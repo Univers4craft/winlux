@@ -397,6 +397,33 @@ def wallpaper_file():
     return None
 
 
+def _channel(value):
+    value /= 255
+    return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def text_veil(pixbuf, base, minimum=4.5):
+    """Opacité du voile noir posé sur le fond d'écran pour que le texte blanc
+    atteigne minimum:1 sur 95 % de l'image (« Winlux Aube » ou une photo claire
+    laissaient l'heure et la date blanches à moins de 2:1 sous un voile de 18 %)."""
+    if pixbuf is None:
+        return base
+    from gi.repository import GdkPixbuf
+    small = pixbuf.scale_simple(64, 36, GdkPixbuf.InterpType.BILINEAR)
+    data, stride, channels = small.get_pixels(), small.get_rowstride(), small.get_n_channels()
+    pixels = [tuple(data[y * stride + x * channels + c] for c in range(3)) for y in range(36) for x in range(64)]
+    limit = 1.05 / minimum - 0.05  # luminance maximale du fond sous du blanc
+
+    def bright_share(alpha):
+        darker = [0.2126 * _channel(r * (1 - alpha)) + 0.7152 * _channel(g * (1 - alpha))
+                  + 0.0722 * _channel(b * (1 - alpha)) for r, g, b in pixels]
+        return sum(value > limit for value in darker) / len(darker)
+    alpha = base
+    while alpha < 0.8 and bright_share(alpha) > 0.05:
+        alpha += 0.02
+    return round(alpha, 2)
+
+
 def run_lock():
     import gi
     gi.require_version("Gtk", "3.0")
@@ -404,12 +431,12 @@ def run_lock():
     from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
     css = b"""
-      .lock-time { color: white; font-size: 112px; font-weight: 600; }
-      .lock-date { color: white; font-size: 26px; }
-      .lock-hint { color: rgba(255,255,255,0.75); font-size: 13px; }
-      .lock-name { color: white; font-size: 26px; font-weight: 600; }
-      .lock-error { color: white; font-size: 14px; }
-      .lock-caps { color: rgba(255,255,255,0.8); font-size: 12px; }
+      .lock-time { color: white; font-size: 112px; font-weight: 600; text-shadow: 0 2px 6px rgba(0,0,0,0.55); }
+      .lock-date { color: white; font-size: 26px; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+      .lock-hint { color: white; font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+      .lock-name { color: white; font-size: 26px; font-weight: 600; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+      .lock-error { color: white; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+      .lock-caps { color: white; font-size: 12px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
       entry.lock-password { background: rgba(255,255,255,0.88); color: #1b1b1b; border: none;
                             border-bottom: 2px solid #3b6ee8; border-radius: 4px; padding: 8px 10px;
                             min-width: 260px; font-size: 15px; caret-color: #1b1b1b; }
@@ -446,6 +473,8 @@ def run_lock():
                     self.blurred = image
                 except GLib.Error:
                     self.sharp = self.blurred = None
+            # Voile assez sombre pour que le texte blanc reste lisible sur un fond clair.
+            self.veil = {"clock": text_veil(self.sharp, 0.18), "signin": text_veil(self.blurred, 0.40)}
             display = Gdk.Display.get_default()
             primary = display.get_primary_monitor() or display.get_monitor(0)
             self.windows = []
@@ -556,7 +585,7 @@ def run_lock():
                 Gdk.cairo_set_source_pixbuf(cr, image, 0, 0)
                 cr.paint()
                 cr.restore()
-            cr.set_source_rgba(0, 0, 0, 0.40 if self.view == "signin" else 0.18)
+            cr.set_source_rgba(0, 0, 0, self.veil["signin" if self.view == "signin" else "clock"])
             cr.paint()
             return False
 

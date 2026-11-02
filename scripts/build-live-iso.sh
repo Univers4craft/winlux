@@ -142,6 +142,8 @@ cp "$root/scripts/winlux-grub-theme.sh" "$stage/opt/winlux/scripts/winlux-grub-t
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
+# Réinitialiser ce PC, clé de secours, réparation du démarrage (#283).
+install -m 755 "$root/scripts/winlux-reset.py" "$stage/usr/bin/winlux-reset"
 cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
 cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
 chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
@@ -486,6 +488,9 @@ boot_mark() {
 }
 /bin/busybox rm -f /run/winlux/boot-times /run/winlux/boot-recorded
 boot_mark init
+# « Redémarrer sur le menu de secours » (Paramètres > Récupération) ne vaut
+# que pour un démarrage, même si l'on a choisi le bureau dans le menu GRUB.
+/bin/busybox rm -f /boot/winlux-next-recovery 2>/dev/null || true
 # Écran Prisme dans le framebuffer jusqu'à l'arrivée du bureau (#170).
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline && ! /bin/busybox grep -qw 'winlux.check-iso=1' /proc/cmdline && test -e /dev/fb0 && test -x /usr/bin/winlux; then
     /usr/bin/winlux --boot-splash >/run/winlux/boot-splash.log 2>&1 &

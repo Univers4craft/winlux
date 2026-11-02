@@ -5669,7 +5669,7 @@ unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
     text(
         g.hdc,
         g.f.caption,
-        rgb(0xFF, 0xFF, 0xFF),
+        p.on_accent,
         (ok.left + ok.right - text_width(okl, 12)) / 2,
         ok.top + 8,
         okl,

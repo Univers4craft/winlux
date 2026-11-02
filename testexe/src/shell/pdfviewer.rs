@@ -133,7 +133,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             toolbar_y + 10,
             btn_x + btn_w,
             toolbar_y + 40,
-            rgb(0x0A, 0x84, 0xFF),
+            rgb(0x00, 0x67, 0xC0),
         );
         text_centered(
             g.hdc,
@@ -154,7 +154,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             toolbar_y + 10,
             btn_x + btn_w * 2 + 8,
             toolbar_y + 40,
-            rgb(0x0A, 0x84, 0xFF),
+            rgb(0x00, 0x67, 0xC0),
         );
         text_centered(
             g.hdc,
