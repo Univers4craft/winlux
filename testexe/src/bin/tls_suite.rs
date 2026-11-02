@@ -38,6 +38,24 @@ extern "system" {
     ) -> i32;
     fn CertCreateCertificateChainEngine(config: *const u8, out: *mut usize) -> i32;
     fn CertFreeCertificateChainEngine(e: usize);
+    fn CryptProtectData(
+        input: *const DataBlob,
+        desc: *const u16,
+        entropy: *const DataBlob,
+        reserved: usize,
+        prompt: usize,
+        flags: u32,
+        out: *mut DataBlob,
+    ) -> i32;
+    fn CryptUnprotectData(
+        input: *const DataBlob,
+        desc: *mut *mut u16,
+        entropy: *const DataBlob,
+        reserved: usize,
+        prompt: usize,
+        flags: u32,
+        out: *mut DataBlob,
+    ) -> i32;
     fn CertOpenSystemStoreW(prov: usize, name: *const u16) -> usize;
     fn CertCloseStore(h: usize, flags: u32) -> i32;
     fn CertEnumCertificatesInStore(h: usize, prev: *const CertContext) -> *const CertContext;
@@ -475,6 +493,48 @@ unsafe fn curl_cainfo(ctx: *const SecHandle) {
     CertFreeCertificateContext(cert);
 }
 
+#[repr(C)]
+struct DataBlob {
+    cb: u32,
+    pb: *mut u8,
+}
+
+/// DPAPI : un secret protégé pour le compte se relit, pas avec une autre entropie.
+unsafe fn protected_data() {
+    out(b"\n-- Protection de donnees (DPAPI) --\n");
+    let secret = *b"jeton d'acces";
+    let input = DataBlob {
+        cb: secret.len() as u32,
+        pb: secret.as_ptr() as *mut u8,
+    };
+    let mut salt = *b"sel";
+    let entropy = DataBlob {
+        cb: 3,
+        pb: salt.as_mut_ptr(),
+    };
+    let mut blob = DataBlob {
+        cb: 0,
+        pb: null_mut(),
+    };
+    check!(
+        CryptProtectData(&input, null(), &entropy, 0, 0, 0, &mut blob) != 0 && blob.cb > 13,
+        "CryptProtectData"
+    );
+    let mut back = DataBlob {
+        cb: 0,
+        pb: null_mut(),
+    };
+    let ok = CryptUnprotectData(&blob, null_mut(), &entropy, 0, 0, 0, &mut back);
+    check!(
+        ok != 0 && back.cb == 13 && core::slice::from_raw_parts(back.pb, 13) == secret,
+        "CryptUnprotectData rend le secret"
+    );
+    check!(
+        CryptUnprotectData(&blob, null_mut(), null(), 0, 0, 0, &mut back) == 0,
+        "autre entropie refusée"
+    );
+}
+
 /// Petit tableau de taille fixe rempli depuis un itérateur (no_std).
 struct Ar<const N: usize>([u16; N]);
 impl<const N: usize> core::iter::FromIterator<u16> for Ar<N> {
@@ -784,6 +844,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         certificates();
         hashes();
+        protected_data();
         schannel();
         if FAILURES == 0 {
             out(b"\nTous les tests HTTPS passent.\n");

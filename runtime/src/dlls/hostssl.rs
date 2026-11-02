@@ -37,6 +37,12 @@ pub struct Ssl {
     pub X509_STORE_add_cert: unsafe extern "C" fn(P, P) -> c_int,
     pub X509_STORE_set_flags: unsafe extern "C" fn(P, std::ffi::c_ulong) -> c_int,
     pub EVP_get_cipherbyname: unsafe extern "C" fn(*const c_char) -> P,
+    pub d2i_PKCS12: unsafe extern "C" fn(*mut P, *mut *const u8, c_long) -> P,
+    pub PKCS12_parse: unsafe extern "C" fn(P, *const c_char, *mut P, *mut P, *mut P) -> c_int,
+    pub PKCS12_free: unsafe extern "C" fn(P),
+    pub EVP_PKEY_free: unsafe extern "C" fn(P),
+    pub i2d_PrivateKey: unsafe extern "C" fn(P, *mut *mut u8) -> c_int,
+    pub d2i_AutoPrivateKey: unsafe extern "C" fn(*mut P, *mut *const u8, c_long) -> P,
     pub EVP_CIPHER_CTX_new: unsafe extern "C" fn() -> P,
     pub EVP_CIPHER_CTX_free: unsafe extern "C" fn(P),
     pub EVP_CipherInit_ex: unsafe extern "C" fn(P, P, P, *const u8, *const u8, c_int) -> c_int,
@@ -80,6 +86,8 @@ pub struct Ssl {
     pub SSL_set_bio: unsafe extern "C" fn(P, P, P),
     pub SSL_ctrl: unsafe extern "C" fn(P, c_int, c_long, P) -> c_long,
     pub SSL_set1_host: unsafe extern "C" fn(P, *const c_char) -> c_int,
+    pub SSL_use_certificate: unsafe extern "C" fn(P, P) -> c_int,
+    pub SSL_use_PrivateKey: unsafe extern "C" fn(P, P) -> c_int,
     pub SSL_set_connect_state: unsafe extern "C" fn(P),
     pub SSL_do_handshake: unsafe extern "C" fn(P) -> c_int,
     pub SSL_get_error: unsafe extern "C" fn(P, c_int) -> c_int,
@@ -149,6 +157,12 @@ pub fn ssl() -> Option<&'static Ssl> {
             X509_STORE_add_cert: f!(c, "X509_STORE_add_cert"),
             X509_STORE_set_flags: f!(c, "X509_STORE_set_flags"),
             EVP_get_cipherbyname: f!(c, "EVP_get_cipherbyname"),
+            d2i_PKCS12: f!(c, "d2i_PKCS12"),
+            PKCS12_parse: f!(c, "PKCS12_parse"),
+            PKCS12_free: f!(c, "PKCS12_free"),
+            EVP_PKEY_free: f!(c, "EVP_PKEY_free"),
+            i2d_PrivateKey: f!(c, "i2d_PrivateKey"),
+            d2i_AutoPrivateKey: f!(c, "d2i_AutoPrivateKey"),
             EVP_CIPHER_CTX_new: f!(c, "EVP_CIPHER_CTX_new"),
             EVP_CIPHER_CTX_free: f!(c, "EVP_CIPHER_CTX_free"),
             EVP_CipherInit_ex: f!(c, "EVP_CipherInit_ex"),
@@ -189,6 +203,8 @@ pub fn ssl() -> Option<&'static Ssl> {
             SSL_set_bio: f!(s, "SSL_set_bio"),
             SSL_ctrl: f!(s, "SSL_ctrl"),
             SSL_set1_host: f!(s, "SSL_set1_host"),
+            SSL_use_certificate: f!(s, "SSL_use_certificate"),
+            SSL_use_PrivateKey: f!(s, "SSL_use_PrivateKey"),
             SSL_set_connect_state: f!(s, "SSL_set_connect_state"),
             SSL_do_handshake: f!(s, "SSL_do_handshake"),
             SSL_get_error: f!(s, "SSL_get_error"),
@@ -486,6 +502,97 @@ pub fn cipher(name: &CStr, key: &[u8], iv: &[u8], enc: bool, data: &mut [u8]) ->
                 && n as usize == input.len();
         }
         (s.EVP_CIPHER_CTX_free)(ctx);
+        ok
+    }
+}
+
+/// Contenu d'un fichier PKCS #12 (.pfx, .p12).
+pub struct Pkcs12 {
+    /// Clé privée (DER, format « traditionnel » ou PKCS #8 selon OpenSSL).
+    pub key: Option<Vec<u8>>,
+    pub cert: Option<Vec<u8>>,
+    pub ca: Vec<Vec<u8>>,
+}
+
+/// Déchiffre un PKCS #12 avec `password` (UTF-8) ; None si le mot de passe
+/// est faux ou le fichier illisible.
+pub fn pkcs12(der: &[u8], password: &str) -> Option<Pkcs12> {
+    let s = ssl()?;
+    unsafe {
+        let mut p = der.as_ptr();
+        let p12 = (s.d2i_PKCS12)(std::ptr::null_mut(), &mut p, der.len() as c_long);
+        if p12.is_null() {
+            return None;
+        }
+        let pass = std::ffi::CString::new(password).unwrap_or_default();
+        let (mut key, mut cert, mut ca) = (
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        let mut ok = (s.PKCS12_parse)(p12, pass.as_ptr(), &mut key, &mut cert, &mut ca) == 1;
+        if !ok && password.is_empty() {
+            // Fichier sans mot de passe : OpenSSL distingue "" et NULL.
+            ok = (s.PKCS12_parse)(p12, std::ptr::null(), &mut key, &mut cert, &mut ca) == 1;
+        }
+        (s.PKCS12_free)(p12);
+        if !ok {
+            return None;
+        }
+        let key_der = if key.is_null() {
+            None
+        } else {
+            let mut out: *mut u8 = std::ptr::null_mut();
+            let n = (s.i2d_PrivateKey)(key, &mut out);
+            let v = (n > 0).then(|| std::slice::from_raw_parts(out, n as usize).to_vec());
+            if !out.is_null() {
+                (s.CRYPTO_free)(out.cast(), c"hostssl".as_ptr(), 0);
+            }
+            (s.EVP_PKEY_free)(key);
+            v
+        };
+        let cert_der = if cert.is_null() {
+            None
+        } else {
+            let d = der_of(cert);
+            (s.X509_free)(cert);
+            d
+        };
+        let mut cas = Vec::new();
+        if !ca.is_null() {
+            for i in 0..(s.OPENSSL_sk_num)(ca) {
+                if let Some(d) = der_of((s.OPENSSL_sk_value)(ca, i)) {
+                    cas.push(d);
+                }
+            }
+            (s.OPENSSL_sk_pop_free)(ca, s.X509_free);
+        }
+        Some(Pkcs12 {
+            key: key_der,
+            cert: cert_der,
+            ca: cas,
+        })
+    }
+}
+
+/// Installe un certificat client et sa clé sur une session TLS.
+pub fn use_client_cert(ssl_: P, cert: &[u8], key: &[u8]) -> bool {
+    let Some(s) = ssl() else {
+        return false;
+    };
+    unsafe {
+        let Some(x) = x509_of(cert) else {
+            return false;
+        };
+        let mut p = key.as_ptr();
+        let k = (s.d2i_AutoPrivateKey)(std::ptr::null_mut(), &mut p, key.len() as c_long);
+        let ok = !k.is_null()
+            && (s.SSL_use_certificate)(ssl_, x) == 1
+            && (s.SSL_use_PrivateKey)(ssl_, k) == 1;
+        (s.X509_free)(x);
+        if !k.is_null() {
+            (s.EVP_PKEY_free)(k);
+        }
         ok
     }
 }

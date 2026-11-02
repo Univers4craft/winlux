@@ -426,8 +426,19 @@ Ampleur : **L**. Suivi : #235.
 - Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
   `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
   unitaires.
-- Reste : `ncrypt`, clés RSA de la CryptoAPI, `CryptProtectData`,
-  certificats client (`PFXImportCertStore`), rôle serveur de Schannel.
+- Données protégées (`runtime/src/dlls/dpapi.rs`) : `CryptProtectData`,
+  `CryptUnprotectData` (AES-256-CBC et HMAC-SHA256, clé maîtresse par compte
+  dans `~/.config/winlux/dpapi/master.key`, clé de la machine avec
+  `CRYPTPROTECT_LOCAL_MACHINE`, entropie et description gérées),
+  `CryptProtectMemory`/`CryptUnprotectMemory` et `RtlEncryptMemory`. Un blob
+  venu d'un vrai Windows ne se relit pas : il dépend des secrets du compte
+  Windows.
+- Certificats client : `PFXImportCertStore` (PKCS #12 déchiffré par
+  OpenSSL, clé privée attachée au certificat, `CERT_KEY_PROV_INFO_PROP_ID`),
+  `PFXIsPFXBlob`, `PFXVerifyPassword`, `CERT_FIND_HAS_PRIVATE_KEY` ; Schannel
+  présente le certificat de `SCHANNEL_CRED.paCred` au serveur qui le demande.
+- Reste : `ncrypt`, clés RSA de la CryptoAPI (`CryptSignHash`,
+  `CryptAcquireCertificatePrivateKey`), rôle serveur de Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 

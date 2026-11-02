@@ -720,7 +720,36 @@ pub unsafe extern "win64" fn CertAddCertificateContextToStore(
     out: *mut usize,
 ) -> i32 {
     let der = cert_der(ctx).to_vec();
-    CertAddEncodedCertificateToStore(h, X509_ASN_ENCODING, der.as_ptr(), der.len() as u32, 0, out)
+    let mut added = 0usize;
+    if CertAddEncodedCertificateToStore(
+        h,
+        X509_ASN_ENCODING,
+        der.as_ptr(),
+        der.len() as u32,
+        0,
+        &mut added,
+    ) == 0
+    {
+        return 0;
+    }
+    // La clé privée suit le certificat dans son nouveau magasin.
+    if let (Some(src), Some(dst)) = (cert(ctx), cert(added)) {
+        if !std::ptr::eq(src, dst) {
+            let from = super::lock(&src.props).clone();
+            let mut to = super::lock(&dst.props);
+            for id in [PRIVATE_KEY_PROP, CERT_KEY_SPEC_PROP_ID] {
+                if let Some(v) = from.get(&id) {
+                    to.insert(id, v.clone());
+                }
+            }
+        }
+    }
+    if out.is_null() {
+        CertFreeCertificateContext(added);
+    } else {
+        *out = added;
+    }
+    1
 }
 
 pub unsafe extern "win64" fn CertCompareCertificate(
@@ -806,6 +835,8 @@ pub unsafe extern "win64" fn CertFindCertificateInStore(
                 .to_lowercase()
                 .contains(&wanted_str),
             0xd0000 => k.der.as_slice() == cert_der(para),
+            // CERT_FIND_HAS_PRIVATE_KEY
+            0x150000 => super::lock(&k.props).contains_key(&PRIVATE_KEY_PROP),
             _ => false,
         };
         if hit {
@@ -826,6 +857,13 @@ pub unsafe extern "win64" fn CertGetCertificateContextProperty(
         set_last_error(E_INVALIDARG);
         return 0;
     };
+    if id == PRIVATE_KEY_PROP {
+        set_last_error(CRYPT_E_NOT_FOUND);
+        return 0;
+    }
+    if id == CERT_KEY_PROV_INFO_PROP_ID && super::lock(&c.props).contains_key(&PRIVATE_KEY_PROP) {
+        return key_prov_info(&c.der, data, size);
+    }
     let value = super::lock(&c.props)
         .get(&id)
         .cloned()
@@ -849,6 +887,50 @@ pub unsafe extern "win64" fn CertGetCertificateContextProperty(
     }
     std::ptr::copy_nonoverlapping(v.as_ptr(), data, v.len());
     *size = v.len() as u32;
+    1
+}
+
+/// CRYPT_KEY_PROV_INFO d'une clé importée, bâti dans le tampon de
+/// l'appelant (les chaînes suivent la structure, comme sous Windows).
+unsafe fn key_prov_info(der: &[u8], data: *mut u8, size: *mut u32) -> i32 {
+    let sha = hash_prop(der, 3).unwrap_or_default();
+    let container: Vec<u16> = format!(
+        "winlux-{}",
+        sha.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
+    let provider: Vec<u16> = "Winlux Software Key Storage"
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    // { pwszContainerName, pwszProvName, dwProvType, dwFlags, cProvParam,
+    //   rgProvParam, dwKeySpec } = 48 octets en x64.
+    let total = 48 + 2 * (container.len() + provider.len());
+    if size.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    if data.is_null() {
+        *size = total as u32;
+        return 1;
+    }
+    if (*size as usize) < total {
+        *size = total as u32;
+        set_last_error(ERROR_MORE_DATA);
+        return 0;
+    }
+    std::ptr::write_bytes(data, 0, 48);
+    let c = data.add(48);
+    let p = c.add(container.len() * 2);
+    std::ptr::copy_nonoverlapping(container.as_ptr() as *const u8, c, container.len() * 2);
+    std::ptr::copy_nonoverlapping(provider.as_ptr() as *const u8, p, provider.len() * 2);
+    *(data as *mut usize) = c as usize;
+    *(data.add(8) as *mut usize) = p as usize;
+    *(data.add(16) as *mut u32) = 24; // PROV_RSA_AES
+    *(data.add(40) as *mut u32) = 1; // AT_KEYEXCHANGE
+    *size = total as u32;
     1
 }
 
@@ -1968,40 +2050,94 @@ pub unsafe extern "win64" fn CryptDecodeObjectEx(
     1
 }
 
-// ---------- Protection de données (non fournie) ----------
+// ---------- PKCS #12 ----------
 
-pub unsafe extern "win64" fn CryptProtectData(
-    _in: usize,
-    _desc: *const u16,
-    _entropy: usize,
-    _reserved: usize,
-    _prompt: usize,
-    _flags: u32,
-    _out: usize,
-) -> i32 {
-    0
+/// Propriété interne : clé privée DER d'un certificat importé d'un PKCS #12.
+/// Jamais rendue par CertGetCertificateContextProperty.
+const PRIVATE_KEY_PROP: u32 = 0x5749_0001;
+const CERT_KEY_PROV_INFO_PROP_ID: u32 = 2;
+const CERT_KEY_SPEC_PROP_ID: u32 = 6;
+const ERROR_INVALID_PASSWORD: u32 = 86;
+
+/// Clé privée associée au certificat (importée par PFXImportCertStore).
+pub fn private_key(ctx: usize) -> Option<Vec<u8>> {
+    let c = unsafe { cert(ctx) }?;
+    super::lock(&c.props).get(&PRIVATE_KEY_PROP).cloned()
 }
-pub unsafe extern "win64" fn CryptUnprotectData(
-    _in: usize,
-    _desc: *mut *mut u16,
-    _entropy: usize,
-    _reserved: usize,
-    _prompt: usize,
-    _flags: u32,
-    _out: usize,
-) -> i32 {
-    0
+
+unsafe fn pfx_of(blob: *const Blob) -> &'static [u8] {
+    if blob.is_null() || (*blob).pb.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*blob).pb, (*blob).cb as usize)
+    }
 }
+
+/// PFXImportCertStore : certificat, autorités et clé privée d'un PKCS #12,
+/// déchiffré par l'OpenSSL de l'hôte. La clé reste attachée au certificat :
+/// Schannel s'en sert pour l'authentification du client.
 pub unsafe extern "win64" fn PFXImportCertStore(
-    _pfx: usize,
-    _pass: *const u16,
+    pfx: *const Blob,
+    pass: *const u16,
     _flags: u32,
 ) -> usize {
-    0
+    let data = pfx_of(pfx);
+    if data.is_empty() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    let password = if pass.is_null() {
+        String::new()
+    } else {
+        super::wstr(pass)
+    };
+    let Some(p12) = hostssl::pkcs12(data, &password) else {
+        set_last_error(ERROR_INVALID_PASSWORD);
+        return 0;
+    };
+    let store = new_store();
+    if let Some(der) = &p12.cert {
+        if let Some(c) = store_add_der(store, der) {
+            if let (Some(k), Some(cc)) = (&p12.key, cert(c)) {
+                let mut props = super::lock(&cc.props);
+                props.insert(PRIVATE_KEY_PROP, k.clone());
+                props.insert(CERT_KEY_SPEC_PROP_ID, 1u32.to_le_bytes().to_vec());
+            }
+        }
+    }
+    for der in &p12.ca {
+        store_add_der(store, der);
+    }
+    store
+}
+
+pub unsafe extern "win64" fn PFXIsPFXBlob(pfx: *const Blob) -> i32 {
+    // PFX = SEQUENCE { INTEGER 3, ContentInfo, ... }.
+    let d = pfx_of(pfx);
+    let Some((seq, _)) = tlv(d).filter(|(t, _)| t.tag == 0x30) else {
+        return 0;
+    };
+    children(seq.body)
+        .first()
+        .is_some_and(|v| v.tag == 0x02 && v.body == [3]) as i32
+}
+
+pub unsafe extern "win64" fn PFXVerifyPassword(
+    pfx: *const Blob,
+    pass: *const u16,
+    _flags: u32,
+) -> i32 {
+    let password = if pass.is_null() {
+        String::new()
+    } else {
+        super::wstr(pass)
+    };
+    hostssl::pkcs12(pfx_of(pfx), &password).is_some() as i32
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut e = super::dpapi::exports();
+    e.extend(crate::exports! {
         "CertOpenSystemStoreW" => fn CertOpenSystemStoreW,
         "CertOpenSystemStoreA" => fn CertOpenSystemStoreA,
         "CertOpenStore" => fn CertOpenStore,
@@ -2030,18 +2166,19 @@ pub fn exports() -> crate::dlls::Exports {
         "CertGetNameStringA" => fn CertGetNameStringA,
         "CertNameToStrW" => fn CertNameToStrW,
         "CertNameToStrA" => fn CertNameToStrA,
-        "CryptProtectData" => fn CryptProtectData,
-        "CryptUnprotectData" => fn CryptUnprotectData,
         "CryptStringToBinaryW" => fn CryptStringToBinaryW,
         "CryptStringToBinaryA" => fn CryptStringToBinaryA,
         "CryptBinaryToStringW" => fn CryptBinaryToStringW,
         "CryptBinaryToStringA" => fn CryptBinaryToStringA,
         "PFXImportCertStore" => fn PFXImportCertStore,
+        "PFXIsPFXBlob" => fn PFXIsPFXBlob,
+        "PFXVerifyPassword" => fn PFXVerifyPassword,
         "CryptQueryObject" => fn CryptQueryObject,
         "CryptDecodeObjectEx" => fn CryptDecodeObjectEx,
         "CertFreeCRLContext" => fn CertFreeCRLContext,
         "CertFreeCTLContext" => fn CertFreeCTLContext,
-    }
+    });
+    e
 }
 
 #[cfg(test)]
