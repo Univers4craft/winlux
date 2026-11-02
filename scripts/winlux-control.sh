@@ -382,10 +382,18 @@ perform() {
                 # Garder la zone de notification des programmes Windows (#154).
                 tray=
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-10 2>/dev/null)" = systray; then tray='-t int -s 10'; fi
-                # shellcheck disable=SC2086
-                xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 $tray -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 9 -t int -s 7 || return
+                # Valeurs déjà en place (cas de chaque ouverture de session) :
+                # rien n'est réécrit, la barre ne reconstruit pas ses greffons.
+                ids="3 1 2 8 ${tray:+10 }4 5 6 9 7"
+                current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
+                if test "$current" != "$ids "; then
+                    # shellcheck disable=SC2086
+                    xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 $tray -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 9 -t int -s 7 || return
+                fi
                 expand=false; test "$alignment" != center || expand=true
-                xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then
+                    xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+                fi
             fi
             save "$config/preferences.conf" TASKBAR_ALIGN "$alignment" ;;
         desktop-icon-recycle)

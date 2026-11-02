@@ -90,6 +90,24 @@ proportions comptent :
 | 3-4 : GPU seul avant Xorg sans `cat`, catalogue en parallèle | 38,6 s | session 15,5 s |
 | 5 : services sans écran pendant Xorg, `--boot` sans Python | 33,3 s | session 10,4 s |
 | 6-7 : WM d'emblée, Thunar et raccourcis hors chemin critique | 31,6 s | session 8,2 s |
+| 8-11 : Xorg sans glamor en VM sans 3D, relevé d'état allégé (#259) | 31,3 s | Xorg 7,1 → 5,5 s |
+
+Attention : jusqu'ici le repère `desktop` est le lancement de xfdesktop, pas
+son affichage. À partir de l'itération 12 le banc note aussi
+`wm.xfdesktop`, l'instant où la fenêtre du bureau est visible
+(`xdotool search --onlyvisible`) : c'est le chiffre qui compte pour
+l'utilisateur.
+
+Depuis #258, un système installé ouvre le bureau sous le compte de
+l'utilisateur (`winlux-user-session`), qui reprenait l'ancien ordre en série.
+Même banc, compte installé avec connexion automatique, bureau visible :
+
+| Itération | Bureau visible | Changement |
+|---|---|---|
+| master après #258 | 71,3 s | Thunar attendu (Ping) avant tout, programmes au démarrage et raccourcis en série |
+| 12 : même traitement que #254 dans la session du compte | 61,3 s | WM d'emblée, raccourcis, programmes au démarrage, clavier en arrière-plan |
+| 13 : démarrage décalé | 55,3 s | agents de la zone de notification, presse-papiers, lecteurs réseau, économiseur, verrouillage, catalogue, relevé d'état et suivi des écrans attendent le bureau visible |
+| 14-15 : Thunar non attendu, barre non reconstruite | 48,5 s | `align-*` ne réécrit plus `plugin-ids` identique |
 
 ## Mode jeu
 
