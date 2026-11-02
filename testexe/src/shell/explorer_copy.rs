@@ -581,7 +581,7 @@ pub(super) unsafe fn test_answer(mode: Option<Mode>) {
 // ---------- Carte de progression ----------
 
 const CARD_W: i32 = 400;
-const CARD_H: i32 = 196;
+const CARD_H: i32 = 222;
 
 /// Cartes visibles (après 400 ms, pour ne pas clignoter sur une petite copie).
 unsafe fn visible(c: &CopyJob) -> bool {
