@@ -162,11 +162,23 @@ for window in [explorer, settings, editor, terminal]:
 print("WINLUX_NATIVE_WINDOW_CONTROLS=0", flush=True)
 
 # Exercise the delivered Openbox bindings, not just manual wmctrl placement.
-run("xdotool", "windowactivate", "--sync", terminal)
-run("xdotool", "key", "--clearmodifiers", "super+Left")
-wait_for(lambda: abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap left")
-run("xdotool", "key", "--clearmodifiers", "super+Right")
-wait_for(lambda: abs(windows()[terminal][0][0] - 960) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap right")
+def snap(key, predicate, label):
+    # A shortcut sent before Openbox has given the window focus is lost
+    # (seen once after the restore above): wait for the focus, and send the
+    # key again if the window has not moved. A broken binding still fails.
+    for attempt in range(3):
+        run("xdotool", "windowactivate", "--sync", terminal)
+        wait_for(lambda: int(run("xdotool", "getactivewindow").strip()) == int(terminal, 0), label + " focus")
+        run("xdotool", "key", "--clearmodifiers", key)
+        try:
+            wait_for(predicate, label)
+            return
+        except AssertionError:
+            print(f"{label}: {windows().get(terminal)}, nouvel essai", flush=True)
+    raise AssertionError(label)
+
+snap("super+Left", lambda: abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap left")
+snap("super+Right", lambda: abs(windows()[terminal][0][0] - 960) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap right")
 print("WINLUX_NATIVE_WINDOW_SNAPPING=0", flush=True)
 
 # End-to-end geometry acknowledgement latency. This includes subprocess and
