@@ -412,13 +412,22 @@ Ampleur : **L**. Suivi : #235.
   automatiquement avec les autorités du système, sauf validation manuelle
   demandée par l'appli. Kerberos, NTLM et Negotiate restent absents.
 - CryptoAPI : `CryptCreateHash`, `CryptHashData`, `CryptGetHashParam`,
-  `CryptDuplicateHash` (MD5, SHA-1, SHA-2) ; `bcrypt` gagne MD5, SHA-384,
-  SHA-512 et HMAC.
+  `CryptDuplicateHash` (MD4, MD5, SHA-1, SHA-2) ; `bcrypt` gagne MD5, SHA-384,
+  SHA-512 et HMAC. Clés symétriques : `CryptImportKey` (`PLAINTEXTKEYBLOB`),
+  `CryptGenKey`, `CryptDeriveKey`, `CryptEncrypt`/`CryptDecrypt` en CBC ou
+  ECB avec bourrage PKCS#5 (DES, 3DES, AES 128/192/256, RC4), paramètres de
+  clé (IV, mode, longueur). C'est ce que demande le NTLM de libcurl.
+- Le chemin de libcurl avec un fichier d'autorités (`CURLOPT_CAINFO`) :
+  `CryptQueryObject` (certificat binaire, PEM ou base64, tampon ou fichier),
+  `CertCreateCertificateChainEngine` avec racines exclusives
+  (`hExclusiveRoot`, chaîne partielle acceptée), `CertGetNameString` avec
+  tous les noms DNS (`CERT_NAME_SEARCH_ALL_NAMES_FLAG`), `CryptDecodeObjectEx`
+  pour les noms alternatifs et les contraintes de base.
 - Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
   `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
   unitaires.
-- Reste : `ncrypt`, clés de la CryptoAPI (`CryptGenKey`, `CryptEncrypt`),
-  `CryptProtectData`, certificats client, rôle serveur de Schannel.
+- Reste : `ncrypt`, clés RSA de la CryptoAPI, `CryptProtectData`,
+  certificats client (`PFXImportCertStore`), rôle serveur de Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 

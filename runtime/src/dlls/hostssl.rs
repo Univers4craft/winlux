@@ -35,6 +35,13 @@ pub struct Ssl {
     pub X509_STORE_free: unsafe extern "C" fn(P),
     pub X509_STORE_set_default_paths: unsafe extern "C" fn(P) -> c_int,
     pub X509_STORE_add_cert: unsafe extern "C" fn(P, P) -> c_int,
+    pub X509_STORE_set_flags: unsafe extern "C" fn(P, std::ffi::c_ulong) -> c_int,
+    pub EVP_get_cipherbyname: unsafe extern "C" fn(*const c_char) -> P,
+    pub EVP_CIPHER_CTX_new: unsafe extern "C" fn() -> P,
+    pub EVP_CIPHER_CTX_free: unsafe extern "C" fn(P),
+    pub EVP_CipherInit_ex: unsafe extern "C" fn(P, P, P, *const u8, *const u8, c_int) -> c_int,
+    pub EVP_CIPHER_CTX_set_padding: unsafe extern "C" fn(P, c_int) -> c_int,
+    pub EVP_CipherUpdate: unsafe extern "C" fn(P, *mut u8, *mut c_int, *const u8, c_int) -> c_int,
     pub X509_STORE_CTX_new: unsafe extern "C" fn() -> P,
     pub X509_STORE_CTX_free: unsafe extern "C" fn(P),
     pub X509_STORE_CTX_init: unsafe extern "C" fn(P, P, P, P) -> c_int,
@@ -140,6 +147,13 @@ pub fn ssl() -> Option<&'static Ssl> {
             X509_STORE_free: f!(c, "X509_STORE_free"),
             X509_STORE_set_default_paths: f!(c, "X509_STORE_set_default_paths"),
             X509_STORE_add_cert: f!(c, "X509_STORE_add_cert"),
+            X509_STORE_set_flags: f!(c, "X509_STORE_set_flags"),
+            EVP_get_cipherbyname: f!(c, "EVP_get_cipherbyname"),
+            EVP_CIPHER_CTX_new: f!(c, "EVP_CIPHER_CTX_new"),
+            EVP_CIPHER_CTX_free: f!(c, "EVP_CIPHER_CTX_free"),
+            EVP_CipherInit_ex: f!(c, "EVP_CipherInit_ex"),
+            EVP_CIPHER_CTX_set_padding: f!(c, "EVP_CIPHER_CTX_set_padding"),
+            EVP_CipherUpdate: f!(c, "EVP_CipherUpdate"),
             X509_STORE_CTX_new: f!(c, "X509_STORE_CTX_new"),
             X509_STORE_CTX_free: f!(c, "X509_STORE_CTX_free"),
             X509_STORE_CTX_init: f!(c, "X509_STORE_CTX_init"),
@@ -355,11 +369,39 @@ pub struct Verified {
 /// Vérifie `leaf` avec les autorités du système, `extra` servant
 /// d'intermédiaires. `host` : nom à contrôler (None : pas de contrôle).
 pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Verified> {
+    verify_with(leaf, extra, None, false, host)
+}
+
+/// Comme `verify`, mais avec des racines de confiance données (`roots`) à la
+/// place de celles du système ; `partial` accepte une chaîne qui s'arrête sur
+/// n'importe quel certificat de `roots` (X509_V_FLAG_PARTIAL_CHAIN).
+pub fn verify_with(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    roots: Option<&[Vec<u8>]>,
+    partial: bool,
+    host: Option<&str>,
+) -> Option<Verified> {
     let s = ssl()?;
     unsafe {
         let x = x509_of(leaf)?;
         let store = (s.X509_STORE_new)();
-        (s.X509_STORE_set_default_paths)(store);
+        match roots {
+            None => {
+                (s.X509_STORE_set_default_paths)(store);
+            }
+            Some(list) => {
+                for r in list {
+                    if let Some(rx) = x509_of(r) {
+                        (s.X509_STORE_add_cert)(store, rx);
+                        (s.X509_free)(rx);
+                    }
+                }
+            }
+        }
+        if partial {
+            (s.X509_STORE_set_flags)(store, 0x80000);
+        }
         let untrusted = (s.OPENSSL_sk_new_null)();
         let mut extras = Vec::new();
         for e in extra {
@@ -408,6 +450,43 @@ pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Veri
         (s.X509_free)(x);
         (s.X509_STORE_free)(store);
         Some(Verified { error, chain })
+    }
+}
+
+/// Chiffre (`enc`) ou déchiffre des blocs entiers avec le chiffrement
+/// OpenSSL `name` (« AES-128-CBC », « DES-EDE3-ECB »…), sans bourrage ;
+/// `iv` sert aux modes chaînés.
+pub fn cipher(name: &CStr, key: &[u8], iv: &[u8], enc: bool, data: &mut [u8]) -> bool {
+    let Some(s) = ssl() else {
+        return false;
+    };
+    unsafe {
+        let cipher = (s.EVP_get_cipherbyname)(name.as_ptr());
+        if cipher.is_null() {
+            return false;
+        }
+        let ctx = (s.EVP_CIPHER_CTX_new)();
+        if ctx.is_null() {
+            return false;
+        }
+        let null = std::ptr::null_mut();
+        let mut ok =
+            (s.EVP_CipherInit_ex)(ctx, cipher, null, key.as_ptr(), iv.as_ptr(), enc as c_int) == 1;
+        if ok {
+            (s.EVP_CIPHER_CTX_set_padding)(ctx, 0);
+            let input = data.to_vec();
+            let mut n: c_int = 0;
+            ok = (s.EVP_CipherUpdate)(
+                ctx,
+                data.as_mut_ptr(),
+                &mut n,
+                input.as_ptr(),
+                input.len() as c_int,
+            ) == 1
+                && n as usize == input.len();
+        }
+        (s.EVP_CIPHER_CTX_free)(ctx);
+        ok
     }
 }
 

@@ -154,7 +154,9 @@ def main():
         print("Barre réelle non vérifiée : " + ", ".join(missing) + " absent(s)")
         return 0
     problems = []
-    with tempfile.TemporaryDirectory() as temp:
+    # xfconfd peut encore écrire dans le dossier pendant son nettoyage : une
+    # erreur de suppression n'est pas un échec du test.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
         for alignment in ("centrée", "gauche"):
             run(alignment, Path(temp), problems)
     for problem in problems:

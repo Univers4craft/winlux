@@ -89,6 +89,15 @@ course à la main (la session était verrouillée pendant la mesure).
     shaders DXBC/HLSL vers GLSL manque (#137). `CreateDCW("\\.\DISPLAY1")`
     ouvrait une imprimante au lieu de l'écran (SDL3) : corrigé. Plein écran
     1920×1080 en Vulkan : 60 FPS.
+12. **libcurl de Warzone 2100** (8.19, Schannel ; vérification des mises à
+    jour, actualités, partie en ligne). `curl_global_init` échouait parce
+    que `InitSecurityInterfaceW` rendait une table nulle : la table SSPI
+    existe depuis #320. Le reste du chemin de libcurl est maintenant fourni :
+    moteur de chaînes aux racines exclusives et `CryptQueryObject` (fichier
+    d'autorités), tous les noms DNS du certificat, `CryptDecodeObjectEx`
+    (noms alternatifs), `CryptImportKey`/`CryptEncrypt` et MD4 (NTLM).
+    Rejoué par `tls_suite.exe` contre un serveur HTTPS local ; à confirmer
+    dans le jeu sur le vrai PC.
 
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
 rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
@@ -98,11 +107,8 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 | Manque | Jeux touchés | Effet aujourd'hui | Fil |
 |---|---|---|---|
 | Manettes HID (`hid.dll` sans périphérique, `SetupDi*` vide pour la classe HID) | SDL2/SDL3 | seules les manettes XInput sont vues | #271 |
-| Chaîne de certificats Schannel (`CertCreateCertificateChainEngine`, `CryptQueryObject`…) | libcurl de Warzone 2100 (vérification de mise à jour, actualités) | HTTPS en échec, le jeu continue sans | #235 |
-| `CryptImportKey`/`CryptEncrypt` (NTLM de libcurl) | libcurl | authentification NTLM indisponible | #235 |
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
-| libcurl : `curl_global_init` échoue | Warzone 2100 | partie en ligne et mises à jour indisponibles | #235 |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
 | Traduction des shaders D3D11 (DXBC/HLSL → GLSL) | Warzone 2100 en ANGLE | image noire | #137 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
