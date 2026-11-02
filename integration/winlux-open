@@ -20,19 +20,67 @@ show_message() {
     icon=dialog-error
     if [ "$mode" = info ]; then dialog_flag=--msgbox; icon=dialog-information; fi
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        # Détails techniques : repliés dans la boîte Winlux, ajoutés au texte
+        # pour les autres boîtes.
+        full=$message
+        if [ -n "${3:-}" ]; then full="$message
+
+${3:-}"; fi
         if command -v kdialog >/dev/null 2>&1; then
-            kdialog --title "$title" "$dialog_flag" "$message" && return
+            kdialog --title "$title" "$dialog_flag" "$full" && return
         elif command -v zenity >/dev/null 2>&1; then
-            zenity "--$mode" --title="$title" --no-wrap --text="$message" && return
+            zenity "--$mode" --title="$title" --no-wrap --text="$full" && return
+        # Boîte Winlux (GTK) : texte en français lisible, détails techniques
+        # repliés. xmessage affichait l'UTF-8 en charabia, titre « xmessage ».
+        elif command -v python3 >/dev/null 2>&1 && gtk_message "$mode" "$message" "${3:-}"; then
+            return
         elif command -v notify-send >/dev/null 2>&1; then
-            notify-send --app-name=Winlux --icon="$icon" "$title" "$message" && return
+            notify-send --app-name=Winlux --icon="$icon" "$title" "$full" && return
         elif command -v xmessage >/dev/null 2>&1; then
-            xmessage -center "$title : $message" && return
+            xmessage -center "$title : $full" && return
         fi
     fi
-    printf 'Winlux : %s\n' "$message" >&2
+    printf 'Winlux : %s\n' "$message${3:+
+$3}" >&2
 }
-show_error() { show_message "$1" error; }
+show_error() { show_message "$1" error "${2:-}"; }
+
+gtk_message() {
+    python3 - "$@" <<'PY' 2>/dev/null
+import sys
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+mode, message, details = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
+kind = Gtk.MessageType.INFO if mode == "info" else Gtk.MessageType.ERROR
+dialog = Gtk.MessageDialog(message_type=kind, buttons=Gtk.ButtonsType.OK, text=message.split("\n", 1)[0])
+dialog.set_title("Winlux")
+if "\n" in message:
+    dialog.format_secondary_text(message.split("\n", 1)[1])
+if details.strip():
+    expander = Gtk.Expander(label="Détails techniques")
+    view = Gtk.Label(label=details.strip(), selectable=True, xalign=0, wrap=True, max_width_chars=70)
+    expander.add(view)
+    dialog.get_message_area().pack_end(expander, False, False, 0)
+    expander.show_all()
+dialog.set_keep_above(True)
+dialog.run()
+PY
+}
+
+# Message clair pour un programme qui n'a pas pu démarrer, d'après le journal.
+explain_failure() {
+    name=$1; status=$2; journal=$3
+    missing=$(sed -n 's/.*DLL introuvable : \([^ ]*\).*/\1/p' "$journal" 2>/dev/null | head -n 1)
+    function=$(sed -n 's/.*fonction introuvable : \([^ ]*\).*/\1/p' "$journal" 2>/dev/null | head -n 1)
+    if [ -n "$missing" ]; then
+        printf '« %s » ne peut pas encore fonctionner avec Winlux.\nCe programme a besoin du composant Windows %s, que Winlux ne fournit pas encore. Rien n’a été modifié sur votre ordinateur.' "$name" "$missing"
+    elif [ -n "$function" ]; then
+        printf '« %s » ne peut pas encore fonctionner avec Winlux.\nCe programme utilise une fonction de Windows (%s) que Winlux ne sait pas encore exécuter. Rien n’a été modifié sur votre ordinateur.' "$name" "$function"
+    else
+        printf '« %s » s’est arrêté de manière inattendue (code %s).\nSi le problème se reproduit, Paramètres > Signaler un problème permet d’en envoyer le détail.' "$name" "$status"
+    fi
+}
 
 # Exécute le programme dans le terminal déjà ouvert puis attend Entrée pour
 # laisser le temps de lire la sortie.
@@ -182,7 +230,14 @@ esac
 reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
 kind=$("$winlux" --inspect "$exe" 2>/dev/null)
 if [ -z "$kind" ]; then
-    show_error "Impossible d’ouvrir « $(basename -- "$exe") » : ${reason:-format inconnu}."
+    case "$reason" in
+        *"32 bits"*)
+            show_error "« $(basename -- "$exe") » est un programme Windows 32 bits.
+Winlux ne lance pour l’instant que les programmes 64 bits. Beaucoup d’installateurs restent en 32 bits même pour un logiciel 64 bits : la version « portable » 64 bits de l’éditeur (archive .zip), si elle existe, peut fonctionner. Rien n’a été modifié sur votre ordinateur." "$reason" ;;
+        *)
+            show_error "Impossible d’ouvrir « $(basename -- "$exe") ».
+Ce fichier n’est pas un programme Windows que Winlux sait lancer." "${reason:-format inconnu}" ;;
+    esac
     exit 1
 fi
 if command -v winlux-applications >/dev/null 2>&1; then
@@ -229,7 +284,6 @@ if [ "$status" -ne 0 ]; then
         && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' /run/winlux/journal/crash.log | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
-    show_error "« $(basename -- "$exe") » s’est arrêté (code $status).
-$detail"
+    show_error "$(explain_failure "$(basename -- "$exe")" "$status" "$log")" "$detail"
 fi
 exit "$status"

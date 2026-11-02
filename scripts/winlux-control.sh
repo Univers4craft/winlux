@@ -241,13 +241,13 @@ if test "${WINLUX_CONTROL_RELAYED:-}" = 1 && test "$(id -u)" = 0; then relayed=1
 if test "$relayed" = 0; then
 # Une seule action a la fois. Le bureau reste reactif pendant les appels
 # reseau et voit le journal quand la commande detachee se termine.
-if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une operation est deja en cours. Consultez le journal.'; exit 1; fi
+if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une opération est déjà en cours. Consultez le journal.'; exit 1; fi
 trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
 fi
 action=$1
 # Alias accepte par les menus XFCE (whiskermenu) : « shutdown » = poweroff.
 case "$action" in shutdown) action=poweroff ;; esac
-test "$relayed" = 1 || message 'Operation en cours...'
+test "$relayed" = 1 || message 'Opération en cours…'
 # Actions du bureau lui-meme (X, son, dossier personnel) : sous le compte.
 # Les autres touchent au systeme et passent par le relais root.
 local_action() {
@@ -554,7 +554,7 @@ log="$run/action.log"
 case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
 if perform "$@" > "$log" 2>&1; then
-    message 'Operation terminee.'
+    message 'Opération terminée.'
     result=0
 else
     result=$?
@@ -562,7 +562,7 @@ else
         detail=$(tail -n 1 "$log")
         message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
     else
-        message "Echec de l'operation. Le journal indique la cause."
+        message "Échec de l’opération. Le journal indique la cause."
     fi
 fi
 # Au démarrage de session, l'init rafraîchit déjà l'état toutes les 3 s :

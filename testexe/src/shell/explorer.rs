@@ -6403,6 +6403,44 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         Focus::List => None,
     };
     if let Some(fl) = field {
+        // Ctrl+C / Ctrl+X / Ctrl+V dans la recherche, l'adresse ou le
+        // renommage : le presse-papiers commun (Edge, terminal, .txt…). Ces
+        // touches étaient perdues : le runtime livre Ctrl+lettre sans caractère.
+        let ch = match (ch, ctrl(), vk) {
+            (0, true, 0x43) => 3,
+            (0, true, 0x56) => 22,
+            (0, true, 0x58) => 24,
+            _ => ch,
+        };
+        if matches!(ch, 3 | 22 | 24) {
+            if ch != 22 {
+                crate::cliphist::set_text(fl.get());
+            }
+            if ch == 24 || (ch == 22 && (RENAME_FRESH || (FOCUS == Focus::Address && ADDRESS_SELECTED))) {
+                fl.len = 0;
+                RENAME_FRESH = false;
+                RENAME_TAIL = 0;
+                ADDRESS_SELECTED = false;
+            }
+            if ch == 22 {
+                let mut buf = [0u8; 1024];
+                let n = crate::cliphist::get_text(&mut buf);
+                for &c in buf[..n].iter().take_while(|&&c| c != b'\r' && c != b'\n') {
+                    if c >= 32 {
+                        fl.push(c);
+                    }
+                }
+            }
+            if FOCUS == Focus::Search {
+                let p = pane();
+                if p.deep {
+                    reload(p);
+                }
+                rebuild_view(p);
+                p.scroll = 0;
+            }
+            return true;
+        }
         if FOCUS == Focus::Address && ADDRESS_SELECTED && ch != 0 && ch != 13 && ch != 27 {
             fl.len = 0;
             ADDRESS_SELECTED = false;
@@ -6734,8 +6772,9 @@ unsafe fn watch_drives() -> bool {
         .iter()
         .fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100_0000_01b3))
         | 1;
-    if DRIVES_SIG == 0 || sig == DRIVES_SIG {
-        DRIVES_SIG = sig;
+    // Premier passage compris : le volet de gauche montre dès l'ouverture les
+    // clés déjà branchées (avant, seulement après un passage par Ce PC).
+    if sig == DRIVES_SIG {
         return false;
     }
     DRIVES_SIG = sig;

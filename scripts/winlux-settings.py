@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Native settings: nonblocking control actions and live Linux status."""
 import os
+import time
 from pathlib import Path
 import subprocess
 import unicodedata
@@ -39,6 +40,8 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Révision : {value}': ('Revision: {value}', 'Revisión: {value}', 'Revision: {value}'),
+    'Compilée le : {value}': ('Built on: {value}', 'Compilada el: {value}', 'Erstellt am: {value}'),
     # Refonte des Paramètres (catégories, réglages intégrés)
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
@@ -49,10 +52,9 @@ _TR = {
     'Système Linux': ('Linux system', 'Sistema Linux', 'Linux-System'),
     'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
     'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
-    "Echec de l'operation. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
-    'Operation en cours...': ('Operation in progress...', 'Operación en curso...', 'Vorgang läuft...'),
-    'Operation terminee.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
-    'Une operation est deja en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
+    "Échec de l’opération. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
+    'Opération terminée.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
+    'Une opération est déjà en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
     'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
     'Version disponible : ': ('Available version: ', 'Versión disponible: ', 'Verfügbare Version: '),
     'Action en attente : ': ('Pending action: ', 'Acción pendiente: ', 'Ausstehende Aktion: '),
@@ -562,6 +564,19 @@ def _extra_pages():
 EXTRA = _extra_pages()
 
 
+def about_build(info):
+    """BUILD-INFO lisible (« Révision », « Compilée le ») au lieu des clés brutes
+    commit=, tracked_sources=, scope=…"""
+    values = dict(line.split("=", 1) for line in info.splitlines() if "=" in line)
+    lines = []
+    if values.get("commit"):
+        lines.append(_t("Révision : {value}").format(value=values["commit"][:10]))
+    built = values.get("built_at_utc", "")
+    if len(built) >= 10 and built[4] == "-":
+        lines.append(_t("Compilée le : {value}").format(value=f"{built[8:10]}/{built[5:7]}/{built[:4]}"))
+    return "".join("\n" + line for line in lines)
+
+
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Paramètres"))
@@ -710,6 +725,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
     def select(self, _, row):
         # Page visible lisible de l'extérieur (xprop WM_WINDOW_ROLE).
         self.set_role(f"page-{self.current}")
+        # Le message de la dernière opération ne suit pas d'une page à l'autre
+        # (« Opération terminée. » s'affichait partout, même sans rien faire).
+        self.page_opened = time.time()
         self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
         category = category_of(self.current)
@@ -882,7 +900,16 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
-        text = "\n".join(_t("{label} : {value}").format(label=label, value=status.get(key) or _t("Indisponible")) for label, key in fields)
+        def shown(key):
+            value = status.get(key)
+            # Échelle non réglée : automatique (et non « Indisponible »), en %.
+            if key == "display_scale":
+                try:
+                    return f"{round(float(value) * 100)} %" if value else _t("Automatique")
+                except ValueError:
+                    return value
+            return value or _t("Indisponible")
+        text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
@@ -890,7 +917,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
             self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
-        if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
+        if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
@@ -898,7 +925,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
             text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
         if self.state.get_text() != text: self.state.set_text(text)
-        if self.process is None: self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()))
+        if self.process is None:
+            try:
+                fresh = os.stat("/run/winlux/action.txt").st_mtime >= getattr(self, "page_opened", 0) - 1
+            except OSError:
+                fresh = False
+            self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()) if fresh else "")
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
         try: percent = int(progress.get("percent", "-1"))
         except ValueError: percent = -1

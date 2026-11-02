@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **263**
-- À faire ou en cours : **41**
-- Total : **304**
-- Progression : **86.5%**
-- Dernière mise à jour : 01/11/2026 (Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
+- Réalisé : **285**
+- À faire ou en cours : **40**
+- Total : **325**
+- Progression : **87.7%**
+- Dernière mise à jour : 02/11/2026 (issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
 
@@ -20,9 +20,9 @@
 - [x] **Installateur multilingue** : Choix de la langue et du clavier lors de l'installation sur disque vierge.
 - [x] **Session multilingue** : xsession-winlux lit locale.conf et exporte WINLUX_LANG au démarrage.
 - [x] **Gestion fuseau horaire** : timedatectl/ln -sf dans winlux-control.sh, 12 fuseaux courants dans l'interface.
-- [ ] **Corbeille fonctionnelle** (#10) : l'envoi vers la corbeille existe ; reste à permettre "Supprimer" -> corbeille, restaurer, vider. Très attendu.
-- [ ] **Copie avec progression + pause/annuler** (#11) : UX visuelle (barre de progression + vitesse, ETA) dans l'Explorateur.
-- [ ] **Centre de réglages rapides plus complet** (#12) : réseau (#51) et volume (#64) livrés ; reste la luminosité, la batterie (#80) et l'affichage "Ethernet virtuel" sur VM sans Wi-Fi.
+- [ ] **Corbeille fonctionnelle** (#10) : Supprimer → Corbeille et Restaurer livrés (#252), Suppr dans la Corbeille confirmé ; reste « Vider la corbeille » dans l'Explorateur.
+- [ ] **Copie avec progression + pause/annuler** (#11) : aujourd'hui une copie bloque la fenêtre de l'Explorateur jusqu'à la fin (`copy_tree` sur le fil de la fenêtre) ; à passer en tâche de fond avec progression, vitesse, temps restant, Pause, Annuler et choix en cas de conflit.
+- [ ] **Centre de réglages rapides plus complet** (#12) : réseau, volume, batterie, luminosité et « Ethernet virtuel » livrés ; reste un vrai panneau Windows 11 (tuiles et curseurs, Windows+A) à la place de la liste de boutons.
 
 
 ### État actuel
@@ -35,8 +35,8 @@
 - [x] Réseau local partagé Linux ↔ Windows (#168) : WinSock traduit IPv6 (AF_INET6 23↔10), multidiffusion et `IPV6_V6ONLY` ; iphlpapi `GetExtendedTcpTable`/`GetExtendedUdpTable` avec PID ; page « Ports ouverts » du pare-feu avec le nom de l'appli et sa portée ; proxy commun (WinHTTP, registre Internet Settings ↔ `/etc/winlux/proxy.conf` et session Linux) (`docs/RESEAU-LOCAL.md`).
 - [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
 - [x] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran ; réseau autorisé d'office mais blocable), choix mémorisé et révocable dans Paramètres > Confidentialité et sécurité (#158).
-- [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
-- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
+- [x] Bureau et .exe sous le compte de l'utilisateur, plus en root, sur le système installé (#258, issue #13 fermée) ; la session Live reste en root par choix.
+- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (#31, voir `docs/AB_UPDATES.md`).
 
 - [x] Stabilité de la session native (testée dans une VM de l'ISO v0.2.12, captures dans `docs/captures/stabilite-session/`) : menu Démarrer qui ignorait les clics une fois sur deux (saisie du pointeur), Paramètres en une seule fenêtre qui s'ouvre sur la page demandée, un bouton de barre des tâches par fenêtre (plus de menu de regroupement), compositeur picom (plus de traînées en déplaçant une fenêtre, ombres, coins arrondis), traductions fr/en/es/de conservées dans l'image (bureau, Corbeille, éditeur en français).  Corbeille d’un nouveau profil créée à l’ouverture de session (l’Explorateur affichait « Ce dossier est introuvable »).
 - [x] Explorateur en session native : les fichiers texte (Corbeille comprise) s'ouvrent dans Mousepad avec leur contenu via l'association Linux, et Suppr dans la Corbeille demande un second appui avant la suppression définitive (fiche .trashinfo effacée aussi).
@@ -49,60 +49,64 @@
 
 - [ ] Valider la veille, la veille prolongée (`winlux --power hibernate-setup`) et le capot sur un vrai portable installé ; en VM seule la veille ACPI S3 est testable.
 
-- [ ] Continuer à remplacer les implémentations partielles de `kernel32`, `msvcrt` et `ntdll`; ces modules ne constituent pas des DLL Windows complètes.
-- [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
+- [ ] Combler les fonctions Win32 les plus importées qui manquent (#14) : liste mesurée dans `docs/COMPATIBILITE.md` (point 1), dont `__CxxFrameHandler4`, `GetPrivateProfileStringW`, `timeBeginPeriod`.
+- [ ] Pile de secours (#15) : posée sur chaque thread (#230, #231) ; reste un test de débordement réel et la livraison de `STATUS_STACK_OVERFLOW` à l'appli (#269).
+- [ ] Fautes matérielles (SIGSEGV…) livrées comme exceptions SEH aux `__try` et VEH, et suspension de threads (`SuspendThread`, `GetThreadContext`, `QueueUserAPC2`) pour coreclr, Java et Go (#269).
 
 ### Priorité 2 — Compatibilité Windows
 
-- [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs.
-- [ ] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows.
-- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
-- [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
-- [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
-- [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
-- [ ] Faire tourner Paint.NET (#138) : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
-- [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
-- [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
-- [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
-- [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
+- [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs (#16).
+- [ ] Services Windows (#17) : version A livrée (#63) ; restent les variantes W, le démarrage automatique et un vrai service.
+- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides (#18).
+- [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants (#19).
+- [ ] Partage d’objets nommés entre processus (#20) : `CreateFileMappingW` ignore encore le nom ; sections ntdll reprises de #21.
+- [x] `ntdll` : exceptions et déroulement SEH x64 (`seh.rs`), TLS statique d'une DLL chargée par LoadLibrary posé sur tous les threads (issue #21 fermée ; sections nommées → #20).
+- [ ] Faire tourner Paint.NET (#138) : coreclr démarré jusqu'à `Program.Start()` (#201), WIC et Direct2D/DirectWrite livrés (#191) ; blocages suivants dans l'ordre : `coremessaging.dll` (#265), `TaskDialogIndirect` (#266), `LoadLibraryEx` en mode données pour `mscorrc.dll` (#267), puis WPF (#268). `docs/PAINTNET.md`.
+- [ ] DLL système absentes (#26) : `imm32` d'abord (9 logiciels sur 21, et PuTTY), puis `psapi`, `msimg32`, `wtsapi32`, `pdh`, `netapi32`… (`docs/COMPATIBILITE.md`, point 2).
+- [ ] Surveillance de dossiers `ReadDirectoryChangesW` et pseudo-console ConPTY, pour Claude Code, Node et les outils de dev (#270).
+- [ ] Périphériques des jeux et du matériel : `DeviceIoControl`, entrée brute, HID, ports série, changement de résolution (#271).
+- [ ] Installer les paquets MSIX/AppX (#272).
+- [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows (#23).
+- [ ] `FreeLibrary` (#24) : compteur et `DLL_PROCESS_DETACH` livrés (#230) ; la DLL reste mappée jusqu’à la fin du processus.
+- [x] Programmes C++ MinGW et exécutables MSVC/clang-cl : `cpp_exceptions` et `eh_msvc` passent en CI, `claude.exe` tourne (#255) (issue #25 fermée).
 
 ### Priorité 3 — Double-clic et intégration Linux
 
-- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`) ; les tests en racine temporaire ne constituent pas cette preuve.
+- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`) ; les tests en racine temporaire ne constituent pas cette preuve (#27).
 - [ ] Tester l’enregistrement binfmt sur une machine Linux réelle ; script de diagnostic et configuration présents, résultat réel non établi par cet audit.
 - [ ] Tester le double-clic depuis GNOME, KDE et XFCE ; la présence de `test-binfmt-desktops.sh` ne prouve pas ces trois sessions.
 
 ### Priorité 5 — Thème Windows 11
 
-- [ ] Navigation clavier complète (Tab entre les contrôles) dans toutes les fenêtres du shell ; la page Accessibilité et le Narrateur sont déjà utilisables au clavier.
-- [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
-- [ ] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
-- [ ] Ajouter la création explicite de raccourcis d'applications, leur
+- [ ] Navigation clavier complète (Tab entre les contrôles) dans toutes les fenêtres du shell ; la page Accessibilité et le Narrateur sont déjà utilisables au clavier (#28).
+- [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète (#29).
+- [ ] Démarrer avec la Corbeille seule sur le bureau, comme Windows 11 (xfdesktop affiche encore ses icônes par défaut) ; rendre les autres icônes système facultatives dans Paramètres (#30).
+- [ ] Raccourcis d'applications sur le bureau : persistance et choix grille / placement libre (#30).
 
 ### Priorité 6 — Qualité et livraison
 
-- [ ] Vérifier et embarquer toutes les notices et les obligations de fourniture de sources pour une distribution complète ; NOTICES seul n'est pas une preuve d'empaquetage exhaustif.
-- [ ] Valider une exécution complète du workflow de release modifié sur GitHub ; ses étapes de construction et tests ne constituent pas une publication déjà effectuée.
-- [ ] Signer les mises à jour (Ed25519) et implémenter le schéma A/B réel (voir `docs/AB_UPDATES.md`).
-- [ ] Committer une première version stable après validation du pipeline complet.
+- [ ] Vérifier et embarquer toutes les notices et les obligations de fourniture de sources pour une distribution complète ; NOTICES seul n'est pas une preuve d'empaquetage exhaustif (#33).
+- [x] Workflow de release validé : v0.2.13 construite et publiée par `release.yml` le 01/11/2026 (issue #32 fermée).
+- [ ] Signer les mises à jour (Ed25519) et implémenter le schéma A/B réel (#31, voir `docs/AB_UPDATES.md`).
+- [ ] Committer une première version stable après validation du pipeline complet (#34).
 
 
 ## EN COURS
 
 ### Pull requests ouvertes
 
-Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
+Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de tests, 2e série), #264 (icônes de la barre des tâches centrées).
 
 ### Chantiers actifs (issue ouverte)
 
 - [ ] Démarrer en moins de 10 s (bureau utilisable) : menu GRUB caché 1 s, noyau silencieux, inventaire matériel et services hors du chemin critique, premier démarrage sans installation bloquante (`docs/PERFORMANCES.md`, objectif 10 s).
-- [ ] Release v0.2.12 en préparation ; v0.2.7 à v0.2.11 ont échoué (paquets Qt 6 renommés, base APT dans QEMU, bureau bloqué sans Bluetooth, ISO > 2 Gio), corrigés par #128, #132, #142 et la compression xz (#32).
-- [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
-- [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
-- [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] v0.2.14 en préparation pour une installation sur un vrai ordinateur : démarrage le plus court possible, campagne de tests terminée, Claude Code dans Winlux (#255–#257 livrés) ; PR #262, #263, #264. v0.2.13 publiée le 01/11/2026.
+- [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étapes 1 à 4 livrées (#133, #143, #191, #201) ; personne dessus pour l'instant, suite dans #265 à #268 (#138, `docs/PAINTNET.md`).
+- [x] Toutes les applications en FR/EN/ES/DE (#120, #130, #131, #134, #135, puis #219 et #239 ; issue #139 fermée).
+- [x] Installateur traduit en entier en 6 langues, langue appliquée au système installé (issue #140 fermée).
 - [ ] Partage de dossiers : valider dans une VM avec un vrai PC Windows (panneau Réseau via wsdd) et un Mac (Finder) sur le même réseau (#171).
-- [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
-- [ ] Suite de l'audit du 01/11/2026 : bugs signalés dans les fichiers gelés par la file de merge (menu Démarrer « Toutes les applications », boutons de la barre des tâches, Corbeille sans confirmation, enregistrement de l'Éditeur, Alt+Tab), threads et synchronisation du runtime, IPv6/WSAPoll/WSAEventSelect, robustesse des décodeurs d'images et du CLR, scripts ISO (pkexec, DNS, binfmt) ; voir les issues ouvertes par l'audit.
+- [x] Temps de démarrage mesuré et affiché, mode jeu (#153, fermée) ; la réduction continue (#254, #259, #260, ligne « moins de 10 s » ci-dessus).
+- [ ] Suite de l'audit du 01/11/2026 : bugs signalés dans les fichiers gelés par la file de merge (menu Démarrer « Toutes les applications », boutons de la barre des tâches, Corbeille sans confirmation, enregistrement de l'Éditeur, Alt+Tab), threads et synchronisation du runtime, IPv6/WSAPoll/WSAEventSelect, robustesse des décodeurs d'images et du CLR, scripts ISO (pkexec, DNS, binfmt) ; voir les issues ouvertes par l'audit. Restes vérifiés le 02/11 dans #209 (shell) et #214 (scripts).
 - [ ] Compatibilité Linux ↔ Windows du texte, des polices, de la langue, du clavier et de l'heure : livré dans la PR de #183 ; restent les clés de registre dynamiques, `ToUnicode`/`VkKeyScan` selon la disposition et les pages 1250/1251/866 (#183, `docs/INTL.md`).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
@@ -110,6 +114,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Échecs et finitions (02/11/2026, campagne de tests v0.2.13) : un .exe qui ne peut pas démarrer affichait un xmessage en charabia (UTF-8), avec le message brut du chargeur. winlux-open ouvre maintenant une boîte Winlux claire (composant Windows manquant, programme 32 bits) avec « Détails techniques » repliés. « Extraire ici » extrayait dans un nouveau dossier « Téléchargements (2) » à côté du dossier courant ; l'extraction se fait maintenant dans le dossier même, sans jamais écraser un fichier (« nom (2).ext »), et un échec ne touche plus au dossier de l'utilisateur. Les Réglages rapides n'affichent plus Wi-Fi, Bluetooth ni luminosité sans le matériel correspondant. Paramètres : « Échelle : Automatique / 125 % » au lieu de « Indisponible », « Opération terminée. » accentué et affiché seulement sur la page où l'action a eu lieu. À propos : « Révision » et « Compilée le » au lieu des clés brutes de BUILD-INFO. L'icône nm-applet (en anglais) doublait l'icône réseau Winlux dans la barre : elle est masquée, et nm-applet reste lancé pour les mots de passe Wi-Fi. Menu Démarrer : le clic droit propose les actions déclarées par l'application (« Mettre à jour Claude Code »), et un raccourci créé sur le bureau reçoit la somme de confiance d'xfdesktop. Claude Code : un téléchargement coupé affiche « La connexion Internet a été interrompue… » au lieu de « The read operation timed out ». La version installée reste utilisable, et Réessayer reprend correctement. Terminal Winlux : un texte copié dans Edge ou un .txt (Ctrl+C) ne se collait pas, parce que xterm ne colle que la sélection PRIMARY. Ctrl+Maj+V, Maj+Inser et le clic droit collent maintenant le presse-papiers (CLIPBOARD), et Ctrl+Maj+C copie. Explorateur : Ctrl+C, Ctrl+X et Ctrl+V fonctionnent dans la recherche, la barre d'adresse et le renommage. Le runtime livre Ctrl+lettre sans caractère, et ces touches étaient perdues.
 - [x] Raccourcis clavier Windows (01/11/2026, campagne de tests v0.2.13) : xfsettingsd appliquait les raccourcis XFCE avant openbox. Windows+E ouvrait Thunar en root sur « / », Windows+R, Windows+P, Ctrl+Alt+L, Ctrl+Alt+Suppr, Ctrl+Maj+Échap et Impr écran visaient des programmes absents de l'image. `winlux-native-config` remplace les valeurs XFCE d'origine par l'Explorateur, le menu Démarrer, Paramètres > Écran, le verrouillage et le Gestionnaire des tâches, et retire ceux sans équivalent. Un raccourci personnalisé est conservé. Vérifié en VM sur l'ISO v0.2.13.
 - [x] Bureau (01/11/2026, campagne de tests v0.2.13) : le clic droit sur un fichier du bureau ouvrait le menu d'Openbox (ni Ouvrir, ni Renommer, ni Supprimer) et un clic ne donnait jamais le clavier au bureau (Ctrl+C/V, Suppr sans effet). xfdesktop affiche maintenant ses menus : fichier (Ouvrir avec, Couper, Copier, Corbeille, Supprimer, Renommer, Propriétés) et espace vide (Créer un dossier/document, Coller, Ouvrir dans le terminal) ; le menu Winlux reste sur Windows+F10. Profils existants migrés par `winlux-native-config`. Live : un xfdesktop relancé laissait toutes les fenêtres noires sous picom, remis à zéro par SIGUSR1.
 - [x] Explorateur (01/11/2026, campagne de tests v0.2.13) : glisser un fichier sur un dossier de la liste ou sur un emplacement du volet de gauche (Bureau, Documents, lecteurs) ne faisait rien. Il le déplace maintenant (Ctrl : copie), avec la surbrillance du dossier visé, et un dépôt sur la Corbeille met à la corbeille. Renommer (F2) ne sélectionne que le nom sans l'extension, et Ctrl+A sélectionne le nom entier. La barre d'état affiche « 1 élément ».
