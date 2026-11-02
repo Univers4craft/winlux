@@ -517,6 +517,19 @@ assert not assistant.LOCAL_DIR.exists() and not assistant.is_enabled()
 assert assistant.main(["winlux-assistant", "--activer", "inconnu"]) == 2
 httpd.shutdown()
 
+# ── L'IA parle la langue choisie pour Winlux (Paramètres > Langue, /etc/winlux/locale.conf) ──
+for lang, name, page in (("en", "English", "Display"), ("es", "español", "Pantalla"), ("de", "Deutsch", "Bildschirm")):
+    assistant._LANG = lang
+    assert f"Réponds toujours en {name}" in assistant.system_prompt("ChatGPT"), lang
+    label = assistant.describe_action("ouvrir_parametres", "8")[0]
+    assert page in label and "Écran" not in label, label
+    assert assistant.display_name("local") != "IA locale"
+    assert "Processeur" not in assistant.read_system() and "Mémoire" not in assistant.read_system()
+    assert assistant.describe_action("reglage", "theme_sombre")[0] != "Thème sombre"
+assistant._LANG = "fr"
+for page_name in assistant.SETTINGS_PAGES.values():
+    assert page_name in assistant._TR, f"page non traduite : {page_name}"
+
 # ── Quatre langues : chaque texte de l'interface est traduit ──
 for text, row in assistant._TR.items():
     assert len(row) == 3 and all(row), text

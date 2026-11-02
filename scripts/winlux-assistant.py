@@ -179,6 +179,29 @@ _TR = {
     "Mode économie d'énergie": ("Power saving mode", "Modo ahorro de energía", "Energiesparmodus"),
     "Rechercher les mises à jour de Winlux": ("Check for Winlux updates", "Buscar actualizaciones de Winlux",
                                               "Nach Winlux-Updates suchen"),
+    # Pages des Paramètres et description du PC, dans la langue choisie.
+    "Réseau": ("Network", "Red", "Netzwerk"),
+    "Clavier et souris": ("Keyboard and mouse", "Teclado y ratón", "Tastatur und Maus"),
+    "Mises à jour": ("Updates", "Actualizaciones", "Updates"),
+    "Écran": ("Display", "Pantalla", "Bildschirm"),
+    "Programmes Windows": ("Windows programs", "Programas de Windows", "Windows-Programme"),
+    "Navigateurs": ("Browsers", "Navegadores", "Browser"),
+    "Accessibilité": ("Accessibility", "Accesibilidad", "Barrierefreiheit"),
+    "Localisation": ("Location", "Ubicación", "Standort"),
+    "Son": ("Sound", "Sonido", "Sound"),
+    "Confidentialité et sécurité": ("Privacy and security", "Privacidad y seguridad", "Datenschutz und Sicherheit"),
+    "Lecteurs réseau": ("Network drives", "Unidades de red", "Netzlaufwerke"),
+    "Fond d’écran et couleurs": ("Wallpaper and colors", "Fondo de pantalla y colores", "Hintergrund und Farben"),
+    "Bluetooth": ("Bluetooth", "Bluetooth", "Bluetooth"),
+    "Alimentation et batterie": ("Power and battery", "Energía y batería", "Energie und Akku"),
+    "Graphismes": ("Graphics", "Gráficos", "Grafik"),
+    "Imprimantes et scanners": ("Printers and scanners", "Impresoras y escáneres", "Drucker und Scanner"),
+    "Partage et transfert": ("Sharing and transfer", "Compartir y transferir", "Freigabe und Übertragung"),
+    "Jeux": ("Games", "Juegos", "Spiele"),
+    "Processeur : {model} ({count} cœurs)": ("Processor: {model} ({count} cores)", "Procesador: {model} ({count} núcleos)", "Prozessor: {model} ({count} Kerne)"),
+    "Mémoire : {size} Gio": ("Memory: {size} GiB", "Memoria: {size} GiB", "Arbeitsspeicher: {size} GiB"),
+    "Carte graphique": ("Graphics card", "Tarjeta gráfica", "Grafikkarte"),
+    "Machine virtuelle": ("Virtual machine", "Máquina virtual", "Virtuelle Maschine"),
     # Trois assistants : Claude, ChatGPT, IA locale.
     'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'IA locale': ('Local AI', 'IA local', 'Lokale KI'),
@@ -942,7 +965,8 @@ C:\\Users\\<nom> sont le dossier personnel Linux. Le journal Winlux note les DLL
 manquent à un programme ; un .exe qui ne s'ouvre pas manque souvent d'une DLL ou d'une fonction encore non
 fournie, ou plante (journal des plantages). Les pilotes noyau et anti-triche ne sont pas pris en charge.
 
-Réponds en {LANGUAGE_NAMES[_LANG]}, simplement, en quelques phrases, pour quelqu'un qui n'est pas informaticien.
+Réponds toujours en {LANGUAGE_NAMES[_LANG]}, la langue choisie pour Winlux, même si la question est posée dans une
+autre langue ; simplement, en quelques phrases, pour quelqu'un qui n'est pas informaticien.
 Tu n'as aucun outil : n'exécute aucune commande et ne lis aucun fichier toi-même. Pour lire une information
 ou agir, remplis « demande » (une seule par réponse) et « argument » (vide si inutile) ; l'utilisateur voit la demande et l'accepte ou la refuse. Demandes possibles :
 - aucune : simple réponse.
@@ -1013,13 +1037,13 @@ def read_system():
     try:
         model = next(line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                      if line.startswith("model name"))
-        lines.append(f"Processeur : {model} ({os.cpu_count()} cœurs)")
+        lines.append(_t("Processeur : {model} ({count} cœurs)", model=model, count=os.cpu_count()))
     except (OSError, StopIteration):
         pass
     try:
         total = next(int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
                      if line.startswith("MemTotal"))
-        lines.append(f"Mémoire : {total / 1048576:.1f} Gio")
+        lines.append(_t("Mémoire : {size} Gio", size=f"{total / 1048576:.1f}"))
     except (OSError, StopIteration, ValueError):
         pass
     try:
@@ -1027,7 +1051,7 @@ def read_system():
                       if "=" in line)
         for key, label in (("gpu", "Carte graphique"), ("display_mode", "Écran"), ("virtual_machine", "Machine virtuelle")):
             if status.get(key):
-                lines.append(f"{label} : {status[key]}")
+                lines.append(f"{_t(label)} : {status[key]}")
     except OSError:
         pass
     return "\n".join(lines)
@@ -1079,7 +1103,7 @@ def describe_action(kind, argument):
         return _t(label), ["winlux-control", action]
     if kind == "ouvrir_parametres" and argument.strip().isdigit() and int(argument) in SETTINGS_PAGES:
         page = int(argument)
-        return (_t("ouvrir Paramètres, page {page}", page=f"« {SETTINGS_PAGES[page]} »"),
+        return (_t("ouvrir Paramètres, page {page}", page=f"« {_t(SETTINGS_PAGES[page])} »"),
                 ["winlux-shell-app", "settings", str(page)])
     if kind == "ouvrir_dossier":
         path = Path(os.path.expanduser(argument.strip())) if argument.strip() else None
@@ -1365,7 +1389,7 @@ class LocalAssistant:
         pages = "; ".join(f"{number} = {name}" for number, name in SETTINGS_PAGES.items())
         system = (f"Tu es la petite IA locale de Winlux, un système Linux qui lance les programmes Windows (.exe) "
                   f"avec sa propre couche de compatibilité et un bureau façon Windows 11. Réponds en "
-                  f"{LANGUAGE_NAMES[_LANG]}, en trois phrases au plus, simplement. Un .exe qui ne s'ouvre pas manque "
+                  f"{LANGUAGE_NAMES[_LANG]} (la langue choisie pour Winlux), en trois phrases au plus, simplement. Un .exe qui ne s'ouvre pas manque "
                   f"souvent d'une DLL ou d'une fonction Windows : le journal le dit (« missing », « unimplemented »). "
                   f"N'invente rien ; si tu ne sais pas, dis-le. « page » : la page des Paramètres utile ({pages}), "
                   f"sinon aucune.")
