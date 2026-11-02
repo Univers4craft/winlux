@@ -347,7 +347,7 @@ if openbox_config.is_file():
                 defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
                 if defaults is not None:
                     for binding in defaults:
-                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t", "W-w") and binding.get("key") not in keys:
+                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t", "W-w", "W-c") and binding.get("key") not in keys:
                             keyboard.append(ET.fromstring(ET.tostring(binding)))
                             changed = True
             for binding in list(keyboard):
