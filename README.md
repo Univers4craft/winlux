@@ -75,8 +75,8 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.13**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.13) (1er novembre 2026) : ISO de 1,93 Gio, outil de mise à jour corrigé, changement rapide d'utilisateur, impression, son PipeWire, lecteurs réseau SMB/NFS. |
-| **Version en préparation** | **v0.2.14** : bureau et programmes sous le compte de l'utilisateur (plus en root), démarrage plus rapide, Claude Code dans Winlux, applications Ubuntu traduites. |
+| **Dernière version publiée** | [**v0.2.14**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.14) (2 novembre 2026) : bureau et programmes sous le compte de l'utilisateur (plus en root), démarrage plus rapide, Claude Code dans Winlux, applications Ubuntu traduites. |
+| **Version en préparation** | **v0.2.15** : aucun navigateur fourni (vous choisissez le vôtre, téléchargé chez son éditeur), système au nom de Winlux, sources GPL publiées, contrôles et boîtes de dialogue Win32, OpenGL et Vulkan. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS ou UEFI, Secure Boot compatible. |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
