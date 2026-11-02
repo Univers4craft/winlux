@@ -283,9 +283,9 @@ européennes, jamais comme une obligation de Winlux :
   article 14, paragraphe 1, point c).
 - Formule publique : « Dans l'esprit des règles européennes sur le choix du
   navigateur, Winlux laisse l'utilisateur choisir lui-même son navigateur ».
-  **Ne pas écrire** « l'Union européenne nous demande », ni « aucun
-  navigateur n'est préinstallé ni favorisé » tant que la section 3, lignes 8
-  et 9, n'est pas fusionnée et publiée.
+  **Ne pas écrire** « l'Union européenne nous demande ». Depuis #331,
+  « aucun navigateur n'est préinstallé ni favorisé » est exact pour l'image
+  d'installation et figure sur la page publique.
 
 ## 3. Les endroits à corriger
 
@@ -317,8 +317,8 @@ Relevé fait dans le dépôt le 2 novembre 2026.
 | 5 | Wiki, pages techniques (`Reseau-et-disques`, `Registre-Windows`, `Bureau-et-applications`, `Architecture`, `Parametres`…) | Relire avec la liste 2.1 ; « Registre Windows » reste un nom descriptif acceptable | Fil de la documentation, ou le coordinateur |
 | 6 | Accent de couleur et bouton Démarrer par défaut | Vérifier que le logo Prisme et l'accent violet sont bien les réglages par défaut dans les deux bureaux | Fil de l'interface |
 | 7 | Épingle « Microsoft Edge » avec son logo dans le menu Démarrer d'un compte neuf, et dessin imitant le logo Edge dans le shell PE | Remplacés par une entrée générique « Navigateur » à icône neutre, vérifiée par `scripts/test-no-microsoft-branding.py` (#317, à fusionner). Tant que ce n'est pas fusionné, la page publique ne parle que du code et des ressources du projet | Fil des comptes |
-| 8 | Paquets Edge et Chrome intégrés aux ISO jusqu'à v0.2.14 | Voir section 4, point 4. Corrigé pour les versions suivantes : aucun navigateur dans l'image. Retrait des anciennes ISO de GitHub : décision de damien | Fil des versions |
-| 9 | Navigateur par défaut quand l'utilisateur n'en a choisi aucun (`winlux-browsers.sh` retombe sur `edge`) | Ne retomber sur aucun navigateur : ouvrir l'écran de choix ; présenter la liste dans un ordre neutre (alphabétique ou aléatoire). Ensuite seulement, la page publique pourra dire « aucun navigateur n'est préinstallé ni favorisé » | Fil des versions ou fil des comptes |
+| 8 | Paquets Edge et Chrome intégrés aux ISO jusqu'à v0.2.14 | **Fait** (#331) : aucun navigateur dans l'image, contrôle `check-image-redistributable.sh` ; anciennes ISO retirées (notes de v0.2.15, `docs/BROWSERS.md`) | Fil des versions |
+| 9 | Navigateur par défaut quand l'utilisateur n'en a choisi aucun | **Fait** (#331) : aucun par défaut, liste alphabétique partout, téléchargement chez l'éditeur. Reste : l'entrée `integration/winlux-browser.desktop` s'appelait « Microsoft Edge (Winlux) » (corrigée dans la PR de suivi de #327) ; le paquet d'intégration hors ISO (`integration/winlux-browser`, `install.sh`) privilégie encore Edge | Fil des versions |
 
 ---
 
