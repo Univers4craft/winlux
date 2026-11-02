@@ -12,6 +12,7 @@ pub mod comctl32;
 pub mod comdlg32;
 pub mod comobj;
 pub mod console_input;
+pub mod controls;
 pub mod credentials;
 pub mod crt;
 pub mod crt_runtime;
@@ -597,6 +598,12 @@ fn add_basics(all: &mut [Builtin]) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
             }
+        }
+    }
+    // Versions réelles qui remplacent d'anciens exports vides.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
+        for (name, addr) in controls::user32_overrides() {
+            b.exports.insert(name, addr);
         }
     }
 }
