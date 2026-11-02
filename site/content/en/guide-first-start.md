@@ -1,13 +1,21 @@
 ---
 title: First start
-description: The Welcome assistant personalises your desktop, then a short tour shows you the essentials.
+description: The Welcome window takes you, in one click, to the guided tour, the keyboard, the network, the appearance and recovery.
 ---
 
-## The Welcome assistant
+## The Welcome window
 
-At first start, the Welcome assistant offers you, one step at a time: a wallpaper (“Winlux Nuit”, “Winlux Aube”…), an accent colour and the light or dark theme, the position of the taskbar (centred or on the left), the desktop icons and the sign-in sound. Each choice applies immediately.
+The first time you sign in, the **Welcome to Winlux** window opens on the desktop. It changes nothing by itself: each button opens the right tool, and you go at your own pace.
 
-![The Welcome assistant](img:assistant-bienvenue.jpg "The Welcome assistant: everything can still be changed in Settings › Personalisation.")
+- **Guided tour and common apps**: a two-minute tour (Start menu, Explorer, running an `.exe`, Settings, shortcuts, privacy), then a list of free apps to tick and install in one click, and the choice of light or dark theme and taskbar position.
+- **Choose the keyboard**: opens Settings › Keyboard & mouse.
+- **Set up the network**: opens quick settings, for Wi-Fi.
+- **Personalize the appearance**: opens Settings › Background & colors.
+- **Discover recovery**: opens Settings › Updates, where you can restore the previous version and find what to do if the desktop no longer starts.
+
+![The Welcome window](img:assistant-bienvenue.jpg "The Welcome window: five shortcuts to the guided tour and the first settings.")
+
+Click **“Finish”** when you are done. Until you do, the window comes back each time you sign in. After that, it no longer opens by itself, but you can start it again at any time from the Start menu: search for “Welcome to Winlux”.
 
 If you asked for it during installation, the applications recommended for your profile are then installed in the background, as soon as an Internet connection is available.
 
@@ -24,7 +32,7 @@ If you asked for it during installation, the applications recommended for your p
 ![The Start menu](img:bureau-menu-demarrer.jpg "The Start menu: pinned apps, recommendations and search.")
 
 > [!tip]
-> The Welcome assistant and the tour can be started again at any time from the Start menu.
+> Windows + E opens File Explorer, Windows + A opens quick settings and Windows + N opens notifications.
 
 ## Where your files are
 
