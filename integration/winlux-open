@@ -274,14 +274,21 @@ status=$?
 if [ "$status" -ne 0 ]; then
     # Un plantage enregistré depuis le lancement : la boîte « Signaler un
     # problème » explique la cause et propose l'envoi (jamais automatique).
-    # Depuis le bureau Winlux, c'est le bureau qui la propose après l'écran bleu.
-    if [ "${WINLUX_DESKTOP_LAUNCH:-0}" != 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+    # Seul le bureau PE (gui_demo.exe, WINLUX_DESKTOP_DEMO) affiche lui-même
+    # l'écran bleu puis cette boîte. L'Explorateur et les autres applications
+    # PE de la session native (WINLUX_NATIVE_SHELL) passent aussi par
+    # ShellExecute (WINLUX_DESKTOP_LAUNCH=1) mais n'affichent rien : sans la
+    # boîte ici, un .exe graphique qui plantait disparaissait sans un mot.
+    pe_desktop=0
+    if [ -n "${WINLUX_DESKTOP_DEMO:-}" ] && [ -z "${WINLUX_NATIVE_SHELL:-}" ]; then pe_desktop=1; fi
+    if [ "$pe_desktop" != 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
         && command -v winlux-report >/dev/null 2>&1; then
         winlux-report --crash --since "$started"
         case $? in 0) exit "$status" ;; esac
     fi
-    [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] && [ -e /run/winlux/journal/crash.log ] \
-        && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' /run/winlux/journal/crash.log | tail -n 1)" -ge "$started" ] 2>/dev/null \
+    crashes=${WINLUX_JOURNAL_DIR:-/run/winlux/journal}/crash.log
+    [ "$pe_desktop" = 1 ] && [ -e "$crashes" ] \
+        && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' "$crashes" | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
     show_error "$(explain_failure "$(basename -- "$exe")" "$status" "$log")" "$detail"

@@ -629,6 +629,16 @@ if test -n "$desktop_user"; then
     # Dossier d'état partagé : chacun y écrit ses fichiers, personne ne
     # touche à ceux des autres (sticky), root ne suit pas les liens d'autrui.
     /bin/busybox chmod 1777 /run/winlux
+    # Journal Winlux : les .exe du compte y écrivent winlux.log et crash.log.
+    # Créés ici avant tout service root (winlux --power daemon les créait en
+    # 0644 root) : sinon un plantage sous le compte n'était jamais enregistré,
+    # ni proposé au signalement, ni visible dans l'Observateur d'événements.
+    /bin/busybox mkdir -p /run/winlux/journal
+    /bin/busybox chmod 1777 /run/winlux/journal
+    for journal_file in winlux.log crash.log; do
+        /bin/busybox touch "/run/winlux/journal/$journal_file"
+        /bin/busybox chmod 0666 "/run/winlux/journal/$journal_file"
+    done
     echo 1 >/proc/sys/fs/protected_symlinks 2>/dev/null || true
     echo 1 >/proc/sys/fs/protected_hardlinks 2>/dev/null || true
 else
