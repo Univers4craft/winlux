@@ -1205,6 +1205,122 @@ unsafe extern "win64" fn set_file_security_w(name: *const u16, _info: u32, _sd: 
     }
 }
 
+// Journal des événements : chaque source est un handle ; ReportEvent écrit
+// dans le journal de Winlux (celui que lit le rapport de bogue), avec le
+// niveau du type d'événement Windows.
+
+fn event_sources() -> &'static std::sync::Mutex<std::collections::HashMap<usize, String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+fn register_source(name: String) -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5E70_0000);
+    let h = NEXT.fetch_add(4, std::sync::atomic::Ordering::Relaxed);
+    event_sources()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(h, name);
+    h
+}
+
+unsafe extern "win64" fn register_event_source_w(_server: *const u16, source: *const u16) -> usize {
+    register_source(wstr(source))
+}
+
+unsafe extern "win64" fn register_event_source_a(_server: *const u8, source: *const u8) -> usize {
+    register_source(crate::dlls::cstr(source))
+}
+
+extern "win64" fn deregister_event_source(h: usize) -> i32 {
+    match event_sources()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&h)
+    {
+        Some(_) => 1,
+        None => {
+            set_last_error(6); // ERROR_INVALID_HANDLE
+            0
+        }
+    }
+}
+
+/// Écrit l'événement dans le journal de Winlux. Renvoie la ligne écrite.
+pub fn report_event(h: usize, kind: u16, id: u32, strings: &[String]) -> Option<String> {
+    let source = event_sources()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&h)
+        .cloned()?;
+    let line = format!(
+        "{source} (événement {}) : {}",
+        id & 0xFFFF,
+        strings.join(" | ")
+    );
+    match kind {
+        1 | 0x10 => {
+            crate::log_error!("eventlog", "{line}");
+        } // ERROR, AUDIT_FAILURE
+        2 => {
+            crate::log_warn!("eventlog", "{line}");
+        }
+        _ => {
+            crate::log_info!("eventlog", "{line}");
+        }
+    }
+    Some(line)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn report_event_w(
+    h: usize,
+    kind: u16,
+    _category: u16,
+    id: u32,
+    _sid: usize,
+    n: u16,
+    _size: u32,
+    strings: *const *const u16,
+    _data: usize,
+) -> i32 {
+    let list: Vec<String> = (0..n as usize)
+        .filter(|_| !strings.is_null())
+        .map(|i| wstr(*strings.add(i)))
+        .collect();
+    if report_event(h, kind, id, &list).is_some() {
+        1
+    } else {
+        set_last_error(6);
+        0
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn report_event_a(
+    h: usize,
+    kind: u16,
+    _category: u16,
+    id: u32,
+    _sid: usize,
+    n: u16,
+    _size: u32,
+    strings: *const *const u8,
+    _data: usize,
+) -> i32 {
+    let list: Vec<String> = (0..n as usize)
+        .filter(|_| !strings.is_null())
+        .map(|i| crate::dlls::cstr(*strings.add(i)))
+        .collect();
+    if report_event(h, kind, id, &list).is_some() {
+        1
+    } else {
+        set_last_error(6);
+        0
+    }
+}
+
 // ── msvcrt (noms décorés du C++ 64 bits) ───────────────────────────────
 
 /// type_info::~type_info : le nom décoré mis en cache par type_info::name
@@ -1273,6 +1389,13 @@ pub fn shell32_overrides() -> Exports {
     }
 }
 
+/// RegisterEventSourceA renvoyait 1 pour toute source, sans journal.
+pub fn advapi32_overrides() -> Exports {
+    crate::exports! {
+        "RegisterEventSourceA" => fn register_event_source_a,
+    }
+}
+
 pub fn advapi32_exports() -> Exports {
     crate::exports! {
         "LsaOpenPolicy" => fn lsa_open_policy,
@@ -1280,6 +1403,10 @@ pub fn advapi32_exports() -> Exports {
         "LsaClose" => fn lsa_close,
         "LookupAccountNameW" => fn lookup_account_name_w,
         "SetFileSecurityW" => fn set_file_security_w,
+        "RegisterEventSourceW" => fn register_event_source_w,
+        "DeregisterEventSource" => fn deregister_event_source,
+        "ReportEventW" => fn report_event_w,
+        "ReportEventA" => fn report_event_a,
     }
 }
 
@@ -1431,6 +1558,15 @@ mod tests {
             );
             il_free(p);
         }
+    }
+
+    #[test]
+    fn journal_des_evenements() {
+        let h = register_source("Paint.NET".into());
+        let line = report_event(h, 1, 0x4000_0003, &["échec".into(), "détail".into()]).unwrap();
+        assert_eq!(line, "Paint.NET (événement 3) : échec | détail");
+        assert_eq!(deregister_event_source(h), 1);
+        assert!(report_event(h, 1, 3, &[]).is_none());
     }
 
     #[test]

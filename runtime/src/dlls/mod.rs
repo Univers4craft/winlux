@@ -721,6 +721,11 @@ fn add_basics(all: &mut [Builtin]) {
             b.exports.insert(name, addr);
         }
     }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "advapi32") {
+        for (name, addr) in apps_win32::advapi32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
     if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
