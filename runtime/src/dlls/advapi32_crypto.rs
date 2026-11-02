@@ -9,7 +9,7 @@
 //! Windows) ou ECB, avec le bourrage PKCS#5 au dernier appel. DES, 3DES et AES
 //! passent par l'OpenSSL de l'hôte (DES = DES-EDE3 à clé répétée, car DES
 //! seul n'est que dans le fournisseur « legacy »), RC4 est maison. Les clés
-//! RSA (échange, signature) ne sont pas fournies.
+//! RSA (échange, signature) et les conteneurs sont dans `advapi32_rsa`.
 
 use crate::process::set_last_error;
 use std::collections::HashMap;
@@ -31,6 +31,8 @@ const CALG_MD4: u32 = 0x8002;
 struct Hash {
     algid: u32,
     data: Vec<u8>,
+    /// Fournisseur qui a créé le condensat (CryptSignHash signe avec sa clé).
+    prov: usize,
 }
 
 fn hashes() -> &'static Mutex<HashMap<usize, Hash>> {
@@ -146,6 +148,14 @@ fn bcrypt_alg(algid: u32) -> Option<usize> {
     })
 }
 
+/// Algorithme, valeur et fournisseur d'un condensat (CryptSignHash,
+/// CryptVerifySignature).
+pub(crate) fn hash_value(h: usize) -> Option<(u32, Vec<u8>, usize)> {
+    let map = super::lock(hashes());
+    let st = map.get(&h)?;
+    Some((st.algid, digest(st)?, st.prov))
+}
+
 fn digest(h: &Hash) -> Option<Vec<u8>> {
     if h.algid == CALG_MD4 {
         return Some(md4(&h.data).to_vec());
@@ -173,23 +183,8 @@ fn digest(h: &Hash) -> Option<Vec<u8>> {
     (r == 0).then_some(out)
 }
 
-pub unsafe extern "win64" fn crypt_acquire_context_w(
-    ph: *mut usize,
-    _container: *const u16,
-    _provider: *const u16,
-    _type: u32,
-    _flags: u32,
-) -> i32 {
-    if ph.is_null() {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    *ph = 1;
-    1
-}
-
 pub unsafe extern "win64" fn crypt_create_hash(
-    _prov: usize,
+    prov: usize,
     algid: u32,
     key: usize,
     _flags: u32,
@@ -210,6 +205,7 @@ pub unsafe extern "win64" fn crypt_create_hash(
         Hash {
             algid,
             data: Vec::new(),
+            prov,
         },
     );
     *out = id;
@@ -269,6 +265,7 @@ pub unsafe extern "win64" fn crypt_get_hash_param(
         4 => (digest(&Hash {
             algid: st.algid,
             data: Vec::new(),
+            prov: 0,
         })
         .map_or(0, |d| d.len()) as u32)
             .to_le_bytes()
@@ -310,6 +307,7 @@ pub unsafe extern "win64" fn crypt_duplicate_hash(
     let copy = Hash {
         algid: st.algid,
         data: st.data.clone(),
+        prov: st.prov,
     };
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     map.insert(id, copy);
@@ -478,11 +476,11 @@ fn reset(k: &mut Key) {
 }
 
 pub unsafe extern "win64" fn crypt_import_key(
-    _prov: usize,
+    prov: usize,
     data: *const u8,
     len: u32,
     pub_key: usize,
-    _flags: u32,
+    flags: u32,
     out: *mut usize,
 ) -> i32 {
     if data.is_null() || out.is_null() || len < 12 {
@@ -490,6 +488,9 @@ pub unsafe extern "win64" fn crypt_import_key(
         return 0;
     }
     let blob = std::slice::from_raw_parts(data, len as usize);
+    if let Some(r) = super::advapi32_rsa::import_key(prov, blob, flags, out) {
+        return r;
+    }
     // BLOBHEADER { bType, bVersion, reserved, aiKeyAlg } puis, pour
     // PLAINTEXTKEYBLOB, dwKeySize et la clé en clair.
     if blob[0] != PLAINTEXTKEYBLOB || pub_key != 0 {
@@ -515,7 +516,7 @@ pub unsafe extern "win64" fn crypt_import_key(
 }
 
 pub unsafe extern "win64" fn crypt_gen_key(
-    _prov: usize,
+    prov: usize,
     algid: u32,
     flags: u32,
     out: *mut usize,
@@ -523,6 +524,9 @@ pub unsafe extern "win64" fn crypt_gen_key(
     if out.is_null() {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
+    }
+    if let Some(r) = super::advapi32_rsa::gen_key(prov, algid, flags, out) {
+        return r;
     }
     let Some((_, sizes)) = alg_shape(algid) else {
         set_last_error(NTE_BAD_ALGID);
@@ -602,6 +606,7 @@ pub unsafe extern "win64" fn crypt_derive_key(
             digest(&Hash {
                 algid: halg,
                 data: b.to_vec(),
+                prov: 0,
             })
             .unwrap_or_default()
         };
@@ -623,7 +628,7 @@ pub unsafe extern "win64" fn crypt_encrypt(
     key: usize,
     hash: usize,
     final_: i32,
-    _flags: u32,
+    flags: u32,
     data: *mut u8,
     len: *mut u32,
     buf_len: u32,
@@ -631,6 +636,9 @@ pub unsafe extern "win64" fn crypt_encrypt(
     if len.is_null() {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
+    }
+    if super::advapi32_rsa::is_rsa(key) {
+        return super::advapi32_rsa::encrypt(key, final_, flags, data, len, buf_len);
     }
     let mut map = super::lock(keys());
     let Some(k) = map.get_mut(&key) else {
@@ -692,13 +700,16 @@ pub unsafe extern "win64" fn crypt_decrypt(
     key: usize,
     hash: usize,
     final_: i32,
-    _flags: u32,
+    flags: u32,
     data: *mut u8,
     len: *mut u32,
 ) -> i32 {
     if len.is_null() || (data.is_null() && *len != 0) {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
+    }
+    if super::advapi32_rsa::is_rsa(key) {
+        return super::advapi32_rsa::decrypt(key, final_, flags, data, len);
     }
     let mut map = super::lock(keys());
     let Some(k) = map.get_mut(&key) else {
@@ -794,6 +805,13 @@ pub unsafe extern "win64" fn crypt_get_key_param(
     len: *mut u32,
     _flags: u32,
 ) -> i32 {
+    if super::advapi32_rsa::is_rsa(key) {
+        if len.is_null() {
+            set_last_error(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        return super::advapi32_rsa::get_param(key, param, out, len);
+    }
     let map = super::lock(keys());
     let Some(k) = map.get(&key) else {
         set_last_error(NTE_BAD_KEY);
@@ -835,6 +853,14 @@ pub unsafe extern "win64" fn crypt_duplicate_key(
     _flags: u32,
     out: *mut usize,
 ) -> i32 {
+    if super::advapi32_rsa::is_rsa(key) {
+        if out.is_null() {
+            set_last_error(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        *out = super::advapi32_rsa::duplicate(key);
+        return (*out != 0) as i32;
+    }
     let mut map = super::lock(keys());
     let Some(k) = map.get(&key).cloned() else {
         set_last_error(NTE_BAD_KEY);
@@ -851,6 +877,9 @@ pub unsafe extern "win64" fn crypt_duplicate_key(
 }
 
 pub extern "win64" fn crypt_destroy_key(key: usize) -> i32 {
+    if super::advapi32_rsa::is_rsa(key) {
+        return super::advapi32_rsa::crypt_destroy_key(key);
+    }
     if super::lock(keys()).remove(&key).is_some() {
         1
     } else {
@@ -859,9 +888,60 @@ pub extern "win64" fn crypt_destroy_key(key: usize) -> i32 {
     }
 }
 
+/// CryptExportKey d'une clé symétrique : PLAINTEXTKEYBLOB seulement (le
+/// chiffrement par une clé RSA, SIMPLEBLOB, n'est pas fourni).
+pub(crate) unsafe fn export_symmetric(
+    key: usize,
+    exp_key: usize,
+    blob_type: u32,
+    out: *mut u8,
+    len: *mut u32,
+) -> i32 {
+    if len.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(k) = super::lock(keys()).get(&key).cloned() else {
+        set_last_error(NTE_BAD_KEY);
+        return 0;
+    };
+    if blob_type != PLAINTEXTKEYBLOB as u32 || exp_key != 0 {
+        set_last_error(NTE_BAD_TYPE);
+        return 0;
+    }
+    let mut blob = vec![PLAINTEXTKEYBLOB, 2, 0, 0];
+    blob.extend_from_slice(&k.algid.to_le_bytes());
+    blob.extend_from_slice(&(k.key.len() as u32).to_le_bytes());
+    blob.extend_from_slice(&k.key);
+    if out.is_null() {
+        *len = blob.len() as u32;
+        return 1;
+    }
+    if (*len as usize) < blob.len() {
+        *len = blob.len() as u32;
+        set_last_error(ERROR_MORE_DATA);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(blob.as_ptr(), out, blob.len());
+    *len = blob.len() as u32;
+    1
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-        "CryptAcquireContextW" => fn crypt_acquire_context_w,
+        "CryptAcquireContextW" => fn super::advapi32_rsa::crypt_acquire_context_w,
+        "CryptAcquireContextA" => fn super::advapi32_rsa::crypt_acquire_context_a,
+        "CryptReleaseContext" => fn super::advapi32_rsa::crypt_release_context,
+        "CryptContextAddRef" => fn super::advapi32_rsa::crypt_context_add_ref,
+        "CryptGenRandom" => fn super::advapi32_rsa::crypt_gen_random,
+        "CryptGetProvParam" => fn super::advapi32_rsa::crypt_get_prov_param,
+        "CryptSetProvParam" => fn super::advapi32_rsa::crypt_set_prov_param,
+        "CryptGetUserKey" => fn super::advapi32_rsa::crypt_get_user_key,
+        "CryptExportKey" => fn super::advapi32_rsa::crypt_export_key,
+        "CryptSignHashW" => fn super::advapi32_rsa::crypt_sign_hash_w,
+        "CryptSignHashA" => fn super::advapi32_rsa::crypt_sign_hash_a,
+        "CryptVerifySignatureW" => fn super::advapi32_rsa::crypt_verify_signature_w,
+        "CryptVerifySignatureA" => fn super::advapi32_rsa::crypt_verify_signature_a,
         "CryptCreateHash" => fn crypt_create_hash,
         "CryptHashData" => fn crypt_hash_data,
         "CryptGetHashParam" => fn crypt_get_hash_param,

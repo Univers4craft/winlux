@@ -2065,6 +2065,126 @@ pub fn private_key(ctx: usize) -> Option<Vec<u8>> {
     super::lock(&c.props).get(&PRIVATE_KEY_PROP).cloned()
 }
 
+fn der_wrap(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag];
+    let n = body.len();
+    if n < 0x80 {
+        v.push(n as u8);
+    } else {
+        let bytes: Vec<u8> = n
+            .to_be_bytes()
+            .iter()
+            .copied()
+            .skip_while(|&b| b == 0)
+            .collect();
+        v.push(0x80 | bytes.len() as u8);
+        v.extend_from_slice(&bytes);
+    }
+    v.extend_from_slice(body);
+    v
+}
+
+/// SubjectPublicKeyInfo DER d'un CERT_PUBLIC_KEY_INFO (RSA seulement).
+unsafe fn spki_der(alg: &AlgId, key: &BitBlob) -> Option<Vec<u8>> {
+    if alg.oid.is_null() || key.pb.is_null() {
+        return None;
+    }
+    if std::ffi::CStr::from_ptr(alg.oid).to_bytes() != b"1.2.840.113549.1.1.1" {
+        return None;
+    }
+    let mut a = vec![
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    ];
+    if alg.params.cb > 0 && !alg.params.pb.is_null() {
+        a.extend_from_slice(std::slice::from_raw_parts(
+            alg.params.pb,
+            alg.params.cb as usize,
+        ));
+    } else {
+        a.extend_from_slice(&[0x05, 0x00]);
+    }
+    let mut bits = vec![key.unused as u8];
+    bits.extend_from_slice(std::slice::from_raw_parts(key.pb, key.cb as usize));
+    let body = [der_wrap(0x30, &a), der_wrap(0x03, &bits)].concat();
+    Some(der_wrap(0x30, &body))
+}
+
+/// CERT_PUBLIC_KEY_INFO : l'algorithme puis la clé, comme dans CERT_INFO.
+#[repr(C)]
+struct PublicKeyInfo {
+    alg: AlgId,
+    key: BitBlob,
+}
+
+unsafe extern "win64" fn CryptImportPublicKeyInfo(
+    _prov: usize,
+    _encoding: u32,
+    info: *const PublicKeyInfo,
+    out: *mut usize,
+) -> i32 {
+    if info.is_null() || out.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    match spki_der(&(*info).alg, &(*info).key) {
+        Some(der) => super::advapi32_rsa::import_spki(&der, out),
+        None => {
+            set_last_error(0x8009_0008); // NTE_BAD_ALGID
+            0
+        }
+    }
+}
+
+unsafe extern "win64" fn CryptImportPublicKeyInfoEx(
+    prov: usize,
+    encoding: u32,
+    info: *const PublicKeyInfo,
+    _algid: u32,
+    _flags: u32,
+    _aux: usize,
+    out: *mut usize,
+) -> i32 {
+    CryptImportPublicKeyInfo(prov, encoding, info, out)
+}
+
+const CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG: u32 = 0x0004_0000;
+
+/// CryptAcquireCertificatePrivateKey : fournisseur CAPI qui tient la clé
+/// privée du certificat (importée d'un PKCS #12), en AT_KEYEXCHANGE.
+unsafe extern "win64" fn CryptAcquireCertificatePrivateKey(
+    ctx: usize,
+    flags: u32,
+    _params: usize,
+    out: *mut usize,
+    spec: *mut u32,
+    caller_free: *mut i32,
+) -> i32 {
+    if out.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    if flags & CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG != 0 {
+        set_last_error(0x8009_0029); // NTE_NOT_SUPPORTED
+        return 0;
+    }
+    let Some(der) = private_key(ctx) else {
+        set_last_error(0x8009_200B); // CRYPT_E_NO_KEY_PROPERTY
+        return 0;
+    };
+    let Some(prov) = super::advapi32_rsa::provider_for_private_key(&der) else {
+        set_last_error(0x8009_0016); // NTE_BAD_KEYSET
+        return 0;
+    };
+    *out = prov;
+    if !spec.is_null() {
+        *spec = 1;
+    }
+    if !caller_free.is_null() {
+        *caller_free = 1;
+    }
+    1
+}
+
 unsafe fn pfx_of(blob: *const Blob) -> &'static [u8] {
     if blob.is_null() || (*blob).pb.is_null() {
         &[]
@@ -2138,6 +2258,9 @@ pub unsafe extern "win64" fn PFXVerifyPassword(
 pub fn exports() -> crate::dlls::Exports {
     let mut e = super::dpapi::exports();
     e.extend(crate::exports! {
+        "CryptImportPublicKeyInfo" => fn CryptImportPublicKeyInfo,
+        "CryptImportPublicKeyInfoEx" => fn CryptImportPublicKeyInfoEx,
+        "CryptAcquireCertificatePrivateKey" => fn CryptAcquireCertificatePrivateKey,
         "CertOpenSystemStoreW" => fn CertOpenSystemStoreW,
         "CertOpenSystemStoreA" => fn CertOpenSystemStoreA,
         "CertOpenStore" => fn CertOpenStore,

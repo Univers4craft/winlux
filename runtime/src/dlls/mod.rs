@@ -5,6 +5,7 @@
 pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_crypto;
+pub mod advapi32_rsa;
 pub mod advapi32_services;
 pub mod audio_com;
 pub mod bcrypt;

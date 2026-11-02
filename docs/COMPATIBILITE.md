@@ -437,8 +437,19 @@ Ampleur : **L**. Suivi : #235.
   OpenSSL, clé privée attachée au certificat, `CERT_KEY_PROV_INFO_PROP_ID`),
   `PFXIsPFXBlob`, `PFXVerifyPassword`, `CERT_FIND_HAS_PRIVATE_KEY` ; Schannel
   présente le certificat de `SCHANNEL_CRED.paCred` au serveur qui le demande.
-- Reste : `ncrypt`, clés RSA de la CryptoAPI (`CryptSignHash`,
-  `CryptAcquireCertificatePrivateKey`), rôle serveur de Schannel.
+- Clés RSA de la CryptoAPI (`runtime/src/dlls/advapi32_rsa.rs`) : conteneurs
+  de clés par compte (`CryptAcquireContext` avec `CRYPT_NEWKEYSET`,
+  `CRYPT_DELETEKEYSET`, `CRYPT_VERIFYCONTEXT` ; clés gardées dans
+  `~/.config/winlux/crypto/`, chiffrées par la DPAPI), `CryptGenKey`
+  (`AT_KEYEXCHANGE`, `AT_SIGNATURE`), `CryptGetUserKey`, `CryptExportKey` et
+  `CryptImportKey` (`PUBLICKEYBLOB`, `PRIVATEKEYBLOB`, `PLAINTEXTKEYBLOB`),
+  `CryptSignHash`/`CryptVerifySignature` (PKCS #1 v1.5, MD5, SHA-1, SHA-2),
+  `CryptEncrypt`/`CryptDecrypt` RSA (PKCS #1 v1.5 ou `CRYPT_OAEP`),
+  `CryptAcquireCertificatePrivateKey` (clé d'un certificat importé d'un
+  PKCS #12) et `CryptImportPublicKeyInfo(Ex)`. Calculs par l'OpenSSL du
+  système.
+- Reste : `ncrypt`, `SIMPLEBLOB` (clé de session chiffrée par RSA), HMAC de
+  la CryptoAPI, rôle serveur de Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 
