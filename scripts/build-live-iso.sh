@@ -1069,8 +1069,11 @@ sequential_status=$?
 echo "WINLUX_LIVE_SEQUENTIAL_EXIT=$sequential_status"
 
 echo "Winlux live test: parallel PE suite"
+# QEMU sans accélération (TCG, 2 vCPU) : dix exécutables à la fois
+# dépassent les 30 s prévus pour une machine réelle.
 WINLUX_BIN=/usr/bin/winlux \
 WINLUX_TESTDIR=/opt/winlux/tests \
+WINLUX_TEST_TIMEOUT=120 \
     /bin/sh /opt/winlux/scripts/test-runtime-parallel.sh
 parallel_status=$?
 echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"
