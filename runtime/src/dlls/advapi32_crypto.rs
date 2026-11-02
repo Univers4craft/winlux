@@ -876,6 +876,8 @@ pub fn exports() -> crate::dlls::Exports {
         "CryptGetKeyParam" => fn crypt_get_key_param,
         "CryptDuplicateKey" => fn crypt_duplicate_key,
         "CryptDestroyKey" => fn crypt_destroy_key,
+        "SystemFunction040" => fn super::dpapi::rtl_encrypt_memory,
+        "SystemFunction041" => fn super::dpapi::rtl_decrypt_memory,
     }
 }
 

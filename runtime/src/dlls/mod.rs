@@ -40,6 +40,7 @@ pub mod devnodes;
 pub mod dialogs;
 pub mod dinput8;
 pub mod displaymode;
+pub mod dpapi;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -455,6 +456,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "crypt32",
                 exports: crypt32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpapi",
+                exports: dpapi::exports(),
                 handle: fake_module(),
             },
             Builtin {

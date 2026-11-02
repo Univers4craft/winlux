@@ -78,6 +78,8 @@ pub struct SecBufferDesc {
 
 struct Cred {
     flags: u32,
+    /// Certificat client (DER) et sa clé privée, si l'appli en a donné un.
+    client: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 struct Ctx {
@@ -202,18 +204,37 @@ pub unsafe fn acquire_credentials(
     if hostssl::ssl().is_none() {
         return SEC_E_INTERNAL_ERROR;
     }
-    // SCHANNEL_CRED (version 4) : dwFlags à +72 ; SCH_CREDENTIALS (version 5) : à +52.
-    let flags = if auth.is_null() {
-        0
+    // SCHANNEL_CRED (version 4) : cCreds à +4, paCred à +8, dwFlags à +72 ;
+    // SCH_CREDENTIALS (version 5) : cCreds à +8, paCred à +16, dwFlags à +52.
+    let (flags, count, list) = if auth.is_null() {
+        (0, 0, 0usize)
     } else {
-        match (auth as *const u32).read_unaligned() {
-            4 => (auth.add(72) as *const u32).read_unaligned(),
-            5 => (auth.add(52) as *const u32).read_unaligned(),
-            _ => 0,
+        let u32_at = |o: usize| (auth.add(o) as *const u32).read_unaligned();
+        let ptr_at = |o: usize| (auth.add(o) as *const usize).read_unaligned();
+        match u32_at(0) {
+            4 => (u32_at(72), u32_at(4), ptr_at(8)),
+            5 => (u32_at(52), u32_at(8), ptr_at(16)),
+            _ => (0, 0, 0),
         }
     };
+    // Premier certificat client muni d'une clé privée (PFXImportCertStore).
+    let client = if list == 0 {
+        None
+    } else {
+        (0..count as usize).find_map(|i| {
+            let ctx = (list as *const usize).add(i).read_unaligned();
+            let key = super::crypt32::private_key(ctx)?;
+            Some((super::crypt32::cert_der(ctx).to_vec(), key))
+        })
+    };
+    if count > 0 && client.is_none() {
+        crate::log_warn!(
+            "schannel",
+            "certificat client sans clé privée utilisable : ignoré"
+        );
+    }
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    super::lock(creds()).insert(id, Cred { flags });
+    super::lock(creds()).insert(id, Cred { flags, client });
     (*cred).lower = id;
     (*cred).upper = MAGIC;
     if !expiry.is_null() {
@@ -355,14 +376,22 @@ pub unsafe fn initialize(
     let id = match existing {
         Some(id) => id,
         None => {
-            let Some(cflags) =
-                id_of(cred).and_then(|id| super::lock(creds()).get(&id).map(|c| c.flags))
-            else {
+            let Some((cflags, client)) = id_of(cred).and_then(|id| {
+                super::lock(creds())
+                    .get(&id)
+                    .map(|c| (c.flags, c.client.clone()))
+            }) else {
                 return SEC_E_INVALID_HANDLE;
             };
             let ssl = (s.SSL_new)(ctx_global(s));
             if ssl.is_null() {
                 return SEC_E_INTERNAL_ERROR;
+            }
+            if let Some((cert, key)) = &client {
+                if !hostssl::use_client_cert(ssl, cert, key) {
+                    (s.SSL_free)(ssl);
+                    return SEC_E_NO_CREDENTIALS;
+                }
             }
             let rbio = (s.BIO_new)((s.BIO_s_mem)());
             let wbio = (s.BIO_new)((s.BIO_s_mem)());
@@ -782,8 +811,23 @@ mod tests {
         manual: bool,
         host: &str,
     ) -> Result<(SecHandle, Vec<u8>), i32> {
+        handshake_with(sock, manual, host, 0)
+    }
+
+    /// Poignée de main, avec un certificat client (`client`, contexte crypt32) si non nul.
+    unsafe fn handshake_with(
+        sock: &mut TcpStream,
+        manual: bool,
+        host: &str,
+        client: usize,
+    ) -> Result<(SecHandle, Vec<u8>), i32> {
         let mut auth = [0u8; 80];
         auth[..4].copy_from_slice(&4u32.to_le_bytes());
+        let list = [client];
+        if client != 0 {
+            auth[4..8].copy_from_slice(&1u32.to_le_bytes());
+            auth[8..16].copy_from_slice(&(list.as_ptr() as usize).to_le_bytes());
+        }
         if manual {
             auth[72..76].copy_from_slice(&SCH_CRED_MANUAL_CRED_VALIDATION.to_le_bytes());
         }
@@ -1032,5 +1076,171 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn openssl(args: &[&str], dir: &std::path::Path) -> bool {
+        std::process::Command::new("openssl")
+            .args(args)
+            .current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    /// Authentification du client : PKCS #12 importé par PFXImportCertStore,
+    /// certificat passé dans SCHANNEL_CRED.paCred, serveur qui l'exige.
+    #[test]
+    fn certificat_client_depuis_un_pfx() {
+        use super::super::crypt32 as c32;
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("winlux-mtls-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ready = openssl(
+            &[
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-subj",
+                "/CN=localhost",
+                "-days",
+                "1",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+                "-keyout",
+                "sk.pem",
+                "-out",
+                "sc.pem",
+            ],
+            &dir,
+        ) && openssl(
+            &[
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-subj",
+                "/CN=client winlux",
+                "-days",
+                "1",
+                "-keyout",
+                "ck.pem",
+                "-out",
+                "cc.pem",
+            ],
+            &dir,
+        ) && openssl(
+            &[
+                "pkcs12",
+                "-export",
+                "-in",
+                "cc.pem",
+                "-inkey",
+                "ck.pem",
+                "-passout",
+                "pass:secret",
+                "-out",
+                "c.pfx",
+            ],
+            &dir,
+        );
+        if !ready {
+            eprintln!("openssl absent : test sauté");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let pfx = std::fs::read(dir.join("c.pfx")).unwrap();
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let blob = c32::Blob {
+                cb: pfx.len() as u32,
+                pb: pfx.as_ptr(),
+            };
+            assert_eq!(c32::PFXIsPFXBlob(&blob), 1);
+            let bad: Vec<u16> = "faux\0".encode_utf16().collect();
+            assert_eq!(c32::PFXVerifyPassword(&blob, bad.as_ptr(), 0), 0);
+            assert_eq!(c32::PFXImportCertStore(&blob, bad.as_ptr(), 0), 0);
+            let pass: Vec<u16> = "secret\0".encode_utf16().collect();
+            let store = c32::PFXImportCertStore(&blob, pass.as_ptr(), 0);
+            assert_ne!(store, 0);
+            // CERT_FIND_HAS_PRIVATE_KEY, puis CERT_KEY_PROV_INFO_PROP_ID.
+            let cert = c32::CertFindCertificateInStore(store, 1, 0, 0x150000, 0, 0);
+            assert_ne!(cert, 0);
+            let mut size = 0u32;
+            assert_eq!(
+                c32::CertGetCertificateContextProperty(cert, 2, std::ptr::null_mut(), &mut size),
+                1
+            );
+            let mut info = vec![0u8; size as usize];
+            assert_eq!(
+                c32::CertGetCertificateContextProperty(cert, 2, info.as_mut_ptr(), &mut size),
+                1
+            );
+            assert!(
+                super::super::wstr(*(info.as_ptr() as *const *const u16)).starts_with("winlux-")
+            );
+            assert_eq!(
+                c32::CertGetCertificateContextProperty(
+                    cert,
+                    0x5749_0001,
+                    std::ptr::null_mut(),
+                    &mut size
+                ),
+                0
+            );
+
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let mut child = std::process::Command::new("openssl")
+                .args([
+                    "s_server",
+                    "-quiet",
+                    "-www",
+                    "-Verify",
+                    "1",
+                    "-verify_return_error",
+                    "-CAfile",
+                    "cc.pem",
+                    "-cert",
+                    "sc.pem",
+                    "-key",
+                    "sk.pem",
+                    "-accept",
+                ])
+                .arg(port.to_string())
+                .current_dir(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut up = false;
+            for _ in 0..100 {
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    up = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(up, "serveur TLS mutuel");
+            let mut sock = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let (ctx, rest) =
+                handshake_with(&mut sock, true, "localhost", cert).expect("poignée de main");
+            let page = exchange(&mut sock, &ctx, rest);
+            assert!(page.starts_with("HTTP/1.0 200"), "{page}");
+            delete(&ctx);
+            let _ = child.kill();
+            let _ = child.wait();
+            c32::CertFreeCertificateContext(cert);
+            c32::CertCloseStore(store, 0);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
