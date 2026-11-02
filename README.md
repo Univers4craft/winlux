@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="https://univers4craft.github.io/winlux/"><b>Site web et guide</b></a> ·
   <a href="wiki/Home.md"><b>Wiki complet</b></a> ·
   <a href="https://github.com/Univers4craft/winlux/releases/latest">Télécharger l'ISO</a> ·
   <a href="Suivi.md">Suivi des tâches</a> ·
@@ -275,6 +276,7 @@ Une CI verte ne garantit pas que tous les logiciels Windows fonctionnent : elle 
 
 ## Documentation
 
+- **[Le site web](https://univers4craft.github.io/winlux/)** : présentation, téléchargement et guide de l'utilisateur pas à pas, en français, anglais, allemand et espagnol (sources dans [`site/`](site/)).
 - **[Le wiki](wiki/Home.md)** : la documentation complète et organisée (but, architecture, compatibilité, registre, chemins et droits, réseau et disques, Paramètres, installation, publication, construction, tests, feuille de route).
 - **Référence technique** dans `docs/` : [BUILD](docs/BUILD.md), [REGISTRY](docs/REGISTRY.md), [CHEMINS-ET-DROITS](docs/CHEMINS-ET-DROITS.md), [VOLUMES](docs/VOLUMES.md), [PARTAGE](docs/PARTAGE.md), [NATIVE-DESKTOP](docs/NATIVE-DESKTOP.md), [NATIVE-APT](docs/NATIVE-APT.md), [SECURE-BOOT](docs/SECURE-BOOT.md), [RECOVERY](docs/RECOVERY.md), [MEDIA](docs/MEDIA.md), [AUDIO](docs/AUDIO.md), [INTL](docs/INTL.md), [STORE](docs/STORE.md), [MSIEXEC](docs/MSIEXEC.md), [SETUP-EXE](docs/SETUP-EXE.md), [PAINTNET](docs/PAINTNET.md), [IDENTITE-VISUELLE](docs/IDENTITE-VISUELLE.md), [AB_UPDATES](docs/AB_UPDATES.md)…
 - **Notes de version** : [docs/releases/](docs/releases/).
