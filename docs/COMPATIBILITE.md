@@ -35,8 +35,16 @@ empreintes du block map vérifiées avant toute écriture, installation dans
 `C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
 protocoles, `LocalState`, identité de paquet à l'exécution
 (`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
-Pas encore : la signature `AppxSignature.p7x` (#235), les paquets de ressources
-des bundles, et les paquets 32 bits (#232). Test : `scripts/test-msix.sh`.
+Éditeur : comme Windows, un paquet non signé n'est pas installé sans
+avertissement. Il est refusé par défaut avec « Éditeur non vérifié » (code 3), et le
+double-clic demande une confirmation explicite (« Annuler » par défaut,
+« Installer quand même ») avant de relancer avec `--allow-unverified`. Un paquet signé
+dont le certificat porte bien l'éditeur du manifeste passe par la même confirmation,
+tant que la chaîne de certificats n'est pas vérifiée (#235). Un certificat au nom d'un
+autre éditeur est refusé dans tous les cas (`runtime/src/setup/appx_signature.rs`).
+Pas encore : la vérification cryptographique de la signature et de sa chaîne (#235),
+les paquets de ressources des bundles, et les paquets 32 bits (#232).
+Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
 aussi en HID brut, comme le font SDL, les moteurs de jeu et les outils de
@@ -60,6 +68,38 @@ percé), `QUERY_ALLOCATED_RANGES` (SEEK_DATA/SEEK_HOLE), compression et
 identifiant d'objet. Les rapports HID passent aussi par `IOCTL_HID_*`.
 Verrouiller ou démonter un volume est refusé (accès refusé), tout autre code
 rend `ERROR_NOT_SUPPORTED`. Test : `scripts/test-devio.sh`.
+
+L'entrée brute (#271, `runtime/src/dlls/rawinput.rs`) donne aux jeux de tir la
+souris en déplacements relatifs, sans accélération ni blocage au bord de
+l'écran : `RegisterRawInputDevices` lance un fil qui lit les souris et claviers
+evdev de l'hôte (`/dev/input/event*`, ouverts au groupe `input`) et poste
+`WM_INPUT` à la fenêtre inscrite tant que le programme a le focus (toujours avec
+`RIDEV_INPUTSINK`). `GetRawInputData`, `GetRawInputBuffer`,
+`GetRawInputDeviceList` et `GetRawInputDeviceInfoA/W` (nom, fiche, manettes HID)
+suivent. Boutons 1 à 5, molettes (haute résolution comprise), scancodes PS/2 avec
+le préfixe E0. Test : `scripts/test-rawinput.sh` (fausse souris et faux clavier
+sur des FIFO, `WINLUX_RAWINPUT_DEVICES`).
+
+Les ports série (`COMn` sur `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, DCB et
+délais sur termios) se trouvent désormais comme sous Windows (#271,
+`runtime/src/dlls/serial.rs`) : `QueryDosDeviceW/A` liste les lecteurs et les
+ports présents, `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` est rafraîchie à chaque
+ouverture, et `SetCommMask`/`WaitCommEvent` (OVERLAPPED compris),
+`GetCommProperties`, `BuildCommDCBA/W`, `TransmitCommChar`, `Get/SetCommConfig`
+et `GetDefaultCommConfig` complètent. Test : `scripts/test-serial.sh` (COM7 sur
+un pseudo-terminal qui répond).
+
+Les jeux en plein écran exclusif changent la définition et la rampe gamma
+(#271, `runtime/src/dlls/displaymode.rs`) : `EnumDisplaySettings(Ex)A/W` liste les
+vrais modes et fréquences de chaque écran (`xrandr --query`, `\\.\DISPLAY1` =
+écran principal), `ChangeDisplaySettings(Ex)A/W` applique la demande par
+`xrandr --output … --mode … --rate …` (CDS_TEST, DISP_CHANGE_BADMODE,
+WM_DISPLAYCHANGE), et `SetDeviceGammaRamp`/`GetDeviceGammaRamp` passent par la
+rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
+plante : un gardien `winlux --display-restore`, lancé au premier changement avec
+l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
+Rien n'est écrit dans la configuration d'écran mémorisée. Test :
+`scripts/test-display-mode.sh` (faux xrandr).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
@@ -405,9 +445,9 @@ série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
 
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
-sur disques, volumes et fichiers (voir plus haut).
-Reste : entrée brute, `cfgmgr32`, `winusb`, ports série,
-résolution et rampe gamma.
+sur disques, volumes et fichiers, entrée brute, ports série, définition
+d'écran et rampe gamma (voir plus haut).
+Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`.
 
 Ampleur : **M**. Suivi : #271.
 
