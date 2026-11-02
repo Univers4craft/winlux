@@ -80,4 +80,7 @@ kill -0 "$xorg_pid" 2>/dev/null && echo after_term=alive || echo after_term=gone
     time.sleep(0.2)
     leftover = subprocess.run(["pgrep", "-f", str(fake)], capture_output=True, text=True).stdout.strip()
     assert not leftover, f"Xorg toujours en vie : {leftover}"
+# Les Xorg des autres comptes (winlux-sessions) sont lancés de la même façon.
+sessions = (ROOT / "scripts/winlux-sessions.sh").read_text(encoding="utf-8")
+assert re.search(r"setsid /bin/sh -c .*wait .*winlux-xorg", sessions), "winlux-sessions : Xorg sans session propre"
 print("Xorg :0 : session propre, setsid réussi, arrêt suivi")
