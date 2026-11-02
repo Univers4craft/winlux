@@ -20,13 +20,13 @@
 - Sécurité : sur un système installé, le bureau et les .exe tournent sous le compte de l'utilisateur, plus en root (#258).
 - Démarrage plus rapide : menu GRUB caché 1 s, noyau silencieux, matériel et services hors du chemin critique (#254, #259, #260).
 - Claude Code (claude.exe officiel) tourne par la couche PE maison, avec une entrée au menu Démarrer (#255, #257).
-- Applications Ubuntu traduites en quatre langues (#253) et correctifs de la campagne de tests en VM (#252).
+- Applications Ubuntu traduites en quatre langues (#253) et correctifs de la campagne de tests en VM : raccourcis Windows, menu clic droit du bureau, glisser-déposer et Corbeille de l'Explorateur (#252, #263).
 
 ## En cours (pull requests ouvertes)
 
 | Sujet | Pull request |
 |---|---|
-| Campagne de tests en VM : clés USB FAT, CIFS, fenêtres noires et la suite | #252 |
+| Campagne de tests en VM, deuxième série de correctifs | #263 |
 
 ## Priorités suivantes
 
