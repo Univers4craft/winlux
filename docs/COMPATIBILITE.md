@@ -117,6 +117,19 @@ d'interface COMPORT s'ouvre avec `CreateFileW` comme le port lui-même. Test :
 `scripts/test-devnodes.sh` (faux sysfs d'une Arduino Uno, plus COM7 sur un
 pseudo-terminal).
 
+L'accès USB direct des outils de flashage, de radio logicielle et de libusb
+passe par `winusb.dll` (#271, `runtime/src/dlls/winusb.rs`). Les appareils de
+`/sys/bus/usb/devices` sont listés par setupapi sous `GUID_DEVINTERFACE_USB_DEVICE`,
+puis `CreateFileW` sur leur chemin ouvre `/dev/bus/usb/BBB/DDD` (usbfs).
+`WinUsb_Initialize` réclame l'interface sans jamais détacher un pilote du noyau
+(ERROR_BUSY sinon). Fonctions servies : descripteurs, vitesse, réglages
+d'interface et points de terminaison (`QueryInterfaceSettings`, `QueryPipe`),
+`ControlTransfer`, `ReadPipe`/`WritePipe` (bulk et interruption), délais par
+`PIPE_TRANSFER_TIMEOUT`, `ResetPipe`, réglage alternatif, interfaces associées.
+Sans droit sur usbfs, la description vient du fichier `descriptors` de sysfs et
+les transferts échouent proprement (ERROR_ACCESS_DENIED). L'isochrone n'est pas
+pris en charge. Test : `scripts/test-winusb.sh` (faux sysfs).
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -463,7 +476,7 @@ résolution (`ChangeDisplaySettingsExW`, 8).
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
 sur disques, volumes et fichiers, entrée brute, ports série, définition
 d'écran et rampe gamma, `cfgmgr32` et la classe Ports de `setupapi` (voir plus haut).
-Reste : `winusb`.
+Reste : les transferts isochrones de `winusb`.
 
 Ampleur : **M**. Suivi : #271.
 

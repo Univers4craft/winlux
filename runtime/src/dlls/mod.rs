@@ -32,6 +32,7 @@ pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod d3dcompiler;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod devio;
@@ -134,6 +135,7 @@ pub mod winmm;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
+pub mod winusb;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;
@@ -395,6 +397,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "d3dcompiler_47",
+                exports: d3dcompiler::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "avrt",
                 exports: mmdevapi::avrt_exports(),
                 handle: fake_module(),
@@ -487,6 +494,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winusb",
+                exports: winusb::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -703,6 +715,10 @@ pub fn normalize(dll: &str) -> String {
     let base = l.strip_suffix(".dll").unwrap_or(&l);
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
+    }
+    // Compilateur HLSL : toutes les versions servies par le même d3dcompiler_47.
+    if base.starts_with("d3dcompiler_") {
+        return "d3dcompiler_47".into();
     }
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {

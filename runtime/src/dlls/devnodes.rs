@@ -23,7 +23,7 @@
 
 use crate::dlls::hid::{self, HidDevice, HID_GUID};
 use crate::dlls::serial;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 const ERROR_INVALID_PARAMETER: u32 = 87;
@@ -60,6 +60,14 @@ pub const HID_CLASS: [u8; 16] = guid(
     0x74D3,
     0x11D0,
     [0xB6, 0xFE, 0x00, 0xA0, 0xC9, 0x0F, 0x57, 0xDA],
+);
+/// {A5DCBF10-6530-11D2-901F-00C04FB951ED} : GUID_DEVINTERFACE_USB_DEVICE
+/// (libusb, outils de flashage, winusb).
+pub const USB_DEVICE_INTERFACE: [u8; 16] = guid(
+    0xA5DCBF10,
+    0x6530,
+    0x11D2,
+    [0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED],
 );
 /// {36FC9E60-C465-11CF-8056-444553540000} : classe USB.
 pub const USB_CLASS: [u8; 16] = guid(
@@ -112,11 +120,7 @@ impl Usb {
         let instance = if self.serial.is_empty() {
             // Comme Windows : identifiant tiré de l'emplacement.
             let tail = self.sysfs.rsplit('/').next().unwrap_or("0");
-            format!(
-                "5&{}&0&{}",
-                tail.replace(['-', '.', ':'], ""),
-                self.interface
-            )
+            format!("5&{}&0&0", tail.replace(['-', '.', ':'], ""))
         } else {
             self.serial.clone()
         };
@@ -255,7 +259,70 @@ pub fn nodes() -> Vec<Node> {
         }
         out.push(node);
     }
+    // Les autres appareils USB (ceux que winusb ou libusb ouvrent).
+    for u in usb_devices() {
+        let id = u.device_id();
+        if !out.iter().any(|n| n.id.eq_ignore_ascii_case(&id)) {
+            out.push(Node {
+                id,
+                parent: Some(ROOT.into()),
+                kind: Kind::UsbDevice(u),
+            });
+        }
+    }
     out
+}
+
+/// Racine de sysfs (`WINLUX_SYSFS` pour les tests).
+fn sysfs() -> PathBuf {
+    std::env::var_os("WINLUX_SYSFS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/sys"))
+}
+
+/// Appareils de `/sys/bus/usb/devices` (sans les concentrateurs racine
+/// `usbN` ni les interfaces `1-1:1.0`).
+pub fn usb_devices() -> Vec<Usb> {
+    let mut names: Vec<String> = std::fs::read_dir(sysfs().join("bus/usb/devices"))
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.contains(':') && !n.starts_with("usb"))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|n| {
+            let d = std::fs::canonicalize(sysfs().join("bus/usb/devices").join(n)).ok()?;
+            let hex = |f: &str| u16::from_str_radix(&read_trim(&d.join(f)), 16).ok();
+            Some(Usb {
+                vendor: hex("idVendor")?,
+                product: hex("idProduct").unwrap_or(0),
+                serial: read_trim(&d.join("serial")),
+                name: read_trim(&d.join("product")),
+                manufacturer: read_trim(&d.join("manufacturer")),
+                interface: 0,
+                sysfs: d.to_string_lossy().into_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Chemin d'interface `{a5dcbf10-…}` passé à CreateFile : dossier sysfs de
+/// l'appareil USB qu'il désigne.
+pub fn usb_device_target(path: &str) -> Option<PathBuf> {
+    let lower = path.to_ascii_lowercase().replace("\\\\.\\", "\\\\?\\");
+    if !lower.ends_with(&guid_text(&USB_DEVICE_INTERFACE)) {
+        return None;
+    }
+    nodes().into_iter().find_map(|n| match &n.kind {
+        Kind::UsbDevice(u) if n.interface_path()?.eq_ignore_ascii_case(&lower) => {
+            Some(PathBuf::from(&u.sysfs))
+        }
+        _ => None,
+    })
 }
 
 impl Node {
@@ -270,7 +337,8 @@ impl Node {
         match self.kind {
             Kind::Hid(_) => Some(HID_GUID),
             Kind::Port { .. } => Some(COMPORT_INTERFACE),
-            _ => None,
+            Kind::UsbDevice(_) => Some(USB_DEVICE_INTERFACE),
+            Kind::Root => None,
         }
     }
     /// Chemin rendu par `SetupDiGetDeviceInterfaceDetailW`.
@@ -282,7 +350,12 @@ impl Node {
                 self.id.to_ascii_lowercase().replace('\\', "#"),
                 guid_text(&COMPORT_INTERFACE)
             )),
-            _ => None,
+            Kind::UsbDevice(_) => Some(format!(
+                "\\\\?\\{}#{}",
+                self.id.to_ascii_lowercase().replace('\\', "#"),
+                guid_text(&USB_DEVICE_INTERFACE)
+            )),
+            Kind::Root => None,
         }
     }
     fn description(&self) -> String {
@@ -460,6 +533,7 @@ pub fn get_class_devs(
                 PORTS_CLASS,
                 COMPORT_INTERFACE,
                 USB_CLASS,
+                USB_DEVICE_INTERFACE,
             ]
             .contains(&g)
         });

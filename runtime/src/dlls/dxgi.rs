@@ -7,7 +7,7 @@ use crate::dlls::gl_bindings as gl;
 use crate::dlls::ole32::Guid;
 use crate::{log_debug, log_error, log_info, log_warn};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 const S_OK: i32 = 0;
@@ -155,6 +155,79 @@ pub(crate) fn install_x_error_guard() {
     });
 }
 
+/// Contexte GLX de la première chaîne d'échange : les contextes de travail
+/// des autres threads partagent ses objets (shaders, tampons, textures).
+static MAIN_CONTEXT: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    static WORKER_CONTEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sous Windows, les méthodes de création d'ID3D11Device s'appellent depuis
+/// n'importe quel thread (ANGLE crée ses shaders dans ses threads de travail).
+/// Ici ces objets vivent dans OpenGL : un thread sans contexte courant reçoit
+/// un contexte GLX partagé avec le contexte principal, rendu courant sur la
+/// fenêtre racine (il ne sert qu'à créer des objets, jamais à présenter).
+pub(crate) fn ensure_thread_context() {
+    let main = MAIN_CONTEXT.load(Ordering::Acquire);
+    if main == 0 || WORKER_CONTEXT.with(|w| w.get()) {
+        return;
+    }
+    let Some(glx) = gl::glx() else { return };
+    if !glx.available {
+        return;
+    }
+    unsafe {
+        let f = (glx.GetProcAddressARB)(c"glXGetCurrentContext".as_ptr().cast());
+        if !f.is_null() {
+            let current: unsafe extern "C" fn() -> gl::GLXContext = std::mem::transmute(f);
+            if !current().is_null() {
+                return;
+            }
+        }
+        let display = (glx.XOpenDisplay)(std::ptr::null());
+        if display.is_null() {
+            return;
+        }
+        let screen = (glx.XDefaultScreen)(display);
+        let vi = (glx.ChooseVisual)(display, screen, VISUAL_ATTRIBS.as_ptr());
+        if vi.is_null() {
+            (glx.XCloseDisplay)(display);
+            return;
+        }
+        let context = (glx.CreateContext)(display, vi, main as gl::GLXContext, 1);
+        if context.is_null() {
+            log_warn!("dxgi", "contexte GL de travail partagé impossible");
+            (glx.XCloseDisplay)(display);
+            return;
+        }
+        let root = (glx.XDefaultRootWindow)(display) as u64;
+        if (glx.MakeCurrent)(display, root, context) == 0 {
+            (glx.DestroyContext)(display, context);
+            (glx.XCloseDisplay)(display);
+            return;
+        }
+        WORKER_CONTEXT.with(|w| w.set(true));
+        log_debug!("dxgi", "contexte GL partagé créé pour un thread de travail");
+    }
+}
+
+// Pas de canal alpha : le visuel doit correspondre à celui (24 bits)
+// des fenêtres Winlux, sinon glXMakeCurrent échoue (BadMatch).
+const VISUAL_ATTRIBS: [libc::c_int; 11] = [
+    gl::GLX_RGBA,
+    gl::GLX_DEPTH_SIZE,
+    24,
+    gl::GLX_DOUBLEBUFFER,
+    gl::GLX_RED_SIZE,
+    8,
+    gl::GLX_GREEN_SIZE,
+    8,
+    gl::GLX_BLUE_SIZE,
+    8,
+    0, // None
+];
+
 pub(crate) struct GlContext {
     pub display: *mut c_void,
     pub context: *mut c_void,
@@ -231,6 +304,13 @@ impl GlContext {
                 (glx.XCloseDisplay)(display);
                 return None;
             }
+
+            let _ = MAIN_CONTEXT.compare_exchange(
+                0,
+                context as usize,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
 
             let version = (g.GetString)(gl::GL_VERSION);
             if !version.is_null() {
@@ -345,6 +425,12 @@ impl Drop for GlContext {
             }
             if let Some(glx) = glx {
                 if !self.context.is_null() {
+                    let _ = MAIN_CONTEXT.compare_exchange(
+                        self.context as usize,
+                        0,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    );
                     (glx.MakeCurrent)(self.display, 0, std::ptr::null_mut());
                     (glx.DestroyContext)(self.display, self.context);
                 }
