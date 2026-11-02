@@ -148,8 +148,14 @@ jobs:
       - name: Vérifier la détection des modes d'alimentation (économie, normal, turbo)
         run: python3 -B scripts/test-power-modes.py
 
+      - name: Vérifier les widgets Win+W (réglages, météo partagée, bouton de la barre, langues)
+        run: python3 -B scripts/test-widgets.py
+
       - name: Vérifier l'application Claude Code (téléchargement vérifié, terminal)
         run: python3 -B scripts/test-claude-code.py
+
+      - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
+        run: python3 -B scripts/test-games.py
 
       - name: Vérifier « Réinitialiser ce PC » (fichiers gardés, tout supprimer, coupure, clé de secours)
         run: |
@@ -317,6 +323,14 @@ jobs:
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: Fenêtre Jeux (cartes, tri, recherche)
+        run: |
+          mkdir -p build/captures
+          xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
+
+      - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
 
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures

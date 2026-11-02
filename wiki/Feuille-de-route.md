@@ -55,11 +55,9 @@ Aucune pull request ouverte pour la v0.2.14.
 - Traduction des dernières applications (#139) et de tout l'installateur (#140).
 - « Ouvrir avec… » dans l'Explorateur (#152).
 
-### Idées proposées, pas encore commencées
+### Idées proposées, pas encore commencées (02/11/2026)
 
-- Jeux : Direct3D 11 complet, Steam, overlay FPS.
-- Suite bureautique et lecteur PDF avancé, navigateur intégré.
-- Finition Windows 11 de la session native : Snap Layouts, animations, bureaux virtuels, widgets, panneau de notifications.
-- Site web et documentation utilisateur.
+- Petits plaisirs : éclairage nocturne (#274), emojis Win+. (#275), historique Win+V natif (#276), Snap Layouts, Win+Tab et bureaux virtuels natifs (#277), Horloge (#278), pipette et petits outils (#279), copier le texte d'une image (#280), thème automatique et diaporama (#281).
+- Gros chantiers : widgets Win+W (#282), lien avec le téléphone (#284), coin jeux puis Steam (#285), assistant intégré (#286), site web et guide utilisateur (#287).
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)

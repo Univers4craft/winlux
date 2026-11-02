@@ -7,7 +7,7 @@ et créer une clé de secours. Les opérations passent par winlux-reset, en root
 via le relais winlux-root (Contrôle de compte d'utilisateur). Une option que
 la machine ne permet pas (Live, outils absents) n'apparaît pas.
 
-Chargé par winlux-settings-pages (page 29). Lancé seul, ouvre la page dans sa
+Chargé par winlux-settings-pages (page 30). Lancé seul, ouvre la page dans sa
 propre fenêtre (captures, tests) : winlux-reset-page [--wizard reset|key].
 """
 import os
