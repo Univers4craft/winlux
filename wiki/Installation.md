@@ -70,7 +70,7 @@ Pour déployer plusieurs postes, un **fichier de réponses** YAML ou JSON pré-r
 
 ## 5. Premier démarrage
 
-L'assistant **Bienvenue** propose : thème clair ou sombre, fond d'écran, position de la barre des tâches, choix des applications à installer, et une courte visite (lancer un `.exe`, installer les logiciels courants en un clic). Il peut être relancé depuis Démarrer.
+La fenêtre **Bienvenue** (`winlux-welcome`) s'ouvre à la première session et ne modifie rien d'elle-même. Elle propose cinq boutons : **Visite guidée et logiciels courants** (la visite du bureau, les logiciels courants en un clic, thème et position de la barre), **Choisir le clavier** (Paramètres › Clavier et souris), **Configurer le réseau** (réglages rapides), **Personnaliser l’apparence** (Paramètres › Fond d’écran et couleurs) et **Découvrir le secours** (Paramètres › Mises à jour). Elle revient à chaque session jusqu'au clic sur « Terminer » (marqueur `~/.config/winlux/welcome-complete`).
 
 ## Récupération
 
