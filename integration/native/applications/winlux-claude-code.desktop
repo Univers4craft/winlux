@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Code
+Comment=Assistant de programmation d'Anthropic, dans le terminal Winlux
+Comment[en]=Anthropic's coding assistant, in the Winlux terminal
+Comment[es]=Asistente de programación de Anthropic, en el terminal de Winlux
+Comment[de]=Programmierassistent von Anthropic im Winlux-Terminal
+Exec=/usr/bin/python3 /usr/share/winlux/native/claude-code/winlux-claude-code.py
+Icon=winlux-claude-code
+StartupWMClass=winlux-claude-code
+Terminal=false
+Categories=Development;
+Keywords=claude;ia;ai;assistant;code;anthropic;
+Actions=reinstaller;
+
+[Desktop Action reinstaller]
+Name=Mettre à jour Claude Code
+Name[en]=Update Claude Code
+Name[es]=Actualizar Claude Code
+Name[de]=Claude Code aktualisieren
+Exec=/usr/bin/python3 /usr/share/winlux/native/claude-code/winlux-claude-code.py --reinstaller
