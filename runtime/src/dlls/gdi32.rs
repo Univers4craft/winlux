@@ -2238,6 +2238,16 @@ pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
 
 /// `CreateDC`/`CreateIC` : DC imprimante quand le pilote ou le périphérique
 /// désigne une imprimante (`WINSPOOL`, nom d'imprimante), sinon DC sans fenêtre.
+/// « DISPLAY » ou un écran nommé « \\.\DISPLAYn » (SDL3 ouvre ainsi le DC
+/// de chaque écran) : un DC d'écran, pas une imprimante.
+fn is_display_name(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    up == "DISPLAY"
+        || up
+            .strip_prefix("\\\\.\\DISPLAY")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 unsafe fn create_dc_common(
     driver: *const c_void,
     device: *const c_void,
@@ -2255,12 +2265,10 @@ unsafe fn create_dc_common(
         }
     };
     let (driver, device) = (read(driver), read(device));
-    let printing = driver
-        .as_deref()
-        .is_some_and(|d| !d.eq_ignore_ascii_case("DISPLAY"))
+    let printing = driver.as_deref().is_some_and(|d| !is_display_name(d))
         || device
             .as_deref()
-            .is_some_and(|d| !d.is_empty() && !d.eq_ignore_ascii_case("DISPLAY"));
+            .is_some_and(|d| !d.is_empty() && !is_display_name(d));
     if printing {
         if let Some(dc) = crate::dlls::winspool::create_printer_dc(
             driver,
@@ -2501,5 +2509,17 @@ pub fn exports() -> crate::dlls::Exports {
         "GdiSetBatchLimit"=>fn gdi_set_batch_limit, "GdiGetBatchLimit"=>fn gdi_get_batch_limit,
         // --- Custom ---
         "WinluxDrawIconA"=>fn winlux_draw_icon_a, "WinluxDrawImageA"=>fn winlux_draw_image_a,
+    }
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    #[test]
+    fn screen_device_names_are_not_printers() {
+        assert!(super::is_display_name("DISPLAY"));
+        assert!(super::is_display_name("\\\\.\\DISPLAY1"));
+        assert!(super::is_display_name("\\\\.\\display12"));
+        assert!(!super::is_display_name("\\\\.\\DISPLAY"));
+        assert!(!super::is_display_name("Microsoft Print to PDF"));
     }
 }

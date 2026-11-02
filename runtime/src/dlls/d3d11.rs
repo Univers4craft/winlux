@@ -258,7 +258,7 @@ impl Texture2D {
         if prev == 1 {
             let t = Box::from_raw(this);
             if t.owns_texture && t.gl_texture != 0 {
-                if let Some(g) = gl::gl() {
+                if let Some(g) = gl_here() {
                     (g.DeleteTextures)(1, &t.gl_texture);
                 }
             }
@@ -342,7 +342,7 @@ fn create_texture2d(
     desc: &D3D11Texture2DDesc,
     initial: *const D3D11SubresourceData,
 ) -> *mut Texture2D {
-    let g = match gl::gl() {
+    let g = match gl_here() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
@@ -497,7 +497,7 @@ impl Buffer {
         if prev == 1 {
             let b = Box::from_raw(this);
             if b.gl_buffer != 0 {
-                if let Some(g) = gl::gl() {
+                if let Some(g) = gl_here() {
                     (g.DeleteBuffers)(1, &b.gl_buffer);
                 }
             }
@@ -577,7 +577,7 @@ fn usage_to_gl_usage(usage: u32) -> gl::GLenum {
 }
 
 fn create_buffer(desc: &D3D11BufferDesc, initial: *const D3D11SubresourceData) -> *mut Buffer {
-    let g = match gl::gl() {
+    let g = match gl_here() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
@@ -800,7 +800,7 @@ impl SimpleComObj {
                 com_release(obj.view_resource);
             }
             if obj.gl_id != 0 {
-                if let Some(g) = gl::gl() {
+                if let Some(g) = gl_here() {
                     (g.DeleteFramebuffers)(1, &obj.gl_id);
                 }
             }
@@ -834,6 +834,13 @@ static VIEW_COM_VTABLE: SimpleComVTable = SimpleComVTable {
     get_resource_or_desc: view_get_resource,
     get_view_desc: view_get_desc,
 };
+
+/// Fonctions GL, avec un contexte courant sur ce thread (voir
+/// `dxgi::ensure_thread_context`).
+fn gl_here() -> Option<&'static gl::GlFunctions> {
+    crate::dlls::dxgi::ensure_thread_context();
+    gl::gl()
+}
 
 // ────────────────────── Typage des objets COM maison ──────────────────────
 //
@@ -875,7 +882,7 @@ fn texture_bytes(desc: &D3D11Texture2DDesc) -> Option<usize> {
 }
 
 fn create_render_target_view(resource: *mut c_void) -> *mut SimpleComObj {
-    let g = match gl::gl() {
+    let g = match gl_here() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
@@ -926,7 +933,7 @@ fn create_shader_object(
     size: usize,
     shader_type: ShaderType,
 ) -> *mut SimpleComObj {
-    let g = match gl::gl() {
+    let g = match gl_here() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
@@ -1692,7 +1699,7 @@ unsafe extern "win64" fn ctx_ia_set_vertex_buffers(
     strides: *const u32,
     offsets: *const u32,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     for i in 0..count {
         let buf_ptr = *buffers.add(i as usize);
         let Some(buf) = as_buffer(buf_ptr) else {
@@ -1711,7 +1718,7 @@ unsafe extern "win64" fn ctx_ia_set_index_buffer(
     format: u32,
     _offset: u32,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     // Le format d'index (16 ou 32 bits) est mémorisé pour les tirages.
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     s.index_format = format;
@@ -1730,7 +1737,7 @@ fn index_type(format: u32) -> (gl::GLenum, usize) {
 }
 
 unsafe extern "win64" fn ctx_draw(this: *mut DeviceContext, vertex_count: u32, start: u32) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     let mode = topology_to_gl(s.topology);
     (g.DrawArrays)(mode, start as i32, vertex_count as i32);
@@ -1742,7 +1749,7 @@ unsafe extern "win64" fn ctx_draw_indexed(
     start_index: u32,
     _base_vertex: i32,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     let mode = topology_to_gl(s.topology);
     let (ty, size) = index_type(s.index_format);
@@ -1757,7 +1764,7 @@ unsafe extern "win64" fn ctx_draw_instanced(
     start: u32,
     _base: u32,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     (g.DrawArraysInstanced)(gl::GL_TRIANGLES, start as i32, vpc as i32, ic as i32);
 }
 
@@ -1769,7 +1776,7 @@ unsafe extern "win64" fn ctx_draw_indexed_instanced(
     _base: i32,
     _ibase: u32,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     let (ty, size) = index_type(s.index_format);
     let offset = (start as usize * size) as *const c_void;
@@ -1818,7 +1825,7 @@ unsafe extern "win64" fn ctx_map(
 }
 
 unsafe extern "win64" fn ctx_unmap(_this: *mut DeviceContext, resource: *mut c_void, _sub: u32) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     if let Some(buf) = as_buffer(resource) {
         let guard = (*buf)
             .staging_data
@@ -1865,7 +1872,7 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
     rtvs: *const *mut c_void,
     dsv: *mut c_void,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
 
     if count > 0 && !rtvs.is_null() {
@@ -1899,7 +1906,7 @@ unsafe extern "win64" fn ctx_clear_rtv(
     view: *mut c_void,
     color: *const [f32; 4],
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     if color.is_null() {
         return;
     }
@@ -1919,7 +1926,7 @@ unsafe extern "win64" fn ctx_clear_dsv(
     _depth: f32,
     _stencil: u8,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let mut mask = 0u32;
     if flags & 1 != 0 {
         mask |= gl::GL_DEPTH_BUFFER_BIT;
@@ -1935,7 +1942,7 @@ unsafe extern "win64" fn ctx_rs_set_viewports(
     count: u32,
     viewports: *const D3D11Viewport,
 ) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     if count > 0 && !viewports.is_null() {
         let vp = &*viewports;
         (g.Viewport)(
@@ -1982,7 +1989,7 @@ unsafe extern "win64" fn ctx_update_subresource(
     if resource.is_null() || data.is_null() {
         return;
     }
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     if let Some(buf) = as_buffer(resource) {
         let target = bind_flags_to_gl_target((*buf).desc.bind_flags);
         let size = (*buf).desc.byte_width;
@@ -1998,7 +2005,7 @@ unsafe extern "win64" fn ctx_update_subresource(
 }
 
 unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_void) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     if let Some(obj) = as_simple(srv) {
         let obj = &*obj;
         if obj.resource_tex != 0 {
@@ -2009,7 +2016,7 @@ unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_vo
 }
 
 unsafe extern "win64" fn ctx_clear_state(this: *mut DeviceContext) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     *s = DeviceContextState::default();
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
@@ -2017,7 +2024,7 @@ unsafe extern "win64" fn ctx_clear_state(this: *mut DeviceContext) {
 }
 
 unsafe extern "win64" fn ctx_flush(_this: *mut DeviceContext) {
-    if let Some(g) = gl::gl() {
+    if let Some(g) = gl_here() {
         (g.Flush)();
     }
 }
@@ -2025,7 +2032,7 @@ unsafe extern "win64" fn ctx_flush(_this: *mut DeviceContext) {
 unsafe extern "win64" fn ctx_dispatch(_: *mut DeviceContext, _x: u32, _y: u32, _z: u32) {}
 
 fn update_program(s: &mut DeviceContextState) {
-    let Some(g) = gl::gl() else { return };
+    let Some(g) = gl_here() else { return };
 
     if s.current_vs == 0 && s.current_ps == 0 {
         unsafe {

@@ -1586,6 +1586,23 @@ unsafe fn create_file_str(
             }
         };
     }
+    // \\?\usb#vid_…#…#{a5dcbf10-…} : un appareil USB pour winusb (usbfs).
+    if let Some(dir) = crate::dlls::devnodes::usb_device_target(path) {
+        return match crate::dlls::winusb::open(&dir) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(5);
+                usize::MAX
+            }
+        };
+    }
     // \\.\C: et \\.\PhysicalDriveN : un handle pour DeviceIoControl, posé
     // sur la racine du lecteur ou l'entrée /sys/block du disque.
     if let Some(dir) = crate::dlls::devio::device_target(path) {

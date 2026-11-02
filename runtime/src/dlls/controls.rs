@@ -2068,7 +2068,26 @@ fn paint_items(hwnd: usize, c: &Ctl, p: &Painter, area: Rect, odt: u32) {
             right: row.right - 2,
             ..row
         };
-        p.text(tr, text, if enabled(hwnd) { fg } else { TEXT_DISABLED }, 0);
+        let color = if enabled(hwnd) { fg } else { TEXT_DISABLED };
+        if text.contains('\t') {
+            // Tabulations (LBS_USETABSTOPS, journal d'événements de PuTTY) :
+            // colonnes tous les 8 caractères moyens, comme les arrêts par
+            // défaut de Windows, au lieu d'un carré.
+            let tab = (measure(p.font, "nnnnnnnn").0).max(8);
+            let mut x = tr.left;
+            for (k, part) in text.split('\t').enumerate() {
+                if k > 0 {
+                    x = tr.left + ((x - tr.left) / tab + 1) * tab;
+                }
+                if x >= tr.right {
+                    break;
+                }
+                p.text(Rect { left: x, ..tr }, part, color, 0);
+                x += measure(p.font, part).0;
+            }
+        } else {
+            p.text(tr, text, color, 0);
+        }
     }
     if scroll {
         // Barre de défilement fine, comme celles de Windows 11 au repos.
