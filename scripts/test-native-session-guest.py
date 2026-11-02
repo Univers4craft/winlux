@@ -432,6 +432,8 @@ def image_identity():
     rows = [line.split("\t") for line in sources.splitlines() if line and not line.startswith("#")]
     assert len(rows) > 100 and any("GPL" in row[2] for row in rows), len(rows)
     assert any(row[0] == "bash" and "GPL" in row[2] for row in rows)
+    # L'installateur pose aussi BOOTIA32.EFI (micrologiciel UEFI 32 bits).
+    assert Path("/usr/lib/grub/i386-efi").is_dir(), "GRUB UEFI 32 bits absent de l'image"
 
 image_identity()
 print("WINLUX_NATIVE_IMAGE_IDENTITY=0", flush=True)

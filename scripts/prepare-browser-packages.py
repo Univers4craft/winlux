@@ -3,11 +3,12 @@
 
     prepare-browser-packages.py [--only edge,chrome,firefox] [SORTIE]
 
-Seul Firefox (MPL, binaire officiel non modifié) peut être redistribué dans
-l'ISO. Les licences d'Edge (« you will not ... share, publish, distribute,
-or lend the Software », section 2.8 f) et de Chrome l'interdisent : ils sont
-téléchargés chez leur éditeur sur le PC de l'utilisateur, à sa demande
-(winlux-browsers --install edge|chrome appelle ce même script).
+Aucun navigateur n'est fourni dans l'ISO (docs/BROWSERS.md) : les licences
+d'Edge (« you will not ... share, publish, distribute, or lend the Software »,
+section 2.8 f) et de Chrome interdisent de les redistribuer, et Winlux n'en
+favorise aucun. Le navigateur choisi est téléchargé chez son éditeur sur le
+PC de l'utilisateur, à sa demande : winlux-browsers --install (image) et
+install-browser.sh (paquet d'intégration) appellent ce script.
 """
 import gzip
 import hashlib

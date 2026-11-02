@@ -28,7 +28,7 @@ PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "l
              "libqt6core6t64", "libqt6gui6", "libqt6widgets6"]
 # Tools the graphical installer runs from the live session.
 PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
-             "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
+             "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "grub-efi-ia32-bin", "efibootmgr",
              "xorriso", "openssl", "python3-gi-cairo"]
 # Decoding engine of the media player (winlux_media runs ffmpeg/ffprobe from PATH).
 PACKAGES += ["ffmpeg"]

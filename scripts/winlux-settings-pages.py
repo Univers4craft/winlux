@@ -542,6 +542,12 @@ _TR = {
     'IA locale : rien ne quitte ce PC. Ce qu’elle lit (recherche de fichier, journal) vous est montré.': ('Local AI: nothing leaves this PC. What it reads (file search, log) is shown to you.', 'IA local: nada sale de este equipo. Lo que lee (búsqueda de archivos, registro) se le muestra.', 'Lokale KI: Nichts verlässt diesen PC. Was sie liest (Dateisuche, Protokoll), wird Ihnen angezeigt.'),
     'Pour les trois, chaque action (réglage, dossier, page des Paramètres) attend votre clic sur « Faire ».': ('For all three, each action (setting, folder, Settings page) waits for your click on “Do it”.', 'Para los tres, cada acción (ajuste, carpeta, página de Configuración) espera su clic en «Hacerlo».', 'Bei allen dreien wartet jede Aktion (Einstellung, Ordner, Einstellungsseite) auf Ihren Klick auf „Ausführen“.'),
     'Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.': ('The sign-ins to your accounts are kept in your home folder, readable only by you.', 'Los inicios de sesión de sus cuentas se guardan en su carpeta personal, legibles solo por usted.', 'Die Anmeldungen bei Ihren Konten werden in Ihrem persönlichen Ordner gespeichert, nur für Sie lesbar.'),
+    'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
+    'Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant.': ('Winlux neither ships nor imposes any store. The ones you turn on are added to the Store: what they need is downloaded from the publisher and checked, then the store appears in the Start menu. Without a connection, it is added at the next startup.', 'Winlux no incluye ni impone ninguna tienda. Las que active se añaden a la Tienda: lo necesario se descarga del editor y se comprueba, y la tienda aparece en el menú Inicio. Sin conexión, se añade en el siguiente arranque.', 'Winlux liefert und erzwingt keinen Store. Die von Ihnen aktivierten werden dem Store hinzugefügt: Das Nötige wird beim Herausgeber heruntergeladen und geprüft, dann erscheint der Store im Startmenü. Ohne Verbindung wird er beim nächsten Start hinzugefügt.'),
+    'Logiciels Windows': ('Windows software', 'Programas de Windows', 'Windows-Programme'),
+    'Logiciels Linux': ('Linux software', 'Programas de Linux', 'Linux-Programme'),
+    'En attente du réseau : ajoutée au prochain démarrage.': ('Waiting for the network: added at the next startup.', 'Esperando la red: se añadirá en el próximo arranque.', 'Wartet auf das Netzwerk: wird beim nächsten Start hinzugefügt.'),
+    'Ouvrir le Store': ('Open the Store', 'Abrir la Tienda', 'Store öffnen'),
     'Désactivé, un assistant n’apparaît nulle part et rien ne tourne.': ('When off, an assistant appears nowhere and nothing runs.', 'Desactivado, un asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint ein Assistent nirgends und nichts läuft.'),
 }
 
@@ -1105,6 +1111,16 @@ def reset_page():
             except Exception:
                 return None
     return None
+
+
+def store_catalogs():
+    """Lignes de « winlux-store-catalogs --list » : id, état, plateforme, nom, résumé, site."""
+    if not have("winlux-store-catalogs"): return []
+    try:
+        out = subprocess.run(["winlux-store-catalogs", "--list"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [parts for parts in (line.split("|") for line in out.splitlines()) if len(parts) == 6]
 
 
 def default_apps_panel(window):
@@ -2483,7 +2499,22 @@ class ExtraPages:
 
     # ── Applications : installer, par défaut, démarrage (dans la page) ──
 
+    def store_catalogs_section(self):
+        """Boutiques de logiciels (docs/BOUTIQUES.md) : aucune fournie ni
+        présélectionnée, ordre alphabétique, téléchargées chez l'éditeur."""
+        rows = store_catalogs()
+        if not rows: return
+        self.section(_t("Boutiques de logiciels"), _t("Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant."))
+        box = self.card()
+        for ident, state, platform, name, summary, _site in rows:
+            label = f"{name} · {_t('Logiciels Windows') if platform == 'windows' else _t('Logiciels Linux')}"
+            if state == "pending": summary = _t("En attente du réseau : ajoutée au prochain démarrage.") + "\n" + summary
+            self.switch(box, label, state != "off",
+                        lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
+        self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
+
     def page_apps(self):
+        self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:
             self.section(_t("Applications par défaut"))

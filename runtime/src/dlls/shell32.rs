@@ -2,7 +2,7 @@
 //! dossier ou une adresse web avec le bon programme du système Linux.
 //!
 //! - une adresse web (`https://…`, `www.…`, `microsoft-edge:…`) s'ouvre dans
-//!   le navigateur par défaut de Winlux, Microsoft Edge (voir `browser_candidates`) ;
+//!   le navigateur choisi par l'utilisateur (voir `browser_candidates`) ;
 //! - `mailto:` ouvre le client mail Linux (`xdg-email`), un autre protocole
 //!   (`steam:`, `magnet:`, `tel:`…) l'appli Linux qui le gère (`xdg-open`),
 //!   et `file:///…` le fichier désigné ;
@@ -117,8 +117,10 @@ fn which(name: &str) -> Option<PathBuf> {
     crate::launch::which(name)
 }
 
-/// Navigateurs essayés dans l'ordre : `WINLUX_BROWSER`, le lanceur Winlux,
-/// puis Microsoft Edge (canaux stable, bêta, dev) et des solutions de repli.
+/// Navigateurs essayés dans l'ordre : `WINLUX_BROWSER`, puis le lanceur Winlux
+/// (le navigateur choisi par l'utilisateur, docs/BROWSERS.md). Sans lanceur,
+/// un navigateur présent, sans en favoriser aucun (ordre alphabétique de
+/// l'éditeur), puis `xdg-open`.
 pub fn browser_candidates() -> Vec<String> {
     let mut list = Vec::new();
     if let Ok(b) = std::env::var("WINLUX_BROWSER") {
@@ -128,12 +130,11 @@ pub fn browser_candidates() -> Vec<String> {
     }
     for name in [
         "winlux-browser",
-        "microsoft-edge-stable",
-        "microsoft-edge",
-        "microsoft-edge-beta",
-        "microsoft-edge-dev",
+        "google-chrome-stable",
         "chromium",
         "chromium-browser",
+        "microsoft-edge-stable",
+        "microsoft-edge",
         "firefox",
         "xdg-open",
     ] {
@@ -708,9 +709,10 @@ mod tests {
 
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let edge = bin.join("microsoft-edge-stable");
-        std::fs::write(&edge, b"#!/bin/sh\n").unwrap();
-        make_executable(&edge);
+        // Le lanceur Winlux passe avant tout navigateur installé sur l'hôte.
+        let browser = bin.join("winlux-browser");
+        std::fs::write(&browser, b"#!/bin/sh\n").unwrap();
+        make_executable(&browser);
         let _env = crate::launch::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -731,11 +733,11 @@ mod tests {
             )
         );
         let (program, args) = resolve("www.bing.com", "").unwrap();
-        assert_eq!(program, edge);
+        assert_eq!(program, browser);
         assert_eq!(args, vec!["https://www.bing.com".to_string()]);
         assert_eq!(
             resolve("shell:browser", "").unwrap(),
-            (edge.clone(), vec![])
+            (browser.clone(), vec![])
         );
         assert_eq!(resolve("C:\\fichier-introuvable.txt", ""), Err(SE_ERR_FNF));
         match old_path {

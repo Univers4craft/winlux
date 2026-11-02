@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as tmp:
            "XDG_CONFIG_HOME": str(home / ".config"), "WINLUX_DRIVE_C": str(home),
            "WINLUX_STORE_CATALOG": str(project / "integration/store-catalog.txt"),
            "WINLUX_STORE_OFFLINE": "1", "LOG": str(log), "LANG": "fr_FR.UTF-8",
-           "WINLUX_APPIMAGE_FEED": (w / "feed.json").as_uri(),
+           "WINLUX_APPIMAGE_FEED": (w / "feed.json").as_uri(), "WINLUX_STORE_APPIMAGEHUB": "1",
            "PATH": f"{bindir}:/usr/bin:/bin"}
 
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---

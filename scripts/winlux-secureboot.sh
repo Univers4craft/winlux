@@ -62,6 +62,26 @@ copy_chain() {
     cp "$WINLUX_MOKMANAGER" "$efi_boot/mmx64.efi"
 }
 
+# UEFI 32 bits (processeur 64 bits, micrologiciel 32 bits : tablettes Atom).
+# Il n'existe pas de shim signé en 32 bits : ce chemin démarre sans Secure
+# Boot, à côté de la chaîne signée 64 bits, sans la toucher.
+ia32_loader() {
+    tree=$1
+    search=$2
+    test -d /usr/lib/grub/i386-efi || die 'modules GRUB UEFI 32 bits absents (paquet grub-efi-ia32-bin)'
+    command -v grub-mkimage >/dev/null 2>&1 || die 'grub-mkimage requis (paquet grub-common)'
+    mkdir -p "$tree/EFI/BOOT"
+    config=$(mktemp)
+    printf 'search --no-floppy --set=root %s\nset prefix=($root)/boot/grub\nconfigfile $prefix/grub.cfg\n' "$search" >"$config"
+    grub-mkimage -O i386-efi -p /boot/grub -c "$config" -o "$tree/EFI/BOOT/BOOTIA32.EFI" \
+        part_gpt part_msdos fat iso9660 ext2 search search_label search_fs_file search_fs_uuid \
+        configfile normal linux echo test sleep serial terminal gzio efi_gop all_video
+    rm -f "$config"
+    rm -rf "$tree/boot/grub/i386-efi"
+    mkdir -p "$tree/boot/grub"
+    cp -a /usr/lib/grub/i386-efi "$tree/boot/grub/i386-efi"
+}
+
 secureboot_state() {
     variable=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
     test -d /sys/firmware/efi || { echo 'Démarrage : BIOS (Secure Boot non applicable)'; return; }
@@ -104,7 +124,8 @@ case "$command" in
         printf 'configfile /boot/grub/grub.cfg\n' >"$iso_root/boot/grub/x86_64-efi/grub.cfg"
         # xorriso is used directly, so the BIOS modules grub-mkrescue would add are copied here.
         rm -rf "$iso_root/boot/grub/i386-pc"
-        cp -a /usr/lib/grub/i386-pc "$iso_root/boot/grub/i386-pc" ;;
+        cp -a /usr/lib/grub/i386-pc "$iso_root/boot/grub/i386-pc"
+        ia32_loader "$iso_root" '--file /boot/winlux-rootfs.squashfs' ;;
     make-iso)
         iso_root=${1:?arborescence ISO requise}
         out=${2:?ISO de sortie requise}
