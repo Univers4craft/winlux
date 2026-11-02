@@ -370,6 +370,7 @@ unsafe fn write_msg(out: *mut Msg, m: &Msg) {
 pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
+        super::ws2_32::pump_async();
         let q = gui::current_queue();
         // Un minuteur très en retard passe avant les entrées (anti-famine).
         if let Some(m) = gui::due_timer(hwnd, min, max, true) {
@@ -400,7 +401,13 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         // File vide : en headless on rend la main (fin de boucle); avec un
         // backend réel on dort jusqu'au prochain événement hôte, dépôt d'un
         // autre thread ou minuteur (borne de sûreté : 500 ms).
-        let wait = gui::next_timer_ms(hwnd).map_or(500, |ms| ms.min(500));
+        // Sockets WSAAsyncSelect : sondées toutes les 10 ms au plus.
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
             return 0;
         }
@@ -427,6 +434,7 @@ pub unsafe extern "win64" fn peek_message_a(
     remove: u32,
 ) -> i32 {
     gui::pump_backend();
+    super::ws2_32::pump_async();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
@@ -449,13 +457,20 @@ pub unsafe extern "win64" fn peek_message_a(
         return 1;
     }
     // File vide : WM_PAINT tant que la fenêtre n'a pas validé sa zone.
-    match gui::pending_paint(hwnd, min, max) {
-        Some(m) => {
-            write_msg(out, &m);
-            1
-        }
-        None => 0,
+    if let Some(m) = gui::pending_paint(hwnd, min, max) {
+        write_msg(out, &m);
+        return 1;
     }
+    // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
+    // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
+    // vide sa file par PeekMessage tournerait sans fin (PuTTY).
+    if remove & 0x1 != 0 {
+        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
+            write_msg(out, &m);
+            return 1;
+        }
+    }
+    0
 }
 
 pub unsafe extern "win64" fn peek_message_w(
@@ -2515,6 +2530,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
 /// Un message, un WM_PAINT en attente ou un minuteur échu pour ce thread ?
 fn message_waiting() -> bool {
     gui::pump_backend();
+    super::ws2_32::pump_async();
     let q = gui::current_queue();
     gui::peek_message(&q, 0, 0, 0).is_some()
         || gui::pending_paint(0, 0, 0).is_some()
@@ -2916,6 +2932,31 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peek_message_rend_wm_timer_comme_get_message() {
+        unsafe {
+            // Minuteur de thread (hwnd 0), comme SetTimer(NULL, …).
+            let id = set_timer(0, 0, 30, 0);
+            assert_ne!(id, 0);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            // MsgWait voit le minuteur échu…
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                0
+            );
+            // …et PeekMessage(PM_REMOVE) le rend, sinon la boucle tournerait.
+            let mut m: Msg = std::mem::zeroed();
+            assert_eq!(peek_message_a(&mut m, 0, 0, 0, 1), 1);
+            let msg = std::ptr::read_unaligned(&m).message;
+            assert_eq!(msg, 0x0113);
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                258
+            );
+            kill_timer(0, id);
+        }
+    }
 
     #[test]
     fn msg_wait_respecte_le_delai_et_les_evenements() {
