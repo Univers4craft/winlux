@@ -65,6 +65,7 @@ run verrouillage         python3 -B scripts/test-lock.py
 run autorisations        python3 -B scripts/test-permission.py
 run uac                  python3 -B scripts/test-uac.py
 run relais-root          python3 -B scripts/test-root.py
+run xorg-session-vt      python3 -B scripts/test-xorg-session.py
 run coller-bureau        python3 -B scripts/test-desktop-paste.py
 run modes-alimentation   python3 -B scripts/test-power-modes.py
 run redemarrage-garde    python3 -B scripts/test-power-reboot-guard.py
@@ -107,6 +108,8 @@ run manettes-hid         sh scripts/test-hid.sh
 run deviceiocontrol      sh scripts/test-devio.sh
 run entree-brute         sh scripts/test-rawinput.sh
 run ports-serie          sh scripts/test-serial.sh
+run arbre-peripheriques  sh scripts/test-devnodes.sh
+run winusb               sh scripts/test-winusb.sh
 run definition-ecran     sh scripts/test-display-mode.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
@@ -116,6 +119,17 @@ fi
 # l'affichage, sauté proprement sans pilote. Seulement si déjà compilé.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe ]; then
     run opengl-vulkan-exe    display target/release/winlux target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe
+fi
+# System32 et msvcp140 maison, sur un lecteur C: jetable.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/system32_suite.exe ]; then
+    sys32_c=$(mktemp -d)
+    run system32-msvcp140    env WINLUX_DRIVE_C="$sys32_c" WINLUX_GUI=headless target/release/winlux target/x86_64-pc-windows-msvc/release/system32_suite.exe
+    rm -rf "$sys32_c"
+fi
+# HTTPS des .exe : certificats (crypt32), CryptoAPI et Schannel contre un
+# serveur TLS local jetable.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/tls_suite.exe ]; then
+    run https-schannel       sh scripts/run-tls-suite.sh target/release/winlux target/x86_64-pc-windows-msvc/release/tls_suite.exe
 fi
 
 echo

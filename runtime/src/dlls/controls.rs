@@ -90,7 +90,7 @@ const VK_DELETE: usize = 0x2E;
 const VK_F4: usize = 0x73;
 
 // Couleurs COLORREF (0x00BBGGRR) de Windows 11, thème clair.
-const ACCENT: u32 = 0x00C0_6700; // #0067C0
+const ACCENT: u32 = 0x00F0_3D6A; // #6A3DF0, violet Prisme
 const TEXT: u32 = 0x001B_1B1B;
 const TEXT_DISABLED: u32 = 0x00A0_A0A0;
 const CONTROL_FILL: u32 = 0x00FD_FDFD;
@@ -2068,7 +2068,26 @@ fn paint_items(hwnd: usize, c: &Ctl, p: &Painter, area: Rect, odt: u32) {
             right: row.right - 2,
             ..row
         };
-        p.text(tr, text, if enabled(hwnd) { fg } else { TEXT_DISABLED }, 0);
+        let color = if enabled(hwnd) { fg } else { TEXT_DISABLED };
+        if text.contains('\t') {
+            // Tabulations (LBS_USETABSTOPS, journal d'événements de PuTTY) :
+            // colonnes tous les 8 caractères moyens, comme les arrêts par
+            // défaut de Windows, au lieu d'un carré.
+            let tab = (measure(p.font, "nnnnnnnn").0).max(8);
+            let mut x = tr.left;
+            for (k, part) in text.split('\t').enumerate() {
+                if k > 0 {
+                    x = tr.left + ((x - tr.left) / tab + 1) * tab;
+                }
+                if x >= tr.right {
+                    break;
+                }
+                p.text(Rect { left: x, ..tr }, part, color, 0);
+                x += measure(p.font, part).0;
+            }
+        } else {
+            p.text(tr, text, color, 0);
+        }
     }
     if scroll {
         // Barre de défilement fine, comme celles de Windows 11 au repos.

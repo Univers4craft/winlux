@@ -1553,6 +1553,16 @@ unsafe fn create_file_str(
     if let Some(name) = crate::dlls::named_pipes::pipe_name(path) {
         return crate::dlls::named_pipes::open_client(&name, _flags);
     }
+    // \\?\usb#vid_…&mi_…#…#{86e0d1e0-…} : l'interface d'un port COM
+    // (CM_Get_Device_Interface_List), ouverte comme \\.\COMn.
+    let com_alias;
+    let path = match crate::dlls::devnodes::comport_alias(path) {
+        Some(c) => {
+            com_alias = c;
+            com_alias.as_str()
+        }
+        None => path,
+    };
     // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
     if let Some(dev) = crate::dlls::hid::device_path(path) {
         return match crate::dlls::hid::open(&dev) {
@@ -1572,6 +1582,23 @@ unsafe fn create_file_str(
                         2
                     },
                 );
+                usize::MAX
+            }
+        };
+    }
+    // \\?\usb#vid_…#…#{a5dcbf10-…} : un appareil USB pour winusb (usbfs).
+    if let Some(dir) = crate::dlls::devnodes::usb_device_target(path) {
+        return match crate::dlls::winusb::open(&dir) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(_) => {
+                crate::process::set_last_error(5);
                 usize::MAX
             }
         };
@@ -2721,7 +2748,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
-    if let Some(h) = crate::dlls::module_handle(n) {
+    let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
+        && crate::loader::main_module()
+            .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
+    if let Some(h) = crate::dlls::module_handle(n).filter(|_| !real_first) {
         {
             let mut mods = crate::loader::MODULES.lock().unwrap();
             if let Some(m) = mods.iter_mut().find(|m| m.base == h) {

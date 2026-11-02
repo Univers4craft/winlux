@@ -32,7 +32,7 @@ El sistema, el instalador y este sitio están disponibles en francés, inglés, 
 ![El escritorio de Winlux con el menú Inicio abierto](img:bureau-menu-demarrer.jpg "El escritorio de Winlux, fondo «Winlux Nuit», menú Inicio abierto.")
 
 ::: figure-row
-![El asistente de bienvenida en el primer arranque](img:assistant-bienvenue.jpg "En el primer arranque, el asistente de bienvenida ajusta el fondo, los colores y la barra de tareas.")
+![La ventana de bienvenida en el primer arranque](img:assistant-bienvenue.jpg "En el primer arranque, la ventana de bienvenida lleva al recorrido guiado, al teclado, a la red y a la apariencia.")
 
 ![La página Actualizaciones de la Configuración](img:mises-a-jour.jpg "Las actualizaciones se instalan desde Configuración, con vuelta atrás automática.")
 :::

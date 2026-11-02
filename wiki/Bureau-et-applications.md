@@ -33,7 +33,7 @@ C'est la session par défaut, en Live comme sur un système installé. Elle est 
 - **Écran de verrouillage** (`winlux-lock`) : heure et date sur le fond d'écran, puis avatar et mot de passe sur fond flouté. Déclenché par Windows+L, Démarrer › Verrouiller, l'inactivité (5 minutes par défaut) et le réveil de veille. Cinq erreurs bloquent la saisie trente secondes.
 - **UAC** (`winlux-uac`) : « Voulez-vous autoriser cette application à apporter des modifications à votre appareil ? », pour les programmes qui demandent les droits administrateur. Voir [Chemins et droits](Chemins-et-droits).
 - **Autorisations** (`winlux-permission`) : caméra, micro, capture d'écran, dossiers personnels, demandées une fois par programme.
-- **Bienvenue** (`winlux-welcome`) : visite guidée au premier démarrage, lancer un `.exe`, installer les logiciels courants en un clic.
+- **Bienvenue** (`winlux-welcome`) : fenêtre de la première session, avec cinq raccourcis (visite guidée et logiciels courants, clavier, réseau, apparence, secours) ; elle revient jusqu'au clic sur « Terminer », puis se rouvre depuis le menu Démarrer.
 - **Personnalisation** (`winlux-personalize`) : fonds, couleurs, position de la barre des tâches, appliqués à GTK, Openbox et XFCE.
 - **Notifications** et **zone de notification** : centre de notifications, icônes `Shell_NotifyIcon` des programmes Windows (`winlux-notify-icon`).
 - **Écran d'arrêt**, **sessions multiples** (Verrouiller, Se déconnecter, Changer d'utilisateur ; un Xorg par compte), **signalement de problème** (`winlux-report`).

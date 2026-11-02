@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Redistribuable de test pour les bundles WiX Burn (setup/burn.rs) :
+     une DLL déposée dans System64Folder (C:\Windows\System32).
+     wixl -a x64 redist.wxs -o redist.msi -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="{7B2C6D1F-2222-4333-8444-A55566667777}" Name="Winlux Redistribuable" Language="1033"
+           Version="14.40.1" Manufacturer="Équipe Winlux" UpgradeCode="{1F2E3D4C-BBBB-4CCC-8DDD-EEEEFFFF0000}">
+    <Package InstallerVersion="200" Compressed="yes" Description="Redistribuable de test"/>
+    <Media Id="1" Cabinet="redist.cab" EmbedCab="yes"/>
+    <Property Id="ALLUSERS" Value="1"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="System64Folder">
+        <Component Id="Dll" Guid="{44444444-2222-4333-8444-555555555555}" Win64="yes">
+          <File Id="dll" Name="winlux_redist_test.dll" Source="redist.dll" KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </Directory>
+    <Feature Id="Tout" Level="1">
+      <ComponentRef Id="Dll"/>
+    </Feature>
+  </Product>
+</Wix>

@@ -429,7 +429,11 @@ impl DxgiAdapter {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
-            let _ = Box::from_raw(this);
+            // L'adaptateur tient une référence sur sa fabrique (create_adapter).
+            let adapter = Box::from_raw(this);
+            if !adapter.factory.is_null() {
+                DxgiFactory::release(adapter.factory);
+            }
             return 0;
         }
         prev - 1
@@ -602,7 +606,11 @@ fn adapter_desc() -> DxgiAdapterDesc {
 
 /// Adaptateur (et sa fabrique) pour IDXGIDevice::GetAdapter de d3d11.
 pub(crate) fn new_default_adapter() -> *mut c_void {
-    create_adapter(create_factory()).cast()
+    let factory = create_factory();
+    let adapter = create_adapter(factory);
+    // L'adaptateur garde sa propre référence : on rend celle de création.
+    unsafe { DxgiFactory::release(factory) };
+    adapter.cast()
 }
 
 pub(crate) unsafe fn adapter_query_interface(
@@ -617,7 +625,12 @@ pub(crate) unsafe fn adapter_release(adapter: *mut c_void) -> u32 {
     unsafe { DxgiAdapter::release(adapter.cast()) }
 }
 
+/// Crée un adaptateur qui garde sa fabrique en vie : ANGLE relâche la
+/// fabrique juste après EnumAdapters puis remonte à elle par GetParent.
 fn create_adapter(factory: *mut DxgiFactory) -> *mut DxgiAdapter {
+    if !factory.is_null() {
+        unsafe { (*factory).ref_count.fetch_add(1, Ordering::Relaxed) };
+    }
     Box::into_raw(Box::new(DxgiAdapter {
         vtable: &ADAPTER_VTABLE,
         ref_count: AtomicU32::new(1),
@@ -721,10 +734,11 @@ unsafe extern "win64" fn sc_get_priv(
 }
 unsafe extern "win64" fn sc_get_parent(
     _: *mut DxgiSwapChain,
-    _: *const Guid,
-    _: *mut *mut c_void,
+    riid: *const Guid,
+    out: *mut *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    // Parent d'une chaîne d'échange : la fabrique DXGI.
+    factory_for(riid, out)
 }
 
 unsafe extern "win64" fn sc_get_device(
@@ -1349,5 +1363,29 @@ pub fn exports() -> crate::dlls::Exports {
         "CreateDXGIFactory1" => fn CreateDXGIFactory1,
         "CreateDXGIFactory2" => fn CreateDXGIFactory2,
         "DXGIGetDebugInterface1" => fn DXGIGetDebugInterface1,
+    }
+}
+
+#[cfg(test)]
+mod refcount_tests {
+    use super::*;
+
+    #[test]
+    fn adapter_keeps_its_factory_alive() {
+        // ANGLE : CreateDXGIFactory1 → EnumAdapters → Release(fabrique)
+        // → adaptateur.GetParent(IDXGIFactory1) doit encore réussir.
+        unsafe {
+            let f = create_factory();
+            let a = create_adapter(f);
+            assert_eq!(DxgiFactory::release(f), 1);
+            let mut parent = std::ptr::null_mut();
+            assert_eq!(
+                adapter_get_parent(a, &IID_IDXGI_FACTORY1, &mut parent),
+                S_OK
+            );
+            assert_eq!(parent, f.cast());
+            assert_eq!(DxgiFactory::release(parent.cast()), 1);
+            assert_eq!(DxgiAdapter::release(a), 0);
+        }
     }
 }
