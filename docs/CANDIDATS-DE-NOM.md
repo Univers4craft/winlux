@@ -1,16 +1,16 @@
 # Candidats pour remplacer le nom « Winlux »
 
-État au 02/11/2026. **Le renommage est en pause** : aucun des noms étudiés n'a
-été retenu, le projet garde le nom Winlux pour l'instant. Rien n'a été acheté
-ni déposé, et rien ne le sera avant l'avis d'un conseil en propriété
-industrielle.
+État au 02/11/2026. **Le renommage est abandonné** : damien a décidé de garder
+le nom Winlux et de renforcer plutôt la position juridique du projet. Ce
+document ne sert que si la question du nom revient. Rien n'a été acheté ni
+déposé.
 
 Pourquoi changer de nom : voir `docs/RISQUES-JURIDIQUES.md` et
 `docs/NOM-ET-STRUCTURE-JURIDIQUE.md` (PR #327). « Winlux » reproduit le schéma
 de « Lindows », que Microsoft a attaqué dans plusieurs pays et qui a dû devenir
 Linspire en 2004.
 
-Ce document sert à reprendre la recherche sans tout refaire : il liste les noms
+Si la question revient, ce document permet de reprendre la recherche sans tout refaire : il liste les noms
 déjà étudiés, ce qui les bloque, et la méthode de vérification à appliquer à un
 nouveau nom.
 
