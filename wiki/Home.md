@@ -18,7 +18,7 @@ Ce wiki explique ce qu'est Winlux, pourquoi il existe, comment il est construit,
 
 1. [But et principes](But-et-principes) : pourquoi Winlux existe, ce qu'il veut être et les règles qu'il s'impose.
 2. [Architecture](Architecture) : les couches du système, du noyau Linux jusqu'au bureau, et le trajet d'un `.exe` double-cliqué.
-3. [Bureau et applications](Bureau-et-applications) : la session de bureau habillée Windows 11 et le shell PE interne, avec la liste des applications intégrées.
+3. [Bureau et applications](Bureau-et-applications) : la session de bureau et le shell PE interne, avec la liste des applications intégrées.
 
 ### Ce que Winlux sait faire
 

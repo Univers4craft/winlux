@@ -40,3 +40,14 @@
 - Ne pas masquer les erreurs de validation. Si une commande échoue, examiner
   son résultat et ne relancer que si une action corrective ou une autre
   vérification est nécessaire.
+
+## Marque, vocabulaire et salle blanche
+
+Voir `docs/POSITION-JURIDIQUE.md` (position publique) et `docs/DEFENSE-DU-NOM.md` (dossier interne).
+
+- **Aucun élément de Microsoft** dans le dépôt ni dans l'ISO : ni code, ni DLL, ni exécutable, ni police (Segoe…), ni icône, ni curseur, ni son, ni fond d'écran, ni logo, ni texte d'aide recopié.
+- **Salle blanche** : ne jamais consulter ni reproduire du code source de Microsoft (publié, divulgué ou fuité) ; ne jamais décompiler une DLL de Microsoft pour écrire du code. Chaque comportement reproduit vient de la documentation publique, de l'observation d'un programme en fonctionnement ou de nos propres tests ; le dire dans le commit quand ce n'est pas évident.
+- **Vocabulaire permis** : « ouvre les programmes conçus pour Windows (.exe) », « compatible avec de nombreux programmes Windows », « la touche Windows », « ergonomie familière ».
+- **Vocabulaire interdit** dans les textes visibles, le site, le wiki, les notes de version et les captures : « Windows gratuit », « Windows libre », « remplace Windows », « alternative à Windows », « comme Windows 11 », « comme sous Windows », « façon Windows 11 », « ressemble à Windows », « clone de Windows », toute explication du nom qui le relie à Windows, et les noms de produits ou de matières graphiques de Microsoft comme noms de fonctions (Mica, Acrylic, Fluent, Copilot, Cortana, Defender, WordPad). Dans les commentaires de code, préférer une description fonctionnelle.
+- **Mention de non-affiliation** sur tout nouvel écran « À propos », installateur ou page publique : « Windows est une marque de Microsoft Corporation. Winlux est un projet indépendant : il n'est ni affilié à Microsoft, ni approuvé par elle. »
+- **Aucun contournement** de protection technique, d'activation ou de licence.

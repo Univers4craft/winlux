@@ -10,12 +10,13 @@
 > sources publiques vérifiées le 2 novembre 2026 (liste en fin de document) ;
 > ils peuvent changer. Quand une chose n'a pas été vérifiée, c'est écrit.
 
-> **Note pour le renommage.** Ce document et `RISQUES-JURIDIQUES.md` doivent
-> **garder l'ancien nom** là où il est cité : c'est la trace de la décision.
-> Ils ne doivent pas être passés au remplacement automatique de l'ancien nom.
-> Le nouveau nom n'étant **pas encore choisi** au moment de la rédaction, il
-> est écrit ici « le nouveau nom » ; il faudra le remplacer quand il sera
-> arrêté, sans toucher au reste.
+> **Mise à jour du 2 novembre 2026, fin de journée : le nom Winlux est
+> conservé.** Après avoir écarté un premier candidat, damien a décidé de
+> garder « Winlux » et de le défendre. Les sections 1 à 3 retracent la
+> réflexion sur le renommage et restent pour mémoire ; les sections 4 à 7
+> s'appliquent désormais à « Winlux ». La défense du nom est dans
+> [DEFENSE-DU-NOM.md](DEFENSE-DU-NOM.md) (interne) et
+> [POSITION-JURIDIQUE.md](POSITION-JURIDIQUE.md) (publique).
 
 ## 1. La décision
 
@@ -24,7 +25,7 @@
 | **Date** | 2 novembre 2026 |
 | **Décidé par** | damien (GitHub : Univers4craft), auteur et responsable du projet |
 | **Ancien nom** | Winlux |
-| **Nouveau nom** | **pas encore arrêté** (voir ci-dessous) |
+| **Nouveau nom** | aucun : **Winlux est conservé** (décision du même jour, voir l'encadré en tête) |
 | **Portée** | Tout le projet : dépôt, système, site, documentation, ISO, logo et textes. Plus aucune trace de l'ancien nom, sauf dans les deux documents juridiques qui retracent la décision |
 | **Raison** | Le risque de conflit avec la marque « Windows » de Microsoft, classé **risque n° 1** dans [RISQUES-JURIDIQUES.md](RISQUES-JURIDIQUES.md#1-le-nom-winlux) |
 
@@ -101,7 +102,7 @@ Trois sortes de droits antérieurs comptent :
 « Luxia » montre que le risque est réel : le nom paraissait neuf et il était
 déjà pris deux fois, comme société et comme marque.
 
-## 4. Protéger le nouveau nom
+## 4. Protéger le nom
 
 ### Étape 1 : la recherche d'antériorité (indispensable)
 
@@ -285,10 +286,10 @@ Une page **Mentions légales** avec :
 - **l'hébergeur** : GitHub, Inc. pour GitHub Pages (adresse à recopier depuis
   les conditions de GitHub au moment de la publication) ;
 - **un contact** ;
-- **la licence** : « [nouveau nom] est un logiciel libre distribué sous licence GNU
+- **la licence** : « Winlux est un logiciel libre distribué sous licence GNU
   GPL version 3 ou ultérieure », avec un lien vers `LICENSE` ;
 - **la mention de non-affiliation** :
-  > Windows est une marque de Microsoft Corporation. [Nouveau nom] est un projet
+  > Windows est une marque de Microsoft Corporation. Winlux est un projet
   > indépendant : il n'est ni affilié à Microsoft, ni approuvé par elle.
   > Les autres marques citées appartiennent à leurs titulaires.
 
@@ -335,13 +336,9 @@ ni de cookies).
 
 **Instructions prêtes à envoyer** (une par fil) :
 
-1. *Fil du renommage* : « Pour chaque candidat de nom, fais la recherche
-   gratuite de `docs/NOM-ET-STRUCTURE-JURIDIQUE.md` section 4, étape 1
-   (TMview et data.inpi.fr, classes 9 et 42, marques et dénominations
-   sociales, variantes d'orthographe) avant de l'annoncer ; exclus
-   `docs/RISQUES-JURIDIQUES.md` et `docs/NOM-ET-STRUCTURE-JURIDIQUE.md` du
-   remplacement automatique, et remplace seulement « le nouveau nom » /
-   « [nouveau nom] » dans le second quand le nom est arrêté. »
+1. *Fil du renommage* : **annulé** (le nom Winlux est conservé). Pour
+   toute future recherche de nom, suivre la section 4, étape 1 (TMview et
+   data.inpi.fr, classes 9 et 42) avant toute annonce.
 2. *Fil des versions* : « Dans `build-live-iso.sh`, lance
    `python3 scripts/list-gpl-sources.py <racine de l'image>
    <racine>/usr/share/doc/winlux/sources-gpl.tsv` après l'installation des

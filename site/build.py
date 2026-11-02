@@ -506,6 +506,7 @@ def render_page(lang: str, slug: str, all_strings: dict, meta_all: dict) -> str:
 <li><a href="{GITHUB}/blob/master/LICENSE" rel="noopener">{s['footer_license']}</a></li>
 <li><a href="legal.html">{s['footer_legal']}</a></li>
 <li><a href="privacy.html">{s['footer_privacy']}</a></li>
+<li><a href="position.html">{s['footer_position']}</a></li>
 </ul>
 <p class="muted small">{r.inline(s['footer_disclaimer'])}</p>
 </div>
