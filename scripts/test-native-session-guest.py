@@ -448,6 +448,49 @@ except Exception:
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
 
+def campaign_shortcuts_and_clipboard():
+    """Campagne v0.2.13 : Windows+E ouvrait Thunar en root sur « / », et un
+    texte copié (Ctrl+C dans Edge, un .txt) ne se collait pas au terminal."""
+    before = set(windows())
+    run("xdotool", "key", "--clearmodifiers", "super+e")
+    explorer = None
+    deadline = time.monotonic() + 60
+    while explorer is None and time.monotonic() < deadline:
+        for window, (_, title) in windows().items():
+            if window not in before:
+                assert "Thunar" not in title, "Windows+E opened Thunar: " + title
+                if "Explorer Winlux" in title: explorer = window
+        time.sleep(0.2)
+    assert explorer, "Windows+E did not open the Winlux Explorer"
+    run("wmctrl", "-ic", explorer)
+    text = "echo collé été"
+    owner = subprocess.Popen(["python3", "-c", "import sys, gi\ngi.require_version('Gtk', '3.0')\n"
+                              "from gi.repository import Gtk, Gdk, GLib\n"
+                              "Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(sys.argv[1], -1)\n"
+                              "GLib.timeout_add_seconds(60, Gtk.main_quit)\nGtk.main()", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        time.sleep(1)
+        for gesture in (["ctrl+shift+v"], ["shift+Insert"]):
+            pasted = Path("/tmp/winlux-pasted")
+            pasted.unlink(missing_ok=True)
+            before = set(windows())
+            subprocess.Popen(["winlux-terminal", "-e", "sh", "-c", 'read line; printf %s "$line" > /tmp/winlux-pasted'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wait_for(lambda: any(w not in before and "Terminal Winlux" in t for w, (_, t) in windows().items()), "terminal for paste")
+            terminal = next(w for w, (_, t) in windows().items() if w not in before and "Terminal Winlux" in t)
+            run("xdotool", "windowactivate", "--sync", terminal)
+            run("xdotool", "key", "--clearmodifiers", *gesture)
+            run("xdotool", "key", "Return")
+            deadline = time.monotonic() + 10
+            while not pasted.exists() and time.monotonic() < deadline: time.sleep(0.2)
+            assert pasted.exists() and pasted.read_text() == text, f"{gesture[0]} did not paste the clipboard into the terminal"
+    finally:
+        owner.terminate()
+
+campaign_shortcuts_and_clipboard()
+print("WINLUX_NATIVE_SHORTCUTS_AND_CLIPBOARD=0", flush=True)
+
 def update_from_previous_release():
     """Paramètres > Mettre à jour : l'outil de la version publiée installe la nouvelle."""
     bench = Path("/opt/winlux-test/update")

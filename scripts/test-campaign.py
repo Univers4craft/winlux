@@ -1,0 +1,249 @@
+#!/usr/bin/python3
+"""Régressions de la campagne de tests v0.2.13 (VM neuve, novembre 2026).
+
+Chaque vérification reprend un défaut trouvé en VM puis corrigé : s'il
+revient, ce test échoue. Tout tourne sur la machine de développement, sans
+VM ni droits root (profils isolés dans des dossiers temporaires, outils
+système remplacés par des faux qui notent leurs arguments).
+"""
+import hashlib
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from types import SimpleNamespace
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+NATIVE = ROOT / "integration/native"
+OB = "{http://openbox.org/3.4/rc}"
+checks = 0
+
+
+def ok(condition, label):
+    global checks
+    if not condition:
+        print(f"ÉCHEC : {label}", file=sys.stderr)
+        raise SystemExit(1)
+    checks += 1
+    print(f"  OK     {label}")
+
+
+def native_config(home):
+    env = {**os.environ, "HOME": str(home), "WINLUX_NATIVE_SOURCE": str(NATIVE)}
+    subprocess.run([sys.executable, "-B", str(SCRIPTS / "winlux-native-config.py")], env=env, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def shortcuts(home):
+    path = home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml"
+    root = ET.parse(path).getroot()
+    commands = next(item for item in root if item.get("name") == "commands")
+    custom = next(item for item in commands if item.get("name") == "custom")
+    return {item.get("name"): item.get("value") for item in custom}
+
+
+def fake_tool(directory, name, body):
+    tool = directory / name
+    tool.write_text("#!/bin/sh\n" + body + "\n")
+    tool.chmod(0o755)
+    return tool
+
+
+# ── Raccourcis Windows (Windows+E ouvrait Thunar en root sur « / ») ─────────
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    keys = shortcuts(home)
+    ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil neuf : Windows+E ouvre l'Explorateur Winlux")
+    ok(keys.get("<Super>r") == "winlux-start-menu", "profil neuf : Windows+R ouvre le menu Démarrer")
+    ok(keys.get("<Super>p") == "winlux-shell-app settings 8", "profil neuf : Windows+P ouvre Paramètres > Écran")
+    ok(keys.get("<Primary><Alt>l") == "winlux-lock now", "profil neuf : Ctrl+Alt+L verrouille")
+    ok(keys.get("<Primary><Shift>Escape") == "winlux-system-tools tasks", "profil neuf : Ctrl+Maj+Échap ouvre le Gestionnaire des tâches")
+    ok(keys.get("override") == "true", "profil neuf : xfsettingsd ne recopie pas les défauts d'XFCE")
+    ok("<Alt><Super>s" not in keys and "Print" not in keys, "profil neuf : aucun raccourci vers un programme absent (orca, screenshooter)")
+    ok("<Primary><Alt>t" not in keys, "Ctrl+Alt+T laissé à openbox (actif dès l'apparition du bureau)")
+
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    channel = home / ".config/xfce4/xfconf/xfce-perchannel-xml"
+    channel.mkdir(parents=True)
+    (channel / "xfce4-keyboard-shortcuts.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-keyboard-shortcuts" version="1.0">'
+        '<property name="commands" type="empty"><property name="custom" type="empty">'
+        '<property name="&lt;Super&gt;e" type="string" value="thunar"/>'
+        '<property name="&lt;Super&gt;r" type="string" value="xfce4-appfinder -c"><property name="startup-notify" type="bool" value="true"/></property>'
+        '<property name="&lt;Super&gt;p" type="string" value="mon-outil"/>'
+        '<property name="Print" type="string" value="xfce4-screenshooter"/>'
+        '<property name="override" type="bool" value="true"/></property></property></channel>\n')
+    native_config(home)
+    keys = shortcuts(home)
+    ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil existant : Windows+E migré vers l'Explorateur")
+    ok(keys.get("<Super>r") == "winlux-start-menu", "profil existant : Windows+R migré (option startup-notify retirée)")
+    ok(keys.get("<Super>p") == "mon-outil", "profil existant : un raccourci personnalisé est conservé")
+    ok("Print" not in keys, "profil existant : Impr écran vers un programme absent retiré")
+
+# ── Bureau : menu clic droit des fichiers et clavier (Ctrl+C/V, Suppr) ──────
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
+    contexts = {item.get("name"): item for item in rc.find(f"{OB}mouse")}
+    desktop = contexts["Desktop"]
+    ok(not any(bind.get("button") == "Right" for bind in desktop),
+       "openbox laisse le clic droit à xfdesktop (Renommer, Supprimer, Copier sur un fichier)")
+    ok(desktop.find(f"{OB}mousebind/{OB}action/{OB}desktop") is not None,
+       "un clic donne le clavier au bureau (focus <desktop>yes</desktop>)")
+    ok(contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "root-menu", "menu Winlux gardé sur la racine")
+    keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}command") for bind in rc.find(f"{OB}keyboard")}
+    ok(keys.get("C-A-t") == "winlux-terminal", "Ctrl+Alt+T ouvre le terminal Winlux par openbox")
+    uca = (home / ".config/Thunar/uca.xml").read_text()
+    ok("Ouvrir dans le terminal" in uca and "Open Terminal Here</name>\n" not in uca.split("xml:lang")[0],
+       "menu du bureau : « Ouvrir dans le terminal » en français")
+    ok((home / ".local/share/Trash/files").is_dir() and (home / ".local/share/Trash/info").is_dir(),
+       "Corbeille prête sur un profil neuf (pas « dossier introuvable »)")
+
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    (home / ".config/openbox").mkdir(parents=True)
+    old = (NATIVE / "config/openbox/rc.xml").read_text()
+    old = old.split("<!-- Bureau :")[0] + '<context name="Desktop"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>\n  </mouse>' + old.split("</mouse>", 1)[1]
+    old = old.replace('    <keybind key="C-A-t">', '    <keybind key="X-unused">')
+    (home / ".config/openbox/rc.xml").write_text(old)
+    (home / ".config/Thunar").mkdir(parents=True)
+    (home / ".config/Thunar/uca.xml").write_text("<actions>\n<action>\n\t<name>Open Terminal Here</name>\n</action>\n</actions>\n")
+    native_config(home)
+    rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
+    contexts = {item.get("name"): item for item in rc.find(f"{OB}mouse")}
+    ok(not any(bind.get("button") == "Right" for bind in contexts["Desktop"]) and "Root" in contexts,
+       "profil existant : ancien clic droit d'openbox sur le bureau migré")
+    ok("Ouvrir dans le terminal" in (home / ".config/Thunar/uca.xml").read_text(), "profil existant : action Thunar traduite")
+
+# ── Barre des tâches : icône nm-applet en double ───────────────────────────
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    native_config(home)
+    panel = (home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").read_text()
+    ok(panel.count('value="nm-applet"') == 1, "icône nm-applet masquée une seule fois (relances idempotentes)")
+
+# ── Lanceurs de confiance (« Lanceur d'application non fiable ») ───────────
+source = (SCRIPTS / "winlux-trust-shortcuts.py").read_text()
+ok("metadata::xfce-exe-checksum" in source and "hashlib.sha256" in source,
+   "winlux-trust-shortcuts pose la somme SHA-256 lue par xfdesktop 4.20")
+menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
+ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
+ok("list_actions" in menu_source and "launch_action" in menu_source,
+   "clic droit du menu Démarrer : actions de l'application (« Mettre à jour Claude Code »)")
+
+# ── Menu Démarrer : nom du compte et « Retour » pendant une recherche ──────
+menu = runpy.run_path(str(SCRIPTS / "winlux-start-menu.py"), run_name="test_campaign")
+entry = SimpleNamespace(pw_uid=1000, pw_gecos="Damien Test,,,", pw_name="damien")
+with patch("os.getuid", return_value=1000), patch("pwd.getpwuid", return_value=entry):
+    ok(menu["account_name"]() == "Damien Test", "menu Démarrer : nom complet du compte, pas « Winlux »")
+entry = SimpleNamespace(pw_uid=1000, pw_gecos="", pw_name="damien")
+with patch("os.getuid", return_value=1000), patch("pwd.getpwuid", return_value=entry):
+    ok(menu["account_name"]() == "damien", "menu Démarrer : identifiant quand le nom complet est vide")
+state = {"text": "final", "rendered": 0}
+fake = SimpleNamespace(all_apps=False,
+                       search=SimpleNamespace(get_text=lambda: state["text"], set_text=lambda text: state.update(text=text)),
+                       render=lambda: state.update(rendered=state["rendered"] + 1))
+menu["Start"].toggle_list(fake)
+ok(state["text"] == "" and fake.all_apps is False and state["rendered"] == 1, "« Retour » efface la recherche en cours")
+menu["Start"].toggle_list(fake)
+ok(fake.all_apps is True, "« Toutes les applications » s'ouvre sans recherche")
+
+# ── Terminal Winlux : coller ce qui a été copié (signalé par damien) ───────
+with tempfile.TemporaryDirectory() as directory:
+    log = Path(directory) / "xterm.log"
+    xterm = fake_tool(Path(directory), "xterm", f'printf "%s\\n" "$@" > "{log}"')
+    subprocess.run(["sh", str(ROOT / "integration/winlux-terminal")], env={**os.environ, "WINLUX_XTERM": str(xterm)}, check=True)
+    arguments = log.read_text()
+    for gesture, label in (("Shift Ctrl <Key>V: insert-selection(CLIPBOARD)", "Ctrl+Maj+V"),
+                           ("Shift <Key>Insert: insert-selection(CLIPBOARD)", "Maj+Inser"),
+                           ("<Btn3Down>: insert-selection(CLIPBOARD)", "clic droit"),
+                           ("Shift Ctrl <Key>C: copy-selection(CLIPBOARD)", "Ctrl+Maj+C (copier)")):
+        ok(gesture in arguments, f"terminal : {label} utilise le presse-papiers (CLIPBOARD)")
+
+# ── .exe qui ne démarre pas : message clair, pas de charabia ───────────────
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    dialog = work / "dialog.log"
+    fake_tool(work, "kdialog", f'printf "%s\\n" "$@" >> "{dialog}"')
+    for tool in ("dirname", "basename", "mkdir", "tail", "grep", "sed", "head", "date", "cat", "printf"):
+        found = subprocess.run(["sh", "-c", f"command -v {tool}"], capture_output=True, text=True).stdout.strip()
+        if found.startswith("/"):
+            (work / tool).symlink_to(found)
+    runtime32 = fake_tool(work, "runtime32", 'case "$1" in --inspect) echo "programme Windows 32 bits (machine 0x014c) : seul le 64 bits est pris en charge pour l\'instant" >&2; exit 1 ;; esac; exit 1')
+    exe = work / "setup.exe"
+    exe.write_bytes(b"MZ")
+    env = {"PATH": str(work), "DISPLAY": ":99", "HOME": str(work), "WINLUX_RUNTIME": str(runtime32), "WINLUX_DESKTOP_LAUNCH": "1"}
+    subprocess.run(["/bin/sh", str(ROOT / "integration/winlux-open"), str(exe)], env=env)
+    text = dialog.read_text()
+    ok("programme Windows 32 bits" in text and "64 bits" in text and "Rien n’a été modifié" in text,
+       ".exe 32 bits : explication en français et piste de la version 64 bits")
+    dialog.unlink()
+    runtime_dll = fake_tool(work, "runtime-dll", 'case "$1" in --inspect) echo gui; exit 0 ;; esac; '
+                            'echo "winlux[error/loader]: chargement impossible : DLL introuvable : IMM32.dll (ni intégrée)" >&2; exit 1')
+    subprocess.run(["/bin/sh", str(ROOT / "integration/winlux-open"), str(exe)], env={**env, "WINLUX_RUNTIME": str(runtime_dll)})
+    text = dialog.read_text()
+    ok("ne peut pas encore fonctionner avec Winlux" in text and "IMM32.dll" in text,
+       "DLL manquante : nom du composant Windows et message compréhensible")
+    ok("s’est arrêté (code" not in text.splitlines()[2], "DLL manquante : plus de « s'est arrêté (code 1) » brut en tête")
+
+# ── Boutique : désinstallation sans trace ──────────────────────────────────
+with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME": directory, "XDG_RUNTIME_DIR": directory}):
+    store = runpy.run_path(str(SCRIPTS / "winlux-store.py"), run_name="test_campaign")
+    calls = []
+    apt = store["Apt"].__new__(store["Apt"])
+    apt.apt = lambda arguments, progress: calls.append(arguments) or 0
+    store["Apt"].remove(apt, "gnome-mines", None)
+    ok(calls and calls[0][:2] == ["purge", "--autoremove"], "Boutique : désinstaller = purge --autoremove (réglages et dépendances partent)")
+store_source = (SCRIPTS / "winlux-store.py").read_text()
+ok(store_source.index("write_index(sources, apps, False)") < store_source.index('progress(100, tr(done'),
+   "Boutique : index réécrit avant « done » (plus de « Obtenir » après installation)")
+ok("contains_ci(reference, q)" in (ROOT / "testexe/src/shell/store.rs").read_text(),
+   "Boutique : la recherche trouve aussi le nom du paquet (« mines » → Démineur)")
+
+# ── Paramètres ─────────────────────────────────────────────────────────────
+with patch.dict(os.environ, {"WINLUX_LANG": "fr"}):
+    settings = runpy.run_path(str(SCRIPTS / "winlux-settings.py"), run_name="test_campaign")
+about = settings["about_build"]("version=v0.2.13\ncommit=b0ee03dd41cef83\ntracked_sources=clean\nbuilt_at_utc=2026-11-01T21:30:12Z\nscope=system\n")
+ok("Révision : b0ee03dd41" in about and "Compilée le : 01/11/2026" in about and "scope" not in about,
+   "À propos : révision et date lisibles, sans clés brutes")
+control = (SCRIPTS / "winlux-control.sh").read_text()
+ok("Opération terminée." in control and "Operation terminee" not in control, "messages d'opération accentués")
+settings_source = (SCRIPTS / "winlux-settings.py").read_text()
+ok("page_opened" in settings_source, "« Opération terminée. » ne suit plus d'une page à l'autre")
+
+# ── Image et session ───────────────────────────────────────────────────────
+build = (SCRIPTS / "build-live-iso.sh").read_text()
+for module, why in (("nls_utf8", "CIFS et noms UTF-8"), ("usb_storage", "clé USB → /dev/sdX"), ("uas", "disques USB rapides")):
+    ok(f" {module} " in build, f"module {module} livré ({why})")
+ok("killall -USR1 picom" in build, "live : picom remis à zéro quand le bureau est relancé (fenêtres noires)")
+for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
+    ok("/usr/games" in (SCRIPTS / script).read_text(), f"{script} : /usr/games dans PATH (jeux visibles dans le menu)")
+ok("pkill -USR1 -x picom" in (SCRIPTS / "winlux-native-session.sh").read_text(),
+   "premier démarrage : Bienvenue repeinte après l'arrivée du bureau")
+installer = (SCRIPTS / "winlux-installer.py").read_text()
+ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
+ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
+   "installateur : « Redémarrer maintenant » passe par winlux-power")
+tools = (SCRIPTS / "winlux-system-tools.py").read_text()
+ok("/sys/class/ieee80211" in tools and "/sys/class/bluetooth" in tools,
+   "réglages rapides : Wi-Fi et Bluetooth masqués sans matériel")
+claude = (NATIVE / "claude-code/winlux-claude-code.py").read_text()
+ok("La connexion Internet a été interrompue" in claude, "Claude Code : coupure réseau expliquée en français")
+explorer = (ROOT / "testexe/src/shell/explorer.rs").read_text()
+for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un emplacement"),
+                      ("fn restore_selection", "« Restaurer » dans la Corbeille"),
+                      ("fn watch_drives", "« Ce PC » suit les clés USB"),
+                      ("RENAME_ALL", "Ctrl+A en renommage"),
+                      ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
+    ok(marker in explorer, f"Explorateur : {label}")
+
+print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

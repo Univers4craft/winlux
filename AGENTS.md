@@ -6,7 +6,7 @@
 
 - **Avant d'agir** : Consulte `Suivi.md`. Prends une tâche non cochée dans "À FAIRE" et commence à la réaliser. **Coche-la `[x]` IMMÉDIATEMENT** en la déplaçant vers "DÉJÀ FAIT" ou en la marquant faite.
 - **Pendant l'action** : Travaille uniquement sur cette tâche. Si tu découvres une sous-tâche nécessaire, ajoute-la à `Suivi.md` dans la bonne section.
-- **Après avoir terminé** : Teste (`cargo test -p winlux`, `scripts/build-tests.sh`, `scripts/test-runtime.sh` si pertinent). **Met à jour `Suivi.md`** pour marquer la tâche comme `[x]` avec contexte si besoin. Commit et push.
+- **Après avoir terminé** : Teste (`cargo test -p winlux`, `scripts/build-tests.sh`, `scripts/test-runtime.sh` si pertinent ; `sh scripts/test-all.sh` lance toute la suite). **Met à jour `Suivi.md`** pour marquer la tâche comme `[x]` avec contexte si besoin. Commit et push.
 - **À jour en temps réel** : À CHAQUE action concrète (ajout, correction, refactor), `Suivi.md` DOIT être mis à jour dans le même commit ou juste après. Pas "plus tard".
 - **Miroirs** : `TODO.md` et `TRACKING.md` sont des miroirs. `Suivi.md` est la source à consulter et à mettre à jour en priorité.
 

@@ -84,7 +84,8 @@ if os.geteuid() == 0:
     os.chown(directory, saver.pw_uid, saver.pw_gid)
 
 home = Path.home()
-source = Path("/usr/share/winlux/native")
+# WINLUX_NATIVE_SOURCE : dossier du dépôt pour les tests (test-campaign.py).
+source = Path(os.environ.get("WINLUX_NATIVE_SOURCE", "/usr/share/winlux/native"))
 reset_panel = "--reset-panel" in sys.argv
 for path in (source / "config").rglob("*"):
     if path.is_file():
