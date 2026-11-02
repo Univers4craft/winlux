@@ -18,6 +18,9 @@
     <keybind key="W-l"><action name="Execute"><command>winlux-lock now</command></action></keybind>
     <keybind key="W-e"><action name="Execute"><command>winlux-shell-app explorer</command></action></keybind>
     <keybind key="W-Return"><action name="Execute"><command>winlux-terminal</command></action></keybind>
+    <!-- Ctrl+Alt+T par openbox : actif dès l'apparition du bureau (par xfsettingsd, il ne
+         répondait qu'un peu plus tard). -->
+    <keybind key="C-A-t"><action name="Execute"><command>winlux-terminal</command></action></keybind>
     <keybind key="W-space"><action name="Execute"><command>winlux-start-menu</command></action></keybind>
     <keybind key="C-S-Escape"><action name="Execute"><command>winlux-shell-app taskmgr</command></action></keybind>
     <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>
@@ -52,7 +55,10 @@
     <context name="Left"><mousebind button="Left" action="Drag"><action name="Resize"><edge>left</edge></action></mousebind></context>
     <context name="Right"><mousebind button="Left" action="Drag"><action name="Resize"><edge>right</edge></action></mousebind></context>
     <context name="Top"><mousebind button="Left" action="Drag"><action name="Resize"><edge>top</edge></action></mousebind></context>
-    <context name="Desktop"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>
+    <!-- Bureau : xfdesktop affiche lui-même le menu d'un fichier (Ouvrir, Renommer,
+         Supprimer…) ou de l'espace vide ; un clic lui donne le clavier (Ctrl+C/V, Suppr, F2). -->
+    <context name="Desktop"><mousebind button="Left" action="Press"><action name="Focus"><desktop>yes</desktop></action></mousebind></context>
+    <context name="Root"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>
   </mouse>
   <menu><file>~/.config/openbox/menu.xml</file><hideDelay>200</hideDelay><applicationIcons>yes</applicationIcons></menu>
   <applications>
