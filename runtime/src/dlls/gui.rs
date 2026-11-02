@@ -2521,6 +2521,8 @@ pub fn def_window_proc(hwnd: usize, message: u32, _wparam: usize, _lparam: isize
             0
         }
         WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        // WM_NCCREATE : accepter la création (FALSE l'annulerait).
+        0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
         // sinon la fenêtre recevrait WM_PAINT sans fin.
         WM_PAINT => {
@@ -2590,6 +2592,18 @@ pub fn set_wnd_proc(hwnd: usize, new_proc: usize) -> Option<usize> {
     let mut map = lock(windows());
     let w = map.get_mut(&hwnd)?;
     Some(std::mem::replace(&mut w.wnd_proc, new_proc))
+}
+
+/// Enfants directs d'une fenêtre, dans l'ordre de création (ordre Z des
+/// contrôles d'un dialogue, ordre de la touche Tab).
+pub fn child_windows(parent: usize) -> Vec<usize> {
+    let mut v: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(_, w)| w.parent == parent)
+        .map(|(h, _)| *h)
+        .collect();
+    v.sort_unstable();
+    v
 }
 
 /// Énumère les HWNDs de toutes les fenêtres de premier niveau.

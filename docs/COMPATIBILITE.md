@@ -4,6 +4,12 @@
 répond à une question simple : **que faut-il encore écrire pour que la
 quasi-totalité des logiciels Windows démarrent et fonctionnent sur Winlux ?**
 
+> **Mise à jour du 2 novembre 2026** ([compat/mesure-2026-11-02.md](compat/mesure-2026-11-02.md)) :
+> le premier manque n'est pas une DLL. Les boîtes de dialogue, les contrôles
+> standard (boutons, champs, listes) et les fenêtres enfants ne sont pas
+> encore implémentés : les logiciels Win32 classiques démarrent sans rien
+> afficher. C'est le chantier prioritaire, devant tous ceux listés ci-dessous.
+
 Il complète [COMPATIBILITY.md](../COMPATIBILITY.md), qui décrit API par API ce
 qui existe, et ne remplace aucun des suivis existants : chaque manque renvoie à
 son issue GitHub quand elle existe déjà.
