@@ -262,6 +262,14 @@ perform() {
         browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
         browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
         browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
+        # Boutiques de logiciels (docs/BOUTIQUES.md) : 75 = reporté faute de réseau.
+        store-catalog-add-*|store-catalog-remove-*)
+            id=${action#store-catalog-add-}; verb=--add
+            case "$action" in store-catalog-remove-*) id=${action#store-catalog-remove-}; verb=--remove ;; esac
+            case "$id" in ''|*[!a-z0-9-]*) message 'Boutique inconnue'; exit 2 ;; esac
+            code=0; winlux-store-catalogs "$verb" "$id" || code=$?
+            test "$code" = 75 && code=0
+            return "$code" ;;
         network-renew) winlux-network restart ;;
         network-scan)
             # Write available networks to a file the desktop shell can read.

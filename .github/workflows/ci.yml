@@ -254,9 +254,16 @@ jobs:
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          python3 -B scripts/test-store-catalogs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
+
+      - name: Clé de signature de Flathub inchangée
+        # Réseau des runners : l'empreinte publiée par Flathub doit rester celle
+        # épinglée dans integration/store-catalogs.json (docs/BOUTIQUES.md).
+        run: |
+          WINLUX_STORE_CATALOGS_DEFS=integration/store-catalogs.json python3 -B scripts/winlux-store-catalogs.py --check-key flathub
 
       - name: Valider sauvegarde, sessions et bureau à distance
         run: |

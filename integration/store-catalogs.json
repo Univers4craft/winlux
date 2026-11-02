@@ -1,0 +1,55 @@
+{
+  "about": "Boutiques que Winlux propose d'ajouter au Store (docs/BOUTIQUES.md). Aucune n'est fournie dans l'image ni présélectionnée ; l'ordre d'affichage est alphabétique.",
+  "catalogs": [
+    {
+      "id": "flathub",
+      "name": "Flathub",
+      "platform": "linux",
+      "kind": "flatpak",
+      "remote": "flathub",
+      "repo": "https://dl.flathub.org/repo/flathub.flatpakrepo",
+      "fingerprint": "",
+      "site": "https://flathub.org",
+      "source": "flatpak:",
+      "summary": {
+        "fr": "Applications Linux en bac à sable, examinées à leur entrée, éditeurs vérifiés, signées par Flathub.",
+        "en": "Sandboxed Linux apps, reviewed on submission, verified publishers, signed by Flathub.",
+        "es": "Aplicaciones Linux aisladas, revisadas al publicarse, editores verificados, firmadas por Flathub.",
+        "de": "Linux-Apps in einer Sandbox, bei der Aufnahme geprüft, verifizierte Herausgeber, von Flathub signiert."
+      }
+    },
+    {
+      "id": "scoop-extras",
+      "name": "Scoop Extras",
+      "platform": "windows",
+      "kind": "windows",
+      "format": "scoop",
+      "url": "https://github.com/ScoopInstaller/Extras/archive/refs/heads/master.tar.gz",
+      "site": "https://github.com/ScoopInstaller/Extras",
+      "source": "windows:scoop-extras/",
+      "summary": {
+        "fr": "Logiciels Windows courants (libres ou gratuits) : manifestes publics relus, chaque fichier vérifié par son empreinte SHA-256.",
+        "en": "Common Windows software (free or open source): public reviewed manifests, every file checked against its SHA-256 hash.",
+        "es": "Programas de Windows habituales (libres o gratuitos): manifiestos públicos revisados, cada archivo comprobado con su huella SHA-256.",
+        "de": "Gängige Windows-Programme (frei oder kostenlos): öffentliche, geprüfte Manifeste, jede Datei per SHA-256-Prüfsumme kontrolliert."
+      }
+    },
+    {
+      "id": "scoop-games",
+      "name": "Scoop Games",
+      "platform": "windows",
+      "kind": "windows",
+      "format": "scoop",
+      "category": "jeux",
+      "url": "https://github.com/ScoopInstaller/Games/archive/refs/heads/master.tar.gz",
+      "site": "https://github.com/ScoopInstaller/Games",
+      "source": "windows:scoop-games/",
+      "summary": {
+        "fr": "Jeux Windows libres ou gratuits et outils de jeu : mêmes règles que Scoop Extras, empreinte SHA-256 vérifiée.",
+        "en": "Free and open source Windows games and game tools: same rules as Scoop Extras, SHA-256 hash checked.",
+        "es": "Juegos de Windows libres o gratuitos y herramientas de juego: mismas reglas que Scoop Extras, huella SHA-256 comprobada.",
+        "de": "Freie und kostenlose Windows-Spiele und Spielwerkzeuge: gleiche Regeln wie Scoop Extras, SHA-256-Prüfsumme kontrolliert."
+      }
+    }
+  ]
+}

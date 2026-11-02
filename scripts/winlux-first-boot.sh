@@ -322,6 +322,19 @@ menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun
 BROWSER_CHOICE=${REPLY:-aucun}
 case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
 
+# Boutiques de logiciels : aucune fournie ni cochée d'office (docs/BOUTIQUES.md),
+# ordre alphabétique. Ajoutées au Store par winlux-store-catalogs, reprises au
+# démarrage suivant sans réseau.
+log "Étape 6/$TOTAL_STEPS : Boutiques de logiciels"
+store_mark() { if grep -qx "$1" /etc/winlux/store-catalogs 2>/dev/null; then echo on; else echo off; fi; }
+CHECKLIST_ARGS="flathub Flathub_(logiciels_Linux) $(store_mark flathub) scoop-extras Scoop_Extras_(logiciels_Windows) $(store_mark scoop-extras) scoop-games Scoop_Games_(jeux_Windows) $(store_mark scoop-games)"
+checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Winlux n'en impose aucune)" $CHECKLIST_ARGS
+STORE_CHOICE=
+for store in ${REPLY:-}; do
+    store=$(printf '%s' "$store" | tr -d '"')
+    case "$store" in flathub|scoop-extras|scoop-games) STORE_CHOICE="$STORE_CHOICE $store" ;; esac
+done
+
 # ============================================================
 #  Étape 7 : Compte utilisateur local
 # ============================================================
@@ -418,7 +431,7 @@ fi
 #  Étape 10 : Récapitulatif
 # ============================================================
 log "Étape 10/$TOTAL_STEPS : Récapitulatif"
-summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED\nNavigateur : $BROWSER_CHOICE"
+summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED\nNavigateur : $BROWSER_CHOICE\nBoutiques :${STORE_CHOICE:- aucune}"
 if test -n "$USER_AVATAR"; then
     summary="$summary\nAvatar : $(basename "$USER_AVATAR")"
 fi
@@ -630,6 +643,19 @@ if test "$BROWSER_CHOICE" != aucun; then
     else
         log "Navigateur $BROWSER_CHOICE : installation reportée au prochain démarrage avec réseau"
     fi
+fi
+
+# --- Boutiques choisies : ajoutées maintenant si le réseau répond, sinon par
+# l'init au démarrage suivant (store-catalogs-pending) ---
+mkdir -p /etc/winlux
+if command -v winlux-store-catalogs >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    if winlux-store-catalogs --set $STORE_CHOICE; then :; else
+        log "Boutiques$STORE_CHOICE : ajout reporté au prochain démarrage avec réseau"
+    fi
+else
+    printf '%s\n' $STORE_CHOICE > /etc/winlux/store-catalogs
+    printf '%s\n' $STORE_CHOICE > /etc/winlux/store-catalogs-pending
 fi
 
 # --- Installation des applications sélectionnées ---

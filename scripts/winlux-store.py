@@ -53,6 +53,25 @@ STATE = DATA / "winlux/store-state.json"
 CONFIG_DIRS = [Path(ROOT + "/etc/winlux/store-sources.d"),
                Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/store-sources.d"]
 CATALOG = Path(os.environ.get("WINLUX_STORE_CATALOG", ROOT + "/usr/share/winlux/store-catalog.txt"))
+# Boutiques proposées (integration/store-catalogs.json) et celles choisies.
+CATALOG_DEFS = Path(os.environ.get("WINLUX_STORE_CATALOGS_DEFS", ROOT + "/usr/share/winlux/store-catalogs.json"))
+CATALOG_CHOICE = Path(ROOT + "/etc/winlux/store-catalogs")
+
+
+def catalog_defs():
+    try:
+        defs = json.loads(CATALOG_DEFS.read_text(encoding="utf-8")).get("catalogs", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [c for c in defs if isinstance(c, dict) and isinstance(c.get("id"), str)] if isinstance(defs, list) else []
+
+
+def chosen_catalogs():
+    try:
+        ids = set(CATALOG_CHOICE.read_text().split())
+    except OSError:
+        return []
+    return [c for c in catalog_defs() if c["id"] in ids]
 def interface_lang():
     """Langue de l'interface : WINLUX_LANG, sinon /etc/winlux/locale.conf
     (Paramètres > Langue), sinon LANG ; fr, en, es ou de."""
@@ -822,10 +841,32 @@ class Flatpak(Source):
 
     def remotes(self):
         code, out = run(["flatpak", "remotes", "--columns=name,options"], 20)
-        return [l.split("\t")[0].strip() for l in out.splitlines() if l.strip() and "disabled" not in l]
+        names = [l.split("\t")[0].strip() for l in out.splitlines() if l.strip() and "disabled" not in l]
+        # Une boutique retirée (Paramètres > Applications) n'est plus proposée,
+        # même si son dépôt reste déclaré pour les applications installées.
+        offered = {c.get("remote", c["id"]) for c in chosen_catalogs() if c.get("kind") == "flatpak"}
+        known = {c.get("remote", c["id"]) for c in catalog_defs() if c.get("kind") == "flatpak"}
+        return [n for n in names if n not in known or n in offered]
 
     def available(self):
         return have("flatpak") and bool(self.remotes())
+
+    def user_remotes(self):
+        """Boutiques Flatpak choisies : le dépôt vérifié par winlux-store-catalogs
+        (/etc/winlux/store-repos) est déclaré pour ce compte, sans réseau ; les
+        logiciels s'installent alors sans droits administrateur (--user)."""
+        if not have("flatpak"):
+            return
+        code, out = run(["flatpak", "remotes", "--user", "--columns=name"], 20)
+        present = {l.strip() for l in out.splitlines() if l.strip()}
+        for c in chosen_catalogs():
+            remote = c.get("remote", c["id"])
+            repo = Path(ROOT + f"/etc/winlux/store-repos/{c['id']}.flatpakrepo")
+            if c.get("kind") != "flatpak" or remote in present or not repo.is_file():
+                continue
+            if run(["flatpak", "remote-add", "--user", "--if-not-exists", "--from", remote, str(repo)], 60)[0] == 0 \
+                    and not OFFLINE:
+                run(["flatpak", "update", "--user", "--appstream", "-y", "--noninteractive", remote], 300)
 
     def appstream_dirs(self, remote):
         for base in (Path(ROOT + "/var/lib/flatpak"), DATA / "flatpak"):
@@ -898,8 +939,10 @@ class Flatpak(Source):
             return proc.wait()
 
     def install(self, ref, progress):
+        self.user_remotes()
         remote = next(iter(self.remotes()), "flathub")
-        return self.flatpak(["install", remote, ref], progress)
+        # Installation du compte : ni mot de passe ni service système requis.
+        return self.flatpak(["install", "--user", remote, ref], progress)
 
     def remove(self, ref, progress):
         return self.flatpak(["uninstall", ref], progress)
@@ -1020,13 +1063,18 @@ class AppImage(Source):
                 self.feed = []
         return self.feed
 
+    def enabled(self):
+        # AppImageHub n'examine ni ne signe rien (docs/BOUTIQUES.md) : son
+        # catalogue n'est lu que pour un compte qui en a déjà installé une.
+        return bool(load_json(STATE, {}).get("appimage")) or os.environ.get("WINLUX_STORE_APPIMAGEHUB") == "1"
+
     def available(self):
-        return bool(self.load())
+        return self.enabled() and bool(self.load())
 
     def apps(self, force=False):
         state = load_json(STATE, {}).get("appimage", {})
         out = []
-        for item in self.load(force):
+        for item in self.load(force) if self.enabled() else []:
             name = item.get("name", "")
             github = next((l.get("url") for l in item.get("links") or [] if l.get("type") == "GitHub"), "")
             if not name or not github:
@@ -1152,6 +1200,9 @@ class WindowsCatalog:
             apps = [a for a in adapter(data) if valid_windows_entry(a)]
         except (ValueError, TypeError, AttributeError, KeyError, OSError, EOFError, tarfile.TarError):
             return []
+        if self.conf.get("category") in CATEGORIES:
+            for a in apps:
+                a["category"] = self.conf["category"]  # boutique de jeux : tout en Jeux
         memo.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(memo, json.dumps({"digest": digest, "apps": apps}, ensure_ascii=False))
         return apps
@@ -1314,12 +1365,19 @@ class Windows(Source):
     name, label = "windows", "Windows"
 
     def providers(self):
-        found = []
+        found, seen = [], set()
         for d in CONFIG_DIRS:
             for f in sorted(d.glob("*.json")) if d.is_dir() else []:
                 conf = load_json(f, None)
                 if isinstance(conf, dict) and conf.get("enabled", True):
                     found.append(WindowsCatalog(conf))
+                    seen.add(found[-1].id)
+        # Boutiques Windows choisies par l'utilisateur (winlux-store-catalogs,
+        # docs/BOUTIQUES.md) : aucune n'est active sans ce choix.
+        for conf in chosen_catalogs():
+            if conf.get("kind") == "windows" and conf["id"] not in seen:
+                found.append(WindowsCatalog(conf))
+                seen.add(conf["id"])
         return found
 
     def available(self):
@@ -1501,7 +1559,8 @@ def install_windows_file(path, progress, args=(), entry=None):
     return code
 
 
-SOURCES = [Apt(), Flatpak(), Snap(), AppImage(), Windows()]
+FLATPAK = Flatpak()
+SOURCES = [Apt(), FLATPAK, Snap(), AppImage(), Windows()]
 SOURCE_BY_NAME = {s.name: s for s in SOURCES}
 PRIORITY = {"apt": 0, "flatpak": 1, "snap": 2, "appimage": 3, "windows": 4}
 
@@ -1614,6 +1673,10 @@ def refresh(force=False):
         if time.time() - lock.stat().st_mtime < 900:
             return 0
     try:
+        try:
+            FLATPAK.user_remotes()
+        except Exception:
+            pass
         # 1. Sources locales tout de suite, 2. tout (réseau, vignettes) ensuite.
         sources, apps = collect(False, only_local=True)
         write_index(sources, apps, True)

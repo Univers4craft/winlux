@@ -65,6 +65,7 @@ PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,127}$")
 # : confirmation par le Contrôle de compte d'utilisateur.
 CONTROL_POLICY = (
     (r"browser-(install|default)-(edge|chrome|firefox)", "admin"),
+    (r"store-catalog-(add|remove)-[a-z0-9-]+", "admin"),
     (r"network-(renew|scan|connect|disconnect)", "user"),
     (r"bluetooth-(on|off|scan|pair|connect|disconnect|remove)", "user"),
     (r"(tz|timezone)-[A-Za-z0-9/_+-]+", "user"),

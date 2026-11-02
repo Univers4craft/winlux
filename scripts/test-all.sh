@@ -54,6 +54,7 @@ for page in sorted(pathlib.Path("wiki").glob("*.md")):
 sys.exit(bad)
 EOF
 run catalogue-natif      python3 -B scripts/test-native-catalogue.py
+run boutiques-logiciels  python3 -B scripts/test-store-catalogs.py
 run installateur-oobe    python3 -B scripts/test-installer-oobe.py
 run installation-auto    python3 -B scripts/test-autoinstall.py
 run partitionnement      python3 -B scripts/test-installer-partitioning.py
