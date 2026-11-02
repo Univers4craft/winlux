@@ -132,6 +132,43 @@ with tempfile.TemporaryDirectory() as folder:
                                                    "panel-size": "999", "name": "<script>"}))
     read, image, _ = personalize["read_theme"](path)
     assert read == {"format": "winlux-theme-1", "name": "script"} and image is None, read
+# Thème appliqué à chaud (VM : Paramètres et les fenêtres ouvertes gardaient
+# l'ancien thème ; /etc/winlux/preferences.conf restait à THEME=dark).
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    home, tools = root / "home", root / "bin"
+    tools.mkdir()
+    (home / ".config/gtk-3.0").mkdir(parents=True)
+    (home / ".config/gtk-3.0/settings.ini").write_text("[Settings]\ngtk-theme-name=Adwaita\ngtk-application-prefer-dark-theme=1\n")
+    (home / ".config/gtk-3.0/gtk.css").write_text(".tasklist {padding: 0;}\n/* Winlux appearance */\nwindow {color: red;}\n/* End Winlux appearance */\n")
+    calls = root / "calls.log"
+    for tool in ("xfconf-query", "winlux-control", "openbox"):
+        (tools / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "{calls}"\n')
+        (tools / tool).chmod(0o755)
+    env = {**os.environ, "HOME": str(home), "PATH": f"{tools}:{os.environ['PATH']}"}
+
+    def apply(*args):
+        subprocess.run([sys.executable, "-B", str(PERSONALIZE), *args], env=env, check=True, stdout=subprocess.DEVNULL)
+        ini = (home / ".config/gtk-3.0/settings.ini").read_text()
+        return next(line.split("=", 1)[1].strip() for line in ini.splitlines() if line.startswith("gtk-theme-name"))
+
+    light = apply("theme", "light")
+    log = calls.read_text()
+    assert light.startswith("Winlux-light-"), light
+    assert f"-p /Net/ThemeName -s {light}" in log, log
+    assert "winlux-control theme-light" in log, log
+    ini = (home / ".config/gtk-3.0/settings.ini").read_text()
+    assert "gtk-application-prefer-dark-theme = 0" in ini, ini
+    css = (home / ".local/share/themes" / light / "gtk-3.0/gtk.css").read_text()
+    assert "gtk-contained.css" in css and "#f3f5fa" in css, css
+    style = (home / ".config/gtk-3.0/gtk.css").read_text()
+    assert ".tasklist" in style and "Winlux appearance" not in style, style
+    again = apply("accent", "#2e8b57")
+    assert again.startswith("Winlux-light-") and again != light, (light, again)  # nouveau nom : rechargé partout
+    dark = apply("theme", "dark")
+    assert dark.startswith("Winlux-dark-") and "winlux-control theme-dark" in calls.read_text()
+    assert "gtk-contained-dark.css" in (home / ".local/share/themes" / dark / "gtk-3.0/gtk.css").read_text()
+
 for key, row in personalize["_TR"].items():
     assert len(row) == 3 and all(row), key
 

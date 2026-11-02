@@ -592,6 +592,8 @@ def dark_theme():
     name = (settings.get_property("gtk-theme-name") or "").lower()
     if name == "highcontrast":
         return False
+    if name.startswith("winlux-"):  # thème de winlux-personalize : le nom fait foi
+        return "-dark" in name
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name or "inverse" in name
 
 
