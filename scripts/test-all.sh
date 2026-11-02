@@ -94,6 +94,8 @@ display() {
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run clavier-menus       display python3 -B scripts/test-keyboard-nav.py start
+run clavier-panneaux    display python3 -B scripts/test-keyboard-nav.py quick
 run comptes              display python3 -B scripts/test-accounts.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh

@@ -175,6 +175,8 @@ MENU_CSS = Template("""
   #winlux-start entry selection { background: $selected; color: $on_selected; }
   #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
   #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  /* Navigation au clavier (#28) : cadre visible seulement au clavier, comme Windows. */
+  #winlux-start button { outline: 2px solid $accent; outline-offset: -2px; }
   #winlux-start .heading { font-weight: bold; font-size: 12pt; }
   #winlux-start .footer { background: $footer; padding: 12px 25px; }
   #winlux-start .app-name { font-size: 9pt; }
