@@ -343,7 +343,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
             gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
-            dbus-x11 xfce4-panel xfce4-genmon-plugin
+            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool
 
       - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
@@ -361,6 +361,11 @@ jobs:
         run: |
           mkdir -p build/captures
           xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
+
+      - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
+        run: |
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
+          xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py

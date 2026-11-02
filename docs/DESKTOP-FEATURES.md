@@ -42,8 +42,18 @@ options d'alimentation. Ces deux panneaux sont à instance unique, se placent
 près de la barre des tâches du moniteur courant et se ferment aussi sur Échap
 ou au clic extérieur. Les écritures du curseur sont regroupées sur 120 ms.
 
-Cliquer sur les indicateurs réseau, son ou alimentation ouvre les réglages
-rapides. NetworkManager et son agent gèrent les réseaux et les demandes de
+Cliquer sur les indicateurs réseau, son ou alimentation, ou Windows+A, ouvre
+le panneau **Réglages rapides** façon Windows 11 (`winlux-popup quick`) :
+tuiles Wi-Fi (avec le nom du réseau et une flèche vers la liste des réseaux),
+Bluetooth (flèche vers Paramètres › Bluetooth), Mode avion, Économiseur de
+batterie, Éclairage nocturne et Accessibilité ; curseurs de luminosité et de
+volume (flèche vers le mélangeur) ; batterie et engrenage Paramètres en pied.
+Chaque tuile n'apparaît qu'avec le matériel correspondant : sans carte Wi-Fi,
+la tuile devient « Ethernet » (« Ethernet virtuel » dans une machine
+virtuelle), sans rétroéclairage pas de luminosité, sans batterie ni mode
+« économie » pas d'économiseur. Le mode avion coupe toutes les radios
+(`nmcli radio all off`, `bluetoothctl power off`) et se souvient de son état
+dans `~/.config/winlux/airplane-mode`. Test : `scripts/test-quick-settings.py`. NetworkManager et son agent gèrent les réseaux et les demandes de
 mot de passe ; BlueZ et Blueman gèrent le Bluetooth. `brightnessctl` utilise
 les périphériques de rétroéclairage réellement disponibles. L'absence d'un
 adaptateur, d'un pilote, d'un rétroéclairage ou d'un service est une erreur
