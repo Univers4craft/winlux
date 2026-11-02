@@ -61,6 +61,7 @@ pub mod hid;
 pub mod hostcall;
 pub mod hostssl;
 pub mod imm32;
+pub mod inherit;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;

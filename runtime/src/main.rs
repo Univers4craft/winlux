@@ -248,6 +248,7 @@ fn main() {
         playtime::start(&exe);
     }
     dlls::kernel32::init();
+    dlls::inherit::adopt();
     process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
 }
