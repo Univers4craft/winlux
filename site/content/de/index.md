@@ -44,7 +44,7 @@ Das System, das Installationsprogramm und diese Website gibt es auf Französisch
 Holen Sie sich das Abbild der neuesten Version und, wenn Sie möchten, den USB-Stick-Ersteller. [Seite Herunterladen](page:download)
 
 ### 2. Der Anleitung folgen
-Sechs Schritte, vom USB-Stick bis zu Ihrem ersten Windows-Programm, dann die Updates. [Anleitung öffnen](page:guide)
+Sieben Schritte, vom USB-Stick bis zu Ihrem ersten Windows-Programm, dann die Updates. [Anleitung öffnen](page:guide)
 
 ### 3. Ihre Software prüfen
 Was schon funktioniert, was noch nicht funktioniert, und wie Sie es uns melden. [Getestete Anwendungen](page:apps)
