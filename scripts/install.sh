@@ -159,6 +159,27 @@ cp -a "$work/source/." "$work/target/"
 mkdir -p "$work/target/etc/winlux"
 printf 'LANG=%s\n' "$install_lang" > "$work/target/etc/winlux/locale.conf"
 printf 'XKB_LAYOUT=%s\n' "$install_kb" > "$work/target/etc/winlux/input.conf"
+# Travail unique du premier démarrage (droits de la base APT, déclencheurs
+# dpkg reportés, caches) fait ici, dans le système cible : sinon la phase
+# « recovery » du premier démarrage durait plus de 15 s. En cas d'échec, le
+# premier démarrage s'en charge comme avant.
+if test -f "$work/target/usr/share/winlux/update-backend" && command -v chroot >/dev/null 2>&1; then
+    prepared=
+    for fs in proc sys dev; do
+        mkdir -p "$work/target/$fs"
+        mount --bind "/$fs" "$work/target/$fs" && prepared="$fs $prepared"
+    done
+    policy="$work/target/usr/sbin/policy-rc.d"
+    own_policy=0
+    if ! test -e "$policy"; then
+        mkdir -p "$work/target/usr/sbin"
+        printf '#!/bin/sh\nexit 101\n' >"$policy" && chmod 755 "$policy" && own_policy=1
+    fi
+    DEBIAN_FRONTEND=noninteractive chroot "$work/target" /usr/bin/winlux-update --boot ||
+        echo 'Préparation du premier démarrage reportée au premier démarrage.' >&2
+    if test "$own_policy" = 1; then rm -f "$policy"; fi
+    for fs in $prepared; do umount -l "$work/target/$fs" || true; done
+fi
 mkdir -p "$work/target/boot/grub" "$work/target/boot/efi"
 cp "$work/vmlinuz" "$work/target/boot/vmlinuz"
 cp "$work/initramfs.gz" "$work/target/boot/winlux-initramfs.cpio.gz"
