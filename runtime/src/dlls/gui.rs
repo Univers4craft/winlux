@@ -1868,11 +1868,18 @@ pub trait GuiBackend: Send {
         Vec::new()
     }
     fn create_window(&mut self, _hwnd: usize, _title: &str, _rect: Rect) {}
+    /// Contrôle `WS_CHILD` : sous-fenêtre placée dans la zone client du
+    /// parent (coordonnées relatives). Sans prise en charge, fenêtre isolée.
+    fn create_child_window(&mut self, hwnd: usize, _parent: usize, rect: Rect) {
+        self.create_window(hwnd, "", rect);
+    }
     fn destroy_window(&mut self, _hwnd: usize) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
     fn set_focus(&mut self, _hwnd: usize) {}
+    /// Passe une fenêtre devant ses voisines (liste déroulante ouverte).
+    fn raise_window(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
@@ -2191,6 +2198,16 @@ pub fn destroy_window(hwnd: usize) -> bool {
         }
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
     }
+    // Les enfants sont détruits après le WM_DESTROY du parent (ordre Win32)
+    // mais avant sa fenêtre X, qui emporterait leurs sous-fenêtres.
+    let children: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(_, w)| w.parent == hwnd)
+        .map(|(&h, _)| h)
+        .collect();
+    for c in children {
+        destroy_window(c);
+    }
     with_backend(|b| b.destroy_window(hwnd));
     // Plus aucun rappel sur une HWND morte : minuteurs, capture de la souris,
     // ordre Z et messages encore en file pour cette fenêtre.
@@ -2206,14 +2223,9 @@ pub fn destroy_window(hwnd: usize) -> bool {
         let q = queue_for(*owner);
         lock(&q.items).retain(|m| m.hwnd != hwnd);
     }
-    // Les enfants sont détruits récursivement.
-    let children: Vec<usize> = lock(windows())
-        .iter()
-        .filter(|(_, w)| w.parent == hwnd)
-        .map(|(&h, _)| h)
-        .collect();
-    for c in children {
-        destroy_window(c);
+    // Dernier message de la fenêtre : le programme y libère ses objets.
+    if let Some(wp) = wnd_proc {
+        unsafe { call_wndproc(wp, hwnd, 0x0082, 0, 0) }; // WM_NCDESTROY
     }
     let _ = parent;
     let _ = owner;
@@ -2230,10 +2242,19 @@ pub fn register_class(name: &str, info: ClassInfo) -> bool {
 }
 
 pub fn lookup_class(name: &str) -> Option<ClassInfo> {
-    lock(classes()).get(name).map(|c| ClassInfo {
+    let registered = lock(classes()).get(name).map(|c| ClassInfo {
         wnd_proc: c.wnd_proc,
         background: c.background,
         instance: c.instance,
+    });
+    // Classes prédéfinies de Windows (BUTTON, EDIT…), sans tenir compte de
+    // la casse ; une classe enregistrée du même nom par le programme gagne.
+    registered.or_else(|| {
+        crate::dlls::controls::builtin_class(name).map(|wnd_proc| ClassInfo {
+            wnd_proc,
+            background: 0,
+            instance: 0,
+        })
     })
 }
 
@@ -2317,15 +2338,41 @@ pub fn get_window_style(hwnd: usize) -> u32 {
 // set_window_style est défini plus bas avec return de l'ancien style
 
 /// Renvoie l'origine (left, top) de la fenêtre en coordonnées écran.
+/// Origine de la zone client en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
-    lock(windows())
-        .get(&hwnd)
-        .map(|w| (w.rect.left, w.rect.top))
-        .unwrap_or((0, 0))
+    screen_rect(hwnd).map(|r| (r.left, r.top)).unwrap_or((0, 0))
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
     lock(windows()).get(&hwnd).map(|w| w.rect)
+}
+
+/// Vrai pour une fenêtre `WS_CHILD` rattachée à un parent : son rectangle
+/// est relatif à la zone client de ce parent.
+fn is_child(w: &Window) -> bool {
+    w.parent != 0 && w.style & 0x4000_0000 != 0
+}
+
+/// Rectangle en coordonnées écran (GetWindowRect) : les enfants ajoutent
+/// l'origine de chacun de leurs parents.
+pub fn screen_rect(hwnd: usize) -> Option<Rect> {
+    let map = lock(windows());
+    let w = map.get(&hwnd)?;
+    let mut rect = w.rect;
+    let mut cur = w;
+    let mut depth = 0;
+    while is_child(cur) && depth < 64 {
+        let Some(parent) = map.get(&cur.parent) else {
+            break;
+        };
+        rect.left += parent.rect.left;
+        rect.right += parent.rect.left;
+        rect.top += parent.rect.top;
+        rect.bottom += parent.rect.top;
+        cur = parent;
+        depth += 1;
+    }
+    Some(rect)
 }
 
 pub fn window_owner(hwnd: usize) -> Option<ThreadId> {
@@ -2404,14 +2451,39 @@ pub fn first_window() -> Option<usize> {
 /// Ouvre un cycle de peinture : marque la zone comme validée et alloue un vrai
 /// `HDC` invité ciblant la fenêtre.
 pub fn begin_paint(hwnd: usize) -> Option<(usize, Rect)> {
-    let rect = {
+    let (rect, background) = {
         let mut map = lock(windows());
         let w = map.get_mut(&hwnd)?;
         w.needs_paint = false;
         w.paint_queued = false;
-        w.client_rect()
+        (w.client_rect(), w.background)
     };
-    Some((create_dc(hwnd), rect))
+    let hdc = create_dc(hwnd);
+    // Une fenêtre qui contient des contrôles standard (boîte de réglages
+    // classique) est effacée avec le pinceau de sa classe, comme sous
+    // Windows : sans cela le dégradé du thème apparaîtrait entre les
+    // contrôles, peints, eux, sur la couleur des boîtes de dialogue.
+    if background != 0 && has_control_children(hwnd) {
+        if let Some(color) = brush_color(background) {
+            record(hdc, DrawCmd::FillRect { rect, color });
+        }
+    }
+    Some((hdc, rect))
+}
+
+/// Couleur d'un pinceau de classe : un vrai pinceau, ou `COLOR_* + 1`.
+fn brush_color(brush: usize) -> Option<u32> {
+    if (1..=31).contains(&brush) {
+        Some(crate::dlls::user32::get_sys_color(brush as i32 - 1))
+    } else {
+        object_color(brush)
+    }
+}
+
+fn has_control_children(hwnd: usize) -> bool {
+    child_windows(hwnd)
+        .into_iter()
+        .any(|c| crate::dlls::controls::kind_of(c).is_some())
 }
 
 /// Clôt le cycle : libère le DC et rejoue les commandes GDI chez le backend.
@@ -2514,8 +2586,43 @@ pub fn post_quit(q: &Queue, code: i32) {
 // ---------- Défaut ----------
 
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
-pub fn def_window_proc(hwnd: usize, message: u32, _wparam: usize, _lparam: isize) -> isize {
+pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     match message {
+        // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH : le titre de la fenêtre,
+        // en A ou en W selon la fonction qui a envoyé le message.
+        0x000C => {
+            let text = if lparam == 0 {
+                String::new()
+            } else if crate::dlls::controls::message_is_wide(hwnd) {
+                unsafe { crate::dlls::wstr(lparam as *const u16) }
+            } else {
+                unsafe { crate::dlls::cstr(lparam as *const u8) }
+            };
+            if set_title(hwnd, &text) {
+                with_backend(|b| b.set_title(hwnd, &text));
+            }
+            1
+        }
+        0x000D => {
+            let text = title_of(hwnd).unwrap_or_default();
+            if lparam == 0 || wparam == 0 {
+                0
+            } else if crate::dlls::controls::message_is_wide(hwnd) {
+                unsafe {
+                    crate::dlls::put_text_w(&text, lparam as *mut u16, wparam as u32) as isize
+                }
+            } else {
+                unsafe { crate::dlls::put_text_a(&text, lparam as *mut u8, wparam as u32) as isize }
+            }
+        }
+        0x000E => {
+            let text = title_of(hwnd).unwrap_or_default();
+            if crate::dlls::controls::message_is_wide(hwnd) {
+                text.encode_utf16().count() as isize
+            } else {
+                crate::dlls::encode_ansi(&text).len() as isize
+            }
+        }
         WM_CLOSE => {
             destroy_window(hwnd);
             0
@@ -2919,6 +3026,45 @@ mod tests {
     use super::*;
 
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn les_enfants_sont_places_dans_la_zone_client_du_parent() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        let fenetre = |parent: usize, style: u32, rect: Rect| {
+            let h = alloc_hwnd();
+            insert_window(
+                h,
+                Window {
+                    class: "Placement".to_string(),
+                    wnd_proc: proc_addr as usize,
+                    background: 0,
+                    title: String::new(),
+                    rect,
+                    visible: true,
+                    parent,
+                    owner: std::thread::current().id(),
+                    needs_paint: false,
+                    paint_queued: false,
+                    style,
+                    ex_style: 0,
+                    pending: Vec::new(),
+                },
+            );
+            h
+        };
+        let haut = fenetre(0, 0, Rect::from_size(100, 50, 400, 300));
+        let groupe = fenetre(haut, 0x4000_0000, Rect::from_size(10, 20, 200, 100));
+        let bouton = fenetre(groupe, 0x4000_0000, Rect::from_size(5, 6, 80, 24));
+        assert_eq!(screen_rect(haut), Some(Rect::from_size(100, 50, 400, 300)));
+        assert_eq!(screen_rect(bouton), Some(Rect::from_size(115, 76, 80, 24)));
+        assert_eq!(window_origin(bouton), (115, 76));
+        // Fenêtre possédée (popup, sans WS_CHILD) : déjà en coordonnées écran.
+        let popup = fenetre(haut, 0, Rect::from_size(300, 300, 50, 50));
+        assert_eq!(screen_rect(popup), Some(Rect::from_size(300, 300, 50, 50)));
+        for h in [bouton, groupe, popup, haut] {
+            destroy_window(h);
+        }
+    }
 
     #[test]
     fn file_messages_par_thread_est_isolee() {
