@@ -2,9 +2,11 @@
 """Run with xvfb-run; measures geometry latency, not visible frame pacing."""
 import json
 from pathlib import Path
+import os
 import runpy
 import statistics
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -13,8 +15,13 @@ module = runpy.run_path(str(project / "scripts/winlux-settings.py"), run_name="s
 Gtk, GLib = module["Gtk"], module["GLib"]
 if subprocess.run(["wmctrl", "-m"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
     raise RuntimeError("Use a dedicated Xvfb display without an existing window manager")
+# Windows + flèches passe par winlux-snap (installé dans /usr/bin sur l'image) :
+# ici il est pris dans scripts/, sans l'Assistant d'ancrage.
+shims = tempfile.TemporaryDirectory()
+os.symlink(project / "scripts/winlux-snap.py", Path(shims.name) / "winlux-snap")
+manager_env = dict(os.environ, PATH=shims.name + os.pathsep + os.environ.get("PATH", ""), WINLUX_SNAP_ASSIST="0")
 manager = subprocess.Popen(["openbox", "--sm-disable", "--config-file", str(project / "integration/native/config/openbox/rc.xml")],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=manager_env)
 window = module["Settings"]()
 failures = []
 # The title follows the interface language since #145.
@@ -47,13 +54,19 @@ def check():
         assert found, "Settings window did not map"
         identifier = found[0]
         run("xdotool", "windowactivate", "--sync", identifier)
-        for key, x in [("super+Left", 0), ("super+Right", 960)]:
+        # Comme Windows 11 : ← moitié gauche, → depuis la moitié gauche rend
+        # la taille d'avant, → encore moitié droite.
+        before = rows()[identifier][0]
+        for key, x, half in [("super+Left", 0, True), ("super+Right", before[0], False), ("super+Right", 960, True)]:
             run("xdotool", "key", "--clearmodifiers", key)
-            for _ in range(50):
+            def reached(geometry):
+                if half: return abs(geometry[0] - x) < 32 and abs(geometry[2] - 960) < 32
+                return abs(geometry[0] - x) < 32 and abs(geometry[2] - before[2]) < 32
+            for _ in range(100):
                 geometry = rows()[identifier][0]
-                if abs(geometry[0] - x) < 32 and abs(geometry[2] - 960) < 32: break
+                if reached(geometry): break
                 time.sleep(0.02)
-            assert abs(geometry[0] - x) < 32 and abs(geometry[2] - 960) < 32, (key, geometry)
+            assert reached(geometry), (key, geometry, before)
         timings = {"move_ms": [], "resize_ms": []}
         for index in range(12):
             for name, args in [("move_ms", ["windowmove", "--sync", identifier, str(100 + index * 8), str(80 + index * 4)]),
