@@ -191,7 +191,10 @@ pub extern "C" fn mainCRTStartup() -> ! {
             SetEnvironmentVariableA(c"WINLUX_POPUPMENU".as_ptr(), c"102".as_ptr());
             let r = TrackPopupMenu(menu, 0, 200, 150, 0, main, core::ptr::null());
             pump();
-            check!(r == 1 && LAST_COMMAND == 102, "WM_COMMAND poste a la fenetre");
+            check!(
+                r == 1 && LAST_COMMAND == 102,
+                "WM_COMMAND poste a la fenetre"
+            );
 
             SetEnvironmentVariableA(c"WINLUX_POPUPMENU".as_ptr(), c"336".as_ptr());
             let r = TrackPopupMenu(sys, 0, 90, 70, 0, main, core::ptr::null());
