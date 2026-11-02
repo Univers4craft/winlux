@@ -68,6 +68,8 @@ def load(root, lang="fr"):
 
 def build(module, modes=None):
     app = module["Popup"]("quick")
+    # Deux panneaux dans le même test : sans identifiant, pas de conflit D-Bus.
+    app.set_application_id(None)
     app.register(None)
     app.build()
     if modes is not None: app.modes_module = modes
