@@ -219,7 +219,7 @@ _TR = {
     'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
     'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
-    'Assistant Claude': ('Claude assistant', 'Asistente Claude', 'Claude-Assistent'),
+    'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
@@ -306,7 +306,7 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
+         _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les

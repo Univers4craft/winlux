@@ -310,6 +310,7 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "listbox" | "combolbox" => listbox_proc,
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
+            "#32768" => popup::popup_proc,
             _ => match comctl::class_kind(&lower)? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
@@ -3297,6 +3298,7 @@ pub fn user32_overrides() -> Exports {
 }
 
 mod comctl;
+pub(crate) mod popup;
 
 #[cfg(test)]
 mod tests;

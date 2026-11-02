@@ -29,7 +29,7 @@
     <keybind key="W-period"><action name="Execute"><command>winlux-emoji</command></action></keybind>
     <keybind key="W-semicolon"><action name="Execute"><command>winlux-emoji</command></action></keybind>
     <keybind key="W-w"><action name="Execute"><command>winlux-widgets</command></action></keybind>
-    <!-- Assistant Claude : ne fait rien tant qu'il n'est pas activé dans Paramètres. -->
+    <!-- Assistant IA (Claude, ChatGPT, IA locale) : ne fait rien tant qu'il n'est pas activé dans Paramètres. -->
     <keybind key="W-c"><action name="Execute"><command>winlux-assistant</command></action></keybind>
     <keybind key="W-F10"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
     <!-- Ancrage comme Windows 11 (winlux-snap) : Windows + flèches enchaîne moitiés,
