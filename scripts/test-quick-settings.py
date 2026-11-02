@@ -66,10 +66,14 @@ def load(root, lang="fr"):
     return runpy.run_path(str(HERE / "winlux-popup.py"), run_name="quick_test")
 
 
+BUILT = []
+
+
 def build(module, modes=None):
     app = module["Popup"]("quick")
-    # Deux panneaux dans le même test : sans identifiant, pas de conflit D-Bus.
-    app.set_application_id(None)
+    # Deux panneaux dans le même test : un identifiant chacun (D-Bus).
+    BUILT.append(app)
+    app.set_application_id(f"org.winlux.PopupTest.Quick{len(BUILT)}")
     app.register(None)
     app.build()
     if modes is not None: app.modes_module = modes
