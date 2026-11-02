@@ -22,6 +22,13 @@ Issues des grands chantiers : #14 et #26 (fonctions et DLL système), #232
 exceptions, suspension de threads), #270 (`ReadDirectoryChangesW`, ConPTY),
 #271 (périphériques), #272 (MSIX) et #265 à #268 (suite de Paint.NET).
 
+Depuis #269 (première partie), les fautes matérielles du code d'un programme
+(accès mémoire invalide, division par zéro, `int3`, `ud2`, pas à pas,
+instruction privilégiée, page de garde `PAGE_GUARD`, débordement de pile)
+deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
+blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
+`scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -203,6 +210,19 @@ traduit `VK_KHR_win32_surface` en surface Xlib. Les conventions d'appel
 changent (Windows x64 vers System V), il faut donc des thunks générés.
 
 Ampleur : **M** pour chacun. Suivi : #233.
+
+**Fait (novembre 2026).** `opengl32.dll` et `vulkan-1.dll` existent
+(`runtime/src/dlls/opengl32.rs`, `vulkan1.rs`). Un pont générique
+(`hostcall.rs`) traduit chaque appel Windows x64 en appel System V d'après la
+signature de la fonction, tirée des registres Khronos (`sigs/gl.txt` : 3 295
+fonctions OpenGL, `sigs/vk.txt` : 716 commandes Vulkan, regénérés par
+`scripts/gen-host-signatures.py`). WGL est relié à GLX sur la fenêtre X11 du
+HWND (formats de pixel, `WGL_ARB_create_context`, `WGL_ARB_pixel_format`,
+`WGL_EXT_swap_control`), `ChoosePixelFormat` / `SwapBuffers` sont dans gdi32.
+Côté Vulkan, `VK_KHR_win32_surface` devient une surface Xlib, les rappels de
+débogage sont enveloppés et les allocateurs du programme remplacés par celui
+du pilote. Vérifié par `gl_vk_suite.exe` (OpenGL 4.5 Mesa, Vulkan lavapipe).
+Reste : `wglUseFontBitmaps` et le rendu dans un bitmap (`PFD_DRAW_TO_BITMAP`).
 
 ### 5. Bibliothèque C++ de Visual Studio et dossier System32
 

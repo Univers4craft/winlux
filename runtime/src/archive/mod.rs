@@ -13,6 +13,7 @@
 //! gzip. Les formats tiers (7z, RAR, xz, zstd, bzip2, cab…) passent par les
 //! outils système s'ils sont installés ; sinon ils ne sont pas proposés.
 
+pub mod copy;
 pub mod crc32;
 pub mod deflate;
 pub mod ffi;

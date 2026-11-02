@@ -1,0 +1,3296 @@
+# Généré par scripts/gen-host-signatures.py, ne pas modifier à la main.
+* glAccum if
+glAccumxOES ii
+glAcquireKeyedMutexWin32EXT ipi
+glActiveProgramEXT i
+glActiveShaderProgram ii
+glActiveShaderProgramEXT ii
+glActiveStencilFaceEXT i
+glActiveTexture i
+glActiveTextureARB i
+glActiveVaryingNV ip
+glAlphaFragmentOp1ATI iiiiii
+glAlphaFragmentOp2ATI iiiiiiiii
+glAlphaFragmentOp3ATI iiiiiiiiiiii
+* glAlphaFunc if
+glAlphaFuncQCOM if
+glAlphaFuncx ii
+glAlphaFuncxOES ii
+glAlphaToCoverageDitherControlNV i
+glApplyFramebufferAttachmentCMAAINTEL -
+glApplyTextureEXT i
+glAreProgramsResidentNV ipp
+* glAreTexturesResident ipp
+glAreTexturesResidentEXT ipp
+* glArrayElement i
+glArrayElementEXT i
+glArrayObjectATI iiiiii
+glAsyncCopyBufferSubDataNVX ippiiiipppipp
+glAsyncCopyImageSubDataNVX ippiiiiiiiiiiiiiiiiiipp
+glAsyncMarkerSGIX i
+glAttachObjectARB ii
+glAttachShader ii
+* glBegin i
+glBeginConditionalRender ii
+glBeginConditionalRenderNV ii
+glBeginConditionalRenderNVX i
+glBeginFragmentShaderATI -
+glBeginOcclusionQueryNV i
+glBeginPerfMonitorAMD i
+glBeginPerfQueryINTEL i
+glBeginQuery ii
+glBeginQueryARB ii
+glBeginQueryEXT ii
+glBeginQueryIndexed iii
+glBeginTransformFeedback i
+glBeginTransformFeedbackEXT i
+glBeginTransformFeedbackNV i
+glBeginVertexShaderEXT -
+glBeginVideoCaptureNV i
+glBindAttribLocation iip
+glBindAttribLocationARB iip
+glBindBuffer ii
+glBindBufferARB ii
+glBindBufferBase iii
+glBindBufferBaseEXT iii
+glBindBufferBaseNV iii
+glBindBufferOffsetEXT iiip
+glBindBufferOffsetNV iiip
+glBindBufferRange iiipp
+glBindBufferRangeEXT iiipp
+glBindBufferRangeNV iiipp
+glBindBuffersBase iiip
+glBindBuffersRange iiippp
+glBindFragDataLocation iip
+glBindFragDataLocationEXT iip
+glBindFragDataLocationIndexed iiip
+glBindFragDataLocationIndexedEXT iiip
+glBindFragmentShaderATI i
+glBindFramebuffer ii
+glBindFramebufferEXT ii
+glBindFramebufferOES ii
+glBindImageTexture iiibiii
+glBindImageTextureEXT iiibiii
+glBindImageTextures iip
+glBindLightParameterEXT ii
+glBindMaterialParameterEXT ii
+glBindMultiTextureEXT iii
+glBindParameterEXT i
+glBindProgramARB ii
+glBindProgramNV ii
+glBindProgramPipeline i
+glBindProgramPipelineEXT i
+glBindRenderbuffer ii
+glBindRenderbufferEXT ii
+glBindRenderbufferOES ii
+glBindSampler ii
+glBindSamplers iip
+glBindShadingRateImageNV i
+glBindTexGenParameterEXT iii
+* glBindTexture ii
+glBindTextureEXT ii
+glBindTextureUnit ii
+glBindTextureUnitParameterEXT ii
+glBindTextures iip
+glBindTransformFeedback ii
+glBindTransformFeedbackNV ii
+glBindVertexArray i
+glBindVertexArrayAPPLE i
+glBindVertexArrayOES i
+glBindVertexBuffer iipi
+glBindVertexBuffers iippp
+glBindVertexShaderEXT i
+glBindVideoCaptureStreamBufferNV iiip
+glBindVideoCaptureStreamTextureNV iiiii
+glBinormal3bEXT ccc
+glBinormal3bvEXT p
+glBinormal3dEXT ddd
+glBinormal3dvEXT p
+glBinormal3fEXT fff
+glBinormal3fvEXT p
+glBinormal3iEXT iii
+glBinormal3ivEXT p
+glBinormal3sEXT sss
+glBinormal3svEXT p
+glBinormalPointerEXT iip
+* glBitmap iiffffp
+glBitmapxOES iiiiiip
+glBlendBarrier -
+glBlendBarrierKHR -
+glBlendBarrierNV -
+glBlendColor ffff
+glBlendColorEXT ffff
+glBlendColorxOES iiii
+glBlendEquation i
+glBlendEquationEXT i
+glBlendEquationIndexedAMD ii
+glBlendEquationOES i
+glBlendEquationSeparate ii
+glBlendEquationSeparateEXT ii
+glBlendEquationSeparateIndexedAMD iii
+glBlendEquationSeparateOES ii
+glBlendEquationSeparatei iii
+glBlendEquationSeparateiARB iii
+glBlendEquationSeparateiEXT iii
+glBlendEquationSeparateiOES iii
+glBlendEquationi ii
+glBlendEquationiARB ii
+glBlendEquationiEXT ii
+glBlendEquationiOES ii
+* glBlendFunc ii
+glBlendFuncIndexedAMD iii
+glBlendFuncSeparate iiii
+glBlendFuncSeparateEXT iiii
+glBlendFuncSeparateINGR iiii
+glBlendFuncSeparateIndexedAMD iiiii
+glBlendFuncSeparateOES iiii
+glBlendFuncSeparatei iiiii
+glBlendFuncSeparateiARB iiiii
+glBlendFuncSeparateiEXT iiiii
+glBlendFuncSeparateiOES iiiii
+glBlendFunci iii
+glBlendFunciARB iii
+glBlendFunciEXT iii
+glBlendFunciOES iii
+glBlendParameteriNV ii
+glBlitFramebuffer iiiiiiiiii
+glBlitFramebufferANGLE iiiiiiiiii
+glBlitFramebufferEXT iiiiiiiiii
+glBlitFramebufferLayerEXT iiiiiiiiiiii
+glBlitFramebufferLayersEXT iiiiiiiiii
+glBlitFramebufferNV iiiiiiiiii
+glBlitNamedFramebuffer iiiiiiiiiiii
+glBufferAddressRangeNV iipp
+glBufferAttachMemoryNV iip
+glBufferData ippi
+glBufferDataARB ippi
+glBufferPageCommitmentARB ippb
+glBufferPageCommitmentMemNV ippipb
+glBufferParameteriAPPLE iii
+glBufferStorage ippi
+glBufferStorageEXT ippi
+glBufferStorageExternalEXT ipppi
+glBufferStorageMemEXT ipip
+glBufferSubData ippp
+glBufferSubDataARB ippp
+glCallCommandListNV i
+* glCallList i
+* glCallLists iip
+glCheckFramebufferStatus i
+glCheckFramebufferStatusEXT i
+glCheckFramebufferStatusOES i
+glCheckNamedFramebufferStatus ii
+glCheckNamedFramebufferStatusEXT ii
+glClampColor ii
+glClampColorARB ii
+* glClear i
+* glClearAccum ffff
+glClearAccumxOES iiii
+glClearBufferData iiiip
+glClearBufferSubData iippiip
+glClearBufferfi iifi
+glClearBufferfv iip
+glClearBufferiv iip
+glClearBufferuiv iip
+* glClearColor ffff
+glClearColorIiEXT iiii
+glClearColorIuiEXT iiii
+glClearColorx iiii
+glClearColorxOES iiii
+* glClearDepth d
+glClearDepthdNV d
+glClearDepthf f
+glClearDepthfOES f
+glClearDepthx i
+glClearDepthxOES i
+* glClearIndex f
+glClearNamedBufferData iiiip
+glClearNamedBufferDataEXT iiiip
+glClearNamedBufferSubData iippiip
+glClearNamedBufferSubDataEXT iippiip
+glClearNamedFramebufferfi iiifi
+glClearNamedFramebufferfv iiip
+glClearNamedFramebufferiv iiip
+glClearNamedFramebufferuiv iiip
+glClearPixelLocalStorageuiEXT iip
+* glClearStencil i
+glClearTexImage iiiip
+glClearTexImageEXT iiiip
+glClearTexSubImage iiiiiiiiiip
+glClearTexSubImageEXT iiiiiiiiiip
+glClientActiveTexture i
+glClientActiveTextureARB i
+glClientActiveVertexStreamATI i
+glClientAttribDefaultEXT i
+glClientWaitSemaphoreui64NVX ipp
+glClientWaitSync pip
+glClientWaitSyncAPPLE pip
+glClipControl ii
+glClipControlEXT ii
+* glClipPlane ip
+glClipPlanef ip
+glClipPlanefIMG ip
+glClipPlanefOES ip
+glClipPlanex ip
+glClipPlanexIMG ip
+glClipPlanexOES ip
+* glColor3b ccc
+* glColor3bv p
+* glColor3d ddd
+* glColor3dv p
+* glColor3f fff
+glColor3fVertex3fSUN ffffff
+glColor3fVertex3fvSUN pp
+* glColor3fv p
+glColor3hNV hhh
+glColor3hvNV p
+* glColor3i iii
+* glColor3iv p
+* glColor3s sss
+* glColor3sv p
+* glColor3ub bbb
+* glColor3ubv p
+* glColor3ui iii
+* glColor3uiv p
+* glColor3us hhh
+* glColor3usv p
+glColor3xOES iii
+glColor3xvOES p
+* glColor4b cccc
+* glColor4bv p
+* glColor4d dddd
+* glColor4dv p
+* glColor4f ffff
+glColor4fNormal3fVertex3fSUN ffffffffff
+glColor4fNormal3fVertex3fvSUN ppp
+* glColor4fv p
+glColor4hNV hhhh
+glColor4hvNV p
+* glColor4i iiii
+* glColor4iv p
+* glColor4s ssss
+* glColor4sv p
+* glColor4ub bbbb
+glColor4ubVertex2fSUN bbbbff
+glColor4ubVertex2fvSUN pp
+glColor4ubVertex3fSUN bbbbfff
+glColor4ubVertex3fvSUN pp
+* glColor4ubv p
+* glColor4ui iiii
+* glColor4uiv p
+* glColor4us hhhh
+* glColor4usv p
+glColor4x iiii
+glColor4xOES iiii
+glColor4xvOES p
+glColorFormatNV iii
+glColorFragmentOp1ATI iiiiiii
+glColorFragmentOp2ATI iiiiiiiiii
+glColorFragmentOp3ATI iiiiiiiiiiiii
+* glColorMask bbbb
+glColorMaskIndexedEXT ibbbb
+glColorMaski ibbbb
+glColorMaskiEXT ibbbb
+glColorMaskiOES ibbbb
+* glColorMaterial ii
+glColorP3ui ii
+glColorP3uiv ip
+glColorP4ui ii
+glColorP4uiv ip
+* glColorPointer iiip
+glColorPointerEXT iiiip
+glColorPointerListIBM iiipi
+glColorPointervINTEL iip
+glColorSubTable iiiiip
+glColorSubTableEXT iiiiip
+glColorTable iiiiip
+glColorTableEXT iiiiip
+glColorTableParameterfv iip
+glColorTableParameterfvSGI iip
+glColorTableParameteriv iip
+glColorTableParameterivSGI iip
+glColorTableSGI iiiiip
+glCombinerInputNV iiiiii
+glCombinerOutputNV iiiiiiibbb
+glCombinerParameterfNV if
+glCombinerParameterfvNV ip
+glCombinerParameteriNV ii
+glCombinerParameterivNV ip
+glCombinerStageParameterfvNV iip
+glCommandListSegmentsNV ii
+glCompileCommandListNV i
+glCompileShader i
+glCompileShaderARB i
+glCompileShaderIncludeARB iipp
+glCompressedMultiTexImage1DEXT iiiiiiip
+glCompressedMultiTexImage2DEXT iiiiiiiip
+glCompressedMultiTexImage3DEXT iiiiiiiiip
+glCompressedMultiTexSubImage1DEXT iiiiiiip
+glCompressedMultiTexSubImage2DEXT iiiiiiiiip
+glCompressedMultiTexSubImage3DEXT iiiiiiiiiiip
+glCompressedTexImage1D iiiiiip
+glCompressedTexImage1DARB iiiiiip
+glCompressedTexImage2D iiiiiiip
+glCompressedTexImage2DARB iiiiiiip
+glCompressedTexImage3D iiiiiiiip
+glCompressedTexImage3DARB iiiiiiiip
+glCompressedTexImage3DOES iiiiiiiip
+glCompressedTexSubImage1D iiiiiip
+glCompressedTexSubImage1DARB iiiiiip
+glCompressedTexSubImage2D iiiiiiiip
+glCompressedTexSubImage2DARB iiiiiiiip
+glCompressedTexSubImage3D iiiiiiiiiip
+glCompressedTexSubImage3DARB iiiiiiiiiip
+glCompressedTexSubImage3DOES iiiiiiiiiip
+glCompressedTextureImage1DEXT iiiiiiip
+glCompressedTextureImage2DEXT iiiiiiiip
+glCompressedTextureImage3DEXT iiiiiiiiip
+glCompressedTextureSubImage1D iiiiiip
+glCompressedTextureSubImage1DEXT iiiiiiip
+glCompressedTextureSubImage2D iiiiiiiip
+glCompressedTextureSubImage2DEXT iiiiiiiiip
+glCompressedTextureSubImage3D iiiiiiiiiip
+glCompressedTextureSubImage3DEXT iiiiiiiiiiip
+glConservativeRasterParameterfNV if
+glConservativeRasterParameteriNV ii
+glConvolutionFilter1D iiiiip
+glConvolutionFilter1DEXT iiiiip
+glConvolutionFilter2D iiiiiip
+glConvolutionFilter2DEXT iiiiiip
+glConvolutionParameterf iif
+glConvolutionParameterfEXT iif
+glConvolutionParameterfv iip
+glConvolutionParameterfvEXT iip
+glConvolutionParameteri iii
+glConvolutionParameteriEXT iii
+glConvolutionParameteriv iip
+glConvolutionParameterivEXT iip
+glConvolutionParameterxOES iii
+glConvolutionParameterxvOES iip
+glCopyBufferSubData iippp
+glCopyBufferSubDataNV iippp
+glCopyColorSubTable iiiii
+glCopyColorSubTableEXT iiiii
+glCopyColorTable iiiii
+glCopyColorTableSGI iiiii
+glCopyConvolutionFilter1D iiiii
+glCopyConvolutionFilter1DEXT iiiii
+glCopyConvolutionFilter2D iiiiii
+glCopyConvolutionFilter2DEXT iiiiii
+glCopyImageSubData iiiiiiiiiiiiiii
+glCopyImageSubDataEXT iiiiiiiiiiiiiii
+glCopyImageSubDataNV iiiiiiiiiiiiiii
+glCopyImageSubDataOES iiiiiiiiiiiiiii
+glCopyMultiTexImage1DEXT iiiiiiii
+glCopyMultiTexImage2DEXT iiiiiiiii
+glCopyMultiTexSubImage1DEXT iiiiiii
+glCopyMultiTexSubImage2DEXT iiiiiiiii
+glCopyMultiTexSubImage3DEXT iiiiiiiiii
+glCopyNamedBufferSubData iippp
+glCopyPathNV ii
+* glCopyPixels iiiii
+* glCopyTexImage1D iiiiiii
+glCopyTexImage1DEXT iiiiiii
+* glCopyTexImage2D iiiiiiii
+glCopyTexImage2DEXT iiiiiiii
+* glCopyTexSubImage1D iiiiii
+glCopyTexSubImage1DEXT iiiiii
+* glCopyTexSubImage2D iiiiiiii
+glCopyTexSubImage2DEXT iiiiiiii
+glCopyTexSubImage3D iiiiiiiii
+glCopyTexSubImage3DEXT iiiiiiiii
+glCopyTexSubImage3DOES iiiiiiiii
+glCopyTextureImage1DEXT iiiiiiii
+glCopyTextureImage2DEXT iiiiiiiii
+glCopyTextureLevelsAPPLE iiii
+glCopyTextureSubImage1D iiiiii
+glCopyTextureSubImage1DEXT iiiiiii
+glCopyTextureSubImage2D iiiiiiii
+glCopyTextureSubImage2DEXT iiiiiiiii
+glCopyTextureSubImage3D iiiiiiiii
+glCopyTextureSubImage3DEXT iiiiiiiiii
+glCoverFillPathInstancedNV iipiiip
+glCoverFillPathNV ii
+glCoverStrokePathInstancedNV iipiiip
+glCoverStrokePathNV ii
+glCoverageMaskNV b
+glCoverageModulationNV i
+glCoverageModulationTableNV ip
+glCoverageOperationNV i
+glCreateBuffers ip
+glCreateCommandListsNV ip
+glCreateFramebuffers ip
+glCreateMemoryObjectsEXT ip
+glCreatePerfQueryINTEL ip
+glCreateProgram -
+glCreateProgramObjectARB -
+glCreateProgramPipelines ip
+glCreateProgressFenceNVX -
+glCreateQueries iip
+glCreateRenderbuffers ip
+glCreateSamplers ip
+glCreateSemaphoresNV ip
+glCreateShader i
+glCreateShaderObjectARB i
+glCreateShaderProgramEXT ip
+glCreateShaderProgramv iip
+glCreateShaderProgramvEXT iip
+glCreateStatesNV ip
+glCreateSyncFromCLeventARB ppi
+glCreateTextures iip
+glCreateTransformFeedbacks ip
+glCreateVertexArrays ip
+* glCullFace i
+glCullParameterdvEXT ip
+glCullParameterfvEXT ip
+glCurrentPaletteMatrixARB i
+glCurrentPaletteMatrixOES i
+glDebugMessageCallback pp
+glDebugMessageCallbackAMD pp
+glDebugMessageCallbackARB pp
+glDebugMessageCallbackKHR pp
+glDebugMessageControl iiiipb
+glDebugMessageControlARB iiiipb
+glDebugMessageControlKHR iiiipb
+glDebugMessageEnableAMD iiipb
+glDebugMessageInsert iiiiip
+glDebugMessageInsertAMD iiiip
+glDebugMessageInsertARB iiiiip
+glDebugMessageInsertKHR iiiiip
+glDeformSGIX i
+glDeformationMap3dSGIX iddiiddiiddiip
+glDeformationMap3fSGIX iffiiffiiffiip
+glDeleteAsyncMarkersSGIX ii
+glDeleteBuffers ip
+glDeleteBuffersARB ip
+glDeleteCommandListsNV ip
+glDeleteFencesAPPLE ip
+glDeleteFencesNV ip
+glDeleteFragmentShaderATI i
+glDeleteFramebuffers ip
+glDeleteFramebuffersEXT ip
+glDeleteFramebuffersOES ip
+* glDeleteLists ii
+glDeleteMemoryObjectsEXT ip
+glDeleteNamedStringARB ip
+glDeleteNamesAMD iip
+glDeleteObjectARB i
+glDeleteOcclusionQueriesNV ip
+glDeletePathsNV ii
+glDeletePerfMonitorsAMD ip
+glDeletePerfQueryINTEL i
+glDeleteProgram i
+glDeleteProgramPipelines ip
+glDeleteProgramPipelinesEXT ip
+glDeleteProgramsARB ip
+glDeleteProgramsNV ip
+glDeleteQueries ip
+glDeleteQueriesARB ip
+glDeleteQueriesEXT ip
+glDeleteQueryResourceTagNV ip
+glDeleteRenderbuffers ip
+glDeleteRenderbuffersEXT ip
+glDeleteRenderbuffersOES ip
+glDeleteSamplers ip
+glDeleteSemaphoresEXT ip
+glDeleteShader i
+glDeleteStatesNV ip
+glDeleteSync p
+glDeleteSyncAPPLE p
+* glDeleteTextures ip
+glDeleteTexturesEXT ip
+glDeleteTransformFeedbacks ip
+glDeleteTransformFeedbacksNV ip
+glDeleteVertexArrays ip
+glDeleteVertexArraysAPPLE ip
+glDeleteVertexArraysOES ip
+glDeleteVertexShaderEXT i
+glDepthBoundsEXT dd
+glDepthBoundsdNV dd
+* glDepthFunc i
+* glDepthMask b
+* glDepthRange dd
+glDepthRangeArraydvNV iip
+glDepthRangeArrayfvNV iip
+glDepthRangeArrayfvOES iip
+glDepthRangeArrayv iip
+glDepthRangeIndexed idd
+glDepthRangeIndexeddNV idd
+glDepthRangeIndexedfNV iff
+glDepthRangeIndexedfOES iff
+glDepthRangedNV dd
+glDepthRangef ff
+glDepthRangefOES ff
+glDepthRangex ii
+glDepthRangexOES ii
+glDetachObjectARB ii
+glDetachShader ii
+glDetailTexFuncSGIS iip
+* glDisable i
+* glDisableClientState i
+glDisableClientStateIndexedEXT ii
+glDisableClientStateiEXT ii
+glDisableDriverControlQCOM i
+glDisableIndexedEXT ii
+glDisableVariantClientStateEXT i
+glDisableVertexArrayAttrib ii
+glDisableVertexArrayAttribEXT ii
+glDisableVertexArrayEXT ii
+glDisableVertexAttribAPPLE ii
+glDisableVertexAttribArray i
+glDisableVertexAttribArrayARB i
+glDisablei ii
+glDisableiEXT ii
+glDisableiNV ii
+glDisableiOES ii
+glDiscardFramebufferEXT iip
+glDispatchCompute iii
+glDispatchComputeGroupSizeARB iiiiii
+glDispatchComputeIndirect p
+* glDrawArrays iii
+glDrawArraysEXT iii
+glDrawArraysIndirect ip
+glDrawArraysInstanced iiii
+glDrawArraysInstancedANGLE iiii
+glDrawArraysInstancedARB iiii
+glDrawArraysInstancedBaseInstance iiiii
+glDrawArraysInstancedBaseInstanceEXT iiiii
+glDrawArraysInstancedEXT iiii
+glDrawArraysInstancedNV iiii
+* glDrawBuffer i
+glDrawBuffers ip
+glDrawBuffersARB ip
+glDrawBuffersATI ip
+glDrawBuffersEXT ip
+glDrawBuffersIndexedEXT ipp
+glDrawBuffersNV ip
+glDrawCommandsAddressNV ippi
+glDrawCommandsNV iippi
+glDrawCommandsStatesAddressNV ppppi
+glDrawCommandsStatesNV ippppi
+glDrawElementArrayAPPLE iii
+glDrawElementArrayATI ii
+* glDrawElements iiip
+glDrawElementsBaseVertex iiipi
+glDrawElementsBaseVertexEXT iiipi
+glDrawElementsBaseVertexOES iiipi
+glDrawElementsIndirect iip
+glDrawElementsInstanced iiipi
+glDrawElementsInstancedANGLE iiipi
+glDrawElementsInstancedARB iiipi
+glDrawElementsInstancedBaseInstance iiipii
+glDrawElementsInstancedBaseInstanceEXT iiipii
+glDrawElementsInstancedBaseVertex iiipii
+glDrawElementsInstancedBaseVertexBaseInstance iiipiii
+glDrawElementsInstancedBaseVertexBaseInstanceEXT iiipiii
+glDrawElementsInstancedBaseVertexEXT iiipii
+glDrawElementsInstancedBaseVertexOES iiipii
+glDrawElementsInstancedEXT iiipi
+glDrawElementsInstancedNV iiipi
+glDrawMeshArraysSUN iiii
+glDrawMeshTasksIndirectNV p
+glDrawMeshTasksNV ii
+* glDrawPixels iiiip
+glDrawRangeElementArrayAPPLE iiiii
+glDrawRangeElementArrayATI iiii
+glDrawRangeElements iiiiip
+glDrawRangeElementsBaseVertex iiiiipi
+glDrawRangeElementsBaseVertexEXT iiiiipi
+glDrawRangeElementsBaseVertexOES iiiiipi
+glDrawRangeElementsEXT iiiiip
+glDrawTexfOES fffff
+glDrawTexfvOES p
+glDrawTexiOES iiiii
+glDrawTexivOES p
+glDrawTexsOES sssss
+glDrawTexsvOES p
+glDrawTextureNV iifffffffff
+glDrawTexxOES iiiii
+glDrawTexxvOES p
+glDrawTransformFeedback ii
+glDrawTransformFeedbackEXT ii
+glDrawTransformFeedbackInstanced iii
+glDrawTransformFeedbackInstancedEXT iii
+glDrawTransformFeedbackNV ii
+glDrawTransformFeedbackStream iii
+glDrawTransformFeedbackStreamInstanced iiii
+glDrawVkImageNV pifffffffff
+glEGLImageTargetRenderbufferStorageOES ip
+glEGLImageTargetTexStorageEXT ipp
+glEGLImageTargetTexture2DOES ip
+glEGLImageTargetTextureStorageEXT ipp
+* glEdgeFlag b
+glEdgeFlagFormatNV i
+* glEdgeFlagPointer ip
+glEdgeFlagPointerEXT iip
+glEdgeFlagPointerListIBM ipi
+* glEdgeFlagv p
+glElementPointerAPPLE ip
+glElementPointerATI ip
+* glEnable i
+* glEnableClientState i
+glEnableClientStateIndexedEXT ii
+glEnableClientStateiEXT ii
+glEnableDriverControlQCOM i
+glEnableIndexedEXT ii
+glEnableVariantClientStateEXT i
+glEnableVertexArrayAttrib ii
+glEnableVertexArrayAttribEXT ii
+glEnableVertexArrayEXT ii
+glEnableVertexAttribAPPLE ii
+glEnableVertexAttribArray i
+glEnableVertexAttribArrayARB i
+glEnablei ii
+glEnableiEXT ii
+glEnableiNV ii
+glEnableiOES ii
+* glEnd -
+glEndConditionalRender -
+glEndConditionalRenderNV -
+glEndConditionalRenderNVX -
+glEndFragmentShaderATI -
+* glEndList -
+glEndOcclusionQueryNV -
+glEndPerfMonitorAMD i
+glEndPerfQueryINTEL i
+glEndQuery i
+glEndQueryARB i
+glEndQueryEXT i
+glEndQueryIndexed ii
+glEndTilingQCOM i
+glEndTransformFeedback -
+glEndTransformFeedbackEXT -
+glEndTransformFeedbackNV -
+glEndVertexShaderEXT -
+glEndVideoCaptureNV i
+* glEvalCoord1d d
+* glEvalCoord1dv p
+* glEvalCoord1f f
+* glEvalCoord1fv p
+glEvalCoord1xOES i
+glEvalCoord1xvOES p
+* glEvalCoord2d dd
+* glEvalCoord2dv p
+* glEvalCoord2f ff
+* glEvalCoord2fv p
+glEvalCoord2xOES ii
+glEvalCoord2xvOES p
+glEvalMapsNV ii
+* glEvalMesh1 iii
+* glEvalMesh2 iiiii
+* glEvalPoint1 i
+* glEvalPoint2 ii
+glEvaluateDepthValuesARB -
+glExecuteProgramNV iip
+glExtGetBufferPointervQCOM ip
+glExtGetBuffersQCOM pip
+glExtGetFramebuffersQCOM pip
+glExtGetProgramBinarySourceQCOM iipp
+glExtGetProgramsQCOM pip
+glExtGetRenderbuffersQCOM pip
+glExtGetShadersQCOM pip
+glExtGetTexLevelParameterivQCOM iiiip
+glExtGetTexSubImageQCOM iiiiiiiiiip
+glExtGetTexturesQCOM pip
+glExtIsProgramBinaryQCOM i
+glExtTexObjectStateOverrideiQCOM iii
+glExtractComponentEXT iii
+glExtrapolateTex2DQCOM iiif
+* glFeedbackBuffer iip
+glFeedbackBufferxOES iip
+glFenceSync ii
+glFenceSyncAPPLE ii
+glFinalCombinerInputNV iiii
+* glFinish -
+glFinishAsyncSGIX p
+glFinishFenceAPPLE i
+glFinishFenceNV i
+glFinishObjectAPPLE ii
+glFinishTextureSUNX -
+* glFlush -
+glFlushMappedBufferRange ipp
+glFlushMappedBufferRangeAPPLE ipp
+glFlushMappedBufferRangeEXT ipp
+glFlushMappedNamedBufferRange ipp
+glFlushMappedNamedBufferRangeEXT ipp
+glFlushPixelDataRangeNV i
+glFlushRasterSGIX -
+glFlushStaticDataIBM i
+glFlushVertexArrayRangeAPPLE ip
+glFlushVertexArrayRangeNV -
+glFogCoordFormatNV ii
+glFogCoordPointer iip
+glFogCoordPointerEXT iip
+glFogCoordPointerListIBM iipi
+glFogCoordd d
+glFogCoorddEXT d
+glFogCoorddv p
+glFogCoorddvEXT p
+glFogCoordf f
+glFogCoordfEXT f
+glFogCoordfv p
+glFogCoordfvEXT p
+glFogCoordhNV h
+glFogCoordhvNV p
+glFogFuncSGIS ip
+* glFogf if
+* glFogfv ip
+* glFogi ii
+* glFogiv ip
+glFogx ii
+glFogxOES ii
+glFogxv ip
+glFogxvOES ip
+glFragmentColorMaterialSGIX ii
+glFragmentCoverageColorNV i
+glFragmentLightModelfSGIX if
+glFragmentLightModelfvSGIX ip
+glFragmentLightModeliSGIX ii
+glFragmentLightModelivSGIX ip
+glFragmentLightfSGIX iif
+glFragmentLightfvSGIX iip
+glFragmentLightiSGIX iii
+glFragmentLightivSGIX iip
+glFragmentMaterialfSGIX iif
+glFragmentMaterialfvSGIX iip
+glFragmentMaterialiSGIX iii
+glFragmentMaterialivSGIX iip
+glFrameTerminatorGREMEDY -
+glFrameZoomSGIX i
+glFramebufferDrawBufferEXT ii
+glFramebufferDrawBuffersEXT iip
+glFramebufferFetchBarrierEXT -
+glFramebufferFetchBarrierQCOM -
+glFramebufferFoveationConfigQCOM iiiip
+glFramebufferFoveationParametersQCOM iiifffff
+glFramebufferParameteri iii
+glFramebufferParameteriMESA iii
+glFramebufferPixelLocalStorageSizeEXT ii
+glFramebufferReadBufferEXT ii
+glFramebufferRenderbuffer iiii
+glFramebufferRenderbufferEXT iiii
+glFramebufferRenderbufferOES iiii
+glFramebufferSampleLocationsfvARB iiip
+glFramebufferSampleLocationsfvNV iiip
+glFramebufferSamplePositionsfvAMD iiip
+glFramebufferShadingRateEXT iiiiiii
+glFramebufferTexture iiii
+glFramebufferTexture1D iiiii
+glFramebufferTexture1DEXT iiiii
+glFramebufferTexture2D iiiii
+glFramebufferTexture2DDownsampleIMG iiiiiii
+glFramebufferTexture2DEXT iiiii
+glFramebufferTexture2DMultisampleEXT iiiiii
+glFramebufferTexture2DMultisampleIMG iiiiii
+glFramebufferTexture2DOES iiiii
+glFramebufferTexture3D iiiiii
+glFramebufferTexture3DEXT iiiiii
+glFramebufferTexture3DOES iiiiii
+glFramebufferTextureARB iiii
+glFramebufferTextureEXT iiii
+glFramebufferTextureFaceARB iiiii
+glFramebufferTextureFaceEXT iiiii
+glFramebufferTextureLayer iiiii
+glFramebufferTextureLayerARB iiiii
+glFramebufferTextureLayerDownsampleIMG iiiiiii
+glFramebufferTextureLayerEXT iiiii
+glFramebufferTextureMultisampleMultiviewOVR iiiiiii
+glFramebufferTextureMultiviewOVR iiiiii
+glFramebufferTextureOES iiii
+glFreeObjectBufferATI i
+* glFrontFace i
+* glFrustum dddddd
+glFrustumf ffffff
+glFrustumfOES ffffff
+glFrustumx iiiiii
+glFrustumxOES iiiiii
+glGenAsyncMarkersSGIX i
+glGenBuffers ip
+glGenBuffersARB ip
+glGenFencesAPPLE ip
+glGenFencesNV ip
+glGenFragmentShadersATI i
+glGenFramebuffers ip
+glGenFramebuffersEXT ip
+glGenFramebuffersOES ip
+* glGenLists i
+glGenNamesAMD iip
+glGenOcclusionQueriesNV ip
+glGenPathsNV i
+glGenPerfMonitorsAMD ip
+glGenProgramPipelines ip
+glGenProgramPipelinesEXT ip
+glGenProgramsARB ip
+glGenProgramsNV ip
+glGenQueries ip
+glGenQueriesARB ip
+glGenQueriesEXT ip
+glGenQueryResourceTagNV ip
+glGenRenderbuffers ip
+glGenRenderbuffersEXT ip
+glGenRenderbuffersOES ip
+glGenSamplers ip
+glGenSemaphoresEXT ip
+glGenSymbolsEXT iiii
+* glGenTextures ip
+glGenTexturesEXT ip
+glGenTransformFeedbacks ip
+glGenTransformFeedbacksNV ip
+glGenVertexArrays ip
+glGenVertexArraysAPPLE ip
+glGenVertexArraysOES ip
+glGenVertexShadersEXT i
+glGenerateMipmap i
+glGenerateMipmapEXT i
+glGenerateMipmapOES i
+glGenerateMultiTexMipmapEXT ii
+glGenerateTextureMipmap i
+glGenerateTextureMipmapEXT ii
+glGetActiveAtomicCounterBufferiv iiip
+glGetActiveAttrib iiipppp
+glGetActiveAttribARB iiipppp
+glGetActiveSubroutineName iiiipp
+glGetActiveSubroutineUniformName iiiipp
+glGetActiveSubroutineUniformiv iiiip
+glGetActiveUniform iiipppp
+glGetActiveUniformARB iiipppp
+glGetActiveUniformBlockName iiipp
+glGetActiveUniformBlockiv iiip
+glGetActiveUniformName iiipp
+glGetActiveUniformsiv iipip
+glGetActiveVaryingNV iiipppp
+glGetArrayObjectfvATI iip
+glGetArrayObjectivATI iip
+glGetAttachedObjectsARB iipp
+glGetAttachedShaders iipp
+glGetAttribLocation ip
+glGetAttribLocationARB ip
+glGetBooleanIndexedvEXT iip
+glGetBooleani_v iip
+* glGetBooleanv ip
+glGetBufferParameteri64v iip
+glGetBufferParameteriv iip
+glGetBufferParameterivARB iip
+glGetBufferParameterui64vNV iip
+glGetBufferPointerv iip
+glGetBufferPointervARB iip
+glGetBufferPointervOES iip
+glGetBufferSubData ippp
+glGetBufferSubDataARB ippp
+* glGetClipPlane ip
+glGetClipPlanef ip
+glGetClipPlanefOES ip
+glGetClipPlanex ip
+glGetClipPlanexOES ip
+glGetColorTable iiip
+glGetColorTableEXT iiip
+glGetColorTableParameterfv iip
+glGetColorTableParameterfvEXT iip
+glGetColorTableParameterfvSGI iip
+glGetColorTableParameteriv iip
+glGetColorTableParameterivEXT iip
+glGetColorTableParameterivSGI iip
+glGetColorTableSGI iiip
+glGetCombinerInputParameterfvNV iiiip
+glGetCombinerInputParameterivNV iiiip
+glGetCombinerOutputParameterfvNV iiip
+glGetCombinerOutputParameterivNV iiip
+glGetCombinerStageParameterfvNV iip
+glGetCommandHeaderNV ii
+glGetCompressedMultiTexImageEXT iiip
+glGetCompressedTexImage iip
+glGetCompressedTexImageARB iip
+glGetCompressedTextureImage iiip
+glGetCompressedTextureImageEXT iiip
+glGetCompressedTextureSubImage iiiiiiiiip
+glGetConvolutionFilter iiip
+glGetConvolutionFilterEXT iiip
+glGetConvolutionParameterfv iip
+glGetConvolutionParameterfvEXT iip
+glGetConvolutionParameteriv iip
+glGetConvolutionParameterivEXT iip
+glGetConvolutionParameterxvOES iip
+glGetCoverageModulationTableNV ip
+glGetDebugMessageLog iipppppp
+glGetDebugMessageLogAMD iippppp
+glGetDebugMessageLogARB iipppppp
+glGetDebugMessageLogKHR iipppppp
+glGetDetailTexFuncSGIS ip
+glGetDoubleIndexedvEXT iip
+glGetDoublei_v iip
+glGetDoublei_vEXT iip
+* glGetDoublev ip
+glGetDriverControlStringQCOM iipp
+glGetDriverControlsQCOM pip
+* glGetError -
+glGetFenceivNV iip
+glGetFinalCombinerInputParameterfvNV iip
+glGetFinalCombinerInputParameterivNV iip
+glGetFirstPerfQueryIdINTEL p
+glGetFixedv ip
+glGetFixedvOES ip
+glGetFloatIndexedvEXT iip
+glGetFloati_v iip
+glGetFloati_vEXT iip
+glGetFloati_vNV iip
+glGetFloati_vOES iip
+* glGetFloatv ip
+glGetFogFuncSGIS p
+glGetFragDataIndex ip
+glGetFragDataIndexEXT ip
+glGetFragDataLocation ip
+glGetFragDataLocationEXT ip
+glGetFragmentLightfvSGIX iip
+glGetFragmentLightivSGIX iip
+glGetFragmentMaterialfvSGIX iip
+glGetFragmentMaterialivSGIX iip
+glGetFragmentShadingRatesEXT iipp
+glGetFramebufferAttachmentParameteriv iiip
+glGetFramebufferAttachmentParameterivEXT iiip
+glGetFramebufferAttachmentParameterivOES iiip
+glGetFramebufferParameterfvAMD iiiiip
+glGetFramebufferParameteriv iip
+glGetFramebufferParameterivEXT iip
+glGetFramebufferParameterivMESA iip
+glGetFramebufferPixelLocalStorageSizeEXT i
+glGetGraphicsResetStatus -
+glGetGraphicsResetStatusARB -
+glGetGraphicsResetStatusEXT -
+glGetGraphicsResetStatusKHR -
+glGetHandleARB i
+glGetHistogram ibiip
+glGetHistogramEXT ibiip
+glGetHistogramParameterfv iip
+glGetHistogramParameterfvEXT iip
+glGetHistogramParameteriv iip
+glGetHistogramParameterivEXT iip
+glGetHistogramParameterxvOES iip
+glGetImageHandleARB iibii
+glGetImageHandleNV iibii
+glGetImageTransformParameterfvHP iip
+glGetImageTransformParameterivHP iip
+glGetInfoLogARB iipp
+glGetInstrumentsSGIX -
+glGetInteger64i_v iip
+glGetInteger64v ip
+glGetInteger64vAPPLE ip
+glGetInteger64vEXT ip
+glGetIntegerIndexedvEXT iip
+glGetIntegeri_v iip
+glGetIntegeri_vEXT iip
+glGetIntegerui64i_vNV iip
+glGetIntegerui64vNV ip
+* glGetIntegerv ip
+glGetInternalformatSampleivNV iiiiip
+glGetInternalformati64v iiiip
+glGetInternalformativ iiiip
+glGetInvariantBooleanvEXT iip
+glGetInvariantFloatvEXT iip
+glGetInvariantIntegervEXT iip
+* glGetLightfv iip
+* glGetLightiv iip
+glGetLightxOES iip
+glGetLightxv iip
+glGetLightxvOES iip
+glGetListParameterfvSGIX iip
+glGetListParameterivSGIX iip
+glGetLocalConstantBooleanvEXT iip
+glGetLocalConstantFloatvEXT iip
+glGetLocalConstantIntegervEXT iip
+glGetMapAttribParameterfvNV iiip
+glGetMapAttribParameterivNV iiip
+glGetMapControlPointsNV iiiiibp
+glGetMapParameterfvNV iip
+glGetMapParameterivNV iip
+* glGetMapdv iip
+* glGetMapfv iip
+* glGetMapiv iip
+glGetMapxvOES iip
+* glGetMaterialfv iip
+* glGetMaterialiv iip
+glGetMaterialxOES iii
+glGetMaterialxv iip
+glGetMaterialxvOES iip
+glGetMemoryObjectDetachedResourcesuivNV iiiip
+glGetMemoryObjectParameterivEXT iip
+glGetMinmax ibiip
+glGetMinmaxEXT ibiip
+glGetMinmaxParameterfv iip
+glGetMinmaxParameterfvEXT iip
+glGetMinmaxParameteriv iip
+glGetMinmaxParameterivEXT iip
+glGetMultiTexEnvfvEXT iiip
+glGetMultiTexEnvivEXT iiip
+glGetMultiTexGendvEXT iiip
+glGetMultiTexGenfvEXT iiip
+glGetMultiTexGenivEXT iiip
+glGetMultiTexImageEXT iiiiip
+glGetMultiTexLevelParameterfvEXT iiiip
+glGetMultiTexLevelParameterivEXT iiiip
+glGetMultiTexParameterIivEXT iiip
+glGetMultiTexParameterIuivEXT iiip
+glGetMultiTexParameterfvEXT iiip
+glGetMultiTexParameterivEXT iiip
+glGetMultisamplefv iip
+glGetMultisamplefvNV iip
+glGetNamedBufferParameteri64v iip
+glGetNamedBufferParameteriv iip
+glGetNamedBufferParameterivEXT iip
+glGetNamedBufferParameterui64vNV iip
+glGetNamedBufferPointerv iip
+glGetNamedBufferPointervEXT iip
+glGetNamedBufferSubData ippp
+glGetNamedBufferSubDataEXT ippp
+glGetNamedFramebufferAttachmentParameteriv iiip
+glGetNamedFramebufferAttachmentParameterivEXT iiip
+glGetNamedFramebufferParameterfvAMD iiiiip
+glGetNamedFramebufferParameteriv iip
+glGetNamedFramebufferParameterivEXT iip
+glGetNamedProgramLocalParameterIivEXT iiip
+glGetNamedProgramLocalParameterIuivEXT iiip
+glGetNamedProgramLocalParameterdvEXT iiip
+glGetNamedProgramLocalParameterfvEXT iiip
+glGetNamedProgramStringEXT iiip
+glGetNamedProgramivEXT iiip
+glGetNamedRenderbufferParameteriv iip
+glGetNamedRenderbufferParameterivEXT iip
+glGetNamedStringARB ipipp
+glGetNamedStringivARB ipip
+glGetNextPerfQueryIdINTEL ip
+glGetObjectBufferfvATI iip
+glGetObjectBufferivATI iip
+glGetObjectLabel iiipp
+glGetObjectLabelEXT iiipp
+glGetObjectLabelKHR iiipp
+glGetObjectParameterfvARB iip
+glGetObjectParameterivAPPLE iiip
+glGetObjectParameterivARB iip
+glGetObjectPtrLabel pipp
+glGetObjectPtrLabelKHR pipp
+glGetOcclusionQueryivNV iip
+glGetOcclusionQueryuivNV iip
+glGetPathColorGenfvNV iip
+glGetPathColorGenivNV iip
+glGetPathCommandsNV ip
+glGetPathCoordsNV ip
+glGetPathDashArrayNV ip
+glGetPathLengthNV iii
+glGetPathMetricRangeNV iiiip
+glGetPathMetricsNV iiipiip
+glGetPathParameterfvNV iip
+glGetPathParameterivNV iip
+glGetPathSpacingNV iiipiffip
+glGetPathTexGenfvNV iip
+glGetPathTexGenivNV iip
+glGetPerfCounterInfoINTEL iiipipppppp
+glGetPerfMonitorCounterDataAMD iiipp
+glGetPerfMonitorCounterInfoAMD iiip
+glGetPerfMonitorCounterStringAMD iiipp
+glGetPerfMonitorCountersAMD ippip
+glGetPerfMonitorGroupStringAMD iipp
+glGetPerfMonitorGroupsAMD pip
+glGetPerfQueryDataINTEL iiipp
+glGetPerfQueryIdByNameINTEL pp
+glGetPerfQueryInfoINTEL iippppp
+* glGetPixelMapfv ip
+* glGetPixelMapuiv ip
+* glGetPixelMapusv ip
+glGetPixelMapxv iip
+glGetPixelTexGenParameterfvSGIS ip
+glGetPixelTexGenParameterivSGIS ip
+glGetPixelTransformParameterfvEXT iip
+glGetPixelTransformParameterivEXT iip
+glGetPointerIndexedvEXT iip
+glGetPointeri_vEXT iip
+* glGetPointerv ip
+glGetPointervEXT ip
+glGetPointervKHR ip
+* glGetPolygonStipple p
+glGetProgramBinary iippp
+glGetProgramBinaryOES iippp
+glGetProgramEnvParameterIivNV iip
+glGetProgramEnvParameterIuivNV iip
+glGetProgramEnvParameterdvARB iip
+glGetProgramEnvParameterfvARB iip
+glGetProgramInfoLog iipp
+glGetProgramInterfaceiv iiip
+glGetProgramLocalParameterIivNV iip
+glGetProgramLocalParameterIuivNV iip
+glGetProgramLocalParameterdvARB iip
+glGetProgramLocalParameterfvARB iip
+glGetProgramNamedParameterdvNV iipp
+glGetProgramNamedParameterfvNV iipp
+glGetProgramParameterdvNV iiip
+glGetProgramParameterfvNV iiip
+glGetProgramPipelineInfoLog iipp
+glGetProgramPipelineInfoLogEXT iipp
+glGetProgramPipelineiv iip
+glGetProgramPipelineivEXT iip
+glGetProgramResourceIndex iip
+glGetProgramResourceLocation iip
+glGetProgramResourceLocationIndex iip
+glGetProgramResourceLocationIndexEXT iip
+glGetProgramResourceName iiiipp
+glGetProgramResourcefvNV iiiipipp
+glGetProgramResourceiv iiiipipp
+glGetProgramStageiv iiip
+glGetProgramStringARB iip
+glGetProgramStringNV iip
+glGetProgramSubroutineParameteruivNV iip
+glGetProgramiv iip
+glGetProgramivARB iip
+glGetProgramivNV iip
+glGetQueryBufferObjecti64v iiip
+glGetQueryBufferObjectiv iiip
+glGetQueryBufferObjectui64v iiip
+glGetQueryBufferObjectuiv iiip
+glGetQueryIndexediv iiip
+glGetQueryObjecti64v iip
+glGetQueryObjecti64vEXT iip
+glGetQueryObjectiv iip
+glGetQueryObjectivARB iip
+glGetQueryObjectivEXT iip
+glGetQueryObjectui64v iip
+glGetQueryObjectui64vEXT iip
+glGetQueryObjectuiv iip
+glGetQueryObjectuivARB iip
+glGetQueryObjectuivEXT iip
+glGetQueryiv iip
+glGetQueryivARB iip
+glGetQueryivEXT iip
+glGetRenderbufferParameteriv iip
+glGetRenderbufferParameterivEXT iip
+glGetRenderbufferParameterivOES iip
+glGetSamplerParameterIiv iip
+glGetSamplerParameterIivEXT iip
+glGetSamplerParameterIivOES iip
+glGetSamplerParameterIuiv iip
+glGetSamplerParameterIuivEXT iip
+glGetSamplerParameterIuivOES iip
+glGetSamplerParameterfv iip
+glGetSamplerParameteriv iip
+glGetSemaphoreParameterivNV iip
+glGetSemaphoreParameterui64vEXT iip
+glGetSeparableFilter iiippp
+glGetSeparableFilterEXT iiippp
+glGetShaderInfoLog iipp
+glGetShaderPrecisionFormat iipp
+glGetShaderSource iipp
+glGetShaderSourceARB iipp
+glGetShaderiv iip
+glGetShadingRateImagePaletteNV iip
+glGetShadingRateSampleLocationivNV iiip
+glGetSharpenTexFuncSGIS ip
+glGetStageIndexNV i
+* glGetString i
+glGetStringi ii
+glGetSubroutineIndex iip
+glGetSubroutineUniformLocation iip
+glGetSynciv piipp
+glGetSyncivAPPLE piipp
+glGetTexBumpParameterfvATI ip
+glGetTexBumpParameterivATI ip
+* glGetTexEnvfv iip
+* glGetTexEnviv iip
+glGetTexEnvxv iip
+glGetTexEnvxvOES iip
+glGetTexFilterFuncSGIS iip
+* glGetTexGendv iip
+* glGetTexGenfv iip
+glGetTexGenfvOES iip
+* glGetTexGeniv iip
+glGetTexGenivOES iip
+glGetTexGenxvOES iip
+* glGetTexImage iiiip
+* glGetTexLevelParameterfv iiip
+* glGetTexLevelParameteriv iiip
+glGetTexLevelParameterxvOES iiip
+glGetTexParameterIiv iip
+glGetTexParameterIivEXT iip
+glGetTexParameterIivOES iip
+glGetTexParameterIuiv iip
+glGetTexParameterIuivEXT iip
+glGetTexParameterIuivOES iip
+glGetTexParameterPointervAPPLE iip
+* glGetTexParameterfv iip
+* glGetTexParameteriv iip
+glGetTexParameterxv iip
+glGetTexParameterxvOES iip
+glGetTextureHandleARB i
+glGetTextureHandleIMG i
+glGetTextureHandleNV i
+glGetTextureImage iiiiip
+glGetTextureImageEXT iiiiip
+glGetTextureLevelParameterfv iiip
+glGetTextureLevelParameterfvEXT iiiip
+glGetTextureLevelParameteriv iiip
+glGetTextureLevelParameterivEXT iiiip
+glGetTextureParameterIiv iip
+glGetTextureParameterIivEXT iiip
+glGetTextureParameterIuiv iip
+glGetTextureParameterIuivEXT iiip
+glGetTextureParameterfv iip
+glGetTextureParameterfvEXT iiip
+glGetTextureParameteriv iip
+glGetTextureParameterivEXT iiip
+glGetTextureSamplerHandleARB ii
+glGetTextureSamplerHandleIMG ii
+glGetTextureSamplerHandleNV ii
+glGetTextureSubImage iiiiiiiiiiip
+glGetTrackMatrixivNV iiip
+glGetTransformFeedbackVarying iiipppp
+glGetTransformFeedbackVaryingEXT iiipppp
+glGetTransformFeedbackVaryingNV iip
+glGetTransformFeedbacki64_v iiip
+glGetTransformFeedbacki_v iiip
+glGetTransformFeedbackiv iip
+glGetTranslatedShaderSourceANGLE iipp
+glGetUniformBlockIndex ip
+glGetUniformBufferSizeEXT ii
+glGetUniformIndices iipp
+glGetUniformLocation ip
+glGetUniformLocationARB ip
+glGetUniformOffsetEXT ii
+glGetUniformSubroutineuiv iip
+glGetUniformdv iip
+glGetUniformfv iip
+glGetUniformfvARB iip
+glGetUniformi64vARB iip
+glGetUniformi64vNV iip
+glGetUniformiv iip
+glGetUniformivARB iip
+glGetUniformui64vARB iip
+glGetUniformui64vNV iip
+glGetUniformuiv iip
+glGetUniformuivEXT iip
+glGetUnsignedBytei_vEXT iip
+glGetUnsignedBytevEXT ip
+glGetVariantArrayObjectfvATI iip
+glGetVariantArrayObjectivATI iip
+glGetVariantBooleanvEXT iip
+glGetVariantFloatvEXT iip
+glGetVariantIntegervEXT iip
+glGetVariantPointervEXT iip
+glGetVaryingLocationNV ip
+glGetVertexArrayIndexed64iv iiip
+glGetVertexArrayIndexediv iiip
+glGetVertexArrayIntegeri_vEXT iiip
+glGetVertexArrayIntegervEXT iip
+glGetVertexArrayPointeri_vEXT iiip
+glGetVertexArrayPointervEXT iip
+glGetVertexArrayiv iip
+glGetVertexAttribArrayObjectfvATI iip
+glGetVertexAttribArrayObjectivATI iip
+glGetVertexAttribIiv iip
+glGetVertexAttribIivEXT iip
+glGetVertexAttribIuiv iip
+glGetVertexAttribIuivEXT iip
+glGetVertexAttribLdv iip
+glGetVertexAttribLdvEXT iip
+glGetVertexAttribLi64vNV iip
+glGetVertexAttribLui64vARB iip
+glGetVertexAttribLui64vNV iip
+glGetVertexAttribPointerv iip
+glGetVertexAttribPointervARB iip
+glGetVertexAttribPointervNV iip
+glGetVertexAttribdv iip
+glGetVertexAttribdvARB iip
+glGetVertexAttribdvNV iip
+glGetVertexAttribfv iip
+glGetVertexAttribfvARB iip
+glGetVertexAttribfvNV iip
+glGetVertexAttribiv iip
+glGetVertexAttribivARB iip
+glGetVertexAttribivNV iip
+glGetVideoCaptureStreamdvNV iiip
+glGetVideoCaptureStreamfvNV iiip
+glGetVideoCaptureStreamivNV iiip
+glGetVideoCaptureivNV iip
+glGetVideoi64vNV iip
+glGetVideoivNV iip
+glGetVideoui64vNV iip
+glGetVideouivNV iip
+glGetVkProcAddrNV p
+glGetnColorTable iiiip
+glGetnColorTableARB iiiip
+glGetnCompressedTexImage iiip
+glGetnCompressedTexImageARB iiip
+glGetnConvolutionFilter iiiip
+glGetnConvolutionFilterARB iiiip
+glGetnHistogram ibiiip
+glGetnHistogramARB ibiiip
+glGetnMapdv iiip
+glGetnMapdvARB iiip
+glGetnMapfv iiip
+glGetnMapfvARB iiip
+glGetnMapiv iiip
+glGetnMapivARB iiip
+glGetnMinmax ibiiip
+glGetnMinmaxARB ibiiip
+glGetnPixelMapfv iip
+glGetnPixelMapfvARB iip
+glGetnPixelMapuiv iip
+glGetnPixelMapuivARB iip
+glGetnPixelMapusv iip
+glGetnPixelMapusvARB iip
+glGetnPolygonStipple ip
+glGetnPolygonStippleARB ip
+glGetnSeparableFilter iiiipipp
+glGetnSeparableFilterARB iiiipipp
+glGetnTexImage iiiiip
+glGetnTexImageARB iiiiip
+glGetnUniformdv iiip
+glGetnUniformdvARB iiip
+glGetnUniformfv iiip
+glGetnUniformfvARB iiip
+glGetnUniformfvEXT iiip
+glGetnUniformfvKHR iiip
+glGetnUniformi64vARB iiip
+glGetnUniformiv iiip
+glGetnUniformivARB iiip
+glGetnUniformivEXT iiip
+glGetnUniformivKHR iiip
+glGetnUniformui64vARB iiip
+glGetnUniformuiv iiip
+glGetnUniformuivARB iiip
+glGetnUniformuivKHR iiip
+glGlobalAlphaFactorbSUN c
+glGlobalAlphaFactordSUN d
+glGlobalAlphaFactorfSUN f
+glGlobalAlphaFactoriSUN i
+glGlobalAlphaFactorsSUN s
+glGlobalAlphaFactorubSUN b
+glGlobalAlphaFactoruiSUN i
+glGlobalAlphaFactorusSUN h
+* glHint ii
+glHintPGI ii
+glHistogram iiib
+glHistogramEXT iiib
+glIglooInterfaceSGIX ip
+glImageTransformParameterfHP iif
+glImageTransformParameterfvHP iip
+glImageTransformParameteriHP iii
+glImageTransformParameterivHP iip
+glImportMemoryFdEXT ipii
+glImportMemoryWin32HandleEXT ipip
+glImportMemoryWin32NameEXT ipip
+glImportSemaphoreFdEXT iii
+glImportSemaphoreWin32HandleEXT iip
+glImportSemaphoreWin32NameEXT iip
+glImportSyncEXT ipi
+glIndexFormatNV ii
+glIndexFuncEXT if
+* glIndexMask i
+glIndexMaterialEXT ii
+* glIndexPointer iip
+glIndexPointerEXT iiip
+glIndexPointerListIBM iipi
+* glIndexd d
+* glIndexdv p
+* glIndexf f
+* glIndexfv p
+* glIndexi i
+* glIndexiv p
+* glIndexs s
+* glIndexsv p
+* glIndexub b
+* glIndexubv p
+glIndexxOES i
+glIndexxvOES p
+* glInitNames -
+glInsertComponentEXT iii
+glInsertEventMarkerEXT ip
+glInstrumentsBufferSGIX ip
+* glInterleavedArrays iip
+glInterpolatePathsNV iiif
+glInvalidateBufferData i
+glInvalidateBufferSubData ipp
+glInvalidateFramebuffer iip
+glInvalidateNamedFramebufferData iip
+glInvalidateNamedFramebufferSubData iipiiii
+glInvalidateSubFramebuffer iipiiii
+glInvalidateTexImage ii
+glInvalidateTexSubImage iiiiiiii
+glIsAsyncMarkerSGIX i
+glIsBuffer i
+glIsBufferARB i
+glIsBufferResidentNV i
+glIsCommandListNV i
+* glIsEnabled i
+glIsEnabledIndexedEXT ii
+glIsEnabledi ii
+glIsEnablediEXT ii
+glIsEnablediNV ii
+glIsEnablediOES ii
+glIsFenceAPPLE i
+glIsFenceNV i
+glIsFramebuffer i
+glIsFramebufferEXT i
+glIsFramebufferOES i
+glIsImageHandleResidentARB p
+glIsImageHandleResidentNV p
+* glIsList i
+glIsMemoryObjectEXT i
+glIsNameAMD ii
+glIsNamedBufferResidentNV i
+glIsNamedStringARB ip
+glIsObjectBufferATI i
+glIsOcclusionQueryNV i
+glIsPathNV i
+glIsPointInFillPathNV iiff
+glIsPointInStrokePathNV iff
+glIsProgram i
+glIsProgramARB i
+glIsProgramNV i
+glIsProgramPipeline i
+glIsProgramPipelineEXT i
+glIsQuery i
+glIsQueryARB i
+glIsQueryEXT i
+glIsRenderbuffer i
+glIsRenderbufferEXT i
+glIsRenderbufferOES i
+glIsSampler i
+glIsSemaphoreEXT i
+glIsShader i
+glIsStateNV i
+glIsSync p
+glIsSyncAPPLE p
+* glIsTexture i
+glIsTextureEXT i
+glIsTextureHandleResidentARB p
+glIsTextureHandleResidentNV p
+glIsTransformFeedback i
+glIsTransformFeedbackNV i
+glIsVariantEnabledEXT ii
+glIsVertexArray i
+glIsVertexArrayAPPLE i
+glIsVertexArrayOES i
+glIsVertexAttribEnabledAPPLE ii
+glLGPUCopyImageSubDataNVX iiiiiiiiiiiiiiiii
+glLGPUInterlockNVX -
+glLGPUNamedBufferSubDataNVX iippp
+glLabelObjectEXT iiip
+glLightEnviSGIX ii
+* glLightModelf if
+* glLightModelfv ip
+* glLightModeli ii
+* glLightModeliv ip
+glLightModelx ii
+glLightModelxOES ii
+glLightModelxv ip
+glLightModelxvOES ip
+* glLightf iif
+* glLightfv iip
+* glLighti iii
+* glLightiv iip
+glLightx iii
+glLightxOES iii
+glLightxv iip
+glLightxvOES iip
+* glLineStipple ih
+* glLineWidth f
+glLineWidthx i
+glLineWidthxOES i
+glLinkProgram i
+glLinkProgramARB i
+* glListBase i
+glListDrawCommandsStatesClientNV iippppi
+glListParameterfSGIX iif
+glListParameterfvSGIX iip
+glListParameteriSGIX iii
+glListParameterivSGIX iip
+* glLoadIdentity -
+glLoadIdentityDeformationMapSGIX i
+* glLoadMatrixd p
+* glLoadMatrixf p
+glLoadMatrixx p
+glLoadMatrixxOES p
+* glLoadName i
+glLoadPaletteFromModelViewMatrixOES -
+glLoadProgramNV iiip
+glLoadTransposeMatrixd p
+glLoadTransposeMatrixdARB p
+glLoadTransposeMatrixf p
+glLoadTransposeMatrixfARB p
+glLoadTransposeMatrixxOES p
+glLockArraysEXT ii
+* glLogicOp i
+glMakeBufferNonResidentNV i
+glMakeBufferResidentNV ii
+glMakeImageHandleNonResidentARB p
+glMakeImageHandleNonResidentNV p
+glMakeImageHandleResidentARB pi
+glMakeImageHandleResidentNV pi
+glMakeNamedBufferNonResidentNV i
+glMakeNamedBufferResidentNV ii
+glMakeTextureHandleNonResidentARB p
+glMakeTextureHandleNonResidentNV p
+glMakeTextureHandleResidentARB p
+glMakeTextureHandleResidentNV p
+* glMap1d iddiip
+* glMap1f iffiip
+glMap1xOES iiiiii
+* glMap2d iddiiddiip
+* glMap2f iffiiffiip
+glMap2xOES iiiiiiiiii
+glMapBuffer ii
+glMapBufferARB ii
+glMapBufferOES ii
+glMapBufferRange ippi
+glMapBufferRangeEXT ippi
+glMapControlPointsNV iiiiiiibp
+* glMapGrid1d idd
+* glMapGrid1f iff
+glMapGrid1xOES iii
+* glMapGrid2d iddidd
+* glMapGrid2f iffiff
+glMapGrid2xOES iiiii
+glMapNamedBuffer ii
+glMapNamedBufferEXT ii
+glMapNamedBufferRange ippi
+glMapNamedBufferRangeEXT ippi
+glMapObjectBufferATI i
+glMapParameterfvNV iip
+glMapParameterivNV iip
+glMapTexture2DINTEL iiipp
+glMapVertexAttrib1dAPPLE iiddiip
+glMapVertexAttrib1fAPPLE iiffiip
+glMapVertexAttrib2dAPPLE iiddiiddiip
+glMapVertexAttrib2fAPPLE iiffiiffiip
+* glMaterialf iif
+* glMaterialfv iip
+* glMateriali iii
+* glMaterialiv iip
+glMaterialx iii
+glMaterialxOES iii
+glMaterialxv iip
+glMaterialxvOES iip
+glMatrixFrustumEXT idddddd
+glMatrixIndexPointerARB iiip
+glMatrixIndexPointerOES iiip
+glMatrixIndexubvARB ip
+glMatrixIndexuivARB ip
+glMatrixIndexusvARB ip
+glMatrixLoad3x2fNV ip
+glMatrixLoad3x3fNV ip
+glMatrixLoadIdentityEXT i
+glMatrixLoadTranspose3x3fNV ip
+glMatrixLoadTransposedEXT ip
+glMatrixLoadTransposefEXT ip
+glMatrixLoaddEXT ip
+glMatrixLoadfEXT ip
+* glMatrixMode i
+glMatrixMult3x2fNV ip
+glMatrixMult3x3fNV ip
+glMatrixMultTranspose3x3fNV ip
+glMatrixMultTransposedEXT ip
+glMatrixMultTransposefEXT ip
+glMatrixMultdEXT ip
+glMatrixMultfEXT ip
+glMatrixOrthoEXT idddddd
+glMatrixPopEXT i
+glMatrixPushEXT i
+glMatrixRotatedEXT idddd
+glMatrixRotatefEXT iffff
+glMatrixScaledEXT iddd
+glMatrixScalefEXT ifff
+glMatrixTranslatedEXT iddd
+glMatrixTranslatefEXT ifff
+glMaxActiveShaderCoresARM i
+glMaxShaderCompilerThreadsARB i
+glMaxShaderCompilerThreadsKHR i
+glMemoryBarrier i
+glMemoryBarrierByRegion i
+glMemoryBarrierEXT i
+glMemoryObjectParameterivEXT iip
+glMinSampleShading f
+glMinSampleShadingARB f
+glMinSampleShadingOES f
+glMinmax iib
+glMinmaxEXT iib
+* glMultMatrixd p
+* glMultMatrixf p
+glMultMatrixx p
+glMultMatrixxOES p
+glMultTransposeMatrixd p
+glMultTransposeMatrixdARB p
+glMultTransposeMatrixf p
+glMultTransposeMatrixfARB p
+glMultTransposeMatrixxOES p
+glMultiDrawArrays ippi
+glMultiDrawArraysEXT ippi
+glMultiDrawArraysIndirect ipii
+glMultiDrawArraysIndirectAMD ipii
+glMultiDrawArraysIndirectBindlessCountNV ipiiii
+glMultiDrawArraysIndirectBindlessNV ipiii
+glMultiDrawArraysIndirectCount ippii
+glMultiDrawArraysIndirectCountARB ippii
+glMultiDrawArraysIndirectEXT ipii
+glMultiDrawElementArrayAPPLE ippi
+glMultiDrawElements ipipi
+glMultiDrawElementsBaseVertex ipipip
+glMultiDrawElementsBaseVertexEXT ipipip
+glMultiDrawElementsEXT ipipi
+glMultiDrawElementsIndirect iipii
+glMultiDrawElementsIndirectAMD iipii
+glMultiDrawElementsIndirectBindlessCountNV iipiiii
+glMultiDrawElementsIndirectBindlessNV iipiii
+glMultiDrawElementsIndirectCount iippii
+glMultiDrawElementsIndirectCountARB iippii
+glMultiDrawElementsIndirectEXT iipii
+glMultiDrawMeshTasksIndirectCountNV ppii
+glMultiDrawMeshTasksIndirectNV pii
+glMultiDrawRangeElementArrayAPPLE iiippi
+glMultiModeDrawArraysIBM pppii
+glMultiModeDrawElementsIBM ppipii
+glMultiTexBufferEXT iiii
+glMultiTexCoord1bOES ic
+glMultiTexCoord1bvOES ip
+glMultiTexCoord1d id
+glMultiTexCoord1dARB id
+glMultiTexCoord1dv ip
+glMultiTexCoord1dvARB ip
+glMultiTexCoord1f if
+glMultiTexCoord1fARB if
+glMultiTexCoord1fv ip
+glMultiTexCoord1fvARB ip
+glMultiTexCoord1hNV ih
+glMultiTexCoord1hvNV ip
+glMultiTexCoord1i ii
+glMultiTexCoord1iARB ii
+glMultiTexCoord1iv ip
+glMultiTexCoord1ivARB ip
+glMultiTexCoord1s is
+glMultiTexCoord1sARB is
+glMultiTexCoord1sv ip
+glMultiTexCoord1svARB ip
+glMultiTexCoord1xOES ii
+glMultiTexCoord1xvOES ip
+glMultiTexCoord2bOES icc
+glMultiTexCoord2bvOES ip
+glMultiTexCoord2d idd
+glMultiTexCoord2dARB idd
+glMultiTexCoord2dv ip
+glMultiTexCoord2dvARB ip
+glMultiTexCoord2f iff
+glMultiTexCoord2fARB iff
+glMultiTexCoord2fv ip
+glMultiTexCoord2fvARB ip
+glMultiTexCoord2hNV ihh
+glMultiTexCoord2hvNV ip
+glMultiTexCoord2i iii
+glMultiTexCoord2iARB iii
+glMultiTexCoord2iv ip
+glMultiTexCoord2ivARB ip
+glMultiTexCoord2s iss
+glMultiTexCoord2sARB iss
+glMultiTexCoord2sv ip
+glMultiTexCoord2svARB ip
+glMultiTexCoord2xOES iii
+glMultiTexCoord2xvOES ip
+glMultiTexCoord3bOES iccc
+glMultiTexCoord3bvOES ip
+glMultiTexCoord3d iddd
+glMultiTexCoord3dARB iddd
+glMultiTexCoord3dv ip
+glMultiTexCoord3dvARB ip
+glMultiTexCoord3f ifff
+glMultiTexCoord3fARB ifff
+glMultiTexCoord3fv ip
+glMultiTexCoord3fvARB ip
+glMultiTexCoord3hNV ihhh
+glMultiTexCoord3hvNV ip
+glMultiTexCoord3i iiii
+glMultiTexCoord3iARB iiii
+glMultiTexCoord3iv ip
+glMultiTexCoord3ivARB ip
+glMultiTexCoord3s isss
+glMultiTexCoord3sARB isss
+glMultiTexCoord3sv ip
+glMultiTexCoord3svARB ip
+glMultiTexCoord3xOES iiii
+glMultiTexCoord3xvOES ip
+glMultiTexCoord4bOES icccc
+glMultiTexCoord4bvOES ip
+glMultiTexCoord4d idddd
+glMultiTexCoord4dARB idddd
+glMultiTexCoord4dv ip
+glMultiTexCoord4dvARB ip
+glMultiTexCoord4f iffff
+glMultiTexCoord4fARB iffff
+glMultiTexCoord4fv ip
+glMultiTexCoord4fvARB ip
+glMultiTexCoord4hNV ihhhh
+glMultiTexCoord4hvNV ip
+glMultiTexCoord4i iiiii
+glMultiTexCoord4iARB iiiii
+glMultiTexCoord4iv ip
+glMultiTexCoord4ivARB ip
+glMultiTexCoord4s issss
+glMultiTexCoord4sARB issss
+glMultiTexCoord4sv ip
+glMultiTexCoord4svARB ip
+glMultiTexCoord4x iiiii
+glMultiTexCoord4xOES iiiii
+glMultiTexCoord4xvOES ip
+glMultiTexCoordP1ui iii
+glMultiTexCoordP1uiv iip
+glMultiTexCoordP2ui iii
+glMultiTexCoordP2uiv iip
+glMultiTexCoordP3ui iii
+glMultiTexCoordP3uiv iip
+glMultiTexCoordP4ui iii
+glMultiTexCoordP4uiv iip
+glMultiTexCoordPointerEXT iiiip
+glMultiTexEnvfEXT iiif
+glMultiTexEnvfvEXT iiip
+glMultiTexEnviEXT iiii
+glMultiTexEnvivEXT iiip
+glMultiTexGendEXT iiid
+glMultiTexGendvEXT iiip
+glMultiTexGenfEXT iiif
+glMultiTexGenfvEXT iiip
+glMultiTexGeniEXT iiii
+glMultiTexGenivEXT iiip
+glMultiTexImage1DEXT iiiiiiiip
+glMultiTexImage2DEXT iiiiiiiiip
+glMultiTexImage3DEXT iiiiiiiiiip
+glMultiTexParameterIivEXT iiip
+glMultiTexParameterIuivEXT iiip
+glMultiTexParameterfEXT iiif
+glMultiTexParameterfvEXT iiip
+glMultiTexParameteriEXT iiii
+glMultiTexParameterivEXT iiip
+glMultiTexRenderbufferEXT iii
+glMultiTexSubImage1DEXT iiiiiiip
+glMultiTexSubImage2DEXT iiiiiiiiip
+glMultiTexSubImage3DEXT iiiiiiiiiiip
+glMulticastBarrierNV -
+glMulticastBlitFramebufferNV iiiiiiiiiiii
+glMulticastBufferSubDataNV iippp
+glMulticastCopyBufferSubDataNV iiiippp
+glMulticastCopyImageSubDataNV iiiiiiiiiiiiiiiii
+glMulticastFramebufferSampleLocationsfvNV iiiip
+glMulticastGetQueryObjecti64vNV iiip
+glMulticastGetQueryObjectivNV iiip
+glMulticastGetQueryObjectui64vNV iiip
+glMulticastGetQueryObjectuivNV iiip
+glMulticastScissorArrayvNVX iiip
+glMulticastViewportArrayvNVX iiip
+glMulticastViewportPositionWScaleNVX iiff
+glMulticastWaitSyncNV ii
+glNamedBufferAttachMemoryNV iip
+glNamedBufferData ippi
+glNamedBufferDataEXT ippi
+glNamedBufferPageCommitmentARB ippb
+glNamedBufferPageCommitmentEXT ippb
+glNamedBufferPageCommitmentMemNV ippipb
+glNamedBufferStorage ippi
+glNamedBufferStorageEXT ippi
+glNamedBufferStorageExternalEXT ipppi
+glNamedBufferStorageMemEXT ipip
+glNamedBufferSubData ippp
+glNamedBufferSubDataEXT ippp
+glNamedCopyBufferSubDataEXT iippp
+glNamedFramebufferDrawBuffer ii
+glNamedFramebufferDrawBuffers iip
+glNamedFramebufferParameteri iii
+glNamedFramebufferParameteriEXT iii
+glNamedFramebufferReadBuffer ii
+glNamedFramebufferRenderbuffer iiii
+glNamedFramebufferRenderbufferEXT iiii
+glNamedFramebufferSampleLocationsfvARB iiip
+glNamedFramebufferSampleLocationsfvNV iiip
+glNamedFramebufferSamplePositionsfvAMD iiip
+glNamedFramebufferTexture iiii
+glNamedFramebufferTexture1DEXT iiiii
+glNamedFramebufferTexture2DEXT iiiii
+glNamedFramebufferTexture3DEXT iiiiii
+glNamedFramebufferTextureEXT iiii
+glNamedFramebufferTextureFaceEXT iiiii
+glNamedFramebufferTextureLayer iiiii
+glNamedFramebufferTextureLayerEXT iiiii
+glNamedFramebufferTextureMultiviewOVR iiiiii
+glNamedProgramLocalParameter4dEXT iiidddd
+glNamedProgramLocalParameter4dvEXT iiip
+glNamedProgramLocalParameter4fEXT iiiffff
+glNamedProgramLocalParameter4fvEXT iiip
+glNamedProgramLocalParameterI4iEXT iiiiiii
+glNamedProgramLocalParameterI4ivEXT iiip
+glNamedProgramLocalParameterI4uiEXT iiiiiii
+glNamedProgramLocalParameterI4uivEXT iiip
+glNamedProgramLocalParameters4fvEXT iiiip
+glNamedProgramLocalParametersI4ivEXT iiiip
+glNamedProgramLocalParametersI4uivEXT iiiip
+glNamedProgramStringEXT iiiip
+glNamedRenderbufferStorage iiii
+glNamedRenderbufferStorageEXT iiii
+glNamedRenderbufferStorageMultisample iiiii
+glNamedRenderbufferStorageMultisampleAdvancedAMD iiiiii
+glNamedRenderbufferStorageMultisampleCoverageEXT iiiiii
+glNamedRenderbufferStorageMultisampleEXT iiiii
+glNamedStringARB iipip
+* glNewList ii
+glNewObjectBufferATI ipi
+* glNormal3b ccc
+* glNormal3bv p
+* glNormal3d ddd
+* glNormal3dv p
+* glNormal3f fff
+glNormal3fVertex3fSUN ffffff
+glNormal3fVertex3fvSUN pp
+* glNormal3fv p
+glNormal3hNV hhh
+glNormal3hvNV p
+* glNormal3i iii
+* glNormal3iv p
+* glNormal3s sss
+* glNormal3sv p
+glNormal3x iii
+glNormal3xOES iii
+glNormal3xvOES p
+glNormalFormatNV ii
+glNormalP3ui ii
+glNormalP3uiv ip
+* glNormalPointer iip
+glNormalPointerEXT iiip
+glNormalPointerListIBM iipi
+glNormalPointervINTEL ip
+glNormalStream3bATI iccc
+glNormalStream3bvATI ip
+glNormalStream3dATI iddd
+glNormalStream3dvATI ip
+glNormalStream3fATI ifff
+glNormalStream3fvATI ip
+glNormalStream3iATI iiii
+glNormalStream3ivATI ip
+glNormalStream3sATI isss
+glNormalStream3svATI ip
+glObjectLabel iiip
+glObjectLabelKHR iiip
+glObjectPtrLabel pip
+glObjectPtrLabelKHR pip
+glObjectPurgeableAPPLE iii
+glObjectUnpurgeableAPPLE iii
+* glOrtho dddddd
+glOrthof ffffff
+glOrthofOES ffffff
+glOrthox iiiiii
+glOrthoxOES iiiiii
+glPNTrianglesfATI if
+glPNTrianglesiATI ii
+glPassTexCoordATI iii
+* glPassThrough f
+glPassThroughxOES i
+glPatchParameterfv ip
+glPatchParameteri ii
+glPatchParameteriEXT ii
+glPatchParameteriOES ii
+glPathColorGenNV iiip
+glPathCommandsNV iipiip
+glPathCoordsNV iiip
+glPathCoverDepthFuncNV i
+glPathDashArrayNV iip
+glPathFogGenNV i
+glPathGlyphIndexArrayNV iipiiiif
+glPathGlyphIndexRangeNV ipiifp
+glPathGlyphRangeNV iipiiiiif
+glPathGlyphsNV iipiiipiif
+glPathMemoryGlyphIndexArrayNV iippiiiif
+glPathParameterfNV iif
+glPathParameterfvNV iip
+glPathParameteriNV iii
+glPathParameterivNV iip
+glPathStencilDepthOffsetNV ff
+glPathStencilFuncNV iii
+glPathStringNV iiip
+glPathSubCommandsNV iiiipiip
+glPathSubCoordsNV iiiip
+glPathTexGenNV iiip
+glPauseTransformFeedback -
+glPauseTransformFeedbackNV -
+glPixelDataRangeNV iip
+* glPixelMapfv iip
+* glPixelMapuiv iip
+* glPixelMapusv iip
+glPixelMapx iip
+* glPixelStoref if
+* glPixelStorei ii
+glPixelStorex ii
+glPixelTexGenParameterfSGIS if
+glPixelTexGenParameterfvSGIS ip
+glPixelTexGenParameteriSGIS ii
+glPixelTexGenParameterivSGIS ip
+glPixelTexGenSGIX i
+* glPixelTransferf if
+* glPixelTransferi ii
+glPixelTransferxOES ii
+glPixelTransformParameterfEXT iif
+glPixelTransformParameterfvEXT iip
+glPixelTransformParameteriEXT iii
+glPixelTransformParameterivEXT iip
+* glPixelZoom ff
+glPixelZoomxOES ii
+glPointAlongPathNV iiifpppp
+glPointParameterf if
+glPointParameterfARB if
+glPointParameterfEXT if
+glPointParameterfSGIS if
+glPointParameterfv ip
+glPointParameterfvARB ip
+glPointParameterfvEXT ip
+glPointParameterfvSGIS ip
+glPointParameteri ii
+glPointParameteriNV ii
+glPointParameteriv ip
+glPointParameterivNV ip
+glPointParameterx ii
+glPointParameterxOES ii
+glPointParameterxv ip
+glPointParameterxvOES ip
+* glPointSize f
+glPointSizePointerOES iip
+glPointSizex i
+glPointSizexOES i
+glPollAsyncSGIX p
+glPollInstrumentsSGIX p
+* glPolygonMode ii
+glPolygonModeNV ii
+* glPolygonOffset ff
+glPolygonOffsetClamp fff
+glPolygonOffsetClampEXT fff
+glPolygonOffsetEXT ff
+glPolygonOffsetx ii
+glPolygonOffsetxOES ii
+* glPolygonStipple p
+* glPopAttrib -
+* glPopClientAttrib -
+glPopDebugGroup -
+glPopDebugGroupKHR -
+glPopGroupMarkerEXT -
+* glPopMatrix -
+* glPopName -
+glPresentFrameDualFillNV ipiiiiiiiiiii
+glPresentFrameKeyedNV ipiiiiiiiii
+glPrimitiveBoundingBox ffffffff
+glPrimitiveBoundingBoxARB ffffffff
+glPrimitiveBoundingBoxEXT ffffffff
+glPrimitiveBoundingBoxOES ffffffff
+glPrimitiveRestartIndex i
+glPrimitiveRestartIndexNV i
+glPrimitiveRestartNV -
+* glPrioritizeTextures ipp
+glPrioritizeTexturesEXT ipp
+glPrioritizeTexturesxOES ipp
+glProgramBinary iipi
+glProgramBinaryOES iipi
+glProgramBufferParametersIivNV iiiip
+glProgramBufferParametersIuivNV iiiip
+glProgramBufferParametersfvNV iiiip
+glProgramEnvParameter4dARB iidddd
+glProgramEnvParameter4dvARB iip
+glProgramEnvParameter4fARB iiffff
+glProgramEnvParameter4fvARB iip
+glProgramEnvParameterI4iNV iiiiii
+glProgramEnvParameterI4ivNV iip
+glProgramEnvParameterI4uiNV iiiiii
+glProgramEnvParameterI4uivNV iip
+glProgramEnvParameters4fvEXT iiip
+glProgramEnvParametersI4ivNV iiip
+glProgramEnvParametersI4uivNV iiip
+glProgramLocalParameter4dARB iidddd
+glProgramLocalParameter4dvARB iip
+glProgramLocalParameter4fARB iiffff
+glProgramLocalParameter4fvARB iip
+glProgramLocalParameterI4iNV iiiiii
+glProgramLocalParameterI4ivNV iip
+glProgramLocalParameterI4uiNV iiiiii
+glProgramLocalParameterI4uivNV iip
+glProgramLocalParameters4fvEXT iiip
+glProgramLocalParametersI4ivNV iiip
+glProgramLocalParametersI4uivNV iiip
+glProgramNamedParameter4dNV iipdddd
+glProgramNamedParameter4dvNV iipp
+glProgramNamedParameter4fNV iipffff
+glProgramNamedParameter4fvNV iipp
+glProgramParameter4dNV iidddd
+glProgramParameter4dvNV iip
+glProgramParameter4fNV iiffff
+glProgramParameter4fvNV iip
+glProgramParameteri iii
+glProgramParameteriARB iii
+glProgramParameteriEXT iii
+glProgramParameters4dvNV iiip
+glProgramParameters4fvNV iiip
+glProgramPathFragmentInputGenNV iiiip
+glProgramStringARB iiip
+glProgramSubroutineParametersuivNV iip
+glProgramUniform1d iid
+glProgramUniform1dEXT iid
+glProgramUniform1dv iiip
+glProgramUniform1dvEXT iiip
+glProgramUniform1f iif
+glProgramUniform1fEXT iif
+glProgramUniform1fv iiip
+glProgramUniform1fvEXT iiip
+glProgramUniform1i iii
+glProgramUniform1i64ARB iip
+glProgramUniform1i64NV iip
+glProgramUniform1i64vARB iiip
+glProgramUniform1i64vNV iiip
+glProgramUniform1iEXT iii
+glProgramUniform1iv iiip
+glProgramUniform1ivEXT iiip
+glProgramUniform1ui iii
+glProgramUniform1ui64ARB iip
+glProgramUniform1ui64NV iip
+glProgramUniform1ui64vARB iiip
+glProgramUniform1ui64vNV iiip
+glProgramUniform1uiEXT iii
+glProgramUniform1uiv iiip
+glProgramUniform1uivEXT iiip
+glProgramUniform2d iidd
+glProgramUniform2dEXT iidd
+glProgramUniform2dv iiip
+glProgramUniform2dvEXT iiip
+glProgramUniform2f iiff
+glProgramUniform2fEXT iiff
+glProgramUniform2fv iiip
+glProgramUniform2fvEXT iiip
+glProgramUniform2i iiii
+glProgramUniform2i64ARB iipp
+glProgramUniform2i64NV iipp
+glProgramUniform2i64vARB iiip
+glProgramUniform2i64vNV iiip
+glProgramUniform2iEXT iiii
+glProgramUniform2iv iiip
+glProgramUniform2ivEXT iiip
+glProgramUniform2ui iiii
+glProgramUniform2ui64ARB iipp
+glProgramUniform2ui64NV iipp
+glProgramUniform2ui64vARB iiip
+glProgramUniform2ui64vNV iiip
+glProgramUniform2uiEXT iiii
+glProgramUniform2uiv iiip
+glProgramUniform2uivEXT iiip
+glProgramUniform3d iiddd
+glProgramUniform3dEXT iiddd
+glProgramUniform3dv iiip
+glProgramUniform3dvEXT iiip
+glProgramUniform3f iifff
+glProgramUniform3fEXT iifff
+glProgramUniform3fv iiip
+glProgramUniform3fvEXT iiip
+glProgramUniform3i iiiii
+glProgramUniform3i64ARB iippp
+glProgramUniform3i64NV iippp
+glProgramUniform3i64vARB iiip
+glProgramUniform3i64vNV iiip
+glProgramUniform3iEXT iiiii
+glProgramUniform3iv iiip
+glProgramUniform3ivEXT iiip
+glProgramUniform3ui iiiii
+glProgramUniform3ui64ARB iippp
+glProgramUniform3ui64NV iippp
+glProgramUniform3ui64vARB iiip
+glProgramUniform3ui64vNV iiip
+glProgramUniform3uiEXT iiiii
+glProgramUniform3uiv iiip
+glProgramUniform3uivEXT iiip
+glProgramUniform4d iidddd
+glProgramUniform4dEXT iidddd
+glProgramUniform4dv iiip
+glProgramUniform4dvEXT iiip
+glProgramUniform4f iiffff
+glProgramUniform4fEXT iiffff
+glProgramUniform4fv iiip
+glProgramUniform4fvEXT iiip
+glProgramUniform4i iiiiii
+glProgramUniform4i64ARB iipppp
+glProgramUniform4i64NV iipppp
+glProgramUniform4i64vARB iiip
+glProgramUniform4i64vNV iiip
+glProgramUniform4iEXT iiiiii
+glProgramUniform4iv iiip
+glProgramUniform4ivEXT iiip
+glProgramUniform4ui iiiiii
+glProgramUniform4ui64ARB iipppp
+glProgramUniform4ui64NV iipppp
+glProgramUniform4ui64vARB iiip
+glProgramUniform4ui64vNV iiip
+glProgramUniform4uiEXT iiiiii
+glProgramUniform4uiv iiip
+glProgramUniform4uivEXT iiip
+glProgramUniformHandleui64ARB iip
+glProgramUniformHandleui64IMG iip
+glProgramUniformHandleui64NV iip
+glProgramUniformHandleui64vARB iiip
+glProgramUniformHandleui64vIMG iiip
+glProgramUniformHandleui64vNV iiip
+glProgramUniformMatrix2dv iiibp
+glProgramUniformMatrix2dvEXT iiibp
+glProgramUniformMatrix2fv iiibp
+glProgramUniformMatrix2fvEXT iiibp
+glProgramUniformMatrix2x3dv iiibp
+glProgramUniformMatrix2x3dvEXT iiibp
+glProgramUniformMatrix2x3fv iiibp
+glProgramUniformMatrix2x3fvEXT iiibp
+glProgramUniformMatrix2x4dv iiibp
+glProgramUniformMatrix2x4dvEXT iiibp
+glProgramUniformMatrix2x4fv iiibp
+glProgramUniformMatrix2x4fvEXT iiibp
+glProgramUniformMatrix3dv iiibp
+glProgramUniformMatrix3dvEXT iiibp
+glProgramUniformMatrix3fv iiibp
+glProgramUniformMatrix3fvEXT iiibp
+glProgramUniformMatrix3x2dv iiibp
+glProgramUniformMatrix3x2dvEXT iiibp
+glProgramUniformMatrix3x2fv iiibp
+glProgramUniformMatrix3x2fvEXT iiibp
+glProgramUniformMatrix3x4dv iiibp
+glProgramUniformMatrix3x4dvEXT iiibp
+glProgramUniformMatrix3x4fv iiibp
+glProgramUniformMatrix3x4fvEXT iiibp
+glProgramUniformMatrix4dv iiibp
+glProgramUniformMatrix4dvEXT iiibp
+glProgramUniformMatrix4fv iiibp
+glProgramUniformMatrix4fvEXT iiibp
+glProgramUniformMatrix4x2dv iiibp
+glProgramUniformMatrix4x2dvEXT iiibp
+glProgramUniformMatrix4x2fv iiibp
+glProgramUniformMatrix4x2fvEXT iiibp
+glProgramUniformMatrix4x3dv iiibp
+glProgramUniformMatrix4x3dvEXT iiibp
+glProgramUniformMatrix4x3fv iiibp
+glProgramUniformMatrix4x3fvEXT iiibp
+glProgramUniformui64NV iip
+glProgramUniformui64vNV iiip
+glProgramVertexLimitNV ii
+glProvokingVertex i
+glProvokingVertexEXT i
+* glPushAttrib i
+* glPushClientAttrib i
+glPushClientAttribDefaultEXT i
+glPushDebugGroup iiip
+glPushDebugGroupKHR iiip
+glPushGroupMarkerEXT ip
+* glPushMatrix -
+* glPushName i
+glQueryCounter ii
+glQueryCounterEXT ii
+glQueryMatrixxOES pp
+glQueryObjectParameteruiAMD iiii
+glQueryResourceNV iiip
+glQueryResourceTagNV ip
+* glRasterPos2d dd
+* glRasterPos2dv p
+* glRasterPos2f ff
+* glRasterPos2fv p
+* glRasterPos2i ii
+* glRasterPos2iv p
+* glRasterPos2s ss
+* glRasterPos2sv p
+glRasterPos2xOES ii
+glRasterPos2xvOES p
+* glRasterPos3d ddd
+* glRasterPos3dv p
+* glRasterPos3f fff
+* glRasterPos3fv p
+* glRasterPos3i iii
+* glRasterPos3iv p
+* glRasterPos3s sss
+* glRasterPos3sv p
+glRasterPos3xOES iii
+glRasterPos3xvOES p
+* glRasterPos4d dddd
+* glRasterPos4dv p
+* glRasterPos4f ffff
+* glRasterPos4fv p
+* glRasterPos4i iiii
+* glRasterPos4iv p
+* glRasterPos4s ssss
+* glRasterPos4sv p
+glRasterPos4xOES iiii
+glRasterPos4xvOES p
+glRasterSamplesEXT ib
+* glReadBuffer i
+glReadBufferIndexedEXT ii
+glReadBufferNV i
+glReadInstrumentsSGIX i
+* glReadPixels iiiiiip
+glReadnPixels iiiiiiip
+glReadnPixelsARB iiiiiiip
+glReadnPixelsEXT iiiiiiip
+glReadnPixelsKHR iiiiiiip
+* glRectd dddd
+* glRectdv pp
+* glRectf ffff
+* glRectfv pp
+* glRecti iiii
+* glRectiv pp
+* glRects ssss
+* glRectsv pp
+glRectxOES iiii
+glRectxvOES pp
+glReferencePlaneSGIX p
+glReleaseKeyedMutexWin32EXT ip
+glReleaseShaderCompiler -
+glRenderGpuMaskNV i
+* glRenderMode i
+glRenderbufferStorage iiii
+glRenderbufferStorageEXT iiii
+glRenderbufferStorageMultisample iiiii
+glRenderbufferStorageMultisampleANGLE iiiii
+glRenderbufferStorageMultisampleAPPLE iiiii
+glRenderbufferStorageMultisampleAdvancedAMD iiiiii
+glRenderbufferStorageMultisampleCoverageNV iiiiii
+glRenderbufferStorageMultisampleEXT iiiii
+glRenderbufferStorageMultisampleIMG iiiii
+glRenderbufferStorageMultisampleNV iiiii
+glRenderbufferStorageOES iiii
+glReplacementCodePointerSUN iip
+glReplacementCodeubSUN b
+glReplacementCodeubvSUN p
+glReplacementCodeuiColor3fVertex3fSUN iffffff
+glReplacementCodeuiColor3fVertex3fvSUN ppp
+glReplacementCodeuiColor4fNormal3fVertex3fSUN iffffffffff
+glReplacementCodeuiColor4fNormal3fVertex3fvSUN pppp
+glReplacementCodeuiColor4ubVertex3fSUN ibbbbfff
+glReplacementCodeuiColor4ubVertex3fvSUN ppp
+glReplacementCodeuiNormal3fVertex3fSUN iffffff
+glReplacementCodeuiNormal3fVertex3fvSUN ppp
+glReplacementCodeuiSUN i
+glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fSUN iffffffffffff
+glReplacementCodeuiTexCoord2fColor4fNormal3fVertex3fvSUN ppppp
+glReplacementCodeuiTexCoord2fNormal3fVertex3fSUN iffffffff
+glReplacementCodeuiTexCoord2fNormal3fVertex3fvSUN pppp
+glReplacementCodeuiTexCoord2fVertex3fSUN ifffff
+glReplacementCodeuiTexCoord2fVertex3fvSUN ppp
+glReplacementCodeuiVertex3fSUN ifff
+glReplacementCodeuiVertex3fvSUN pp
+glReplacementCodeuivSUN p
+glReplacementCodeusSUN h
+glReplacementCodeusvSUN p
+glRequestResidentProgramsNV ip
+glResetHistogram i
+glResetHistogramEXT i
+glResetMemoryObjectParameterNV ii
+glResetMinmax i
+glResetMinmaxEXT i
+glResizeBuffersMESA -
+glResolveDepthValuesNV -
+glResolveMultisampleFramebufferAPPLE -
+glResumeTransformFeedback -
+glResumeTransformFeedbackNV -
+* glRotated dddd
+* glRotatef ffff
+glRotatex iiii
+glRotatexOES iiii
+glSampleCoverage fb
+glSampleCoverageARB fb
+glSampleCoveragex ib
+glSampleCoveragexOES ib
+glSampleMapATI iii
+glSampleMaskEXT fb
+glSampleMaskIndexedNV ii
+glSampleMaskSGIS fb
+glSampleMaski ii
+glSamplePatternEXT i
+glSamplePatternSGIS i
+glSamplerParameterIiv iip
+glSamplerParameterIivEXT iip
+glSamplerParameterIivOES iip
+glSamplerParameterIuiv iip
+glSamplerParameterIuivEXT iip
+glSamplerParameterIuivOES iip
+glSamplerParameterf iif
+glSamplerParameterfv iip
+glSamplerParameteri iii
+glSamplerParameteriv iip
+* glScaled ddd
+* glScalef fff
+glScalex iii
+glScalexOES iii
+* glScissor iiii
+glScissorArrayv iip
+glScissorArrayvNV iip
+glScissorArrayvOES iip
+glScissorExclusiveArrayvNV iip
+glScissorExclusiveNV iiii
+glScissorIndexed iiiii
+glScissorIndexedNV iiiii
+glScissorIndexedOES iiiii
+glScissorIndexedv ip
+glScissorIndexedvNV ip
+glScissorIndexedvOES ip
+glSecondaryColor3b ccc
+glSecondaryColor3bEXT ccc
+glSecondaryColor3bv p
+glSecondaryColor3bvEXT p
+glSecondaryColor3d ddd
+glSecondaryColor3dEXT ddd
+glSecondaryColor3dv p
+glSecondaryColor3dvEXT p
+glSecondaryColor3f fff
+glSecondaryColor3fEXT fff
+glSecondaryColor3fv p
+glSecondaryColor3fvEXT p
+glSecondaryColor3hNV hhh
+glSecondaryColor3hvNV p
+glSecondaryColor3i iii
+glSecondaryColor3iEXT iii
+glSecondaryColor3iv p
+glSecondaryColor3ivEXT p
+glSecondaryColor3s sss
+glSecondaryColor3sEXT sss
+glSecondaryColor3sv p
+glSecondaryColor3svEXT p
+glSecondaryColor3ub bbb
+glSecondaryColor3ubEXT bbb
+glSecondaryColor3ubv p
+glSecondaryColor3ubvEXT p
+glSecondaryColor3ui iii
+glSecondaryColor3uiEXT iii
+glSecondaryColor3uiv p
+glSecondaryColor3uivEXT p
+glSecondaryColor3us hhh
+glSecondaryColor3usEXT hhh
+glSecondaryColor3usv p
+glSecondaryColor3usvEXT p
+glSecondaryColorFormatNV iii
+glSecondaryColorP3ui ii
+glSecondaryColorP3uiv ip
+glSecondaryColorPointer iiip
+glSecondaryColorPointerEXT iiip
+glSecondaryColorPointerListIBM iiipi
+* glSelectBuffer ip
+glSelectPerfMonitorCountersAMD ibiip
+glSemaphoreParameterivNV iip
+glSemaphoreParameterui64vEXT iip
+glSeparableFilter2D iiiiiipp
+glSeparableFilter2DEXT iiiiiipp
+glSetFenceAPPLE i
+glSetFenceNV ii
+glSetFragmentShaderConstantATI ip
+glSetInvariantEXT iip
+glSetLocalConstantEXT iip
+glSetMultisamplefvAMD iip
+* glShadeModel i
+glShaderBinary ipipi
+glShaderOp1EXT iii
+glShaderOp2EXT iiii
+glShaderOp3EXT iiiii
+glShaderSource iipp
+glShaderSourceARB iipp
+glShaderStorageBlockBinding iii
+glShadingRateCombinerOpsEXT ii
+glShadingRateEXT i
+glShadingRateImageBarrierNV b
+glShadingRateImagePaletteNV iiip
+glShadingRateQCOM i
+glShadingRateSampleOrderCustomNV iip
+glShadingRateSampleOrderNV i
+glSharpenTexFuncSGIS iip
+glSignalSemaphoreEXT iipipp
+glSignalSemaphoreui64NVX iipp
+glSignalVkFenceNV p
+glSignalVkSemaphoreNV p
+glSpecializeShader ipipp
+glSpecializeShaderARB ipipp
+glSpriteParameterfSGIX if
+glSpriteParameterfvSGIX ip
+glSpriteParameteriSGIX ii
+glSpriteParameterivSGIX ip
+glStartInstrumentsSGIX -
+glStartTilingQCOM iiiii
+glStateCaptureNV ii
+glStencilClearTagEXT ii
+glStencilFillPathInstancedNV iipiiiip
+glStencilFillPathNV iii
+* glStencilFunc iii
+glStencilFuncSeparate iiii
+glStencilFuncSeparateATI iiii
+* glStencilMask i
+glStencilMaskSeparate ii
+* glStencilOp iii
+glStencilOpSeparate iiii
+glStencilOpSeparateATI iiii
+glStencilOpValueAMD ii
+glStencilStrokePathInstancedNV iipiiiip
+glStencilStrokePathNV iii
+glStencilThenCoverFillPathInstancedNV iipiiiiip
+glStencilThenCoverFillPathNV iiii
+glStencilThenCoverStrokePathInstancedNV iipiiiiip
+glStencilThenCoverStrokePathNV iiii
+glStopInstrumentsSGIX i
+glStringMarkerGREMEDY ip
+glSubpixelPrecisionBiasNV ii
+glSwizzleEXT iiiiii
+glSyncTextureINTEL i
+glTagSampleBufferSGIX -
+glTangent3bEXT ccc
+glTangent3bvEXT p
+glTangent3dEXT ddd
+glTangent3dvEXT p
+glTangent3fEXT fff
+glTangent3fvEXT p
+glTangent3iEXT iii
+glTangent3ivEXT p
+glTangent3sEXT sss
+glTangent3svEXT p
+glTangentPointerEXT iip
+glTbufferMask3DFX i
+glTessellationFactorAMD f
+glTessellationModeAMD i
+glTestFenceAPPLE i
+glTestFenceNV i
+glTestObjectAPPLE ii
+glTexAttachMemoryNV iip
+glTexBuffer iii
+glTexBufferARB iii
+glTexBufferEXT iii
+glTexBufferOES iii
+glTexBufferRange iiipp
+glTexBufferRangeEXT iiipp
+glTexBufferRangeOES iiipp
+glTexBumpParameterfvATI ip
+glTexBumpParameterivATI ip
+glTexCoord1bOES c
+glTexCoord1bvOES p
+* glTexCoord1d d
+* glTexCoord1dv p
+* glTexCoord1f f
+* glTexCoord1fv p
+glTexCoord1hNV h
+glTexCoord1hvNV p
+* glTexCoord1i i
+* glTexCoord1iv p
+* glTexCoord1s s
+* glTexCoord1sv p
+glTexCoord1xOES i
+glTexCoord1xvOES p
+glTexCoord2bOES cc
+glTexCoord2bvOES p
+* glTexCoord2d dd
+* glTexCoord2dv p
+* glTexCoord2f ff
+glTexCoord2fColor3fVertex3fSUN ffffffff
+glTexCoord2fColor3fVertex3fvSUN ppp
+glTexCoord2fColor4fNormal3fVertex3fSUN ffffffffffff
+glTexCoord2fColor4fNormal3fVertex3fvSUN pppp
+glTexCoord2fColor4ubVertex3fSUN ffbbbbfff
+glTexCoord2fColor4ubVertex3fvSUN ppp
+glTexCoord2fNormal3fVertex3fSUN ffffffff
+glTexCoord2fNormal3fVertex3fvSUN ppp
+glTexCoord2fVertex3fSUN fffff
+glTexCoord2fVertex3fvSUN pp
+* glTexCoord2fv p
+glTexCoord2hNV hh
+glTexCoord2hvNV p
+* glTexCoord2i ii
+* glTexCoord2iv p
+* glTexCoord2s ss
+* glTexCoord2sv p
+glTexCoord2xOES ii
+glTexCoord2xvOES p
+glTexCoord3bOES ccc
+glTexCoord3bvOES p
+* glTexCoord3d ddd
+* glTexCoord3dv p
+* glTexCoord3f fff
+* glTexCoord3fv p
+glTexCoord3hNV hhh
+glTexCoord3hvNV p
+* glTexCoord3i iii
+* glTexCoord3iv p
+* glTexCoord3s sss
+* glTexCoord3sv p
+glTexCoord3xOES iii
+glTexCoord3xvOES p
+glTexCoord4bOES cccc
+glTexCoord4bvOES p
+* glTexCoord4d dddd
+* glTexCoord4dv p
+* glTexCoord4f ffff
+glTexCoord4fColor4fNormal3fVertex4fSUN fffffffffffffff
+glTexCoord4fColor4fNormal3fVertex4fvSUN pppp
+glTexCoord4fVertex4fSUN ffffffff
+glTexCoord4fVertex4fvSUN pp
+* glTexCoord4fv p
+glTexCoord4hNV hhhh
+glTexCoord4hvNV p
+* glTexCoord4i iiii
+* glTexCoord4iv p
+* glTexCoord4s ssss
+* glTexCoord4sv p
+glTexCoord4xOES iiii
+glTexCoord4xvOES p
+glTexCoordFormatNV iii
+glTexCoordP1ui ii
+glTexCoordP1uiv ip
+glTexCoordP2ui ii
+glTexCoordP2uiv ip
+glTexCoordP3ui ii
+glTexCoordP3uiv ip
+glTexCoordP4ui ii
+glTexCoordP4uiv ip
+* glTexCoordPointer iiip
+glTexCoordPointerEXT iiiip
+glTexCoordPointerListIBM iiipi
+glTexCoordPointervINTEL iip
+* glTexEnvf iif
+* glTexEnvfv iip
+* glTexEnvi iii
+* glTexEnviv iip
+glTexEnvx iii
+glTexEnvxOES iii
+glTexEnvxv iip
+glTexEnvxvOES iip
+glTexEstimateMotionQCOM iii
+glTexEstimateMotionRegionsQCOM iiii
+glTexFilterFuncSGIS iiip
+* glTexGend iid
+* glTexGendv iip
+* glTexGenf iif
+glTexGenfOES iif
+* glTexGenfv iip
+glTexGenfvOES iip
+* glTexGeni iii
+glTexGeniOES iii
+* glTexGeniv iip
+glTexGenivOES iip
+glTexGenxOES iii
+glTexGenxvOES iip
+* glTexImage1D iiiiiiip
+* glTexImage2D iiiiiiiip
+glTexImage2DMultisample iiiiib
+glTexImage2DMultisampleCoverageNV iiiiiib
+glTexImage3D iiiiiiiiip
+glTexImage3DEXT iiiiiiiiip
+glTexImage3DMultisample iiiiiib
+glTexImage3DMultisampleCoverageNV iiiiiiib
+glTexImage3DOES iiiiiiiiip
+glTexImage4DSGIS iiiiiiiiiip
+glTexPageCommitmentARB iiiiiiiib
+glTexPageCommitmentEXT iiiiiiiib
+glTexPageCommitmentMemNV iiiiiiiiiipb
+glTexParameterIiv iip
+glTexParameterIivEXT iip
+glTexParameterIivOES iip
+glTexParameterIuiv iip
+glTexParameterIuivEXT iip
+glTexParameterIuivOES iip
+* glTexParameterf iif
+* glTexParameterfv iip
+* glTexParameteri iii
+* glTexParameteriv iip
+glTexParameterx iii
+glTexParameterxOES iii
+glTexParameterxv iip
+glTexParameterxvOES iip
+glTexRenderbufferNV ii
+glTexStorage1D iiii
+glTexStorage1DEXT iiii
+glTexStorage2D iiiii
+glTexStorage2DEXT iiiii
+glTexStorage2DMultisample iiiiib
+glTexStorage3D iiiiii
+glTexStorage3DEXT iiiiii
+glTexStorage3DMultisample iiiiiib
+glTexStorage3DMultisampleOES iiiiiib
+glTexStorageAttribs2DEXT iiiiip
+glTexStorageAttribs3DEXT iiiiiip
+glTexStorageMem1DEXT iiiiip
+glTexStorageMem2DEXT iiiiiip
+glTexStorageMem2DMultisampleEXT iiiiibip
+glTexStorageMem3DEXT iiiiiiip
+glTexStorageMem3DMultisampleEXT iiiiiibip
+glTexStorageSparseAMD iiiiiii
+* glTexSubImage1D iiiiiip
+glTexSubImage1DEXT iiiiiip
+* glTexSubImage2D iiiiiiiip
+glTexSubImage2DEXT iiiiiiiip
+glTexSubImage3D iiiiiiiiiip
+glTexSubImage3DEXT iiiiiiiiiip
+glTexSubImage3DOES iiiiiiiiiip
+glTexSubImage4DSGIS iiiiiiiiiiiip
+glTextureAttachMemoryNV iip
+glTextureBarrier -
+glTextureBarrierNV -
+glTextureBuffer iii
+glTextureBufferEXT iiii
+glTextureBufferRange iiipp
+glTextureBufferRangeEXT iiiipp
+glTextureColorMaskSGIS bbbb
+glTextureFoveationParametersQCOM iiifffff
+glTextureImage1DEXT iiiiiiiip
+glTextureImage2DEXT iiiiiiiiip
+glTextureImage2DMultisampleCoverageNV iiiiiiib
+glTextureImage2DMultisampleNV iiiiiib
+glTextureImage3DEXT iiiiiiiiiip
+glTextureImage3DMultisampleCoverageNV iiiiiiiib
+glTextureImage3DMultisampleNV iiiiiiib
+glTextureLightEXT i
+glTextureMaterialEXT ii
+glTextureNormalEXT i
+glTexturePageCommitmentEXT iiiiiiiib
+glTexturePageCommitmentMemNV iiiiiiiiiipb
+glTextureParameterIiv iip
+glTextureParameterIivEXT iiip
+glTextureParameterIuiv iip
+glTextureParameterIuivEXT iiip
+glTextureParameterf iif
+glTextureParameterfEXT iiif
+glTextureParameterfv iip
+glTextureParameterfvEXT iiip
+glTextureParameteri iii
+glTextureParameteriEXT iiii
+glTextureParameteriv iip
+glTextureParameterivEXT iiip
+glTextureRangeAPPLE iip
+glTextureRenderbufferEXT iii
+glTextureStorage1D iiii
+glTextureStorage1DEXT iiiii
+glTextureStorage2D iiiii
+glTextureStorage2DEXT iiiiii
+glTextureStorage2DMultisample iiiiib
+glTextureStorage2DMultisampleEXT iiiiiib
+glTextureStorage3D iiiiii
+glTextureStorage3DEXT iiiiiii
+glTextureStorage3DMultisample iiiiiib
+glTextureStorage3DMultisampleEXT iiiiiiib
+glTextureStorageMem1DEXT iiiiip
+glTextureStorageMem2DEXT iiiiiip
+glTextureStorageMem2DMultisampleEXT iiiiibip
+glTextureStorageMem3DEXT iiiiiiip
+glTextureStorageMem3DMultisampleEXT iiiiiibip
+glTextureStorageSparseAMD iiiiiiii
+glTextureSubImage1D iiiiiip
+glTextureSubImage1DEXT iiiiiiip
+glTextureSubImage2D iiiiiiiip
+glTextureSubImage2DEXT iiiiiiiiip
+glTextureSubImage3D iiiiiiiiiip
+glTextureSubImage3DEXT iiiiiiiiiiip
+glTextureView iiiiiiii
+glTextureViewEXT iiiiiiii
+glTextureViewOES iiiiiiii
+glTrackMatrixNV iiii
+glTransformFeedbackAttribsNV ipi
+glTransformFeedbackBufferBase iii
+glTransformFeedbackBufferRange iiipp
+glTransformFeedbackStreamAttribsNV ipipi
+glTransformFeedbackVaryings iipi
+glTransformFeedbackVaryingsEXT iipi
+glTransformFeedbackVaryingsNV iipi
+glTransformPathNV iiip
+* glTranslated ddd
+* glTranslatef fff
+glTranslatex iii
+glTranslatexOES iii
+glUniform1d id
+glUniform1dv iip
+glUniform1f if
+glUniform1fARB if
+glUniform1fv iip
+glUniform1fvARB iip
+glUniform1i ii
+glUniform1i64ARB ip
+glUniform1i64NV ip
+glUniform1i64vARB iip
+glUniform1i64vNV iip
+glUniform1iARB ii
+glUniform1iv iip
+glUniform1ivARB iip
+glUniform1ui ii
+glUniform1ui64ARB ip
+glUniform1ui64NV ip
+glUniform1ui64vARB iip
+glUniform1ui64vNV iip
+glUniform1uiEXT ii
+glUniform1uiv iip
+glUniform1uivEXT iip
+glUniform2d idd
+glUniform2dv iip
+glUniform2f iff
+glUniform2fARB iff
+glUniform2fv iip
+glUniform2fvARB iip
+glUniform2i iii
+glUniform2i64ARB ipp
+glUniform2i64NV ipp
+glUniform2i64vARB iip
+glUniform2i64vNV iip
+glUniform2iARB iii
+glUniform2iv iip
+glUniform2ivARB iip
+glUniform2ui iii
+glUniform2ui64ARB ipp
+glUniform2ui64NV ipp
+glUniform2ui64vARB iip
+glUniform2ui64vNV iip
+glUniform2uiEXT iii
+glUniform2uiv iip
+glUniform2uivEXT iip
+glUniform3d iddd
+glUniform3dv iip
+glUniform3f ifff
+glUniform3fARB ifff
+glUniform3fv iip
+glUniform3fvARB iip
+glUniform3i iiii
+glUniform3i64ARB ippp
+glUniform3i64NV ippp
+glUniform3i64vARB iip
+glUniform3i64vNV iip
+glUniform3iARB iiii
+glUniform3iv iip
+glUniform3ivARB iip
+glUniform3ui iiii
+glUniform3ui64ARB ippp
+glUniform3ui64NV ippp
+glUniform3ui64vARB iip
+glUniform3ui64vNV iip
+glUniform3uiEXT iiii
+glUniform3uiv iip
+glUniform3uivEXT iip
+glUniform4d idddd
+glUniform4dv iip
+glUniform4f iffff
+glUniform4fARB iffff
+glUniform4fv iip
+glUniform4fvARB iip
+glUniform4i iiiii
+glUniform4i64ARB ipppp
+glUniform4i64NV ipppp
+glUniform4i64vARB iip
+glUniform4i64vNV iip
+glUniform4iARB iiiii
+glUniform4iv iip
+glUniform4ivARB iip
+glUniform4ui iiiii
+glUniform4ui64ARB ipppp
+glUniform4ui64NV ipppp
+glUniform4ui64vARB iip
+glUniform4ui64vNV iip
+glUniform4uiEXT iiiii
+glUniform4uiv iip
+glUniform4uivEXT iip
+glUniformBlockBinding iii
+glUniformBufferEXT iii
+glUniformHandleui64ARB ip
+glUniformHandleui64IMG ip
+glUniformHandleui64NV ip
+glUniformHandleui64vARB iip
+glUniformHandleui64vIMG iip
+glUniformHandleui64vNV iip
+glUniformMatrix2dv iibp
+glUniformMatrix2fv iibp
+glUniformMatrix2fvARB iibp
+glUniformMatrix2x3dv iibp
+glUniformMatrix2x3fv iibp
+glUniformMatrix2x3fvNV iibp
+glUniformMatrix2x4dv iibp
+glUniformMatrix2x4fv iibp
+glUniformMatrix2x4fvNV iibp
+glUniformMatrix3dv iibp
+glUniformMatrix3fv iibp
+glUniformMatrix3fvARB iibp
+glUniformMatrix3x2dv iibp
+glUniformMatrix3x2fv iibp
+glUniformMatrix3x2fvNV iibp
+glUniformMatrix3x4dv iibp
+glUniformMatrix3x4fv iibp
+glUniformMatrix3x4fvNV iibp
+glUniformMatrix4dv iibp
+glUniformMatrix4fv iibp
+glUniformMatrix4fvARB iibp
+glUniformMatrix4x2dv iibp
+glUniformMatrix4x2fv iibp
+glUniformMatrix4x2fvNV iibp
+glUniformMatrix4x3dv iibp
+glUniformMatrix4x3fv iibp
+glUniformMatrix4x3fvNV iibp
+glUniformSubroutinesuiv iip
+glUniformui64NV ip
+glUniformui64vNV iip
+glUnlockArraysEXT -
+glUnmapBuffer i
+glUnmapBufferARB i
+glUnmapBufferOES i
+glUnmapNamedBuffer i
+glUnmapNamedBufferEXT i
+glUnmapObjectBufferATI i
+glUnmapTexture2DINTEL ii
+glUpdateObjectBufferATI iiipi
+glUploadGpuMaskNVX i
+glUseProgram i
+glUseProgramObjectARB i
+glUseProgramStages iii
+glUseProgramStagesEXT iii
+glUseShaderProgramEXT ii
+glVDPAUFiniNV -
+glVDPAUGetSurfaceivNV piipp
+glVDPAUInitNV pp
+glVDPAUIsSurfaceNV p
+glVDPAUMapSurfacesNV ip
+glVDPAURegisterOutputSurfaceNV piip
+glVDPAURegisterVideoSurfaceNV piip
+glVDPAURegisterVideoSurfaceWithPictureStructureNV piipb
+glVDPAUSurfaceAccessNV pi
+glVDPAUUnmapSurfacesNV ip
+glVDPAUUnregisterSurfaceNV p
+glValidateProgram i
+glValidateProgramARB i
+glValidateProgramPipeline i
+glValidateProgramPipelineEXT i
+glVariantArrayObjectATI iiiii
+glVariantPointerEXT iiip
+glVariantbvEXT ip
+glVariantdvEXT ip
+glVariantfvEXT ip
+glVariantivEXT ip
+glVariantsvEXT ip
+glVariantubvEXT ip
+glVariantuivEXT ip
+glVariantusvEXT ip
+glVertex2bOES cc
+glVertex2bvOES p
+* glVertex2d dd
+* glVertex2dv p
+* glVertex2f ff
+* glVertex2fv p
+glVertex2hNV hh
+glVertex2hvNV p
+* glVertex2i ii
+* glVertex2iv p
+* glVertex2s ss
+* glVertex2sv p
+glVertex2xOES i
+glVertex2xvOES p
+glVertex3bOES ccc
+glVertex3bvOES p
+* glVertex3d ddd
+* glVertex3dv p
+* glVertex3f fff
+* glVertex3fv p
+glVertex3hNV hhh
+glVertex3hvNV p
+* glVertex3i iii
+* glVertex3iv p
+* glVertex3s sss
+* glVertex3sv p
+glVertex3xOES ii
+glVertex3xvOES p
+glVertex4bOES cccc
+glVertex4bvOES p
+* glVertex4d dddd
+* glVertex4dv p
+* glVertex4f ffff
+* glVertex4fv p
+glVertex4hNV hhhh
+glVertex4hvNV p
+* glVertex4i iiii
+* glVertex4iv p
+* glVertex4s ssss
+* glVertex4sv p
+glVertex4xOES iii
+glVertex4xvOES p
+glVertexArrayAttribBinding iii
+glVertexArrayAttribFormat iiiibi
+glVertexArrayAttribIFormat iiiii
+glVertexArrayAttribLFormat iiiii
+glVertexArrayBindVertexBufferEXT iiipi
+glVertexArrayBindingDivisor iii
+glVertexArrayColorOffsetEXT iiiiip
+glVertexArrayEdgeFlagOffsetEXT iiip
+glVertexArrayElementBuffer ii
+glVertexArrayFogCoordOffsetEXT iiiip
+glVertexArrayIndexOffsetEXT iiiip
+glVertexArrayMultiTexCoordOffsetEXT iiiiiip
+glVertexArrayNormalOffsetEXT iiiip
+glVertexArrayParameteriAPPLE ii
+glVertexArrayRangeAPPLE ip
+glVertexArrayRangeNV ip
+glVertexArraySecondaryColorOffsetEXT iiiiip
+glVertexArrayTexCoordOffsetEXT iiiiip
+glVertexArrayVertexAttribBindingEXT iii
+glVertexArrayVertexAttribDivisorEXT iii
+glVertexArrayVertexAttribFormatEXT iiiibi
+glVertexArrayVertexAttribIFormatEXT iiiii
+glVertexArrayVertexAttribIOffsetEXT iiiiiip
+glVertexArrayVertexAttribLFormatEXT iiiii
+glVertexArrayVertexAttribLOffsetEXT iiiiiip
+glVertexArrayVertexAttribOffsetEXT iiiiibip
+glVertexArrayVertexBindingDivisorEXT iii
+glVertexArrayVertexBuffer iiipi
+glVertexArrayVertexBuffers iiippp
+glVertexArrayVertexOffsetEXT iiiiip
+glVertexAttrib1d id
+glVertexAttrib1dARB id
+glVertexAttrib1dNV id
+glVertexAttrib1dv ip
+glVertexAttrib1dvARB ip
+glVertexAttrib1dvNV ip
+glVertexAttrib1f if
+glVertexAttrib1fARB if
+glVertexAttrib1fNV if
+glVertexAttrib1fv ip
+glVertexAttrib1fvARB ip
+glVertexAttrib1fvNV ip
+glVertexAttrib1hNV ih
+glVertexAttrib1hvNV ip
+glVertexAttrib1s is
+glVertexAttrib1sARB is
+glVertexAttrib1sNV is
+glVertexAttrib1sv ip
+glVertexAttrib1svARB ip
+glVertexAttrib1svNV ip
+glVertexAttrib2d idd
+glVertexAttrib2dARB idd
+glVertexAttrib2dNV idd
+glVertexAttrib2dv ip
+glVertexAttrib2dvARB ip
+glVertexAttrib2dvNV ip
+glVertexAttrib2f iff
+glVertexAttrib2fARB iff
+glVertexAttrib2fNV iff
+glVertexAttrib2fv ip
+glVertexAttrib2fvARB ip
+glVertexAttrib2fvNV ip
+glVertexAttrib2hNV ihh
+glVertexAttrib2hvNV ip
+glVertexAttrib2s iss
+glVertexAttrib2sARB iss
+glVertexAttrib2sNV iss
+glVertexAttrib2sv ip
+glVertexAttrib2svARB ip
+glVertexAttrib2svNV ip
+glVertexAttrib3d iddd
+glVertexAttrib3dARB iddd
+glVertexAttrib3dNV iddd
+glVertexAttrib3dv ip
+glVertexAttrib3dvARB ip
+glVertexAttrib3dvNV ip
+glVertexAttrib3f ifff
+glVertexAttrib3fARB ifff
+glVertexAttrib3fNV ifff
+glVertexAttrib3fv ip
+glVertexAttrib3fvARB ip
+glVertexAttrib3fvNV ip
+glVertexAttrib3hNV ihhh
+glVertexAttrib3hvNV ip
+glVertexAttrib3s isss
+glVertexAttrib3sARB isss
+glVertexAttrib3sNV isss
+glVertexAttrib3sv ip
+glVertexAttrib3svARB ip
+glVertexAttrib3svNV ip
+glVertexAttrib4Nbv ip
+glVertexAttrib4NbvARB ip
+glVertexAttrib4Niv ip
+glVertexAttrib4NivARB ip
+glVertexAttrib4Nsv ip
+glVertexAttrib4NsvARB ip
+glVertexAttrib4Nub ibbbb
+glVertexAttrib4NubARB ibbbb
+glVertexAttrib4Nubv ip
+glVertexAttrib4NubvARB ip
+glVertexAttrib4Nuiv ip
+glVertexAttrib4NuivARB ip
+glVertexAttrib4Nusv ip
+glVertexAttrib4NusvARB ip
+glVertexAttrib4bv ip
+glVertexAttrib4bvARB ip
+glVertexAttrib4d idddd
+glVertexAttrib4dARB idddd
+glVertexAttrib4dNV idddd
+glVertexAttrib4dv ip
+glVertexAttrib4dvARB ip
+glVertexAttrib4dvNV ip
+glVertexAttrib4f iffff
+glVertexAttrib4fARB iffff
+glVertexAttrib4fNV iffff
+glVertexAttrib4fv ip
+glVertexAttrib4fvARB ip
+glVertexAttrib4fvNV ip
+glVertexAttrib4hNV ihhhh
+glVertexAttrib4hvNV ip
+glVertexAttrib4iv ip
+glVertexAttrib4ivARB ip
+glVertexAttrib4s issss
+glVertexAttrib4sARB issss
+glVertexAttrib4sNV issss
+glVertexAttrib4sv ip
+glVertexAttrib4svARB ip
+glVertexAttrib4svNV ip
+glVertexAttrib4ubNV ibbbb
+glVertexAttrib4ubv ip
+glVertexAttrib4ubvARB ip
+glVertexAttrib4ubvNV ip
+glVertexAttrib4uiv ip
+glVertexAttrib4uivARB ip
+glVertexAttrib4usv ip
+glVertexAttrib4usvARB ip
+glVertexAttribArrayObjectATI iiibiii
+glVertexAttribBinding ii
+glVertexAttribDivisor ii
+glVertexAttribDivisorANGLE ii
+glVertexAttribDivisorARB ii
+glVertexAttribDivisorEXT ii
+glVertexAttribDivisorNV ii
+glVertexAttribFormat iiibi
+glVertexAttribFormatNV iiibi
+glVertexAttribI1i ii
+glVertexAttribI1iEXT ii
+glVertexAttribI1iv ip
+glVertexAttribI1ivEXT ip
+glVertexAttribI1ui ii
+glVertexAttribI1uiEXT ii
+glVertexAttribI1uiv ip
+glVertexAttribI1uivEXT ip
+glVertexAttribI2i iii
+glVertexAttribI2iEXT iii
+glVertexAttribI2iv ip
+glVertexAttribI2ivEXT ip
+glVertexAttribI2ui iii
+glVertexAttribI2uiEXT iii
+glVertexAttribI2uiv ip
+glVertexAttribI2uivEXT ip
+glVertexAttribI3i iiii
+glVertexAttribI3iEXT iiii
+glVertexAttribI3iv ip
+glVertexAttribI3ivEXT ip
+glVertexAttribI3ui iiii
+glVertexAttribI3uiEXT iiii
+glVertexAttribI3uiv ip
+glVertexAttribI3uivEXT ip
+glVertexAttribI4bv ip
+glVertexAttribI4bvEXT ip
+glVertexAttribI4i iiiii
+glVertexAttribI4iEXT iiiii
+glVertexAttribI4iv ip
+glVertexAttribI4ivEXT ip
+glVertexAttribI4sv ip
+glVertexAttribI4svEXT ip
+glVertexAttribI4ubv ip
+glVertexAttribI4ubvEXT ip
+glVertexAttribI4ui iiiii
+glVertexAttribI4uiEXT iiiii
+glVertexAttribI4uiv ip
+glVertexAttribI4uivEXT ip
+glVertexAttribI4usv ip
+glVertexAttribI4usvEXT ip
+glVertexAttribIFormat iiii
+glVertexAttribIFormatNV iiii
+glVertexAttribIPointer iiiip
+glVertexAttribIPointerEXT iiiip
+glVertexAttribL1d id
+glVertexAttribL1dEXT id
+glVertexAttribL1dv ip
+glVertexAttribL1dvEXT ip
+glVertexAttribL1i64NV ip
+glVertexAttribL1i64vNV ip
+glVertexAttribL1ui64ARB ip
+glVertexAttribL1ui64NV ip
+glVertexAttribL1ui64vARB ip
+glVertexAttribL1ui64vNV ip
+glVertexAttribL2d idd
+glVertexAttribL2dEXT idd
+glVertexAttribL2dv ip
+glVertexAttribL2dvEXT ip
+glVertexAttribL2i64NV ipp
+glVertexAttribL2i64vNV ip
+glVertexAttribL2ui64NV ipp
+glVertexAttribL2ui64vNV ip
+glVertexAttribL3d iddd
+glVertexAttribL3dEXT iddd
+glVertexAttribL3dv ip
+glVertexAttribL3dvEXT ip
+glVertexAttribL3i64NV ippp
+glVertexAttribL3i64vNV ip
+glVertexAttribL3ui64NV ippp
+glVertexAttribL3ui64vNV ip
+glVertexAttribL4d idddd
+glVertexAttribL4dEXT idddd
+glVertexAttribL4dv ip
+glVertexAttribL4dvEXT ip
+glVertexAttribL4i64NV ipppp
+glVertexAttribL4i64vNV ip
+glVertexAttribL4ui64NV ipppp
+glVertexAttribL4ui64vNV ip
+glVertexAttribLFormat iiii
+glVertexAttribLFormatNV iiii
+glVertexAttribLPointer iiiip
+glVertexAttribLPointerEXT iiiip
+glVertexAttribP1ui iibi
+glVertexAttribP1uiv iibp
+glVertexAttribP2ui iibi
+glVertexAttribP2uiv iibp
+glVertexAttribP3ui iibi
+glVertexAttribP3uiv iibp
+glVertexAttribP4ui iibi
+glVertexAttribP4uiv iibp
+glVertexAttribParameteriAMD iii
+glVertexAttribPointer iiibip
+glVertexAttribPointerARB iiibip
+glVertexAttribPointerNV iiiip
+glVertexAttribs1dvNV iip
+glVertexAttribs1fvNV iip
+glVertexAttribs1hvNV iip
+glVertexAttribs1svNV iip
+glVertexAttribs2dvNV iip
+glVertexAttribs2fvNV iip
+glVertexAttribs2hvNV iip
+glVertexAttribs2svNV iip
+glVertexAttribs3dvNV iip
+glVertexAttribs3fvNV iip
+glVertexAttribs3hvNV iip
+glVertexAttribs3svNV iip
+glVertexAttribs4dvNV iip
+glVertexAttribs4fvNV iip
+glVertexAttribs4hvNV iip
+glVertexAttribs4svNV iip
+glVertexAttribs4ubvNV iip
+glVertexBindingDivisor ii
+glVertexBlendARB i
+glVertexBlendEnvfATI if
+glVertexBlendEnviATI ii
+glVertexFormatNV iii
+glVertexP2ui ii
+glVertexP2uiv ip
+glVertexP3ui ii
+glVertexP3uiv ip
+glVertexP4ui ii
+glVertexP4uiv ip
+* glVertexPointer iiip
+glVertexPointerEXT iiiip
+glVertexPointerListIBM iiipi
+glVertexPointervINTEL iip
+glVertexStream1dATI id
+glVertexStream1dvATI ip
+glVertexStream1fATI if
+glVertexStream1fvATI ip
+glVertexStream1iATI ii
+glVertexStream1ivATI ip
+glVertexStream1sATI is
+glVertexStream1svATI ip
+glVertexStream2dATI idd
+glVertexStream2dvATI ip
+glVertexStream2fATI iff
+glVertexStream2fvATI ip
+glVertexStream2iATI iii
+glVertexStream2ivATI ip
+glVertexStream2sATI iss
+glVertexStream2svATI ip
+glVertexStream3dATI iddd
+glVertexStream3dvATI ip
+glVertexStream3fATI ifff
+glVertexStream3fvATI ip
+glVertexStream3iATI iiii
+glVertexStream3ivATI ip
+glVertexStream3sATI isss
+glVertexStream3svATI ip
+glVertexStream4dATI idddd
+glVertexStream4dvATI ip
+glVertexStream4fATI iffff
+glVertexStream4fvATI ip
+glVertexStream4iATI iiiii
+glVertexStream4ivATI ip
+glVertexStream4sATI issss
+glVertexStream4svATI ip
+glVertexWeightPointerEXT iiip
+glVertexWeightfEXT f
+glVertexWeightfvEXT p
+glVertexWeighthNV h
+glVertexWeighthvNV p
+glVideoCaptureNV ipp
+glVideoCaptureStreamParameterdvNV iiip
+glVideoCaptureStreamParameterfvNV iiip
+glVideoCaptureStreamParameterivNV iiip
+* glViewport iiii
+glViewportArrayv iip
+glViewportArrayvNV iip
+glViewportArrayvOES iip
+glViewportIndexedf iffff
+glViewportIndexedfNV iffff
+glViewportIndexedfOES iffff
+glViewportIndexedfv ip
+glViewportIndexedfvNV ip
+glViewportIndexedfvOES ip
+glViewportPositionWScaleNV iff
+glViewportSwizzleNV iiiii
+glWaitSemaphoreEXT iipipp
+glWaitSemaphoreui64NVX iipp
+glWaitSync pip
+glWaitSyncAPPLE pip
+glWaitVkSemaphoreNV p
+glWeightPathsNV iipp
+glWeightPointerARB iiip
+glWeightPointerOES iiip
+glWeightbvARB ip
+glWeightdvARB ip
+glWeightfvARB ip
+glWeightivARB ip
+glWeightsvARB ip
+glWeightubvARB ip
+glWeightuivARB ip
+glWeightusvARB ip
+glWindowPos2d dd
+glWindowPos2dARB dd
+glWindowPos2dMESA dd
+glWindowPos2dv p
+glWindowPos2dvARB p
+glWindowPos2dvMESA p
+glWindowPos2f ff
+glWindowPos2fARB ff
+glWindowPos2fMESA ff
+glWindowPos2fv p
+glWindowPos2fvARB p
+glWindowPos2fvMESA p
+glWindowPos2i ii
+glWindowPos2iARB ii
+glWindowPos2iMESA ii
+glWindowPos2iv p
+glWindowPos2ivARB p
+glWindowPos2ivMESA p
+glWindowPos2s ss
+glWindowPos2sARB ss
+glWindowPos2sMESA ss
+glWindowPos2sv p
+glWindowPos2svARB p
+glWindowPos2svMESA p
+glWindowPos3d ddd
+glWindowPos3dARB ddd
+glWindowPos3dMESA ddd
+glWindowPos3dv p
+glWindowPos3dvARB p
+glWindowPos3dvMESA p
+glWindowPos3f fff
+glWindowPos3fARB fff
+glWindowPos3fMESA fff
+glWindowPos3fv p
+glWindowPos3fvARB p
+glWindowPos3fvMESA p
+glWindowPos3i iii
+glWindowPos3iARB iii
+glWindowPos3iMESA iii
+glWindowPos3iv p
+glWindowPos3ivARB p
+glWindowPos3ivMESA p
+glWindowPos3s sss
+glWindowPos3sARB sss
+glWindowPos3sMESA sss
+glWindowPos3sv p
+glWindowPos3svARB p
+glWindowPos3svMESA p
+glWindowPos4dMESA dddd
+glWindowPos4dvMESA p
+glWindowPos4fMESA ffff
+glWindowPos4fvMESA p
+glWindowPos4iMESA iiii
+glWindowPos4ivMESA p
+glWindowPos4sMESA ssss
+glWindowPos4svMESA p
+glWindowRectanglesEXT iip
+glWriteMaskEXT iiiiii

@@ -40,6 +40,7 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Révision : {value}': ('Revision: {value}', 'Revisión: {value}', 'Revision: {value}'),
     'Compilée le : {value}': ('Built on: {value}', 'Compilada el: {value}', 'Erstellt am: {value}'),
     # Refonte des Paramètres (catégories, réglages intégrés)
@@ -304,17 +305,19 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers")]
+         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
+         _t("Comptes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 32 n’existent que dans les Paramètres natifs.
+# Pages 29 à 33 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15, 30]),
+              (_t("Comptes"), [33]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
@@ -612,7 +615,7 @@ SETTINGS_CSS = """
   #sidebar .sub {{ color: {dim}; font-size: 13px; }}
   #sidebar row:selected .sub {{ color: {selected_dim}; }}
   #sidebar .open {{ font-weight: bold; }}
-  #content {{ background: {bg}; }}
+  #content, #content-frame {{ background: {bg}; }}
   #content list, #content list row {{ background: {card}; color: {fg}; }}
   #content list row:hover {{ background: {card_hover}; }}
   #content list row:selected, #content list row:selected label {{ background: {selected}; color: {selected_fg}; }}
@@ -706,7 +709,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         outer.pack_start(scroll, True, True, 0)
         self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
         self.body.set_name("content")
-        scroll.add(self.body)
+        # La vue défilante ne peint pas son fond quand la page dépasse la
+        # fenêtre (cache de pixels de GtkViewport) : les marges de la page
+        # sortaient en bande noire. Un cadre peint remplit toute la vue.
+        page_frame = Gtk.Box()
+        page_frame.set_name("content-frame")
+        page_frame.pack_start(self.body, True, True, 0)
+        scroll.add(page_frame)
         self.open_page(self.current)
         GLib.timeout_add(1000, self.poll)
         self.show_all()

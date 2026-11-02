@@ -3363,11 +3363,25 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
     crate::process::set_last_error(87);
     0
 }
+/// PAGE_GUARD, PAGE_NOCACHE et PAGE_WRITECOMBINE modifient une protection
+/// de base ; PAGE_GUARD ne s'applique pas à PAGE_NOACCESS.
+const PAGE_GUARD: u32 = 0x100;
+const PAGE_MODIFIERS: u32 = 0x100 | 0x200 | 0x400;
 fn valid_win_prot(p: u32) -> bool {
-    matches!(p, 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80)
+    p & !(0xFF | PAGE_MODIFIERS) == 0
+        && matches!(
+            p & 0xFF,
+            0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80
+        )
+        && !(p & 0xFF == 0x01 && p & PAGE_MODIFIERS != 0)
 }
 fn win_prot(p: u32) -> i32 {
-    match p {
+    // Page de garde : inaccessible jusqu'au premier accès, qui lève
+    // STATUS_GUARD_PAGE_VIOLATION et rend la protection de base (seh_hw).
+    if p & PAGE_GUARD != 0 {
+        return libc::PROT_NONE;
+    }
+    match p & 0xFF {
         0x01 => libc::PROT_NONE,
         0x02 => libc::PROT_READ,
         0x04 | 0x08 => libc::PROT_READ | libc::PROT_WRITE,
@@ -3421,6 +3435,71 @@ pub unsafe extern "win64" fn virtual_protect(
     r.protection[first..first + count].fill(prot);
     1
 }
+/// Pour le gestionnaire de fautes (contexte de signal : jamais de verrou
+/// bloquant) : `Some(true)` si `addr` est dans une page VirtualAlloc
+/// exécutable (code d'un JIT), `Some(false)` si elle n'y est pas, `None` si
+/// la table est occupée.
+pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return Some(false);
+    };
+    let maps = table.try_lock().ok()?;
+    Some(maps.iter().any(|(&b, r)| {
+        addr >= b
+            && addr < b + r.size
+            && r.committed[(addr - b) / PAGE]
+            && matches!(
+                r.protection[(addr - b) / PAGE] & 0xFF,
+                0x10 | 0x20 | 0x40 | 0x80
+            )
+    }))
+}
+
+/// Page de garde touchée en `addr` : retire PAGE_GUARD de cette page (une
+/// seule levée, comme Windows) et renvoie vrai. Faux si `addr` n'est pas
+/// dans une page de garde VirtualAlloc. Hors contexte de signal.
+pub(crate) fn clear_guard_page(addr: usize) -> bool {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return false;
+    };
+    let mut maps = lock(table);
+    let Some((&base, r)) = maps
+        .iter_mut()
+        .find(|(&b, r)| addr >= b && addr < b + r.size)
+    else {
+        return false;
+    };
+    let index = (addr - base) / PAGE;
+    if !r.committed[index] || r.protection[index] & PAGE_GUARD == 0 {
+        return false;
+    }
+    let prot = r.protection[index] & !PAGE_GUARD;
+    let page = base + index * PAGE;
+    if unsafe { libc::mprotect(page as *mut c_void, PAGE, win_prot(prot)) } != 0 {
+        return false;
+    }
+    r.protection[index] = prot;
+    true
+}
+
+/// Variante sans verrou bloquant de `clear_guard_page`, pour savoir dans le
+/// gestionnaire de signal si la faute vise une page de garde.
+pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return Some(false);
+    };
+    let maps = table.try_lock().ok()?;
+    Some(maps.iter().any(|(&b, r)| {
+        addr >= b
+            && addr < b + r.size
+            && r.committed[(addr - b) / PAGE]
+            && r.protection[(addr - b) / PAGE] & PAGE_GUARD != 0
+    }))
+}
+
 /// Région Linux (hors VirtualAlloc) qui contient `address` : la pile du
 /// thread courant, décrite comme une pile Windows (AllocationBase au bas de
 /// la réservation, ce que lit coreclr pour borner sa pile), ou une

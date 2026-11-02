@@ -44,7 +44,7 @@ The system, the installer and this website are available in French, English, Ger
 Get the image of the latest version and, if you like, the USB drive creator. [Download page](page:download)
 
 ### 2. Follow the guide
-Six steps, from the USB drive to your first Windows program, then updates. [Open the guide](page:guide)
+Seven steps, from the USB drive to your first Windows program, then updates. [Open the guide](page:guide)
 
 ### 3. Check your software
 What already works, what does not work yet, and how to tell us. [Tested applications](page:apps)
