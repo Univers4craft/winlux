@@ -30,6 +30,7 @@ pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dataobject;
 pub mod dbghelp;
+pub mod dialogs;
 pub mod dinput8;
 pub mod dsound;
 pub mod dwmapi;
@@ -602,7 +603,10 @@ fn add_basics(all: &mut [Builtin]) {
     }
     // Versions réelles qui remplacent d'anciens exports vides.
     if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
-        for (name, addr) in controls::user32_overrides() {
+        for (name, addr) in controls::user32_overrides()
+            .into_iter()
+            .chain(dialogs::user32_overrides())
+        {
             b.exports.insert(name, addr);
         }
     }
