@@ -71,6 +71,7 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 | **Windows + flèches**, **Windows + Z** | Ancrage comme Windows 11 : moitiés, quarts, agrandir, taille d'avant ; l'Assistant d'ancrage propose les autres fenêtres. Windows + Z ou clic droit sur Agrandir : cinq dispositions (moitiés, deux tiers, trois colonnes, quarts). Windows + Maj + flèche : écran voisin. |
 | **Windows + Tab** | Vue des tâches : aperçus des fenêtres, bureaux virtuels (nouveau, renommer, supprimer, déplacer une fenêtre par clic droit). Windows + Ctrl + D crée un bureau, Windows + Ctrl + F4 le ferme, Windows + Ctrl + ← / → passe de l'un à l'autre. |
 | **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
+| Menu Démarrer › **Horloge** | Alarmes (répétées ou uniques, rappel dans 5 min), minuteurs, chronomètre avec tours, horloges du monde, sessions de concentration avec Ne pas déranger. Les alarmes sonnent même l'application fermée. |
 | Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
 
 ## Applications Linux
