@@ -4983,6 +4983,11 @@ pub fn handle_to_fd(h: usize) -> i32 {
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
+    // Pseudo-handles (processus -1, thread -2, jetons -4 à -6) : fermer ne
+    // fait rien et réussit, comme sous Windows (crashpad de Warzone 2100).
+    if matches!(handle as isize, -6..=-1) {
+        return 1;
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6391,7 +6396,7 @@ pub extern "win64" fn sleep_condition_variable_srw(
         },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1
@@ -6405,7 +6410,7 @@ pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32)
         || unsafe { enter_critical_section(cs as *mut c_void) },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1
