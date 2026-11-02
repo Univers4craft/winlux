@@ -242,6 +242,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           python3 -B scripts/test-power.py
+          python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
           sh scripts/test-display.sh

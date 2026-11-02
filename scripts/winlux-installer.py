@@ -4479,9 +4479,16 @@ class InstallerApp(Gtk.Application):
             # En live, PID 1 est le script /init : « reboot » (systemctl)
             # ne faisait rien et le bouton fermait seulement l'installateur.
             # winlux-power sait redémarrer dans les deux cas.
+            # Rien à enregistrer après l'installation : l'étape finale sans
+            # écran signale l'init directement. L'écran « now » (GTK) mourait
+            # parfois en session live après avoir fermé les applications, et
+            # la machine ne redémarrait plus. Il ne sert que si l'init refuse
+            # (mise à jour en cours…), pour afficher la raison.
             power = shutil.which("winlux-power")
             if power:
-                subprocess.Popen([power, "now", "reboot"], start_new_session=True)
+                done = subprocess.run([power, "execute", "reboot"], timeout=30).returncode == 0
+                if not done:
+                    subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
                 subprocess.run(["reboot"], timeout=10)
         except Exception:

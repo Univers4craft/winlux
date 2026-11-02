@@ -1,0 +1,1595 @@
+# Imports des DLL système par les vrais jeux testés (jeu, DLL telle qu'importée, fonction).
+# Régénéré par la mesure de docs/VRAIS-JEUX.md ; vérifié par scripts/test-games-imports.py.
+SuperTuxKart 1.5	advapi32.dll	CryptAcquireContextA
+SuperTuxKart 1.5	advapi32.dll	CryptCreateHash
+SuperTuxKart 1.5	advapi32.dll	CryptDestroyHash
+SuperTuxKart 1.5	advapi32.dll	CryptGenRandom
+SuperTuxKart 1.5	advapi32.dll	CryptGetHashParam
+SuperTuxKart 1.5	advapi32.dll	CryptHashData
+SuperTuxKart 1.5	advapi32.dll	CryptReleaseContext
+SuperTuxKart 1.5	advapi32.dll	RegCloseKey
+SuperTuxKart 1.5	advapi32.dll	RegOpenKeyExW
+SuperTuxKart 1.5	advapi32.dll	RegQueryValueExW
+SuperTuxKart 1.5	dnsapi.dll	DnsFree
+SuperTuxKart 1.5	dnsapi.dll	DnsQuery_W
+SuperTuxKart 1.5	gdi32.dll	BitBlt
+SuperTuxKart 1.5	gdi32.dll	ChoosePixelFormat
+SuperTuxKart 1.5	gdi32.dll	CombineRgn
+SuperTuxKart 1.5	gdi32.dll	CreateBitmap
+SuperTuxKart 1.5	gdi32.dll	CreateCompatibleBitmap
+SuperTuxKart 1.5	gdi32.dll	CreateCompatibleDC
+SuperTuxKart 1.5	gdi32.dll	CreateDCW
+SuperTuxKart 1.5	gdi32.dll	CreateDIBSection
+SuperTuxKart 1.5	gdi32.dll	CreateFontIndirectW
+SuperTuxKart 1.5	gdi32.dll	CreateFontW
+SuperTuxKart 1.5	gdi32.dll	CreatePen
+SuperTuxKart 1.5	gdi32.dll	CreateRectRgn
+SuperTuxKart 1.5	gdi32.dll	CreateSolidBrush
+SuperTuxKart 1.5	gdi32.dll	DeleteDC
+SuperTuxKart 1.5	gdi32.dll	DeleteObject
+SuperTuxKart 1.5	gdi32.dll	DescribePixelFormat
+SuperTuxKart 1.5	gdi32.dll	ExtTextOutW
+SuperTuxKart 1.5	gdi32.dll	GetDIBits
+SuperTuxKart 1.5	gdi32.dll	GetDeviceCaps
+SuperTuxKart 1.5	gdi32.dll	GetDeviceGammaRamp
+SuperTuxKart 1.5	gdi32.dll	GetICMProfileW
+SuperTuxKart 1.5	gdi32.dll	GetPixelFormat
+SuperTuxKart 1.5	gdi32.dll	GetTextExtentPoint32A
+SuperTuxKart 1.5	gdi32.dll	GetTextExtentPoint32W
+SuperTuxKart 1.5	gdi32.dll	GetTextMetricsW
+SuperTuxKart 1.5	gdi32.dll	Rectangle
+SuperTuxKart 1.5	gdi32.dll	SelectObject
+SuperTuxKart 1.5	gdi32.dll	SetBkMode
+SuperTuxKart 1.5	gdi32.dll	SetDeviceGammaRamp
+SuperTuxKart 1.5	gdi32.dll	SetPixelFormat
+SuperTuxKart 1.5	gdi32.dll	SetTextColor
+SuperTuxKart 1.5	gdi32.dll	SwapBuffers
+SuperTuxKart 1.5	hid.dll	HidD_GetAttributes
+SuperTuxKart 1.5	hid.dll	HidD_GetHidGuid
+SuperTuxKart 1.5	hid.dll	HidD_SetOutputReport
+SuperTuxKart 1.5	imm32.dll	ImmAssociateContext
+SuperTuxKart 1.5	imm32.dll	ImmGetCandidateListW
+SuperTuxKart 1.5	imm32.dll	ImmGetCompositionStringW
+SuperTuxKart 1.5	imm32.dll	ImmGetContext
+SuperTuxKart 1.5	imm32.dll	ImmGetIMEFileNameA
+SuperTuxKart 1.5	imm32.dll	ImmNotifyIME
+SuperTuxKart 1.5	imm32.dll	ImmReleaseContext
+SuperTuxKart 1.5	imm32.dll	ImmSetCandidateWindow
+SuperTuxKart 1.5	imm32.dll	ImmSetCompositionStringW
+SuperTuxKart 1.5	imm32.dll	ImmSetCompositionWindow
+SuperTuxKart 1.5	iphlpapi.dll	GetAdaptersAddresses
+SuperTuxKart 1.5	kernel32.dll	AddVectoredExceptionHandler
+SuperTuxKart 1.5	kernel32.dll	AreFileApisANSI
+SuperTuxKart 1.5	kernel32.dll	CancelIo
+SuperTuxKart 1.5	kernel32.dll	CloseHandle
+SuperTuxKart 1.5	kernel32.dll	CompareStringA
+SuperTuxKart 1.5	kernel32.dll	CreateDirectoryW
+SuperTuxKart 1.5	kernel32.dll	CreateEventA
+SuperTuxKart 1.5	kernel32.dll	CreateEventW
+SuperTuxKart 1.5	kernel32.dll	CreateFileA
+SuperTuxKart 1.5	kernel32.dll	CreateFileMappingA
+SuperTuxKart 1.5	kernel32.dll	CreateFileMappingW
+SuperTuxKart 1.5	kernel32.dll	CreateFileW
+SuperTuxKart 1.5	kernel32.dll	CreateMutexA
+SuperTuxKart 1.5	kernel32.dll	CreateMutexW
+SuperTuxKart 1.5	kernel32.dll	CreateSemaphoreA
+SuperTuxKart 1.5	kernel32.dll	CreateSemaphoreW
+SuperTuxKart 1.5	kernel32.dll	CreateThread
+SuperTuxKart 1.5	kernel32.dll	DebugBreak
+SuperTuxKart 1.5	kernel32.dll	DeleteCriticalSection
+SuperTuxKart 1.5	kernel32.dll	DeleteFileA
+SuperTuxKart 1.5	kernel32.dll	DeleteFileW
+SuperTuxKart 1.5	kernel32.dll	DeviceIoControl
+SuperTuxKart 1.5	kernel32.dll	DuplicateHandle
+SuperTuxKart 1.5	kernel32.dll	EnterCriticalSection
+SuperTuxKart 1.5	kernel32.dll	EnumResourceNamesW
+SuperTuxKart 1.5	kernel32.dll	ExitProcess
+SuperTuxKart 1.5	kernel32.dll	FindClose
+SuperTuxKart 1.5	kernel32.dll	FindFirstFileW
+SuperTuxKart 1.5	kernel32.dll	FindNextFileW
+SuperTuxKart 1.5	kernel32.dll	FlushFileBuffers
+SuperTuxKart 1.5	kernel32.dll	FlushViewOfFile
+SuperTuxKart 1.5	kernel32.dll	FormatMessageA
+SuperTuxKart 1.5	kernel32.dll	FormatMessageW
+SuperTuxKart 1.5	kernel32.dll	FreeLibrary
+SuperTuxKart 1.5	kernel32.dll	GetConsoleScreenBufferInfo
+SuperTuxKart 1.5	kernel32.dll	GetCurrentProcess
+SuperTuxKart 1.5	kernel32.dll	GetCurrentProcessId
+SuperTuxKart 1.5	kernel32.dll	GetCurrentThread
+SuperTuxKart 1.5	kernel32.dll	GetCurrentThreadId
+SuperTuxKart 1.5	kernel32.dll	GetDiskFreeSpaceA
+SuperTuxKart 1.5	kernel32.dll	GetDiskFreeSpaceW
+SuperTuxKart 1.5	kernel32.dll	GetEnvironmentVariableA
+SuperTuxKart 1.5	kernel32.dll	GetEnvironmentVariableW
+SuperTuxKart 1.5	kernel32.dll	GetFileAttributesA
+SuperTuxKart 1.5	kernel32.dll	GetFileAttributesExW
+SuperTuxKart 1.5	kernel32.dll	GetFileAttributesW
+SuperTuxKart 1.5	kernel32.dll	GetFileSize
+SuperTuxKart 1.5	kernel32.dll	GetFileSizeEx
+SuperTuxKart 1.5	kernel32.dll	GetFileTime
+SuperTuxKart 1.5	kernel32.dll	GetFullPathNameA
+SuperTuxKart 1.5	kernel32.dll	GetFullPathNameW
+SuperTuxKart 1.5	kernel32.dll	GetHandleInformation
+SuperTuxKart 1.5	kernel32.dll	GetLastError
+SuperTuxKart 1.5	kernel32.dll	GetLocaleInfoA
+SuperTuxKart 1.5	kernel32.dll	GetModuleFileNameW
+SuperTuxKart 1.5	kernel32.dll	GetModuleHandleA
+SuperTuxKart 1.5	kernel32.dll	GetModuleHandleExW
+SuperTuxKart 1.5	kernel32.dll	GetModuleHandleW
+SuperTuxKart 1.5	kernel32.dll	GetOverlappedResult
+SuperTuxKart 1.5	kernel32.dll	GetProcAddress
+SuperTuxKart 1.5	kernel32.dll	GetProcessAffinityMask
+SuperTuxKart 1.5	kernel32.dll	GetProcessHeap
+SuperTuxKart 1.5	kernel32.dll	GetShortPathNameW
+SuperTuxKart 1.5	kernel32.dll	GetStartupInfoA
+SuperTuxKart 1.5	kernel32.dll	GetStdHandle
+SuperTuxKart 1.5	kernel32.dll	GetSystemDirectoryA
+SuperTuxKart 1.5	kernel32.dll	GetSystemInfo
+SuperTuxKart 1.5	kernel32.dll	GetSystemPowerStatus
+SuperTuxKart 1.5	kernel32.dll	GetSystemTime
+SuperTuxKart 1.5	kernel32.dll	GetSystemTimeAsFileTime
+SuperTuxKart 1.5	kernel32.dll	GetTempPathA
+SuperTuxKart 1.5	kernel32.dll	GetTempPathW
+SuperTuxKart 1.5	kernel32.dll	GetThreadContext
+SuperTuxKart 1.5	kernel32.dll	GetThreadPriority
+SuperTuxKart 1.5	kernel32.dll	GetTickCount
+SuperTuxKart 1.5	kernel32.dll	GetTimeZoneInformation
+SuperTuxKart 1.5	kernel32.dll	GetVersionExA
+SuperTuxKart 1.5	kernel32.dll	GetVersionExW
+SuperTuxKart 1.5	kernel32.dll	GlobalAlloc
+SuperTuxKart 1.5	kernel32.dll	GlobalLock
+SuperTuxKart 1.5	kernel32.dll	GlobalMemoryStatusEx
+SuperTuxKart 1.5	kernel32.dll	GlobalUnlock
+SuperTuxKart 1.5	kernel32.dll	HeapAlloc
+SuperTuxKart 1.5	kernel32.dll	HeapCompact
+SuperTuxKart 1.5	kernel32.dll	HeapCreate
+SuperTuxKart 1.5	kernel32.dll	HeapDestroy
+SuperTuxKart 1.5	kernel32.dll	HeapFree
+SuperTuxKart 1.5	kernel32.dll	HeapReAlloc
+SuperTuxKart 1.5	kernel32.dll	HeapSize
+SuperTuxKart 1.5	kernel32.dll	HeapValidate
+SuperTuxKart 1.5	kernel32.dll	InitializeCriticalSection
+SuperTuxKart 1.5	kernel32.dll	InitializeCriticalSectionAndSpinCount
+SuperTuxKart 1.5	kernel32.dll	IsDBCSLeadByteEx
+SuperTuxKart 1.5	kernel32.dll	IsDebuggerPresent
+SuperTuxKart 1.5	kernel32.dll	LeaveCriticalSection
+SuperTuxKart 1.5	kernel32.dll	LoadLibraryA
+SuperTuxKart 1.5	kernel32.dll	LoadLibraryExW
+SuperTuxKart 1.5	kernel32.dll	LoadLibraryW
+SuperTuxKart 1.5	kernel32.dll	LocalFree
+SuperTuxKart 1.5	kernel32.dll	LockFile
+SuperTuxKart 1.5	kernel32.dll	LockFileEx
+SuperTuxKart 1.5	kernel32.dll	MapViewOfFile
+SuperTuxKart 1.5	kernel32.dll	MoveFileExA
+SuperTuxKart 1.5	kernel32.dll	MoveFileExW
+SuperTuxKart 1.5	kernel32.dll	MulDiv
+SuperTuxKart 1.5	kernel32.dll	MultiByteToWideChar
+SuperTuxKart 1.5	kernel32.dll	OpenProcess
+SuperTuxKart 1.5	kernel32.dll	OutputDebugStringA
+SuperTuxKart 1.5	kernel32.dll	OutputDebugStringW
+SuperTuxKart 1.5	kernel32.dll	QueryPerformanceCounter
+SuperTuxKart 1.5	kernel32.dll	QueryPerformanceFrequency
+SuperTuxKart 1.5	kernel32.dll	RaiseException
+SuperTuxKart 1.5	kernel32.dll	ReadFile
+SuperTuxKart 1.5	kernel32.dll	ReleaseMutex
+SuperTuxKart 1.5	kernel32.dll	ReleaseSemaphore
+SuperTuxKart 1.5	kernel32.dll	RemoveDirectoryW
+SuperTuxKart 1.5	kernel32.dll	RemoveVectoredExceptionHandler
+SuperTuxKart 1.5	kernel32.dll	ResetEvent
+SuperTuxKart 1.5	kernel32.dll	ResumeThread
+SuperTuxKart 1.5	kernel32.dll	RtlAddFunctionTable
+SuperTuxKart 1.5	kernel32.dll	RtlCaptureContext
+SuperTuxKart 1.5	kernel32.dll	RtlLookupFunctionEntry
+SuperTuxKart 1.5	kernel32.dll	RtlUnwindEx
+SuperTuxKart 1.5	kernel32.dll	RtlVirtualUnwind
+SuperTuxKart 1.5	kernel32.dll	SetConsoleTextAttribute
+SuperTuxKart 1.5	kernel32.dll	SetEndOfFile
+SuperTuxKart 1.5	kernel32.dll	SetEnvironmentVariableA
+SuperTuxKart 1.5	kernel32.dll	SetErrorMode
+SuperTuxKart 1.5	kernel32.dll	SetEvent
+SuperTuxKart 1.5	kernel32.dll	SetFilePointer
+SuperTuxKart 1.5	kernel32.dll	SetFilePointerEx
+SuperTuxKart 1.5	kernel32.dll	SetLastError
+SuperTuxKart 1.5	kernel32.dll	SetProcessAffinityMask
+SuperTuxKart 1.5	kernel32.dll	SetThreadAffinityMask
+SuperTuxKart 1.5	kernel32.dll	SetThreadContext
+SuperTuxKart 1.5	kernel32.dll	SetThreadExecutionState
+SuperTuxKart 1.5	kernel32.dll	SetThreadPriority
+SuperTuxKart 1.5	kernel32.dll	SetUnhandledExceptionFilter
+SuperTuxKart 1.5	kernel32.dll	Sleep
+SuperTuxKart 1.5	kernel32.dll	SleepEx
+SuperTuxKart 1.5	kernel32.dll	SuspendThread
+SuperTuxKart 1.5	kernel32.dll	SystemTimeToFileTime
+SuperTuxKart 1.5	kernel32.dll	TerminateProcess
+SuperTuxKart 1.5	kernel32.dll	TlsAlloc
+SuperTuxKart 1.5	kernel32.dll	TlsFree
+SuperTuxKart 1.5	kernel32.dll	TlsGetValue
+SuperTuxKart 1.5	kernel32.dll	TlsSetValue
+SuperTuxKart 1.5	kernel32.dll	TryEnterCriticalSection
+SuperTuxKart 1.5	kernel32.dll	UnhandledExceptionFilter
+SuperTuxKart 1.5	kernel32.dll	UnlockFile
+SuperTuxKart 1.5	kernel32.dll	UnlockFileEx
+SuperTuxKart 1.5	kernel32.dll	UnmapViewOfFile
+SuperTuxKart 1.5	kernel32.dll	VerSetConditionMask
+SuperTuxKart 1.5	kernel32.dll	VerifyVersionInfoW
+SuperTuxKart 1.5	kernel32.dll	VirtualProtect
+SuperTuxKart 1.5	kernel32.dll	VirtualQuery
+SuperTuxKart 1.5	kernel32.dll	WaitForMultipleObjects
+SuperTuxKart 1.5	kernel32.dll	WaitForSingleObject
+SuperTuxKart 1.5	kernel32.dll	WaitForSingleObjectEx
+SuperTuxKart 1.5	kernel32.dll	WideCharToMultiByte
+SuperTuxKart 1.5	kernel32.dll	WriteFile
+SuperTuxKart 1.5	kernel32.dll	__C_specific_handler
+SuperTuxKart 1.5	msvcrt.dll	__C_specific_handler
+SuperTuxKart 1.5	msvcrt.dll	___lc_codepage_func
+SuperTuxKart 1.5	msvcrt.dll	___mb_cur_max_func
+SuperTuxKart 1.5	msvcrt.dll	__argc
+SuperTuxKart 1.5	msvcrt.dll	__argv
+SuperTuxKart 1.5	msvcrt.dll	__doserrno
+SuperTuxKart 1.5	msvcrt.dll	__getmainargs
+SuperTuxKart 1.5	msvcrt.dll	__initenv
+SuperTuxKart 1.5	msvcrt.dll	__iob_func
+SuperTuxKart 1.5	msvcrt.dll	__lconv_init
+SuperTuxKart 1.5	msvcrt.dll	__set_app_type
+SuperTuxKart 1.5	msvcrt.dll	__setusermatherr
+SuperTuxKart 1.5	msvcrt.dll	_acmdln
+SuperTuxKart 1.5	msvcrt.dll	_aligned_free
+SuperTuxKart 1.5	msvcrt.dll	_aligned_malloc
+SuperTuxKart 1.5	msvcrt.dll	_amsg_exit
+SuperTuxKart 1.5	msvcrt.dll	_assert
+SuperTuxKart 1.5	msvcrt.dll	_beginthreadex
+SuperTuxKart 1.5	msvcrt.dll	_cexit
+SuperTuxKart 1.5	msvcrt.dll	_close
+SuperTuxKart 1.5	msvcrt.dll	_ctime64
+SuperTuxKart 1.5	msvcrt.dll	_difftime64
+SuperTuxKart 1.5	msvcrt.dll	_endthreadex
+SuperTuxKart 1.5	msvcrt.dll	_errno
+SuperTuxKart 1.5	msvcrt.dll	_fdopen
+SuperTuxKart 1.5	msvcrt.dll	_filelengthi64
+SuperTuxKart 1.5	msvcrt.dll	_fileno
+SuperTuxKart 1.5	msvcrt.dll	_findclose
+SuperTuxKart 1.5	msvcrt.dll	_fmode
+SuperTuxKart 1.5	msvcrt.dll	_fstat64
+SuperTuxKart 1.5	msvcrt.dll	_getcwd
+SuperTuxKart 1.5	msvcrt.dll	_getpid
+SuperTuxKart 1.5	msvcrt.dll	_gmtime64
+SuperTuxKart 1.5	msvcrt.dll	_hypot
+SuperTuxKart 1.5	msvcrt.dll	_i64toa
+SuperTuxKart 1.5	msvcrt.dll	_initterm
+SuperTuxKart 1.5	msvcrt.dll	_isctype
+SuperTuxKart 1.5	msvcrt.dll	_itoa
+SuperTuxKart 1.5	msvcrt.dll	_localtime64
+SuperTuxKart 1.5	msvcrt.dll	_lock
+SuperTuxKart 1.5	msvcrt.dll	_lseeki64
+SuperTuxKart 1.5	msvcrt.dll	_ltoa
+SuperTuxKart 1.5	msvcrt.dll	_mktime64
+SuperTuxKart 1.5	msvcrt.dll	_onexit
+SuperTuxKart 1.5	msvcrt.dll	_open
+SuperTuxKart 1.5	msvcrt.dll	_putenv
+SuperTuxKart 1.5	msvcrt.dll	_read
+SuperTuxKart 1.5	msvcrt.dll	_setjmp
+SuperTuxKart 1.5	msvcrt.dll	_snprintf
+SuperTuxKart 1.5	msvcrt.dll	_stat64
+SuperTuxKart 1.5	msvcrt.dll	_strdup
+SuperTuxKart 1.5	msvcrt.dll	_stricmp
+SuperTuxKart 1.5	msvcrt.dll	_strlwr
+SuperTuxKart 1.5	msvcrt.dll	_strnicmp
+SuperTuxKart 1.5	msvcrt.dll	_strrev
+SuperTuxKart 1.5	msvcrt.dll	_strupr
+SuperTuxKart 1.5	msvcrt.dll	_sys_errlist
+SuperTuxKart 1.5	msvcrt.dll	_sys_nerr
+SuperTuxKart 1.5	msvcrt.dll	_time64
+SuperTuxKart 1.5	msvcrt.dll	_ui64toa
+SuperTuxKart 1.5	msvcrt.dll	_ultoa
+SuperTuxKart 1.5	msvcrt.dll	_unlink
+SuperTuxKart 1.5	msvcrt.dll	_unlock
+SuperTuxKart 1.5	msvcrt.dll	_vsnprintf
+SuperTuxKart 1.5	msvcrt.dll	_vsnwprintf
+SuperTuxKart 1.5	msvcrt.dll	_waccess
+SuperTuxKart 1.5	msvcrt.dll	_wchdir
+SuperTuxKart 1.5	msvcrt.dll	_wcsicmp
+SuperTuxKart 1.5	msvcrt.dll	_wcsnicmp
+SuperTuxKart 1.5	msvcrt.dll	_wfindfirst64
+SuperTuxKart 1.5	msvcrt.dll	_wfindnext64
+SuperTuxKart 1.5	msvcrt.dll	_wfopen
+SuperTuxKart 1.5	msvcrt.dll	_wfullpath
+SuperTuxKart 1.5	msvcrt.dll	_wgetcwd
+SuperTuxKart 1.5	msvcrt.dll	_wgetenv
+SuperTuxKart 1.5	msvcrt.dll	_wmkdir
+SuperTuxKart 1.5	msvcrt.dll	_wopen
+SuperTuxKart 1.5	msvcrt.dll	_wremove
+SuperTuxKart 1.5	msvcrt.dll	_wrename
+SuperTuxKart 1.5	msvcrt.dll	_write
+SuperTuxKart 1.5	msvcrt.dll	_wstat64
+SuperTuxKart 1.5	msvcrt.dll	abort
+SuperTuxKart 1.5	msvcrt.dll	acos
+SuperTuxKart 1.5	msvcrt.dll	asin
+SuperTuxKart 1.5	msvcrt.dll	atan
+SuperTuxKart 1.5	msvcrt.dll	atof
+SuperTuxKart 1.5	msvcrt.dll	atoi
+SuperTuxKart 1.5	msvcrt.dll	atol
+SuperTuxKart 1.5	msvcrt.dll	bsearch
+SuperTuxKart 1.5	msvcrt.dll	calloc
+SuperTuxKart 1.5	msvcrt.dll	clearerr
+SuperTuxKart 1.5	msvcrt.dll	cosh
+SuperTuxKart 1.5	msvcrt.dll	exit
+SuperTuxKart 1.5	msvcrt.dll	fclose
+SuperTuxKart 1.5	msvcrt.dll	feof
+SuperTuxKart 1.5	msvcrt.dll	ferror
+SuperTuxKart 1.5	msvcrt.dll	fflush
+SuperTuxKart 1.5	msvcrt.dll	fgetpos
+SuperTuxKart 1.5	msvcrt.dll	fgets
+SuperTuxKart 1.5	msvcrt.dll	fopen
+SuperTuxKart 1.5	msvcrt.dll	fprintf
+SuperTuxKart 1.5	msvcrt.dll	fputc
+SuperTuxKart 1.5	msvcrt.dll	fputs
+SuperTuxKart 1.5	msvcrt.dll	fread
+SuperTuxKart 1.5	msvcrt.dll	free
+SuperTuxKart 1.5	msvcrt.dll	frexp
+SuperTuxKart 1.5	msvcrt.dll	fseek
+SuperTuxKart 1.5	msvcrt.dll	fsetpos
+SuperTuxKart 1.5	msvcrt.dll	ftell
+SuperTuxKart 1.5	msvcrt.dll	fwrite
+SuperTuxKart 1.5	msvcrt.dll	getc
+SuperTuxKart 1.5	msvcrt.dll	getenv
+SuperTuxKart 1.5	msvcrt.dll	getwc
+SuperTuxKart 1.5	msvcrt.dll	isalnum
+SuperTuxKart 1.5	msvcrt.dll	isalpha
+SuperTuxKart 1.5	msvcrt.dll	iscntrl
+SuperTuxKart 1.5	msvcrt.dll	isgraph
+SuperTuxKart 1.5	msvcrt.dll	islower
+SuperTuxKart 1.5	msvcrt.dll	isprint
+SuperTuxKart 1.5	msvcrt.dll	ispunct
+SuperTuxKart 1.5	msvcrt.dll	isspace
+SuperTuxKart 1.5	msvcrt.dll	isupper
+SuperTuxKart 1.5	msvcrt.dll	iswctype
+SuperTuxKart 1.5	msvcrt.dll	isxdigit
+SuperTuxKart 1.5	msvcrt.dll	localeconv
+SuperTuxKart 1.5	msvcrt.dll	log10
+SuperTuxKart 1.5	msvcrt.dll	longjmp
+SuperTuxKart 1.5	msvcrt.dll	malloc
+SuperTuxKart 1.5	msvcrt.dll	mbstowcs
+SuperTuxKart 1.5	msvcrt.dll	memchr
+SuperTuxKart 1.5	msvcrt.dll	memcmp
+SuperTuxKart 1.5	msvcrt.dll	memcpy
+SuperTuxKart 1.5	msvcrt.dll	memmove
+SuperTuxKart 1.5	msvcrt.dll	memset
+SuperTuxKart 1.5	msvcrt.dll	printf
+SuperTuxKart 1.5	msvcrt.dll	putc
+SuperTuxKart 1.5	msvcrt.dll	putchar
+SuperTuxKart 1.5	msvcrt.dll	puts
+SuperTuxKart 1.5	msvcrt.dll	putwc
+SuperTuxKart 1.5	msvcrt.dll	qsort
+SuperTuxKart 1.5	msvcrt.dll	rand
+SuperTuxKart 1.5	msvcrt.dll	realloc
+SuperTuxKart 1.5	msvcrt.dll	remove
+SuperTuxKart 1.5	msvcrt.dll	rewind
+SuperTuxKart 1.5	msvcrt.dll	setbuf
+SuperTuxKart 1.5	msvcrt.dll	setlocale
+SuperTuxKart 1.5	msvcrt.dll	setvbuf
+SuperTuxKart 1.5	msvcrt.dll	signal
+SuperTuxKart 1.5	msvcrt.dll	sinh
+SuperTuxKart 1.5	msvcrt.dll	sprintf
+SuperTuxKart 1.5	msvcrt.dll	srand
+SuperTuxKart 1.5	msvcrt.dll	sscanf
+SuperTuxKart 1.5	msvcrt.dll	strcat
+SuperTuxKart 1.5	msvcrt.dll	strchr
+SuperTuxKart 1.5	msvcrt.dll	strcmp
+SuperTuxKart 1.5	msvcrt.dll	strcoll
+SuperTuxKart 1.5	msvcrt.dll	strcpy
+SuperTuxKart 1.5	msvcrt.dll	strcspn
+SuperTuxKart 1.5	msvcrt.dll	strerror
+SuperTuxKart 1.5	msvcrt.dll	strftime
+SuperTuxKart 1.5	msvcrt.dll	strlen
+SuperTuxKart 1.5	msvcrt.dll	strncmp
+SuperTuxKart 1.5	msvcrt.dll	strncpy
+SuperTuxKart 1.5	msvcrt.dll	strpbrk
+SuperTuxKart 1.5	msvcrt.dll	strrchr
+SuperTuxKart 1.5	msvcrt.dll	strspn
+SuperTuxKart 1.5	msvcrt.dll	strstr
+SuperTuxKart 1.5	msvcrt.dll	strtol
+SuperTuxKart 1.5	msvcrt.dll	strtoul
+SuperTuxKart 1.5	msvcrt.dll	strxfrm
+SuperTuxKart 1.5	msvcrt.dll	tan
+SuperTuxKart 1.5	msvcrt.dll	tanh
+SuperTuxKart 1.5	msvcrt.dll	tolower
+SuperTuxKart 1.5	msvcrt.dll	toupper
+SuperTuxKart 1.5	msvcrt.dll	towlower
+SuperTuxKart 1.5	msvcrt.dll	towupper
+SuperTuxKart 1.5	msvcrt.dll	ungetc
+SuperTuxKart 1.5	msvcrt.dll	ungetwc
+SuperTuxKart 1.5	msvcrt.dll	vfprintf
+SuperTuxKart 1.5	msvcrt.dll	wcscmp
+SuperTuxKart 1.5	msvcrt.dll	wcscoll
+SuperTuxKart 1.5	msvcrt.dll	wcscpy
+SuperTuxKart 1.5	msvcrt.dll	wcsftime
+SuperTuxKart 1.5	msvcrt.dll	wcslen
+SuperTuxKart 1.5	msvcrt.dll	wcsncmp
+SuperTuxKart 1.5	msvcrt.dll	wcsstr
+SuperTuxKart 1.5	msvcrt.dll	wcstombs
+SuperTuxKart 1.5	msvcrt.dll	wcsxfrm
+SuperTuxKart 1.5	ole32.dll	CLSIDFromString
+SuperTuxKart 1.5	ole32.dll	CoCreateInstance
+SuperTuxKart 1.5	ole32.dll	CoInitialize
+SuperTuxKart 1.5	ole32.dll	CoInitializeEx
+SuperTuxKart 1.5	ole32.dll	CoTaskMemFree
+SuperTuxKart 1.5	ole32.dll	CoUninitialize
+SuperTuxKart 1.5	ole32.dll	PropVariantClear
+SuperTuxKart 1.5	ole32.dll	StringFromCLSID
+SuperTuxKart 1.5	oleaut32.dll	SysFreeString
+SuperTuxKart 1.5	rpcrt4.dll	UuidCreate
+SuperTuxKart 1.5	rpcrt4.dll	UuidCreateSequential
+SuperTuxKart 1.5	setupapi.dll	SetupDiDestroyDeviceInfoList
+SuperTuxKart 1.5	setupapi.dll	SetupDiEnumDeviceInfo
+SuperTuxKart 1.5	setupapi.dll	SetupDiEnumDeviceInterfaces
+SuperTuxKart 1.5	setupapi.dll	SetupDiGetClassDevsA
+SuperTuxKart 1.5	setupapi.dll	SetupDiGetClassDevsW
+SuperTuxKart 1.5	setupapi.dll	SetupDiGetDeviceInterfaceDetailA
+SuperTuxKart 1.5	setupapi.dll	SetupDiGetDeviceInterfaceDetailW
+SuperTuxKart 1.5	setupapi.dll	SetupDiGetDeviceRegistryPropertyA
+SuperTuxKart 1.5	shell32.dll	DragAcceptFiles
+SuperTuxKart 1.5	shell32.dll	DragFinish
+SuperTuxKart 1.5	shell32.dll	DragQueryFileW
+SuperTuxKart 1.5	shell32.dll	SHGetFolderPathW
+SuperTuxKart 1.5	shell32.dll	SHGetSpecialFolderPathW
+SuperTuxKart 1.5	shell32.dll	ShellExecuteA
+SuperTuxKart 1.5	shell32.dll	ShellExecuteW
+SuperTuxKart 1.5	user32.dll	AdjustWindowRectEx
+SuperTuxKart 1.5	user32.dll	AttachThreadInput
+SuperTuxKart 1.5	user32.dll	CallNextHookEx
+SuperTuxKart 1.5	user32.dll	CallWindowProcW
+SuperTuxKart 1.5	user32.dll	ChangeDisplaySettingsExW
+SuperTuxKart 1.5	user32.dll	ClientToScreen
+SuperTuxKart 1.5	user32.dll	ClipCursor
+SuperTuxKart 1.5	user32.dll	CloseClipboard
+SuperTuxKart 1.5	user32.dll	CopyImage
+SuperTuxKart 1.5	user32.dll	CreateIconFromResource
+SuperTuxKart 1.5	user32.dll	CreateIconIndirect
+SuperTuxKart 1.5	user32.dll	CreateWindowExA
+SuperTuxKart 1.5	user32.dll	CreateWindowExW
+SuperTuxKart 1.5	user32.dll	DefWindowProcW
+SuperTuxKart 1.5	user32.dll	DestroyIcon
+SuperTuxKart 1.5	user32.dll	DestroyWindow
+SuperTuxKart 1.5	user32.dll	DialogBoxIndirectParamW
+SuperTuxKart 1.5	user32.dll	DispatchMessageW
+SuperTuxKart 1.5	user32.dll	DrawTextW
+SuperTuxKart 1.5	user32.dll	EmptyClipboard
+SuperTuxKart 1.5	user32.dll	EndDialog
+SuperTuxKart 1.5	user32.dll	EnumDisplayDevicesW
+SuperTuxKart 1.5	user32.dll	EnumDisplayMonitors
+SuperTuxKart 1.5	user32.dll	EnumDisplaySettingsW
+SuperTuxKart 1.5	user32.dll	FillRect
+SuperTuxKart 1.5	user32.dll	FlashWindowEx
+SuperTuxKart 1.5	user32.dll	GetAsyncKeyState
+SuperTuxKart 1.5	user32.dll	GetClassInfoExW
+SuperTuxKart 1.5	user32.dll	GetClientRect
+SuperTuxKart 1.5	user32.dll	GetClipCursor
+SuperTuxKart 1.5	user32.dll	GetClipboardData
+SuperTuxKart 1.5	user32.dll	GetClipboardSequenceNumber
+SuperTuxKart 1.5	user32.dll	GetCursorPos
+SuperTuxKart 1.5	user32.dll	GetDC
+SuperTuxKart 1.5	user32.dll	GetDesktopWindow
+SuperTuxKart 1.5	user32.dll	GetDlgItem
+SuperTuxKart 1.5	user32.dll	GetDoubleClickTime
+SuperTuxKart 1.5	user32.dll	GetFocus
+SuperTuxKart 1.5	user32.dll	GetForegroundWindow
+SuperTuxKart 1.5	user32.dll	GetKeyState
+SuperTuxKart 1.5	user32.dll	GetKeyboardLayout
+SuperTuxKart 1.5	user32.dll	GetKeyboardState
+SuperTuxKart 1.5	user32.dll	GetMenu
+SuperTuxKart 1.5	user32.dll	GetMessageExtraInfo
+SuperTuxKart 1.5	user32.dll	GetMessageTime
+SuperTuxKart 1.5	user32.dll	GetMessageW
+SuperTuxKart 1.5	user32.dll	GetMonitorInfoW
+SuperTuxKart 1.5	user32.dll	GetParent
+SuperTuxKart 1.5	user32.dll	GetPropW
+SuperTuxKart 1.5	user32.dll	GetRawInputData
+SuperTuxKart 1.5	user32.dll	GetRawInputDeviceInfoA
+SuperTuxKart 1.5	user32.dll	GetRawInputDeviceList
+SuperTuxKart 1.5	user32.dll	GetSystemMetrics
+SuperTuxKart 1.5	user32.dll	GetUpdateRect
+SuperTuxKart 1.5	user32.dll	GetWindowLongPtrW
+SuperTuxKart 1.5	user32.dll	GetWindowLongW
+SuperTuxKart 1.5	user32.dll	GetWindowRect
+SuperTuxKart 1.5	user32.dll	GetWindowTextLengthW
+SuperTuxKart 1.5	user32.dll	GetWindowTextW
+SuperTuxKart 1.5	user32.dll	GetWindowThreadProcessId
+SuperTuxKart 1.5	user32.dll	IntersectRect
+SuperTuxKart 1.5	user32.dll	InvalidateRect
+SuperTuxKart 1.5	user32.dll	IsClipboardFormatAvailable
+SuperTuxKart 1.5	user32.dll	IsIconic
+SuperTuxKart 1.5	user32.dll	KillTimer
+SuperTuxKart 1.5	user32.dll	LoadCursorW
+SuperTuxKart 1.5	user32.dll	LoadIconW
+SuperTuxKart 1.5	user32.dll	MapVirtualKeyW
+SuperTuxKart 1.5	user32.dll	MessageBoxA
+SuperTuxKart 1.5	user32.dll	MonitorFromPoint
+SuperTuxKart 1.5	user32.dll	MonitorFromRect
+SuperTuxKart 1.5	user32.dll	MonitorFromWindow
+SuperTuxKart 1.5	user32.dll	MsgWaitForMultipleObjects
+SuperTuxKart 1.5	user32.dll	OpenClipboard
+SuperTuxKart 1.5	user32.dll	PeekMessageW
+SuperTuxKart 1.5	user32.dll	PostMessageW
+SuperTuxKart 1.5	user32.dll	PostQuitMessage
+SuperTuxKart 1.5	user32.dll	PostThreadMessageW
+SuperTuxKart 1.5	user32.dll	PtInRect
+SuperTuxKart 1.5	user32.dll	RegisterClassExA
+SuperTuxKart 1.5	user32.dll	RegisterClassExW
+SuperTuxKart 1.5	user32.dll	RegisterClassW
+SuperTuxKart 1.5	user32.dll	RegisterDeviceNotificationW
+SuperTuxKart 1.5	user32.dll	RegisterRawInputDevices
+SuperTuxKart 1.5	user32.dll	RegisterWindowMessageA
+SuperTuxKart 1.5	user32.dll	ReleaseCapture
+SuperTuxKart 1.5	user32.dll	ReleaseDC
+SuperTuxKart 1.5	user32.dll	RemovePropW
+SuperTuxKart 1.5	user32.dll	ScreenToClient
+SuperTuxKart 1.5	user32.dll	SendMessageW
+SuperTuxKart 1.5	user32.dll	SetActiveWindow
+SuperTuxKart 1.5	user32.dll	SetCapture
+SuperTuxKart 1.5	user32.dll	SetClipboardData
+SuperTuxKart 1.5	user32.dll	SetCursor
+SuperTuxKart 1.5	user32.dll	SetCursorPos
+SuperTuxKart 1.5	user32.dll	SetFocus
+SuperTuxKart 1.5	user32.dll	SetForegroundWindow
+SuperTuxKart 1.5	user32.dll	SetLayeredWindowAttributes
+SuperTuxKart 1.5	user32.dll	SetPropW
+SuperTuxKart 1.5	user32.dll	SetTimer
+SuperTuxKart 1.5	user32.dll	SetWindowLongPtrW
+SuperTuxKart 1.5	user32.dll	SetWindowLongW
+SuperTuxKart 1.5	user32.dll	SetWindowPos
+SuperTuxKart 1.5	user32.dll	SetWindowRgn
+SuperTuxKart 1.5	user32.dll	SetWindowTextW
+SuperTuxKart 1.5	user32.dll	SetWindowsHookExW
+SuperTuxKart 1.5	user32.dll	ShowWindow
+SuperTuxKart 1.5	user32.dll	SystemParametersInfoA
+SuperTuxKart 1.5	user32.dll	SystemParametersInfoW
+SuperTuxKart 1.5	user32.dll	ToUnicode
+SuperTuxKart 1.5	user32.dll	TrackMouseEvent
+SuperTuxKart 1.5	user32.dll	TranslateMessage
+SuperTuxKart 1.5	user32.dll	UnhookWindowsHookEx
+SuperTuxKart 1.5	user32.dll	UnregisterClassA
+SuperTuxKart 1.5	user32.dll	UnregisterClassW
+SuperTuxKart 1.5	user32.dll	UnregisterDeviceNotification
+SuperTuxKart 1.5	user32.dll	ValidateRect
+SuperTuxKart 1.5	version.dll	GetFileVersionInfoA
+SuperTuxKart 1.5	version.dll	GetFileVersionInfoSizeA
+SuperTuxKart 1.5	version.dll	VerQueryValueA
+SuperTuxKart 1.5	winmm.dll	timeBeginPeriod
+SuperTuxKart 1.5	winmm.dll	timeEndPeriod
+SuperTuxKart 1.5	winmm.dll	timeGetTime
+SuperTuxKart 1.5	winmm.dll	waveInAddBuffer
+SuperTuxKart 1.5	winmm.dll	waveInClose
+SuperTuxKart 1.5	winmm.dll	waveInGetDevCapsW
+SuperTuxKart 1.5	winmm.dll	waveInGetNumDevs
+SuperTuxKart 1.5	winmm.dll	waveInOpen
+SuperTuxKart 1.5	winmm.dll	waveInPrepareHeader
+SuperTuxKart 1.5	winmm.dll	waveInReset
+SuperTuxKart 1.5	winmm.dll	waveInStart
+SuperTuxKart 1.5	winmm.dll	waveInStop
+SuperTuxKart 1.5	winmm.dll	waveInUnprepareHeader
+SuperTuxKart 1.5	winmm.dll	waveOutClose
+SuperTuxKart 1.5	winmm.dll	waveOutGetDevCapsW
+SuperTuxKart 1.5	winmm.dll	waveOutGetErrorTextW
+SuperTuxKart 1.5	winmm.dll	waveOutGetNumDevs
+SuperTuxKart 1.5	winmm.dll	waveOutOpen
+SuperTuxKart 1.5	winmm.dll	waveOutPrepareHeader
+SuperTuxKart 1.5	winmm.dll	waveOutReset
+SuperTuxKart 1.5	winmm.dll	waveOutUnprepareHeader
+SuperTuxKart 1.5	winmm.dll	waveOutWrite
+SuperTuxKart 1.5	ws2_32.dll	WSACleanup
+SuperTuxKart 1.5	ws2_32.dll	WSACloseEvent
+SuperTuxKart 1.5	ws2_32.dll	WSACreateEvent
+SuperTuxKart 1.5	ws2_32.dll	WSAEnumNetworkEvents
+SuperTuxKart 1.5	ws2_32.dll	WSAEventSelect
+SuperTuxKart 1.5	ws2_32.dll	WSAGetLastError
+SuperTuxKart 1.5	ws2_32.dll	WSAIoctl
+SuperTuxKart 1.5	ws2_32.dll	WSARecvFrom
+SuperTuxKart 1.5	ws2_32.dll	WSAResetEvent
+SuperTuxKart 1.5	ws2_32.dll	WSASendTo
+SuperTuxKart 1.5	ws2_32.dll	WSASetEvent
+SuperTuxKart 1.5	ws2_32.dll	WSASetLastError
+SuperTuxKart 1.5	ws2_32.dll	WSAStartup
+SuperTuxKart 1.5	ws2_32.dll	WSAWaitForMultipleEvents
+SuperTuxKart 1.5	ws2_32.dll	__WSAFDIsSet
+SuperTuxKart 1.5	ws2_32.dll	accept
+SuperTuxKart 1.5	ws2_32.dll	bind
+SuperTuxKart 1.5	ws2_32.dll	closesocket
+SuperTuxKart 1.5	ws2_32.dll	connect
+SuperTuxKart 1.5	ws2_32.dll	freeaddrinfo
+SuperTuxKart 1.5	ws2_32.dll	getaddrinfo
+SuperTuxKart 1.5	ws2_32.dll	gethostname
+SuperTuxKart 1.5	ws2_32.dll	getpeername
+SuperTuxKart 1.5	ws2_32.dll	getsockname
+SuperTuxKart 1.5	ws2_32.dll	getsockopt
+SuperTuxKart 1.5	ws2_32.dll	htonl
+SuperTuxKart 1.5	ws2_32.dll	htons
+SuperTuxKart 1.5	ws2_32.dll	ioctlsocket
+SuperTuxKart 1.5	ws2_32.dll	listen
+SuperTuxKart 1.5	ws2_32.dll	ntohs
+SuperTuxKart 1.5	ws2_32.dll	recv
+SuperTuxKart 1.5	ws2_32.dll	recvfrom
+SuperTuxKart 1.5	ws2_32.dll	select
+SuperTuxKart 1.5	ws2_32.dll	send
+SuperTuxKart 1.5	ws2_32.dll	setsockopt
+SuperTuxKart 1.5	ws2_32.dll	shutdown
+SuperTuxKart 1.5	ws2_32.dll	socket
+SuperTuxKart 1.5	wsock32.dll	WSACleanup
+SuperTuxKart 1.5	wsock32.dll	WSAGetLastError
+SuperTuxKart 1.5	wsock32.dll	WSAStartup
+SuperTuxKart 1.5	wsock32.dll	__WSAFDIsSet
+SuperTuxKart 1.5	wsock32.dll	accept
+SuperTuxKart 1.5	wsock32.dll	bind
+SuperTuxKart 1.5	wsock32.dll	closesocket
+SuperTuxKart 1.5	wsock32.dll	connect
+SuperTuxKart 1.5	wsock32.dll	gethostbyaddr
+SuperTuxKart 1.5	wsock32.dll	gethostbyname
+SuperTuxKart 1.5	wsock32.dll	getsockname
+SuperTuxKart 1.5	wsock32.dll	getsockopt
+SuperTuxKart 1.5	wsock32.dll	htonl
+SuperTuxKart 1.5	wsock32.dll	htons
+SuperTuxKart 1.5	wsock32.dll	inet_ntoa
+SuperTuxKart 1.5	wsock32.dll	ioctlsocket
+SuperTuxKart 1.5	wsock32.dll	listen
+SuperTuxKart 1.5	wsock32.dll	ntohl
+SuperTuxKart 1.5	wsock32.dll	ntohs
+SuperTuxKart 1.5	wsock32.dll	recvfrom
+SuperTuxKart 1.5	wsock32.dll	select
+SuperTuxKart 1.5	wsock32.dll	sendto
+SuperTuxKart 1.5	wsock32.dll	setsockopt
+SuperTuxKart 1.5	wsock32.dll	shutdown
+SuperTuxKart 1.5	wsock32.dll	socket
+Warzone 2100 4.7.0	advapi32.dll	BuildExplicitAccessWithNameW
+Warzone 2100 4.7.0	advapi32.dll	BuildSecurityDescriptorW
+Warzone 2100 4.7.0	advapi32.dll	ConvertStringSecurityDescriptorToSecurityDescriptorW
+Warzone 2100 4.7.0	advapi32.dll	CryptAcquireContextA
+Warzone 2100 4.7.0	advapi32.dll	CryptAcquireContextW
+Warzone 2100 4.7.0	advapi32.dll	CryptCreateHash
+Warzone 2100 4.7.0	advapi32.dll	CryptDestroyHash
+Warzone 2100 4.7.0	advapi32.dll	CryptDestroyKey
+Warzone 2100 4.7.0	advapi32.dll	CryptEncrypt
+Warzone 2100 4.7.0	advapi32.dll	CryptGenRandom
+Warzone 2100 4.7.0	advapi32.dll	CryptGetHashParam
+Warzone 2100 4.7.0	advapi32.dll	CryptHashData
+Warzone 2100 4.7.0	advapi32.dll	CryptImportKey
+Warzone 2100 4.7.0	advapi32.dll	CryptReleaseContext
+Warzone 2100 4.7.0	advapi32.dll	GetSecurityInfo
+Warzone 2100 4.7.0	advapi32.dll	GetUserNameA
+Warzone 2100 4.7.0	advapi32.dll	ImpersonateNamedPipeClient
+Warzone 2100 4.7.0	advapi32.dll	OpenProcessToken
+Warzone 2100 4.7.0	advapi32.dll	RegCloseKey
+Warzone 2100 4.7.0	advapi32.dll	RegCreateKeyExW
+Warzone 2100 4.7.0	advapi32.dll	RegGetValueA
+Warzone 2100 4.7.0	advapi32.dll	RegOpenKeyExA
+Warzone 2100 4.7.0	advapi32.dll	RegOpenKeyExW
+Warzone 2100 4.7.0	advapi32.dll	RegQueryValueExA
+Warzone 2100 4.7.0	advapi32.dll	RegQueryValueExW
+Warzone 2100 4.7.0	advapi32.dll	RegSetKeyValueW
+Warzone 2100 4.7.0	advapi32.dll	RegSetValueExW
+Warzone 2100 4.7.0	advapi32.dll	RevertToSelf
+Warzone 2100 4.7.0	advapi32.dll	SystemFunction036
+Warzone 2100 4.7.0	api-ms-win-core-synch-l1-2-0.dll	Sleep
+Warzone 2100 4.7.0	api-ms-win-core-synch-l1-2-0.dll	WaitOnAddress
+Warzone 2100 4.7.0	api-ms-win-core-synch-l1-2-0.dll	WakeByAddressSingle
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_i64toa
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_itoa
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_ltoa
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_strtod_l
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_strtoi64_l
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_strtoui64_l
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_ui64toa
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	_ultoa
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	atof
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	atoi
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	atol
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	btowc
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	mbrtowc
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	mbsrtowcs
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	mbstowcs
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtod
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtof
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtol
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtoll
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtoul
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	strtoull
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcrtomb
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcrtomb_s
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstod
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstol
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstoll
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstombs
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstoul
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wcstoull
+Warzone 2100 4.7.0	api-ms-win-crt-convert-l1-1-0.dll	wctob
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	__p__environ
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	__p__wenviron
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	_putenv_s
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	_wgetcwd
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	_wgetenv
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	getenv
+Warzone 2100 4.7.0	api-ms-win-crt-environment-l1-1-0.dll	getenv_s
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_fstat64i32
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_fullpath
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_lock_file
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_stat64i32
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_unlink
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_unlock_file
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_waccess
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_wchdir
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_wfullpath
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_wmkdir
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_wstat64
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	_wstat64i32
+Warzone 2100 4.7.0	api-ms-win-crt-filesystem-l1-1-0.dll	remove
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	_aligned_free
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	_aligned_malloc
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	_msize
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	_set_new_mode
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	calloc
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	free
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	malloc
+Warzone 2100 4.7.0	api-ms-win-crt-heap-l1-1-0.dll	realloc
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	___lc_codepage_func
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	___mb_cur_max_func
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	__pctype_func
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	_configthreadlocale
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	_create_locale
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	_free_locale
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	localeconv
+Warzone 2100 4.7.0	api-ms-win-crt-locale-l1-1-0.dll	setlocale
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	__setusermatherr
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	_fdopen
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	_hypot
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	acos
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	acosf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	acosh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	acoshf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	asin
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	asinf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	asinh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	asinhf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atan
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atan2
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atan2f
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atanf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atanh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	atanhf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	cbrt
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	cbrtf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	ceil
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	ceilf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	cos
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	cosf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	cosh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	coshf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	exp
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	exp2
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	exp2f
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	expf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	expm1
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	floor
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	floorf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	fmaf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	fmod
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	fmodf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	frexp
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	hypot
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log10
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log10f
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log1p
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log2
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	log2f
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	logb
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	logbf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	logf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	lrint
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	lrintf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	lround
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	lroundf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	modf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	modff
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	nearbyintf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	nextafterf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	pow
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	powf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	remainderf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	rint
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	round
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	roundf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sin
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sinf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sinh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sinhf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sqrt
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	sqrtf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	tan
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	tanf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	tanh
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	tanhf
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	trunc
+Warzone 2100 4.7.0	api-ms-win-crt-math-l1-1-0.dll	truncf
+Warzone 2100 4.7.0	api-ms-win-crt-multibyte-l1-1-0.dll	_ismbblead
+Warzone 2100 4.7.0	api-ms-win-crt-multibyte-l1-1-0.dll	_mbtowc_l
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	__intrinsic_setjmpex
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	longjmp
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	memchr
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	memcmp
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	memcpy
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	memmove
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	strchr
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	strrchr
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	strstr
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	wcschr
+Warzone 2100 4.7.0	api-ms-win-crt-private-l1-1-0.dll	wcsstr
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	__p___argc
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	__p___argv
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	__p___wargv
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	__p__acmdln
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	__sys_nerr
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_assert
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_beginthreadex
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_cexit
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_configure_narrow_argv
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_configure_wide_argv
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_crt_atexit
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_endthreadex
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_errno
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_execute_onexit_table
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_exit
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_initialize_narrow_environment
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_initialize_onexit_table
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_initialize_wide_environment
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_initterm
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_initterm_e
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_register_onexit_function
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_register_thread_local_exe_atexit_callback
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_set_app_type
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_set_errno
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	_set_invalid_parameter_handler
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	abort
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	exit
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	perror
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	raise
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	signal
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	strerror
+Warzone 2100 4.7.0	api-ms-win-crt-runtime-l1-1-0.dll	strerror_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__acrt_iob_func
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__p__commode
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__p__fmode
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vfprintf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vfwprintf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vsnprintf_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vsnwprintf_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vsprintf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vsprintf_p
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vsscanf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	__stdio_common_vswprintf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_close
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_dup
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_dup2
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_filelengthi64
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_fileno
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_fseeki64
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_ftelli64
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_get_osfhandle
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_isatty
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_locking
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_lseeki64
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_open
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_pipe
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_read
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_setmode
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wfopen
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wfreopen
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wfreopen_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wfsopen
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wopen
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_write
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	_wsopen_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fclose
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	feof
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	ferror
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fflush
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fgetc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fgetpos
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fgets
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fgetwc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fopen
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fputc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fputs
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fputwc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fread
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	freopen_s
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fseek
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fsetpos
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	ftell
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	fwrite
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	getc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	putc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	setbuf
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	ungetc
+Warzone 2100 4.7.0	api-ms-win-crt-stdio-l1-1-0.dll	ungetwc
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_isctype_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswalpha_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswcntrl_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswdigit_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswlower_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswprint_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswpunct_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswspace_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswupper_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_iswxdigit_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_memicmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_strcoll_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_strdup
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_stricmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_strnicmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_strrev
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_strxfrm_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_tolower_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_toupper_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_towlower_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_towupper_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_wcscoll_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_wcsdup
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_wcsicmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	_wcsxfrm_l
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isalnum
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isalpha
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isdigit
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isspace
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isupper
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	isxdigit
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	mbrlen
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	memcpy_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	memset
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strcat
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strcat_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strcmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strcpy
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strcspn
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strlen
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strncat
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strncmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strncpy
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strncpy_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strnlen
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strpbrk
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	strspn
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	tolower
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	toupper
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	towupper
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcscmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcscpy
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcscpy_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcslen
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcsncat_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcsncmp
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcsncpy_s
+Warzone 2100 4.7.0	api-ms-win-crt-string-l1-1-0.dll	wcsnlen
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	__dstbias
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	__timezone
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	__tzname
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_ctime64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_gmtime64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_gmtime64_s
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_localtime64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_localtime64_s
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_mkgmtime64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_mktime64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_strftime_l
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	_time64
+Warzone 2100 4.7.0	api-ms-win-crt-time-l1-1-0.dll	strftime
+Warzone 2100 4.7.0	api-ms-win-crt-utility-l1-1-0.dll	bsearch
+Warzone 2100 4.7.0	api-ms-win-crt-utility-l1-1-0.dll	qsort
+Warzone 2100 4.7.0	api-ms-win-crt-utility-l1-1-0.dll	rand
+Warzone 2100 4.7.0	api-ms-win-crt-utility-l1-1-0.dll	rand_s
+Warzone 2100 4.7.0	api-ms-win-crt-utility-l1-1-0.dll	srand
+Warzone 2100 4.7.0	avrt.dll	AvRevertMmThreadCharacteristics
+Warzone 2100 4.7.0	avrt.dll	AvSetMmThreadCharacteristicsW
+Warzone 2100 4.7.0	bcrypt.dll	BCryptCloseAlgorithmProvider
+Warzone 2100 4.7.0	bcrypt.dll	BCryptGenRandom
+Warzone 2100 4.7.0	bcrypt.dll	BCryptOpenAlgorithmProvider
+Warzone 2100 4.7.0	crypt32.dll	CertAddCertificateContextToStore
+Warzone 2100 4.7.0	crypt32.dll	CertCloseStore
+Warzone 2100 4.7.0	crypt32.dll	CertCreateCertificateChainEngine
+Warzone 2100 4.7.0	crypt32.dll	CertEnumCertificatesInStore
+Warzone 2100 4.7.0	crypt32.dll	CertFindCertificateInStore
+Warzone 2100 4.7.0	crypt32.dll	CertFindExtension
+Warzone 2100 4.7.0	crypt32.dll	CertFreeCRLContext
+Warzone 2100 4.7.0	crypt32.dll	CertFreeCTLContext
+Warzone 2100 4.7.0	crypt32.dll	CertFreeCertificateChain
+Warzone 2100 4.7.0	crypt32.dll	CertFreeCertificateChainEngine
+Warzone 2100 4.7.0	crypt32.dll	CertFreeCertificateContext
+Warzone 2100 4.7.0	crypt32.dll	CertGetCertificateChain
+Warzone 2100 4.7.0	crypt32.dll	CertGetNameStringW
+Warzone 2100 4.7.0	crypt32.dll	CertOpenStore
+Warzone 2100 4.7.0	crypt32.dll	CryptDecodeObjectEx
+Warzone 2100 4.7.0	crypt32.dll	CryptQueryObject
+Warzone 2100 4.7.0	crypt32.dll	CryptStringToBinaryW
+Warzone 2100 4.7.0	crypt32.dll	PFXImportCertStore
+Warzone 2100 4.7.0	d3d9.dll	D3DPERF_BeginEvent
+Warzone 2100 4.7.0	d3d9.dll	D3DPERF_EndEvent
+Warzone 2100 4.7.0	d3d9.dll	D3DPERF_GetStatus
+Warzone 2100 4.7.0	d3d9.dll	D3DPERF_SetMarker
+Warzone 2100 4.7.0	d3d9.dll	Direct3DCreate9
+Warzone 2100 4.7.0	dbghelp.dll	MiniDumpWriteDump
+Warzone 2100 4.7.0	dbghelp.dll	StackWalk64
+Warzone 2100 4.7.0	dbghelp.dll	SymFromAddr
+Warzone 2100 4.7.0	dbghelp.dll	SymFromAddrW
+Warzone 2100 4.7.0	dbghelp.dll	SymFunctionTableAccess64
+Warzone 2100 4.7.0	dbghelp.dll	SymGetModuleBase64
+Warzone 2100 4.7.0	dbghelp.dll	SymGetOptions
+Warzone 2100 4.7.0	dbghelp.dll	SymInitialize
+Warzone 2100 4.7.0	dbghelp.dll	SymSetOptions
+Warzone 2100 4.7.0	dxgi.dll	CreateDXGIFactory
+Warzone 2100 4.7.0	dxgi.dll	CreateDXGIFactory1
+Warzone 2100 4.7.0	gdi32.dll	BitBlt
+Warzone 2100 4.7.0	gdi32.dll	ChoosePixelFormat
+Warzone 2100 4.7.0	gdi32.dll	CombineRgn
+Warzone 2100 4.7.0	gdi32.dll	CreateBitmap
+Warzone 2100 4.7.0	gdi32.dll	CreateCompatibleBitmap
+Warzone 2100 4.7.0	gdi32.dll	CreateCompatibleDC
+Warzone 2100 4.7.0	gdi32.dll	CreateDCW
+Warzone 2100 4.7.0	gdi32.dll	CreateDIBSection
+Warzone 2100 4.7.0	gdi32.dll	CreateFontIndirectW
+Warzone 2100 4.7.0	gdi32.dll	CreateRectRgn
+Warzone 2100 4.7.0	gdi32.dll	CreateRectRgnIndirect
+Warzone 2100 4.7.0	gdi32.dll	CreateSolidBrush
+Warzone 2100 4.7.0	gdi32.dll	DeleteDC
+Warzone 2100 4.7.0	gdi32.dll	DeleteObject
+Warzone 2100 4.7.0	gdi32.dll	DescribePixelFormat
+Warzone 2100 4.7.0	gdi32.dll	GetDIBits
+Warzone 2100 4.7.0	gdi32.dll	GetDeviceCaps
+Warzone 2100 4.7.0	gdi32.dll	GetICMProfileW
+Warzone 2100 4.7.0	gdi32.dll	GetPixelFormat
+Warzone 2100 4.7.0	gdi32.dll	GetRgnBox
+Warzone 2100 4.7.0	gdi32.dll	GetTextExtentPoint32A
+Warzone 2100 4.7.0	gdi32.dll	GetTextMetricsW
+Warzone 2100 4.7.0	gdi32.dll	OffsetRgn
+Warzone 2100 4.7.0	gdi32.dll	SelectClipRgn
+Warzone 2100 4.7.0	gdi32.dll	SelectObject
+Warzone 2100 4.7.0	gdi32.dll	SetPixel
+Warzone 2100 4.7.0	gdi32.dll	SetPixelFormat
+Warzone 2100 4.7.0	gdi32.dll	SwapBuffers
+Warzone 2100 4.7.0	imm32.dll	ImmAssociateContext
+Warzone 2100 4.7.0	imm32.dll	ImmGetCandidateListW
+Warzone 2100 4.7.0	imm32.dll	ImmGetCompositionFontW
+Warzone 2100 4.7.0	imm32.dll	ImmGetCompositionStringW
+Warzone 2100 4.7.0	imm32.dll	ImmGetContext
+Warzone 2100 4.7.0	imm32.dll	ImmGetIMEFileNameA
+Warzone 2100 4.7.0	imm32.dll	ImmNotifyIME
+Warzone 2100 4.7.0	imm32.dll	ImmReleaseContext
+Warzone 2100 4.7.0	imm32.dll	ImmSetCandidateWindow
+Warzone 2100 4.7.0	imm32.dll	ImmSetCompositionStringW
+Warzone 2100 4.7.0	imm32.dll	ImmSetCompositionWindow
+Warzone 2100 4.7.0	iphlpapi.dll	FreeMibTable
+Warzone 2100 4.7.0	iphlpapi.dll	GetAdaptersAddresses
+Warzone 2100 4.7.0	iphlpapi.dll	GetBestInterfaceEx
+Warzone 2100 4.7.0	iphlpapi.dll	GetIpForwardTable2
+Warzone 2100 4.7.0	iphlpapi.dll	if_nametoindex
+Warzone 2100 4.7.0	kernel32.dll	AcquireSRWLockExclusive
+Warzone 2100 4.7.0	kernel32.dll	AcquireSRWLockShared
+Warzone 2100 4.7.0	kernel32.dll	AddVectoredExceptionHandler
+Warzone 2100 4.7.0	kernel32.dll	AllocConsole
+Warzone 2100 4.7.0	kernel32.dll	AreFileApisANSI
+Warzone 2100 4.7.0	kernel32.dll	AttachConsole
+Warzone 2100 4.7.0	kernel32.dll	CancelIo
+Warzone 2100 4.7.0	kernel32.dll	CloseHandle
+Warzone 2100 4.7.0	kernel32.dll	CompareFileTime
+Warzone 2100 4.7.0	kernel32.dll	CompareStringA
+Warzone 2100 4.7.0	kernel32.dll	ConnectNamedPipe
+Warzone 2100 4.7.0	kernel32.dll	CopyFileExW
+Warzone 2100 4.7.0	kernel32.dll	CreateDirectoryW
+Warzone 2100 4.7.0	kernel32.dll	CreateEventA
+Warzone 2100 4.7.0	kernel32.dll	CreateEventW
+Warzone 2100 4.7.0	kernel32.dll	CreateFileA
+Warzone 2100 4.7.0	kernel32.dll	CreateFileMappingA
+Warzone 2100 4.7.0	kernel32.dll	CreateFileMappingW
+Warzone 2100 4.7.0	kernel32.dll	CreateFileW
+Warzone 2100 4.7.0	kernel32.dll	CreateHardLinkW
+Warzone 2100 4.7.0	kernel32.dll	CreateIoCompletionPort
+Warzone 2100 4.7.0	kernel32.dll	CreateMutexW
+Warzone 2100 4.7.0	kernel32.dll	CreateNamedPipeW
+Warzone 2100 4.7.0	kernel32.dll	CreatePipe
+Warzone 2100 4.7.0	kernel32.dll	CreateProcessW
+Warzone 2100 4.7.0	kernel32.dll	CreateSemaphoreA
+Warzone 2100 4.7.0	kernel32.dll	CreateSemaphoreW
+Warzone 2100 4.7.0	kernel32.dll	CreateSymbolicLinkW
+Warzone 2100 4.7.0	kernel32.dll	CreateThread
+Warzone 2100 4.7.0	kernel32.dll	CreateToolhelp32Snapshot
+Warzone 2100 4.7.0	kernel32.dll	DebugBreak
+Warzone 2100 4.7.0	kernel32.dll	DeleteCriticalSection
+Warzone 2100 4.7.0	kernel32.dll	DeleteFileA
+Warzone 2100 4.7.0	kernel32.dll	DeleteFileW
+Warzone 2100 4.7.0	kernel32.dll	DeviceIoControl
+Warzone 2100 4.7.0	kernel32.dll	DisconnectNamedPipe
+Warzone 2100 4.7.0	kernel32.dll	DuplicateHandle
+Warzone 2100 4.7.0	kernel32.dll	EnterCriticalSection
+Warzone 2100 4.7.0	kernel32.dll	EnumResourceNamesW
+Warzone 2100 4.7.0	kernel32.dll	EnumSystemLocalesA
+Warzone 2100 4.7.0	kernel32.dll	ExitProcess
+Warzone 2100 4.7.0	kernel32.dll	FileTimeToSystemTime
+Warzone 2100 4.7.0	kernel32.dll	FindClose
+Warzone 2100 4.7.0	kernel32.dll	FindFirstFileA
+Warzone 2100 4.7.0	kernel32.dll	FindFirstFileExW
+Warzone 2100 4.7.0	kernel32.dll	FindFirstFileW
+Warzone 2100 4.7.0	kernel32.dll	FindNextFileW
+Warzone 2100 4.7.0	kernel32.dll	FlsAlloc
+Warzone 2100 4.7.0	kernel32.dll	FlsGetValue
+Warzone 2100 4.7.0	kernel32.dll	FlsSetValue
+Warzone 2100 4.7.0	kernel32.dll	FlushFileBuffers
+Warzone 2100 4.7.0	kernel32.dll	FlushInstructionCache
+Warzone 2100 4.7.0	kernel32.dll	FlushViewOfFile
+Warzone 2100 4.7.0	kernel32.dll	FormatMessageA
+Warzone 2100 4.7.0	kernel32.dll	FormatMessageW
+Warzone 2100 4.7.0	kernel32.dll	FreeEnvironmentStringsW
+Warzone 2100 4.7.0	kernel32.dll	FreeLibrary
+Warzone 2100 4.7.0	kernel32.dll	GenerateConsoleCtrlEvent
+Warzone 2100 4.7.0	kernel32.dll	GetCommandLineW
+Warzone 2100 4.7.0	kernel32.dll	GetConsoleMode
+Warzone 2100 4.7.0	kernel32.dll	GetConsoleScreenBufferInfo
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentDirectoryA
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentDirectoryW
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentProcess
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentProcessId
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentThread
+Warzone 2100 4.7.0	kernel32.dll	GetCurrentThreadId
+Warzone 2100 4.7.0	kernel32.dll	GetDiskFreeSpaceA
+Warzone 2100 4.7.0	kernel32.dll	GetDiskFreeSpaceExW
+Warzone 2100 4.7.0	kernel32.dll	GetDiskFreeSpaceW
+Warzone 2100 4.7.0	kernel32.dll	GetDriveTypeA
+Warzone 2100 4.7.0	kernel32.dll	GetEnvironmentStringsW
+Warzone 2100 4.7.0	kernel32.dll	GetEnvironmentVariableA
+Warzone 2100 4.7.0	kernel32.dll	GetEnvironmentVariableW
+Warzone 2100 4.7.0	kernel32.dll	GetExitCodeProcess
+Warzone 2100 4.7.0	kernel32.dll	GetExitCodeThread
+Warzone 2100 4.7.0	kernel32.dll	GetFileAttributesA
+Warzone 2100 4.7.0	kernel32.dll	GetFileAttributesExA
+Warzone 2100 4.7.0	kernel32.dll	GetFileAttributesExW
+Warzone 2100 4.7.0	kernel32.dll	GetFileAttributesW
+Warzone 2100 4.7.0	kernel32.dll	GetFileInformationByHandle
+Warzone 2100 4.7.0	kernel32.dll	GetFileInformationByHandleEx
+Warzone 2100 4.7.0	kernel32.dll	GetFileSize
+Warzone 2100 4.7.0	kernel32.dll	GetFileSizeEx
+Warzone 2100 4.7.0	kernel32.dll	GetFileTime
+Warzone 2100 4.7.0	kernel32.dll	GetFileType
+Warzone 2100 4.7.0	kernel32.dll	GetFinalPathNameByHandleW
+Warzone 2100 4.7.0	kernel32.dll	GetFullPathNameA
+Warzone 2100 4.7.0	kernel32.dll	GetFullPathNameW
+Warzone 2100 4.7.0	kernel32.dll	GetHandleInformation
+Warzone 2100 4.7.0	kernel32.dll	GetLastError
+Warzone 2100 4.7.0	kernel32.dll	GetLocalTime
+Warzone 2100 4.7.0	kernel32.dll	GetLocaleInfoA
+Warzone 2100 4.7.0	kernel32.dll	GetLocaleInfoW
+Warzone 2100 4.7.0	kernel32.dll	GetLogicalDrives
+Warzone 2100 4.7.0	kernel32.dll	GetLogicalProcessorInformation
+Warzone 2100 4.7.0	kernel32.dll	GetLongPathNameW
+Warzone 2100 4.7.0	kernel32.dll	GetModuleFileNameA
+Warzone 2100 4.7.0	kernel32.dll	GetModuleFileNameW
+Warzone 2100 4.7.0	kernel32.dll	GetModuleHandleA
+Warzone 2100 4.7.0	kernel32.dll	GetModuleHandleExA
+Warzone 2100 4.7.0	kernel32.dll	GetModuleHandleExW
+Warzone 2100 4.7.0	kernel32.dll	GetModuleHandleW
+Warzone 2100 4.7.0	kernel32.dll	GetNativeSystemInfo
+Warzone 2100 4.7.0	kernel32.dll	GetOverlappedResult
+Warzone 2100 4.7.0	kernel32.dll	GetProcAddress
+Warzone 2100 4.7.0	kernel32.dll	GetProcessAffinityMask
+Warzone 2100 4.7.0	kernel32.dll	GetProcessHeap
+Warzone 2100 4.7.0	kernel32.dll	GetProcessId
+Warzone 2100 4.7.0	kernel32.dll	GetProcessTimes
+Warzone 2100 4.7.0	kernel32.dll	GetQueuedCompletionStatus
+Warzone 2100 4.7.0	kernel32.dll	GetStartupInfoA
+Warzone 2100 4.7.0	kernel32.dll	GetStdHandle
+Warzone 2100 4.7.0	kernel32.dll	GetSystemDefaultLCID
+Warzone 2100 4.7.0	kernel32.dll	GetSystemDirectoryW
+Warzone 2100 4.7.0	kernel32.dll	GetSystemInfo
+Warzone 2100 4.7.0	kernel32.dll	GetSystemPowerStatus
+Warzone 2100 4.7.0	kernel32.dll	GetSystemTime
+Warzone 2100 4.7.0	kernel32.dll	GetSystemTimeAdjustment
+Warzone 2100 4.7.0	kernel32.dll	GetSystemTimeAsFileTime
+Warzone 2100 4.7.0	kernel32.dll	GetTempFileNameA
+Warzone 2100 4.7.0	kernel32.dll	GetTempPathA
+Warzone 2100 4.7.0	kernel32.dll	GetTempPathW
+Warzone 2100 4.7.0	kernel32.dll	GetThreadContext
+Warzone 2100 4.7.0	kernel32.dll	GetThreadId
+Warzone 2100 4.7.0	kernel32.dll	GetThreadLocale
+Warzone 2100 4.7.0	kernel32.dll	GetThreadPriority
+Warzone 2100 4.7.0	kernel32.dll	GetThreadTimes
+Warzone 2100 4.7.0	kernel32.dll	GetTickCount
+Warzone 2100 4.7.0	kernel32.dll	GetTickCount64
+Warzone 2100 4.7.0	kernel32.dll	GetTimeZoneInformation
+Warzone 2100 4.7.0	kernel32.dll	GetUserDefaultLCID
+Warzone 2100 4.7.0	kernel32.dll	GetVersion
+Warzone 2100 4.7.0	kernel32.dll	GetVersionExA
+Warzone 2100 4.7.0	kernel32.dll	GetVersionExW
+Warzone 2100 4.7.0	kernel32.dll	GetVolumeInformationA
+Warzone 2100 4.7.0	kernel32.dll	GlobalAlloc
+Warzone 2100 4.7.0	kernel32.dll	GlobalFree
+Warzone 2100 4.7.0	kernel32.dll	GlobalLock
+Warzone 2100 4.7.0	kernel32.dll	GlobalMemoryStatusEx
+Warzone 2100 4.7.0	kernel32.dll	GlobalSize
+Warzone 2100 4.7.0	kernel32.dll	GlobalUnlock
+Warzone 2100 4.7.0	kernel32.dll	HeapAlloc
+Warzone 2100 4.7.0	kernel32.dll	HeapCompact
+Warzone 2100 4.7.0	kernel32.dll	HeapCreate
+Warzone 2100 4.7.0	kernel32.dll	HeapDestroy
+Warzone 2100 4.7.0	kernel32.dll	HeapFree
+Warzone 2100 4.7.0	kernel32.dll	HeapReAlloc
+Warzone 2100 4.7.0	kernel32.dll	HeapSize
+Warzone 2100 4.7.0	kernel32.dll	HeapValidate
+Warzone 2100 4.7.0	kernel32.dll	InitOnceExecuteOnce
+Warzone 2100 4.7.0	kernel32.dll	InitializeConditionVariable
+Warzone 2100 4.7.0	kernel32.dll	InitializeCriticalSection
+Warzone 2100 4.7.0	kernel32.dll	InitializeCriticalSectionAndSpinCount
+Warzone 2100 4.7.0	kernel32.dll	InitializeCriticalSectionEx
+Warzone 2100 4.7.0	kernel32.dll	IsDebuggerPresent
+Warzone 2100 4.7.0	kernel32.dll	IsProcessorFeaturePresent
+Warzone 2100 4.7.0	kernel32.dll	IsWow64Process
+Warzone 2100 4.7.0	kernel32.dll	K32EnumProcessModulesEx
+Warzone 2100 4.7.0	kernel32.dll	K32GetModuleFileNameExW
+Warzone 2100 4.7.0	kernel32.dll	K32GetProcessMemoryInfo
+Warzone 2100 4.7.0	kernel32.dll	LeaveCriticalSection
+Warzone 2100 4.7.0	kernel32.dll	LoadLibraryA
+Warzone 2100 4.7.0	kernel32.dll	LoadLibraryExA
+Warzone 2100 4.7.0	kernel32.dll	LoadLibraryExW
+Warzone 2100 4.7.0	kernel32.dll	LoadLibraryW
+Warzone 2100 4.7.0	kernel32.dll	LocalFree
+Warzone 2100 4.7.0	kernel32.dll	LockFile
+Warzone 2100 4.7.0	kernel32.dll	LockFileEx
+Warzone 2100 4.7.0	kernel32.dll	MapViewOfFile
+Warzone 2100 4.7.0	kernel32.dll	Module32FirstW
+Warzone 2100 4.7.0	kernel32.dll	Module32NextW
+Warzone 2100 4.7.0	kernel32.dll	MoveFileExA
+Warzone 2100 4.7.0	kernel32.dll	MoveFileExW
+Warzone 2100 4.7.0	kernel32.dll	MulDiv
+Warzone 2100 4.7.0	kernel32.dll	MultiByteToWideChar
+Warzone 2100 4.7.0	kernel32.dll	OpenProcess
+Warzone 2100 4.7.0	kernel32.dll	OutputDebugStringA
+Warzone 2100 4.7.0	kernel32.dll	OutputDebugStringW
+Warzone 2100 4.7.0	kernel32.dll	PeekNamedPipe
+Warzone 2100 4.7.0	kernel32.dll	PostQueuedCompletionStatus
+Warzone 2100 4.7.0	kernel32.dll	Process32FirstW
+Warzone 2100 4.7.0	kernel32.dll	Process32NextW
+Warzone 2100 4.7.0	kernel32.dll	QueryPerformanceCounter
+Warzone 2100 4.7.0	kernel32.dll	QueryPerformanceFrequency
+Warzone 2100 4.7.0	kernel32.dll	RaiseException
+Warzone 2100 4.7.0	kernel32.dll	ReadFile
+Warzone 2100 4.7.0	kernel32.dll	ReadProcessMemory
+Warzone 2100 4.7.0	kernel32.dll	RegisterWaitForSingleObject
+Warzone 2100 4.7.0	kernel32.dll	ReleaseSRWLockExclusive
+Warzone 2100 4.7.0	kernel32.dll	ReleaseSRWLockShared
+Warzone 2100 4.7.0	kernel32.dll	ReleaseSemaphore
+Warzone 2100 4.7.0	kernel32.dll	RemoveDirectoryW
+Warzone 2100 4.7.0	kernel32.dll	RemoveVectoredExceptionHandler
+Warzone 2100 4.7.0	kernel32.dll	ResetEvent
+Warzone 2100 4.7.0	kernel32.dll	ResumeThread
+Warzone 2100 4.7.0	kernel32.dll	RtlCaptureContext
+Warzone 2100 4.7.0	kernel32.dll	RtlCaptureStackBackTrace
+Warzone 2100 4.7.0	kernel32.dll	RtlLookupFunctionEntry
+Warzone 2100 4.7.0	kernel32.dll	RtlRestoreContext
+Warzone 2100 4.7.0	kernel32.dll	RtlUnwindEx
+Warzone 2100 4.7.0	kernel32.dll	RtlVirtualUnwind
+Warzone 2100 4.7.0	kernel32.dll	SetConsoleCtrlHandler
+Warzone 2100 4.7.0	kernel32.dll	SetConsoleOutputCP
+Warzone 2100 4.7.0	kernel32.dll	SetConsoleScreenBufferSize
+Warzone 2100 4.7.0	kernel32.dll	SetConsoleTitleW
+Warzone 2100 4.7.0	kernel32.dll	SetCurrentDirectoryW
+Warzone 2100 4.7.0	kernel32.dll	SetEndOfFile
+Warzone 2100 4.7.0	kernel32.dll	SetEnvironmentVariableA
+Warzone 2100 4.7.0	kernel32.dll	SetEnvironmentVariableW
+Warzone 2100 4.7.0	kernel32.dll	SetErrorMode
+Warzone 2100 4.7.0	kernel32.dll	SetEvent
+Warzone 2100 4.7.0	kernel32.dll	SetFileAttributesA
+Warzone 2100 4.7.0	kernel32.dll	SetFileAttributesW
+Warzone 2100 4.7.0	kernel32.dll	SetFileInformationByHandle
+Warzone 2100 4.7.0	kernel32.dll	SetFilePointer
+Warzone 2100 4.7.0	kernel32.dll	SetFilePointerEx
+Warzone 2100 4.7.0	kernel32.dll	SetFileTime
+Warzone 2100 4.7.0	kernel32.dll	SetHandleInformation
+Warzone 2100 4.7.0	kernel32.dll	SetLastError
+Warzone 2100 4.7.0	kernel32.dll	SetNamedPipeHandleState
+Warzone 2100 4.7.0	kernel32.dll	SetProcessAffinityMask
+Warzone 2100 4.7.0	kernel32.dll	SetProcessShutdownParameters
+Warzone 2100 4.7.0	kernel32.dll	SetSystemTime
+Warzone 2100 4.7.0	kernel32.dll	SetThreadContext
+Warzone 2100 4.7.0	kernel32.dll	SetThreadExecutionState
+Warzone 2100 4.7.0	kernel32.dll	SetThreadLocale
+Warzone 2100 4.7.0	kernel32.dll	SetThreadPriority
+Warzone 2100 4.7.0	kernel32.dll	SetUnhandledExceptionFilter
+Warzone 2100 4.7.0	kernel32.dll	Sleep
+Warzone 2100 4.7.0	kernel32.dll	SleepConditionVariableCS
+Warzone 2100 4.7.0	kernel32.dll	SleepConditionVariableSRW
+Warzone 2100 4.7.0	kernel32.dll	SleepEx
+Warzone 2100 4.7.0	kernel32.dll	SuspendThread
+Warzone 2100 4.7.0	kernel32.dll	SwitchToThread
+Warzone 2100 4.7.0	kernel32.dll	SystemTimeToFileTime
+Warzone 2100 4.7.0	kernel32.dll	SystemTimeToTzSpecificLocalTime
+Warzone 2100 4.7.0	kernel32.dll	TerminateProcess
+Warzone 2100 4.7.0	kernel32.dll	TlsAlloc
+Warzone 2100 4.7.0	kernel32.dll	TlsFree
+Warzone 2100 4.7.0	kernel32.dll	TlsGetValue
+Warzone 2100 4.7.0	kernel32.dll	TlsSetValue
+Warzone 2100 4.7.0	kernel32.dll	TransactNamedPipe
+Warzone 2100 4.7.0	kernel32.dll	TryAcquireSRWLockExclusive
+Warzone 2100 4.7.0	kernel32.dll	TryEnterCriticalSection
+Warzone 2100 4.7.0	kernel32.dll	UnlockFile
+Warzone 2100 4.7.0	kernel32.dll	UnlockFileEx
+Warzone 2100 4.7.0	kernel32.dll	UnmapViewOfFile
+Warzone 2100 4.7.0	kernel32.dll	UnregisterWaitEx
+Warzone 2100 4.7.0	kernel32.dll	VerSetConditionMask
+Warzone 2100 4.7.0	kernel32.dll	VerifyVersionInfoW
+Warzone 2100 4.7.0	kernel32.dll	VirtualAlloc
+Warzone 2100 4.7.0	kernel32.dll	VirtualAllocEx
+Warzone 2100 4.7.0	kernel32.dll	VirtualFree
+Warzone 2100 4.7.0	kernel32.dll	VirtualLock
+Warzone 2100 4.7.0	kernel32.dll	VirtualProtect
+Warzone 2100 4.7.0	kernel32.dll	VirtualProtectEx
+Warzone 2100 4.7.0	kernel32.dll	VirtualQuery
+Warzone 2100 4.7.0	kernel32.dll	VirtualQueryEx
+Warzone 2100 4.7.0	kernel32.dll	VirtualUnlock
+Warzone 2100 4.7.0	kernel32.dll	WaitForMultipleObjects
+Warzone 2100 4.7.0	kernel32.dll	WaitForSingleObject
+Warzone 2100 4.7.0	kernel32.dll	WaitForSingleObjectEx
+Warzone 2100 4.7.0	kernel32.dll	WaitNamedPipeW
+Warzone 2100 4.7.0	kernel32.dll	WakeAllConditionVariable
+Warzone 2100 4.7.0	kernel32.dll	WakeConditionVariable
+Warzone 2100 4.7.0	kernel32.dll	WerRegisterRuntimeExceptionModule
+Warzone 2100 4.7.0	kernel32.dll	WideCharToMultiByte
+Warzone 2100 4.7.0	kernel32.dll	Wow64GetThreadContext
+Warzone 2100 4.7.0	kernel32.dll	WriteConsoleW
+Warzone 2100 4.7.0	kernel32.dll	WriteFile
+Warzone 2100 4.7.0	kernel32.dll	WriteProcessMemory
+Warzone 2100 4.7.0	kernel32.dll	__C_specific_handler
+Warzone 2100 4.7.0	kernel32.dll	lstrlenW
+Warzone 2100 4.7.0	ole32.dll	CLSIDFromString
+Warzone 2100 4.7.0	ole32.dll	CoCreateInstance
+Warzone 2100 4.7.0	ole32.dll	CoInitializeEx
+Warzone 2100 4.7.0	ole32.dll	CoTaskMemFree
+Warzone 2100 4.7.0	ole32.dll	CoUninitialize
+Warzone 2100 4.7.0	ole32.dll	OleInitialize
+Warzone 2100 4.7.0	ole32.dll	OleUninitialize
+Warzone 2100 4.7.0	ole32.dll	PropVariantClear
+Warzone 2100 4.7.0	ole32.dll	RegisterDragDrop
+Warzone 2100 4.7.0	ole32.dll	ReleaseStgMedium
+Warzone 2100 4.7.0	ole32.dll	RevokeDragDrop
+Warzone 2100 4.7.0	ole32.dll	StringFromCLSID
+Warzone 2100 4.7.0	oleaut32.dll	SysFreeString
+Warzone 2100 4.7.0	powrprof.dll	CallNtPowerInformation
+Warzone 2100 4.7.0	secur32.dll	InitSecurityInterfaceW
+Warzone 2100 4.7.0	setupapi.dll	CM_Get_Device_IDA
+Warzone 2100 4.7.0	setupapi.dll	CM_Get_Parent
+Warzone 2100 4.7.0	setupapi.dll	CM_Locate_DevNodeA
+Warzone 2100 4.7.0	setupapi.dll	SetupDiDestroyDeviceInfoList
+Warzone 2100 4.7.0	setupapi.dll	SetupDiEnumDeviceInfo
+Warzone 2100 4.7.0	setupapi.dll	SetupDiGetClassDevsA
+Warzone 2100 4.7.0	setupapi.dll	SetupDiGetDeviceInstanceIdA
+Warzone 2100 4.7.0	setupapi.dll	SetupDiGetDeviceRegistryPropertyW
+Warzone 2100 4.7.0	shell32.dll	CommandLineToArgvW
+Warzone 2100 4.7.0	shell32.dll	DragAcceptFiles
+Warzone 2100 4.7.0	shell32.dll	DragFinish
+Warzone 2100 4.7.0	shell32.dll	DragQueryFileW
+Warzone 2100 4.7.0	shell32.dll	SHBrowseForFolderW
+Warzone 2100 4.7.0	shell32.dll	SHCreateDirectoryExW
+Warzone 2100 4.7.0	shell32.dll	SHGetFolderPathW
+Warzone 2100 4.7.0	shell32.dll	SHGetKnownFolderPath
+Warzone 2100 4.7.0	shell32.dll	SHGetPathFromIDListW
+Warzone 2100 4.7.0	shell32.dll	ShellExecuteExW
+Warzone 2100 4.7.0	shell32.dll	ShellExecuteW
+Warzone 2100 4.7.0	shell32.dll	Shell_NotifyIconW
+Warzone 2100 4.7.0	shlwapi.dll	PathAppendW
+Warzone 2100 4.7.0	shlwapi.dll	PathFileExistsW
+Warzone 2100 4.7.0	shlwapi.dll	PathRemoveFileSpecW
+Warzone 2100 4.7.0	shlwapi.dll	UrlCanonicalizeW
+Warzone 2100 4.7.0	user32.dll	AdjustWindowRectEx
+Warzone 2100 4.7.0	user32.dll	AttachThreadInput
+Warzone 2100 4.7.0	user32.dll	BeginPaint
+Warzone 2100 4.7.0	user32.dll	CallNextHookEx
+Warzone 2100 4.7.0	user32.dll	CallWindowProcW
+Warzone 2100 4.7.0	user32.dll	ChangeDisplaySettingsExW
+Warzone 2100 4.7.0	user32.dll	CheckMenuItem
+Warzone 2100 4.7.0	user32.dll	ClientToScreen
+Warzone 2100 4.7.0	user32.dll	ClipCursor
+Warzone 2100 4.7.0	user32.dll	CloseClipboard
+Warzone 2100 4.7.0	user32.dll	CreateIconFromResource
+Warzone 2100 4.7.0	user32.dll	CreateIconFromResourceEx
+Warzone 2100 4.7.0	user32.dll	CreateIconIndirect
+Warzone 2100 4.7.0	user32.dll	CreatePopupMenu
+Warzone 2100 4.7.0	user32.dll	CreateWindowExA
+Warzone 2100 4.7.0	user32.dll	CreateWindowExW
+Warzone 2100 4.7.0	user32.dll	DefWindowProcW
+Warzone 2100 4.7.0	user32.dll	DeleteMenu
+Warzone 2100 4.7.0	user32.dll	DestroyCursor
+Warzone 2100 4.7.0	user32.dll	DestroyIcon
+Warzone 2100 4.7.0	user32.dll	DestroyMenu
+Warzone 2100 4.7.0	user32.dll	DestroyWindow
+Warzone 2100 4.7.0	user32.dll	DialogBoxIndirectParamW
+Warzone 2100 4.7.0	user32.dll	DispatchMessageW
+Warzone 2100 4.7.0	user32.dll	DrawTextW
+Warzone 2100 4.7.0	user32.dll	EmptyClipboard
+Warzone 2100 4.7.0	user32.dll	EnableMenuItem
+Warzone 2100 4.7.0	user32.dll	EnableWindow
+Warzone 2100 4.7.0	user32.dll	EndDialog
+Warzone 2100 4.7.0	user32.dll	EndPaint
+Warzone 2100 4.7.0	user32.dll	EnumClipboardFormats
+Warzone 2100 4.7.0	user32.dll	EnumDisplayDevicesW
+Warzone 2100 4.7.0	user32.dll	EnumDisplayMonitors
+Warzone 2100 4.7.0	user32.dll	EnumDisplaySettingsW
+Warzone 2100 4.7.0	user32.dll	EnumWindows
+Warzone 2100 4.7.0	user32.dll	FillRect
+Warzone 2100 4.7.0	user32.dll	FlashWindowEx
+Warzone 2100 4.7.0	user32.dll	GetAsyncKeyState
+Warzone 2100 4.7.0	user32.dll	GetClassInfoExW
+Warzone 2100 4.7.0	user32.dll	GetClientRect
+Warzone 2100 4.7.0	user32.dll	GetClipCursor
+Warzone 2100 4.7.0	user32.dll	GetClipboardData
+Warzone 2100 4.7.0	user32.dll	GetClipboardFormatNameA
+Warzone 2100 4.7.0	user32.dll	GetClipboardSequenceNumber
+Warzone 2100 4.7.0	user32.dll	GetCursorPos
+Warzone 2100 4.7.0	user32.dll	GetDC
+Warzone 2100 4.7.0	user32.dll	GetDesktopWindow
+Warzone 2100 4.7.0	user32.dll	GetDlgItem
+Warzone 2100 4.7.0	user32.dll	GetDoubleClickTime
+Warzone 2100 4.7.0	user32.dll	GetFocus
+Warzone 2100 4.7.0	user32.dll	GetForegroundWindow
+Warzone 2100 4.7.0	user32.dll	GetKeyState
+Warzone 2100 4.7.0	user32.dll	GetKeyboardLayout
+Warzone 2100 4.7.0	user32.dll	GetKeyboardState
+Warzone 2100 4.7.0	user32.dll	GetMenu
+Warzone 2100 4.7.0	user32.dll	GetMenuItemInfoW
+Warzone 2100 4.7.0	user32.dll	GetMessageA
+Warzone 2100 4.7.0	user32.dll	GetMessageExtraInfo
+Warzone 2100 4.7.0	user32.dll	GetMessagePos
+Warzone 2100 4.7.0	user32.dll	GetMessageTime
+Warzone 2100 4.7.0	user32.dll	GetMessageW
+Warzone 2100 4.7.0	user32.dll	GetMonitorInfoW
+Warzone 2100 4.7.0	user32.dll	GetPropW
+Warzone 2100 4.7.0	user32.dll	GetQueueStatus
+Warzone 2100 4.7.0	user32.dll	GetRawInputBuffer
+Warzone 2100 4.7.0	user32.dll	GetRawInputData
+Warzone 2100 4.7.0	user32.dll	GetRawInputDeviceInfoA
+Warzone 2100 4.7.0	user32.dll	GetRawInputDeviceList
+Warzone 2100 4.7.0	user32.dll	GetShellWindow
+Warzone 2100 4.7.0	user32.dll	GetSystemMetrics
+Warzone 2100 4.7.0	user32.dll	GetUpdateRect
+Warzone 2100 4.7.0	user32.dll	GetWindow
+Warzone 2100 4.7.0	user32.dll	GetWindowLongPtrW
+Warzone 2100 4.7.0	user32.dll	GetWindowLongW
+Warzone 2100 4.7.0	user32.dll	GetWindowPlacement
+Warzone 2100 4.7.0	user32.dll	GetWindowRect
+Warzone 2100 4.7.0	user32.dll	GetWindowTextLengthW
+Warzone 2100 4.7.0	user32.dll	GetWindowTextW
+Warzone 2100 4.7.0	user32.dll	GetWindowThreadProcessId
+Warzone 2100 4.7.0	user32.dll	InsertMenuW
+Warzone 2100 4.7.0	user32.dll	IntersectRect
+Warzone 2100 4.7.0	user32.dll	InvalidateRect
+Warzone 2100 4.7.0	user32.dll	IsClipboardFormatAvailable
+Warzone 2100 4.7.0	user32.dll	IsIconic
+Warzone 2100 4.7.0	user32.dll	IsWindow
+Warzone 2100 4.7.0	user32.dll	IsWindowVisible
+Warzone 2100 4.7.0	user32.dll	IsZoomed
+Warzone 2100 4.7.0	user32.dll	KillTimer
+Warzone 2100 4.7.0	user32.dll	LoadCursorW
+Warzone 2100 4.7.0	user32.dll	LoadIconW
+Warzone 2100 4.7.0	user32.dll	MapVirtualKeyW
+Warzone 2100 4.7.0	user32.dll	MessageBoxA
+Warzone 2100 4.7.0	user32.dll	MessageBoxW
+Warzone 2100 4.7.0	user32.dll	MonitorFromPoint
+Warzone 2100 4.7.0	user32.dll	MonitorFromWindow
+Warzone 2100 4.7.0	user32.dll	MsgWaitForMultipleObjects
+Warzone 2100 4.7.0	user32.dll	OpenClipboard
+Warzone 2100 4.7.0	user32.dll	PeekMessageW
+Warzone 2100 4.7.0	user32.dll	PostMessageW
+Warzone 2100 4.7.0	user32.dll	PostThreadMessageW
+Warzone 2100 4.7.0	user32.dll	PtInRect
+Warzone 2100 4.7.0	user32.dll	RegisterClassExA
+Warzone 2100 4.7.0	user32.dll	RegisterClassExW
+Warzone 2100 4.7.0	user32.dll	RegisterClassW
+Warzone 2100 4.7.0	user32.dll	RegisterClipboardFormatW
+Warzone 2100 4.7.0	user32.dll	RegisterDeviceNotificationW
+Warzone 2100 4.7.0	user32.dll	RegisterRawInputDevices
+Warzone 2100 4.7.0	user32.dll	RegisterWindowMessageA
+Warzone 2100 4.7.0	user32.dll	RegisterWindowMessageW
+Warzone 2100 4.7.0	user32.dll	ReleaseCapture
+Warzone 2100 4.7.0	user32.dll	ReleaseDC
+Warzone 2100 4.7.0	user32.dll	RemovePropW
+Warzone 2100 4.7.0	user32.dll	ScreenToClient
+Warzone 2100 4.7.0	user32.dll	SendMessageW
+Warzone 2100 4.7.0	user32.dll	SetActiveWindow
+Warzone 2100 4.7.0	user32.dll	SetCapture
+Warzone 2100 4.7.0	user32.dll	SetClipboardData
+Warzone 2100 4.7.0	user32.dll	SetCursor
+Warzone 2100 4.7.0	user32.dll	SetCursorPos
+Warzone 2100 4.7.0	user32.dll	SetFocus
+Warzone 2100 4.7.0	user32.dll	SetForegroundWindow
+Warzone 2100 4.7.0	user32.dll	SetLayeredWindowAttributes
+Warzone 2100 4.7.0	user32.dll	SetMenuItemInfoW
+Warzone 2100 4.7.0	user32.dll	SetParent
+Warzone 2100 4.7.0	user32.dll	SetPropW
+Warzone 2100 4.7.0	user32.dll	SetRectEmpty
+Warzone 2100 4.7.0	user32.dll	SetTimer
+Warzone 2100 4.7.0	user32.dll	SetWindowLongPtrW
+Warzone 2100 4.7.0	user32.dll	SetWindowLongW
+Warzone 2100 4.7.0	user32.dll	SetWindowPos
+Warzone 2100 4.7.0	user32.dll	SetWindowRgn
+Warzone 2100 4.7.0	user32.dll	SetWindowTextW
+Warzone 2100 4.7.0	user32.dll	SetWindowsHookExW
+Warzone 2100 4.7.0	user32.dll	ShowWindow
+Warzone 2100 4.7.0	user32.dll	SystemParametersInfoA
+Warzone 2100 4.7.0	user32.dll	SystemParametersInfoW
+Warzone 2100 4.7.0	user32.dll	ToUnicode
+Warzone 2100 4.7.0	user32.dll	TrackMouseEvent
+Warzone 2100 4.7.0	user32.dll	TrackPopupMenu
+Warzone 2100 4.7.0	user32.dll	TranslateMessage
+Warzone 2100 4.7.0	user32.dll	UnhookWindowsHookEx
+Warzone 2100 4.7.0	user32.dll	UnregisterClassA
+Warzone 2100 4.7.0	user32.dll	UnregisterClassW
+Warzone 2100 4.7.0	user32.dll	UnregisterDeviceNotification
+Warzone 2100 4.7.0	user32.dll	ValidateRect
+Warzone 2100 4.7.0	user32.dll	WindowFromDC
+Warzone 2100 4.7.0	user32.dll	wsprintfA
+Warzone 2100 4.7.0	user32.dll	wsprintfW
+Warzone 2100 4.7.0	user32.dll	wvsprintfA
+Warzone 2100 4.7.0	version.dll	GetFileVersionInfoA
+Warzone 2100 4.7.0	version.dll	GetFileVersionInfoSizeA
+Warzone 2100 4.7.0	version.dll	GetFileVersionInfoSizeW
+Warzone 2100 4.7.0	version.dll	GetFileVersionInfoW
+Warzone 2100 4.7.0	version.dll	VerQueryValueA
+Warzone 2100 4.7.0	version.dll	VerQueryValueW
+Warzone 2100 4.7.0	winhttp.dll	WinHttpAddRequestHeaders
+Warzone 2100 4.7.0	winhttp.dll	WinHttpCloseHandle
+Warzone 2100 4.7.0	winhttp.dll	WinHttpConnect
+Warzone 2100 4.7.0	winhttp.dll	WinHttpCrackUrl
+Warzone 2100 4.7.0	winhttp.dll	WinHttpOpen
+Warzone 2100 4.7.0	winhttp.dll	WinHttpOpenRequest
+Warzone 2100 4.7.0	winhttp.dll	WinHttpQueryHeaders
+Warzone 2100 4.7.0	winhttp.dll	WinHttpReadData
+Warzone 2100 4.7.0	winhttp.dll	WinHttpReceiveResponse
+Warzone 2100 4.7.0	winhttp.dll	WinHttpSendRequest
+Warzone 2100 4.7.0	winhttp.dll	WinHttpSetCredentials
+Warzone 2100 4.7.0	winhttp.dll	WinHttpSetTimeouts
+Warzone 2100 4.7.0	winhttp.dll	WinHttpWriteData
+Warzone 2100 4.7.0	winmm.dll	timeBeginPeriod
+Warzone 2100 4.7.0	winmm.dll	timeEndPeriod
+Warzone 2100 4.7.0	ws2_32.dll	WSACleanup
+Warzone 2100 4.7.0	ws2_32.dll	WSACloseEvent
+Warzone 2100 4.7.0	ws2_32.dll	WSACreateEvent
+Warzone 2100 4.7.0	ws2_32.dll	WSAEnumNetworkEvents
+Warzone 2100 4.7.0	ws2_32.dll	WSAEventSelect
+Warzone 2100 4.7.0	ws2_32.dll	WSAGetLastError
+Warzone 2100 4.7.0	ws2_32.dll	WSAIoctl
+Warzone 2100 4.7.0	ws2_32.dll	WSAPoll
+Warzone 2100 4.7.0	ws2_32.dll	WSAResetEvent
+Warzone 2100 4.7.0	ws2_32.dll	WSASendMsg
+Warzone 2100 4.7.0	ws2_32.dll	WSASetEvent
+Warzone 2100 4.7.0	ws2_32.dll	WSASetLastError
+Warzone 2100 4.7.0	ws2_32.dll	WSAStartup
+Warzone 2100 4.7.0	ws2_32.dll	WSAWaitForMultipleEvents
+Warzone 2100 4.7.0	ws2_32.dll	__WSAFDIsSet
+Warzone 2100 4.7.0	ws2_32.dll	accept
+Warzone 2100 4.7.0	ws2_32.dll	bind
+Warzone 2100 4.7.0	ws2_32.dll	closesocket
+Warzone 2100 4.7.0	ws2_32.dll	connect
+Warzone 2100 4.7.0	ws2_32.dll	freeaddrinfo
+Warzone 2100 4.7.0	ws2_32.dll	getaddrinfo
+Warzone 2100 4.7.0	ws2_32.dll	gethostname
+Warzone 2100 4.7.0	ws2_32.dll	getnameinfo
+Warzone 2100 4.7.0	ws2_32.dll	getpeername
+Warzone 2100 4.7.0	ws2_32.dll	getsockname
+Warzone 2100 4.7.0	ws2_32.dll	getsockopt
+Warzone 2100 4.7.0	ws2_32.dll	htonl
+Warzone 2100 4.7.0	ws2_32.dll	htons
+Warzone 2100 4.7.0	ws2_32.dll	inet_addr
+Warzone 2100 4.7.0	ws2_32.dll	inet_ntop
+Warzone 2100 4.7.0	ws2_32.dll	inet_pton
+Warzone 2100 4.7.0	ws2_32.dll	ioctlsocket
+Warzone 2100 4.7.0	ws2_32.dll	listen
+Warzone 2100 4.7.0	ws2_32.dll	ntohl
+Warzone 2100 4.7.0	ws2_32.dll	ntohs
+Warzone 2100 4.7.0	ws2_32.dll	recv
+Warzone 2100 4.7.0	ws2_32.dll	recvfrom
+Warzone 2100 4.7.0	ws2_32.dll	select
+Warzone 2100 4.7.0	ws2_32.dll	send
+Warzone 2100 4.7.0	ws2_32.dll	sendto
+Warzone 2100 4.7.0	ws2_32.dll	setsockopt
+Warzone 2100 4.7.0	ws2_32.dll	socket
