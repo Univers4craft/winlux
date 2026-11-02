@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=Assistant Claude
-Name[en]=Claude assistant
-Name[es]=Asistente Claude
-Name[de]=Claude-Assistent
-Comment=Poser une question à Claude sur Winlux (Windows+C)
-Comment[en]=Ask Claude a question about Winlux (Windows+C)
-Comment[es]=Hacer una pregunta a Claude sobre Winlux (Windows+C)
-Comment[de]=Claude eine Frage zu Winlux stellen (Windows+C)
+Name=Assistant IA
+Name[en]=AI assistant
+Name[es]=Asistente de IA
+Name[de]=KI-Assistent
+Comment=Poser une question sur Winlux à Claude, ChatGPT ou l'IA locale (Windows+C)
+Comment[en]=Ask Claude, ChatGPT or the local AI a question about Winlux (Windows+C)
+Comment[es]=Preguntar sobre Winlux a Claude, ChatGPT o la IA local (Windows+C)
+Comment[de]=Claude, ChatGPT oder der lokalen KI eine Frage zu Winlux stellen (Windows+C)
 Exec=/usr/bin/winlux-assistant
-Icon=winlux-claude-code
+Icon=winlux-assistant
 StartupWMClass=winlux-assistant
 Terminal=false
 NoDisplay=true

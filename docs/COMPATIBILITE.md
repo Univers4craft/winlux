@@ -35,8 +35,16 @@ empreintes du block map vérifiées avant toute écriture, installation dans
 `C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
 protocoles, `LocalState`, identité de paquet à l'exécution
 (`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
-Pas encore : la signature `AppxSignature.p7x` (#235), les paquets de ressources
-des bundles, et les paquets 32 bits (#232). Test : `scripts/test-msix.sh`.
+Éditeur : comme Windows, un paquet non signé n'est pas installé sans
+avertissement. Il est refusé par défaut avec « Éditeur non vérifié » (code 3), et le
+double-clic demande une confirmation explicite (« Annuler » par défaut,
+« Installer quand même ») avant de relancer avec `--allow-unverified`. Un paquet signé
+dont le certificat porte bien l'éditeur du manifeste passe par la même confirmation,
+tant que la chaîne de certificats n'est pas vérifiée (#235). Un certificat au nom d'un
+autre éditeur est refusé dans tous les cas (`runtime/src/setup/appx_signature.rs`).
+Pas encore : la vérification cryptographique de la signature et de sa chaîne (#235),
+les paquets de ressources des bundles, et les paquets 32 bits (#232).
+Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
 aussi en HID brut, comme le font SDL, les moteurs de jeu et les outils de

@@ -4,7 +4,8 @@
     winlux-widgets                 ouvre ou referme le volet
     winlux-widgets --tray          bouton météo de la barre (greffon genmon)
     winlux-widgets weather-update  relit la météo maintenant
-    winlux-widgets set CLÉ VALEUR  location, units (c|f), photos, button (on|off)
+    winlux-widgets set CLÉ VALEUR  location, units (c|f), photos, button (on|off),
+                                   weather (on|off : accord pour contacter wttr.in)
     winlux-widgets reset           widgets et ordre par défaut
     winlux-widgets status          réglages en JSON (Paramètres)
 
@@ -14,7 +15,9 @@ Chaque widget se retire, se déplace ou se rajoute depuis le volet ; les réglag
 (bouton de la barre, lieu de la météo, dossier des photos) sont dans
 Paramètres > Fond d'écran et couleurs.
 
-La météo vient de wttr.in et s'écrit dans /run/winlux/weather.json au format
+La météo vient de wttr.in, un service tiers qui reçoit l'adresse IP et le lieu :
+rien ne lui est demandé tant que l'utilisateur n'a pas accepté (réglage
+« weather », désactivé par défaut, voir docs/RISQUES-JURIDIQUES.md). Le relevé s'écrit dans /run/winlux/weather.json au format
 « clé=valeur » déjà lu par le widget météo du shell PE (testexe/src/shell/
 weather.rs) : une seule source pour les deux bureaux.
 """
@@ -103,6 +106,11 @@ _TR = {
     'Ouvrir le dossier': ('Open folder', 'Abrir carpeta', 'Ordner öffnen'),
     'Météo : {value}': ('Weather: {value}', 'Tiempo: {value}', 'Wetter: {value}'),
     'Ouvrir les widgets (Windows + W)': ('Open widgets (Windows + W)', 'Abrir widgets (Windows + W)', 'Widgets öffnen (Windows + W)'),
+    'La météo vient du service en ligne wttr.in, qui reçoit votre adresse IP et le lieu choisi.':
+        ('The weather comes from the online service wttr.in, which receives your IP address and the chosen place.',
+         'El tiempo procede del servicio en línea wttr.in, que recibe su dirección IP y el lugar elegido.',
+         'Das Wetter stammt vom Onlinedienst wttr.in, der Ihre IP-Adresse und den gewählten Ort erhält.'),
+    'Afficher la météo': ('Show the weather', 'Mostrar el tiempo', 'Wetter anzeigen'),
 }
 
 
@@ -154,7 +162,7 @@ ICONS = {"weather": "weather-few-clouds-symbolic", "agenda": "x-office-calendar-
          "pc": "computer-symbolic", "notes": "accessories-text-editor-symbolic",
          "photos": "image-x-generic-symbolic", "timer": "alarm-symbolic"}
 DEFAULTS = {"order": list(WIDGETS), "hidden": [], "location": "", "units": "c", "photos": "",
-            "button": False, "notes": "", "agenda": []}
+            "button": False, "notes": "", "agenda": [], "weather": False}
 
 
 def config_path():
@@ -175,6 +183,8 @@ def load_config():
     data["order"] = list(dict.fromkeys(order + [name for name in WIDGETS if name not in order]))
     data["hidden"] = [name for name in data.get("hidden") or [] if name in WIDGETS]
     data["units"] = "f" if data.get("units") == "f" else "c"
+    # Accord explicite de l'utilisateur avant tout appel à wttr.in.
+    data["weather"] = data.get("weather") is True
     # Rendez-vous passés effacés : l'agenda ne garde que le jour et la suite.
     now = today().isoformat()
     data["agenda"] = [entry for entry in data.get("agenda") or []
@@ -375,6 +385,8 @@ def fetch_weather(data=None, timeout=8):
     if os.environ.get("WINLUX_WEATHER_OFFLINE") == "1":
         return False
     data = data or load_config()
+    if not data.get("weather"):
+        return False  # pas d'accord : aucune requête vers wttr.in
     location = urllib.parse.quote(data.get("location", "").strip())
     lang = {"fr": "fr", "es": "es", "de": "de"}.get(_LANG, "en")
     url = os.environ.get("WINLUX_WEATHER_URL", "https://wttr.in/{location}?format=j1&lang={lang}").format(
@@ -551,7 +563,7 @@ def command_line(argv):
         return 0 if fetch_weather() else 1
     if name == "status":
         data = load_config()
-        print(json.dumps({key: data[key] for key in ("order", "hidden", "location", "units", "photos", "button")},
+        print(json.dumps({key: data[key] for key in ("order", "hidden", "location", "units", "photos", "button", "weather")},
                          ensure_ascii=False))
         return 0
     if name == "reset":
@@ -571,16 +583,18 @@ def command_line(argv):
         elif key == "button" and value in ("on", "off"):
             data["button"] = value == "on"
             set_button(data["button"])
+        elif key == "weather" and value in ("on", "off"):
+            data["weather"] = value == "on"
         else:
             print(f"Réglage inconnu : {key} {value}", file=sys.stderr)
             return 2
         save_config(data)
-        if key in ("location", "units"):
+        if key in ("location", "units", "weather"):
             # Ancien relevé d'un autre lieu ou dans l'autre unité : refait.
             for path in weather_paths():
                 try: path.unlink()
                 except OSError: pass
-            fetch_weather(data)
+            fetch_weather(data)  # sans accord, ne contacte rien
         return 0
     if name in ("-h", "--help"):
         print(__doc__)
@@ -962,6 +976,8 @@ class Widgets(Gtk.Application):
 
     # Météo
     def build_weather(self):
+        if not self.data.get("weather"):
+            return self.build_weather_consent()
         report = read_weather()
         if report is None:
             return None
@@ -1006,6 +1022,26 @@ class Widgets(Gtk.Application):
         footer.pack_start(label(_t("Mis à jour à {time}").format(time=updated), "dim"), True, True, 0)
         footer.pack_end(icon_button("view-refresh-symbolic", _t("Actualiser"), self.refresh_weather), False, False, 0)
         box.pack_start(footer, False, False, 0)
+        return box
+
+    def build_weather_consent(self):
+        """Météo jamais demandée : explique ce qui serait envoyé, et attend l'accord."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        text = label(_t("La météo vient du service en ligne wttr.in, qui reçoit votre adresse IP et le lieu choisi."), "dim")
+        text.set_line_wrap(True)
+        box.pack_start(text, False, False, 0)
+        button = Gtk.Button(label=_t("Afficher la météo"))
+
+        def accept(*_):
+            self.data = load_config()
+            self.data["weather"] = True
+            save_config(self.data)
+            self.render()
+            self.refresh_weather()
+        button.connect("clicked", accept)
+        line = Gtk.Box()
+        line.pack_start(button, False, False, 0)
+        box.pack_start(line, False, False, 0)
         return box
 
     def refresh_weather(self):

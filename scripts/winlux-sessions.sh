@@ -120,7 +120,15 @@ start_session() {
     log="$run/session-$user.log"
     xorg=${WINLUX_XORG:-/usr/bin/Xorg}
     test -x "$xorg" || fail "serveur X introuvable : $xorg"
-    "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$run/Xorg.$n.log" > "$log" 2>&1 &
+    # Parent chef de session (comme le Xorg :0 de l'init) : le setsid de
+    # Xorg réussit, il prend son VT et rend l'affichage au retour.
+    if have setsid; then
+        # shellcheck disable=SC2016
+        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; "$@" & x=$!; wait "$x"' winlux-xorg \
+            "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$run/Xorg.$n.log" > "$log" 2>&1 &
+    else
+        "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$run/Xorg.$n.log" > "$log" 2>&1 &
+    fi
     xpid=$!
     tries=0
     while ! test -S "$xsock/X$n"; do

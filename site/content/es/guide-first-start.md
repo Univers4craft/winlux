@@ -1,13 +1,21 @@
 ---
 title: Primer arranque
-description: El asistente de bienvenida personaliza su escritorio y luego un breve recorrido le muestra lo esencial.
+description: La ventana de bienvenida le lleva, con un clic, al recorrido guiado, al teclado, a la red, a la apariencia y a la recuperación.
 ---
 
-## El asistente de bienvenida
+## La ventana de bienvenida
 
-En el primer arranque, el asistente de bienvenida le propone, paso a paso: un fondo de pantalla («Winlux Nuit», «Winlux Aube»…), un color de énfasis y el tema claro u oscuro, la posición de la barra de tareas (centrada o a la izquierda), los iconos del escritorio y el sonido de inicio de sesión. Cada elección se aplica al instante.
+La primera vez que inicia sesión, la ventana **Bienvenido a Winlux** se abre en el escritorio. No cambia nada por sí sola: cada botón abre la herramienta adecuada, y usted avanza a su ritmo.
 
-![El asistente de bienvenida](img:assistant-bienvenue.jpg "El asistente de bienvenida: todo sigue siendo modificable en Configuración › Personalización.")
+- **Recorrido guiado y aplicaciones habituales**: un recorrido de dos minutos (menú Inicio, Explorador, abrir un `.exe`, Configuración, atajos, privacidad), luego una lista de aplicaciones libres que puede marcar para instalarlas con un clic, y la elección del tema claro u oscuro y de la posición de la barra de tareas.
+- **Elegir el teclado**: abre Configuración › Teclado y mouse.
+- **Configurar la red**: abre la configuración rápida, para el wifi.
+- **Personalizar la apariencia**: abre Configuración › Fondo y colores.
+- **Descubrir la recuperación**: abre Configuración › Actualizaciones, donde se restaura la versión anterior y se explica qué hacer si el escritorio ya no arranca.
+
+![La ventana de bienvenida](img:assistant-bienvenue.jpg "La ventana de bienvenida: cinco accesos al recorrido guiado y a los primeros ajustes.")
+
+Haga clic en **«Finalizar»** cuando termine. Mientras no lo haga, la ventana vuelve a aparecer en cada inicio de sesión. Después ya no se abre sola, pero puede volver a abrirla en cualquier momento desde el menú Inicio: busque «Bienvenido a Winlux».
 
 Si lo pidió durante la instalación, las aplicaciones recomendadas para su perfil se instalan después en segundo plano, en cuanto haya conexión a Internet.
 
@@ -24,7 +32,7 @@ Si lo pidió durante la instalación, las aplicaciones recomendadas para su perf
 ![El menú Inicio](img:bureau-menu-demarrer.jpg "El menú Inicio: aplicaciones ancladas, recomendaciones y búsqueda.")
 
 > [!tip]
-> El asistente de bienvenida y el recorrido se pueden volver a abrir en cualquier momento desde el menú Inicio.
+> Windows + E abre el Explorador, Windows + A la configuración rápida y Windows + N las notificaciones.
 
 ## Dónde están sus archivos
 
