@@ -170,6 +170,24 @@ pub(crate) enum ThreadTarget {
     NotStarted(Arc<ThreadObject>),
 }
 
+/// Identifiant Win32 du thread d'un handle (GetThreadId).
+pub(crate) fn thread_id_of_handle(h: usize) -> Option<u32> {
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => {
+            let st = t
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Some(if st.win_tid != 0 {
+                st.win_tid
+            } else {
+                t.os_tid.load(Ordering::Acquire) as u32
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
     if h == get_current_thread() {
         return Some(ThreadTarget::Running(unsafe {
