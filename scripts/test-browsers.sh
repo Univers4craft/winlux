@@ -23,6 +23,10 @@ for id in edge chrome firefox; do
     sha256sum "$cache/$id.deb" | cut -d' ' -f1 > "$cache/$id.sha256"
     printf '1.0\n' > "$cache/$id.version"
 done
+# Table de routage simulée : en ligne (route par défaut) ou hors ligne.
+printf 'Iface\tDestination\tGateway\neth0\t00000000\t0202000A\n' > "$work/routes-online"
+printf 'Iface\tDestination\tGateway\neth0\t0002000A\t00000000\n' > "$work/routes-offline"
+export WINLUX_NETWORK_ROUTES="$work/routes-online"
 manager() {
     if command -v busybox >/dev/null 2>&1; then
         busybox sh "$project/scripts/winlux-browsers.sh" "$@"
@@ -76,11 +80,42 @@ grep -q "^--only chrome $WINLUX_BROWSER_ROOT/var/cache/winlux/browsers\$" "$work
 manager --status | grep -qx 'browser_chrome=installed'
 test ! -e "$cache/chrome.deb"
 # Échec du téléchargement : rien d'installé, pas de verrou orphelin.
+cp "$cache/edge.deb" "$work/edge.deb.saved"
 rm -rf "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/edge" "$cache/edge.deb" "$cache/edge.sha256" "$cache/edge.version"
 printf '#!/bin/sh\nexit 1\n' > "$work/fetch"
 if manager --install edge >/dev/null 2>&1; then echo 'Edge installé sans téléchargement' >&2; exit 1; fi
 test ! -e "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/edge"
 test ! -e "$WINLUX_BROWSER_ROOT/run/winlux/browser-install.lock"
+# Hors ligne : message clair (code 75), aucune trace technique, reprise notée.
+WINLUX_NETWORK_ROUTES="$work/routes-offline"
+code=0; manager --install edge 2>"$work/offline.txt" || code=$?
+test "$code" = 75
+grep -q "Pas de connexion Internet" "$work/offline.txt"
+if grep -qi "traceback\|urlopen\|errno" "$work/offline.txt"; then echo 'Trace technique affichée hors ligne' >&2; exit 1; fi
+grep -qx edge "$WINLUX_BROWSER_ROOT/etc/winlux/browser-install-pending"
+code=0; manager --default edge 2>/dev/null || code=$?
+test "$code" = 75
+test "$(cat "$WINLUX_BROWSER_ROOT/etc/winlux/first-boot-browser")" = edge
+# Le réseau tombe pendant le téléchargement : même message, journal à part.
+printf '#!/bin/sh\necho "Traceback: urlopen error" >&2\nexit 1\n' > "$work/fetch"
+WINLUX_NETWORK_ROUTES="$work/routes-online"
+code=0; manager --install edge 2>"$work/failed.txt" || code=$?
+test "$code" = 1
+if grep -q Traceback "$work/failed.txt"; then echo 'Trace technique affichée' >&2; exit 1; fi
+grep -q Traceback "$WINLUX_BROWSER_ROOT/run/winlux/browser-fetch.log"
+# Retour du réseau : installé, plus rien en attente.
+sed 's/chrome/edge/g' > "$work/fetch" <<FETCH
+#!/bin/sh
+set -eu
+cp "$work/edge-publisher.deb" "\$3/chrome.deb"
+sha256sum "\$3/chrome.deb" | cut -d' ' -f1 > "\$3/chrome.sha256"
+printf '2.0\n' > "\$3/chrome.version"
+FETCH
+cp "$work/edge.deb.saved" "$work/edge-publisher.deb"
+manager --default edge
+test ! -e "$WINLUX_BROWSER_ROOT/etc/winlux/browser-install-pending"
+test ! -e "$WINLUX_BROWSER_ROOT/etc/winlux/first-boot-browser"
+manager --status | grep -qx 'browser_edge=installed'
 if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
 python3 -B "$project/scripts/test-browser-downloads.py"
 echo 'OK: no browser shipped or preferred, choice screen, download on demand, URL arguments, checksums and cleanup'

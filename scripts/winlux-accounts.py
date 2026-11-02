@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Comptes locaux de Winlux (Paramètres › Comptes), comme sous Windows 11.
+"""Comptes locaux de Winlux (Paramètres › Comptes).
 
     winlux-accounts list                         comptes du bureau (lecture seule)
     winlux-accounts add NOM admin|user [NOM COMPLET]   mot de passe sur l'entrée standard

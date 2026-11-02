@@ -271,13 +271,13 @@ perform() {
         browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
         browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
         browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
-        # Boutiques de logiciels (docs/BOUTIQUES.md) : 75 = reporté faute de réseau.
+        # Boutiques de logiciels (docs/BOUTIQUES.md) : 75 = reporté faute de réseau
+        # (Paramètres l'explique, l'init reprend au démarrage suivant).
         store-catalog-add-*|store-catalog-remove-*)
             id=${action#store-catalog-add-}; verb=--add
             case "$action" in store-catalog-remove-*) id=${action#store-catalog-remove-}; verb=--remove ;; esac
             case "$id" in ''|*[!a-z0-9-]*) message 'Boutique inconnue'; exit 2 ;; esac
             code=0; winlux-store-catalogs "$verb" "$id" || code=$?
-            test "$code" = 75 && code=0
             return "$code" ;;
         network-renew) winlux-network restart ;;
         network-scan)
@@ -606,7 +606,10 @@ if perform "$@" > "$log" 2>&1; then
     result=0
 else
     result=$?
-    if test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
+    if test "$result" = 75; then
+        # Reporté faute de réseau (navigateur, boutique) : pas une panne.
+        message 'Pas de connexion Internet : ce sera fait automatiquement au prochain démarrage connecté.'
+    elif test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
         detail=$(tail -n 1 "$log")
         message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
     else

@@ -160,6 +160,16 @@ CATEGORIES = ["navigateurs", "bureautique", "multimedia", "developpement", "jeux
 # Outils communs
 # ---------------------------------------------------------------------------
 
+def network_up():
+    """Route par défaut présente (hors ligne simulé : WINLUX_STORE_OFFLINE=1)."""
+    if OFFLINE:
+        return False
+    try:
+        lines = Path(os.environ.get("WINLUX_NETWORK_ROUTES", "/proc/net/route")).read_text().splitlines()[1:]
+    except OSError:
+        return True
+    return any(len(f) > 1 and f[1] == "00000000" for f in (l.split() for l in lines))
+
 def have(cmd):
     return shutil.which(cmd) is not None
 
@@ -1794,6 +1804,9 @@ def operate(action, target, hook=None, reindex=True, known=""):
             progress(100, tr(done, name=name) if done else name, "done")
         elif code in MESSAGES:
             progress(0, tr(MESSAGES[code]), "error")
+        elif not network_up():
+            # apt, flatpak ou un installateur sans réseau : le dire simplement.
+            progress(0, tr("offline"), "error")
         else:
             progress(0, tr("failed", code=code, log=RUN / "store.log"), "error")
         return code
