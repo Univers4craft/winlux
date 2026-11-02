@@ -157,7 +157,7 @@ jobs:
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 
-      - name: Vérifier l'assistant Claude (désactivé par défaut, envois montrés, actions confirmées)
+      - name: Vérifier l'assistant IA : Claude, ChatGPT, IA locale (désactivés par défaut, envois montrés, téléchargements vérifiés, actions confirmées)
         run: python3 -B scripts/test-assistant.py
 
       - name: Vérifier les grandes images X11 en 1080p

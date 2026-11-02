@@ -41,7 +41,7 @@
 | 27 | **Bureau à distance** | Serveur RFB/VNC de la session. |
 | 28 | **Partage et transfert** | Dossiers partagés (Samba) et transfert des réglages par fichier `.wlxprofile`. |
 | 29 | **Jeux** | Bibliothèque des jeux Windows, temps de jeu, raccourcis (docs/JEUX.md). |
-| 30 | **Assistant Claude** | Désactivé par défaut. L'activer télécharge Claude Code s'il manque, connecte le compte Claude (Google, e-mail…) puis ajoute le bouton Claude à la barre des tâches (et Windows+C). Compte connecté, « Se déconnecter », ce qui est envoyé. Session native seulement. |
+| 30 | **Assistant IA** | Trois assistants, tous désactivés par défaut, chacun avec son interrupteur : **Claude** (compte Claude, Claude Code téléchargé), **ChatGPT** (compte ChatGPT, Codex d'OpenAI téléchargé) et **IA locale** (llama.cpp et le petit modèle Qwen2.5 1,5B, rien ne quitte le PC, cachée sous 3 Gio de mémoire). Un seul bouton dans la barre des tâches (et Windows+C), choix de l'assistant dans le panneau, ce qui est envoyé. Session native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

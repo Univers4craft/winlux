@@ -388,7 +388,7 @@ perform() {
                 # la barre centrée, près des icônes de la barre à gauche.
                 widgets=
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-11 2>/dev/null)" = genmon; then widgets=11; fi
-                # Bouton de l'assistant Claude (#286), présent seulement une fois activé.
+                # Bouton de l'assistant IA (#286), présent seulement une fois activé.
                 assistant=
                 assistant=$(sed -n 's/^panel_plugin=//p' "${XDG_CONFIG_HOME:-$HOME/.config}/winlux/assistant.conf" 2>/dev/null || true)
                 case "$assistant" in
