@@ -102,6 +102,8 @@ unsafe fn open_impl(root: usize, sub: &str, result: *mut usize) -> i32 {
         Ok(p) => p,
         Err(e) => return e,
     };
+    // HKLM\HARDWARE\DEVICEMAP\SERIALCOMM suit les ports COM branchés.
+    crate::dlls::serial::refresh_registry(&path);
     match reg::open(&path) {
         Ok(h) => {
             *result = h;
