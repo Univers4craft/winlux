@@ -49,7 +49,7 @@ _TR = {
     'Réglage inconnu': ('Unknown setting', 'Ajuste desconocido', 'Unbekannte Einstellung'),
     'Image trop volumineuse': ('Image too large', 'Imagen demasiado grande', 'Bild zu groß'),
     'Le service de fond d’écran n’est pas initialisé': ('The wallpaper service is not initialized', 'El servicio de fondo de pantalla no está inicializado', 'Der Hintergrunddienst ist nicht initialisiert'),
-    'Préférence appliquée. Rouvrez les applications pour actualiser leur thème.': ('Preference applied. Reopen your apps to refresh their theme.', 'Preferencia aplicada. Vuelva a abrir las aplicaciones para actualizar su tema.', 'Einstellung übernommen. Öffnen Sie die Apps erneut, um ihr Design zu aktualisieren.'),
+    'Préférence appliquée.': ('Preference applied.', 'Preferencia aplicada.', 'Einstellung übernommen.'),
     'Fichier de thème invalide': ('Invalid theme file', 'Archivo de tema no válido', 'Ungültige Designdatei'),
     'Thème enregistré.': ('Theme saved.', 'Tema guardado.', 'Design gespeichert.'),
     'Thème appliqué.': ('Theme applied.', 'Tema aplicado.', 'Design übernommen.'),
@@ -75,13 +75,50 @@ def text_on(color):
     lum=0.2126*channel(r)+0.7152*channel(g)+0.0722*channel(b)
     return "#000000" if (lum+0.05)/0.05>=1.05/(lum+0.05) else "#ffffff"
 
+def palette(dark):
+    """(fond, texte, surface) des fenêtres et de la barre de titre."""
+    return ("#181b24","#ecedf5","#242a38") if dark else ("#f3f5fa","#202430","#ffffff")
+
 def appearance_css(dark,accent):
     """gtk.css commun à toutes les applications GTK (priorité « utilisateur »)."""
-    bg,fg,surface=("#181b24","#ecedf5","#242a38") if dark else ("#f3f5fa","#202430","#ffffff")
+    bg,fg,surface=palette(dark)
     # Pas de « window box » : les fenêtres qui ont leurs propres couleurs (UAC,
     # autorisations, signalement) gardaient des boîtes repeintes sous leur texte.
     on_accent=text_on(accent)
     return f"window, list, viewport {{background-color:{bg}; color:{fg};}} #sidebar, #sidebar list {{background-color:{surface}; color:{fg};}} #sidebar row:selected, #sidebar row:selected label, selection {{background-color:{accent}; color:{on_accent};}} button {{background:{surface}; color:{fg}; border-color:{accent};}} entry {{background:{surface}; color:{fg};}} .card {{background:{surface};color:{fg};}}"
+
+THEMES=HOME/".local/share/themes"
+MARKER="/* Winlux appearance */"
+END_MARKER="/* End Winlux appearance */"
+
+def write_gtk_theme(dark,css):
+    """Thème GTK du compte : Adwaita (clair ou sombre) + couleurs et accent Winlux.
+
+    Les couleurs vivaient dans ~/.config/gtk-3.0/gtk.css, que GTK ne relit
+    jamais : les fenêtres ouvertes gardaient l'ancien thème. Un thème nommé,
+    lui, est rechargé par toutes les fenêtres quand xsettings change de nom ;
+    deux emplacements par mode font changer le nom à chaque réglage (accent)."""
+    mode="dark" if dark else "light"
+    try: current=configparser.ConfigParser(interpolation=None);current.read(HOME/".config/gtk-3.0/settings.ini");current=current.get("Settings","gtk-theme-name",fallback="")
+    except (configparser.Error,OSError): current=""
+    name=f"Winlux-{mode}-2" if current==f"Winlux-{mode}-1" else f"Winlux-{mode}-1"
+    folder=THEMES/name/"gtk-3.0";folder.mkdir(parents=True,exist_ok=True)
+    base="gtk-contained-dark.css" if dark else "gtk-contained.css"
+    (folder/"gtk.css").write_text(f'@import url("resource:///org/gtk/libgtk/theme/Adwaita/{base}");\n'+MARKER+"\n"+css+"\n"+END_MARKER+"\n")
+    # L'ancien bloc de ~/.config/gtk-3.0/gtk.css passerait au-dessus du thème.
+    style=HOME/".config/gtk-3.0/gtk.css"
+    if style.exists():
+        old=style.read_text()
+        cleaned=re.sub(r"\n?"+re.escape(MARKER)+r".*?"+re.escape(END_MARKER)+r"\n?","",old,flags=re.S)
+        if cleaned!=old: style.write_text(cleaned)
+    return name
+
+def sync_system_theme(dark):
+    """/etc/winlux/preferences.conf (THEME, lu par le bureau Win32) suit le thème réel."""
+    tool=shutil.which("winlux-control")
+    if not tool or os.environ.get("WINLUX_PERSONALIZE_NO_SYSTEM"): return
+    try: subprocess.run([tool,"theme-dark" if dark else "theme-light"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+    except (OSError,subprocess.SubprocessError): pass
 
 def apply(kind,value):
     try: state=json.loads(PREF.read_text())
@@ -125,22 +162,23 @@ def apply(kind,value):
     temp=PREF.with_suffix(".tmp");temp.write_text(json.dumps(state));temp.replace(PREF)
     dark=state.get("theme","dark")=="dark"
     accent=state.get("accent","#8178b7")
-    css=appearance_css(dark,accent)
-    style=HOME/".config/gtk-3.0/gtk.css";style.parent.mkdir(parents=True,exist_ok=True)
-    marker="/* Winlux appearance */"
-    old=style.read_text() if style.exists() else ""
-    end_marker="/* End Winlux appearance */"
-    old=re.sub(re.escape(marker)+r".*?"+re.escape(end_marker),"",old,flags=re.S)
-    style.write_text(old+"\n"+marker+"\n"+css+"\n"+end_marker+"\n")
+    theme=write_gtk_theme(dark,appearance_css(dark,accent))
     gtk_preferences=HOME/".config/gtk-3.0/settings.ini"
     gtk_config=configparser.ConfigParser(interpolation=None)
     gtk_config.optionxform=str
     gtk_config.read(gtk_preferences)
     if not gtk_config.has_section("Settings"):gtk_config.add_section("Settings")
-    gtk_config.set("Settings","gtk-application-prefer-dark-theme","1" if dark else "0")
-    gtk_config.set("Settings","gtk-theme-name","Adwaita-dark" if dark else "Adwaita")
+    # Le mode sombre passe par le seul nom du thème, que xsettings transmet aux
+    # fenêtres déjà ouvertes. La préférence sombre de settings.ini n'est lue
+    # qu'au démarrage d'une application : à 1, les fenêtres ouvertes restaient
+    # sombres après le passage au thème clair (mode Automatique compris).
+    gtk_config.set("Settings","gtk-application-prefer-dark-theme","0")
+    gtk_config.set("Settings","gtk-theme-name",theme)
+    gtk_preferences.parent.mkdir(parents=True,exist_ok=True)
     with gtk_preferences.open("w") as stream:gtk_config.write(stream)
-    query("xsettings","/Net/ThemeName","Adwaita-dark" if dark else "Adwaita","string")
+    query("xsettings","/Net/ThemeName",theme,"string")
+    sync_system_theme(dark)
+    bg,fg,surface=palette(dark)
     source=Path("/usr/share/themes/Winlux/openbox-3/themerc")
     if source.is_file():
         replacements={"window.active.title.bg.color":surface,"window.active.client.color":surface,
@@ -159,7 +197,7 @@ def apply(kind,value):
             if name is not None:
                 name.text="Winlux-user";tree.write(rc,encoding="utf-8",xml_declaration=True)
                 subprocess.run(["openbox","--reconfigure"],check=True)
-    print(_t("Préférence appliquée. Rouvrez les applications pour actualiser leur thème."))
+    print(_t("Préférence appliquée."))
 
 # ── Thèmes partageables (.wlxtheme) ─────────────────────────────────────────
 
