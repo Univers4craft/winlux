@@ -121,7 +121,7 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
-| Traduction des shaders D3D11 (DXBC/HLSL → GLSL) | Warzone 2100 en ANGLE | image noire | #137 |
+| Traduction du HLSL compilé à la volée (`D3DCompile`) vers GLSL ; le DXBC précompilé est traduit depuis #354 | Warzone 2100 en ANGLE (Direct3D 11, OpenGL ES) | image noire : utiliser OpenGL ou Vulkan | #137 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)
