@@ -130,6 +130,8 @@ alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/nu
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
 (
     export WINLUX_CONTROL_NO_STATUS=1
+    # Icône du clavier tactile (sans clavier physique) avant l'alignement.
+    if test -x /usr/bin/winlux-osk; then /usr/bin/winlux-osk panel || true; fi
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
     # Restore the user's input choice on each session, without resetting defaults.
     case "$speed" in
@@ -137,6 +139,8 @@ speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
         50) /usr/bin/winlux-control mouse-normal || true ;;
         75) /usr/bin/winlux-control mouse-fast || true ;;
     esac
+    # Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+    if test -x /usr/bin/winlux-mouse; then /usr/bin/winlux-mouse apply || true; fi
     # Profil processeur et courbe de ventilateurs choisis dans les Parametres.
     if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
 ) </dev/null >/run/winlux/session-settings.log 2>&1 &

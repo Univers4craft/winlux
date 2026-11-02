@@ -67,6 +67,7 @@ pub mod mfplat;
 pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
+pub mod mouse;
 pub mod mscoree;
 pub mod msvcrt;
 pub mod named_pipes;

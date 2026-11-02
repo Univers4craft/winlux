@@ -404,10 +404,13 @@ perform() {
                     ''|*[!0-9]*) assistant= ;;
                     *) test "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$assistant" 2>/dev/null)" = launcher || assistant= ;;
                 esac
+                # Icône du clavier tactile (winlux-osk panel), avant le réseau.
+                keyboard=
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-12 2>/dev/null)" = genmon; then keyboard=12; fi
                 if test "$alignment" = center; then
-                    ids="${widgets:+11 }3 1 2 8 ${assistant:+$assistant }${tray:+10 }4 5 6 9 7"
+                    ids="${widgets:+11 }3 1 2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 else
-                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }4 5 6 9 7"
+                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 if test "$current" != "$ids "; then

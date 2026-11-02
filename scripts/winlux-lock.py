@@ -58,6 +58,7 @@ _TR = {
         "Demasiados intentos. Vuelva a intentarlo en {s} segundos.",
         "Zu viele Versuche. Versuchen Sie es in {s} Sekunden erneut."),
     "Verr. Maj activé": ("Caps Lock is on", "Bloq Mayús activado", "Feststelltaste ist aktiviert"),
+    "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Afficher le mot de passe": ("Show password", "Mostrar contraseña", "Kennwort anzeigen"),
     "Appuyez sur une touche ou cliquez pour vous connecter": (
         "Press any key or click to sign in",
@@ -87,6 +88,40 @@ def _t(text):
     """Texte dans la langue de l'interface (le français sert de clé)."""
     row = _TR.get(text)
     return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
+def type_into(entry, key, submit):
+    """Une touche du clavier tactile dans un champ GTK (écran de connexion)."""
+    position = entry.get_position()
+    if key == "BackSpace":
+        if position > 0:
+            entry.delete_text(position - 1, position)
+    elif key == "Return":
+        submit()
+    elif key == "Escape":
+        entry.set_text("")
+    elif key in ("Left", "Right"):
+        entry.set_position(max(0, position + (1 if key == "Right" else -1)))
+    elif len(key) == 1:
+        entry.insert_text(key, position)
+        entry.set_position(position + 1)
+
+
+def osk_module():
+    """Module du clavier tactile (/usr/bin/winlux-osk, ou le script voisin)."""
+    import importlib.machinery
+    import importlib.util
+    for path in (Path("/usr/bin/winlux-osk"), Path(__file__).resolve().with_name("winlux-osk.py")):
+        if path.is_file():
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", str(path))
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def long_date(when, lang=None):
@@ -446,6 +481,8 @@ def run_lock():
     """
 
     class Lock:
+        osk = None  # clavier tactile (keyboard_view)
+
         def __init__(self):
             self.user = session_account()
             self.password = requires_password(self.user)
@@ -502,13 +539,56 @@ def run_lock():
                 self.area = area
                 overlay.add_overlay(self.clock_view())
                 overlay.add_overlay(self.signin_view())
+                overlay.add_overlay(self.keyboard_view())
                 window.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
                 window.connect("key-press-event", self.on_key)
                 window.connect("button-press-event", self.on_click)
             window.show_all()
             if main:
                 self.signin.hide()
+                if self.osk is not None:
+                    self.osk.hide()
             return window
+
+        def keyboard_view(self):
+            """Clavier tactile (winlux-osk) en bas de l'écran de connexion, et
+            son bouton à droite : ouvert d'office sans clavier physique."""
+            self.osk, self.osk_button, self.osk_auto = None, None, False
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.END, halign=Gtk.Align.FILL)
+            module = osk_module()
+            if module is None or self.entry is None:
+                return box
+            try:
+                keys = module.keyboard_widget(send=self.osk_send, on_close=self.osk_toggle)
+                self.osk_auto = module.icon_wanted()
+            except Exception:  # Clavier indisponible : l'écran reste utilisable.
+                return box
+            corner = Gtk.Box(halign=Gtk.Align.END, margin_end=24, margin_bottom=16)
+            self.osk_button = Gtk.Button.new_from_icon_name("input-keyboard-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
+            self.osk_button.get_style_context().add_class("lock-go")
+            self.osk_button.set_tooltip_text(_t("Clavier tactile"))
+            self.osk_button.connect("clicked", lambda *_: self.osk_toggle())
+            corner.pack_start(self.osk_button, False, False, 0)
+            box.pack_start(corner, False, False, 0)
+            keys.set_size_request(-1, 280)
+            box.pack_start(keys, False, False, 0)
+            self.osk = keys
+            return box
+
+        def osk_toggle(self):
+            if self.osk is None:
+                return
+            if self.osk.get_visible():
+                self.osk.hide()
+            else:
+                self.osk.show()
+            self.last_typing = time.monotonic()
+
+        def osk_send(self, key, _modifiers):
+            """Touches du clavier tactile vers le champ du mot de passe."""
+            self.last_typing = time.monotonic()
+            if self.entry is not None:
+                type_into(self.entry, key, self.submit)
 
         def clock_view(self):
             self.clock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER,
@@ -655,11 +735,15 @@ def run_lock():
             self.area.queue_draw()
             if self.entry is not None:
                 self.entry.grab_focus()
+            if self.osk is not None and self.osk_auto:
+                self.osk.show()
             self.tick()
 
         def show_clock(self):
             self.view = "clock"
             self.signin.hide()
+            if self.osk is not None:
+                self.osk.hide()
             self.clock.show()
             self.error.set_text("")
             self.area.queue_draw()

@@ -77,6 +77,7 @@ run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 run pilotes-materiel     python3 -B scripts/test-drivers.py
+run clavier-souris       python3 -B scripts/test-input-devices.py
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
 display() {
@@ -86,6 +87,7 @@ display() {
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 run pilotes-page         display python3 -B scripts/test-drivers.py
+run clavier-tactile      display python3 -B scripts/test-input-devices.py
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5

@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 
 def _interface_lang():
@@ -40,6 +40,39 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Clavier tactile et souris avancée
+    "Icône du clavier tactile": ("Touch keyboard icon", "Icono del teclado táctil", "Symbol der Bildschirmtastatur"),
+    "Dans la barre des tâches. « Sans clavier physique » la montre quand aucun clavier n’est branché.": ("On the taskbar. “Without a physical keyboard” shows it when no keyboard is connected.", "En la barra de tareas. «Sin teclado físico» lo muestra cuando no hay ningún teclado conectado.", "In der Taskleiste. „Ohne physische Tastatur“ zeigt es, wenn keine Tastatur angeschlossen ist."),
+    "Sans clavier physique": ("Without a physical keyboard", "Sin teclado físico", "Ohne physische Tastatur"),
+    "Toujours": ("Always", "Siempre", "Immer"),
+    "Ouvrir le clavier tactile": ("Open the touch keyboard", "Abrir el teclado táctil", "Bildschirmtastatur öffnen"),
+    "Bouton principal de la souris": ("Primary mouse button", "Botón principal del mouse", "Primäre Maustaste"),
+    "Gauche": ("Left", "Izquierdo", "Links"),
+    "Droit": ("Right", "Derecho", "Rechts"),
+    "Améliorer la précision du pointeur": ("Enhance pointer precision", "Mejorar la precisión del puntero", "Zeigerbeschleunigung verbessern"),
+    "Le pointeur va plus loin quand la souris bouge vite.": ("The pointer travels further when the mouse moves fast.", "El puntero llega más lejos cuando el mouse se mueve rápido.", "Der Zeiger bewegt sich weiter, wenn die Maus schnell bewegt wird."),
+    "Défilement": ("Scrolling", "Desplazamiento", "Bildlauf"),
+    "Lignes à faire défiler à chaque cran de la molette": ("Lines to scroll at a time", "Líneas que se desplazan cada vez", "Zeilen pro Bildlauf"),
+    "Programmes Windows ; 3 par défaut.": ("Windows programs; 3 by default.", "Programas de Windows; 3 de forma predeterminada.", "Windows-Programme; standardmäßig 3."),
+    "Sens de défilement inversé": ("Reverse scrolling direction", "Invertir la dirección de desplazamiento", "Bildlaufrichtung umkehren"),
+    "Tourner la molette vers le bas fait monter le contenu.": ("Turning the wheel down moves the content up.", "Girar la rueda hacia abajo sube el contenido.", "Das Mausrad nach unten drehen bewegt den Inhalt nach oben."),
+    "Double-clic": ("Double-click", "Doble clic", "Doppelklick"),
+    "Vitesse du double-clic": ("Double-click speed", "Velocidad del doble clic", "Doppelklickgeschwindigkeit"),
+    "Plus lente à gauche, plus rapide à droite.": ("Slower to the left, faster to the right.", "Más lenta a la izquierda, más rápida a la derecha.", "Links langsamer, rechts schneller."),
+    "Double-cliquez sur le dossier pour tester.": ("Double-click the folder to test.", "Haga doble clic en la carpeta para probar.", "Doppelklicken Sie zum Testen auf den Ordner."),
+    "Zone de test": ("Test area", "Área de prueba", "Testbereich"),
+    "Double-cliquez sur le dossier : il s’ouvre ou se ferme si la vitesse vous convient.": ("Double-click the folder: it opens or closes if the speed suits you.", "Haga doble clic en la carpeta: se abre o se cierra si la velocidad le conviene.", "Doppelklicken Sie auf den Ordner: Er öffnet oder schließt sich, wenn die Geschwindigkeit passt."),
+    "Pointeur": ("Pointer", "Puntero", "Zeiger"),
+    "Couleur du pointeur": ("Pointer colour", "Color del puntero", "Zeigerfarbe"),
+    "Thème du système": ("System theme", "Tema del sistema", "Systemdesign"),
+    "Blanc": ("White", "Blanco", "Weiß"),
+    "Noir": ("Black", "Negro", "Schwarz"),
+    "Vert vif": ("Lime", "Verde lima", "Hellgrün"),
+    "Traînée du pointeur": ("Pointer trails", "Rastro del puntero", "Mausspur"),
+    "Des copies du pointeur le suivent quand il bouge : il se repère mieux sur un grand écran.": ("Copies of the pointer follow it as it moves, so it is easier to find on a large screen.", "Copias del puntero lo siguen al moverse: se localiza mejor en una pantalla grande.", "Kopien des Zeigers folgen ihm beim Bewegen, so findet man ihn auf großen Bildschirmen leichter."),
+    "Aucune": ("None", "Ninguno", "Keine"),
+    "Courte": ("Short", "Corto", "Kurz"),
+    "Longue": ("Long", "Largo", "Lang"),
     # Jeux (application Jeux, temps de jeu, dossiers de jeux)
     'Bibliothèque de jeux': ('Game library', 'Biblioteca de juegos', 'Spielebibliothek'),
     'L’application Jeux rassemble vos jeux Windows installés : GOG, itch.io, dossiers de jeux et programmes 3D.': ('The Games app gathers your installed Windows games: GOG, itch.io, game folders and 3D programs.', 'La aplicación Juegos reúne sus juegos de Windows instalados: GOG, itch.io, carpetas de juegos y programas 3D.', 'Die App „Spiele“ sammelt Ihre installierten Windows-Spiele: GOG, itch.io, Spieleordner und 3D-Programme.'),
@@ -601,6 +634,9 @@ TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
             ("clickfinger", "Clic droit à deux doigts", "Sinon, appui dans le coin inférieur droit."),
             ("natural", "Défilement naturel", "Le contenu suit les doigts, comme sur un téléphone."),
             ("dwt", "Désactiver pendant la frappe", "Évite les clics involontaires avec la paume."))
+OSK_ICON = (("auto", "Sans clavier physique"), ("always", "Toujours"), ("never", "Jamais"))
+POINTER_COLORS = (("default", "Thème du système"), ("white", "Blanc"), ("black", "Noir"), ("lime", "Vert vif"))
+POINTER_TRAILS = (("0", "Aucune"), ("3", "Courte"), ("5", "Moyenne"), ("7", "Longue"))
 CPU_PROFILES = {"performance": "Performances", "balanced": "Équilibré", "powersave": "Économie d’énergie"}
 CPU_HYBRID = (("auto", "Automatique (recommandé)"), ("heavy", "Programmes lourds sur les P-cores"),
               ("performance", "Toujours les P-cores"), ("efficiency", "Toujours les E-cores"))
@@ -637,6 +673,18 @@ def ambiance_tool():
 def clipboard_tool():
     if have("winlux-clipboard"): return ["winlux-clipboard"]
     script = Path(__file__).resolve().with_name("winlux-clipboard.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def osk_tool():
+    if have("winlux-osk"): return ["winlux-osk"]
+    script = Path(__file__).resolve().with_name("winlux-osk.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def mouse_tool():
+    if have("winlux-mouse"): return ["winlux-mouse"]
+    script = Path(__file__).resolve().with_name("winlux-mouse.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
@@ -1762,11 +1810,15 @@ class ExtraPages:
         box = self.card()
         self.combo(box, _t("Disposition du clavier"), [(k, _t(v)) for k, v in LAYOUTS], status.get("layout") or "fr",
                    lambda value: self.execute("keyboard-" + value), _t("Langue et fuseau horaire : Heure et langue."))
-        self.section(_t("Souris"))
-        box = self.card()
-        speeds = [("25", _t("Lente")), ("50", _t("Normale")), ("75", _t("Rapide"))]
-        self.combo(box, _t("Vitesse du pointeur"), speeds, status.get("mouse_speed") if status.get("mouse_speed") in ("25", "75") else "50",
-                   lambda value: self.execute({"25": "mouse-slow", "75": "mouse-fast"}.get(value, "mouse-normal")))
+        osk = osk_tool()
+        if osk is not None:
+            state = keyvals(getattr(run(osk + ["icon"], timeout=5), "stdout", "") or "")
+            self.combo(box, _t("Icône du clavier tactile"), [(k, _t(v)) for k, v in OSK_ICON], state.get("setting", "auto"),
+                       lambda value: self.tool(osk + ["set", value], refresh=False),
+                       _t("Dans la barre des tâches. « Sans clavier physique » la montre quand aucun clavier n’est branché."))
+            self.actions(box, [(_t("Ouvrir le clavier tactile"), lambda: self.spawn(osk + ["show"]))])
+        self.sections_mouse(status)
+        if status.get("touchpad_present") != "1": return
         if status.get("touchpad_present") != "1": return
         self.section(_t("Pavé tactile"))
         box = self.card()
@@ -1780,6 +1832,80 @@ class ExtraPages:
             self.level_row(box, _t("Vitesse du curseur"), int(speed), lambda v: self.execute("touchpad-set", "speed", str(v)))
         if status.get("touchpad_gestures") == "1":
             self.row(box, _t("Pincer pour zoomer"), None, _t("Les applications zooment comme avec Ctrl + molette."))
+
+    def sections_mouse(self, status):
+        """Souris : comme Paramètres > Bluetooth et appareils > Souris de Windows 11."""
+        tool = mouse_tool()
+        result = run(tool + ["status"], timeout=10) if tool else None
+        mouse = keyvals(result.stdout) if result else {}
+        if not mouse:
+            self.section(_t("Souris"))
+            box = self.card()
+            speeds = [("25", _t("Lente")), ("50", _t("Normale")), ("75", _t("Rapide"))]
+            self.combo(box, _t("Vitesse du pointeur"), speeds, status.get("mouse_speed") if status.get("mouse_speed") in ("25", "75") else "50",
+                       lambda value: self.execute({"25": "mouse-slow", "75": "mouse-fast"}.get(value, "mouse-normal")))
+            return
+
+        def set_value(key, value):
+            self.tool(tool + ["set", key, str(value)], refresh=False)
+        # Section masquée sans souris libinput (tablette d'une VM, écran tactile seul).
+        if "1" in (mouse.get("cap_left"), mouse.get("cap_speed"), mouse.get("cap_precision")):
+            self.section(_t("Souris"))
+            box = self.card()
+        if mouse.get("cap_left") == "1":
+            self.combo(box, _t("Bouton principal de la souris"), [("0", _t("Gauche")), ("1", _t("Droit"))],
+                       mouse.get("left", "0"), lambda value: set_value("left", value))
+        if mouse.get("cap_speed") == "1":
+            speed = mouse.get("speed", "50")
+            self.level_row(box, _t("Vitesse du pointeur"), int(speed) if speed.isdigit() else 50,
+                           lambda value: set_value("speed", value))
+        if mouse.get("cap_precision") == "1":
+            self.switch(box, _t("Améliorer la précision du pointeur"), mouse.get("precision", "1") == "1",
+                        lambda on: set_value("precision", int(on)),
+                        _t("Le pointeur va plus loin quand la souris bouge vite."))
+        self.section(_t("Défilement"))
+        box = self.card()
+        lines = mouse.get("lines", "3")
+        choices = sorted({1, 2, 3, 4, 5, 6, 8, 10, 15, 20} | ({int(lines)} if lines.isdigit() else set()))
+        self.combo(box, _t("Lignes à faire défiler à chaque cran de la molette"), [(str(n), str(n)) for n in choices], lines,
+                   lambda value: set_value("lines", value), _t("Programmes Windows ; 3 par défaut."))
+        if mouse.get("cap_natural") == "1":
+            self.switch(box, _t("Sens de défilement inversé"), mouse.get("natural") == "1",
+                        lambda on: set_value("natural", int(on)),
+                        _t("Tourner la molette vers le bas fait monter le contenu."))
+        self.section(_t("Double-clic"))
+        box = self.card()
+        double = mouse.get("double", "500")
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 200, 900, 50)
+        scale.set_value(int(double) if double.isdigit() else 500)
+        scale.set_inverted(True)  # à droite : plus rapide, comme Windows
+        scale.set_draw_value(False)
+        scale.set_size_request(260, -1)
+        scale.connect("button-release-event", lambda w, _: set_value("double", int(round(w.get_value() / 50) * 50)) and False)
+        self.row(box, _t("Vitesse du double-clic"), scale, _t("Plus lente à gauche, plus rapide à droite."))
+        test = Gtk.EventBox()
+        icon = Gtk.Image.new_from_icon_name("folder", Gtk.IconSize.DIALOG)
+        test.add(icon)
+        test.set_tooltip_text(_t("Double-cliquez sur le dossier pour tester."))
+
+        def clicked(_widget, event):
+            if event.type == Gdk.EventType._2BUTTON_PRESS:
+                closed = icon.get_icon_name()[0] == "folder"
+                icon.set_from_icon_name("folder-open" if closed else "folder", Gtk.IconSize.DIALOG)
+            return True
+        test.connect("button-press-event", clicked)
+        self.row(box, _t("Zone de test"), test, _t("Double-cliquez sur le dossier : il s’ouvre ou se ferme si la vitesse vous convient."))
+        self.section(_t("Pointeur"))
+        box = self.card()
+        if mouse.get("cap_color") == "1":
+            self.combo(box, _t("Couleur du pointeur"), [(k, _t(v)) for k, v in POINTER_COLORS], mouse.get("color", "default"),
+                       lambda value: set_value("color", value))
+        self.combo(box, _t("Taille du pointeur"), [(i + 1, f"{size} px") for i, size in enumerate(POINTER_SIZES)],
+                   a11y_read().get("pointer_size", 1), lambda value: self.set_pointer(int(value)))
+        trail = mouse.get("trail", "0")
+        self.combo(box, _t("Traînée du pointeur"), [(k, _t(v)) for k, v in POINTER_TRAILS],
+                   trail if trail in dict(POINTER_TRAILS) else "0", lambda value: set_value("trail", value),
+                   _t("Des copies du pointeur le suivent quand il bouge : il se repère mieux sur un grand écran."))
 
     def level_row(self, parent, title, value, changed):
         """Curseur 0-100 appliqué quand on le relâche (une commande, pas cent)."""
