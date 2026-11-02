@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **285**
-- À faire ou en cours : **54**
+- Réalisé : **286**
+- À faire ou en cours : **53**
 - Total : **339**
-- Progression : **84.1%**
+- Progression : **84.4%**
 - Dernière mise à jour : 02/11/2026 (14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
@@ -95,7 +95,7 @@
 
 Petits plaisirs :
 
-- [ ] Éclairage nocturne, planning au coucher du soleil (#274).
+- [x] Éclairage nocturne, planning au coucher du soleil (#274) : `winlux-ambiance` (rampes gamma RandR, fondu, planning soleil calculé depuis zone1970.tab sans Internet ou heures choisies, l’interrupteur suit le planning à chaque changement de plage), Paramètres > Écran et réglages rapides (Win+A), masqué sans rampe gamma, 4 langues, `test-ambiance.py` en CI.
 - [ ] Sélecteur d'emojis et de symboles Win+. (#275).
 - [ ] Historique du presse-papiers Win+V dans la session native (#276).
 - [ ] Session native : Snap Layouts, vue des tâches Win+Tab et bureaux virtuels (#277).

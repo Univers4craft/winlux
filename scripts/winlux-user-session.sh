@@ -225,6 +225,8 @@ wait_desktop() {
             start screensaver.log env LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash
         fi
     fi
+    # Éclairage nocturne : planning et couleurs de l'écran (rien sans rampe gamma).
+    if test -x /usr/bin/winlux-ambiance; then start ambiance.log /usr/bin/winlux-ambiance daemon; fi
     # Verrouillage après inactivité et au retour de veille.
     if test -x /usr/bin/winlux-lock; then start lock.log /usr/bin/winlux-lock daemon; fi
     # Catalogue des applications (raccourcis .lnk, programmes installés) et
