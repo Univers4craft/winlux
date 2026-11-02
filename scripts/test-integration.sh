@@ -210,4 +210,25 @@ set -e
 test ! -s "$work/dialogue.log" || fail "bureau PE : boîte en double avec l'écran bleu"
 ok "plantage d'un .exe graphique ouvert depuis l'Explorateur : message affiché"
 
+# Installateur 32 bits que le runtime déroule lui-même (WiX Burn comme
+# vc_redist.x64.exe, NSIS, Inno Setup) : --inspect répond « setup » et le
+# double-clic l'installe au lieu de refuser un programme 32 bits.
+setupbin="$work/setup-bin"
+mkdir -p "$setupbin"
+cat >"$setupbin/winlux" <<EOF
+#!/bin/sh
+if [ "\$1" = --inspect ]; then echo setup; exit 0; fi
+echo "\$@" >"$work/setup-args.log"
+exit 0
+EOF
+chmod +x "$setupbin/winlux"
+cp "$apps/fenetre.exe" "$apps/vc_redist.x64.exe"
+: >"$work/dialogue.log"
+env PATH="$fake:$PATH" DISPLAY=:99 XDG_STATE_HOME="$work/state" WINLUX_RUNTIME="$setupbin/winlux" \
+    "$open" "$apps/vc_redist.x64.exe" </dev/null >"$work/sortie.log" 2>&1 || fail "installateur : échec"
+grep -q 'vc_redist.x64.exe' "$work/setup-args.log" || fail "installateur : runtime non appelé"
+grep -q 'est installé' "$work/dialogue.log" || fail "installateur : pas de message de fin"
+if grep -q '32 bits' "$work/dialogue.log"; then fail "installateur refusé comme programme 32 bits"; fi
+ok "installateur 32 bits (vc_redist) : installé par double-clic"
+
 echo "Intégration bureau validée."
