@@ -116,9 +116,13 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+# Catalogues ajoutés à la main par l'administrateur (aucun livré).
 mkdir -p "$stage/etc/winlux/store-sources.d"
-cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
-chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
+# Boutiques tierces proposées (docs/BOUTIQUES.md) : seulement leur description ;
+# rien n'est téléchargé avant le choix de l'utilisateur, aucune n'est cochée.
+cp "$root/scripts/winlux-store-catalogs.py" "$stage/usr/bin/winlux-store-catalogs"
+cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalogs.json"
+chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
 # claude.exe après le premier démarrage ; rien de lourd dans l'ISO.
 if test -f "$root/scripts/winlux-claude-code.sh"; then
@@ -760,6 +764,20 @@ if test -s /etc/winlux/first-boot-browser; then
             /bin/busybox mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
         fi
     ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
+# Boutiques de logiciels choisies (installateur, premier démarrage) : ajoutées
+# au Store dès que le réseau répond ; sans réseau, retentées au démarrage
+# suivant (docs/BOUTIQUES.md).
+if test -s /etc/winlux/store-catalogs-pending && test -x /usr/bin/winlux-store-catalogs; then
+    (
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        $low /usr/bin/winlux-store-catalogs --resume || true
+    ) >>/var/log/winlux-store-catalogs.log 2>&1 &
 fi
 if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
     # Les tests de navigateurs ont besoin d'Edge déjà installé.

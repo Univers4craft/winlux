@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Name=Store Winlux
+Name[en]=Winlux Store
+Name[es]=Tienda Winlux
+Name[de]=Winlux Store
+Comment=Boutique de logiciels Linux et Windows : installer, mettre à jour, désinstaller
+Comment[en]=Linux and Windows software store: install, update, uninstall
+Comment[es]=Tienda de programas Linux y Windows: instalar, actualizar, desinstalar
+Comment[de]=Software-Store für Linux und Windows: installieren, aktualisieren, deinstallieren
+Keywords=Boutique;Magasin;Logiciels;Applications;Installer;Store;
+Keywords[en]=Store;Shop;Software;Apps;Install;
+Keywords[es]=Tienda;Programas;Aplicaciones;Instalar;Store;
+Keywords[de]=Store;Laden;Programme;Apps;Installieren;
+Exec=/usr/bin/winlux-shell-app store
+Icon=system-software-install
+Terminal=false
+Categories=System;PackageManager;
+X-Winlux-Pin=true
