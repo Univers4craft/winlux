@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Name=Jeux
+Name[en]=Games
+Name[es]=Juegos
+Name[de]=Spiele
+Comment=Vos jeux Windows installés, leur temps de jeu et des raccourcis
+Comment[en]=Your installed Windows games, their play time and shortcuts
+Comment[es]=Sus juegos de Windows instalados, su tiempo de juego y accesos directos
+Comment[de]=Ihre installierten Windows-Spiele, ihre Spielzeit und Verknüpfungen
+Exec=/usr/bin/python3 /usr/share/winlux/native/jeux/winlux-games.py
+Icon=applications-games
+StartupWMClass=winlux-games
+Terminal=false
+Categories=Game;
+Keywords=jeux;jeu;games;game;juegos;spiele;gog;itch;bibliothèque;library;
+Actions=rechercher;
+
+[Desktop Action rechercher]
+Name=Rechercher les jeux
+Name[en]=Look for games
+Name[es]=Buscar juegos
+Name[de]=Nach Spielen suchen
+Exec=/usr/bin/python3 /usr/share/winlux/native/jeux/winlux-games.py --scan

@@ -13,6 +13,10 @@ Winlux est testé à trois niveaux : **tests unitaires Rust**, **vrais programme
 | **Tests runtime (PE)** | Compile les `.exe` de `testexe/` et les exécute un par un puis en parallèle ; intégration du double-clic ; installe MinGW-w64, clang et lld, compile et exécute les suites C/C++ (MinGW et MSVC, dont les exceptions C++) ; rapport des PE générés. |
 | **Captures d'écran** | Sous Xvfb : contraste du menu Démarrer en thèmes clair et sombre (`test-shell-contrast.py`), puis `capture-ui.py` photographie toutes les pages des Paramètres, le menu Démarrer, les fenêtres et les applications maison ; `compare-captures.py` les compare à la dernière version verte de `master` (artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). |
 
+### `site.yml` : site web
+
+Sur les pull requests qui touchent `site/` ou `wiki/`, puis à chaque fusion sur `master` : construit le [site web](https://univers4craft.github.io/winlux/) et le teste avec `scripts/test-site.py --render` (quatre langues complètes, aucun lien ni ancre cassés, aucun lien Microsoft, rendu dans Chromium en mobile, tablette, portable et grand écran, thèmes clair et sombre ; captures en artefact `site-captures`). Après une fusion, il publie le site sur GitHub Pages.
+
 ### `apt-base.yml` : sur les pull requests qui touchent la base
 
 Reconstruit la base Ubuntu exactement comme la publication (sans rien publier), dès que `prepare-apt-base.py`, `prepare-desktop-packages.py` ou les workflows changent. Une base cassée est ainsi vue avant de taguer.
@@ -24,6 +28,8 @@ Construit l'ISO et la valide en VM avant de publier : navigateurs, bureau natif,
 ## Lancer les tests en local
 
 ### Le minimum avant une pull request
+
+`sh scripts/test-all.sh` lance d'un coup toutes les vérifications rapides (Python, shell et site web) ; `sh scripts/test-all.sh site` n'en garde que celles dont le nom contient « site ». Ensuite :
 
 ```sh
 cargo fmt --check -p winlux
@@ -47,6 +53,7 @@ bash scripts/build-tests.sh && bash scripts/test-runtime.sh
 | Partage, transfert | `sh scripts/test-share.sh`, `sh scripts/test-share-clients.sh`, `sh scripts/test-transfer.sh` |
 | Sessions, sauvegarde, bureau à distance | `sh scripts/test-sessions.sh`, `sh scripts/test-backup.sh`, `sh scripts/test-remote.sh` |
 | Store | `python3 -B scripts/test-store.py` |
+| Site web | `python3 -B site/build.py` (construit dans `build/site/`), `python3 -B scripts/test-site.py --render` (Node.js et Playwright pour le rendu) |
 | Menu Démarrer, fenêtres | `python3 -B scripts/test-start-icon.py`, `test-shell-popups.py`, `test-window-performance.py` |
 | Codecs audio réels | `ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux winmm::codecs -- --include-ignored` |
 | ISO et VM | voir [Construire l'ISO](Construire-l-ISO) |

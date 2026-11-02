@@ -169,6 +169,9 @@ jobs:
       - name: Vérifier l'application Horloge (alarmes, minuteurs, concentration)
         run: python3 -B scripts/test-alarms.py
 
+      - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
+        run: python3 -B scripts/test-games.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
@@ -328,6 +331,11 @@ jobs:
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: Fenêtre Jeux (cartes, tri, recherche)
+        run: |
+          mkdir -p build/captures
+          xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py

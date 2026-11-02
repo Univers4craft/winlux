@@ -272,6 +272,7 @@ _TR = {
     'Bureau': ('Desktop', 'Escritorio', 'Desktop'),
     # Page Processeur : mode jeu.
     'Mode jeu': ('Game mode', 'Modo juego', 'Spielmodus'),
+    'Jeux': ('Games', 'Juegos', 'Spiele'),
     'Mode jeu automatique': ('Automatic game mode', 'Modo juego automático', 'Automatischer Spielmodus'),
     'Désactiver le mode jeu': ('Turn off game mode', 'Desactivar el modo juego', 'Spielmodus ausschalten'),
     'Automatique : s’active quand un jeu ou une application 3D tourne.': ('Automatic: turns on while a game or 3D app is running.', 'Automático: se activa cuando se ejecuta un juego o una aplicación 3D.', 'Automatisch: aktiv, solange ein Spiel oder eine 3D-App läuft.'),
@@ -301,18 +302,19 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Presse-papiers")]
+         _t("Partage et transfert"), _t("Jeux"), _t("Presse-papiers")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
 # Page 29 (Presse-papiers) n'existe que dans les Paramètres natifs.
-CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 29, 19, 0, 27, 25, 9]),
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 30, 19, 0, 27, 25, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15]),
               (_t("Heure et langue"), [14]),
+              (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
               (_t("Confidentialité et sécurité"), [18]),
               (_t("Mises à jour"), [7, 17])]

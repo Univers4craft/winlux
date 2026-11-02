@@ -86,6 +86,7 @@ _TR = {
     'Graphisme': ('Graphics', 'Gráficos', 'Grafik'),
     'Audio et vidéo': ('Audio and video', 'Audio y vídeo', 'Audio und Video'),
     'Jeux': ('Games', 'Juegos', 'Spiele'),
+    'Jeux bibliothèque temps de jeu': ('Games library play time', 'Juegos biblioteca tiempo de juego', 'Spiele Bibliothek Spielzeit'),
     'Développement': ('Development', 'Desarrollo', 'Entwicklung'),
     'Système': ('System', 'Sistema', 'System'),
     'Accessoires': ('Accessories', 'Accesorios', 'Zubehör'),
@@ -128,7 +129,7 @@ DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
             (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
-            (_t("Partage de dossiers et transfert des réglages"), 28)]
+            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29)]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
 # les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
 # recherche trouve les pages ci-dessus).
@@ -240,6 +241,10 @@ class Start(Gtk.Application):
             self.hide()
             return
         if not self.window: self.build()
+        # Épingles ajoutées par une autre application (Jeux) depuis la
+        # dernière ouverture : relues à chaque ouverture.
+        try: self.state = json.loads(STATE.read_text())
+        except (OSError, ValueError): pass
         # Services de la session livrés avec une entrée de menu par leur paquet.
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
                      if listed(app) and app.get_id() not in SESSION_SERVICES}
