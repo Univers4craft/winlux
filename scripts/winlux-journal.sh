@@ -78,6 +78,8 @@ case "${1:-status}" in
         if test -f "$LOG_FILE" && test "$(wc -c < "$LOG_FILE" 2>/dev/null)" -gt 1048576; then
             mv "$LOG_FILE" "$LOG_FILE.1"
             : > "$LOG_FILE"
+            # Même droits que l'original : les .exe du compte y écrivent.
+            chmod --reference="$LOG_FILE.1" "$LOG_FILE" 2>/dev/null || true
             printf 'Rotation effectuee\n'
         else
             printf 'Pas de rotation necessaire\n'

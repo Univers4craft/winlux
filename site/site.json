@@ -1,0 +1,25 @@
+{
+  "repo": "Univers4craft/winlux",
+  "url": "https://univers4craft.github.io/winlux",
+  "languages": ["fr", "en", "de", "es"],
+  "pages": [
+    "index",
+    "download",
+    "guide",
+    "guide-usb",
+    "guide-install",
+    "guide-first-start",
+    "guide-run-exe",
+    "guide-updates",
+    "guide-help",
+    "apps"
+  ],
+  "guide": [
+    "guide-usb",
+    "guide-install",
+    "guide-first-start",
+    "guide-run-exe",
+    "guide-updates",
+    "guide-help"
+  ]
+}

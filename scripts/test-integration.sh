@@ -170,4 +170,36 @@ launch "$apps/absent.exe" && fail "fichier absent accepté"
 grep -q 'n’existe pas' "$work/dialogue.log" || fail "aucune erreur pour un fichier absent"
 ok "erreurs affichées dans une boîte de dialogue"
 
+# Un .exe graphique qui plante, lancé depuis l'Explorateur de la session
+# native (ShellExecute : WINLUX_DESKTOP_LAUNCH=1) : la boîte d'erreur doit
+# s'afficher. Seul le bureau PE (WINLUX_DESKTOP_DEMO), qui montre l'écran
+# bleu, la remplace. Avant, la fenêtre ne s'ouvrait pas et rien ne le disait.
+crashbin="$work/crash-bin"
+journal="$work/journal"
+mkdir -p "$crashbin" "$journal"
+cat >"$crashbin/winlux" <<EOF
+#!/bin/sh
+if [ "\$1" = --inspect ]; then echo gui; exit 0; fi
+printf '[CRASH] ts=%s sig=11 stop=IRQL_NOT_LESS_OR_EQUAL exe=plante.exe pid=%s\n' "\$(date +%s)" "\$\$" >>"$journal/crash.log"
+exit 5
+EOF
+chmod +x "$crashbin/winlux"
+cp "$apps/fenetre.exe" "$apps/plante.exe"
+crash_launch() {
+    : >"$work/dialogue.log"
+    env PATH="$fake:$PATH" DISPLAY=:99 XDG_STATE_HOME="$work/state" WINLUX_RUNTIME="$crashbin/winlux" \
+        WINLUX_JOURNAL_DIR="$journal" WINLUX_DESKTOP_LAUNCH=1 "$@" "$open" "$apps/plante.exe" \
+        </dev/null >"$work/sortie.log" 2>&1
+}
+set +e
+crash_launch WINLUX_NATIVE_SHELL=1; status=$?
+set -e
+test "$status" -eq 5 || fail "plantage : code $status au lieu de 5"
+grep -q 'plante.exe' "$work/dialogue.log" || fail "plantage depuis l'Explorateur natif : aucune boîte"
+set +e
+crash_launch WINLUX_DESKTOP_DEMO=1
+set -e
+test ! -s "$work/dialogue.log" || fail "bureau PE : boîte en double avec l'écran bleu"
+ok "plantage d'un .exe graphique ouvert depuis l'Explorateur : message affiché"
+
 echo "Intégration bureau validée."

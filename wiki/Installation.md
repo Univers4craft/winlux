@@ -1,5 +1,7 @@
 # Installation
 
+> Vous découvrez Winlux ? Le [guide de l'utilisateur](https://univers4craft.github.io/winlux/fr/guide.html) du site web explique l'installation pas à pas, en français, anglais, allemand et espagnol. Cette page en donne le détail technique.
+
 > **Préversion technique.** Découvrez Winlux d'abord dans une machine virtuelle. Avant d'installer sur un vrai PC, **sauvegardez vos données**.
 
 ## Ce qu'il faut

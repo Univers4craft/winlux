@@ -47,6 +47,7 @@ Ce wiki explique ce qu'est Winlux, pourquoi il existe, comment il est construit,
 
 ## Liens utiles
 
+- [Site web de Winlux](https://univers4craft.github.io/winlux/) : présentation, téléchargement et guide pas à pas pour l'utilisateur, en quatre langues. Ce wiki en reste la documentation technique.
 - [Télécharger la dernière ISO](https://github.com/Univers4craft/winlux/releases/latest)
 - [Suivi.md](https://github.com/Univers4craft/winlux/blob/master/Suivi.md), la source unique de vérité des tâches
 - [Issues ouvertes](https://github.com/Univers4craft/winlux/issues) · [Pull requests](https://github.com/Univers4craft/winlux/pulls) · [Actions](https://github.com/Univers4craft/winlux/actions)
