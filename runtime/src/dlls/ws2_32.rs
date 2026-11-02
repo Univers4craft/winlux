@@ -21,7 +21,7 @@ const WSAEFAULT: i32 = 10014;
 const WSAEINVAL: i32 = 10022;
 const _WSAENOBUFS: i32 = 10055;
 const WSAEOPNOTSUPP: i32 = 10045;
-const _WSAEWOULDBLOCK: i32 = 10035;
+const WSAEWOULDBLOCK: i32 = 10035;
 const WSAENOPROTOOPT: i32 = 10042;
 const SOCKET_ERROR: i32 = -1;
 const WSAHOST_NOT_FOUND: i32 = 11001;
@@ -340,7 +340,9 @@ fn error_from_errno(e: i32) -> i32 {
         libc::EADDRINUSE => 10048,
         libc::EADDRNOTAVAIL => 10049,
         libc::EAFNOSUPPORT => 10047,
-        libc::EINPROGRESS => 10036,
+        // Windows signale un connect non bloquant en cours par WSAEWOULDBLOCK
+        // (10035), jamais WSAEINPROGRESS (10036) que PuTTY traite comme fatal.
+        libc::EINPROGRESS => WSAEWOULDBLOCK,
         libc::EINTR => 10004,
         libc::EINVAL => 10022,
         libc::EMFILE => 10024,
@@ -548,7 +550,7 @@ pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32
     );
     if rc < 0 {
         let e = last_error();
-        if e == libc::EINPROGRESS || e == libc::EWOULDBLOCK {
+        if e == WSAEWOULDBLOCK {
             rearm_write(s);
         }
         set_error(e);
@@ -716,7 +718,7 @@ pub unsafe extern "win64" fn send_to(
     );
     if r < 0 {
         let e = last_error();
-        if e == libc::EWOULDBLOCK {
+        if e == WSAEWOULDBLOCK {
             rearm_write(s);
         }
         set_error(e);
@@ -3023,6 +3025,14 @@ mod tests {
     }
     fn cleanup() {
         wsa_cleanup();
+    }
+
+    #[test]
+    fn connect_non_bloquant_signale_wsaewouldblock_comme_windows() {
+        // PuTTY abandonne sur WSAEINPROGRESS (10036) : Windows renvoie
+        // WSAEWOULDBLOCK (10035) pour un connect non bloquant en cours.
+        assert_eq!(error_from_errno(libc::EINPROGRESS), WSAEWOULDBLOCK);
+        assert_eq!(error_from_errno(libc::EWOULDBLOCK), WSAEWOULDBLOCK);
     }
 
     #[test]
