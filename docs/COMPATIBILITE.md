@@ -49,6 +49,18 @@ l'octet d'identifiant de rapport que Windows impose et que hidraw omet. La règl
 `integration/70-winlux-manettes.rules` ouvre les `/dev/hidraw*` des fabricants
 de manettes au groupe `input`. Test : `scripts/test-hid.sh`.
 
+`DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
+(`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
+sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
+modèle, numéro de série, bus, SSD ou non, TRIM, alignement),
+`IOCTL_DISK_GET_DRIVE_GEOMETRY(_EX)`, `GET_LENGTH_INFO`, `GET_PARTITION_INFO_EX`,
+`IOCTL_STORAGE_GET_DEVICE_NUMBER`, `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` sont lus
+dans /sys/block. Côté fichiers : `FSCTL_SET_SPARSE`, `SET_ZERO_DATA` (trou
+percé), `QUERY_ALLOCATED_RANGES` (SEEK_DATA/SEEK_HOLE), compression et
+identifiant d'objet. Les rapports HID passent aussi par `IOCTL_HID_*`.
+Verrouiller ou démonter un volume est refusé (accès refusé), tout autre code
+rend `ERROR_NOT_SUPPORTED`. Test : `scripts/test-devio.sh`.
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -340,8 +352,9 @@ Ampleur : **L**. Suivi : #16, #17, #19, #20.
 série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
 
-Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw (voir plus haut).
-Reste : `DeviceIoControl`, entrée brute, `cfgmgr32`, `winusb`, ports série,
+Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
+sur disques, volumes et fichiers (voir plus haut).
+Reste : entrée brute, `cfgmgr32`, `winusb`, ports série,
 résolution et rampe gamma.
 
 Ampleur : **M**. Suivi : #271.
