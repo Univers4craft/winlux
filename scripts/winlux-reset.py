@@ -183,6 +183,13 @@ def have(tool):
     return shutil.which(tool) is not None
 
 
+def load_fat_modules():
+    """Menu de secours : pas d'udev pour charger FAT et ses jeux de caractères."""
+    if have("modprobe"):
+        for module in ("vfat", "nls_cp437", "nls_ascii", "nls_iso8859_1", "nls_utf8", "isofs"):
+            run(["modprobe", "-q", module], check=False, capture_output=True, timeout=30)
+
+
 def require_root():
     if os.geteuid() != 0 and "WINLUX_RESET_ROOT" not in os.environ:
         raise ResetError(_("Droits administrateur requis."))
@@ -537,6 +544,7 @@ def find_media(scan=False):
         if (Path(mount) / "boot/winlux-rootfs.squashfs").is_file() and Path(mount) not in found:
             found.append(Path(mount))
     if scan and have("lsblk"):
+        load_fat_modules()
         try:
             tree = json.loads(output(["lsblk", "-J", "-p", "-o", "NAME,FSTYPE,MOUNTPOINT"]) or "{}")
         except ValueError:
@@ -546,7 +554,11 @@ def find_media(scan=False):
         while stack:
             device = stack.pop(0)
             stack.extend(device.get("children") or [])
-            if device.get("fstype") not in ("vfat", "iso9660") or device.get("mountpoint"):
+            fstype = device.get("fstype")
+            if not fstype and not device.get("children"):
+                # Sans base udev (menu de secours), lsblk ne connaît pas le type : sonder.
+                fstype = output(["blkid", "-p", "-o", "value", "-s", "TYPE", device["name"]], timeout=20).strip()
+            if fstype not in ("vfat", "iso9660") or device.get("mountpoint"):
                 continue
             target = WORK / f"media-{index}"
             index += 1
@@ -872,13 +884,30 @@ def disk_of(device):
     return "/dev/" + name
 
 
+def probe(device):
+    """Champs de blkid -p (lu sur le disque, sans base udev : menu de secours)."""
+    fields = {}
+    for line in output(["blkid", "-p", "-o", "export", device], timeout=20).splitlines():
+        key, _sep, value = line.partition("=")
+        fields[key] = value
+    return fields
+
+
 def partitions(disk):
-    try:
-        tree = json.loads(output(["lsblk", "-J", "-p", "-o", "NAME,FSTYPE,PARTTYPE,PTTYPE,MOUNTPOINT", disk]) or "{}")
-    except ValueError:
-        return None, []
-    devices = tree.get("blockdevices") or [{}]
-    return devices[0].get("pttype"), devices[0].get("children") or []
+    """(table, [{name, fstype, parttype, mountpoint}]) lus directement sur le disque."""
+    table = probe(disk).get("PTTYPE") or None
+    mounts = {os.path.realpath(dev): mount for mount, dev in mounted().items() if dev.startswith("/dev/")}
+    name = os.path.basename(os.path.realpath(disk))
+    parts = []
+    sys_dir = Path("/sys/class/block") / name
+    children = sorted((p for p in sys_dir.iterdir() if (p / "partition").exists()),
+                      key=lambda p: int(read_text(p / "partition").strip() or 0)) if sys_dir.is_dir() else []
+    for child in children:
+        device = "/dev/" + child.name
+        fields = probe(device)
+        parts.append({"name": device, "fstype": fields.get("TYPE"), "parttype": fields.get("PART_ENTRY_TYPE", "").lower(),
+                      "mountpoint": mounts.get(os.path.realpath(device))})
+    return table, parts
 
 
 def boot_params():
@@ -944,15 +973,16 @@ def repair_boot():
         result = run(["grub-install", "--target=i386-pc", f"--boot-directory={boot}", "--recheck", disk],
                      check=False, capture_output=True, text=True)
         if result.returncode:
-            warnings.append(result.stderr.strip()[-200:])
-    esp = next((p for p in parts if (p.get("parttype") or "").lower() == ESP_TYPE), None) or \
+            warnings.append((result.stdout + result.stderr).strip()[-300:])
+    esp = next((p for p in parts if (p.get("parttype") or "").lower() in (ESP_TYPE, "0xef")), None) or \
         next((p for p in parts if p.get("fstype") == "vfat"), None)
     windows_esp_uuid = None
-    if esp and have("grub-install"):
+    if esp:
         progress(55, _("Réinstallation de GRUB pour le démarrage UEFI…"))
         efi_dir = Path(esp.get("mountpoint") or boot / "efi")
         mounted_here = False
         if not esp.get("mountpoint"):
+            load_fat_modules()
             efi_dir.mkdir(parents=True, exist_ok=True)
             run(["mount", "-t", "vfat", "-o", "iocharset=ascii", esp["name"], str(efi_dir)])
             mounted_here = True
@@ -965,13 +995,15 @@ def repair_boot():
             result = run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
                           f"--boot-directory={boot}", "--recheck", *efi_args], check=False, capture_output=True, text=True)
             if result.returncode:
-                warnings.append(result.stderr.strip()[-200:])
+                warnings.append((result.stdout + result.stderr).strip()[-300:])
             elif not shared and have("winlux-secureboot") and Path("/usr/lib/shim/shimx64.efi.signed").exists():
                 uuid = output(["blkid", "-s", "UUID", "-o", "value", device]).strip()
                 run(["winlux-secureboot", "install-esp", str(efi_dir), uuid], check=False, capture_output=True)
         finally:
             if mounted_here:
                 run(["umount", str(efi_dir)], check=False)
+    if not esp and not (table == "dos" or any((p.get("parttype") or "").lower() == BIOS_GRUB_TYPE for p in parts)):
+        raise ResetError(_("Partition système introuvable."))
     cfg = boot / "grub/grub.cfg"
     if not grub_cfg_valid(cfg):
         boot_device = resolve_device(cmdline().get("winlux.boot", "")) or device
@@ -1084,7 +1116,9 @@ def key_grub_cfg(root_spec, extra, theme):
     entries.append(f'menuentry "{_("Vérifier la clé puis démarrer")}" --hotkey=v {{\n'
                    f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
-    themed = ""
+    # Sans thème, la police Unicode de GRUB (posée par grub-install) garde les accents.
+    themed = ("if loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
+              "    set gfxmode=auto\n    if terminal_output gfxterm; then\n        set winlux_term=gfxterm\n    fi\nfi\n")
     if theme:
         themed = ("if loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
                   "    insmod png\n    set gfxmode=auto\n    if terminal_output gfxterm; then\n"
@@ -1172,6 +1206,7 @@ def make_key(args):
             break
         time.sleep(0.2)
     run(["mkfs.fat", "-F", "32", "-n", KEY_LABEL, part], capture_output=True)
+    load_fat_modules()
     target = work / "mnt"
     target.mkdir(parents=True, exist_ok=True)
     run(["mount", "-t", "vfat", part, str(target)])
