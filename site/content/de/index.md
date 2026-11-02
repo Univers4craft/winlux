@@ -32,7 +32,7 @@ Das System, das Installationsprogramm und diese Website gibt es auf Französisch
 ![Der Winlux-Desktop mit geöffnetem Startmenü](img:bureau-menu-demarrer.jpg "Der Winlux-Desktop, Hintergrund „Winlux Nuit“, Startmenü geöffnet.")
 
 ::: figure-row
-![Der Willkommensassistent beim ersten Start](img:assistant-bienvenue.jpg "Beim ersten Start stellt der Willkommensassistent Hintergrund, Farben und Taskleiste ein.")
+![Das Willkommensfenster beim ersten Start](img:assistant-bienvenue.jpg "Beim ersten Start führt das Willkommensfenster zur geführten Tour, zur Tastatur, zum Netzwerk und zur Darstellung.")
 
 ![Die Seite Updates in den Einstellungen](img:mises-a-jour.jpg "Updates werden aus den Einstellungen installiert, mit automatischer Rückkehr zur vorherigen Version.")
 :::

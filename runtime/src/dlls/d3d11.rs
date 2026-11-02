@@ -614,6 +614,154 @@ struct SimpleComVTable {
         unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *mut *mut c_void) -> i32,
     add_ref: unsafe extern "win64" fn(*mut SimpleComObj) -> u32,
     release: unsafe extern "win64" fn(*mut SimpleComObj) -> u32,
+    // ID3D11DeviceChild (3-6) : ANGLE nomme chaque objet par SetPrivateData.
+    get_device: unsafe extern "win64" fn(*mut SimpleComObj, *mut *mut c_void),
+    get_private_data:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *mut u32, *mut c_void) -> i32,
+    set_private_data:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, u32, *const c_void) -> i32,
+    set_private_data_interface:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *const c_void) -> i32,
+    // Vues : GetResource (7) puis GetDesc (8) ; états : GetDesc (7).
+    get_resource_or_desc: unsafe extern "win64" fn(*mut SimpleComObj, *mut *mut c_void),
+    get_view_desc: unsafe extern "win64" fn(*mut SimpleComObj, *mut c_void),
+}
+
+/// Dernier appareil créé : parent rendu par ID3D11DeviceChild::GetDevice.
+static LAST_DEVICE: std::sync::atomic::AtomicPtr<Device> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+unsafe extern "win64" fn child_get_device(_: *mut SimpleComObj, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let dev = LAST_DEVICE.load(Ordering::Acquire);
+    unsafe {
+        if !dev.is_null() {
+            dev_addref(dev);
+        }
+        *out = dev.cast();
+    }
+}
+unsafe extern "win64" fn child_get_private_data(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    size: *mut u32,
+    _: *mut c_void,
+) -> i32 {
+    if !size.is_null() {
+        unsafe { *size = 0 };
+    }
+    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+}
+unsafe extern "win64" fn child_set_private_data(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    _: u32,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn child_set_private_data_interface(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+/// États et shaders : GetDesc (7) n'est pas rempli (taille inconnue ici).
+unsafe extern "win64" fn child_get_resource_or_desc(_: *mut SimpleComObj, _: *mut *mut c_void) {}
+unsafe extern "win64" fn child_get_view_desc(_: *mut SimpleComObj, _: *mut c_void) {}
+
+/// ID3D11View::GetResource : jamais nul pour une vue valide (ANGLE fait
+/// Release dessus sans vérifier).
+unsafe extern "win64" fn view_get_resource(this: *mut SimpleComObj, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    unsafe {
+        let res = (*this).view_resource;
+        if !res.is_null() {
+            com_addref(res);
+        }
+        *out = res;
+    }
+}
+unsafe extern "win64" fn view_get_desc(this: *mut SimpleComObj, out: *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    unsafe {
+        let len = (*this).view_desc_len.min(24);
+        std::ptr::copy_nonoverlapping(
+            (*this).view_desc.as_ptr().cast::<u8>(),
+            out.cast::<u8>(),
+            len,
+        );
+    }
+}
+
+unsafe fn com_addref(p: *mut c_void) -> u32 {
+    unsafe {
+        let vt = *(p as *const *const usize);
+        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(1));
+        f(p)
+    }
+}
+unsafe fn com_release(p: *mut c_void) -> u32 {
+    unsafe {
+        let vt = *(p as *const *const usize);
+        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(2));
+        f(p)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ViewKind {
+    RenderTarget,
+    ShaderResource,
+    DepthStencil,
+}
+
+/// Rattache une vue à sa ressource (AddRef) et retient son descripteur :
+/// celui de l'appel s'il est donné, sinon celui d'une vue 2D par défaut.
+unsafe fn attach_view(
+    view: *mut SimpleComObj,
+    kind: ViewKind,
+    resource: *mut c_void,
+    desc: *const c_void,
+) {
+    unsafe {
+        (*view).vtable = &VIEW_COM_VTABLE;
+        if !resource.is_null() {
+            com_addref(resource);
+            (*view).view_resource = resource;
+        }
+        let len = if matches!(kind, ViewKind::RenderTarget) {
+            20
+        } else {
+            24
+        };
+        (*view).view_desc_len = len;
+        let d = &mut (*view).view_desc;
+        if !desc.is_null() {
+            std::ptr::copy_nonoverlapping(desc.cast::<u8>(), d.as_mut_ptr().cast::<u8>(), len);
+            return;
+        }
+        let tex = as_texture2d(resource).map(|t| (*t).desc);
+        d[0] = tex.map_or(0, |t| t.format);
+        match kind {
+            // D3D11_RTV_DIMENSION_TEXTURE2D = 4, MipSlice 0.
+            ViewKind::RenderTarget => d[1] = 4,
+            // D3D11_SRV_DIMENSION_TEXTURE2D = 4, MostDetailedMip 0, MipLevels.
+            ViewKind::ShaderResource => {
+                d[1] = if tex.is_some() { 4 } else { 1 };
+                d[3] = tex.map_or(0, |t| t.mip_levels.max(1));
+            }
+            // D3D11_DSV_DIMENSION_TEXTURE2D = 3, Flags 0, MipSlice 0.
+            ViewKind::DepthStencil => d[1] = 3,
+        }
+    }
 }
 
 struct SimpleComObj {
@@ -621,6 +769,11 @@ struct SimpleComObj {
     ref_count: AtomicU32,
     gl_id: gl::GLuint,
     resource_tex: gl::GLuint,
+    /// Vues : ressource visée (référence tenue) et descripteur D3D11 rendu
+    /// par GetDesc (`view_desc_len` octets : 20 pour une RTV, 24 sinon).
+    view_resource: *mut c_void,
+    view_desc: [u32; 6],
+    view_desc_len: usize,
 }
 
 impl SimpleComObj {
@@ -643,6 +796,9 @@ impl SimpleComObj {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
             let obj = Box::from_raw(this);
+            if !obj.view_resource.is_null() {
+                com_release(obj.view_resource);
+            }
             if obj.gl_id != 0 {
                 if let Some(g) = gl::gl() {
                     (g.DeleteFramebuffers)(1, &obj.gl_id);
@@ -658,6 +814,25 @@ static SIMPLE_COM_VTABLE: SimpleComVTable = SimpleComVTable {
     query_interface: SimpleComObj::query_interface,
     add_ref: SimpleComObj::add_ref,
     release: SimpleComObj::release,
+    get_device: child_get_device,
+    get_private_data: child_get_private_data,
+    set_private_data: child_set_private_data,
+    set_private_data_interface: child_set_private_data_interface,
+    get_resource_or_desc: child_get_resource_or_desc,
+    get_view_desc: child_get_view_desc,
+};
+
+/// Vues (RTV, SRV, DSV) : même objet, avec GetResource et GetDesc remplis.
+static VIEW_COM_VTABLE: SimpleComVTable = SimpleComVTable {
+    query_interface: SimpleComObj::query_interface,
+    add_ref: SimpleComObj::add_ref,
+    release: SimpleComObj::release,
+    get_device: child_get_device,
+    get_private_data: child_get_private_data,
+    set_private_data: child_set_private_data,
+    set_private_data_interface: child_set_private_data_interface,
+    get_resource_or_desc: view_get_resource,
+    get_view_desc: view_get_desc,
 };
 
 // ────────────────────── Typage des objets COM maison ──────────────────────
@@ -684,7 +859,9 @@ unsafe fn as_texture2d(p: *mut c_void) -> Option<*mut Texture2D> {
 }
 
 unsafe fn as_simple(p: *mut c_void) -> Option<*mut SimpleComObj> {
-    (vtable_ptr(p) == &SIMPLE_COM_VTABLE as *const SimpleComVTable as *const c_void)
+    let vt = vtable_ptr(p);
+    (vt == &SIMPLE_COM_VTABLE as *const SimpleComVTable as *const c_void
+        || vt == &VIEW_COM_VTABLE as *const SimpleComVTable as *const c_void)
         .then_some(p as *mut SimpleComObj)
 }
 
@@ -729,6 +906,9 @@ fn create_render_target_view(resource: *mut c_void) -> *mut SimpleComObj {
         ref_count: AtomicU32::new(1),
         gl_id: fbo,
         resource_tex: tex_gl,
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
     }))
 }
 
@@ -808,6 +988,9 @@ fn create_shader_object(
         ref_count: AtomicU32::new(1),
         gl_id: shader,
         resource_tex: 0,
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
     }))
 }
 
@@ -866,6 +1049,9 @@ fn create_input_layout(descs: *const D3D11InputElementDesc, count: u32) -> *mut 
         ref_count: AtomicU32::new(1),
         gl_id: elems as *const Vec<InputElement> as u32,
         resource_tex: 0,
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
     }))
 }
 
@@ -2437,6 +2623,12 @@ unsafe extern "win64" fn dev_addref(this: *mut Device) -> u32 {
 unsafe extern "win64" fn dev_release(this: *mut Device) -> u32 {
     let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
     if prev == 1 {
+        let _ = LAST_DEVICE.compare_exchange(
+            this,
+            std::ptr::null_mut(),
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
         let dev = Box::from_raw(this);
         // L'appareil relâche sa propre référence sur le contexte immédiat ;
         // celui-ci survit tant que l'application en détient une.
@@ -2507,12 +2699,17 @@ unsafe extern "win64" fn dev_create_srv(
         Some(t) => (*t).gl_texture,
         None => 0,
     };
-    *out = Box::into_raw(Box::new(SimpleComObj {
+    let view = Box::into_raw(Box::new(SimpleComObj {
         vtable: &SIMPLE_COM_VTABLE,
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: tex_gl,
-    })) as *mut c_void;
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
+    }));
+    attach_view(view, ViewKind::ShaderResource, resource, _desc);
+    *out = view.cast();
     S_OK
 }
 
@@ -2541,25 +2738,31 @@ unsafe extern "win64" fn dev_create_rtv(
     if rtv.is_null() {
         return E_FAIL;
     }
+    attach_view(rtv, ViewKind::RenderTarget, resource, _desc);
     *out = rtv as *mut c_void;
     S_OK
 }
 
 unsafe extern "win64" fn dev_create_dsv(
     _this: *mut Device,
-    _resource: *mut c_void,
-    _desc: *const c_void,
+    resource: *mut c_void,
+    desc: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    *out = Box::into_raw(Box::new(SimpleComObj {
+    let view = Box::into_raw(Box::new(SimpleComObj {
         vtable: &SIMPLE_COM_VTABLE,
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: 0,
-    })) as *mut c_void;
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
+    }));
+    attach_view(view, ViewKind::DepthStencil, resource, desc);
+    *out = view.cast();
     S_OK
 }
 
@@ -2700,6 +2903,9 @@ fn create_dummy_com_obj() -> *mut c_void {
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: 0,
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
     })) as *mut c_void
 }
 
@@ -2895,6 +3101,7 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         },
     }));
     (*dev).dxgi.owner = dev;
+    LAST_DEVICE.store(dev, Ordering::Release);
 
     if !device.is_null() {
         *device = dev as usize;
@@ -3002,5 +3209,40 @@ mod vtable_tests {
         assert!(!is_dxgi_device_iid(&g));
         g.data1 = 0x0500_8617; // IDXGIDevice2, exigé par ANGLE
         assert!(is_dxgi_device_iid(&g));
+    }
+
+    #[test]
+    fn simple_objects_implement_device_child() {
+        // Vues, shaders, états : IUnknown + ID3D11DeviceChild + GetResource/GetDesc.
+        use super::SimpleComVTable;
+        assert_eq!(
+            core::mem::offset_of!(SimpleComVTable, set_private_data),
+            5 * 8
+        );
+        assert_eq!(core::mem::size_of::<SimpleComVTable>(), 9 * 8);
+    }
+
+    #[test]
+    fn view_get_resource_and_desc() {
+        use super::*;
+        unsafe {
+            // Une SRV sur une SRV-ressource factice : GetResource rend la
+            // ressource avec une référence de plus, Release la rend.
+            let res = create_dummy_com_obj() as *mut SimpleComObj;
+            let view = create_dummy_com_obj() as *mut SimpleComObj;
+            attach_view(view, ViewKind::ShaderResource, res.cast(), std::ptr::null());
+            assert_eq!((*res).ref_count.load(Ordering::Relaxed), 2);
+            let mut got = std::ptr::null_mut();
+            view_get_resource(view, &mut got);
+            assert_eq!(got, res.cast());
+            assert_eq!(com_release(got), 2);
+            let mut desc = [0xffu8; 24];
+            view_get_desc(view, desc.as_mut_ptr().cast());
+            assert_eq!(desc[4], 1); // pas une texture : D3D11_SRV_DIMENSION_BUFFER
+            assert!(as_simple(view.cast()).is_some());
+            assert_eq!(SimpleComObj::release(view), 0);
+            assert_eq!((*res).ref_count.load(Ordering::Relaxed), 1);
+            assert_eq!(SimpleComObj::release(res), 0);
+        }
     }
 }

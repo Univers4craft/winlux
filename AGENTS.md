@@ -68,3 +68,14 @@ juridiquement irréprochable, il se fait en « salle blanche » :
   généré (exemple : `runtime/src/msi/testdata/`).
 - En cas de doute sur l'origine d'une information ou d'un fichier, ne pas
   l'utiliser et le signaler.
+
+## Marque et vocabulaire
+
+Voir `docs/POSITION-JURIDIQUE.md` (position publique) et `docs/DEFENSE-DU-NOM.md` (dossier interne).
+
+- **Aucun élément de Microsoft** dans le dépôt ni dans l'ISO : ni code, ni DLL, ni exécutable, ni police (Segoe…), ni icône, ni curseur, ni son, ni fond d'écran, ni logo, ni texte d'aide recopié.
+- **Salle blanche** : voir la section précédente.
+- **Vocabulaire permis** : « ouvre les programmes conçus pour Windows (.exe) », « compatible avec de nombreux programmes Windows », « la touche Windows », « ergonomie familière ».
+- **Vocabulaire interdit** dans les textes visibles, le site, le wiki, les notes de version et les captures : « Windows gratuit », « Windows libre », « remplace Windows », « alternative à Windows », « comme Windows 11 », « comme sous Windows », « façon Windows 11 », « ressemble à Windows », « clone de Windows », toute explication du nom qui le relie à Windows, et les noms de produits ou de matières graphiques de Microsoft comme noms de fonctions (Mica, Acrylic, Fluent, Copilot, Cortana, Defender, WordPad). Dans les commentaires de code, préférer une description fonctionnelle.
+- **Mention de non-affiliation** sur tout nouvel écran « À propos », installateur ou page publique : « Windows est une marque de Microsoft Corporation. Winlux est un projet indépendant : il n'est ni affilié à Microsoft, ni approuvé par elle. »
+- **Aucun contournement** de protection technique, d'activation ou de licence.

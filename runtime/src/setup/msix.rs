@@ -14,9 +14,12 @@
 //! entrée dans « Applications installées ». Un programme lancé depuis ce
 //! dossier reçoit son identité de paquet (`GetCurrentPackageFullName`…).
 //!
-//! La signature `AppxSignature.p7x` n'est pas encore vérifiée (chaîne de
-//! certificats, #235) : le journal le signale.
+//! Signature (`AppxSignature.p7x`, voir `appx_signature`) : un paquet non
+//! signé, ou dont la chaîne de certificats n'est pas encore vérifiée (#235),
+//! n'est installé qu'après confirmation explicite (`--allow-unverified`) ;
+//! un certificat qui ne porte pas l'éditeur du manifeste est refusé.
 
+use super::appx_signature::{self, Signature};
 use super::{Installer, Kind, Options};
 use crate::archive::zip::{self, ZipEntry};
 use std::fs::File;
@@ -459,7 +462,34 @@ pub fn info(path: &Path) -> Result<super::Info, String> {
     })
 }
 
-pub fn install(path: &Path, _opts: &Options, inst: &mut Installer) -> Result<(), String> {
+/// Signature du paquet tel qu'il a été reçu (celle du bundle pour un
+/// bundle : les paquets qu'il contient ne sont pas signés à part).
+pub fn signature(path: &Path) -> Result<Signature, String> {
+    let pkg = read_package(path)?;
+    let mut f = File::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    let entries = zip::list(&mut f).map_err(|e| format!("{} : {e}", path.display()))?;
+    let p7x = match find(&entries, "AppxSignature.p7x") {
+        Some(e) => Some(read_entry(&mut f, e)?),
+        None => None,
+    };
+    Ok(appx_signature::examine(p7x.as_deref(), &pkg.publisher))
+}
+
+pub fn install(path: &Path, opts: &Options, inst: &mut Installer) -> Result<(), String> {
+    // Comme Windows, pas d'installation silencieuse d'un paquet dont
+    // l'éditeur n'est pas vérifié : refus, sauf confirmation explicite.
+    let sig = signature(path)?;
+    let publisher = read_package(path)?.publisher_display;
+    match &sig {
+        Signature::Invalid(e) => return Err(format!("signature refusée : {e}")),
+        _ if !opts.allow_unverified => return Err(appx_signature::warning(&sig, &publisher)),
+        Signature::Absent => inst
+            .log
+            .log("paquet non signé, installé sur confirmation de l'utilisateur"),
+        Signature::Unverified { signer } => inst.log.log(&format!(
+            "paquet signé au nom de « {signer} » (chaîne non vérifiée, #235), installé sur confirmation de l'utilisateur"
+        )),
+    }
     let (app, tmp) = open_app_package(path)?;
     let result = install_app_package(&app, inst);
     if let Some(t) = tmp {
@@ -482,12 +512,7 @@ fn install_app_package(path: &Path, inst: &mut Installer) -> Result<(), String> 
     let map_entry =
         find(&entries, "AppxBlockMap.xml").ok_or("AppxBlockMap.xml absent : paquet incomplet")?;
     let map = block_map(&String::from_utf8_lossy(&read_entry(&mut f, map_entry)?));
-    if find(&entries, "AppxSignature.p7x").is_some() {
-        inst.log.log("signature AppxSignature.p7x présente, pas encore vérifiée (#235) ; empreintes du block map vérifiées");
-    } else {
-        inst.log
-            .log("paquet non signé ; empreintes du block map vérifiées");
-    }
+    inst.log.log("empreintes du block map vérifiées");
     let full = pkg.full_name();
     let family = pkg.family_name();
     let dir = format!("C:\\Program Files\\WindowsApps\\{full}");

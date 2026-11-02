@@ -483,7 +483,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Ouvrir le dossier personnel",
     b"Ouvrir les mises \xE0 jour",
     // 131-133 : Effets visuels
-    b"Flou acrylique",
+    b"Flou de transparence",
     b"Animations fluides",
     b"Miniatures",
     // 134-145 : Fuseaux
@@ -719,7 +719,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Open Home folder",
     b"Open Updates",
     // 131-133 : Visual effects
-    b"Acrylic blur",
+    b"Transparency blur",
     b"Smooth animations",
     b"Thumbnails",
     // 134-145 : Timezones
@@ -955,7 +955,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Abrir carpeta personal",
     b"Abrir actualizaciones",
     // 131-133
-    b"Desenfoque acr\xEDlico",
+    b"Desenfoque de transparencia",
     b"Animaciones fluidas",
     b"Miniaturas",
     // 134-145
@@ -1191,7 +1191,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Benutzerordner \xF6ffnen",
     b"Updates \xF6ffnen",
     // 131-133
-    b"Acryl-Unsch\xE4rfe",
+    b"Transparenz-Unsch\xE4rfe",
     b"Fl\xFCssige Animationen",
     b"Miniaturansichten",
     // 134-145

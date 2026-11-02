@@ -448,7 +448,17 @@ fn format_of_dc(hdc: usize) -> i32 {
 
 unsafe fn create_context(hdc: usize, share: usize, attribs: &[i32]) -> usize {
     let Some(g) = glx() else { return 0 };
-    let window = dc_drawable(hdc).map(|(_, w)| w).unwrap_or(0);
+    // Sans fenêtre X11 (session sans affichage, HDC mémoire), le contexte ne
+    // pourrait jamais devenir courant : échec dès la création, comme un
+    // pilote Windows sans format accéléré.
+    let Some((_, window)) = dc_drawable(hdc) else {
+        crate::log_warn!(
+            "opengl32",
+            "contexte demandé sur le HDC {hdc:#x} sans fenêtre X11"
+        );
+        crate::process::set_last_error(2000); // ERROR_INVALID_PIXEL_FORMAT
+        return 0;
+    };
     let format = format_of_dc(hdc);
     let share_glx = lock(contexts()).get(&share).map(|c| c.glx).unwrap_or(0);
     let ctx = create_glx(g, format, window, share_glx, attribs);

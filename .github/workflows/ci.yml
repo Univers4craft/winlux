@@ -120,6 +120,9 @@ jobs:
       - name: Vérifier les fichiers de réponse d'installation silencieuse
         run: python3 -B scripts/test-autoinstall.py
 
+      - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
+        run: python3 -B scripts/test-gpl-sources.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 
@@ -144,6 +147,8 @@ jobs:
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
         run: python3 -B scripts/test-root.py
+      - name: Vérifier que le Xorg de l'init a sa session (changement d'utilisateur, VT)
+        run: python3 -B scripts/test-xorg-session.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
@@ -184,7 +189,7 @@ jobs:
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 
-      - name: Vérifier l'assistant Claude (désactivé par défaut, envois montrés, actions confirmées)
+      - name: Vérifier l'assistant IA, Claude, ChatGPT et IA locale (désactivés par défaut, envois montrés, téléchargements vérifiés, actions confirmées)
         run: python3 -B scripts/test-assistant.py
 
       - name: Vérifier « Réinitialiser ce PC » (fichiers gardés, tout supprimer, coupure, clé de secours)

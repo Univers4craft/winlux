@@ -13,7 +13,10 @@ Sans option, tout est hors ligne et sans dépendance :
   4. les liens externes ne vont que vers le dépôt GitHub du projet ;
   5. aucune marque ni ressource Microsoft (pas de logo Windows, pas de lien
      vers un site Microsoft), seule la mention légale de la marque est permise ;
-  6. les images sont toutes utilisées, légères, et décrites (alt).
+  6. les images sont toutes utilisées, légères, et décrites (alt) ;
+  7. la page « Premier démarrage » décrit la vraie fenêtre Bienvenue
+     (scripts/winlux-welcome.py) : chacun de ses boutons y est nommé, dans
+     sa traduction exacte, pour chaque langue.
 --render  rend chaque page dans Chromium (Playwright, via Node) en mobile,
           tablette, portable et grand écran : pas de défilement horizontal,
           images chargées, navigation visible, colonne de texte lisible.
@@ -153,6 +156,33 @@ def check_sources() -> None:
             fail(f"nom d'image interdit : {img.name}")
 
 
+WELCOME_BUTTONS = ("Visite guidée et logiciels courants", "Choisir le clavier", "Configurer le réseau",
+                   "Personnaliser l’apparence", "Découvrir le secours", "Terminer")
+
+
+def check_welcome_page() -> None:
+    """La page Premier démarrage nomme les boutons de la vraie fenêtre Bienvenue."""
+    import ast
+    script = (ROOT / "scripts" / "winlux-welcome.py").read_text(encoding="utf-8")
+    table = None
+    for node in ast.walk(ast.parse(script)):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_TR" for t in node.targets):
+            table = ast.literal_eval(node.value)
+    if table is None:
+        fail("scripts/winlux-welcome.py : table _TR introuvable")
+        return
+    column = {"en": 0, "es": 1, "de": 2}
+    for label in WELCOME_BUTTONS:
+        if f'"{label}"' not in script:
+            fail(f"scripts/winlux-welcome.py : bouton « {label} » absent, mettez WELCOME_BUTTONS à jour")
+            continue
+        for l in LANGS:
+            text = label if l == "fr" else table.get(label, ("", "", ""))[column[l]]
+            page = (SITE / "content" / l / "guide-first-start.md").read_text(encoding="utf-8")
+            if not text or text not in page:
+                fail(f"content/{l}/guide-first-start.md : le bouton « {text or label} » de la fenêtre Bienvenue n'est pas décrit")
+
+
 def check_build(out: Path) -> set[str]:
     pages: dict[Path, Page] = {}
     for html_file in sorted(out.rglob("*.html")):
@@ -229,7 +259,7 @@ def check_build(out: Path) -> set[str]:
                     fail(f"{l}/{slug}.html : pas de lien vers la version {other}")
 
     # Aucune ressource ni lien Microsoft ; la marque n'apparaît que dans la
-    # mention légale du pied de page.
+    # mention légale du pied de page et dans la page « Position juridique ».
     for path in out.rglob("*"):
         if path.suffix not in (".html", ".css", ".js", ".xml"):
             continue
@@ -237,7 +267,8 @@ def check_build(out: Path) -> set[str]:
         if re.search(r"microsoft\.com|windows\.com|live\.com|bing\.com|msn\.com", text, re.I):
             fail(f"{path.relative_to(out)} : lien vers un site Microsoft")
         body = re.sub(r'<p class="muted small">.*?</p>', "", text, flags=re.S)
-        if re.search(r"microsoft", body, re.I) and path.suffix == ".html":
+        # La page « Position juridique » s'adresse à Microsoft : seule exception.
+        if re.search(r"microsoft", body, re.I) and path.suffix == ".html" and path.name != "position.html":
             fail(f"{path.relative_to(out)} : « Microsoft » cité hors de la mention légale")
 
     # Fichiers attendus par GitHub Pages.
@@ -287,6 +318,7 @@ def main() -> int:
     if "--keep" in args:
         keep = Path(args[args.index("--keep") + 1]).resolve()
     check_sources()
+    check_welcome_page()
     tmp = Path(tempfile.mkdtemp(prefix="winlux-site-"))
     out = keep or tmp / "site"
     try:
