@@ -1,16 +1,19 @@
 [Desktop Entry]
 Type=Application
-Name=Microsoft Edge (Winlux)
+Name=Navigateur
+Name[en]=Browser
+Name[de]=Browser
+Name[es]=Navegador
 GenericName=Navigateur web
 GenericName[en]=Web browser
 GenericName[de]=Webbrowser
 GenericName[es]=Navegador web
-Comment=Ouvre les pages web dans Microsoft Edge, le navigateur par défaut de Winlux
-Comment[en]=Opens web pages in Microsoft Edge, the default Winlux browser
-Comment[de]=Öffnet Webseiten in Microsoft Edge, dem Standardbrowser von Winlux
-Comment[es]=Abre las páginas web en Microsoft Edge, el navegador predeterminado de Winlux
+Comment=Ouvre les pages web dans le navigateur par défaut
+Comment[en]=Opens web pages in the default browser
+Comment[de]=Öffnet Webseiten im Standardbrowser
+Comment[es]=Abre las páginas web en el navegador predeterminado
 Exec=/usr/bin/winlux-browser %U
-Icon=microsoft-edge
+Icon=web-browser
 Terminal=false
 Categories=Network;WebBrowser;
 MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;application/xhtml+xml;

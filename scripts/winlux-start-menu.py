@@ -127,7 +127,7 @@ def _t(text):
 
 
 STATE = Path.home() / ".config/winlux/start.json"
-DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
+DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
@@ -235,6 +235,8 @@ class Start(Gtk.Application):
         self.file_results = []
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
+        if not isinstance(self.state, dict): self.state = {"pins": DEFAULTS, "recent": []}
+        self.state["pins"] = migrate_pins(self.state.get("pins", DEFAULTS))
 
     def save(self):
         STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -608,6 +610,23 @@ class Start(Gtk.Application):
             entries.append((_t("Mettre en veille"), sleep, "weather-clear-night-symbolic"))
         self.menu(widget, None, entries + [(_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
                                            (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
+
+
+# Anciennes épingles par défaut remplacées : l'épingle Edge des premières
+# versions devient le « Navigateur » générique (aucune marque imposée).
+RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
+
+
+def migrate_pins(pins):
+    """Épingles enregistrées, anciennes épingles par défaut remplacées, sans doublon."""
+    if not isinstance(pins, list):
+        return list(DEFAULTS)
+    result = []
+    for pin in pins:
+        pin = RENAMED_PINS.get(pin, pin)
+        if pin not in result:
+            result.append(pin)
+    return result
 
 
 def power_menu_has_sleep():
