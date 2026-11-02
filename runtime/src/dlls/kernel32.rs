@@ -2729,8 +2729,16 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
+    // LOAD_IGNORE_CODE_AUTHZ_LEVEL : sans effet.
+    let flags = flags & !0x10;
     if flags == 0 {
         return load_library_a(name);
+    }
+    // LOAD_LIBRARY_AS_DATAFILE(_EXCLUSIVE) et LOAD_LIBRARY_AS_IMAGE_RESOURCE :
+    // ressources seulement (mscorrc.dll de .NET, fichiers .mui, icônes).
+    const AS_DATA: u32 = 0x2 | 0x20 | 0x40;
+    if flags & AS_DATA != 0 {
+        return load_as_data(&value, flags);
     }
     // Never execute DLL entry points for resource/data-only loading requests.
     // AddDllDirectory/user search directories and signature flags are not yet
@@ -2767,6 +2775,38 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
     }
     crate::loader::with_dll_search(directories, || load_library_a(name))
 }
+/// LoadLibraryEx en mode données : l'image est projetée en lecture seule,
+/// sans imports ni DllMain ; le handle porte le bit 1 (fichier de données)
+/// ou 2 (image de ressources) et sert aux fonctions de ressources.
+fn load_as_data(value: &str, flags: u32) -> usize {
+    // Une DLL déjà chargée normalement est renvoyée telle quelle.
+    if let Some(h) = crate::dlls::module_handle(value) {
+        crate::loader::increment_ref(h);
+        return h;
+    }
+    let importer = crate::loader::main_module()
+        .map(|m| m.path)
+        .unwrap_or_else(|| crate::paths::to_linux("C:\\Windows\\System32\\winlux.exe"));
+    let path = crate::loader::find_dll_file(value, &importer).or_else(|| {
+        let system = crate::paths::to_linux("C:\\Windows\\System32");
+        crate::loader::with_dll_search(vec![system], || {
+            crate::loader::find_dll_file(value, &importer)
+        })
+    });
+    let Some(path) = path else {
+        crate::process::set_last_error(2);
+        return 0;
+    };
+    let tag = if flags & 0x20 != 0 { 2 } else { 1 };
+    match crate::loader::load_data(&path, tag) {
+        Ok(handle) => handle,
+        Err(error) => {
+            crate::trace!("LoadLibraryEx (données) {} : {error}", path.display());
+            crate::process::set_last_error(193);
+            0
+        }
+    }
+}
 pub unsafe extern "win64" fn load_library_ex_w(name: *const u16, file: usize, flags: u32) -> usize {
     let name = match cstring_from_wide(name) {
         Ok(value) => value,
@@ -2778,6 +2818,13 @@ pub unsafe extern "win64" fn load_library_ex_w(name: *const u16, file: usize, fl
     load_library_ex_a(name.as_ptr().cast(), file, flags)
 }
 pub extern "win64" fn free_library(module: usize) -> i32 {
+    if module & crate::loader::DATA_HANDLE_BITS != 0 {
+        if crate::loader::free_data(module).is_some() {
+            return 1;
+        }
+        crate::process::set_last_error(6);
+        return 0;
+    }
     if crate::dlls::builtin_by_handle(module).is_some() {
         return 1;
     }
@@ -8235,14 +8282,120 @@ mod tests {
             assert_eq!(load_library_ex_w(name.as_ptr(), 0, 0x1000), expected);
             assert_eq!(load_library_ex_w(name.as_ptr(), 1, 0), 0);
             assert_eq!(crate::process::last_error(), 87);
-            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 2), 0);
-            assert_eq!(crate::process::last_error(), 50); // data-file loading is not execution
+            // Mode données sur une DLL intégrée : son handle, sans rien exécuter.
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 2), expected);
             assert_eq!(load_library_ex_w(name.as_ptr(), 0, 8 | 0x800), 0);
             assert_eq!(crate::process::last_error(), 87);
             let relative = b"winlux-test-relative.dll\0";
             assert_eq!(load_library_ex_a(relative.as_ptr(), 0, 0x100), 0);
             assert_eq!(crate::process::last_error(), 87);
         }
+    }
+
+    /// DLL de ressources minimale (PE32+, une section .rsrc) dont la table
+    /// de chaînes contient « Prisme » à l'identifiant 3.
+    fn resource_only_dll() -> Vec<u8> {
+        let mut f = vec![0u8; 0x400];
+        f[0..2].copy_from_slice(b"MZ");
+        f[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let w16 = |f: &mut Vec<u8>, o: usize, v: u16| f[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let w32 = |f: &mut Vec<u8>, o: usize, v: u32| f[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let coff = 0x44;
+        w16(&mut f, coff, 0x8664);
+        w16(&mut f, coff + 2, 1);
+        w16(&mut f, coff + 16, 240);
+        w16(&mut f, coff + 18, 0x2022);
+        let opt = coff + 20;
+        w16(&mut f, opt, 0x20b);
+        f[opt + 24..opt + 32].copy_from_slice(&0x1_8000_0000u64.to_le_bytes());
+        w32(&mut f, opt + 32, 0x1000);
+        w32(&mut f, opt + 36, 0x200);
+        w32(&mut f, opt + 56, 0x2000);
+        w32(&mut f, opt + 60, 0x200);
+        w16(&mut f, opt + 68, 2);
+        w32(&mut f, opt + 108, 16);
+        // Répertoire 2 : ressources.
+        let mut rsrc = vec![0u8; 0x58];
+        let dir = |r: &mut Vec<u8>, at: usize, id: u32, target: u32| {
+            r[at + 14..at + 16].copy_from_slice(&1u16.to_le_bytes());
+            r[at + 16..at + 20].copy_from_slice(&id.to_le_bytes());
+            r[at + 20..at + 24].copy_from_slice(&target.to_le_bytes());
+        };
+        dir(&mut rsrc, 0, 6, 0x8000_0018);
+        dir(&mut rsrc, 0x18, 1, 0x8000_0030);
+        dir(&mut rsrc, 0x30, 0x409, 0x48);
+        let mut table = Vec::new();
+        for i in 0..16u16 {
+            if i == 3 {
+                table.extend_from_slice(&6u16.to_le_bytes());
+                for u in "Prisme".encode_utf16() {
+                    table.extend_from_slice(&u.to_le_bytes());
+                }
+            } else {
+                table.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+        rsrc[0x48..0x4c].copy_from_slice(&(0x1000u32 + 0x58).to_le_bytes());
+        rsrc[0x4c..0x50].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        rsrc.extend_from_slice(&table);
+        w32(&mut f, opt + 112 + 2 * 8, 0x1000);
+        w32(&mut f, opt + 112 + 2 * 8 + 4, rsrc.len() as u32);
+        let sec = opt + 240;
+        f[sec..sec + 5].copy_from_slice(b".rsrc");
+        w32(&mut f, sec + 8, rsrc.len() as u32);
+        w32(&mut f, sec + 12, 0x1000);
+        w32(&mut f, sec + 16, 0x200);
+        w32(&mut f, sec + 20, 0x200);
+        w32(&mut f, sec + 36, 0x4000_0040);
+        f[0x200..0x200 + rsrc.len()].copy_from_slice(&rsrc);
+        f
+    }
+
+    #[test]
+    fn load_library_ex_en_mode_donnees_pour_les_ressources() {
+        let _teb = crate::process::test_teb();
+        let name = format!("winlux-donnees-{}.dll", std::process::id());
+        let linux = std::path::Path::new("/tmp").join(&name);
+        std::fs::write(&linux, resource_only_dll()).unwrap();
+        let path = CString::new(format!("Z:\\tmp\\{name}")).unwrap();
+        unsafe {
+            let h = load_library_ex_a(path.as_ptr().cast(), 0, 0x2);
+            assert_ne!(
+                h,
+                0,
+                "fichier de données chargé : {}",
+                crate::process::last_error()
+            );
+            assert_eq!(h & 3, 1, "bit 1 : LOAD_LIBRARY_AS_DATAFILE");
+            let mut buf = [0u16; 16];
+            let n = crate::dlls::user32::load_string_w(h, 3, buf.as_mut_ptr(), 16);
+            assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Prisme");
+            // LoadStringW(…, 0) : pointeur vers la chaîne dans l'image.
+            let mut ptr = [0u16; 4];
+            assert_eq!(
+                crate::dlls::resource::load_string_w(h, 3, ptr.as_mut_ptr(), 0),
+                6
+            );
+            let found = crate::dlls::resource::find_resource_w(h, 1 as *const u16, 6 as *const u16);
+            assert_ne!(found, 0, "FindResource sur le handle de données");
+            assert!(
+                crate::dlls::module_handle(&name).is_none(),
+                "invisible pour GetModuleHandle"
+            );
+            // Deuxième chargement en image de ressources : même image, bit 2.
+            let h2 = load_library_ex_a(path.as_ptr().cast(), 0, 0x20);
+            assert_eq!(h2 & !3, h & !3);
+            assert_eq!(h2 & 3, 2);
+            assert_eq!(free_library(h2), 1);
+            assert_eq!(free_library(h), 1);
+            assert!(crate::loader::data_image(h).is_none(), "image libérée");
+            assert_eq!(free_library(h), 0);
+            let missing = b"winlux-introuvable-xyz.dll\0";
+            assert_eq!(load_library_ex_a(missing.as_ptr(), 0, 0x2), 0);
+            assert_eq!(crate::process::last_error(), 2);
+        }
+        let _ = std::fs::remove_file(linux);
     }
 
     #[test]

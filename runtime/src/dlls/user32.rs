@@ -2303,28 +2303,23 @@ pub unsafe extern "win64" fn load_image_w(
     0
 }
 
+/// LoadStringA/W : les tables de chaînes du module (voir resource.rs).
 pub unsafe extern "win64" fn load_string_a(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u8,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_a(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_string_w(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u16,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_w(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_accelerators_a(_instance: usize, _name: *const u8) -> usize {

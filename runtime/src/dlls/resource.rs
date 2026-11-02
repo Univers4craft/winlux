@@ -20,8 +20,12 @@ fn rd32(b: &[u8], o: usize) -> Option<u32> {
 
 /// Trouve le répertoire de ressources du module.
 fn resource_root(base: usize) -> Option<(usize, &'static [u8])> {
-    let mods = loader::MODULES.lock().unwrap();
-    let m = mods.iter().find(|m| m.base == base)?;
+    let base = base & !loader::DATA_HANDLE_BITS;
+    let m = {
+        let mods = loader::MODULES.lock().unwrap();
+        mods.iter().find(|m| m.base == base).cloned()
+    }
+    .or_else(|| loader::data_image(base))?;
     let d = m.pe.dir(DIR_RESOURCE);
     if d.rva == 0 || d.size == 0 {
         return None;
@@ -173,7 +177,7 @@ pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
-        hmod
+        hmod & !loader::DATA_HANDLE_BITS
     };
     if base == 0 {
         crate::process::set_last_error(6);
@@ -221,7 +225,7 @@ pub unsafe extern "win64" fn find_resource_w(
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
-        hmod
+        hmod & !loader::DATA_HANDLE_BITS
     };
     if base == 0 {
         crate::process::set_last_error(6);
@@ -257,7 +261,7 @@ pub unsafe extern "win64" fn load_resource(hmod: usize, hrsrc: usize) -> usize {
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
-        hmod
+        hmod & !loader::DATA_HANDLE_BITS
     };
     let (rva, _size) = decode_hrsrc(hrsrc);
     base + rva as usize
@@ -309,7 +313,7 @@ pub unsafe extern "win64" fn load_string_a(
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
-        hmod
+        hmod & !loader::DATA_HANDLE_BITS
     };
     if base == 0 {
         *buf = 0;
@@ -356,64 +360,62 @@ pub unsafe extern "win64" fn load_string_a(
     0
 }
 
-/// LoadStringW
+/// Chaîne `id` de la table RT_STRING : adresse de ses caractères UTF-16
+/// dans l'image et longueur (les chaînes sont groupées par 16).
+fn string_entry(base: usize, id: u32) -> Option<(usize, usize)> {
+    let (rva, size) = find_resource_data(base, 6, (id / 16 + 1) as usize, false, false)?;
+    // SAFETY: find_resource_data a vérifié que la section est dans l'image.
+    let data =
+        unsafe { std::slice::from_raw_parts((base + rva as usize) as *const u8, size as usize) };
+    let mut off = 0;
+    for i in 0..16 {
+        let len = pe::rd16(data, off)? as usize;
+        off += 2;
+        if i == (id % 16) as usize {
+            if len == 0 || off + len * 2 > data.len() {
+                return None;
+            }
+            return Some((base + rva as usize + off, len));
+        }
+        off += len * 2;
+    }
+    None
+}
+
+/// LoadStringW. Avec `buf_size` = 0, `buf` reçoit un pointeur en lecture
+/// seule vers la chaîne dans l'image (non terminée), comme sous Windows.
 pub unsafe extern "win64" fn load_string_w(
     hmod: usize,
     id: u32,
     buf: *mut u16,
     buf_size: i32,
 ) -> i32 {
-    if buf_size <= 0 {
-        return 0;
-    }
-    if buf.is_null() {
-        // Quand buf est null et buf_size == 0, Windows renvoie un pointeur en lecture seule.
-        // On ne peut pas supporter cet usage facilement, on renvoie 0.
+    if buf.is_null() || buf_size < 0 {
         return 0;
     }
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
-        hmod
+        hmod & !loader::DATA_HANDLE_BITS
     };
-    if base == 0 {
+    let entry = if base == 0 {
+        None
+    } else {
+        string_entry(base, id)
+    };
+    if buf_size == 0 {
+        let (ptr, len) = entry.unwrap_or((0, 0));
+        (buf as *mut usize).write_unaligned(ptr);
+        return len as i32;
+    }
+    let Some((ptr, len)) = entry else {
         *buf = 0;
         return 0;
-    }
-    let block_id = (id / 16 + 1) as usize;
-    let index = (id % 16) as usize;
-    let (rva, size) = match find_resource_data(base, 6, block_id, false, false) {
-        Some(r) => r,
-        None => {
-            *buf = 0;
-            return 0;
-        }
     };
-    let data = std::slice::from_raw_parts((base + rva as usize) as *const u8, size as usize);
-    let mut off = 0;
-    for i in 0..16 {
-        if off + 2 > data.len() {
-            *buf = 0;
-            return 0;
-        }
-        let len = pe::rd16(data, off).unwrap_or(0) as usize;
-        off += 2;
-        if i == index {
-            if len == 0 {
-                *buf = 0;
-                return 0;
-            }
-            let n = len.min((buf_size as usize) - 1);
-            for j in 0..n {
-                *buf.add(j) = pe::rd16(data, off + j * 2).unwrap_or(0);
-            }
-            *buf.add(n) = 0;
-            return n as i32;
-        }
-        off += len * 2;
-    }
-    *buf = 0;
-    0
+    let n = len.min((buf_size as usize) - 1);
+    std::ptr::copy_nonoverlapping(ptr as *const u16, buf, n);
+    *buf.add(n) = 0;
+    n as i32
 }
 
 pub fn exports() -> crate::dlls::Exports {
