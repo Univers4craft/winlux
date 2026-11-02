@@ -587,18 +587,46 @@ pub fn gdi32_exports() -> Exports {
 
 /// Variantes ANSI de setupapi (SDL2) : appel de la version W, chemins
 /// et chaînes convertis dans la page ANSI.
-unsafe extern "win64" fn SetupDiGetDeviceInterfaceDetailA(set: usize, iface: *const u8, detail: *mut u8, size: u32, required: *mut u32, devinfo: *mut u8) -> i32 {
+unsafe extern "win64" fn SetupDiGetDeviceInterfaceDetailA(
+    set: usize,
+    iface: *const u8,
+    detail: *mut u8,
+    size: u32,
+    required: *mut u32,
+    devinfo: *mut u8,
+) -> i32 {
     let mut need = 0u32;
-    crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(set, iface, std::ptr::null_mut(), 0, &mut need, std::ptr::null_mut());
+    crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(
+        set,
+        iface,
+        std::ptr::null_mut(),
+        0,
+        &mut need,
+        std::ptr::null_mut(),
+    );
     if need < 8 {
         return 0;
     }
     let mut wide = vec![0u8; need as usize + 8];
     std::ptr::write_unaligned(wide.as_mut_ptr() as *mut u32, 8);
-    if crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(set, iface, wide.as_mut_ptr(), wide.len() as u32, &mut need, devinfo) == 0 {
+    if crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(
+        set,
+        iface,
+        wide.as_mut_ptr(),
+        wide.len() as u32,
+        &mut need,
+        devinfo,
+    ) == 0
+    {
         return 0;
     }
-    let units: Vec<u16> = wide[4..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    let units: Vec<u16> = wide[4..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .take_while(|&c| c != 0)
+        .collect();
     let mut path = crate::dlls::encode_ansi(&String::from_utf16_lossy(&units));
     path.push(0);
     let total = 4 + path.len() as u32;
@@ -612,20 +640,54 @@ unsafe extern "win64" fn SetupDiGetDeviceInterfaceDetailA(set: usize, iface: *co
     std::ptr::copy_nonoverlapping(path.as_ptr(), detail.add(4), path.len());
     1
 }
-unsafe extern "win64" fn SetupDiGetDeviceRegistryPropertyA(set: usize, data: *const u8, prop: u32, kind: *mut u32, buf: *mut u8, size: u32, required: *mut u32) -> i32 {
+unsafe extern "win64" fn SetupDiGetDeviceRegistryPropertyA(
+    set: usize,
+    data: *const u8,
+    prop: u32,
+    kind: *mut u32,
+    buf: *mut u8,
+    size: u32,
+    required: *mut u32,
+) -> i32 {
     let mut need = 0u32;
     let mut t = 0u32;
-    crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(set, data, prop, &mut t, std::ptr::null_mut(), 0, &mut need);
+    crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(
+        set,
+        data,
+        prop,
+        &mut t,
+        std::ptr::null_mut(),
+        0,
+        &mut need,
+    );
     if need == 0 {
         return 0;
     }
     let mut wide = vec![0u8; need as usize];
-    if crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(set, data, prop, &mut t, wide.as_mut_ptr(), need, &mut need) == 0 {
+    if crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(
+        set,
+        data,
+        prop,
+        &mut t,
+        wide.as_mut_ptr(),
+        need,
+        &mut need,
+    ) == 0
+    {
         return 0;
     }
-    let units: Vec<u16> = wide.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = wide
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
     // Chaînes (REG_SZ, REG_MULTI_SZ) converties ; données binaires recopiées.
-    let out: Vec<u8> = if matches!(t, 1 | 2 | 7) { crate::dlls::encode_ansi(&String::from_utf16_lossy(&units)) } else { wide.clone() };
+    let out: Vec<u8> = if matches!(t, 1 | 2 | 7) {
+        crate::dlls::encode_ansi(&String::from_utf16_lossy(&units))
+    } else {
+        wide.clone()
+    };
     if !kind.is_null() {
         *kind = t;
     }
