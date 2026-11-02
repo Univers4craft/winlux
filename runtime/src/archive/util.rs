@@ -46,15 +46,34 @@ pub struct Progress {
     pub done: Arc<AtomicU64>,
     pub total: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
+    /// Pause demandée par l'Explorer : la tâche attend dans `add`.
+    pub pause: Arc<AtomicBool>,
+    /// Éléments (fichiers, dossiers) traités et à traiter.
+    pub items_done: Arc<AtomicU64>,
+    pub items_total: Arc<AtomicU64>,
+    /// Nom de l'élément en cours (fenêtre de progression des copies).
+    pub current: Arc<std::sync::Mutex<String>>,
 }
 
 impl Progress {
     pub fn add(&self, n: u64) -> Res<()> {
         self.done.fetch_add(n, Ordering::Relaxed);
-        if self.cancel.load(Ordering::Relaxed) {
-            return Err(ArcError::Cancelled);
+        self.check()
+    }
+    /// Point d'arrêt : annulation, ou attente tant que la pause dure.
+    pub fn check(&self) -> Res<()> {
+        loop {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err(ArcError::Cancelled);
+            }
+            if !self.pause.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        Ok(())
+    }
+    pub fn set_current(&self, name: &str) {
+        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = name.to_string();
     }
     pub fn set_total(&self, n: u64) {
         self.total.store(n, Ordering::Relaxed);

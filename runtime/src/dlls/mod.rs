@@ -93,6 +93,7 @@ pub mod sechost;
 pub mod secur32;
 pub mod security;
 pub mod seh;
+pub mod seh_hw;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;

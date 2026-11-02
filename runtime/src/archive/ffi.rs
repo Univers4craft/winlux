@@ -249,6 +249,90 @@ pub unsafe extern "win64" fn winlux_job_poll(
     st
 }
 
+/// `WinluxFileCopy(liste, options)` : copie ou déplace en tâche de fond.
+/// `liste` alterne source et destination (chemins Windows), chacune
+/// terminée par NUL, la liste par un NUL de plus. Options : 1 déplacer,
+/// 2 remplacer les fichiers existants, 4 les ignorer, 8 démarrer en pause.
+pub unsafe extern "win64" fn winlux_file_copy(list: *const u16, flags: u32) -> u32 {
+    if list.is_null() {
+        return 0;
+    }
+    let mut paths = Vec::new();
+    let mut p = list;
+    while *p != 0 {
+        let Some(l) = linux(p) else {
+            return 0;
+        };
+        paths.push(l);
+        p = p.add(crate::printf::wide_len(p) + 1);
+    }
+    if paths.is_empty() || paths.len() % 2 != 0 {
+        return 0;
+    }
+    let pairs: Vec<(PathBuf, PathBuf)> = paths
+        .chunks(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect();
+    jobs::spawn(move |pr| super::copy::run(&pairs, flags, pr))
+}
+
+/// `WinluxFileDelete(liste, options)` : suppression définitive en tâche de
+/// fond (liste de chemins Windows terminés par NUL, plus un NUL final).
+/// Option 1 : ne vider que le contenu des dossiers (Vider la Corbeille).
+pub unsafe extern "win64" fn winlux_file_delete(list: *const u16, flags: u32) -> u32 {
+    if list.is_null() {
+        return 0;
+    }
+    let mut paths = Vec::new();
+    let mut p = list;
+    while *p != 0 {
+        let Some(l) = linux(p) else {
+            return 0;
+        };
+        paths.push(l);
+        p = p.add(crate::printf::wide_len(p) + 1);
+    }
+    if paths.is_empty() {
+        return 0;
+    }
+    jobs::spawn(move |pr| super::copy::delete(&paths, flags, pr))
+}
+
+/// Met en pause (`on` ≠ 0) ou relance une tâche.
+pub extern "win64" fn winlux_job_pause(id: u32, on: u32) {
+    if let Some(j) = jobs::get(id) {
+        j.progress.pause.store(on != 0, Ordering::Relaxed);
+    }
+}
+
+/// Détails d'une tâche : `out[0..4]` reçoit octets faits, octets à faire,
+/// éléments faits, éléments à faire ; `name` l'élément en cours. Renvoie 1
+/// si la tâche est en pause, 0 sinon, 0xFFFFFFFF si elle est inconnue.
+pub unsafe extern "win64" fn winlux_job_stats(
+    id: u32,
+    out: *mut u64,
+    name: *mut u16,
+    cap: u32,
+) -> u32 {
+    let Some(j) = jobs::get(id) else {
+        return u32::MAX;
+    };
+    let pr = &j.progress;
+    if !out.is_null() {
+        *out = pr.done.load(Ordering::Relaxed);
+        *out.add(1) = pr.total.load(Ordering::Relaxed);
+        *out.add(2) = pr.items_done.load(Ordering::Relaxed);
+        *out.add(3) = pr.items_total.load(Ordering::Relaxed);
+    }
+    if !name.is_null() && cap > 0 {
+        let m = pr.current.lock().unwrap_or_else(|e| e.into_inner());
+        let w: Vec<u16> = m.encode_utf16().take(cap as usize - 1).collect();
+        std::ptr::copy_nonoverlapping(w.as_ptr(), name, w.len());
+        *name.add(w.len()) = 0;
+    }
+    pr.pause.load(Ordering::Relaxed) as u32
+}
+
 pub extern "win64" fn winlux_job_cancel(id: u32) {
     if let Some(j) = jobs::get(id) {
         j.progress.cancel.store(true, Ordering::Relaxed);
@@ -272,5 +356,9 @@ pub fn exports() -> crate::dlls::Exports {
         "WinluxJobPoll" => fn winlux_job_poll,
         "WinluxJobCancel" => fn winlux_job_cancel,
         "WinluxJobClose" => fn winlux_job_close,
+        "WinluxJobPause" => fn winlux_job_pause,
+        "WinluxJobStats" => fn winlux_job_stats,
+        "WinluxFileCopy" => fn winlux_file_copy,
+        "WinluxFileDelete" => fn winlux_file_delete,
     }
 }
