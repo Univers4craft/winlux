@@ -104,7 +104,9 @@ for mode in bios uefi; do
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
     fi
     boot_status=0
-    (for attempt in $(seq 1 80); do printf d || exit 0; sleep 0.5; done) | timeout 300 "$@" >"$log" 2>&1 || boot_status=$?
+    # GRUB n'attend qu'une seconde (#254) : une touche toutes les 0,1 s tombe
+    # forcément dans la fenêtre, en BIOS comme en UEFI.
+    (for attempt in $(seq 1 400); do printf d || exit 0; sleep 0.1; done) | timeout 300 "$@" >"$log" 2>&1 || boot_status=$?
     for marker in WINLUX_SYSTEM_VERSION= WINLUX_LIVE_SEQUENTIAL_EXIT=0 WINLUX_LIVE_PARALLEL_EXIT=0 WINLUX_LIVE_X11_EXIT=0 WINLUX_LIVE_RESULT=0; do
         grep -q "$marker" "$log" || { echo "Disque installé ($mode) : $marker absent (code $boot_status)" >&2; tail -n 80 "$log"; exit 1; }
     done

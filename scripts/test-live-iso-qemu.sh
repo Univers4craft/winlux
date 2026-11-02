@@ -55,9 +55,10 @@ esac
 echo "Test QEMU $mode de $iso"
 set +e
 # Select GRUB's diagnostic hotkey while the hidden menu is waiting. Repeating
-# covers BIOS and slower UEFI firmware without changing the delivered ISO.
+# covers BIOS and slower UEFI firmware without changing the delivered ISO;
+# every 0.1 s so a key always lands inside GRUB's short countdown.
 (
-    for attempt in $(seq 1 80); do printf d || exit 0; sleep 0.5; done
+    for attempt in $(seq 1 400); do printf d || exit 0; sleep 0.1; done
 ) | timeout "$timeout_seconds" "$@" >"$log" 2>&1
 qemu_status=$?
 set -e
