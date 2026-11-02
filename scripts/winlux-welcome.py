@@ -33,6 +33,7 @@ _TR = {
     'Préparez votre ordinateur à votre rythme. Ces réglages restent accessibles à tout moment dans Paramètres.': ('Set up your computer at your own pace. These settings remain available at any time in Settings.', 'Prepare su equipo a su ritmo. Estos ajustes siguen disponibles en cualquier momento en Configuración.', 'Richten Sie Ihren Computer in Ihrem Tempo ein. Diese Einstellungen bleiben jederzeit in den Einstellungen verfügbar.'),
     'Visite guidée et logiciels courants': ('Guided tour and common apps', 'Recorrido guiado y aplicaciones habituales', 'Geführte Tour und gängige Programme'),
     'Choisir le clavier': ('Choose the keyboard', 'Elegir el teclado', 'Tastatur auswählen'),
+    'Choisir et installer un navigateur': ('Choose and install a browser', 'Elegir e instalar un navegador', 'Browser auswählen und installieren'),
     'Configurer le réseau': ('Set up the network', 'Configurar la red', 'Netzwerk einrichten'),
     'Personnaliser l’apparence': ('Personalize the appearance', 'Personalizar la apariencia', 'Darstellung anpassen'),
     'Découvrir le secours': ('Discover recovery', 'Descubrir la recuperación', 'Wiederherstellung entdecken'),
@@ -67,6 +68,8 @@ class Welcome(Gtk.Window):
         for label, command in (
             (_t("Visite guidée et logiciels courants"), ["winlux-shell-app", "welcome"]),
             (_t("Choisir le clavier"), ["winlux-shell-app", "settings", "4"]),
+            # Aucun navigateur n'est fourni : l'utilisateur choisit le sien.
+            (_t("Choisir et installer un navigateur"), ["winlux-shell-app", "settings", "11"]),
             (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
             (_t("Personnaliser l’apparence"), ["winlux-shell-app", "settings", "21"]),
             (_t("Découvrir le secours"), ["winlux-shell-app", "settings", "7"]),

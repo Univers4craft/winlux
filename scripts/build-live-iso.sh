@@ -739,6 +739,25 @@ if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
 fi
+# Navigateur choisi à l'installation ou au premier démarrage : téléchargé sur
+# le site officiel de son éditeur, vérifié et installé dès que le réseau
+# répond, en basse priorité. Sans réseau, il est retenté au démarrage suivant
+# (aucun navigateur n'est fourni dans l'image : docs/BROWSERS.md).
+if test -s /etc/winlux/first-boot-browser; then
+    (
+        choice=$(/bin/busybox sed -n '1p' /etc/winlux/first-boot-browser)
+        case "$choice" in chrome|edge|firefox) ;; *) exit 0 ;; esac
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        if $low /usr/bin/winlux-browsers --default "$choice"; then
+            /bin/busybox mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
+        fi
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
 if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
     # Les tests de navigateurs ont besoin d'Edge déjà installé.
     wait "$browser_setup_pid" 2>/dev/null || true

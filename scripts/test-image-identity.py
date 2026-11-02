@@ -83,6 +83,29 @@ from winlux_usb import i18n  # noqa: E402
 assert all("Microsoft" in text for text in i18n.T["independent"]) and len(i18n.T["independent"]) == len(i18n.LANGS)
 installer = (project / "scripts/winlux-installer.py").read_text()
 assert installer.count('"independent_notice":') == 6, "mention absente d'une langue de l'installateur"
+# Choix du navigateur : aucun fourni, aucun présélectionné, ordre alphabétique.
+assert installer.count('"browser_subtitle":') == 6, "choix du navigateur absent d'une langue"
+assert 'BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]' in installer
+assert '"browser": None,' in installer and 'first-boot-browser' in installer
+first_boot = (project / "scripts/winlux-first-boot.sh").read_text()
+assert "MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'" in first_boot
+assert "Navigateur_Firefox on" not in first_boot and "apt-get install -y --no-install-recommends firefox" not in first_boot
+assert 'winlux-browsers --default "$choice"' in build and "first-boot-browser.done" in build
+sys.path.insert(0, str(project / "scripts"))
+import winlux_autoinstall  # noqa: E402
+with tempfile.TemporaryDirectory() as temp:
+    answers = Path(temp) / "winlux-answers.json"
+    for value, ok in (("firefox", True), ("edge", True), ("safari", False)):
+        answers.write_text('{"version": 1, "browser": "%s"}' % value)
+        try:
+            settings, _steps = winlux_autoinstall.load(str(answers))
+            assert ok and settings["browser"] == value
+        except winlux_autoinstall.AnswerFileError:
+            assert not ok, value
+browsers_sh = (project / "scripts/winlux-browsers.sh").read_text()
+assert "browser=${2:-none}" in browsers_sh and "printf 'none\\n'" in browsers_sh and "edge\\n' ;;" not in browsers_sh
+settings_py = (project / "scripts/winlux-settings.py").read_text()
+assert 'for name in ("chrome", "edge", "firefox")' in settings_py
 guest = (project / "scripts/test-native-session-guest.py").read_text()
 assert "/usr/share/doc/winlux/sources-gpl.tsv" in guest and "WINLUX_NATIVE_IMAGE_IDENTITY" in guest
 
