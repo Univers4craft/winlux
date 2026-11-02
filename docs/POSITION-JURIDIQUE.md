@@ -168,7 +168,9 @@ Chacun peut les contrôler dans le dépôt public
    listés dans `NOTICES`, avec une offre écrite de code source pour les
    logiciels sous GPL inclus dans l'image d'installation.
 2. **Aucun élément de Microsoft** : le code et les ressources du projet
-   (son dépôt public) ne contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
+   (son dépôt public) et l'image d'installation (vérifiée à chaque
+   construction par `scripts/check-image-redistributable.sh` et
+   `scripts/test-no-microsoft-branding.py`) ne contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
    (Segoe UI n'est pas fournie ; son nom est seulement remplacé par une
    police libre), ni icône, ni son, ni fond d'écran, ni logo de Microsoft.
    Les fichiers Microsoft qu'une application apporte elle-même (par exemple

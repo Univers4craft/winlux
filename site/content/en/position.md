@@ -59,7 +59,7 @@ The name Winlux does not take the word Windows and does not look or sound like i
 Everything can be checked in the [public repository](https://github.com/Univers4craft/winlux):
 
 1. **Free licence**: code under GNU GPL version 3 or later; third-party components and the written source code offer in the [NOTICES](https://github.com/Univers4craft/winlux/blob/master/NOTICES) file.
-2. **No Microsoft material**: no Microsoft code, library, executable, font, icon, sound, wallpaper or logo in the project's code and resources (its public repository). Programs from other publishers that users choose to install, such as a web browser, remain theirs, under their own licence; they appear under their real name, which refers to the product of its publisher (**Regulation (EU) 2017/1001, Article 14(1)(c)**).
+2. **No Microsoft material**: no Microsoft code, library, executable, font, icon, sound, wallpaper or logo in the project's code and resources (its public repository) or in the installation image, which an automatic check verifies at every build. Programs from other publishers that users choose to install, such as a web browser, remain theirs, under their own licence; they appear under their real name, which refers to the product of its publisher (**Regulation (EU) 2017/1001, Article 14(1)(c)**).
 3. **Clean room**: the [contributor guide](https://github.com/Univers4craft/winlux/blob/master/AGENTS.md) forbids reading or copying Microsoft source code and decompiling a Microsoft library to write code.
 4. **Reproducible test files**: Windows-format test files are built by the project, with free tools, from sources in the repository.
 5. **No replacement claims**: the project does not present itself as an alternative to or replacement for Windows.

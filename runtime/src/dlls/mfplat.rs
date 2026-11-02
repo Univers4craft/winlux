@@ -1,6 +1,6 @@
 //! Media Foundation : objets de base (attributs, types de média,
-//! échantillons, tampons) et capture webcam V4L2 (voir `mfcapture`). La
-//! lecture de fichiers (MFCreateSourceReaderFromURL, sessions) reste à faire.
+//! échantillons, tampons), capture webcam V4L2 (voir `mfcapture`) et
+//! lecture de fichiers par `MFCreateSourceReaderFromURL` (voir `mfreader`).
 
 use super::mfcapture;
 use std::ffi::c_void;
@@ -201,15 +201,24 @@ pub unsafe extern "win64" fn mf_create_source_reader_from_media_source(
 }
 
 // ---------- MFReadWrite (mfreadwrite.dll alias) ----------
+/// MFCreateSourceReaderFromURL : fichier local décodé par le moteur
+/// multimédia de Winlux (voir `mfreader`).
 pub unsafe extern "win64" fn mf_create_source_reader_from_url(
-    _url: *const u16,
-    _attrs: *mut c_void,
+    url: *const u16,
+    attrs: *mut c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
+    if out.is_null() || url.is_null() {
+        return E_POINTER;
     }
-    E_NOTIMPL
+    *out = std::ptr::null_mut();
+    match super::mfreader::create_from_url(&super::wstr(url), attrs) {
+        Ok(reader) => {
+            *out = reader;
+            0
+        }
+        Err(hr) => hr,
+    }
 }
 
 pub unsafe extern "win64" fn mf_create_source_reader_from_byte_stream(

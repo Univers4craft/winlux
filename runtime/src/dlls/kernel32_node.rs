@@ -920,14 +920,23 @@ pub unsafe extern "win64" fn fail_no_more_files() -> usize {
     usize::MAX
 }
 
-/// `ProcThreadAttributeList` : liste opaque. On y garde seulement
-/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (handles hérités, lu par
-/// CreateProcess) ; les autres attributs (ConPTY…) sont acceptés et ignorés.
-/// Disposition : marque, adresse du tableau de handles, nombre.
-pub(crate) const ATTRIBUTE_LIST_MAGIC: u64 = 0x5453_494C_5254_5441; // « ATTRLIST »
+/// `ProcThreadAttributeList` : liste maison (en-tête « WLXA », capacité,
+/// nombre, puis triplets attribut/valeur/taille). CreateProcess y lit la
+/// pseudo-console (PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) et les handles
+/// hérités (PROC_THREAD_ATTRIBUTE_HANDLE_LIST) ; les autres attributs
+/// (parent…) sont gardés et ignorés.
+const ATTRIBUTE_MAGIC: u32 = 0x4158_4C57; // « WLXA »
+const ATTRIBUTE_ENTRY: usize = 24;
+pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
+
+fn attribute_list_size(count: u32) -> usize {
+    16 + (count.max(1) as usize) * ATTRIBUTE_ENTRY
+}
+
 pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
     list: *mut u8,
-    _count: u32,
+    count: u32,
     _flags: u32,
     size: *mut usize,
 ) -> i32 {
@@ -935,13 +944,16 @@ pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
         crate::process::set_last_error(87);
         return 0;
     }
-    if list.is_null() || *size < 64 {
-        *size = 64;
+    let needed = attribute_list_size(count).max(64);
+    if list.is_null() || *size < needed {
+        *size = needed;
         crate::process::set_last_error(122);
         return 0;
     }
-    std::ptr::write_bytes(list, 0, 64);
-    std::ptr::write_unaligned(list as *mut u64, ATTRIBUTE_LIST_MAGIC);
+    std::ptr::write_bytes(list, 0, needed);
+    let capacity = ((needed - 16) / ATTRIBUTE_ENTRY) as u32;
+    std::ptr::write_unaligned(list as *mut u32, ATTRIBUTE_MAGIC);
+    std::ptr::write_unaligned(list.add(4) as *mut u32, capacity);
     1
 }
 pub unsafe extern "win64" fn UpdateProcThreadAttribute(
@@ -953,24 +965,57 @@ pub unsafe extern "win64" fn UpdateProcThreadAttribute(
     _prev: usize,
     _ret: usize,
 ) -> i32 {
-    const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x20002;
-    if list != 0 && attr == PROC_THREAD_ATTRIBUTE_HANDLE_LIST {
-        if std::ptr::read_unaligned(list as *const u64) != ATTRIBUTE_LIST_MAGIC {
-            crate::process::set_last_error(87);
-            return 0;
-        }
-        std::ptr::write_unaligned((list + 8) as *mut usize, value);
-        std::ptr::write_unaligned((list + 16) as *mut usize, size / 8);
+    let list = list as *mut u8;
+    if list.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
     }
+    if std::ptr::read_unaligned(list as *const u32) != ATTRIBUTE_MAGIC {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let capacity = std::ptr::read_unaligned(list.add(4) as *const u32);
+    let used = std::ptr::read_unaligned(list.add(8) as *const u32);
+    if used >= capacity {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    // PSEUDOCONSOLE : la valeur est le HPCON lui-même ; ailleurs un pointeur.
+    let entry = list.add(16 + used as usize * ATTRIBUTE_ENTRY);
+    std::ptr::write_unaligned(entry as *mut usize, attr);
+    std::ptr::write_unaligned(entry.add(8) as *mut usize, value);
+    std::ptr::write_unaligned(entry.add(16) as *mut usize, size);
+    std::ptr::write_unaligned(list.add(8) as *mut u32, used + 1);
     1
 }
-/// Handles de `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, s'il y en a.
-pub(crate) unsafe fn attribute_handle_list(list: usize) -> Option<Vec<usize>> {
-    if list == 0 || std::ptr::read_unaligned(list as *const u64) != ATTRIBUTE_LIST_MAGIC {
+
+/// (valeur, taille) d'un attribut d'une liste remplie par UpdateProcThreadAttribute.
+unsafe fn attribute_entry(list: usize, attr: usize) -> Option<(usize, usize)> {
+    let list = list as *const u8;
+    if list.is_null() || std::ptr::read_unaligned(list as *const u32) != ATTRIBUTE_MAGIC {
         return None;
     }
-    let ptr = std::ptr::read_unaligned((list + 8) as *const usize);
-    let n = std::ptr::read_unaligned((list + 16) as *const usize);
+    let used = std::ptr::read_unaligned(list.add(8) as *const u32) as usize;
+    (0..used).find_map(|index| {
+        let entry = list.add(16 + index * ATTRIBUTE_ENTRY);
+        (std::ptr::read_unaligned(entry as *const usize) == attr).then(|| {
+            (
+                std::ptr::read_unaligned(entry.add(8) as *const usize),
+                std::ptr::read_unaligned(entry.add(16) as *const usize),
+            )
+        })
+    })
+}
+
+/// Valeur d'un attribut d'une liste remplie par UpdateProcThreadAttribute.
+pub(crate) unsafe fn proc_thread_attribute(list: usize, attr: usize) -> Option<usize> {
+    attribute_entry(list, attr).map(|(value, _)| value)
+}
+
+/// Handles de `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, s'il y en a.
+pub(crate) unsafe fn attribute_handle_list(list: usize) -> Option<Vec<usize>> {
+    let (ptr, size) = attribute_entry(list, PROC_THREAD_ATTRIBUTE_HANDLE_LIST)?;
+    let n = size / 8;
     if ptr == 0 || n > 4096 {
         return None;
     }

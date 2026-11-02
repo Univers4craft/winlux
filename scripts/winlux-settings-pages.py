@@ -277,7 +277,20 @@ _TR = {
     "Clair": ("Light", "Claro", "Hell"),
     "Couleur d’accentuation": ("Accent color", "Color de énfasis", "Akzentfarbe"),
     "Personnalisée…": ("Custom…", "Personalizado…", "Benutzerdefiniert…"),
+    "Icônes du bureau": ("Desktop icons", "Iconos del escritorio", "Desktopsymbole"),
+    "Corbeille": ("Recycle Bin", "Papelera de reciclaje", "Papierkorb"),
+    "Ce PC": ("This PC", "Este equipo", "Dieser PC"),
+    "Explorateur": ("File Explorer", "Explorador de archivos", "Explorer"),
+    "Documents": ("Documents", "Documentos", "Dokumente"),
     "Barre des tâches": ("Taskbar", "Barra de tareas", "Taskleiste"),
+    "Ce PC (système de fichiers)": ("This PC (file system)", "Este equipo (sistema de archivos)", "Dieser PC (Dateisystem)"),
+    "Dossier de l’utilisateur": ("User's files", "Archivos del usuario", "Benutzerdateien"),
+    "Lecteurs amovibles et réseau": ("Removable and network drives", "Unidades extraíbles y de red", "Wechsel- und Netzlaufwerke"),
+    "Réorganiser les icônes": ("Arrange icons", "Organizar iconos", "Symbole anordnen"),
+    "Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci.": (
+        "Added shortcuts are removed with a right-click. Right-clicking an app in the Start menu also creates its shortcut.",
+        "Los accesos directos añadidos se quitan con un clic derecho. Un clic derecho en una aplicación del menú Inicio también crea su acceso directo.",
+        "Hinzugefügte Verknüpfungen werden per Rechtsklick entfernt. Ein Rechtsklick auf eine App im Startmenü erstellt ebenfalls ihre Verknüpfung."),
     "Taille": ("Size", "Tamaño", "Größe"),
     "Petite": ("Small", "Pequeña", "Klein"),
     "Moyenne": ("Medium", "Mediana", "Mittel"),
@@ -667,6 +680,17 @@ def keyvals(text):
 
 def have(command):
     return shutil.which(command) is not None
+
+
+# Icônes spéciales du bureau (xfdesktop) : clé, libellé, présence par défaut.
+DESKTOP_ICONS = [("trash", "Corbeille"), ("filesystem", "Ce PC (système de fichiers)"),
+                 ("home", "Dossier de l’utilisateur"), ("removable", "Lecteurs amovibles et réseau")]
+DESKTOP_ICON_DEFAULTS = {"trash": True, "filesystem": False, "home": False, "removable": False}
+
+
+def desktop_icon_shown(key):
+    value = xfconf_get("xfce4-desktop", f"/desktop-icons/file-icons/show-{key}")
+    return DESKTOP_ICON_DEFAULTS[key] if value is None else value == "true"
 
 
 def ambiance_tool():
@@ -1345,11 +1369,23 @@ class ExtraPages:
             self.widget_settings()
         self.section(_t("Icônes du bureau"))
         box = self.card()
-        self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
-                           (_t("Ce PC"), lambda: self.execute("desktop-icon-computer")),
-                           (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
+        if have("xfconf-query"):
+            # Icônes du bureau d'XFCE : Windows 11 démarre avec la Corbeille seule.
+            for key, title in DESKTOP_ICONS:
+                self.switch(box, _t(title), desktop_icon_shown(key),
+                            lambda on, k=key: xfconf_set("xfce4-desktop", f"/desktop-icons/file-icons/show-{k}",
+                                                         "bool", str(on).lower()))
+        else:
+            self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
+                               (_t("Ce PC"), lambda: self.execute("desktop-icon-computer"))])
+        self.actions(box, [(_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
-        self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+        self.hint(_t("Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci."), box)
+        if have("xfdesktop"):
+            # xfdesktop range toujours les icônes sur une grille, comme
+            # « Aligner les icônes sur la grille » de Windows : seul le
+            # rangement automatique est proposé.
+            self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""

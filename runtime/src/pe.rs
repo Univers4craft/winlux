@@ -108,18 +108,33 @@ pub fn peek_subsystem(file: &[u8]) -> Option<u16> {
     rd16(file, pe.checked_add(24 + 68)?)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Code,
+    IlOnly,
+    Data,
+}
+
 impl PeImage {
     pub fn parse(file: &[u8]) -> Result<PeImage, PeError> {
-        Self::parse_with(file, false)
+        Self::parse_with(file, Mode::Code)
     }
 
     /// Comme `parse`, en acceptant aussi une assembly .NET IL seul au
     /// format PE32, que `LoadLibraryEx` charge dans un processus 64 bits.
     pub fn parse_il_only(file: &[u8]) -> Result<PeImage, PeError> {
-        Self::parse_with(file, true)
+        Self::parse_with(file, Mode::IlOnly)
     }
 
-    fn parse_with(file: &[u8], il_only32: bool) -> Result<PeImage, PeError> {
+    /// Image lue seulement pour ses ressources (LoadLibraryEx en mode
+    /// données) : PE32 ou PE32+, toute architecture, sans exigence de CLR.
+    pub fn parse_resources(file: &[u8]) -> Result<PeImage, PeError> {
+        Self::parse_with(file, Mode::Data)
+    }
+
+    fn parse_with(file: &[u8], mode: Mode) -> Result<PeImage, PeError> {
+        let il_only32 = mode != Mode::Code;
+        let data = mode == Mode::Data;
         if file.len() < 0x40 {
             return Err(PeError::TooSmall);
         }
@@ -147,7 +162,7 @@ impl PeImage {
         if !pe32 && magic != PE32PLUS_MAGIC {
             return Err(PeError::Bad("magic de l'en-tête optionnel inconnu"));
         }
-        if !pe32 && machine != IMAGE_FILE_MACHINE_AMD64 {
+        if !pe32 && machine != IMAGE_FILE_MACHINE_AMD64 && !data {
             return Err(PeError::Machine(machine));
         }
         // PE32 : champs de 32 bits pour ImageBase et la pile, répertoires 16 octets plus tôt.
@@ -158,7 +173,7 @@ impl PeImage {
             d.rva = g32(dirs_at + 4 + i * 8)?;
             d.size = g32(dirs_at + 8 + i * 8)?;
         }
-        if pe32 {
+        if pe32 && !data {
             let cor = dirs[DIR_COM_DESCRIPTOR];
             if cor.rva == 0 {
                 return Err(PeError::Pe32(machine));
@@ -219,6 +234,7 @@ impl PeImage {
             }
         }
         if img.il_only32
+            && !data
             && !img
                 .cor_flags(file)
                 .is_some_and(|f| f & COMIMAGE_FLAGS_ILONLY != 0)

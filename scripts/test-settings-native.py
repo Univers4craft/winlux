@@ -39,6 +39,17 @@ with tempfile.TemporaryDirectory() as folder:
     pages["openbox_set"].__globals__["have"] = lambda command: False
     assert pages["openbox_set"]("resize", "drawContents", "no") and pages["openbox_get"]("resize", "drawContents") == "no"
     assert pages["openbox_set"]("theme", "animateIconify", "no") and pages["openbox_get"]("theme", "animateIconify") == "no"
+# Icônes du bureau (#30) : Corbeille seule par défaut, choix xfconf respecté.
+shown = pages["desktop_icon_shown"]
+stored = {}
+shown.__globals__["xfconf_get"] = lambda channel, prop: stored.get(prop)
+assert shown("trash") and not shown("filesystem") and not shown("home") and not shown("removable")
+stored["/desktop-icons/file-icons/show-home"] = "true"
+stored["/desktop-icons/file-icons/show-trash"] = "false"
+assert shown("home") and not shown("trash")
+for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
+    text = Path(__file__).with_name(script).read_text()
+    assert "for icon in trash:true filesystem:false home:false removable:false" in text, script
 window = module["Settings"]()
 failures = []
 
