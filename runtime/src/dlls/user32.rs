@@ -475,6 +475,14 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
         return 0;
     }
+    // WM_TIMER d'un minuteur à fonction de rappel : lParam est la TIMERPROC,
+    // appelée à la place de la procédure de fenêtre.
+    if m.message == 0x0113 && m.lparam != 0 {
+        let callback: unsafe extern "win64" fn(usize, u32, usize, u32) =
+            std::mem::transmute(m.lparam as usize);
+        callback(m.hwnd, m.message, m.wparam, m.time);
+        return 0;
+    }
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
