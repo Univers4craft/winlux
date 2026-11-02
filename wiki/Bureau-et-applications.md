@@ -68,6 +68,8 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 | Raccourci ou endroit | Fonction |
 |---|---|
 | **Windows + .** ou **Windows + ;** | Sélecteur d'emojis, kaomojis et symboles ; recherche sans accents dans la langue du bureau et en anglais ; le choix est tapé dans la fenêtre active. Les emojis en couleur se téléchargent au premier usage (10 Mo). |
+| **Windows + flèches**, **Windows + Z** | Ancrage comme Windows 11 : moitiés, quarts, agrandir, taille d'avant ; l'Assistant d'ancrage propose les autres fenêtres. Windows + Z ou clic droit sur Agrandir : cinq dispositions (moitiés, deux tiers, trois colonnes, quarts). Windows + Maj + flèche : écran voisin. |
+| **Windows + Tab** | Vue des tâches : aperçus des fenêtres, bureaux virtuels (nouveau, renommer, supprimer, déplacer une fenêtre par clic droit). Windows + Ctrl + D crée un bureau, Windows + Ctrl + F4 le ferme, Windows + Ctrl + ← / → passe de l'un à l'autre. |
 | **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
 | Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
 
@@ -87,7 +89,7 @@ Le bureau, l'Explorateur, les Paramètres, l'écran de verrouillage et les appli
 
 - Corbeille complète (restaurer, vider) et barre de progression des copies (#10, #11).
 - Navigation au clavier (Tab) dans toutes les fenêtres du shell.
-- Dans la session native : aperçu d'ancrage à la souris (Snap Layouts), animations, bureaux virtuels et widgets plus proches de Windows 11 (ils existent dans l'ancien bureau PE).
+- Dans la session native : ancrage en glissant une fenêtre au bord de l'écran, animations.
 - Écran de chargement du noyau, sons système et jeu d'icônes à l'identité Prisme (#170).
 
 Voir aussi : [Paramètres](Parametres) · [INTERFACE.md](https://github.com/Univers4craft/winlux/blob/master/INTERFACE.md) · [docs/NATIVE-DESKTOP.md](https://github.com/Univers4craft/winlux/blob/master/docs/NATIVE-DESKTOP.md)
