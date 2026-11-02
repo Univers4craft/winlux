@@ -489,6 +489,7 @@ TRANSLATIONS = {
         "done_title": "Installation terminée !",
         "done_subtitle": "Winlux a été installé avec succès. Retirez le média d'installation et redémarrez.",
         "btn_next": "Suivant",
+        "btn_osk": "Clavier tactile",
         "btn_back": "Retour",
         "btn_install": "Installer",
         "btn_reboot": "Redémarrer maintenant",
@@ -649,6 +650,7 @@ TRANSLATIONS = {
         "done_title": "Installation complete!",
         "done_subtitle": "Winlux has been installed successfully. Remove the installation media and reboot.",
         "btn_next": "Next",
+        "btn_osk": "Touch keyboard",
         "btn_back": "Back",
         "btn_install": "Install",
         "btn_reboot": "Reboot now",
@@ -809,6 +811,7 @@ TRANSLATIONS = {
         "done_title": "Installation abgeschlossen!",
         "done_subtitle": "Winlux wurde erfolgreich installiert. Entfernen Sie das Installationsmedium und starten Sie neu.",
         "btn_next": "Weiter",
+        "btn_osk": "Bildschirmtastatur",
         "btn_back": "Zurück",
         "btn_install": "Installieren",
         "btn_reboot": "Jetzt neu starten",
@@ -969,6 +972,7 @@ TRANSLATIONS = {
         "done_title": "¡Instalación completada!",
         "done_subtitle": "Winlux se ha instalado correctamente. Retire el medio de instalación y reinicie.",
         "btn_next": "Siguiente",
+        "btn_osk": "Teclado táctil",
         "btn_back": "Atrás",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar ahora",
@@ -1129,6 +1133,7 @@ TRANSLATIONS = {
         "done_title": "Installazione completata!",
         "done_subtitle": "Winlux è stato installato con successo. Rimuovi il supporto di installazione e riavvia.",
         "btn_next": "Avanti",
+        "btn_osk": "Tastiera virtuale",
         "btn_back": "Indietro",
         "btn_install": "Installa",
         "btn_reboot": "Riavvia ora",
@@ -1289,6 +1294,7 @@ TRANSLATIONS = {
         "done_title": "Instalação concluída!",
         "done_subtitle": "O Winlux foi instalado com sucesso. Remova a mídia de instalação e reinicie.",
         "btn_next": "Próximo",
+        "btn_osk": "Teclado virtual",
         "btn_back": "Voltar",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar agora",
@@ -2309,6 +2315,24 @@ def cpio_newc(entries):
     return bytes(out)
 
 
+def osk_module():
+    """Module du clavier tactile (/usr/bin/winlux-osk, ou le script voisin), ou None."""
+    import importlib.machinery
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in ("/usr/bin/winlux-osk", os.path.join(here, "winlux-osk.py"), os.path.join(here, "winlux-osk")):
+        if os.path.isfile(path):
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", path)
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def keymap_tools_available():
     return bool(shutil.which("ckbcomp") and shutil.which("loadkeys"))
 
@@ -2910,6 +2934,89 @@ class InstallerApp(Gtk.Application):
             return True
         return False
 
+    # ── Clavier tactile (tablette sans clavier physique) ──────────────────────
+
+    def setup_touch_keyboard(self):
+        """Clavier visuel en bas de la fenêtre : ouvert d'office quand aucun clavier
+        physique n'est branché, toujours ouvrable par le bouton « Clavier tactile »."""
+        self.osk = osk_module()
+        self.osk_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.osk_box.set_no_show_all(True)
+        self.osk_widget = None
+        self.osk_layout = None
+        self.content_area.pack_end(self.osk_box, False, False, 0)
+        if self.osk is None:
+            return
+        self.btn_osk = Gtk.Button(label=tr("btn_osk"))
+        self.btn_osk.get_style_context().add_class("btn-secondary")
+        self.btn_osk.set_tooltip_text(tr("btn_osk"))
+        self.btn_osk.connect("clicked", lambda _b: self.show_touch_keyboard(not self.osk_box.get_visible()))
+        self.nav_box.pack_start(self.btn_osk, False, False, 0)
+        try:
+            missing = not self.osk.keyboards()
+        except Exception:
+            missing = False
+        if missing:
+            GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+
+    def touch_keyboard_layout(self):
+        code = str(getattr(self, "config", {}).get("keyboard") or "")[:2]
+        code = {"be": "fr", "gb": "us"}.get(code, code)
+        return code if self.osk is not None and code in self.osk.LAYOUTS else None
+
+    def show_touch_keyboard(self, visible):
+        if self.osk is None:
+            return False
+        layout = self.touch_keyboard_layout()
+        # Disposition choisie à l'étape Clavier et langue de l'installateur.
+        wanted = (layout, tr._lang[:2])
+        if visible and (self.osk_widget is None or wanted != self.osk_layout):
+            if self.osk_widget is not None:
+                self.osk_box.remove(self.osk_widget)
+            os.environ["WINLUX_LANG"] = tr._lang[:2]
+            self.osk._LANG = self.osk._interface_lang()
+            self.osk_widget = self.osk.keyboard_widget(
+                send=self.touch_key, layout=layout,
+                on_close=lambda: self.show_touch_keyboard(False))
+            self.osk_layout = wanted
+            self.osk_box.pack_start(self.osk_widget, False, False, 0)
+        if visible:
+            # set_no_show_all : show_all() ne toucherait pas la boîte elle-même.
+            self.osk_widget.show_all()
+            self.osk_box.show()
+        else:
+            self.osk_box.hide()
+        return True
+
+    def touch_key(self, key, _modifiers=()):
+        """Une touche du clavier tactile dans le champ qui a le focus (Gtk.Entry)."""
+        widget = self.win.get_focus()
+        if key == "Tab":
+            self.win.child_focus(Gtk.DirectionType.TAB_FORWARD)
+            return
+        if not isinstance(widget, Gtk.Entry):
+            return
+        position = widget.get_position()
+        if key == "BackSpace":
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+            elif position > 0:
+                widget.delete_text(position - 1, position)
+        elif key == "Return":
+            widget.activate()
+        elif key in ("Left", "Right"):
+            widget.set_position(max(0, position + (1 if key == "Right" else -1)))
+        elif key == "Escape":
+            self.show_touch_keyboard(False)
+        elif len(key) == 1:
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+                position = bounds[0]
+            widget.insert_text(key, position)
+            widget.set_position(position + 1)
+
     def make_pages_scrollable(self):
         """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
         # Toutes les pages sont retirées puis remises dans leur ordre d'origine : un
@@ -2976,6 +3083,7 @@ class InstallerApp(Gtk.Application):
         self.nav_box.pack_end(self.btn_next, False, False, 0)
         self.nav_box.pack_end(self.btn_back, False, False, 0)
         self.content_area.pack_end(self.nav_box, False, False, 0)
+        self.setup_touch_keyboard()
         self.ui_lang = tr._lang
         self.lang_keyboard_labels = []
         self.profile_tune_labels = {}
@@ -3103,6 +3211,8 @@ class InstallerApp(Gtk.Application):
         if key == "summary":
             self.refresh_summary()
         self.pages.set_visible_child_name(page_name(key))
+        if getattr(self, "osk_box", None) is not None and self.osk_box.get_visible():
+            self.show_touch_keyboard(True)
         if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
         if key == "benchmark" and self.bench_state == "idle":
@@ -3247,6 +3357,10 @@ class InstallerApp(Gtk.Application):
         # place, sans rien reconstruire, pour garder la saisie et les choix en cours.
         self.ui_lang = tr._lang
         relabel_widgets(self.win, relabel_map(previous, tr._lang))
+        if getattr(self, "btn_osk", None) is not None:
+            self.btn_osk.set_tooltip_text(tr("btn_osk"))
+            if self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         for label, kb in self.lang_keyboard_labels:
             label.set_text(tr("language_keyboard", kb=kb))
         for pid, label in self.profile_tune_labels.items():

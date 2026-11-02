@@ -97,6 +97,16 @@ check(all(key in osk["ACCENTS"] for key in "aeiouc"), "accents par appui long")
 out = subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "detect"], capture_output=True, text=True,
                      env=dict(os.environ))
 check(out.returncode == 0 and out.stdout.startswith("keyboard=1"), out.stdout + out.stderr)
+# « need » (champs de mot de passe) : avec un clavier branché, rien ne s'ouvre.
+out = subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "need"], capture_output=True, text=True,
+                     env=dict(os.environ), timeout=20)
+check(out.returncode == 0 and not out.stdout, "need avec clavier : aucune fenêtre " + out.stdout + out.stderr)
+# Écran de verrouillage, contrôle de compte et installateur proposent le clavier visuel.
+for script, needle in (("winlux-lock.py", "keyboard_widget"), ("winlux-uac.py", "physical_keyboard"),
+                       ("winlux-installer.py", "setup_touch_keyboard")):
+    check(needle in (HERE / script).read_text(encoding="utf-8"), f"clavier tactile absent de {script}")
+uac = (HERE / "winlux-uac.py").read_text(encoding="utf-8")
+check('"Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur")' in uac, "UAC : 4 langues")
 
 
 # ── Souris ──────────────────────────────────────────────────────────────────

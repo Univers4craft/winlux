@@ -113,6 +113,8 @@ display() {
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 run pilotes-page         display python3 -B scripts/test-drivers.py
 run clavier-tactile      display python3 -B scripts/test-input-devices.py
+run clavier-installateur display python3 -B scripts/test-installer-osk.py
+run clavier-installateur-branche display python3 -B scripts/test-installer-osk.py --clavier
 run accent-prisme        python3 -B scripts/test-default-accent.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
 run clavier-menus       display python3 -B scripts/test-keyboard-nav.py start
