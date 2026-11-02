@@ -85,6 +85,7 @@ display() {
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run comptes              display python3 -B scripts/test-accounts.py
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5

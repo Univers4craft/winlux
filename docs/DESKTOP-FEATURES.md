@@ -27,6 +27,29 @@ L'accueil propose des raccourcis vers le clavier, le réseau, l'apparence et
 le secours lors de la première session. « Terminer » enregistre le choix dans
 le profil ; fermer la fenêtre permet de le reprendre plus tard.
 
+## Comptes, changement d'utilisateur et veille
+
+Paramètres › **Comptes** (page 33, cachée en session Live) liste les comptes
+locaux : « Votre compte » (changer le mot de passe) et « Autres
+utilisateurs » (ajouter un compte, changer son type Administrateur/Standard,
+son mot de passe, le supprimer en gardant ou en effaçant ses fichiers).
+Comptes locaux uniquement. Chaque action passe par le Contrôle de compte
+d'utilisateur puis `winlux-control account-*` relayé en root, qui appelle
+`winlux-accounts` (useradd, chpasswd, gpasswd, userdel ; le mot de passe
+passe par l'entrée standard) et tient `/etc/winlux/users.conf` à jour. Le
+dernier administrateur ne peut être ni rétrogradé ni supprimé ; un compte
+dont la session est ouverte ne peut pas être supprimé.
+
+Le menu d'alimentation du menu Démarrer propose **Changer d'utilisateur**
+dès qu'un second compte existe : `winlux-lock switch` verrouille la session
+et affiche les comptes en bas à gauche, comme Windows 11. Le mot de passe du
+compte choisi est vérifié par le relais root (`winlux-root`, op `switch`),
+qui ouvre ou rejoint sa session (`winlux-sessions switch`) ; la session
+quittée reste verrouillée. Ouvrir la session d'un autre compte sans son mot
+de passe demande désormais un administrateur. **Mettre en veille** apparaît
+quand `/sys/power/state` propose `mem` ou `freeze` et passe par
+`winlux-control power-suspend`. Test : `scripts/test-accounts.py`.
+
 ## Réglages rapides et matériel
 
 Les commandes Arrêter et Redémarrer demandent d'abord aux fenêtres de se

@@ -40,6 +40,7 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Révision : {value}': ('Revision: {value}', 'Revisión: {value}', 'Revision: {value}'),
     'Compilée le : {value}': ('Built on: {value}', 'Compilada el: {value}', 'Erstellt am: {value}'),
     # Refonte des Paramètres (catégories, réglages intégrés)
@@ -304,17 +305,19 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers")]
+         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
+         _t("Comptes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 32 n’existent que dans les Paramètres natifs.
+# Pages 29 à 33 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15, 30]),
+              (_t("Comptes"), [33]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
