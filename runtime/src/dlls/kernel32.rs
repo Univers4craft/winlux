@@ -1535,6 +1535,29 @@ unsafe fn create_file_str(
     if let Some(name) = crate::dlls::named_pipes::pipe_name(path) {
         return crate::dlls::named_pipes::open_client(&name, _flags);
     }
+    // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
+    if let Some(dev) = crate::dlls::hid::device_path(path) {
+        return match crate::dlls::hid::open(&dev) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(e) => {
+                crate::process::set_last_error(
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        5
+                    } else {
+                        2
+                    },
+                );
+                usize::MAX
+            }
+        };
+    }
     // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
     let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
     if device == "CONIN$" && libc::isatty(0) == 1 {

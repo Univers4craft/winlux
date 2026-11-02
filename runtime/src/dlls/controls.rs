@@ -742,6 +742,19 @@ const BS_OWNERDRAW: u32 = 0xB;
 const BS_LEFTTEXT: u32 = 0x20;
 const BS_NOTIFY: u32 = 0x4000;
 
+/// Contrôle de fond qui en entoure d'autres : cadre de groupe, onglets,
+/// rectangle ou cadre STATIC. Sous Windows ils ne recouvrent pas leurs
+/// voisins ; en X11, où chaque contrôle est une fenêtre opaque, ils doivent
+/// rester derrière.
+pub fn is_backdrop(hwnd: usize) -> bool {
+    match kind_of(hwnd) {
+        Some(Kind::Button) => button_type(hwnd) == BS_GROUPBOX,
+        Some(Kind::Tab) => true,
+        Some(Kind::Static) => matches!(style(hwnd) & 0x1F, 0x4..=0x9 | 0x10..=0x12),
+        _ => false,
+    }
+}
+
 fn button_type(hwnd: usize) -> u32 {
     style(hwnd) & 0xF
 }
