@@ -1,0 +1,717 @@
+# Généré par scripts/gen-host-signatures.py, ne pas modifier à la main.
+vkAcquireDrmDisplayEXT pip
+vkAcquireFullScreenExclusiveModeEXT pp
+vkAcquireImageANDROID ppipp
+vkAcquireNextImage2KHR ppp
+vkAcquireNextImageKHR pppppp
+vkAcquirePerformanceConfigurationINTEL ppp
+vkAcquireProfilingLockKHR pp
+vkAcquireWinrtDisplayNV pp
+vkAcquireXlibDisplayEXT ppp
+* vkAllocateCommandBuffers ppp
+* vkAllocateDescriptorSets ppp
+* vkAllocateMemory ppAp
+vkAntiLagUpdateAMD pp
+* vkBeginCommandBuffer pp
+vkBindAccelerationStructureMemoryNV pip
+* vkBindBufferMemory pppp
+* vkBindBufferMemory2 pip
+vkBindBufferMemory2KHR pip
+* vkBindImageMemory pppp
+* vkBindImageMemory2 pip
+vkBindImageMemory2KHR pip
+vkBindOpticalFlowSessionImageNV ppipi
+vkBindVideoSessionMemoryKHR ppip
+vkBuildAccelerationStructuresKHR ppipp
+vkBuildMicromapsEXT ppip
+vkCmdBeginConditionalRenderingEXT pp
+vkCmdBeginDebugUtilsLabelEXT pp
+* vkCmdBeginQuery ppii
+vkCmdBeginQueryIndexedEXT ppiii
+* vkCmdBeginRenderPass ppi
+* vkCmdBeginRenderPass2 ppp
+vkCmdBeginRenderPass2KHR ppp
+* vkCmdBeginRendering pp
+vkCmdBeginRenderingKHR pp
+vkCmdBeginTransformFeedbackEXT piipp
+vkCmdBeginVideoCodingKHR pp
+vkCmdBindDescriptorBufferEmbeddedSamplers2EXT pp
+vkCmdBindDescriptorBufferEmbeddedSamplersEXT pipi
+vkCmdBindDescriptorBuffersEXT pip
+* vkCmdBindDescriptorSets pipiipip
+vkCmdBindDescriptorSets2KHR pp
+* vkCmdBindIndexBuffer pppi
+vkCmdBindIndexBuffer2KHR ppppi
+vkCmdBindInvocationMaskHUAWEI ppi
+* vkCmdBindPipeline pip
+vkCmdBindPipelineShaderGroupNV pipi
+vkCmdBindShadersEXT pipp
+vkCmdBindShadingRateImageNV ppi
+vkCmdBindTransformFeedbackBuffersEXT piippp
+* vkCmdBindVertexBuffers piipp
+* vkCmdBindVertexBuffers2 piipppp
+vkCmdBindVertexBuffers2EXT piipppp
+* vkCmdBlitImage ppipiipi
+* vkCmdBlitImage2 pp
+vkCmdBlitImage2KHR pp
+vkCmdBuildAccelerationStructureNV ppppipppp
+vkCmdBuildAccelerationStructuresIndirectKHR pipppp
+vkCmdBuildAccelerationStructuresKHR pipp
+vkCmdBuildMicromapsEXT pip
+* vkCmdClearAttachments pipip
+* vkCmdClearColorImage ppipip
+* vkCmdClearDepthStencilImage ppipip
+vkCmdControlVideoCodingKHR pp
+vkCmdCopyAccelerationStructureKHR pp
+vkCmdCopyAccelerationStructureNV pppi
+vkCmdCopyAccelerationStructureToMemoryKHR pp
+* vkCmdCopyBuffer pppip
+* vkCmdCopyBuffer2 pp
+vkCmdCopyBuffer2KHR pp
+* vkCmdCopyBufferToImage pppiip
+* vkCmdCopyBufferToImage2 pp
+vkCmdCopyBufferToImage2KHR pp
+* vkCmdCopyImage ppipiip
+* vkCmdCopyImage2 pp
+vkCmdCopyImage2KHR pp
+* vkCmdCopyImageToBuffer ppipip
+* vkCmdCopyImageToBuffer2 pp
+vkCmdCopyImageToBuffer2KHR pp
+vkCmdCopyMemoryIndirectNV ppii
+vkCmdCopyMemoryToAccelerationStructureKHR pp
+vkCmdCopyMemoryToImageIndirectNV ppiipip
+vkCmdCopyMemoryToMicromapEXT pp
+vkCmdCopyMicromapEXT pp
+vkCmdCopyMicromapToMemoryEXT pp
+* vkCmdCopyQueryPoolResults ppiipppi
+vkCmdCuLaunchKernelNVX pp
+vkCmdCudaLaunchKernelNV pp
+vkCmdDebugMarkerBeginEXT pp
+vkCmdDebugMarkerEndEXT p
+vkCmdDebugMarkerInsertEXT pp
+vkCmdDecodeVideoKHR pp
+vkCmdDecompressMemoryIndirectCountNV pppi
+vkCmdDecompressMemoryNV pip
+* vkCmdDispatch piii
+* vkCmdDispatchBase piiiiii
+vkCmdDispatchBaseKHR piiiiii
+vkCmdDispatchGraphAMDX ppp
+vkCmdDispatchGraphIndirectAMDX ppp
+vkCmdDispatchGraphIndirectCountAMDX ppp
+* vkCmdDispatchIndirect ppp
+* vkCmdDraw piiii
+vkCmdDrawClusterHUAWEI piii
+vkCmdDrawClusterIndirectHUAWEI ppp
+* vkCmdDrawIndexed piiiii
+* vkCmdDrawIndexedIndirect pppii
+* vkCmdDrawIndexedIndirectCount pppppii
+vkCmdDrawIndexedIndirectCountAMD pppppii
+vkCmdDrawIndexedIndirectCountKHR pppppii
+* vkCmdDrawIndirect pppii
+vkCmdDrawIndirectByteCountEXT piippii
+* vkCmdDrawIndirectCount pppppii
+vkCmdDrawIndirectCountAMD pppppii
+vkCmdDrawIndirectCountKHR pppppii
+vkCmdDrawMeshTasksEXT piii
+vkCmdDrawMeshTasksIndirectCountEXT pppppii
+vkCmdDrawMeshTasksIndirectCountNV pppppii
+vkCmdDrawMeshTasksIndirectEXT pppii
+vkCmdDrawMeshTasksIndirectNV pppii
+vkCmdDrawMeshTasksNV pii
+vkCmdDrawMultiEXT pipiii
+vkCmdDrawMultiIndexedEXT pipiiip
+vkCmdEncodeVideoKHR pp
+vkCmdEndConditionalRenderingEXT p
+vkCmdEndDebugUtilsLabelEXT p
+* vkCmdEndQuery ppi
+vkCmdEndQueryIndexedEXT ppii
+* vkCmdEndRenderPass p
+* vkCmdEndRenderPass2 pp
+vkCmdEndRenderPass2KHR pp
+* vkCmdEndRendering p
+vkCmdEndRenderingKHR p
+vkCmdEndTransformFeedbackEXT piipp
+vkCmdEndVideoCodingKHR pp
+* vkCmdExecuteCommands pip
+vkCmdExecuteGeneratedCommandsEXT pip
+vkCmdExecuteGeneratedCommandsNV pip
+* vkCmdFillBuffer ppppi
+vkCmdInitializeGraphScratchMemoryAMDX pp
+vkCmdInsertDebugUtilsLabelEXT pp
+* vkCmdNextSubpass pi
+* vkCmdNextSubpass2 ppp
+vkCmdNextSubpass2KHR ppp
+vkCmdOpticalFlowExecuteNV ppp
+* vkCmdPipelineBarrier piiiipipip
+* vkCmdPipelineBarrier2 pp
+vkCmdPipelineBarrier2KHR pp
+vkCmdPreprocessGeneratedCommandsEXT ppp
+vkCmdPreprocessGeneratedCommandsNV pp
+* vkCmdPushConstants ppiiip
+vkCmdPushConstants2KHR pp
+vkCmdPushDescriptorSet2KHR pp
+vkCmdPushDescriptorSetKHR pipiip
+vkCmdPushDescriptorSetWithTemplate2KHR pp
+vkCmdPushDescriptorSetWithTemplateKHR pppip
+vkCmdRefreshObjectsKHR pp
+* vkCmdResetEvent ppi
+* vkCmdResetEvent2 ppp
+vkCmdResetEvent2KHR ppp
+* vkCmdResetQueryPool ppii
+* vkCmdResolveImage ppipiip
+* vkCmdResolveImage2 pp
+vkCmdResolveImage2KHR pp
+vkCmdSetAlphaToCoverageEnableEXT pi
+vkCmdSetAlphaToOneEnableEXT pi
+vkCmdSetAttachmentFeedbackLoopEnableEXT pi
+* vkCmdSetBlendConstants pp
+vkCmdSetCheckpointNV pp
+vkCmdSetCoarseSampleOrderNV piip
+vkCmdSetColorBlendAdvancedEXT piip
+vkCmdSetColorBlendEnableEXT piip
+vkCmdSetColorBlendEquationEXT piip
+vkCmdSetColorWriteEnableEXT pip
+vkCmdSetColorWriteMaskEXT piip
+vkCmdSetConservativeRasterizationModeEXT pi
+vkCmdSetCoverageModulationModeNV pi
+vkCmdSetCoverageModulationTableEnableNV pi
+vkCmdSetCoverageModulationTableNV pip
+vkCmdSetCoverageReductionModeNV pi
+vkCmdSetCoverageToColorEnableNV pi
+vkCmdSetCoverageToColorLocationNV pi
+* vkCmdSetCullMode pi
+vkCmdSetCullModeEXT pi
+* vkCmdSetDepthBias pfff
+vkCmdSetDepthBias2EXT pp
+* vkCmdSetDepthBiasEnable pi
+vkCmdSetDepthBiasEnableEXT pi
+* vkCmdSetDepthBounds pff
+* vkCmdSetDepthBoundsTestEnable pi
+vkCmdSetDepthBoundsTestEnableEXT pi
+vkCmdSetDepthClampEnableEXT pi
+vkCmdSetDepthClampRangeEXT pip
+vkCmdSetDepthClipEnableEXT pi
+vkCmdSetDepthClipNegativeOneToOneEXT pi
+* vkCmdSetDepthCompareOp pi
+vkCmdSetDepthCompareOpEXT pi
+* vkCmdSetDepthTestEnable pi
+vkCmdSetDepthTestEnableEXT pi
+* vkCmdSetDepthWriteEnable pi
+vkCmdSetDepthWriteEnableEXT pi
+vkCmdSetDescriptorBufferOffsets2EXT pp
+vkCmdSetDescriptorBufferOffsetsEXT pipiipp
+* vkCmdSetDeviceMask pi
+vkCmdSetDeviceMaskKHR pi
+vkCmdSetDiscardRectangleEXT piip
+vkCmdSetDiscardRectangleEnableEXT pi
+vkCmdSetDiscardRectangleModeEXT pi
+* vkCmdSetEvent ppi
+* vkCmdSetEvent2 ppp
+vkCmdSetEvent2KHR ppp
+vkCmdSetExclusiveScissorEnableNV piip
+vkCmdSetExclusiveScissorNV piip
+vkCmdSetExtraPrimitiveOverestimationSizeEXT pf
+vkCmdSetFragmentShadingRateEnumNV pip
+vkCmdSetFragmentShadingRateKHR ppp
+* vkCmdSetFrontFace pi
+vkCmdSetFrontFaceEXT pi
+vkCmdSetLineRasterizationModeEXT pi
+vkCmdSetLineStippleEXT pip
+vkCmdSetLineStippleEnableEXT pi
+vkCmdSetLineStippleKHR pip
+* vkCmdSetLineWidth pf
+vkCmdSetLogicOpEXT pi
+vkCmdSetLogicOpEnableEXT pi
+vkCmdSetPatchControlPointsEXT pi
+vkCmdSetPerformanceMarkerINTEL pp
+vkCmdSetPerformanceOverrideINTEL pp
+vkCmdSetPerformanceStreamMarkerINTEL pp
+vkCmdSetPolygonModeEXT pi
+* vkCmdSetPrimitiveRestartEnable pi
+vkCmdSetPrimitiveRestartEnableEXT pi
+* vkCmdSetPrimitiveTopology pi
+vkCmdSetPrimitiveTopologyEXT pi
+vkCmdSetProvokingVertexModeEXT pi
+vkCmdSetRasterizationSamplesEXT pi
+vkCmdSetRasterizationStreamEXT pi
+* vkCmdSetRasterizerDiscardEnable pi
+vkCmdSetRasterizerDiscardEnableEXT pi
+vkCmdSetRayTracingPipelineStackSizeKHR pi
+vkCmdSetRenderingAttachmentLocationsKHR pp
+vkCmdSetRenderingInputAttachmentIndicesKHR pp
+vkCmdSetRepresentativeFragmentTestEnableNV pi
+vkCmdSetSampleLocationsEXT pp
+vkCmdSetSampleLocationsEnableEXT pi
+vkCmdSetSampleMaskEXT pip
+* vkCmdSetScissor piip
+* vkCmdSetScissorWithCount pip
+vkCmdSetScissorWithCountEXT pip
+vkCmdSetShadingRateImageEnableNV pi
+* vkCmdSetStencilCompareMask pii
+* vkCmdSetStencilOp piiiii
+vkCmdSetStencilOpEXT piiiii
+* vkCmdSetStencilReference pii
+* vkCmdSetStencilTestEnable pi
+vkCmdSetStencilTestEnableEXT pi
+* vkCmdSetStencilWriteMask pii
+vkCmdSetTessellationDomainOriginEXT pi
+vkCmdSetVertexInputEXT pipip
+* vkCmdSetViewport piip
+vkCmdSetViewportShadingRatePaletteNV piip
+vkCmdSetViewportSwizzleNV piip
+vkCmdSetViewportWScalingEnableNV pi
+vkCmdSetViewportWScalingNV piip
+* vkCmdSetViewportWithCount pip
+vkCmdSetViewportWithCountEXT pip
+vkCmdSubpassShadingHUAWEI p
+vkCmdTraceRaysIndirect2KHR pp
+vkCmdTraceRaysIndirectKHR pppppp
+vkCmdTraceRaysKHR pppppiii
+vkCmdTraceRaysNV ppppppppppppiii
+* vkCmdUpdateBuffer ppppp
+vkCmdUpdatePipelineIndirectBufferNV pip
+* vkCmdWaitEvents pipiiipipip
+* vkCmdWaitEvents2 pipp
+vkCmdWaitEvents2KHR pipp
+vkCmdWriteAccelerationStructuresPropertiesKHR pipipi
+vkCmdWriteAccelerationStructuresPropertiesNV pipipi
+vkCmdWriteBufferMarker2AMD ppppi
+vkCmdWriteBufferMarkerAMD pippi
+vkCmdWriteMicromapsPropertiesEXT pipipi
+* vkCmdWriteTimestamp pipi
+* vkCmdWriteTimestamp2 pppi
+vkCmdWriteTimestamp2KHR pppi
+vkCompileDeferredNV ppi
+vkCopyAccelerationStructureKHR ppp
+vkCopyAccelerationStructureToMemoryKHR ppp
+vkCopyImageToImageEXT pp
+vkCopyImageToMemoryEXT pp
+vkCopyMemoryToAccelerationStructureKHR ppp
+vkCopyMemoryToImageEXT pp
+vkCopyMemoryToMicromapEXT ppp
+vkCopyMicromapEXT ppp
+vkCopyMicromapToMemoryEXT ppp
+vkCreateAccelerationStructureKHR ppAp
+vkCreateAccelerationStructureNV ppAp
+vkCreateAndroidSurfaceKHR ppAp
+* vkCreateBuffer ppAp
+vkCreateBufferCollectionFUCHSIA ppAp
+* vkCreateBufferView ppAp
+* vkCreateCommandPool ppAp
+* vkCreateComputePipelines ppipAp
+vkCreateCuFunctionNVX ppAp
+vkCreateCuModuleNVX ppAp
+vkCreateCudaFunctionNV ppAp
+vkCreateCudaModuleNV ppAp
+vkCreateDebugReportCallbackEXT ppAp
+vkCreateDebugUtilsMessengerEXT ppAp
+vkCreateDeferredOperationKHR pAp
+* vkCreateDescriptorPool ppAp
+* vkCreateDescriptorSetLayout ppAp
+* vkCreateDescriptorUpdateTemplate ppAp
+vkCreateDescriptorUpdateTemplateKHR ppAp
+* vkCreateDevice ppAp
+vkCreateDirectFBSurfaceEXT ppAp
+vkCreateDisplayModeKHR pppAp
+vkCreateDisplayPlaneSurfaceKHR ppAp
+* vkCreateEvent ppAp
+vkCreateExecutionGraphPipelinesAMDX ppipAp
+* vkCreateFence ppAp
+* vkCreateFramebuffer ppAp
+* vkCreateGraphicsPipelines ppipAp
+vkCreateHeadlessSurfaceEXT ppAp
+vkCreateIOSSurfaceMVK ppAp
+* vkCreateImage ppAp
+vkCreateImagePipeSurfaceFUCHSIA ppAp
+* vkCreateImageView ppAp
+vkCreateIndirectCommandsLayoutEXT ppAp
+vkCreateIndirectCommandsLayoutNV ppAp
+vkCreateIndirectExecutionSetEXT ppAp
+* vkCreateInstance pAp
+vkCreateMacOSSurfaceMVK ppAp
+vkCreateMetalSurfaceEXT ppAp
+vkCreateMicromapEXT ppAp
+vkCreateOpticalFlowSessionNV ppAp
+vkCreatePipelineBinariesKHR ppAp
+* vkCreatePipelineCache ppAp
+* vkCreatePipelineLayout ppAp
+* vkCreatePrivateDataSlot ppAp
+vkCreatePrivateDataSlotEXT ppAp
+* vkCreateQueryPool ppAp
+vkCreateRayTracingPipelinesKHR pppipAp
+vkCreateRayTracingPipelinesNV ppipAp
+* vkCreateRenderPass ppAp
+* vkCreateRenderPass2 ppAp
+vkCreateRenderPass2KHR ppAp
+* vkCreateSampler ppAp
+* vkCreateSamplerYcbcrConversion ppAp
+vkCreateSamplerYcbcrConversionKHR ppAp
+vkCreateScreenSurfaceQNX ppAp
+* vkCreateSemaphore ppAp
+vkCreateSemaphoreSciSyncPoolNV ppAp
+* vkCreateShaderModule ppAp
+vkCreateShadersEXT pipAp
+vkCreateSharedSwapchainsKHR pipAp
+vkCreateStreamDescriptorSurfaceGGP ppAp
+vkCreateSwapchainKHR ppAp
+vkCreateValidationCacheEXT ppAp
+vkCreateViSurfaceNN ppAp
+vkCreateVideoSessionKHR ppAp
+vkCreateVideoSessionParametersKHR ppAp
+vkCreateWaylandSurfaceKHR ppAp
+vkCreateWin32SurfaceKHR ppAp
+vkCreateXcbSurfaceKHR ppAp
+vkCreateXlibSurfaceKHR ppAp
+vkDebugMarkerSetObjectNameEXT pp
+vkDebugMarkerSetObjectTagEXT pp
+vkDebugReportMessageEXT piippipp
+vkDeferredOperationJoinKHR pp
+vkDestroyAccelerationStructureKHR ppA
+vkDestroyAccelerationStructureNV ppA
+* vkDestroyBuffer ppA
+vkDestroyBufferCollectionFUCHSIA ppA
+* vkDestroyBufferView ppA
+* vkDestroyCommandPool ppA
+vkDestroyCuFunctionNVX ppA
+vkDestroyCuModuleNVX ppA
+vkDestroyCudaFunctionNV ppA
+vkDestroyCudaModuleNV ppA
+vkDestroyDebugReportCallbackEXT ppA
+vkDestroyDebugUtilsMessengerEXT ppA
+vkDestroyDeferredOperationKHR ppA
+* vkDestroyDescriptorPool ppA
+* vkDestroyDescriptorSetLayout ppA
+* vkDestroyDescriptorUpdateTemplate ppA
+vkDestroyDescriptorUpdateTemplateKHR ppA
+* vkDestroyDevice pA
+* vkDestroyEvent ppA
+* vkDestroyFence ppA
+* vkDestroyFramebuffer ppA
+* vkDestroyImage ppA
+* vkDestroyImageView ppA
+vkDestroyIndirectCommandsLayoutEXT ppA
+vkDestroyIndirectCommandsLayoutNV ppA
+vkDestroyIndirectExecutionSetEXT ppA
+* vkDestroyInstance pA
+vkDestroyMicromapEXT ppA
+vkDestroyOpticalFlowSessionNV ppA
+* vkDestroyPipeline ppA
+vkDestroyPipelineBinaryKHR ppA
+* vkDestroyPipelineCache ppA
+* vkDestroyPipelineLayout ppA
+* vkDestroyPrivateDataSlot ppA
+vkDestroyPrivateDataSlotEXT ppA
+* vkDestroyQueryPool ppA
+* vkDestroyRenderPass ppA
+* vkDestroySampler ppA
+* vkDestroySamplerYcbcrConversion ppA
+vkDestroySamplerYcbcrConversionKHR ppA
+* vkDestroySemaphore ppA
+vkDestroySemaphoreSciSyncPoolNV ppA
+vkDestroyShaderEXT ppA
+* vkDestroyShaderModule ppA
+vkDestroySurfaceKHR ppA
+vkDestroySwapchainKHR ppA
+vkDestroyValidationCacheEXT ppA
+vkDestroyVideoSessionKHR ppA
+vkDestroyVideoSessionParametersKHR ppA
+* vkDeviceWaitIdle p
+vkDisplayPowerControlEXT ppp
+* vkEndCommandBuffer p
+* vkEnumerateDeviceExtensionProperties pppp
+* vkEnumerateDeviceLayerProperties ppp
+* vkEnumerateInstanceExtensionProperties ppp
+* vkEnumerateInstanceLayerProperties pp
+* vkEnumerateInstanceVersion p
+* vkEnumeratePhysicalDeviceGroups ppp
+vkEnumeratePhysicalDeviceGroupsKHR ppp
+vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR pippp
+* vkEnumeratePhysicalDevices ppp
+vkExportMetalObjectsEXT pp
+* vkFlushMappedMemoryRanges pip
+* vkFreeCommandBuffers ppip
+* vkFreeDescriptorSets ppip
+* vkFreeMemory ppA
+vkGetAccelerationStructureBuildSizesKHR pippp
+vkGetAccelerationStructureDeviceAddressKHR pp
+vkGetAccelerationStructureHandleNV pppp
+vkGetAccelerationStructureMemoryRequirementsNV ppp
+vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT ppp
+vkGetAndroidHardwareBufferPropertiesANDROID ppp
+vkGetBufferCollectionPropertiesFUCHSIA ppp
+* vkGetBufferDeviceAddress pp
+vkGetBufferDeviceAddressEXT pp
+vkGetBufferDeviceAddressKHR pp
+* vkGetBufferMemoryRequirements ppp
+* vkGetBufferMemoryRequirements2 ppp
+vkGetBufferMemoryRequirements2KHR ppp
+* vkGetBufferOpaqueCaptureAddress pp
+vkGetBufferOpaqueCaptureAddressKHR pp
+vkGetBufferOpaqueCaptureDescriptorDataEXT ppp
+vkGetCalibratedTimestampsEXT pippp
+vkGetCalibratedTimestampsKHR pippp
+vkGetCommandPoolMemoryConsumption pppp
+vkGetCudaModuleCacheNV pppp
+vkGetDeferredOperationMaxConcurrencyKHR pp
+vkGetDeferredOperationResultKHR pp
+vkGetDescriptorEXT pppp
+vkGetDescriptorSetHostMappingVALVE ppp
+vkGetDescriptorSetLayoutBindingOffsetEXT ppip
+vkGetDescriptorSetLayoutHostMappingInfoVALVE ppp
+vkGetDescriptorSetLayoutSizeEXT ppp
+* vkGetDescriptorSetLayoutSupport ppp
+vkGetDescriptorSetLayoutSupportKHR ppp
+vkGetDeviceAccelerationStructureCompatibilityKHR ppp
+* vkGetDeviceBufferMemoryRequirements ppp
+vkGetDeviceBufferMemoryRequirementsKHR ppp
+vkGetDeviceFaultInfoEXT ppp
+* vkGetDeviceGroupPeerMemoryFeatures piiip
+vkGetDeviceGroupPeerMemoryFeaturesKHR piiip
+vkGetDeviceGroupPresentCapabilitiesKHR pp
+vkGetDeviceGroupSurfacePresentModes2EXT ppp
+vkGetDeviceGroupSurfacePresentModesKHR ppp
+* vkGetDeviceImageMemoryRequirements ppp
+vkGetDeviceImageMemoryRequirementsKHR ppp
+* vkGetDeviceImageSparseMemoryRequirements pppp
+vkGetDeviceImageSparseMemoryRequirementsKHR pppp
+vkGetDeviceImageSubresourceLayoutKHR ppp
+* vkGetDeviceMemoryCommitment ppp
+* vkGetDeviceMemoryOpaqueCaptureAddress pp
+vkGetDeviceMemoryOpaqueCaptureAddressKHR pp
+vkGetDeviceMicromapCompatibilityEXT ppp
+* vkGetDeviceProcAddr pp
+* vkGetDeviceQueue piip
+* vkGetDeviceQueue2 ppp
+vkGetDeviceSubpassShadingMaxWorkgroupSizeHUAWEI ppp
+vkGetDisplayModeProperties2KHR pppp
+vkGetDisplayModePropertiesKHR pppp
+vkGetDisplayPlaneCapabilities2KHR ppp
+vkGetDisplayPlaneCapabilitiesKHR ppip
+vkGetDisplayPlaneSupportedDisplaysKHR pipp
+vkGetDrmDisplayEXT piip
+vkGetDynamicRenderingTilePropertiesQCOM ppp
+vkGetEncodedVideoSessionParametersKHR ppppp
+* vkGetEventStatus pp
+vkGetExecutionGraphPipelineNodeIndexAMDX pppp
+vkGetExecutionGraphPipelineScratchSizeAMDX ppp
+vkGetFaultData pippp
+vkGetFenceFdKHR ppp
+vkGetFenceSciSyncFenceNV ppp
+vkGetFenceSciSyncObjNV ppp
+* vkGetFenceStatus pp
+vkGetFenceWin32HandleKHR ppp
+vkGetFramebufferTilePropertiesQCOM pppp
+vkGetGeneratedCommandsMemoryRequirementsEXT ppp
+vkGetGeneratedCommandsMemoryRequirementsNV ppp
+vkGetImageDrmFormatModifierPropertiesEXT ppp
+* vkGetImageMemoryRequirements ppp
+* vkGetImageMemoryRequirements2 ppp
+vkGetImageMemoryRequirements2KHR ppp
+vkGetImageOpaqueCaptureDescriptorDataEXT ppp
+* vkGetImageSparseMemoryRequirements pppp
+* vkGetImageSparseMemoryRequirements2 pppp
+vkGetImageSparseMemoryRequirements2KHR pppp
+* vkGetImageSubresourceLayout pppp
+vkGetImageSubresourceLayout2EXT pppp
+vkGetImageSubresourceLayout2KHR pppp
+vkGetImageViewAddressNVX ppp
+vkGetImageViewHandleNVX pp
+vkGetImageViewOpaqueCaptureDescriptorDataEXT ppp
+* vkGetInstanceProcAddr pp
+vkGetLatencyTimingsNV ppp
+vkGetMemoryAndroidHardwareBufferANDROID ppp
+vkGetMemoryFdKHR ppp
+vkGetMemoryFdPropertiesKHR piip
+vkGetMemoryHostPointerPropertiesEXT pipp
+vkGetMemoryRemoteAddressNV ppp
+vkGetMemorySciBufNV ppp
+vkGetMemoryWin32HandleKHR ppp
+vkGetMemoryWin32HandleNV ppip
+vkGetMemoryWin32HandlePropertiesKHR pipp
+vkGetMemoryZirconHandleFUCHSIA ppp
+vkGetMemoryZirconHandlePropertiesFUCHSIA pipp
+vkGetMicromapBuildSizesEXT pipp
+vkGetPastPresentationTimingGOOGLE pppp
+vkGetPerformanceParameterINTEL pip
+vkGetPhysicalDeviceCalibrateableTimeDomainsEXT ppp
+vkGetPhysicalDeviceCalibrateableTimeDomainsKHR ppp
+vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR ppp
+vkGetPhysicalDeviceCooperativeMatrixPropertiesNV ppp
+vkGetPhysicalDeviceDirectFBPresentationSupportEXT pip
+vkGetPhysicalDeviceDisplayPlaneProperties2KHR ppp
+vkGetPhysicalDeviceDisplayPlanePropertiesKHR ppp
+vkGetPhysicalDeviceDisplayProperties2KHR ppp
+vkGetPhysicalDeviceDisplayPropertiesKHR ppp
+* vkGetPhysicalDeviceExternalBufferProperties ppp
+vkGetPhysicalDeviceExternalBufferPropertiesKHR ppp
+* vkGetPhysicalDeviceExternalFenceProperties ppp
+vkGetPhysicalDeviceExternalFencePropertiesKHR ppp
+vkGetPhysicalDeviceExternalImageFormatPropertiesNV piiiiiip
+vkGetPhysicalDeviceExternalMemorySciBufPropertiesNV pipp
+* vkGetPhysicalDeviceExternalSemaphoreProperties ppp
+vkGetPhysicalDeviceExternalSemaphorePropertiesKHR ppp
+* vkGetPhysicalDeviceFeatures pp
+* vkGetPhysicalDeviceFeatures2 pp
+vkGetPhysicalDeviceFeatures2KHR pp
+* vkGetPhysicalDeviceFormatProperties pip
+* vkGetPhysicalDeviceFormatProperties2 pip
+vkGetPhysicalDeviceFormatProperties2KHR pip
+vkGetPhysicalDeviceFragmentShadingRatesKHR ppp
+* vkGetPhysicalDeviceImageFormatProperties piiiiip
+* vkGetPhysicalDeviceImageFormatProperties2 ppp
+vkGetPhysicalDeviceImageFormatProperties2KHR ppp
+* vkGetPhysicalDeviceMemoryProperties pp
+* vkGetPhysicalDeviceMemoryProperties2 pp
+vkGetPhysicalDeviceMemoryProperties2KHR pp
+vkGetPhysicalDeviceMultisamplePropertiesEXT pip
+vkGetPhysicalDeviceOpticalFlowImageFormatsNV pppp
+vkGetPhysicalDevicePresentRectanglesKHR pppp
+* vkGetPhysicalDeviceProperties pp
+* vkGetPhysicalDeviceProperties2 pp
+vkGetPhysicalDeviceProperties2KHR pp
+vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR ppp
+* vkGetPhysicalDeviceQueueFamilyProperties ppp
+* vkGetPhysicalDeviceQueueFamilyProperties2 ppp
+vkGetPhysicalDeviceQueueFamilyProperties2KHR ppp
+vkGetPhysicalDeviceRefreshableObjectTypesKHR ppp
+vkGetPhysicalDeviceSciBufAttributesNV pp
+vkGetPhysicalDeviceSciSyncAttributesNV ppp
+vkGetPhysicalDeviceScreenPresentationSupportQNX pip
+* vkGetPhysicalDeviceSparseImageFormatProperties piiiiipp
+* vkGetPhysicalDeviceSparseImageFormatProperties2 pppp
+vkGetPhysicalDeviceSparseImageFormatProperties2KHR pppp
+vkGetPhysicalDeviceSupportedFramebufferMixedSamplesCombinationsNV ppp
+vkGetPhysicalDeviceSurfaceCapabilities2EXT ppp
+vkGetPhysicalDeviceSurfaceCapabilities2KHR ppp
+vkGetPhysicalDeviceSurfaceCapabilitiesKHR ppp
+vkGetPhysicalDeviceSurfaceFormats2KHR pppp
+vkGetPhysicalDeviceSurfaceFormatsKHR pppp
+vkGetPhysicalDeviceSurfacePresentModes2EXT pppp
+vkGetPhysicalDeviceSurfacePresentModesKHR pppp
+vkGetPhysicalDeviceSurfaceSupportKHR pipp
+* vkGetPhysicalDeviceToolProperties ppp
+vkGetPhysicalDeviceToolPropertiesEXT ppp
+vkGetPhysicalDeviceVideoCapabilitiesKHR ppp
+vkGetPhysicalDeviceVideoEncodeQualityLevelPropertiesKHR ppp
+vkGetPhysicalDeviceVideoFormatPropertiesKHR pppp
+vkGetPhysicalDeviceWaylandPresentationSupportKHR pip
+vkGetPhysicalDeviceWin32PresentationSupportKHR pi
+vkGetPhysicalDeviceXcbPresentationSupportKHR pipp
+vkGetPhysicalDeviceXlibPresentationSupportKHR pipp
+vkGetPipelineBinaryDataKHR ppppp
+* vkGetPipelineCacheData pppp
+vkGetPipelineExecutableInternalRepresentationsKHR pppp
+vkGetPipelineExecutablePropertiesKHR pppp
+vkGetPipelineExecutableStatisticsKHR pppp
+vkGetPipelineIndirectDeviceAddressNV pp
+vkGetPipelineIndirectMemoryRequirementsNV ppp
+vkGetPipelineKeyKHR ppp
+vkGetPipelinePropertiesEXT ppp
+* vkGetPrivateData pippp
+vkGetPrivateDataEXT pippp
+* vkGetQueryPoolResults ppiipppi
+vkGetQueueCheckpointData2NV ppp
+vkGetQueueCheckpointDataNV ppp
+vkGetRandROutputDisplayEXT pppp
+vkGetRayTracingCaptureReplayShaderGroupHandlesKHR ppiipp
+vkGetRayTracingShaderGroupHandlesKHR ppiipp
+vkGetRayTracingShaderGroupHandlesNV ppiipp
+vkGetRayTracingShaderGroupStackSizeKHR ppii
+vkGetRefreshCycleDurationGOOGLE ppp
+* vkGetRenderAreaGranularity ppp
+vkGetRenderingAreaGranularityKHR ppp
+vkGetSamplerOpaqueCaptureDescriptorDataEXT ppp
+vkGetScreenBufferPropertiesQNX ppp
+* vkGetSemaphoreCounterValue ppp
+vkGetSemaphoreCounterValueKHR ppp
+vkGetSemaphoreFdKHR ppp
+vkGetSemaphoreSciSyncObjNV ppp
+vkGetSemaphoreWin32HandleKHR ppp
+vkGetSemaphoreZirconHandleFUCHSIA ppp
+vkGetShaderBinaryDataEXT pppp
+vkGetShaderInfoAMD ppiipp
+vkGetShaderModuleCreateInfoIdentifierEXT ppp
+vkGetShaderModuleIdentifierEXT ppp
+vkGetSwapchainCounterEXT ppip
+vkGetSwapchainGrallocUsage2ANDROID piiipp
+vkGetSwapchainGrallocUsageANDROID piip
+vkGetSwapchainImagesKHR pppp
+vkGetSwapchainStatusKHR pp
+vkGetValidationCacheDataEXT pppp
+vkGetVideoSessionMemoryRequirementsKHR pppp
+vkGetWinrtDisplayNV pip
+vkImportFenceFdKHR pp
+vkImportFenceSciSyncFenceNV pp
+vkImportFenceSciSyncObjNV pp
+vkImportFenceWin32HandleKHR pp
+vkImportSemaphoreFdKHR pp
+vkImportSemaphoreSciSyncObjNV pp
+vkImportSemaphoreWin32HandleKHR pp
+vkImportSemaphoreZirconHandleFUCHSIA pp
+vkInitializePerformanceApiINTEL pp
+* vkInvalidateMappedMemoryRanges pip
+vkLatencySleepNV ppp
+* vkMapMemory ppppip
+vkMapMemory2KHR ppp
+* vkMergePipelineCaches ppip
+vkMergeValidationCachesEXT ppip
+vkQueueBeginDebugUtilsLabelEXT pp
+* vkQueueBindSparse pipp
+vkQueueEndDebugUtilsLabelEXT p
+vkQueueInsertDebugUtilsLabelEXT pp
+vkQueueNotifyOutOfBandNV pp
+vkQueuePresentKHR pp
+vkQueueSetPerformanceConfigurationINTEL pp
+vkQueueSignalReleaseImageANDROID pippp
+* vkQueueSubmit pipp
+* vkQueueSubmit2 pipp
+vkQueueSubmit2KHR pipp
+* vkQueueWaitIdle p
+vkRegisterDeviceEventEXT ppAp
+vkRegisterDisplayEventEXT pppAp
+vkReleaseCapturedPipelineDataKHR ppA
+vkReleaseDisplayEXT pp
+vkReleaseFullScreenExclusiveModeEXT pp
+vkReleasePerformanceConfigurationINTEL pp
+vkReleaseProfilingLockKHR p
+vkReleaseSwapchainImagesEXT pp
+* vkResetCommandBuffer pi
+* vkResetCommandPool ppi
+* vkResetDescriptorPool ppi
+* vkResetEvent pp
+* vkResetFences pip
+* vkResetQueryPool ppii
+vkResetQueryPoolEXT ppii
+vkSetBufferCollectionBufferConstraintsFUCHSIA ppp
+vkSetBufferCollectionImageConstraintsFUCHSIA ppp
+vkSetDebugUtilsObjectNameEXT pp
+vkSetDebugUtilsObjectTagEXT pp
+vkSetDeviceMemoryPriorityEXT ppf
+* vkSetEvent pp
+vkSetHdrMetadataEXT pipp
+vkSetLatencyMarkerNV ppp
+vkSetLatencySleepModeNV ppp
+vkSetLocalDimmingAMD ppi
+* vkSetPrivateData pippp
+vkSetPrivateDataEXT pippp
+* vkSignalSemaphore pp
+vkSignalSemaphoreKHR pp
+vkSubmitDebugUtilsMessageEXT piip
+vkTransitionImageLayoutEXT pip
+* vkTrimCommandPool ppi
+vkTrimCommandPoolKHR ppi
+vkUninitializePerformanceApiINTEL p
+* vkUnmapMemory pp
+vkUnmapMemory2KHR pp
+* vkUpdateDescriptorSetWithTemplate pppp
+vkUpdateDescriptorSetWithTemplateKHR pppp
+* vkUpdateDescriptorSets pipip
+vkUpdateIndirectExecutionSetPipelineEXT ppip
+vkUpdateIndirectExecutionSetShaderEXT ppip
+vkUpdateVideoSessionParametersKHR ppp
+* vkWaitForFences pipip
+vkWaitForPresentKHR pppp
+* vkWaitSemaphores ppp
+vkWaitSemaphoresKHR ppp
+vkWriteAccelerationStructuresPropertiesKHR pipippp
+vkWriteMicromapsPropertiesEXT pipippp

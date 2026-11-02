@@ -76,6 +76,7 @@ run petits-outils        python3 -B scripts/test-small-tools.py
 run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
+run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
 display() {
@@ -84,11 +85,20 @@ display() {
     else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run comptes              display python3 -B scripts/test-accounts.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
+# Paquets MSIX (#272) : runtime et hello.exe compilés requis.
+run paquets-msix         sh scripts/test-msix.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5
+fi
+# OpenGL (opengl32 + WGL) et Vulkan (vulkan-1) des .exe : rendu réel sur
+# l'affichage, sauté proprement sans pilote. Seulement si déjà compilé.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe ]; then
+    run opengl-vulkan-exe    display target/release/winlux target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe
 fi
 
 echo

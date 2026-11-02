@@ -29,6 +29,15 @@ deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
 blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
 `scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
 
+Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
+par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
+empreintes du block map vérifiées avant toute écriture, installation dans
+`C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
+protocoles, `LocalState`, identité de paquet à l'exécution
+(`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
+Pas encore : la signature `AppxSignature.p7x` (#235), les paquets de ressources
+des bundles, et les paquets 32 bits (#232). Test : `scripts/test-msix.sh`.
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -210,6 +219,19 @@ traduit `VK_KHR_win32_surface` en surface Xlib. Les conventions d'appel
 changent (Windows x64 vers System V), il faut donc des thunks générés.
 
 Ampleur : **M** pour chacun. Suivi : #233.
+
+**Fait (novembre 2026).** `opengl32.dll` et `vulkan-1.dll` existent
+(`runtime/src/dlls/opengl32.rs`, `vulkan1.rs`). Un pont générique
+(`hostcall.rs`) traduit chaque appel Windows x64 en appel System V d'après la
+signature de la fonction, tirée des registres Khronos (`sigs/gl.txt` : 3 295
+fonctions OpenGL, `sigs/vk.txt` : 716 commandes Vulkan, regénérés par
+`scripts/gen-host-signatures.py`). WGL est relié à GLX sur la fenêtre X11 du
+HWND (formats de pixel, `WGL_ARB_create_context`, `WGL_ARB_pixel_format`,
+`WGL_EXT_swap_control`), `ChoosePixelFormat` / `SwapBuffers` sont dans gdi32.
+Côté Vulkan, `VK_KHR_win32_surface` devient une surface Xlib, les rappels de
+débogage sont enveloppés et les allocateurs du programme remplacés par celui
+du pilote. Vérifié par `gl_vk_suite.exe` (OpenGL 4.5 Mesa, Vulkan lavapipe).
+Reste : `wglUseFontBitmaps` et le rendu dans un bitmap (`PFD_DRAW_TO_BITMAP`).
 
 ### 5. Bibliothèque C++ de Visual Studio et dossier System32
 
