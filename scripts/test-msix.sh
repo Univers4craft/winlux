@@ -6,8 +6,13 @@
 #   - l'entrée de « Applications installées » et le dossier LocalState ;
 #   - que le programme installé se lance ;
 #   - le refus par défaut d'un éditeur non vérifié (non signé, ou signé
-#     sans chaîne vérifiée), code 3, et l'installation après confirmation
-#     (--allow-unverified) ; le refus d'un certificat d'un autre éditeur ;
+#     par une autorité inconnue), code 3, et l'installation après
+#     confirmation (--allow-unverified) ;
+#   - avec la commande openssl (#235) : l'installation sans question d'un
+#     paquet signé par une autorité reconnue (SSL_CERT_FILE), et le refus
+#     sans recours d'une signature au nom d'un autre éditeur, d'une
+#     signature fausse, d'un paquet modifié après signature et d'une
+#     signature sans signataire ;
 #   - le refus d'un paquet dont un fichier a été modifié ;
 #   - le choix du paquet x64 dans un bundle ;
 #   - la désinstallation complète.
@@ -28,7 +33,7 @@ export HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/
 export WINLUX_HOME="$home" WINLUX_DRIVE_C="$home" WINLUX_GUI=headless
 
 python3 -I - "$hello" "$work" <<'PY'
-import base64, hashlib, sys, zipfile
+import base64, hashlib, io, shutil, struct, subprocess, sys, zipfile, zlib
 hello, work = sys.argv[1], sys.argv[2]
 manifest = """<?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -52,7 +57,8 @@ def der(tag, body):
     n = len(body)
     head = bytes([n]) if n < 0x80 else bytes([0x82, n >> 8, n & 0xFF])
     return bytes([tag]) + head + body
-def p7x(cn):
+def fake_p7x(cn):
+    # Certificat seul, sans signataire : refusé.
     cn_oid = der(0x06, b"\x55\x04\x03")
     name = lambda v: der(0x30, der(0x31, der(0x30, cn_oid + der(0x0C, v.encode()))))
     tbs = der(0xA0, der(0x02, b"\x02")) + der(0x02, b"\x01") + der(0x30, b"") + name("Autorite de test") \
@@ -61,7 +67,7 @@ def p7x(cn):
     signed = der(0x02, b"\x01") + der(0x31, b"") + der(0x30, b"") + der(0xA0, cert) + der(0x31, b"")
     oid = der(0x06, bytes([0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]))
     return b"PKCX" + der(0x30, oid + der(0xA0, der(0x30, signed)))
-def package(path, arch, tamper=False, signer=None):
+def contents(arch):
     files = {
         "AppxManifest.xml": manifest.replace("ARCH", arch).encode(),
         "bin/hello.exe": open(hello, "rb").read(),
@@ -75,18 +81,75 @@ def package(path, arch, tamper=False, signer=None):
             blocks.append('<Block Hash="%s" Size="1"/>' % h)
         blocks.append("</File>")
     blocks.append("</BlockMap>")
+    return files, "\n".join(blocks).encode()
+def package(path, arch, tamper=False, signer=None):
+    files, blockmap = contents(arch)
     if tamper:
         data = bytearray(files["bin/hello.exe"]); data[100] ^= 0xFF; files["bin/hello.exe"] = bytes(data)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in files.items():
             z.writestr(name.replace(" ", "%20"), data)
-        z.writestr("AppxBlockMap.xml", "\n".join(blocks))
+        z.writestr("AppxBlockMap.xml", blockmap)
         z.writestr("[Content_Types].xml", "<Types/>")
         if signer:
-            z.writestr("AppxSignature.p7x", p7x(signer))
+            z.writestr("AppxSignature.p7x", fake_p7x(signer))
+
+# Vraie signature (Authenticode CMS) avec la commande openssl : condensats
+# APPX du paquet non signé, puis AppxSignature.p7x ajouté en dernière
+# entrée, comme le fait l'outil de signature de Windows.
+def unsigned(arch, blockmap_override=None):
+    files, blockmap = contents(arch)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in files.items():
+            z.writestr(name.replace(" ", "%20"), data)
+        z.writestr("AppxBlockMap.xml", blockmap_override or blockmap)
+        z.writestr("[Content_Types].xml", "<Types/>")
+    return buf.getvalue(), blockmap
+def openssl(*args):
+    subprocess.run(["openssl", *args], check=True, cwd=work, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def make_keys():
+    open(work + "/leaf.ext", "w").write("basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=codeSigning\n")
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=Autorite de test Winlux", "-days", "2",
+            "-keyout", "ca.key", "-out", "ca.pem", "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign")
+    for leaf, cn in (("leaf", "Winlux Test"), ("autre", "Autre editeur")):
+        openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + cn, "-keyout", leaf + ".key", "-out", leaf + ".csr")
+        openssl("x509", "-req", "-in", leaf + ".csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+                "-days", "2", "-out", leaf + ".pem", "-extfile", "leaf.ext")
+def signed(path, leaf="leaf", blockmap_signed=None, corrupt=False):
+    data, blockmap = unsigned("x64")
+    eocd = data.rindex(b"PK\x05\x06")
+    entries, cd_size, cd_off = struct.unpack("<HII", data[eocd + 10:eocd + 20])
+    sha = lambda b: hashlib.sha256(b).digest()
+    digests = b"APPX" + b"AXPC" + sha(data[:cd_off]) + b"AXCD" + sha(data[cd_off:]) \
+        + b"AXCT" + sha(b"<Types/>") + b"AXBM" + sha(blockmap_signed or blockmap)
+    sha256 = der(0x30, der(0x06, bytes.fromhex("608648016503040201")) + der(0x05, b""))
+    spc = der(0x30, der(0x30, der(0x06, bytes.fromhex("2b060104018237021e"))) + der(0x30, sha256 + der(0x04, digests)))
+    open(work + "/spc.der", "wb").write(spc)
+    openssl("cms", "-sign", "-binary", "-nodetach", "-outform", "DER", "-md", "sha256",
+            "-econtent_type", "1.3.6.1.4.1.311.2.1.4", "-in", "spc.der", "-signer", leaf + ".pem",
+            "-inkey", leaf + ".key", "-certfile", "ca.pem", "-nosmimecap", "-out", "sig.der")
+    sig = bytearray(b"PKCX" + open(work + "/sig.der", "rb").read())
+    if corrupt:
+        sig[-1] ^= 0x01  # dernier octet de la valeur de signature
+    name = b"AppxSignature.p7x"
+    crc = zlib.crc32(sig)
+    local = struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, 0, 0, 0, 0x21, crc, len(sig), len(sig), len(name), 0) + name + sig
+    central = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 20, 20, 0, 0, 0, 0x21, crc, len(sig), len(sig),
+                          len(name), 0, 0, 0, 0, 0, cd_off) + name
+    cd = data[cd_off:cd_off + cd_size] + central
+    end = struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, entries + 1, entries + 1, len(cd), cd_off + len(local), 0)
+    open(path, "wb").write(data[:cd_off] + local + cd + end)
+
 package(work + "/test.msix", "x64")
-package(work + "/signe.msix", "x64", signer="Winlux Test")
-package(work + "/autre-editeur.msix", "x64", signer="Quelqu'un d'autre")
+package(work + "/sans-signataire.msix", "x64", signer="Winlux Test")
+if shutil.which("openssl"):
+    make_keys()
+    signed(work + "/signe.msix")
+    signed(work + "/autre-editeur.msix", leaf="autre")
+    signed(work + "/falsifie.msix", corrupt=True)
+    signed(work + "/modifie-apres.msix", blockmap_signed=b"<BlockMap/>")
 package(work + "/altere.msix", "x64", tamper=True)
 package(work + "/inner_x64.msix", "x64")
 package(work + "/inner_x86.msix", "x86")
@@ -110,12 +173,6 @@ set -e
 test "$rc" -eq 3 || { cat "$work/nonsigne.txt"; fail "paquet non signé : code $rc au lieu de 3"; }
 grep -q "Éditeur non vérifié : ce paquet n'est pas signé" "$work/nonsigne.txt" || { cat "$work/nonsigne.txt"; fail "avertissement « non signé » absent"; }
 nothing_installed || fail "un paquet non signé a été installé sans confirmation"
-set +e
-"$runtime" --setup "$work/signe.msix" >"$work/signe.txt" 2>&1; rc=$?
-set -e
-test "$rc" -eq 3 || { cat "$work/signe.txt"; fail "paquet signé non vérifié : code $rc au lieu de 3"; }
-grep -q "signé au nom de « CN=Winlux Test »" "$work/signe.txt" || { cat "$work/signe.txt"; fail "avertissement « chaîne non vérifiée » absent"; }
-nothing_installed || fail "un paquet signé non vérifié a été installé sans confirmation"
 # Double-clic sans affichage pour confirmer : refus, rien d'installé.
 set +e
 env -u DISPLAY -u WAYLAND_DISPLAY WINLUX_RUNTIME="$runtime" XDG_STATE_HOME="$work/state" \
@@ -123,15 +180,48 @@ env -u DISPLAY -u WAYLAND_DISPLAY WINLUX_RUNTIME="$runtime" XDG_STATE_HOME="$wor
 set -e
 test "$rc" -eq 3 || { cat "$work/open.txt"; fail "double-clic sans confirmation : code $rc au lieu de 3"; }
 nothing_installed || fail "le double-clic a installé un paquet non vérifié sans confirmation"
-echo "msix : éditeur non vérifié refusé par défaut (non signé, signé, double-clic)"
+echo "msix : éditeur non vérifié refusé par défaut (non signé, double-clic)"
 
-# Certificat d'un autre éditeur : refusé même avec confirmation.
-if "$runtime" --setup --allow-unverified "$work/autre-editeur.msix" >"$work/autre.txt" 2>&1; then
-    fail "un paquet signé par un autre éditeur a été installé"
+refused() { # paquet, motif attendu : refus même avec confirmation
+    if "$runtime" --setup --allow-unverified "$work/$1" >"$work/refus.txt" 2>&1; then
+        fail "$1 a été installé"
+    fi
+    grep -q "signature refusée" "$work/refus.txt" && grep -q "$2" "$work/refus.txt" \
+        || { cat "$work/refus.txt"; fail "$1 : message « $2 » absent"; }
+    nothing_installed || fail "$1 a laissé des fichiers"
+}
+refused sans-signataire.msix "AppxSignature.p7x illisible"
+echo "msix : signature sans signataire refusée"
+
+if test -f "$work/signe.msix"; then
+    mkdir -p "$work/aucune-autorite"
+    : >"$work/aucune-autorite.pem"
+    # Autorité inconnue du système : éditeur non vérifié, code 3.
+    set +e
+    SSL_CERT_FILE="$work/aucune-autorite.pem" SSL_CERT_DIR="$work/aucune-autorite" \
+        "$runtime" --setup "$work/signe.msix" >"$work/signe.txt" 2>&1; rc=$?
+    set -e
+    test "$rc" -eq 3 || { cat "$work/signe.txt"; fail "autorité inconnue : code $rc au lieu de 3"; }
+    grep -q "signé au nom de « CN=Winlux Test », mais son certificat ne vient pas d'une autorité reconnue" "$work/signe.txt" \
+        || { cat "$work/signe.txt"; fail "avertissement « autorité inconnue » absent"; }
+    nothing_installed || fail "un paquet d'une autorité inconnue a été installé sans confirmation"
+    # Autorité reconnue : installé sans question.
+    SSL_CERT_FILE="$work/ca.pem" SSL_CERT_DIR="$work/aucune-autorite" \
+        "$runtime" --setup "$work/signe.msix" >"$work/verifie.txt" 2>&1 \
+        || { cat "$work/verifie.txt"; fail "paquet signé par une autorité reconnue refusé"; }
+    full=$("$runtime" --setup --list | awk -F '\t' '$4 == "msix" { print $1 }')
+    test -n "$full" || fail "paquet vérifié absent de --list"
+    "$runtime" --setup --uninstall "$full" || fail "désinstallation du paquet vérifié échouée"
+    echo "msix : signature vérifiée, installé sans question ; autorité inconnue à confirmer"
+    export SSL_CERT_FILE="$work/ca.pem" SSL_CERT_DIR="$work/aucune-autorite"
+    refused autre-editeur.msix "au nom de « CN=Autre editeur » et non de l'éditeur"
+    refused falsifie.msix "signature fausse"
+    refused modifie-apres.msix "AppxBlockMap.xml a été modifié après la signature"
+    unset SSL_CERT_FILE SSL_CERT_DIR
+    echo "msix : autre éditeur, signature fausse, paquet modifié après signature refusés"
+else
+    echo "msix : commande openssl absente, vraies signatures non testées"
 fi
-grep -q "signature refusée" "$work/autre.txt" || { cat "$work/autre.txt"; fail "message « signature refusée » absent"; }
-nothing_installed || fail "un paquet d'un autre éditeur a laissé des fichiers"
-echo "msix : certificat d'un autre éditeur refusé"
 
 # Paquet modifié : refusé, rien d'installé.
 if "$runtime" --setup --allow-unverified "$work/altere.msix" >"$work/altere.txt" 2>&1; then

@@ -16,6 +16,46 @@ use winlux_testexe::*;
 
 #[link(name = "crypt32", kind = "raw-dylib")]
 extern "system" {
+    fn CertOpenStore(p: usize, enc: u32, prov: usize, f: u32, para: *const c_void) -> usize;
+    fn CryptQueryObject(
+        ty: u32,
+        obj: *const c_void,
+        content: u32,
+        format: u32,
+        f: u32,
+        enc: *mut u32,
+        ctype: *mut u32,
+        ftype: *mut u32,
+        store: *mut usize,
+        msg: *mut usize,
+        ctx: *mut *const CertContext,
+    ) -> i32;
+    fn CertAddCertificateContextToStore(
+        h: usize,
+        c: *const CertContext,
+        disp: u32,
+        out: *mut *const CertContext,
+    ) -> i32;
+    fn CertCreateCertificateChainEngine(config: *const u8, out: *mut usize) -> i32;
+    fn CertFreeCertificateChainEngine(e: usize);
+    fn CryptProtectData(
+        input: *const DataBlob,
+        desc: *const u16,
+        entropy: *const DataBlob,
+        reserved: usize,
+        prompt: usize,
+        flags: u32,
+        out: *mut DataBlob,
+    ) -> i32;
+    fn CryptUnprotectData(
+        input: *const DataBlob,
+        desc: *mut *mut u16,
+        entropy: *const DataBlob,
+        reserved: usize,
+        prompt: usize,
+        flags: u32,
+        out: *mut DataBlob,
+    ) -> i32;
     fn CertOpenSystemStoreW(prov: usize, name: *const u16) -> usize;
     fn CertCloseStore(h: usize, flags: u32) -> i32;
     fn CertEnumCertificatesInStore(h: usize, prev: *const CertContext) -> *const CertContext;
@@ -71,6 +111,23 @@ extern "system" {
     fn CryptGetHashParam(h: usize, p: u32, out: *mut u8, n: *mut u32, f: u32) -> i32;
     fn CryptDestroyHash(h: usize) -> i32;
     fn CryptReleaseContext(h: usize, f: u32) -> i32;
+    fn CryptImportKey(prov: usize, d: *const u8, n: u32, k: usize, f: u32, out: *mut usize) -> i32;
+    fn CryptEncrypt(k: usize, h: usize, fin: i32, f: u32, d: *mut u8, n: *mut u32, cap: u32)
+        -> i32;
+    fn CryptDecrypt(k: usize, h: usize, fin: i32, f: u32, d: *mut u8, n: *mut u32) -> i32;
+    fn CryptDestroyKey(k: usize) -> i32;
+    fn CryptGenKey(prov: usize, alg: u32, f: u32, out: *mut usize) -> i32;
+    fn CryptExportKey(k: usize, e: usize, t: u32, f: u32, d: *mut u8, n: *mut u32) -> i32;
+    fn CryptSignHashW(h: usize, spec: u32, d: *const u16, f: u32, s: *mut u8, n: *mut u32) -> i32;
+    fn CryptVerifySignatureW(
+        h: usize,
+        s: *const u8,
+        n: u32,
+        k: usize,
+        d: *const u16,
+        f: u32,
+    ) -> i32;
+    fn CryptGetUserKey(prov: usize, spec: u32, out: *mut usize) -> i32;
 }
 
 #[link(name = "secur32", kind = "raw-dylib")]
@@ -310,7 +367,268 @@ unsafe fn hashes() {
         "condensat SHA-256 exact"
     );
     CryptDestroyHash(h);
+
+    // DES par CryptImportKey/CryptEncrypt, comme le NTLM de libcurl.
+    let mut blob = [0u8; 20];
+    blob[0] = 8; // PLAINTEXTKEYBLOB
+    blob[1] = 2;
+    blob[4..8].copy_from_slice(&0x6601u32.to_le_bytes());
+    blob[8] = 8;
+    blob[12..].copy_from_slice(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+    let mut key = 0usize;
+    check!(
+        CryptImportKey(prov, blob.as_ptr(), 20, 0, 0, &mut key) != 0,
+        "CryptImportKey (DES)"
+    );
+    let mut block = *b"Now is t";
+    let mut n = 8u32;
+    CryptEncrypt(key, 0, 0, 0, block.as_mut_ptr(), &mut n, 8);
+    check!(
+        block == [0x3f, 0xa4, 0x0e, 0x8a, 0x98, 0x4d, 0x48, 0x15],
+        "CryptEncrypt DES exact"
+    );
+    CryptDestroyKey(key);
+    // AES-256 avec bourrage, aller-retour.
+    let mut blob = [0u8; 44];
+    blob[0] = 8;
+    blob[1] = 2;
+    blob[4..8].copy_from_slice(&0x6610u32.to_le_bytes());
+    blob[8] = 32;
+    for (i, b) in blob[12..].iter_mut().enumerate() {
+        *b = i as u8;
+    }
+    check!(
+        CryptImportKey(prov, blob.as_ptr(), 44, 0, 0, &mut key) != 0,
+        "CryptImportKey (AES-256)"
+    );
+    let mut buf = [0u8; 32];
+    buf[..6].copy_from_slice(b"Winlux");
+    let mut n = 6u32;
+    let enc = CryptEncrypt(key, 0, 1, 0, buf.as_mut_ptr(), &mut n, 32);
+    check!(enc != 0 && n == 16, "CryptEncrypt AES (bourrage PKCS#5)");
+    let dec = CryptDecrypt(key, 0, 1, 0, buf.as_mut_ptr(), &mut n);
+    check!(
+        dec != 0 && n == 6 && &buf[..6] == b"Winlux",
+        "CryptDecrypt AES"
+    );
+    CryptDestroyKey(key);
     CryptReleaseContext(prov, 0);
+}
+
+/// Vérification « à la libcurl » avec CURLOPT_CAINFO : fichier d'autorités
+/// chargé par CryptQueryObject, moteur aux racines exclusives, chaîne du
+/// certificat du serveur et tous ses noms DNS.
+unsafe fn curl_cainfo(ctx: *const SecHandle) {
+    let mut cert: *const CertContext = null();
+    check!(
+        QueryContextAttributesW(ctx, 0x53, (&mut cert as *mut *const CertContext).cast()) == 0
+            && !cert.is_null(),
+        "certificat du serveur (SECPKG_ATTR_REMOTE_CERT_CONTEXT)"
+    );
+    if cert.is_null() {
+        return;
+    }
+    let mut names = [0u16; 128];
+    let n = CertGetNameStringW(cert, 6, 0x0001_0002, null(), names.as_mut_ptr(), 128);
+    check!(
+        n >= 11 && names[..9] == "localhost".encode_utf16().collect::<Ar<9>>().0,
+        "noms DNS du serveur (CERT_NAME_SEARCH_ALL_NAMES_FLAG)"
+    );
+    let mut path = [0u16; 300];
+    path[0] = b'Z' as u16;
+    path[1] = b':' as u16;
+    let len = GetEnvironmentVariableW(
+        "WINLUX_TLS_CA\0"
+            .encode_utf16()
+            .collect::<Ar<14>>()
+            .0
+            .as_ptr(),
+        path.as_mut_ptr().add(2),
+        290,
+    );
+    if len == 0 {
+        out(b"  (WINLUX_TLS_CA absent : CURLOPT_CAINFO saute)\n");
+        CertFreeCertificateContext(cert);
+        return;
+    }
+    let store = CertOpenStore(2, 0, 0, 0x2000, null());
+    let mut ca: *const CertContext = null();
+    let mut content = 0u32;
+    let q = CryptQueryObject(
+        1,
+        path.as_ptr().cast(),
+        2,
+        0x3fe,
+        0,
+        null_mut(),
+        &mut content,
+        null_mut(),
+        null_mut(),
+        null_mut(),
+        &mut ca,
+    );
+    check!(q != 0 && content == 1, "CryptQueryObject (fichier PEM)");
+    if q != 0 {
+        CertAddCertificateContextToStore(store, ca, 3, null_mut());
+        CertFreeCertificateContext(ca);
+    }
+    let mut config = [0u8; 88];
+    config[0] = 88;
+    config[64..72].copy_from_slice(&store.to_le_bytes());
+    config[80] = 1;
+    let mut engine = 0usize;
+    check!(
+        CertCreateCertificateChainEngine(config.as_ptr(), &mut engine) != 0,
+        "CertCreateCertificateChainEngine (hExclusiveRoot)"
+    );
+    let para = [0u8; 32];
+    let mut chain: *const ChainContext = null();
+    let ok = CertGetCertificateChain(
+        engine,
+        cert,
+        null(),
+        (*cert).store,
+        para.as_ptr().cast(),
+        0x2000_0000,
+        null(),
+        &mut chain,
+    );
+    check!(
+        ok != 0 && !chain.is_null() && (*chain).error & !1 == 0,
+        "chaîne de confiance par le fichier d'autorités"
+    );
+    if !chain.is_null() {
+        CertFreeCertificateChain(chain);
+    }
+    CertFreeCertificateChainEngine(engine);
+    CertCloseStore(store, 0);
+    CertFreeCertificateContext(cert);
+}
+
+#[repr(C)]
+struct DataBlob {
+    cb: u32,
+    pb: *mut u8,
+}
+
+/// DPAPI : un secret protégé pour le compte se relit, pas avec une autre entropie.
+unsafe fn protected_data() {
+    out(b"\n-- Protection de donnees (DPAPI) --\n");
+    let secret = *b"jeton d'acces";
+    let input = DataBlob {
+        cb: secret.len() as u32,
+        pb: secret.as_ptr() as *mut u8,
+    };
+    let mut salt = *b"sel";
+    let entropy = DataBlob {
+        cb: 3,
+        pb: salt.as_mut_ptr(),
+    };
+    let mut blob = DataBlob {
+        cb: 0,
+        pb: null_mut(),
+    };
+    check!(
+        CryptProtectData(&input, null(), &entropy, 0, 0, 0, &mut blob) != 0 && blob.cb > 13,
+        "CryptProtectData"
+    );
+    let mut back = DataBlob {
+        cb: 0,
+        pb: null_mut(),
+    };
+    let ok = CryptUnprotectData(&blob, null_mut(), &entropy, 0, 0, 0, &mut back);
+    check!(
+        ok != 0 && back.cb == 13 && core::slice::from_raw_parts(back.pb, 13) == secret,
+        "CryptUnprotectData rend le secret"
+    );
+    check!(
+        CryptUnprotectData(&blob, null_mut(), null(), 0, 0, 0, &mut back) == 0,
+        "autre entropie refusée"
+    );
+}
+
+static mut RSA_BUF: [u8; 2048] = [0; 2048];
+
+/// Clés RSA : génération dans un conteneur, signature SHA-256, export de
+/// la clé publique, vérification, chiffrement OAEP.
+unsafe fn rsa_keys() {
+    out(b"\n-- Cles RSA (CryptoAPI) --\n");
+    let name: Ar<32> = "Suite HTTPS\0".encode_utf16().collect();
+    let mut prov = 0usize;
+    // Conteneur neuf (on efface celui d'un passage précédent).
+    CryptAcquireContextW(&mut prov, name.0.as_ptr(), null(), 24, 0x10);
+    check!(
+        CryptAcquireContextW(&mut prov, name.0.as_ptr(), null(), 24, 0x8) != 0,
+        "CryptAcquireContext CRYPT_NEWKEYSET"
+    );
+    let mut sk = 0usize;
+    check!(
+        CryptGenKey(prov, 2, 1024 << 16, &mut sk) != 0,
+        "CryptGenKey AT_SIGNATURE"
+    );
+    let mut h = 0usize;
+    CryptCreateHash(prov, 0x800c, 0, 0, &mut h);
+    CryptHashData(h, b"abc".as_ptr(), 3, 0);
+    let buf = &mut *core::ptr::addr_of_mut!(RSA_BUF);
+    let mut n = 256u32;
+    check!(
+        CryptSignHashW(h, 2, null(), 0, buf.as_mut_ptr(), &mut n) != 0 && n == 128,
+        "CryptSignHash SHA-256"
+    );
+    let (sig, rest) = buf.split_at_mut(256);
+    let mut pn = 1024u32;
+    check!(
+        CryptExportKey(sk, 0, 6, 0, rest.as_mut_ptr(), &mut pn) != 0 && &rest[8..12] == b"RSA1",
+        "CryptExportKey PUBLICKEYBLOB"
+    );
+    let mut pk = 0usize;
+    check!(
+        CryptImportKey(prov, rest.as_ptr(), pn, 0, 0, &mut pk) != 0
+            && CryptVerifySignatureW(h, sig.as_ptr(), n, pk, null(), 0) != 0,
+        "CryptVerifySignature"
+    );
+    sig[0] ^= 1;
+    check!(
+        CryptVerifySignatureW(h, sig.as_ptr(), n, pk, null(), 0) == 0,
+        "signature alteree refusee"
+    );
+    CryptDestroyKey(sk);
+    CryptDestroyKey(pk);
+    CryptDestroyHash(h);
+    CryptReleaseContext(prov, 0);
+
+    // La clé est restée dans le conteneur.
+    check!(
+        CryptAcquireContextW(&mut prov, name.0.as_ptr(), null(), 24, 0) != 0
+            && CryptGetUserKey(prov, 2, &mut sk) != 0,
+        "CryptGetUserKey retrouve la cle"
+    );
+    let mut xk = 0usize;
+    let mut ok = CryptGenKey(prov, 1, (1024 << 16) | 1, &mut xk) != 0;
+    let msg = b"cle de session";
+    buf[..msg.len()].copy_from_slice(msg);
+    let mut len = msg.len() as u32;
+    ok = ok && CryptEncrypt(xk, 0, 1, 0x40, buf.as_mut_ptr(), &mut len, 256) != 0 && len == 128;
+    ok = ok
+        && CryptDecrypt(xk, 0, 1, 0x40, buf.as_mut_ptr(), &mut len) != 0
+        && &buf[..len as usize] == msg;
+    check!(ok, "chiffrement RSA-OAEP aller-retour");
+    CryptDestroyKey(sk);
+    CryptDestroyKey(xk);
+    CryptReleaseContext(prov, 0);
+    CryptAcquireContextW(&mut prov, name.0.as_ptr(), null(), 24, 0x10);
+}
+
+/// Petit tableau de taille fixe rempli depuis un itérateur (no_std).
+struct Ar<const N: usize>([u16; N]);
+impl<const N: usize> core::iter::FromIterator<u16> for Ar<N> {
+    fn from_iter<I: IntoIterator<Item = u16>>(it: I) -> Self {
+        let mut a = [0u16; N];
+        for (d, s) in a.iter_mut().zip(it) {
+            *d = s;
+        }
+        Ar(a)
+    }
 }
 
 /// Port décimal de WINLUX_TLS_PORT, ou 0.
@@ -480,6 +798,7 @@ unsafe fn schannel() {
         QueryContextAttributesW(&ctx, 4, sizes.as_mut_ptr().cast()) == 0,
         "tailles du flux"
     );
+    curl_cainfo(&ctx);
 
     let req = b"GET / HTTP/1.0\r\n\r\n";
     let mut msg = [0u8; 512];
@@ -609,6 +928,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         certificates();
         hashes();
+        protected_data();
+        rsa_keys();
         schannel();
         if FAILURES == 0 {
             out(b"\nTous les tests HTTPS passent.\n");

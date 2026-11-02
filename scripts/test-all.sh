@@ -54,11 +54,15 @@ for page in sorted(pathlib.Path("wiki").glob("*.md")):
 sys.exit(bad)
 EOF
 run catalogue-natif      python3 -B scripts/test-native-catalogue.py
+run boutiques-logiciels  python3 -B scripts/test-store-catalogs.py
 run installateur-oobe    python3 -B scripts/test-installer-oobe.py
 run installation-auto    python3 -B scripts/test-autoinstall.py
 run partitionnement      python3 -B scripts/test-installer-partitioning.py
 run signalement          python3 -B scripts/test-report.py
 run sources-gpl          python3 -B scripts/test-gpl-sources.py
+run identite-image      python3 -B scripts/test-image-identity.py
+run amorcage-3-chemins  python3 -B scripts/test-boot-paths.py
+run liste-mises-a-jour  python3 -B scripts/test-update-listing.py
 run verrouillage         python3 -B scripts/test-lock.py
 run autorisations        python3 -B scripts/test-permission.py
 run uac                  python3 -B scripts/test-uac.py
@@ -79,7 +83,18 @@ run petits-outils        python3 -B scripts/test-small-tools.py
 run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
+run pilotes-materiel     python3 -B scripts/test-drivers.py
+run clavier-souris       python3 -B scripts/test-input-devices.py
 run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
+# Bureau en 1080p, 1440p et 4K (#29) : un écran virtuel par résolution.
+resolutions() {
+    command -v xvfb-run >/dev/null 2>&1 || { echo "xvfb-run absent : test sauté"; return 0; }
+    for size in 1920x1080 2560x1440 3840x2160; do
+        xvfb-run -a -s "-screen 0 ${size}x24" python3 -B scripts/test-resolutions.py build/captures || return 1
+    done
+}
+run resolutions-bureau   resolutions
+
 # Vrais jeux (docs/VRAIS-JEUX.md) : chaque import système de SuperTuxKart et de
 # Warzone 2100 est fourni ; puis leurs fonctions, si les tests MinGW sont construits.
 run jeux-imports         python3 -B scripts/test-games-imports.py
@@ -96,8 +111,20 @@ display() {
     else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+run pilotes-page         display python3 -B scripts/test-drivers.py
+run clavier-tactile      display python3 -B scripts/test-input-devices.py
+run clavier-connexion    display python3 -B scripts/test-lock-osk.py
+run clavier-installateur display python3 -B scripts/test-installer-osk.py
+run clavier-installateur-branche display python3 -B scripts/test-installer-osk.py --clavier
+run accent-prisme        python3 -B scripts/test-default-accent.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run clavier-menus       display python3 -B scripts/test-keyboard-nav.py start
+run clavier-panneaux    display python3 -B scripts/test-keyboard-nav.py quick
 run comptes              display python3 -B scripts/test-accounts.py
+run sans-marque-ms       display python3 -B scripts/test-no-microsoft-branding.py
+run bienvenue            display python3 -B scripts/test-welcome.py
+run afficher-dossier     python3 -B scripts/test-filemanager1.py
+run page-alimentation    display python3 -B scripts/test-power-page.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
 # Paquets MSIX (#272) : runtime et hello.exe compilés requis.
@@ -108,6 +135,9 @@ run entree-brute         sh scripts/test-rawinput.sh
 run ports-serie          sh scripts/test-serial.sh
 run arbre-peripheriques  sh scripts/test-devnodes.sh
 run winusb               sh scripts/test-winusb.sh
+run api-chromium         sh scripts/test-chromium-api.sh
+run d3d11-rendu          sh scripts/test-d3d11-rendu.sh
+run heritage-handles     sh scripts/test-heritage.sh
 run definition-ecran     sh scripts/test-display-mode.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then

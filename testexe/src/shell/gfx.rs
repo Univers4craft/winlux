@@ -904,7 +904,6 @@ pub enum Glyph {
     Mail,
     Calc,
     Exe,
-    Edge,
     Home,
     Desktop,
     Download,
@@ -1470,45 +1469,6 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 rgb(0x60, 0x6A, 0x78),
             );
             glyph(hdc, b, f, Glyph::Start, x + s / 3, y + s * 2 / 5, s / 3);
-        }
-        Glyph::Edge => {
-            ellipse(hdc, b, x, y, x + s, y + s, rgb(0x0B, 0x53, 0x9F));
-            ellipse(
-                hdc,
-                b,
-                x + s / 16,
-                y + s / 3,
-                x + s * 15 / 16,
-                y + s * 31 / 32,
-                rgb(0x1F, 0xB5, 0x7E),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s / 8,
-                y + s / 8,
-                x + s * 7 / 8,
-                y + s * 3 / 4,
-                rgb(0x13, 0x7C, 0xE0),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s * 3 / 8,
-                y + s * 3 / 8,
-                x + s * 13 / 16,
-                y + s * 13 / 16,
-                rgb(0x5E, 0xE0, 0xC0),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s * 7 / 16,
-                y + s * 7 / 16,
-                x + s * 3 / 4,
-                y + s * 11 / 16,
-                rgb(0x13, 0x7C, 0xE0),
-            );
         }
         Glyph::Home => {
             let c = rgb(0x4C, 0xA6, 0xF0);

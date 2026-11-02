@@ -80,6 +80,7 @@ _TR = {
     'Écran résolution': ('Display resolution', 'Pantalla resolución', 'Bildschirm Auflösung'),
     'À propos version': ('About version', 'Acerca de versión', 'Info Version'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
+    'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
     'Partage de dossiers et transfert des réglages': ('Folder sharing and settings transfer', 'Compartir carpetas y transferir ajustes', 'Ordnerfreigabe und Übertragung der Einstellungen'),
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Bureautique': ('Office', 'Oficina', 'Büro'),
@@ -113,6 +114,7 @@ _TR = {
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Changer d’utilisateur': ('Switch user', 'Cambiar de usuario', 'Benutzer wechseln'),
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
@@ -126,11 +128,11 @@ def _t(text):
 
 
 STATE = Path.home() / ".config/winlux/start.json"
-DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
+DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
-            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
+            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11), (_t("Boutiques de logiciels"), 1),
             (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29)]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
 # les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
@@ -175,6 +177,8 @@ MENU_CSS = Template("""
   #winlux-start entry selection { background: $selected; color: $on_selected; }
   #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
   #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  /* Navigation au clavier (#28) : cadre visible seulement au clavier, comme Windows. */
+  #winlux-start button { outline: 2px solid $accent; outline-offset: -2px; }
   #winlux-start .heading { font-weight: bold; font-size: 12pt; }
   #winlux-start .footer { background: $footer; padding: 12px 25px; }
   #winlux-start .app-name { font-size: 9pt; }
@@ -232,6 +236,8 @@ class Start(Gtk.Application):
         self.file_results = []
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
+        if not isinstance(self.state, dict): self.state = {"pins": DEFAULTS, "recent": []}
+        self.state["pins"] = migrate_pins(self.state.get("pins", DEFAULTS))
 
     def save(self):
         STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +257,7 @@ class Start(Gtk.Application):
         # Services de la session livrés avec une entrée de menu par leur paquet.
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
                      if listed(app) and app.get_id() not in SESSION_SERVICES}
+        if auto_pin(self.state, self.apps): self.save()
         self.all_apps = False
         self.search.set_text("")
         self.render()
@@ -436,7 +443,7 @@ class Start(Gtk.Application):
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
-        self.results = sorted((app for app in self.apps.values() if query in fold(app.get_display_name())), key=lambda app: app.get_display_name().casefold())
+        self.results = sorted((app for app in self.apps.values() if matches(app, query)), key=lambda app: app.get_display_name().casefold())
         if listing:
             if query:
                 for label, page in SETTINGS:
@@ -588,13 +595,63 @@ class Start(Gtk.Application):
             self.hide()
             subprocess.Popen(["winlux-control", "power-suspend"], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def logoff():
+            # Ferme la session de ce compte (applications comprises), comme
+            # « Se déconnecter » de Windows ; le relais root vérifie le compte.
+            self.hide()
+            subprocess.Popen(["winlux-control", "session-logoff", current_account()], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Ordre de Windows 11 : Verrouiller, Se déconnecter, Changer
+        # d'utilisateur, Mettre en veille, Redémarrer, Arrêter.
         entries = [(_t("Verrouiller"), lock, "system-lock-screen-symbolic")]
+        if power_menu_has_logoff():
+            entries.append((_t("Se déconnecter"), logoff, "system-log-out-symbolic"))
         if power_menu_has_switch():
             entries.append((_t("Changer d’utilisateur"), lambda: lock("switch"), "system-switch-user-symbolic"))
         if power_menu_has_sleep():
             entries.append((_t("Mettre en veille"), sleep, "weather-clear-night-symbolic"))
         self.menu(widget, None, entries + [(_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
                                            (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
+
+
+# Anciennes épingles par défaut remplacées : l'épingle Edge des premières
+# versions devient le « Navigateur » générique (aucune marque imposée).
+RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
+
+
+def matches(app, query):
+    """Nom affiché ou mot-clé du lanceur (« boutique » trouve le Store)."""
+    if query in fold(app.get_display_name()): return True
+    keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
+    return bool(query) and any(query in fold(word) for word in keywords or [])
+
+
+def auto_pin(state, apps):
+    """Lanceurs marqués X-Winlux-Pin=true (Store, boutiques choisies) épinglés
+    une seule fois par compte : détachés ensuite, ils le restent. Une boutique
+    retirée puis choisie de nouveau est épinglée de nouveau."""
+    done = [ident for ident in state.get("auto_pinned", []) if ident in apps]
+    pins = state.setdefault("pins", list(DEFAULTS))
+    for ident, app in apps.items():
+        if ident in done or not hasattr(app, "get_boolean") or not app.has_key("X-Winlux-Pin"): continue
+        if not app.get_boolean("X-Winlux-Pin"): continue
+        if ident not in pins: pins.append(ident)
+        done.append(ident)
+    if done == state.get("auto_pinned"): return False
+    state["auto_pinned"] = done
+    return True
+
+
+def migrate_pins(pins):
+    """Épingles enregistrées, anciennes épingles par défaut remplacées, sans doublon."""
+    if not isinstance(pins, list):
+        return list(DEFAULTS)
+    result = []
+    for pin in pins:
+        pin = RENAMED_PINS.get(pin, pin)
+        if pin not in result:
+            result.append(pin)
+    return result
 
 
 def power_menu_has_sleep():
@@ -604,6 +661,17 @@ def power_menu_has_sleep():
     except OSError:
         return False
     return "mem" in states or "freeze" in states
+
+
+def current_account():
+    """Compte de la session (USER, sinon celui du processus)."""
+    return os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+
+
+def power_menu_has_logoff():
+    """« Se déconnecter » dans une session installée ; la session Live n'a
+    pas d'écran de connexion vers lequel revenir."""
+    return not Path(os.environ.get("WINLUX_LIVE_MARKER", "/etc/winlux/live-session")).exists()
 
 
 def power_menu_has_switch():

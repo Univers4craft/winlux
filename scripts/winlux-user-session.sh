@@ -146,6 +146,15 @@ if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
         fi
     done
 fi
+# Bureau de Windows 11 : la Corbeille seule (#30). Les autres icônes
+# d'xfdesktop s'activent dans Paramètres ; un choix existant est gardé.
+if test -x /usr/bin/xfconf-query; then
+    for icon in trash:true filesystem:false home:false removable:false; do
+        property="/desktop-icons/file-icons/show-${icon%%:*}"
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
+            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
+    done
+fi
 # Compositeur facultatif : sans lui, un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
@@ -162,6 +171,9 @@ fi
 if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
     # L'état est publié par la boucle de la session : pas de sondes ici.
     export WINLUX_CONTROL_NO_STATUS=1
+    # Icône du clavier tactile (sans clavier physique) : greffon placé
+    # avant que l'alignement range la barre.
+    if test -x /usr/bin/winlux-osk; then /usr/bin/winlux-osk panel >/dev/null 2>&1 || true; fi
     alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" >/dev/null 2>&1 || true ;; esac
     speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
@@ -274,6 +286,25 @@ wait_desktop() {
 ) </dev/null >/dev/null 2>&1 &
 pids="$pids $!"
 
+# Échelle des applications GTK (#29), comme XFCE : facteur entier pour GTK
+# (200 % en 4K), le reste par la densité des polices (150 % → 144 ppp).
+# Un réglage fait à la main dans xsettings est gardé.
+gtk_scale() {
+    test -x /usr/bin/xfconf-query || return 0
+    marker="$HOME/.local/share/winlux/gtk-scale"
+    case "$1" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) return 0 ;; esac
+    factor=$(awk -v s="$1" 'BEGIN { print (s >= 2) ? 2 : 1 }')
+    dpi=$(awk -v s="$1" -v f="$factor" 'BEGIN { printf "%d", 96 * s / f + 0.5 }')
+    current=$(/usr/bin/xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || true)
+    previous=$(cat "$marker" 2>/dev/null || true)
+    if test -n "$current" && test "$current" != "${previous#*:}"; then return 0; fi
+    test "$previous" = "$factor:$dpi" && test "$current" = "$dpi" && return 0
+    for setting in "/Gdk/WindowScalingFactor:$factor" "/Xft/DPI:$dpi"; do
+        /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -s "${setting##*:}" 2>/dev/null ||
+            /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -n -t int -s "${setting##*:}" || true
+    done
+    mkdir -p "${marker%/*}" && printf '%s:%s\n' "$factor" "$dpi" >"$marker"
+}
 # Le bureau (fond d'écran, icônes) est relancé s'il s'arrête ; la session
 # vit tant que son gestionnaire de fenêtres vit.
 while kill -0 "$wm_pid" 2>/dev/null; do
@@ -283,11 +314,14 @@ while kill -0 "$wm_pid" 2>/dev/null; do
         (
             case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
             if test -x /usr/bin/winlux-touchpad; then /usr/bin/winlux-touchpad apply 2>/dev/null || true; fi
+            # Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+            if test -x /usr/bin/winlux-mouse; then /usr/bin/winlux-mouse apply 2>/dev/null || true; fi
         ) </dev/null >/dev/null 2>&1 &
         ui_scale=$(/usr/bin/winlux-display session-scale 2>/dev/null || true)
         case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac
         WINLUX_THEME=$(sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
         export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME
+        gtk_scale "$ui_scale"
     fi
     if test -x /usr/bin/xfdesktop; then
         /usr/bin/xfdesktop --disable-wm-check >>"$logs/desktop.log" 2>&1 &

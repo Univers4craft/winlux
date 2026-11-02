@@ -31,7 +31,7 @@ fi
 rm -f "$etc/binfmt.d/winlux.conf" "$etc/udev/rules.d/70-winlux-manettes.rules"
 rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report" "$bin/winlux-uac"
 rm -f "$share/applications/winlux.desktop" "$share/applications/winlux-browser.desktop" "$share/mime/packages/winlux.xml"
-rm -f "$share/winlux/version" "$share/winlux/uninstall.sh" "$share/winlux/install-edge.sh" "$share/winlux/winlux-lock.py"
+rm -f "$share/winlux/version" "$share/winlux/uninstall.sh" "$share/winlux/install-browser.sh" "$share/winlux/install-edge.sh" "$share/winlux/winlux-browser-fetch" "$share/winlux/winlux-lock.py"
 rmdir "$share/winlux" 2>/dev/null || true
 
 mimeapps="$etc/xdg/mimeapps.list"

@@ -46,6 +46,10 @@ import zipfile
 
 ROOT = os.environ.get("WINLUX_CONTROL_ROOT", "")
 RUN = Path(ROOT + "/run/winlux")
+# Index, fiches, avancement et journal du Store : dossier propre au compte
+# (winlux-shell-app), relu par la fenêtre du Store. Les verrous de l'amorçage
+# (starter, lancé par l'init) restent dans RUN.
+STORE_RUN = Path(os.environ.get("WINLUX_STORE_RUN") or RUN)
 HOME = Path(os.environ.get("HOME", "/root"))
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "winlux/store"
 DATA = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
@@ -53,6 +57,25 @@ STATE = DATA / "winlux/store-state.json"
 CONFIG_DIRS = [Path(ROOT + "/etc/winlux/store-sources.d"),
                Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/store-sources.d"]
 CATALOG = Path(os.environ.get("WINLUX_STORE_CATALOG", ROOT + "/usr/share/winlux/store-catalog.txt"))
+# Boutiques proposées (integration/store-catalogs.json) et celles choisies.
+CATALOG_DEFS = Path(os.environ.get("WINLUX_STORE_CATALOGS_DEFS", ROOT + "/usr/share/winlux/store-catalogs.json"))
+CATALOG_CHOICE = Path(ROOT + "/etc/winlux/store-catalogs")
+
+
+def catalog_defs():
+    try:
+        defs = json.loads(CATALOG_DEFS.read_text(encoding="utf-8")).get("catalogs", [])
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [c for c in defs if isinstance(c, dict) and isinstance(c.get("id"), str)] if isinstance(defs, list) else []
+
+
+def chosen_catalogs():
+    try:
+        ids = set(CATALOG_CHOICE.read_text().split())
+    except OSError:
+        return []
+    return [c for c in catalog_defs() if c["id"] in ids]
 def interface_lang():
     """Langue de l'interface : WINLUX_LANG, sinon /etc/winlux/locale.conf
     (Paramètres > Langue), sinon LANG ; fr, en, es ou de."""
@@ -140,6 +163,16 @@ CATEGORIES = ["navigateurs", "bureautique", "multimedia", "developpement", "jeux
 # ---------------------------------------------------------------------------
 # Outils communs
 # ---------------------------------------------------------------------------
+
+def network_up():
+    """Route par défaut présente (hors ligne simulé : WINLUX_STORE_OFFLINE=1)."""
+    if OFFLINE:
+        return False
+    try:
+        lines = Path(os.environ.get("WINLUX_NETWORK_ROUTES", "/proc/net/route")).read_text().splitlines()[1:]
+    except OSError:
+        return True
+    return any(len(f) > 1 and f[1] == "00000000" for f in (l.split() for l in lines))
 
 def have(cmd):
     return shutil.which(cmd) is not None
@@ -781,7 +814,7 @@ class Apt(Source):
             os.close(w)
             return 126
         env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 proc = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
                                         pass_fds=(w,), env=env)
@@ -822,10 +855,32 @@ class Flatpak(Source):
 
     def remotes(self):
         code, out = run(["flatpak", "remotes", "--columns=name,options"], 20)
-        return [l.split("\t")[0].strip() for l in out.splitlines() if l.strip() and "disabled" not in l]
+        names = [l.split("\t")[0].strip() for l in out.splitlines() if l.strip() and "disabled" not in l]
+        # Une boutique retirée (Paramètres > Applications) n'est plus proposée,
+        # même si son dépôt reste déclaré pour les applications installées.
+        offered = {c.get("remote", c["id"]) for c in chosen_catalogs() if c.get("kind") == "flatpak"}
+        known = {c.get("remote", c["id"]) for c in catalog_defs() if c.get("kind") == "flatpak"}
+        return [n for n in names if n not in known or n in offered]
 
     def available(self):
         return have("flatpak") and bool(self.remotes())
+
+    def user_remotes(self):
+        """Boutiques Flatpak choisies : le dépôt vérifié par winlux-store-catalogs
+        (/etc/winlux/store-repos) est déclaré pour ce compte, sans réseau ; les
+        logiciels s'installent alors sans droits administrateur (--user)."""
+        if not have("flatpak"):
+            return
+        code, out = run(["flatpak", "remotes", "--user", "--columns=name"], 20)
+        present = {l.strip() for l in out.splitlines() if l.strip()}
+        for c in chosen_catalogs():
+            remote = c.get("remote", c["id"])
+            repo = Path(ROOT + f"/etc/winlux/store-repos/{c['id']}.flatpakrepo")
+            if c.get("kind") != "flatpak" or remote in present or not repo.is_file():
+                continue
+            if run(["flatpak", "remote-add", "--user", "--if-not-exists", "--from", remote, str(repo)], 60)[0] == 0 \
+                    and not OFFLINE:
+                run(["flatpak", "update", "--user", "--appstream", "-y", "--noninteractive", remote], 300)
 
     def appstream_dirs(self, remote):
         for base in (Path(ROOT + "/var/lib/flatpak"), DATA / "flatpak"):
@@ -883,7 +938,7 @@ class Flatpak(Source):
 
     def flatpak(self, args, progress):
         progress(5, "Flatpak...")
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 proc = subprocess.Popen(["flatpak", *args, "-y", "--noninteractive"], stdout=subprocess.PIPE,
                                         stderr=log, stdin=subprocess.DEVNULL)
@@ -898,8 +953,10 @@ class Flatpak(Source):
             return proc.wait()
 
     def install(self, ref, progress):
+        self.user_remotes()
         remote = next(iter(self.remotes()), "flathub")
-        return self.flatpak(["install", remote, ref], progress)
+        # Installation du compte : ni mot de passe ni service système requis.
+        return self.flatpak(["install", "--user", remote, ref], progress)
 
     def remove(self, ref, progress):
         return self.flatpak(["uninstall", ref], progress)
@@ -982,7 +1039,7 @@ class Snap(Source):
         if cmd is None:
             return 126
         progress(10, "Snap Store...")
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 return subprocess.run(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, timeout=1800).returncode
             except (OSError, subprocess.SubprocessError):
@@ -1020,13 +1077,18 @@ class AppImage(Source):
                 self.feed = []
         return self.feed
 
+    def enabled(self):
+        # AppImageHub n'examine ni ne signe rien (docs/BOUTIQUES.md) : son
+        # catalogue n'est lu que pour un compte qui en a déjà installé une.
+        return bool(load_json(STATE, {}).get("appimage")) or os.environ.get("WINLUX_STORE_APPIMAGEHUB") == "1"
+
     def available(self):
-        return bool(self.load())
+        return self.enabled() and bool(self.load())
 
     def apps(self, force=False):
         state = load_json(STATE, {}).get("appimage", {})
         out = []
-        for item in self.load(force):
+        for item in self.load(force) if self.enabled() else []:
             name = item.get("name", "")
             github = next((l.get("url") for l in item.get("links") or [] if l.get("type") == "GitHub"), "")
             if not name or not github:
@@ -1152,6 +1214,9 @@ class WindowsCatalog:
             apps = [a for a in adapter(data) if valid_windows_entry(a)]
         except (ValueError, TypeError, AttributeError, KeyError, OSError, EOFError, tarfile.TarError):
             return []
+        if self.conf.get("category") in CATEGORIES:
+            for a in apps:
+                a["category"] = self.conf["category"]  # boutique de jeux : tout en Jeux
         memo.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(memo, json.dumps({"digest": digest, "apps": apps}, ensure_ascii=False))
         return apps
@@ -1314,12 +1379,19 @@ class Windows(Source):
     name, label = "windows", "Windows"
 
     def providers(self):
-        found = []
+        found, seen = [], set()
         for d in CONFIG_DIRS:
             for f in sorted(d.glob("*.json")) if d.is_dir() else []:
                 conf = load_json(f, None)
                 if isinstance(conf, dict) and conf.get("enabled", True):
                     found.append(WindowsCatalog(conf))
+                    seen.add(found[-1].id)
+        # Boutiques Windows choisies par l'utilisateur (winlux-store-catalogs,
+        # docs/BOUTIQUES.md) : aucune n'est active sans ce choix.
+        for conf in chosen_catalogs():
+            if conf.get("kind") == "windows" and conf["id"] not in seen:
+                found.append(WindowsCatalog(conf))
+                seen.add(conf["id"])
         return found
 
     def available(self):
@@ -1485,7 +1557,7 @@ def install_windows_file(path, progress, args=(), entry=None):
         cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
-    with open(RUN / "store.log", "ab") as log:
+    with open(STORE_RUN / "store.log", "ab") as log:
         try:
             code = subprocess.run(cmd, cwd=str(path.parent), stdout=log, stderr=log,
                                   stdin=subprocess.DEVNULL).returncode
@@ -1501,7 +1573,8 @@ def install_windows_file(path, progress, args=(), entry=None):
     return code
 
 
-SOURCES = [Apt(), Flatpak(), Snap(), AppImage(), Windows()]
+FLATPAK = Flatpak()
+SOURCES = [Apt(), FLATPAK, Snap(), AppImage(), Windows()]
 SOURCE_BY_NAME = {s.name: s for s in SOURCES}
 PRIORITY = {"apt": 0, "flatpak": 1, "snap": 2, "appimage": 3, "windows": 4}
 
@@ -1552,7 +1625,7 @@ def collect(force=False, only_local=False):
         try:
             apps += s.apps(force)
         except Exception as exc:  # une source défaillante ne bloque pas les autres
-            with open(RUN / "store.log", "a") as log:
+            with open(STORE_RUN / "store.log", "a") as log:
                 log.write(f"source {s.name}: {exc}\n")
     return sources, merge(apps)
 
@@ -1603,17 +1676,21 @@ def write_index(sources, apps, refreshing, download=False):
         exe = re.search(r"^X-Winlux-Executable=(.*)$", text, re.M)
         if name:
             lines.append(f"win={field(name.group(1))}|{field(exe.group(1) if exe else '')}")
-    atomic_write(RUN / "store.txt", "\n".join(lines) + "\n")
+    atomic_write(STORE_RUN / "store.txt", "\n".join(lines) + "\n")
     atomic_write(CACHE / "index.json", json.dumps([a.__dict__ for a in apps], default=str))
 
 def refresh(force=False):
-    lock = RUN / "store-refresh.lock"
+    lock = STORE_RUN / "store-refresh.lock"
     try:
         lock.mkdir(parents=True)
     except FileExistsError:
         if time.time() - lock.stat().st_mtime < 900:
             return 0
     try:
+        try:
+            FLATPAK.user_remotes()
+        except Exception:
+            pass
         # 1. Sources locales tout de suite, 2. tout (réseau, vignettes) ensuite.
         sources, apps = collect(False, only_local=True)
         write_index(sources, apps, True)
@@ -1647,7 +1724,7 @@ def find(key):
 def details(key):
     src, app = find(key)
     if app is None:
-        atomic_write(RUN / "store-detail.txt", f"key={field(key)}\nerror=1\n")
+        atomic_write(STORE_RUN / "store-detail.txt", f"key={field(key)}\nerror=1\n")
         return 2
     app = src.details(app)
     index = {a.get("source") + ":" + a.get("ref"): a for a in load_json(CACHE / "index.json", [])}
@@ -1665,10 +1742,10 @@ def details(key):
         s = SOURCE_BY_NAME.get(alt.split(":", 1)[0])
         lines.append(f"alt={field(alt)}|{s.label if s else alt}")
     # Fiche affichée tout de suite ; les captures (réseau) suivent.
-    atomic_write(RUN / "store-detail.txt", "\n".join(lines + ["partial=1"]) + "\n")
+    atomic_write(STORE_RUN / "store-detail.txt", "\n".join(lines + ["partial=1"]) + "\n")
     urls = app.screenshots or (src.more_screenshots(app) if hasattr(src, "more_screenshots") else [])
     shots = [m for m in (media(u, "shots") for u in urls[:5]) if m]
-    atomic_write(RUN / "store-detail.txt", "\n".join(lines + [f"shot={s}" for s in shots]) + "\n")
+    atomic_write(STORE_RUN / "store-detail.txt", "\n".join(lines + [f"shot={s}" for s in shots]) + "\n")
     return 0
 
 class Progress:
@@ -1677,7 +1754,7 @@ class Progress:
 
     def __call__(self, percent, message, state="running"):
         percent = max(0, min(100, int(percent)))
-        atomic_write(RUN / "store-progress.txt",
+        atomic_write(STORE_RUN / "store-progress.txt",
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
                      f"percent={percent}\nmessage={field(message, 200)}\n")
         if self.hook:
@@ -1731,8 +1808,11 @@ def operate(action, target, hook=None, reindex=True, known=""):
             progress(100, tr(done, name=name) if done else name, "done")
         elif code in MESSAGES:
             progress(0, tr(MESSAGES[code]), "error")
+        elif not network_up():
+            # apt, flatpak ou un installateur sans réseau : le dire simplement.
+            progress(0, tr("offline"), "error")
         else:
-            progress(0, tr("failed", code=code, log=RUN / "store.log"), "error")
+            progress(0, tr("failed", code=code, log=STORE_RUN / "store.log"), "error")
         return code
     finally:
         lock.rmdir()
@@ -1974,7 +2054,11 @@ def starter(args):
     return starter_run()
 
 def main(argv):
-    RUN.mkdir(parents=True, exist_ok=True)
+    try:
+        RUN.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    STORE_RUN.mkdir(parents=True, exist_ok=True)
     action = argv[1] if len(argv) > 1 else "refresh"
     target = argv[2] if len(argv) > 2 else ""
     if action == "refresh":

@@ -472,3 +472,32 @@ for line in user_dirs.read_text(encoding="utf-8").splitlines():
 mimeapps = home / ".config/mimeapps.list"
 if not mimeapps.exists():
     mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\ntext/x-ms-regedit=winlux-regedit.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")
+
+
+def folder_handler(text):
+    """mimeapps.list avec les dossiers ouverts par l'Explorateur Winlux.
+
+    Un fichier écrit par une autre application (navigateur…) n'avait pas de
+    ligne inode/directory, et GIO prenait Thunar : « Afficher dans le dossier »
+    ouvrait Thunar. Le choix d'un autre gestionnaire que Thunar est gardé."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("inode/directory="):
+            first = line.partition("=")[2].split(";")[0].strip().lower()
+            if first and first not in ("thunar.desktop", "org.xfce.thunar.desktop"):
+                return text
+            lines[index] = "inode/directory=winlux-explorer.desktop;"
+            return "\n".join(lines) + "\n"
+    if "[Default Applications]" not in lines:
+        lines += ["[Default Applications]"]
+    lines.insert(lines.index("[Default Applications]") + 1, "inode/directory=winlux-explorer.desktop;")
+    return "\n".join(lines) + "\n"
+
+
+try:
+    current = mimeapps.read_text(encoding="utf-8")
+    fixed = folder_handler(current)
+    if fixed != current:
+        mimeapps.write_text(fixed, encoding="utf-8")
+except (OSError, UnicodeDecodeError):
+    pass

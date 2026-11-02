@@ -18,7 +18,7 @@ SEARCH_PATHS = [
 LANGUAGES = {"fr_FR": "fr", "en_US": "us", "de_DE": "de", "es_ES": "es", "it_IT": "it", "pt_BR": "br"}
 KEYBOARDS = {"fr", "us", "gb", "de", "es", "it", "br", "ch", "be", "ca"}
 TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "license_accepted",
-            "partitioning", "account", "packages", "reboot"}
+            "partitioning", "account", "packages", "browser", "store_catalogs", "reboot"}
 PARTITION_KEYS = {"disk", "mode"}
 ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin"}
 
@@ -227,6 +227,18 @@ def validate(data):
             settings["autologin"] = _bool(account["autologin"], "account.autologin")
         if "username" in settings and ("password" in settings or "password_hash" in settings):
             steps.add(STEP_ACCOUNT)
+    browser = data.get("browser")
+    if browser is not None:
+        # Navigateur téléchargé chez l'éditeur au premier démarrage ; null = aucun.
+        if browser not in ("chrome", "edge", "firefox"):
+            raise AnswerFileError(f"browser : chrome, edge, firefox ou null attendu : {browser!r}")
+        settings["browser"] = browser
+    stores = data.get("store_catalogs")
+    if stores is not None:
+        # Boutiques ajoutées au Store au premier démarrage (docs/BOUTIQUES.md).
+        if not isinstance(stores, list) or not all(isinstance(s, str) and re.fullmatch(r"[a-z0-9-]+", s) for s in stores):
+            raise AnswerFileError(f"store_catalogs : liste d'identifiants attendue (flathub, scoop-extras…) : {stores!r}")
+        settings["store_catalogs"] = list(dict.fromkeys(stores))
     packages = data.get("packages")
     if packages is not None:
         if not isinstance(packages, list):

@@ -30,6 +30,37 @@ HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
 INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
                   os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
+
+
+def firmware_efi_bits():
+    """32 sur un UEFI 32 bits (tablettes Atom), 64 sinon (lu dans /sys)."""
+    try:
+        with open("/sys/firmware/efi/fw_platform_size") as f:
+            return 32 if f.read().strip() == "32" else 64
+    except OSError:
+        return 64
+
+
+def efi_variables_writable():
+    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    try:
+        return any(os.scandir("/sys/firmware/efi/efivars"))
+    except OSError:
+        return False
+
+
+def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
+    """Chargeurs UEFI à installer : un processeur 64 bits peut avoir un micrologiciel 32 bits.
+
+    Sur une partition EFI à nous (EFI/BOOT), on pose les deux : BOOTX64.EFI et
+    BOOTIA32.EFI, le micrologiciel prend celui de son mode. Sur une partition
+    partagée avec Windows, l'entrée de démarrage est propre à ce micrologiciel :
+    seul le chargeur de son mode est installé.
+    """
+    ia32 = os.path.isdir(os.path.join(grub_dir, "i386-efi"))
+    if not own_esp:
+        return ["i386-efi"] if ia32 and firmware_efi_bits() == 32 else ["x86_64-efi"]
+    return ["x86_64-efi", "i386-efi"] if ia32 else ["x86_64-efi"]
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
 # Modules partagés : à côté du script dans le dépôt, /usr/lib/winlux/python une fois installé.
@@ -458,6 +489,7 @@ TRANSLATIONS = {
         "done_title": "Installation terminée !",
         "done_subtitle": "Winlux a été installé avec succès. Retirez le média d'installation et redémarrez.",
         "btn_next": "Suivant",
+        "btn_osk": "Clavier tactile",
         "btn_back": "Retour",
         "btn_install": "Installer",
         "btn_reboot": "Redémarrer maintenant",
@@ -618,6 +650,7 @@ TRANSLATIONS = {
         "done_title": "Installation complete!",
         "done_subtitle": "Winlux has been installed successfully. Remove the installation media and reboot.",
         "btn_next": "Next",
+        "btn_osk": "Touch keyboard",
         "btn_back": "Back",
         "btn_install": "Install",
         "btn_reboot": "Reboot now",
@@ -778,6 +811,7 @@ TRANSLATIONS = {
         "done_title": "Installation abgeschlossen!",
         "done_subtitle": "Winlux wurde erfolgreich installiert. Entfernen Sie das Installationsmedium und starten Sie neu.",
         "btn_next": "Weiter",
+        "btn_osk": "Bildschirmtastatur",
         "btn_back": "Zurück",
         "btn_install": "Installieren",
         "btn_reboot": "Jetzt neu starten",
@@ -938,6 +972,7 @@ TRANSLATIONS = {
         "done_title": "¡Instalación completada!",
         "done_subtitle": "Winlux se ha instalado correctamente. Retire el medio de instalación y reinicie.",
         "btn_next": "Siguiente",
+        "btn_osk": "Teclado táctil",
         "btn_back": "Atrás",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar ahora",
@@ -1098,6 +1133,7 @@ TRANSLATIONS = {
         "done_title": "Installazione completata!",
         "done_subtitle": "Winlux è stato installato con successo. Rimuovi il supporto di installazione e riavvia.",
         "btn_next": "Avanti",
+        "btn_osk": "Tastiera virtuale",
         "btn_back": "Indietro",
         "btn_install": "Installa",
         "btn_reboot": "Riavvia ora",
@@ -1258,6 +1294,7 @@ TRANSLATIONS = {
         "done_title": "Instalação concluída!",
         "done_subtitle": "O Winlux foi instalado com sucesso. Remova a mídia de instalação e reinicie.",
         "btn_next": "Próximo",
+        "btn_osk": "Teclado virtual",
         "btn_back": "Voltar",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar agora",
@@ -1361,6 +1398,17 @@ TRANSLATIONS = {
 
 EXTRA_TRANSLATIONS = {
     "fr_FR": {
+        "browser_title": 'Navigateur web',
+        "browser_subtitle": "Winlux ne fournit ni n'impose aucun navigateur, dans l'esprit des règles européennes sur le choix du navigateur. Celui que vous choisissez est téléchargé sur le site officiel de son éditeur, vérifié et installé au premier démarrage (connexion Internet requise).",
+        "browser_later": 'Choisir plus tard (Paramètres > Navigateurs)',
+        "summary_browser": 'Navigateur',
+        "summary_browser_none": 'à choisir plus tard',
+        "store_title": 'Boutiques de logiciels',
+        "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
+        "summary_store": 'Boutiques',
+        "summary_store_none": 'aucune (Paramètres > Applications)',
+        "summary_offline_later": "Pas de connexion Internet pour l'instant : le navigateur et les boutiques choisis seront installés automatiquement au premier démarrage connecté.",
+        "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
         "keyboard_name_gb": "QWERTY — Anglais (UK)",
@@ -1438,6 +1486,17 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
     },
     "en_US": {
+        "browser_title": 'Web browser',
+        "browser_subtitle": "Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. The one you choose is downloaded from its publisher's official website, checked and installed at first startup (Internet connection required).",
+        "browser_later": 'Choose later (Settings > Browsers)',
+        "summary_browser": 'Browser',
+        "summary_browser_none": 'to be chosen later',
+        "store_title": 'Software stores',
+        "store_subtitle": 'Winlux neither ships nor imposes any store. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'none (Settings > Apps)',
+        "summary_offline_later": 'No Internet connection for now: the chosen browser and stores will be installed automatically at the first startup with a connection.',
+        "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
         "keyboard_name_gb": "QWERTY — English (UK)",
@@ -1515,6 +1574,17 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Resizing Windows (may take several minutes)...",
     },
     "de_DE": {
+        "browser_title": "Webbrowser",
+        "browser_subtitle": "Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Der gewählte Browser wird beim ersten Start von der offiziellen Website des Herstellers heruntergeladen, geprüft und installiert (Internetverbindung erforderlich).",
+        "browser_later": "Später auswählen (Einstellungen > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "später auswählen",
+        "store_title": 'Software-Stores',
+        "store_subtitle": 'Winlux liefert und erzwingt keinen Store. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'keine (Einstellungen > Apps)',
+        "summary_offline_later": 'Derzeit keine Internetverbindung: Der gewählte Browser und die Stores werden beim ersten Start mit Verbindung automatisch installiert.',
+        "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
         "keyboard_name_gb": "QWERTY — Englisch (GB)",
@@ -1592,6 +1662,17 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
     },
     "es_ES": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. El que elija se descarga del sitio oficial de su editor, se comprueba y se instala en el primer arranque (se requiere conexión a Internet).",
+        "browser_later": "Elegir más tarde (Configuración > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "por elegir más tarde",
+        "store_title": 'Tiendas de programas',
+        "store_subtitle": 'Winlux no incluye ni impone ninguna tienda. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
+        "summary_store": 'Tiendas',
+        "summary_store_none": 'ninguna (Configuración > Aplicaciones)',
+        "summary_offline_later": 'Sin conexión a Internet por ahora: el navegador y las tiendas elegidos se instalarán automáticamente en el primer arranque con conexión.',
+        "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
         "keyboard_name_gb": "QWERTY — Inglés (Reino Unido)",
@@ -1669,6 +1750,17 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
     },
     "it_IT": {
+        "browser_title": "Browser web",
+        "browser_subtitle": "Winlux non include né impone alcun browser, nello spirito delle norme europee sulla scelta del browser. Quello scelto viene scaricato dal sito ufficiale del suo editore, verificato e installato al primo avvio (connessione Internet richiesta).",
+        "browser_later": "Scegli più tardi (Impostazioni > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "da scegliere più tardi",
+        "store_title": 'Negozi di software',
+        "store_subtitle": "Winlux non include né impone alcun negozio. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
+        "summary_store": 'Negozi',
+        "summary_store_none": 'nessuno (Impostazioni > App)',
+        "summary_offline_later": 'Nessuna connessione Internet per ora: il browser e i negozi scelti verranno installati automaticamente al primo avvio con connessione.',
+        "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
         "keyboard_name_gb": "QWERTY — Inglese (Regno Unito)",
@@ -1746,6 +1838,17 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
     },
     "pt_BR": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "O Winlux não inclui nem impõe nenhum navegador, no espírito das regras europeias sobre a escolha do navegador. O que você escolher é baixado do site oficial do editor, verificado e instalado na primeira inicialização (conexão com a Internet necessária).",
+        "browser_later": "Escolher depois (Configurações > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "a escolher depois",
+        "store_title": 'Lojas de software',
+        "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
+        "summary_store": 'Lojas',
+        "summary_store_none": 'nenhuma (Configurações > Aplicativos)',
+        "summary_offline_later": 'Sem conexão com a Internet por enquanto: o navegador e as lojas escolhidos serão instalados automaticamente na primeira inicialização com conexão.',
+        "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
         "keyboard_name_gb": "QWERTY — Inglês (Reino Unido)",
@@ -1907,6 +2010,22 @@ Ce logiciel est fourni « en l'état », sans aucune garantie.
 
 Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 """
+
+# Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
+BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
+
+
+def store_catalog_choices():
+    """Boutiques proposées (docs/BOUTIQUES.md), ordre alphabétique : (id, nom, résumé par langue)."""
+    for path in (os.path.join(SCRIPT_DIR, "..", "integration", "store-catalogs.json"), "/usr/share/winlux/store-catalogs.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = json.load(f).get("catalogs", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        rows = [r for r in rows if isinstance(r, dict) and re.fullmatch(r"[a-z0-9-]+", str(r.get("id", "")))]
+        return sorted(((r["id"], r.get("name", r["id"]), r.get("summary", {})) for r in rows), key=lambda r: r[1].casefold())
+    return []
 
 STEPS = [
     "Langue",
@@ -2202,6 +2321,24 @@ def cpio_newc(entries):
     return bytes(out)
 
 
+def osk_module():
+    """Module du clavier tactile (/usr/bin/winlux-osk, ou le script voisin), ou None."""
+    import importlib.machinery
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in ("/usr/bin/winlux-osk", os.path.join(here, "winlux-osk.py"), os.path.join(here, "winlux-osk")):
+        if os.path.isfile(path):
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", path)
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def keymap_tools_available():
     return bool(shutil.which("ckbcomp") and shutil.which("loadkeys"))
 
@@ -2443,6 +2580,15 @@ def nm_available():
         return out.strip() == "running"
     except Exception:
         return False
+
+
+def has_default_route():
+    """Route par défaut présente (même test que l'init avant de télécharger)."""
+    try:
+        with open("/proc/net/route", encoding="ascii", errors="replace") as routes:
+            return any(len(f) > 1 and f[1] == "00000000" for f in (line.split() for line in list(routes)[1:]))
+    except OSError:
+        return True
 
 
 def network_status():
@@ -2724,6 +2870,10 @@ class InstallerApp(Gtk.Application):
             "password_hash": "",
             "timezone": None,
             "packages": [],
+            # Aucun navigateur présélectionné : None = choisir plus tard.
+            "browser": None,
+            # Aucune boutique tierce cochée d'office (docs/BOUTIQUES.md).
+            "store_catalogs": [],
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
@@ -2799,6 +2949,89 @@ class InstallerApp(Gtk.Application):
             return True
         return False
 
+    # ── Clavier tactile (tablette sans clavier physique) ──────────────────────
+
+    def setup_touch_keyboard(self):
+        """Clavier visuel en bas de la fenêtre : ouvert d'office quand aucun clavier
+        physique n'est branché, toujours ouvrable par le bouton « Clavier tactile »."""
+        self.osk = osk_module()
+        self.osk_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.osk_box.set_no_show_all(True)
+        self.osk_widget = None
+        self.osk_layout = None
+        self.content_area.pack_end(self.osk_box, False, False, 0)
+        if self.osk is None:
+            return
+        self.btn_osk = Gtk.Button(label=tr("btn_osk"))
+        self.btn_osk.get_style_context().add_class("btn-secondary")
+        self.btn_osk.set_tooltip_text(tr("btn_osk"))
+        self.btn_osk.connect("clicked", lambda _b: self.show_touch_keyboard(not self.osk_box.get_visible()))
+        self.nav_box.pack_start(self.btn_osk, False, False, 0)
+        try:
+            missing = not self.osk.keyboards()
+        except Exception:
+            missing = False
+        if missing:
+            GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+
+    def touch_keyboard_layout(self):
+        code = str(getattr(self, "config", {}).get("keyboard") or "")[:2]
+        code = {"be": "fr", "gb": "us"}.get(code, code)
+        return code if self.osk is not None and code in self.osk.LAYOUTS else None
+
+    def show_touch_keyboard(self, visible):
+        if self.osk is None:
+            return False
+        layout = self.touch_keyboard_layout()
+        # Disposition choisie à l'étape Clavier et langue de l'installateur.
+        wanted = (layout, tr._lang[:2])
+        if visible and (self.osk_widget is None or wanted != self.osk_layout):
+            if self.osk_widget is not None:
+                self.osk_box.remove(self.osk_widget)
+            os.environ["WINLUX_LANG"] = tr._lang[:2]
+            self.osk._LANG = self.osk._interface_lang()
+            self.osk_widget = self.osk.keyboard_widget(
+                send=self.touch_key, layout=layout,
+                on_close=lambda: self.show_touch_keyboard(False))
+            self.osk_layout = wanted
+            self.osk_box.pack_start(self.osk_widget, False, False, 0)
+        if visible:
+            # set_no_show_all : show_all() ne toucherait pas la boîte elle-même.
+            self.osk_widget.show_all()
+            self.osk_box.show()
+        else:
+            self.osk_box.hide()
+        return True
+
+    def touch_key(self, key, _modifiers=()):
+        """Une touche du clavier tactile dans le champ qui a le focus (Gtk.Entry)."""
+        widget = self.win.get_focus()
+        if key == "Tab":
+            self.win.child_focus(Gtk.DirectionType.TAB_FORWARD)
+            return
+        if not isinstance(widget, Gtk.Entry):
+            return
+        position = widget.get_position()
+        if key == "BackSpace":
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+            elif position > 0:
+                widget.delete_text(position - 1, position)
+        elif key == "Return":
+            widget.activate()
+        elif key in ("Left", "Right"):
+            widget.set_position(max(0, position + (1 if key == "Right" else -1)))
+        elif key == "Escape":
+            self.show_touch_keyboard(False)
+        elif len(key) == 1:
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+                position = bounds[0]
+            widget.insert_text(key, position)
+            widget.set_position(position + 1)
+
     def make_pages_scrollable(self):
         """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
         # Toutes les pages sont retirées puis remises dans leur ordre d'origine : un
@@ -2865,6 +3098,7 @@ class InstallerApp(Gtk.Application):
         self.nav_box.pack_end(self.btn_next, False, False, 0)
         self.nav_box.pack_end(self.btn_back, False, False, 0)
         self.content_area.pack_end(self.nav_box, False, False, 0)
+        self.setup_touch_keyboard()
         self.ui_lang = tr._lang
         self.lang_keyboard_labels = []
         self.profile_tune_labels = {}
@@ -2938,7 +3172,7 @@ class InstallerApp(Gtk.Application):
             return
         self.answer_settings = settings
         for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
-                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages"):
+                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser", "store_catalogs"):
             if key in settings:
                 self.config[key] = settings[key]
         self.skip_steps = set(steps)
@@ -2992,6 +3226,8 @@ class InstallerApp(Gtk.Application):
         if key == "summary":
             self.refresh_summary()
         self.pages.set_visible_child_name(page_name(key))
+        if getattr(self, "osk_box", None) is not None and self.osk_box.get_visible():
+            self.show_touch_keyboard(True)
         if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
         if key == "benchmark" and self.bench_state == "idle":
@@ -3105,7 +3341,16 @@ class InstallerApp(Gtk.Application):
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
+        box.pack_end(self.independent_label(), False, False, 0)
         self.pages.add_named(box, page_name("language"))
+
+    def independent_label(self):
+        """« Projet indépendant, non affilié à Microsoft » (docs/DEFENSE-DU-NOM.md)."""
+        label = Gtk.Label(label=tr("independent_notice"), xalign=0)
+        label.set_line_wrap(True)
+        label.set_margin_top(12)
+        label.get_style_context().add_class("card-detail")
+        return label
 
     def on_lang_toggle(self, btn, locale, kb):
         if btn.get_active():
@@ -3127,6 +3372,10 @@ class InstallerApp(Gtk.Application):
         # place, sans rien reconstruire, pour garder la saisie et les choix en cours.
         self.ui_lang = tr._lang
         relabel_widgets(self.win, relabel_map(previous, tr._lang))
+        if getattr(self, "btn_osk", None) is not None:
+            self.btn_osk.set_tooltip_text(tr("btn_osk"))
+            if self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         for label, kb in self.lang_keyboard_labels:
             label.set_text(tr("language_keyboard", kb=kb))
         for pid, label in self.profile_tune_labels.items():
@@ -4187,9 +4436,75 @@ class InstallerApp(Gtk.Application):
         apps_check.set_margin_top(8)
         apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
         box.pack_start(apps_check, False, False, 0)
+        box.pack_start(self.build_browser_choice(), False, False, 0)
+        store_card = self.build_store_choice()
+        if store_card is not None:
+            box.pack_start(store_card, False, False, 0)
         self.selecting_profile = False
         self.select_profile("office")
         self.pages.add_named(box, page_name("profile"))
+
+    def build_browser_choice(self):
+        """Choix du navigateur : ordre alphabétique, aucun présélectionné (docs/BROWSERS.md)."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("browser_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("browser_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        row = Gtk.Box(spacing=16)
+        later = Gtk.RadioButton.new_with_label_from_widget(None, tr("browser_later"))
+        later.connect("toggled", self.on_browser_toggle, None)
+        row.pack_start(later, False, False, 0)
+        self.browser_buttons = {None: later}
+        for browser, name in BROWSER_CHOICES:
+            button = Gtk.RadioButton.new_with_label_from_widget(later, name)
+            button.connect("toggled", self.on_browser_toggle, browser)
+            row.pack_start(button, False, False, 0)
+            self.browser_buttons[browser] = button
+        card.pack_start(row, False, False, 0)
+        self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
+        return card
+
+    def build_store_choice(self):
+        """Boutiques de logiciels : cases à cocher, aucune cochée, ordre alphabétique."""
+        choices = store_catalog_choices()
+        if not choices:
+            return None
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("store_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("store_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        self.store_buttons = {}
+        lang = (self.config.get("language") or "fr")[:2]
+        for ident, name, summary in choices:
+            button = Gtk.CheckButton(label=name)
+            button.set_tooltip_text(summary.get(lang) or summary.get("en") or summary.get("fr", ""))
+            button.set_active(ident in self.config.get("store_catalogs", []))
+            button.connect("toggled", self.on_store_toggle, ident)
+            card.pack_start(button, False, False, 0)
+            self.store_buttons[ident] = button
+        return card
+
+    def on_store_toggle(self, button, ident):
+        chosen = [i for i in self.config.get("store_catalogs", []) if i != ident]
+        if button.get_active():
+            chosen.append(ident)
+        self.config["store_catalogs"] = chosen
+
+    def on_browser_toggle(self, button, browser):
+        if button.get_active():
+            self.config["browser"] = browser
 
     def select_profile(self, pid):
         self.selecting_profile = True
@@ -4372,6 +4687,13 @@ class InstallerApp(Gtk.Application):
         if self.config["install_apps"]:
             profile_line += " " + tr("summary_profile_apps")
         lines.append(profile_line)
+        browser = dict(BROWSER_CHOICES).get(self.config.get("browser"))
+        lines.append(f"{tr('summary_browser')} : {browser or tr('summary_browser_none')}")
+        stores = [name for ident, name, _ in store_catalog_choices() if ident in self.config.get("store_catalogs", [])]
+        lines.append(f"{tr('summary_store')} : {', '.join(stores) or tr('summary_store_none')}")
+        if (browser or stores) and not has_default_route():
+            # Pas une erreur : l'init les installe au premier démarrage connecté.
+            lines.append(tr("summary_offline_later"))
         score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
                  else tr("summary_benchmark_none"))
         lines.append(f"{tr('summary_benchmark')} : {score}")
@@ -4471,6 +4793,11 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
+        notice = self.independent_label()
+        notice.set_xalign(0.5)
+        notice.set_justify(Gtk.Justification.CENTER)
+        notice.set_margin_top(24)
+        box.pack_start(notice, False, False, 0)
         self.pages.add_named(box, page_name("done"))
 
     def on_reboot(self, _btn):
@@ -4847,6 +5174,12 @@ class InstallerApp(Gtk.Application):
         # visible 5 s quand Windows est proposé à côté.
         menu_timeout, menu_style = (5, "menu") if windows_entry else (1, "hidden")
         grub_cfg = f"""set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}
 serial --unit=0 --speed=115200
@@ -4854,17 +5187,17 @@ terminal_input console serial
 terminal_output console serial
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
     {initrd}
 }}
 {windows_entry}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra} $winlux_efi_args
     {initrd}
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
@@ -4883,9 +5216,14 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             else:
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
-            subprocess.run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
-                            f"--boot-directory={target}/boot", "--recheck", *efi_args],
-                           check=True, timeout=120)
+                if not efi_variables_writable():
+                    # UEFI 32 bits démarré avec efi=noruntime : pas de variables UEFI,
+                    # donc pas d'entrée de démarrage (docs/SECURE-BOOT.md).
+                    efi_args.append("--no-nvram")
+            for efi_target in efi_grub_targets(layout["own_esp"]):
+                subprocess.run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
+                                f"--boot-directory={target}/boot", "--recheck", *efi_args],
+                               check=True, timeout=120)
             # The Secure Boot chain goes to EFI/BOOT, which belongs to Windows on a shared ESP.
             if layout["own_esp"] and SECUREBOOT_SH and os.path.exists("/usr/lib/shim/shimx64.efi.signed"):
                 subprocess.run(["sh", SECUREBOOT_SH, "install-esp", efi_dir, search_uuid], check=True, timeout=60)
@@ -5039,6 +5377,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "autologin": self.config["autologin"],
             "timezone": self.config.get("timezone"),
             "packages": self.config.get("packages", []),
+            "browser": self.config.get("browser"),
+            "store_catalogs": self.config.get("store_catalogs", []),
             "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
@@ -5062,6 +5402,20 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             # Installés par l'init du système au premier démarrage avec réseau.
             with open(f"{etc}/first-boot-packages", "w") as f:
                 f.write("\n".join(self.config["packages"]) + "\n")
+        if self.config.get("browser") in dict(BROWSER_CHOICES):
+            # Téléchargé chez l'éditeur et installé par l'init au premier
+            # démarrage avec réseau (winlux-browsers --default), jamais fourni.
+            with open(f"{etc}/first-boot-browser", "w") as f:
+                f.write(self.config["browser"] + "\n")
+        known = [ident for ident, _, _ in store_catalog_choices()]
+        stores = [ident for ident in known if ident in self.config.get("store_catalogs", [])]
+        # Choix enregistré tel quel (même vide) ; les boutiques choisies sont
+        # ajoutées par l'init au premier démarrage avec réseau, puis reprises
+        # à chaque démarrage tant qu'il en reste en attente.
+        with open(f"{etc}/store-catalogs", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
+        with open(f"{etc}/store-catalogs-pending", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
         try:
             self.configure_network_target(root_path)
         except Exception as e:
@@ -5076,6 +5430,50 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             dest = f"{root_path}/usr/bin/winlux-hw-detect"
             subprocess.run(["cp", hw_script, dest], timeout=10)
             os.chmod(dest, 0o755)
+        self.prepare_system_state(root_path)
+
+    def prepare_system_state(self, root_path):
+        """Fait pendant l'installation le travail unique du premier démarrage.
+
+        `winlux-update --boot` rétablit les droits de la base APT, finit les
+        déclencheurs dpkg reportés par la construction de l'image et refait
+        les caches (applications, types MIME). Fait au premier démarrage, il
+        y ajoutait plus de 15 s (phase « recovery »). Ici, dans le système
+        cible (chroot), il n'est plus fait au démarrage ; en cas d'échec, le
+        premier démarrage s'en charge comme avant.
+        """
+        if not os.path.exists(f"{root_path}/usr/share/winlux/update-backend") or not shutil.which("chroot"):
+            return
+        mounted = []
+        policy = f"{root_path}/usr/sbin/policy-rc.d"
+        had_policy = os.path.exists(policy)
+        try:
+            for source in ("/proc", "/sys", "/dev"):
+                destination = f"{root_path}{source}"
+                os.makedirs(destination, exist_ok=True)
+                subprocess.run(["mount", "--bind", source, destination], check=True, timeout=30)
+                mounted.append(destination)
+            if not had_policy:
+                # Aucun service démarré depuis le chroot de l'installateur.
+                os.makedirs(os.path.dirname(policy), exist_ok=True)
+                with open(policy, "w") as f:
+                    f.write("#!/bin/sh\nexit 101\n")
+                os.chmod(policy, 0o755)
+            result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-update", "--boot"],
+                                    capture_output=True, text=True, timeout=900,
+                                    env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+            if result.returncode != 0:
+                print("winlux-update --boot (installation) :", result.stdout, result.stderr, file=sys.stderr)
+        except (OSError, subprocess.SubprocessError) as error:
+            print("Préparation du premier démarrage reportée :", error, file=sys.stderr)
+        finally:
+            if not had_policy:
+                try:
+                    os.remove(policy)
+                except OSError:
+                    pass
+            for destination in reversed(mounted):
+                subprocess.run(["umount", "-l", destination], timeout=30)
 
     def configure_network_target(self, root_path):
         src_dir = "/etc/NetworkManager/system-connections"

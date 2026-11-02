@@ -43,6 +43,14 @@ for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue gru
         exit 1
     }
 done
+# Trois chemins d'amorçage : BIOS, UEFI 64 bits, et UEFI 32 bits pour les
+# processeurs 64 bits sur micrologiciel 32 bits (tablettes Atom).
+for platform in i386-pc x86_64-efi i386-efi; do
+    test -d "/usr/lib/grub/$platform" || {
+        echo "modules GRUB $platform absents (paquets grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin)" >&2
+        exit 1
+    }
+done
 if ! test -r "$kernel"; then
     echo "noyau absent ou illisible : $kernel" >&2
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
@@ -116,9 +124,13 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+# Catalogues ajoutés à la main par l'administrateur (aucun livré).
 mkdir -p "$stage/etc/winlux/store-sources.d"
-cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
-chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
+# Boutiques tierces proposées (docs/BOUTIQUES.md) : seulement leur description ;
+# rien n'est téléchargé avant le choix de l'utilisateur, aucune n'est cochée.
+cp "$root/scripts/winlux-store-catalogs.py" "$stage/usr/bin/winlux-store-catalogs"
+cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalogs.json"
+chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
 # claude.exe après le premier démarrage ; rien de lourd dans l'ISO.
 if test -f "$root/scripts/winlux-claude-code.sh"; then
@@ -131,6 +143,8 @@ chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
 cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
 cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
+# Pilotes du matériel réel (cartes graphiques, NVIDIA, VA-API, microcode, fwupd).
+install -m 755 "$root/scripts/winlux-drivers.py" "$stage/usr/bin/winlux-drivers"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
@@ -194,6 +208,7 @@ if test -f "$wallpaper_src"; then
 fi
 
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
+cp "$root/scripts/run-tls-suite.sh" "$stage/opt/winlux/scripts/run-tls-suite.sh"
 cp "$root/scripts/test-terminal-guest.sh" "$stage/opt/winlux/scripts/test-terminal-guest.sh"
 cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-native-session-guest.py"
 cp "$root/scripts/test-apt-native-guest.py" "$stage/opt/winlux/scripts/test-apt-native-guest.py"
@@ -202,6 +217,7 @@ cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runt
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
+    "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite commdlg_suite menu_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
@@ -315,7 +331,11 @@ fi
 # nls_utf8: FAT and exFAT USB keys are mounted with iocharset=utf8 (volumes.rs);
 # without it every such key failed with "IO charset utf8 not found". usb_storage
 # and uas give USB keys their /dev/sdX even where the kernel builds them as modules.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 nls_utf8 usb_storage uas bochs qxl vmwgfx cifs nfs nfsv3 nfsv4; do
+# Matériel réel : scripts/hardware-modules.list (cartes graphiques, Wi-Fi,
+# Ethernet, Bluetooth, son, pavés tactiles, capteurs). udev ne les charge que
+# si le matériel est là.
+hardware_modules=$(sed 's/#.*//' "$root/scripts/hardware-modules.list" | tr '\n' ' ')
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 nls_utf8 usb_storage uas bochs qxl vmwgfx cifs nfs nfsv3 nfsv4 $hardware_modules; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -367,28 +387,23 @@ if command -v xmessage >/dev/null 2>&1; then
     chmod 755 "$stage/usr/bin/xmessage"
     copy_shared_libraries "$(command -v xmessage)"
 fi
-# Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
-# .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
-# téléchargé depuis https://www.microsoft.com/edge). Sinon le bouton Edge
-# affiche une notification.
+# Aucun navigateur n'est intégré à l'ISO : l'utilisateur choisit le sien.
+# Microsoft Edge et Google Chrome ne pourraient de toute façon pas l'être :
+# leurs licences interdisent de les redistribuer (Edge : « you will not ... share,
+# publish, distribute, or lend the Software », section 2.8 f). Ils se
+# téléchargent chez leur éditeur, sur le PC, à la demande de l'utilisateur.
 if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
-    test -r "$WINLUX_EDGE_DEB" || { echo "paquet Edge illisible : $WINLUX_EDGE_DEB" >&2; exit 1; }
-    dpkg-deb -x "$WINLUX_EDGE_DEB" "$stage"
-    test -x "$stage/opt/microsoft/msedge/msedge" || { echo "paquet Edge inattendu" >&2; exit 1; }
-    missing=$(ldd "$stage/opt/microsoft/msedge/msedge" | awk '/not found/ { print $1 }')
-    if [ -n "$missing" ]; then
-        echo "bibliothèques manquantes pour Edge sur cette machine : $missing" >&2
-        echo "installez-les (sudo apt install microsoft-edge-stable les tire) puis relancez" >&2
-        exit 1
-    fi
-    copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
-    ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
+    echo "WINLUX_EDGE_DEB refusé : Edge ne peut pas être redistribué dans l'ISO" >&2
+    exit 1
 fi
-# Offline browser catalogue; official packages are prepared before this build.
+# Aucun navigateur dans l'image : seulement les outils et bibliothèques qui
+# font tourner celui que l'utilisateur choisira (stage-browser-packages.sh
+# refuse tout paquet de navigateur).
 browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
-if test -f "$browser_packages/edge.deb"; then
-    sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
-fi
+mkdir -p "$browser_packages"
+sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
+# Téléchargement du navigateur choisi chez son éditeur (index HTTPS, SHA-256).
+install -D -m 755 "$root/scripts/prepare-browser-packages.py" "$stage/usr/lib/winlux/winlux-browser-fetch"
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
@@ -611,6 +626,16 @@ fi
 (
     /usr/bin/winlux-hardware rest >/dev/null 2>&1 || true
     /usr/bin/winlux-firmware >/dev/null 2>&1 || true
+    # Système installé : microcode et pilotes suivis à chaque démarrage, puis
+    # au premier démarrage les pilotes recommandés (NVIDIA, pilotes complets
+    # du noyau, VA-API, microcode), réseau venu et en basse priorité.
+    if test -x /usr/bin/winlux-drivers && test -f /etc/winlux/install-config.json; then
+        /usr/bin/winlux-drivers boot >/run/winlux/drivers-boot.log 2>&1 || true
+        if test ! -e /var/lib/winlux/drivers/auto.done; then
+            low=; test -x /usr/bin/nice && low='/usr/bin/nice -n 19'
+            $low /usr/bin/winlux-drivers auto >>/var/log/winlux-drivers.log 2>&1 || true
+        fi
+    fi
     if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
         /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
     fi
@@ -689,16 +714,8 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
-# Installation hors ligne d'Edge (copie, vérification, extraction) : en
-# arrière-plan et en basse priorité, elle ne retarde plus le bureau.
+# Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
-if test -f /usr/share/winlux/browsers/edge.deb; then
-    # The static BusyBox of the image has no nice applet: use coreutils.
-    nice=
-    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
-    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
-    browser_setup_pid=$!
-fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
@@ -751,6 +768,54 @@ if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
             $notice_as /usr/bin/winlux-first-boot-notice failed 2>/dev/null || true
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
+# Navigateur choisi à l'installation ou au premier démarrage : téléchargé sur
+# le site officiel de son éditeur, vérifié et installé dès que le réseau
+# répond, en basse priorité. Sans réseau, il est retenté au démarrage suivant
+# (aucun navigateur n'est fourni dans l'image : docs/BROWSERS.md).
+if test -s /etc/winlux/first-boot-browser; then
+    (
+        choice=$(/bin/busybox sed -n '1p' /etc/winlux/first-boot-browser)
+        case "$choice" in chrome|edge|firefox) ;; *) exit 0 ;; esac
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        if $low /usr/bin/winlux-browsers --default "$choice"; then
+            /bin/busybox mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
+        fi
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
+# Navigateurs demandés hors ligne depuis Paramètres > Navigateurs : installés
+# dès que le réseau répond (winlux-browsers les retire de la liste ensuite).
+if test -s /etc/winlux/browser-install-pending; then
+    (
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        for choice in $(/bin/busybox grep -E '^(chrome|edge|firefox)$' /etc/winlux/browser-install-pending); do
+            $low /usr/bin/winlux-browsers --install "$choice" || true
+        done
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
+# Boutiques de logiciels choisies (installateur, premier démarrage) : ajoutées
+# au Store dès que le réseau répond ; sans réseau, retentées au démarrage
+# suivant (docs/BOUTIQUES.md).
+if test -s /etc/winlux/store-catalogs-pending && test -x /usr/bin/winlux-store-catalogs; then
+    (
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        $low /usr/bin/winlux-store-catalogs --resume || true
+    ) >>/var/log/winlux-store-catalogs.log 2>&1 &
 fi
 if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
     # Les tests de navigateurs ont besoin d'Edge déjà installé.
@@ -1128,7 +1193,17 @@ chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
+    # Nom et logos Winlux à la place de ceux d'Ubuntu (politique de Canonical).
+    sh "$root/scripts/winlux-brand-image.sh" "$stage"
+    # Offre de sources GPL : liste exacte des paquets sources de l'image,
+    # dans l'image et à côté de l'ISO (publiée avec chaque version).
+    mkdir -p "$stage/usr/share/doc/winlux"
+    python3 "$root/scripts/list-gpl-sources.py" "$stage" "$stage/usr/share/doc/winlux/sources-gpl.tsv"
+    test -s "$stage/usr/share/doc/winlux/sources-gpl.tsv" || { echo 'sources-gpl.tsv vide' >&2; exit 1; }
+    cp "$stage/usr/share/doc/winlux/sources-gpl.tsv" "$root/build/sources-gpl.tsv"
 fi
+# Aucun logiciel d'éditeur tiers non redistribuable dans l'image publiée.
+sh "$root/scripts/check-image-redistributable.sh" "$stage"
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
 for unit in smbd nmbd samba samba-ad-dc wsdd; do
@@ -1146,10 +1221,20 @@ sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout=2
 set timeout_style=menu
 set winlux_term=console
-if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+# UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
+# au démarrage (mode mixte, vérifié sous QEMU) ; menu en texte.
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_term=console
+elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png
@@ -1169,11 +1254,11 @@ fi
 set winlux_root=
 search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
+    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
@@ -1181,10 +1266,10 @@ menuentry "Winlux Desktop" {
         if test -f "($winlux_root)/boot/vmlinuz"; then
             # Load the updated kernel and persistent root from the disk.
             if test -f "($winlux_root)/boot/winlux-split-root"; then
-                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
                 initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
             else
-                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
             fi
         else
             winlux_live
@@ -1199,10 +1284,10 @@ menuentry "Installer Winlux sur le disque" --hotkey=i {
 menuentry "Winlux Recovery (secours)" --hotkey=r {
     if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
         if test -f "($winlux_root)/boot/winlux-split-root"; then
-            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1 $winlux_efi_args
             initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
         else
-            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1 $winlux_efi_args
             initrd /boot/winlux-initramfs.cpio.gz
         fi
     else
@@ -1212,16 +1297,16 @@ menuentry "Winlux Recovery (secours)" --hotkey=r {
     fi
 }
 menuentry "Vérifier l'intégrité du média puis démarrer" --hotkey=v {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
     if test -f "($winlux_root)/boot/winlux-split-root"; then
-        linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+        linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1 $winlux_efi_args
         initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
     else
-        linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+        linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1 $winlux_efi_args
     fi
 }
 GRUB
@@ -1248,6 +1333,7 @@ if test "$secureboot" = 1; then
 else
     grub-mkrescue -o "$out" "$iso_root"
 fi
+sh "$root/scripts/check-iso-boot-paths.sh" "$out"
 sha256sum "$out" >"$out.sha256"
 echo "ISO live créée : $out"
 echo "Somme SHA-256 : $out.sha256"

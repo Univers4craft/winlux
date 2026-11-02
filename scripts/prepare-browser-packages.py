@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Cache official amd64 browser DEBs; verify publisher-index SHA256 hashes."""
+"""Cache official amd64 browser DEBs; verify publisher-index SHA256 hashes.
+
+    prepare-browser-packages.py [--only edge,chrome,firefox] [SORTIE]
+
+Aucun navigateur n'est fourni dans l'ISO (docs/BROWSERS.md) : les licences
+d'Edge (« you will not ... share, publish, distribute, or lend the Software »,
+section 2.8 f) et de Chrome interdisent de les redistribuer, et Winlux n'en
+favorise aucun. Le navigateur choisi est téléchargé chez son éditeur sur le
+PC de l'utilisateur, à sa demande : winlux-browsers --install (image) et
+install-browser.sh (paquet d'intégration) appellent ce script.
+"""
 import gzip
 import hashlib
 import pathlib
@@ -49,11 +59,20 @@ def checksum(path):
     return digest.hexdigest()
 
 def main():
-    output = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/browser-packages").resolve()
+    args = sys.argv[1:]
+    only = list(SOURCES)
+    if args[:1] == ["--only"] and len(args) >= 2:
+        only = [name for name in args[1].split(",") if name]
+        args = args[2:]
+    unknown = [name for name in only if name not in SOURCES]
+    if unknown:
+        raise SystemExit(f"navigateur inconnu : {', '.join(unknown)}")
+    output = pathlib.Path(args[0] if args else "build/browser-packages").resolve()
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output, prefix=".download-") as work:
         work = pathlib.Path(work)
-        for browser, (package, base, index) in SOURCES.items():
+        for browser in only:
+            package, base, index = SOURCES[browser]
             fetch(base + index, work / "Packages.gz")
             fields = select((work / "Packages.gz").read_bytes(), package)
             destination = output / f"{browser}.deb"

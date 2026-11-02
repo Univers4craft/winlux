@@ -29,6 +29,40 @@ WINLUX_SECUREBOOT=1 WINLUX_KERNEL=/boot/vmlinuz-<version> WINLUX_KERNEL_RELEASE=
 - Sans `WINLUX_SECUREBOOT=1`, la construction reste identique à avant
   (`grub-mkrescue`, GRUB non signé : il faut désactiver Secure Boot).
 
+## PC à micrologiciel UEFI 32 bits (tablettes Atom)
+
+Certaines tablettes et petits PC (Intel Atom Bay Trail / Cherry Trail) ont un
+processeur 64 bits mais un micrologiciel UEFI 32 bits. Winlux reste 64 bits ;
+seul le premier chargeur existe aussi en 32 bits, `EFI/BOOT/BOOTIA32.EFI`, à
+côté de `BOOTX64.EFI` (paquet `grub-efi-ia32-bin`). L'ISO, la clé USB, le
+disque installé, la clé de secours et la réinitialisation portent les deux, et
+le micrologiciel prend seul celui de son mode. Sur une partition EFI partagée
+avec Windows, l'installateur pose uniquement le chargeur du mode détecté
+(`/sys/firmware/efi/fw_platform_size`). Le noyau Ubuntu démarre dans ce mode
+mixte (`CONFIG_EFI_MIXED`). En UEFI 32 bits, le menu GRUB reste en texte : son
+terminal graphique fait planter le noyau 64 bits juste après le chargement
+(reproduit sous QEMU avec OVMF 32 bits et le noyau 7.0 d'Ubuntu 26.04).
+En UEFI 32 bits, chaque entrée du menu ajoute `efi=noruntime` : en mode mixte,
+le noyau 7.0 plante dans les services d'exécution UEFI sur un processeur sans
+pages de 1 Go, ce qui est le cas des Atom (reproduit sous QEMU avec
+`-cpu max,pdpe1gb=off`). Le mode du micrologiciel reste détecté, mais les
+variables UEFI sont inaccessibles. Sur une partition EFI à Winlux, cela ne
+change rien, puisque le chargeur est posé dans `EFI/BOOT`. Sur une partition
+partagée avec Windows, l'installateur pose `EFI/winlux/grubia32.efi` sans
+pouvoir créer l'entrée de démarrage : choisissez ce fichier dans le menu de
+démarrage du micrologiciel, ou installez Winlux sur tout le disque.
+
+La même option évite aussi le plantage sous QEMU avec la pagination à 5 niveaux
+(`-cpu max`, LA57) : les tests UEFI 32 bits gardent donc `-cpu max`.
+
+Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
+Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est
+pas touchée. La validation de `release.yml` démarre l'ISO et le disque
+installé sous QEMU avec OVMF 32 bits (`scripts/fetch-ovmf-ia32.sh` : Ubuntu 26.04
+n'a plus le paquet `ovmf-ia32`, celui de 24.04 est vérifié par SHA-256), et
+`scripts/check-iso-boot-paths.sh` fait échouer la construction si l'un des
+trois chemins (BIOS, UEFI 64 bits, UEFI 32 bits) manque.
+
 L'installateur (graphique ou `scripts/install.sh`) copie la même chaîne sur
 l'ESP du disque cible quand `/usr/lib/shim/shimx64.efi.signed` est présent.
 Le mode récupération (« Réparer le démarrage ») la réinstalle aussi.

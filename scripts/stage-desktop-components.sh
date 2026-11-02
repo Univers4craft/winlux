@@ -41,6 +41,13 @@ mkdir -p "$stage/usr/share/winlux/native"
 cp -a "$project/integration/native/." "$stage/usr/share/winlux/native/"
 mkdir -p "$stage/usr/share/dbus-1/services"
 cp "$project/integration/native/dbus/org.freedesktop.Notifications.service" "$stage/usr/share/dbus-1/services/"
+# « Afficher dans le dossier » des navigateurs et des applications passe par
+# org.freedesktop.FileManager1 : c'est l'Explorateur Winlux, plus Thunar
+# (org.xfce.Thunar.FileManager1.service retiré, un seul fournisseur).
+grep -l '^Name=org.freedesktop.FileManager1$' "$stage"/usr/share/dbus-1/services/*.service 2>/dev/null | while IFS= read -r other; do
+    rm -f "$other"
+done
+cp "$project/integration/native/dbus/org.freedesktop.FileManager1.service" "$stage/usr/share/dbus-1/services/"
 mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 # Identité Winlux : thème d'icônes maison (complété par Adwaita) et sons système.
@@ -63,6 +70,14 @@ while IFS= read -r type; do
     grep -q "^$type=" "$mimeapps" && continue
     sed -i "/^\[Default Applications\]/a $type=winlux-explorer.desktop;" "$mimeapps"
 done
+# Dossiers : toujours l'Explorateur (xdg-open, GIO, liens des navigateurs et
+# des .exe), y compris dans la liste propre à XFCE, qui passe avant.
+for list in "$mimeapps" "$stage/etc/xdg/xfce-mimeapps.list" "$stage/usr/share/applications/xfce-mimeapps.list"; do
+    test -f "$list" || continue
+    sed -i '/^inode\/directory=/d' "$list"
+    grep -q '^\[Default Applications\]' "$list" || printf '[Default Applications]\n' >>"$list"
+    sed -i '/^\[Default Applications\]/a inode/directory=winlux-explorer.desktop;' "$list"
+done
 # Icônes des .exe et des raccourcis .lnk (Bureau, Explorateur, Thunar) via tumbler.
 mkdir -p "$stage/usr/share/thumbnailers"
 cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage/usr/share/thumbnailers/"
@@ -75,7 +90,7 @@ cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/us
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
 cp --remove-destination "$project/scripts/winlux-boot-menu.sh" "$stage/usr/share/winlux/boot-menu"
 chmod 755 "$stage/usr/share/winlux/boot-menu"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-reset-page.py:winlux-reset-page' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"

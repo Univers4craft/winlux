@@ -62,6 +62,7 @@ _TR = {
         "Demasiados intentos. Vuelva a intentarlo en {s} segundos.",
         "Zu viele Versuche. Versuchen Sie es in {s} Sekunden erneut."),
     "Verr. Maj activé": ("Caps Lock is on", "Bloq Mayús activado", "Feststelltaste ist aktiviert"),
+    "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Afficher le mot de passe": ("Show password", "Mostrar contraseña", "Kennwort anzeigen"),
     "Appuyez sur une touche ou cliquez pour vous connecter": (
         "Press any key or click to sign in",
@@ -91,6 +92,40 @@ def _t(text):
     """Texte dans la langue de l'interface (le français sert de clé)."""
     row = _TR.get(text)
     return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
+def type_into(entry, key, submit):
+    """Une touche du clavier tactile dans un champ GTK (écran de connexion)."""
+    position = entry.get_position()
+    if key == "BackSpace":
+        if position > 0:
+            entry.delete_text(position - 1, position)
+    elif key == "Return":
+        submit()
+    elif key == "Escape":
+        entry.set_text("")
+    elif key in ("Left", "Right"):
+        entry.set_position(max(0, position + (1 if key == "Right" else -1)))
+    elif len(key) == 1:
+        entry.insert_text(key, position)
+        entry.set_position(position + 1)
+
+
+def osk_module():
+    """Module du clavier tactile (/usr/bin/winlux-osk, ou le script voisin)."""
+    import importlib.machinery
+    import importlib.util
+    for path in (Path("/usr/bin/winlux-osk"), Path(__file__).resolve().with_name("winlux-osk.py")):
+        if path.is_file():
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", str(path))
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def long_date(when, lang=None):
@@ -195,6 +230,20 @@ def session_account():
         if 1000 <= uid < 60000 and not shell.endswith(("nologin", "false")):
             return name
     return "root"
+
+
+def display_name(user):
+    """Nom affiché d'un compte : le nom complet (champ GECOS de /etc/passwd,
+    rempli par Paramètres > Comptes et l'installateur), sinon l'identifiant."""
+    try:
+        for line in path("/etc/passwd").read_text(errors="replace").splitlines():
+            parts = line.split(":")
+            if len(parts) >= 7 and parts[0] == user:
+                full = parts[4].split(",")[0].strip()
+                return full or user
+    except OSError:
+        pass
+    return user
 
 
 def account_home(user):
@@ -539,6 +588,7 @@ def run_lock(start="clock"):
                 self.area = area
                 overlay.add_overlay(self.clock_view())
                 overlay.add_overlay(self.signin_view())
+                self.keyboard_view(overlay)
                 overlay.add_overlay(self.accounts_view())
                 window.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
                 window.connect("key-press-event", self.on_key)
@@ -547,8 +597,68 @@ def run_lock(start="clock"):
             if main:
                 self.signin.hide()
                 self.accounts.hide()
+                if self.osk is not None:
+                    self.osk.hide()
+                    self.osk_button.hide()
                 self.select_account(self.user)
             return window
+
+        def keyboard_view(self, overlay):
+            """Clavier tactile (winlux-osk) en bas de l'écran de connexion, et
+            son bouton en bas à droite : ouvert d'office sans clavier physique.
+            Deux calques distincts : un calque de la largeur de l'écran
+            capterait les clics destinés aux autres comptes, en bas à gauche."""
+            self.osk, self.osk_button, self.osk_auto = None, None, False
+            module = osk_module()
+            if module is None or getattr(self, "password_entry", None) is None:
+                return
+            try:
+                keys = module.keyboard_widget(send=self.osk_send, on_close=self.osk_toggle)
+                self.osk_auto = module.icon_wanted()
+            except Exception:  # Clavier indisponible : l'écran reste utilisable.
+                return
+            self.osk_button = Gtk.Button.new_from_icon_name("input-keyboard-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
+            self.osk_button.set_halign(Gtk.Align.END)
+            self.osk_button.set_valign(Gtk.Align.END)
+            self.osk_button.set_margin_end(24)
+            self.osk_button.set_margin_bottom(24)
+            self.osk_button.get_style_context().add_class("lock-go")
+            self.osk_button.set_tooltip_text(_t("Clavier tactile"))
+            self.osk_button.connect("clicked", lambda *_: self.osk_toggle())
+            overlay.add_overlay(self.osk_button)
+            keys.set_valign(Gtk.Align.END)
+            keys.set_halign(Gtk.Align.FILL)
+            screen = Gdk.Screen.get_default()
+            self.osk_height = max(220, min(300, int((screen.get_height() if screen else 768) * 0.36)))
+            keys.set_size_request(-1, self.osk_height)
+            overlay.add_overlay(keys)
+            self.osk = keys
+
+        def osk_toggle(self):
+            if self.osk is None:
+                return
+            self.osk_show(not self.osk.get_visible())
+            self.last_typing = time.monotonic()
+
+        def osk_show(self, visible):
+            """Clavier affiché : le compte remonte en haut pour garder le champ
+            du mot de passe visible au-dessus des touches."""
+            if self.osk is None:
+                return
+            self.osk.set_visible(visible)
+            self.signin.set_valign(Gtk.Align.START if visible else Gtk.Align.CENTER)
+            self.signin.set_margin_top(32 if visible else 0)
+            # Autres comptes (en bas à gauche) et bouton du clavier (en bas à
+            # droite) passent au-dessus des touches au lieu de les recouvrir.
+            above = self.osk_height + 16 if visible else 0
+            self.accounts.set_margin_bottom(above or 28)
+            self.osk_button.set_margin_bottom(above or 24)
+
+        def osk_send(self, key, _modifiers):
+            """Touches du clavier tactile vers le champ du mot de passe."""
+            self.last_typing = time.monotonic()
+            if self.entry is not None:
+                type_into(self.entry, key, self.submit)
 
         def accounts_view(self):
             """Autres comptes en bas à gauche : un clic change de compte."""
@@ -557,9 +667,9 @@ def run_lock(start="clock"):
             self.account_names = [self.owner] + other_accounts(self.owner)
             if len(self.account_names) > 1:
                 for name in self.account_names:
-                    button = Gtk.Button(label=name)
+                    button = Gtk.Button(label=display_name(name))
                     button.get_style_context().add_class("lock-signin")
-                    button.get_accessible().set_name(_t("Autre compte : {name}").format(name=name))
+                    button.get_accessible().set_name(_t("Autre compte : {name}").format(name=display_name(name)))
                     button.connect("clicked", lambda _b, n=name: self.select_account(n))
                     self.accounts.pack_start(button, False, False, 0)
             return self.accounts
@@ -568,7 +678,7 @@ def run_lock(start="clock"):
             """Compte affiché au centre : celui de la session ou un autre."""
             self.user = name
             self.password = requires_password(name)
-            self.name_label.set_text(name)
+            self.name_label.set_text(display_name(name))
             self.face = None
             home = account_home(name)
             if home and Path(home, ".face").is_file():
@@ -616,7 +726,7 @@ def run_lock(start="clock"):
                     self.face = None
             avatar.connect("draw", self.draw_avatar)
             self.signin.pack_start(avatar, False, False, 0)
-            name = Gtk.Label(label=self.user)
+            name = Gtk.Label(label=display_name(self.user))
             name.get_style_context().add_class("lock-name")
             self.name_label = name
             self.signin.pack_start(name, False, False, 6)
@@ -686,7 +796,7 @@ def run_lock(start="clock"):
             cr.set_source_rgb(1, 1, 1)
             cr.select_font_face("Sans")
             cr.set_font_size(size * 0.42)
-            letter = (self.user[:1] or "?").upper()
+            letter = (display_name(self.user)[:1] or "?").upper()
             ext = cr.text_extents(letter)
             cr.move_to(size / 2 - ext.width / 2 - ext.x_bearing, size / 2 - ext.height / 2 - ext.y_bearing)
             cr.show_text(letter)
@@ -743,11 +853,18 @@ def run_lock(start="clock"):
             self.area.queue_draw()
             if self.entry is not None:
                 self.entry.grab_focus()
+            if self.osk is not None:
+                self.osk_button.show()
+                if self.osk_auto and self.entry is not None:
+                    self.osk_show(True)
             self.tick()
 
         def show_clock(self):
             self.view = "clock"
             self.signin.hide()
+            if self.osk is not None:
+                self.osk_show(False)
+                self.osk_button.hide()
             self.accounts.hide()
             if self.user != self.owner:
                 self.select_account(self.owner)

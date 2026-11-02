@@ -22,14 +22,14 @@ El creador de memoria USB de Winlux descarga la última imagen, la comprueba y l
 La imagen de Winlux es «híbrida»: sirve cualquier herramienta que copie una imagen de disco en una memoria USB, y Ventoy también la arranca. En Linux, desde la línea de comandos, sustituyendo `/dev/sdX` por la memoria (y nunca por un disco):
 
 ```sh
-sudo dd if=winlux-live-v0.2.14.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.15.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 ## Arrancar el PC desde la memoria
 
 1. Conecte la memoria y encienda (o reinicie) el PC.
 2. Pulse enseguida la tecla del menú de arranque: a menudo **F12**, **F11**, **F8** o **Esc**, según el fabricante.
-3. Elija la memoria USB. Arranca tanto en UEFI como en BIOS heredada, y Secure Boot puede seguir activado.
+3. Elija la memoria USB. Arranca tanto en UEFI como en BIOS heredada, y Secure Boot puede seguir activado. En una tableta con firmware de arranque de 32 bits (Atom), desactive Secure Boot: la memoria también arranca en ese modo.
 4. Aparece el menú de Winlux: elija la sesión Live para probarlo, o la instalación.
 
 > [!tip]

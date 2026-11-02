@@ -294,6 +294,9 @@ class App(tk.Tk):
         self.progress.pack(fill="x")
         self.status = tk.Label(bottom, text=tr("ready"), bg=BG, fg=MUTED, anchor="w")
         self.status.pack(fill="x", pady=(4, 10))
+        # Mention de non-affiliation (docs/DEFENSE-DU-NOM.md).
+        tk.Label(bottom, text=tr("independent"), bg=BG, fg=MUTED, anchor="w", justify="left",
+                 wraplength=480, font=(self.family, 8)).pack(fill="x", pady=(0, 8))
         buttons = tk.Frame(bottom, bg=BG)
         buttons.pack(fill="x")
         tk.Label(buttons, text=f"v{version().lstrip('v')}", bg=BG, fg=MUTED).pack(side="left")

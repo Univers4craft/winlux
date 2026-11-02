@@ -156,7 +156,7 @@ Pour ne jamais nous placer dans le sillage de Microsoft :
 - chaque page du site et l'écran « À propos » du système affichent que le
   projet n'est ni affilié à Microsoft, ni approuvé par elle.
 
-**Choix du navigateur.** Dans l'esprit des règles européennes sur le choix du navigateur, Winlux laisse l'utilisateur choisir lui-même son navigateur parmi plusieurs, dans Paramètres > Navigateurs, et changer à tout moment celui qui s'ouvre par défaut. Ces règles visent les grands systèmes : le **règlement (UE) 2022/1925 sur les marchés numériques, article 6, paragraphe 3**, impose aux contrôleurs d'accès de permettre de désinstaller facilement les applications et de changer les réglages par défaut, avec un écran de choix ; avant lui, la Commission européenne avait rendu obligatoires les engagements de Microsoft de proposer un écran de choix du navigateur (**affaire COMP/39.530, décision du 16 décembre 2009**). Winlux n'est pas un contrôleur d'accès et n'y est pas tenu ; il suit ce principe de lui-même. Les navigateurs y apparaissent sous leur vrai nom, celui de leur éditeur.
+**Choix du navigateur.** Dans l'esprit des règles européennes sur le choix du navigateur, Winlux ne fournit ni ne favorise aucun navigateur : l'image d'installation n'en contient aucun, aucun n'est choisi par défaut, et l'utilisateur choisit le sien dans une liste en ordre alphabétique (Paramètres > Navigateurs, installateur, premier démarrage). Winlux le télécharge alors sur le site officiel de son éditeur, vérifie le fichier et l'installe ; l'utilisateur peut en changer à tout moment. La décision et ses raisons sont consignées dans `docs/BROWSERS.md`. Ces règles visent les grands systèmes : le **règlement (UE) 2022/1925 sur les marchés numériques, article 6, paragraphe 3**, impose aux contrôleurs d'accès de permettre de désinstaller facilement les applications et de changer les réglages par défaut, avec un écran de choix ; avant lui, la Commission européenne avait rendu obligatoires les engagements de Microsoft de proposer un écran de choix du navigateur (**affaire COMP/39.530, décision du 16 décembre 2009**). Winlux n'est pas un contrôleur d'accès et n'y est pas tenu ; il suit ce principe de lui-même. Les navigateurs y apparaissent sous leur vrai nom, celui de leur éditeur.
 
 ## 5. Nos engagements vérifiables
 
@@ -168,7 +168,9 @@ Chacun peut les contrôler dans le dépôt public
    listés dans `NOTICES`, avec une offre écrite de code source pour les
    logiciels sous GPL inclus dans l'image d'installation.
 2. **Aucun élément de Microsoft** : le code et les ressources du projet
-   (son dépôt public) ne contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
+   (son dépôt public) et l'image d'installation (vérifiée à chaque
+   construction par `scripts/check-image-redistributable.sh` et
+   `scripts/test-no-microsoft-branding.py`) ne contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
    (Segoe UI n'est pas fournie ; son nom est seulement remplacé par une
    police libre), ni icône, ni son, ni fond d'écran, ni logo de Microsoft.
    Les fichiers Microsoft qu'une application apporte elle-même (par exemple

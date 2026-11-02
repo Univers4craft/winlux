@@ -466,13 +466,7 @@ pub fn info(path: &Path) -> Result<super::Info, String> {
 /// bundle : les paquets qu'il contient ne sont pas signés à part).
 pub fn signature(path: &Path) -> Result<Signature, String> {
     let pkg = read_package(path)?;
-    let mut f = File::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
-    let entries = zip::list(&mut f).map_err(|e| format!("{} : {e}", path.display()))?;
-    let p7x = match find(&entries, "AppxSignature.p7x") {
-        Some(e) => Some(read_entry(&mut f, e)?),
-        None => None,
-    };
-    Ok(appx_signature::examine(p7x.as_deref(), &pkg.publisher))
+    Ok(appx_signature::examine(path, &pkg.publisher))
 }
 
 pub fn install(path: &Path, opts: &Options, inst: &mut Installer) -> Result<(), String> {
@@ -482,13 +476,18 @@ pub fn install(path: &Path, opts: &Options, inst: &mut Installer) -> Result<(), 
     let publisher = read_package(path)?.publisher_display;
     match &sig {
         Signature::Invalid(e) => return Err(format!("signature refusée : {e}")),
-        _ if !opts.allow_unverified => return Err(appx_signature::warning(&sig, &publisher)),
+        Signature::Absent | Signature::Unverified { .. } if !opts.allow_unverified => {
+            return Err(appx_signature::warning(&sig, &publisher))
+        }
         Signature::Absent => inst
             .log
             .log("paquet non signé, installé sur confirmation de l'utilisateur"),
-        Signature::Unverified { signer } => inst.log.log(&format!(
-            "paquet signé au nom de « {signer} » (chaîne non vérifiée, #235), installé sur confirmation de l'utilisateur"
+        Signature::Unverified { signer, reason } => inst.log.log(&format!(
+            "paquet signé au nom de « {signer} », non vérifié ({reason}), installé sur confirmation de l'utilisateur"
         )),
+        Signature::Verified { signer } => inst
+            .log
+            .log(&format!("paquet signé par « {signer} », signature et chaîne vérifiées")),
     }
     let (app, tmp) = open_app_package(path)?;
     let result = install_app_package(&app, inst);

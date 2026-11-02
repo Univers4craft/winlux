@@ -252,3 +252,64 @@ fn status_lists_every_screen() {
     }
     assert!(s.is_ascii());
 }
+
+const GAMING: &str = "\
+Screen 0: minimum 320 x 200, current 2560 x 1440, maximum 16384 x 16384
+DP-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 597mm x 336mm
+   2560x1440     59.95 +  143.97*  119.88    99.95
+   1920x1080     144.00   60.00
+";
+
+#[test]
+fn refresh_rates_are_parsed() {
+    let o = parse_query(GAMING);
+    let m = o[0].current_mode().unwrap();
+    assert_eq!(m.rates, ["59.95", "143.97", "119.88", "99.95"]);
+    assert_eq!(m.current_rate.as_deref(), Some("143.97"));
+    assert!(m.preferred);
+    let laptop = outputs();
+    let m = laptop[0].current_mode().unwrap();
+    assert_eq!(m.rates, ["60.02", "59.97", "48.00"]);
+    assert_eq!(m.current_rate.as_deref(), Some("60.02"));
+    // Définition proposée deux fois (progressive et entrelacée) : une seule entrée.
+    let hdmi = laptop[1].find_mode("1920x1080").unwrap();
+    assert_eq!(hdmi.rates, ["60.00", "50.00"]);
+    assert_eq!(rate_label("143.97"), "144 Hz");
+    assert_eq!(rate_label("59.95"), "60 Hz");
+}
+
+#[test]
+fn refresh_rate_is_chosen_per_screen() {
+    let o = parse_query(GAMING);
+    let mut config = Config::default();
+    assert!(apply_command(&mut config, &o, &["rate", "DP-1", "240.00"]).is_err());
+    apply_command(&mut config, &o, &["rate", "DP-1", "119.88"]).unwrap();
+    assert_eq!(config.get("display.DP-1.rate.DP-1"), Some("119.88"));
+    let w = wanted(&config, &o);
+    let p = plan(&w, &o, false, 1.0);
+    let on = p[0].on.as_ref().unwrap();
+    assert_eq!(on.rate.as_deref(), Some("119.88"));
+    let args = xrandr_args(&p);
+    let i = args.iter().position(|a| a == "--rate").unwrap();
+    assert_eq!(args[i + 1], "119.88");
+    // Fréquence actuelle 143.97 : le plan n'est pas encore appliqué.
+    assert!(!matches(&o, &p));
+    let status = status_lines(Path::new("/nonexistent"), &o, &config);
+    assert!(
+        status.contains("display_1_rates=59.95,143.97,119.88,99.95\n"),
+        "{status}"
+    );
+    assert!(
+        status.contains("display_1_rate=119.88\ndisplay_1_rate_auto=0\n"),
+        "{status}"
+    );
+    // Une définition qui ne propose pas cette fréquence la laisse au serveur.
+    apply_command(&mut config, &o, &["mode", "DP-1", "1920x1080"]).unwrap();
+    let w = wanted(&config, &o);
+    assert_eq!(plan(&w, &o, false, 1.0)[0].on.as_ref().unwrap().rate, None);
+    apply_command(&mut config, &o, &["rate", "auto"]).unwrap();
+    assert_eq!(config.get("display.DP-1.rate.DP-1"), None);
+    // Sans réglage, aucune option --rate : le serveur garde son choix.
+    let w = wanted(&Config::default(), &o);
+    assert!(!xrandr_args(&plan(&w, &o, false, 1.0)).contains(&"--rate".to_string()));
+}

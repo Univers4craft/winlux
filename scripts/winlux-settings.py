@@ -140,6 +140,7 @@ _TR = {
     'Connexion': ('Connection', 'Conexión', 'Verbindung'),
     'Volume': ('Volume', 'Volumen', 'Lautstärke'),
     'Batterie': ('Battery', 'Batería', 'Akku'),
+    'Alimentation': ('Power', 'Energía', 'Energie'),
     'Mode': ('Mode', 'Modo', 'Modus'),
     'Écran éteint après': ('Turn off screen after', 'Apagar pantalla tras', 'Bildschirm aus nach'),
     'Veille après': ('Sleep after', 'Suspender tras', 'Energiesparmodus nach'),
@@ -152,6 +153,9 @@ _TR = {
     'Alignement': ('Alignment', 'Alineación', 'Ausrichtung'),
     'Définition': ('Resolution', 'Resolución', 'Auflösung'),
     'Échelle': ('Scale', 'Escala', 'Skalierung'),
+    'En attente d’Internet, installé au prochain démarrage connecté : {names}': ('Waiting for Internet, installed at the next startup with a connection: {names}', 'Esperando Internet, se instalará en el próximo arranque con conexión: {names}', 'Wartet auf Internet, wird beim nächsten Start mit Verbindung installiert: {names}'),
+    'Pas de connexion Internet': ('No Internet connection', 'Sin conexión a Internet', 'Keine Internetverbindung'),
+    'Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté.': ('Nothing is lost: Winlux will download it from the publisher and install it automatically at the next startup with a connection. You can also try again here once connected.', 'No se pierde nada: Winlux lo descargará del editor y lo instalará automáticamente en el próximo arranque con conexión. También puede volver a intentarlo aquí una vez conectado.', 'Nichts geht verloren: Winlux lädt es beim Herausgeber herunter und installiert es beim nächsten Start mit Verbindung automatisch. Sie können es auch hier erneut versuchen, sobald Sie verbunden sind.'),
     'Navigateur par défaut': ('Default browser', 'Navegador predeterminado', 'Standardbrowser'),
     'Relancer le bureau': ('Restart the desktop', 'Reiniciar el escritorio', 'Desktop neu starten'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
@@ -224,6 +228,8 @@ _TR = {
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
+    'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
     'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
     'Enregistrez vos documents avant de continuer.': ('Save your documents before continuing.', 'Guarde sus documentos antes de continuar.', 'Speichern Sie Ihre Dokumente, bevor Sie fortfahren.'),
@@ -245,6 +251,8 @@ _TR = {
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
     'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
     'Par défaut : {name}': ('Default: {name}', 'Predeterminado: {name}', 'Standard: {name}'),
+    'Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous.': ('Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. Pick the one you prefer: Winlux downloads it from its publisher’s official website, checks the file and installs it for you.', 'Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. Elija el que prefiera: Winlux lo descarga del sitio oficial de su editor, comprueba el archivo y lo instala por usted.', 'Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Wählen Sie Ihren bevorzugten Browser: Winlux lädt ihn von der offiziellen Website des Herstellers herunter, prüft die Datei und installiert ihn für Sie.'),
+    'Aucun : choisissez-en un ci-dessous': ('None: choose one below', 'Ninguno: elija uno abajo', 'Keiner: unten einen auswählen'),
     'Ouvrir {name}': ('Open {name}', 'Abrir {name}', '{name} öffnen'),
     '{label} : {value}': ('{label}: {value}', '{label}: {value}', '{label}: {value}'),
     'Pilote {driver}': ('Driver {driver}', 'Controlador {driver}', 'Treiber {driver}'),
@@ -307,13 +315,13 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
-         _t("Comptes")]
+         _t("Comptes"), _t("Matériel et pilotes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 33 n’existent que dans les Paramètres natifs.
-CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 0, 27, 25, 31, 9]),
+# Pages 29 à 34 n’existent que dans les Paramètres natifs.
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
@@ -538,6 +546,40 @@ def read(name):
     except OSError: return ""
 
 
+def power_hardware(root=None):
+    """Matériel d'alimentation réellement présent : (batterie, capot, rétroéclairage).
+
+    Sans batterie (ordinateur de bureau, VM), les réglages « sur batterie »
+    sont masqués, jamais grisés ; de même pour le capot et la luminosité."""
+    base = Path(root or os.environ.get("WINLUX_HW_ROOT", "/"))
+    battery = False
+    for supply in (base / "sys/class/power_supply").glob("*"):
+        try:
+            kind = (supply / "type").read_text().strip()
+            present = (supply / "present").read_text().strip() if (supply / "present").exists() else "1"
+        except OSError:
+            continue
+        if kind == "Battery" and present == "1" and (supply / "capacity").exists():
+            battery = True
+    lid = any((base / "proc/acpi/button/lid").glob("*/state"))
+    backlight = any((base / "sys/class/backlight").glob("*/brightness"))
+    return battery, lid, backlight
+
+
+def power_page_items(fields, actions, hardware):
+    """Champs et boutons de la page Alimentation selon le matériel détecté."""
+    battery, lid, backlight = hardware
+    def keep(key):
+        if not battery and (key == "battery" or key.endswith("-dc")):
+            return False
+        if not lid and key in ("power_lid", "power-lid"):
+            return False
+        if not backlight and (key == "power_brightness" or key.startswith("power-brightness-")):
+            return False
+        return True
+    return [f for f in fields if keep(f[1])], [a for a in actions if keep(a[1])]
+
+
 def _power_modes():
     """Modes d'alimentation disponibles (winlux-power-modes, installé à côté)."""
     from importlib.machinery import SourceFileLoader
@@ -655,10 +697,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         # Une page sans contenu possible sur cette machine n'apparaît pas.
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+        # Sans batterie, la page s'appelle « Alimentation » (comme un PC de bureau).
+        if not power_hardware()[0]: PAGES[23] = _t("Alimentation")
         # Sans PipeWire, « Son » garde les commandes simples de l’ancienne page.
         self.sound_fallback = SOUND_PAGE in self.hidden_pages
         self.hidden_pages.discard(SOUND_PAGE)
         self.hidden_pages |= set(MERGED)
+        # Page 33 (Comptes, #309) : cachée tant que sa page n’est pas livrée.
         if wanted in self.hidden_pages: wanted = 8
         self.current = wanted
         self.page = wanted
@@ -724,7 +769,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.progress.set_visible(self.page == 7)
 
     def apply_theme(self):
-        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#8178b7"))
+        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0"))
         self.css.load_from_data(SETTINGS_CSS.format(**p).encode())
 
     def label(self, text, style=None):
@@ -798,24 +843,32 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             available = _power_modes()
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
+            _, actions = power_page_items([], actions, power_hardware())
         if self.page == 11:
-            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
+            # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
+            self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
+            # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
+            actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
         self.rollback_button = None
+        self.browser_buttons = {}
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
+            if action.startswith("browser-"): self.browser_buttons[action] = button
         self.buttons = flow
-        if self.page == 8:
+        display_status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line) if self.page == 8 else {}
+        # Écrans détaillés (définition, fréquence, échelle par écran) : sections_screens.
+        if self.page == 8 and not display_status.get("display_1_name"):
             self.modes = Gtk.ComboBoxText()
-            status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+            status = display_status
             for mode in status.get("display_modes", "").split(","):
                 if mode: self.modes.append_text(mode)
             self.modes.set_active(0)
@@ -843,6 +896,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.poll()
         self.body.show_all()
         self.progress.set_visible(self.page == 7)
+        if self.page == 11:
+            # show_all() vient de tout réafficher : on remasque selon l'état réel.
+            self.show_browser_buttons(dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line))
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
@@ -938,6 +994,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.notice.set_text(_t("Opération en cours…"))
         self.buttons.set_sensitive(False)
 
+    def show_browser_buttons(self, status):
+        for action, button in getattr(self, "browser_buttons", {}).items():
+            child = button.get_parent() or button
+            shown = browser_buttons_shown(status, action)
+            if child.get_visible() != shown: child.set_visible(shown)
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -946,7 +1008,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             action = self.active_action
             self.process = None
             self.active_action = None
-            if result and action in ("update-check", "update-apply", "update-rollback"):
+            if result == 75 and action and action.startswith(("browser-", "store-catalog-")):
+                # Reporté faute de réseau : une information, pas une erreur technique.
+                self.show_info(_t("Pas de connexion Internet"), _t("Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté."))
+            elif result and action in ("update-check", "update-apply", "update-rollback"):
                 self.show_update_error(action, result)
             elif result:
                 detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
@@ -955,6 +1020,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
+        if self.page == 23:
+            fields, _ = power_page_items(fields, [], power_hardware())
         def shown(key):
             value = status.get(key)
             # Échelle non réglée : automatique (et non « Indisponible »), en %.
@@ -963,6 +1030,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                     return f"{round(float(value) * 100)} %" if value else _t("Automatique")
                 except ValueError:
                     return value
+            if key == "browser_default":
+                return BROWSER_NAMES.get(value, _t("Aucun : choisissez-en un ci-dessous"))
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
@@ -973,6 +1042,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
+        if self.page == 11:
+            self.show_browser_buttons(status)
+            waiting = browsers_waiting()
+            if waiting:
+                text += "\n" + _t("En attente d’Internet, installé au prochain démarrage connecté : {names}").format(names=", ".join(waiting))
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
@@ -1025,6 +1099,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
+    def show_info(self, title, detail):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.INFO,
+                                   buttons=Gtk.ButtonsType.CLOSE, text=title)
+        dialog.format_secondary_text(detail)
+        dialog.connect("response", lambda window, _: window.destroy())
+        dialog.show_all()
+
     def show_error(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.ERROR,
                                    buttons=Gtk.ButtonsType.CLOSE, text=title)
@@ -1033,6 +1114,27 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if isinstance(child, Gtk.Label): child.set_selectable(True)
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
+
+# Ordre alphabétique : aucun navigateur mis en avant.
+BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+
+
+def browser_buttons_shown(status, action):
+    """« Par défaut » et « Ouvrir » seulement pour un navigateur installé ;
+    « Installer » seulement pour un navigateur absent (ou à mettre à jour)."""
+    verb, _, ident = action[len("browser-"):].partition("-")
+    installed = status.get(f"browser_{ident}") in ("installed", "update")
+    if verb == "install":
+        return not installed or status.get(f"browser_{ident}") == "update"
+    return installed
+
+
+def browsers_waiting():
+    """Navigateurs demandés sans réseau, que l'init installera (winlux-browsers)."""
+    names = BROWSER_NAMES
+    ids = read("/etc/winlux/browser-install-pending").split() + read("/etc/winlux/first-boot-browser").split()[:1]
+    return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
+
 
 class SettingsApp(Gtk.Application):
     """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement

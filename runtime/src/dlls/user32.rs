@@ -1042,6 +1042,11 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         4 => 4,                               // SM_CYBORDER
         7 => 32,                              // SM_CYHSCROLL
         8 => 16,                              // SM_CYVSCROLL
+        19 => 1,                              // SM_MOUSEPRESENT
+        23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
+        36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        43 => 3,                              // SM_CMOUSEBUTTONS
+        75 => 1,                              // SM_MOUSEWHEELPRESENT
         90 => 96,                             // LOGPIXELSX
         91 => 96,                             // LOGPIXELSY
         _ => 0,
@@ -1576,20 +1581,7 @@ pub extern "win64" fn map_virtual_key_ex_w(code: u32, map_type: u32, _hkl: usize
 }
 
 fn map_virtual_key_impl(code: u32, map_type: u32) -> u32 {
-    // Mappage simplifié VK <-> scan code
-    match map_type {
-        0 => code, // MAPVK_VK_TO_VSC
-        1 => code, // MAPVK_VSC_TO_VK
-        2 => {
-            if (0x30..=0x39).contains(&code) || (0x41..=0x5A).contains(&code) {
-                code
-            } else {
-                0
-            }
-        }
-        3 => code, // MAPVK_VSC_TO_VK_EX
-        _ => 0,
-    }
+    crate::intl::keymap::map_virtual_key(crate::intl::keymap::current_klid(), code, map_type)
 }
 
 pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
@@ -1650,11 +1642,14 @@ pub extern "win64" fn show_cursor(show: i32) -> i32 {
 }
 
 pub extern "win64" fn get_double_click_time() -> u32 {
-    500 // Valeur Windows par défaut
+    // Paramètres > Souris (500 ms par défaut, comme Windows).
+    crate::dlls::mouse::current().double_click
 }
 
 pub extern "win64" fn swap_mouse_button(_swap: i32) -> i32 {
-    0 // Pas de swap
+    // Les boutons sont déjà inversés par libinput quand le réglage gaucher est
+    // actif : on renvoie l'état précédent sans le modifier pour tout le bureau.
+    i32::from(crate::dlls::mouse::current().swap_buttons)
 }
 
 // =====================================================================
@@ -2188,6 +2183,18 @@ pub unsafe extern "win64" fn system_parameters_info_a(
             *data.cast::<i32>() = i32::from(a11y.animations);
             return 1;
         }
+        // Souris (Paramètres > Souris) : SPI_GETMOUSETRAILS, SPI_GETWHEELSCROLLLINES,
+        // SPI_GETMOUSESPEED (1 à 20) et SPI_GETWHEELSCROLLCHARS (3, comme Windows).
+        0x005E | 0x0068 | 0x0070 | 0x006C if !data.is_null() => {
+            let mouse = crate::dlls::mouse::current();
+            *data.cast::<u32>() = match action {
+                0x005E => mouse.trails,
+                0x0068 => mouse.wheel_lines,
+                0x0070 => mouse.speed,
+                _ => 3,
+            };
+            return 1;
+        }
         // SPI_GETCARETWIDTH : DWORD en pixels.
         0x2006 if !data.is_null() => {
             *data.cast::<u32>() = u32::from(a11y.caret_width);
@@ -2330,28 +2337,23 @@ pub unsafe extern "win64" fn load_image_w(
     0
 }
 
+/// LoadStringA/W : les tables de chaînes du module (voir resource.rs).
 pub unsafe extern "win64" fn load_string_a(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u8,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_a(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_string_w(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u16,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_w(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_accelerators_a(_instance: usize, _name: *const u8) -> usize {
@@ -2386,33 +2388,106 @@ pub extern "win64" fn get_key_name_text_w(_lparam: i32, _buf: *mut u16, _max: i3
     0
 }
 
+/// VkKeyScan(Ex) : touche et modificateurs d'un caractère dans la
+/// disposition réelle (voir intl::keymap).
 pub extern "win64" fn vk_key_scan_a(ch: u8) -> i16 {
-    ch as i16
+    let text = crate::intl::codepage::decode(crate::intl::codepage::resolve(0), &[ch], false)
+        .unwrap_or_default();
+    text.chars().next().map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
 pub extern "win64" fn vk_key_scan_w(ch: u16) -> i16 {
-    ch as i16
+    char::from_u32(ch as u32).map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
+pub extern "win64" fn vk_key_scan_ex_a(ch: u8, _hkl: usize) -> i16 {
+    vk_key_scan_a(ch)
+}
+
+pub extern "win64" fn vk_key_scan_ex_w(ch: u16, _hkl: usize) -> i16 {
+    vk_key_scan_w(ch)
+}
+
+/// ToUnicodeEx : caractères de la touche selon la disposition réelle,
+/// touches mortes comprises (-1 puis la lettre composée).
 pub unsafe extern "win64" fn to_unicode_ex(
     vk: u32,
     scan: u32,
     state: *const u8,
     buf: *mut u16,
     buf_size: i32,
-    _flags: u32,
+    flags: u32,
     _hkl: usize,
 ) -> i32 {
-    let _ = (scan, state);
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
-    if (0x20..=0x7E).contains(&vk) {
-        *buf = vk as u16;
-        1
-    } else {
-        0
+    let mut keys = [0u8; 256];
+    if !state.is_null() {
+        std::ptr::copy_nonoverlapping(state, keys.as_mut_ptr(), 256);
     }
+    let typed = crate::intl::keymap::to_unicode(
+        crate::intl::keymap::current_klid(),
+        vk,
+        scan,
+        &keys,
+        flags,
+    );
+    let mut n = 0usize;
+    for c in &typed.chars {
+        let mut units = [0u16; 2];
+        for u in c.encode_utf16(&mut units).iter() {
+            if n < buf_size as usize {
+                *buf.add(n) = *u;
+                n += 1;
+            }
+        }
+    }
+    if n < buf_size as usize {
+        *buf.add(n) = 0;
+    }
+    typed.code
+}
+
+/// ToAscii(Ex) : comme ToUnicode, dans la page ANSI ; renvoie 1 ou 2
+/// caractères, -1 pour une touche morte.
+pub unsafe extern "win64" fn to_ascii_ex(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+    hkl: usize,
+) -> i32 {
+    let mut wide = [0u16; 4];
+    let code = to_unicode_ex(vk, scan, state, wide.as_mut_ptr(), 4, flags, hkl);
+    if code == 0 || out.is_null() {
+        return code;
+    }
+    let count = code.unsigned_abs().min(2) as usize;
+    let text = String::from_utf16_lossy(&wide[..count]);
+    let bytes = crate::intl::codepage::encode(crate::intl::codepage::resolve(0), &text, b'?', true)
+        .map(|e| e.bytes)
+        .unwrap_or_default();
+    let out = out as *mut u8;
+    for (i, b) in bytes.iter().take(2).enumerate() {
+        *out.add(i) = *b;
+    }
+    code
+}
+
+pub unsafe extern "win64" fn to_ascii(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+) -> i32 {
+    to_ascii_ex(vk, scan, state, out, flags, 0)
 }
 
 pub unsafe extern "win64" fn to_unicode(
@@ -2848,6 +2923,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetKeyNameTextA"=>fn get_key_name_text_a, "GetKeyNameTextW"=>fn get_key_name_text_w,
         "VkKeyScanA"=>fn vk_key_scan_a, "VkKeyScanW"=>fn vk_key_scan_w,
         "ToUnicode"=>fn to_unicode, "ToUnicodeEx"=>fn to_unicode_ex,
+        "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
+        "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
         "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
         "GetCapture"=>fn get_capture,

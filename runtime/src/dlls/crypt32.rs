@@ -720,7 +720,36 @@ pub unsafe extern "win64" fn CertAddCertificateContextToStore(
     out: *mut usize,
 ) -> i32 {
     let der = cert_der(ctx).to_vec();
-    CertAddEncodedCertificateToStore(h, X509_ASN_ENCODING, der.as_ptr(), der.len() as u32, 0, out)
+    let mut added = 0usize;
+    if CertAddEncodedCertificateToStore(
+        h,
+        X509_ASN_ENCODING,
+        der.as_ptr(),
+        der.len() as u32,
+        0,
+        &mut added,
+    ) == 0
+    {
+        return 0;
+    }
+    // La clé privée suit le certificat dans son nouveau magasin.
+    if let (Some(src), Some(dst)) = (cert(ctx), cert(added)) {
+        if !std::ptr::eq(src, dst) {
+            let from = super::lock(&src.props).clone();
+            let mut to = super::lock(&dst.props);
+            for id in [PRIVATE_KEY_PROP, CERT_KEY_SPEC_PROP_ID] {
+                if let Some(v) = from.get(&id) {
+                    to.insert(id, v.clone());
+                }
+            }
+        }
+    }
+    if out.is_null() {
+        CertFreeCertificateContext(added);
+    } else {
+        *out = added;
+    }
+    1
 }
 
 pub unsafe extern "win64" fn CertCompareCertificate(
@@ -806,6 +835,8 @@ pub unsafe extern "win64" fn CertFindCertificateInStore(
                 .to_lowercase()
                 .contains(&wanted_str),
             0xd0000 => k.der.as_slice() == cert_der(para),
+            // CERT_FIND_HAS_PRIVATE_KEY
+            0x150000 => super::lock(&k.props).contains_key(&PRIVATE_KEY_PROP),
             _ => false,
         };
         if hit {
@@ -826,6 +857,13 @@ pub unsafe extern "win64" fn CertGetCertificateContextProperty(
         set_last_error(E_INVALIDARG);
         return 0;
     };
+    if id == PRIVATE_KEY_PROP {
+        set_last_error(CRYPT_E_NOT_FOUND);
+        return 0;
+    }
+    if id == CERT_KEY_PROV_INFO_PROP_ID && super::lock(&c.props).contains_key(&PRIVATE_KEY_PROP) {
+        return key_prov_info(&c.der, data, size);
+    }
     let value = super::lock(&c.props)
         .get(&id)
         .cloned()
@@ -849,6 +887,50 @@ pub unsafe extern "win64" fn CertGetCertificateContextProperty(
     }
     std::ptr::copy_nonoverlapping(v.as_ptr(), data, v.len());
     *size = v.len() as u32;
+    1
+}
+
+/// CRYPT_KEY_PROV_INFO d'une clé importée, bâti dans le tampon de
+/// l'appelant (les chaînes suivent la structure, comme sous Windows).
+unsafe fn key_prov_info(der: &[u8], data: *mut u8, size: *mut u32) -> i32 {
+    let sha = hash_prop(der, 3).unwrap_or_default();
+    let container: Vec<u16> = format!(
+        "winlux-{}",
+        sha.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect();
+    let provider: Vec<u16> = "Winlux Software Key Storage"
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    // { pwszContainerName, pwszProvName, dwProvType, dwFlags, cProvParam,
+    //   rgProvParam, dwKeySpec } = 48 octets en x64.
+    let total = 48 + 2 * (container.len() + provider.len());
+    if size.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    if data.is_null() {
+        *size = total as u32;
+        return 1;
+    }
+    if (*size as usize) < total {
+        *size = total as u32;
+        set_last_error(ERROR_MORE_DATA);
+        return 0;
+    }
+    std::ptr::write_bytes(data, 0, 48);
+    let c = data.add(48);
+    let p = c.add(container.len() * 2);
+    std::ptr::copy_nonoverlapping(container.as_ptr() as *const u8, c, container.len() * 2);
+    std::ptr::copy_nonoverlapping(provider.as_ptr() as *const u8, p, provider.len() * 2);
+    *(data as *mut usize) = c as usize;
+    *(data.add(8) as *mut usize) = p as usize;
+    *(data.add(16) as *mut u32) = 24; // PROV_RSA_AES
+    *(data.add(40) as *mut u32) = 1; // AT_KEYEXCHANGE
+    *size = total as u32;
     1
 }
 
@@ -951,6 +1033,15 @@ unsafe fn name_string(ctx: usize, kind: u32, flags: u32, para: usize) -> String 
         1 => attr(name, "1.2.840.113549.1.9.1").unwrap_or_default(),
         2 => name_to_str(name, false),
         3 => attr(name, &super::cstr(para as *const u8)).unwrap_or_default(),
+        // CERT_NAME_SEARCH_ALL_NAMES_FLAG (0x2) : tous les noms DNS, chacun
+        // terminé par un nul (le nul final de put_w ferme la liste).
+        6 if flags & 1 == 0 && flags & 2 != 0 => {
+            let mut all = dns_names(c);
+            if all.is_empty() {
+                all.extend(attr(name, "2.5.4.3"));
+            }
+            all.iter().map(|n| format!("{n}\0")).collect()
+        }
         6 if flags & 1 == 0 => dns_names(c)
             .into_iter()
             .next()
@@ -1121,7 +1212,7 @@ fn trust_error(x509: i32) -> u32 {
 }
 
 pub unsafe extern "win64" fn CertGetCertificateChain(
-    _engine: usize,
+    engine: usize,
     ctx: usize,
     _time: usize,
     extra_store: usize,
@@ -1138,8 +1229,23 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
         set_last_error(E_INVALIDARG);
         return 0;
     }
+    let (roots, partial, mut stores) = match super::lock(engines()).get(&engine) {
+        Some(e) if e.exclusive_root != 0 => (
+            Some(
+                store_certs(e.exclusive_root)
+                    .into_iter()
+                    .map(|c| cert_der(c).to_vec())
+                    .collect::<Vec<_>>(),
+            ),
+            e.partial,
+            e.additional.clone(),
+        ),
+        Some(e) => (None, false, e.additional.clone()),
+        None => (None, false, Vec::new()),
+    };
+    stores.extend([leaf.ctx.store, extra_store]);
     let mut extra: Vec<Vec<u8>> = Vec::new();
-    for h in [leaf.ctx.store, extra_store] {
+    for h in stores {
         for c in store_certs(h) {
             let d = cert_der(c);
             if d != leaf.der.as_slice() && !extra.iter().any(|e| e == d) {
@@ -1147,7 +1253,8 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
             }
         }
     }
-    let (x509_error, ders) = match hostssl::verify(&leaf.der, &extra, None) {
+    let verified = hostssl::verify_with(&leaf.der, &extra, roots.as_deref(), partial, None);
+    let (x509_error, ders) = match verified {
         Some(v) => (v.error, v.chain),
         // Sans OpenSSL : chaîne d'un seul élément, racine inconnue.
         None => (20, vec![leaf.der.clone()]),
@@ -1326,14 +1433,78 @@ pub unsafe extern "win64" fn CertVerifyCertificateChainPolicy(
     1
 }
 
-pub extern "win64" fn CertCreateCertificateChainEngine(_config: usize, out: *mut usize) -> i32 {
-    if !out.is_null() {
-        unsafe { *out = 0x7000_0002 };
+/// Moteur de chaînes : racines exclusives (hExclusiveRoot) et magasins
+/// supplémentaires de CERT_CHAIN_ENGINE_CONFIG. Sans racine exclusive, ce
+/// sont les autorités du système, comme le moteur par défaut.
+struct Engine {
+    exclusive_root: usize,
+    /// CERT_CHAIN_EXCLUSIVE_ENABLE_CA_FLAG : toute autorité de hExclusiveRoot
+    /// peut terminer la chaîne, même si elle n'est pas auto-signée.
+    partial: bool,
+    additional: Vec<usize>,
+}
+
+fn engines() -> &'static Mutex<HashMap<usize, Engine>> {
+    static E: OnceLock<Mutex<HashMap<usize, Engine>>> = OnceLock::new();
+    E.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static NEXT_ENGINE: AtomicUsize = AtomicUsize::new(0x7000_1000);
+
+pub unsafe extern "win64" fn CertCreateCertificateChainEngine(
+    config: usize,
+    out: *mut usize,
+) -> i32 {
+    // cbSize : 80 (Windows 7) ou 88 (Windows 8 et plus, avec dwExclusiveFlags).
+    let cb = if config == 0 {
+        0
+    } else {
+        *(config as *const u32)
+    };
+    if out.is_null() || !(cb == 64 || cb == 80 || cb == 88) {
+        set_last_error(E_INVALIDARG);
+        return 0;
     }
+    let f = |off: usize| *((config + off) as *const usize);
+    let count = *((config + 32) as *const u32) as usize;
+    let list = f(40) as *const usize;
+    let additional = if list.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(list, count).to_vec()
+    };
+    let (exclusive_root, partial) = if cb >= 80 {
+        (f(64), cb >= 88 && *((config + 80) as *const u32) & 1 != 0)
+    } else {
+        (0, false)
+    };
+    for h in additional.iter().copied().chain([exclusive_root]) {
+        if let Some(st) = store(h) {
+            st.refs.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let id = NEXT_ENGINE.fetch_add(1, Ordering::Relaxed);
+    super::lock(engines()).insert(
+        id,
+        Engine {
+            exclusive_root,
+            partial,
+            additional,
+        },
+    );
+    *out = id;
     1
 }
 
-pub extern "win64" fn CertFreeCertificateChainEngine(_engine: usize) {}
+pub extern "win64" fn CertFreeCertificateChainEngine(engine: usize) {
+    if let Some(e) = super::lock(engines()).remove(&engine) {
+        for h in e.additional.into_iter().chain([e.exclusive_root]) {
+            if h != 0 {
+                CertCloseStore(h, 0);
+            }
+        }
+    }
+}
 
 // ---------- Conversions texte ----------
 
@@ -1589,40 +1760,507 @@ pub unsafe extern "win64" fn CryptBinaryToStringA(
     1
 }
 
-// ---------- Protection de données (non fournie) ----------
+// ---------- CryptQueryObject et CryptDecodeObjectEx ----------
 
-pub unsafe extern "win64" fn CryptProtectData(
-    _in: usize,
-    _desc: *const u16,
-    _entropy: usize,
-    _reserved: usize,
-    _prompt: usize,
-    _flags: u32,
-    _out: usize,
-) -> i32 {
-    0
+const CERT_QUERY_OBJECT_FILE: u32 = 1;
+const CERT_QUERY_OBJECT_BLOB: u32 = 2;
+const CERT_QUERY_CONTENT_CERT: u32 = 1;
+const CERT_QUERY_CONTENT_FLAG_CERT: u32 = 1 << CERT_QUERY_CONTENT_CERT;
+const CERT_QUERY_FORMAT_BINARY: u32 = 1;
+const CERT_QUERY_FORMAT_BASE64_ENCODED: u32 = 2;
+const CRYPT_E_NO_MATCH: u32 = 0x8009_2009;
+
+/// Certificat DER contenu dans `data` : binaire, PEM ou base64 nu.
+fn query_cert(data: &[u8], formats: u32) -> Option<(Vec<u8>, u32)> {
+    if formats & (1 << CERT_QUERY_FORMAT_BINARY) != 0 && data.first() == Some(&0x30) {
+        let (t, _) = tlv(data)?;
+        return Some((t.all.to_vec(), CERT_QUERY_FORMAT_BINARY));
+    }
+    if formats & (1 << CERT_QUERY_FORMAT_BASE64_ENCODED) == 0 {
+        return None;
+    }
+    let text = std::str::from_utf8(data).ok()?.trim_end_matches('\0');
+    let der = pem_certs(text)
+        .into_iter()
+        .next()
+        .or_else(|| crate::imaging::base64(text.trim()))?;
+    Some((der, CERT_QUERY_FORMAT_BASE64_ENCODED))
 }
-pub unsafe extern "win64" fn CryptUnprotectData(
-    _in: usize,
-    _desc: *mut *mut u16,
-    _entropy: usize,
-    _reserved: usize,
-    _prompt: usize,
+
+/// CryptQueryObject : seul le contenu « certificat » (binaire, PEM, base64)
+/// est reconnu, dans un tampon ou un fichier. C'est ce que lit le Schannel de
+/// libcurl pour charger son fichier d'autorités (CURLOPT_CAINFO).
+pub unsafe extern "win64" fn CryptQueryObject(
+    object_type: u32,
+    object: usize,
+    content_flags: u32,
+    format_flags: u32,
     _flags: u32,
-    _out: usize,
+    encoding: *mut u32,
+    content_type: *mut u32,
+    format_type: *mut u32,
+    store_out: *mut usize,
+    msg_out: *mut usize,
+    context_out: *mut usize,
 ) -> i32 {
-    0
+    if object == 0 {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    let data = match object_type {
+        CERT_QUERY_OBJECT_BLOB => blob_slice(object as *const Blob).to_vec(),
+        CERT_QUERY_OBJECT_FILE => {
+            let path = crate::paths::to_linux(&super::wstr(object as *const u16));
+            match std::fs::read(path) {
+                Ok(d) => d,
+                Err(_) => {
+                    set_last_error(2);
+                    return 0;
+                }
+            }
+        }
+        _ => {
+            set_last_error(E_INVALIDARG);
+            return 0;
+        }
+    };
+    let found = (content_flags & CERT_QUERY_CONTENT_FLAG_CERT != 0)
+        .then(|| query_cert(&data, if format_flags == 0 { !0 } else { format_flags }))
+        .flatten();
+    let Some((der, format)) = found else {
+        set_last_error(CRYPT_E_NO_MATCH);
+        return 0;
+    };
+    let store = new_store();
+    let Some(c) = store_add_der(store, &der) else {
+        CertCloseStore(store, 0);
+        set_last_error(CRYPT_E_NO_MATCH);
+        return 0;
+    };
+    if !encoding.is_null() {
+        *encoding = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
+    }
+    if !content_type.is_null() {
+        *content_type = CERT_QUERY_CONTENT_CERT;
+    }
+    if !format_type.is_null() {
+        *format_type = format;
+    }
+    if !msg_out.is_null() {
+        *msg_out = 0;
+    }
+    if !context_out.is_null() {
+        *context_out = add_ref(c);
+    }
+    if store_out.is_null() {
+        CertCloseStore(store, 0);
+    } else {
+        *store_out = store;
+    }
+    1
 }
+
+/// Ni CRL ni CTL ne sont jamais rendues : leur libération réussit toujours.
+pub extern "win64" fn CertFreeCRLContext(_ctx: usize) -> i32 {
+    1
+}
+
+pub extern "win64" fn CertFreeCTLContext(_ctx: usize) -> i32 {
+    1
+}
+
+const X509_ALTERNATE_NAME: usize = 12;
+const X509_BASIC_CONSTRAINTS2: usize = 15;
+const CRYPT_DECODE_ALLOC_FLAG: u32 = 0x8000;
+
+/// Une entrée de nom alternatif décodée : (choix, texte UTF-16 ou octets).
+enum AltValue {
+    Text(Vec<u16>),
+    Bytes(Vec<u8>),
+}
+
+fn alt_names(ext: &[u8]) -> Option<Vec<(u32, AltValue)>> {
+    let (seq, _) = tlv(ext)?;
+    if seq.tag != 0x30 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for g in children(seq.body) {
+        // [1] rfc822Name, [2] dNSName, [6] URI : IA5String ; [7] iPAddress.
+        let wide = |b: &[u8]| {
+            let mut w: Vec<u16> = String::from_utf8_lossy(b).encode_utf16().collect();
+            w.push(0);
+            AltValue::Text(w)
+        };
+        match g.tag {
+            0x81 => out.push((2, wide(g.body))),
+            0x82 => out.push((3, wide(g.body))),
+            0x86 => out.push((7, wide(g.body))),
+            0x87 => out.push((8, AltValue::Bytes(g.body.to_vec()))),
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// CERT_ALT_NAME_INFO dans un seul bloc : en-tête (16 octets), entrées
+/// CERT_ALT_NAME_ENTRY (24 octets), puis les chaînes et octets désignés.
+fn alt_layout(names: &[(u32, AltValue)]) -> usize {
+    16 + names.len() * 24
+        + names
+            .iter()
+            .map(|(_, v)| match v {
+                AltValue::Text(w) => w.len() * 2,
+                AltValue::Bytes(b) => b.len().next_multiple_of(2),
+            })
+            .sum::<usize>()
+}
+
+unsafe fn alt_fill(names: &[(u32, AltValue)], base: *mut u8) {
+    *(base as *mut u32) = names.len() as u32;
+    let entries = base.add(16);
+    *(base.add(8) as *mut usize) = if names.is_empty() {
+        0
+    } else {
+        entries as usize
+    };
+    let mut tail = entries.add(names.len() * 24);
+    for (i, (choice, v)) in names.iter().enumerate() {
+        let e = entries.add(i * 24);
+        std::ptr::write_bytes(e, 0, 24);
+        *(e as *mut u32) = *choice;
+        match v {
+            AltValue::Text(w) => {
+                std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, tail, w.len() * 2);
+                *(e.add(8) as *mut usize) = tail as usize;
+                tail = tail.add(w.len() * 2);
+            }
+            AltValue::Bytes(b) => {
+                std::ptr::copy_nonoverlapping(b.as_ptr(), tail, b.len());
+                *(e.add(8) as *mut u32) = b.len() as u32;
+                *(e.add(16) as *mut usize) = tail as usize;
+                tail = tail.add(b.len().next_multiple_of(2));
+            }
+        }
+    }
+}
+
+/// CryptDecodeObjectEx : noms alternatifs (X509_ALTERNATE_NAME, OID
+/// 2.5.29.17/18/7/8) et contraintes de base (X509_BASIC_CONSTRAINTS2,
+/// 2.5.29.19). Les autres structures répondent CRYPT_E_NOT_FOUND.
+pub unsafe extern "win64" fn CryptDecodeObjectEx(
+    _enc: u32,
+    struct_type: usize,
+    encoded: *const u8,
+    len: u32,
+    flags: u32,
+    para: usize,
+    out: *mut u8,
+    out_len: *mut u32,
+) -> i32 {
+    if encoded.is_null() || out_len.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    let kind = if struct_type < 0x1_0000 {
+        struct_type
+    } else {
+        match super::cstr(struct_type as *const u8).as_str() {
+            "2.5.29.17" | "2.5.29.18" | "2.5.29.7" | "2.5.29.8" => X509_ALTERNATE_NAME,
+            "2.5.29.19" => X509_BASIC_CONSTRAINTS2,
+            _ => 0,
+        }
+    };
+    let data = std::slice::from_raw_parts(encoded, len as usize);
+    // Le décodé est bâti à l'adresse finale, d'où une fonction de remplissage.
+    let (size, fill): (usize, Box<dyn Fn(*mut u8)>) = match kind {
+        X509_ALTERNATE_NAME => {
+            let Some(names) = alt_names(data) else {
+                set_last_error(CRYPT_E_ASN1_BADTAG);
+                return 0;
+            };
+            (alt_layout(&names), Box::new(move |p| alt_fill(&names, p)))
+        }
+        X509_BASIC_CONSTRAINTS2 => {
+            let Some((seq, _)) = tlv(data).filter(|(t, _)| t.tag == 0x30) else {
+                set_last_error(CRYPT_E_ASN1_BADTAG);
+                return 0;
+            };
+            let mut ca = false;
+            let mut path: Option<u32> = None;
+            for c in children(seq.body) {
+                match c.tag {
+                    0x01 => ca = c.body.first().is_some_and(|&b| b != 0),
+                    0x02 => path = Some(c.body.iter().fold(0u32, |a, &b| a << 8 | b as u32)),
+                    _ => {}
+                }
+            }
+            (
+                12,
+                Box::new(move |p| {
+                    *(p as *mut u32) = ca as u32;
+                    *(p.add(4) as *mut u32) = path.is_some() as u32;
+                    *(p.add(8) as *mut u32) = path.unwrap_or(0);
+                }),
+            )
+        }
+        _ => {
+            set_last_error(CRYPT_E_NOT_FOUND);
+            return 0;
+        }
+    };
+    if flags & CRYPT_DECODE_ALLOC_FLAG != 0 {
+        if out.is_null() {
+            set_last_error(E_INVALIDARG);
+            return 0;
+        }
+        // CRYPT_DECODE_PARA { cbSize, pfnAlloc, pfnFree } ; sinon LocalAlloc.
+        let alloc = if para != 0 && *(para as *const u32) >= 16 {
+            *((para + 8) as *const usize)
+        } else {
+            0
+        };
+        let p = if alloc != 0 {
+            let f: unsafe extern "win64" fn(usize) -> *mut u8 = std::mem::transmute(alloc);
+            f(size)
+        } else {
+            super::kernel32_misc::local_alloc(0x40, size) as *mut u8
+        };
+        if p.is_null() {
+            set_last_error(14);
+            return 0;
+        }
+        fill(p);
+        *(out as *mut *mut u8) = p;
+        *out_len = size as u32;
+        return 1;
+    }
+    if out.is_null() {
+        *out_len = size as u32;
+        return 1;
+    }
+    if (*out_len as usize) < size {
+        *out_len = size as u32;
+        set_last_error(ERROR_MORE_DATA);
+        return 0;
+    }
+    std::ptr::write_bytes(out, 0, size);
+    fill(out);
+    *out_len = size as u32;
+    1
+}
+
+// ---------- PKCS #12 ----------
+
+/// Propriété interne : clé privée DER d'un certificat importé d'un PKCS #12.
+/// Jamais rendue par CertGetCertificateContextProperty.
+const PRIVATE_KEY_PROP: u32 = 0x5749_0001;
+const CERT_KEY_PROV_INFO_PROP_ID: u32 = 2;
+const CERT_KEY_SPEC_PROP_ID: u32 = 6;
+const ERROR_INVALID_PASSWORD: u32 = 86;
+
+/// Clé privée associée au certificat (importée par PFXImportCertStore).
+pub fn private_key(ctx: usize) -> Option<Vec<u8>> {
+    let c = unsafe { cert(ctx) }?;
+    super::lock(&c.props).get(&PRIVATE_KEY_PROP).cloned()
+}
+
+fn der_wrap(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = vec![tag];
+    let n = body.len();
+    if n < 0x80 {
+        v.push(n as u8);
+    } else {
+        let bytes: Vec<u8> = n
+            .to_be_bytes()
+            .iter()
+            .copied()
+            .skip_while(|&b| b == 0)
+            .collect();
+        v.push(0x80 | bytes.len() as u8);
+        v.extend_from_slice(&bytes);
+    }
+    v.extend_from_slice(body);
+    v
+}
+
+/// SubjectPublicKeyInfo DER d'un CERT_PUBLIC_KEY_INFO (RSA seulement).
+unsafe fn spki_der(alg: &AlgId, key: &BitBlob) -> Option<Vec<u8>> {
+    if alg.oid.is_null() || key.pb.is_null() {
+        return None;
+    }
+    if std::ffi::CStr::from_ptr(alg.oid).to_bytes() != b"1.2.840.113549.1.1.1" {
+        return None;
+    }
+    let mut a = vec![
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    ];
+    if alg.params.cb > 0 && !alg.params.pb.is_null() {
+        a.extend_from_slice(std::slice::from_raw_parts(
+            alg.params.pb,
+            alg.params.cb as usize,
+        ));
+    } else {
+        a.extend_from_slice(&[0x05, 0x00]);
+    }
+    let mut bits = vec![key.unused as u8];
+    bits.extend_from_slice(std::slice::from_raw_parts(key.pb, key.cb as usize));
+    let body = [der_wrap(0x30, &a), der_wrap(0x03, &bits)].concat();
+    Some(der_wrap(0x30, &body))
+}
+
+/// CERT_PUBLIC_KEY_INFO : l'algorithme puis la clé, comme dans CERT_INFO.
+#[repr(C)]
+struct PublicKeyInfo {
+    alg: AlgId,
+    key: BitBlob,
+}
+
+unsafe extern "win64" fn CryptImportPublicKeyInfo(
+    _prov: usize,
+    _encoding: u32,
+    info: *const PublicKeyInfo,
+    out: *mut usize,
+) -> i32 {
+    if info.is_null() || out.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    match spki_der(&(*info).alg, &(*info).key) {
+        Some(der) => super::advapi32_rsa::import_spki(&der, out),
+        None => {
+            set_last_error(0x8009_0008); // NTE_BAD_ALGID
+            0
+        }
+    }
+}
+
+unsafe extern "win64" fn CryptImportPublicKeyInfoEx(
+    prov: usize,
+    encoding: u32,
+    info: *const PublicKeyInfo,
+    _algid: u32,
+    _flags: u32,
+    _aux: usize,
+    out: *mut usize,
+) -> i32 {
+    CryptImportPublicKeyInfo(prov, encoding, info, out)
+}
+
+const CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG: u32 = 0x0004_0000;
+
+/// CryptAcquireCertificatePrivateKey : fournisseur CAPI qui tient la clé
+/// privée du certificat (importée d'un PKCS #12), en AT_KEYEXCHANGE.
+unsafe extern "win64" fn CryptAcquireCertificatePrivateKey(
+    ctx: usize,
+    flags: u32,
+    _params: usize,
+    out: *mut usize,
+    spec: *mut u32,
+    caller_free: *mut i32,
+) -> i32 {
+    if out.is_null() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    if flags & CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG != 0 {
+        set_last_error(0x8009_0029); // NTE_NOT_SUPPORTED
+        return 0;
+    }
+    let Some(der) = private_key(ctx) else {
+        set_last_error(0x8009_200B); // CRYPT_E_NO_KEY_PROPERTY
+        return 0;
+    };
+    let Some(prov) = super::advapi32_rsa::provider_for_private_key(&der) else {
+        set_last_error(0x8009_0016); // NTE_BAD_KEYSET
+        return 0;
+    };
+    *out = prov;
+    if !spec.is_null() {
+        *spec = 1;
+    }
+    if !caller_free.is_null() {
+        *caller_free = 1;
+    }
+    1
+}
+
+unsafe fn pfx_of(blob: *const Blob) -> &'static [u8] {
+    if blob.is_null() || (*blob).pb.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*blob).pb, (*blob).cb as usize)
+    }
+}
+
+/// PFXImportCertStore : certificat, autorités et clé privée d'un PKCS #12,
+/// déchiffré par l'OpenSSL de l'hôte. La clé reste attachée au certificat :
+/// Schannel s'en sert pour l'authentification du client.
 pub unsafe extern "win64" fn PFXImportCertStore(
-    _pfx: usize,
-    _pass: *const u16,
+    pfx: *const Blob,
+    pass: *const u16,
     _flags: u32,
 ) -> usize {
-    0
+    let data = pfx_of(pfx);
+    if data.is_empty() {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    }
+    let password = if pass.is_null() {
+        String::new()
+    } else {
+        super::wstr(pass)
+    };
+    let Some(p12) = hostssl::pkcs12(data, &password) else {
+        set_last_error(ERROR_INVALID_PASSWORD);
+        return 0;
+    };
+    let store = new_store();
+    if let Some(der) = &p12.cert {
+        if let Some(c) = store_add_der(store, der) {
+            if let (Some(k), Some(cc)) = (&p12.key, cert(c)) {
+                let mut props = super::lock(&cc.props);
+                props.insert(PRIVATE_KEY_PROP, k.clone());
+                props.insert(CERT_KEY_SPEC_PROP_ID, 1u32.to_le_bytes().to_vec());
+            }
+        }
+    }
+    for der in &p12.ca {
+        store_add_der(store, der);
+    }
+    store
+}
+
+pub unsafe extern "win64" fn PFXIsPFXBlob(pfx: *const Blob) -> i32 {
+    // PFX = SEQUENCE { INTEGER 3, ContentInfo, ... }.
+    let d = pfx_of(pfx);
+    let Some((seq, _)) = tlv(d).filter(|(t, _)| t.tag == 0x30) else {
+        return 0;
+    };
+    children(seq.body)
+        .first()
+        .is_some_and(|v| v.tag == 0x02 && v.body == [3]) as i32
+}
+
+pub unsafe extern "win64" fn PFXVerifyPassword(
+    pfx: *const Blob,
+    pass: *const u16,
+    _flags: u32,
+) -> i32 {
+    let password = if pass.is_null() {
+        String::new()
+    } else {
+        super::wstr(pass)
+    };
+    hostssl::pkcs12(pfx_of(pfx), &password).is_some() as i32
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut e = super::dpapi::exports();
+    e.extend(crate::exports! {
+        "CryptImportPublicKeyInfo" => fn CryptImportPublicKeyInfo,
+        "CryptImportPublicKeyInfoEx" => fn CryptImportPublicKeyInfoEx,
+        "CryptAcquireCertificatePrivateKey" => fn CryptAcquireCertificatePrivateKey,
         "CertOpenSystemStoreW" => fn CertOpenSystemStoreW,
         "CertOpenSystemStoreA" => fn CertOpenSystemStoreA,
         "CertOpenStore" => fn CertOpenStore,
@@ -1651,14 +2289,19 @@ pub fn exports() -> crate::dlls::Exports {
         "CertGetNameStringA" => fn CertGetNameStringA,
         "CertNameToStrW" => fn CertNameToStrW,
         "CertNameToStrA" => fn CertNameToStrA,
-        "CryptProtectData" => fn CryptProtectData,
-        "CryptUnprotectData" => fn CryptUnprotectData,
         "CryptStringToBinaryW" => fn CryptStringToBinaryW,
         "CryptStringToBinaryA" => fn CryptStringToBinaryA,
         "CryptBinaryToStringW" => fn CryptBinaryToStringW,
         "CryptBinaryToStringA" => fn CryptBinaryToStringA,
         "PFXImportCertStore" => fn PFXImportCertStore,
-    }
+        "PFXIsPFXBlob" => fn PFXIsPFXBlob,
+        "PFXVerifyPassword" => fn PFXVerifyPassword,
+        "CryptQueryObject" => fn CryptQueryObject,
+        "CryptDecodeObjectEx" => fn CryptDecodeObjectEx,
+        "CertFreeCRLContext" => fn CertFreeCRLContext,
+        "CertFreeCTLContext" => fn CertFreeCTLContext,
+    });
+    e
 }
 
 #[cfg(test)]
@@ -1757,5 +2400,236 @@ mod tests {
             unsafe { CertFindCertificateInStore(root, 1, 0, 0x10000, &b as *const _ as usize, 0) };
         assert_eq!(found, c);
         CertFreeCertificateContext(found);
+    }
+
+    /// Certificat auto-signé jetable (openssl de l'hôte), avec trois noms
+    /// alternatifs ; None si la commande openssl manque.
+    fn self_signed() -> Option<String> {
+        let dir = std::env::temp_dir().join(format!("winlux-crypt32-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let crt = dir.join("c.pem");
+        let ok = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-subj",
+                "/CN=winlux.test",
+                "-days",
+                "1",
+                "-addext",
+                "subjectAltName=DNS:a.example,DNS:b.example,IP:127.0.0.1",
+                "-keyout",
+            ])
+            .arg(dir.join("k.pem"))
+            .arg("-out")
+            .arg(&crt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?
+            .success();
+        let pem = std::fs::read_to_string(&crt).ok();
+        let _ = std::fs::remove_dir_all(&dir);
+        if ok {
+            pem
+        } else {
+            None
+        }
+    }
+
+    /// Le chemin de libcurl (Schannel) avec CURLOPT_CAINFO : PEM chargé par
+    /// CryptQueryObject, moteur de chaîne aux racines exclusives, noms DNS
+    /// de CertGetNameStringW et noms alternatifs de CryptDecodeObjectEx.
+    #[test]
+    fn chemin_schannel_de_curl() {
+        if hostssl::ssl().is_none() {
+            return;
+        }
+        let Some(pem) = self_signed() else {
+            return;
+        };
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let b = Blob {
+                cb: pem.len() as u32,
+                pb: pem.as_ptr(),
+            };
+            let (mut enc, mut content, mut format, mut ctx) = (0u32, 0u32, 0u32, 0usize);
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &b as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_CERT,
+                    0x3fe,
+                    0,
+                    &mut enc,
+                    &mut content,
+                    &mut format,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut ctx,
+                ),
+                1
+            );
+            assert_eq!(
+                (content, format),
+                (CERT_QUERY_CONTENT_CERT, CERT_QUERY_FORMAT_BASE64_ENCODED)
+            );
+            let junk = Blob {
+                cb: 5,
+                pb: b"hello".as_ptr(),
+            };
+            let mut other = 0usize;
+            assert_eq!(
+                CryptQueryObject(
+                    CERT_QUERY_OBJECT_BLOB,
+                    &junk as *const Blob as usize,
+                    CERT_QUERY_CONTENT_FLAG_CERT,
+                    0x3fe,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut other,
+                ),
+                0
+            );
+
+            // Tous les noms DNS, séparés par des nuls, double nul final.
+            let flags = 0x10000 | 0x2;
+            let n = CertGetNameStringW(ctx, 6, flags, 0, std::ptr::null_mut(), 0);
+            let mut buf = vec![0u16; n as usize];
+            assert_eq!(CertGetNameStringW(ctx, 6, flags, 0, buf.as_mut_ptr(), n), n);
+            assert_eq!(String::from_utf16_lossy(&buf), "a.example\0b.example\0\0");
+
+            // Noms alternatifs décodés, alloués par LocalAlloc.
+            let info = &*(*(ctx as *const CertContext)).info;
+            let ext = CertFindExtension(
+                c"2.5.29.17".as_ptr() as *const u8,
+                info.ext_count,
+                info.exts,
+            );
+            assert_ne!(ext, 0);
+            let ext = &*(ext as *const Extension);
+            let mut decoded: *mut u8 = std::ptr::null_mut();
+            let mut size = 0u32;
+            assert_eq!(
+                CryptDecodeObjectEx(
+                    0x10001,
+                    c"2.5.29.17".as_ptr() as usize,
+                    ext.value.pb,
+                    ext.value.cb,
+                    CRYPT_DECODE_ALLOC_FLAG,
+                    0,
+                    &mut decoded as *mut *mut u8 as *mut u8,
+                    &mut size,
+                ),
+                1
+            );
+            assert_eq!(*(decoded as *const u32), 3);
+            let entries = *(decoded.add(8) as *const *const u8);
+            assert_eq!(*(entries as *const u32), 3);
+            assert_eq!(
+                super::super::wstr(*(entries.add(8) as *const *const u16)),
+                "a.example"
+            );
+            let ip = entries.add(48);
+            assert_eq!(*(ip as *const u32), 8);
+            assert_eq!(*(ip.add(8) as *const u32), 4);
+            assert_eq!(
+                std::slice::from_raw_parts(*(ip.add(16) as *const *const u8), 4),
+                [127, 0, 0, 1]
+            );
+            super::super::kernel32_misc::local_free(decoded as *mut _);
+            // Taille seule, puis contraintes de base (CA:TRUE d'openssl req).
+            let mut need = 0u32;
+            assert_eq!(
+                CryptDecodeObjectEx(
+                    1,
+                    X509_ALTERNATE_NAME,
+                    ext.value.pb,
+                    ext.value.cb,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut need
+                ),
+                1
+            );
+            assert_eq!(need, size);
+            let bc = CertFindExtension(
+                c"2.5.29.19".as_ptr() as *const u8,
+                info.ext_count,
+                info.exts,
+            );
+            if bc != 0 {
+                let bc = &*(bc as *const Extension);
+                let mut out = [0u32; 3];
+                let mut n = 12u32;
+                assert_eq!(
+                    CryptDecodeObjectEx(
+                        1,
+                        X509_BASIC_CONSTRAINTS2,
+                        bc.value.pb,
+                        bc.value.cb,
+                        0,
+                        0,
+                        out.as_mut_ptr() as *mut u8,
+                        &mut n
+                    ),
+                    1
+                );
+                assert_eq!(out[0], 1);
+            }
+
+            // Sans moteur : racine inconnue. Avec hExclusiveRoot : de confiance.
+            let mut chain = 0usize;
+            assert_eq!(
+                CertGetCertificateChain(0, ctx, 0, 0, 0, 0, 0, &mut chain),
+                1
+            );
+            assert_ne!(
+                (*(chain as *const ChainContext)).trust.error & CERT_TRUST_IS_UNTRUSTED_ROOT,
+                0
+            );
+            CertFreeCertificateChain(chain);
+            let trust = new_store();
+            assert_eq!(
+                CertAddCertificateContextToStore(trust, ctx, 3, std::ptr::null_mut()),
+                1
+            );
+            let mut config = [0u8; 88];
+            config[..4].copy_from_slice(&88u32.to_le_bytes());
+            config[64..72].copy_from_slice(&trust.to_le_bytes());
+            config[80..84].copy_from_slice(&1u32.to_le_bytes());
+            let mut engine = 0usize;
+            assert_eq!(
+                CertCreateCertificateChainEngine(config.as_ptr() as usize, &mut engine),
+                1
+            );
+            assert_eq!(
+                CertGetCertificateChain(engine, ctx, 0, 0, 0, 0x2000_0000, 0, &mut chain),
+                1
+            );
+            assert_eq!(
+                (*(chain as *const ChainContext)).trust.error & !CERT_TRUST_IS_NOT_TIME_VALID,
+                0
+            );
+            CertFreeCertificateChain(chain);
+            CertFreeCertificateChainEngine(engine);
+            // Une taille de configuration inconnue est refusée, comme sous Windows.
+            config[..4].copy_from_slice(&72u32.to_le_bytes());
+            assert_eq!(
+                CertCreateCertificateChainEngine(config.as_ptr() as usize, &mut engine),
+                0
+            );
+            CertCloseStore(trust, 0);
+            CertFreeCertificateContext(ctx);
+        }
     }
 }

@@ -234,19 +234,32 @@ assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/
 html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
-# Since #155 the init installs Edge in the background. Make sure it is
-# really installed before launching it, and show why if it is not.
-if "browser_edge=installed" not in run("winlux-browsers", "--status"):
-    setup_log = Path("/run/winlux/browser-setup.log")
-    print("Edge absent au lancement ; journal d'installation :\n" +
-          (setup_log.read_text(errors="replace") if setup_log.exists() else "(aucun)"), flush=True)
-    print(run("winlux-browsers", "--install", "edge", timeout=600), flush=True)
-subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
+# No browser ships in the image (the user chooses one, downloaded from its
+# publisher): all three are offered, none is installed, and opening a link
+# without a browser leads to the choice screen (Paramètres > Navigateurs).
+status = run("winlux-browsers", "--status")
+for name in ("edge", "chrome", "firefox"):
+    assert f"browser_{name}=downloadable" in status, status
+assert "browser_default=none" in status, status
+assert not any(Path("/usr/share/winlux/browsers").glob("*.deb"))
+chooser = Path("/run/winlux/browser-chooser")
+run("winlux-browsers", "--open", html.as_uri())
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline and not chooser.exists() and not Path("/run/winlux/browser-settings.log").exists():
+    time.sleep(0.2)
+assert chooser.exists() or Path("/run/winlux/browser-settings.log").exists(), "écran de choix du navigateur non demandé"
+print("WINLUX_NATIVE_BROWSER_CHOICE=0", flush=True)
+# A plain application window stands in for the browser in the window tests.
+# A GTK window (the toolkit every native Winlux app uses) is always present.
+subprocess.Popen(["python3", "-c", "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk; "
+                  "w = Gtk.Window(title='Winlux browser window test'); w.set_default_size(1000, 700); "
+                  "w.add(Gtk.Label(label='Winlux')); w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()"],
+                 stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]
 assert geometry[2] < 1920 and geometry[3] < 1040, geometry
-print("WINLUX_NATIVE_EDGE_WINDOWED=0", flush=True)
+print("WINLUX_NATIVE_BROWSER_WINDOWED=0", flush=True)
 clients = client_ids()
 for window in [explorer, settings, editor, terminal, browser]:
     assert int(window, 16) in clients, window
@@ -405,6 +418,25 @@ def installer_shortcut():
 
 installer_shortcut()
 print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
+
+def image_identity():
+    """Image : nom Winlux (pas Ubuntu), aucun logo Ubuntu, liste des sources GPL."""
+    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    assert release.get("NAME", "").strip('"') == "Winlux", release
+    assert "ubuntu" not in release.get("PRETTY_NAME", "").lower(), release
+    assert "Ubuntu" not in Path("/etc/lsb-release").read_text().split("DISTRIB_ID=", 1)[1].split("\n", 1)[0]
+    assert Path("/usr/share/icons/hicolor/scalable/apps/distributor-logo.svg").is_file()
+    leftovers = [str(path) for path in Path("/usr/share/icons").glob("*/*/*/ubuntu-logo*")]
+    assert not leftovers, leftovers
+    sources = Path("/usr/share/doc/winlux/sources-gpl.tsv").read_text(encoding="utf-8")
+    rows = [line.split("\t") for line in sources.splitlines() if line and not line.startswith("#")]
+    assert len(rows) > 100 and any("GPL" in row[2] for row in rows), len(rows)
+    assert any(row[0] == "bash" and "GPL" in row[2] for row in rows)
+    # L'installateur pose aussi BOOTIA32.EFI (micrologiciel UEFI 32 bits).
+    assert Path("/usr/lib/grub/i386-efi").is_dir(), "GRUB UEFI 32 bits absent de l'image"
+
+image_identity()
+print("WINLUX_NATIVE_IMAGE_IDENTITY=0", flush=True)
 
 def explorer_accented_folders():
     """Explorateur de l'ISO : Téléchargements s'ouvre (pas « Ce dossier est introuvable »)."""

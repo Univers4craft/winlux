@@ -5,10 +5,12 @@
 pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_crypto;
+pub mod advapi32_rsa;
 pub mod advapi32_services;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod chromium_win32;
 pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
@@ -40,10 +42,13 @@ pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
 pub mod dinput8;
+pub mod dirwatch;
 pub mod displaymode;
+pub mod dpapi;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
+pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
 pub mod evdev;
@@ -62,6 +67,7 @@ pub mod hid;
 pub mod hostcall;
 pub mod hostssl;
 pub mod imm32;
+pub mod inherit;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
@@ -76,9 +82,11 @@ pub mod libstdcpp;
 pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
+pub mod mfreader;
 pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
+pub mod mouse;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -111,6 +119,7 @@ pub mod shell32;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod user32;
@@ -216,6 +225,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
+                    e.extend(chromium_win32::kernel32_exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
@@ -281,8 +291,16 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(rawinput::exports());
                     e.extend(displaymode::user32_exports());
                     e.extend(crate::intl::api::user32_exports());
+                    for (name, addr) in chromium_win32::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "shcore",
+                exports: chromium_win32::shcore_exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -297,6 +315,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(credentials::exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
+                    e.extend(chromium_win32::advapi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -456,6 +475,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "crypt32",
                 exports: crypt32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpapi",
+                exports: dpapi::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -783,6 +807,23 @@ pub fn normalize(dll: &str) -> String {
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
         return "setupapi".into();
+    }
+    // DPI par écran (Chromium, Electron) : shcore.
+    if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
+        return "shcore".into();
+    }
+    // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
+    for (prefix, dll) in [
+        ("api-ms-win-downlevel-shell32-", "shell32"),
+        ("api-ms-win-downlevel-user32-", "user32"),
+        ("api-ms-win-downlevel-advapi32-", "advapi32"),
+        ("api-ms-win-downlevel-ole32-", "ole32"),
+        ("api-ms-win-downlevel-shlwapi-", "shlwapi"),
+        ("api-ms-win-downlevel-version-", "version"),
+    ] {
+        if base.starts_with(prefix) {
+            return dll.into();
+        }
     }
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();

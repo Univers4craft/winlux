@@ -65,6 +65,7 @@ PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,127}$")
 # : confirmation par le Contrôle de compte d'utilisateur.
 CONTROL_POLICY = (
     (r"browser-(install|default)-(edge|chrome|firefox)", "admin"),
+    (r"store-catalog-(add|remove)-[a-z0-9-]+", "admin"),
     (r"network-(renew|scan|connect|disconnect)", "user"),
     (r"bluetooth-(on|off|scan|pair|connect|disconnect|remove)", "user"),
     (r"(tz|timezone)-[A-Za-z0-9/_+-]+", "user"),
@@ -76,6 +77,8 @@ CONTROL_POLICY = (
     (r"cpu-profile-(performance|balanced|powersave)|game-mode-(auto|off)", "user"),
     (r"cpu-hybrid-[a-z]+|cpu-fan-[a-z]+|cpu-restore", "user"),
     (r"gpu-set", "admin"),
+    (r"drivers-(refresh|firmware-check|auto-on|auto-off)", "user"),
+    (r"drivers-(install-[a-z-]+|remove-nvidia|firmware-update)", "admin"),
     (r"display-[a-z0-9x-]+", "user"),
     (r"power-hibernate-setup", "admin"),
     (r"power-[a-z-]+", "user"),
@@ -378,7 +381,8 @@ def run_command(command, fds, extra, env, peer_uid, cwd="/"):
 # Fichiers d'état écrits pendant une action relayée et réécrits ensuite par
 # le bureau : ils sont rendus au compte (le dossier /run/winlux est collant).
 GIVE_BACK = ("updates.txt", "networks.txt", "cpu.txt", "control.txt", "action.txt", "sessions.txt",
-             "update-error-phase", "browser.log", "sysupdate.txt", "remote-state.txt")
+             "update-error-phase", "browser.log", "sysupdate.txt", "remote-state.txt", "drivers.txt",
+             "drivers.log")
 
 
 def give_back(uid, since):
