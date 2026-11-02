@@ -11,6 +11,13 @@
 > Le droit cité est surtout français et européen, avec les États-Unis quand
 > ils comptent (GitHub, Microsoft et les IA y sont établis).
 
+> **Suite donnée (2 novembre 2026).** Après cette analyse, damien a décidé de
+> renommer le projet **Luxia**. La décision, ce qu'elle règle et ne règle
+> pas, la protection du nouveau nom, la forme juridique et la liste des
+> corrections restantes sont dans
+> [NOM-ET-STRUCTURE-JURIDIQUE.md](NOM-ET-STRUCTURE-JURIDIQUE.md). Ce document
+> garde l'ancien nom pour la trace de la décision.
+
 ## En bref
 
 | # | Risque | Gravité | Face à qui | À faire maintenant |
