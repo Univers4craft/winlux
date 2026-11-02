@@ -104,7 +104,10 @@ course à la main (la session était verrouillée pendant la mesure).
     vérification de mise à jour) échouaient pourtant : au premier appel,
     curl déclare son tampon de sortie `SECBUFFER_EMPTY` et
     `InitializeSecurityContextW` rendait `SEC_E_BUFFER_TOO_SMALL`. Ce tampon
-    devient maintenant le jeton, comme sous Windows. crashpad reste
+    devient maintenant le jeton, comme sous Windows. Vérifié sur le PC de
+    damien : `wz2100_updates.json` et `wz2100_compat.json` (JSON signé du
+    serveur) sont téléchargés au lancement, sans erreur réseau ni TLS.
+    crashpad reste
     volontairement non lancé (`is_crash_handler`) ; le jeu n'est pas bloqué.
 
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
