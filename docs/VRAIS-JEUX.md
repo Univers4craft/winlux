@@ -62,17 +62,34 @@ course à la main (la session était verrouillée pendant la mesure).
    Vulkan. ANGLE refusait de présenter (« DXGI 1.2 required ») car l'appareil
    D3D11 ne répondait pas à `IDXGIDevice2` : l'appareil expose maintenant
    `IDXGIDevice` 0 à 3, avec `GetAdapter`/`GetParent` vers l'adaptateur DXGI.
-   À vérifier : l'horloge de jeu semblait avancer trop vite avec
-   `--autogame` (≈ 20 min de jeu en 30 s).
+8. **Passage 6** : la vérification « DXGI 1.2 » d'ANGLE passe, puis ANGLE
+   plantait dans `createSwapChain` : l'adaptateur gardait un pointeur brut
+   sur sa fabrique sans `AddRef`, ANGLE relâchait la fabrique après
+   `EnumAdapters` et `GetParent` lisait une fabrique libérée. L'adaptateur
+   tient maintenant une référence sur sa fabrique (test `refcount_tests`
+   de `dxgi.rs`). L'horloge de jeu est exacte en partie normale (00:56 de
+   jeu pour 60 s réelles) ; l'accélération vue avec `--autogame` est
+   l'avance rapide du mode spectateur du jeu.
+
+9. **Passage 7** : ANGLE crée son appareil, sa chaîne d'échange et la
+   fenêtre, puis nomme chaque objet par `SetPrivateData` (méthode 5 de
+   `ID3D11DeviceChild`) : les vues, shaders, dispositions d'entrée et états
+   n'avaient que les 3 méthodes d'IUnknown. Leur table a maintenant les
+   9 méthodes de `ID3D11DeviceChild` et des vues. SuperTuxKart : pas de
+   régression avec #326 (course de démonstration à 117,5 FPS).
+10. **Passage 8** : ANGLE s'initialise sur le D3D11 de Winlux (« ANGLE
+    Direct3D11 vs_5_0 ps_5_0 », OpenGL ES 3.0), puis
+    `ID3D11View::GetResource` rendait un pointeur nul. Les vues gardent
+    maintenant leur ressource (avec une référence) et leur descripteur.
+
+Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
+rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 
 ## Manques connus, par fil
 
 | Manque | Jeux touchés | Effet aujourd'hui | Fil |
 |---|---|---|---|
-| Entrée brute (`WM_INPUT`) : `RegisterRawInputDevices` accepte, mais aucun périphérique n'est listé et `WM_INPUT` n'arrive jamais | tous les jeux SDL (souris relative, vue à la souris) | SDL retombe sur les messages souris classiques ; la vue à la souris des FPS reste à vérifier | #271 |
 | Manettes HID (`hid.dll` sans périphérique, `SetupDi*` vide pour la classe HID) | SDL2/SDL3 | seules les manettes XInput sont vues | #271 |
-| Changement de résolution (`ChangeDisplaySettingsEx` répond « réussi » sans changer le mode) | plein écran exclusif | le jeu tourne à la résolution du bureau | #271 |
-| Rampe gamma (`SetDeviceGammaRamp` refusée) | SDL (luminosité) | réglage de luminosité sans effet | — |
 | Chaîne de certificats Schannel (`CertCreateCertificateChainEngine`, `CryptQueryObject`…) | libcurl de Warzone 2100 (vérification de mise à jour, actualités) | HTTPS en échec, le jeu continue sans | #235 |
 | `CryptImportKey`/`CryptEncrypt` (NTLM de libcurl) | libcurl | authentification NTLM indisponible | #235 |
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
