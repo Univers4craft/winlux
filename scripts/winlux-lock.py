@@ -142,12 +142,21 @@ def lock_on_resume(conf=None):
     return (conf or read_conf())["LOCK_ON_RESUME"] != "0"
 
 
+def _screen_suffix():
+    """Marqueurs par écran : « Changer d'utilisateur » laisse le premier compte
+    verrouillé sur :0 ; un marqueur commun empêchait le second compte (:1) de
+    verrouiller ou d'ouvrir l'écran de connexion. :0 garde les noms d'origine
+    (lus par le service d'alimentation avant la veille)."""
+    display = os.environ.get("DISPLAY", ":0").rpartition(":")[2].split(".")[0]
+    return "" if display in ("", "0") else "-" + "".join(c for c in display if c.isdigit())
+
+
 def active_file():
-    return path("/run/winlux/lock/active")
+    return path("/run/winlux/lock/active" + _screen_suffix())
 
 
 def shown_file():
-    return path("/run/winlux/lock/shown")
+    return path("/run/winlux/lock/shown" + _screen_suffix())
 
 
 def is_locked():
@@ -833,6 +842,13 @@ def claim_marker(marker):
     for _attempt in range(2):
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                # Partagé entre les comptes (un marqueur par écran) : dossier
+                # collant comme /tmp, chacun ne touche qu'à ses fichiers.
+                if marker.parent.stat().st_uid == os.geteuid():
+                    marker.parent.chmod(0o1777)
+            except OSError:
+                pass
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         except FileExistsError:
             if is_locked():

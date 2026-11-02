@@ -312,4 +312,10 @@ for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
     ok(".local/share/themes/$gtk_theme" in text and "winlux-personalize theme" in text,
        f"{script} : thème du compte reconnu, thème absent remplacé par le thème Winlux")
 
+lock = (SCRIPTS / "winlux-lock.py").read_text()
+ok("def _screen_suffix" in lock and "0o1777" in lock,
+   "verrouillage : un marqueur par écran (le second compte peut verrouiller et changer d'utilisateur)")
+ok("Terminal libre" in (SCRIPTS / "winlux-sessions.sh").read_text(),
+   "changer d'utilisateur : le second bureau évite le VT du premier")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
