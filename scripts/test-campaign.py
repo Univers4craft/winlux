@@ -302,4 +302,7 @@ ok("apt_candidate(target[4:])" in (SCRIPTS / "winlux-store.py").read_text(),
 ok('chmod 644 "$resolver"' in (SCRIPTS / "winlux-dhcp-hook.sh").read_text(),
    "DHCP : resolv.conf lisible par apt (_apt) après un renouvellement")
 
+ok("Éditeur vérifié : Winlux" in (SCRIPTS / "winlux-uac.py").read_text(),
+   "UAC : un outil de Winlux (Store, Paramètres) affiche un éditeur vérifié, pas « inconnu »")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

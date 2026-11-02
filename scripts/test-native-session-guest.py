@@ -476,6 +476,9 @@ print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
 def campaign_shortcuts_and_clipboard():
     """Campagne v0.2.13 : Windows+E ouvrait Thunar en root sur « / », et un
     texte copié (Ctrl+C dans Edge, un .txt) ne se collait pas au terminal."""
+    # L'écran de veille a pu démarrer pendant les étapes précédentes (CI) :
+    # les touches iraient à lui et non au terminal.
+    subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
     before = set(windows())
     run("xdotool", "key", "--clearmodifiers", "super+e")
     explorer = None
@@ -494,8 +497,18 @@ def campaign_shortcuts_and_clipboard():
                               "Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(sys.argv[1], -1)\n"
                               "GLib.timeout_add_seconds(60, Gtk.main_quit)\nGtk.main()", text],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    reader = ("import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk, Gdk\n"
+              "print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '')")
     try:
-        time.sleep(1)
+        # Le propriétaire du presse-papiers (GTK) met du temps à démarrer
+        # sur une VM lente : attendre que le texte soit réellement copié.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = subprocess.run(["python3", "-c", reader], capture_output=True, text=True, timeout=20).stdout.strip()
+            if current == text: break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("clipboard owner never published the text")
         for gesture in (["ctrl+shift+v"], ["shift+Insert"]):
             pasted = Path("/tmp/winlux-pasted")
             pasted.unlink(missing_ok=True)
@@ -504,11 +517,16 @@ def campaign_shortcuts_and_clipboard():
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             wait_for(lambda: any(w not in before and "Terminal Winlux" in t for w, (_, t) in windows().items()), "terminal for paste")
             terminal = next(w for w, (_, t) in windows().items() if w not in before and "Terminal Winlux" in t)
+            subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
             run("xdotool", "windowactivate", "--sync", terminal)
-            run("xdotool", "key", "--clearmodifiers", *gesture)
-            run("xdotool", "key", "Return")
-            deadline = time.monotonic() + 10
-            while not pasted.exists() and time.monotonic() < deadline: time.sleep(0.2)
+            # Le shell de xterm doit avoir atteint « read » avant la frappe.
+            time.sleep(2)
+            for _ in range(3):
+                run("xdotool", "key", "--clearmodifiers", *gesture)
+                run("xdotool", "key", "Return")
+                deadline = time.monotonic() + 10
+                while not pasted.exists() and time.monotonic() < deadline: time.sleep(0.2)
+                if pasted.exists(): break
             assert pasted.exists() and pasted.read_text() == text, f"{gesture[0]} did not paste the clipboard into the terminal"
     finally:
         owner.terminate()

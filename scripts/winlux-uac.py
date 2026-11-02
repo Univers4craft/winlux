@@ -48,6 +48,7 @@ _TR = {
         "¿Quieres permitir que esta aplicación haga cambios en el dispositivo?",
         "Möchten Sie zulassen, dass durch diese App Änderungen an Ihrem Gerät vorgenommen werden?"),
     "Éditeur : inconnu": ("Publisher: Unknown", "Editor: desconocido", "Herausgeber: Unbekannt"),
+    "Éditeur vérifié : Winlux": ("Verified publisher: Winlux", "Editor comprobado: Winlux", "Verifizierter Herausgeber: Winlux"),
     "Origine du fichier : disque dur de cet ordinateur": (
         "File origin: Hard drive on this computer",
         "Origen del archivo: unidad de disco duro de este equipo",
@@ -203,7 +204,10 @@ def run_dialog(app, win_path, elevate=False):
     name = Gtk.Label(label=app, xalign=0, margin_top=8, wrap=True)
     name.get_style_context().add_class("uac-app")
     body.pack_start(name, False, False, 0)
-    for line in (_t("Éditeur : inconnu"), _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
+    # --elevate : un outil de Winlux lui-même (Store, Paramètres) passe par le
+    # relais root ; comme Windows pour ses composants, l'éditeur est connu.
+    publisher = _t("Éditeur vérifié : Winlux") if elevate else _t("Éditeur : inconnu")
+    for line in (publisher, _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
         if line:
             label = Gtk.Label(label=line, xalign=0, wrap=True)
             label.get_style_context().add_class("uac-info")
