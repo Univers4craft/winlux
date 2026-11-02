@@ -193,7 +193,7 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
 // SHA-1/SHA-256 maison, partagés avec winlux-remote.
 #[allow(dead_code)]
 #[path = "../remote/crypto.rs"]
-mod crypto;
+pub(crate) mod crypto;
 
 /// SHA-256 pour le reste du runtime (block map des paquets MSIX).
 pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
@@ -217,6 +217,7 @@ fn digest(alg: usize, data: &[u8]) -> Option<Vec<u8>> {
     match alg {
         ALG_SHA256 => Some(crypto::sha256(&[data]).to_vec()),
         ALG_SHA1 => Some(crypto::sha1(&[data]).to_vec()),
+        ALG_MD5 => Some(crate::dlls::games_win32::md5(data).to_vec()),
         _ => None,
     }
 }

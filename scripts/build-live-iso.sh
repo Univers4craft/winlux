@@ -207,6 +207,14 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite 
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+# Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
+# quand le compilateur MinGW-w64 est présent sur la machine de construction.
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+    sh "$root/scripts/build-mingw-tests.sh"
+    for name in mingw_suite games_suite games_suite_ucrt; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
 
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.

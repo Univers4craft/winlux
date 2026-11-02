@@ -757,6 +757,173 @@ pub unsafe extern "win64" fn fsetpos(p: *mut c_void, pos: *const i64) -> i32 {
     fseeki64(p, *pos, 0)
 }
 
+// ---------- Flux ouverts sur un descripteur, réouverture, caractères larges ----------
+
+/// `_fdopen` : flux sur un descripteur de `_open`/`_pipe` (descripteur Linux).
+pub unsafe extern "win64" fn fdopen(fd: i32, mode: *const u8) -> *mut c_void {
+    use std::os::unix::io::FromRawFd;
+    if fd < 0 || mode.is_null() {
+        return std::ptr::null_mut();
+    }
+    match fd {
+        0..=2 => std_stream(fd as usize),
+        _ => register(Kind::Disk, Some(File::from_raw_fd(fd))),
+    }
+}
+pub unsafe extern "win64" fn wfdopen(fd: i32, mode: *const u16) -> *mut c_void {
+    if mode.is_null() {
+        return std::ptr::null_mut();
+    }
+    fdopen(fd, c"r".as_ptr().cast())
+}
+
+/// `freopen` : rouvre un flux sur un autre fichier. Pour stdin/stdout/stderr
+/// (journal redirigé par les jeux), le descripteur 0/1/2 est remplacé.
+unsafe fn reopen(path: &str, mode: &str, stream: *mut c_void) -> *mut c_void {
+    use std::os::unix::io::AsRawFd;
+    let Some(s) = lookup(stream) else {
+        return std::ptr::null_mut();
+    };
+    let Some((_, o)) = parse_mode(mode) else {
+        return std::ptr::null_mut();
+    };
+    flush_stream(&s);
+    let Ok(file) = o.open(crate::paths::to_linux(path)) else {
+        crate::dlls::crt_runtime::set_errno_value(2);
+        return std::ptr::null_mut();
+    };
+    match s.kind {
+        Kind::Disk => {
+            *s.file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(file);
+        }
+        k => {
+            let target = match k {
+                Kind::Stdin => 0,
+                Kind::Stdout => 1,
+                _ => 2,
+            };
+            if libc::dup2(file.as_raw_fd(), target) < 0 {
+                return std::ptr::null_mut();
+            }
+        }
+    }
+    s.eof.store(false, Ordering::Release);
+    s.err.store(false, Ordering::Release);
+    s.pushback
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    stream
+}
+pub unsafe extern "win64" fn freopen(
+    path: *const u8,
+    mode: *const u8,
+    stream: *mut c_void,
+) -> *mut c_void {
+    if path.is_null() || mode.is_null() {
+        return std::ptr::null_mut();
+    }
+    reopen(&crate::dlls::cstr(path), &crate::dlls::cstr(mode), stream)
+}
+pub unsafe extern "win64" fn wfreopen(
+    path: *const u16,
+    mode: *const u16,
+    stream: *mut c_void,
+) -> *mut c_void {
+    if path.is_null() || mode.is_null() {
+        return std::ptr::null_mut();
+    }
+    reopen(&crate::dlls::wstr(path), &crate::dlls::wstr(mode), stream)
+}
+pub unsafe extern "win64" fn freopen_s(
+    out: *mut *mut c_void,
+    path: *const u8,
+    mode: *const u8,
+    stream: *mut c_void,
+) -> i32 {
+    let r = freopen(path, mode, stream);
+    if !out.is_null() {
+        *out = r;
+    }
+    if r.is_null() {
+        2
+    } else {
+        0
+    }
+}
+pub unsafe extern "win64" fn wfreopen_s(
+    out: *mut *mut c_void,
+    path: *const u16,
+    mode: *const u16,
+    stream: *mut c_void,
+) -> i32 {
+    let r = wfreopen(path, mode, stream);
+    if !out.is_null() {
+        *out = r;
+    }
+    if r.is_null() {
+        2
+    } else {
+        0
+    }
+}
+
+/// `fgetwc` en mode texte : un caractère UTF-8 (ou un octet ANSI isolé).
+pub unsafe extern "win64" fn fgetwc(p: *mut c_void) -> u32 {
+    let first = fgetc(p);
+    if first < 0 {
+        return 0xFFFF;
+    }
+    let b0 = first as u8;
+    let extra = match b0 {
+        0xC2..=0xDF => 1,
+        0xE0..=0xEF => 2,
+        _ => 0,
+    };
+    let mut bytes = vec![b0];
+    for _ in 0..extra {
+        let c = fgetc(p);
+        if c < 0 || (c as u8) & 0xC0 != 0x80 {
+            if c >= 0 {
+                ungetc(c, p);
+            }
+            return crate::dlls::decode_ansi(&[b0])
+                .encode_utf16()
+                .next()
+                .unwrap_or(b0 as u16) as u32;
+        }
+        bytes.push(c as u8);
+    }
+    match std::str::from_utf8(&bytes) {
+        Ok(t) if extra > 0 => t.encode_utf16().next().unwrap_or(0xFFFD) as u32,
+        _ => crate::dlls::decode_ansi(&[b0])
+            .encode_utf16()
+            .next()
+            .unwrap_or(b0 as u16) as u32,
+    }
+}
+pub unsafe extern "win64" fn ungetwc(c: u32, p: *mut c_void) -> u32 {
+    if c == 0xFFFF {
+        return c;
+    }
+    let text = String::from_utf16_lossy(&[c as u16]);
+    for b in text.bytes().rev() {
+        ungetc(b as i32, p);
+    }
+    c
+}
+pub unsafe extern "win64" fn putchar(c: i32) -> i32 {
+    fputc(c, std_stream(1))
+}
+pub unsafe extern "win64" fn getchar() -> i32 {
+    fgetc(std_stream(0))
+}
+pub unsafe extern "win64" fn putwchar(c: u16) -> u16 {
+    crate::dlls::crt_ucrt::fputwc(c, std_stream(1))
+}
+
 crate::varargs_thunk!(fprintf_thunk => imp_fprintf);
 crate::varargs_thunk!(vfprintf_thunk => imp_vfprintf);
 crate::varargs_thunk!(vsprintf_thunk => imp_vsprintf);
@@ -772,6 +939,10 @@ pub fn exports() -> crate::dlls::Exports {
         "fflush" => fn fflush, "setvbuf" => fn setvbuf, "setbuf" => fn setvbuf, "_fileno" => fn fileno,
         "__acrt_iob_func" => fn acrt_iob_func, "__iob_func" => fn iob_func, "_iob" => data IOB, "_filelength" => fn filelength,
         "remove" => fn remove_file, "rename" => fn rename_file,
+        "_fdopen" => fn fdopen, "_wfdopen" => fn wfdopen, "freopen" => fn freopen, "_wfreopen" => fn wfreopen,
+        "freopen_s" => fn freopen_s, "_wfreopen_s" => fn wfreopen_s,
+        "fgetwc" => fn fgetwc, "getwc" => fn fgetwc, "_fgetwc_nolock" => fn fgetwc, "ungetwc" => fn ungetwc,
+        "putwc" => fn crate::dlls::crt_ucrt::fputwc, "putchar" => fn putchar, "getchar" => fn getchar, "putwchar" => fn putwchar,
         "fprintf" => fn fprintf_thunk,
         "vfprintf" => fn vfprintf_thunk, "vsprintf" => fn vsprintf_thunk,
     }
