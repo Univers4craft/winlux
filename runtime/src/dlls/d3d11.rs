@@ -1056,11 +1056,87 @@ struct DeviceContextVTable {
     cs_set_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *const *mut c_void), // 70
     cs_set_constant_buffers:
         unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *const *mut c_void), // 71
-    clear_state: unsafe extern "win64" fn(*mut DeviceContext), // 72
-    flush: unsafe extern "win64" fn(*mut DeviceContext),       // 73
-    get_type_ctx: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 74
-    get_context_flags: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 75
-    finish_command_list: unsafe extern "win64" fn(*mut DeviceContext, i32, *mut *mut c_void) -> i32, // 76
+    vs_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 72
+    ps_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 73
+    ps_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 74
+    ps_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 75
+    vs_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 76
+    ps_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 77
+    ia_get_input_layout: unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void), // 78
+    ia_get_vertex_buffers: unsafe extern "win64" fn(
+        *mut DeviceContext,
+        u32,
+        u32,
+        *mut *mut c_void,
+        *mut u32,
+        *mut u32,
+    ), // 79
+    ia_get_index_buffer:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut u32, *mut u32), // 80
+    gs_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 81
+    gs_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 82
+    ia_get_primitive_topology: unsafe extern "win64" fn(*mut DeviceContext, *mut u32), // 83
+    vs_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 84
+    vs_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 85
+    get_predication: unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut i32), // 86
+    gs_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 87
+    gs_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 88
+    om_get_render_targets:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, *mut *mut c_void, *mut *mut c_void), // 89
+    om_get_render_targets_and_uavs: unsafe extern "win64" fn(
+        *mut DeviceContext,
+        u32,
+        *mut *mut c_void,
+        *mut *mut c_void,
+        u32,
+        u32,
+        *mut *mut c_void,
+    ), // 90
+    om_get_blend_state:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut f32, *mut u32), // 91
+    om_get_depth_stencil_state:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut u32), // 92
+    so_get_targets: unsafe extern "win64" fn(*mut DeviceContext, u32, *mut *mut c_void), // 93
+    rs_get_state: unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void),      // 94
+    rs_get_viewports: unsafe extern "win64" fn(*mut DeviceContext, *mut u32, *mut c_void), // 95
+    rs_get_scissor_rects: unsafe extern "win64" fn(*mut DeviceContext, *mut u32, *mut c_void), // 96
+    hs_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 97
+    hs_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 98
+    hs_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 99
+    hs_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 100
+    ds_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 101
+    ds_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 102
+    ds_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 103
+    ds_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 104
+    cs_get_shader_resources:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 105
+    cs_get_unordered_access_views:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 106
+    cs_get_shader:
+        unsafe extern "win64" fn(*mut DeviceContext, *mut *mut c_void, *mut *mut c_void, *mut u32), // 107
+    cs_get_samplers: unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 108
+    cs_get_constant_buffers:
+        unsafe extern "win64" fn(*mut DeviceContext, u32, u32, *mut *mut c_void), // 109
+    clear_state: unsafe extern "win64" fn(*mut DeviceContext), // 110
+    flush: unsafe extern "win64" fn(*mut DeviceContext),       // 111
+    get_type_ctx: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 112
+    get_context_flags: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 113
+    finish_command_list: unsafe extern "win64" fn(*mut DeviceContext, i32, *mut *mut c_void) -> i32, // 114
 }
 
 #[repr(C)]
@@ -1141,6 +1217,154 @@ unsafe extern "win64" fn ctx_noop_set_shader(
     _: *const *mut c_void,
     _: u32,
 ) {
+}
+// Méthodes Get* d'ID3D11DeviceContext (72 à 109) : l'état n'est pas relu, les
+// sorties sont mises à zéro (aucun objet renvoyé), comme un contexte neuf.
+unsafe fn zero_ptrs(out: *mut *mut c_void, n: u32) {
+    if !out.is_null() {
+        for i in 0..n.min(128) as usize {
+            unsafe { *out.add(i) = core::ptr::null_mut() };
+        }
+    }
+}
+unsafe fn zero_u32(out: *mut u32) {
+    if !out.is_null() {
+        unsafe { *out = 0 };
+    }
+}
+unsafe extern "win64" fn ctx_get_array(
+    _: *mut DeviceContext,
+    _: u32,
+    n: u32,
+    out: *mut *mut c_void,
+) {
+    unsafe { zero_ptrs(out, n) };
+}
+unsafe extern "win64" fn ctx_get_shader(
+    _: *mut DeviceContext,
+    shader: *mut *mut c_void,
+    classes: *mut *mut c_void,
+    count: *mut u32,
+) {
+    unsafe {
+        zero_ptrs(shader, 1);
+        if !count.is_null() {
+            zero_ptrs(classes, *count);
+        }
+        zero_u32(count);
+    }
+}
+unsafe extern "win64" fn ctx_get_one(_: *mut DeviceContext, out: *mut *mut c_void) {
+    unsafe { zero_ptrs(out, 1) };
+}
+unsafe extern "win64" fn ctx_get_vertex_buffers(
+    _: *mut DeviceContext,
+    _: u32,
+    n: u32,
+    buffers: *mut *mut c_void,
+    strides: *mut u32,
+    offsets: *mut u32,
+) {
+    unsafe {
+        zero_ptrs(buffers, n);
+        for i in 0..n.min(128) as usize {
+            zero_u32(if strides.is_null() {
+                strides
+            } else {
+                strides.add(i)
+            });
+            zero_u32(if offsets.is_null() {
+                offsets
+            } else {
+                offsets.add(i)
+            });
+        }
+    }
+}
+unsafe extern "win64" fn ctx_get_index_buffer(
+    _: *mut DeviceContext,
+    buf: *mut *mut c_void,
+    fmt: *mut u32,
+    off: *mut u32,
+) {
+    unsafe {
+        zero_ptrs(buf, 1);
+        zero_u32(fmt);
+        zero_u32(off);
+    }
+}
+unsafe extern "win64" fn ctx_get_u32(_: *mut DeviceContext, out: *mut u32) {
+    unsafe { zero_u32(out) };
+}
+unsafe extern "win64" fn ctx_get_predication(
+    _: *mut DeviceContext,
+    pred: *mut *mut c_void,
+    value: *mut i32,
+) {
+    unsafe {
+        zero_ptrs(pred, 1);
+        zero_u32(value.cast());
+    }
+}
+unsafe extern "win64" fn ctx_get_render_targets(
+    _: *mut DeviceContext,
+    n: u32,
+    rtv: *mut *mut c_void,
+    dsv: *mut *mut c_void,
+) {
+    unsafe {
+        zero_ptrs(rtv, n);
+        zero_ptrs(dsv, 1);
+    }
+}
+unsafe extern "win64" fn ctx_get_rt_uav(
+    _: *mut DeviceContext,
+    n: u32,
+    rtv: *mut *mut c_void,
+    dsv: *mut *mut c_void,
+    _: u32,
+    n_uav: u32,
+    uav: *mut *mut c_void,
+) {
+    unsafe {
+        zero_ptrs(rtv, n);
+        zero_ptrs(dsv, 1);
+        zero_ptrs(uav, n_uav);
+    }
+}
+unsafe extern "win64" fn ctx_get_blend(
+    _: *mut DeviceContext,
+    state: *mut *mut c_void,
+    factor: *mut f32,
+    mask: *mut u32,
+) {
+    unsafe {
+        zero_ptrs(state, 1);
+        if !factor.is_null() {
+            for i in 0..4 {
+                *factor.add(i) = 1.0;
+            }
+        }
+        if !mask.is_null() {
+            *mask = u32::MAX;
+        }
+    }
+}
+unsafe extern "win64" fn ctx_get_ptr_u32(
+    _: *mut DeviceContext,
+    state: *mut *mut c_void,
+    value: *mut u32,
+) {
+    unsafe {
+        zero_ptrs(state, 1);
+        zero_u32(value);
+    }
+}
+unsafe extern "win64" fn ctx_get_so(_: *mut DeviceContext, n: u32, out: *mut *mut c_void) {
+    unsafe { zero_ptrs(out, n) };
+}
+unsafe extern "win64" fn ctx_get_count(_: *mut DeviceContext, count: *mut u32, _: *mut c_void) {
+    unsafe { zero_u32(count) };
 }
 unsafe extern "win64" fn ctx_noop_1ptr(_: *mut DeviceContext, _: *mut c_void) {}
 unsafe extern "win64" fn ctx_noop_void(_: *mut DeviceContext) {}
@@ -1737,6 +1961,44 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     cs_set_shader: ctx_noop_set_shader,
     cs_set_samplers: ctx_noop_3ptr,
     cs_set_constant_buffers: ctx_noop_3ptr,
+    vs_get_constant_buffers: ctx_get_array,
+    ps_get_shader_resources: ctx_get_array,
+    ps_get_shader: ctx_get_shader,
+    ps_get_samplers: ctx_get_array,
+    vs_get_shader: ctx_get_shader,
+    ps_get_constant_buffers: ctx_get_array,
+    ia_get_input_layout: ctx_get_one,
+    ia_get_vertex_buffers: ctx_get_vertex_buffers,
+    ia_get_index_buffer: ctx_get_index_buffer,
+    gs_get_constant_buffers: ctx_get_array,
+    gs_get_shader: ctx_get_shader,
+    ia_get_primitive_topology: ctx_get_u32,
+    vs_get_shader_resources: ctx_get_array,
+    vs_get_samplers: ctx_get_array,
+    get_predication: ctx_get_predication,
+    gs_get_shader_resources: ctx_get_array,
+    gs_get_samplers: ctx_get_array,
+    om_get_render_targets: ctx_get_render_targets,
+    om_get_render_targets_and_uavs: ctx_get_rt_uav,
+    om_get_blend_state: ctx_get_blend,
+    om_get_depth_stencil_state: ctx_get_ptr_u32,
+    so_get_targets: ctx_get_so,
+    rs_get_state: ctx_get_one,
+    rs_get_viewports: ctx_get_count,
+    rs_get_scissor_rects: ctx_get_count,
+    hs_get_shader_resources: ctx_get_array,
+    hs_get_shader: ctx_get_shader,
+    hs_get_samplers: ctx_get_array,
+    hs_get_constant_buffers: ctx_get_array,
+    ds_get_shader_resources: ctx_get_array,
+    ds_get_shader: ctx_get_shader,
+    ds_get_samplers: ctx_get_array,
+    ds_get_constant_buffers: ctx_get_array,
+    cs_get_shader_resources: ctx_get_array,
+    cs_get_unordered_access_views: ctx_get_array,
+    cs_get_shader: ctx_get_shader,
+    cs_get_samplers: ctx_get_array,
+    cs_get_constant_buffers: ctx_get_array,
     clear_state: ctx_clear_state,
     flush: ctx_flush,
     get_type_ctx: ctx_get_type,
@@ -1906,9 +2168,244 @@ struct Device {
     ref_count: AtomicU32,
     context: *mut DeviceContext,
     feature_level: u32,
+    dxgi: DxgiDevice,
 }
 
 unsafe impl Send for Device {}
+
+// ────────────────────── IDXGIDevice (vue DXGI de l'appareil) ──────────────────────
+//
+// ANGLE (Direct3D 11 de Warzone 2100) demande IDXGIDevice2 à l'appareil avant
+// de présenter dans une fenêtre, puis remonte à l'adaptateur et à la fabrique.
+// Interface détachée logée dans l'appareil : même compteur de références.
+
+#[repr(C)]
+struct DxgiDeviceVTable {
+    query_interface:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "win64" fn(*mut DxgiDevice) -> u32,
+    release: unsafe extern "win64" fn(*mut DxgiDevice) -> u32,
+    set_private_data:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, u32, *const c_void) -> i32,
+    set_private_data_interface:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *const c_void) -> i32,
+    get_private_data:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut u32, *mut c_void) -> i32,
+    get_parent: unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut *mut c_void) -> i32,
+    get_adapter: unsafe extern "win64" fn(*mut DxgiDevice, *mut *mut c_void) -> i32,
+    create_surface: unsafe extern "win64" fn(
+        *mut DxgiDevice,
+        *const c_void,
+        u32,
+        u32,
+        *const c_void,
+        *mut *mut c_void,
+    ) -> i32,
+    query_resource_residency:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const *mut c_void, *mut u32, u32) -> i32,
+    set_gpu_thread_priority: unsafe extern "win64" fn(*mut DxgiDevice, i32) -> i32,
+    get_gpu_thread_priority: unsafe extern "win64" fn(*mut DxgiDevice, *mut i32) -> i32,
+    set_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiDevice, u32) -> i32,
+    get_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiDevice, *mut u32) -> i32,
+    offer_resources: unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, u32) -> i32,
+    reclaim_resources:
+        unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, *mut i32) -> i32,
+    enqueue_set_event: unsafe extern "win64" fn(*mut DxgiDevice, usize) -> i32,
+    trim: unsafe extern "win64" fn(*mut DxgiDevice),
+}
+
+#[repr(C)]
+struct DxgiDevice {
+    vtable: *const DxgiDeviceVTable,
+    owner: *mut Device,
+    frame_latency: AtomicU32,
+}
+
+/// IDXGIDevice, 1, 2, 3 et IDXGIObject, reconnus par leur premier mot.
+fn is_dxgi_device_iid(riid: &Guid) -> bool {
+    [
+        0x54ec_77fa,
+        0x77db_970f,
+        0x0500_8617,
+        0x6007_896c,
+        0xaec2_2fb8,
+    ]
+    .contains(&riid.data1)
+}
+
+unsafe extern "win64" fn dxdev_qi(
+    this: *mut DxgiDevice,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    unsafe { dev_qi((*this).owner, riid, out) }
+}
+unsafe extern "win64" fn dxdev_addref(this: *mut DxgiDevice) -> u32 {
+    unsafe { dev_addref((*this).owner) }
+}
+unsafe extern "win64" fn dxdev_release(this: *mut DxgiDevice) -> u32 {
+    unsafe { dev_release((*this).owner) }
+}
+unsafe extern "win64" fn dxdev_set_priv(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    _: u32,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_priv_if(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_priv(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    size: *mut u32,
+    _: *mut c_void,
+) -> i32 {
+    if !size.is_null() {
+        unsafe { *size = 0 };
+    }
+    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+}
+unsafe extern "win64" fn dxdev_get_adapter(_: *mut DxgiDevice, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = dxgi::new_default_adapter() };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_parent(
+    this: *mut DxgiDevice,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut adapter = std::ptr::null_mut();
+    unsafe {
+        dxdev_get_adapter(this, &mut adapter);
+        let hr = dxgi::adapter_query_interface(adapter, riid, out);
+        dxgi::adapter_release(adapter);
+        hr
+    }
+}
+unsafe extern "win64" fn dxdev_create_surface(
+    _: *mut DxgiDevice,
+    _: *const c_void,
+    _: u32,
+    _: u32,
+    _: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !out.is_null() {
+        unsafe { *out = std::ptr::null_mut() };
+    }
+    E_NOTIMPL
+}
+unsafe extern "win64" fn dxdev_residency(
+    _: *mut DxgiDevice,
+    _: *const *mut c_void,
+    status: *mut u32,
+    n: u32,
+) -> i32 {
+    // DXGI_RESIDENCY_FULLY_RESIDENT = 1 : tout est en mémoire vidéo.
+    if !status.is_null() {
+        for i in 0..n as usize {
+            unsafe { *status.add(i) = 1 };
+        }
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_prio(_: *mut DxgiDevice, prio: i32) -> i32 {
+    if (-7..=7).contains(&prio) {
+        S_OK
+    } else {
+        E_INVALIDARG
+    }
+}
+unsafe extern "win64" fn dxdev_get_prio(_: *mut DxgiDevice, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = 0 };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_latency(this: *mut DxgiDevice, n: u32) -> i32 {
+    if n > 16 {
+        return E_INVALIDARG;
+    }
+    // 0 rétablit la valeur par défaut de Windows (3 images).
+    unsafe {
+        (*this)
+            .frame_latency
+            .store(if n == 0 { 3 } else { n }, Ordering::Relaxed)
+    };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_latency(this: *mut DxgiDevice, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = (*this).frame_latency.load(Ordering::Relaxed) };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_offer(
+    _: *mut DxgiDevice,
+    _: u32,
+    _: *const *mut c_void,
+    _: u32,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_reclaim(
+    _: *mut DxgiDevice,
+    n: u32,
+    _: *const *mut c_void,
+    discarded: *mut i32,
+) -> i32 {
+    // Rien n'est jamais rendu au système : aucune ressource n'est perdue.
+    if !discarded.is_null() {
+        for i in 0..n as usize {
+            unsafe { *discarded.add(i) = 0 };
+        }
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_enqueue_set_event(_: *mut DxgiDevice, event: usize) -> i32 {
+    // Le rendu est synchrone : le travail en file est déjà terminé.
+    if event != 0 {
+        crate::dlls::kernel32::set_event(event);
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_trim(_: *mut DxgiDevice) {}
+
+static DXGI_DEVICE_VTABLE: DxgiDeviceVTable = DxgiDeviceVTable {
+    query_interface: dxdev_qi,
+    add_ref: dxdev_addref,
+    release: dxdev_release,
+    set_private_data: dxdev_set_priv,
+    set_private_data_interface: dxdev_set_priv_if,
+    get_private_data: dxdev_get_priv,
+    get_parent: dxdev_get_parent,
+    get_adapter: dxdev_get_adapter,
+    create_surface: dxdev_create_surface,
+    query_resource_residency: dxdev_residency,
+    set_gpu_thread_priority: dxdev_set_prio,
+    get_gpu_thread_priority: dxdev_get_prio,
+    set_maximum_frame_latency: dxdev_set_latency,
+    get_maximum_frame_latency: dxdev_get_latency,
+    offer_resources: dxdev_offer,
+    reclaim_resources: dxdev_reclaim,
+    enqueue_set_event: dxdev_enqueue_set_event,
+    trim: dxdev_trim,
+};
 unsafe impl Sync for Device {}
 
 // Device method implementations
@@ -1924,6 +2421,11 @@ unsafe extern "win64" fn dev_qi(
     if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
+        return S_OK;
+    }
+    if is_dxgi_device_iid(riid) {
+        (*this).ref_count.fetch_add(1, Ordering::Relaxed);
+        *out = std::ptr::addr_of_mut!((*this).dxgi).cast();
         return S_OK;
     }
     *out = std::ptr::null_mut();
@@ -2386,7 +2888,13 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         ref_count: AtomicU32::new(1),
         context: ctx,
         feature_level: fl,
+        dxgi: DxgiDevice {
+            vtable: &DXGI_DEVICE_VTABLE,
+            owner: std::ptr::null_mut(),
+            frame_latency: AtomicU32::new(3),
+        },
     }));
+    (*dev).dxgi.owner = dev;
 
     if !device.is_null() {
         *device = dev as usize;
@@ -2457,5 +2965,42 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "D3D11CreateDevice" => fn D3D11CreateDevice,
         "D3D11CreateDeviceAndSwapChain" => fn D3D11CreateDeviceAndSwapChain,
+    }
+}
+
+#[cfg(test)]
+mod vtable_tests {
+    use super::DeviceContextVTable;
+
+    #[test]
+    fn device_context_vtable_matches_windows_order() {
+        // ID3D11DeviceContext : ClearState est la méthode 110 (ANGLE de Warzone 2100).
+        assert_eq!(
+            core::mem::offset_of!(DeviceContextVTable, clear_state),
+            110 * 8
+        );
+        assert_eq!(
+            core::mem::offset_of!(DeviceContextVTable, finish_command_list),
+            114 * 8
+        );
+        assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 115 * 8);
+    }
+
+    #[test]
+    fn dxgi_device_vtable_matches_windows_order() {
+        use super::{is_dxgi_device_iid, DxgiDeviceVTable};
+        assert_eq!(core::mem::offset_of!(DxgiDeviceVTable, get_adapter), 7 * 8);
+        assert_eq!(
+            core::mem::offset_of!(DxgiDeviceVTable, set_maximum_frame_latency),
+            12 * 8
+        );
+        assert_eq!(
+            core::mem::offset_of!(DxgiDeviceVTable, enqueue_set_event),
+            16 * 8
+        );
+        let mut g = super::IID_ID3D11_DEVICE;
+        assert!(!is_dxgi_device_iid(&g));
+        g.data1 = 0x0500_8617; // IDXGIDevice2, exigé par ANGLE
+        assert!(is_dxgi_device_iid(&g));
     }
 }
