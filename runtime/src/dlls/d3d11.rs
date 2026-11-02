@@ -614,7 +614,68 @@ struct SimpleComVTable {
         unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *mut *mut c_void) -> i32,
     add_ref: unsafe extern "win64" fn(*mut SimpleComObj) -> u32,
     release: unsafe extern "win64" fn(*mut SimpleComObj) -> u32,
+    // ID3D11DeviceChild (3-6) : ANGLE nomme chaque objet par SetPrivateData.
+    get_device: unsafe extern "win64" fn(*mut SimpleComObj, *mut *mut c_void),
+    get_private_data:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *mut u32, *mut c_void) -> i32,
+    set_private_data:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, u32, *const c_void) -> i32,
+    set_private_data_interface:
+        unsafe extern "win64" fn(*mut SimpleComObj, *const Guid, *const c_void) -> i32,
+    // Vues : GetResource (7) puis GetDesc (8) ; états : GetDesc (7).
+    get_resource_or_desc: unsafe extern "win64" fn(*mut SimpleComObj, *mut *mut c_void),
+    get_view_desc: unsafe extern "win64" fn(*mut SimpleComObj, *mut c_void),
 }
+
+/// Dernier appareil créé : parent rendu par ID3D11DeviceChild::GetDevice.
+static LAST_DEVICE: std::sync::atomic::AtomicPtr<Device> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+unsafe extern "win64" fn child_get_device(_: *mut SimpleComObj, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let dev = LAST_DEVICE.load(Ordering::Acquire);
+    unsafe {
+        if !dev.is_null() {
+            dev_addref(dev);
+        }
+        *out = dev.cast();
+    }
+}
+unsafe extern "win64" fn child_get_private_data(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    size: *mut u32,
+    _: *mut c_void,
+) -> i32 {
+    if !size.is_null() {
+        unsafe { *size = 0 };
+    }
+    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+}
+unsafe extern "win64" fn child_set_private_data(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    _: u32,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn child_set_private_data_interface(
+    _: *mut SimpleComObj,
+    _: *const Guid,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn child_get_resource_or_desc(_: *mut SimpleComObj, out: *mut *mut c_void) {
+    // Aucune ressource rattachée n'est rendue (pointeur nul).
+    if !out.is_null() {
+        unsafe { *out = std::ptr::null_mut() };
+    }
+}
+unsafe extern "win64" fn child_get_view_desc(_: *mut SimpleComObj, _: *mut c_void) {}
 
 struct SimpleComObj {
     vtable: *const SimpleComVTable,
@@ -658,6 +719,12 @@ static SIMPLE_COM_VTABLE: SimpleComVTable = SimpleComVTable {
     query_interface: SimpleComObj::query_interface,
     add_ref: SimpleComObj::add_ref,
     release: SimpleComObj::release,
+    get_device: child_get_device,
+    get_private_data: child_get_private_data,
+    set_private_data: child_set_private_data,
+    set_private_data_interface: child_set_private_data_interface,
+    get_resource_or_desc: child_get_resource_or_desc,
+    get_view_desc: child_get_view_desc,
 };
 
 // ────────────────────── Typage des objets COM maison ──────────────────────
@@ -2437,6 +2504,12 @@ unsafe extern "win64" fn dev_addref(this: *mut Device) -> u32 {
 unsafe extern "win64" fn dev_release(this: *mut Device) -> u32 {
     let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
     if prev == 1 {
+        let _ = LAST_DEVICE.compare_exchange(
+            this,
+            std::ptr::null_mut(),
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
         let dev = Box::from_raw(this);
         // L'appareil relâche sa propre référence sur le contexte immédiat ;
         // celui-ci survit tant que l'application en détient une.
@@ -2895,6 +2968,7 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         },
     }));
     (*dev).dxgi.owner = dev;
+    LAST_DEVICE.store(dev, Ordering::Release);
 
     if !device.is_null() {
         *device = dev as usize;
@@ -3002,5 +3076,16 @@ mod vtable_tests {
         assert!(!is_dxgi_device_iid(&g));
         g.data1 = 0x0500_8617; // IDXGIDevice2, exigé par ANGLE
         assert!(is_dxgi_device_iid(&g));
+    }
+
+    #[test]
+    fn simple_objects_implement_device_child() {
+        // Vues, shaders, états : IUnknown + ID3D11DeviceChild + GetResource/GetDesc.
+        use super::SimpleComVTable;
+        assert_eq!(
+            core::mem::offset_of!(SimpleComVTable, set_private_data),
+            5 * 8
+        );
+        assert_eq!(core::mem::size_of::<SimpleComVTable>(), 9 * 8);
     }
 }
