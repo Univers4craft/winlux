@@ -203,10 +203,18 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+# Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
+# quand le compilateur MinGW-w64 est présent sur la machine de construction.
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+    sh "$root/scripts/build-mingw-tests.sh"
+    for name in mingw_suite games_suite games_suite_ucrt; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
 
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
@@ -440,6 +448,9 @@ done
 # Configuration binfmt : le noyau lance automatiquement winlux pour les .exe MZ.
 mkdir -p "$stage/etc/binfmt.d"
 cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
+# Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
+mkdir -p "$stage/etc/udev/rules.d"
+cp "$root/integration/70-winlux-manettes.rules" "$stage/etc/udev/rules.d/70-winlux-manettes.rules"
 # Type MIME pour les .exe.
 mkdir -p "$stage/usr/share/mime/packages"
 cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
@@ -1058,8 +1069,11 @@ sequential_status=$?
 echo "WINLUX_LIVE_SEQUENTIAL_EXIT=$sequential_status"
 
 echo "Winlux live test: parallel PE suite"
+# QEMU sans accélération (TCG, 2 vCPU) : dix exécutables à la fois
+# dépassent les 30 s prévus pour une machine réelle.
 WINLUX_BIN=/usr/bin/winlux \
 WINLUX_TESTDIR=/opt/winlux/tests \
+WINLUX_TEST_TIMEOUT=120 \
     /bin/sh /opt/winlux/scripts/test-runtime-parallel.sh
 parallel_status=$?
 echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"

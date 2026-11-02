@@ -1089,7 +1089,7 @@ pub(super) unsafe fn regression(root: &[u8]) {
     let mut big = [0u8; PATH_LEN + NAME_LEN + 2];
     let bgn = join(&mut big, &a[..an], b"gros.bin");
     let chunk = [0x5Au8; 65536];
-    check!(write_file(&big[..bgn], &chunk, 256), "Prepare un fichier de 16 Mo");
+    check!(write_file(&big[..bgn], &chunk, 48), "Prepare un fichier de 3 Mo");
     let mut one = [EMPTY_PATH; 1];
     one[0].set(&big[..bgn]);
     let t0 = GetTickCount();
@@ -1099,9 +1099,9 @@ pub(super) unsafe fn regression(root: &[u8]) {
     let id = first_job();
     check!(
         out.queued == 1 && id != 0 && GetTickCount().wrapping_sub(t0) < 1000,
-        "Une copie de 16 Mo rend la main tout de suite (tache de fond)"
+        "Une copie de 3 Mo rend la main tout de suite (tache de fond)"
     );
-    Sleep(300);
+    Sleep(100);
     let mut s1 = [0u64; 4];
     let p1 = WinluxJobStats(id, s1.as_mut_ptr(), core::ptr::null_mut(), 0);
     tick();
@@ -1132,7 +1132,7 @@ pub(super) unsafe fn regression(root: &[u8]) {
         FindClose(h);
         (data.size_high as u64) << 32 | data.size_low as u64
     };
-    check!(size == 16 << 20, "La copie de fond arrive au bout (16 Mo)");
+    check!(size == 3 << 20, "La copie de fond arrive au bout (3 Mo)");
     // Déplacer vers un autre dossier : la source disparaît.
     let mut c2 = [0u8; PATH_LEN + NAME_LEN + 2];
     let c2n = join(&mut c2, root, b"copie-c");

@@ -39,6 +39,8 @@ sed "s|/usr/bin/winlux-browser|$prefix/bin/winlux-browser|" "$root/integration/w
 install -Dm644 "$root/integration/x-ms-dos-executable.xml" "$share/mime/packages/winlux.xml"
 sed "s|/usr/bin/winlux|$prefix/bin/winlux|" "$root/integration/winlux-binfmt.conf" \
     | install -Dm644 /dev/stdin "$etc/binfmt.d/winlux.conf"
+# Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
+install -Dm644 "$root/integration/70-winlux-manettes.rules" "$etc/udev/rules.d/70-winlux-manettes.rules"
 
 # Application par défaut des .exe pour tous les utilisateurs; uninstall.sh
 # retire exactement ces lignes.

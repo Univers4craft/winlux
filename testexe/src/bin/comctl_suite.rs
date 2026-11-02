@@ -384,6 +384,23 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let n = SendMessageA(edit, 0x000D, 8, num.as_mut_ptr() as isize) as usize; // WM_GETTEXT
         check!(&num[..n] == b"22", "UDS_SETBUDDYINT ecrit dans le champ");
 
+        // Cadre de groupe créé APRÈS les contrôles qu'il entoure (comme
+        // PuTTY) : il ne doit pas les masquer.
+        let group = CreateWindowExA(
+            0,
+            c"BUTTON".as_ptr(),
+            c"Reglages".as_ptr(),
+            WS_CHILD | WS_VISIBLE | 0x7,
+            198,
+            252,
+            422,
+            80,
+            main,
+            209 as Handle,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+        SendMessageA(group, WM_SETFONT, GetStockObject(17) as usize, 0);
         let status = CreateStatusWindowA(WS_VISIBLE, c"Pret".as_ptr(), main, 208);
         check!(!status.is_null(), "CreateStatusWindowA");
         let n = SendMessageA(status, 0x0402, 0, buf.as_mut_ptr() as isize) as usize & 0xFFFF;

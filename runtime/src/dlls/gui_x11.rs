@@ -680,6 +680,28 @@ fn screen_density_randr(conn: &RustConnection, root: u32, root_height: u16) -> S
     density
 }
 
+/// Jeu ou programme qui dessine lui-même (SDL, OpenGL, Vulkan, Direct3D) :
+/// il n'est pas « DPI-aware » et appelle glViewport avec la taille logique de
+/// sa fenêtre. Ses fenêtres restent donc à l'échelle 1 (pixels réels).
+pub static RENDERS_ITSELF: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Imports qui désignent un programme dessinant lui-même sa fenêtre.
+pub fn renders_itself(imports: &[String]) -> bool {
+    imports.iter().any(|name| {
+        let n = name.to_ascii_lowercase();
+        n.starts_with("d3d")
+            || n.starts_with("dxgi")
+            || n == "opengl32.dll"
+            || n.starts_with("vulkan-1")
+            || n.starts_with("sdl2")
+            || n.starts_with("sdl3")
+            || n.starts_with("glfw")
+            || n == "libglesv2.dll"
+            || n == "libegl.dll"
+    })
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -760,6 +782,7 @@ impl X11Backend {
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
         let scale = match requested_scale {
+            _ if RENDERS_ITSELF.load(std::sync::atomic::Ordering::Relaxed) => 1.0,
             Some(scale) => dpi_scale(96.0, Some(scale)),
             None => automatic_scale(screen_density(&conn, scr)),
         };
@@ -3714,6 +3737,15 @@ impl gui::GuiBackend for X11Backend {
             .height(height as u32);
         let _ = self.conn.configure_window(window, &aux);
         let _ = self.conn.flush();
+    }
+
+    fn lower_window(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux =
+                ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.flush();
+        }
     }
 
     fn raise_window(&mut self, hwnd: usize) {

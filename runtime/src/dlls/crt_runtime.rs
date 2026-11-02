@@ -634,17 +634,48 @@ pub extern "win64" fn configthreadlocale(typ: i32) -> i32 {
     }
 }
 
+/// `_locale_t` de la locale « C » : `__crt_locale_pointers { locinfo, mbcinfo }`.
+/// libc++ (llvm-mingw) lit directement `locinfo->_locale_pctype`,
+/// `_locale_mb_cur_max` et `_locale_lc_codepage` (disposition de l'UCRT x64 :
+/// pctype à 0, mb_cur_max à 8, lc_codepage à 12).
+#[repr(C)]
+struct LocaleInfo {
+    pctype: *const u16,
+    mb_cur_max: i32,
+    lc_codepage: u32,
+    _reste: [u64; 64],
+}
+#[repr(C)]
+struct LocalePointers {
+    locinfo: *const LocaleInfo,
+    mbcinfo: *const u8,
+}
+fn c_locale() -> usize {
+    static LOCALE: OnceLock<usize> = OnceLock::new();
+    *LOCALE.get_or_init(|| {
+        let info = Box::leak(Box::new(LocaleInfo {
+            pctype: PCTYPE_TABLE.as_ptr(),
+            mb_cur_max: 1,
+            lc_codepage: crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP),
+            _reste: [0; 64],
+        }));
+        let mbc = Box::leak(Box::new([0u8; 512]));
+        Box::leak(Box::new(LocalePointers {
+            locinfo: info,
+            mbcinfo: mbc.as_ptr(),
+        })) as *const LocalePointers as usize
+    })
+}
+
 pub extern "win64" fn create_locale(_cat: i32, _locale: *const u8) -> usize {
-    // Retourner un handle fictif non nul pour la locale « C ».
-    static FAKE: u8 = 0;
-    &FAKE as *const u8 as usize
+    // Une seule locale, « C » : la même structure pour tous.
+    c_locale()
 }
 
 pub extern "win64" fn free_locale(_handle: usize) {}
 
 pub extern "win64" fn get_current_locale() -> usize {
-    static FAKE: u8 = 0;
-    &FAKE as *const u8 as usize
+    c_locale()
 }
 
 static PCTYPE_TABLE: [u16; 256] = {

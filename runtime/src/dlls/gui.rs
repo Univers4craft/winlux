@@ -393,8 +393,24 @@ fn queues() -> &'static Mutex<HashMap<ThreadId, Arc<Queue>>> {
     Q.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Identifiant Win32 d'un thread → son identifiant Rust, pour
+/// `PostThreadMessage` : un thread y figure dès qu'il a une file de messages.
+fn win32_threads() -> &'static Mutex<HashMap<u32, ThreadId>> {
+    static T: OnceLock<Mutex<HashMap<u32, ThreadId>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Thread Rust portant la file de messages du thread Win32 `tid`.
+pub fn thread_of_win32(tid: u32) -> Option<ThreadId> {
+    lock(win32_threads()).get(&tid).copied()
+}
+
 pub fn current_queue() -> Arc<Queue> {
     let tid = std::thread::current().id();
+    thread_local!(static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if !REGISTERED.with(|r| r.replace(true)) {
+        lock(win32_threads()).insert(crate::dlls::kernel32::get_current_thread_id(), tid);
+    }
     let mut map = lock(queues());
     if let Some(q) = map.get(&tid) {
         return q.clone();
@@ -1880,6 +1896,8 @@ pub trait GuiBackend: Send {
     fn set_focus(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre devant ses voisines (liste déroulante ouverte).
     fn raise_window(&mut self, _hwnd: usize) {}
+    /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
+    fn lower_window(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {

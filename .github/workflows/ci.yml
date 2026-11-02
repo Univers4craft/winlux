@@ -231,6 +231,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           python3 -B scripts/test-power.py
+          python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
           sh scripts/test-display.sh
@@ -286,6 +287,9 @@ jobs:
 
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
+
+      - name: Installer des paquets MSIX (#272)
+        run: sh scripts/test-msix.sh
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh

@@ -14,6 +14,7 @@
 pub mod inno;
 mod inno_layout;
 pub mod lzma;
+pub mod msix;
 pub mod nsis;
 pub mod programs;
 
@@ -22,8 +23,9 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup
+const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup, paquets MSIX et AppX
   winlux --setup installateur.exe [/D=dossier]   installer
+  winlux --setup paquet.msix|.appx|.msixbundle   installer un paquet MSIX
   winlux --setup --info installateur.exe          type, nom, version, dossier
   winlux --setup --list                           applications installées ainsi
   winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe
@@ -35,6 +37,8 @@ const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup
 pub enum Kind {
     Nsis,
     Inno,
+    /// Paquet MSIX ou AppX (archive ZIP, pas un .exe).
+    Msix,
 }
 
 impl Kind {
@@ -42,6 +46,7 @@ impl Kind {
         match self {
             Kind::Nsis => "nsis",
             Kind::Inno => "inno",
+            Kind::Msix => "msix",
         }
     }
 }
@@ -697,22 +702,35 @@ pub fn remove(m: &Manifest, log: &mut Logger) {
 
 /// Informations sur un installateur.
 pub fn info(path: &Path) -> Result<Info, String> {
+    if msix::is_package(path) {
+        return msix::info(path);
+    }
     let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     match detect(&data) {
         Some(Kind::Inno) => inno::info(&data),
         Some(Kind::Nsis) => nsis::info(&data, path),
-        None => Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into()),
+        Some(Kind::Msix) | None => {
+            Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into())
+        }
     }
 }
 
 /// Installe. Renvoie le manifeste enregistré.
 pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
-    let kind = detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
-    let mut inst = Installer::new(kind, log);
-    match kind {
-        Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
-        Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
+    let mut inst;
+    if msix::is_package(path) {
+        inst = Installer::new(Kind::Msix, log);
+        msix::install(path, opts, &mut inst)?;
+    } else {
+        let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+        let kind =
+            detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
+        inst = Installer::new(kind, log);
+        match kind {
+            Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
+            Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
+            Kind::Msix => unreachable!("un .exe n'est jamais un paquet MSIX"),
+        }
     }
     // Réinstallation : les fichiers de l'ancienne version absents de la
     // nouvelle sont retirés, le reste est conservé.
@@ -921,7 +939,9 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         remove(&m, &mut log);
         return Some(0);
     }
-    detect_file(exe)?;
+    if !(msix::is_package_name(exe) && msix::is_package(exe)) {
+        detect_file(exe)?;
+    }
     let mut cli_args: Vec<String> = args.to_vec();
     cli_args.push(exe.to_string_lossy().into_owned());
     Some(cli(&cli_args))
