@@ -130,6 +130,7 @@ _TR = {
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
+    'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobile Geräte'),
     'Bluetooth et appareils': ('Bluetooth & devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Alimentation et batterie': ('Power & battery', 'Energía y batería', 'Energie und Akku'),
     'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
@@ -300,13 +301,13 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert")]
+         _t("Partage et transfert"), _t("Appareils mobiles")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 19, 0, 27, 25, 9]),
-              (_t("Bluetooth et appareils"), [22, 4, 26]),
+              (_t("Bluetooth et appareils"), [22, 4, 26, 29]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15]),

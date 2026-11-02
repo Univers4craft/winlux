@@ -137,6 +137,8 @@ jobs:
 
       - name: Vérifier les autorisations des applications Windows
         run: python3 -B scripts/test-permission.py
+      - name: Vérifier Téléphone connecté (faux téléphone Android, protocole KDE Connect)
+        run: /usr/bin/python3 -B scripts/test-phone.py
       - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
