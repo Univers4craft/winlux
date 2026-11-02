@@ -172,6 +172,14 @@ pub enum Kind {
     ListBox,
     ComboBox,
     ScrollBar,
+    TreeView,
+    ListView,
+    Tab,
+    StatusBar,
+    Progress,
+    TrackBar,
+    UpDown,
+    ToolTip,
 }
 
 #[derive(Clone, Default)]
@@ -280,20 +288,39 @@ control_proc!(edit_proc, Kind::Edit);
 control_proc!(listbox_proc, Kind::ListBox);
 control_proc!(combobox_proc, Kind::ComboBox);
 control_proc!(scrollbar_proc, Kind::ScrollBar);
+control_proc!(treeview_proc, Kind::TreeView);
+control_proc!(listview_proc, Kind::ListView);
+control_proc!(tab_proc, Kind::Tab);
+control_proc!(statusbar_proc, Kind::StatusBar);
+control_proc!(progress_proc, Kind::Progress);
+control_proc!(trackbar_proc, Kind::TrackBar);
+control_proc!(updown_proc, Kind::UpDown);
+control_proc!(tooltip_proc, Kind::ToolTip);
 
 /// Procédure d'une classe prédéfinie (le nom ne tient pas compte de la casse).
 /// `ComboLBox` est la liste déroulante d'une COMBOBOX créée à part par
 /// certains programmes ; elle se comporte en LISTBOX.
 pub fn builtin_class(name: &str) -> Option<usize> {
+    let lower = name.to_ascii_lowercase();
     let proc_addr: unsafe extern "win64" fn(usize, u32, usize, isize) -> isize =
-        match name.to_ascii_lowercase().as_str() {
+        match lower.as_str() {
             "button" => button_proc,
             "static" => static_proc,
             "edit" => edit_proc,
             "listbox" | "combolbox" => listbox_proc,
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
-            _ => return None,
+            _ => match comctl::class_kind(&lower)? {
+                Kind::TreeView => treeview_proc,
+                Kind::ListView => listview_proc,
+                Kind::Tab => tab_proc,
+                Kind::StatusBar => statusbar_proc,
+                Kind::Progress => progress_proc,
+                Kind::TrackBar => trackbar_proc,
+                Kind::UpDown => updown_proc,
+                Kind::ToolTip => tooltip_proc,
+                _ => return None,
+            },
         };
     Some(proc_addr as usize)
 }
@@ -608,7 +635,12 @@ impl Painter {
 /// aussi la couleur du texte que le parent a pu choisir.
 fn background(hwnd: usize, hdc: usize, msg: u32, default: u32, p: &Painter, r: Rect) -> u32 {
     gdi32::set_text_color(hdc, TEXT);
-    let brush = send(parent(hwnd), msg, hdc, hwnd as isize);
+    // msg = 0 : pas de WM_CTLCOLOR* (TreeView, ListView).
+    let brush = if msg == 0 {
+        0
+    } else {
+        send(parent(hwnd), msg, hdc, hwnd as isize)
+    };
     if brush != 0 {
         p.fill_brush(r, brush as usize);
         let color = gdi32::get_text_color(hdc);
@@ -689,6 +721,7 @@ fn paint(hwnd: usize) {
         Kind::ListBox => paint_listbox(hwnd, &c, &p, r),
         Kind::ComboBox => paint_combobox(hwnd, &c, &p, r),
         Kind::ScrollBar => paint_scrollbar(hwnd, &c, &p, r),
+        kind => comctl::paint(kind, hwnd, &c, &p, r),
     }
     unsafe {
         user32::end_paint(hwnd, &ps);
@@ -3143,10 +3176,12 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
             if kind == Kind::ScrollBar {
                 with_ctl(hwnd, |c| c.max = 100);
             }
+            comctl::init(kind, hwnd);
             return 0;
         }
         WM_NCDESTROY => {
             lock(state()).remove(&hwnd);
+            comctl::forget(hwnd);
             return 0;
         }
         WM_DESTROY => return 0,
@@ -3191,6 +3226,7 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
         Kind::ListBox => listbox_proc_impl(hwnd, msg, wp, lp),
         Kind::ComboBox => combobox_proc_impl(hwnd, msg, wp, lp),
         Kind::ScrollBar => scrollbar_proc_impl(hwnd, msg, wp, lp),
+        kind => comctl::proc_impl(kind, hwnd, msg, wp, lp),
     };
     match handled {
         Some(r) => r,
@@ -3246,6 +3282,8 @@ pub fn user32_overrides() -> Exports {
         "IsDlgButtonChecked" => fn is_dlg_button_checked,
     }
 }
+
+mod comctl;
 
 #[cfg(test)]
 mod tests;
