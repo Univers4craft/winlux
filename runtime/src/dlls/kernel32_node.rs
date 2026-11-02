@@ -860,7 +860,7 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "FindNextVolumeW" => fn fail_not_supported,
         "FindVolumeClose" => fn job_ok2,
         "QueryDosDeviceW" => fn fail_not_supported,
-        "WaitNamedPipeW" => fn fail_not_supported,
+        "WaitNamedPipeW" => fn crate::dlls::named_pipes::wait_named_pipe_w,
         "Thread32First" => fn fail_not_supported,
         "Thread32Next" => fn fail_not_supported,
         "OpenThread" => fn fail_not_supported,

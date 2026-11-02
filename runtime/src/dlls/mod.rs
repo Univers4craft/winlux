@@ -62,6 +62,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
 pub mod mscoree;
+pub mod named_pipes;
 pub mod msvcrt;
 pub mod nls;
 pub mod notifyicon;

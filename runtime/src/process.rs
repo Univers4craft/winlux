@@ -185,11 +185,20 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let exe_win = crate::paths::to_windows(&exe.path);
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
-    let cmd = all
+    let mut cmd = all
         .iter()
         .map(|a| quote_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // Ligne exacte transmise par un parent Windows (CreateProcess) : elle
+    // garde son premier mot, que certains programmes lisent (argv[0]).
+    if let Some(line) = std::env::var("WINLUX_COMMAND_LINE")
+        .ok()
+        .filter(|l| !l.trim().is_empty())
+    {
+        std::env::remove_var("WINLUX_COMMAND_LINE");
+        cmd = line;
+    }
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
