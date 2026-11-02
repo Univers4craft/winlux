@@ -119,7 +119,10 @@ pub unsafe extern "win64" fn winlux_archive_extract(
         let r = super::extract_to(&p, &staging, pw.as_deref(), pr).and_then(|()| {
             for entry in std::fs::read_dir(&staging)? {
                 let entry = entry?;
-                std::fs::rename(entry.path(), free_name(&dir, &entry.file_name().to_string_lossy()))?;
+                std::fs::rename(
+                    entry.path(),
+                    free_name(&dir, &entry.file_name().to_string_lossy()),
+                )?;
             }
             Ok(())
         });
