@@ -33,6 +33,21 @@ trust_desktop() {
     if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
 }
 message() { printf '%s\n' "$*" > "$run/action.txt.tmp.$$"; mv "$run/action.txt.tmp.$$" "$run/action.txt"; }
+# Relevé périodique (boucle de l'init, toutes les 3 s) : les sondes lentes
+# dont la réponse change rarement (deux sont en Python) sont reprises du
+# relevé de moins d'une minute. Toute action de winlux-control, dont chaque
+# réglage changé dans Paramètres, refait un relevé complet.
+cached() {
+    key=$1; shift
+    file="$run/status-cache/$key"
+    if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1 && test -f "$file" && test -n "$(find "$file" -mmin -1 2>/dev/null)"; then
+        cat "$file"; return 0
+    fi
+    mkdir -p "$run/status-cache"
+    "$@" >"$file.tmp.$$" 2>/dev/null || true
+    mv "$file.tmp.$$" "$file"
+    cat "$file"
+}
 status() {
     {
         printf 'version=%s\n' "$(head -n 1 "$root/usr/share/winlux/version" 2>/dev/null || printf 'developpement')"
@@ -133,7 +148,7 @@ status() {
         printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
         # Réglages réellement acceptés par le pavé (rien sans pavé tactile).
-        if have winlux-touchpad; then winlux-touchpad status 2>/dev/null || true; fi
+        if have winlux-touchpad; then cached touchpad winlux-touchpad status; fi
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
         welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
@@ -144,23 +159,34 @@ status() {
         printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
         # Verrouillage de l'ecran (delai, sortie de veille, compte protege).
-        if have winlux-lock; then WINLUX_LOCK_ROOT="$root" winlux-lock status 2>/dev/null || true; fi
+        if have winlux-lock; then cached lock env WINLUX_LOCK_ROOT="$root" winlux-lock status; fi
         # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
-        if have winlux-report; then WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status 2>/dev/null || true; fi
+        if have winlux-report; then cached report env WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
-        if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
+        if have winlux-browsers; then cached browsers winlux-browsers --status; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
     cpu_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
-    if have winlux-update; then
+    # Refait seulement si l'une de ses sources a change depuis (les dossiers
+    # d'etat comptent : un fichier supprime change leur date).
+    if have winlux-update && ! updates_current; then
         if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
             mv "$run/updates.txt.tmp.$$" "$run/updates.txt"
         else rm -f "$run/updates.txt.tmp.$$"; fi
     fi
+}
+updates_current() {
+    test -s "$run/updates.txt" || return 1
+    for source in "$root/usr/share/winlux/version" "$root/var/lib/winlux" "$root/var/cache/winlux" \
+        "$root/var/lib/winlux/available-manifest" "$root/var/lib/winlux/update-trial"; do
+        test -e "$source" || continue
+        test "$source" -nt "$run/updates.txt" && return 1
+    done
+    return 0
 }
 # Capacites processeur detectees par le runtime : chaque section des
 # Parametres n'apparait que si son cap_*=1 (garde-fous materiels).

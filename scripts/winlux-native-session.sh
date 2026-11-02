@@ -185,8 +185,9 @@ fi
 # raccourcis de la session précédente restent affichés entre-temps.
 (
     while :; do
-        /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true
-        /usr/bin/winlux-applications window-icons >>/run/winlux/applications.log 2>&1 || true
+        # Basse priorité : le catalogue ne ralentit ni le bureau ni les applications.
+        nice -n 10 /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true
+        nice -n 10 /usr/bin/winlux-applications window-icons >>/run/winlux/applications.log 2>&1 || true
         if test -f /run/winlux/browser-chooser; then
             rm -f /run/winlux/browser-chooser
             /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
