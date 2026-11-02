@@ -62,6 +62,7 @@ run verrouillage         python3 -B scripts/test-lock.py
 run autorisations        python3 -B scripts/test-permission.py
 run uac                  python3 -B scripts/test-uac.py
 run relais-root          python3 -B scripts/test-root.py
+run xorg-session-vt      python3 -B scripts/test-xorg-session.py
 run coller-bureau        python3 -B scripts/test-desktop-paste.py
 run modes-alimentation   python3 -B scripts/test-power-modes.py
 run claude-code          python3 -B scripts/test-claude-code.py

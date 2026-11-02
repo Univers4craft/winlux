@@ -820,7 +820,22 @@ fi
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
     /bin/busybox touch /run/winlux/splash.stop
-    /usr/bin/Xorg :0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
+    # Xorg doit ouvrir sa propre session pour prendre son terminal virtuel
+    # comme terminal de contrôle et gérer les changements de VT (rendre
+    # l'affichage au serveur X d'un autre compte, « Changer d'utilisateur »).
+    # Lancé directement par l'init (pid 1, groupe 0), il se fait chef de
+    # groupe puis échoue sur setsid (« setsid failed: Operation not
+    # permitted ») : le second Xorg trouvait alors l'affichage pris
+    # (« drmSetMaster: Device or resource busy ») et l'écran restait noir.
+    # Un petit parent chef de sa propre session lui permet de réussir.
+    xorg_args=':0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log'
+    if command -v setsid >/dev/null 2>&1; then
+        # shellcheck disable=SC2016
+        setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; /usr/bin/Xorg "$@" & x=$!; wait "$x"' winlux-xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+    else
+        # shellcheck disable=SC2086
+        /usr/bin/Xorg $xorg_args >/tmp/xorg-console.log 2>&1 &
+    fi
     xorg_pid=$!
     # Bus D-Bus, polkit, udisks, réseau, impression et son n'ont pas besoin de
     # l'écran : ils démarrent pendant que Xorg s'initialise.
