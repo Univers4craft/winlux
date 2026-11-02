@@ -483,7 +483,10 @@ pub unsafe extern "win64" fn rtl_add_growable_function_table(
 pub unsafe extern "win64" fn rtl_grow_function_table(table: usize, count: u32) {
     let t = crate::dlls::lock(&DYNAMIC);
     for e in t.iter() {
-        if let DynamicTable::Growable { handle, count: c, .. } = e {
+        if let DynamicTable::Growable {
+            handle, count: c, ..
+        } = e
+        {
             if *handle == table {
                 c.store(count, std::sync::atomic::Ordering::Release);
             }

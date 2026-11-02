@@ -90,7 +90,12 @@ unsafe extern "win64" fn NetApiBufferFree(_buf: usize) -> u32 {
 unsafe extern "win64" fn net_denied4(_a: usize, _b: usize, _c: usize, _d: usize) -> u32 {
     ERROR_ACCESS_DENIED
 }
-unsafe extern "win64" fn NetUserGetInfo(_server: usize, _user: usize, _level: u32, buf: *mut usize) -> u32 {
+unsafe extern "win64" fn NetUserGetInfo(
+    _server: usize,
+    _user: usize,
+    _level: u32,
+    buf: *mut usize,
+) -> u32 {
     if !buf.is_null() {
         *buf = 0;
     }

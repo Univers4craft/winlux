@@ -659,7 +659,13 @@ pub unsafe extern "win64" fn recv(s: usize, b: *mut u8, n: i32, flags: i32) -> i
         // données ; on ne fait remonter que l'erreur en attente.
         let mut err: i32 = 0;
         let mut len = 4u32;
-        libc::getsockopt(s as i32, libc::SOL_SOCKET, libc::SO_ERROR, &mut err as *mut i32 as *mut c_void, &mut len);
+        libc::getsockopt(
+            s as i32,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut err as *mut i32 as *mut c_void,
+            &mut len,
+        );
         if err != 0 {
             set_error(error_from_errno(err));
             return SOCKET_ERROR;
@@ -860,7 +866,9 @@ pub unsafe extern "win64" fn get_host_name_w(buf: *mut u16, len: i32) -> i32 {
         set_error(last_error());
         return SOCKET_ERROR;
     }
-    let name = std::ffi::CStr::from_ptr(b.as_ptr()).to_string_lossy().into_owned();
+    let name = std::ffi::CStr::from_ptr(b.as_ptr())
+        .to_string_lossy()
+        .into_owned();
     let w: Vec<u16> = name.encode_utf16().collect();
     if w.len() >= len as usize {
         set_error(10014); // WSAEFAULT : tampon trop petit
@@ -1387,14 +1395,31 @@ pub unsafe extern "win64" fn getsockopt(
         let get = |o: i32| -> i32 {
             let mut v: i32 = 0;
             let mut l = 4u32;
-            libc::getsockopt(s as i32, libc::SOL_SOCKET, o, &mut v as *mut i32 as *mut c_void, &mut l);
+            libc::getsockopt(
+                s as i32,
+                libc::SOL_SOCKET,
+                o,
+                &mut v as *mut i32 as *mut c_void,
+                &mut l,
+            );
             v
         };
-        let (domain, kind, proto) = (get(libc::SO_DOMAIN), get(libc::SO_TYPE), get(libc::SO_PROTOCOL));
+        let (domain, kind, proto) = (
+            get(libc::SO_DOMAIN),
+            get(libc::SO_TYPE),
+            get(libc::SO_PROTOCOL),
+        );
         std::ptr::write_bytes(optval, 0, need as usize);
         let put = |off: usize, v: i32| std::ptr::write_unaligned(optval.add(off) as *mut i32, v);
         // XP1_CONNECTIONLESS (datagrammes) ou XP1_GUARANTEED_DELIVERY|ORDER.
-        put(0, if kind == libc::SOCK_DGRAM { 0x1 | 0x200 } else { 0x2 | 0x4 | 0x20000 });
+        put(
+            0,
+            if kind == libc::SOCK_DGRAM {
+                0x1 | 0x200
+            } else {
+                0x2 | 0x4 | 0x20000
+            },
+        );
         put(36, 1001); // dwCatalogEntryId
         put(40, 1); // ProtocolChain.ChainLen : BASE_PROTOCOL
         put(72, 2); // iVersion
@@ -1410,7 +1435,11 @@ pub unsafe extern "win64" fn getsockopt(
         put(92, proto);
         put(100, 1); // BIGENDIAN
         put(108, if kind == libc::SOCK_DGRAM { 65467 } else { 0 });
-        let name = if kind == libc::SOCK_DGRAM { "Winlux UDP" } else { "Winlux TCP" };
+        let name = if kind == libc::SOCK_DGRAM {
+            "Winlux UDP"
+        } else {
+            "Winlux TCP"
+        };
         if wide {
             for (i, c) in name.encode_utf16().enumerate() {
                 std::ptr::write_unaligned(optval.add(116 + i * 2) as *mut u16, c);
@@ -2877,17 +2906,47 @@ pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i3
 /// Ordinaux publics communs à ws2_32 et wsock32 (Winsock 1.1) : les
 /// programmes liés à wsock32 importent souvent par numéro.
 const WINSOCK_ORDINALS: &[(u16, &str)] = &[
-    (1, "accept"), (2, "bind"), (3, "closesocket"), (4, "connect"), (5, "getpeername"),
-    (6, "getsockname"), (7, "getsockopt"), (8, "htonl"), (9, "htons"), (10, "ioctlsocket"),
-    (11, "inet_addr"), (12, "inet_ntoa"), (13, "listen"), (14, "ntohl"), (15, "ntohs"),
-    (16, "recv"), (17, "recvfrom"), (18, "select"), (19, "send"), (20, "sendto"),
-    (21, "setsockopt"), (22, "shutdown"), (23, "socket"), (51, "gethostbyaddr"),
-    (52, "gethostbyname"), (53, "getprotobyname"), (54, "getprotobynumber"),
-    (55, "getservbyname"), (56, "getservbyport"), (57, "gethostname"),
-    (101, "WSAAsyncSelect"), (102, "WSAAsyncGetHostByAddr"), (103, "WSAAsyncGetHostByName"),
-    (108, "WSACancelAsyncRequest"), (111, "WSAGetLastError"), (112, "WSASetLastError"),
-    (113, "WSACancelBlockingCall"), (114, "WSAIsBlocking"), (115, "WSAStartup"),
-    (116, "WSACleanup"), (151, "__WSAFDIsSet"),
+    (1, "accept"),
+    (2, "bind"),
+    (3, "closesocket"),
+    (4, "connect"),
+    (5, "getpeername"),
+    (6, "getsockname"),
+    (7, "getsockopt"),
+    (8, "htonl"),
+    (9, "htons"),
+    (10, "ioctlsocket"),
+    (11, "inet_addr"),
+    (12, "inet_ntoa"),
+    (13, "listen"),
+    (14, "ntohl"),
+    (15, "ntohs"),
+    (16, "recv"),
+    (17, "recvfrom"),
+    (18, "select"),
+    (19, "send"),
+    (20, "sendto"),
+    (21, "setsockopt"),
+    (22, "shutdown"),
+    (23, "socket"),
+    (51, "gethostbyaddr"),
+    (52, "gethostbyname"),
+    (53, "getprotobyname"),
+    (54, "getprotobynumber"),
+    (55, "getservbyname"),
+    (56, "getservbyport"),
+    (57, "gethostname"),
+    (101, "WSAAsyncSelect"),
+    (102, "WSAAsyncGetHostByAddr"),
+    (103, "WSAAsyncGetHostByName"),
+    (108, "WSACancelAsyncRequest"),
+    (111, "WSAGetLastError"),
+    (112, "WSASetLastError"),
+    (113, "WSACancelBlockingCall"),
+    (114, "WSAIsBlocking"),
+    (115, "WSAStartup"),
+    (116, "WSACleanup"),
+    (151, "__WSAFDIsSet"),
 ];
 
 pub fn exports() -> crate::dlls::Exports {

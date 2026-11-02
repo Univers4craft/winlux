@@ -389,7 +389,15 @@ pub fn msys_script(s: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         let prev = if i == 0 { None } else { Some(chars[i - 1]) };
-        let boundary = prev.is_none_or(|p| !(p.is_alphanumeric() || p == '_' || p == '.' || p == '/' || p == '\\' || p == '-' || p == '$'));
+        let boundary = prev.is_none_or(|p| {
+            !(p.is_alphanumeric()
+                || p == '_'
+                || p == '.'
+                || p == '/'
+                || p == '\\'
+                || p == '-'
+                || p == '$')
+        });
         if boundary {
             if let Some((len, linux)) = path_token(&chars[i..], prev) {
                 out.push_str(&linux);
@@ -416,7 +424,10 @@ fn path_end(rest: &[char], quote: Option<char>, colon_ends: bool) -> usize {
             Some(q) => c == q || c == '\n',
             None => {
                 c.is_whitespace()
-                    || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>' | '`' | '"' | '\'')
+                    || matches!(
+                        c,
+                        ';' | '|' | '&' | '(' | ')' | '<' | '>' | '`' | '"' | '\''
+                    )
                     || (colon_ends && c == ':')
             }
         })
@@ -433,7 +444,10 @@ fn path_token(rest: &[char], prev: Option<char>) -> Option<(usize, String)> {
     {
         let len = path_end(rest, quote, false);
         let win: String = rest[..len].iter().collect();
-        return Some((len, crate::paths::to_linux(&win).to_string_lossy().into_owned()));
+        return Some((
+            len,
+            crate::paths::to_linux(&win).to_string_lossy().into_owned(),
+        ));
     }
     // /cygdrive/c/… ou /c/…
     let letter_at = if rest.starts_with(&['/', 'c', 'y', 'g', 'd', 'r', 'i', 'v', 'e', '/']) {
@@ -447,7 +461,9 @@ fn path_token(rest: &[char], prev: Option<char>) -> Option<(usize, String)> {
     let letter = rest[letter_at];
     let after = rest.get(letter_at + 1).copied();
     if !letter.is_ascii_alphabetic()
-        || !after.is_none_or(|c| c == '/' || c.is_whitespace() || c == '\'' || c == '"' || c == ';' || c == ':')
+        || !after.is_none_or(|c| {
+            c == '/' || c.is_whitespace() || c == '\'' || c == '"' || c == ';' || c == ':'
+        })
     {
         return None;
     }
@@ -457,8 +473,44 @@ fn path_token(rest: &[char], prev: Option<char>) -> Option<(usize, String)> {
     }
     let len = path_end(rest, quote, true);
     let tail: String = rest[letter_at + 1..len].iter().collect();
-    let win = format!("{}:/{}", letter.to_ascii_uppercase(), tail.trim_start_matches('/'));
-    Some((len, crate::paths::to_linux(&win).to_string_lossy().into_owned()))
+    let win = format!(
+        "{}:/{}",
+        letter.to_ascii_uppercase(),
+        tail.trim_start_matches('/')
+    );
+    Some((
+        len,
+        crate::paths::to_linux(&win).to_string_lossy().into_owned(),
+    ))
+}
+
+/// Git Bash de Winlux : les programmes Windows qui ont besoin d'un shell
+/// POSIX (Claude Code exige Git Bash sous Windows) reçoivent le bash Linux
+/// sous le nom `bash.exe`, via un lien dans les données de Winlux, et
+/// `CLAUDE_CODE_GIT_BASH_PATH` le leur indique quand rien d'autre n'est
+/// réglé. Les scripts qu'il reçoit voient leurs chemins traduits
+/// ([`msys_script`]).
+pub fn provide_git_bash() {
+    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
+        return;
+    }
+    let bash = Path::new("/usr/bin/bash");
+    if !bash.exists() {
+        return;
+    }
+    let Some(dir) = crate::paths::data_dir().map(|d| d.join("git").join("bin")) else {
+        return;
+    };
+    let link = dir.join("bash.exe");
+    if std::fs::symlink_metadata(&link).is_err() {
+        let _ = std::fs::create_dir_all(&dir);
+        if std::os::unix::fs::symlink(bash, &link).is_err() {
+            return;
+        }
+    }
+    if is_linux_program(&link) {
+        std::env::set_var("CLAUDE_CODE_GIT_BASH_PATH", crate::paths::to_windows(&link));
+    }
 }
 
 /// Un programme Linux déguisé en `.exe` (lien `bash.exe` → `/usr/bin/bash`)
@@ -584,7 +636,9 @@ mod tests {
     }
     #[test]
     fn traduit_les_chemins_windows_et_msys_dun_script() {
-        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved = std::env::var_os("WINLUX_DRIVE_C");
         std::env::set_var("WINLUX_DRIVE_C", "/srv/lecteur-c");
         let s = msys_script("source 'C:\\Windows\\temp\\a b.sh' && cat >| /c/Windows/temp/x-cwd; ls /usr/bin; echo a/c/b");
@@ -592,15 +646,20 @@ mod tests {
             s,
             "source '/srv/lecteur-c/Windows/temp/a b.sh' && cat >| /srv/lecteur-c/Windows/temp/x-cwd; ls /usr/bin; echo a/c/b"
         );
-        assert_eq!(msys_script("cd /cygdrive/c/projet"), "cd /srv/lecteur-c/projet");
+        assert_eq!(
+            msys_script("cd /cygdrive/c/projet"),
+            "cd /srv/lecteur-c/projet"
+        );
         let pwd = msys_script("pwd -P >| /c/t/cwd");
         assert!(pwd.contains("__wl=\"/c${__wl#'/srv/lecteur-c'}\""), "{pwd}");
         assert!(pwd.ends_with(">| /srv/lecteur-c/t/cwd"), "{pwd}");
-        assert_eq!(msys_script("echo https://x.org/c/y"), "echo https://x.org/c/y");
+        assert_eq!(
+            msys_script("echo https://x.org/c/y"),
+            "echo https://x.org/c/y"
+        );
         match saved {
             Some(v) => std::env::set_var("WINLUX_DRIVE_C", v),
             None => std::env::remove_var("WINLUX_DRIVE_C"),
         }
     }
-
 }

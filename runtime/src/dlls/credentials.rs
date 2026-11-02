@@ -16,7 +16,11 @@ const ERROR_NO_SUCH_LOGON_SESSION: u32 = 1312;
 
 fn store_dir() -> Option<std::path::PathBuf> {
     let d = crate::paths::data_dir()?.join("identifiants");
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&d).ok()?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&d)
+        .ok()?;
     Some(d)
 }
 
@@ -132,7 +136,12 @@ pub unsafe extern "win64" fn CredWriteW(cred: *const u8, _flags: u32) -> i32 {
 
 /// `CredReadW(target, type, flags, PCREDENTIALW*)` : un seul bloc alloué,
 /// rendu par CredFree.
-pub unsafe extern "win64" fn CredReadW(target: *const u16, kind: u32, _flags: u32, out: *mut *mut u8) -> i32 {
+pub unsafe extern "win64" fn CredReadW(
+    target: *const u16,
+    kind: u32,
+    _flags: u32,
+    out: *mut *mut u8,
+) -> i32 {
     if target.is_null() || out.is_null() {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
@@ -148,7 +157,10 @@ pub unsafe extern "win64" fn CredReadW(target: *const u16, kind: u32, _flags: u3
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| (d.as_secs() + 11_644_473_600) * 10_000_000)
         .unwrap_or(0);
-    let Some(s) = std::fs::read(&path).ok().and_then(|raw| decode(&raw, written)) else {
+    let Some(s) = std::fs::read(&path)
+        .ok()
+        .and_then(|raw| decode(&raw, written))
+    else {
         crate::process::set_last_error(ERROR_NOT_FOUND);
         return 0;
     };
@@ -167,7 +179,8 @@ pub unsafe extern "win64" fn CredReadW(target: *const u16, kind: u32, _flags: u3
         cur = cur.add(data.len());
         p
     };
-    let as_bytes = |w: &[u16]| std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2).to_vec();
+    let as_bytes =
+        |w: &[u16]| std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2).to_vec();
     let pt = place(&as_bytes(&wt));
     let pc = place(&as_bytes(&wc));
     let pu = place(&as_bytes(&wu));
@@ -177,7 +190,11 @@ pub unsafe extern "win64" fn CredReadW(target: *const u16, kind: u32, _flags: u3
     (block.add(16) as *mut *mut u8).write_unaligned(pc);
     (block.add(24) as *mut u64).write_unaligned(s.written);
     (block.add(32) as *mut u32).write_unaligned(s.blob.len() as u32);
-    (block.add(40) as *mut *mut u8).write_unaligned(if s.blob.is_empty() { std::ptr::null_mut() } else { pb });
+    (block.add(40) as *mut *mut u8).write_unaligned(if s.blob.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        pb
+    });
     (block.add(48) as *mut u32).write_unaligned(s.persist);
     (block.add(72) as *mut *mut u8).write_unaligned(pu);
     *out = block;

@@ -375,7 +375,11 @@ pub fn init() {
 pub(crate) const STD_INPUT_REAL: usize = 0xFFF0;
 pub(crate) const STD_OUTPUT_REAL: usize = 0xFFF4;
 pub(crate) const STD_ERROR_REAL: usize = 0xFFF8;
-static STD_OVERRIDE: [AtomicUsize; 3] = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
+static STD_OVERRIDE: [AtomicUsize; 3] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
 
 /// Ramène toutes les formes d'un handle standard (réel, constante STD_*,
 /// constante tronquée à 63 bits) à la constante STD_* historique, que le
@@ -418,7 +422,11 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
         }
     };
     let real = [STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][slot];
-    let value = if canon_std(h) == canon_std(real) { 0 } else { h };
+    let value = if canon_std(h) == canon_std(real) {
+        0
+    } else {
+        h
+    };
     STD_OVERRIDE[slot].store(value, Ordering::Relaxed);
     1
 }
@@ -637,15 +645,15 @@ unsafe fn sync_io_at_overlapped(
 pub(crate) fn ntstatus_of_win32(error: u32) -> u32 {
     match error {
         0 => 0,
-        5 => 0xC000_0022,   // ACCESS_DENIED
-        6 => 0xC000_0008,   // INVALID_HANDLE
-        38 => 0xC000_0011,  // HANDLE_EOF → END_OF_FILE
-        87 => 0xC000_000D,  // INVALID_PARAMETER
-        109 => 0xC000_014B, // BROKEN_PIPE → PIPE_BROKEN
-        112 => 0xC000_007F, // DISK_FULL
-        232 => 0xC000_00B1, // NO_DATA → PIPE_CLOSING
-        995 => 0xC000_0120, // OPERATION_ABORTED → CANCELLED
-        1236 => 0xC000_0241, // CONNECTION_ABORTED
+        5 => 0xC000_0022,     // ACCESS_DENIED
+        6 => 0xC000_0008,     // INVALID_HANDLE
+        38 => 0xC000_0011,    // HANDLE_EOF → END_OF_FILE
+        87 => 0xC000_000D,    // INVALID_PARAMETER
+        109 => 0xC000_014B,   // BROKEN_PIPE → PIPE_BROKEN
+        112 => 0xC000_007F,   // DISK_FULL
+        232 => 0xC000_00B1,   // NO_DATA → PIPE_CLOSING
+        995 => 0xC000_0120,   // OPERATION_ABORTED → CANCELLED
+        1236 => 0xC000_0241,  // CONNECTION_ABORTED
         10054 => 0xC000_020D, // WSAECONNRESET → CONNECTION_RESET
         _ => 0xC000_0001,
     }
@@ -660,12 +668,21 @@ fn win32_of_ntstatus(status: u32) -> u32 {
 /// données étaient prêtes, Some(Err(109)) si l'autre bout est fermé,
 /// None s'il faut attendre.
 fn try_stream_read_now(fd: i32, buffer: usize, len: u32) -> Option<Result<u32, u32>> {
-    let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
     if unsafe { libc::poll(&mut p, 1, 0) } <= 0 {
         return None;
     }
     let n = unsafe {
-        libc::recv(fd, buffer as *mut libc::c_void, len as usize, libc::MSG_DONTWAIT)
+        libc::recv(
+            fd,
+            buffer as *mut libc::c_void,
+            len as usize,
+            libc::MSG_DONTWAIT,
+        )
     };
     let n = if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTSOCK) {
         let mut avail: libc::c_int = 0;
@@ -676,7 +693,13 @@ fn try_stream_read_now(fd: i32, buffer: usize, len: u32) -> Option<Result<u32, u
             }
             return None;
         }
-        unsafe { libc::read(fd, buffer as *mut libc::c_void, (len as usize).min(avail as usize)) }
+        unsafe {
+            libc::read(
+                fd,
+                buffer as *mut libc::c_void,
+                (len as usize).min(avail as usize),
+            )
+        }
     } else {
         n
     };
@@ -708,10 +731,23 @@ fn stream_io(
                 return Err(995);
             }
             let n = unsafe {
-                libc::send(fd, data[done..].as_ptr() as *const libc::c_void, data.len() - done, libc::MSG_NOSIGNAL)
+                libc::send(
+                    fd,
+                    data[done..].as_ptr() as *const libc::c_void,
+                    data.len() - done,
+                    libc::MSG_NOSIGNAL,
+                )
             };
-            let n = if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTSOCK) {
-                unsafe { libc::write(fd, data[done..].as_ptr() as *const libc::c_void, data.len() - done) }
+            let n = if n < 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTSOCK)
+            {
+                unsafe {
+                    libc::write(
+                        fd,
+                        data[done..].as_ptr() as *const libc::c_void,
+                        data.len() - done,
+                    )
+                }
             } else {
                 n
             };
@@ -720,7 +756,11 @@ fn stream_io(
                 match e.raw_os_error() {
                     Some(libc::EINTR) => continue,
                     Some(libc::EAGAIN) => {
-                        let mut p = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+                        let mut p = libc::pollfd {
+                            fd,
+                            events: libc::POLLOUT,
+                            revents: 0,
+                        };
                         unsafe { libc::poll(&mut p, 1, 100) };
                         continue;
                     }
@@ -736,9 +776,14 @@ fn stream_io(
         if cancelled.load(Ordering::Acquire) {
             return Err(995);
         }
-        let mut p = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         let r = unsafe { libc::poll(&mut p, 1, 100) };
-        if r == 0 || (r < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)) {
+        if r == 0 || (r < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR))
+        {
             continue;
         }
         let mut avail: libc::c_int = 0;
@@ -784,7 +829,15 @@ pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error
         .get(&h)
         .cloned();
     if let Some((port, key)) = completion {
-        post_iocp(&port, CompletionPacket { bytes, key, overlapped, error });
+        post_iocp(
+            &port,
+            CompletionPacket {
+                bytes,
+                key,
+                overlapped,
+                error,
+            },
+        );
     }
 }
 
@@ -838,7 +891,11 @@ fn start_overlapped_io(
                     let op = Arc::new(IoOperation {
                         file_handle: h,
                         issuing_thread: std::thread::current().id(),
-                        state: Mutex::new(IoResult { done: true, bytes: n, error: 0 }),
+                        state: Mutex::new(IoResult {
+                            done: true,
+                            bytes: n,
+                            error: 0,
+                        }),
                         changed: Condvar::new(),
                         cancelled: std::sync::atomic::AtomicBool::new(false),
                     });
@@ -855,7 +912,15 @@ fn start_overlapped_io(
                         let _ = set_event(event);
                     }
                     if let Some((port, key)) = completion {
-                        post_iocp(&port, CompletionPacket { bytes: n, key, overlapped, error: 0 });
+                        post_iocp(
+                            &port,
+                            CompletionPacket {
+                                bytes: n,
+                                key,
+                                overlapped,
+                                error: 0,
+                            },
+                        );
                     }
                     crate::process::set_last_error(0);
                     return 1;
@@ -1470,6 +1535,16 @@ unsafe fn create_file_str(
     if let Some(name) = crate::dlls::named_pipes::pipe_name(path) {
         return crate::dlls::named_pipes::open_client(&name, _flags);
     }
+    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
+    let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
+    if device == "CONIN$" && libc::isatty(0) == 1 {
+        crate::process::set_last_error(0);
+        return STD_INPUT_REAL;
+    }
+    if device == "CONOUT$" && libc::isatty(1) == 1 {
+        crate::process::set_last_error(0);
+        return STD_OUTPUT_REAL;
+    }
     let p = crate::paths::to_linux(path);
     let existed = p.exists();
     // Fichier en lecture seule : refusé en écriture même pour root, comme
@@ -1490,7 +1565,8 @@ unsafe fn create_file_str(
     // Node/Bun (journaux, transcriptions de session de Claude Code).
     let append_only = access & 4 != 0 && !want_write;
     let mut o = OpenOptions::new();
-    o.read(want_read || !(want_write || append_only)).write(want_write);
+    o.read(want_read || !(want_write || append_only))
+        .write(want_write);
     if append_only {
         o.append(true);
     }
@@ -1498,7 +1574,8 @@ unsafe fn create_file_str(
     // FILE_FLAG_OPEN_REPARSE_POINT : on ouvre le lien symbolique lui-même
     // (lstat() de Node/Bun, lecture de la cible avec DeviceIoControl).
     if _flags & 0x0020_0000 != 0
-        && p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+        && p.symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
         && !want_write
         && !append_only
     {
@@ -1516,7 +1593,10 @@ unsafe fn create_file_str(
             crate::process::set_last_error(80); // ERROR_FILE_EXISTS
             return usize::MAX;
         }
-        o.read(true).write(false).append(false).custom_flags(libc::O_DIRECTORY);
+        o.read(true)
+            .write(false)
+            .append(false)
+            .custom_flags(libc::O_DIRECTORY);
     }
     // Rust exige `write` pour créer ou tronquer : CreateFile(GENERIC_READ,
     // OPEN_ALWAYS) sur un fichier absent échouait avec 87.
@@ -4268,7 +4348,9 @@ unsafe fn create_process_common(
     } else {
         crate::dlls::cstr(command_line)
     };
-    crate::trace!("CreateProcess : application {application:?}, ligne {line:?}, options {creation_flags:#x}");
+    crate::trace!(
+        "CreateProcess : application {application:?}, ligne {line:?}, options {creation_flags:#x}"
+    );
     let mut args = split_windows_command_line(&line);
     let app_dir =
         crate::loader::main_module().and_then(|m| m.path.parent().map(|d| d.to_path_buf()));
@@ -4357,7 +4439,13 @@ unsafe fn create_process_common(
         target.extend(
             crate::launch::linux_args(&args)
                 .into_iter()
-                .map(|a| if disguised { crate::launch::msys_script(&a) } else { a })
+                .map(|a| {
+                    if disguised {
+                        crate::launch::msys_script(&a)
+                    } else {
+                        a
+                    }
+                })
                 .map(std::ffi::OsString::from),
         );
     }
@@ -4915,6 +5003,14 @@ pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *co
     open_named_sync(name, false)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
+    // Entrée de la console (terminal) : signalée quand une touche attend.
+    if crate::dlls::console_input::is_console_input(h) {
+        return if crate::dlls::console_input::wait(timeout) {
+            0
+        } else {
+            258
+        };
+    }
     let Some(obj) = lookup_sync(h) else {
         crate::process::set_last_error(6);
         return u32::MAX;
@@ -5728,7 +5824,16 @@ pub unsafe extern "win64" fn write_console_w(
         std::slice::from_raw_parts(buf, n as usize)
     };
     let x = String::from_utf16_lossy(units);
-    if std::io::Write::write_all(&mut std::io::stdout(), x.as_bytes()).is_err() {
+    let ok = if canon_std(_h) == (-12isize) as usize {
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::io::Write::write_all(&mut std::io::stderr(), x.as_bytes()).is_ok()
+    } else {
+        let mut out = std::io::stdout();
+        std::io::Write::write_all(&mut out, x.as_bytes())
+            .and_then(|_| std::io::Write::flush(&mut out))
+            .is_ok()
+    };
+    if !ok {
         return 0;
     }
     if !written.is_null() {
@@ -5759,6 +5864,7 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
 }
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    crate::dlls::console_input::restore();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     std::process::exit(code)
 }
@@ -7152,6 +7258,10 @@ pub unsafe extern "win64" fn duplicate_handle(
     let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
     let copy = if pseudo {
         Some(src_handle)
+    } else if let Some(fd) = std_fd.filter(|&fd| libc::isatty(fd) == 1) {
+        // La console (terminal) reste la console : la copie est le handle
+        // standard réel, que les fonctions Console reconnaissent.
+        Some([STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][fd as usize])
     } else if let Some(fd) = std_fd {
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))

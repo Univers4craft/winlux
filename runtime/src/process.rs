@@ -199,6 +199,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
         std::env::remove_var("WINLUX_COMMAND_LINE");
         cmd = line;
     }
+    crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);

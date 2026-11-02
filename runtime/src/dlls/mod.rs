@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
 pub mod comobj;
+pub mod console_input;
 pub mod credentials;
 pub mod crt;
 pub mod crt_runtime;
@@ -62,8 +63,8 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
 pub mod mscoree;
-pub mod named_pipes;
 pub mod msvcrt;
+pub mod named_pipes;
 pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
@@ -75,8 +76,8 @@ pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
 pub mod resource;
-pub mod sandbox_dlls;
 pub mod rpcrt4;
+pub mod sandbox_dlls;
 pub mod sechost;
 pub mod security;
 pub mod seh;
@@ -198,6 +199,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
+                    e.extend(console_input::exports());
                     e
                 },
                 handle: fake_module(),

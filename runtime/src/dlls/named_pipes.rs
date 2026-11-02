@@ -55,9 +55,13 @@ fn registry() -> &'static Registry {
 pub(crate) fn pipe_name(path: &str) -> Option<String> {
     let p = path.replace('/', "\\");
     let lower = p.to_ascii_lowercase();
-    for prefix in ["\\\\.\\pipe\\", "\\\\?\\pipe\\", "\\??\\pipe\\", "\\device\\namedpipe\\"] {
-        if lower.starts_with(prefix) {
-            let rest = &lower[prefix.len()..];
+    for prefix in [
+        "\\\\.\\pipe\\",
+        "\\\\?\\pipe\\",
+        "\\??\\pipe\\",
+        "\\device\\namedpipe\\",
+    ] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
             if rest.is_empty() {
                 return None;
             }
@@ -146,7 +150,7 @@ pub(crate) fn open_client(name: &str, flags: u32) -> usize {
     h
 }
 
-fn find_server<'a>(st: &'a mut State, h: usize) -> Option<&'a mut Instance> {
+fn find_server(st: &mut State, h: usize) -> Option<&mut Instance> {
     st.pipes
         .values_mut()
         .flat_map(|l| l.iter_mut())
@@ -263,7 +267,10 @@ pub(crate) fn wait(path: &str, timeout_ms: u32) -> bool {
         }
         let (g, _) = reg
             .changed
-            .wait_timeout(st, (deadline - now).min(std::time::Duration::from_millis(200)))
+            .wait_timeout(
+                st,
+                (deadline - now).min(std::time::Duration::from_millis(200)),
+            )
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         st = g;
     }
@@ -277,7 +284,11 @@ pub unsafe extern "win64" fn wait_named_pipe_w(name: *const u16, timeout: u32) -
     if wait(&crate::dlls::wstr(name), timeout) {
         1
     } else {
-        crate::process::set_last_error(if timeout == 0 { 121 } else { ERROR_FILE_NOT_FOUND });
+        crate::process::set_last_error(if timeout == 0 {
+            121
+        } else {
+            ERROR_FILE_NOT_FOUND
+        });
         0
     }
 }
@@ -288,7 +299,10 @@ mod tests {
 
     #[test]
     fn noms_de_tubes() {
-        assert_eq!(pipe_name("\\\\.\\pipe\\uv\\abc-12").as_deref(), Some("uv\\abc-12"));
+        assert_eq!(
+            pipe_name("\\\\.\\pipe\\uv\\abc-12").as_deref(),
+            Some("uv\\abc-12")
+        );
         assert_eq!(pipe_name("\\\\?\\PIPE\\Truc").as_deref(), Some("truc"));
         assert_eq!(pipe_name("C:\\pipe\\x"), None);
     }

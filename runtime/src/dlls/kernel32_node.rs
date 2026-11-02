@@ -81,7 +81,12 @@ unsafe fn same_value(addr: usize, compare: usize, size: usize) -> bool {
 /// `WaitOnAddress(addr, compare, size, ms)` : TRUE au réveil, FALSE avec
 /// ERROR_TIMEOUT à l'expiration. Les réveils parasites sont permis par la
 /// documentation (l'appelant revérifie toujours sa condition).
-pub unsafe extern "win64" fn WaitOnAddress(addr: usize, compare: usize, size: usize, ms: u32) -> i32 {
+pub unsafe extern "win64" fn WaitOnAddress(
+    addr: usize,
+    compare: usize,
+    size: usize,
+    ms: u32,
+) -> i32 {
     if addr == 0 || compare == 0 || !matches!(size, 1 | 2 | 4 | 8) {
         crate::process::set_last_error(87);
         return 0;
@@ -143,7 +148,12 @@ pub unsafe extern "win64" fn WakeByAddressAll(addr: usize) {
 
 /// `RtlWaitOnAddress(addr, compare, size, PLARGE_INTEGER timeout)` :
 /// NTSTATUS, délai NT (négatif = relatif en unités de 100 ns, NULL = infini).
-pub unsafe extern "win64" fn RtlWaitOnAddress(addr: usize, compare: usize, size: usize, timeout: *const i64) -> u32 {
+pub unsafe extern "win64" fn RtlWaitOnAddress(
+    addr: usize,
+    compare: usize,
+    size: usize,
+    timeout: *const i64,
+) -> u32 {
     let ms = if timeout.is_null() {
         u32::MAX
     } else {
@@ -160,7 +170,6 @@ pub unsafe extern "win64" fn RtlWaitOnAddress(addr: usize, compare: usize, size:
         0x102 // STATUS_TIMEOUT
     }
 }
-
 
 // ---- Mémoire --------------------------------------------------------------
 
@@ -203,7 +212,12 @@ pub unsafe extern "win64" fn DeviceIoControl(
             return 0;
         };
         let mut iosb = [0u64; 2];
-        let st = crate::dlls::ntdll_file::reparse_point_of_fd(fd, outb, outl, iosb.as_mut_ptr() as *mut c_void);
+        let st = crate::dlls::ntdll_file::reparse_point_of_fd(
+            fd,
+            outb,
+            outl,
+            iosb.as_mut_ptr() as *mut c_void,
+        );
         if st == 0 {
             if !returned.is_null() {
                 *returned = iosb[1] as u32;
@@ -231,12 +245,14 @@ pub unsafe extern "win64" fn DeviceIoControl(
 pub unsafe extern "win64" fn ReOpenFile(h: usize, _access: u32, _share: u32, flags: u32) -> usize {
     let h = crate::dlls::kernel32::canon_std(h);
     let copy = match h as isize {
-        -10 | -11 | -12 => {
+        -12..=-10 => {
             let fd = libc::fcntl((-(h as isize) - 10) as i32, libc::F_DUPFD_CLOEXEC, 3);
             if fd < 0 {
                 None
             } else {
-                Some(crate::dlls::kernel32::insert_file(std::os::unix::io::FromRawFd::from_raw_fd(fd)))
+                Some(crate::dlls::kernel32::insert_file(
+                    std::os::unix::io::FromRawFd::from_raw_fd(fd),
+                ))
             }
         }
         _ => crate::dlls::kernel32::duplicate_handle_impl(h),
@@ -278,10 +294,23 @@ pub unsafe extern "win64" fn LockFileEx(
 ) -> i32 {
     file_lock(h, flags, len_lo, len_hi, ov, true)
 }
-pub unsafe extern "win64" fn UnlockFileEx(h: usize, _reserved: u32, len_lo: u32, len_hi: u32, ov: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn UnlockFileEx(
+    h: usize,
+    _reserved: u32,
+    len_lo: u32,
+    len_hi: u32,
+    ov: *mut c_void,
+) -> i32 {
     file_lock(h, 0, len_lo, len_hi, ov, false)
 }
-unsafe fn file_lock(h: usize, flags: u32, len_lo: u32, len_hi: u32, ov: *mut c_void, lock: bool) -> i32 {
+unsafe fn file_lock(
+    h: usize,
+    flags: u32,
+    len_lo: u32,
+    len_hi: u32,
+    ov: *mut c_void,
+    lock: bool,
+) -> i32 {
     let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) else {
         crate::process::set_last_error(6);
         return 0;
@@ -304,8 +333,16 @@ unsafe fn file_lock(h: usize, flags: u32, len_lo: u32, len_hi: u32, ov: *mut c_v
     } as i16;
     fl.l_whence = libc::SEEK_SET as i16;
     fl.l_start = offset.min(i64::MAX as u64) as i64;
-    fl.l_len = if len >= i64::MAX as u64 { 0 } else { len as i64 };
-    let cmd = if lock && flags & 1 == 0 { libc::F_OFD_SETLKW } else { libc::F_OFD_SETLK };
+    fl.l_len = if len >= i64::MAX as u64 {
+        0
+    } else {
+        len as i64
+    };
+    let cmd = if lock && flags & 1 == 0 {
+        libc::F_OFD_SETLKW
+    } else {
+        libc::F_OFD_SETLK
+    };
     if libc::fcntl(fd, cmd, &fl) != 0 {
         let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if e == libc::EBADF && lock && flags & 2 != 0 {
@@ -326,7 +363,12 @@ unsafe fn file_lock(h: usize, flags: u32, len_lo: u32, len_hi: u32, ov: *mut c_v
 }
 
 /// `SetFileInformationByHandle` : classes Win32 → classes NT équivalentes.
-pub unsafe extern "win64" fn SetFileInformationByHandle(h: usize, class: u32, buf: *const u8, len: u32) -> i32 {
+pub unsafe extern "win64" fn SetFileInformationByHandle(
+    h: usize,
+    class: u32,
+    buf: *const u8,
+    len: u32,
+) -> i32 {
     let nt = match class {
         0 => 4,   // FileBasicInfo
         3 => 10,  // FileRenameInfo
@@ -341,7 +383,13 @@ pub unsafe extern "win64" fn SetFileInformationByHandle(h: usize, class: u32, bu
         }
     };
     let mut iosb = [0u64; 2];
-    let st = crate::dlls::ntdll_file::NtSetInformationFile(h, iosb.as_mut_ptr() as *mut c_void, buf, len, nt);
+    let st = crate::dlls::ntdll_file::NtSetInformationFile(
+        h,
+        iosb.as_mut_ptr() as *mut c_void,
+        buf,
+        len,
+        nt,
+    );
     if st != 0 {
         crate::process::set_last_error(crate::dlls::ntdll::rtl_nt_status_to_dos_error(st as i32));
         return 0;
@@ -349,7 +397,11 @@ pub unsafe extern "win64" fn SetFileInformationByHandle(h: usize, class: u32, bu
     1
 }
 
-pub unsafe extern "win64" fn CreateDirectoryExW(_template: *const u16, path: *const u16, sa: usize) -> i32 {
+pub unsafe extern "win64" fn CreateDirectoryExW(
+    _template: *const u16,
+    path: *const u16,
+    sa: usize,
+) -> i32 {
     crate::dlls::kernel32::create_directory_w(path, sa)
 }
 
@@ -391,9 +443,22 @@ pub unsafe extern "win64" fn GetDiskFreeSpaceA(
     let w: Vec<u16> = if root.is_null() {
         vec![0]
     } else {
-        crate::dlls::cstr(root).encode_utf16().chain(std::iter::once(0)).collect()
+        crate::dlls::cstr(root)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect()
     };
-    GetDiskFreeSpaceW(if root.is_null() { std::ptr::null() } else { w.as_ptr() }, spc, bps, free, total)
+    GetDiskFreeSpaceW(
+        if root.is_null() {
+            std::ptr::null()
+        } else {
+            w.as_ptr()
+        },
+        spc,
+        bps,
+        free,
+        total,
+    )
 }
 
 // ---- Attentes enregistrées et file de travail ------------------------------
@@ -404,8 +469,9 @@ struct RegisteredWait {
     finished: std::sync::Condvar,
 }
 
-static WAITS: std::sync::Mutex<Option<std::collections::HashMap<usize, std::sync::Arc<RegisteredWait>>>> =
-    std::sync::Mutex::new(None);
+static WAITS: std::sync::Mutex<
+    Option<std::collections::HashMap<usize, std::sync::Arc<RegisteredWait>>>,
+> = std::sync::Mutex::new(None);
 static NEXT_WAIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5741_0000);
 
 /// Un thread Winlux prêt à exécuter du code Windows (TEB, GS).
@@ -453,7 +519,11 @@ pub unsafe extern "win64" fn RegisterWaitForSingleObject(
                 if w.cancelled.load(Ordering::Acquire) {
                     break None;
                 }
-                let slice = if ms == u32::MAX { 100 } else { (ms - waited).min(100) };
+                let slice = if ms == u32::MAX {
+                    100
+                } else {
+                    (ms - waited).min(100)
+                };
                 let r = crate::dlls::kernel32::wait_for_single_object(object, slice);
                 if r != 0x102 {
                     break Some(r);
@@ -484,7 +554,10 @@ pub unsafe extern "win64" fn RegisterWaitForSingleObject(
 }
 
 unsafe fn unregister(id: usize, completion: usize) -> i32 {
-    let Some(w) = crate::dlls::lock(&WAITS).as_mut().and_then(|m| m.remove(&id)) else {
+    let Some(w) = crate::dlls::lock(&WAITS)
+        .as_mut()
+        .and_then(|m| m.remove(&id))
+    else {
         crate::process::set_last_error(6);
         return 0;
     };
@@ -493,7 +566,10 @@ unsafe fn unregister(id: usize, completion: usize) -> i32 {
         // INVALID_HANDLE_VALUE : attendre la fin d'un rappel en cours.
         let mut done = crate::dlls::lock(&w.done);
         while !*done {
-            done = w.finished.wait(done).unwrap_or_else(std::sync::PoisonError::into_inner);
+            done = w
+                .finished
+                .wait(done)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     } else if completion != 0 {
         crate::dlls::kernel32::set_event(completion);
@@ -536,7 +612,12 @@ pub unsafe extern "win64" fn CreateJobObjectW(_sa: usize, _name: *const u16) -> 
 pub unsafe extern "win64" fn job_ok2(_a: usize, _b: usize) -> i32 {
     1
 }
-pub unsafe extern "win64" fn SetInformationJobObject(_job: usize, _class: u32, _info: usize, _len: u32) -> i32 {
+pub unsafe extern "win64" fn SetInformationJobObject(
+    _job: usize,
+    _class: u32,
+    _info: usize,
+    _len: u32,
+) -> i32 {
     1
 }
 
@@ -552,7 +633,11 @@ pub unsafe extern "win64" fn ProcessIdToSessionId(_pid: u32, session: *mut u32) 
 }
 
 /// PROCESS_MEMORY_COUNTERS(_EX) depuis /proc/self/status.
-pub unsafe extern "win64" fn K32GetProcessMemoryInfo(_process: usize, counters: *mut u8, cb: u32) -> i32 {
+pub unsafe extern "win64" fn K32GetProcessMemoryInfo(
+    _process: usize,
+    counters: *mut u8,
+    cb: u32,
+) -> i32 {
     if counters.is_null() || cb < 72 {
         crate::process::set_last_error(122);
         return 0;
@@ -609,7 +694,8 @@ struct Snapshot {
     procs: Vec<(u32, u32, u32, String)>, // pid, ppid, threads, nom
     pos: usize,
 }
-static SNAPSHOTS: std::sync::Mutex<Option<std::collections::HashMap<usize, Snapshot>>> = std::sync::Mutex::new(None);
+static SNAPSHOTS: std::sync::Mutex<Option<std::collections::HashMap<usize, Snapshot>>> =
+    std::sync::Mutex::new(None);
 static NEXT_SNAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x534E_0000);
 
 pub unsafe extern "win64" fn CreateToolhelp32Snapshot(flags: u32, _pid: u32) -> usize {
@@ -687,7 +773,9 @@ pub unsafe extern "win64" fn Process32NextW(snap: usize, entry: *mut u8) -> i32 
 }
 /// Fermeture d'un instantané (appelée par CloseHandle).
 pub(crate) fn close_snapshot(h: usize) -> bool {
-    crate::dlls::lock(&SNAPSHOTS).as_mut().is_some_and(|m| m.remove(&h).is_some())
+    crate::dlls::lock(&SNAPSHOTS)
+        .as_mut()
+        .is_some_and(|m| m.remove(&h).is_some())
 }
 
 pub unsafe extern "win64" fn GetThreadDescription(_thread: usize, out: *mut *mut u16) -> i32 {
@@ -729,7 +817,13 @@ pub unsafe extern "win64" fn GetComputerNameExW(kind: u32, buf: *mut u16, size: 
 pub unsafe extern "win64" fn HeapCompact(_heap: usize, _flags: u32) -> usize {
     1 << 20
 }
-pub unsafe extern "win64" fn HeapQueryInformation(_heap: usize, class: u32, info: *mut u32, len: usize, ret: *mut usize) -> i32 {
+pub unsafe extern "win64" fn HeapQueryInformation(
+    _heap: usize,
+    class: u32,
+    info: *mut u32,
+    len: usize,
+    ret: *mut usize,
+) -> i32 {
     if class != 0 {
         crate::process::set_last_error(87);
         return 0;
@@ -769,7 +863,12 @@ pub unsafe extern "win64" fn fail_no_more_files() -> usize {
 
 /// `ProcThreadAttributeList` : liste opaque ; les attributs (ConPTY,
 /// handles hérités) sont acceptés et ignorés.
-pub unsafe extern "win64" fn InitializeProcThreadAttributeList(list: *mut u8, _count: u32, _flags: u32, size: *mut usize) -> i32 {
+pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
+    list: *mut u8,
+    _count: u32,
+    _flags: u32,
+    size: *mut usize,
+) -> i32 {
     if size.is_null() {
         crate::process::set_last_error(87);
         return 0;
@@ -802,9 +901,192 @@ pub unsafe extern "win64" fn FreeLibraryAndExitThread(module: usize, code: u32) 
 
 /// `GenerateConsoleCtrlEvent(CTRL_C/CTRL_BREAK, groupe)`.
 pub unsafe extern "win64" fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32 {
-    let sig = if event == 0 { libc::SIGINT } else { libc::SIGQUIT };
+    let sig = if event == 0 {
+        libc::SIGINT
+    } else {
+        libc::SIGQUIT
+    };
     let target = if group == 0 { 0 } else { -(group as i32) };
     (libc::kill(target, sig) == 0) as i32
+}
+
+// ---------- Fonctions encore importées par Claude Code (Bun) ----------
+
+/// `GetModuleHandleExA` : comme la variante W.
+pub unsafe extern "win64" fn GetModuleHandleExA(
+    flags: u32,
+    module: *const u8,
+    out: *mut usize,
+) -> i32 {
+    if flags & 4 != 0 || module.is_null() {
+        return crate::dlls::kernel32::get_module_handle_ex_w(flags, module as *const u16, out);
+    }
+    let w: Vec<u16> = crate::dlls::cstr(module)
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    crate::dlls::kernel32::get_module_handle_ex_w(flags, w.as_ptr(), out)
+}
+
+fn is_current_process(h: usize) -> bool {
+    h == usize::MAX || h == crate::dlls::kernel32::get_current_process()
+}
+
+/// `K32EnumProcessModules` (processus courant) : base de chaque module.
+pub unsafe extern "win64" fn K32EnumProcessModules(
+    process: usize,
+    modules: *mut usize,
+    cb: u32,
+    needed: *mut u32,
+) -> i32 {
+    if !is_current_process(process) {
+        crate::process::set_last_error(5);
+        return 0;
+    }
+    let list = crate::loader::list_modules();
+    let size = std::mem::size_of::<usize>();
+    if !needed.is_null() {
+        *needed = (list.len() * size) as u32;
+    }
+    if !modules.is_null() {
+        for (i, m) in list.iter().take(cb as usize / size).enumerate() {
+            *modules.add(i) = m.base;
+        }
+    }
+    1
+}
+
+unsafe fn copy_wide(text: &str, buf: *mut u16, size: u32) -> u32 {
+    if buf.is_null() || size == 0 {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    let w: Vec<u16> = text.encode_utf16().collect();
+    let n = w.len().min(size as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
+/// `K32GetModuleBaseNameW(processus, module, tampon, taille)`.
+pub unsafe extern "win64" fn K32GetModuleBaseNameW(
+    process: usize,
+    module: usize,
+    buf: *mut u16,
+    size: u32,
+) -> u32 {
+    if !is_current_process(process) {
+        crate::process::set_last_error(5);
+        return 0;
+    }
+    let m = if module == 0 {
+        crate::loader::main_module()
+    } else {
+        crate::loader::find_module_by_addr(module)
+    };
+    match m {
+        Some(m) => copy_wide(&m.name, buf, size),
+        None => {
+            crate::process::set_last_error(126);
+            0
+        }
+    }
+}
+
+/// `K32GetModuleFileNameExW(processus, module, tampon, taille)`.
+pub unsafe extern "win64" fn K32GetModuleFileNameExW(
+    process: usize,
+    module: usize,
+    buf: *mut u16,
+    size: u32,
+) -> u32 {
+    if !is_current_process(process) {
+        crate::process::set_last_error(5);
+        return 0;
+    }
+    crate::dlls::kernel32::get_module_file_name_w(module, buf, size)
+}
+
+/// `GetNamedPipeHandleStateA` : tube en mode octets, bloquant, une instance.
+pub unsafe extern "win64" fn GetNamedPipeHandleStateA(
+    _pipe: usize,
+    state: *mut u32,
+    instances: *mut u32,
+    max_collection: *mut u32,
+    timeout: *mut u32,
+    user: *mut u8,
+    user_size: u32,
+) -> i32 {
+    for (p, v) in [
+        (state, 0u32),
+        (instances, 1),
+        (max_collection, 0),
+        (timeout, 0),
+    ] {
+        if !p.is_null() {
+            *p = v;
+        }
+    }
+    if !user.is_null() && user_size > 0 {
+        *user = 0;
+    }
+    1
+}
+
+static CONSOLE_TITLE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// `GetConsoleTitleW(tampon, taille)`.
+pub unsafe extern "win64" fn GetConsoleTitleW(buf: *mut u16, size: u32) -> u32 {
+    let t = crate::dlls::lock(&CONSOLE_TITLE).clone();
+    let t = if t.is_empty() {
+        "Winlux".to_string()
+    } else {
+        t
+    };
+    copy_wide(&t, buf, size)
+}
+
+/// `FreeResource` : obsolète, ne fait rien et rend FALSE comme Windows.
+pub extern "win64" fn FreeResource(_h: usize) -> i32 {
+    0
+}
+
+/// Énumération des ressources : aucune ressource de ce type
+/// (ERROR_RESOURCE_TYPE_NOT_FOUND), les appelants passent au repli.
+pub extern "win64" fn EnumResourceNamesW(_m: usize, _t: usize, _f: usize, _p: isize) -> i32 {
+    crate::process::set_last_error(1813);
+    0
+}
+
+/// `RtlFillMemory(destination, longueur, octet)`.
+pub unsafe extern "win64" fn RtlFillMemory(dest: *mut u8, len: usize, fill: u8) {
+    if !dest.is_null() {
+        std::ptr::write_bytes(dest, fill, len);
+    }
+}
+
+/// `RtlExitUserProcess(code)`.
+pub extern "win64" fn RtlExitUserProcess(code: u32) -> ! {
+    crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+
+/// `RtlCaptureStackBackTrace` : pas de pile remontée (0 trame), ce que
+/// les appelants (diagnostics) acceptent.
+pub unsafe extern "win64" fn RtlCaptureStackBackTrace(
+    _skip: u32,
+    _count: u32,
+    _frames: *mut usize,
+    hash: *mut u32,
+) -> u16 {
+    if !hash.is_null() {
+        *hash = 0;
+    }
+    0
+}
+
+/// Objets du noyau sans équivalent : STATUS_NOT_SUPPORTED.
+pub extern "win64" fn nt_not_supported() -> u32 {
+    0xC000_00BB
 }
 
 pub fn kernel32_exports() -> crate::dlls::Exports {
@@ -869,6 +1151,18 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "BeginUpdateResourceW" => fn fail_not_supported,
         "UpdateResourceW" => fn fail_not_supported,
         "EndUpdateResourceW" => fn fail_not_supported,
+        "GetModuleHandleExA" => fn GetModuleHandleExA,
+        "K32EnumProcessModules" => fn K32EnumProcessModules,
+        "EnumProcessModules" => fn K32EnumProcessModules,
+        "K32GetModuleBaseNameW" => fn K32GetModuleBaseNameW,
+        "K32GetModuleFileNameExW" => fn K32GetModuleFileNameExW,
+        "GetNamedPipeHandleStateA" => fn GetNamedPipeHandleStateA,
+        "GetNamedPipeHandleStateW" => fn GetNamedPipeHandleStateA,
+        "GetConsoleTitleW" => fn GetConsoleTitleW,
+        "FreeResource" => fn FreeResource,
+        "EnumResourceNamesW" => fn EnumResourceNamesW,
+        "EnumResourceLanguagesW" => fn EnumResourceNamesW,
+        "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
     }
 }
 
@@ -878,5 +1172,12 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "RtlWakeAddressSingle" => fn WakeByAddressSingle,
         "RtlWakeAddressAll" => fn WakeByAddressAll,
         "DbgBreakPoint" => fn DebugBreak,
+        "RtlFillMemory" => fn RtlFillMemory,
+        "RtlExitUserProcess" => fn RtlExitUserProcess,
+        "RtlCaptureStackBackTrace" => fn RtlCaptureStackBackTrace,
+        "NtQuerySecurityObject" => fn nt_not_supported,
+        "NtSetSecurityObject" => fn nt_not_supported,
+        "NtOpenDirectoryObject" => fn nt_not_supported,
+        "NtCreateNamedPipeFile" => fn nt_not_supported,
     }
 }

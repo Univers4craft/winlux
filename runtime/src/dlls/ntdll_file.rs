@@ -400,7 +400,11 @@ unsafe fn put_name(o: &Out, at: usize, w: &[u16], io: *mut c_void) -> u32 {
 }
 
 /// Chemin NT (« \??\C:\… ») éventuellement relatif à un handle de dossier.
-unsafe fn nt_name_to_linux(root: usize, name: *const u16, bytes: u32) -> Option<std::path::PathBuf> {
+unsafe fn nt_name_to_linux(
+    root: usize,
+    name: *const u16,
+    bytes: u32,
+) -> Option<std::path::PathBuf> {
     if name.is_null() {
         return None;
     }
@@ -676,7 +680,14 @@ pub unsafe extern "win64" fn NtQueryVolumeInformationFile(
             }
             o.zero(28);
             for i in 0..4 {
-                o.put(i * 4, if i == 0 || i == 3 { 512u32 } else { bsize as u32 });
+                o.put(
+                    i * 4,
+                    if i == 0 || i == 3 {
+                        512u32
+                    } else {
+                        bsize as u32
+                    },
+                );
             }
             iosb(io, STATUS_SUCCESS, 28)
         }
@@ -715,7 +726,11 @@ fn wild_match(pattern: &[u16], name: &[u16]) -> bool {
     let (mut p, mut n) = (0usize, 0usize);
     let (mut star, mut mark) = (usize::MAX, 0usize);
     while n < name.len() {
-        if p < pattern.len() && (pattern[p] == b'?' as u16 || pattern[p] == b'>' as u16 || up(pattern[p]) == up(name[n])) {
+        if p < pattern.len()
+            && (pattern[p] == b'?' as u16
+                || pattern[p] == b'>' as u16
+                || up(pattern[p]) == up(name[n]))
+        {
             p += 1;
             n += 1;
         } else if p < pattern.len() && (pattern[p] == b'*' as u16 || pattern[p] == b'<' as u16) {
@@ -837,7 +852,11 @@ unsafe fn put_dir_entry(o: &Out, class: u32, e: &DirEntry, header: usize) {
             o.put(72, s.index);
         }
     }
-    std::ptr::copy_nonoverlapping(e.name.as_ptr() as *const u8, o.p.add(header), name_bytes as usize);
+    std::ptr::copy_nonoverlapping(
+        e.name.as_ptr() as *const u8,
+        o.p.add(header),
+        name_bytes as usize,
+    );
 }
 
 /// `NtQueryDirectoryFile` : liste un dossier ouvert, synchrone.
@@ -925,7 +944,9 @@ pub unsafe extern "win64" fn NtQueryDirectoryFile(
     if let Some(prev) = last {
         (buf.add(prev) as *mut u32).write_unaligned(0);
     }
-    let used = last.map(|l| l + header + cur.entries[cur.pos - 1].name.len() * 2).unwrap_or(0);
+    let used = last
+        .map(|l| l + header + cur.entries[cur.pos - 1].name.len() * 2)
+        .unwrap_or(0);
     drop(guard);
     if event != 0 {
         crate::dlls::kernel32::set_event(event);
@@ -978,7 +999,15 @@ pub unsafe extern "win64" fn NtReadFile(
     }
     if n == 0 && len > 0 {
         let is_pipe = fstat(fd).is_ok_and(|st| st.st_mode & libc::S_IFMT == libc::S_IFIFO);
-        return iosb(io, if is_pipe { STATUS_PIPE_BROKEN } else { STATUS_END_OF_FILE }, 0);
+        return iosb(
+            io,
+            if is_pipe {
+                STATUS_PIPE_BROKEN
+            } else {
+                STATUS_END_OF_FILE
+            },
+            0,
+        );
     }
     iosb(io, STATUS_SUCCESS, n as usize)
 }
@@ -1073,9 +1102,19 @@ pub unsafe extern "win64" fn NtFsControlFile(
     reparse_point_of_fd(fd, outb, outl, io)
 }
 
-pub(crate) unsafe fn reparse_point_of_fd(fd: i32, outb: *mut u8, outl: u32, io: *mut c_void) -> u32 {
+pub(crate) unsafe fn reparse_point_of_fd(
+    fd: i32,
+    outb: *mut u8,
+    outl: u32,
+    io: *mut c_void,
+) -> u32 {
     let mut target = [0u8; 4096];
-    let n = libc::readlinkat(fd, c"".as_ptr(), target.as_mut_ptr() as *mut libc::c_char, target.len());
+    let n = libc::readlinkat(
+        fd,
+        c"".as_ptr(),
+        target.as_mut_ptr() as *mut libc::c_char,
+        target.len(),
+    );
     if n <= 0 {
         return iosb(io, STATUS_NOT_A_REPARSE_POINT, 0);
     }
@@ -1084,7 +1123,10 @@ pub(crate) unsafe fn reparse_point_of_fd(fd: i32, outb: *mut u8, outl: u32, io: 
         (crate::paths::to_windows(t).encode_utf16().collect(), false)
     } else {
         (
-            t.to_string_lossy().replace('/', "\\").encode_utf16().collect(),
+            t.to_string_lossy()
+                .replace('/', "\\")
+                .encode_utf16()
+                .collect(),
             true,
         )
     };
@@ -1113,7 +1155,11 @@ pub(crate) unsafe fn reparse_point_of_fd(fd: i32, outb: *mut u8, outl: u32, io: 
     o.put(14, (w.len() * 2) as u16);
     o.put(16, relative as u32); // SYMLINK_FLAG_RELATIVE
     std::ptr::copy_nonoverlapping(subst.as_ptr() as *const u8, outb.add(20), subst.len() * 2);
-    std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, outb.add(20 + subst.len() * 2), w.len() * 2);
+    std::ptr::copy_nonoverlapping(
+        w.as_ptr() as *const u8,
+        outb.add(20 + subst.len() * 2),
+        w.len() * 2,
+    );
     iosb(io, STATUS_SUCCESS, total)
 }
 

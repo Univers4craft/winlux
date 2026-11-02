@@ -150,7 +150,10 @@ pub unsafe extern "win64" fn get_console_mode(h: usize, mode: *mut u32) -> i32 {
 pub extern "win64" fn set_console_mode(h: usize, mode: u32) -> i32 {
     let h = super::kernel32::canon_std(h);
     match h {
-        STD_INPUT => CONSOLE_MODE_IN.store(mode, Ordering::Relaxed),
+        STD_INPUT => {
+            CONSOLE_MODE_IN.store(mode, Ordering::Relaxed);
+            super::console_input::apply_input_mode(mode);
+        }
         STD_OUTPUT | STD_ERROR => CONSOLE_MODE_OUT.store(mode, Ordering::Relaxed),
         _ => {
             crate::process::set_last_error(6);

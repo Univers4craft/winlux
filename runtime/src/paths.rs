@@ -479,6 +479,17 @@ fn resolve_drive(letter: char, comps: &[String]) -> (PathBuf, usize) {
             return (public_folder(), 2);
         }
     }
+    // `C:\Users` lui-même quand le lecteur C: n'a pas de dossier Users : le dossier qui contient les dossiers
+    // personnels (/home). Node/Bun remontent le chemin dossier par dossier
+    // (realpath, verrous de fichiers) et doivent trouver chaque étape.
+    if letter == 'C' && comps.len() == 1 && comps[0].eq_ignore_ascii_case("Users") {
+        let root = drive_root('C');
+        if !root.join(&comps[0]).exists() {
+            if let Some(parent) = home().parent() {
+                return (parent.to_path_buf(), 1);
+            }
+        }
+    }
     (drive_root(letter), 0)
 }
 
