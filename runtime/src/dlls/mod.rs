@@ -34,6 +34,7 @@ pub mod dataobject;
 pub mod dbghelp;
 pub mod dialogs;
 pub mod dinput8;
+pub mod dirwatch;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;

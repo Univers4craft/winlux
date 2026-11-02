@@ -4947,6 +4947,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
+        forget_dir_watcher(handle);
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
         remove_waitable_timer(handle);
@@ -6900,19 +6901,440 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
     1
 }
 
-// --- ReadDirectoryChangesW (stub) ---
-pub unsafe extern "win64" fn read_directory_changes_w(
-    _h: usize,
-    _buf: *mut c_void,
-    _len: u32,
-    _subtree: i32,
-    _filter: u32,
-    _bytes: *mut u32,
-    _ov: usize,
-    _routine: usize,
-) -> i32 {
-    crate::process::set_last_error(120); // ERROR_CALL_NOT_IMPLEMENTED
+// --- Surveillance de dossiers : ReadDirectoryChangesW et FindFirstChangeNotification ---
+//
+// Moteur inotify dans `dirwatch.rs`. Un dossier ouvert par CreateFile garde
+// son surveillant jusqu'à CloseHandle : les changements survenus entre deux
+// appels sont rendus au suivant, comme sous Windows.
+
+type SharedWatcher = Arc<Mutex<crate::dlls::dirwatch::Watcher>>;
+static DIR_WATCHERS: OnceLock<Mutex<HashMap<usize, SharedWatcher>>> = OnceLock::new();
+fn dir_watchers() -> &'static Mutex<HashMap<usize, SharedWatcher>> {
+    DIR_WATCHERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+const ERROR_NOTIFY_ENUM_DIR: u32 = 1022;
+const ERROR_OPERATION_ABORTED: u32 = 995;
+
+/// Chemin Linux d'un handle de fichier (lien /proc/self/fd).
+fn handle_path(h: usize) -> Option<std::path::PathBuf> {
+    let fd = fd_of_handle(h)?;
+    std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
+}
+
+fn watcher_for(h: usize, subtree: bool, filter: u32) -> Result<SharedWatcher, u32> {
+    if let Some(found) = lock(dir_watchers()).get(&h).cloned() {
+        lock(&found).set_filter(filter);
+        return Ok(found);
+    }
+    let Some(path) = handle_path(h) else {
+        return Err(6);
+    };
+    if !path.is_dir() {
+        return Err(1); // ERROR_INVALID_FUNCTION : pas un dossier
+    }
+    let watcher = crate::dlls::dirwatch::Watcher::new(&path, subtree, filter).map_err(|e| {
+        if e.raw_os_error() == Some(libc::ENOSPC) || e.raw_os_error() == Some(libc::EMFILE) {
+            8 // plus de surveillances inotify disponibles
+        } else {
+            io_error_code(&e)
+        }
+    })?;
+    crate::trace!("ReadDirectoryChangesW : surveillance de {path:?} (sous-arbre {subtree}, filtre {filter:#x})");
+    let shared = Arc::new(Mutex::new(watcher));
+    lock(dir_watchers()).insert(h, shared.clone());
+    Ok(shared)
+}
+
+/// Oublie le surveillant d'un handle fermé (appelé par CloseHandle).
+pub(crate) fn forget_dir_watcher(h: usize) {
+    lock(dir_watchers()).remove(&h);
+}
+
+// File d'APC par thread : routines d'achèvement (ReadDirectoryChangesW,
+// ReadFileEx…) et QueueUserAPC, exécutées pendant une attente « alertable ».
+#[derive(Clone, Copy)]
+enum Apc {
+    /// PAPCFUNC(param)
+    User(usize, usize),
+    /// LPOVERLAPPED_COMPLETION_ROUTINE(erreur, octets, overlapped)
+    Completion(usize, u32, u32, usize),
+}
+static APC_QUEUES: OnceLock<(Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar)> = OnceLock::new();
+fn apc_queues() -> &'static (Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar) {
+    APC_QUEUES.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()))
+}
+fn queue_apc(thread: ThreadId, apc: Apc) {
+    let (queues, changed) = apc_queues();
+    lock(queues).entry(thread).or_default().push_back(apc);
+    changed.notify_all();
+}
+fn apc_pending() -> bool {
+    let me = std::thread::current().id();
+    lock(&apc_queues().0)
+        .get(&me)
+        .is_some_and(|q| !q.is_empty())
+}
+/// Exécute les APC du thread courant ; vrai si au moins une a tourné.
+pub(crate) fn run_apcs() -> bool {
+    let me = std::thread::current().id();
+    let mut ran = false;
+    loop {
+        let next = lock(&apc_queues().0)
+            .get_mut(&me)
+            .and_then(VecDeque::pop_front);
+        let Some(apc) = next else {
+            return ran;
+        };
+        ran = true;
+        unsafe {
+            match apc {
+                Apc::User(func, param) => {
+                    let f: extern "win64" fn(usize) = std::mem::transmute(func);
+                    f(param);
+                }
+                Apc::Completion(func, error, bytes, overlapped) => {
+                    let f: extern "win64" fn(u32, u32, usize) = std::mem::transmute(func);
+                    f(error, bytes, overlapped);
+                }
+            }
+        }
+    }
+}
+/// Attente alertable : APC en attente → elles tournent et on rend
+/// WAIT_IO_COMPLETION (0xC0) ; sinon `wait(tranche)` jusqu'au délai.
+fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
+    const WAIT_IO_COMPLETION: u32 = 0xC0;
+    const WAIT_TIMEOUT: u32 = 258;
+    if run_apcs() {
+        return WAIT_IO_COMPLETION;
+    }
+    let start = std::time::Instant::now();
+    loop {
+        let elapsed = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        let left = if ms == u32::MAX {
+            u32::MAX
+        } else {
+            ms.saturating_sub(elapsed)
+        };
+        let result = wait(left.min(15));
+        if result != WAIT_TIMEOUT {
+            return result;
+        }
+        if run_apcs() {
+            return WAIT_IO_COMPLETION;
+        }
+        if left <= 15 {
+            return WAIT_TIMEOUT;
+        }
+    }
+}
+
+/// `QueueUserAPC` : pour le thread courant (pseudo-handle GetCurrentThread).
+pub unsafe extern "win64" fn queue_user_apc(func: usize, thread: usize, param: usize) -> u32 {
+    if func == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if thread == get_current_thread() {
+        queue_apc(std::thread::current().id(), Apc::User(func, param));
+        return 1;
+    }
+    crate::process::set_last_error(6);
     0
+}
+
+/// Copie un lot de changements dans le tampon de l'appelant.
+unsafe fn deliver_changes(
+    watcher: &SharedWatcher,
+    buf: *mut c_void,
+    len: u32,
+    extended: bool,
+) -> (u32, u32) {
+    match lock(watcher).take(len as usize, extended) {
+        crate::dlls::dirwatch::Batch::Records(data) => {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, data.len());
+            (data.len() as u32, 0)
+        }
+        crate::dlls::dirwatch::Batch::Overflow => (0, ERROR_NOTIFY_ENUM_DIR),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_directory_changes(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+    extended: bool,
+) -> i32 {
+    if buf.is_null() || filter == 0 || filter & !0x17f != 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let watcher = match watcher_for(h, subtree != 0, filter) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
+    };
+    if ov == 0 {
+        // Synchrone : attend le premier changement.
+        loop {
+            let ready = lock(&watcher).wait(200);
+            if ready {
+                break;
+            }
+            if !lock(dir_watchers()).contains_key(&h) {
+                crate::process::set_last_error(ERROR_OPERATION_ABORTED);
+                return 0;
+            }
+        }
+        let (n, error) = deliver_changes(&watcher, buf, len, extended);
+        if !bytes.is_null() {
+            *bytes = n;
+        }
+        crate::process::set_last_error(error);
+        return 1;
+    }
+    if !ov.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    // Asynchrone : un fil attend, puis remplit le tampon et signale
+    // l'événement, le port de complétion ou la routine d'achèvement.
+    let operation = Arc::new(IoOperation {
+        file_handle: h,
+        issuing_thread: std::thread::current().id(),
+        state: Mutex::new(IoResult {
+            done: false,
+            bytes: 0,
+            error: 0,
+        }),
+        changed: Condvar::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops.get(&ov).is_some_and(|op| !lock(&op.state).done) {
+            crate::process::set_last_error(997);
+            return 0;
+        }
+        ops.insert(ov, operation.clone());
+    }
+    let overlapped = ov as *mut Overlapped;
+    (*overlapped).internal = 0x103; // STATUS_PENDING
+    (*overlapped).internal_high = 0;
+    let event = (*overlapped).event & !1;
+    if event != 0 {
+        let _ = reset_event(event);
+    }
+    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&h)
+        .cloned();
+    let issuer = std::thread::current().id();
+    let (buf, op) = (buf as usize, operation.clone());
+    let spawned = std::thread::Builder::new()
+        .name("winlux-dirwatch".into())
+        .spawn(move || {
+            let error = loop {
+                if op.cancelled.load(Ordering::Acquire) || !lock(dir_watchers()).contains_key(&h) {
+                    break ERROR_OPERATION_ABORTED;
+                }
+                if lock(&watcher).wait(100) {
+                    break 0;
+                }
+            };
+            let (count, error) = if error == 0 {
+                // Débordement : succès avec 0 octet, l'appli relit le dossier.
+                let (count, _) =
+                    unsafe { deliver_changes(&watcher, buf as *mut c_void, len, extended) };
+                (count, 0)
+            } else {
+                (0, error)
+            };
+            unsafe {
+                (*(ov as *mut Overlapped)).internal = match error {
+                    0 if count == 0 => 0x10C, // STATUS_NOTIFY_ENUM_DIR
+                    0 => 0,
+                    _ => 0xC000_0120, // STATUS_CANCELLED
+                };
+                (*(ov as *mut Overlapped)).internal_high = count as usize;
+            }
+            {
+                let mut state = lock(&op.state);
+                state.bytes = count;
+                state.error = error;
+                state.done = true;
+                op.changed.notify_all();
+            }
+            if event != 0 {
+                let _ = set_event(event);
+            }
+            if let Some((port, key)) = completion {
+                post_iocp(
+                    &port,
+                    CompletionPacket {
+                        bytes: count,
+                        key,
+                        overlapped: ov,
+                        error,
+                    },
+                );
+            }
+            if routine != 0 {
+                queue_apc(issuer, Apc::Completion(routine, error, count, ov));
+            }
+        });
+    if spawned.is_err() {
+        lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&ov);
+        crate::process::set_last_error(8);
+        return 0;
+    }
+    if !bytes.is_null() {
+        *bytes = 0;
+    }
+    crate::process::set_last_error(997);
+    1
+}
+
+/// `ReadDirectoryChangesW` : synchrone, OVERLAPPED + événement, port de
+/// complétion ou routine d'achèvement (APC du thread appelant).
+pub unsafe extern "win64" fn read_directory_changes_w(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+) -> i32 {
+    read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, false)
+}
+
+/// `ReadDirectoryChangesExW` : classe 1 (FILE_NOTIFY_INFORMATION) ou
+/// 2 (FILE_NOTIFY_EXTENDED_INFORMATION : dates, taille, attributs, id).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn read_directory_changes_ex_w(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+    class: u32,
+) -> i32 {
+    match class {
+        1 => read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, false),
+        2 => read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, true),
+        _ => {
+            crate::process::set_last_error(87);
+            0
+        }
+    }
+}
+
+// FindFirstChangeNotification : un événement Windows qu'un fil signale à
+// chaque changement ; FindNextChangeNotification le réarme.
+static CHANGE_NOTIFICATIONS: OnceLock<Mutex<HashMap<usize, Arc<std::sync::atomic::AtomicBool>>>> =
+    OnceLock::new();
+fn change_notifications() -> &'static Mutex<HashMap<usize, Arc<std::sync::atomic::AtomicBool>>> {
+    CHANGE_NOTIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn find_first_change_notification(path: &str, subtree: bool, filter: u32) -> usize {
+    if filter == 0 || filter & !0x17f != 0 {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    let linux = crate::paths::to_linux(path);
+    let mut watcher = match crate::dlls::dirwatch::Watcher::new(&linux, subtree, filter) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::process::set_last_error(if e.raw_os_error() == Some(libc::ENOTDIR) {
+                267
+            } else {
+                io_error_code(&e)
+            });
+            return usize::MAX;
+        }
+    };
+    let event = add_sync(
+        SyncHandle::Event(Arc::new(EventObject {
+            manual_reset: true,
+            signaled: Mutex::new(false),
+            changed: Condvar::new(),
+        })),
+        None,
+    );
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    lock(change_notifications()).insert(event, stop.clone());
+    let spawned = std::thread::Builder::new()
+        .name("winlux-change-notify".into())
+        .spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                if watcher.wait(150) {
+                    watcher.clear();
+                    let _ = set_event(event);
+                }
+            }
+        });
+    if spawned.is_err() {
+        lock(change_notifications()).remove(&event);
+        remove_sync(event);
+        crate::process::set_last_error(8);
+        return usize::MAX;
+    }
+    event
+}
+
+pub unsafe extern "win64" fn find_first_change_notification_w(
+    path: *const u16,
+    subtree: i32,
+    filter: u32,
+) -> usize {
+    if path.is_null() {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    find_first_change_notification(&crate::dlls::wstr(path), subtree != 0, filter)
+}
+
+pub unsafe extern "win64" fn find_first_change_notification_a(
+    path: *const u8,
+    subtree: i32,
+    filter: u32,
+) -> usize {
+    if path.is_null() {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    find_first_change_notification(&crate::dlls::cstr(path), subtree != 0, filter)
+}
+
+pub extern "win64" fn find_next_change_notification(h: usize) -> i32 {
+    if !lock(change_notifications()).contains_key(&h) {
+        crate::process::set_last_error(6);
+        return 0;
+    }
+    reset_event(h)
+}
+
+pub extern "win64" fn find_close_change_notification(h: usize) -> i32 {
+    let Some(stop) = lock(change_notifications()).remove(&h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    stop.store(true, Ordering::Release);
+    remove_sync(h);
+    1
 }
 
 // --- CreateNamedPipeA / ConnectNamedPipe (stubs) ---
@@ -7563,13 +7985,43 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
     1
 }
 
-pub unsafe extern "win64" fn sleep_ex(ms: u32, _alertable: i32) -> u32 {
-    sleep(ms);
-    0
+pub unsafe extern "win64" fn sleep_ex(ms: u32, alertable: i32) -> u32 {
+    if alertable == 0 {
+        sleep(ms);
+        return 0;
+    }
+    // Réveillé par une APC (routine d'achèvement, QueueUserAPC).
+    match alertable_wait(ms, |slice| {
+        let (queues, changed) = apc_queues();
+        let me = std::thread::current().id();
+        let guard = lock(queues);
+        if guard.get(&me).is_some_and(|q| !q.is_empty()) {
+            return 0;
+        }
+        let _ = changed.wait_timeout(guard, std::time::Duration::from_millis(slice as u64));
+        if apc_pending() {
+            0
+        } else {
+            258
+        }
+    }) {
+        0xC0 => 0xC0,
+        0 => {
+            if run_apcs() {
+                0xC0
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
 }
 
-pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, _alertable: i32) -> u32 {
-    wait_for_single_object(h, ms)
+pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, alertable: i32) -> u32 {
+    if alertable == 0 {
+        return wait_for_single_object(h, ms);
+    }
+    alertable_wait(ms, |slice| wait_for_single_object(h, slice))
 }
 
 pub unsafe extern "win64" fn signal_object_and_wait(
@@ -7698,7 +8150,7 @@ pub fn exports() -> crate::dlls::Exports {
      "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
      "GetActiveProcessorCount"=>fn get_active_processor_count,
      "CreateWaitableTimerA"=>fn create_waitable_timer_a,"CreateWaitableTimerW"=>fn create_waitable_timer_w,"CreateWaitableTimerExW"=>fn create_waitable_timer_ex_w,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
-     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,
+     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,"ReadDirectoryChangesExW"=>fn read_directory_changes_ex_w,"FindFirstChangeNotificationW"=>fn find_first_change_notification_w,"FindFirstChangeNotificationA"=>fn find_first_change_notification_a,"FindNextChangeNotification"=>fn find_next_change_notification,"FindCloseChangeNotification"=>fn find_close_change_notification,"QueueUserAPC"=>fn queue_user_apc,
      "CreateNamedPipeA"=>fn create_named_pipe_a,"ConnectNamedPipe"=>fn connect_named_pipe,"DisconnectNamedPipe"=>fn disconnect_named_pipe,
      "CreateFileMappingA"=>fn create_file_mapping_a,"CreateFileMappingW"=>fn create_file_mapping_w,"MapViewOfFile"=>fn map_view_of_file,"UnmapViewOfFile"=>fn unmap_view_of_file,
      "GetUserNameA"=>fn get_user_name_a,
