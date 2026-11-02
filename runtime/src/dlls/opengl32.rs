@@ -452,7 +452,10 @@ unsafe fn create_context(hdc: usize, share: usize, attribs: &[i32]) -> usize {
     // pourrait jamais devenir courant : échec dès la création, comme un
     // pilote Windows sans format accéléré.
     let Some((_, window)) = dc_drawable(hdc) else {
-        crate::log_warn!("opengl32", "contexte demandé sur le HDC {hdc:#x} sans fenêtre X11");
+        crate::log_warn!(
+            "opengl32",
+            "contexte demandé sur le HDC {hdc:#x} sans fenêtre X11"
+        );
         crate::process::set_last_error(2000); // ERROR_INVALID_PIXEL_FORMAT
         return 0;
     };

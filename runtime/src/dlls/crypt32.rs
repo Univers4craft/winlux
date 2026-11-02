@@ -1174,10 +1174,8 @@ pub unsafe extern "win64" fn CertGetCertificateChain(
             extended_error: 0,
         });
     }
-    let element_ptrs: Vec<*const ChainElement> = elements
-        .iter()
-        .map(|e| e as *const ChainElement)
-        .collect();
+    let element_ptrs: Vec<*const ChainElement> =
+        elements.iter().map(|e| e as *const ChainElement).collect();
     let simple = Box::new(SimpleChain {
         cb: std::mem::size_of::<SimpleChain>() as u32,
         trust: TrustStatus {
