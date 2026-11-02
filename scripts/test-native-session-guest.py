@@ -61,7 +61,15 @@ def wait_for(predicate, label):
 def capture(name):
     destination = Path("/var/lib/winlux") / (name + ".xwd")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    run("xwd", "-root", "-silent", "-out", str(destination))
+    # xwd lit les attributs de chaque fenêtre : une fenêtre qui se ferme
+    # pendant la capture le fait échouer (BadWindow, vu au tag v0.2.14).
+    for attempt in range(3):
+        try:
+            run("xwd", "-root", "-silent", "-out", str(destination))
+            break
+        except subprocess.CalledProcessError as error:
+            if attempt == 2 or "BadWindow" not in (error.output or ""): raise
+            time.sleep(0.3)
     return destination.read_bytes()
 
 def client_ids():
