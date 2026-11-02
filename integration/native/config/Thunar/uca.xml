@@ -34,4 +34,18 @@
 	<text-files/>
 	<video-files/>
 </action>
+<action>
+	<icon>edit-copy</icon>
+	<name>Copier le texte de l’image</name>
+	<name xml:lang="en">Copy text from image</name>
+	<name xml:lang="es">Copiar el texto de la imagen</name>
+	<name xml:lang="de">Text aus Bild kopieren</name>
+	<submenu></submenu>
+	<unique-id>1793570335019944-3</unique-id>
+	<command>winlux-ocr %f</command>
+	<description></description>
+	<range>1</range>
+	<patterns>*</patterns>
+	<image-files/>
+</action>
 </actions>

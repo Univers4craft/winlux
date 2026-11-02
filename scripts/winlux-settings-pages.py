@@ -54,6 +54,7 @@ _TR = {
     'Aucun dossier ajouté.': ('No folder added.', 'No se agregó ninguna carpeta.', 'Kein Ordner hinzugefügt.'),
     'Ajouter un dossier…': ('Add a folder…', 'Agregar una carpeta…', 'Ordner hinzufügen…'),
     'Retirer': ('Remove', 'Quitar', 'Entfernen'),
+    'Télécharger': ('Download', 'Descargar', 'Herunterladen'),
     'Jeux retirés de la bibliothèque': ('Games removed from the library', 'Juegos quitados de la biblioteca', 'Aus der Bibliothek entfernte Spiele'),
     'Remettre': ('Restore', 'Restaurar', 'Wiederherstellen'),
     'Performances en jeu': ('In-game performance', 'Rendimiento en juego', 'Leistung im Spiel'),
@@ -393,6 +394,21 @@ _TR = {
     # Presse-papiers
     'Historique du presse-papiers': ('Clipboard history', 'Historial del portapapeles', 'Zwischenablageverlauf'),
     'Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V.': ('Keep several copied items and find them with Windows + V.', 'Guarde varios elementos copiados y encuéntrelos con Windows + V.', 'Behalten Sie mehrere kopierte Elemente und finden Sie sie mit Windows + V.'),
+    'Copier le texte d’une image': ('Copy text from an image', 'Copiar el texto de una imagen', 'Text aus einem Bild kopieren'),
+    'Windows + Maj + T encadre une zone de l’écran et copie son texte ; la visionneuse d’images et le clic droit sur une image le proposent aussi.': (
+        'Windows + Shift + T lets you draw a box on the screen and copies its text; the image viewer and right-clicking an image offer it too.',
+        'Windows + Mayús + T enmarca una zona de la pantalla y copia su texto; el visor de imágenes y el clic derecho en una imagen también lo ofrecen.',
+        'Windows + Umschalt + T markiert einen Bildschirmbereich und kopiert seinen Text; die Bildanzeige und der Rechtsklick auf ein Bild bieten es ebenfalls an.'),
+    'Reconnaissance de texte installée': ('Text recognition installed', 'Reconocimiento de texto instalado', 'Texterkennung installiert'),
+    'Reconnaissance de texte': ('Text recognition', 'Reconocimiento de texto', 'Texterkennung'),
+    'Téléchargée à la première utilisation (environ 15 Mo), en français, anglais, espagnol et allemand.': (
+        'Downloaded on first use (about 15 MB), in French, English, Spanish and German.',
+        'Se descarga en el primer uso (unos 15 MB), en francés, inglés, español y alemán.',
+        'Wird bei der ersten Verwendung heruntergeladen (etwa 15 MB), auf Französisch, Englisch, Spanisch und Deutsch.'),
+    'français': ('French', 'francés', 'Französisch'),
+    'anglais': ('English', 'inglés', 'Englisch'),
+    'espagnol': ('Spanish', 'español', 'Spanisch'),
+    'allemand': ('German', 'alemán', 'Deutsch'),
     'Effacer les données du presse-papiers': ('Clear clipboard data', 'Borrar los datos del portapapeles', 'Zwischenablagedaten löschen'),
     'Efface tout l’historique, sauf les éléments épinglés.': ('Clears the whole history except pinned items.', 'Borra todo el historial excepto los elementos anclados.', 'Löscht den gesamten Verlauf außer angehefteten Elementen.'),
     'Effacer': ('Clear', 'Borrar', 'Löschen'),
@@ -590,6 +606,12 @@ def ambiance_tool():
 def clipboard_tool():
     if have("winlux-clipboard"): return ["winlux-clipboard"]
     script = Path(__file__).resolve().with_name("winlux-clipboard.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def ocr_tool():
+    if have("winlux-ocr"): return ["winlux-ocr"]
+    script = Path(__file__).resolve().with_name("winlux-ocr.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
@@ -1668,6 +1690,22 @@ class ExtraPages:
                  _t("Efface tout l’historique, sauf les éléments épinglés."))
         self.actions(box, [(_t("Effacer"), lambda: self.tool(tool + ["clear"]),
                             state.get("items", "0") != state.get("pinned", "0"))])
+        ocr = ocr_tool()
+        if ocr is None: return
+        result = run(ocr + ["status"])
+        state = keyvals(result.stdout) if result else {}
+        self.section(_t("Copier le texte d’une image"),
+                     _t("Windows + Maj + T encadre une zone de l’écran et copie son texte ; la visionneuse d’images et le clic droit sur une image le proposent aussi."))
+        box = self.card()
+        if state.get("installed") == "1":
+            names = {"fra": _t("français"), "eng": _t("anglais"), "spa": _t("espagnol"), "deu": _t("allemand")}
+            languages = ", ".join(names[code] for code in state.get("languages", "").split(",") if code in names)
+            self.row(box, _t("Reconnaissance de texte installée"), None, languages or None)
+            self.actions(box, [(_t("Retirer"), lambda: self.tool(ocr + ["remove"]))])
+        else:
+            self.row(box, _t("Reconnaissance de texte"), None,
+                     _t("Téléchargée à la première utilisation (environ 15 Mo), en français, anglais, espagnol et allemand."))
+            self.actions(box, [(_t("Télécharger"), lambda: self.tool(ocr + ["install"]))])
 
     # ── Écran : éclairage nocturne ──
 
