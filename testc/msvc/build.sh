@@ -41,3 +41,21 @@ llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_devio.def" -l "$tmp/kernel32_devio
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/devio_msvc.c" -o "$tmp/devio_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/devio_msvc.obj" \
     "$tmp/kernel32_devio.lib" /out:"$out/devio_msvc.exe"
+# Entrée brute : souris relative et clavier des jeux de tir (#271).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nWriteFile\nCloseHandle\nSleep\nGetTickCount64\n' >"$tmp/kernel32_raw.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nCreateWindowExW\nPeekMessageW\nRegisterRawInputDevices\nGetRawInputData\nGetRawInputDeviceList\nGetRawInputDeviceInfoW\n' >"$tmp/user32_raw.def"
+for d in kernel32_raw user32_raw; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/rawinput_msvc.c" -o "$tmp/rawinput_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/rawinput_msvc.obj" \
+    "$tmp/kernel32_raw.lib" "$tmp/user32_raw.lib" /out:"$out/rawinput_msvc.exe"
+# Ports série : recherche du port, DCB par texte, WaitCommEvent (#271).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nReadFile\nWriteFile\nCloseHandle\nQueryDosDeviceW\nBuildCommDCBW\nGetCommState\nSetCommState\nSetCommTimeouts\nSetCommMask\nWaitCommEvent\nTransmitCommChar\nGetCommProperties\n' >"$tmp/kernel32_serial.def"
+printf 'LIBRARY advapi32.dll\nEXPORTS\nRegOpenKeyExW\nRegQueryValueExW\n' >"$tmp/advapi32_serial.def"
+for d in kernel32_serial advapi32_serial; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/serial_msvc.c" -o "$tmp/serial_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/serial_msvc.obj" \
+    "$tmp/kernel32_serial.lib" "$tmp/advapi32_serial.lib" /out:"$out/serial_msvc.exe"

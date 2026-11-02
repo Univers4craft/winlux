@@ -2273,6 +2273,7 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                crate::dlls::rawinput::set_app_focus(true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -2285,6 +2286,8 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
+                crate::dlls::rawinput::set_app_focus(false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,

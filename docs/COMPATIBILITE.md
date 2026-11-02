@@ -61,6 +61,26 @@ identifiant d'objet. Les rapports HID passent aussi par `IOCTL_HID_*`.
 Verrouiller ou démonter un volume est refusé (accès refusé), tout autre code
 rend `ERROR_NOT_SUPPORTED`. Test : `scripts/test-devio.sh`.
 
+L'entrée brute (#271, `runtime/src/dlls/rawinput.rs`) donne aux jeux de tir la
+souris en déplacements relatifs, sans accélération ni blocage au bord de
+l'écran : `RegisterRawInputDevices` lance un fil qui lit les souris et claviers
+evdev de l'hôte (`/dev/input/event*`, ouverts au groupe `input`) et poste
+`WM_INPUT` à la fenêtre inscrite tant que le programme a le focus (toujours avec
+`RIDEV_INPUTSINK`). `GetRawInputData`, `GetRawInputBuffer`,
+`GetRawInputDeviceList` et `GetRawInputDeviceInfoA/W` (nom, fiche, manettes HID)
+suivent. Boutons 1 à 5, molettes (haute résolution comprise), scancodes PS/2 avec
+le préfixe E0. Test : `scripts/test-rawinput.sh` (fausse souris et faux clavier
+sur des FIFO, `WINLUX_RAWINPUT_DEVICES`).
+
+Les ports série (`COMn` sur `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, DCB et
+délais sur termios) se trouvent désormais comme sous Windows (#271,
+`runtime/src/dlls/serial.rs`) : `QueryDosDeviceW/A` liste les lecteurs et les
+ports présents, `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` est rafraîchie à chaque
+ouverture, et `SetCommMask`/`WaitCommEvent` (OVERLAPPED compris),
+`GetCommProperties`, `BuildCommDCBA/W`, `TransmitCommChar`, `Get/SetCommConfig`
+et `GetDefaultCommConfig` complètent. Test : `scripts/test-serial.sh` (COM7 sur
+un pseudo-terminal qui répond).
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -353,8 +373,8 @@ série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
 
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
-sur disques, volumes et fichiers (voir plus haut).
-Reste : entrée brute, `cfgmgr32`, `winusb`, ports série,
+sur disques, volumes et fichiers, entrée brute (voir plus haut).
+Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`,
 résolution et rampe gamma.
 
 Ampleur : **M**. Suivi : #271.

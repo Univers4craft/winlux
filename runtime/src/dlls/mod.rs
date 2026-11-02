@@ -85,6 +85,7 @@ pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
+pub mod rawinput;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sandbox_dlls;
@@ -93,6 +94,7 @@ pub mod secur32;
 pub mod security;
 pub mod seh;
 pub mod seh_hw;
+pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
@@ -214,6 +216,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
                     e.extend(console_input::exports());
+                    // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
+                    e.extend(serial::exports());
                     e
                 },
                 handle: fake_module(),
@@ -259,6 +263,7 @@ fn builtins() -> &'static Vec<Builtin> {
                         }
                     }
                     e.extend(clipboard::exports());
+                    e.extend(rawinput::exports());
                     e.extend(crate::intl::api::user32_exports());
                     e
                 },
