@@ -592,6 +592,8 @@ def dark_theme():
     name = (settings.get_property("gtk-theme-name") or "").lower()
     if name == "highcontrast":
         return False
+    if name.startswith("winlux-"):  # thème de winlux-personalize : le nom fait foi
+        return "-dark" in name
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name or "inverse" in name
 
 
@@ -610,7 +612,7 @@ SETTINGS_CSS = """
   #sidebar .sub {{ color: {dim}; font-size: 13px; }}
   #sidebar row:selected .sub {{ color: {selected_dim}; }}
   #sidebar .open {{ font-weight: bold; }}
-  #content {{ background: {bg}; }}
+  #content, #content-frame {{ background: {bg}; }}
   #content list, #content list row {{ background: {card}; color: {fg}; }}
   #content list row:hover {{ background: {card_hover}; }}
   #content list row:selected, #content list row:selected label {{ background: {selected}; color: {selected_fg}; }}
@@ -704,7 +706,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         outer.pack_start(scroll, True, True, 0)
         self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
         self.body.set_name("content")
-        scroll.add(self.body)
+        # La vue défilante ne peint pas son fond quand la page dépasse la
+        # fenêtre (cache de pixels de GtkViewport) : les marges de la page
+        # sortaient en bande noire. Un cadre peint remplit toute la vue.
+        page_frame = Gtk.Box()
+        page_frame.set_name("content-frame")
+        page_frame.pack_start(self.body, True, True, 0)
+        scroll.add(page_frame)
         self.open_page(self.current)
         GLib.timeout_add(1000, self.poll)
         self.show_all()

@@ -136,19 +136,27 @@ def parent(only, verbose, themes=(), shots=None):
             home = temp / label.replace(" ", "_").replace("#", "").replace("(", "").replace(")", "")
             config = home / ".config"
             (config / "gtk-3.0").mkdir(parents=True)
-            (config / "gtk-3.0/settings.ini").write_text(
-                "[Settings]\ngtk-theme-name=%s\ngtk-application-prefer-dark-theme=%d\ngtk-enable-animations=false\n"
-                % (gtk_theme, dark), encoding="utf-8")
-            css = (shipped / "gtk-3.0/gtk.css").read_text(encoding="utf-8")
-            if personal:
-                css += "\n/* Winlux appearance */\n" + personalize_css(dark, accent) + "\n/* End Winlux appearance */\n"
-                (config / "winlux").mkdir(parents=True)
-                (config / "winlux/appearance.json").write_text(json.dumps({"theme": "dark" if dark else "light",
-                                                                          "accent": accent}))
-            (config / "gtk-3.0/gtk.css").write_text(css, encoding="utf-8")
             # Thèmes livrés par Winlux (Adwaita-dark), comme dans /usr/share/themes.
             (home / "share").mkdir(parents=True, exist_ok=True)
             shutil.copytree(project / "integration/native/themes", home / "share/themes")
+            prefer_dark = dark
+            if personal:
+                # Ce qu'écrit winlux-personalize : un thème du compte (Adwaita +
+                # couleurs Winlux) choisi par son nom, sans préférence sombre.
+                mode = "dark" if dark else "light"
+                gtk_theme, prefer_dark = f"Winlux-{mode}-1", False
+                folder = home / "share/themes" / gtk_theme / "gtk-3.0"
+                folder.mkdir(parents=True)
+                base = "gtk-contained-dark.css" if dark else "gtk-contained.css"
+                folder.joinpath("gtk.css").write_text(
+                    f'@import url("resource:///org/gtk/libgtk/theme/Adwaita/{base}");\n'
+                    + personalize_css(dark, accent) + "\n", encoding="utf-8")
+                (config / "winlux").mkdir(parents=True)
+                (config / "winlux/appearance.json").write_text(json.dumps({"theme": mode, "accent": accent}))
+            (config / "gtk-3.0/settings.ini").write_text(
+                "[Settings]\ngtk-theme-name=%s\ngtk-application-prefer-dark-theme=%d\ngtk-enable-animations=false\n"
+                % (gtk_theme, prefer_dark), encoding="utf-8")
+            (config / "gtk-3.0/gtk.css").write_text((shipped / "gtk-3.0/gtk.css").read_text(encoding="utf-8"), encoding="utf-8")
             for name, command, extra in targets:
                 if accent and accent != ACCENTS[0] and not name.startswith(("settings-00", "settings-08", "tools-quick", "uac", "welcome")):
                     continue  # chaque accent : un échantillon d'écrans suffit
@@ -283,6 +291,14 @@ def audit(Gtk, Pango, lang):
         for widget in walk(window):
             if not widget.get_mapped() or not widget.is_drawable():
                 continue
+            # GtkViewport ne peint pas son fond quand son contenu défile (cache
+            # de pixels) : les marges de l'enfant sortent en noir à l'écran.
+            if isinstance(widget, Gtk.Viewport) and widget.get_child() is not None:
+                child = widget.get_child()
+                if any((child.get_margin_start(), child.get_margin_end(), child.get_margin_top(),
+                        child.get_margin_bottom())):
+                    problems.append(f"marges non peintes dans une zone défilante : {type(child).__name__} "
+                                    f"« {child.get_name()} » (bande noire quand la page défile)")
             if isinstance(widget, Gtk.Image) and widget.get_storage_type() != Gtk.ImageType.ICON_NAME:
                 continue
             if isinstance(widget, Gtk.Image) and not (widget.get_icon_name()[0] or "").endswith("-symbolic"):

@@ -44,7 +44,7 @@ Le système, l'installateur et ce site existent en français, en anglais, en all
 Récupérez l'image de la dernière version et, si vous le souhaitez, le créateur de clé USB. [Page Télécharger](page:download)
 
 ### 2. Suivre le guide
-Six étapes, de la clé USB à votre premier programme Windows, puis les mises à jour. [Ouvrir le guide](page:guide)
+Sept étapes, de la clé USB à votre premier programme Windows, puis les mises à jour. [Ouvrir le guide](page:guide)
 
 ### 3. Vérifier vos logiciels
 Ce qui fonctionne déjà, ce qui ne fonctionne pas encore, et comment nous le signaler. [Applications testées](page:apps)
