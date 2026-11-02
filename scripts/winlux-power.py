@@ -95,6 +95,18 @@ SESSIONS = ROOT + "/run/winlux/sessions"
 UPDATE_BUSY = "Une mise à jour est en cours d’installation. Réessayez quand elle sera terminée."
 NO_SERVICE = "Le service d’alimentation ne répond pas."
 CLOSE_TIMEOUT = float(os.environ.get("WINLUX_POWER_CLOSE_TIMEOUT", "20"))
+# Canal vers le processus de garde (voir gui()) : l'écran y note son étape.
+STATE_FD = None
+
+
+def report(state):
+    """Note l'étape de l'écran pour le gardien : go, done, cancel, blocked, error."""
+    if STATE_FD is None:
+        return
+    try:
+        os.write(STATE_FD, state.encode() + b"\n")
+    except OSError:
+        pass
 
 
 def normalize(action):
@@ -435,6 +447,7 @@ class PowerUI:
         Gtk = self.Gtk
         shutdown = self.action == "poweroff"
         self.mode = "blocked"
+        report("blocked")
         listing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         seen = set()
         for window_class, title, _pid in blockers.values():
@@ -462,6 +475,7 @@ class PowerUI:
 
     def show_error(self, message):
         self.mode = "error"
+        report("error")
         self.set_card(self.make_card(
             "dialog-error-symbolic",
             _t("Impossible d’arrêter le PC") if self.action == "poweroff" else _t("Impossible de redémarrer le PC"),
@@ -470,12 +484,15 @@ class PowerUI:
     # ── Déroulement ──
     def cancel(self):
         self.result = 1
+        report("cancel")
         self.ungrab()
         self.window.destroy()
 
     def start_shutdown(self):
         self.mode = "progress"
         self.started = time.monotonic()
+        if not self.screen_only:
+            report("go")
         self.set_card(None)
         self.animate()
         if self.screen_only:
@@ -506,11 +523,13 @@ class PowerUI:
         self.set_card(None)
         self.animate()
         self.status = ""
+        report("go")
         error = execute(self.action)
         if error:
             self.show_error(error)
             return
         self.result = 0
+        report("done")
         # L'init termine maintenant tous les processus : l'écran reste affiché.
         # S'il n'a toujours rien fait au bout d'une minute, on le dit.
         self.GLib.timeout_add_seconds(60, self.init_silent)
@@ -600,6 +619,45 @@ class PowerUI:
 
 
 def gui(action, confirm, screen_only=False):
+    if screen_only:
+        return run_gui(action, confirm, screen_only)
+    # L'écran GTK tourne dans un processus enfant. S'il meurt une fois l'arrêt
+    # décidé (« Bus error » vu en session live, perte de l'affichage quand les
+    # applications se ferment…), le parent, qui n'a chargé ni GTK ni cairo,
+    # termine le travail : sinon la machine ne redémarrait jamais.
+    global STATE_FD
+    read_end, write_end = os.pipe()
+    child = os.fork()
+    if child == 0:
+        os.close(read_end)
+        STATE_FD = write_end
+        code = 1
+        try:
+            if os.environ.get("WINLUX_POWER_TEST_GUI_CRASH") == "1":
+                os.kill(os.getpid(), signal.SIGBUS)  # test : écran qui plante
+            code = run_gui(action, confirm, screen_only)
+        finally:
+            os._exit(code if isinstance(code, int) else 1)
+    os.close(write_end)
+    # « now » : l'arrêt est décidé dès le départ ; « ask » : après confirmation.
+    state = "pending" if confirm else "go"
+    with os.fdopen(read_end, "rb") as states:
+        for line in states:
+            state = line.decode(errors="replace").strip() or state
+    _pid, status = os.waitpid(child, 0)
+    # GDK quitte avec le code 1 quand l'affichage disparaît : seul l'état
+    # compte. « go » sans « done » = arrêt décidé mais jamais demandé à l'init.
+    if state != "go":
+        return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
+    print(f"Écran d'arrêt interrompu (état {status}) : {action} sans écran.", file=sys.stderr)
+    message = execute(action)
+    if message:
+        print(message, file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_gui(action, confirm, screen_only=False):
     try:
         ui = PowerUI(action, confirm=confirm, screen_only=screen_only)
     except Exception as error:  # pas d'affichage, GTK absent…
@@ -608,8 +666,10 @@ def gui(action, confirm, screen_only=False):
         print(f"Interface indisponible ({error}) : arrêt sans écran.", file=sys.stderr)
         message = execute(action)
         if message:
+            report("error")
             print(message, file=sys.stderr)
             return 1
+        report("done")
         return 0
     return ui.run()
 
