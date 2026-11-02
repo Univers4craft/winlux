@@ -367,20 +367,22 @@ if command -v xmessage >/dev/null 2>&1; then
     chmod 755 "$stage/usr/bin/xmessage"
     copy_shared_libraries "$(command -v xmessage)"
 fi
-# Microsoft Edge et Google Chrome ne sont jamais intégrés à l'ISO : leurs
-# licences interdisent de les redistribuer (Edge : « you will not ... share,
+# Aucun navigateur n'est intégré à l'ISO : l'utilisateur choisit le sien.
+# Microsoft Edge et Google Chrome ne pourraient de toute façon pas l'être :
+# leurs licences interdisent de les redistribuer (Edge : « you will not ... share,
 # publish, distribute, or lend the Software », section 2.8 f). Ils se
 # téléchargent chez leur éditeur, sur le PC, à la demande de l'utilisateur.
 if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
     echo "WINLUX_EDGE_DEB refusé : Edge ne peut pas être redistribué dans l'ISO" >&2
     exit 1
 fi
-# Offline browser catalogue: only Firefox (MPL, official unmodified build).
+# Aucun navigateur dans l'image : seulement les outils et bibliothèques qui
+# font tourner celui que l'utilisateur choisira (stage-browser-packages.sh
+# refuse tout paquet de navigateur).
 browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
-if test -f "$browser_packages/firefox.deb" || test -f "$browser_packages/edge.deb" || test -f "$browser_packages/chrome.deb"; then
-    sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
-fi
-# Téléchargement d'Edge et de Chrome chez l'éditeur (index signé, SHA-256).
+mkdir -p "$browser_packages"
+sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
+# Téléchargement du navigateur choisi chez son éditeur (index HTTPS, SHA-256).
 install -D -m 755 "$root/scripts/prepare-browser-packages.py" "$stage/usr/lib/winlux/winlux-browser-fetch"
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
@@ -682,16 +684,8 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
-# Installation hors ligne de Firefox (copie, vérification, extraction) : en
-# arrière-plan et en basse priorité, elle ne retarde plus le bureau.
+# Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
-if test -f /usr/share/winlux/browsers/firefox.deb && ! test -x /opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox; then
-    # The static BusyBox of the image has no nice applet: use coreutils.
-    nice=
-    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
-    $nice /usr/bin/winlux-browsers --install firefox >/run/winlux/browser-setup.log 2>&1 &
-    browser_setup_pid=$!
-fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals

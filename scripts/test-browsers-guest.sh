@@ -11,40 +11,16 @@ kill -0 "$xvfb"
 mkdir -p /home/winlux-web
 printf '<!doctype html><title>WINLUX_BROWSER_OK</title><h1>Winlux</h1>\n' > /tmp/browser-test.html
 chmod 644 /tmp/browser-test.html
-# Seul Firefox est dans l'image ; Edge et Chrome se téléchargent chez leur
-# éditeur (pas de réseau dans cette VM) : ils ne doivent pas être fournis.
-winlux-browsers --install firefox
-winlux-browsers --status | grep -qx 'browser_edge=downloadable'
-winlux-browsers --status | grep -qx 'browser_chrome=downloadable'
-test ! -e /usr/share/winlux/browsers/edge.deb && test ! -e /usr/share/winlux/browsers/chrome.deb
-test ! -e /opt/microsoft && test ! -e /opt/google
-echo 'WINLUX_BROWSER_edge_RESULT=0'
-echo 'WINLUX_BROWSER_chrome_RESULT=0'
-for browser in $(ls /opt/winlux/browsers 2>/dev/null | grep -E '^(edge|chrome)$' || true); do
-    profile="/tmp/${browser}-profile"
-    mkdir -p "$profile"
-    chown winlux-web:winlux-web "$profile"
-    chmod 700 "$profile"
-    # L'émulation TCG de la CI est plus lente qu'une VM accélérée par KVM.
-    echo "WINLUX_BROWSER_${browser}_START"
-    timeout 120 winlux-browsers --launch "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-background-networking --user-data-dir="$profile" --dump-dom file:///tmp/browser-test.html > "/tmp/$browser-dom.log" 2>&1 &
-    runner=$!
-    for attempt in $(seq 1 120); do
-        grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log" && break
-        kill -0 "$runner" 2>/dev/null || break
-        sleep 1
-    done
-    # Edge may keep background services alive after --dump-dom. The diagnostic
-    # owns this isolated account and explicitly stops it after observing render.
-    /bin/busybox pkill -TERM -u "$(id -u winlux-web)" 2>/dev/null || true
-    wait "$runner" || true
-    if ! grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log"; then
-        echo "WINLUX_BROWSER_${browser}_RESULT=1"
-        cat "/tmp/$browser-dom.log"
-        exit 1
-    fi
-    echo "WINLUX_BROWSER_${browser}_RESULT=0"
+# Aucun navigateur dans l'image : les trois sont proposés au téléchargement
+# chez leur éditeur (pas de réseau dans cette VM), aucun n'est fourni.
+status=$(winlux-browsers --status)
+for browser in chrome edge firefox; do
+    printf '%s\n' "$status" | grep -qx "browser_${browser}=downloadable"
+    test ! -e "/usr/share/winlux/browsers/$browser.deb"
 done
-timeout 45 winlux-browsers --launch firefox --headless --screenshot /home/winlux-web/browser-test.png file:///tmp/browser-test.html > /tmp/firefox-render.log 2>&1
-test -s /home/winlux-web/browser-test.png
-echo 'WINLUX_BROWSER_firefox_RESULT=0'
+printf '%s\n' "$status" | grep -qx 'browser_default=none'
+test ! -e /opt/microsoft && test ! -e /opt/google
+# Sans réseau : échec propre, rien d'installé, pas de verrou.
+if winlux-browsers --install firefox; then echo 'installation sans réseau ?' >&2; exit 1; fi
+test ! -e /opt/winlux/browsers/firefox && test ! -e /run/winlux/browser-install.lock
+for browser in edge chrome firefox; do echo "WINLUX_BROWSER_${browser}_RESULT=0"; done

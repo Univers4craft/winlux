@@ -245,6 +245,8 @@ _TR = {
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
     'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
     'Par défaut : {name}': ('Default: {name}', 'Predeterminado: {name}', 'Standard: {name}'),
+    'Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous.': ('Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. Pick the one you prefer: Winlux downloads it from its publisher’s official website, checks the file and installs it for you.', 'Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. Elija el que prefiera: Winlux lo descarga del sitio oficial de su editor, comprueba el archivo y lo instala por usted.', 'Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Wählen Sie Ihren bevorzugten Browser: Winlux lädt ihn von der offiziellen Website des Herstellers herunter, prüft die Datei und installiert ihn für Sie.'),
+    'Aucun : choisissez-en un ci-dessous': ('None: choose one below', 'Ninguno: elija uno abajo', 'Keiner: unten einen auswählen'),
     'Ouvrir {name}': ('Open {name}', 'Abrir {name}', '{name} öffnen'),
     '{label} : {value}': ('{label}: {value}', '{label}: {value}', '{label}: {value}'),
     'Pilote {driver}': ('Driver {driver}', 'Controlador {driver}', 'Treiber {driver}'),
@@ -799,7 +801,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
         if self.page == 11:
-            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
+            # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
+            self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
+            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("chrome", "edge", "firefox")
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
@@ -963,6 +967,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                     return f"{round(float(value) * 100)} %" if value else _t("Automatique")
                 except ValueError:
                     return value
+            if key == "browser_default":
+                names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+                return names.get(value, _t("Aucun : choisissez-en un ci-dessous"))
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")

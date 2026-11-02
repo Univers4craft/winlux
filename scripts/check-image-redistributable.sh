@@ -4,7 +4,8 @@
 #   sh scripts/check-image-redistributable.sh RACINE
 #
 # L'ISO publiée ne contient que des logiciels libres ou redistribuables
-# (archive Ubuntu, Firefox officiel, Winlux). Les logiciels propriétaires
+# (archive Ubuntu et Winlux), et aucun navigateur : l'utilisateur choisit le
+# sien, téléchargé chez son éditeur (docs/BROWSERS.md). Les logiciels propriétaires
 # dont la licence interdit la redistribution, comme Microsoft Edge
 # (« you will not ... share, publish, distribute, or lend the Software »,
 # section 2.8 f) ou Google Chrome, se téléchargent chez leur éditeur après
@@ -19,12 +20,13 @@ found=
 for path in opt/microsoft opt/google opt/brave.com opt/vivaldi opt/opera opt/zoom opt/teams \
     opt/discord opt/spotify usr/share/microsoft-edge usr/share/teams usr/share/code \
     usr/bin/microsoft-edge usr/bin/microsoft-edge-stable usr/bin/google-chrome usr/bin/google-chrome-stable \
-    usr/share/winlux/browsers/edge.deb usr/share/winlux/browsers/chrome.deb; do
+    usr/share/winlux/browsers/edge.deb usr/share/winlux/browsers/chrome.deb usr/share/winlux/browsers/firefox.deb \
+    opt/firefox usr/lib/firefox/firefox; do
     if test -e "$root/$path" || test -L "$root/$path"; then found="$found /$path"; fi
 done
 
 # Paquets propriétaires connus, installés (dpkg) ou mis en cache (.deb).
-denied='microsoft-*|msedge*|google-chrome*|google-earth*|code|code-insiders|teams|teams-for-linux|skypeforlinux|vivaldi*|opera-stable|opera-beta|brave-browser*|zoom|discord|spotify-client|steam-launcher|yandex-browser*|anydesk|teamviewer*'
+denied='firefox|firefox-esr|chromium|chromium-browser|microsoft-*|msedge*|google-chrome*|google-earth*|code|code-insiders|teams|teams-for-linux|skypeforlinux|vivaldi*|opera-stable|opera-beta|brave-browser*|zoom|discord|spotify-client|steam-launcher|yandex-browser*|anydesk|teamviewer*'
 status="$root/var/lib/dpkg/status"
 if test -r "$status"; then
     packages=$(awk '/^Package: / { name = $2 } /^Status: .* installed$/ { print name }' "$status")

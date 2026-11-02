@@ -48,8 +48,9 @@ paquet n'est installé sur l'hôte par le script de préparation.
 ## Applications
 
 - Explorer et Paramètres sont deux fenêtres PE indépendantes du runtime Winlux.
-- Les applications Linux utilisent leurs propres fenêtres et contrôles. Edge
-  démarre en fenêtre, avec son bac à sable conservé.
+- Les applications Linux utilisent leurs propres fenêtres et contrôles. Le
+  navigateur choisi par l'utilisateur démarre en fenêtre, avec son bac à sable
+  conservé (aucun n'est fourni : voir BROWSERS.md).
 - Les fenêtres EWMH apparaissent dans le panneau, y compris celles du runtime.
 - Mousepad est l'[éditeur maintenu par Xfce](https://docs.xfce.org/apps/mousepad/start).
   Les textes peuvent être ouverts, modifiés et sauvegardés ; xterm lance Bash.
@@ -149,7 +150,7 @@ python3 scripts/prepare-desktop-packages.py build/desktop-components
 l'échappement des chemins sans lancer de VM. Après construction du stage,
 `sh scripts/test-native-session-vm.sh` utilise exclusivement un disque jetable,
 un affichage invisible en 1920×1080 et une limite de temps. Il contrôle les
-fenêtres PE/Linux, l'édition et la sauvegarde, Edge, le catalogue, le menu,
+fenêtres PE/Linux, l'édition et la sauvegarde, l'écran de choix du navigateur, le catalogue, le menu,
 l'animation et la fermeture. Ses captures réelles et journaux sont conservés
 sous `build/native-vm.*`. La publication automatise ce contrôle.
 

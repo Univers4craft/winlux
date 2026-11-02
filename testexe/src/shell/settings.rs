@@ -865,8 +865,8 @@ unsafe fn button_in(g: &mut Gfx, c: &Rect, r: Rect, label: &[u8], id: i32) {
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
         (10, 12..=14) => EXE_GPU == (id - 12) as usize,
-        (11, 1) => value(b"browser_default") == b"edge",
-        (11, 4) => value(b"browser_default") == b"chrome",
+        (11, 1) => value(b"browser_default") == b"chrome",
+        (11, 4) => value(b"browser_default") == b"edge",
         (11, 7) => value(b"browser_default") == b"firefox",
         (14, 0..=3) => (unsafe { CURRENT_LANG } as usize) == id as usize,
         (14, 10..=17) => {
@@ -1303,22 +1303,24 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 &c,
                 44,
                 tr4(&[b"Navigateur par d\xE9faut", b"Default browser", b"Navegador predeterminado", b"Standardbrowser"]),
+                // Aucun navigateur fourni ni favorisé : l'utilisateur choisit.
                 match value(b"browser_default") {
                     b"chrome" => b"Google Chrome",
+                    b"edge" => b"Microsoft Edge",
                     b"firefox" => b"Mozilla Firefox",
-                    _ => b"Microsoft Edge",
+                    _ => tr4(&[b"Aucun - choisissez-en un ci-dessous", b"None - choose one below", b"Ninguno - elija uno abajo", b"Keiner - unten einen ausw\xE4hlen"]),
                 },
             );
             for (i, labels) in [
                 [
-                    tr4(&[b"Installer Edge", b"Install Edge", b"Instalar Edge", b"Edge installieren"]),
-                    tr4(&[b"Choisir Edge", b"Choose Edge", b"Elegir Edge", b"Edge w\xE4hlen"]),
-                    tr4(&[b"Ouvrir Edge", b"Open Edge", b"Abrir Edge", b"Edge \xF6ffnen"]),
-                ],
-                [
                     tr4(&[b"Installer Chrome", b"Install Chrome", b"Instalar Chrome", b"Chrome installieren"]),
                     tr4(&[b"Choisir Chrome", b"Choose Chrome", b"Elegir Chrome", b"Chrome w\xE4hlen"]),
                     tr4(&[b"Ouvrir Chrome", b"Open Chrome", b"Abrir Chrome", b"Chrome \xF6ffnen"]),
+                ],
+                [
+                    tr4(&[b"Installer Edge", b"Install Edge", b"Instalar Edge", b"Edge installieren"]),
+                    tr4(&[b"Choisir Edge", b"Choose Edge", b"Elegir Edge", b"Edge w\xE4hlen"]),
+                    tr4(&[b"Ouvrir Edge", b"Open Edge", b"Abrir Edge", b"Edge \xF6ffnen"]),
                 ],
                 [
                     tr4(&[b"Installer Firefox", b"Install Firefox", b"Instalar Firefox", b"Firefox installieren"]),
@@ -1334,8 +1336,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
             }
             for (i, key) in [
-                b"browser_edge".as_slice(),
-                b"browser_chrome",
+                // Ordre alphabétique : aucun navigateur mis en avant.
+                b"browser_chrome".as_slice(),
+                b"browser_edge",
                 b"browser_firefox",
             ]
             .iter()
@@ -1346,8 +1349,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     &c,
                     272 + i as i32 * 65,
                     [
-                        b"Microsoft Edge".as_slice(),
-                        b"Google Chrome",
+                        b"Google Chrome".as_slice(),
+                        b"Microsoft Edge",
                         b"Mozilla Firefox",
                     ][i],
                     match value(key) {
@@ -2312,12 +2315,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         (11, id) if (0..=8).contains(&id) => Some(
             [
-                c"browser-install-edge",
-                c"browser-default-edge",
-                c"browser-launch-edge",
                 c"browser-install-chrome",
                 c"browser-default-chrome",
                 c"browser-launch-chrome",
+                c"browser-install-edge",
+                c"browser-default-edge",
+                c"browser-launch-edge",
                 c"browser-install-firefox",
                 c"browser-default-firefox",
                 c"browser-launch-firefox",

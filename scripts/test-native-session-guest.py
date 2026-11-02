@@ -234,17 +234,23 @@ assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/
 html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
-# The init installs Firefox, the only browser shipped in the image, in the
-# background (Edge and Chrome may not be redistributed: they are downloaded
-# from their publisher on demand). Make sure it is installed before launching.
-if "browser_firefox=installed" not in run("winlux-browsers", "--status"):
-    setup_log = Path("/run/winlux/browser-setup.log")
-    print("Firefox absent au lancement ; journal d'installation :\n" +
-          (setup_log.read_text(errors="replace") if setup_log.exists() else "(aucun)"), flush=True)
-    print(run("winlux-browsers", "--install", "firefox", timeout=600), flush=True)
+# No browser ships in the image (the user chooses one, downloaded from its
+# publisher): all three are offered, none is installed, and opening a link
+# without a browser leads to the choice screen (Paramètres > Navigateurs).
 status = run("winlux-browsers", "--status")
-assert "browser_edge=downloadable" in status and "browser_chrome=downloadable" in status, status
-subprocess.Popen(["winlux-browsers", "--launch", "firefox", html.as_uri()], stdout=log, stderr=log)
+for name in ("edge", "chrome", "firefox"):
+    assert f"browser_{name}=downloadable" in status, status
+assert "browser_default=none" in status, status
+assert not any(Path("/usr/share/winlux/browsers").glob("*.deb"))
+chooser = Path("/run/winlux/browser-chooser")
+run("winlux-browsers", "--open", html.as_uri())
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline and not chooser.exists() and not Path("/run/winlux/browser-settings.log").exists():
+    time.sleep(0.2)
+assert chooser.exists() or Path("/run/winlux/browser-settings.log").exists(), "écran de choix du navigateur non demandé"
+print("WINLUX_NATIVE_BROWSER_CHOICE=0", flush=True)
+# A plain application window stands in for the browser in the window tests.
+subprocess.Popen(["xterm", "-T", "Winlux browser window test"], stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]

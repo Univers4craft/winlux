@@ -1,8 +1,8 @@
 #!/bin/sh
 # Fixed browser catalogue. DEB payloads are isolated, no maintainer scripts.
-# Firefox ships offline in the image. Edge and Chrome may not be redistributed
-# (their licences forbid it): they are downloaded from their publisher, on
-# this PC, when the user asks (index over HTTPS, SHA-256 from the index).
+# No browser ships in the image: the user chooses one (Paramètres >
+# Navigateurs), downloaded from its publisher on this PC (index over HTTPS,
+# SHA-256 from the index). Edge's licence forbids redistributing it anyway.
 set -eu
 # Prefer full tools over the limited BusyBox applets in /bin.
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -14,10 +14,10 @@ fetch=${WINLUX_BROWSER_FETCH:-"$root/usr/lib/winlux/winlux-browser-fetch"}
 installed="$root/opt/winlux/browsers"
 config="$root/etc/winlux/browser.conf"
 run="$root/run/winlux"
-browser=${2:-edge}
+browser=${2:-none}
 case "${1:---status}" in
     --install|--default|--launch) case "$browser" in edge|chrome|firefox) ;; *) echo 'Navigateur inconnu' >&2; exit 2 ;; esac ;;
-    *) browser=edge ;;
+    *) browser=none ;;
 esac
 binary() {
     case "$1" in
@@ -28,15 +28,15 @@ binary() {
 }
 default_browser() {
     selected=$(sed -n 's/^default=//p' "$config" 2>/dev/null | head -n 1)
-    case "$selected" in edge|chrome|firefox) printf '%s\n' "$selected" ;; *) printf 'firefox\n' ;; esac
+    case "$selected" in edge|chrome|firefox) printf '%s\n' "$selected" ;; *) printf 'none\n' ;; esac
 }
 status() {
     printf 'browser_default=%s\n' "$(default_browser)"
-    for id in edge chrome firefox; do
+    for id in chrome edge firefox; do
         state=unavailable
+        # Téléchargeable chez l'éditeur : proposé, jamais fourni par Winlux.
+        test ! -x "$fetch" || state=downloadable
         test ! -f "$cache/$id.deb" || state=available
-        # Téléchargeable chez l'éditeur (Edge, Chrome) : proposé, pas fourni.
-        case "$id" in edge|chrome) test ! -x "$fetch" || state=downloadable ;; esac
         if test -x "$(binary "$id")"; then
             state=installed
             if test -f "$cache/$id.version" && ! cmp -s "$cache/$id.version" "$installed/$id/version"; then state=update; fi
@@ -48,7 +48,7 @@ install_browser() {
     id=$1
     if ! test -r "$cache/$id.deb"; then
         case "$id" in
-            edge|chrome)
+            edge|chrome|firefox)
                 # Paquet officiel téléchargé chez l'éditeur, jamais fourni par Winlux.
                 test -x "$fetch" || { echo "Téléchargement indisponible : $id" >&2; return 1; }
                 mkdir -p "$downloads"

@@ -30,7 +30,7 @@ manager() {
         sh "$project/scripts/winlux-browsers.sh" "$@"
     fi
 }
-manager --status | grep -qx 'browser_default=firefox'
+manager --status | grep -qx 'browser_default=none'
 manager --open 'https://example.invalid/'
 test -f "$WINLUX_BROWSER_ROOT/run/winlux/browser-chooser"
 umask 077
@@ -83,4 +83,4 @@ test ! -e "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/edge"
 test ! -e "$WINLUX_BROWSER_ROOT/run/winlux/browser-install.lock"
 if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
 python3 -B "$project/scripts/test-browser-downloads.py"
-echo 'OK: browser selection (Firefox offline, Edge/Chrome downloaded on demand), default, URL arguments, checksums and cleanup'
+echo 'OK: no browser shipped or preferred, choice screen, download on demand, URL arguments, checksums and cleanup'
