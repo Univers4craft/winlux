@@ -17,6 +17,50 @@ Trois services maison, sans Wine ni dépendance tierce de compatibilité.
   (`winlux-restore`), qui couvrent le système et non les documents.
 - Test : `sh scripts/test-backup.sh`.
 
+## Bureau sous le compte de l'utilisateur
+
+Sur un système installé, le bureau ne tourne plus en root : un `.exe` lancé
+d'un double-clic tourne sous le compte créé à l'installation (`ps -o user`).
+
+- L'init lit `/etc/winlux/install-config.json` (`username`, `autologin`). Si le
+  compte existe (UID ≥ 1000), il démarre en root seulement les services
+  système (`winlux-system-services` : D-Bus système, polkit, udisks,
+  NetworkManager, CUPS, Bluetooth), les deux relais root (`winlux-power serve`
+  pour arrêter et redémarrer, `winlux-root serve` pour le reste), puis le
+  bureau sur `:0` sous le compte, par `setpriv`, avec `winlux-user-session`
+  (son PipeWire, Thunar, picom, barre des tâches, Bienvenue, verrouillage,
+  presse-papiers commun, lecteurs réseau, état des Paramètres, écrans).
+- Connexion automatique : la session s'ouvre directement. Sinon, elle s'ouvre
+  verrouillée et demande le mot de passe du compte.
+- `/etc/winlux/users.conf` reprend les vrais comptes (`nom:root|user:shadow`) :
+  plus aucun mot de passe en clair, `shadow` renvoie à `/etc/shadow`.
+- `/run/winlux` est collant et ouvert à tous (comme `/tmp`), avec
+  `fs.protected_symlinks=1` : chacun y écrit ses fichiers d'état sans toucher
+  à ceux des autres. Les journaux du bureau sont dans
+  `/run/winlux/session-<compte>/`.
+- Relais root `winlux-root` (`/run/winlux-root.sock`, appelant vérifié par
+  `SO_PEERCRED`, seulement les comptes de `users.conf`) :
+  - `conf` : les préférences du bureau dans `/etc/winlux` (thème, clavier,
+    confidentialité, verrouillage…), liste fermée de fichiers et de clés ;
+  - `control` : les actions système connues de `winlux-control` (réseau,
+    Bluetooth, fuseau, écrans, alimentation, mises à jour, sauvegarde,
+    sessions…). Les actions d'administrateur (installer un navigateur, carte
+    graphique, points de restauration, journal effacé, partages, bureau à
+    distance) demandent d'abord le Contrôle de compte d'utilisateur
+    (`winlux-uac --elevate`, mot de passe d'un administrateur, élévation de
+    5 minutes pour ce compte) ;
+  - `exec` : `apt-get` et `snap` pour la Boutique, options APT sûres
+    seulement ; installer ou désinstaller demande le Contrôle de compte ;
+  - `check`/`elevate` : mot de passe vérifié par `crypt()` sur `/etc/shadow`
+    (écran de verrouillage, Contrôle de compte, bureau à distance). Une
+    vérification réussie met à jour le mot de passe réseau des partages.
+- Disques branchés : éjecter ou réparer depuis le bureau passe par le service
+  des volumes (root) via `/run/winlux/disk-action.txt`.
+- Session Live : inchangée, elle tourne en root (`/etc/winlux/live-session`).
+- Dépannage : `winlux.root-session=1` sur la ligne du noyau rouvre l'ancien
+  bureau root d'un système installé.
+- Test : `python3 -B scripts/test-root.py`.
+
 ## Sessions multi-utilisateur (`winlux-sessions`)
 
 - Menu du compte dans Démarrer : Verrouiller, Se déconnecter, Changer

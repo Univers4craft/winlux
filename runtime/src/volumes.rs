@@ -1194,6 +1194,9 @@ pub fn eject(letter: char) -> Result<String, String> {
     if m.kind != "disk" {
         return Err("ce lecteur n'est pas un disque".into());
     }
+    if let Some(r) = ask_daemon("umount", &m) {
+        return r;
+    }
     // `sync` d'abord : une clé retirée juste après garde ses fichiers.
     unsafe { libc::sync() };
     if is_mounted(&m.mountpoint) && !unmount(&m.mountpoint, false) {
@@ -1209,12 +1212,65 @@ pub fn eject(letter: char) -> Result<String, String> {
     Ok(format!("{}:", m.letter))
 }
 
+/// Bureau sous le compte de l'utilisateur : démonter ou réparer demande root.
+/// La demande passe par le service des volumes (root), qui lit
+/// `run/winlux/disk-action.txt` toutes les deux secondes ; on attend son
+/// résultat (lecteur retiré, ou remonté) au plus 20 s. `None` en root.
+fn ask_daemon(verb: &str, m: &Mount) -> Option<Result<String, String>> {
+    if unsafe { libc::geteuid() } == 0 {
+        return None;
+    }
+    let daemon_pid = admin::read_text(&admin::path(RUN_DIR).join("daemon.pid"))?;
+    let alive = daemon_pid
+        .trim()
+        .parse::<i32>()
+        .is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0 || errno_is_eperm());
+    if !alive {
+        return None;
+    }
+    let path = admin::path("run/winlux/disk-action.txt");
+    let mut text = admin::read_text(&path).unwrap_or_default();
+    text.push_str(&format!("{verb} {}\n", m.device));
+    if let Err(e) = admin::write_text(&path, &text) {
+        return Some(Err(format!("service des volumes injoignable : {e}")));
+    }
+    let mut processed = 0;
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if admin::read_text(&path).is_some_and(|t| t.contains(&m.device)) {
+            continue;
+        }
+        processed += 1;
+        let gone = mounts::get(m.letter)
+            .filter(|x| x.device == m.device)
+            .is_none();
+        if verb == "umount" && gone || verb != "umount" && processed > 10 {
+            return Some(Ok(format!("{}:", m.letter)));
+        }
+        // Le service a lu la demande : quelques secondes pour la mener à bien.
+        if processed > 25 {
+            return Some(Err(
+                "Le lecteur est en cours d'utilisation. Fermez les fichiers ouverts et réessayez."
+                    .into(),
+            ));
+        }
+    }
+    Some(Err("le service des volumes n'a pas répondu".into()))
+}
+
+fn errno_is_eperm() -> bool {
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 /// Réparation légère d'un volume NTFS « sale » (`ntfsfix -d`), puis
 /// remontage en écriture. Refusée si Windows est en veille prolongée.
 pub fn repair(letter: char) -> Result<String, String> {
     let m = mounts::get(letter).ok_or("lecteur inconnu")?;
     if m.kind != "disk" || !m.backend.starts_with("ntfs") {
         return Err("seuls les disques NTFS se réparent ici".into());
+    }
+    if let Some(r) = ask_daemon("repair", &m) {
+        return r;
     }
     if m.backend.ends_with(":hibernated") {
         return Err(

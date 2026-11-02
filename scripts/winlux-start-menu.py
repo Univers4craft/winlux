@@ -195,6 +195,18 @@ def on_click(button, callback):
     button.connect("button-release-event", released)
     button.connect("clicked", clicked)
 
+
+def account_label():
+    """Nom affiché du compte de la session (nom complet, sinon identifiant)."""
+    if os.geteuid() == 0:
+        return "Winlux"
+    try:
+        import pwd
+        entry = pwd.getpwuid(os.geteuid())
+    except (ImportError, KeyError):
+        return "Winlux"
+    return entry.pw_gecos.split(",")[0].strip() or entry.pw_name
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -292,7 +304,7 @@ class Start(Gtk.Application):
         footer = Gtk.Box(spacing=12)
         footer.get_style_context().add_class("footer")
         footer.pack_start(Gtk.Image.new_from_icon_name("avatar-default-symbolic", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
-        footer.pack_start(Gtk.Label(label="Winlux", xalign=0), True, True, 0)
+        footer.pack_start(Gtk.Label(label=account_label(), xalign=0), True, True, 0)
         power = Gtk.Button.new_from_icon_name("system-shutdown-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
         power.set_tooltip_text(_t("Options d’alimentation"))
         on_click(power, lambda: self.power(power))
