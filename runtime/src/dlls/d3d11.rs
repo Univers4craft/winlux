@@ -2168,9 +2168,244 @@ struct Device {
     ref_count: AtomicU32,
     context: *mut DeviceContext,
     feature_level: u32,
+    dxgi: DxgiDevice,
 }
 
 unsafe impl Send for Device {}
+
+// ────────────────────── IDXGIDevice (vue DXGI de l'appareil) ──────────────────────
+//
+// ANGLE (Direct3D 11 de Warzone 2100) demande IDXGIDevice2 à l'appareil avant
+// de présenter dans une fenêtre, puis remonte à l'adaptateur et à la fabrique.
+// Interface détachée logée dans l'appareil : même compteur de références.
+
+#[repr(C)]
+struct DxgiDeviceVTable {
+    query_interface:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "win64" fn(*mut DxgiDevice) -> u32,
+    release: unsafe extern "win64" fn(*mut DxgiDevice) -> u32,
+    set_private_data:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, u32, *const c_void) -> i32,
+    set_private_data_interface:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *const c_void) -> i32,
+    get_private_data:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut u32, *mut c_void) -> i32,
+    get_parent: unsafe extern "win64" fn(*mut DxgiDevice, *const Guid, *mut *mut c_void) -> i32,
+    get_adapter: unsafe extern "win64" fn(*mut DxgiDevice, *mut *mut c_void) -> i32,
+    create_surface: unsafe extern "win64" fn(
+        *mut DxgiDevice,
+        *const c_void,
+        u32,
+        u32,
+        *const c_void,
+        *mut *mut c_void,
+    ) -> i32,
+    query_resource_residency:
+        unsafe extern "win64" fn(*mut DxgiDevice, *const *mut c_void, *mut u32, u32) -> i32,
+    set_gpu_thread_priority: unsafe extern "win64" fn(*mut DxgiDevice, i32) -> i32,
+    get_gpu_thread_priority: unsafe extern "win64" fn(*mut DxgiDevice, *mut i32) -> i32,
+    set_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiDevice, u32) -> i32,
+    get_maximum_frame_latency: unsafe extern "win64" fn(*mut DxgiDevice, *mut u32) -> i32,
+    offer_resources: unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, u32) -> i32,
+    reclaim_resources:
+        unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, *mut i32) -> i32,
+    enqueue_set_event: unsafe extern "win64" fn(*mut DxgiDevice, usize) -> i32,
+    trim: unsafe extern "win64" fn(*mut DxgiDevice),
+}
+
+#[repr(C)]
+struct DxgiDevice {
+    vtable: *const DxgiDeviceVTable,
+    owner: *mut Device,
+    frame_latency: AtomicU32,
+}
+
+/// IDXGIDevice, 1, 2, 3 et IDXGIObject, reconnus par leur premier mot.
+fn is_dxgi_device_iid(riid: &Guid) -> bool {
+    [
+        0x54ec_77fa,
+        0x77db_970f,
+        0x0500_8617,
+        0x6007_896c,
+        0xaec2_2fb8,
+    ]
+    .contains(&riid.data1)
+}
+
+unsafe extern "win64" fn dxdev_qi(
+    this: *mut DxgiDevice,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    unsafe { dev_qi((*this).owner, riid, out) }
+}
+unsafe extern "win64" fn dxdev_addref(this: *mut DxgiDevice) -> u32 {
+    unsafe { dev_addref((*this).owner) }
+}
+unsafe extern "win64" fn dxdev_release(this: *mut DxgiDevice) -> u32 {
+    unsafe { dev_release((*this).owner) }
+}
+unsafe extern "win64" fn dxdev_set_priv(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    _: u32,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_priv_if(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    _: *const c_void,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_priv(
+    _: *mut DxgiDevice,
+    _: *const Guid,
+    size: *mut u32,
+    _: *mut c_void,
+) -> i32 {
+    if !size.is_null() {
+        unsafe { *size = 0 };
+    }
+    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+}
+unsafe extern "win64" fn dxdev_get_adapter(_: *mut DxgiDevice, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = dxgi::new_default_adapter() };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_parent(
+    this: *mut DxgiDevice,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut adapter = std::ptr::null_mut();
+    unsafe {
+        dxdev_get_adapter(this, &mut adapter);
+        let hr = dxgi::adapter_query_interface(adapter, riid, out);
+        dxgi::adapter_release(adapter);
+        hr
+    }
+}
+unsafe extern "win64" fn dxdev_create_surface(
+    _: *mut DxgiDevice,
+    _: *const c_void,
+    _: u32,
+    _: u32,
+    _: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !out.is_null() {
+        unsafe { *out = std::ptr::null_mut() };
+    }
+    E_NOTIMPL
+}
+unsafe extern "win64" fn dxdev_residency(
+    _: *mut DxgiDevice,
+    _: *const *mut c_void,
+    status: *mut u32,
+    n: u32,
+) -> i32 {
+    // DXGI_RESIDENCY_FULLY_RESIDENT = 1 : tout est en mémoire vidéo.
+    if !status.is_null() {
+        for i in 0..n as usize {
+            unsafe { *status.add(i) = 1 };
+        }
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_prio(_: *mut DxgiDevice, prio: i32) -> i32 {
+    if (-7..=7).contains(&prio) {
+        S_OK
+    } else {
+        E_INVALIDARG
+    }
+}
+unsafe extern "win64" fn dxdev_get_prio(_: *mut DxgiDevice, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = 0 };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_set_latency(this: *mut DxgiDevice, n: u32) -> i32 {
+    if n > 16 {
+        return E_INVALIDARG;
+    }
+    // 0 rétablit la valeur par défaut de Windows (3 images).
+    unsafe {
+        (*this)
+            .frame_latency
+            .store(if n == 0 { 3 } else { n }, Ordering::Relaxed)
+    };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_get_latency(this: *mut DxgiDevice, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { *out = (*this).frame_latency.load(Ordering::Relaxed) };
+    S_OK
+}
+unsafe extern "win64" fn dxdev_offer(
+    _: *mut DxgiDevice,
+    _: u32,
+    _: *const *mut c_void,
+    _: u32,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_reclaim(
+    _: *mut DxgiDevice,
+    n: u32,
+    _: *const *mut c_void,
+    discarded: *mut i32,
+) -> i32 {
+    // Rien n'est jamais rendu au système : aucune ressource n'est perdue.
+    if !discarded.is_null() {
+        for i in 0..n as usize {
+            unsafe { *discarded.add(i) = 0 };
+        }
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_enqueue_set_event(_: *mut DxgiDevice, event: usize) -> i32 {
+    // Le rendu est synchrone : le travail en file est déjà terminé.
+    if event != 0 {
+        crate::dlls::kernel32::set_event(event);
+    }
+    S_OK
+}
+unsafe extern "win64" fn dxdev_trim(_: *mut DxgiDevice) {}
+
+static DXGI_DEVICE_VTABLE: DxgiDeviceVTable = DxgiDeviceVTable {
+    query_interface: dxdev_qi,
+    add_ref: dxdev_addref,
+    release: dxdev_release,
+    set_private_data: dxdev_set_priv,
+    set_private_data_interface: dxdev_set_priv_if,
+    get_private_data: dxdev_get_priv,
+    get_parent: dxdev_get_parent,
+    get_adapter: dxdev_get_adapter,
+    create_surface: dxdev_create_surface,
+    query_resource_residency: dxdev_residency,
+    set_gpu_thread_priority: dxdev_set_prio,
+    get_gpu_thread_priority: dxdev_get_prio,
+    set_maximum_frame_latency: dxdev_set_latency,
+    get_maximum_frame_latency: dxdev_get_latency,
+    offer_resources: dxdev_offer,
+    reclaim_resources: dxdev_reclaim,
+    enqueue_set_event: dxdev_enqueue_set_event,
+    trim: dxdev_trim,
+};
 unsafe impl Sync for Device {}
 
 // Device method implementations
@@ -2186,6 +2421,11 @@ unsafe extern "win64" fn dev_qi(
     if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
+        return S_OK;
+    }
+    if is_dxgi_device_iid(riid) {
+        (*this).ref_count.fetch_add(1, Ordering::Relaxed);
+        *out = std::ptr::addr_of_mut!((*this).dxgi).cast();
         return S_OK;
     }
     *out = std::ptr::null_mut();
@@ -2648,7 +2888,13 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         ref_count: AtomicU32::new(1),
         context: ctx,
         feature_level: fl,
+        dxgi: DxgiDevice {
+            vtable: &DXGI_DEVICE_VTABLE,
+            owner: std::ptr::null_mut(),
+            frame_latency: AtomicU32::new(3),
+        },
     }));
+    (*dev).dxgi.owner = dev;
 
     if !device.is_null() {
         *device = dev as usize;
@@ -2738,5 +2984,23 @@ mod vtable_tests {
             114 * 8
         );
         assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 115 * 8);
+    }
+
+    #[test]
+    fn dxgi_device_vtable_matches_windows_order() {
+        use super::{is_dxgi_device_iid, DxgiDeviceVTable};
+        assert_eq!(core::mem::offset_of!(DxgiDeviceVTable, get_adapter), 7 * 8);
+        assert_eq!(
+            core::mem::offset_of!(DxgiDeviceVTable, set_maximum_frame_latency),
+            12 * 8
+        );
+        assert_eq!(
+            core::mem::offset_of!(DxgiDeviceVTable, enqueue_set_event),
+            16 * 8
+        );
+        let mut g = super::IID_ID3D11_DEVICE;
+        assert!(!is_dxgi_device_iid(&g));
+        g.data1 = 0x0500_8617; // IDXGIDevice2, exigé par ANGLE
+        assert!(is_dxgi_device_iid(&g));
     }
 }
