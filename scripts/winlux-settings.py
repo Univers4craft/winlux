@@ -152,6 +152,9 @@ _TR = {
     'Alignement': ('Alignment', 'Alineación', 'Ausrichtung'),
     'Définition': ('Resolution', 'Resolución', 'Auflösung'),
     'Échelle': ('Scale', 'Escala', 'Skalierung'),
+    'En attente d’Internet, installé au prochain démarrage connecté : {names}': ('Waiting for Internet, installed at the next startup with a connection: {names}', 'Esperando Internet, se instalará en el próximo arranque con conexión: {names}', 'Wartet auf Internet, wird beim nächsten Start mit Verbindung installiert: {names}'),
+    'Pas de connexion Internet': ('No Internet connection', 'Sin conexión a Internet', 'Keine Internetverbindung'),
+    'Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté.': ('Nothing is lost: Winlux will download it from the publisher and install it automatically at the next startup with a connection. You can also try again here once connected.', 'No se pierde nada: Winlux lo descargará del editor y lo instalará automáticamente en el próximo arranque con conexión. También puede volver a intentarlo aquí una vez conectado.', 'Nichts geht verloren: Winlux lädt es beim Herausgeber herunter und installiert es beim nächsten Start mit Verbindung automatisch. Sie können es auch hier erneut versuchen, sobald Sie verbunden sind.'),
     'Navigateur par défaut': ('Default browser', 'Navegador predeterminado', 'Standardbrowser'),
     'Relancer le bureau': ('Restart the desktop', 'Reiniciar el escritorio', 'Desktop neu starten'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
@@ -955,7 +958,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             action = self.active_action
             self.process = None
             self.active_action = None
-            if result and action in ("update-check", "update-apply", "update-rollback"):
+            if result == 75 and action and action.startswith(("browser-", "store-catalog-")):
+                # Reporté faute de réseau : une information, pas une erreur technique.
+                self.show_info(_t("Pas de connexion Internet"), _t("Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté."))
+            elif result and action in ("update-check", "update-apply", "update-rollback"):
                 self.show_update_error(action, result)
             elif result:
                 detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
@@ -985,6 +991,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
+        if self.page == 11:
+            waiting = browsers_waiting()
+            if waiting:
+                text += "\n" + _t("En attente d’Internet, installé au prochain démarrage connecté : {names}").format(names=", ".join(waiting))
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
@@ -1037,6 +1047,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
+    def show_info(self, title, detail):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.INFO,
+                                   buttons=Gtk.ButtonsType.CLOSE, text=title)
+        dialog.format_secondary_text(detail)
+        dialog.connect("response", lambda window, _: window.destroy())
+        dialog.show_all()
+
     def show_error(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.ERROR,
                                    buttons=Gtk.ButtonsType.CLOSE, text=title)
@@ -1045,6 +1062,13 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if isinstance(child, Gtk.Label): child.set_selectable(True)
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
+
+def browsers_waiting():
+    """Navigateurs demandés sans réseau, que l'init installera (winlux-browsers)."""
+    names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+    ids = read("/etc/winlux/browser-install-pending").split() + read("/etc/winlux/first-boot-browser").split()[:1]
+    return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
+
 
 class SettingsApp(Gtk.Application):
     """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement

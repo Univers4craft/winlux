@@ -278,4 +278,16 @@ ok('"Choisir des boutiques de logiciels"' in welcome, "Bienvenue : bouton vers l
 shell = subprocess.run(["sh", str(SCRIPTS / "winlux-shell-app.sh"), "store", "bad;rm", "x"], capture_output=True)
 ok(shell.returncode == 2, "lanceur : filtre de boutique invalide refusé")
 
+# ── Hors ligne : un message humain partout, jamais une trace technique ─────
+ok("test \"$result\" = 75" in control and "Pas de connexion Internet" in control, "winlux-control : code 75 = « Pas de connexion Internet », pas « Échec »")
+settings = (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8")
+ok('result == 75 and action and action.startswith(("browser-", "store-catalog-"))' in settings, "Paramètres : information (et non erreur) quand le réseau manque")
+ok(re.search(r"'Pas de connexion Internet': \('No Internet connection', 'Sin conexión a Internet', 'Keine Internetverbindung'\)", settings),
+   "Paramètres : message hors ligne dans les quatre langues")
+ok("browsers_waiting()" in settings, "Paramètres > Navigateurs : navigateur en attente d'Internet affiché")
+ok(installer.count('"summary_offline_later":') == 6, "installateur : récapitulatif sans réseau dans ses six langues")
+ok("browser-install-pending" in build, "init : navigateur demandé hors ligne installé au démarrage connecté")
+store_src = (SCRIPTS / "winlux-store.py").read_text(encoding="utf-8")
+ok('elif not network_up():' in store_src, "Store : échec sans réseau expliqué simplement")
+
 print(f"OK : {checks} vérifications des boutiques de logiciels")
