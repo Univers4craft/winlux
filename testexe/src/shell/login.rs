@@ -1462,7 +1462,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         text(
             hdc,
             f.caption,
-            rgb(0x60, 0x70, 0x80),
+            rgb(0x8A, 0x98, 0xA8),
             fx + 8,
             fy + 9,
             tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),

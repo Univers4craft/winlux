@@ -175,6 +175,7 @@ _TR = {
     'Refroidissement maximal': ('Maximum cooling', 'Refrigeración máxima', 'Maximale Kühlung'),
     'Se connecter': ('Connect', 'Conectar', 'Verbinden'),
     'Secours et restauration': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Réinitialiser ce PC et clé de secours': ('Reset this PC and recovery drive', 'Restablecer este PC y unidad de recuperación', 'Diesen PC zurücksetzen und Wiederherstellungslaufwerk'),
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
@@ -463,7 +464,8 @@ PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 1
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
 PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
-PAGE_CLIPBOARD = 31
+PAGE_RECOVERY = 31
+PAGE_CLIPBOARD = 32
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -484,6 +486,67 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
 ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+
+
+# ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
+
+def _rgb(color):
+    color = color.lstrip("#")
+    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def luminance(color):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb(color)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast(first, second):
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def mix(first, second, amount):
+    """Mélange first → second (amount de 0 à 1)."""
+    return "#%02x%02x%02x" % tuple(round(a + (b - a) * amount) for a, b in zip(_rgb(first), _rgb(second)))
+
+
+def text_on(background):
+    """Texte noir ou blanc, celui qui se lit le mieux sur ce fond."""
+    return "#000000" if contrast("#000000", background) >= contrast("#ffffff", background) else "#ffffff"
+
+
+def readable(color, background, minimum=4.5):
+    """color assombrie ou éclaircie juste assez pour atteindre minimum:1 sur background."""
+    target = text_on(background)
+    step = 0
+    while contrast(color, background) < minimum and step < 20:
+        step += 1
+        color = mix(color, target, 0.1)
+    return color if contrast(color, background) >= minimum else target
+
+
+def settings_palette(dark, accent="#8178b7"):
+    """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
+    if dark:
+        p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
+             "card_hover": "#2c3344", "entry": "#171b25", "border": "#48536b", "button": "#30384b",
+             "button_hover": "#414b64", "disabled_fg": "#858da0", "disabled_bg": "#252a36", "dim": "#adb6c9"}
+    else:
+        p = {"bg": "#f3f5fa", "fg": "#1f2330", "side": "#e9ecf4", "hover": "#dce1ec", "card": "#ffffff",
+             "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
+             "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
+    p["accent"] = accent
+    # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
+    p["selected"] = mix(p["side"], accent, 0.45)
+    p["selected_fg"] = text_on(p["selected"])
+    p["selected_dim"] = p["selected_fg"]
+    for key in ("dim",):
+        for surface in ("bg", "side", "card", "hover"):
+            p[key] = readable(p[key], p[surface])
+    return p
 EXE_SCALES = (("auto", "Automatique (comme l’écran)"), ("1", "100 %"), ("1.25", "125 %"), ("1.5", "150 %"), ("2", "200 %"))
 # Pavé tactile : (clé touchpad_*, titre, explication), comme la page PE.
 TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
@@ -826,6 +889,9 @@ def page_available(page, status=None):
         return games_module() is not None
     if page == PAGE_ASSISTANT:
         return assistant_module() is not None
+    if page == PAGE_RECOVERY:
+        module = reset_page()
+        return module is not None and module.available()
     return True
 
 
@@ -873,6 +939,22 @@ def assistant_module():
                 module = None
     _ASSISTANT.append(module)
     return module
+def reset_page():
+    """Page Récupération (winlux-reset-page, installée à côté), None si absente."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-reset-page.py"), here.with_name("winlux-reset-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_reset_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_reset_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def default_apps_panel(window):
@@ -902,7 +984,8 @@ class ExtraPages:
                    PAGE_DESKTOP: "page_desktop", PAGE_BLUETOOTH: "page_bluetooth", PAGE_APPS: "page_apps",
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
-                   PAGE_GAMES: "page_games", PAGE_ASSISTANT: "page_assistant",
+                   PAGE_GAMES: "page_games",
+                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
@@ -1089,7 +1172,9 @@ class ExtraPages:
             swatch = Gtk.Button(label="✓" if prefs.get("accent", "").lower() == color else " ")
             swatch.set_size_request(44, 36)
             provider = Gtk.CssProvider()
-            provider.load_from_data(f"button {{ background: {color}; color: #ffffff; border-color: {color}; }}".encode())
+            # Coche noire ou blanche selon la teinte (blanc sur turquoise : 2,6:1).
+            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; "
+                                    f"border-color: {color}; }}".encode())
             swatch.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
             swatch.connect("clicked", lambda *_, c=color: self.tool(["winlux-personalize", "accent", c]))
             palette.pack_start(swatch, False, False, 0)
@@ -1743,6 +1828,15 @@ class ExtraPages:
                  _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
+        if page_available(PAGE_RECOVERY):
+            self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
+
+    def page_recovery(self):
+        module = reset_page()
+        if module is not None:
+            self.recovery_panel = module.RecoveryPanel(self)
 
     # ── Signaler un problème ──
 

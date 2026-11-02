@@ -9,6 +9,7 @@ tourne en root et n'exécute que des actions connues :
   winlux-root serve                       (root) écoute /run/winlux-root.sock
   winlux-root control ACTION [ARGS…]      action de winlux-control, exécutée en root
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
+  winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -114,6 +115,13 @@ APT_FLAGS = {"-y", "-q", "-qq", "--no-install-recommends", "--reinstall", "-f", 
              "--only-upgrade", "--no-remove"}
 APT_OPTIONS = re.compile(r"^(DPkg::Lock::Timeout=[0-9]{1,4}|Dpkg::Use-Pty=0|APT::Status-Fd=[0-9]{1,3})$")
 SNAP_SUBCOMMANDS = {"install": "admin", "remove": "admin", "refresh": "admin"}
+# Réinitialiser ce PC, clé de secours, réparation du démarrage (Paramètres >
+# Récupération) : tout ce qui modifie un disque demande un administrateur.
+RESET_SUBCOMMANDS = {"status": "user", "sources": "user", "list-keys": "user",
+                     "prepare": "admin", "cancel": "admin", "repair-boot": "admin",
+                     "reboot-recovery": "admin", "make-key": "admin"}
+RESET_ARG = re.compile(r"^(--(mode|source|user|fullname|device)|--clean|--scan|keep|wipe|cloud|auto|"
+                       r"(media|iso):/[^\n\r\0]{1,400}|/dev/[A-Za-z0-9/_-]{1,64}|[^\n\r\0:,-][^\n\r\0:,]{0,63})$")
 
 
 def control_level(args):
@@ -158,6 +166,10 @@ def exec_level(args):
             else:
                 return None
         return level
+    if tool == "winlux-reset" and rest and rest[0] in RESET_SUBCOMMANDS:
+        if all(RESET_ARG.match(a) for a in rest[1:]):
+            return RESET_SUBCOMMANDS[rest[0]]
+        return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]

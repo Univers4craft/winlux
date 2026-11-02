@@ -76,6 +76,15 @@ if test -n "$root_device"; then
         "$B" mkdir -p /newroot/boot
         test -b "$device" && "$B" mount -t ext4 -o rw "$device" /newroot/boot || fail "partition /boot introuvable : $boot_device"
     fi
+    # Réinitialiser ce PC (#283) : échange préparé par winlux-reset, terminé
+    # ici avant que le système ne démarre ; un échange interrompu reprend.
+    if test -f /reset-apply.sh; then
+        . /reset-apply.sh
+        WINLUX_RESET_TTY=/dev/tty1
+        winlux_reset_apply /newroot || fail 'réinitialisation interrompue (redémarrez pour la reprendre)'
+    fi
+    # « Redémarrer sur le menu de secours » ne vaut que pour un démarrage.
+    test "$recovery" = 1 || "$B" rm -f /newroot/boot/winlux-next-recovery
     if test "$recovery" = 1; then
         "$B" mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
         for directory in dev proc sys; do

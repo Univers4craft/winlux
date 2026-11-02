@@ -46,6 +46,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod imm32;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
@@ -79,6 +80,7 @@ pub mod resource;
 pub mod rpcrt4;
 pub mod sandbox_dlls;
 pub mod sechost;
+pub mod secur32;
 pub mod security;
 pub mod seh;
 pub mod setupapi;
@@ -98,6 +100,7 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
@@ -170,7 +173,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_ucrt::exports());
         ucrt.extend(cxx_eh::exports());
         ucrt.extend(crate::intl::api::crt_exports());
-        vec![
+        let mut all = vec![
             Builtin {
                 name: "kernel32",
                 exports: {
@@ -559,8 +562,43 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: libstdcpp::exports(),
                 handle: fake_module(),
             },
-        ]
+            Builtin {
+                name: "imm32",
+                exports: imm32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "secur32",
+                exports: secur32::exports(),
+                handle: fake_module(),
+            },
+        ];
+        add_basics(&mut all);
+        all
     })
+}
+
+/// Fonctions de base (win32_basics) : elles complètent chaque DLL sans
+/// jamais remplacer une fonction que la DLL fournit déjà.
+fn add_basics(all: &mut [Builtin]) {
+    let extra: [(&str, Exports); 9] = [
+        ("kernel32", win32_basics::kernel32_exports()),
+        ("user32", win32_basics::user32_exports()),
+        ("gdi32", win32_basics::gdi32_exports()),
+        ("shell32", win32_basics::shell32_exports()),
+        ("winmm", win32_basics::winmm_exports()),
+        ("ws2_32", win32_basics::ws2_32_exports()),
+        ("comctl32", win32_basics::comctl32_exports()),
+        ("ucrtbase", win32_basics::crt_exports()),
+        ("msvcrt", win32_basics::crt_exports()),
+    ];
+    for (dll, exports) in extra {
+        if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
+            for (name, addr) in exports {
+                b.exports.entry(name).or_insert(addr);
+            }
+        }
+    }
 }
 
 /// Nom de DLL normalisé : minuscules, sans « .dll », avec les alias connus
@@ -571,6 +609,10 @@ pub fn normalize(dll: &str) -> String {
     let base = l.strip_suffix(".dll").unwrap_or(&l);
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
+    }
+    // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
+    if base == "sspicli" {
+        return "secur32".into();
     }
     // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
     if base == "wsock32" {
@@ -907,6 +949,11 @@ mod tests {
         assert!(lookup(
             &normalize("api-ms-win-security-base-l1-1-0.dll"),
             "SetSecurityDescriptorDacl"
+        )
+        .is_some());
+        assert!(lookup(
+            &normalize("api-ms-win-security-base-l1-1-0.dll"),
+            "AccessCheckByTypeResultList"
         )
         .is_none());
         assert_eq!(

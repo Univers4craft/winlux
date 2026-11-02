@@ -961,7 +961,8 @@ unsafe fn button_in(g: &mut Gfx, c: &Rect, r: Rect, label: &[u8], id: i32) {
         if disabled {
             p.text3
         } else if primary {
-            rgb(18, 24, 34)
+            // Noir figé : 2,6:1 sur un accent foncé en thème clair.
+            p.on_accent
         } else {
             p.text
         },
@@ -1595,7 +1596,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     g.hdc,
                     g.f.body,
                     13,
-                    rgb(18, 24, 34),
+                    if HOVER == 0 { p.text } else { p.on_accent },
                     (r.left + r.right) / 2,
                     r.top + 15,
                     tr4(&[b"Red\xE9marrer pour terminer la mise \xE0 jour", b"Restart to finish the update", b"Reiniciar para terminar la actualizaci\xF3n", b"Neu starten, um das Update abzuschlie\xDFen"]),

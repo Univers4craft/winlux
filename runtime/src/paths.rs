@@ -280,6 +280,9 @@ struct WinPath {
 
 fn device(name: &str) -> Option<&'static str> {
     let n = name.trim_end_matches([' ', '.', ':']);
+    if let Some(port) = com_port(n) {
+        return Some(port);
+    }
     [
         ("NUL", "/dev/null"),
         ("CONIN$", "/dev/stdin"),
@@ -288,6 +291,34 @@ fn device(name: &str) -> Option<&'static str> {
     .iter()
     .find(|(dev, _)| dev.eq_ignore_ascii_case(n))
     .map(|(_, linux)| *linux)
+}
+
+/// Port série `COMn` : `WINLUX_COMn` s'il est défini, sinon COM1 à COM4 =
+/// /dev/ttyS0 à ttyS3 (ports intégrés) et COM5 et suivants = adaptateurs USB
+/// (/dev/ttyUSB*, puis /dev/ttyACM*), dans l'ordre de leur nom.
+fn com_port(name: &str) -> Option<&'static str> {
+    name.get(..3).filter(|p| p.eq_ignore_ascii_case("COM"))?;
+    let n: usize = name[3..].parse().ok().filter(|n| (1..=256).contains(n))?;
+    let path = std::env::var(format!("WINLUX_COM{n}"))
+        .ok()
+        .unwrap_or_else(|| {
+            if n <= 4 {
+                return format!("/dev/ttyS{}", n - 1);
+            }
+            let mut usb: Vec<String> = std::fs::read_dir("/dev")
+                .map(|d| {
+                    d.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|f| f.starts_with("ttyUSB") || f.starts_with("ttyACM"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            usb.sort_by_key(|f| (f.starts_with("ttyACM"), f.len(), f.clone()));
+            usb.get(n - 5)
+                .map(|f| format!("/dev/{f}"))
+                .unwrap_or_else(|| format!("/dev/winlux-absent/COM{n}"))
+        });
+    Some(Box::leak(path.into_boxed_str()))
 }
 
 fn split_comps(rest: &str, verbatim: bool, keep_leading_dotdot: bool) -> Vec<String> {
