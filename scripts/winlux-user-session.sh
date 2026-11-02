@@ -132,6 +132,7 @@ fi
 # Compositeur facultatif : sans lui, un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
+    compositor_pid=$!
 fi
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
@@ -231,6 +232,19 @@ while kill -0 "$wm_pid" 2>/dev/null; do
         /usr/bin/xfdesktop --disable-wm-check >>"$logs/desktop.log" 2>&1 &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid user=$(id -un)"
+        # picom garde des fenêtres noires quand le fond du bureau change sous
+        # lui : remise à zéro (SIGUSR1) une fois la fenêtre de xfdesktop là.
+        if test -n "${compositor_pid:-}" && test -x /usr/bin/wmctrl; then
+            (
+                for attempt in $(seq 1 240); do
+                    /usr/bin/wmctrl -l -x 2>/dev/null | grep -q ' xfdesktop\.Xfdesktop ' && break
+                    kill -0 "$desktop_pid" 2>/dev/null || exit 0
+                    sleep 0.5
+                done
+                sleep 1
+                kill -USR1 "$compositor_pid" 2>/dev/null || true
+            ) </dev/null >/dev/null 2>&1 &
+        fi
         while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do sleep 1; done
         kill "$desktop_pid" 2>/dev/null || true
         wait "$desktop_pid" 2>/dev/null || true
