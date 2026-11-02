@@ -25,7 +25,7 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_NONE_MAPPED: u32 = 1332;
 
 /// Pseudo-handle de jeton : CloseHandle l'ignore sans dommage.
-const TOKEN_HANDLE: usize = 0x5EC0_0001;
+pub const TOKEN_HANDLE: usize = 0x5EC0_0001;
 
 const SE_GROUP_MANDATORY: u32 = 0x1;
 const SE_GROUP_ENABLED_BY_DEFAULT: u32 = 0x2;
