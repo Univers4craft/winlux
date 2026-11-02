@@ -327,53 +327,83 @@ if panel_config.is_file() and not grouping_marker.exists():
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
-if openbox_config.is_file():
-    namespace = "http://openbox.org/3.4/rc"
-    ET.register_namespace("", namespace)
-    try:
-        tree = ET.parse(openbox_config)
-        keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
-        changed = False
-        default_rc = source / "config/openbox/rc.xml"
-        if keyboard is not None:
-            keys = {binding.get("key") for binding in keyboard}
-            for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
-                if key not in keys:
-                    binding = ET.SubElement(keyboard, f"{{{namespace}}}keybind", key=key)
-                    action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
-                    ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
-                    changed = True
-            if default_rc.is_file():
-                defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
-                if defaults is not None:
-                    for binding in defaults:
-                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t", "W-w", "W-c") and binding.get("key") not in keys:
-                            keyboard.append(ET.fromstring(ET.tostring(binding)))
-                            changed = True
-            for binding in list(keyboard):
-                commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
-                if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
-                    keyboard.remove(binding)
-                    changed = True
-        # Le clic droit sur le bureau ouvrait toujours le menu d'Openbox, même sur
-        # un fichier (ni Renommer ni Supprimer) et le bureau n'avait jamais le
-        # clavier : remplacer la liaison livrée par celle d'aujourd'hui.
-        mouse = tree.getroot().find(f"{{{namespace}}}mouse")
-        desktop = next((item for item in mouse if item.get("name") == "Desktop"), None) if mouse is not None else None
-        if desktop is not None and default_rc.is_file() and len(desktop) == 1 and desktop[0].get("button") == "Right" \
-                and desktop[0].findtext(f"{{{namespace}}}action/{{{namespace}}}menu") == "root-menu":
-            default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
-            position = list(mouse).index(desktop)
-            mouse.remove(desktop)
-            for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
-                mouse.insert(position, ET.fromstring(ET.tostring(context)))
-            changed = True
-        if changed:
-            temporary = openbox_config.with_suffix(".xml.tmp")
-            tree.write(temporary, encoding="utf-8", xml_declaration=True)
-            temporary.replace(openbox_config)
-    except ET.ParseError:
-        print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
+ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
+              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c")
+# Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
+# fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
+# Un raccourci personnel (une commande Execute) n'est pas touché.
+REPLACED_KEYS = ("W-Up", "W-Down", "W-Left", "W-Right", "W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right")
+OLD_SNAP_ACTIONS = {"Maximize", "UnmaximizeFull", "MoveResizeTo"}
+def migrate_openbox(openbox_config, default_rc):
+    """Raccourcis et clics livrés par Winlux mis à jour dans un rc.xml existant."""
+    if openbox_config.is_file():
+        namespace = "http://openbox.org/3.4/rc"
+        ET.register_namespace("", namespace)
+        try:
+            tree = ET.parse(openbox_config)
+            keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
+            changed = False
+            if keyboard is not None:
+                keys = {binding.get("key") for binding in keyboard}
+                for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
+                    if key not in keys:
+                        binding = ET.SubElement(keyboard, f"{{{namespace}}}keybind", key=key)
+                        action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
+                        ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
+                        changed = True
+                if default_rc.is_file():
+                    defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
+                    if defaults is not None:
+                        for binding in defaults:
+                            if binding.get("key") in ADDED_KEYS and binding.get("key") not in keys:
+                                keyboard.append(ET.fromstring(ET.tostring(binding)))
+                                changed = True
+                        shipped = {binding.get("key"): binding for binding in defaults if binding.get("key") in REPLACED_KEYS}
+                        for binding in list(keyboard):
+                            actions = {action.get("name") for action in binding.findall(f"{{{namespace}}}action")}
+                            replacement = shipped.get(binding.get("key"))
+                            if replacement is not None and actions and actions <= OLD_SNAP_ACTIONS \
+                                    and ET.tostring(binding) != ET.tostring(replacement):
+                                keyboard.insert(list(keyboard).index(binding), ET.fromstring(ET.tostring(replacement)))
+                                keyboard.remove(binding)
+                                changed = True
+                for binding in list(keyboard):
+                    commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
+                    if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
+                        keyboard.remove(binding)
+                        changed = True
+            # Le clic droit sur le bureau ouvrait toujours le menu d'Openbox, même sur
+            # un fichier (ni Renommer ni Supprimer) et le bureau n'avait jamais le
+            # clavier : remplacer la liaison livrée par celle d'aujourd'hui.
+            mouse = tree.getroot().find(f"{{{namespace}}}mouse")
+            desktop = next((item for item in mouse if item.get("name") == "Desktop"), None) if mouse is not None else None
+            if desktop is not None and default_rc.is_file() and len(desktop) == 1 and desktop[0].get("button") == "Right" \
+                    and desktop[0].findtext(f"{{{namespace}}}action/{{{namespace}}}menu") == "root-menu":
+                default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
+                position = list(mouse).index(desktop)
+                mouse.remove(desktop)
+                for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
+                    mouse.insert(position, ET.fromstring(ET.tostring(context)))
+                changed = True
+            # Clic droit sur le bouton Agrandir : dispositions d'ancrage (Windows + Z).
+            maximize = next((item for item in mouse if item.get("name") == "Maximize"), None) if mouse is not None else None
+            if maximize is not None and default_rc.is_file() and not any(item.get("button") == "Right" for item in maximize):
+                default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
+                shipped = next((item for item in default_mouse if item.get("name") == "Maximize"), None)
+                for item in (shipped if shipped is not None else []):
+                    if item.get("button") == "Right":
+                        maximize.append(ET.fromstring(ET.tostring(item)))
+                        changed = True
+            if changed:
+                temporary = openbox_config.with_suffix(".xml.tmp")
+                tree.write(temporary, encoding="utf-8", xml_declaration=True)
+                temporary.replace(openbox_config)
+        except ET.ParseError:
+            print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+
+
+migrate_openbox(openbox_config, source / "config/openbox/rc.xml")
 # Action « Open Terminal Here » d'origine (anglaise) du menu des dossiers et du
 # bureau : remplacée par celle livrée, traduite.
 uca = home / ".config/Thunar/uca.xml"
