@@ -373,6 +373,13 @@ jobs:
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
 
+      - name: Bureau en 1080p, 1440p et 4K (menu Démarrer, réglages rapides, Paramètres)
+        run: |
+          mkdir -p build/captures
+          for size in 1920x1080 2560x1440 3840x2160; do
+            xvfb-run -a -s "-screen 0 ${size}x24" /usr/bin/python3 -B scripts/test-resolutions.py build/captures
+          done
+
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures
 

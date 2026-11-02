@@ -77,6 +77,14 @@ run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
+# Bureau en 1080p, 1440p et 4K (#29) : un écran virtuel par résolution.
+resolutions() {
+    command -v xvfb-run >/dev/null 2>&1 || { echo "xvfb-run absent : test sauté"; return 0; }
+    for size in 1920x1080 2560x1440 3840x2160; do
+        xvfb-run -a -s "-screen 0 ${size}x24" python3 -B scripts/test-resolutions.py build/captures || return 1
+    done
+}
+run resolutions-bureau   resolutions
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
 display() {

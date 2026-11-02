@@ -121,6 +121,26 @@ for icon in trash:true filesystem:false home:false removable:false; do
     /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
         /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
 done
+# Échelle des applications GTK (#29), comme XFCE : facteur entier pour GTK
+# (200 % en 4K), le reste par la densité des polices (150 % → 144 ppp).
+# Un réglage fait à la main dans xsettings est gardé.
+gtk_scale() {
+    test -x /usr/bin/xfconf-query || return 0
+    marker="$HOME/.local/share/winlux/gtk-scale"
+    case "$1" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) return 0 ;; esac
+    factor=$(awk -v s="$1" 'BEGIN { print (s >= 2) ? 2 : 1 }')
+    dpi=$(awk -v s="$1" -v f="$factor" 'BEGIN { printf "%d", 96 * s / f + 0.5 }')
+    current=$(/usr/bin/xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || true)
+    previous=$(cat "$marker" 2>/dev/null || true)
+    if test -n "$current" && test "$current" != "${previous#*:}"; then return 0; fi
+    test "$previous" = "$factor:$dpi" && test "$current" = "$dpi" && return 0
+    for setting in "/Gdk/WindowScalingFactor:$factor" "/Xft/DPI:$dpi"; do
+        /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -s "${setting##*:}" 2>/dev/null ||
+            /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -n -t int -s "${setting##*:}" || true
+    done
+    mkdir -p "${marker%/*}" && printf '%s:%s\n' "$factor" "$dpi" >"$marker"
+}
+gtk_scale "${WINLUX_UI_SCALE:-$(/usr/bin/winlux-display session-scale 2>/dev/null || echo 1)}"
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
