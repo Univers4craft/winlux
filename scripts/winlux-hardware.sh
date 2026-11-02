@@ -328,6 +328,26 @@ generate_xorg_config() {
     hw_read /run/winlux/hw/gpu-count 0; gpu_count=$hw_value
     if test "$gpu_count" -gt 0; then
         rm -f "$conf_dir/20-winlux-display.conf"
+    else
+        # Affichage virtuel ou simple framebuffer : sans nœud de rendu
+        # (/dev/dri/renderD*), il n'y a pas d'accélération 3D et Xorg créait
+        # un contexte OpenGL logiciel (llvmpipe) pour finalement refuser
+        # glamor, ce qui retardait l'écran à chaque démarrage. Avec un nœud de
+        # rendu (virgl, VMware 3D), glamor reste tenté.
+        accel=
+        if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+            accel='    Option "AccelMethod" "none"
+'
+            log "Affichage sans accélération 3D : glamor désactivé"
+        fi
+        display_conf="Section \"Device\"
+    Identifier \"Winlux display\"
+    Driver \"modesetting\"
+    Option \"SWcursor\" \"on\"
+${accel}EndSection"
+        if ! printf '%s\n' "$display_conf" | cmp -s - "$conf_dir/20-winlux-display.conf"; then
+            printf '%s\n' "$display_conf" >"$conf_dir/20-winlux-display.conf"
+        fi
     fi
 
     # Configuration NVIDIA

@@ -875,11 +875,15 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
+    # Relevé d'état en basse priorité : il ne prend jamais le pas sur le
+    # bureau ni sur les applications, au démarrage comme après.
+    status_nice=
+    if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
     # Session du compte : son bureau publie lui-même l'état et suit les écrans.
     if test -z "$desktop_user"; then
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
+            DISPLAY=:0 WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status 2>/dev/null || true
             /bin/busybox sleep 3
         done
     ) &

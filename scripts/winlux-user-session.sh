@@ -197,9 +197,12 @@ if test -x /usr/bin/winlux-lock; then start lock.log /usr/bin/winlux-lock daemon
 pids="$pids $!"
 if test "$primary" = 1; then
     # État publié pour les Paramètres et la barre des tâches.
+    # Basse priorité : le relevé ne passe jamais devant le bureau.
+    status_nice=
+    if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
     (
         while :; do
-            /usr/bin/winlux-control status >/dev/null 2>&1 || true
+            WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
             sleep 3
         done
     ) </dev/null >/dev/null 2>&1 &

@@ -19,6 +19,23 @@ if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$targ
         rm -f /run/winlux/update-action
         exit 0
     fi
+    # Questions posées toutes les 3 s par `winlux-control status` : réponses
+    # identiques à celles du moteur APT, sans démarrer Python à chaque fois.
+    case "$*" in
+        '--auto status'|--auto)
+            if test -f /etc/winlux/update.conf && grep -qx 'auto=enabled' /etc/winlux/update.conf; then echo enabled; else echo disabled; fi
+            exit 0 ;;
+        --busy)
+            pid=$(cat /run/winlux/update-inhibit 2>/dev/null || true)
+            case "$pid" in ''|0|*[!0-9]*) ;; *) test -d "/proc/$pid" && exit 0 ;; esac
+            # APT et dpkg posent des verrous POSIX (fcntl) : visibles dans /proc/locks.
+            for lock in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock; do
+                test -e "$lock" || continue
+                inode=$(stat -c %i "$lock" 2>/dev/null) || continue
+                grep -q " POSIX .*:$inode " /proc/locks 2>/dev/null && exit 0
+            done
+            exit 1 ;;
+    esac
     exec /usr/bin/winlux-update-apt "$@"
 fi
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}
