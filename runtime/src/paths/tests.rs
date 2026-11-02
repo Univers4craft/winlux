@@ -142,6 +142,8 @@ fn profil_et_dossiers_connus_suivent_xdg() {
         env.home.join("AppData/Roaming/App")
     );
     assert_eq!(to_linux(&format!("C:\\Users\\{user}")), env.home);
+    // C:\Users lui-même : le dossier des dossiers personnels.
+    assert_eq!(to_linux("C:\\Users"), env.home.parent().unwrap());
     assert_eq!(to_linux("C:\\Users\\Public\\x"), env.home.join("Public/x"));
     // Un autre compte n'est pas le dossier personnel.
     assert_eq!(

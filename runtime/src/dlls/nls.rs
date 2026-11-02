@@ -885,8 +885,128 @@ pub unsafe extern "win64" fn enum_system_locales_ex(
     1
 }
 
+/// `EnumSystemLocalesW(proc, flags)` : chaque LCID en hexadécimal (8 chiffres).
+pub unsafe extern "win64" fn enum_system_locales_w(
+    proc_: Option<unsafe extern "win64" fn(*const u16) -> i32>,
+    _flags: u32,
+) -> i32 {
+    let Some(f) = proc_ else {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    for l in LOCALES
+        .iter()
+        .filter(|l| !l.name.is_empty() && !l.is_neutral())
+    {
+        let w: Vec<u16> = format!("{:08X}", l.lcid)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        if f(w.as_ptr()) == 0 {
+            break;
+        }
+    }
+    1
+}
+
+/// `GetCurrencyFormatEx(locale, flags, valeur, format, tampon, taille)` :
+/// le nombre mis en forme selon la locale, avec le symbole monétaire placé
+/// comme l'indique LOCALE_ICURRENCY (le format personnalisé est ignoré).
+pub unsafe extern "win64" fn get_currency_format_ex(
+    name: *const u16,
+    flags: u32,
+    value: *const u16,
+    _fmt: *const u8,
+    buf: *mut u16,
+    cap: i32,
+) -> i32 {
+    let mut tmp = [0u16; 128];
+    let n = crate::intl::api::get_number_format_ex(
+        name,
+        flags,
+        value,
+        std::ptr::null(),
+        tmp.as_mut_ptr(),
+        tmp.len() as i32,
+    );
+    if n <= 0 {
+        return 0;
+    }
+    let number = String::from_utf16_lossy(&tmp[..(n - 1) as usize]);
+    let l = if name.is_null() {
+        by_name(None)
+    } else {
+        by_name(Some(&crate::dlls::wstr(name)))
+    };
+    let (symbol, pos) = l.map_or(("¤", 0), |l| (l.currency, l.curr_pos));
+    let text = match pos {
+        0 => format!("{symbol}{number}"),
+        1 => format!("{number}{symbol}"),
+        2 => format!("{symbol} {number}"),
+        _ => format!("{number}\u{a0}{symbol}"),
+    };
+    let w: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    if cap == 0 || buf.is_null() {
+        return w.len() as i32;
+    }
+    if (cap as usize) < w.len() {
+        set_last_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    w.len() as i32
+}
+
 pub extern "win64" fn get_user_geo_id(_class: u32) -> u32 {
     by_lcid(USER_LCID).map_or(244, |l| l.geo)
+}
+
+/// `GetGeoInfoW(geo, type, données, taille, langue)` : pays des locales
+/// connues (code ISO, nom, LCID…). Bun/Claude Code s'en sert pour le pays
+/// de l'utilisateur.
+pub unsafe extern "win64" fn get_geo_info_w(
+    geo: u32,
+    geo_type: u32,
+    data: *mut u16,
+    size: i32,
+    _lang: u16,
+) -> i32 {
+    let Some(l) = LOCALES.iter().find(|l| !l.name.is_empty() && l.geo == geo) else {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let text = match geo_type {
+        1 => geo.to_string(),              // GEO_NATION
+        4 => l.ctry2.to_string(),          // GEO_ISO2
+        5 => l.ctry3.to_string(),          // GEO_ISO3
+        6 => l.name.to_string(),           // GEO_RFC1766
+        7 => format!("{:08x}", l.lcid),    // GEO_LCID
+        8 | 9 => l.eng_ctry.to_string(),   // GEO_FRIENDLYNAME, GEO_OFFICIALNAME
+        14 => format!("{:03}", geo),       // GEO_ISO_UN_NUMBER (approché)
+        15 => geo.to_string(),             // GEO_PARENT
+        16 => l.intl_currency.to_string(), // GEO_CURRENCYCODE
+        17 => l.currency.to_string(),      // GEO_CURRENCYSYMBOL
+        18 => l.ctry2.to_string(),         // GEO_NAME
+        _ => {
+            set_last_error(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    let w: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    if size == 0 || data.is_null() {
+        return w.len() as i32;
+    }
+    if (size as usize) < w.len() {
+        set_last_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), data, w.len());
+    w.len() as i32
+}
+
+/// `GetUserDefaultGeoName(tampon, taille)` : code ISO du pays.
+pub unsafe extern "win64" fn get_user_default_geo_name(data: *mut u16, size: i32) -> i32 {
+    get_geo_info_w(get_user_geo_id(16), 4, data, size, 0)
 }
 
 // --- Calendriers -----------------------------------------------------------------------
@@ -1308,7 +1428,11 @@ pub fn exports() -> crate::dlls::Exports {
         "IsValidLocale" => fn is_valid_locale,
         "ResolveLocaleName" => fn resolve_locale_name,
         "EnumSystemLocalesEx" => fn enum_system_locales_ex,
+        "EnumSystemLocalesW" => fn enum_system_locales_w,
+        "GetCurrencyFormatEx" => fn get_currency_format_ex,
         "GetUserGeoID" => fn get_user_geo_id,
+        "GetGeoInfoW" => fn get_geo_info_w,
+        "GetUserDefaultGeoName" => fn get_user_default_geo_name,
         "GetCalendarInfoEx" => fn get_calendar_info_ex,
         "GetCalendarInfoW" => fn get_calendar_info_w,
         "EnumCalendarInfoExEx" => fn enum_calendar_info_ex_ex,

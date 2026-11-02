@@ -154,6 +154,17 @@ pub fn is_windows_program(p: &Path) -> bool {
         && &head == b"MZ"
 }
 
+/// Programme Linux exécutable (ELF ou script « #! »), quel que soit son
+/// nom : un `bash.exe` qui pointe vers `/usr/bin/bash` en est un.
+pub fn is_linux_program(p: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    std::fs::File::open(p)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok()
+        && (&head == b"\x7fELF" || head.starts_with(b"#!"))
+}
+
 pub fn is_desktop_entry(p: &Path) -> bool {
     has_ext(p, "desktop")
 }
@@ -352,6 +363,162 @@ pub fn uri_scheme(s: &str) -> Option<String> {
     Some(scheme.to_ascii_lowercase())
 }
 
+/// Script donné à un shell Linux qui se fait passer pour Git Bash
+/// (`bash.exe -c "…"`) : les chemins Windows (`C:\Users\x`, `C:/x`) et
+/// MSYS (`/c/Users/x`, `/cygdrive/c/x`) qu'il contient deviennent des
+/// chemins Linux, comme le ferait la couche MSYS de Git pour Windows.
+/// Claude Code écrit ainsi l'emplacement de son instantané de shell et du
+/// fichier qui rapporte le dossier courant.
+pub fn msys_script(s: &str) -> String {
+    // `pwd -P >| fichier` : Claude Code relit ce fichier pour suivre le
+    // dossier courant et attend un chemin MSYS (`/c/projet`).
+    let s = if s.contains("pwd -P >|") {
+        let c = crate::paths::drive_c();
+        let c = shell_quote(&c.to_string_lossy());
+        s.replace(
+            "pwd -P >|",
+            &format!(
+                "{{ __wl=$(pwd -P); case \"$__wl\" in {c}|{c}/*) __wl=\"/c${{__wl#{c}}}\";; *) __wl=\"/z$__wl\";; esac; printf '%s\\n' \"$__wl\"; }} >|"
+            ),
+        )
+    } else {
+        s.to_string()
+    };
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+        let boundary = prev.is_none_or(|p| {
+            !(p.is_alphanumeric()
+                || p == '_'
+                || p == '.'
+                || p == '/'
+                || p == '\\'
+                || p == '-'
+                || p == '$')
+        });
+        if boundary {
+            if let Some((len, linux)) = path_token(&chars[i..], prev) {
+                out.push_str(&linux);
+                i += len;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Mot entre apostrophes pour le shell.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Fin d'un chemin dans un script : guillemet fermant s'il a commencé
+/// après un guillemet, sinon espace ou opérateur du shell.
+fn path_end(rest: &[char], quote: Option<char>, colon_ends: bool) -> usize {
+    rest.iter()
+        .position(|&c| match quote {
+            Some(q) => c == q || c == '\n',
+            None => {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        ';' | '|' | '&' | '(' | ')' | '<' | '>' | '`' | '"' | '\''
+                    )
+                    || (colon_ends && c == ':')
+            }
+        })
+        .unwrap_or(rest.len())
+}
+
+fn path_token(rest: &[char], prev: Option<char>) -> Option<(usize, String)> {
+    let quote = prev.filter(|&p| p == '\'' || p == '"');
+    // C:\… ou C:/…
+    if rest.len() >= 3
+        && rest[0].is_ascii_alphabetic()
+        && rest[1] == ':'
+        && (rest[2] == '\\' || rest[2] == '/')
+    {
+        let len = path_end(rest, quote, false);
+        let win: String = rest[..len].iter().collect();
+        return Some((
+            len,
+            crate::paths::to_linux(&win).to_string_lossy().into_owned(),
+        ));
+    }
+    // /cygdrive/c/… ou /c/…
+    let letter_at = if rest.starts_with(&['/', 'c', 'y', 'g', 'd', 'r', 'i', 'v', 'e', '/']) {
+        10
+    } else {
+        1
+    };
+    if rest.first() != Some(&'/') || rest.len() <= letter_at {
+        return None;
+    }
+    let letter = rest[letter_at];
+    let after = rest.get(letter_at + 1).copied();
+    if !letter.is_ascii_alphabetic()
+        || !after.is_none_or(|c| {
+            c == '/' || c.is_whitespace() || c == '\'' || c == '"' || c == ';' || c == ':'
+        })
+    {
+        return None;
+    }
+    // Un vrai dossier Linux d'une lettre (/a, /x…) reste tel quel.
+    if letter_at == 1 && Path::new(&format!("/{letter}")).exists() {
+        return None;
+    }
+    let len = path_end(rest, quote, true);
+    let tail: String = rest[letter_at + 1..len].iter().collect();
+    let win = format!(
+        "{}:/{}",
+        letter.to_ascii_uppercase(),
+        tail.trim_start_matches('/')
+    );
+    Some((
+        len,
+        crate::paths::to_linux(&win).to_string_lossy().into_owned(),
+    ))
+}
+
+/// Git Bash de Winlux : les programmes Windows qui ont besoin d'un shell
+/// POSIX (Claude Code exige Git Bash sous Windows) reçoivent le bash Linux
+/// sous le nom `bash.exe`, via un lien dans les données de Winlux, et
+/// `CLAUDE_CODE_GIT_BASH_PATH` le leur indique quand rien d'autre n'est
+/// réglé. Les scripts qu'il reçoit voient leurs chemins traduits
+/// ([`msys_script`]).
+pub fn provide_git_bash() {
+    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
+        return;
+    }
+    let bash = Path::new("/usr/bin/bash");
+    if !bash.exists() {
+        return;
+    }
+    let Some(dir) = crate::paths::data_dir().map(|d| d.join("git").join("bin")) else {
+        return;
+    };
+    let link = dir.join("bash.exe");
+    if std::fs::symlink_metadata(&link).is_err() {
+        let _ = std::fs::create_dir_all(&dir);
+        if std::os::unix::fs::symlink(bash, &link).is_err() {
+            return;
+        }
+    }
+    if is_linux_program(&link) {
+        std::env::set_var("CLAUDE_CODE_GIT_BASH_PATH", crate::paths::to_windows(&link));
+    }
+}
+
+/// Un programme Linux déguisé en `.exe` (lien `bash.exe` → `/usr/bin/bash`)
+/// attend les chemins Windows qu'on donnerait à son équivalent Windows.
+pub fn is_disguised_linux_tool(p: &Path) -> bool {
+    has_ext(p, "exe") && is_linux_program(p)
+}
+
 /// Les tests qui modifient `PATH` passent l'un après l'autre.
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -466,5 +633,33 @@ mod tests {
         assert!(is_windows_program(&bin.join("Jeu.exe")));
         assert!(!is_windows_program(&tool));
         let _ = std::fs::remove_dir_all(&d);
+    }
+    #[test]
+    fn traduit_les_chemins_windows_et_msys_dun_script() {
+        let _g = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved = std::env::var_os("WINLUX_DRIVE_C");
+        std::env::set_var("WINLUX_DRIVE_C", "/srv/lecteur-c");
+        let s = msys_script("source 'C:\\Windows\\temp\\a b.sh' && cat >| /c/Windows/temp/x-cwd; ls /usr/bin; echo a/c/b");
+        assert_eq!(
+            s,
+            "source '/srv/lecteur-c/Windows/temp/a b.sh' && cat >| /srv/lecteur-c/Windows/temp/x-cwd; ls /usr/bin; echo a/c/b"
+        );
+        assert_eq!(
+            msys_script("cd /cygdrive/c/projet"),
+            "cd /srv/lecteur-c/projet"
+        );
+        let pwd = msys_script("pwd -P >| /c/t/cwd");
+        assert!(pwd.contains("__wl=\"/c${__wl#'/srv/lecteur-c'}\""), "{pwd}");
+        assert!(pwd.ends_with(">| /srv/lecteur-c/t/cwd"), "{pwd}");
+        assert_eq!(
+            msys_script("echo https://x.org/c/y"),
+            "echo https://x.org/c/y"
+        );
+        match saved {
+            Some(v) => std::env::set_var("WINLUX_DRIVE_C", v),
+            None => std::env::remove_var("WINLUX_DRIVE_C"),
+        }
     }
 }

@@ -185,11 +185,21 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let exe_win = crate::paths::to_windows(&exe.path);
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
-    let cmd = all
+    let mut cmd = all
         .iter()
         .map(|a| quote_arg(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // Ligne exacte transmise par un parent Windows (CreateProcess) : elle
+    // garde son premier mot, que certains programmes lisent (argv[0]).
+    if let Some(line) = std::env::var("WINLUX_COMMAND_LINE")
+        .ok()
+        .filter(|l| !l.trim().is_empty())
+    {
+        std::env::remove_var("WINLUX_COMMAND_LINE");
+        cmd = line;
+    }
+    crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
@@ -208,6 +218,13 @@ pub fn init_process(exe: &Module, args: &[String]) {
         *((peb + 0x124) as *mut u32) = 2; // VER_PLATFORM_WIN32_NT
     }
     let path_w: Vec<u16> = exe_win.encode_utf16().collect();
+    // StandardInput/Output/Error de RTL_USER_PROCESS_PARAMETERS : lus
+    // directement par certains runtimes (Bun) au lieu de GetStdHandle.
+    unsafe {
+        *((params + 0x20) as *mut usize) = crate::dlls::kernel32::STD_INPUT_REAL;
+        *((params + 0x28) as *mut usize) = crate::dlls::kernel32::STD_OUTPUT_REAL;
+        *((params + 0x30) as *mut usize) = crate::dlls::kernel32::STD_ERROR_REAL;
+    }
     unicode_string(params + 0x60, &path_w);
     unicode_string(params + 0x70, &cmd_w);
     let mut command_line_w = cmd_w;
