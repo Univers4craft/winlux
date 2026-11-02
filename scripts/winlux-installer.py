@@ -30,6 +30,29 @@ HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
 INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
                   os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
+
+
+def firmware_efi_bits():
+    """32 sur un UEFI 32 bits (tablettes Atom), 64 sinon (lu dans /sys)."""
+    try:
+        with open("/sys/firmware/efi/fw_platform_size") as f:
+            return 32 if f.read().strip() == "32" else 64
+    except OSError:
+        return 64
+
+
+def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
+    """Chargeurs UEFI à installer : un processeur 64 bits peut avoir un micrologiciel 32 bits.
+
+    Sur une partition EFI à nous (EFI/BOOT), on pose les deux : BOOTX64.EFI et
+    BOOTIA32.EFI, le micrologiciel prend celui de son mode. Sur une partition
+    partagée avec Windows, l'entrée de démarrage est propre à ce micrologiciel :
+    seul le chargeur de son mode est installé.
+    """
+    ia32 = os.path.isdir(os.path.join(grub_dir, "i386-efi"))
+    if not own_esp:
+        return ["i386-efi"] if ia32 and firmware_efi_bits() == 32 else ["x86_64-efi"]
+    return ["x86_64-efi", "i386-efi"] if ia32 else ["x86_64-efi"]
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
 # Modules partagés : à côté du script dans le dépôt, /usr/lib/winlux/python une fois installé.
@@ -4971,9 +4994,10 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             else:
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
-            subprocess.run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
-                            f"--boot-directory={target}/boot", "--recheck", *efi_args],
-                           check=True, timeout=120)
+            for efi_target in efi_grub_targets(layout["own_esp"]):
+                subprocess.run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
+                                f"--boot-directory={target}/boot", "--recheck", *efi_args],
+                               check=True, timeout=120)
             # The Secure Boot chain goes to EFI/BOOT, which belongs to Windows on a shared ESP.
             if layout["own_esp"] and SECUREBOOT_SH and os.path.exists("/usr/lib/shim/shimx64.efi.signed"):
                 subprocess.run(["sh", SECUREBOOT_SH, "install-esp", efi_dir, search_uuid], check=True, timeout=60)

@@ -130,6 +130,18 @@ TEXT = {
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
 
+
+def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
+    """Comme l'installateur : les deux chargeurs UEFI dans EFI/BOOT, sinon celui du micrologiciel."""
+    ia32 = os.path.isdir(os.path.join(grub_dir, "i386-efi"))
+    if not own_esp:
+        try:
+            bits = Path("/sys/firmware/efi/fw_platform_size").read_text().strip()
+        except OSError:
+            bits = "64"
+        return ["i386-efi"] if ia32 and bits == "32" else ["x86_64-efi"]
+    return ["x86_64-efi", "i386-efi"] if ia32 else ["x86_64-efi"]
+
 def language():
     code = os.environ.get("WINLUX_LANG", "")
     if not code:
@@ -992,9 +1004,14 @@ def repair_boot():
                 windows_esp_uuid = output(["blkid", "-s", "UUID", "-o", "value", esp["name"]]).strip() or None
             # ESP partagée avec Windows : dossier et entrée à nous, jamais EFI/BOOT.
             efi_args = ["--bootloader-id=winlux"] if shared else ["--removable", "--no-nvram"]
-            result = run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
-                          f"--boot-directory={boot}", "--recheck", *efi_args], check=False, capture_output=True, text=True)
-            if result.returncode:
+            failed = None
+            for efi_target in efi_grub_targets(not shared):
+                result = run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
+                              f"--boot-directory={boot}", "--recheck", *efi_args], check=False, capture_output=True, text=True)
+                if result.returncode and failed is None:
+                    failed = result
+            if failed is not None:
+                result = failed
                 warnings.append((result.stdout + result.stderr).strip()[-300:])
             elif not shared and have("winlux-secureboot") and Path("/usr/lib/shim/shimx64.efi.signed").exists():
                 uuid = output(["blkid", "-s", "UUID", "-o", "value", device]).strip()
@@ -1225,8 +1242,10 @@ def make_key(args):
         if have("grub-install"):
             run(["grub-install", "--target=i386-pc", f"--boot-directory={boot}", "--recheck", device],
                 check=False, capture_output=True)
-            run(["grub-install", "--target=x86_64-efi", "--removable", "--no-nvram", f"--efi-directory={target}",
-                 f"--boot-directory={boot}", "--recheck"], check=False, capture_output=True)
+            # Clé : BOOTX64.EFI et BOOTIA32.EFI, pour les PC à micrologiciel 32 bits.
+            for efi_target in efi_grub_targets(True):
+                run(["grub-install", f"--target={efi_target}", "--removable", "--no-nvram", f"--efi-directory={target}",
+                     f"--boot-directory={boot}", "--recheck"], check=False, capture_output=True)
         if source.efi and (source.efi / "BOOT/BOOTX64.EFI").is_file():
             # Chaîne Secure Boot de l'ISO (shim signé -> GRUB signé) : ses
             # petits grub.cfg cherchent la clé par son fichier témoin.

@@ -29,6 +29,25 @@ WINLUX_SECUREBOOT=1 WINLUX_KERNEL=/boot/vmlinuz-<version> WINLUX_KERNEL_RELEASE=
 - Sans `WINLUX_SECUREBOOT=1`, la construction reste identique à avant
   (`grub-mkrescue`, GRUB non signé : il faut désactiver Secure Boot).
 
+## PC à micrologiciel UEFI 32 bits (tablettes Atom)
+
+Certaines tablettes et petits PC (Intel Atom Bay Trail / Cherry Trail) ont un
+processeur 64 bits mais un micrologiciel UEFI 32 bits. Winlux reste 64 bits ;
+seul le premier chargeur existe aussi en 32 bits, `EFI/BOOT/BOOTIA32.EFI`, à
+côté de `BOOTX64.EFI` (paquet `grub-efi-ia32-bin`). L'ISO, la clé USB, le
+disque installé, la clé de secours et la réinitialisation portent les deux, et
+le micrologiciel prend seul celui de son mode. Sur une partition EFI partagée
+avec Windows, l'installateur pose uniquement le chargeur du mode détecté
+(`/sys/firmware/efi/fw_platform_size`). Le noyau Ubuntu démarre dans ce mode
+mixte (`CONFIG_EFI_MIXED`).
+
+Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
+Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est
+pas touchée. La validation de `release.yml` démarre l'ISO et le disque
+installé sous QEMU avec OVMF 32 bits (`ovmf-ia32`), et
+`scripts/check-iso-boot-paths.sh` fait échouer la construction si l'un des
+trois chemins (BIOS, UEFI 64 bits, UEFI 32 bits) manque.
+
 L'installateur (graphique ou `scripts/install.sh`) copie la même chaîne sur
 l'ESP du disque cible quand `/usr/lib/shim/shimx64.efi.signed` est présent.
 Le mode récupération (« Réparer le démarrage ») la réinstalle aussi.

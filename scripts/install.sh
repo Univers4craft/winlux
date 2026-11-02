@@ -228,6 +228,10 @@ grub-install --target=i386-pc --boot-directory="$work/target/boot" --recheck "$d
 mount -t vfat -o iocharset=ascii "$esp" "$work/target/boot/efi"
 esp_mounted=1
 grub-install --target=x86_64-efi --efi-directory="$work/target/boot/efi" --boot-directory="$work/target/boot" --removable --no-nvram --recheck
+# Processeur 64 bits sur micrologiciel UEFI 32 bits (tablettes Atom) : BOOTIA32.EFI à côté.
+if test -d /usr/lib/grub/i386-efi; then
+    grub-install --target=i386-efi --efi-directory="$work/target/boot/efi" --boot-directory="$work/target/boot" --removable --no-nvram --recheck
+fi
 # Replace the unsigned removable loader with shim + signed GRUB when available.
 if test -f /usr/lib/shim/shimx64.efi.signed; then
     sh "$root/scripts/winlux-secureboot.sh" install-esp "$work/target/boot/efi" "$fsuuid"

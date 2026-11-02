@@ -4,7 +4,9 @@
 #  2. écriture d'une ISO hybride fabriquée par grub-mkrescue, comme celle de
 #     Winlux, avec la ligne de commande de l'outil ;
 #  3. contrôles : partition démontée par l'outil, copie identique octet pour octet ;
-#  4. démarrage de la clé par QEMU, branchée en USB, en BIOS puis en UEFI.
+#  4. démarrage de la clé par QEMU, branchée en USB, en BIOS, en UEFI 64 bits
+#     puis en UEFI 32 bits (processeur 64 bits sur micrologiciel 32 bits,
+#     comme les tablettes Atom) : la clé porte BOOTX64.EFI et BOOTIA32.EFI.
 # Usage : sudo installation/tests/test-block-device.sh [ISO]
 # Avec ISO (par ex. la vraie ISO Winlux), la clé fait la taille de l'ISO + 64 Mio.
 set -eu
@@ -24,13 +26,14 @@ trap cleanup EXIT
 
 iso=${1:-}
 if test -z "$iso"; then
+    test -d /usr/lib/grub/i386-efi || { echo "modules GRUB UEFI 32 bits absents (paquet grub-efi-ia32-bin)" >&2; exit 1; }
     iso="$work/test.iso"
     mkdir -p "$work/iso/boot/grub"
     cat >"$work/iso/boot/grub/grub.cfg" <<'GRUB'
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
-echo "WINLUX-USB-BOOT-OK-${grub_platform}"
+echo "WINLUX-USB-BOOT-OK-${grub_platform}-${grub_cpu}"
 sleep 600
 GRUB
     grub-mkrescue -o "$iso" "$work/iso" >/dev/null 2>&1
@@ -73,9 +76,19 @@ ovmf=""
 for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd; do
     if test -f "$f"; then ovmf=$f; break; fi
 done
-for mode in bios uefi; do
+ovmf32=/usr/share/OVMF/OVMF32_CODE_4M.fd
+for mode in bios uefi uefi32; do
     fw=""
-    if test "$mode" = uefi; then
+    case $mode in
+        bios) expect=pc-i386 ;;
+        uefi) expect=efi-x86_64 ;;
+        uefi32) expect=efi-i386 ;;
+    esac
+    if test "$mode" = uefi32; then
+        test -f "$ovmf32" || { echo "OVMF 32 bits absent (paquet ovmf-ia32) : UEFI 32 bits non testé" >&2; exit 1; }
+        cp /usr/share/OVMF/OVMF32_VARS_4M.fd "$work/vars.fd"
+        fw="-drive if=pflash,format=raw,readonly=on,file=$ovmf32 -drive if=pflash,format=raw,file=$work/vars.fd"
+    elif test "$mode" = uefi; then
         test -n "$ovmf" || { echo "OVMF absent : UEFI non testé" >&2; exit 1; }
         vars=$(dirname "$ovmf")/OVMF_VARS_4M.fd
         test -f "$vars" || vars=$(dirname "$ovmf")/OVMF_VARS.fd
@@ -94,13 +107,13 @@ for mode in bios uefi; do
     echo $! >"$work/qemu-$mode.pid"
     ok=0
     for _ in $(seq 1 180); do
-        if grep -aq "WINLUX-USB-BOOT-OK" "$work/serial-$mode.log"; then ok=1; break; fi
+        if grep -aq "WINLUX-USB-BOOT-OK-$expect" "$work/serial-$mode.log"; then ok=1; break; fi
         sleep 1
     done
     kill "$(cat "$work/qemu-$mode.pid")" 2>/dev/null || true
     rm -f "$work/qemu-$mode.pid"
     if test "$ok" = 1; then
-        echo "Démarrage depuis la clé USB en $mode : OK ($(grep -ao 'WINLUX-USB-BOOT-OK-[a-z0-9-]*' "$work/serial-$mode.log" | head -n 1))"
+        echo "Démarrage depuis la clé USB en $mode : OK ($(grep -ao 'WINLUX-USB-BOOT-OK-[a-z0-9_-]*' "$work/serial-$mode.log" | head -n 1))"
     else
         echo "ÉCHEC : la clé ne démarre pas en $mode" >&2
         tail -c 2000 "$work/serial-$mode.log" >&2

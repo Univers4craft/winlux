@@ -43,6 +43,14 @@ for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue gru
         exit 1
     }
 done
+# Trois chemins d'amorçage : BIOS, UEFI 64 bits, et UEFI 32 bits pour les
+# processeurs 64 bits sur micrologiciel 32 bits (tablettes Atom).
+for platform in i386-pc x86_64-efi i386-efi; do
+    test -d "/usr/lib/grub/$platform" || {
+        echo "modules GRUB $platform absents (paquets grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin)" >&2
+        exit 1
+    }
+done
 if ! test -r "$kernel"; then
     echo "noyau absent ou illisible : $kernel" >&2
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
@@ -1267,6 +1275,7 @@ if test "$secureboot" = 1; then
 else
     grub-mkrescue -o "$out" "$iso_root"
 fi
+sh "$root/scripts/check-iso-boot-paths.sh" "$out"
 sha256sum "$out" >"$out.sha256"
 echo "ISO live créée : $out"
 echo "Somme SHA-256 : $out.sha256"

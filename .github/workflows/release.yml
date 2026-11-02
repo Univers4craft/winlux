@@ -23,6 +23,9 @@ on:
       - scripts/list-gpl-sources.py
       - scripts/winlux-update-apt.py
       - scripts/test-update-curl-shim.py
+      - scripts/check-iso-boot-paths.sh
+      - scripts/install.sh
+      - scripts/test-install-vm-guest.sh
   workflow_dispatch:
 
 permissions:
@@ -65,7 +68,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q \
-            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin ovmf-ia32 \
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static mtools cryptsetup-bin \
@@ -174,6 +177,7 @@ jobs:
           if [ "$SKIP_ISO" = "false" ]; then
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
+            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
             # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
             WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
           fi

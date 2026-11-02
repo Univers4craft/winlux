@@ -81,7 +81,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends python3-tk xvfb xauth fdisk \
-            grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools qemu-system-x86 ovmf
+            grub-common grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin xorriso mtools qemu-system-x86 ovmf ovmf-ia32
           # KVM accélère le démarrage QEMU quand le runner l'offre.
           if test -e /dev/kvm; then
             echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
