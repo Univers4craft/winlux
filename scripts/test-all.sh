@@ -83,6 +83,9 @@ if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev
     step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
 fi
 
+# Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
+step "scripts/test-default-accent.py" python3 -B scripts/test-default-accent.py
+
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
 # Playwright, sauf WINLUX_SITE_RENDER=required.
 step "scripts/test-site.py (site web)" python3 -B scripts/test-site.py --render
