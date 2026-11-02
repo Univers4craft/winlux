@@ -76,6 +76,7 @@ run petits-outils        python3 -B scripts/test-small-tools.py
 run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
+run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
 display() {
