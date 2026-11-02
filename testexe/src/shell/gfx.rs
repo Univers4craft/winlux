@@ -1773,11 +1773,15 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                         rgb(0x8A, 0x5A, 0x10),
                     );
                 }
-                Glyph::Code => text(
+                // Centré sur la page : calé à gauche, « </> » dépassait à
+                // droite et l'icône du Bloc-notes paraissait décalée dans
+                // son bouton de barre des tâches.
+                Glyph::Code => text_centered(
                     hdc,
                     f.small,
+                    11,
                     rgb(0x2B, 0x7F, 0xDA),
-                    l + w / 8,
+                    (l + r) / 2,
                     y + s * 2 / 5,
                     b"</>",
                 ),
@@ -1792,11 +1796,12 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                         rgb(0xD9, 0x3A, 0x2E),
                     );
                     if s >= 32 {
-                        text(
+                        text_centered(
                             hdc,
                             f.small,
+                            11,
                             rgb(0xFF, 0xFF, 0xFF),
-                            l + w / 8,
+                            (l + r) / 2,
                             y + s / 2 + 2,
                             b"PDF",
                         );

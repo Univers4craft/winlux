@@ -16,4 +16,10 @@
 .xfce4-panel button:hover { background-color: #443350; }
 .xfce4-panel button:checked { background-color: #60467b; }
 .xfce4-panel #clock-button label { min-width: 80px; padding: 0 4px; }
+/* Boutons de fenêtres sans libellé : la barre leur donne un carré de la
+   hauteur de la barre. Avec les marges du thème (8 px de chaque côté) et
+   celles de l'icône (3 px), le contenu dépassait du carré et GTK le collait
+   à gauche : l'icône débordait à droite. Sans marge, elle est centrée. */
+.xfce4-panel .tasklist button { padding: 0; min-width: 0; min-height: 0; }
+.xfce4-panel .tasklist button image { padding: 0; }
 /* End Winlux panel */
