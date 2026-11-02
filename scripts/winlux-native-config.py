@@ -327,6 +327,9 @@ if panel_config.is_file() and not grouping_marker.exists():
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
+# Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
+ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
+              "W-period", "W-semicolon")
 if openbox_config.is_file():
     namespace = "http://openbox.org/3.4/rc"
     ET.register_namespace("", namespace)
@@ -347,7 +350,7 @@ if openbox_config.is_file():
                 defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
                 if defaults is not None:
                     for binding in defaults:
-                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t") and binding.get("key") not in keys:
+                        if binding.get("key") in ADDED_KEYS and binding.get("key") not in keys:
                             keyboard.append(ET.fromstring(ET.tostring(binding)))
                             changed = True
             for binding in list(keyboard):

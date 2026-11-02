@@ -63,6 +63,13 @@ Ces applications sont de vrais programmes Windows écrits en Rust `no_std`, comp
 
 L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, code dans `shell/desktop.rs` et `shell/wm.rs`) n'est plus la session par défaut, mais reste dans les tests et sert de banc d'essai au runtime.
 
+## Petits plaisirs du bureau natif
+
+| Raccourci ou endroit | Fonction |
+|---|---|
+| **Windows + .** ou **Windows + ;** | Sélecteur d'emojis, kaomojis et symboles ; recherche sans accents dans la langue du bureau et en anglais ; le choix est tapé dans la fenêtre active. Les emojis en couleur se téléchargent au premier usage (10 Mo). |
+| Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
+
 ## Applications Linux
 
 Les applications Linux s'installent normalement (`apt`, Store, Flatpak, Snap, AppImage). Leurs fichiers `.desktop` sont reconnus par Démarrer, et un crochet APT actualise le catalogue après chaque installation. Un navigateur web est préparé hors ligne dans l'ISO (Paramètres › Navigateurs permet d'en choisir un autre et de le mettre par défaut) ; il tourne sous un compte isolé, et ses téléchargements arrivent dans `C:\Users\<nom>\Downloads` (voir [docs/BROWSERS.md](https://github.com/Univers4craft/winlux/blob/master/docs/BROWSERS.md)).
