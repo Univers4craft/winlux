@@ -62,6 +62,7 @@ pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
@@ -609,6 +610,7 @@ fn add_basics(all: &mut [Builtin]) {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
             .chain(dialogs::user32_overrides())
+            .chain(menus::user32_overrides())
         {
             b.exports.insert(name, addr);
         }

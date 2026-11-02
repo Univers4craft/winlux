@@ -3716,6 +3716,15 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn lower_window(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux =
+                ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
     fn raise_window(&mut self, hwnd: usize) {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
