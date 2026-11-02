@@ -97,17 +97,55 @@ pub unsafe extern "win64" fn winlux_archive_extract(
         return 0;
     };
     // Sans destination : dossier portant le nom de l'archive, à côté d'elle.
-    let d = linux(dest).unwrap_or_else(|| p.with_file_name(super::default_folder_name(&p)));
+    // Avec destination (« Extraire ici ») : dans ce dossier même. Avant, la
+    // destination passait par unique_path et l'archive partait dans un
+    // nouveau « Téléchargements (2) » à côté, invisible depuis l'Explorateur.
+    let here = linux(dest);
     let pw = opt_password(pw);
     jobs::spawn(move |pr| {
-        let target = super::unique_path(&d);
-        let r = super::extract_to(&p, &target, pw.as_deref(), pr);
-        if r.is_err() {
-            let _ = std::fs::remove_dir_all(&target);
-        }
+        let Some(dir) = here else {
+            let target = super::unique_path(&p.with_file_name(super::default_folder_name(&p)));
+            let r = super::extract_to(&p, &target, pw.as_deref(), pr);
+            if r.is_err() {
+                let _ = std::fs::remove_dir_all(&target);
+            }
+            r?;
+            return Ok(crate::paths::to_windows(&target));
+        };
+        // Dossier de travail caché, puis chaque élément est déplacé : un
+        // fichier déjà présent n'est jamais écrasé (« nom (2) » comme
+        // Windows) et un échec ne touche pas au dossier de l'utilisateur.
+        let staging = super::unique_path(&dir.join(".winlux-extraction"));
+        let r = super::extract_to(&p, &staging, pw.as_deref(), pr).and_then(|()| {
+            for entry in std::fs::read_dir(&staging)? {
+                let entry = entry?;
+                std::fs::rename(
+                    entry.path(),
+                    free_name(&dir, &entry.file_name().to_string_lossy()),
+                )?;
+            }
+            Ok(())
+        });
+        let _ = std::fs::remove_dir_all(&staging);
         r?;
-        Ok(crate::paths::to_windows(&target))
+        Ok(crate::paths::to_windows(&dir))
     })
+}
+
+/// `dossier/nom.ext`, ou `nom (2).ext`, `nom (3).ext`… si la place est prise.
+fn free_name(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let first = dir.join(name);
+    if std::fs::symlink_metadata(&first).is_err() {
+        return first;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => name.split_at(i),
+        _ => (name, ""),
+    };
+    (2..10_000)
+        .map(|k| dir.join(format!("{stem} ({k}){ext}")))
+        .find(|p| std::fs::symlink_metadata(p).is_err())
+        .unwrap_or(first)
 }
 
 /// Crée `out` (format selon l'extension) depuis une liste de sources

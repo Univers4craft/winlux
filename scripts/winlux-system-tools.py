@@ -246,6 +246,35 @@ class Tools(Gtk.Window):
         return True
 
     def quick(self):
+        # Sections sans matériel masquées (règle Winlux) : pas de Wi-Fi,
+        # Bluetooth ni luminosité proposés dans une VM ou sur un PC fixe.
+        def present(directory, pattern="*"):
+            try:
+                return any(Path(directory).glob(pattern))
+            except OSError:
+                return False
+        wifi = present("/sys/class/ieee80211") or present("/sys/class/net", "*/wireless")
+        bluetooth = present("/sys/class/bluetooth")
+        backlight = present("/sys/class/backlight")
+        if not wifi:
+            self.button(_t("État des cartes Ethernet et Wi-Fi"), lambda: self.command(["nmcli", "device", "status"]), bool(shutil.which("nmcli")))
+            self.button(_t("Configurer les réseaux"), lambda: self.command(["nm-connection-editor"]), bool(shutil.which("nm-connection-editor")))
+        for title, args, binary, shown in [
+            (_t("Bluetooth : activer"), ["bluetoothctl","power","on"],"bluetoothctl", bluetooth),
+            (_t("Bluetooth : désactiver"), ["bluetoothctl","power","off"],"bluetoothctl", bluetooth),
+            (_t("Associer un périphérique Bluetooth"), ["blueman-manager"],"blueman-manager", bluetooth),
+            (_t("Luminosité −"), ["brightnessctl","set","10%-"],"brightnessctl", backlight),
+            (_t("Luminosité +"), ["brightnessctl","set","+10%"],"brightnessctl", backlight),
+            ("Volume −", ["winlux-control","volume-down"],"winlux-control", True),
+            (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control", True),
+            ("Volume +", ["winlux-control","volume-up"],"winlux-control", True),
+            (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app", True)]:
+            if shown:
+                self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
+        if wifi:
+            self.wifi()
+
+    def wifi(self):
         self.label(_t("Ethernet est prioritaire quand il est disponible. Le Wi-Fi peut rester configuré et prendre le relais lorsque le câble est débranché. Dans une VM, la connexion apparaît généralement comme Ethernet."))
         networks = Gtk.ComboBoxText()
         self.content.pack_start(networks, False, False, 0)
@@ -279,16 +308,7 @@ class Tools(Gtk.Window):
             (_t("État des cartes Ethernet et Wi-Fi"), ["nmcli","device","status"],"nmcli"),
             (_t("Wi-Fi : activer"), ["nmcli","radio","wifi","on"],"nmcli"),
             (_t("Wi-Fi : désactiver"), ["nmcli","radio","wifi","off"],"nmcli"),
-            (_t("Configurer les réseaux"), ["nm-connection-editor"],"nm-connection-editor"),
-            (_t("Bluetooth : activer"), ["bluetoothctl","power","on"],"bluetoothctl"),
-            (_t("Bluetooth : désactiver"), ["bluetoothctl","power","off"],"bluetoothctl"),
-            (_t("Associer un périphérique Bluetooth"), ["blueman-manager"],"blueman-manager"),
-            (_t("Luminosité −"), ["brightnessctl","set","10%-"],"brightnessctl"),
-            (_t("Luminosité +"), ["brightnessctl","set","+10%"],"brightnessctl"),
-            ("Volume −", ["winlux-control","volume-down"],"winlux-control"),
-            (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control"),
-            ("Volume +", ["winlux-control","volume-up"],"winlux-control"),
-            (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app")]:
+            (_t("Configurer les réseaux"), ["nm-connection-editor"],"nm-connection-editor")]:
             self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         ssid=self.entry(_t("Nom du réseau Wi-Fi à rejoindre"))
         self.button(_t("Se connecter au réseau"),lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))

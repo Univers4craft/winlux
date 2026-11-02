@@ -204,6 +204,26 @@ if panel_config.is_file():
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
         pass
+# Icône nm-applet masquée : elle doublait l'icône réseau Winlux, en anglais.
+# nm-applet reste lancé pour demander les mots de passe Wi-Fi.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            if plugin.get("value") != "systray":
+                continue
+            hidden = next((item for item in plugin if item.get("name") == "hidden-items"), None)
+            if hidden is None:
+                hidden = ET.SubElement(plugin, "property", {"name": "hidden-items", "type": "array"})
+            if not any(value.get("value") == "nm-applet" for value in hidden):
+                ET.SubElement(hidden, "value", {"type": "string", "value": "nm-applet"})
+                changed = True
+        if changed:
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError):
+        pass
 # Horloge : le greffon « clock » d'XFCE prenait la couleur de texte du thème
 # (gris foncé en Adwaita clair, illisible sur la barre noire) et ouvrait un
 # calendrier GTK brut. Il devient un genmon winlux-clock (texte clair fixé,

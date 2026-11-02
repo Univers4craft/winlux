@@ -13,6 +13,11 @@ if test "${1:-}" = --cwd; then
 fi
 if test "$#" = 0; then set -- -e /bin/bash -i; fi
 # Ubuntu's bashrc renames xterm windows (user@host: dir); keep the app name.
-exec "$terminal" -title 'Terminal Winlux' -xrm 'XTerm*allowTitleOps: false' -tn xterm-256color -fa 'DejaVu Sans Mono' -fs 11 \
+# Presse-papiers comme sous Windows : Ctrl+Maj+V, Maj+Inser et clic droit
+# collent ce qui a été copié (CLIPBOARD) depuis Edge, un .txt ou un .exe ;
+# xterm ne collait que la sélection PRIMARY (clic du milieu). Ctrl+Maj+C
+# copie la sélection.
+paste='#override \n Shift Ctrl <Key>V: insert-selection(CLIPBOARD) \n Shift Ctrl <Key>C: copy-selection(CLIPBOARD) \n Shift <Key>Insert: insert-selection(CLIPBOARD) \n <Btn3Down>: insert-selection(CLIPBOARD)'
+exec "$terminal" -title 'Terminal Winlux' -xrm 'XTerm*allowTitleOps: false' -xrm "XTerm*VT100.translations: $paste" -tn xterm-256color -fa 'DejaVu Sans Mono' -fs 11 \
     -u8 -bg '#171325' -fg '#eeeaf8' -cr '#ba9cff' \
     -sb -rightbar -sl 5000 -geometry 100x28 "$@"
