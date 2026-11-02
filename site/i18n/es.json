@@ -34,6 +34,9 @@
   "footer_releases": "Versiones publicadas",
   "footer_issues": "Informar de un problema",
   "footer_license": "Licencia GPL 3",
+  "footer_legal": "Aviso legal",
+  "footer_privacy": "Privacidad",
+  "footer_position": "Posición jurídica",
   "footer_disclaimer": "Winlux es software libre independiente. No está afiliado a Microsoft ni cuenta con su aprobación; Windows es una marca de su propietario, citada aquí solo para describir la compatibilidad con los programas `.exe`.",
   "not_found": "Página no encontrada: volver al inicio"
 }

@@ -229,7 +229,7 @@ def check_build(out: Path) -> set[str]:
                     fail(f"{l}/{slug}.html : pas de lien vers la version {other}")
 
     # Aucune ressource ni lien Microsoft ; la marque n'apparaît que dans la
-    # mention légale du pied de page.
+    # mention légale du pied de page et dans la page « Position juridique ».
     for path in out.rglob("*"):
         if path.suffix not in (".html", ".css", ".js", ".xml"):
             continue
@@ -237,7 +237,8 @@ def check_build(out: Path) -> set[str]:
         if re.search(r"microsoft\.com|windows\.com|live\.com|bing\.com|msn\.com", text, re.I):
             fail(f"{path.relative_to(out)} : lien vers un site Microsoft")
         body = re.sub(r'<p class="muted small">.*?</p>', "", text, flags=re.S)
-        if re.search(r"microsoft", body, re.I) and path.suffix == ".html":
+        # La page « Position juridique » s'adresse à Microsoft : seule exception.
+        if re.search(r"microsoft", body, re.I) and path.suffix == ".html" and path.name != "position.html":
             fail(f"{path.relative_to(out)} : « Microsoft » cité hors de la mention légale")
 
     # Fichiers attendus par GitHub Pages.

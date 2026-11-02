@@ -489,6 +489,8 @@ _TR = {
     'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
     'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
     'Vide : d’après la connexion Internet. Données de wttr.in.': ('Empty: based on the Internet connection. Data from wttr.in.', 'Vacío: según la conexión a Internet. Datos de wttr.in.', 'Leer: anhand der Internetverbindung. Daten von wttr.in.'),
+    'Météo en ligne': ('Online weather', 'Tiempo en línea', 'Onlinewetter'),
+    'Désactivée par défaut. Activée, le service wttr.in reçoit votre adresse IP et le lieu.': ('Off by default. When on, the wttr.in service receives your IP address and the place.', 'Desactivado de forma predeterminada. Activado, el servicio wttr.in recibe su dirección IP y el lugar.', 'Standardmäßig aus. Eingeschaltet erhält der Dienst wttr.in Ihre IP-Adresse und den Ort.'),
     'Unité de température': ('Temperature unit', 'Unidad de temperatura', 'Temperatureinheit'),
     'Celsius (°C)': ('Celsius (°C)', 'Celsius (°C)', 'Celsius (°C)'),
     'Fahrenheit (°F)': ('Fahrenheit (°F)', 'Fahrenheit (°F)', 'Fahrenheit (°F)'),
@@ -1423,6 +1425,9 @@ class ExtraPages:
         self.switch(box, _t("Bouton Widgets dans la barre des tâches"), prefs.get("button"),
                     lambda on: self.tool(["winlux-widgets", "set", "button", "on" if on else "off"], refresh=False),
                     _t("Affiche la météo ; un clic ouvre les widgets."))
+        self.switch(box, _t("Météo en ligne"), prefs.get("weather"),
+                    lambda on: self.tool(["winlux-widgets", "set", "weather", "on" if on else "off"], refresh=False),
+                    _t("Désactivée par défaut. Activée, le service wttr.in reçoit votre adresse IP et le lieu."))
         place = Gtk.Box(spacing=6)
         entry = Gtk.Entry(text=prefs.get("location", ""), placeholder_text=_t("Automatique"), width_chars=20)
         entry.get_accessible().set_name(_t("Lieu de la météo"))

@@ -34,12 +34,40 @@ Dépendances transitives compilées statiquement :
   x11rb-protocol      — MIT OR Apache-2.0
   zlib-rs             — Zlib
 
-L'image ISO de test utilise également :
+L'image ISO contient aussi des centaines de paquets Ubuntu non modifiés,
+chacun sous sa propre licence (texte complet dans
+/usr/share/doc/<paquet>/copyright de l'image). Les principaux :
 
-  Noyau Linux         — GPL-2.0-only (non modifié, fourni séparément)
-  GRUB                — GPL-3.0-or-later (non modifié, fourni séparément)
-  BusyBox (initramfs) — GPL-2.0-only (non modifié, fourni séparément)
-  Xvfb / Xorg         — MIT (non modifié, fourni séparément)
+  Noyau Linux et modules       — GPL-2.0-only
+  Micrologiciels (linux-firmware) — licences diverses, voir leur fichier WHENCE
+  GRUB, shim et GRUB signés    — GPL-3.0-or-later ; shim : BSD-2-Clause,
+                                 signé par Canonical et contresigné par
+                                 l'autorité UEFI tierce de Microsoft
+  BusyBox (initramfs)          — GPL-2.0-only
+  FFmpeg                       — GPL-2.0-or-later (compilation Ubuntu)
+  Samba                        — GPL-3.0-or-later
+  Mesa                         — MIT
+  Xorg / Xvfb                  — MIT
+  XFCE, Thunar, Openbox        — GPL-2.0-or-later
+  Polices DejaVu, Liberation, Inter — licences libres (Bitstream Vera, OFL 1.1)
+  Thème d'icônes Adwaita (parent du thème Winlux) — CC-BY-SA-3.0 ou LGPL-3.0
+
+La liste exacte des paquets sources et de leurs versions est produite à
+chaque version par scripts/list-gpl-sources.py et publiée sous le nom
+sources-gpl.tsv (copie dans l'image : /usr/share/doc/winlux/sources-gpl.tsv).
+
+Code source — offre écrite
+--------------------------
+
+Pour chaque logiciel sous GPL, LGPL ou AGPL contenu dans une image Winlux
+que nous avons distribuée, nous fournirons à toute personne qui le demande
+le code source complet correspondant, sous forme lisible par machine, pendant
+au moins trois ans après la dernière distribution de cette image, pour un
+prix qui ne dépasse pas le coût matériel de la copie. La demande se fait en
+ouvrant une issue sur https://github.com/Univers4craft/winlux/issues en
+indiquant la version de l'image. Les sources sont aussi celles des paquets
+Ubuntu de même nom et de même version listés dans sources-gpl.tsv
+(« apt-get source PAQUET=VERSION »).
 
 Données intégrées au bureau :
 
@@ -53,4 +81,9 @@ Microsoft Edge, lorsqu'il est embarqué via WINLUX_EDGE_DEB, est distribué
 selon les conditions de licence de Microsoft et n'est pas inclus par défaut.
 
 Tous les composants externes sont utilisés sans modification. Aucun code
-propriétaire n'est requis pour compiler ou exécuter Winlux.
+propriétaire n'est requis pour compiler ou exécuter Winlux. Aucun fichier de
+Microsoft (DLL, police, icône, son, redistribuable Visual C++) n'est inclus.
+
+Windows est une marque de Microsoft Corporation. Ce projet est indépendant :
+il n'est ni affilié à Microsoft, ni approuvé par elle. Les autres marques
+citées appartiennent à leurs titulaires.

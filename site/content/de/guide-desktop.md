@@ -1,9 +1,9 @@
 ---
 title: Tastenkombinationen und kleine Werkzeuge
-description: Fenster andocken, Kopiertes wiederfinden, eine Farbe auswählen oder den Text eines Bildes kopieren, wie unter Windows 11.
+description: Fenster andocken, Kopiertes wiederfinden, eine Farbe auswählen oder den Text eines Bildes kopieren, mit den gewohnten Tastenkombinationen.
 ---
 
-Der Winlux-Desktop übernimmt die Tastenkombinationen von Windows 11. Sie funktionieren in allen Anwendungen, auch in Windows-Programmen.
+Der Winlux-Desktop nutzt die gängigen Tastenkombinationen mit der Windows-Taste. Sie funktionieren in allen Anwendungen, auch in Windows-Programmen.
 
 ## Tastenkombinationen
 

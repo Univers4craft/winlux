@@ -91,6 +91,7 @@ _TR = {
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
+    'Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation.': ('Free software (GNU GPL v3). Independent project, neither affiliated with nor endorsed by Microsoft; Windows is a trademark of Microsoft Corporation.', 'Software libre (GNU GPL v3). Proyecto independiente, no afiliado a Microsoft ni aprobado por ella; Windows es una marca de Microsoft Corporation.', 'Freie Software (GNU GPL v3). Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke der Microsoft Corporation.'),
     'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
     'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
@@ -583,6 +584,7 @@ def about_build(info):
     built = values.get("built_at_utc", "")
     if len(built) >= 10 and built[4] == "-":
         lines.append(_t("Compilée le : {value}").format(value=f"{built[8:10]}/{built[5:7]}/{built[:4]}"))
+    lines.append(_t("Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation."))
     return "".join("\n" + line for line in lines)
 
 
