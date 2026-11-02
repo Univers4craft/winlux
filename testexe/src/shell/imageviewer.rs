@@ -53,6 +53,7 @@ const ROTATE: [&[u8]; 4] = [b"Pivoter", b"Rotate", b"Girar", b"Drehen"];
 const MIRROR: [&[u8]; 4] = [b"Miroir", b"Mirror", b"Espejo", b"Spiegeln"];
 const SLIDESHOW: [&[u8]; 4] = [b"Diaporama", b"Slideshow", b"Presentaci\xF3n", b"Diashow"];
 const PRINT: [&[u8]; 4] = [b"Imprimer", b"Print", b"Imprimir", b"Drucken"];
+const OCR: [&[u8]; 4] = [b"Copier le texte", b"Copy text", b"Copiar texto", b"Text kopieren"];
 const INFO: [&[u8]; 4] = [b"Infos", b"Info", b"Info", b"Info"];
 const COMPARE: [&[u8]; 4] = [b"Comparer", b"Compare", b"Comparar", b"Vergleichen"];
 const DETAILS: [&[u8]; 4] = [b"Informations", b"Details", b"Detalles", b"Details"];
@@ -259,6 +260,7 @@ struct State {
     buttons: [(Rect, u8); 32],
     nbuttons: usize,
     can_print: bool,
+    can_ocr: bool,
     message: &'static [u8],
 }
 
@@ -303,6 +305,7 @@ static mut S: State = State {
     buttons: [(rect(0, 0, 0, 0), 0); 32],
     nbuttons: 0,
     can_print: false,
+    can_ocr: false,
     message: b"",
 };
 
@@ -343,6 +346,7 @@ const B_PLAY: u8 = 15;
 const B_EXP_DOWN: u8 = 16;
 const B_EXP_UP: u8 = 17;
 const B_LEVELS: u8 = 18;
+const B_OCR: u8 = 19;
 
 // ---------- Petits utilitaires ----------
 
@@ -711,6 +715,8 @@ pub unsafe fn init(hwnd: Handle) {
         && !GetProcAddress(comdlg, c"PrintDlgW".as_ptr()).is_null()
         && !gdi.is_null()
         && !GetProcAddress(gdi, c"StartDocW".as_ptr()).is_null();
+    // « Copier le texte » : outil natif de reconnaissance de texte (#280).
+    s.can_ocr = GetFileAttributesA(c"Z:\\usr\\bin\\winlux-ocr".as_ptr()) != u32::MAX;
     command_line_path(s);
     if s.path_len > 0 {
         open_current(s);
@@ -946,6 +952,9 @@ unsafe fn draw_toolbar(g: &mut crate::wm::Gfx, s: &mut State, c: &Rect) {
         place(g, s, &mut right, t(INFO), B_INFO, s.panel);
         if s.can_print {
             place(g, s, &mut right, t(PRINT), B_PRINT, false);
+        }
+        if s.can_ocr && s.info.flags & FLAG_MODEL == 0 {
+            place(g, s, &mut right, t(OCR), B_OCR, false);
         }
         if s.nfiles > 1 {
             place(g, s, &mut right, t(SLIDESHOW), B_SLIDESHOW, false);
@@ -1361,6 +1370,7 @@ unsafe fn action(s: &mut State, id: u8) {
         B_MIRROR => s.view.mirror ^= 1,
         B_SLIDESHOW => toggle_slideshow(s),
         B_PRINT => print(s),
+        B_OCR => copy_text(s),
         B_INFO => s.panel = !s.panel,
         B_COMPARE => {
             s.compare = !s.compare;
@@ -1568,6 +1578,30 @@ pub unsafe fn shutdown() {
 }
 
 // ---------- Impression ----------
+
+/// Texte de l'image : `winlux-ocr "chemin"` (le runtime traduit le chemin).
+unsafe fn copy_text(s: &mut State) {
+    if s.path_len == 0 || s.path_len + 3 >= PATH_CAP {
+        return;
+    }
+    let mut params = [0u16; PATH_CAP + 3];
+    params[0] = b'"' as u16;
+    params[1..=s.path_len].copy_from_slice(&s.path[..s.path_len]);
+    params[s.path_len + 1] = b'"' as u16;
+    let program: [u16; 11] = [
+        b'w' as u16, b'i' as u16, b'n' as u16, b'l' as u16, b'u' as u16, b'x' as u16, b'-' as u16,
+        b'o' as u16, b'c' as u16, b'r' as u16, 0,
+    ];
+    let verb: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    ShellExecuteW(
+        core::ptr::null_mut(),
+        verb.as_ptr(),
+        program.as_ptr(),
+        params.as_ptr(),
+        core::ptr::null(),
+        1,
+    );
+}
 
 type PrintDlgW = unsafe extern "system" fn(*mut u8) -> i32;
 type StartDocW = unsafe extern "system" fn(Handle, *const u8) -> i32;

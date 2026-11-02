@@ -32,7 +32,7 @@
 | 18 | **Confidentialité et sécurité** | Verrouillage (délai, au réveil), autorisations des applications (caméra, micro, écran, fichiers, réseau), « Tout redemander ». |
 | 19 | **Processeur** | Profils de performance, gouverneur, mode jeu, temps de démarrage mesuré, affichés selon le matériel. |
 | 20 | **Lecteurs réseau** | SMB, NFS, SFTP, FTP, WebDAV, S3 montés comme un disque. |
-| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). |
+| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). Mode de couleur automatique (clair le jour, sombre le soir), arrière-plan en diaporama ou Winlux Aube / Nuit selon l'heure, thèmes `.wlxtheme` à enregistrer et partager. |
 | 22 | **Bluetooth et appareils** | Appairage BlueZ, manettes, caméras, micros, périphériques d'entrée. |
 | 23 | **Alimentation et batterie** | Mise en veille, écran, plans d'alimentation, batterie (affichée seulement si présente). |
 | 24 | **Graphismes** | GPU (y compris hybrides), Direct3D 9/12 et backend Vulkan, décodage vidéo matériel, overlay de performances. |
@@ -43,7 +43,7 @@
 | 29 | **Jeux** | Bibliothèque des jeux Windows, temps de jeu, raccourcis (docs/JEUX.md). |
 | 30 | **Assistant Claude** | Désactivé par défaut. L'activer télécharge Claude Code s'il manque, connecte le compte Claude (Google, e-mail…) puis ajoute le bouton Claude à la barre des tâches (et Windows+C). Compte connecté, « Se déconnecter », ce qui est envoyé. Session native seulement. |
 | 31 | **Récupération** | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), revenir en arrière, démarrage avancé, réparer le démarrage, créer une clé de secours ([docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md)). |
-| 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés). Page native seulement. |
+| 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés), reconnaissance de texte (télécharger, langues installées, retirer). Page native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

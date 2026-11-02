@@ -1,5 +1,14 @@
 #!/usr/bin/python3
-"""Persist appearance choices and apply them to GTK, Openbox and XFCE."""
+"""Persist appearance choices and apply them to GTK, Openbox and XFCE.
+
+    winlux-personalize theme|accent|wallpaper|panel-size|start-icon VALEUR
+    winlux-personalize reset default
+    winlux-personalize export FICHIER.wlxtheme   thème complet en un fichier
+    winlux-personalize import FICHIER.wlxtheme   applique un thème partagé
+
+Un thème Winlux (.wlxtheme) est une archive zip : theme.json (mode de couleur,
+couleur d'accent, taille de la barre, sons système) et l'image du fond.
+"""
 import json
 import configparser
 from pathlib import Path
@@ -41,6 +50,9 @@ _TR = {
     'Image trop volumineuse': ('Image too large', 'Imagen demasiado grande', 'Bild zu groß'),
     'Le service de fond d’écran n’est pas initialisé': ('The wallpaper service is not initialized', 'El servicio de fondo de pantalla no está inicializado', 'Der Hintergrunddienst ist nicht initialisiert'),
     'Préférence appliquée. Rouvrez les applications pour actualiser leur thème.': ('Preference applied. Reopen your apps to refresh their theme.', 'Preferencia aplicada. Vuelva a abrir las aplicaciones para actualizar su tema.', 'Einstellung übernommen. Öffnen Sie die Apps erneut, um ihr Design zu aktualisieren.'),
+    'Fichier de thème invalide': ('Invalid theme file', 'Archivo de tema no válido', 'Ungültige Designdatei'),
+    'Thème enregistré.': ('Theme saved.', 'Tema guardado.', 'Design gespeichert.'),
+    'Thème appliqué.': ('Theme applied.', 'Tema aplicado.', 'Design übernommen.'),
     'usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR': ('usage: winlux-personalize theme|accent|wallpaper|panel-size VALUE', 'uso: winlux-personalize theme|accent|wallpaper|panel-size VALOR', 'Verwendung: winlux-personalize theme|accent|wallpaper|panel-size WERT'),
 }
 
@@ -149,7 +161,96 @@ def apply(kind,value):
                 subprocess.run(["openbox","--reconfigure"],check=True)
     print(_t("Préférence appliquée. Rouvrez les applications pour actualiser leur thème."))
 
+# ── Thèmes partageables (.wlxtheme) ─────────────────────────────────────────
+
+THEME_FORMAT = "winlux-theme-1"
+THEME_MAX = 25 * 1024 * 1024
+SOUNDS_OFF = HOME / ".config/winlux/system-sounds-off"
+WALL_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+
+
+def theme_settings(state, sounds):
+    """Réglages d'un thème, validés (valeurs inconnues ignorées)."""
+    out = {"format": THEME_FORMAT}
+    if state.get("theme") in ("dark", "light"): out["theme"] = state["theme"]
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", str(state.get("accent", ""))): out["accent"] = state["accent"].lower()
+    if str(state.get("panel-size", "")) in ("32", "40", "48", "56", "64"): out["panel-size"] = str(state["panel-size"])
+    if isinstance(sounds, bool): out["sounds"] = sounds
+    return out
+
+
+def export_theme(state, target, sounds=True):
+    import zipfile
+    settings = theme_settings(state, sounds)
+    settings["name"] = Path(target).stem[:64]
+    wallpaper = Path(state.get("wallpaper") or "")
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        if wallpaper.is_file() and wallpaper.suffix.lower() in WALL_SUFFIXES and wallpaper.stat().st_size <= THEME_MAX - 65536:
+            settings["wallpaper"] = "wallpaper" + wallpaper.suffix.lower()
+            archive.write(wallpaper, settings["wallpaper"])
+        archive.writestr("theme.json", json.dumps(settings, ensure_ascii=False, indent=1))
+    return settings
+
+
+def read_theme(source):
+    """(réglages, image du fond ou None, extension) d'un .wlxtheme ; ValueError s'il est invalide."""
+    import zipfile
+    try:
+        archive = zipfile.ZipFile(source)
+    except (OSError, zipfile.BadZipFile):
+        raise ValueError(_t("Fichier de thème invalide"))
+    with archive:
+        members = {info.filename: info for info in archive.infolist()}
+        if "theme.json" not in members or sum(i.file_size for i in members.values()) > THEME_MAX:
+            raise ValueError(_t("Fichier de thème invalide"))
+        if any(name != "theme.json" and not re.fullmatch(r"wallpaper\.[a-z]{3,4}", name) for name in members):
+            raise ValueError(_t("Fichier de thème invalide"))
+        try: raw = json.loads(archive.read("theme.json").decode("utf-8"))
+        except (ValueError, UnicodeDecodeError): raise ValueError(_t("Fichier de thème invalide"))
+        if not isinstance(raw, dict) or raw.get("format") != THEME_FORMAT:
+            raise ValueError(_t("Fichier de thème invalide"))
+        settings = theme_settings(raw, raw.get("sounds"))
+        settings["name"] = re.sub(r"[^\w .-]", "", str(raw.get("name", "")))[:64].strip() or "theme"
+        name = raw.get("wallpaper")
+        if name in members and Path(name).suffix in WALL_SUFFIXES:
+            return settings, archive.read(name), Path(name).suffix
+    return settings, None, ""
+
+
+def import_theme(source):
+    settings, picture, suffix = read_theme(source)
+    if picture:
+        folder = HOME / ".local/share/winlux/themes" / settings["name"]
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / ("wallpaper" + suffix)
+        target.write_bytes(picture)
+        apply("wallpaper", str(target))
+    for kind in ("theme", "accent", "panel-size"):
+        if kind in settings: apply(kind, settings[kind])
+    if settings.get("sounds") is True:
+        try: SOUNDS_OFF.unlink()
+        except OSError: pass
+    elif settings.get("sounds") is False:
+        SOUNDS_OFF.parent.mkdir(parents=True, exist_ok=True)
+        SOUNDS_OFF.touch()
+    return settings
+
+
 if __name__=="__main__":
+    if len(sys.argv) == 3 and sys.argv[1] in ("export", "import"):
+        try:
+            if sys.argv[1] == "export":
+                try: current = json.loads(PREF.read_text())
+                except (OSError, ValueError): current = {"theme": "dark", "accent": "#8178b7"}
+                export_theme(current, sys.argv[2], not SOUNDS_OFF.exists())
+                print(_t("Thème enregistré."))
+            else:
+                import_theme(sys.argv[2])
+                print(_t("Thème appliqué."))
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print(str(error), file=sys.stderr)
+            raise SystemExit(1)
+        raise SystemExit(0)
     try:
         if len(sys.argv)!=3: raise ValueError(_t("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR"))
         if sys.argv[1] == "reset" and sys.argv[2] == "default":

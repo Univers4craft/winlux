@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Copier le texte de l’écran
+Name[en]=Copy text from screen
+Name[es]=Copiar texto de la pantalla
+Name[de]=Text vom Bildschirm kopieren
+Comment=Encadrer une zone de l’écran pour copier son texte (Windows + Maj + T)
+Comment[en]=Draw a box on the screen to copy its text (Windows + Shift + T)
+Comment[es]=Enmarcar una zona de la pantalla para copiar su texto (Windows + Mayús + T)
+Comment[de]=Einen Bildschirmbereich markieren und seinen Text kopieren (Windows + Umschalt + T)
+Keywords=ocr;texte;text;reconnaissance;recognition;extraire;extractor;copier;copy;texto;Texterkennung;
+Exec=/usr/bin/winlux-ocr
+Icon=edit-copy
+Categories=Utility;
+Terminal=false
