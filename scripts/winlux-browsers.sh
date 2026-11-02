@@ -15,6 +15,7 @@ installed="$root/opt/winlux/browsers"
 config="$root/etc/winlux/browser.conf"
 run="$root/run/winlux"
 browser=${2:-none}
+mode=${1:---status}
 case "${1:---status}" in
     --install|--default|--launch) case "$browser" in edge|chrome|firefox) ;; *) echo 'Navigateur inconnu' >&2; exit 2 ;; esac ;;
     *) browser=none ;;
@@ -44,6 +45,38 @@ status() {
         printf 'browser_%s=%s\n' "$id" "$state"
     done
 }
+# Route par défaut présente (comme l'init) : sinon inutile d'attendre le délai réseau.
+network_up() {
+    awk 'NR > 1 && $2 == "00000000" { found = 1 } END { exit !found }' "${WINLUX_NETWORK_ROUTES:-/proc/net/route}" 2>/dev/null
+}
+# Sans réseau, le navigateur demandé est noté et l'init le télécharge au
+# prochain démarrage connecté (choix par défaut : first-boot-browser).
+remember() {
+    mkdir -p "$root/etc/winlux"
+    if test "$mode" = --default; then
+        printf '%s\n' "$1" > "$root/etc/winlux/first-boot-browser"
+    else
+        pending="$root/etc/winlux/browser-install-pending"
+        grep -qx "$1" "$pending" 2>/dev/null || printf '%s\n' "$1" >> "$pending"
+    fi
+}
+forget() {
+    pending="$root/etc/winlux/browser-install-pending"
+    if test -f "$pending"; then
+        grep -vx "$1" "$pending" > "$pending.new" || true
+        mv "$pending.new" "$pending"
+        test -s "$pending" || rm -f "$pending"
+    fi
+    if test "$mode" = --default && test "$(sed -n '1p' "$root/etc/winlux/first-boot-browser" 2>/dev/null)" = "$1"; then
+        mv "$root/etc/winlux/first-boot-browser" "$root/etc/winlux/first-boot-browser.done"
+    fi
+}
+offline() {
+    remember "$1"
+    # Code 75 : reporté. Paramètres l'explique avec un message dans la langue de l'interface.
+    echo "Pas de connexion Internet : $1 sera téléchargé chez son éditeur et installé automatiquement au prochain démarrage connecté." >&2
+    return 75
+}
 install_browser() {
     id=$1
     if ! test -r "$cache/$id.deb"; then
@@ -51,16 +84,22 @@ install_browser() {
             edge|chrome|firefox)
                 # Paquet officiel téléchargé chez l'éditeur, jamais fourni par Winlux.
                 test -x "$fetch" || { echo "Téléchargement indisponible : $id" >&2; return 1; }
-                mkdir -p "$downloads"
+                network_up || { offline "$id"; return 75; }
+                mkdir -p "$downloads" "$run"
                 chmod 755 "$downloads"
                 echo "Téléchargement de $id depuis le site de son éditeur…"
-                "$fetch" --only "$id" "$downloads" || { echo "Téléchargement impossible : $id" >&2; return 1; }
+                # Détails techniques (erreurs Python, HTTP) dans un journal, pas à l'écran.
+                if ! "$fetch" --only "$id" "$downloads" 2>>"$run/browser-fetch.log"; then
+                    network_up || { offline "$id"; return 75; }
+                    echo "Le site de l'éditeur de $id ne répond pas. Réessayez plus tard (détails : /run/winlux/browser-fetch.log)." >&2
+                    return 1
+                fi
                 cache=$downloads
                 ;;
         esac
     fi
     test -r "$cache/$id.deb" && test -r "$cache/$id.sha256" || { echo "Paquet hors ligne absent : $id" >&2; return 1; }
-    if test -x "$(binary "$id")" && cmp -s "$cache/$id.version" "$installed/$id/version"; then return 0; fi
+    if test -x "$(binary "$id")" && cmp -s "$cache/$id.version" "$installed/$id/version"; then forget "$id"; return 0; fi
     if command -v winlux-update >/dev/null 2>&1 && winlux-update --busy 2>/dev/null; then echo 'Attendez la fin de la mise à jour système.' >&2; return 1; fi
     mkdir -p "$installed" "$run"
     chmod 755 "$installed"
@@ -100,6 +139,7 @@ install_browser() {
     rm -rf "$previous"
     trap - EXIT HUP INT TERM
     rmdir "$run/browser-install.lock"
+    forget "$id"
     echo "Navigateur installé : $id"
     if command -v winlux-applications >/dev/null 2>&1; then winlux-applications refresh >/dev/null 2>&1 || true; fi
 }

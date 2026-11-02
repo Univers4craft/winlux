@@ -772,6 +772,21 @@ if test -s /etc/winlux/first-boot-browser; then
         fi
     ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
 fi
+# Navigateurs demandés hors ligne depuis Paramètres > Navigateurs : installés
+# dès que le réseau répond (winlux-browsers les retire de la liste ensuite).
+if test -s /etc/winlux/browser-install-pending; then
+    (
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        for choice in $(/bin/busybox grep -E '^(chrome|edge|firefox)$' /etc/winlux/browser-install-pending); do
+            $low /usr/bin/winlux-browsers --install "$choice" || true
+        done
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
 # Boutiques de logiciels choisies (installateur, premier démarrage) : ajoutées
 # au Store dès que le réseau répond ; sans réseau, retentées au démarrage
 # suivant (docs/BOUTIQUES.md).
