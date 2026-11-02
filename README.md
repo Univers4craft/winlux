@@ -74,15 +74,15 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.12**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.12) (1er novembre 2026) : ISO de 1,92 Gio, première version sur la base Ubuntu 26.04 avec APT natif. |
-| **Version en préparation** | **v0.2.13** : changement rapide d'utilisateur, impression, son PipeWire, lecteurs réseau SMB/NFS, et surtout un outil de mise à jour corrigé. |
+| **Dernière version publiée** | [**v0.2.13**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.13) (1er novembre 2026) : ISO de 1,93 Gio, outil de mise à jour corrigé, changement rapide d'utilisateur, impression, son PipeWire, lecteurs réseau SMB/NFS. |
+| **Version en préparation** | **v0.2.14** : bureau et programmes sous le compte de l'utilisateur (plus en root), démarrage plus rapide, Claude Code dans Winlux, applications Ubuntu traduites. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS ou UEFI, Secure Boot compatible. |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
 | **Matériel réel** | Testé surtout en machine virtuelle (QEMU/KVM, VirtualBox, VMware). La validation sur une large gamme de PC réels reste à faire. |
 
 > [!WARNING]
-> **Mise à jour depuis une ancienne version.** Une installation **v0.2.6 ou plus ancienne** ne peut pas passer à la nouvelle base en place : il faut la **réinstaller une fois** avec l'ISO récente. Une installation **v0.2.12** devra aussi être réinstallée une fois avec l'ISO v0.2.13, car l'outil de mise à jour de la v0.2.12 contient un défaut qui l'empêche d'installer quoi que ce soit (corrigé dans la v0.2.13). Ensuite, les mises à jour se font depuis **Paramètres › Mises à jour**, sans réinstaller. Vos documents ne sont pas concernés par ce défaut, mais sauvegardez-les avant toute réinstallation.
+> **Mise à jour depuis une ancienne version.** Une installation **v0.2.6 ou plus ancienne** ne peut pas passer à la nouvelle base en place : il faut la **réinstaller une fois** avec l'ISO récente. Une installation **v0.2.12** doit aussi être réinstallée une fois avec l'ISO v0.2.13 ou plus récente, car l'outil de mise à jour de la v0.2.12 contient un défaut qui l'empêche d'installer quoi que ce soit (corrigé dans la v0.2.13). Ensuite, les mises à jour se font depuis **Paramètres › Mises à jour**, sans réinstaller. Vos documents ne sont pas concernés par ce défaut, mais sauvegardez-les avant toute réinstallation.
 
 ## Comment ça marche
 

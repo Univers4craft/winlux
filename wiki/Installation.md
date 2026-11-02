@@ -93,7 +93,7 @@ Détails : [docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/maste
 
 ## Mettre à jour une installation existante
 
-Voir [Publication et mises à jour](Publication-et-mises-a-jour). En résumé : une installation **v0.2.6 ou plus ancienne** doit être réinstallée une fois avec une ISO récente ; une installation **v0.2.12** devra l'être une fois avec l'ISO v0.2.13 ; ensuite, tout se fait depuis Paramètres › Mises à jour.
+Voir [Publication et mises à jour](Publication-et-mises-a-jour). En résumé : une installation **v0.2.6 ou plus ancienne** doit être réinstallée une fois avec une ISO récente ; une installation **v0.2.12** doit l'être une fois avec l'ISO v0.2.13 ou plus récente ; ensuite, tout se fait depuis Paramètres › Mises à jour.
 
 ## Utiliser seulement le runtime sur un Linux existant
 

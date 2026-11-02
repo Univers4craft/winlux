@@ -7,7 +7,7 @@ champ de saisie et icône symbolique visible doit atteindre 4,5:1 contre le fond
 réellement peint derrière lui (WCAG AA). Le menu est vérifié épinglés, liste
 « Toutes les applications » et recherche saisie ; les panneaux volants son
 (avec mélangeur par application), alimentation (avec modes) et notifications +
-calendrier.
+calendrier ; le volet de widgets (Win+W).
 
 L'horloge de la barre (winlux-clock) est vérifiée deux fois : sa couleur
 contre le fond de barre déclaré dans gtk.css, puis, si xfce4-panel et le
@@ -213,6 +213,31 @@ def child_case(case):
             return False
         GLib.timeout_add(300, run_popup)
         popup.run([])
+
+    # Volet de widgets (Win+W) : météo, agenda avec un rendez-vous, état du PC,
+    # pense-bête, minuteur, et la liste « Ajouter des widgets » ouverte.
+    run_dir = Path(tempfile.mkdtemp())
+    (run_dir / "weather.json").write_text(
+        "temp=14\nfeels_like=12\nhumidity=72\nwind=18\ncondition=partly\ncity=Lyon\nunits=c\nupdated=1793541600\n"
+        "forecast0_day=dim\nforecast0_min=8\nforecast0_max=15\nforecast0_cond=rain\n", encoding="cp1252")
+    widgets_config = Path(os.environ["XDG_CONFIG_HOME"]) / "winlux/widgets.json"
+    widgets_config.parent.mkdir(parents=True, exist_ok=True)
+    widgets_config.write_text('{"hidden": ["photos"], "notes": "Pain", '
+                              '"agenda": [{"date": "2026-11-01", "time": "14:30", "text": "Dentiste"}]}', encoding="utf-8")
+    os.environ.update(WINLUX_RUN_DIR=str(run_dir), WINLUX_WEATHER_OFFLINE="1", WINLUX_WIDGETS_NO_ANIMATION="1")
+    widgets_module = runpy.run_path(str(directory / "winlux-widgets.py"), run_name="contrast_test")
+    widgets = widgets_module["Widgets"]()
+
+    def run_widgets():
+        settle()
+        if not {"weather", "agenda", "pc", "notes", "timer"} <= set(widgets.cards):
+            problems.append(f"{case} · volet widgets : widgets affichés {sorted(widgets.cards)}")
+        widgets.toggle_add(); settle()
+        check(widgets.window, "volet widgets")
+        widgets.hide(); widgets.quit()
+        return False
+    GLib.timeout_add(300, run_widgets)
+    widgets.run([])
 
     # Boîtes d'arrêt (winlux-power) : confirmation, applications bloquantes, erreur.
     power_module = runpy.run_path(str(directory / "winlux-power.py"), run_name="contrast_test")

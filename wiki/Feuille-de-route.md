@@ -15,24 +15,16 @@
 | Identité | Logo Prisme, fonds, son de démarrage, aucune marque Microsoft. |
 | Langues | Bureau en quatre langues, installateur en six. |
 
-## Prochaine version : v0.2.13
+## Prochaine version : v0.2.14
 
-- Outil de mise à jour réparé (le dernier passage obligé par une réinstallation), manifeste publié avec chaque version, repli sur l'API des releases GitHub.
-- Changement rapide d'utilisateur, impression, son PipeWire, lecteurs SMB/NFS par le noyau.
-- Correctifs de l'audit du code et de l'interface du 1er novembre (Éditeur, boucles de messages, plantage du Terminal, menu Démarrer, barre des tâches…).
+- Sécurité : sur un système installé, le bureau et les .exe tournent sous le compte de l'utilisateur, plus en root (#258).
+- Démarrage plus rapide : menu GRUB caché 1 s, noyau silencieux, matériel et services hors du chemin critique (#254, #259, #260).
+- Claude Code (claude.exe officiel) tourne par la couche PE maison, avec une entrée au menu Démarrer (#255, #257).
+- Applications Ubuntu traduites en quatre langues (#253) et correctifs de la campagne de tests en VM : raccourcis Windows, menu clic droit du bureau, glisser-déposer et Corbeille de l'Explorateur, copier-coller, icônes de la barre des tâches (#252, #263, #264).
 
 ## En cours (pull requests ouvertes)
 
-| Sujet | Pull request |
-|---|---|
-| Installateur, DNS dans les VM, mise à jour sans manifeste (v0.2.13) | #200 |
-| Session native : menu Démarrer fiable, barre des tâches, compositeur, finition Windows 11 | #203 |
-| Corrections de l'audit (runtime, shell, scripts, décodeurs, Winsock IPv6) | #206, #218, #220, #221, #222 |
-| Paint.NET jusqu'à son propre code (`Program.Start`) | #201 |
-| Réseau local partagé Windows ↔ Linux, ports ouverts, proxy commun | #186 |
-| Identité visuelle, suite : écran du noyau, sons, icônes | #187 |
-| Démarrage plus rapide (menu GRUB de 2 s) | #188 |
-| Portable : veille, luminosité, écrans multiples, pavé tactile | #149 |
+Aucune pull request ouverte pour la v0.2.14.
 
 ## Priorités suivantes
 
@@ -62,12 +54,9 @@
 - Traduction des dernières applications (#139) et de tout l'installateur (#140).
 - « Ouvrir avec… » dans l'Explorateur (#152).
 
-### Idées proposées, pas encore commencées
+### Idées proposées, pas encore commencées (02/11/2026)
 
-- Jeux : Direct3D 11 complet, Steam, overlay FPS.
-- Suite bureautique et lecteur PDF avancé, navigateur intégré.
-- Finition Windows 11 de la session native : Snap Layouts, animations, bureaux virtuels, widgets, panneau de notifications.
-- Menu de récupération étendu, clé USB de secours, réinitialisation du PC.
-- Site web et documentation utilisateur.
+- Petits plaisirs : éclairage nocturne (#274), emojis Win+. (#275), historique Win+V natif (#276), Snap Layouts, Win+Tab et bureaux virtuels natifs (#277), Horloge (#278), pipette et petits outils (#279), copier le texte d'une image (#280), thème automatique et diaporama (#281).
+- Gros chantiers : widgets Win+W (#282), réinitialiser le PC et clé de secours (#283), lien avec le téléphone (#284), coin jeux puis Steam (#285), assistant intégré (#286), site web et guide utilisateur (#287).
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)
