@@ -569,4 +569,22 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, build: &[u8], fallback_version: &[u8])
             c.right - c.left,
         );
     }
+    let trademark = tr4(&[
+        b"Projet ind\xE9pendant, ni affili\xE9 \xE0 Microsoft ni approuv\xE9 par elle. Windows est une marque de Microsoft Corporation.",
+        b"Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
+        b"Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
+        b"Unabh\xE4ngiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterst\xFCtzt. Windows ist eine Marke der Microsoft Corporation.",
+    ]);
+    if y + 80 < c.bottom - 30 {
+        text_fit(
+            g.hdc,
+            g.f.caption,
+            12,
+            p.text3,
+            c.left,
+            y + 50,
+            trademark,
+            c.right - c.left,
+        );
+    }
 }

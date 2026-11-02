@@ -12,9 +12,10 @@
 > ils comptent (GitHub, Microsoft et les IA y sont établis).
 
 > **Suite donnée (2 novembre 2026).** Après cette analyse, damien a décidé de
-> renommer le projet **Luxia**. La décision, ce qu'elle règle et ne règle
-> pas, la protection du nouveau nom, la forme juridique et la liste des
-> corrections restantes sont dans
+> renommer le projet. Un premier candidat, « Luxia », a été écarté (marques
+> et société antérieures) ; le nom final n'est pas encore choisi. La
+> décision, ce qu'elle règle et ne règle pas, la protection du nouveau nom,
+> la forme juridique et la liste des corrections restantes sont dans
 > [NOM-ET-STRUCTURE-JURIDIQUE.md](NOM-ET-STRUCTURE-JURIDIQUE.md). Ce document
 > garde l'ancien nom pour la trace de la décision.
 
@@ -136,8 +137,9 @@ Ce qu'il faut en retenir :
 
 **Tout de suite, sans frais :**
 
-1. Ajouter sur le site, dans le `README.md`, dans « À propos » et dans
-   l'installateur :
+1. Afficher partout la mention de non-affiliation. *Correction : elle
+   existait déjà dans le pied de page du site et dans le `README.md` ; la
+   PR #327 l'ajoute dans « À propos » et dans `NOTICES`.*
    > Windows est une marque de Microsoft Corporation. Winlux est un projet
    > indépendant, il n'est ni affilié à Microsoft, ni approuvé par elle.
 2. Parler de « compatibilité avec les programmes Windows » plutôt que de

@@ -12,8 +12,10 @@
 
 > **Note pour le renommage.** Ce document et `RISQUES-JURIDIQUES.md` doivent
 > **garder l'ancien nom** là où il est cité : c'est la trace de la décision.
-> Ils ne doivent pas être passés au remplacement automatique « Winlux » →
-> « Luxia ».
+> Ils ne doivent pas être passés au remplacement automatique de l'ancien nom.
+> Le nouveau nom n'étant **pas encore choisi** au moment de la rédaction, il
+> est écrit ici « le nouveau nom » ; il faudra le remplacer quand il sera
+> arrêté, sans toucher au reste.
 
 ## 1. La décision
 
@@ -22,7 +24,7 @@
 | **Date** | 2 novembre 2026 |
 | **Décidé par** | damien (GitHub : Univers4craft), auteur et responsable du projet |
 | **Ancien nom** | Winlux |
-| **Nouveau nom** | **Luxia** |
+| **Nouveau nom** | **pas encore arrêté** (voir ci-dessous) |
 | **Portée** | Tout le projet : dépôt, système, site, documentation, ISO, logo et textes. Plus aucune trace de l'ancien nom, sauf dans les deux documents juridiques qui retracent la décision |
 | **Raison** | Le risque de conflit avec la marque « Windows » de Microsoft, classé **risque n° 1** dans [RISQUES-JURIDIQUES.md](RISQUES-JURIDIQUES.md#1-le-nom-winlux) |
 
@@ -34,17 +36,35 @@ alors qu'il avait gagné l'argument juridique aux États-Unis. Changer de nom
 avant d'investir dans un domaine, une marque et une notoriété coûte bien
 moins cher que de le faire sous la contrainte.
 
+**Premier candidat écarté : « Luxia ».** Le même jour, « Luxia » a d'abord
+été retenu, puis écarté :
+
+- une société française de logiciels porte ce nom (Paris, fondée en 2009,
+  intelligence artificielle appliquée aux données juridiques, produits
+  REGMIND et ALINEA) ;
+- le fil chargé du renommage a relevé des marques **LUXIA** en classes 9 et
+  42 : marque de l'Union européenne n° 019245887 et marque française
+  n° 5211844. **Je n'ai pas revérifié ces deux numéros moi-même** ; ils sont
+  repris du relevé de ce fil.
+
+Une marque antérieure identique, pour des logiciels, est un obstacle direct :
+le titulaire peut s'opposer au dépôt et interdire l'usage. L'écarter était
+la bonne décision.
+
+**Règle pour le choix du nom final** : chaque candidat passe la recherche
+de l'étape 1 (section 4) **avant** d'être annoncé, puis l'avis d'un conseil
+en propriété industrielle **avant** le dépôt et l'achat du domaine.
+
 ## 2. Ce que le changement de nom règle, et ce qu'il ne règle pas
 
-**Il règle :**
+**Il règle**, à condition que le nouveau nom ne rappelle pas Windows (ni
+« Win », ni « dows », ni une construction « Windows + Linux ») :
 
-- le risque de **contrefaçon de la marque « Windows » par le nom** : « Luxia »
-  ne contient ni « Win » ni « dows » ;
+- le risque de **contrefaçon de la marque « Windows » par le nom** ;
 - la principale **raison pour laquelle Microsoft aurait agi** : un nom
   proche, sur le même produit ;
-- le blocage de la professionnalisation : le projet peut maintenant
-  déposer une marque et un domaine sans attirer d'opposition de Microsoft
-  pour ce motif.
+- le blocage de la professionnalisation : le projet pourra déposer une
+  marque et un domaine sans attirer d'opposition de Microsoft pour ce motif.
 
 **Il ne règle pas :**
 
@@ -62,44 +82,37 @@ moins cher que de le faire sous la contrainte.
    n'est pas affilié à Microsoft (section 6).
 3. **Les autres risques** de l'analyse (sources GPL de l'ISO, assistants
    d'IA, MSIX non signés, vie privée) : voir la section 7.
-4. **Les droits des autres sur « Luxia »**, qui sont un nouveau risque
-   (section 3).
+4. **Les droits des autres sur le nouveau nom**, qui sont un nouveau risque
+   à chaque candidat (section 3).
 
-## 3. Le nouveau risque : les droits antérieurs sur « Luxia »
+## 3. Le nouveau risque : les droits antérieurs sur le nouveau nom
 
-**Il existe déjà une société française de logiciels appelée Luxia** :
-fondée en 2009, installée à Paris, elle édite des outils d'intelligence
-artificielle appliquée aux données juridiques (produits REGMIND et ALINEA).
-C'est un **logiciel**, comme le projet, donc dans les mêmes classes 9
-(logiciels) et 42 (services informatiques).
+Un nom libre de tout lien avec Windows peut appartenir à quelqu'un d'autre.
+Trois sortes de droits antérieurs comptent :
 
-Je n'ai **pas** pu consulter les bases de marques de l'INPI et de l'EUIPO
-depuis cet environnement : je ne sais donc pas si cette société a déposé
-« Luxia » comme marque, ni pour quels produits. Mais même sans marque,
-**une dénomination sociale ou un nom commercial antérieur est un droit
-opposable** à une nouvelle marque en France quand il existe un risque de
-confusion (Code de la propriété intellectuelle, article L. 711-3). Un
-logiciel d'IA juridique et un système d'exploitation ne sont pas le même
-produit, mais ce sont tous deux des logiciels : **le risque de conflit est
-réel et doit être évalué par un professionnel avant tout dépôt**. Il est
-possible que d'autres « Luxia » existent dans d'autres secteurs (éclairage,
-cosmétique…) ; ceux-là gênent peu, parce que les produits sont éloignés.
+- une **marque** enregistrée pour des produits identiques ou similaires
+  (classes 9 et 42 surtout), en France, dans l'Union ou par une marque
+  internationale qui vise la France ;
+- une **dénomination sociale, un nom commercial ou une enseigne**, même sans
+  marque déposée, quand il existe un risque de confusion (Code de la
+  propriété intellectuelle, article L. 711-3, cité de mémoire) ;
+- un **nom de domaine** exploité pour une activité proche.
 
-**Mon avis franc :** ne pas acheter de domaine ni déposer la marque avant
-la recherche d'antériorité. Si le conseil juge le risque trop élevé, il
-vaut mieux le savoir maintenant que le renommage technique vient de
-commencer, plutôt qu'après la sortie d'une version sous ce nom.
+« Luxia » montre que le risque est réel : le nom paraissait neuf et il était
+déjà pris deux fois, comme société et comme marque.
 
-## 4. Protéger le nom Luxia
+## 4. Protéger le nouveau nom
 
 ### Étape 1 : la recherche d'antériorité (indispensable)
 
-- **Gratuit, à faire tout de suite** : chercher « Luxia » et les noms
-  proches (Luxya, Lucsia, Luxiya…) dans [TMview](https://www.tmdn.org/tmview/)
-  (bases de l'INPI, de l'EUIPO et de nombreux offices) et dans la base des
-  marques de [data.inpi.fr](https://data.inpi.fr/), en classes 9 et 42 ;
-  et chercher les sociétés dans l'annuaire des entreprises. Ce n'est pas
-  une recherche suffisante, mais elle élimine les conflits évidents.
+- **Gratuit, à faire pour chaque candidat** : chercher le nom et ses
+  variantes d'orthographe et de prononciation dans
+  [TMview](https://www.tmdn.org/tmview/) (bases de l'INPI, de l'EUIPO et de
+  nombreux offices) et dans la base des marques de
+  [data.inpi.fr](https://data.inpi.fr/), en classes 9 et 42 ; chercher les
+  sociétés du même nom (data.inpi.fr, annuaire des entreprises) ; vérifier
+  les noms de domaine. Ce n'est pas une recherche suffisante, mais elle
+  élimine les conflits évidents.
 - **Par un conseil en propriété industrielle** (profession réglementée,
   annuaire sur le site de la CNCPI) : recherche d'antériorité « à
   l'identique et en similarité », marques, dénominations sociales, noms de
@@ -256,6 +269,9 @@ Quelle que soit la forme choisie :
 
 ### Sur le site
 
+*Fait dans la PR #327 : pages `legal` et `privacy` du site, liées depuis le
+pied de page, qui portait déjà la mention de non-affiliation.*
+
 Une page **Mentions légales** avec :
 
 - **l'éditeur** : tant que damien est un particulier non professionnel, il
@@ -269,10 +285,10 @@ Une page **Mentions légales** avec :
 - **l'hébergeur** : GitHub, Inc. pour GitHub Pages (adresse à recopier depuis
   les conditions de GitHub au moment de la publication) ;
 - **un contact** ;
-- **la licence** : « Luxia est un logiciel libre distribué sous licence GNU
+- **la licence** : « [nouveau nom] est un logiciel libre distribué sous licence GNU
   GPL version 3 ou ultérieure », avec un lien vers `LICENSE` ;
 - **la mention de non-affiliation** :
-  > Windows est une marque de Microsoft Corporation. Luxia est un projet
+  > Windows est une marque de Microsoft Corporation. [Nouveau nom] est un projet
   > indépendant : il n'est ni affilié à Microsoft, ni approuvé par elle.
   > Les autres marques citées appartiennent à leurs titulaires.
 
@@ -296,20 +312,73 @@ ni de cookies).
 
 ## 7. Ce qui reste à corriger de l'analyse des risques
 
-| # | Action | Gravité | Qui s'en occupe |
-|---|--------|---------|-----------------|
-| 1 | Recherche d'antériorité sur « Luxia » par un conseil en propriété industrielle, **avant** domaine et dépôt | Élevée | damien (rendez-vous) ; le fil du renommage fait la recherche gratuite préalable |
-| 2 | Publier les **sources GPL** de l'ISO avec chaque version (ou une offre écrite valable 3 ans) et corriger `NOTICES` | Élevée | Le fil des versions (il possède `release.yml`) |
-| 3 | Mention de **non-affiliation à Microsoft**, pages **Mentions légales** et **Confidentialité** | Moyenne | Le fil du renommage, en même temps que les nouveaux textes du site |
-| 4 | Renommer « Assistant Claude » en **« Assistant IA »**, icône neutre ; accepter les conditions commerciales d'Anthropic ; relire celles d'OpenAI avant #300 | Moyenne | Le fil de l'assistant IA (#300) ; l'acceptation des conditions revient à damien |
-| 5 | **MSIX non signés** : vérifier la signature, ou refuser par défaut avec l'avertissement « Éditeur non vérifié » | Moyenne | Le fil des erreurs matérielles et du MSIX (#272) |
-| 6 | **Météo** : ne contacter wttr.in qu'après l'accord de l'utilisateur | Faible | Le fil des 14 idées (widgets, #282) |
-| 7 | Retirer les **marques Ubuntu** de l'image installée | Moyenne-faible | Le fil des versions |
-| 8 | Règle de **salle blanche** dans `AGENTS.md` ; reformuler les messages d'erreur recopiés de Windows (`kernel32_misc.rs`) ; confirmer l'origine de `sample.msi` et `tables.msi` | Faible | Le fil des .exe |
-| 9 | Choisir la **forme juridique** (section 5) | — | damien, avec un expert-comptable |
+### Déjà fait (PR #327)
 
-Les fils nommés ici sont des propositions : la répartition finale revient
-au coordinateur du projet.
+| Point | Ce qui a été fait |
+|-------|-------------------|
+| Mention de non-affiliation à Microsoft | Elle existait déjà en pied de page du site et dans le `README.md`. Ajoutée dans « À propos » du shell PE (`testexe/src/shell/about.rs`) et des Paramètres natifs (`scripts/winlux-settings.py`), dans les quatre langues, et dans `NOTICES` |
+| Pages Mentions légales et Confidentialité | `site/content/<langue>/legal.md` et `privacy.md`, liées depuis le pied de page, dans les quatre langues ; `scripts/test-site.py` passe |
+| Météo | `scripts/winlux-widgets.py` ne contacte plus wttr.in sans accord : le volet explique ce qui serait envoyé et propose « Afficher la météo » ; interrupteur « Météo en ligne » dans Paramètres ; test ajouté à `scripts/test-widgets.py` |
+| Sources GPL | Offre écrite valable trois ans dans `NOTICES` ; `scripts/list-gpl-sources.py` produit la liste exacte des paquets sources et versions de l'image (`sources-gpl.tsv`) ; test `scripts/test-gpl-sources.py` dans `test-all.sh` et la CI. **Reste** : le brancher dans la construction de l'ISO et la publication (point 2 ci-dessous) |
+
+### À faire
+
+| # | Action | Gravité | Qui |
+|---|--------|---------|-----|
+| 1 | Recherche d'antériorité sur chaque candidat de nom, puis avis d'un conseil en propriété industrielle avant domaine et dépôt | Élevée | Fil du renommage ; damien pour le conseil |
+| 2 | Brancher la liste des sources GPL dans l'ISO et la publication | Élevée | Fil des versions |
+| 3 | « Assistant Claude » → « Assistant IA », icône neutre, conditions d'Anthropic et d'OpenAI | Moyenne | Fil de l'assistant IA (#300) ; damien pour accepter les conditions |
+| 4 | MSIX non signés refusés par défaut | Moyenne | Fil du MSIX (#272) |
+| 5 | Marques Ubuntu retirées de l'image installée | Moyenne-faible | Fil des versions |
+| 6 | Règle de salle blanche, messages d'erreur reformulés, origine des `.msi` de test | Faible | Fil des .exe |
+| 7 | Forme juridique | — | damien, avec un expert-comptable |
+
+**Instructions prêtes à envoyer** (une par fil) :
+
+1. *Fil du renommage* : « Pour chaque candidat de nom, fais la recherche
+   gratuite de `docs/NOM-ET-STRUCTURE-JURIDIQUE.md` section 4, étape 1
+   (TMview et data.inpi.fr, classes 9 et 42, marques et dénominations
+   sociales, variantes d'orthographe) avant de l'annoncer ; exclus
+   `docs/RISQUES-JURIDIQUES.md` et `docs/NOM-ET-STRUCTURE-JURIDIQUE.md` du
+   remplacement automatique, et remplace seulement « le nouveau nom » /
+   « [nouveau nom] » dans le second quand le nom est arrêté. »
+2. *Fil des versions* : « Dans `build-live-iso.sh`, lance
+   `python3 scripts/list-gpl-sources.py <racine de l'image>
+   <racine>/usr/share/doc/winlux/sources-gpl.tsv` après l'installation des
+   paquets ; dans `release.yml`, publie aussi ce fichier comme
+   `sources-gpl.tsv` avec chaque version, et ajoute à
+   `scripts/test-campaign.py` une vérification que l'image installée contient
+   `/usr/share/doc/winlux/sources-gpl.tsv`. Ensuite, retire les marques
+   Ubuntu de l'image installée (`/etc/os-release` : `NAME`, `PRETTY_NAME`,
+   logos, textes) et écris « construit à partir de paquets Ubuntu »
+   (politique de Canonical, `docs/RISQUES-JURIDIQUES.md` section 6). »
+3. *Fil de l'assistant IA (#300)* : « Vérifie qu'aucun texte visible ne dit
+   encore “Assistant Claude” (fichier `.desktop`, `winlux-assistant.py`,
+   `rc.xml`, wiki) et que la fonction s'appelle “Assistant IA” avec
+   “fonctionne avec Claude” ou “avec ChatGPT” en description ; remplace
+   l'icône orange `winlux-claude-code.svg` par une icône neutre ; ne lis
+   jamais `~/.claude` ni `~/.codex` pour réutiliser un jeton ; relis les
+   conditions d'utilisation de Codex et de la connexion ChatGPT et note dans
+   `docs/ASSISTANT-IA.md` ce qu'elles permettent. »
+4. *Fil du MSIX (#272)* : « Dans `runtime/src/setup/msix.rs`, vérifie la
+   signature `AppxSignature.p7x` (chaîne de certificats et empreinte du
+   paquet) ; tant que ce n'est pas fait, refuse par défaut un paquet dont la
+   signature n'est pas vérifiée, avec le message “Éditeur non vérifié :
+   <nom du manifeste>” et une confirmation explicite pour passer outre ;
+   ajoute le test du refus. »
+5. *Fil des .exe* : « Ajoute à `AGENTS.md` la règle de salle blanche de
+   `docs/RISQUES-JURIDIQUES.md` section 2 (aucun code ni document interne de
+   Microsoft, pas de décompilation de DLL Microsoft pour écrire du code,
+   source de chaque comportement reproduit) ; reformule avec des mots propres
+   au projet les messages d'erreur recopiés de Windows dans
+   `runtime/src/dlls/kernel32_misc.rs` (vers la ligne 482) ; indique dans
+   `runtime/src/msi/testdata/` d'où viennent `sample.msi` et `tables.msi`,
+   et régénère-les avec un outil libre s'ils viennent d'un produit
+   Microsoft. »
+6. *damien* : accepter les conditions commerciales d'Anthropic (console
+   Claude) avant de distribuer une version qui fait tourner Claude Code ;
+   prendre rendez-vous avec un conseil en propriété industrielle quand le nom
+   est choisi ; voir un expert-comptable pour la forme juridique.
 
 ## Sources vérifiées le 2 novembre 2026
 
@@ -317,7 +386,7 @@ au coordinateur du projet.
   procédure de dépôt : [INPI, « En pratique, le dépôt »](https://inpi.fr/la-marque/en-pratique-le-depot)
 - Taxes de l'EUIPO : [Trama TM, tarifs pour deux classes ou plus](https://www.tramatm.com/en/trademark-questions-and-answers/cost-of-trademark-registration/what-is-the-price-for-2-or-more-trademark-classes-in-the-eu)
   (chiffres de 2023, à confirmer avec le calculateur de l'EUIPO)
-- Société Luxia (Paris, 2009, IA appliquée au droit) : [Craft](https://craft.co/luxia) ;
+- Société Luxia (Paris, 2009, IA appliquée au droit), premier candidat écarté : [Craft](https://craft.co/luxia) ;
   [Le Monde du Droit, « Alinea by Luxia »](https://www.lemondedudroit.fr/on-en-parle/9947-alinea-by-luxia-le-droit-en-haute-definition.html)
 - Statut de l'entrepreneur individuel : [impots.gouv.fr, « Qu'est-ce que le statut unique de l'entrepreneur individuel ? »](https://www.impots.gouv.fr/professionnel/questions/quest-ce-que-le-statut-unique-dentrepreneur-individuel) ;
   [Legifiscal, entrée en vigueur le 15 mai 2022](https://www.legifiscal.fr/actualites-fiscales/3102-15-mai-2022-entree-vigueur-statut-protecteur-entreprise-individuelle.html)
