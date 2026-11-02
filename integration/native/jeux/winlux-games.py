@@ -591,7 +591,7 @@ def pin(game):
     if not isinstance(state, dict): state = {}
     pins = state.get("pins")
     if not isinstance(pins, list):
-        pins = ["winlux-explorer.desktop", "winlux-browser-firefox.desktop", "org.xfce.mousepad.desktop",
+        pins = ["winlux-explorer.desktop", "winlux-browser.desktop", "org.xfce.mousepad.desktop",
                 "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
     if name not in pins: pins.append(name)
     state["pins"] = pins

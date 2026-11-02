@@ -4,6 +4,7 @@
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
 use crate::dlls::d3d_shader::{self, ShaderType};
+use crate::dlls::dxbc;
 use crate::dlls::dxgi::{self, DxgiSwapChainDesc};
 use crate::dlls::gl_bindings as gl;
 use crate::dlls::ole32::Guid;
@@ -11,6 +12,9 @@ use crate::{log_info, log_warn};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+
+#[path = "d3d11_pipeline.rs"]
+mod pipeline;
 
 const S_OK: i32 = 0;
 const S_FALSE: i32 = 1;
@@ -383,6 +387,8 @@ fn create_texture2d(
             gl::GL_CLAMP_TO_EDGE,
         );
         (g.BindTexture)(gl::GL_TEXTURE_2D, 0);
+        // Seul le niveau 0 existe jusqu'à GenerateMips.
+        pipeline::set_max_level(g, tex, 0);
     }
 
     Box::into_raw(Box::new(Texture2D {
@@ -795,11 +801,13 @@ impl SimpleComObj {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            pipeline::forget(this.cast(), (*this).gl_id);
             let obj = Box::from_raw(this);
             if !obj.view_resource.is_null() {
                 com_release(obj.view_resource);
             }
-            if obj.gl_id != 0 {
+            // Seule une vue de rendu (descripteur de 20 octets) porte un cadre.
+            if obj.gl_id != 0 && obj.view_desc_len == 20 {
                 if let Some(g) = gl_here() {
                     (g.DeleteFramebuffers)(1, &obj.gl_id);
                 }
@@ -951,46 +959,39 @@ fn create_shader_object(
         &[]
     };
 
-    let translated = d3d_shader::translate_dxbc(bytes);
-    let glsl = match &translated {
-        Some(t) => &t.glsl_source,
-        None => match shader_type {
-            ShaderType::Vertex => d3d_shader::passthrough_vertex_shader(),
-            _ => d3d_shader::passthrough_pixel_shader(),
-        },
+    // Traduction DXBC → GLSL (#137) ; à défaut, l'ancien shader de passage.
+    let stage = match shader_type {
+        ShaderType::Vertex => dxbc::Stage::Vertex,
+        ShaderType::Pixel => dxbc::Stage::Pixel,
+        ShaderType::Geometry => dxbc::Stage::Geometry,
+        _ => dxbc::Stage::Compute,
     };
-
-    let shader = unsafe { (g.CreateShader)(gl_type) };
-    if shader == 0 {
-        return std::ptr::null_mut();
+    let translated = pipeline::translate(bytes, stage);
+    let mut shader = translated
+        .as_ref()
+        .and_then(|t| compile_glsl(g, gl_type, &t.glsl));
+    let meta = if shader.is_some() {
+        translated.map(|t| pipeline::Meta::Shader {
+            stage,
+            inputs: t.inputs,
+            pairs: t.sampler_pairs,
+        })
+    } else {
+        None
+    };
+    if shader.is_none() {
+        let legacy = d3d_shader::translate_dxbc(bytes);
+        let glsl = match (&legacy, shader_type) {
+            (Some(t), _) => Some(t.glsl_source.as_str()),
+            (None, ShaderType::Vertex) => Some(d3d_shader::passthrough_vertex_shader()),
+            (None, ShaderType::Pixel) => Some(d3d_shader::passthrough_pixel_shader()),
+            _ => None,
+        };
+        shader = glsl.and_then(|src| compile_glsl(g, gl_type, src));
     }
+    let shader = shader.unwrap_or(0);
 
-    unsafe {
-        let src = glsl.as_ptr() as *const gl::GLchar;
-        let len = glsl.len() as gl::GLint;
-        (g.ShaderSource)(shader, 1, &src, &len);
-        (g.CompileShader)(shader);
-
-        let mut ok = 0i32;
-        (g.GetShaderiv)(shader, gl::GL_COMPILE_STATUS, &mut ok);
-        if ok == 0 {
-            let mut log_len = 0i32;
-            (g.GetShaderiv)(shader, gl::GL_INFO_LOG_LENGTH, &mut log_len);
-            if log_len > 0 {
-                let mut buf = vec![0u8; log_len as usize];
-                (g.GetShaderInfoLog)(
-                    shader,
-                    log_len,
-                    std::ptr::null_mut(),
-                    buf.as_mut_ptr() as *mut gl::GLchar,
-                );
-                let msg = String::from_utf8_lossy(&buf);
-                log_warn!("d3d11", "erreur de compilation shader : {}", msg);
-            }
-        }
-    }
-
-    Box::into_raw(Box::new(SimpleComObj {
+    let obj = Box::into_raw(Box::new(SimpleComObj {
         vtable: &SIMPLE_COM_VTABLE,
         ref_count: AtomicU32::new(1),
         gl_id: shader,
@@ -998,7 +999,47 @@ fn create_shader_object(
         view_resource: std::ptr::null_mut(),
         view_desc: [0; 6],
         view_desc_len: 0,
-    }))
+    }));
+    if let Some(m) = meta {
+        pipeline::register(obj.cast(), m);
+    }
+    obj
+}
+
+/// Compile un shader GLSL ; `None` (et le journal du pilote) en cas d'échec.
+fn compile_glsl(g: &gl::GlFunctions, gl_type: gl::GLenum, glsl: &str) -> Option<gl::GLuint> {
+    unsafe {
+        let shader = (g.CreateShader)(gl_type);
+        if shader == 0 {
+            return None;
+        }
+        let src = glsl.as_ptr() as *const gl::GLchar;
+        let len = glsl.len() as gl::GLint;
+        (g.ShaderSource)(shader, 1, &src, &len);
+        (g.CompileShader)(shader);
+        let mut ok = 0i32;
+        (g.GetShaderiv)(shader, gl::GL_COMPILE_STATUS, &mut ok);
+        if ok != 0 {
+            return Some(shader);
+        }
+        let mut log_len = 0i32;
+        (g.GetShaderiv)(shader, gl::GL_INFO_LOG_LENGTH, &mut log_len);
+        let mut buf = vec![0u8; log_len.max(1) as usize];
+        (g.GetShaderInfoLog)(
+            shader,
+            log_len,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as *mut gl::GLchar,
+        );
+        log_warn!(
+            "d3d11",
+            "erreur de compilation shader : {}",
+            String::from_utf8_lossy(&buf)
+        );
+        crate::log_debug!("d3d11", "source refusée :\n{glsl}");
+        (g.DeleteShader)(shader);
+        None
+    }
 }
 
 // ────────────────────── InputLayout ──────────────────────
@@ -1029,37 +1070,14 @@ struct InputLayoutData {
 }
 
 fn create_input_layout(descs: *const D3D11InputElementDesc, count: u32) -> *mut SimpleComObj {
-    let mut elements = Vec::new();
-    for i in 0..count {
-        let d = unsafe { &*descs.add(i as usize) };
-        let (components, gl_type, norm) = dxgi_format_to_gl_type(d.format);
-        elements.push(InputElement {
-            slot: d.input_slot,
-            offset: d.aligned_byte_offset,
-            components,
-            gl_type,
-            normalized: norm,
-            stride: 0,
-        });
-    }
-
-    // We store element info but use a SimpleComObj wrapper
-    // Elements are stored in a leaked vec for simplicity
-    let elems = Box::leak(Box::new(elements));
-    LAYOUT_STORE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(elems as *const Vec<InputElement> as usize);
-
-    Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
-        ref_count: AtomicU32::new(1),
-        gl_id: elems as *const Vec<InputElement> as u32,
-        resource_tex: 0,
-        view_resource: std::ptr::null_mut(),
-        view_desc: [0; 6],
-        view_desc_len: 0,
-    }))
+    let elements = if descs.is_null() {
+        Vec::new()
+    } else {
+        unsafe { pipeline::layout_from(descs, count) }
+    };
+    let obj = create_dummy_com_obj() as *mut SimpleComObj;
+    pipeline::register(obj.cast(), pipeline::Meta::Layout(elements));
+    obj
 }
 
 static LAYOUT_STORE: Mutex<Vec<usize>> = Mutex::new(Vec::new());
@@ -1078,6 +1096,8 @@ struct DeviceContextState {
     index_format: u32,
     viewports: [D3D11Viewport; 16],
     num_viewports: u32,
+    /// Pipeline programmable et états fixes (d3d11_pipeline.rs).
+    pipe: pipeline::State,
 }
 
 impl Default for DeviceContextState {
@@ -1093,6 +1113,7 @@ impl Default for DeviceContextState {
             index_format: DXGI_FORMAT_R16_UINT,
             viewports: [D3D11Viewport::default(); 16],
             num_viewports: 0,
+            pipe: pipeline::State::default(),
         }
     }
 }
@@ -1646,12 +1667,9 @@ unsafe extern "win64" fn ctx_vs_set_shader(
     _class: *const *mut c_void,
     _n: u32,
 ) {
+    pipeline::set_shader(this, 0, shader);
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    s.current_vs = match as_simple(shader) {
-        Some(o) => (*o).gl_id,
-        None => 0,
-    };
-    update_program(&mut s);
+    s.current_vs = as_simple(shader).map_or(0, |o| (*o).gl_id);
 }
 
 unsafe extern "win64" fn ctx_ps_set_shader(
@@ -1660,12 +1678,9 @@ unsafe extern "win64" fn ctx_ps_set_shader(
     _class: *const *mut c_void,
     _n: u32,
 ) {
+    pipeline::set_shader(this, 1, shader);
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    s.current_ps = match as_simple(shader) {
-        Some(o) => (*o).gl_id,
-        None => 0,
-    };
-    update_program(&mut s);
+    s.current_ps = as_simple(shader).map_or(0, |o| (*o).gl_id);
 }
 
 fn topology_to_gl(t: u32) -> gl::GLenum {
@@ -1875,17 +1890,21 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
     let Some(g) = gl_here() else { return };
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
 
-    if count > 0 && !rtvs.is_null() {
-        let rtv = *rtvs;
-        if let Some(obj) = as_simple(rtv) {
-            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*obj).gl_id);
-            s.current_rtv = obj;
-        }
+    s.current_rtv = if count > 0 && !rtvs.is_null() {
+        as_simple(*rtvs).unwrap_or(std::ptr::null_mut())
     } else {
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
-        s.current_rtv = std::ptr::null_mut();
-    }
+        std::ptr::null_mut()
+    };
     s.current_dsv = as_simple(dsv).unwrap_or(std::ptr::null_mut());
+    let fbo = if s.current_rtv.is_null() {
+        0
+    } else {
+        (*s.current_rtv).gl_id
+    };
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
+    if fbo != 0 {
+        pipeline::attach_depth(g, s.current_dsv);
+    }
 }
 
 unsafe extern "win64" fn ctx_om_set_rt_uav(
@@ -1902,7 +1921,7 @@ unsafe extern "win64" fn ctx_om_set_rt_uav(
 }
 
 unsafe extern "win64" fn ctx_clear_rtv(
-    _this: *mut DeviceContext,
+    this: *mut DeviceContext,
     view: *mut c_void,
     color: *const [f32; 4],
 ) {
@@ -1911,22 +1930,48 @@ unsafe extern "win64" fn ctx_clear_rtv(
         return;
     }
     let Some(obj) = as_simple(view) else { return };
-    let obj = &*obj;
     let c = &*color;
-
-    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, obj.gl_id);
-    (g.ClearColor)(c[0], c[1], c[2], c[3]);
-    (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+    // Effacement entier : ni ciseaux ni masque d'écriture (règle D3D).
+    let current = (*this)
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .current_rtv;
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*obj).gl_id);
+    pipeline::clear(g, || {
+        (g.ColorMask)(1, 1, 1, 1);
+        (g.ClearColor)(c[0], c[1], c[2], c[3]);
+        (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
+    });
+    if !current.is_null() {
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*current).gl_id);
+    }
 }
 
 unsafe extern "win64" fn ctx_clear_dsv(
-    _this: *mut DeviceContext,
-    _view: *mut c_void,
+    this: *mut DeviceContext,
+    view: *mut c_void,
     flags: u32,
-    _depth: f32,
-    _stencil: u8,
+    depth: f32,
+    stencil: u8,
 ) {
     let Some(g) = gl_here() else { return };
+    let Some(view) = as_simple(view) else { return };
+    let current = (*this)
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .current_rtv;
+    // La vue de profondeur est effacée dans le cadre de la cible courante,
+    // où elle est rattachée ; sans cible, par un cadre temporaire.
+    let mut temp = 0;
+    if current.is_null() {
+        (g.GenFramebuffers)(1, &mut temp);
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, temp);
+    } else {
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*current).gl_id);
+    }
+    pipeline::attach_depth(g, view);
     let mut mask = 0u32;
     if flags & 1 != 0 {
         mask |= gl::GL_DEPTH_BUFFER_BIT;
@@ -1934,7 +1979,24 @@ unsafe extern "win64" fn ctx_clear_dsv(
     if flags & 2 != 0 {
         mask |= gl::GL_STENCIL_BUFFER_BIT;
     }
-    (g.Clear)(mask);
+    pipeline::clear(g, || {
+        (g.DepthMask)(1);
+        (g.StencilMask)(0xFF);
+        (g.ClearDepth)(depth as f64);
+        (g.ClearStencil)(stencil as i32);
+        (g.Clear)(mask);
+    });
+    if temp != 0 {
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+        (g.DeleteFramebuffers)(1, &temp);
+    } else {
+        let dsv = (*this)
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_dsv;
+        pipeline::attach_depth(g, dsv);
+    }
 }
 
 unsafe extern "win64" fn ctx_rs_set_viewports(
@@ -1972,9 +2034,24 @@ unsafe extern "win64" fn ctx_copy_subresource(
 
 unsafe extern "win64" fn ctx_copy_resource(
     _: *mut DeviceContext,
-    _dst: *mut c_void,
-    _src: *mut c_void,
+    dst: *mut c_void,
+    src: *mut c_void,
 ) {
+    let Some(g) = gl_here() else { return };
+    // Texture 2D → texture 2D de même taille : relue par la carte, gardée
+    // côté processeur (Map d'une texture de transfert) et téléversée.
+    if let (Some(d), Some(s)) = (as_texture2d(dst), as_texture2d(src)) {
+        if (*d).desc.width != (*s).desc.width || (*d).desc.height != (*s).desc.height {
+            return;
+        }
+        let Some(pixels) = pipeline::read_texture(g, &*s) else {
+            return;
+        };
+        if (*d).gl_texture != 0 && texture_bytes(&(*d).desc) == Some(pixels.len()) {
+            upload_texture_level0(g, &*d, pixels.as_ptr().cast());
+        }
+        *(*d).staging_buf.lock().unwrap_or_else(|e| e.into_inner()) = pixels;
+    }
 }
 
 unsafe extern "win64" fn ctx_update_subresource(
@@ -2009,6 +2086,7 @@ unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_vo
     if let Some(obj) = as_simple(srv) {
         let obj = &*obj;
         if obj.resource_tex != 0 {
+            pipeline::set_max_level(g, obj.resource_tex, 1000);
             (g.BindTexture)(gl::GL_TEXTURE_2D, obj.resource_tex);
             (g.GenerateMipmap)(gl::GL_TEXTURE_2D);
         }
@@ -2089,45 +2167,45 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     get_private_data: ctx_get_priv,
     set_private_data: ctx_set_priv,
     set_private_data_interface: ctx_set_priv_iface,
-    vs_set_constant_buffers: ctx_noop_3ptr,
-    ps_set_shader_resources: ctx_noop_3ptr,
+    vs_set_constant_buffers: pipeline::vs_set_cbs,
+    ps_set_shader_resources: pipeline::ps_set_srvs,
     ps_set_shader: ctx_ps_set_shader,
-    ps_set_samplers: ctx_noop_3ptr,
+    ps_set_samplers: pipeline::ps_set_samplers,
     vs_set_shader: ctx_vs_set_shader,
-    draw_indexed: ctx_draw_indexed,
-    draw: ctx_draw,
+    draw_indexed: pipeline::ctx_draw_indexed,
+    draw: pipeline::ctx_draw,
     map: ctx_map,
     unmap: ctx_unmap,
-    ps_set_constant_buffers: ctx_noop_3ptr,
-    ia_set_input_layout: ctx_ia_set_input_layout,
-    ia_set_vertex_buffers: ctx_ia_set_vertex_buffers,
-    ia_set_index_buffer: ctx_ia_set_index_buffer,
-    draw_indexed_instanced: ctx_draw_indexed_instanced,
-    draw_instanced: ctx_draw_instanced,
-    gs_set_constant_buffers: ctx_noop_3ptr,
-    gs_set_shader: ctx_noop_set_shader,
+    ps_set_constant_buffers: pipeline::ps_set_cbs,
+    ia_set_input_layout: pipeline::ia_set_input_layout,
+    ia_set_vertex_buffers: pipeline::ia_set_vertex_buffers,
+    ia_set_index_buffer: pipeline::ia_set_index_buffer,
+    draw_indexed_instanced: pipeline::ctx_draw_indexed_instanced,
+    draw_instanced: pipeline::ctx_draw_instanced,
+    gs_set_constant_buffers: pipeline::gs_set_cbs,
+    gs_set_shader: pipeline::gs_set_shader,
     ia_set_primitive_topology: ctx_ia_set_topology,
-    vs_set_shader_resources: ctx_noop_3ptr,
-    vs_set_samplers: ctx_noop_3ptr,
+    vs_set_shader_resources: pipeline::vs_set_srvs,
+    vs_set_samplers: pipeline::vs_set_samplers,
     begin: ctx_noop_1ptr,
     end: ctx_noop_1ptr,
     get_data: ctx_get_data,
     set_predication: ctx_noop_pred,
-    gs_set_shader_resources: ctx_noop_3ptr,
-    gs_set_samplers: ctx_noop_3ptr,
+    gs_set_shader_resources: pipeline::gs_set_srvs,
+    gs_set_samplers: pipeline::gs_set_samplers,
     om_set_render_targets: ctx_om_set_render_targets,
     om_set_render_targets_and_unordered: ctx_om_set_rt_uav,
-    om_set_blend_state: ctx_noop_blend,
-    om_set_depth_stencil_state: ctx_noop_ds,
+    om_set_blend_state: pipeline::om_set_blend_state,
+    om_set_depth_stencil_state: pipeline::om_set_depth_stencil_state,
     so_set_targets: ctx_noop_so,
     draw_auto: ctx_noop_void,
     draw_indexed_instanced_indirect: ctx_noop_draw_indirect,
     draw_instanced_indirect: ctx_noop_draw_indirect,
     dispatch: ctx_dispatch,
     dispatch_indirect: ctx_noop_draw_indirect,
-    rs_set_state: ctx_rs_set_state,
-    rs_set_viewports: ctx_rs_set_viewports,
-    rs_set_scissor_rects: ctx_rs_set_scissors,
+    rs_set_state: pipeline::rs_set_state,
+    rs_set_viewports: pipeline::rs_set_viewports,
+    rs_set_scissor_rects: pipeline::rs_set_scissor_rects,
     copy_subresource_region: ctx_copy_subresource,
     copy_resource: ctx_copy_resource,
     update_subresource: ctx_update_subresource,
@@ -3050,10 +3128,10 @@ static DEVICE_VTABLE: DeviceVTable = DeviceVTable {
     create_domain_shader: dev_create_ds,
     create_compute_shader: dev_create_cs,
     create_class_linkage: dev_create_cl,
-    create_blend_state: dev_create_state,
-    create_depth_stencil_state: dev_create_state,
-    create_rasterizer_state: dev_create_state,
-    create_sampler_state: dev_create_state,
+    create_blend_state: pipeline::dev_create_blend,
+    create_depth_stencil_state: pipeline::dev_create_depth,
+    create_rasterizer_state: pipeline::dev_create_raster,
+    create_sampler_state: pipeline::dev_create_sampler,
     create_query: dev_create_state,
     create_predicate: dev_create_state,
     create_counter: dev_create_state,
@@ -3095,6 +3173,7 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         D3D_FEATURE_LEVEL_11_0
     };
 
+    dxgi::ensure_offscreen_context();
     let ctx = create_device_context();
     let dev = Box::into_raw(Box::new(Device {
         vtable: &DEVICE_VTABLE,

@@ -105,6 +105,9 @@ jobs:
       - name: Compiler le runtime
         run: cargo build --release -p winlux
 
+      - name: Installer glslang (validation du GLSL traduit depuis DXBC)
+        run: sudo apt-get update -q && sudo apt-get install -y -q glslang-tools
+
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
@@ -143,6 +146,12 @@ jobs:
 
       - name: Vérifier les comptes locaux, « Changer d'utilisateur » et la veille du menu Démarrer
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-accounts.py
+
+      - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py
+
+      - name: Vérifier la fenêtre Bienvenue et sa réouverture depuis le menu Démarrer
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-welcome.py
 
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
@@ -312,7 +321,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm xvfb xauth libgl1-mesa-dri
 
       - name: Compiler et exécuter les tests C MinGW
         run: |
@@ -388,8 +397,21 @@ jobs:
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
 
+      - name: Navigation au clavier (menu Démarrer, réglages rapides)
+        run: |
+          for kind in start quick; do
+            xvfb-run -a -s '-screen 0 1920x1080x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-keyboard-nav.py "$kind"
+          done
+
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
+
+      - name: Bureau en 1080p, 1440p et 4K (menu Démarrer, réglages rapides, Paramètres)
+        run: |
+          mkdir -p build/captures
+          for size in 1920x1080 2560x1440 3840x2160; do
+            xvfb-run -a -s "-screen 0 ${size}x24" /usr/bin/python3 -B scripts/test-resolutions.py build/captures
+          done
 
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures

@@ -159,15 +159,28 @@ users.write_text("alice:root:shadow\n")
 check(not start["power_menu_has_switch"](), "un seul compte : pas de « Changer d'utilisateur »")
 users.write_text("alice:root:shadow\nbob:user:shadow\n")
 check(start["power_menu_has_switch"](), "deux comptes : « Changer d'utilisateur »")
+live = work / "live-session"
+os.environ["WINLUX_LIVE_MARKER"] = str(live)
+check(start["power_menu_has_logoff"](), "système installé : « Se déconnecter »")
+live.write_text("")
+check(not start["power_menu_has_logoff"](), "session Live : pas de « Se déconnecter »")
+live.unlink()
 source = (HERE / "winlux-start-menu.py").read_text()
 check('"winlux-control", "power-suspend"' in source and '"switch"' in source, "actions du menu d'alimentation")
-for lang, words in (("en", ("Switch user", "Sleep")), ("es", ("Cambiar de usuario", "Suspender")),
-                    ("de", ("Benutzer wechseln", "Energie sparen"))):
+check('"winlux-control", "session-logoff", current_account()' in source, "« Se déconnecter » ferme la session du compte")
+# Ordre de Windows 11 dans le menu d'alimentation.
+order = [source.index(f'_t("{word}")', source.index("def power(")) for word in
+         ("Verrouiller", "Se déconnecter", "Changer d’utilisateur", "Mettre en veille", "Redémarrer", "Arrêter")]
+check(order == sorted(order), f"ordre Windows 11 du menu d'alimentation : {order}")
+for lang, words in (("en", ("Switch user", "Sleep", "Sign out")), ("es", ("Cambiar de usuario", "Suspender", "Cerrar sesión")),
+                    ("de", ("Benutzer wechseln", "Energie sparen", "Abmelden")),
+                    ("fr", ("Changer d’utilisateur", "Mettre en veille", "Se déconnecter"))):
     out = subprocess.run([sys.executable, "-c", "import runpy,sys;m=runpy.run_path(sys.argv[1],run_name='t');"
-                          "print(m['_t']('Changer d’utilisateur'));print(m['_t']('Mettre en veille'))",
+                          "print(m['_t']('Changer d’utilisateur'));print(m['_t']('Mettre en veille'));"
+                          "print(m['_t']('Se déconnecter'))",
                           str(HERE / "winlux-start-menu.py")], env={**os.environ, "WINLUX_LANG": lang},
                          capture_output=True, text=True)
-    check(tuple(out.stdout.split("\n")[:2]) == words, f"{lang} : {out.stdout!r} {out.stderr[-300:]!r}")
+    check(tuple(out.stdout.split("\n")[:3]) == words, f"{lang} : {out.stdout!r} {out.stderr[-300:]!r}")
 
 # ── Paramètres : page 33 « Comptes » ──────────────────────────────────────
 settings = runpy.run_path(str(HERE / "winlux-settings.py"), run_name="settings_test")

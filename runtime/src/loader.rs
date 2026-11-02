@@ -189,6 +189,103 @@ pub fn remove_module(base: usize) -> Option<Module> {
     }
 }
 
+/// Images chargées comme simples données par LoadLibraryEx
+/// (LOAD_LIBRARY_AS_DATAFILE, _EXCLUSIVE ou AS_IMAGE_RESOURCE) : sections
+/// projetées en lecture seule pour leurs ressources, sans imports, sans
+/// relocations ni DllMain. Elles n'apparaissent pas dans MODULES, donc ni
+/// GetModuleHandle ni GetProcAddress ne les voient, comme sous Windows.
+pub static DATA_IMAGES: Mutex<Vec<Module>> = Mutex::new(Vec::new());
+
+/// Marque des handles de données : Windows renvoie l'adresse de l'image
+/// avec le bit 1 (fichier de données) ou 2 (image de ressources).
+pub const DATA_HANDLE_BITS: usize = 3;
+
+/// Charge `path` comme données ; renvoie le handle (adresse | `tag`) ou la
+/// base du module déjà chargé normalement.
+pub fn load_data(path: &Path, tag: usize) -> Result<usize, String> {
+    let _serialized = load_lock();
+    if let Some(existing) = find_module_by_path(path) {
+        increment_ref(existing.base);
+        return Ok(existing.base);
+    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    {
+        let mut data = DATA_IMAGES.lock().unwrap();
+        if let Some(m) = data.iter_mut().find(|m| m.path == canonical) {
+            m.refcount = m.refcount.saturating_add(1);
+            return Ok(m.base | tag);
+        }
+    }
+    let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    let pe = PeImage::parse_resources(&file).map_err(|e| format!("{} : {e}", path.display()))?;
+    let size = round_up(pe.size_of_image as usize, PAGE);
+    let base = unsafe { map_aligned(size).ok_or("mémoire insuffisante pour l'image")? };
+    unsafe {
+        let dst = std::slice::from_raw_parts_mut(base as *mut u8, size);
+        let hs = (pe.size_of_headers as usize).min(file.len()).min(size);
+        dst[..hs].copy_from_slice(&file[..hs]);
+        for s in &pe.sections {
+            if s.raw_size == 0 || s.raw_ptr == 0 {
+                continue;
+            }
+            let start = s.raw_ptr as usize;
+            let mut n = (s.raw_size as usize).min(file.len().saturating_sub(start));
+            if s.virtual_size != 0 {
+                n = n.min(s.virtual_size as usize);
+            }
+            let d = s.rva as usize;
+            if d >= size {
+                continue;
+            }
+            let n = n.min(size - d);
+            dst[d..d + n].copy_from_slice(&file[start..start + n]);
+        }
+        libc::mprotect(base as *mut libc::c_void, size, libc::PROT_READ);
+    }
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    trace!("{} chargé comme données à 0x{base:x}", path.display());
+    DATA_IMAGES.lock().unwrap().push(Module {
+        name,
+        path: canonical,
+        base,
+        size,
+        pe,
+        tls: None,
+        initialized: true,
+        refcount: 1,
+    });
+    Ok(base | tag)
+}
+
+/// Image de données qui commence à `base` (bits de marque retirés).
+pub fn data_image(handle: usize) -> Option<Module> {
+    let base = handle & !DATA_HANDLE_BITS;
+    DATA_IMAGES
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|m| m.base == base)
+        .cloned()
+}
+
+/// FreeLibrary d'un handle de données : `None` s'il n'en est pas un.
+pub fn free_data(handle: usize) -> Option<()> {
+    let base = handle & !DATA_HANDLE_BITS;
+    let mut data = DATA_IMAGES.lock().unwrap();
+    let pos = data.iter().position(|m| m.base == base)?;
+    data[pos].refcount = data[pos].refcount.saturating_sub(1);
+    if data[pos].refcount == 0 {
+        let m = data.remove(pos);
+        unsafe {
+            libc::munmap(m.base as *mut libc::c_void, m.size);
+        }
+    }
+    Some(())
+}
+
 fn round_up(v: usize, a: usize) -> usize {
     (v + a - 1) & !(a - 1)
 }
