@@ -89,6 +89,20 @@ fields = dict(line.split("=", 1) for line in out.getvalue().splitlines())
 assert fields == {"lock_after": "900", "lock_on_resume": "1", "lock_account": "alice",
                   "lock_password": "1", "lock_active": "0"}, fields
 
+# Nom affiché : nom complet (GECOS) s'il existe, sinon l'identifiant.
+passwd = (tmp / "etc/passwd").read_text()
+(tmp / "etc/passwd").write_text(passwd + "testeur:x:1101:1101:Damien Testeur,,,:/home/testeur:/bin/bash\n"
+                                "sansnom:x:1102:1102::/home/sansnom:/bin/bash\n"
+                                "espace:x:1103:1103: ,,,:/home/espace:/bin/bash\n")
+assert lock["display_name"]("testeur") == "Damien Testeur", lock["display_name"]("testeur")
+assert lock["display_name"]("sansnom") == "sansnom"
+assert lock["display_name"]("espace") == "espace"
+assert lock["display_name"]("inconnu") == "inconnu"
+(tmp / "etc/passwd").write_text(passwd)
+source = Path(__file__).with_name("winlux-lock.py").read_text()
+assert "self.name_label.set_text(display_name(name))" in source and "Gtk.Label(label=display_name(self.user))" in source
+assert "Gtk.Button(label=display_name(name))" in source
+
 # Date longue dans les quatre langues.
 day = time.struct_time((2026, 10, 31, 16, 0, 0, 5, 304, 0))
 assert lock["long_date"](day, "fr") == "samedi 31 octobre"
