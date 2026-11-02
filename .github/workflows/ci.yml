@@ -123,6 +123,9 @@ jobs:
       - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
         run: python3 -B scripts/test-gpl-sources.py
 
+      - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
+        run: python3 -B scripts/test-image-identity.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 

@@ -19,6 +19,8 @@ on:
       - scripts/winlux-user-session.sh
       - scripts/winlux-network-watch.sh
       - scripts/stage-apt-root.py
+      - scripts/winlux-brand-image.sh
+      - scripts/list-gpl-sources.py
       - scripts/winlux-update-apt.py
       - scripts/test-update-curl-shim.py
   workflow_dispatch:
@@ -133,6 +135,9 @@ jobs:
           size=$(stat -c %s "build/winlux-live-$RELEASE_NAME.iso")
           echo "Taille de l'ISO : $size octets"
           test "$size" -lt 2147483648 || { echo "ISO trop grande pour une release GitHub (limite 2 Gio)" >&2; exit 1; }
+          # Offre de sources GPL : la liste des paquets sources part avec l'ISO.
+          test -s build/sources-gpl.tsv
+          grep -q 'GPL' build/sources-gpl.tsv
           echo "SKIP_ISO=false" >> "$GITHUB_ENV"
 
       - name: Valider les navigateurs en VM
@@ -216,7 +221,7 @@ jobs:
             set -- "$@" build/winlux-release-notes.txt
           fi
           if [ "$SKIP_ISO" = "false" ]; then
-            set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256"
+            set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256" build/sources-gpl.tsv
           fi
           gh release create "$GITHUB_REF_NAME" \
             "$@" \

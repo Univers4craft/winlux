@@ -1110,6 +1110,14 @@ chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
+    # Nom et logos Winlux à la place de ceux d'Ubuntu (politique de Canonical).
+    sh "$root/scripts/winlux-brand-image.sh" "$stage"
+    # Offre de sources GPL : liste exacte des paquets sources de l'image,
+    # dans l'image et à côté de l'ISO (publiée avec chaque version).
+    mkdir -p "$stage/usr/share/doc/winlux"
+    python3 "$root/scripts/list-gpl-sources.py" "$stage" "$stage/usr/share/doc/winlux/sources-gpl.tsv"
+    test -s "$stage/usr/share/doc/winlux/sources-gpl.tsv" || { echo 'sources-gpl.tsv vide' >&2; exit 1; }
+    cp "$stage/usr/share/doc/winlux/sources-gpl.tsv" "$root/build/sources-gpl.tsv"
 fi
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).

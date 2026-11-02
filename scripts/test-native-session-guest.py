@@ -406,6 +406,23 @@ def installer_shortcut():
 installer_shortcut()
 print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
 
+def image_identity():
+    """Image : nom Winlux (pas Ubuntu), aucun logo Ubuntu, liste des sources GPL."""
+    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    assert release.get("NAME", "").strip('"') == "Winlux", release
+    assert "ubuntu" not in release.get("PRETTY_NAME", "").lower(), release
+    assert "Ubuntu" not in Path("/etc/lsb-release").read_text().split("DISTRIB_ID=", 1)[1].split("\n", 1)[0]
+    assert Path("/usr/share/icons/hicolor/scalable/apps/distributor-logo.svg").is_file()
+    leftovers = [str(path) for path in Path("/usr/share/icons").glob("*/*/*/ubuntu-logo*")]
+    assert not leftovers, leftovers
+    sources = Path("/usr/share/doc/winlux/sources-gpl.tsv").read_text(encoding="utf-8")
+    rows = [line.split("\t") for line in sources.splitlines() if line and not line.startswith("#")]
+    assert len(rows) > 100 and any("GPL" in row[2] for row in rows), len(rows)
+    assert any(row[0] == "bash" and "GPL" in row[2] for row in rows)
+
+image_identity()
+print("WINLUX_NATIVE_IMAGE_IDENTITY=0", flush=True)
+
 def explorer_accented_folders():
     """Explorateur de l'ISO : Téléchargements s'ouvre (pas « Ce dossier est introuvable »)."""
     home = Path(os.environ.get("HOME") or "/root")

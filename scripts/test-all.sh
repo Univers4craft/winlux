@@ -59,6 +59,7 @@ run installation-auto    python3 -B scripts/test-autoinstall.py
 run partitionnement      python3 -B scripts/test-installer-partitioning.py
 run signalement          python3 -B scripts/test-report.py
 run sources-gpl          python3 -B scripts/test-gpl-sources.py
+run identite-image      python3 -B scripts/test-image-identity.py
 run verrouillage         python3 -B scripts/test-lock.py
 run autorisations        python3 -B scripts/test-permission.py
 run uac                  python3 -B scripts/test-uac.py
