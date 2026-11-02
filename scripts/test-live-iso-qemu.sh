@@ -15,14 +15,9 @@ command -v timeout >/dev/null 2>&1 || { echo "timeout est requis" >&2; exit 1; }
 test -f "$iso" || { echo "ISO absente : $iso" >&2; exit 1; }
 mkdir -p "$(dirname -- "$log")"
 
-# UEFI 32 bits : processeur sans pagination à 5 niveaux (LA57), comme les
-# Atom concernés. Avec LA57, le noyau 64 bits plante dans les services UEFI en
-# mode mixte (page NX), un cas qui n'existe que sous QEMU « -cpu max ».
-cpu=${WINLUX_QEMU_CPU:-max}
-if test "$mode" = uefi32 && test -z "${WINLUX_QEMU_CPU:-}"; then cpu=max,la57=off; fi
 set -- qemu-system-x86_64 \
     -m "${WINLUX_QEMU_MEMORY:-2048}" \
-    -smp "${WINLUX_QEMU_CPUS:-2}" -cpu "$cpu" \
+    -smp "${WINLUX_QEMU_CPUS:-2}" -cpu "${WINLUX_QEMU_CPU:-max}" \
     -accel tcg \
     -display none \
     -nic none \

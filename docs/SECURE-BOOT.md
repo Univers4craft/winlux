@@ -42,9 +42,18 @@ avec Windows, l'installateur pose uniquement le chargeur du mode détecté
 mixte (`CONFIG_EFI_MIXED`). En UEFI 32 bits, le menu GRUB reste en texte : son
 terminal graphique fait planter le noyau 64 bits juste après le chargement
 (reproduit sous QEMU avec OVMF 32 bits et le noyau 7.0 d'Ubuntu 26.04).
-Les tests QEMU en UEFI 32 bits coupent aussi la pagination à 5 niveaux
-(`-cpu max,la57=off`) : avec elle, le noyau plante dans les services UEFI en
-mode mixte, mais aucun processeur de ces tablettes ne l'a.
+En UEFI 32 bits, chaque entrée du menu ajoute `efi=noruntime` : en mode mixte,
+le noyau 7.0 plante dans les services d'exécution UEFI sur un processeur sans
+pages de 1 Go, ce qui est le cas des Atom (reproduit sous QEMU avec
+`-cpu max,pdpe1gb=off`). Le mode du micrologiciel reste détecté, mais les
+variables UEFI sont inaccessibles. Sur une partition EFI à Winlux, cela ne
+change rien, puisque le chargeur est posé dans `EFI/BOOT`. Sur une partition
+partagée avec Windows, l'installateur pose `EFI/winlux/grubia32.efi` sans
+pouvoir créer l'entrée de démarrage : choisissez ce fichier dans le menu de
+démarrage du micrologiciel, ou installez Winlux sur tout le disque.
+
+La même option évite aussi le plantage sous QEMU avec la pagination à 5 niveaux
+(`-cpu max`, LA57) : les tests UEFI 32 bits gardent donc `-cpu max`.
 
 Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
 Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est

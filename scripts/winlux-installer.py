@@ -41,6 +41,14 @@ def firmware_efi_bits():
         return 64
 
 
+def efi_variables_writable():
+    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    try:
+        return any(os.scandir("/sys/firmware/efi/efivars"))
+    except OSError:
+        return False
+
+
 def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
     """Chargeurs UEFI à installer : un processeur 64 bits peut avoir un micrologiciel 32 bits.
 
@@ -4958,6 +4966,12 @@ class InstallerApp(Gtk.Application):
         # visible 5 s quand Windows est proposé à côté.
         menu_timeout, menu_style = (5, "menu") if windows_entry else (1, "hidden")
         grub_cfg = f"""set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}
 serial --unit=0 --speed=115200
@@ -4965,17 +4979,17 @@ terminal_input console serial
 terminal_output console serial
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
     {initrd}
 }}
 {windows_entry}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra} $winlux_efi_args
     {initrd}
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
@@ -4994,6 +5008,10 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             else:
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
+                if not efi_variables_writable():
+                    # UEFI 32 bits démarré avec efi=noruntime : pas de variables UEFI,
+                    # donc pas d'entrée de démarrage (docs/SECURE-BOOT.md).
+                    efi_args.append("--no-nvram")
             for efi_target in efi_grub_targets(layout["own_esp"]):
                 subprocess.run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
                                 f"--boot-directory={target}/boot", "--recheck", *efi_args],

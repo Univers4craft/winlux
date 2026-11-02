@@ -199,6 +199,12 @@ fi'
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "\${grub_platform}-\${grub_cpu}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout=1
 set timeout_style=hidden
 set winlux_term=console
@@ -208,12 +214,12 @@ terminal_input console serial
 terminal_output \$winlux_term serial
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 \$winlux_efi_args
     $initrd_line
 }
 menuentry "Winlux diagnostic installé" --hotkey=d {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8 \$winlux_efi_args
     $initrd_line
 }
 EOF
@@ -221,7 +227,7 @@ if test "$split_root" = 1; then
     cat >>"$work/target/boot/grub/grub.cfg" <<EOF
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1 \$winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 EOF

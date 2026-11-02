@@ -130,6 +130,13 @@ TEXT = {
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
 
+EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante\n'
+              '# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).\n'
+              'set winlux_efi_args=\n'
+              'if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then\n'
+              '    set winlux_efi_args=efi=noruntime\n'
+              'fi\n')
+
 
 def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
     """Comme l'installateur : les deux chargeurs UEFI dans EFI/BOOT, sinon celui du micrologiciel."""
@@ -937,6 +944,12 @@ def grub_template(search_uuid, root_arg, extra, windows_esp_uuid=None):
                    f'    chainloader /EFI/Microsoft/Boot/bootmgfw.efi\n}}\n')
     timeout, style = (5, "menu") if windows else (1, "hidden")
     return f"""set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout={timeout}
 set timeout_style={style}
 serial --unit=0 --speed=115200
@@ -944,17 +957,17 @@ terminal_input console serial
 terminal_output console serial
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 {windows}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
@@ -1004,6 +1017,8 @@ def repair_boot():
                 windows_esp_uuid = output(["blkid", "-s", "UUID", "-o", "value", esp["name"]]).strip() or None
             # ESP partagée avec Windows : dossier et entrée à nous, jamais EFI/BOOT.
             efi_args = ["--bootloader-id=winlux"] if shared else ["--removable", "--no-nvram"]
+            if shared and not any(Path("/sys/firmware/efi/efivars").glob("*")):
+                efi_args.append("--no-nvram")  # efi=noruntime (UEFI 32 bits) : pas de variables
             failed = None
             for efi_target in efi_grub_targets(not shared):
                 result = run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
@@ -1116,22 +1131,22 @@ def key_grub_cfg(root_spec, extra, theme):
     common = "rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=0 loglevel=3 winlux.recovery=1"
     if root_spec and not root_spec.startswith("LABEL=WINLUX_ROOT"):
         entries.append(f'menuentry "{_("Menu de secours de ce PC")}" --hotkey=r {{\n'
-                       f'    linux /boot/vmlinuz root={root_spec} {common}{extra}\n'
+                       f'    linux /boot/vmlinuz root={root_spec} {common}{extra} $winlux_efi_args\n'
                        f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
         title = _("Menu de secours (autre PC Winlux)")
     else:
         title = _("Menu de secours de ce PC")
     entries.append(f'menuentry "{title}" {{\n'
                    f'    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then\n'
-                   f'        linux /boot/vmlinuz root=LABEL=WINLUX_ROOT {common}\n'
+                   f'        linux /boot/vmlinuz root=LABEL=WINLUX_ROOT {common} $winlux_efi_args\n'
                    f'        initrd /boot/winlux-initramfs.cpio.gz\n'
                    f'    else\n        echo "{_("Aucune installation Winlux trouvée sur les disques.")}"\n        sleep 6\n    fi\n}}\n')
     live = "console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0"
     entries.append(f'menuentry "{_("Démarrer Winlux depuis la clé (réinstaller)")}" --hotkey=i {{\n'
-                   f'    linux /boot/vmlinuz {live} quiet winlux.interactive=1\n'
+                   f'    linux /boot/vmlinuz {live} quiet winlux.interactive=1 $winlux_efi_args\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
     entries.append(f'menuentry "{_("Vérifier la clé puis démarrer")}" --hotkey=v {{\n'
-                   f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1\n'
+                   f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1 $winlux_efi_args\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
     # Sans thème, la police Unicode de GRUB (posée par grub-install) garde les accents.
     themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
@@ -1140,7 +1155,7 @@ def key_grub_cfg(root_spec, extra, theme):
         themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
                   "    insmod png\n    set gfxmode=auto\n    if terminal_output gfxterm; then\n"
                   "        set theme=/boot/grub/themes/winlux/theme.txt\n        set winlux_term=gfxterm\n    fi\nfi\n")
-    return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + themed +
+    return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + EFI32_ARGS + themed +
             "if serial --unit=0 --speed=115200; then\n    terminal_input serial console\n"
             "    terminal_output serial $winlux_term\nfi\n" + "".join(entries))
 

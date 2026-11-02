@@ -64,6 +64,14 @@ assert 'check-iso-boot-paths.sh" "$out"' in build
 for script in ("scripts/build-live-iso.sh", "scripts/install.sh"):
     assert '= "efi-i386" ]; then\n    set winlux_term=console\nelif loadfont' in (project / script).read_text(), script
 assert reset.count('efi-i386\\" ]; then\\n    set winlux_term=console\\nelif loadfont') == 2
+# Mode mixte : sans efi=noruntime, noyau 7.0 planté dans les services UEFI sur
+# un processeur sans pages de 1 Go (Atom) ; reproduit sous QEMU -cpu max,pdpe1gb=off.
+import re  # noqa: E402
+for script in ("scripts/build-live-iso.sh", "scripts/install.sh", "scripts/winlux-installer.py", "scripts/winlux-reset.py"):
+    text = (project / script).read_text()
+    assert "set winlux_efi_args=efi=noruntime" in text, script
+    lines = [line for line in text.splitlines() if re.match(r"\s*(f')?\s*linux [^ ]*vmlinuz", line)]
+    assert lines and all("winlux_efi_args" in line for line in lines), (script, [line for line in lines if "winlux_efi_args" not in line])
 assert 'ia32_loader "$iso_root"' in (project / "scripts/winlux-secureboot.sh").read_text()
 
 if all(shutil.which(tool) for tool in ("grub-mkrescue", "xorriso", "mdir")) and all(
