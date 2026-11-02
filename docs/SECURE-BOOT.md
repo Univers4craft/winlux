@@ -42,6 +42,9 @@ avec Windows, l'installateur pose uniquement le chargeur du mode détecté
 mixte (`CONFIG_EFI_MIXED`). En UEFI 32 bits, le menu GRUB reste en texte : son
 terminal graphique fait planter le noyau 64 bits juste après le chargement
 (reproduit sous QEMU avec OVMF 32 bits et le noyau 7.0 d'Ubuntu 26.04).
+Les tests QEMU en UEFI 32 bits coupent aussi la pagination à 5 niveaux
+(`-cpu max,la57=off`) : avec elle, le noyau plante dans les services UEFI en
+mode mixte, mais aucun processeur de ces tablettes ne l'a.
 
 Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
 Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est

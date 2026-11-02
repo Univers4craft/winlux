@@ -100,7 +100,10 @@ grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { echo "Installation en VM échouée 
 # démarré par BOOTIA32.EFI que l'installateur pose à côté de BOOTX64.EFI.
 for mode in bios uefi uefi32; do
     log="$work/$mode.log"
-    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
+    # uefi32 : sans LA57, comme les Atom (voir test-live-iso-qemu.sh).
+    cpu=max
+    test "$mode" != uefi32 || cpu=max,la57=off
+    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -cpu "$cpu" -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
     if test "$mode" = uefi32; then
         cp "${WINLUX_OVMF32_VARS:-/usr/share/OVMF/OVMF32_VARS_4M.fd}" "$work/vars.fd"
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF32:-/usr/share/OVMF/OVMF32_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
