@@ -367,28 +367,21 @@ if command -v xmessage >/dev/null 2>&1; then
     chmod 755 "$stage/usr/bin/xmessage"
     copy_shared_libraries "$(command -v xmessage)"
 fi
-# Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
-# .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
-# téléchargé depuis https://www.microsoft.com/edge). Sinon le bouton Edge
-# affiche une notification.
+# Microsoft Edge et Google Chrome ne sont jamais intégrés à l'ISO : leurs
+# licences interdisent de les redistribuer (Edge : « you will not ... share,
+# publish, distribute, or lend the Software », section 2.8 f). Ils se
+# téléchargent chez leur éditeur, sur le PC, à la demande de l'utilisateur.
 if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
-    test -r "$WINLUX_EDGE_DEB" || { echo "paquet Edge illisible : $WINLUX_EDGE_DEB" >&2; exit 1; }
-    dpkg-deb -x "$WINLUX_EDGE_DEB" "$stage"
-    test -x "$stage/opt/microsoft/msedge/msedge" || { echo "paquet Edge inattendu" >&2; exit 1; }
-    missing=$(ldd "$stage/opt/microsoft/msedge/msedge" | awk '/not found/ { print $1 }')
-    if [ -n "$missing" ]; then
-        echo "bibliothèques manquantes pour Edge sur cette machine : $missing" >&2
-        echo "installez-les (sudo apt install microsoft-edge-stable les tire) puis relancez" >&2
-        exit 1
-    fi
-    copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
-    ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
+    echo "WINLUX_EDGE_DEB refusé : Edge ne peut pas être redistribué dans l'ISO" >&2
+    exit 1
 fi
-# Offline browser catalogue; official packages are prepared before this build.
+# Offline browser catalogue: only Firefox (MPL, official unmodified build).
 browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
-if test -f "$browser_packages/edge.deb"; then
+if test -f "$browser_packages/firefox.deb" || test -f "$browser_packages/edge.deb" || test -f "$browser_packages/chrome.deb"; then
     sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
 fi
+# Téléchargement d'Edge et de Chrome chez l'éditeur (index signé, SHA-256).
+install -D -m 755 "$root/scripts/prepare-browser-packages.py" "$stage/usr/lib/winlux/winlux-browser-fetch"
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
@@ -689,14 +682,14 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
-# Installation hors ligne d'Edge (copie, vérification, extraction) : en
+# Installation hors ligne de Firefox (copie, vérification, extraction) : en
 # arrière-plan et en basse priorité, elle ne retarde plus le bureau.
 browser_setup_pid=
-if test -f /usr/share/winlux/browsers/edge.deb; then
+if test -f /usr/share/winlux/browsers/firefox.deb && ! test -x /opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox; then
     # The static BusyBox of the image has no nice applet: use coreutils.
     nice=
     if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
-    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
+    $nice /usr/bin/winlux-browsers --install firefox >/run/winlux/browser-setup.log 2>&1 &
     browser_setup_pid=$!
 fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
@@ -1119,6 +1112,8 @@ if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     test -s "$stage/usr/share/doc/winlux/sources-gpl.tsv" || { echo 'sources-gpl.tsv vide' >&2; exit 1; }
     cp "$stage/usr/share/doc/winlux/sources-gpl.tsv" "$root/build/sources-gpl.tsv"
 fi
+# Aucun logiciel d'éditeur tiers non redistribuable dans l'image publiée.
+sh "$root/scripts/check-image-redistributable.sh" "$stage"
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
 for unit in smbd nmbd samba samba-ad-dc wsdd; do

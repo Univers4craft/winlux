@@ -27,7 +27,16 @@ for tool in dpkg-deb setpriv xhost tar; do
     cp --remove-destination "$binary" "$stage/usr/bin/$tool"
     libraries "$binary"
 done
-for id in edge chrome firefox; do
+# Edge et Chrome ne sont jamais copiés dans l'image : leurs licences en
+# interdisent la redistribution. Ils se téléchargent chez l'éditeur, à la
+# demande (winlux-browsers --install). Seul Firefox part hors ligne.
+for id in edge chrome; do
+    if test -e "$cache/$id.deb"; then
+        echo "$id.deb refusé : licence non redistribuable, téléchargement à la demande uniquement" >&2
+        exit 1
+    fi
+done
+for id in firefox; do
     test -f "$cache/$id.deb" && test -f "$cache/$id.sha256" && test -f "$cache/$id.version"
     printf '%s  %s\n' "$(cat "$cache/$id.sha256")" "$cache/$id.deb" | sha256sum -c -
     for suffix in deb sha256 version source; do cp "$cache/$id.$suffix" "$target/"; done

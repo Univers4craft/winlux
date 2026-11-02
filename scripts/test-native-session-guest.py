@@ -234,19 +234,22 @@ assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/
 html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
-# Since #155 the init installs Edge in the background. Make sure it is
-# really installed before launching it, and show why if it is not.
-if "browser_edge=installed" not in run("winlux-browsers", "--status"):
+# The init installs Firefox, the only browser shipped in the image, in the
+# background (Edge and Chrome may not be redistributed: they are downloaded
+# from their publisher on demand). Make sure it is installed before launching.
+if "browser_firefox=installed" not in run("winlux-browsers", "--status"):
     setup_log = Path("/run/winlux/browser-setup.log")
-    print("Edge absent au lancement ; journal d'installation :\n" +
+    print("Firefox absent au lancement ; journal d'installation :\n" +
           (setup_log.read_text(errors="replace") if setup_log.exists() else "(aucun)"), flush=True)
-    print(run("winlux-browsers", "--install", "edge", timeout=600), flush=True)
-subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
+    print(run("winlux-browsers", "--install", "firefox", timeout=600), flush=True)
+status = run("winlux-browsers", "--status")
+assert "browser_edge=downloadable" in status and "browser_chrome=downloadable" in status, status
+subprocess.Popen(["winlux-browsers", "--launch", "firefox", html.as_uri()], stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]
 assert geometry[2] < 1920 and geometry[3] < 1040, geometry
-print("WINLUX_NATIVE_EDGE_WINDOWED=0", flush=True)
+print("WINLUX_NATIVE_BROWSER_WINDOWED=0", flush=True)
 clients = client_ids()
 for window in [explorer, settings, editor, terminal, browser]:
     assert int(window, 16) in clients, window

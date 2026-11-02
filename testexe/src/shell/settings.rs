@@ -1354,6 +1354,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                         b"installed" => tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"]),
                         b"available" => tr4(&[b"Paquet pr\xEAt - installation hors ligne", b"Package ready - offline installation", b"Paquete listo - instalaci\xF3n sin conexi\xF3n", b"Paket bereit - Offline-Installation"]),
                         b"update" => tr4(&[b"Mise \xE0 jour disponible", b"Update available", b"Actualizaci\xF3n disponible", b"Update verf\xFCgbar"]),
+                        // Edge et Chrome : jamais fournis, téléchargés chez l'éditeur.
+                        b"downloadable" => tr4(&[b"T\xE9l\xE9charg\xE9 sur le site de l'\xE9diteur \xE0 l'installation", b"Downloaded from the publisher's website when installed", b"Se descarga del sitio del editor al instalar", b"Wird bei der Installation von der Website des Herstellers geladen"]),
                         _ => tr4(&[b"Paquet absent de cette image", b"Package not in this image", b"Paquete ausente de esta imagen", b"Paket nicht in diesem Image"]),
                     },
                 );

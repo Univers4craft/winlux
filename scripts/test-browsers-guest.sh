@@ -11,10 +11,16 @@ kill -0 "$xvfb"
 mkdir -p /home/winlux-web
 printf '<!doctype html><title>WINLUX_BROWSER_OK</title><h1>Winlux</h1>\n' > /tmp/browser-test.html
 chmod 644 /tmp/browser-test.html
-for browser in edge chrome firefox; do
-    winlux-browsers --install "$browser"
-done
-for browser in edge chrome; do
+# Seul Firefox est dans l'image ; Edge et Chrome se téléchargent chez leur
+# éditeur (pas de réseau dans cette VM) : ils ne doivent pas être fournis.
+winlux-browsers --install firefox
+winlux-browsers --status | grep -qx 'browser_edge=downloadable'
+winlux-browsers --status | grep -qx 'browser_chrome=downloadable'
+test ! -e /usr/share/winlux/browsers/edge.deb && test ! -e /usr/share/winlux/browsers/chrome.deb
+test ! -e /opt/microsoft && test ! -e /opt/google
+echo 'WINLUX_BROWSER_edge_RESULT=0'
+echo 'WINLUX_BROWSER_chrome_RESULT=0'
+for browser in $(ls /opt/winlux/browsers 2>/dev/null | grep -E '^(edge|chrome)$' || true); do
     profile="/tmp/${browser}-profile"
     mkdir -p "$profile"
     chown winlux-web:winlux-web "$profile"

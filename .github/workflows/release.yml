@@ -78,8 +78,10 @@ jobs:
             python3-gi gir1.2-gtk-3.0
           sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
 
-      - name: Préparer Edge, Chrome et Firefox hors ligne
-        run: python3 scripts/prepare-browser-packages.py build/browser-packages
+      # Seul Firefox est redistribuable : Edge et Chrome se téléchargent chez
+      # leur éditeur après l'installation, à la demande de l'utilisateur.
+      - name: Préparer Firefox hors ligne
+        run: python3 scripts/prepare-browser-packages.py --only firefox build/browser-packages
 
       - name: Préparer le bureau natif et ses applications
         run: python3 scripts/prepare-desktop-packages.py build/desktop-components
