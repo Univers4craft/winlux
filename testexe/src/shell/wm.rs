@@ -1836,7 +1836,7 @@ pub unsafe fn draw(g: &mut Gfx) {
         text(
             g.hdc,
             g.f.small,
-            rgb(0xFF, 0xFF, 0xFF),
+            p.on_accent,
             cx + sw - 58,
             cy + 70,
             b"OK",
@@ -1878,7 +1878,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             text(
                 g.hdc,
                 g.f.small,
-                rgb(0xFF, 0xFF, 0xFF),
+                p.on_accent,
                 mx + 40,
                 my + 2,
                 &buf[..i],

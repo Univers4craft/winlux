@@ -39,6 +39,10 @@ THEMES = [("sombre", "dark", "", 0), ("clair", "light", "", 0),
          [(f"contraste {n}", "dark", "", n) for n in (1, 2, 3, 4)]
 
 
+FULL = ("sombre", "clair", "clair jaune", "contraste 1", "contraste 2")
+SAMPLE = ("settings-00", "settings-03", "settings-08", "settings-17", "settings-21")
+
+
 def targets(only):
     found = [("bureau", {"WINLUX_DESKTOP_DEMO": "1"})]
     found += [(app, {"WINLUX_NATIVE_SHELL": "1", "WINLUX_SHELL_APP": app}) for app in APPS]
@@ -85,6 +89,9 @@ def main():
         jobs = []
         for label, theme, accent, contrast in themes:
             for name, extra in targets(only):
+                # Toutes les pages de Paramètres dans les thèmes de base ; ailleurs, un échantillon.
+                if name.startswith("settings-") and label not in FULL and name not in SAMPLE and not only:
+                    continue
                 home = Path(temp) / f"{label.replace(' ', '-')}-{name}"
                 (home / ".local/share/winlux").mkdir(parents=True)
                 (home / ".local/share/winlux/accessibility.ini").write_text(f"contrast={contrast}\n", encoding="latin-1")

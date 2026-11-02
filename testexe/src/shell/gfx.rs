@@ -1915,15 +1915,17 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 // Centré sur la page : calé à gauche, « </> » dépassait à
                 // droite et l'icône du Bloc-notes paraissait décalée dans
                 // son bouton de barre des tâches.
-                Glyph::Code => text_centered(
-                    hdc,
-                    f.small,
-                    11,
-                    rgb(0x2B, 0x7F, 0xDA),
-                    (l + r) / 2,
-                    y + s * 2 / 5,
-                    b"</>",
-                ),
+                Glyph::Code => {
+                    // Encre calculée contre la page réellement peinte : en
+                    // contraste élevé, page et encre étaient converties
+                    // séparément (cyan sur blanc, 1,4:1).
+                    let page = chrome(rgb(0xF4, 0xF6, 0xF9));
+                    let ink = readable(chrome(rgb(0x1F, 0x6F, 0xC8)), &[page], 450);
+                    let mapped = CHROME_MAP;
+                    CHROME_MAP = false;
+                    text_centered(hdc, f.small, 11, ink, (l + r) / 2, y + s * 2 / 5, b"</>");
+                    CHROME_MAP = mapped;
+                }
                 Glyph::Pdf => {
                     fill(
                         hdc,
