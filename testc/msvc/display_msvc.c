@@ -1,7 +1,7 @@
 // Définition d'écran et rampe gamma des jeux (#271), au format MSVC (clang en
 // mode x86_64-pc-windows-msvc, sans CRT) : EnumDisplaySettingsW,
 // ChangeDisplaySettingsExW (CDS_TEST, mode refusé, vrai changement),
-// GetDeviceGammaRamp. xrandr est remplacé par un faux (scripts/test-display.sh)
+// GetDeviceGammaRamp. xrandr est remplacé par un faux (scripts/test-display-mode.sh)
 // qui note ses appels ; le script vérifie ensuite que l'écran est remis
 // comme avant après la fin du programme.
 // Code de sortie : 0 si tout passe, sinon le numéro du premier test raté.

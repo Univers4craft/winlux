@@ -91,7 +91,7 @@ rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
 plante : un gardien `winlux --display-restore`, lancé au premier changement avec
 l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
 Rien n'est écrit dans la configuration d'écran mémorisée. Test :
-`scripts/test-display.sh` (faux xrandr).
+`scripts/test-display-mode.sh` (faux xrandr).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
