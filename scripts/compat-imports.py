@@ -60,6 +60,12 @@ def normalize(dll: str) -> str:
         return "advapi32"
     if base.startswith("msvcr") and base != "msvcrt":
         return "msvcrt"
+    if base == "wsock32":
+        return "ws2_32"
+    if base == "sspicli":
+        return "secur32"
+    if base == "cfgmgr32" or base.startswith("api-ms-win-devices-config-"):
+        return "setupapi"
     if base == "iertutil":
         return "comctl32"
     if base == "xaudio2_9redist":
@@ -85,8 +91,10 @@ def load_exports(path):
 def lookup(exports, dll, func):
     if func in exports.get(dll, ()):
         return True
+    if dll == "ntdll":
+        return func in exports.get("msvcrt", ())
     if dll == "kernel32":
-        return func in exports.get("ntdll", ()) or (
+        return lookup(exports, "ntdll", func) or (
             func.startswith("Reg") and func in exports.get("advapi32", ())
         )
     return False

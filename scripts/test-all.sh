@@ -64,6 +64,7 @@ run uac                  python3 -B scripts/test-uac.py
 run relais-root          python3 -B scripts/test-root.py
 run coller-bureau        python3 -B scripts/test-desktop-paste.py
 run modes-alimentation   python3 -B scripts/test-power-modes.py
+run redemarrage-garde    python3 -B scripts/test-power-reboot-guard.py
 run claude-code          python3 -B scripts/test-claude-code.py
 run reinitialisation    python3 -B scripts/test-reset.py
 run assistant            python3 -B scripts/test-assistant.py
@@ -77,6 +78,14 @@ run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
+# Vrais jeux (docs/VRAIS-JEUX.md) : chaque import système de SuperTuxKart et de
+# Warzone 2100 est fourni ; puis leurs fonctions, si les tests MinGW sont construits.
+run jeux-imports         python3 -B scripts/test-games-imports.py
+if [ -x target/release/winlux ] && [ -f target/mingw/games_suite.exe ] && [ -f target/mingw/games_suite_ucrt.exe ]; then
+    for exe in games_suite games_suite_ucrt; do
+        run "jeux-$exe" sh -c "cd \"\$(mktemp -d)\" && WINLUX_GAMES_TEST=jeu WINLUX_GUI=headless \"$PWD/target/release/winlux\" \"$PWD/target/mingw/$exe.exe\""
+    done
+fi
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
 display() {
@@ -92,6 +101,7 @@ run exceptions-materielles sh scripts/test-hw-exceptions.sh
 # Paquets MSIX (#272) : runtime et hello.exe compilés requis.
 run paquets-msix         sh scripts/test-msix.sh
 run manettes-hid         sh scripts/test-hid.sh
+run deviceiocontrol      sh scripts/test-devio.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5

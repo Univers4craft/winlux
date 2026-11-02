@@ -11,8 +11,17 @@ command -v "$cc" >/dev/null 2>&1 || { echo "$cc absent : installez gcc-mingw-w64
 mkdir -p "$out"
 for src in "$root"/testc/*.c; do
     name=$(basename "$src" .c)
-    "$cc" -O2 -Wall -Werror -o "$out/$name.exe" "$src"
+    libs=""
+    # games_suite : DLL système des jeux (hid, dnsapi, winhttp…).
+    test "$name" = games_suite && libs="-lhid -ldnsapi -lwinhttp -lshell32 -ladvapi32 -luser32"
+    # shellcheck disable=SC2086
+    "$cc" -O2 -Wall -Werror -o "$out/$name.exe" "$src" $libs
 done
+# games_suite une seconde fois contre l'UCRT (api-ms-win-crt-*), comme les
+# jeux construits avec llvm-mingw (Warzone 2100) : specs où msvcrt devient ucrt.
+"$cc" -dumpspecs | sed 's/-lmsvcrt/-lucrt/g' >"$out/ucrt.specs"
+"$cc" -specs="$out/ucrt.specs" -D_UCRT -O2 -Wall -Werror -o "$out/games_suite_ucrt.exe" "$root/testc/games_suite.c" \
+    -lhid -ldnsapi -lwinhttp -lshell32 -ladvapi32 -luser32
 if command -v "$cxx" >/dev/null 2>&1; then
     for src in "$root"/testc/*.cpp; do
         test -f "$src" || continue

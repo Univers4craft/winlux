@@ -78,7 +78,8 @@ pub(crate) fn attributes(path: &std::path::Path) -> std::io::Result<(u32, std::f
     Ok((a, meta))
 }
 
-#[repr(C)]
+// FILETIME n'est aligné que sur 4 octets : cFileName est à l'offset 44.
+#[repr(C, packed(4))]
 pub struct Win32FindDataA {
     pub attributes: u32,
     pub creation_time: u64,
@@ -92,7 +93,8 @@ pub struct Win32FindDataA {
     pub alternate_name: [c_char; 14],
 }
 
-#[repr(C)]
+// FILETIME n'est aligné que sur 4 octets : cFileName est à l'offset 44.
+#[repr(C, packed(4))]
 pub struct Win32FindDataW {
     pub attributes: u32,
     pub creation_time: u64,
