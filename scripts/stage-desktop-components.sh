@@ -41,6 +41,13 @@ mkdir -p "$stage/usr/share/winlux/native"
 cp -a "$project/integration/native/." "$stage/usr/share/winlux/native/"
 mkdir -p "$stage/usr/share/dbus-1/services"
 cp "$project/integration/native/dbus/org.freedesktop.Notifications.service" "$stage/usr/share/dbus-1/services/"
+# « Afficher dans le dossier » des navigateurs et des applications passe par
+# org.freedesktop.FileManager1 : c'est l'Explorateur Winlux, plus Thunar
+# (org.xfce.Thunar.FileManager1.service retiré, un seul fournisseur).
+grep -l '^Name=org.freedesktop.FileManager1$' "$stage"/usr/share/dbus-1/services/*.service 2>/dev/null | while IFS= read -r other; do
+    rm -f "$other"
+done
+cp "$project/integration/native/dbus/org.freedesktop.FileManager1.service" "$stage/usr/share/dbus-1/services/"
 mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 # Identité Winlux : thème d'icônes maison (complété par Adwaita) et sons système.
@@ -62,6 +69,14 @@ while IFS= read -r type; do
     test -n "$type" || continue
     grep -q "^$type=" "$mimeapps" && continue
     sed -i "/^\[Default Applications\]/a $type=winlux-explorer.desktop;" "$mimeapps"
+done
+# Dossiers : toujours l'Explorateur (xdg-open, GIO, liens des navigateurs et
+# des .exe), y compris dans la liste propre à XFCE, qui passe avant.
+for list in "$mimeapps" "$stage/etc/xdg/xfce-mimeapps.list" "$stage/usr/share/applications/xfce-mimeapps.list"; do
+    test -f "$list" || continue
+    sed -i '/^inode\/directory=/d' "$list"
+    grep -q '^\[Default Applications\]' "$list" || printf '[Default Applications]\n' >>"$list"
+    sed -i '/^\[Default Applications\]/a inode/directory=winlux-explorer.desktop;' "$list"
 done
 # Icônes des .exe et des raccourcis .lnk (Bureau, Explorateur, Thunar) via tumbler.
 mkdir -p "$stage/usr/share/thumbnailers"

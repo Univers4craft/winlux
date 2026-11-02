@@ -10,6 +10,15 @@ fold = module["fold"]
 for typed, label in (("parametres", "Paramètres"), ("RESEAU", "Réseau Wi-Fi"), ("offnen", "Öffnen"),
                      ("strasse", "Straße"), ("configuracion", "Configuración"), ("oeuvre", "Œuvre")):
     assert fold(typed) in fold(label), (typed, label)
+# Navigateurs : vrais noms, « Par défaut »/« Ouvrir » seulement une fois installé.
+shown, names = module["browser_buttons_shown"], module["BROWSER_NAMES"]
+assert list(names) == ["chrome", "edge", "firefox"] and names["firefox"] == "Mozilla Firefox", names
+state = {"browser_chrome": "installed", "browser_edge": "downloadable", "browser_firefox": "update"}
+assert shown(state, "browser-default-chrome") and shown(state, "browser-launch-chrome")
+assert not shown(state, "browser-install-chrome")
+assert shown(state, "browser-install-edge") and not shown(state, "browser-default-edge") and not shown(state, "browser-launch-edge")
+assert shown(state, "browser-install-firefox") and shown(state, "browser-launch-firefox")
+assert not shown({}, "browser-default-chrome") and shown({}, "browser-install-chrome")
 # Temps de démarrage (page Processeur) : durée lisible et étape la plus longue.
 boot = module["boot_summary"]({"boot_known": "1", "boot_total_ms": "8420", "boot_phases": "init:1500,drivers:3150",
                                "boot_slowest": "drivers", "boot_slowest_ms": "3150"})

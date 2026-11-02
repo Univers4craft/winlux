@@ -105,7 +105,9 @@ with tempfile.TemporaryDirectory() as temp:
 browsers_sh = (project / "scripts/winlux-browsers.sh").read_text()
 assert "browser=${2:-none}" in browsers_sh and "printf 'none\\n'" in browsers_sh and "edge\\n' ;;" not in browsers_sh
 settings_py = (project / "scripts/winlux-settings.py").read_text()
-assert 'for name in ("chrome", "edge", "firefox")' in settings_py
+# Ordre alphabétique, aucun navigateur mis en avant (vrais noms dans BROWSER_NAMES).
+assert 'BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}' in settings_py
+assert "for ident in BROWSER_NAMES" in settings_py
 # Paquet d'intégration (hors ISO) : même règle, aucun script dédié à un éditeur.
 assert not (project / "scripts/install-edge.sh").exists()
 integration = (project / "integration/install.sh").read_text()

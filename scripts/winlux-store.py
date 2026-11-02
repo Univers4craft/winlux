@@ -46,6 +46,10 @@ import zipfile
 
 ROOT = os.environ.get("WINLUX_CONTROL_ROOT", "")
 RUN = Path(ROOT + "/run/winlux")
+# Index, fiches, avancement et journal du Store : dossier propre au compte
+# (winlux-shell-app), relu par la fenêtre du Store. Les verrous de l'amorçage
+# (starter, lancé par l'init) restent dans RUN.
+STORE_RUN = Path(os.environ.get("WINLUX_STORE_RUN") or RUN)
 HOME = Path(os.environ.get("HOME", "/root"))
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "winlux/store"
 DATA = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
@@ -810,7 +814,7 @@ class Apt(Source):
             os.close(w)
             return 126
         env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 proc = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
                                         pass_fds=(w,), env=env)
@@ -934,7 +938,7 @@ class Flatpak(Source):
 
     def flatpak(self, args, progress):
         progress(5, "Flatpak...")
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 proc = subprocess.Popen(["flatpak", *args, "-y", "--noninteractive"], stdout=subprocess.PIPE,
                                         stderr=log, stdin=subprocess.DEVNULL)
@@ -1035,7 +1039,7 @@ class Snap(Source):
         if cmd is None:
             return 126
         progress(10, "Snap Store...")
-        with open(RUN / "store.log", "ab") as log:
+        with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 return subprocess.run(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, timeout=1800).returncode
             except (OSError, subprocess.SubprocessError):
@@ -1553,7 +1557,7 @@ def install_windows_file(path, progress, args=(), entry=None):
         cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
-    with open(RUN / "store.log", "ab") as log:
+    with open(STORE_RUN / "store.log", "ab") as log:
         try:
             code = subprocess.run(cmd, cwd=str(path.parent), stdout=log, stderr=log,
                                   stdin=subprocess.DEVNULL).returncode
@@ -1621,7 +1625,7 @@ def collect(force=False, only_local=False):
         try:
             apps += s.apps(force)
         except Exception as exc:  # une source défaillante ne bloque pas les autres
-            with open(RUN / "store.log", "a") as log:
+            with open(STORE_RUN / "store.log", "a") as log:
                 log.write(f"source {s.name}: {exc}\n")
     return sources, merge(apps)
 
@@ -1672,11 +1676,11 @@ def write_index(sources, apps, refreshing, download=False):
         exe = re.search(r"^X-Winlux-Executable=(.*)$", text, re.M)
         if name:
             lines.append(f"win={field(name.group(1))}|{field(exe.group(1) if exe else '')}")
-    atomic_write(RUN / "store.txt", "\n".join(lines) + "\n")
+    atomic_write(STORE_RUN / "store.txt", "\n".join(lines) + "\n")
     atomic_write(CACHE / "index.json", json.dumps([a.__dict__ for a in apps], default=str))
 
 def refresh(force=False):
-    lock = RUN / "store-refresh.lock"
+    lock = STORE_RUN / "store-refresh.lock"
     try:
         lock.mkdir(parents=True)
     except FileExistsError:
@@ -1720,7 +1724,7 @@ def find(key):
 def details(key):
     src, app = find(key)
     if app is None:
-        atomic_write(RUN / "store-detail.txt", f"key={field(key)}\nerror=1\n")
+        atomic_write(STORE_RUN / "store-detail.txt", f"key={field(key)}\nerror=1\n")
         return 2
     app = src.details(app)
     index = {a.get("source") + ":" + a.get("ref"): a for a in load_json(CACHE / "index.json", [])}
@@ -1738,10 +1742,10 @@ def details(key):
         s = SOURCE_BY_NAME.get(alt.split(":", 1)[0])
         lines.append(f"alt={field(alt)}|{s.label if s else alt}")
     # Fiche affichée tout de suite ; les captures (réseau) suivent.
-    atomic_write(RUN / "store-detail.txt", "\n".join(lines + ["partial=1"]) + "\n")
+    atomic_write(STORE_RUN / "store-detail.txt", "\n".join(lines + ["partial=1"]) + "\n")
     urls = app.screenshots or (src.more_screenshots(app) if hasattr(src, "more_screenshots") else [])
     shots = [m for m in (media(u, "shots") for u in urls[:5]) if m]
-    atomic_write(RUN / "store-detail.txt", "\n".join(lines + [f"shot={s}" for s in shots]) + "\n")
+    atomic_write(STORE_RUN / "store-detail.txt", "\n".join(lines + [f"shot={s}" for s in shots]) + "\n")
     return 0
 
 class Progress:
@@ -1750,7 +1754,7 @@ class Progress:
 
     def __call__(self, percent, message, state="running"):
         percent = max(0, min(100, int(percent)))
-        atomic_write(RUN / "store-progress.txt",
+        atomic_write(STORE_RUN / "store-progress.txt",
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
                      f"percent={percent}\nmessage={field(message, 200)}\n")
         if self.hook:
@@ -1827,7 +1831,7 @@ def operate(action, target, hook=None, reindex=True, known=""):
             # apt, flatpak ou un installateur sans réseau : le dire simplement.
             progress(0, tr("offline"), "error")
         else:
-            progress(0, tr("failed", code=code, log=RUN / "store.log"), "error")
+            progress(0, tr("failed", code=code, log=STORE_RUN / "store.log"), "error")
         return code
     finally:
         lock.rmdir()
@@ -2069,7 +2073,11 @@ def starter(args):
     return starter_run()
 
 def main(argv):
-    RUN.mkdir(parents=True, exist_ok=True)
+    try:
+        RUN.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    STORE_RUN.mkdir(parents=True, exist_ok=True)
     action = argv[1] if len(argv) > 1 else "refresh"
     target = argv[2] if len(argv) > 2 else ""
     if action == "refresh":

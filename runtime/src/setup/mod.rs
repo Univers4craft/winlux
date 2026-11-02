@@ -19,6 +19,7 @@ pub mod lzma;
 pub mod msix;
 pub mod nsis;
 pub mod programs;
+pub mod sevenz;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
@@ -42,6 +43,8 @@ pub enum Kind {
     Inno,
     /// Paquet MSIX ou AppX (archive ZIP, pas un .exe).
     Msix,
+    /// Exécutable auto-extractible 7z (installateur de 7-Zip…).
+    SevenZip,
 }
 
 impl Kind {
@@ -50,6 +53,7 @@ impl Kind {
             Kind::Nsis => "nsis",
             Kind::Inno => "inno",
             Kind::Msix => "msix",
+            Kind::SevenZip => "7z",
         }
     }
 }
@@ -64,6 +68,9 @@ pub fn detect(data: &[u8]) -> Option<Kind> {
     }
     if nsis::find_header(data).is_some() {
         return Some(Kind::Nsis);
+    }
+    if sevenz::find_archive(data).is_some() {
+        return Some(Kind::SevenZip);
     }
     None
 }
@@ -715,6 +722,7 @@ pub fn info(path: &Path) -> Result<Info, String> {
     match detect(&data) {
         Some(Kind::Inno) => inno::info(&data),
         Some(Kind::Nsis) => nsis::info(&data, path),
+        Some(Kind::SevenZip) => sevenz::info(&data, path),
         Some(Kind::Msix) | None => {
             Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into())
         }
@@ -735,6 +743,7 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
         match kind {
             Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
             Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
+            Kind::SevenZip => sevenz::install(&data, path, opts, &mut inst)?,
             Kind::Msix => unreachable!("un .exe n'est jamais un paquet MSIX"),
         }
     }

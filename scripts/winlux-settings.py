@@ -140,6 +140,7 @@ _TR = {
     'Connexion': ('Connection', 'Conexión', 'Verbindung'),
     'Volume': ('Volume', 'Volumen', 'Lautstärke'),
     'Batterie': ('Battery', 'Batería', 'Akku'),
+    'Alimentation': ('Power', 'Energía', 'Energie'),
     'Mode': ('Mode', 'Modo', 'Modus'),
     'Écran éteint après': ('Turn off screen after', 'Apagar pantalla tras', 'Bildschirm aus nach'),
     'Veille après': ('Sleep after', 'Suspender tras', 'Energiesparmodus nach'),
@@ -545,6 +546,40 @@ def read(name):
     except OSError: return ""
 
 
+def power_hardware(root=None):
+    """Matériel d'alimentation réellement présent : (batterie, capot, rétroéclairage).
+
+    Sans batterie (ordinateur de bureau, VM), les réglages « sur batterie »
+    sont masqués, jamais grisés ; de même pour le capot et la luminosité."""
+    base = Path(root or os.environ.get("WINLUX_HW_ROOT", "/"))
+    battery = False
+    for supply in (base / "sys/class/power_supply").glob("*"):
+        try:
+            kind = (supply / "type").read_text().strip()
+            present = (supply / "present").read_text().strip() if (supply / "present").exists() else "1"
+        except OSError:
+            continue
+        if kind == "Battery" and present == "1" and (supply / "capacity").exists():
+            battery = True
+    lid = any((base / "proc/acpi/button/lid").glob("*/state"))
+    backlight = any((base / "sys/class/backlight").glob("*/brightness"))
+    return battery, lid, backlight
+
+
+def power_page_items(fields, actions, hardware):
+    """Champs et boutons de la page Alimentation selon le matériel détecté."""
+    battery, lid, backlight = hardware
+    def keep(key):
+        if not battery and (key == "battery" or key.endswith("-dc")):
+            return False
+        if not lid and key in ("power_lid", "power-lid"):
+            return False
+        if not backlight and (key == "power_brightness" or key.startswith("power-brightness-")):
+            return False
+        return True
+    return [f for f in fields if keep(f[1])], [a for a in actions if keep(a[1])]
+
+
 def _power_modes():
     """Modes d'alimentation disponibles (winlux-power-modes, installé à côté)."""
     from importlib.machinery import SourceFileLoader
@@ -662,6 +697,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         # Une page sans contenu possible sur cette machine n'apparaît pas.
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+        # Sans batterie, la page s'appelle « Alimentation » (comme un PC de bureau).
+        if not power_hardware()[0]: PAGES[23] = _t("Alimentation")
         # Sans PipeWire, « Son » garde les commandes simples de l’ancienne page.
         self.sound_fallback = SOUND_PAGE in self.hidden_pages
         self.hidden_pages.discard(SOUND_PAGE)
@@ -806,22 +843,26 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             available = _power_modes()
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
+            _, actions = power_page_items([], actions, power_hardware())
         if self.page == 11:
             # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
-            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("chrome", "edge", "firefox")
+            # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
+            actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
         self.rollback_button = None
+        self.browser_buttons = {}
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
+            if action.startswith("browser-"): self.browser_buttons[action] = button
         self.buttons = flow
         display_status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line) if self.page == 8 else {}
         # Écrans détaillés (définition, fréquence, échelle par écran) : sections_screens.
@@ -855,6 +896,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.poll()
         self.body.show_all()
         self.progress.set_visible(self.page == 7)
+        if self.page == 11:
+            # show_all() vient de tout réafficher : on remasque selon l'état réel.
+            self.show_browser_buttons(dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line))
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
@@ -950,6 +994,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.notice.set_text(_t("Opération en cours…"))
         self.buttons.set_sensitive(False)
 
+    def show_browser_buttons(self, status):
+        for action, button in getattr(self, "browser_buttons", {}).items():
+            child = button.get_parent() or button
+            shown = browser_buttons_shown(status, action)
+            if child.get_visible() != shown: child.set_visible(shown)
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -970,6 +1020,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
+        if self.page == 23:
+            fields, _ = power_page_items(fields, [], power_hardware())
         def shown(key):
             value = status.get(key)
             # Échelle non réglée : automatique (et non « Indisponible »), en %.
@@ -979,8 +1031,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 except ValueError:
                     return value
             if key == "browser_default":
-                names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
-                return names.get(value, _t("Aucun : choisissez-en un ci-dessous"))
+                return BROWSER_NAMES.get(value, _t("Aucun : choisissez-en un ci-dessous"))
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
@@ -992,6 +1043,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
+            self.show_browser_buttons(status)
             waiting = browsers_waiting()
             if waiting:
                 text += "\n" + _t("En attente d’Internet, installé au prochain démarrage connecté : {names}").format(names=", ".join(waiting))
@@ -1063,9 +1115,23 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
 
+# Ordre alphabétique : aucun navigateur mis en avant.
+BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+
+
+def browser_buttons_shown(status, action):
+    """« Par défaut » et « Ouvrir » seulement pour un navigateur installé ;
+    « Installer » seulement pour un navigateur absent (ou à mettre à jour)."""
+    verb, _, ident = action[len("browser-"):].partition("-")
+    installed = status.get(f"browser_{ident}") in ("installed", "update")
+    if verb == "install":
+        return not installed or status.get(f"browser_{ident}") == "update"
+    return installed
+
+
 def browsers_waiting():
     """Navigateurs demandés sans réseau, que l'init installera (winlux-browsers)."""
-    names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+    names = BROWSER_NAMES
     ids = read("/etc/winlux/browser-install-pending").split() + read("/etc/winlux/first-boot-browser").split()[:1]
     return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
 

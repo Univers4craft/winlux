@@ -41,6 +41,7 @@ _LANG = LOCK["_LANG"]
 _COL = {"en": 0, "es": 1, "de": 2}
 
 _TR = {
+    "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Contrôle de compte d'utilisateur": (
         "User Account Control", "Control de cuentas de usuario", "Benutzerkontensteuerung"),
     "Voulez-vous autoriser cette application à apporter des modifications à votre appareil ?": (
@@ -223,6 +224,16 @@ def run_dialog(app, win_path, elevate=False):
         prompt = (_t("Pour continuer, entrez le mot de passe de {name}.", name=user) if user != "root"
                   else _t("Pour continuer, entrez le mot de passe d'un administrateur."))
         body.pack_start(Gtk.Label(label=prompt, xalign=0, wrap=True, margin_top=10), False, False, 0)
+        osk = osk_command()
+        if osk:
+            # Tablette sans clavier : bouton du clavier tactile dans le champ,
+            # et clavier ouvert d'office s'il n'y a aucun clavier physique.
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "input-keyboard-symbolic")
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Clavier tactile"))
+            entry.connect("icon-press", lambda *_: osk_run(osk, "show"))
+            if not physical_keyboard(osk):
+                osk_run(osk, "show")
+                result["osk"] = osk
         body.pack_start(entry, False, False, 0)
         body.pack_start(error, False, False, 0)
 
@@ -256,7 +267,34 @@ def run_dialog(app, win_path, elevate=False):
     window.set_default(yes)
     (entry if ask_password else no).grab_focus()
     Gtk.main()
+    if result.get("osk"):
+        # Le clavier ouvert pour ce mot de passe se referme avec la fenêtre.
+        osk_run(result["osk"], "hide")
     return result["ok"]
+
+
+def osk_command():
+    """Clavier tactile (winlux-osk), installé ou à côté de ce script."""
+    if os.path.exists("/usr/bin/winlux-osk"):
+        return ["/usr/bin/winlux-osk"]
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "winlux-osk.py")
+    return [sys.executable, script] if os.path.exists(script) else None
+
+
+def physical_keyboard(command):
+    try:
+        out = subprocess.run(command + ["detect"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return not out.startswith("keyboard=0")
+
+
+def osk_run(command, verb):
+    try:
+        subprocess.Popen(command + [verb], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+    return False
 
 
 def main(argv):

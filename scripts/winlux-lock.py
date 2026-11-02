@@ -605,9 +605,11 @@ def run_lock(start="clock"):
             window.show_all()
             if main:
                 self.signin.hide()
+                self.accounts.hide()
                 if self.osk is not None:
                     self.osk.hide()
                     self.osk_button.hide()
+                self.select_account(self.user)
             return window
 
         def keyboard_view(self, overlay):
@@ -636,7 +638,8 @@ def run_lock(start="clock"):
             keys.set_valign(Gtk.Align.END)
             keys.set_halign(Gtk.Align.FILL)
             screen = Gdk.Screen.get_default()
-            keys.set_size_request(-1, max(220, min(300, int((screen.get_height() if screen else 768) * 0.36))))
+            self.osk_height = max(220, min(300, int((screen.get_height() if screen else 768) * 0.36)))
+            keys.set_size_request(-1, self.osk_height)
             overlay.add_overlay(keys)
             self.osk = keys
 
@@ -654,15 +657,17 @@ def run_lock(start="clock"):
             self.osk.set_visible(visible)
             self.signin.set_valign(Gtk.Align.START if visible else Gtk.Align.CENTER)
             self.signin.set_margin_top(32 if visible else 0)
+            # Autres comptes (en bas à gauche) et bouton du clavier (en bas à
+            # droite) passent au-dessus des touches au lieu de les recouvrir.
+            above = self.osk_height + 16 if visible else 0
+            self.accounts.set_margin_bottom(above or 28)
+            self.osk_button.set_margin_bottom(above or 24)
 
         def osk_send(self, key, _modifiers):
             """Touches du clavier tactile vers le champ du mot de passe."""
             self.last_typing = time.monotonic()
             if self.entry is not None:
                 type_into(self.entry, key, self.submit)
-                self.accounts.hide()
-                self.select_account(self.user)
-            return window
 
         def accounts_view(self):
             """Autres comptes en bas à gauche : un clic change de compte."""
