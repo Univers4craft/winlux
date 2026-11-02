@@ -146,6 +146,15 @@ if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
         fi
     done
 fi
+# Bureau de Windows 11 : la Corbeille seule (#30). Les autres icônes
+# d'xfdesktop s'activent dans Paramètres ; un choix existant est gardé.
+if test -x /usr/bin/xfconf-query; then
+    for icon in trash:true filesystem:false home:false removable:false; do
+        property="/desktop-icons/file-icons/show-${icon%%:*}"
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
+            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
+    done
+fi
 # Compositeur facultatif : sans lui, un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"

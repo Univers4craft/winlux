@@ -114,6 +114,13 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
+# Bureau de Windows 11 : la Corbeille seule (#30). Les autres icônes
+# d'xfdesktop s'activent dans Paramètres ; un choix existant est gardé.
+for icon in trash:true filesystem:false home:false removable:false; do
+    property="/desktop-icons/file-icons/show-${icon%%:*}"
+    /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
+done
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
