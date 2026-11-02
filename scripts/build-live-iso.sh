@@ -203,7 +203,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -1069,8 +1069,11 @@ sequential_status=$?
 echo "WINLUX_LIVE_SEQUENTIAL_EXIT=$sequential_status"
 
 echo "Winlux live test: parallel PE suite"
+# QEMU sans accélération (TCG, 2 vCPU) : dix exécutables à la fois
+# dépassent les 30 s prévus pour une machine réelle.
 WINLUX_BIN=/usr/bin/winlux \
 WINLUX_TESTDIR=/opt/winlux/tests \
+WINLUX_TEST_TIMEOUT=120 \
     /bin/sh /opt/winlux/scripts/test-runtime-parallel.sh
 parallel_status=$?
 echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"
