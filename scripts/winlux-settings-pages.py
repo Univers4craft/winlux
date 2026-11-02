@@ -466,6 +466,67 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
 ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+
+
+# ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
+
+def _rgb(color):
+    color = color.lstrip("#")
+    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def luminance(color):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb(color)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast(first, second):
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def mix(first, second, amount):
+    """Mélange first → second (amount de 0 à 1)."""
+    return "#%02x%02x%02x" % tuple(round(a + (b - a) * amount) for a, b in zip(_rgb(first), _rgb(second)))
+
+
+def text_on(background):
+    """Texte noir ou blanc, celui qui se lit le mieux sur ce fond."""
+    return "#000000" if contrast("#000000", background) >= contrast("#ffffff", background) else "#ffffff"
+
+
+def readable(color, background, minimum=4.5):
+    """color assombrie ou éclaircie juste assez pour atteindre minimum:1 sur background."""
+    target = text_on(background)
+    step = 0
+    while contrast(color, background) < minimum and step < 20:
+        step += 1
+        color = mix(color, target, 0.1)
+    return color if contrast(color, background) >= minimum else target
+
+
+def settings_palette(dark, accent="#8178b7"):
+    """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
+    if dark:
+        p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
+             "card_hover": "#2c3344", "entry": "#171b25", "border": "#48536b", "button": "#30384b",
+             "button_hover": "#414b64", "disabled_fg": "#858da0", "disabled_bg": "#252a36", "dim": "#adb6c9"}
+    else:
+        p = {"bg": "#f3f5fa", "fg": "#1f2330", "side": "#e9ecf4", "hover": "#dce1ec", "card": "#ffffff",
+             "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
+             "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
+    p["accent"] = accent
+    # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
+    p["selected"] = mix(p["side"], accent, 0.45)
+    p["selected_fg"] = text_on(p["selected"])
+    p["selected_dim"] = p["selected_fg"]
+    for key in ("dim",):
+        for surface in ("bg", "side", "card", "hover"):
+            p[key] = readable(p[key], p[surface])
+    return p
 EXE_SCALES = (("auto", "Automatique (comme l’écran)"), ("1", "100 %"), ("1.25", "125 %"), ("1.5", "150 %"), ("2", "200 %"))
 # Pavé tactile : (clé touchpad_*, titre, explication), comme la page PE.
 TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
@@ -1068,7 +1129,9 @@ class ExtraPages:
             swatch = Gtk.Button(label="✓" if prefs.get("accent", "").lower() == color else " ")
             swatch.set_size_request(44, 36)
             provider = Gtk.CssProvider()
-            provider.load_from_data(f"button {{ background: {color}; color: #ffffff; border-color: {color}; }}".encode())
+            # Coche noire ou blanche selon la teinte (blanc sur turquoise : 2,6:1).
+            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; "
+                                    f"border-color: {color}; }}".encode())
             swatch.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
             swatch.connect("clicked", lambda *_, c=color: self.tool(["winlux-personalize", "accent", c]))
             palette.pack_start(swatch, False, False, 0)

@@ -52,6 +52,8 @@ pub unsafe fn native_app() -> Option<usize> {
     (NATIVE_APP != usize::MAX).then_some(NATIVE_APP)
 }
 pub unsafe fn native_init() {
+    crate::gfx::audit_init();
+    crate::gfx::forced_look();
     crate::gfx::a11y_reload();
     let mut mode = [0i8; 32];
     let n = GetEnvironmentVariableA(c"WINLUX_SHELL_APP".as_ptr(), mode.as_mut_ptr(), 32);
@@ -1834,7 +1836,7 @@ pub unsafe fn draw(g: &mut Gfx) {
         text(
             g.hdc,
             g.f.small,
-            rgb(0xFF, 0xFF, 0xFF),
+            p.on_accent,
             cx + sw - 58,
             cy + 70,
             b"OK",
@@ -1876,7 +1878,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             text(
                 g.hdc,
                 g.f.small,
-                rgb(0xFF, 0xFF, 0xFF),
+                p.on_accent,
                 mx + 40,
                 my + 2,
                 &buf[..i],

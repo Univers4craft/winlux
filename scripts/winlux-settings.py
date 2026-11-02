@@ -581,6 +581,56 @@ def about_build(info):
     return "".join("\n" + line for line in lines)
 
 
+def dark_theme():
+    """Thème sombre demandé : GTK_THEME, préférence GTK ou thème « …-dark »/« …Inverse »."""
+    forced = os.environ.get("GTK_THEME")
+    if forced:
+        return forced.lower().endswith((":dark", "-dark", "inverse"))
+    settings = Gtk.Settings.get_default()
+    name = (settings.get_property("gtk-theme-name") or "").lower()
+    if name == "highcontrast":
+        return False
+    return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name or "inverse" in name
+
+
+# Chaque nœud qui porte du texte reçoit sa couleur : rien n'est laissé au
+# thème GTK ni au gtk.css utilisateur, qui pourraient poser un fond différent.
+SETTINGS_CSS = """
+  window, window box, window viewport, window list, window label {{ background-color: transparent; }}
+  window {{ background: {bg}; color: {fg}; }}
+  label {{ color: {fg}; }}
+  #sidebar {{ background: {side}; padding: 16px; }}
+  #sidebar list, #sidebar viewport {{ background: {side}; color: {fg}; }}
+  #sidebar row {{ padding: 10px; border-radius: 6px; color: {fg}; background: transparent; }}
+  #sidebar row:hover {{ background: {hover}; }}
+  #sidebar row:selected, #sidebar row:selected:hover {{ background: {selected}; color: {selected_fg}; }}
+  #sidebar row:selected label {{ color: {selected_fg}; }}
+  #sidebar .sub {{ color: {dim}; font-size: 13px; }}
+  #sidebar row:selected .sub {{ color: {selected_dim}; }}
+  #sidebar .open {{ font-weight: bold; }}
+  #content {{ background: {bg}; }}
+  #content list, #content list row {{ background: {card}; color: {fg}; }}
+  #content list row:hover {{ background: {card_hover}; }}
+  #content list row:selected, #content list row:selected label {{ background: {selected}; color: {selected_fg}; }}
+  entry {{ background: {entry}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 8px; }}
+  entry:disabled {{ color: {disabled_fg}; }}
+  selection, entry selection {{ background: {selected}; color: {selected_fg}; }}
+  button {{ background: {button}; color: {fg}; border: 1px solid {accent}; border-radius: 6px; padding: 10px 14px;
+           box-shadow: none; background-image: none; text-shadow: none; }}
+  button label {{ color: {fg}; }}
+  button:hover {{ background: {button_hover}; }}
+  button:disabled, button:disabled label {{ color: {disabled_fg}; background: {disabled_bg}; }}
+  button:checked, button:checked label {{ background: {selected}; color: {selected_fg}; }}
+  combobox button, combobox button label, menu, menuitem, menuitem label {{ background: {button}; color: {fg}; }}
+  menuitem:hover, menuitem:hover label {{ background: {selected}; color: {selected_fg}; }}
+  progressbar text {{ color: {fg}; }}
+  .heading {{ font-size: 24px; font-weight: bold; }}
+  .subtitle, label.subtitle {{ color: {dim}; }}
+  .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; }}
+  .section {{ font-size: 16px; font-weight: bold; margin-top: 6px; }}
+"""
+
+
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Paramètres"))
@@ -605,33 +655,15 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.page = wanted
         self.process = None
         self.active_action = None
-        css = Gtk.CssProvider()
-        css.load_from_data(b"""
-          window { background: #181b24; color: #ecedf5; }
-          #sidebar { background: #202430; padding: 16px; }
-          #sidebar list, #sidebar viewport { background: #202430; color: #ecedf5; }
-          #sidebar row { padding: 10px; border-radius: 6px; }
-          #sidebar row:hover { background: #30374a; }
-          #sidebar row:selected { background: #423d66; }
-          #sidebar .sub { color: #c5cbe0; font-size: 13px; }
-          #sidebar .open { font-weight: bold; }
-          #content list, #content list row { background: #242a38; color: #ecedf5; }
-          #content list row:hover { background: #2c3344; }
-          entry { background: #171b25; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 8px; }
-          button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 10px 14px; box-shadow: none; }
-          button:hover { background: #414b64; }
-          button:disabled { color: #858da0; background: #252a36; }
-          .heading { font-size: 24px; font-weight: bold; }
-          .subtitle { color: #adb6c9; }
-          .card { background: #242a38; border-radius: 8px; padding: 16px; }
-          .section { font-size: 16px; font-weight: bold; margin-top: 6px; }
-        """)
-        Gtk.StyleContext.add_provider_for_screen(self.get_screen(), css, 600)
-        personal = Path.home() / ".config/gtk-3.0/gtk.css"
-        if personal.is_file():
-            override = Gtk.CssProvider()
-            override.load_from_path(str(personal))
-            Gtk.StyleContext.add_provider_for_screen(self.get_screen(), override, 800)
+        # Couleurs qui suivent le thème clair/sombre (et l'accent), à une priorité
+        # au-dessus du gtk.css de winlux-personalize : sinon son fond clair passait
+        # sous les gris clairs de cette feuille (1,6:1 en thème clair).
+        self.css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(self.get_screen(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        self.apply_theme()
+        gtk_settings = Gtk.Settings.get_default()
+        for name in ("gtk-theme-name", "gtk-application-prefer-dark-theme"):
+            gtk_settings.connect(f"notify::{name}", lambda *_: self.apply_theme())
         outer = Gtk.Box()
         self.add(outer)
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -675,6 +707,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         GLib.timeout_add(1000, self.poll)
         self.show_all()
         self.progress.set_visible(self.page == 7)
+
+    def apply_theme(self):
+        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#8178b7"))
+        self.css.load_from_data(SETTINGS_CSS.format(**p).encode())
 
     def label(self, text, style=None):
         label = Gtk.Label(label=text, xalign=0, wrap=True, selectable=True)

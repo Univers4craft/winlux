@@ -69,6 +69,18 @@ run reinitialisation    python3 -B scripts/test-reset.py
 run assistant            python3 -B scripts/test-assistant.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 
+# Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
+display() {
+    if [ -n "${DISPLAY:-}" ]; then "$@"
+    elif command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a -s '-screen 0 1920x1080x24' "$@"
+    else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
+}
+run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+# Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
+    run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5
+fi
+
 echo
 echo "$passed réussi(s), $failed échec(s)."
 if [ "$failed" -ne 0 ]; then

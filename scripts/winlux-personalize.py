@@ -54,6 +54,23 @@ def _t(text):
 HOME=Path.home()
 PREF=HOME/".config/winlux/appearance.json"
 
+def text_on(color):
+    """Texte noir ou blanc, celui qui se lit le mieux sur cette couleur (WCAG)."""
+    def channel(value):
+        value/=255
+        return value/12.92 if value<=0.03928 else ((value+0.055)/1.055)**2.4
+    r,g,b=(int(color[i:i+2],16) for i in (1,3,5))
+    lum=0.2126*channel(r)+0.7152*channel(g)+0.0722*channel(b)
+    return "#000000" if (lum+0.05)/0.05>=1.05/(lum+0.05) else "#ffffff"
+
+def appearance_css(dark,accent):
+    """gtk.css commun à toutes les applications GTK (priorité « utilisateur »)."""
+    bg,fg,surface=("#181b24","#ecedf5","#242a38") if dark else ("#f3f5fa","#202430","#ffffff")
+    # Pas de « window box » : les fenêtres qui ont leurs propres couleurs (UAC,
+    # autorisations, signalement) gardaient des boîtes repeintes sous leur texte.
+    on_accent=text_on(accent)
+    return f"window, list, viewport {{background-color:{bg}; color:{fg};}} #sidebar, #sidebar list {{background-color:{surface}; color:{fg};}} #sidebar row:selected, #sidebar row:selected label, selection {{background-color:{accent}; color:{on_accent};}} button {{background:{surface}; color:{fg}; border-color:{accent};}} entry {{background:{surface}; color:{fg};}} .card {{background:{surface};color:{fg};}}"
+
 def apply(kind,value):
     try: state=json.loads(PREF.read_text())
     except (OSError,ValueError): state={"theme":"dark","accent":"#8178b7"}
@@ -96,8 +113,7 @@ def apply(kind,value):
     temp=PREF.with_suffix(".tmp");temp.write_text(json.dumps(state));temp.replace(PREF)
     dark=state.get("theme","dark")=="dark"
     accent=state.get("accent","#8178b7")
-    bg,fg,surface=("#181b24","#ecedf5","#242a38") if dark else ("#f3f5fa","#202430","#ffffff")
-    css=f"window, window box, list, viewport {{background-color:{bg}; color:{fg};}} #sidebar, #sidebar list {{background-color:{surface}; color:{fg};}} #sidebar row:selected, selection {{background-color:{accent};}} button {{background:{surface}; color:{fg}; border-color:{accent};}} entry {{background:{surface}; color:{fg};}} .card {{background:{surface};color:{fg};}}"
+    css=appearance_css(dark,accent)
     style=HOME/".config/gtk-3.0/gtk.css";style.parent.mkdir(parents=True,exist_ok=True)
     marker="/* Winlux appearance */"
     old=style.read_text() if style.exists() else ""
