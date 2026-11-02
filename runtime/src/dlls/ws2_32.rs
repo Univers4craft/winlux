@@ -3279,11 +3279,22 @@ fn named_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn init() {
+    /// Les tests partagent le compteur global WSAStartup/WSACleanup : un
+    /// test qui vide ce compteur pendant qu'un autre utilise ses sockets le
+    /// faisait échouer au hasard. Ils passent donc l'un après l'autre.
+    static WSA_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serialise() -> std::sync::MutexGuard<'static, ()> {
+        WSA_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn init() -> std::sync::MutexGuard<'static, ()> {
+        let guard = serialise();
         unsafe {
             let mut d = [0u8; 408];
             wsa_startup(0x0202, d.as_mut_ptr());
         }
+        guard
     }
     fn cleanup() {
         wsa_cleanup();
@@ -3430,6 +3441,7 @@ mod tests {
 
     #[test]
     fn winsock_startup_ouvre_ferme_et_valide_un_socket() {
+        let _wsa = serialise();
         unsafe {
             // drain any leftover startups from other tests
             while STARTUPS.load(Ordering::Acquire) > 0 {
@@ -3469,7 +3481,7 @@ mod tests {
             addr_out(sa.as_mut_ptr(), 28);
             assert_eq!(sa[0], 23);
         }
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_ne!(s, INVALID_SOCKET);
@@ -3508,7 +3520,7 @@ mod tests {
 
     #[test]
     fn setsockopt_reuseaddr() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_ne!(s, INVALID_SOCKET);
@@ -3543,7 +3555,7 @@ mod tests {
 
     #[test]
     fn ioctlsocket_nonblock() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let mut val: u32 = 1;
@@ -3586,7 +3598,7 @@ mod tests {
 
     #[test]
     fn af_inet6_windows_est_traduit() {
-        init();
+        let _wsa = init();
         unsafe {
             // Sans IPv6 sur la machine de test, rien à vérifier.
             let probe = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
@@ -3647,7 +3659,7 @@ mod tests {
 
     #[test]
     fn wsaeventselect_reveille_sur_connexion_entrante() {
-        init();
+        let _wsa = init();
         unsafe {
             let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let mut addr: libc::sockaddr_in = std::mem::zeroed();
@@ -3692,7 +3704,7 @@ mod tests {
 
     #[test]
     fn select_non_blocking() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             // unconnected socket should be writable
@@ -3725,7 +3737,7 @@ mod tests {
 
     #[test]
     fn wsa_send_recv_tcp() {
-        init();
+        let _wsa = init();
         unsafe {
             let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let val: i32 = 1;
