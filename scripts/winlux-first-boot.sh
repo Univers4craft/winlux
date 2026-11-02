@@ -291,16 +291,16 @@ THEME_CHOICE=${REPLY:-dark}
 
 if test "$TUI" != none; then
     if test "$THEME_CHOICE" = dark; then
-        preview="Thème sombre sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond sombre #181b24  █  │\n  │  █  Texte clair #ecedf5  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+        preview="Thème sombre sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond sombre #181b24  █  │\n  │  █  Texte clair #ecedf5  █  │\n  │  █  Accent    #6a3df0    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
     else
-        preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+        preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #6a3df0    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
     fi
     "$TUI" --title "Aperçu du thème" --msgbox "$preview" "$(dlg_h 14)" "$(dlg_w 40)" 2>/dev/null || true
 else
     if test "$THEME_CHOICE" = dark; then
-        echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #8178b7"
+        echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #6a3df0"
     else
-        echo "  -> Thème clair : fond #f3f5fa, texte #202430, accent #8178b7"
+        echo "  -> Thème clair : fond #f3f5fa, texte #202430, accent #6a3df0"
     fi
 fi
 
@@ -538,7 +538,7 @@ done
 user_home=$(getent passwd "$USERNAME" | cut -d: -f6)
 if test -n "$user_home"; then
     mkdir -p "$user_home/.config/winlux"
-    printf '{"theme":"%s","accent":"#8178b7"}\n' "$THEME_CHOICE" >"$user_home/.config/winlux/appearance.json"
+    printf '{"theme":"%s","accent":"#6a3df0"}\n' "$THEME_CHOICE" >"$user_home/.config/winlux/appearance.json"
     chown -R "$USERNAME:" "$user_home/.config" 2>/dev/null || true
 fi
 

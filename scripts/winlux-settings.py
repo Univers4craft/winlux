@@ -724,7 +724,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.progress.set_visible(self.page == 7)
 
     def apply_theme(self):
-        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#8178b7"))
+        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0"))
         self.css.load_from_data(SETTINGS_CSS.format(**p).encode())
 
     def label(self, text, style=None):

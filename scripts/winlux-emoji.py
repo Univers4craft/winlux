@@ -224,7 +224,7 @@ def run_picker():
               button.cell label { font-size: 20px; }
               button.wide label { font-size: 14px; }
               button.tab { background: transparent; border: none; box-shadow: none; padding: 4px 10px; color: #c5cbe0; }
-              button.tab.on { border-bottom: 2px solid #8178b7; color: #ffffff; }
+              button.tab.on { border-bottom: 2px solid #b69cff; color: #ffffff; }
               .heading { color: #adb6c9; font-size: 12px; margin-top: 4px; }
               .banner { background: #2c3344; border-radius: 6px; }
             """)

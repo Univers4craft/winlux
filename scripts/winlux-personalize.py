@@ -122,7 +122,7 @@ def sync_system_theme(dark):
 
 def apply(kind,value):
     try: state=json.loads(PREF.read_text())
-    except (OSError,ValueError): state={"theme":"dark","accent":"#8178b7"}
+    except (OSError,ValueError): state={"theme":"dark","accent":"#6a3df0"}
     if kind=="theme" and value not in ("dark","light"): raise ValueError(_t("Thème inconnu"))
     if kind=="accent" and not re.fullmatch(r"#[0-9a-fA-F]{6}",value): raise ValueError(_t("Couleur invalide"))
     if kind in ("wallpaper", "start-icon") and not (kind == "start-icon" and value == "default"):
@@ -161,7 +161,7 @@ def apply(kind,value):
     PREF.parent.mkdir(parents=True,exist_ok=True)
     temp=PREF.with_suffix(".tmp");temp.write_text(json.dumps(state));temp.replace(PREF)
     dark=state.get("theme","dark")=="dark"
-    accent=state.get("accent","#8178b7")
+    accent=state.get("accent","#6a3df0")
     theme=write_gtk_theme(dark,appearance_css(dark,accent))
     gtk_preferences=HOME/".config/gtk-3.0/settings.ini"
     gtk_config=configparser.ConfigParser(interpolation=None)
@@ -279,7 +279,7 @@ if __name__=="__main__":
         try:
             if sys.argv[1] == "export":
                 try: current = json.loads(PREF.read_text())
-                except (OSError, ValueError): current = {"theme": "dark", "accent": "#8178b7"}
+                except (OSError, ValueError): current = {"theme": "dark", "accent": "#6a3df0"}
                 export_theme(current, sys.argv[2], not SOUNDS_OFF.exists())
                 print(_t("Thème enregistré."))
             else:
@@ -292,7 +292,7 @@ if __name__=="__main__":
     try:
         if len(sys.argv)!=3: raise ValueError(_t("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR"))
         if sys.argv[1] == "reset" and sys.argv[2] == "default":
-            for kind, value in (("theme", "dark"), ("accent", "#8178b7"), ("panel-size", "40"),
+            for kind, value in (("theme", "dark"), ("accent", "#6a3df0"), ("panel-size", "40"),
                                 ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpaper.bmp")):
                 apply(kind, value)
         else: apply(sys.argv[1],sys.argv[2])
