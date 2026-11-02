@@ -11,6 +11,7 @@
 //! `winlux setup.exe` (double-clic) passe ici automatiquement ;
 //! `winlux --setup …` donne accès aux options (voir `USAGE`).
 
+pub mod appx_signature;
 pub mod inno;
 mod inno_layout;
 pub mod lzma;
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup, paquets MSIX et AppX
   winlux --setup installateur.exe [/D=dossier]   installer
   winlux --setup paquet.msix|.appx|.msixbundle   installer un paquet MSIX
+        [--allow-unverified]                      même d'un éditeur non vérifié (code 3 sinon)
   winlux --setup --info installateur.exe          type, nom, version, dossier
   winlux --setup --list                           applications installées ainsi
   winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe
@@ -104,6 +106,9 @@ pub struct Options {
     pub dir: Option<String>,
     /// Pas de raccourci sur le Bureau.
     pub no_desktop: bool,
+    /// L'utilisateur a confirmé l'installation d'un paquet MSIX dont
+    /// l'éditeur n'est pas vérifié (`--allow-unverified`).
+    pub allow_unverified: bool,
 }
 
 fn clean(s: &str) -> String {
@@ -860,6 +865,7 @@ pub fn cli(args: &[String]) -> i32 {
             "/s" | "/silent" | "/verysilent" | "/sp-" | "/suppressmsgboxes" | "/norestart"
             | "--quiet" => log.quiet = lower == "--quiet",
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
+            "--allow-unverified" => opts.allow_unverified = true,
             _ => {
                 if let Some(d) = a.strip_prefix("/D=").or_else(|| a.strip_prefix("/DIR=")) {
                     opts.dir = Some(d.trim_matches('"').to_string());
@@ -880,6 +886,12 @@ pub fn cli(args: &[String]) -> i32 {
     };
     match install(&host_path(&file), &opts, log) {
         Ok(_) => 0,
+        // Paquet MSIX d'un éditeur non vérifié : le lanceur du double-clic
+        // demande une confirmation puis relance avec --allow-unverified.
+        Err(e) if e.starts_with(appx_signature::UNVERIFIED) => {
+            eprintln!("setup : {e}");
+            3
+        }
         Err(e) => {
             eprintln!("setup : échec de l'installation : {e}");
             1

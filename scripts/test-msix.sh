@@ -5,6 +5,9 @@
 #   - le raccourci du menu Démarrer, l'association .wlxdoc et le protocole ;
 #   - l'entrée de « Applications installées » et le dossier LocalState ;
 #   - que le programme installé se lance ;
+#   - le refus par défaut d'un éditeur non vérifié (non signé, ou signé
+#     sans chaîne vérifiée), code 3, et l'installation après confirmation
+#     (--allow-unverified) ; le refus d'un certificat d'un autre éditeur ;
 #   - le refus d'un paquet dont un fichier a été modifié ;
 #   - le choix du paquet x64 dans un bundle ;
 #   - la désinstallation complète.
@@ -45,7 +48,20 @@ manifest = """<?xml version="1.0" encoding="utf-8"?>
   </Applications>
 </Package>
 """
-def package(path, arch, tamper=False):
+def der(tag, body):
+    n = len(body)
+    head = bytes([n]) if n < 0x80 else bytes([0x82, n >> 8, n & 0xFF])
+    return bytes([tag]) + head + body
+def p7x(cn):
+    cn_oid = der(0x06, b"\x55\x04\x03")
+    name = lambda v: der(0x30, der(0x31, der(0x30, cn_oid + der(0x0C, v.encode()))))
+    tbs = der(0xA0, der(0x02, b"\x02")) + der(0x02, b"\x01") + der(0x30, b"") + name("Autorite de test") \
+        + der(0x30, b"") + name(cn) + der(0x30, b"")
+    cert = der(0x30, der(0x30, tbs) + der(0x30, b"") + der(0x03, b"\x00"))
+    signed = der(0x02, b"\x01") + der(0x31, b"") + der(0x30, b"") + der(0xA0, cert) + der(0x31, b"")
+    oid = der(0x06, bytes([0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]))
+    return b"PKCX" + der(0x30, oid + der(0xA0, der(0x30, signed)))
+def package(path, arch, tamper=False, signer=None):
     files = {
         "AppxManifest.xml": manifest.replace("ARCH", arch).encode(),
         "bin/hello.exe": open(hello, "rb").read(),
@@ -66,7 +82,11 @@ def package(path, arch, tamper=False):
             z.writestr(name.replace(" ", "%20"), data)
         z.writestr("AppxBlockMap.xml", "\n".join(blocks))
         z.writestr("[Content_Types].xml", "<Types/>")
+        if signer:
+            z.writestr("AppxSignature.p7x", p7x(signer))
 package(work + "/test.msix", "x64")
+package(work + "/signe.msix", "x64", signer="Winlux Test")
+package(work + "/autre-editeur.msix", "x64", signer="Quelqu'un d'autre")
 package(work + "/altere.msix", "x64", tamper=True)
 package(work + "/inner_x64.msix", "x64")
 package(work + "/inner_x86.msix", "x86")
@@ -81,8 +101,40 @@ PY
 
 fail() { echo "msix : $*" >&2; exit 1; }
 
+nothing_installed() { ! find "$home" -type d -name "WindowsApps" | grep -q .; }
+
+# Éditeur non vérifié : refus par défaut (code 3), rien d'écrit.
+set +e
+"$runtime" --setup "$work/test.msix" >"$work/nonsigne.txt" 2>&1; rc=$?
+set -e
+test "$rc" -eq 3 || { cat "$work/nonsigne.txt"; fail "paquet non signé : code $rc au lieu de 3"; }
+grep -q "Éditeur non vérifié : ce paquet n'est pas signé" "$work/nonsigne.txt" || { cat "$work/nonsigne.txt"; fail "avertissement « non signé » absent"; }
+nothing_installed || fail "un paquet non signé a été installé sans confirmation"
+set +e
+"$runtime" --setup "$work/signe.msix" >"$work/signe.txt" 2>&1; rc=$?
+set -e
+test "$rc" -eq 3 || { cat "$work/signe.txt"; fail "paquet signé non vérifié : code $rc au lieu de 3"; }
+grep -q "signé au nom de « CN=Winlux Test »" "$work/signe.txt" || { cat "$work/signe.txt"; fail "avertissement « chaîne non vérifiée » absent"; }
+nothing_installed || fail "un paquet signé non vérifié a été installé sans confirmation"
+# Double-clic sans affichage pour confirmer : refus, rien d'installé.
+set +e
+env -u DISPLAY -u WAYLAND_DISPLAY WINLUX_RUNTIME="$runtime" XDG_STATE_HOME="$work/state" \
+    sh "$root/integration/winlux-open" "$work/test.msix" >"$work/open.txt" 2>&1; rc=$?
+set -e
+test "$rc" -eq 3 || { cat "$work/open.txt"; fail "double-clic sans confirmation : code $rc au lieu de 3"; }
+nothing_installed || fail "le double-clic a installé un paquet non vérifié sans confirmation"
+echo "msix : éditeur non vérifié refusé par défaut (non signé, signé, double-clic)"
+
+# Certificat d'un autre éditeur : refusé même avec confirmation.
+if "$runtime" --setup --allow-unverified "$work/autre-editeur.msix" >"$work/autre.txt" 2>&1; then
+    fail "un paquet signé par un autre éditeur a été installé"
+fi
+grep -q "signature refusée" "$work/autre.txt" || { cat "$work/autre.txt"; fail "message « signature refusée » absent"; }
+nothing_installed || fail "un paquet d'un autre éditeur a laissé des fichiers"
+echo "msix : certificat d'un autre éditeur refusé"
+
 # Paquet modifié : refusé, rien d'installé.
-if "$runtime" --setup "$work/altere.msix" >"$work/altere.txt" 2>&1; then
+if "$runtime" --setup --allow-unverified "$work/altere.msix" >"$work/altere.txt" 2>&1; then
     fail "un paquet modifié a été installé"
 fi
 grep -q "altéré" "$work/altere.txt" || { cat "$work/altere.txt"; fail "message « paquet altéré » absent"; }
@@ -93,7 +145,7 @@ echo "msix : paquet modifié refusé, rien d'écrit"
 grep -q "^msix	Test MSIX Winlux	1.0.0.0	Winlux	C:\\\\Program Files\\\\WindowsApps\\\\Winlux.TestMsix_1.0.0.0_x64__" "$work/info.txt" \
     || { cat "$work/info.txt"; fail "--info inattendu"; }
 
-"$runtime" --setup "$work/test.msix" || fail "installation échouée"
+"$runtime" --setup --allow-unverified "$work/test.msix" || fail "installation échouée"
 full=$("$runtime" --setup --list | awk -F '\t' '$4 == "msix" { print $1 }')
 case "$full" in Winlux.TestMsix_1.0.0.0_x64__*) ;; *) fail "paquet absent de --list : $full" ;; esac
 family="Winlux.TestMsix_${full##*__}"
@@ -122,6 +174,6 @@ find "$home" -name "Bonjour MSIX.lnk" | grep -q . && fail "raccourci restant"
 "$runtime" --setup --list | grep -q "$full" && fail "paquet encore inscrit"
 echo "msix : désinstallation complète"
 
-"$runtime" --setup "$work/test.msixbundle" || fail "installation du bundle échouée"
+"$runtime" --setup --allow-unverified "$work/test.msixbundle" || fail "installation du bundle échouée"
 "$runtime" --setup --list | awk -F '\t' '$4 == "msix" { print $1 }' | grep -q "_x64__" || fail "le bundle n'a pas installé le paquet x64"
 echo "msix : bundle, paquet x64 choisi"
