@@ -65,6 +65,7 @@ pub mod libgcc;
 pub mod libstdcpp;
 pub mod mfcapture;
 pub mod mfplat;
+pub mod mfreader;
 pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
