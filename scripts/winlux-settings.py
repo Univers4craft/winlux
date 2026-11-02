@@ -91,6 +91,7 @@ _TR = {
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
+    'Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation.': ('Free software (GNU GPL v3). Independent project, neither affiliated with nor endorsed by Microsoft; Windows is a trademark of Microsoft Corporation.', 'Software libre (GNU GPL v3). Proyecto independiente, no afiliado a Microsoft ni aprobado por ella; Windows es una marca de Microsoft Corporation.', 'Freie Software (GNU GPL v3). Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke der Microsoft Corporation.'),
     'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
     'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
@@ -218,7 +219,7 @@ _TR = {
     'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
     'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
-    'Assistant Claude': ('Claude assistant', 'Asistente Claude', 'Claude-Assistent'),
+    'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
@@ -307,7 +308,7 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
+         _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
@@ -585,6 +586,7 @@ def about_build(info):
     built = values.get("built_at_utc", "")
     if len(built) >= 10 and built[4] == "-":
         lines.append(_t("Compilée le : {value}").format(value=f"{built[8:10]}/{built[5:7]}/{built[:4]}"))
+    lines.append(_t("Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation."))
     return "".join("\n" + line for line in lines)
 
 

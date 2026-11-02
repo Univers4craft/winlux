@@ -32,7 +32,7 @@ The system, the installer and this website are available in French, English, Ger
 ![The Winlux desktop with the Start menu open](img:bureau-menu-demarrer.jpg "The Winlux desktop, “Winlux Nuit” wallpaper, Start menu open.")
 
 ::: figure-row
-![The Welcome assistant at first start](img:assistant-bienvenue.jpg "At first start, the Welcome assistant sets the wallpaper, colours and taskbar.")
+![The Welcome window at first start](img:assistant-bienvenue.jpg "At first start, the Welcome window leads to the guided tour, the keyboard, the network and the appearance.")
 
 ![The Updates page in Settings](img:mises-a-jour.jpg "Updates install from Settings, with automatic rollback.")
 :::

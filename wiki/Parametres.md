@@ -41,7 +41,7 @@
 | 27 | **Bureau à distance** | Serveur RFB/VNC de la session. |
 | 28 | **Partage et transfert** | Dossiers partagés (Samba) et transfert des réglages par fichier `.wlxprofile`. |
 | 29 | **Jeux** | Bibliothèque des jeux Windows, temps de jeu, raccourcis (docs/JEUX.md). |
-| 30 | **Assistant Claude** | Désactivé par défaut. L'activer télécharge Claude Code s'il manque, connecte le compte Claude (Google, e-mail…) puis ajoute le bouton Claude à la barre des tâches (et Windows+C). Compte connecté, « Se déconnecter », ce qui est envoyé. Session native seulement. |
+| 30 | **Assistant IA** | Trois assistants, tous désactivés par défaut, chacun avec son interrupteur : **Claude** (compte Claude, Claude Code téléchargé), **ChatGPT** (compte ChatGPT, Codex d'OpenAI téléchargé) et **IA locale** (llama.cpp et le petit modèle Qwen2.5 1,5B, rien ne quitte le PC, cachée sous 3 Gio de mémoire). Un seul bouton dans la barre des tâches (et Windows+C), choix de l'assistant dans le panneau, ce qui est envoyé. Session native seulement. |
 | 31 | **Récupération** | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), revenir en arrière, démarrage avancé, réparer le démarrage, créer une clé de secours ([docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md)). |
 | 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés), reconnaissance de texte (télécharger, langues installées, retirer). Page native seulement. |
 

@@ -1,0 +1,356 @@
+//! OpenSSL de l'hôte (libcrypto.so.3, libssl.so.3), chargé à la demande.
+//!
+//! Plomberie Linux standard, au même titre que le curl de WinHTTP : sert aux
+//! condensats de la CryptoAPI (MD5, SHA-1, SHA-2), à la vérification des
+//! chaînes de certificats (crypt32) et au TLS de Schannel (secur32). Si la
+//! bibliothèque manque, chaque appelant renvoie une erreur propre.
+
+#![allow(non_snake_case)]
+
+use super::hostcall::sym;
+use std::ffi::{c_char, c_int, c_long, c_void, CStr};
+use std::sync::OnceLock;
+
+pub type P = *mut c_void;
+
+/// Quelques entrées (magasin, ALPN…) servent selon les appelants.
+#[allow(dead_code)]
+pub struct Ssl {
+    // libcrypto
+    pub EVP_get_digestbyname: unsafe extern "C" fn(*const c_char) -> P,
+    pub EVP_Digest: unsafe extern "C" fn(*const c_void, usize, *mut u8, *mut u32, P, P) -> c_int,
+    pub HMAC: unsafe extern "C" fn(
+        P,
+        *const c_void,
+        c_int,
+        *const u8,
+        usize,
+        *mut u8,
+        *mut u32,
+    ) -> *mut u8,
+    pub d2i_X509: unsafe extern "C" fn(*mut P, *mut *const u8, c_long) -> P,
+    pub i2d_X509: unsafe extern "C" fn(P, *mut *mut u8) -> c_int,
+    pub X509_free: unsafe extern "C" fn(P),
+    pub X509_STORE_new: unsafe extern "C" fn() -> P,
+    pub X509_STORE_free: unsafe extern "C" fn(P),
+    pub X509_STORE_set_default_paths: unsafe extern "C" fn(P) -> c_int,
+    pub X509_STORE_add_cert: unsafe extern "C" fn(P, P) -> c_int,
+    pub X509_STORE_CTX_new: unsafe extern "C" fn() -> P,
+    pub X509_STORE_CTX_free: unsafe extern "C" fn(P),
+    pub X509_STORE_CTX_init: unsafe extern "C" fn(P, P, P, P) -> c_int,
+    pub X509_STORE_CTX_get_error: unsafe extern "C" fn(P) -> c_int,
+    pub X509_STORE_CTX_get1_chain: unsafe extern "C" fn(P) -> P,
+    pub X509_verify_cert: unsafe extern "C" fn(P) -> c_int,
+    pub X509_check_host:
+        unsafe extern "C" fn(P, *const c_char, usize, u32, *mut *mut c_char) -> c_int,
+    pub X509_check_ip_asc: unsafe extern "C" fn(P, *const c_char, u32) -> c_int,
+    pub OPENSSL_sk_new_null: unsafe extern "C" fn() -> P,
+    pub OPENSSL_sk_push: unsafe extern "C" fn(P, P) -> c_int,
+    pub OPENSSL_sk_num: unsafe extern "C" fn(P) -> c_int,
+    pub OPENSSL_sk_value: unsafe extern "C" fn(P, c_int) -> P,
+    pub OPENSSL_sk_free: unsafe extern "C" fn(P),
+    pub OPENSSL_sk_pop_free: unsafe extern "C" fn(P, unsafe extern "C" fn(P)),
+    pub CRYPTO_free: unsafe extern "C" fn(*mut c_void, *const c_char, c_int),
+    // libssl
+    pub TLS_client_method: unsafe extern "C" fn() -> P,
+    pub SSL_CTX_new: unsafe extern "C" fn(P) -> P,
+    pub SSL_CTX_free: unsafe extern "C" fn(P),
+    pub SSL_CTX_set_default_verify_paths: unsafe extern "C" fn(P) -> c_int,
+    pub SSL_CTX_set_verify: unsafe extern "C" fn(P, c_int, P),
+    pub SSL_CTX_ctrl: unsafe extern "C" fn(P, c_int, c_long, P) -> c_long,
+    pub SSL_new: unsafe extern "C" fn(P) -> P,
+    pub SSL_free: unsafe extern "C" fn(P),
+    pub SSL_set_bio: unsafe extern "C" fn(P, P, P),
+    pub SSL_ctrl: unsafe extern "C" fn(P, c_int, c_long, P) -> c_long,
+    pub SSL_set1_host: unsafe extern "C" fn(P, *const c_char) -> c_int,
+    pub SSL_set_connect_state: unsafe extern "C" fn(P),
+    pub SSL_do_handshake: unsafe extern "C" fn(P) -> c_int,
+    pub SSL_get_error: unsafe extern "C" fn(P, c_int) -> c_int,
+    pub SSL_read: unsafe extern "C" fn(P, *mut c_void, c_int) -> c_int,
+    pub SSL_write: unsafe extern "C" fn(P, *const c_void, c_int) -> c_int,
+    pub SSL_shutdown: unsafe extern "C" fn(P) -> c_int,
+    pub SSL_get1_peer_certificate: unsafe extern "C" fn(P) -> P,
+    pub SSL_get_peer_cert_chain: unsafe extern "C" fn(P) -> P,
+    pub SSL_get_verify_result: unsafe extern "C" fn(P) -> c_long,
+    pub SSL_version: unsafe extern "C" fn(P) -> c_int,
+    pub SSL_get_current_cipher: unsafe extern "C" fn(P) -> P,
+    pub SSL_CIPHER_get_bits: unsafe extern "C" fn(P, *mut c_int) -> c_int,
+    pub SSL_set_alpn_protos: unsafe extern "C" fn(P, *const u8, u32) -> c_int,
+    pub SSL_get0_alpn_selected: unsafe extern "C" fn(P, *mut *const u8, *mut u32),
+    pub BIO_s_mem: unsafe extern "C" fn() -> P,
+    pub BIO_new: unsafe extern "C" fn(P) -> P,
+    pub BIO_write: unsafe extern "C" fn(P, *const c_void, c_int) -> c_int,
+    pub BIO_read: unsafe extern "C" fn(P, *mut c_void, c_int) -> c_int,
+    pub BIO_ctrl: unsafe extern "C" fn(P, c_int, c_long, P) -> c_long,
+}
+
+unsafe impl Send for Ssl {}
+unsafe impl Sync for Ssl {}
+
+fn open(names: &[&CStr]) -> usize {
+    names
+        .iter()
+        .map(|n| unsafe { libc::dlopen(n.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) as usize })
+        .find(|&h| h != 0)
+        .unwrap_or(0)
+}
+
+/// OpenSSL de l'hôte, ou None s'il manque (journalisé une fois).
+#[allow(clippy::missing_transmute_annotations)]
+pub fn ssl() -> Option<&'static Ssl> {
+    static S: OnceLock<Option<Ssl>> = OnceLock::new();
+    S.get_or_init(|| unsafe {
+        let c = open(&[c"libcrypto.so.3", c"libcrypto.so"]);
+        let s = open(&[c"libssl.so.3", c"libssl.so"]);
+        if c == 0 || s == 0 {
+            crate::log_warn!(
+                "ssl",
+                "OpenSSL 3 absent de l'hôte : TLS et CryptoAPI limités"
+            );
+            return None;
+        }
+        macro_rules! f {
+            ($lib:expr, $n:literal) => {{
+                let p = sym($lib, concat!($n, "\0").as_bytes());
+                if p == 0 {
+                    crate::log_warn!("ssl", "symbole OpenSSL absent : {}", $n);
+                    return None;
+                }
+                std::mem::transmute(p)
+            }};
+        }
+        Some(Ssl {
+            EVP_get_digestbyname: f!(c, "EVP_get_digestbyname"),
+            EVP_Digest: f!(c, "EVP_Digest"),
+            HMAC: f!(c, "HMAC"),
+            d2i_X509: f!(c, "d2i_X509"),
+            i2d_X509: f!(c, "i2d_X509"),
+            X509_free: f!(c, "X509_free"),
+            X509_STORE_new: f!(c, "X509_STORE_new"),
+            X509_STORE_free: f!(c, "X509_STORE_free"),
+            X509_STORE_set_default_paths: f!(c, "X509_STORE_set_default_paths"),
+            X509_STORE_add_cert: f!(c, "X509_STORE_add_cert"),
+            X509_STORE_CTX_new: f!(c, "X509_STORE_CTX_new"),
+            X509_STORE_CTX_free: f!(c, "X509_STORE_CTX_free"),
+            X509_STORE_CTX_init: f!(c, "X509_STORE_CTX_init"),
+            X509_STORE_CTX_get_error: f!(c, "X509_STORE_CTX_get_error"),
+            X509_STORE_CTX_get1_chain: f!(c, "X509_STORE_CTX_get1_chain"),
+            X509_verify_cert: f!(c, "X509_verify_cert"),
+            X509_check_host: f!(c, "X509_check_host"),
+            X509_check_ip_asc: f!(c, "X509_check_ip_asc"),
+            OPENSSL_sk_new_null: f!(c, "OPENSSL_sk_new_null"),
+            OPENSSL_sk_push: f!(c, "OPENSSL_sk_push"),
+            OPENSSL_sk_num: f!(c, "OPENSSL_sk_num"),
+            OPENSSL_sk_value: f!(c, "OPENSSL_sk_value"),
+            OPENSSL_sk_free: f!(c, "OPENSSL_sk_free"),
+            OPENSSL_sk_pop_free: f!(c, "OPENSSL_sk_pop_free"),
+            CRYPTO_free: f!(c, "CRYPTO_free"),
+            TLS_client_method: f!(s, "TLS_client_method"),
+            SSL_CTX_new: f!(s, "SSL_CTX_new"),
+            SSL_CTX_free: f!(s, "SSL_CTX_free"),
+            SSL_CTX_set_default_verify_paths: f!(s, "SSL_CTX_set_default_verify_paths"),
+            SSL_CTX_set_verify: f!(s, "SSL_CTX_set_verify"),
+            SSL_CTX_ctrl: f!(s, "SSL_CTX_ctrl"),
+            SSL_new: f!(s, "SSL_new"),
+            SSL_free: f!(s, "SSL_free"),
+            SSL_set_bio: f!(s, "SSL_set_bio"),
+            SSL_ctrl: f!(s, "SSL_ctrl"),
+            SSL_set1_host: f!(s, "SSL_set1_host"),
+            SSL_set_connect_state: f!(s, "SSL_set_connect_state"),
+            SSL_do_handshake: f!(s, "SSL_do_handshake"),
+            SSL_get_error: f!(s, "SSL_get_error"),
+            SSL_read: f!(s, "SSL_read"),
+            SSL_write: f!(s, "SSL_write"),
+            SSL_shutdown: f!(s, "SSL_shutdown"),
+            SSL_get1_peer_certificate: f!(s, "SSL_get1_peer_certificate"),
+            SSL_get_peer_cert_chain: f!(s, "SSL_get_peer_cert_chain"),
+            SSL_get_verify_result: f!(s, "SSL_get_verify_result"),
+            SSL_version: f!(s, "SSL_version"),
+            SSL_get_current_cipher: f!(s, "SSL_get_current_cipher"),
+            SSL_CIPHER_get_bits: f!(s, "SSL_CIPHER_get_bits"),
+            SSL_set_alpn_protos: f!(s, "SSL_set_alpn_protos"),
+            SSL_get0_alpn_selected: f!(s, "SSL_get0_alpn_selected"),
+            BIO_s_mem: f!(c, "BIO_s_mem"),
+            BIO_new: f!(c, "BIO_new"),
+            BIO_write: f!(c, "BIO_write"),
+            BIO_read: f!(c, "BIO_read"),
+            BIO_ctrl: f!(c, "BIO_ctrl"),
+        })
+    })
+    .as_ref()
+}
+
+/// Condensat `name` (« MD5 », « SHA1 », « SHA256 »…) de `data`.
+pub fn digest(name: &CStr, data: &[u8]) -> Option<Vec<u8>> {
+    let s = ssl()?;
+    unsafe {
+        let md = (s.EVP_get_digestbyname)(name.as_ptr());
+        if md.is_null() {
+            return None;
+        }
+        let mut out = [0u8; 64];
+        let mut n = 0u32;
+        if (s.EVP_Digest)(
+            data.as_ptr().cast(),
+            data.len(),
+            out.as_mut_ptr(),
+            &mut n,
+            md,
+            std::ptr::null_mut(),
+        ) != 1
+        {
+            return None;
+        }
+        Some(out[..n as usize].to_vec())
+    }
+}
+
+/// HMAC `name` de `data` avec la clé `key`.
+pub fn hmac(name: &CStr, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+    let s = ssl()?;
+    unsafe {
+        let md = (s.EVP_get_digestbyname)(name.as_ptr());
+        if md.is_null() {
+            return None;
+        }
+        let mut out = [0u8; 64];
+        let mut n = 0u32;
+        let r = (s.HMAC)(
+            md,
+            key.as_ptr().cast(),
+            key.len() as c_int,
+            data.as_ptr(),
+            data.len(),
+            out.as_mut_ptr(),
+            &mut n,
+        );
+        (!r.is_null()).then(|| out[..n as usize].to_vec())
+    }
+}
+
+/// Encodage DER d'un X509* d'OpenSSL.
+pub fn der_of(x: P) -> Option<Vec<u8>> {
+    let s = ssl()?;
+    unsafe {
+        let n = (s.i2d_X509)(x, std::ptr::null_mut());
+        if n <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; n as usize];
+        let mut p = buf.as_mut_ptr();
+        (s.i2d_X509)(x, &mut p);
+        Some(buf)
+    }
+}
+
+/// X509* d'OpenSSL à partir de DER (à libérer par X509_free).
+pub fn x509_of(der: &[u8]) -> Option<P> {
+    let s = ssl()?;
+    let mut p = der.as_ptr();
+    let x = unsafe { (s.d2i_X509)(std::ptr::null_mut(), &mut p, der.len() as c_long) };
+    (!x.is_null()).then_some(x)
+}
+
+/// Résultat de la vérification d'une chaîne par OpenSSL.
+pub struct Verified {
+    /// Code X509_V_* (0 : succès).
+    pub error: i32,
+    /// Chaîne construite, du certificat final à la racine (DER).
+    pub chain: Vec<Vec<u8>>,
+}
+
+/// Vérifie `leaf` avec les autorités du système, `extra` servant
+/// d'intermédiaires. `host` : nom à contrôler (None : pas de contrôle).
+pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Verified> {
+    let s = ssl()?;
+    unsafe {
+        let x = x509_of(leaf)?;
+        let store = (s.X509_STORE_new)();
+        (s.X509_STORE_set_default_paths)(store);
+        let untrusted = (s.OPENSSL_sk_new_null)();
+        let mut extras = Vec::new();
+        for e in extra {
+            if let Some(ex) = x509_of(e) {
+                (s.OPENSSL_sk_push)(untrusted, ex);
+                extras.push(ex);
+            }
+        }
+        let ctx = (s.X509_STORE_CTX_new)();
+        (s.X509_STORE_CTX_init)(ctx, store, x, untrusted);
+        let ok = (s.X509_verify_cert)(ctx);
+        let mut error = if ok == 1 {
+            0
+        } else {
+            (s.X509_STORE_CTX_get_error)(ctx)
+        };
+        let mut chain = Vec::new();
+        let sk = (s.X509_STORE_CTX_get1_chain)(ctx);
+        if !sk.is_null() {
+            for i in 0..(s.OPENSSL_sk_num)(sk) {
+                if let Some(d) = der_of((s.OPENSSL_sk_value)(sk, i)) {
+                    chain.push(d);
+                }
+            }
+            (s.OPENSSL_sk_pop_free)(sk, s.X509_free);
+        }
+        if chain.is_empty() {
+            chain.push(leaf.to_vec());
+        }
+        if error == 0 {
+            if let Some(h) = host.filter(|h| !h.is_empty()) {
+                let c = std::ffi::CString::new(h).unwrap_or_default();
+                let by_ip = (s.X509_check_ip_asc)(x, c.as_ptr(), 0) == 1;
+                if !by_ip
+                    && (s.X509_check_host)(x, c.as_ptr(), h.len(), 0, std::ptr::null_mut()) != 1
+                {
+                    error = 62; // X509_V_ERR_HOSTNAME_MISMATCH
+                }
+            }
+        }
+        (s.X509_STORE_CTX_free)(ctx);
+        (s.OPENSSL_sk_free)(untrusted);
+        for ex in extras {
+            (s.X509_free)(ex);
+        }
+        (s.X509_free)(x);
+        (s.X509_STORE_free)(store);
+        Some(Verified { error, chain })
+    }
+}
+
+/// Le certificat `der` couvre-t-il le nom d'hôte (ou l'adresse IP) `host` ?
+pub fn check_host(der: &[u8], host: &str) -> bool {
+    let (Some(s), Some(x)) = (ssl(), x509_of(der)) else {
+        return false;
+    };
+    let c = std::ffi::CString::new(host).unwrap_or_default();
+    unsafe {
+        let ok = (s.X509_check_ip_asc)(x, c.as_ptr(), 0) == 1
+            || (s.X509_check_host)(x, c.as_ptr(), host.len(), 0, std::ptr::null_mut()) == 1;
+        (s.X509_free)(x);
+        ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn condensats_et_hmac() {
+        if ssl().is_none() {
+            return;
+        }
+        let md5 = digest(c"MD5", b"abc").unwrap();
+        assert_eq!(md5[..4], [0x90, 0x01, 0x50, 0x98]);
+        let sha256 = digest(c"SHA256", b"abc").unwrap();
+        assert_eq!(sha256[..4], [0xba, 0x78, 0x16, 0xbf]);
+        let mac = hmac(
+            c"SHA256",
+            b"key",
+            b"The quick brown fox jumps over the lazy dog",
+        )
+        .unwrap();
+        assert_eq!(mac[..4], [0xf7, 0xbc, 0x83, 0xf4]);
+    }
+}

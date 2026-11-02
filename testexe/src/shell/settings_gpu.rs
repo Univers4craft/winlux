@@ -1182,6 +1182,11 @@ unsafe fn seen() -> Seen {
 pub unsafe fn regression_checks() {
     let saved = super::STATUS;
     super::STATUS = super::EMPTY;
+    // Les capteurs sont simulés : pas de sonde réelle du runtime (Vulkan,
+    // VA-API, NVDEC), qui charge les pilotes de l'hôte et peut prendre
+    // plusieurs dizaines de secondes dans une VM sans accélération.
+    RUNTIME_LOADED = true;
+    RUNTIME.len = 0;
 
     gpu::set_for_test(
         b"gpu_count=1\ngpu_hybrid=0\ngpu0_card=card0\ngpu0_name=Virtio\ngpu0_vendor=other\ngpu0_driver=virtio-pci\ngpu0_role=single\n",
@@ -1218,5 +1223,6 @@ pub unsafe fn regression_checks() {
         "Overlay desactive : ses options detaillees restent masquees"
     );
     gpu::set_for_test(b"");
+    RUNTIME_LOADED = false;
     super::STATUS = saved;
 }
