@@ -65,6 +65,10 @@ def build(stage, base, output):
         (kernel / "DEBIAN/control").write_text(
             f"Package: winlux-kernel\nVersion: {release}\nArchitecture: amd64\n"
             "Maintainer: Winlux <winlux@localhost>\nEssential: yes\nProtected: yes\n"
+            # Le pilote NVIDIA signé d'Ubuntu dépend de « linux-image-<version> » :
+            # c'est ce noyau-ci. Sans cela, APT installerait le paquet Ubuntu, dont
+            # le script relance update-grub et remplacerait le menu Winlux.
+            f"Provides: linux-image-{release}, linux-image-unsigned-{release}\n"
             "Depends: kmod\nDescription: Winlux factory kernel and matching drivers\n")
         kernel_deb = output.with_name("winlux-kernel.deb")
         subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(kernel), str(kernel_deb)], check=True)

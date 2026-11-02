@@ -512,6 +512,7 @@ PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
 PAGE_RECOVERY = 31
 PAGE_CLIPBOARD = 32
+PAGE_HARDWARE = 33
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -944,6 +945,9 @@ def page_available(page, status=None):
     if page == PAGE_RECOVERY:
         module = reset_page()
         return module is not None and module.available()
+    if page == PAGE_HARDWARE:
+        module = hardware_page()
+        return module is not None and module.available()
     return True
 
 
@@ -1009,6 +1013,30 @@ def reset_page():
     return None
 
 
+_HARDWARE = []
+
+
+def hardware_page():
+    """Matériel et pilotes (winlux-hardware-page, installé à côté), None si absent."""
+    if _HARDWARE: return _HARDWARE[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-hardware-page.py"), here.with_name("winlux-hardware-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_hardware_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_hardware_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _HARDWARE.append(module)
+    return module
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1038,7 +1066,7 @@ class ExtraPages:
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
-                   PAGE_CLIPBOARD: "page_clipboard"}
+                   PAGE_CLIPBOARD: "page_clipboard", PAGE_HARDWARE: "page_hardware"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1791,6 +1819,8 @@ class ExtraPages:
             self.combo(box, _t("Courbe des ventilateurs"), [(k, _t(v)) for k, v in CPU_FANS],
                        report.get("fan_curve") if report.get("fan_curve") in dict(CPU_FANS) else "auto",
                        lambda value: self.execute("cpu-fan-" + value))
+        hardware = hardware_page()
+        if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
 
     # ── Presse-papiers (Windows + V) ──
@@ -1931,6 +1961,9 @@ class ExtraPages:
 
     def sections_graphics(self):
         status = self.status
+        # Pilote de la carte, NVIDIA propriétaire, VA-API/NVENC (#matériel réel).
+        hardware = hardware_page()
+        if hardware is not None: hardware.gpu_section(self)
         self.section(_t("Overlay de performances en jeu"))
         box = self.card()
         enabled = status.get("overlay_enabled") == "1"
@@ -1993,6 +2026,12 @@ class ExtraPages:
         module = reset_page()
         if module is not None:
             self.recovery_panel = module.RecoveryPanel(self)
+
+    # ── Matériel et pilotes : diagnostic et pilotes recommandés ──
+
+    def page_hardware(self):
+        module = hardware_page()
+        if module is not None: module.page(self)
 
     # ── Signaler un problème ──
 
