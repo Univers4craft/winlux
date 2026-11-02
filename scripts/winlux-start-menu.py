@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Windows 11 inspired native Start: real XDG apps, pins and context actions."""
+import hashlib
 import json
 import os
 import pwd
@@ -547,7 +548,18 @@ class Start(Gtk.Application):
                 target.chmod(0o755)
                 subprocess.run(["gio", "set", "-t", "string", str(target), "metadata::trusted", "true"],
                                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)),
+                # xfdesktop 4.20 ne fait confiance qu'à la somme SHA-256 du lanceur.
+                checksum = hashlib.sha256(target.read_bytes()).hexdigest()
+                subprocess.run(["gio", "set", "-t", "string", str(target), "metadata::xfce-exe-checksum", checksum],
+                               check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def action(name):
+            self.hide()
+            app.launch_action(name, None)
+        # Actions déclarées par l'application (« Mettre à jour Claude Code »,
+        # « Nouvelle fenêtre »…), comme la liste de raccourcis de Windows.
+        actions = [(app.get_action_name(name), lambda name=name: action(name))
+                   for name in (app.list_actions() if hasattr(app, "list_actions") else [])]
+        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
                                  (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin),
                                  (_t("Créer un raccourci sur le bureau"), shortcut)])
         return True

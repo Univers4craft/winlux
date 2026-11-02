@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 
 BASE = ("https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819"
@@ -70,6 +71,10 @@ _TR = {
         ("The downloaded file is damaged (wrong SHA-256 checksum). Try again.",
          "El archivo descargado está dañado (suma SHA-256 incorrecta). Inténtelo de nuevo.",
          "Die heruntergeladene Datei ist beschädigt (falsche SHA-256-Prüfsumme). Erneut versuchen."),
+    "La connexion Internet a été interrompue. Vérifiez-la puis cliquez sur Réessayer.":
+        ("The Internet connection was interrupted. Check it, then click Try again.",
+         "Se interrumpió la conexión a Internet. Compruébela y pulse Reintentar.",
+         "Die Internetverbindung wurde unterbrochen. Prüfen Sie sie und klicken Sie auf Erneut versuchen."),
     "Réessayer": ("Try again", "Reintentar", "Erneut versuchen"),
     "Annuler": ("Cancel", "Cancelar", "Abbrechen"),
     "Fermer": ("Close", "Cerrar", "Schließen"),
@@ -245,7 +250,13 @@ def run_gui():
         except Cancelled:
             GLib.idle_add(Gtk.main_quit)
         except Exception as e:  # réseau, disque, manifeste
-            message = str(e) if "SHA-256" in str(e) else _t("Le téléchargement a échoué : {e}", e=e)
+            if "SHA-256" in str(e):
+                message = str(e)
+            elif isinstance(e, (TimeoutError, ConnectionError, urllib.error.URLError)) or "timed out" in str(e):
+                # « The read operation timed out » : message brut en anglais.
+                message = _t("La connexion Internet a été interrompue. Vérifiez-la puis cliquez sur Réessayer.")
+            else:
+                message = _t("Le téléchargement a échoué : {e}", e=e)
             GLib.idle_add(finished, None, message)
 
     def start(*_):
