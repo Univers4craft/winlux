@@ -40,6 +40,7 @@ Il faut Linux x86-64. Pour construire l'ISO, voir [Construire l'ISO](Construire-
 | Configurer la session XFCE | `integration/native/`, `scripts/winlux-native-config.py` |
 | Ajouter un test PE | `testexe/src/bin/<nom>.rs` **et** une ligne dans `scripts/test-runtime.sh` |
 | Documenter | `docs/<SUJET>.md`, et la page concernée dans `wiki/` |
+| Expliquer une fonction à l'utilisateur | le guide du site web : `site/content/<langue>/<page>.md`, **dans les quatre langues** |
 
 ## Règles du projet
 
@@ -62,6 +63,10 @@ Il faut Linux x86-64. Pour construire l'ISO, voir [Construire l'ISO](Construire-
 ## Le wiki
 
 Les pages du wiki sont les fichiers du dossier [`wiki/`](https://github.com/Univers4craft/winlux/tree/master/wiki). Le workflow `wiki.yml` les publie sur le wiki GitHub à chaque fusion sur `master`. Modifiez-les par pull request, comme le code ; un nom de fichier `Ma-page.md` devient la page `Ma-page`, et les liens internes s'écrivent `[Texte](Ma-page)`. `_Sidebar.md` est le menu latéral et `_Footer.md` le pied de page.
+
+## Le site web
+
+Le [site web](https://univers4craft.github.io/winlux/) s'adresse à qui découvre Winlux : présentation, téléchargement, guide pas à pas et applications testées, en français, anglais, allemand et espagnol. Ses sources sont dans [`site/`](https://github.com/Univers4craft/winlux/tree/master/site) : une page Markdown par langue dans `site/content/<langue>/`, les textes de l'interface dans `site/i18n/`, et `site/build.py` (bibliothèque standard de Python seulement) qui les assemble. Le workflow `site.yml` le teste et le publie sur GitHub Pages à chaque fusion. Une page modifiée l'est dans les quatre langues : `scripts/test-site.py` refuse une traduction incomplète. Le site renvoie au wiki pour le détail technique, sans le recopier.
 
 ## Licence
 
