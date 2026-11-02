@@ -175,6 +175,9 @@ jobs:
       - name: Vérifier « Copier le texte » d'une image ou de l'écran (Windows + Maj + T)
         run: python3 -B scripts/test-ocr.py
 
+      - name: Vérifier le thème automatique, le diaporama et les thèmes partageables
+        run: python3 -B scripts/test-appearance-auto.py
+
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 

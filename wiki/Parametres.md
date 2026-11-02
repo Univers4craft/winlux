@@ -32,7 +32,7 @@
 | 18 | **Confidentialité et sécurité** | Verrouillage (délai, au réveil), autorisations des applications (caméra, micro, écran, fichiers, réseau), « Tout redemander ». |
 | 19 | **Processeur** | Profils de performance, gouverneur, mode jeu, temps de démarrage mesuré, affichés selon le matériel. |
 | 20 | **Lecteurs réseau** | SMB, NFS, SFTP, FTP, WebDAV, S3 montés comme un disque. |
-| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). |
+| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). Mode de couleur automatique (clair le jour, sombre le soir), arrière-plan en diaporama ou Winlux Aube / Nuit selon l'heure, thèmes `.wlxtheme` à enregistrer et partager. |
 | 22 | **Bluetooth et appareils** | Appairage BlueZ, manettes, caméras, micros, périphériques d'entrée. |
 | 23 | **Alimentation et batterie** | Mise en veille, écran, plans d'alimentation, batterie (affichée seulement si présente). |
 | 24 | **Graphismes** | GPU (y compris hybrides), Direct3D 9/12 et backend Vulkan, décodage vidéo matériel, overlay de performances. |

@@ -93,6 +93,8 @@ _TR = {
     'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Ce PC': ('This PC', 'Este equipo', 'Dieser PC'),
     'Choisir un dossier': ('Choose a folder', 'Elegir una carpeta', 'Ordner auswählen'),
+    'Parcourir…': ('Browse…', 'Examinar…', 'Durchsuchen…'),
+    'Images': ('Pictures', 'Imágenes', 'Bilder'),
     'Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support.': ('Choose “Winlux recovery” at startup, or start from the installation USB drive. Keep a copy of your documents on another drive.', 'Elija «Winlux recuperación» al arrancar o inicie desde la memoria USB de instalación. Guarde una copia de sus documentos en otro soporte.', 'Wählen Sie beim Start „Winlux-Wiederherstellung“ oder starten Sie vom Installations-USB-Stick. Bewahren Sie eine Kopie Ihrer Dokumente auf einem anderen Datenträger auf.'),
     'Clic droit à deux doigts': ('Two-finger right-click', 'Clic derecho con dos dedos', 'Rechtsklick mit zwei Fingern'),
     'Compatibilité VNC classique': ('Classic VNC compatibility', 'Compatibilidad con VNC clásico', 'Klassische VNC-Kompatibilität'),
@@ -409,6 +411,34 @@ _TR = {
     'anglais': ('English', 'inglés', 'Englisch'),
     'espagnol': ('Spanish', 'español', 'Spanisch'),
     'allemand': ('German', 'alemán', 'Deutsch'),
+    'Automatique : clair le jour, sombre le soir': ('Automatic: light by day, dark in the evening', 'Automático: claro de día, oscuro por la noche', 'Automatisch: tagsüber hell, abends dunkel'),
+    'Lever et coucher du soleil calculés pour votre fuseau horaire.': ('Sunrise and sunset calculated for your time zone.', 'Amanecer y atardecer calculados para su zona horaria.', 'Sonnenauf- und -untergang für Ihre Zeitzone berechnet.'),
+    'Personnaliser l’arrière-plan': ('Personalize your background', 'Personalizar el fondo', 'Hintergrund anpassen'),
+    'Image': ('Picture', 'Imagen', 'Bild'),
+    'Diaporama': ('Slideshow', 'Presentación', 'Diashow'),
+    'Winlux Aube le jour, Winlux Nuit le soir': ('Winlux Dawn by day, Winlux Night in the evening', 'Winlux Amanecer de día, Winlux Noche por la noche', 'Winlux Morgen tagsüber, Winlux Nacht am Abend'),
+    'Dossier des images': ('Picture folder', 'Carpeta de imágenes', 'Bildordner'),
+    'Aucun dossier choisi.': ('No folder chosen.', 'No se eligió ninguna carpeta.', 'Kein Ordner ausgewählt.'),
+    'Changer d’image toutes les': ('Change picture every', 'Cambiar de imagen cada', 'Bild wechseln alle'),
+    '1 minute': ('1 minute', '1 minuto', '1 Minute'),
+    '10 minutes': ('10 minutes', '10 minutos', '10 Minuten'),
+    '30 minutes': ('30 minutes', '30 minutos', '30 Minuten'),
+    '1 heure': ('1 hour', '1 hora', '1 Stunde'),
+    '6 heures': ('6 hours', '6 horas', '6 Stunden'),
+    '1 jour': ('1 day', '1 día', '1 Tag'),
+    'Ordre aléatoire': ('Shuffle the picture order', 'Orden aleatorio', 'Zufällige Reihenfolge'),
+    'Image suivante': ('Next picture', 'Imagen siguiente', 'Nächstes Bild'),
+    'Thèmes': ('Themes', 'Temas', 'Designs'),
+    'Enregistrez votre fond, votre couleur d’accentuation, la taille de la barre et les sons en un fichier à partager.': (
+        'Save your background, accent color, taskbar size and sounds in one file to share.',
+        'Guarde su fondo, su color de énfasis, el tamaño de la barra y los sonidos en un archivo para compartir.',
+        'Speichern Sie Hintergrund, Akzentfarbe, Taskleistengröße und Sounds in einer Datei zum Teilen.'),
+    'Thèmes Winlux': ('Winlux themes', 'Temas de Winlux', 'Winlux-Designs'),
+    'Enregistrer le thème': ('Save theme', 'Guardar tema', 'Design speichern'),
+    'Enregistrer le thème…': ('Save theme…', 'Guardar tema…', 'Design speichern…'),
+    'Appliquer un thème': ('Apply a theme', 'Aplicar un tema', 'Design anwenden'),
+    'Appliquer un thème…': ('Apply a theme…', 'Aplicar un tema…', 'Design anwenden…'),
+    'Mon thème': ('My theme', 'Mi tema', 'Mein Design'),
     'Effacer les données du presse-papiers': ('Clear clipboard data', 'Borrar los datos del portapapeles', 'Zwischenablagedaten löschen'),
     'Efface tout l’historique, sauf les éléments épinglés.': ('Clears the whole history except pinned items.', 'Borra todo el historial excepto los elementos anclados.', 'Löscht den gesamten Verlauf außer angehefteten Elementen.'),
     'Effacer': ('Clear', 'Borrar', 'Löschen'),
@@ -1167,6 +1197,17 @@ class ExtraPages:
 
     def page_desktop(self):
         prefs = appearance()
+        tool = ambiance_tool()
+        moods = ambiance_status() if tool else {}
+
+        def fixed_then(args):
+            """Choix manuel : le mode automatique ou le diaporama s'arrête, puis la commande."""
+            key = "THEME_AUTO" if args[1] == "theme" else "WALLPAPER"
+            value = "off" if key == "THEME_AUTO" else "fixed"
+            if tool and moods.get(key.lower()) not in (None, value):
+                self.tool(tool + ["set", key, value], refresh=False, after=lambda: self.tool(args))
+            else:
+                self.tool(args)
         self.section(_t("Arrière-plan"))
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, row_spacing=10, column_spacing=10)
         current = prefs.get("wallpaper", "")
@@ -1177,7 +1218,7 @@ class ExtraPages:
             if pixbuf: inner.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
             inner.pack_start(Gtk.Label(label=("✓ " if str(path) == current else "") + _t(title)), False, False, 0)
             button.add(inner)
-            button.connect("clicked", lambda *_, p=path: self.tool(["winlux-personalize", "wallpaper", str(p)]))
+            button.connect("clicked", lambda *_, p=path: fixed_then(["winlux-personalize", "wallpaper", str(p)]))
             flow.add(button)
         self.body.pack_start(flow, False, False, 0)
         images = Gtk.FileFilter()
@@ -1185,9 +1226,18 @@ class ExtraPages:
         images.add_pixbuf_formats()
         box = self.card()
         self.row(box, _t("Choisir une photo…"), self.browse_button(
-            _t("Choisir une photo…"), images, lambda path: self.tool(["winlux-personalize", "wallpaper", path])))
-        self.combo(box, _t("Mode de couleur"), [("dark", _t("Sombre")), ("light", _t("Clair"))], prefs.get("theme", "dark"),
-                   lambda value: self.tool(["winlux-personalize", "theme", value]))
+            _t("Choisir une photo…"), images, lambda path: fixed_then(["winlux-personalize", "wallpaper", path])))
+        modes = [("dark", _t("Sombre")), ("light", _t("Clair"))]
+        if tool: modes.append(("auto", _t("Automatique : clair le jour, sombre le soir")))
+        mode = "auto" if moods.get("theme_auto") == "on" else prefs.get("theme", "dark")
+
+        def set_mode(value):
+            if value == "auto": self.tool(tool + ["set", "THEME_AUTO", "on"])
+            else: fixed_then(["winlux-personalize", "theme", value])
+        self.combo(box, _t("Mode de couleur"), modes, mode, set_mode,
+                   _t("Lever et coucher du soleil calculés pour votre fuseau horaire.") if mode == "auto" else None)
+        if tool:
+            self.wallpaper_modes(box, tool, moods)
         self.section(_t("Couleur d’accentuation"))
         palette = Gtk.Box(spacing=8)
         for color in ACCENTS:
@@ -1216,6 +1266,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.theme_files()
         if have("winlux-widgets"):
             self.widget_settings()
         self.section(_t("Icônes du bureau"))
@@ -1225,6 +1276,68 @@ class ExtraPages:
                            (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
         self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+
+    def wallpaper_modes(self, box, tool, moods):
+        """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
+        mode = moods.get("wallpaper", "fixed")
+        reopen = lambda: self.select(self.nav, None)
+        self.combo(box, _t("Personnaliser l’arrière-plan"),
+                   [("fixed", _t("Image")), ("slideshow", _t("Diaporama")),
+                    ("daynight", _t("Winlux Aube le jour, Winlux Nuit le soir"))], mode,
+                   lambda value: self.tool(tool + ["set", "WALLPAPER", value], refresh=False, after=reopen))
+        if mode != "slideshow": return
+        folder = moods.get("slide_folder") or ""
+        chooser = Gtk.Button(label=_t("Parcourir…"))
+
+        def pick(*_):
+            dialog = Gtk.FileChooserNative.new(_t("Choisir un dossier"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            if folder: dialog.set_current_folder(folder)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                self.tool(tool + ["set", "SLIDE_FOLDER", dialog.get_filename()], refresh=False, after=reopen)
+            dialog.destroy()
+        chooser.connect("clicked", pick)
+        self.row(box, _t("Dossier des images"), chooser, folder or _t("Aucun dossier choisi."))
+        self.combo(box, _t("Changer d’image toutes les"),
+                   [("1", _t("1 minute")), ("10", _t("10 minutes")), ("30", _t("30 minutes")), ("60", _t("1 heure")),
+                    ("360", _t("6 heures")), ("1440", _t("1 jour"))], moods.get("slide_minutes", "30"),
+                   lambda value: self.tool(tool + ["set", "SLIDE_MINUTES", value], refresh=False))
+        self.switch(box, _t("Ordre aléatoire"), moods.get("slide_shuffle") == "on",
+                    lambda on: self.tool(tool + ["set", "SLIDE_SHUFFLE", "on" if on else "off"], refresh=False))
+        self.actions(box, [(_t("Image suivante"), lambda: self.tool(tool + ["next"], refresh=False), bool(folder))])
+
+    def theme_files(self):
+        """Thème complet (fond, couleur, barre, sons) en un fichier .wlxtheme (#281)."""
+        self.section(_t("Thèmes"), _t("Enregistrez votre fond, votre couleur d’accentuation, la taille de la barre et les sons en un fichier à partager."))
+        box = self.card()
+        themes = Gtk.FileFilter()
+        themes.set_name(_t("Thèmes Winlux"))
+        themes.add_pattern("*.wlxtheme")
+
+        def save():
+            dialog = Gtk.FileChooserNative.new(_t("Enregistrer le thème"), self, Gtk.FileChooserAction.SAVE, None, None)
+            dialog.add_filter(themes)
+            dialog.set_do_overwrite_confirmation(True)
+            dialog.set_current_name(_t("Mon thème") + ".wlxtheme")
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                target = dialog.get_filename()
+                if not target.endswith(".wlxtheme"): target += ".wlxtheme"
+                self.tool(["winlux-personalize", "export", target], refresh=False)
+            dialog.destroy()
+
+        def load():
+            dialog = Gtk.FileChooserNative.new(_t("Appliquer un thème"), self, Gtk.FileChooserAction.OPEN, None, None)
+            dialog.add_filter(themes)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                chosen = dialog.get_filename()
+                tool = ambiance_tool()
+                apply = lambda: self.tool(["winlux-personalize", "import", chosen])
+                if tool:
+                    self.tool(tool + ["set", "THEME_AUTO", "off"], refresh=False,
+                              after=lambda: self.tool(tool + ["set", "WALLPAPER", "fixed"], refresh=False, after=apply))
+                else:
+                    apply()
+            dialog.destroy()
+        self.actions(box, [(_t("Enregistrer le thème…"), save), (_t("Appliquer un thème…"), load)])
 
     def widget_settings(self):
         """Volet Win+W (winlux-widgets) : bouton de la barre, météo, photos."""
