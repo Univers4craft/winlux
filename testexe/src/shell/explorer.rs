@@ -2159,6 +2159,23 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     );
 }
 
+/// Nom affiché d'un segment du chemin : « Users » à la racine d'un lecteur,
+/// et les dossiers connus d'un compte (Desktop, Downloads…), dans la langue
+/// de l'interface. Les autres noms restent tels quels.
+fn crumb_label<'a>(name: &'a [u8], at_root: bool, in_profile: bool) -> &'a [u8] {
+    if at_root && name.eq_ignore_ascii_case(b"Users") {
+        return tr4(&[b"Utilisateurs", b"Users", b"Usuarios", b"Benutzer"]);
+    }
+    if in_profile {
+        for (i, place) in PLACES.iter().enumerate() {
+            if name.eq_ignore_ascii_case(place.en) {
+                return place_label(i);
+            }
+        }
+    }
+    name
+}
+
 unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let p = pal();
     let mut x = a.left + 10;
@@ -2201,6 +2218,13 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
                 start = i + 1;
             }
         }
+    }
+    // Noms affichés comme sous Windows (desktop.ini) : Utilisateurs, puis
+    // Téléchargements, Images… dans le dossier d'un compte. Le chemin
+    // lui-même (C:\Users\nom\Downloads) ne change pas.
+    for i in 2..n {
+        let users = i >= 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
+        segs[i].0 = crumb_label(segs[i].0, i == 2, users && i == 4);
     }
     // Si tout ne tient pas, on garde les derniers segments.
     let avail = a.right - x - 10;
