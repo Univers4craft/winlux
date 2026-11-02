@@ -65,6 +65,7 @@ run relais-root          python3 -B scripts/test-root.py
 run coller-bureau        python3 -B scripts/test-desktop-paste.py
 run modes-alimentation   python3 -B scripts/test-power-modes.py
 run claude-code          python3 -B scripts/test-claude-code.py
+run reinitialisation    python3 -B scripts/test-reset.py
 run assistant            python3 -B scripts/test-assistant.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 

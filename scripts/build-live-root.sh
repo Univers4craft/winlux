@@ -9,7 +9,7 @@ linkage=$(LC_ALL=C ldd /usr/bin/busybox 2>&1 || true)
 case "$linkage" in *'not a dynamic executable'*|*'statically linked'*) ;;
     *) echo 'busybox-static requis pour le petit initramfs' >&2; exit 1 ;;
 esac
-for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum loadkmap reboot sync; do
+for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum loadkmap reboot sync mv rm cp grep sed head dd chown; do
     /usr/bin/busybox --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
 done
 work=$(mktemp -d "$project/build/live-boot.XXXXXX")
@@ -19,7 +19,9 @@ mkdir -p "$tiny/bin" "$tiny/dev" "$tiny/etc" "$tiny/proc" "$tiny/run" "$tiny/sys
 cp /usr/bin/busybox "$tiny/bin/busybox"
 ln -s busybox "$tiny/bin/sh"
 cp "$project/scripts/winlux-live-init.sh" "$tiny/init"
+cp "$project/scripts/winlux-reset-apply.sh" "$tiny/reset-apply.sh"
 chmod 755 "$tiny/init" "$tiny/bin/busybox"
+chmod 644 "$tiny/reset-apply.sh"
 : >"$tiny/modules-to-load"
 for driver in loop isofs squashfs overlay ext4; do
     modprobe -S "$kernel_release" --show-depends "$driver" >/dev/null 2>&1 || {

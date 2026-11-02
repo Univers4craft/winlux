@@ -175,6 +175,7 @@ _TR = {
     'Refroidissement maximal': ('Maximum cooling', 'Refrigeración máxima', 'Maximale Kühlung'),
     'Se connecter': ('Connect', 'Conectar', 'Verbinden'),
     'Secours et restauration': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Réinitialiser ce PC et clé de secours': ('Reset this PC and recovery drive', 'Restablecer este PC y unidad de recuperación', 'Diesen PC zurücksetzen und Wiederherstellungslaufwerk'),
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
@@ -444,6 +445,7 @@ PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 1
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
 PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
+PAGE_RECOVERY = 31
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -785,6 +787,9 @@ def page_available(page, status=None):
         return games_module() is not None
     if page == PAGE_ASSISTANT:
         return assistant_module() is not None
+    if page == PAGE_RECOVERY:
+        module = reset_page()
+        return module is not None and module.available()
     return True
 
 
@@ -832,6 +837,22 @@ def assistant_module():
                 module = None
     _ASSISTANT.append(module)
     return module
+def reset_page():
+    """Page Récupération (winlux-reset-page, installée à côté), None si absente."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-reset-page.py"), here.with_name("winlux-reset-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_reset_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_reset_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def default_apps_panel(window):
@@ -862,7 +883,7 @@ class ExtraPages:
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
-                   PAGE_ASSISTANT: "page_assistant"}
+                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1638,6 +1659,15 @@ class ExtraPages:
                  _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
+        if page_available(PAGE_RECOVERY):
+            self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
+
+    def page_recovery(self):
+        module = reset_page()
+        if module is not None:
+            self.recovery_panel = module.RecoveryPanel(self)
 
     # ── Signaler un problème ──
 

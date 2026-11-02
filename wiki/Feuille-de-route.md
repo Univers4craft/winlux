@@ -7,12 +7,13 @@
 | Étape | Contenu |
 |---|---|
 | Runtime PE | Chargeur PE32+ x86-64, ~100 DLL réimplémentées, SEH et exceptions C++, registre, chemins, UAC. |
-| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (29 pages), Explorateur et applications maison. |
+| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (30 pages), Explorateur et applications maison. |
 | ISO installable | Live, installateur graphique (automatique, manuel, LUKS, double démarrage), Secure Boot, récupération. |
 | Base native | Ubuntu 26.04 avec APT, mises à jour par paquet `.deb` avec retour arrière (v0.2.12). |
 | Multimédia et jeux | Lecteur FFmpeg, son PipeWire, Direct2D/DirectWrite/WIC maison, Direct3D 9/11/12 vers OpenGL/Vulkan, manettes. |
 | Intégration | Clés USB et partitions Windows avec lettres, lecteurs réseau, partage Samba, impression CUPS, presse-papiers et glisser-déposer communs. |
 | Identité | Logo Prisme, fonds, son de démarrage, aucune marque Microsoft. |
+| Récupération | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), clé de secours, démarrage avancé, réparation du démarrage, menu de secours en quatre langues (#283). |
 | Langues | Bureau en quatre langues, installateur en six. |
 
 ## Prochaine version : v0.2.14
@@ -57,6 +58,6 @@ Aucune pull request ouverte pour la v0.2.14.
 ### Idées proposées, pas encore commencées (02/11/2026)
 
 - Petits plaisirs : éclairage nocturne (#274), emojis Win+. (#275), historique Win+V natif (#276), Snap Layouts, Win+Tab et bureaux virtuels natifs (#277), Horloge (#278), pipette et petits outils (#279), copier le texte d'une image (#280), thème automatique et diaporama (#281).
-- Gros chantiers : widgets Win+W (#282), réinitialiser le PC et clé de secours (#283), lien avec le téléphone (#284), coin jeux puis Steam (#285), assistant intégré (#286), site web et guide utilisateur (#287).
+- Gros chantiers : widgets Win+W (#282), lien avec le téléphone (#284), coin jeux puis Steam (#285), assistant intégré (#286), site web et guide utilisateur (#287).
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)
