@@ -93,6 +93,11 @@ run exceptions-materielles sh scripts/test-hw-exceptions.sh
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5
 fi
+# OpenGL (opengl32 + WGL) et Vulkan (vulkan-1) des .exe : rendu réel sur
+# l'affichage, sauté proprement sans pilote. Seulement si déjà compilé.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe ]; then
+    run opengl-vulkan-exe    display target/release/winlux target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe
+fi
 
 echo
 echo "$passed réussi(s), $failed échec(s)."

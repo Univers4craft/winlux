@@ -50,6 +50,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hostcall;
 pub mod imm32;
 pub mod iphlpapi;
 pub mod ipp;
@@ -76,6 +77,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod opengl32;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -105,6 +107,7 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod vulkan1;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
@@ -335,6 +338,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(winspool::gdi_exports());
+                    e.extend(opengl32::gdi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -575,6 +579,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "secur32",
                 exports: secur32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "opengl32",
+                exports: opengl32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "vulkan-1",
+                exports: vulkan1::exports(),
                 handle: fake_module(),
             },
         ];
