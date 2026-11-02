@@ -11,6 +11,7 @@
 //! `winlux setup.exe` (double-clic) passe ici automatiquement ;
 //! `winlux --setup …` donne accès aux options (voir `USAGE`).
 
+pub mod burn;
 pub mod inno;
 mod inno_layout;
 pub mod lzma;
@@ -920,6 +921,10 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         let mut log = Logger { quiet: false };
         remove(&m, &mut log);
         return Some(0);
+    }
+    // Bundles WiX Burn (vc_redist…) : chaîne de paquets MSI installée ici.
+    if let Some(code) = burn::launch(exe, args) {
+        return Some(code);
     }
     detect_file(exe)?;
     let mut cli_args: Vec<String> = args.to_vec();

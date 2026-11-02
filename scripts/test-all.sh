@@ -93,6 +93,17 @@ fi
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe ]; then
     run opengl-vulkan-exe    display target/release/winlux target/x86_64-pc-windows-msvc/release/gl_vk_suite.exe
 fi
+# System32 et msvcp140 maison, sur un lecteur C: jetable.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/system32_suite.exe ]; then
+    sys32_c=$(mktemp -d)
+    run system32-msvcp140    env WINLUX_DRIVE_C="$sys32_c" WINLUX_GUI=headless target/release/winlux target/x86_64-pc-windows-msvc/release/system32_suite.exe
+    rm -rf "$sys32_c"
+fi
+# HTTPS des .exe : certificats (crypt32), CryptoAPI et Schannel contre un
+# serveur TLS local jetable.
+if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/tls_suite.exe ]; then
+    run https-schannel       sh scripts/run-tls-suite.sh target/release/winlux target/x86_64-pc-windows-msvc/release/tls_suite.exe
+fi
 
 echo
 echo "$passed réussi(s), $failed échec(s)."

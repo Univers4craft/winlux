@@ -2666,7 +2666,10 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
-    if let Some(h) = crate::dlls::module_handle(n) {
+    let real_first = crate::dlls::prefers_real_file(&crate::dlls::normalize(n))
+        && crate::loader::main_module()
+            .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
+    if let Some(h) = crate::dlls::module_handle(n).filter(|_| !real_first) {
         {
             let mut mods = crate::loader::MODULES.lock().unwrap();
             if let Some(m) = mods.iter_mut().find(|m| m.base == h) {

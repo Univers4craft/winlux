@@ -43,14 +43,21 @@ cat >/dev/null
 HELPER
 chmod 755 "$notify_helper"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite controls_suite comctl_suite commdlg_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite gl_vk_suite print_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite controls_suite comctl_suite commdlg_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"
     if [ "$name" = exitcode ]; then expected=42; else expected=0; fi
     set +e
     # Sortie audio nulle cadencée : pas de carte son sur les runners CI.
-    if [ "$name" = winpaths ]; then
+    if [ "$name" = system32_suite ]; then
+        # Lecteur C: jetable : la suite écrit dans C:\Windows\System32.
+        mkdir -p "$power_root/c"
+        WINLUX_DRIVE_C="$power_root/c" WINLUX_GUI=headless "$runtime" "$exe"
+    elif [ "$name" = tls_suite ]; then
+        # Serveur HTTPS local jetable pour la poignée de main Schannel.
+        sh "$root/scripts/run-tls-suite.sh" "$runtime" "$exe"
+    elif [ "$name" = winpaths ]; then
         WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" \
             WINLUX_GUI=headless "$runtime" "$exe"
     else
