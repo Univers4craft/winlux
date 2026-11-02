@@ -341,7 +341,13 @@ pub fn extract(path: &Path, dest: &Path, password: Option<&str>, progress: &Prog
         let mut crc = Crc32::new();
         let mut buf = vec![0u8; 64 * 1024];
         loop {
-            let n = src.read(&mut buf)?;
+            // Un mauvais mot de passe passe l'octet de contrôle une fois sur
+            // 256 : le flux déchiffré est alors du bruit que inflate refuse.
+            let n = match src.read(&mut buf) {
+                Ok(n) => n,
+                Err(_) if e.encrypted() => return Err(ArcError::BadPassword),
+                Err(err) => return Err(err.into()),
+            };
             if n == 0 {
                 break;
             }

@@ -1,17 +1,17 @@
 [Desktop Entry]
 Type=Application
-Name=Navigateur
-Name[en]=Browser
-Name[de]=Browser
-Name[es]=Navegador
+Name=Navigateur web
+Name[en]=Web browser
+Name[de]=Webbrowser
+Name[es]=Navegador web
 GenericName=Navigateur web
 GenericName[en]=Web browser
 GenericName[de]=Webbrowser
 GenericName[es]=Navegador web
-Comment=Ouvre les pages web dans le navigateur par défaut
-Comment[en]=Opens web pages in the default browser
-Comment[de]=Öffnet Webseiten im Standardbrowser
-Comment[es]=Abre las páginas web en el navegador predeterminado
+Comment=Ouvre les pages web dans le navigateur que vous avez choisi
+Comment[en]=Opens web pages in the browser you chose
+Comment[de]=Öffnet Webseiten in dem Browser, den Sie gewählt haben
+Comment[es]=Abre las páginas web en el navegador que ha elegido
 Exec=/usr/bin/winlux-browser %U
 Icon=web-browser
 Terminal=false

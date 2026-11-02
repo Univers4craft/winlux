@@ -13,7 +13,10 @@
     "guide-desktop",
     "guide-updates",
     "guide-help",
-    "apps"
+    "apps",
+    "legal",
+    "privacy",
+    "position"
   ],
   "guide": [
     "guide-usb",

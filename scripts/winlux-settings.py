@@ -91,6 +91,7 @@ _TR = {
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
+    'Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation.': ('Free software (GNU GPL v3). Independent project, neither affiliated with nor endorsed by Microsoft; Windows is a trademark of Microsoft Corporation.', 'Software libre (GNU GPL v3). Proyecto independiente, no afiliado a Microsoft ni aprobado por ella; Windows es una marca de Microsoft Corporation.', 'Freie Software (GNU GPL v3). Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke der Microsoft Corporation.'),
     'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
     'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
@@ -218,7 +219,7 @@ _TR = {
     'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
     'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
-    'Assistant Claude': ('Claude assistant', 'Asistente Claude', 'Claude-Assistent'),
+    'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
@@ -244,6 +245,8 @@ _TR = {
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
     'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
     'Par défaut : {name}': ('Default: {name}', 'Predeterminado: {name}', 'Standard: {name}'),
+    'Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous.': ('Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. Pick the one you prefer: Winlux downloads it from its publisher’s official website, checks the file and installs it for you.', 'Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. Elija el que prefiera: Winlux lo descarga del sitio oficial de su editor, comprueba el archivo y lo instala por usted.', 'Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Wählen Sie Ihren bevorzugten Browser: Winlux lädt ihn von der offiziellen Website des Herstellers herunter, prüft die Datei und installiert ihn für Sie.'),
+    'Aucun : choisissez-en un ci-dessous': ('None: choose one below', 'Ninguno: elija uno abajo', 'Keiner: unten einen auswählen'),
     'Ouvrir {name}': ('Open {name}', 'Abrir {name}', '{name} öffnen'),
     '{label} : {value}': ('{label}: {value}', '{label}: {value}', '{label}: {value}'),
     'Pilote {driver}': ('Driver {driver}', 'Controlador {driver}', 'Treiber {driver}'),
@@ -305,7 +308,7 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
-         _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
+         _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
@@ -583,6 +586,7 @@ def about_build(info):
     built = values.get("built_at_utc", "")
     if len(built) >= 10 and built[4] == "-":
         lines.append(_t("Compilée le : {value}").format(value=f"{built[8:10]}/{built[5:7]}/{built[:4]}"))
+    lines.append(_t("Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation."))
     return "".join("\n" + line for line in lines)
 
 
@@ -722,7 +726,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.progress.set_visible(self.page == 7)
 
     def apply_theme(self):
-        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#8178b7"))
+        p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0"))
         self.css.load_from_data(SETTINGS_CSS.format(**p).encode())
 
     def label(self, text, style=None):
@@ -797,7 +801,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
         if self.page == 11:
-            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
+            # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
+            self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
+            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("chrome", "edge", "firefox")
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
@@ -961,6 +967,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                     return f"{round(float(value) * 100)} %" if value else _t("Automatique")
                 except ValueError:
                     return value
+            if key == "browser_default":
+                names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+                return names.get(value, _t("Aucun : choisissez-en un ci-dessous"))
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")

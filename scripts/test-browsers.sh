@@ -30,7 +30,7 @@ manager() {
         sh "$project/scripts/winlux-browsers.sh" "$@"
     fi
 }
-manager --status | grep -qx 'browser_default=edge'
+manager --status | grep -qx 'browser_default=none'
 manager --open 'https://example.invalid/'
 test -f "$WINLUX_BROWSER_ROOT/run/winlux/browser-chooser"
 umask 077
@@ -55,5 +55,32 @@ touch "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 manager --install firefox
 test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 if manager --install unknown >/dev/null 2>&1; then exit 1; fi
+# Edge et Chrome absents de l'image : téléchargés chez l'éditeur, à la demande.
+rm -f "$cache/chrome.deb" "$cache/chrome.sha256" "$cache/chrome.version"
+rm -rf "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/chrome"
+dpkg-deb --build --root-owner-group "$work/chrome" "$work/chrome-publisher.deb" >/dev/null
+cat > "$work/fetch" <<FETCH
+#!/bin/sh
+set -eu
+test "\$1" = --only && test "\$2" = chrome
+printf '%s\n' "\$*" > "$work/fetch-arguments"
+cp "$work/chrome-publisher.deb" "\$3/chrome.deb"
+sha256sum "\$3/chrome.deb" | cut -d' ' -f1 > "\$3/chrome.sha256"
+printf '2.0\n' > "\$3/chrome.version"
+FETCH
+chmod 755 "$work/fetch"
+export WINLUX_BROWSER_FETCH="$work/fetch"
+manager --status | grep -qx 'browser_chrome=downloadable'
+manager --install chrome
+grep -q "^--only chrome $WINLUX_BROWSER_ROOT/var/cache/winlux/browsers\$" "$work/fetch-arguments"
+manager --status | grep -qx 'browser_chrome=installed'
+test ! -e "$cache/chrome.deb"
+# Échec du téléchargement : rien d'installé, pas de verrou orphelin.
+rm -rf "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/edge" "$cache/edge.deb" "$cache/edge.sha256" "$cache/edge.version"
+printf '#!/bin/sh\nexit 1\n' > "$work/fetch"
+if manager --install edge >/dev/null 2>&1; then echo 'Edge installé sans téléchargement' >&2; exit 1; fi
+test ! -e "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/edge"
+test ! -e "$WINLUX_BROWSER_ROOT/run/winlux/browser-install.lock"
+if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
 python3 -B "$project/scripts/test-browser-downloads.py"
-echo 'OK: offline browser selection, installation, default, URL arguments, checksums and cleanup'
+echo 'OK: no browser shipped or preferred, choice screen, download on demand, URL arguments, checksums and cleanup'

@@ -1,16 +1,15 @@
 //! secur32.dll (et sspicli.dll) : nom complet de l'utilisateur et interface
 //! SSPI (Kerberos, NTLM, Schannel).
 //!
-//! GetUserNameEx répond d'après le compte Linux. Les paquets de sécurité
-//! SSPI ne sont pas encore fournis : EnumerateSecurityPackages en annonce
-//! zéro et les autres appels répondent SEC_E_SECPKG_NOT_FOUND, ce que les
-//! logiciels traitent comme « authentification intégrée indisponible »
-//! (PuTTY retombe alors sur le mot de passe ou la clé).
+//! GetUserNameEx répond d'après le compte Linux. Côté SSPI, Schannel (TLS)
+//! est fourni ([`super::schannel`]) ; Kerberos, NTLM et Negotiate répondent
+//! SEC_E_SECPKG_NOT_FOUND, ce que les logiciels traitent comme
+//! « authentification intégrée indisponible » (PuTTY retombe alors sur le
+//! mot de passe ou la clé).
 
 use crate::process::set_last_error;
 
-const SEC_E_OK: i32 = 0;
-const SEC_E_INVALID_HANDLE: i32 = 0x8009_0301u32 as i32;
+use super::schannel::{SEC_E_INVALID_HANDLE, SEC_E_OK};
 const SEC_E_SECPKG_NOT_FOUND: i32 = 0x8009_0305u32 as i32;
 const ERROR_NONE_MAPPED: u32 = 1332;
 const ERROR_MORE_DATA: u32 = 234;
@@ -125,15 +124,248 @@ pub extern "win64" fn get_computer_object_name(
     0
 }
 
-/// EnumerateSecurityPackages : aucun paquet (tableau nul, à ne pas libérer).
-pub unsafe extern "win64" fn enumerate_security_packages(count: *mut u32, info: *mut usize) -> i32 {
+// ---------- SSPI ----------
+//
+// Seul Schannel (TLS) est fourni, par [`super::schannel`]. Kerberos, NTLM et
+// Negotiate restent « paquet introuvable », ce que les logiciels traitent
+// comme « authentification intégrée indisponible ».
+
+use super::schannel::{self, SecBufferDesc, SecHandle};
+
+const PKG_NAME: &str = "Microsoft Unified Security Protocol Provider";
+const PKG_COMMENT: &str = "Schannel Security Package";
+
+/// SecPkgInfoW / SecPkgInfoA alloués d'un bloc (libéré par FreeContextBuffer).
+unsafe fn pkg_info(count: usize, wide: bool) -> *mut u8 {
+    let enc = |s: &str| -> Vec<u8> {
+        if wide {
+            s.encode_utf16()
+                .chain([0])
+                .flat_map(|c| c.to_le_bytes())
+                .collect()
+        } else {
+            s.bytes().chain([0]).collect()
+        }
+    };
+    let names: Vec<(Vec<u8>, Vec<u8>)> = [PKG_NAME, "Schannel"]
+        .iter()
+        .take(count)
+        .map(|n| (enc(n), enc(PKG_COMMENT)))
+        .collect();
+    let strings: usize = names.iter().map(|(a, b)| a.len() + b.len()).sum();
+    let p = libc::calloc(1, 32 * count + strings) as *mut u8;
+    if p.is_null() {
+        return p;
+    }
+    let mut at = p.add(32 * count);
+    for (i, (n, c)) in names.iter().enumerate() {
+        let e = p.add(32 * i);
+        // fCapabilities, wVersion, wRPCID (14 : GSS_SCHANNEL), cbMaxToken.
+        (e as *mut u32).write_unaligned(0x0001_07b3);
+        (e.add(4) as *mut u16).write_unaligned(1);
+        (e.add(6) as *mut u16).write_unaligned(14);
+        (e.add(8) as *mut u32).write_unaligned(0x6000);
+        std::ptr::copy_nonoverlapping(n.as_ptr(), at, n.len());
+        (e.add(16) as *mut usize).write_unaligned(at as usize);
+        at = at.add(n.len());
+        std::ptr::copy_nonoverlapping(c.as_ptr(), at, c.len());
+        (e.add(24) as *mut usize).write_unaligned(at as usize);
+        at = at.add(c.len());
+    }
+    p
+}
+
+unsafe fn enumerate(count: *mut u32, info: *mut usize, wide: bool) -> i32 {
+    let p = pkg_info(2, wide);
     if !count.is_null() {
-        *count = 0;
+        *count = if p.is_null() { 0 } else { 2 };
     }
     if !info.is_null() {
-        *info = 0;
+        *info = p as usize;
     }
     SEC_E_OK
+}
+
+pub unsafe extern "win64" fn enumerate_security_packages_w(
+    count: *mut u32,
+    info: *mut usize,
+) -> i32 {
+    enumerate(count, info, true)
+}
+
+pub unsafe extern "win64" fn enumerate_security_packages_a(
+    count: *mut u32,
+    info: *mut usize,
+) -> i32 {
+    enumerate(count, info, false)
+}
+
+pub unsafe extern "win64" fn query_security_package_info_w(
+    name: *const u16,
+    info: *mut usize,
+) -> i32 {
+    if !schannel::is_package(&crate::dlls::wstr(name)) || info.is_null() {
+        return SEC_E_SECPKG_NOT_FOUND;
+    }
+    *info = pkg_info(1, true) as usize;
+    SEC_E_OK
+}
+
+pub unsafe extern "win64" fn query_security_package_info_a(
+    name: *const u8,
+    info: *mut usize,
+) -> i32 {
+    if !schannel::is_package(&crate::dlls::cstr(name)) || info.is_null() {
+        return SEC_E_SECPKG_NOT_FOUND;
+    }
+    *info = pkg_info(1, false) as usize;
+    SEC_E_OK
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn acquire_credentials_handle_w(
+    _principal: *const u16,
+    package: *const u16,
+    use_: u32,
+    _logon: usize,
+    auth: *const u8,
+    _get_key: usize,
+    _arg: usize,
+    cred: *mut SecHandle,
+    expiry: *mut i64,
+) -> i32 {
+    if !schannel::is_package(&crate::dlls::wstr(package)) {
+        return SEC_E_SECPKG_NOT_FOUND;
+    }
+    schannel::acquire_credentials(use_, auth, cred, expiry)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn acquire_credentials_handle_a(
+    _principal: *const u8,
+    package: *const u8,
+    use_: u32,
+    _logon: usize,
+    auth: *const u8,
+    _get_key: usize,
+    _arg: usize,
+    cred: *mut SecHandle,
+    expiry: *mut i64,
+) -> i32 {
+    if !schannel::is_package(&crate::dlls::cstr(package)) {
+        return SEC_E_SECPKG_NOT_FOUND;
+    }
+    schannel::acquire_credentials(use_, auth, cred, expiry)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn initialize_security_context_w(
+    cred: *const SecHandle,
+    ctx: *const SecHandle,
+    target: *const u16,
+    req: u32,
+    _reserved1: u32,
+    _rep: u32,
+    input: *mut SecBufferDesc,
+    _reserved2: u32,
+    new_ctx: *mut SecHandle,
+    output: *mut SecBufferDesc,
+    attrs: *mut u32,
+    expiry: *mut i64,
+) -> i32 {
+    if !schannel::is_cred(cred) && !schannel::is_ctx(ctx) {
+        return SEC_E_INVALID_HANDLE;
+    }
+    if !expiry.is_null() {
+        *expiry = i64::MAX;
+    }
+    schannel::initialize(
+        cred,
+        ctx,
+        crate::dlls::wstr(target),
+        req,
+        input,
+        new_ctx,
+        output,
+        attrs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn initialize_security_context_a(
+    cred: *const SecHandle,
+    ctx: *const SecHandle,
+    target: *const u8,
+    req: u32,
+    _reserved1: u32,
+    _rep: u32,
+    input: *mut SecBufferDesc,
+    _reserved2: u32,
+    new_ctx: *mut SecHandle,
+    output: *mut SecBufferDesc,
+    attrs: *mut u32,
+    expiry: *mut i64,
+) -> i32 {
+    if !schannel::is_cred(cred) && !schannel::is_ctx(ctx) {
+        return SEC_E_INVALID_HANDLE;
+    }
+    if !expiry.is_null() {
+        *expiry = i64::MAX;
+    }
+    schannel::initialize(
+        cred,
+        ctx,
+        crate::dlls::cstr(target),
+        req,
+        input,
+        new_ctx,
+        output,
+        attrs,
+    )
+}
+
+pub unsafe extern "win64" fn free_credentials_handle(cred: *const SecHandle) -> i32 {
+    schannel::free_credentials(cred)
+}
+
+pub unsafe extern "win64" fn delete_security_context(ctx: *const SecHandle) -> i32 {
+    schannel::delete(ctx)
+}
+
+pub unsafe extern "win64" fn apply_control_token(
+    ctx: *const SecHandle,
+    input: *mut SecBufferDesc,
+) -> i32 {
+    schannel::apply_control_token(ctx, input)
+}
+
+pub unsafe extern "win64" fn query_context_attributes(
+    ctx: *const SecHandle,
+    attr: u32,
+    out: *mut u8,
+) -> i32 {
+    schannel::query_attributes(ctx, attr, out)
+}
+
+pub unsafe extern "win64" fn encrypt_message(
+    ctx: *const SecHandle,
+    _qop: u32,
+    msg: *mut SecBufferDesc,
+    _seq: u32,
+) -> i32 {
+    schannel::encrypt(ctx, msg)
+}
+
+pub unsafe extern "win64" fn decrypt_message(
+    ctx: *const SecHandle,
+    msg: *mut SecBufferDesc,
+    _seq: u32,
+    qop: *mut u32,
+) -> i32 {
+    if !qop.is_null() {
+        *qop = 0;
+    }
+    schannel::decrypt(ctx, msg)
 }
 
 pub extern "win64" fn package_not_found() -> i32 {
@@ -144,14 +376,82 @@ pub extern "win64" fn invalid_handle() -> i32 {
     SEC_E_INVALID_HANDLE
 }
 
-/// FreeContextBuffer : rien n'a été alloué par Winlux ; un pointeur nul est accepté.
-pub extern "win64" fn free_context_buffer(_buffer: *mut u8) -> i32 {
+/// FreeContextBuffer : libère ce que Winlux a alloué (malloc) ; nul accepté.
+pub unsafe extern "win64" fn free_context_buffer(buffer: *mut u8) -> i32 {
+    if !buffer.is_null() {
+        libc::free(buffer.cast());
+    }
     SEC_E_OK
 }
 
-/// InitSecurityInterface : pas de table de fonctions SSPI.
-pub extern "win64" fn init_security_interface() -> usize {
-    0
+/// Table SecurityFunctionTable (version 4), A ou W.
+fn function_table(wide: bool) -> usize {
+    use std::sync::OnceLock;
+    static W: OnceLock<Box<[usize; 32]>> = OnceLock::new();
+    static A: OnceLock<Box<[usize; 32]>> = OnceLock::new();
+    let build = |wide: bool| -> Box<[usize; 32]> {
+        let mut t = [0usize; 32];
+        let f = |x: *const ()| x as usize;
+        t[0] = 4;
+        t[1] = if wide {
+            f(enumerate_security_packages_w as *const ())
+        } else {
+            f(enumerate_security_packages_a as *const ())
+        };
+        t[2] = f(invalid_handle as *const ());
+        t[3] = if wide {
+            f(acquire_credentials_handle_w as *const ())
+        } else {
+            f(acquire_credentials_handle_a as *const ())
+        };
+        t[4] = f(free_credentials_handle as *const ());
+        t[6] = if wide {
+            f(initialize_security_context_w as *const ())
+        } else {
+            f(initialize_security_context_a as *const ())
+        };
+        t[7] = f(package_not_found as *const ());
+        t[8] = f(invalid_handle as *const ());
+        t[9] = f(delete_security_context as *const ());
+        t[10] = f(apply_control_token as *const ());
+        t[11] = f(query_context_attributes as *const ());
+        t[12] = f(invalid_handle as *const ());
+        t[13] = f(invalid_handle as *const ());
+        t[14] = f(invalid_handle as *const ());
+        t[15] = f(invalid_handle as *const ());
+        t[16] = f(free_context_buffer as *const ());
+        t[17] = if wide {
+            f(query_security_package_info_w as *const ())
+        } else {
+            f(query_security_package_info_a as *const ())
+        };
+        t[20] = f(invalid_handle as *const ());
+        t[21] = f(invalid_handle as *const ());
+        t[22] = f(package_not_found as *const ());
+        t[24] = f(invalid_handle as *const ());
+        t[25] = f(encrypt_message as *const ());
+        t[26] = f(decrypt_message as *const ());
+        t[27] = f(invalid_handle as *const ());
+        t[28] = f(invalid_handle as *const ());
+        t[29] = f(package_not_found as *const ());
+        t[30] = f(query_context_attributes as *const ());
+        t[31] = f(invalid_handle as *const ());
+        Box::new(t)
+    };
+    let t = if wide {
+        W.get_or_init(|| build(true))
+    } else {
+        A.get_or_init(|| build(false))
+    };
+    t.as_ptr() as usize
+}
+
+pub extern "win64" fn init_security_interface_w() -> usize {
+    function_table(true)
+}
+
+pub extern "win64" fn init_security_interface_a() -> usize {
+    function_table(false)
 }
 
 pub fn exports() -> crate::dlls::Exports {
@@ -160,31 +460,34 @@ pub fn exports() -> crate::dlls::Exports {
         "GetUserNameExW" => fn get_user_name_ex_w,
         "GetComputerObjectNameA" => fn get_computer_object_name,
         "GetComputerObjectNameW" => fn get_computer_object_name,
-        "EnumerateSecurityPackagesA" => fn enumerate_security_packages,
-        "EnumerateSecurityPackagesW" => fn enumerate_security_packages,
-        "QuerySecurityPackageInfoA" => fn package_not_found,
-        "QuerySecurityPackageInfoW" => fn package_not_found,
-        "AcquireCredentialsHandleA" => fn package_not_found,
-        "AcquireCredentialsHandleW" => fn package_not_found,
-        "InitializeSecurityContextA" => fn package_not_found,
-        "InitializeSecurityContextW" => fn package_not_found,
+        "EnumerateSecurityPackagesA" => fn enumerate_security_packages_a,
+        "EnumerateSecurityPackagesW" => fn enumerate_security_packages_w,
+        "QuerySecurityPackageInfoA" => fn query_security_package_info_a,
+        "QuerySecurityPackageInfoW" => fn query_security_package_info_w,
+        "AcquireCredentialsHandleA" => fn acquire_credentials_handle_a,
+        "AcquireCredentialsHandleW" => fn acquire_credentials_handle_w,
+        "InitializeSecurityContextA" => fn initialize_security_context_a,
+        "InitializeSecurityContextW" => fn initialize_security_context_w,
         "AcceptSecurityContext" => fn package_not_found,
-        "FreeCredentialsHandle" => fn invalid_handle,
-        "DeleteSecurityContext" => fn invalid_handle,
-        "QueryContextAttributesA" => fn invalid_handle,
-        "QueryContextAttributesW" => fn invalid_handle,
+        "FreeCredentialsHandle" => fn free_credentials_handle,
+        "DeleteSecurityContext" => fn delete_security_context,
+        "ApplyControlToken" => fn apply_control_token,
+        "QueryContextAttributesA" => fn query_context_attributes,
+        "QueryContextAttributesW" => fn query_context_attributes,
+        "QueryContextAttributesExA" => fn query_context_attributes,
+        "QueryContextAttributesExW" => fn query_context_attributes,
         "QueryCredentialsAttributesA" => fn invalid_handle,
         "QueryCredentialsAttributesW" => fn invalid_handle,
         "MakeSignature" => fn invalid_handle,
         "VerifySignature" => fn invalid_handle,
-        "EncryptMessage" => fn invalid_handle,
-        "DecryptMessage" => fn invalid_handle,
+        "EncryptMessage" => fn encrypt_message,
+        "DecryptMessage" => fn decrypt_message,
         "CompleteAuthToken" => fn invalid_handle,
         "ImpersonateSecurityContext" => fn invalid_handle,
         "RevertSecurityContext" => fn invalid_handle,
         "FreeContextBuffer" => fn free_context_buffer,
-        "InitSecurityInterfaceA" => fn init_security_interface,
-        "InitSecurityInterfaceW" => fn init_security_interface,
+        "InitSecurityInterfaceA" => fn init_security_interface_a,
+        "InitSecurityInterfaceW" => fn init_security_interface_w,
     }
 }
 

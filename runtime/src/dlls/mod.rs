@@ -4,9 +4,12 @@
 
 pub mod a11y;
 pub mod advapi32;
+pub mod advapi32_crypto;
+pub mod advapi32_rsa;
 pub mod advapi32_services;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod chromium_win32;
 pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
@@ -31,15 +34,20 @@ pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod d3dcompiler;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod devio;
+pub mod devnodes;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dirwatch;
+pub mod displaymode;
+pub mod dpapi;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
+pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
 pub mod evdev;
@@ -56,7 +64,9 @@ mod gui_cairo;
 pub mod gui_x11;
 pub mod hid;
 pub mod hostcall;
+pub mod hostssl;
 pub mod imm32;
+pub mod inherit;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
@@ -76,6 +86,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
 pub mod mscoree;
+pub mod msvcp140;
 pub mod msvcrt;
 pub mod named_pipes;
 pub mod nls;
@@ -89,14 +100,17 @@ pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
+pub mod rawinput;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sandbox_dlls;
+pub mod schannel;
 pub mod sechost;
 pub mod secur32;
 pub mod security;
 pub mod seh;
 pub mod seh_hw;
+pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
@@ -120,6 +134,7 @@ pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
+pub mod wininet;
 pub mod winlux_capture;
 pub mod winlux_gpu;
 pub mod winlux_media;
@@ -128,6 +143,7 @@ pub mod winmm;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
+pub mod winusb;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;
@@ -206,6 +222,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
+                    e.extend(chromium_win32::kernel32_exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
@@ -221,6 +238,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
                     e.extend(console_input::exports());
+                    // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
+                    e.extend(serial::exports());
                     e
                 },
                 handle: fake_module(),
@@ -266,15 +285,26 @@ fn builtins() -> &'static Vec<Builtin> {
                         }
                     }
                     e.extend(clipboard::exports());
+                    e.extend(rawinput::exports());
+                    e.extend(displaymode::user32_exports());
                     e.extend(crate::intl::api::user32_exports());
+                    for (name, addr) in chromium_win32::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "shcore",
+                exports: chromium_win32::shcore_exports(),
                 handle: fake_module(),
             },
             Builtin {
                 name: "advapi32",
                 exports: {
                     let mut e = advapi32::exports();
+                    e.extend(advapi32_crypto::exports());
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
@@ -282,6 +312,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(credentials::exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
+                    e.extend(chromium_win32::advapi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -349,6 +380,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_fonts::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
+                    e.extend(displaymode::gdi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -380,6 +412,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "audioses",
                 exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3dcompiler_47",
+                exports: d3dcompiler::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -438,6 +475,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "dpapi",
+                exports: dpapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "dxgi",
                 exports: dxgi::exports(),
                 handle: fake_module(),
@@ -475,6 +517,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winusb",
+                exports: winusb::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -597,6 +644,21 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "wininet",
+                exports: wininet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "urlmon",
+                exports: wininet::urlmon_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "msvcp140",
+                exports: msvcp140::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "opengl32",
                 exports: opengl32::exports(),
                 handle: fake_module(),
@@ -677,6 +739,10 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
     }
+    // Compilateur HLSL : toutes les versions servies par le même d3dcompiler_47.
+    if base.starts_with("d3dcompiler_") {
+        return "d3dcompiler_47".into();
+    }
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {
         return "secur32".into();
@@ -688,6 +754,23 @@ pub fn normalize(dll: &str) -> String {
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
         return "setupapi".into();
+    }
+    // DPI par écran (Chromium, Electron) : shcore.
+    if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
+        return "shcore".into();
+    }
+    // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
+    for (prefix, dll) in [
+        ("api-ms-win-downlevel-shell32-", "shell32"),
+        ("api-ms-win-downlevel-user32-", "user32"),
+        ("api-ms-win-downlevel-advapi32-", "advapi32"),
+        ("api-ms-win-downlevel-ole32-", "ole32"),
+        ("api-ms-win-downlevel-shlwapi-", "shlwapi"),
+        ("api-ms-win-downlevel-version-", "version"),
+    ] {
+        if base.starts_with(prefix) {
+            return dll.into();
+        }
     }
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
@@ -813,6 +896,12 @@ pub fn normalize(dll: &str) -> String {
     base.to_string()
 }
 
+/// Redistribuables dont Winlux a une version maison partielle : la vraie
+/// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
+pub fn prefers_real_file(normalized: &str) -> bool {
+    matches!(normalized, "msvcp140")
+}
+
 pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
@@ -843,6 +932,11 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
 /// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
 pub fn module_handle(dll: &str) -> Option<usize> {
     let n = normalize(dll);
+    if prefers_real_file(&n) {
+        if let Some(m) = crate::loader::find_module_by_name(dll) {
+            return Some(m.base);
+        }
+    }
     if let Some(b) = builtins().iter().find(|b| b.name == n) {
         return Some(b.handle);
     }

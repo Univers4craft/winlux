@@ -336,8 +336,12 @@ list_updates() {
     if test -f "$target_root/run/winlux/update-action"; then echo "Action en attente : $(sed -n '1p' "$target_root/run/winlux/update-action")"; fi
     if ! test -f "$state_dir/available-manifest"; then echo "Aucune vérification disponible. Lancez une recherche de mises à jour (--check)."; return; fi
     validate_manifest "$state_dir/available-manifest"
+    if up_to_date; then
+        # À jour : ni taille ni composants, qui laissaient croire à une mise à jour en attente.
+        echo "Winlux est à jour."
+        return
+    fi
     echo "Version disponible : $version"
-    if up_to_date; then echo "Winlux est à jour."; fi
     echo "Portée : $scope"
     echo "Composants : $components"
     shown_bytes=$(value download_bytes "$state_dir/available-manifest" || true)

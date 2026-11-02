@@ -32,7 +32,7 @@ Le système, l'installateur et ce site existent en français, en anglais, en all
 ![Le bureau de Winlux avec le menu Démarrer ouvert](img:bureau-menu-demarrer.jpg "Le bureau de Winlux, fond « Winlux Nuit », menu Démarrer ouvert.")
 
 ::: figure-row
-![L'assistant Bienvenue au premier démarrage](img:assistant-bienvenue.jpg "Au premier démarrage, l'assistant Bienvenue règle fond, couleurs et barre des tâches.")
+![La fenêtre Bienvenue au premier démarrage](img:assistant-bienvenue.jpg "Au premier démarrage, la fenêtre Bienvenue mène à la visite guidée, au clavier, au réseau et à l'apparence.")
 
 ![La page Mises à jour des Paramètres](img:mises-a-jour.jpg "Les mises à jour s'installent depuis Paramètres, avec retour arrière automatique.")
 :::

@@ -105,6 +105,9 @@ jobs:
       - name: Compiler le runtime
         run: cargo build --release -p winlux
 
+      - name: Installer glslang (validation du GLSL traduit depuis DXBC)
+        run: sudo apt-get update -q && sudo apt-get install -y -q glslang-tools
+
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
@@ -119,6 +122,15 @@ jobs:
 
       - name: Vérifier les fichiers de réponse d'installation silencieuse
         run: python3 -B scripts/test-autoinstall.py
+
+      - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
+        run: python3 -B scripts/test-gpl-sources.py
+
+      - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
+        run: python3 -B scripts/test-image-identity.py
+
+      - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
+        run: python3 -B scripts/test-update-listing.py
 
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
@@ -150,6 +162,8 @@ jobs:
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
         run: python3 -B scripts/test-root.py
+      - name: Vérifier que le Xorg de l'init a sa session (changement d'utilisateur, VT)
+        run: python3 -B scripts/test-xorg-session.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
@@ -190,7 +204,7 @@ jobs:
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 
-      - name: Vérifier l'assistant Claude (désactivé par défaut, envois montrés, actions confirmées)
+      - name: Vérifier l'assistant IA, Claude, ChatGPT et IA locale (désactivés par défaut, envois montrés, téléchargements vérifiés, actions confirmées)
         run: python3 -B scripts/test-assistant.py
 
       - name: Vérifier « Réinitialiser ce PC » (fichiers gardés, tout supprimer, coupure, clé de secours)
@@ -304,7 +318,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm xvfb xauth libgl1-mesa-dri
 
       - name: Compiler et exécuter les tests C MinGW
         run: |

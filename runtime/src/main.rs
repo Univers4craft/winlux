@@ -106,6 +106,9 @@ fn main() {
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
     }
+    if exe == "--display-restore" {
+        std::process::exit(dlls::displaymode::restore_guard());
+    }
     if exe == "--display" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(display::main(&rest));
@@ -245,6 +248,7 @@ fn main() {
         playtime::start(&exe);
     }
     dlls::kernel32::init();
+    dlls::inherit::adopt();
     process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
 }

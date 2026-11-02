@@ -476,21 +476,23 @@ pub unsafe extern "win64" fn lstrcmpi_w(a: *const u16, b: *const u16) -> i32 {
 
 // ---------- Messages d'erreur système ----------
 
+/// Textes rédigés par Winlux (salle blanche, voir AGENTS.md) : seul le
+/// code d'erreur vient de l'API Windows, jamais le libellé.
 fn system_message(code: u32) -> Option<&'static str> {
     Some(match code {
-        0 => "L’opération a réussi.",
-        2 => "Le fichier spécifié est introuvable.",
-        3 => "Le chemin d’accès spécifié est introuvable.",
-        5 => "Accès refusé.",
-        6 => "Descripteur non valide.",
-        8 => "Espace de stockage insuffisant pour traiter cette commande.",
-        32 => "Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus.",
-        80 => "Le fichier existe.",
-        87 => "Paramètre incorrect.",
-        122 => "La zone de données passée à un appel système est insuffisante.",
-        126 => "Le module spécifié est introuvable.",
-        127 => "La procédure spécifiée est introuvable.",
-        183 => "Impossible de créer un fichier déjà existant.",
+        0 => "Opération terminée sans erreur.",
+        2 => "Fichier introuvable.",
+        3 => "Dossier introuvable.",
+        5 => "Accès non autorisé.",
+        6 => "Handle invalide.",
+        8 => "Mémoire insuffisante pour terminer l’opération.",
+        32 => "Fichier déjà ouvert par un autre programme.",
+        80 => "Ce fichier existe déjà.",
+        87 => "Paramètre invalide.",
+        122 => "Tampon trop petit pour le résultat.",
+        126 => "Bibliothèque (DLL) introuvable.",
+        127 => "Fonction absente de la bibliothèque.",
+        183 => "Un élément de ce nom existe déjà.",
         _ => return None,
     })
 }
@@ -1126,7 +1128,7 @@ mod tests {
                 0,
             );
             assert!(n > 0);
-            assert!(crate::dlls::wstr(msg.as_ptr()).starts_with("Le fichier spécifié"));
+            assert!(crate::dlls::wstr(msg.as_ptr()).starts_with("Fichier introuvable"));
         }
     }
 }

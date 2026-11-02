@@ -1,18 +1,23 @@
 #!/bin/sh
-# Fixed offline browser catalogue. DEB payloads are isolated, no maintainer scripts.
+# Fixed browser catalogue. DEB payloads are isolated, no maintainer scripts.
+# No browser ships in the image: the user chooses one (Paramètres >
+# Navigateurs), downloaded from its publisher on this PC (index over HTTPS,
+# SHA-256 from the index). Edge's licence forbids redistributing it anyway.
 set -eu
 # Prefer full tools over the limited BusyBox applets in /bin.
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 root=${WINLUX_BROWSER_ROOT:-}
 cache="$root/usr/share/winlux/browsers"
+downloads="$root/var/cache/winlux/browsers"
+fetch=${WINLUX_BROWSER_FETCH:-"$root/usr/lib/winlux/winlux-browser-fetch"}
 installed="$root/opt/winlux/browsers"
 config="$root/etc/winlux/browser.conf"
 run="$root/run/winlux"
-browser=${2:-edge}
+browser=${2:-none}
 case "${1:---status}" in
     --install|--default|--launch) case "$browser" in edge|chrome|firefox) ;; *) echo 'Navigateur inconnu' >&2; exit 2 ;; esac ;;
-    *) browser=edge ;;
+    *) browser=none ;;
 esac
 binary() {
     case "$1" in
@@ -23,12 +28,14 @@ binary() {
 }
 default_browser() {
     selected=$(sed -n 's/^default=//p' "$config" 2>/dev/null | head -n 1)
-    case "$selected" in edge|chrome|firefox) printf '%s\n' "$selected" ;; *) printf 'edge\n' ;; esac
+    case "$selected" in edge|chrome|firefox) printf '%s\n' "$selected" ;; *) printf 'none\n' ;; esac
 }
 status() {
     printf 'browser_default=%s\n' "$(default_browser)"
-    for id in edge chrome firefox; do
+    for id in chrome edge firefox; do
         state=unavailable
+        # Téléchargeable chez l'éditeur : proposé, jamais fourni par Winlux.
+        test ! -x "$fetch" || state=downloadable
         test ! -f "$cache/$id.deb" || state=available
         if test -x "$(binary "$id")"; then
             state=installed
@@ -39,6 +46,19 @@ status() {
 }
 install_browser() {
     id=$1
+    if ! test -r "$cache/$id.deb"; then
+        case "$id" in
+            edge|chrome|firefox)
+                # Paquet officiel téléchargé chez l'éditeur, jamais fourni par Winlux.
+                test -x "$fetch" || { echo "Téléchargement indisponible : $id" >&2; return 1; }
+                mkdir -p "$downloads"
+                chmod 755 "$downloads"
+                echo "Téléchargement de $id depuis le site de son éditeur…"
+                "$fetch" --only "$id" "$downloads" || { echo "Téléchargement impossible : $id" >&2; return 1; }
+                cache=$downloads
+                ;;
+        esac
+    fi
     test -r "$cache/$id.deb" && test -r "$cache/$id.sha256" || { echo "Paquet hors ligne absent : $id" >&2; return 1; }
     if test -x "$(binary "$id")" && cmp -s "$cache/$id.version" "$installed/$id/version"; then return 0; fi
     if command -v winlux-update >/dev/null 2>&1 && winlux-update --busy 2>/dev/null; then echo 'Attendez la fin de la mise à jour système.' >&2; return 1; fi

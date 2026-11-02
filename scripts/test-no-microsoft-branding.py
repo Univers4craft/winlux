@@ -68,9 +68,9 @@ browser = configparser.RawConfigParser(strict=False, interpolation=None)
 browser.optionxform = str
 browser.read(ROOT / "integration/winlux-browser.desktop", encoding="utf-8")
 names = {key: value for key, value in browser["Desktop Entry"].items() if key.startswith("Name")}
-check(names.get("Name") == "Navigateur" and names.get("Name[en]") == "Browser"
-      and names.get("Name[de]") == "Browser" and names.get("Name[es]") == "Navegador",
-      f"« Navigateur » dans les quatre langues : {names}")
+check(names.get("Name") == "Navigateur web" and names.get("Name[en]") == "Web browser"
+      and names.get("Name[de]") == "Webbrowser" and names.get("Name[es]") == "Navegador web",
+      f"« Navigateur web » dans les quatre langues : {names}")
 check(browser["Desktop Entry"].get("Icon") == "web-browser", "icône neutre web-browser")
 
 # Lien http/https : le navigateur par défaut, pas une marque.

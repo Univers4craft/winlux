@@ -78,7 +78,7 @@ const STEPS: [Step; 10] = [
         tips: [
             [b"Th\xE8me clair ou sombre, automatique selon l'heure.", b"Light or dark theme, automatic by time of day.", b"Tema claro u oscuro, autom\xE1tico seg\xFAn la hora.", b"Helles oder dunkles Design, automatisch nach Tageszeit."],
             [b"D\xE9finition de l'\xE9cran et \xE9chelle du texte.", b"Screen resolution and text scaling.", b"Resoluci\xF3n de pantalla y escala del texto.", b"Bildschirmaufl\xF6sung und Textskalierung."],
-            [b"Navigateur par d\xE9faut : Edge, Chrome ou Firefox.", b"Default browser: Edge, Chrome or Firefox.", b"Navegador predeterminado: Edge, Chrome o Firefox.", b"Standardbrowser: Edge, Chrome oder Firefox."],
+            [b"Navigateur : vous choisissez le v\xF4tre, Winlux n'en impose aucun.", b"Browser: you choose yours, Winlux imposes none.", b"Navegador: usted elige el suyo, Winlux no impone ninguno.", b"Browser: Sie w\xE4hlen Ihren eigenen, Winlux schreibt keinen vor."],
         ],
         action: [b"Ouvrir les Param\xE8tres", b"Open Settings", b"Abrir Configuraci\xF3n", b"Einstellungen \xF6ffnen"],
     },

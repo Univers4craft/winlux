@@ -28,8 +28,8 @@ Mesa 25.2.8, OpenGL 4.6, Vulkan 1.4 (ANV), session X11.
 | Imports résolus (analyse statique) | oui, 0 manquant | oui, 0 manquant |
 | Démarrage de la CRT et des DLL | oui | oui |
 | Fenêtre | oui (fenêtre 1040×815 et plein écran 1920×1080) | oui |
-| Menu | oui | en cours (passe 5) |
-| Partie jouable | **oui, 117 FPS** (limite `max_fps=120` du jeu), fenêtre et plein écran | en cours (passe 5) |
+| Menu | oui | oui |
+| Partie jouable | **oui, 117 FPS** (limite `max_fps=120` du jeu), fenêtre et plein écran | **oui, 60 FPS** (synchro d'un écran 60 Hz) en OpenGL 4.6 et Vulkan 1.4 ; ANGLE (Direct3D 11, OpenGL ES) échouait et le jeu basculait seul sur Vulkan |
 
 Souris, clavier et son de SuperTuxKart restent à confirmer en jouant une
 course à la main (la session était verrouillée pendant la mesure).
@@ -58,22 +58,59 @@ course à la main (la session était verrouillée pendant la mesure).
    lieu de 1460 ; la table `ID3D11DeviceContext` n'avait pas les 38 méthodes
    `Get*` (72 à 109), donc ANGLE appelait `Flush` à la place de
    `ClearState` et plantait. Test : `offset_of!(clear_state) == 110 × 8`.
+7. **Passage 5** : escarmouche complète (carte Sk-Rush, 3 IA) en OpenGL et
+   Vulkan. ANGLE refusait de présenter (« DXGI 1.2 required ») car l'appareil
+   D3D11 ne répondait pas à `IDXGIDevice2` : l'appareil expose maintenant
+   `IDXGIDevice` 0 à 3, avec `GetAdapter`/`GetParent` vers l'adaptateur DXGI.
+8. **Passage 6** : la vérification « DXGI 1.2 » d'ANGLE passe, puis ANGLE
+   plantait dans `createSwapChain` : l'adaptateur gardait un pointeur brut
+   sur sa fabrique sans `AddRef`, ANGLE relâchait la fabrique après
+   `EnumAdapters` et `GetParent` lisait une fabrique libérée. L'adaptateur
+   tient maintenant une référence sur sa fabrique (test `refcount_tests`
+   de `dxgi.rs`). L'horloge de jeu est exacte en partie normale (00:56 de
+   jeu pour 60 s réelles) ; l'accélération vue avec `--autogame` est
+   l'avance rapide du mode spectateur du jeu.
+
+9. **Passage 7** : ANGLE crée son appareil, sa chaîne d'échange et la
+   fenêtre, puis nomme chaque objet par `SetPrivateData` (méthode 5 de
+   `ID3D11DeviceChild`) : les vues, shaders, dispositions d'entrée et états
+   n'avaient que les 3 méthodes d'IUnknown. Leur table a maintenant les
+   9 méthodes de `ID3D11DeviceChild` et des vues. SuperTuxKart : pas de
+   régression avec #326 (course de démonstration à 117,5 FPS).
+10. **Passage 8** : ANGLE s'initialise sur le D3D11 de Winlux (« ANGLE
+    Direct3D11 vs_5_0 ps_5_0 », OpenGL ES 3.0), puis
+    `ID3D11View::GetResource` rendait un pointeur nul. Les vues gardent
+    maintenant leur ressource (avec une référence) et leur descripteur.
+11. **Passage 9** : ANGLE ne trouvait pas `d3dcompiler_47.dll`. Un
+    `d3dcompiler_47` maison renvoie maintenant un conteneur DXBC qui porte le
+    type de shader et garde le texte HLSL. ANGLE crée aussi ses shaders depuis
+    ses threads de travail : un contexte GL partagé leur est donné. Plus de
+    plantage, la partie tourne, mais l'image reste noire : la traduction des
+    shaders DXBC/HLSL vers GLSL manque (#137). `CreateDCW("\\.\DISPLAY1")`
+    ouvrait une imprimante au lieu de l'écran (SDL3) : corrigé. Plein écran
+    1920×1080 en Vulkan : 60 FPS.
+12. **libcurl de Warzone 2100** (8.19, Schannel ; vérification des mises à
+    jour, actualités, partie en ligne). `curl_global_init` échouait parce
+    que `InitSecurityInterfaceW` rendait une table nulle : la table SSPI
+    existe depuis #320. Le reste du chemin de libcurl est maintenant fourni :
+    moteur de chaînes aux racines exclusives et `CryptQueryObject` (fichier
+    d'autorités), tous les noms DNS du certificat, `CryptDecodeObjectEx`
+    (noms alternatifs), `CryptImportKey`/`CryptEncrypt` et MD4 (NTLM).
+    Rejoué par `tls_suite.exe` contre un serveur HTTPS local ; à confirmer
+    dans le jeu sur le vrai PC.
+
+Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
+rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 
 ## Manques connus, par fil
 
 | Manque | Jeux touchés | Effet aujourd'hui | Fil |
 |---|---|---|---|
-| Entrée brute (`WM_INPUT`) : `RegisterRawInputDevices` accepte, mais aucun périphérique n'est listé et `WM_INPUT` n'arrive jamais | tous les jeux SDL (souris relative, vue à la souris) | SDL retombe sur les messages souris classiques ; la vue à la souris des FPS reste à vérifier | #271 |
 | Manettes HID (`hid.dll` sans périphérique, `SetupDi*` vide pour la classe HID) | SDL2/SDL3 | seules les manettes XInput sont vues | #271 |
-| Changement de résolution (`ChangeDisplaySettingsEx` répond « réussi » sans changer le mode) | plein écran exclusif | le jeu tourne à la résolution du bureau | #271 |
-| Rampe gamma (`SetDeviceGammaRamp` refusée) | SDL (luminosité) | réglage de luminosité sans effet | — |
-| Chaîne de certificats Schannel (`CertCreateCertificateChainEngine`, `CryptQueryObject`…) | libcurl de Warzone 2100 (vérification de mise à jour, actualités) | HTTPS en échec, le jeu continue sans | #235 |
-| `CryptImportKey`/`CryptEncrypt` (NTLM de libcurl) | libcurl | authentification NTLM indisponible | #235 |
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
-| Shaders HLSL compilés (DXBC/DXIL) | Warzone 2100 en `--gfxbackend=directx` (ANGLE produit du HLSL pour D3D11) | à mesurer | #137 |
-| libcurl : `curl_global_init` échoue | Warzone 2100 | partie en ligne et mises à jour indisponibles | #235 |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
+| Traduction des shaders D3D11 (DXBC/HLSL → GLSL) | Warzone 2100 en ANGLE | image noire | #137 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)

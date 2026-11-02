@@ -565,7 +565,11 @@ enum Want {
 /// Résout un import : DLL maison d'abord, puis DLL réelle à côté du .exe.
 fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, String> {
     let ndll = dlls::normalize(dll);
-    if dlls::is_builtin(&ndll) {
+    // Redistribuables (msvcp140…) : la vraie DLL, si une appli ou un
+    // installeur l'a déposée, est plus complète que la version maison.
+    let real_first = dlls::prefers_real_file(&ndll)
+        && (find_module_by_name(dll).is_some() || find_dll_file(dll, &importer.path).is_some());
+    if dlls::is_builtin(&ndll) && !real_first {
         let found = match want {
             Want::Name(n) => dlls::lookup(&ndll, n),
             // Les DLL intégrées exportent leurs ordinaux sous le nom « #n ».
@@ -610,6 +614,11 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
     })
 }
 
+/// `C:\Windows\System32` côté Linux.
+pub fn system32_dir() -> PathBuf {
+    crate::paths::to_linux("C:\\Windows\\System32")
+}
+
 pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
     if dll.contains(['/', '\\']) || dll.as_bytes().get(1) == Some(&b':') {
         let path = crate::paths::to_linux(dll);
@@ -631,6 +640,9 @@ pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
         if let Some(d) = importer.parent() {
             dirs.push(d.to_path_buf());
         }
+        // Ordre de Windows : dossier de l'appli, puis System32 (où les
+        // installeurs déposent les redistribuables), puis le dossier courant.
+        dirs.push(system32_dir());
         if let Ok(c) = std::env::current_dir() {
             dirs.push(c);
         }

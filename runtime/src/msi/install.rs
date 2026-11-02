@@ -113,7 +113,16 @@ fn system_props(ctx: &mut Context, db: &Database, opts: &Options) {
         ("CommonFiles64Folder", format!("{pf64}Common Files\\")),
         ("WindowsFolder", "C:\\windows\\".into()),
         ("WindowsVolume", "C:\\".into()),
-        ("SystemFolder", "C:\\windows\\system32\\".into()),
+        // Paquet 32 bits : comme sous Windows 64 bits, ses DLL système vont
+        // dans SysWOW64 et n'écrasent pas celles de System32.
+        (
+            "SystemFolder",
+            if x64 {
+                "C:\\windows\\system32\\".into()
+            } else {
+                "C:\\windows\\syswow64\\".into()
+            },
+        ),
         ("System64Folder", "C:\\windows\\system32\\".into()),
         ("System16Folder", "C:\\windows\\system\\".into()),
         ("FontsFolder", "C:\\windows\\Fonts\\".into()),

@@ -146,12 +146,12 @@ scripts/create-test-vm.sh
 scripts/create-test-vm.sh --refresh
 ```
 
-### Embarquer Microsoft Edge dans l'ISO
+### Navigateurs
 
-```sh
-WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb \
-  bash scripts/build-live-iso.sh
-```
+Aucun navigateur n'est intégré à l'ISO : l'utilisateur choisit le sien, et
+Winlux le télécharge chez son éditeur (voir [BROWSERS.md](BROWSERS.md)).
+`WINLUX_EDGE_DEB` est refusé, et `scripts/check-image-redistributable.sh` fait
+échouer la construction si un logiciel propriétaire d'éditeur tiers s'y trouve.
 
 ## Dépannage
 

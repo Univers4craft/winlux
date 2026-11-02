@@ -1,9 +1,9 @@
 ---
 title: Shortcuts and handy tools
-description: Snap windows, find what you copied, pick a colour or copy the text of an image, just like in Windows 11.
+description: Snap windows, find what you copied, pick a colour or copy the text of an image, with the usual shortcuts.
 ---
 
-The Winlux desktop uses the Windows 11 shortcuts. They work in every application, Windows programs included.
+The Winlux desktop uses the common keyboard shortcuts, with the Windows key. They work in every application, Windows programs included.
 
 ## Keyboard shortcuts
 

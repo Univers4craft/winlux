@@ -8,7 +8,7 @@ Beaucoup de gens restent sous Windows pour une seule raison : leurs programmes. 
 
 - **un `.exe` se lance d'un double-clic, où qu'il soit** : sur le bureau, dans Téléchargements, sur une clé USB, sur un partage réseau ;
 - **il voit les mêmes fichiers que le reste du système** : `C:\Users\<nom>\Documents` est le vrai dossier Documents de l'utilisateur Linux, et `Z:\` est la racine Linux ;
-- **l'utilisateur retrouve ses repères** : menu Démarrer, barre des tâches, Explorateur, Paramètres, Gestionnaire des tâches, Éditeur du Registre, raccourcis clavier, tout ressemble à Windows 11 ;
+- **l'utilisateur retrouve ses repères** : menu Démarrer, barre des tâches, Explorateur, Paramètres, Gestionnaire des tâches, Éditeur du Registre, raccourcis clavier : une ergonomie familière ;
 - **il n'y a qu'un seul noyau, Linux** : aucune machine virtuelle Windows ne tourne en arrière-plan, aucune licence Windows n'est nécessaire, et les applications Linux s'installent normalement avec `apt`, Flatpak ou Snap à côté des programmes Windows.
 
 ## Ce que Winlux n'est pas
@@ -52,13 +52,13 @@ Winlux exécute des programmes Windows, mais n'est pas associé à Microsoft :
 
 ### 3. Une identité visuelle propre : « Prisme »
 
-L'ergonomie est celle de Windows 11, mais **aucun logo Windows n'apparaît nulle part**. Le logo de Winlux est **Prisme** : un losange taillé en quatre facettes, violet à gauche (Linux, la nuit) et cyan à droite (*lux*, la lumière). Accent de marque `#7C4DFF`, fond de nuit `#070A1F`.
+L'ergonomie est familière, mais **aucun logo, police, icône ni son de Microsoft n'apparaît nulle part**. Le logo de Winlux est **Prisme** : un losange taillé en quatre facettes, violet à gauche (Linux, la nuit) et cyan à droite (*lux*, la lumière). Accent de marque `#7C4DFF`, fond de nuit `#070A1F`.
 
 Prisme apparaît sur le bouton Démarrer, le menu GRUB, l'écran de démarrage, l'installateur, l'assistant de bienvenue et la page À propos. Les fonds d'écran « Winlux Nuit » (par défaut), « Winlux Aube » et « Winlux classique » et le son de démarrage « Prisme » sont aussi créés dans le dépôt. Tout est régénérable avec `scripts/render-brand.py` ([docs/IDENTITE-VISUELLE.md](https://github.com/Univers4craft/winlux/blob/master/docs/IDENTITE-VISUELLE.md)).
 
-### 4. Ressembler à Windows 11, pour de vrai
+### 4. Une ergonomie familière
 
-Le menu Démarrer peut être centré ou aligné à gauche, comme sous Windows 11. Les raccourcis habituels existent (Windows+L, Windows+V, Windows+S, Ctrl+Maj+Échap, Windows+flèches). Les fenêtres « système » portent les noms que l'utilisateur connaît : Explorateur, Paramètres, Gestionnaire des tâches, Observateur d'événements, Planificateur de tâches, Éditeur du Registre.
+Le menu Démarrer peut être centré ou aligné à gauche. Les raccourcis habituels existent (Windows+L, Windows+V, Windows+S, Ctrl+Maj+Échap, Windows+flèches). Les fenêtres « système » portent les noms que l'utilisateur connaît : Explorateur, Paramètres, Gestionnaire des tâches, Observateur d'événements, Planificateur de tâches, Éditeur du Registre.
 
 ### 5. Des Paramètres honnêtes
 
