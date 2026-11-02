@@ -173,14 +173,14 @@ fn screen_for(device: Option<String>) -> Option<Screen> {
 }
 
 /// Modes énumérés : chaque (définition, fréquence), du plus grand au plus
-/// petit, en 32 bits par pixel (et 16 bits pour les vieux jeux).
+/// petit, en 32 bits par pixel seulement, comme Windows 8 et suivants (SDL3
+/// journalisait chaque mode 16 bits comme « bits < 8 »). Une demande en
+/// 16 bits reste acceptée par ChangeDisplaySettings.
 pub fn mode_list(s: &Screen) -> Vec<(u32, u32, u32, u32)> {
     let mut v = Vec::new();
-    for bpp in [32u32, 16] {
-        for m in &s.modes {
-            for (hz, _) in &m.rates {
-                v.push((m.w, m.h, *hz, bpp));
-            }
+    for m in &s.modes {
+        for (hz, _) in &m.rates {
+            v.push((m.w, m.h, *hz, 32));
         }
     }
     v
@@ -764,7 +764,7 @@ HDMI-1 disconnected (normal left inverted right x axis y axis)
             s[0].modes[1].rates.iter().map(|r| r.0).collect::<Vec<_>>(),
             vec![120, 60]
         );
-        assert_eq!(mode_list(&s[0]).len(), 2 * (3 + 2 + 1));
+        assert_eq!(mode_list(&s[0]).len(), 3 + 2 + 1);
         assert_eq!(
             pick(&s[0], 1920, 1080, Some(60)),
             Some((60, "60.00".into()))
