@@ -719,6 +719,11 @@ class Widgets(Gtk.Application):
         if self.window and self.window.get_visible():
             self.hide()
             return
+        # Windows+W pendant que le volet est ouvert : la touche lui retire le
+        # focus (focus-out le cache) juste avant cette activation, qui le
+        # rouvrait aussitôt. Un second appui doit le fermer.
+        if time.monotonic() - getattr(self, "hidden_at", 0) < 0.5:
+            return
         if not self.window:
             self.build()
         self.data = load_config()
@@ -745,13 +750,18 @@ class Widgets(Gtk.Application):
             self.window.grab_remove()
         self.window.get_display().get_default_seat().ungrab()
         self.window.hide()
+        self.hidden_at = time.monotonic()
         self.save_now()
         return True
 
     def grab(self):
         if self.window.get_visible():
+            # owner_events=True, comme le menu Démarrer : avec False, chaque
+            # clic partait vers la fenêtre du volet et aucun bouton, champ ni
+            # pense-bête ne réagissait (campagne de tests VM). Les clics hors
+            # du volet reviennent toujours à outside().
             self.pointer_status = self.window.get_display().get_default_seat().grab(
-                self.window.get_window(), Gdk.SeatCapabilities.POINTER, False, None, None, None, None)
+                self.window.get_window(), Gdk.SeatCapabilities.POINTER, True, None, None, None, None)
             if self.pointer_status == Gdk.GrabStatus.SUCCESS:
                 self.window.grab_add()
         return False
@@ -905,6 +915,11 @@ class Widgets(Gtk.Application):
             button.connect("clicked", lambda *_, n=name: self.restore(n))
             flow.add(button)
         self.add_box.pack_start(flow, False, False, 0)
+        # Liste ouverte pendant un retrait : le widget retiré y apparaît tout
+        # de suite (la liste restait vide et « + » demandait deux clics).
+        if self.add_box.get_visible():
+            for child in self.add_box.get_children():
+                child.show_all()
 
     def toggle_add(self):
         if self.add_box.get_visible():

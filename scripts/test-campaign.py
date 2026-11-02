@@ -246,4 +246,18 @@ for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un 
                       ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
     ok(marker in explorer, f"Explorateur : {label}")
 
+# ── Widgets Windows+W (#293, passage en VM) ────────────────────────────────
+widgets = (SCRIPTS / "winlux-widgets.py").read_text()
+ok("Gdk.SeatCapabilities.POINTER, True" in widgets,
+   "widgets : saisie du pointeur owner_events=True (boutons, agenda et pense-bête répondent)")
+ok("hidden_at" in widgets, "widgets : un second Windows+W ferme le volet au lieu de le rouvrir")
+ok("for child in self.add_box.get_children():\n                child.show_all()" in widgets,
+   "widgets : un widget retiré apparaît tout de suite dans « Ajouter des widgets »")
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
+    keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}command") for bind in rc.find(f"{OB}keyboard")}
+    ok(keys.get("W-w") == "winlux-widgets", "Windows+W ouvre les widgets")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
