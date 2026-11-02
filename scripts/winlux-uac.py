@@ -169,7 +169,7 @@ def run_dialog(app, win_path, elevate=False):
       .uac .uac-app { font-size: 15px; font-weight: 600; color: #1b1b1b; }
       .uac .uac-info { color: #5d5d5d; font-size: 13px; }
       .uac .uac-error { color: #c42b1c; font-size: 13px; }
-      button.uac-yes { background: #0067c0; color: white; border: none; border-radius: 4px;
+      button.uac-yes { background: #6a3df0; color: white; border: none; border-radius: 4px;
                        padding: 6px 24px; box-shadow: none; text-shadow: none; }
       button.uac-no { background: white; color: #1b1b1b; border: 1px solid #d1d1d1;
                       border-radius: 4px; padding: 6px 24px; box-shadow: none; }

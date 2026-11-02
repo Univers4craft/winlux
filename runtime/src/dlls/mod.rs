@@ -4,6 +4,7 @@
 
 pub mod a11y;
 pub mod advapi32;
+pub mod advapi32_crypto;
 pub mod advapi32_services;
 pub mod audio_com;
 pub mod bcrypt;
@@ -34,6 +35,7 @@ pub mod d3d_shader;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod devio;
+pub mod devnodes;
 pub mod dialogs;
 pub mod dinput8;
 pub mod displaymode;
@@ -56,6 +58,7 @@ mod gui_cairo;
 pub mod gui_x11;
 pub mod hid;
 pub mod hostcall;
+pub mod hostssl;
 pub mod imm32;
 pub mod iphlpapi;
 pub mod ipp;
@@ -75,6 +78,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
 pub mod mscoree;
+pub mod msvcp140;
 pub mod msvcrt;
 pub mod named_pipes;
 pub mod nls;
@@ -92,6 +96,7 @@ pub mod rawinput;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sandbox_dlls;
+pub mod schannel;
 pub mod sechost;
 pub mod secur32;
 pub mod security;
@@ -120,6 +125,7 @@ pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
+pub mod wininet;
 pub mod winlux_capture;
 pub mod winlux_gpu;
 pub mod winlux_media;
@@ -279,6 +285,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 name: "advapi32",
                 exports: {
                     let mut e = advapi32::exports();
+                    e.extend(advapi32_crypto::exports());
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
@@ -602,6 +609,21 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "wininet",
+                exports: wininet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "urlmon",
+                exports: wininet::urlmon_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "msvcp140",
+                exports: msvcp140::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "opengl32",
                 exports: opengl32::exports(),
                 handle: fake_module(),
@@ -818,6 +840,12 @@ pub fn normalize(dll: &str) -> String {
     base.to_string()
 }
 
+/// Redistribuables dont Winlux a une version maison partielle : la vraie
+/// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
+pub fn prefers_real_file(normalized: &str) -> bool {
+    matches!(normalized, "msvcp140")
+}
+
 pub fn is_builtin(normalized: &str) -> bool {
     builtins().iter().any(|b| b.name == normalized)
 }
@@ -848,6 +876,11 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
 /// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
 pub fn module_handle(dll: &str) -> Option<usize> {
     let n = normalize(dll);
+    if prefers_real_file(&n) {
+        if let Some(m) = crate::loader::find_module_by_name(dll) {
+            return Some(m.base);
+        }
+    }
     if let Some(b) = builtins().iter().find(|b| b.name == n) {
         return Some(b.handle);
     }

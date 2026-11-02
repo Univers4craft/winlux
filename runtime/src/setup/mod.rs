@@ -12,6 +12,7 @@
 //! `winlux --setup …` donne accès aux options (voir `USAGE`).
 
 pub mod appx_signature;
+pub mod burn;
 pub mod inno;
 mod inno_layout;
 pub mod lzma;
@@ -950,6 +951,10 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         let mut log = Logger { quiet: false };
         remove(&m, &mut log);
         return Some(0);
+    }
+    // Bundles WiX Burn (vc_redist…) : chaîne de paquets MSI installée ici.
+    if let Some(code) = burn::launch(exe, args) {
+        return Some(code);
     }
     if !(msix::is_package_name(exe) && msix::is_package(exe)) {
         detect_file(exe)?;

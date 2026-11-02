@@ -39,7 +39,7 @@ fn dev_root() -> std::path::PathBuf {
         .map(Into::into)
         .unwrap_or_else(|| "/dev".into())
 }
-fn sys_tty() -> std::path::PathBuf {
+pub(crate) fn sys_tty() -> std::path::PathBuf {
     std::env::var_os("WINLUX_SYSFS")
         .map(|s| std::path::PathBuf::from(s).join("class/tty"))
         .unwrap_or_else(|| "/sys/class/tty".into())

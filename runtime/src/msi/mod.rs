@@ -4,12 +4,12 @@
 //! `winlux msiexec.exe /i paquet.msi /qn INSTALLDIR=C:\App` (ou
 //! `winlux --msiexec …`) accepte les options usuelles de msiexec.
 
-mod cab;
+pub(crate) mod cab;
 mod cfb;
 mod cond;
 mod db;
 pub mod extra;
-mod install;
+pub(crate) mod install;
 pub use install::{civil, shortcut_bytes};
 mod lzx;
 
