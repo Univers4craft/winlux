@@ -5298,6 +5298,50 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             dest = f"{root_path}/usr/bin/winlux-hw-detect"
             subprocess.run(["cp", hw_script, dest], timeout=10)
             os.chmod(dest, 0o755)
+        self.prepare_system_state(root_path)
+
+    def prepare_system_state(self, root_path):
+        """Fait pendant l'installation le travail unique du premier démarrage.
+
+        `winlux-update --boot` rétablit les droits de la base APT, finit les
+        déclencheurs dpkg reportés par la construction de l'image et refait
+        les caches (applications, types MIME). Fait au premier démarrage, il
+        y ajoutait plus de 15 s (phase « recovery »). Ici, dans le système
+        cible (chroot), il n'est plus fait au démarrage ; en cas d'échec, le
+        premier démarrage s'en charge comme avant.
+        """
+        if not os.path.exists(f"{root_path}/usr/share/winlux/update-backend") or not shutil.which("chroot"):
+            return
+        mounted = []
+        policy = f"{root_path}/usr/sbin/policy-rc.d"
+        had_policy = os.path.exists(policy)
+        try:
+            for source in ("/proc", "/sys", "/dev"):
+                destination = f"{root_path}{source}"
+                os.makedirs(destination, exist_ok=True)
+                subprocess.run(["mount", "--bind", source, destination], check=True, timeout=30)
+                mounted.append(destination)
+            if not had_policy:
+                # Aucun service démarré depuis le chroot de l'installateur.
+                os.makedirs(os.path.dirname(policy), exist_ok=True)
+                with open(policy, "w") as f:
+                    f.write("#!/bin/sh\nexit 101\n")
+                os.chmod(policy, 0o755)
+            result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-update", "--boot"],
+                                    capture_output=True, text=True, timeout=900,
+                                    env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+            if result.returncode != 0:
+                print("winlux-update --boot (installation) :", result.stdout, result.stderr, file=sys.stderr)
+        except (OSError, subprocess.SubprocessError) as error:
+            print("Préparation du premier démarrage reportée :", error, file=sys.stderr)
+        finally:
+            if not had_policy:
+                try:
+                    os.remove(policy)
+                except OSError:
+                    pass
+            for destination in reversed(mounted):
+                subprocess.run(["umount", "-l", destination], timeout=30)
 
     def configure_network_target(self, root_path):
         src_dir = "/etc/NetworkManager/system-connections"
