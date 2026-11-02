@@ -3,6 +3,8 @@
 
 Usage :
   winlux-lock now       verrouille tout de suite (Windows+L, menu Démarrer)
+  winlux-lock switch    « Changer d'utilisateur » : verrouille et propose les
+                        autres comptes (en bas à gauche, comme Windows 11)
   winlux-lock daemon    verrouille après l'inactivité réglée et au retour de veille
   winlux-lock status    état lisible par winlux-control (clé=valeur)
 
@@ -47,6 +49,8 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Autre compte : {name}': ('Other account: {name}', 'Otra cuenta: {name}', 'Anderes Konto: {name}'),
+    'Impossible d’ouvrir la session de {name}.': ('Couldn’t open {name}’s session.', 'No se pudo abrir la sesión de {name}.', 'Die Sitzung von {name} konnte nicht geöffnet werden.'),
     "Mot de passe": ("Password", "Contraseña", "Kennwort"),
     "Se connecter": ("Sign in", "Iniciar sesión", "Anmelden"),
     "Le mot de passe est incorrect. Réessayez.": (
@@ -288,6 +292,36 @@ def relay_check(user, password, op="check"):
         return None
 
 
+def relay_switch(user, password):
+    """Ouvre ou rejoint la session d'un autre compte après vérification de son
+    mot de passe par le relais root (winlux-sessions switch). Vrai si fait."""
+    import json
+    import socket
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(60)
+            client.connect(str(path(RELAY)))
+            client.sendall((json.dumps({"op": "switch", "user": user, "password": password}) + "\n").encode())
+            answer = client.makefile("r", encoding="utf-8").readline()
+        return bool(json.loads(answer or "{}").get("ok"))
+    except (OSError, ValueError):
+        return False
+
+
+def other_accounts(user):
+    """Comptes de l'écran de connexion (users.conf) autres que celui-ci."""
+    names = []
+    try:
+        for line in path("/etc/winlux/users.conf").read_text(errors="replace").splitlines():
+            name = line.split(":", 1)[0]
+            if name and name != user and name not in names:
+                names.append(name)
+    except OSError:
+        pass
+    # root n'apparaît que s'il est le seul autre compte (session Live).
+    return [n for n in names if n != "root"] or names
+
+
 def requires_password(user):
     stored = shadow_hash(user)
     if stored and stored.startswith("$"):
@@ -459,7 +493,7 @@ def text_veil(pixbuf, base, minimum=4.5):
     return round(alpha, 2)
 
 
-def run_lock():
+def run_lock(start="clock"):
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
@@ -481,10 +515,9 @@ def run_lock():
     """
 
     class Lock:
-        osk = None  # clavier tactile (keyboard_view)
-
-        def __init__(self):
+        def __init__(self, start="clock"):
             self.user = session_account()
+            self.owner = self.user  # compte de la session verrouillée
             self.password = requires_password(self.user)
             self.failures = 0
             self.blocked_until = 0
@@ -522,6 +555,8 @@ def run_lock():
             GLib.timeout_add(100, self.grab)
             GLib.timeout_add(1000, self.tick)
             self.tick()
+            if start == "signin":
+                self.show_signin()
 
         def make_window(self, geo, main):
             window = Gtk.Window(type=Gtk.WindowType.POPUP)
@@ -539,7 +574,8 @@ def run_lock():
                 self.area = area
                 overlay.add_overlay(self.clock_view())
                 overlay.add_overlay(self.signin_view())
-                overlay.add_overlay(self.keyboard_view())
+                self.keyboard_view(overlay)
+                overlay.add_overlay(self.accounts_view())
                 window.add_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
                 window.connect("key-press-event", self.on_key)
                 window.connect("button-press-event", self.on_click)
@@ -548,47 +584,98 @@ def run_lock():
                 self.signin.hide()
                 if self.osk is not None:
                     self.osk.hide()
+                    self.osk_button.hide()
             return window
 
-        def keyboard_view(self):
+        def keyboard_view(self, overlay):
             """Clavier tactile (winlux-osk) en bas de l'écran de connexion, et
-            son bouton à droite : ouvert d'office sans clavier physique."""
+            son bouton en bas à droite : ouvert d'office sans clavier physique.
+            Deux calques distincts : un calque de la largeur de l'écran
+            capterait les clics destinés aux autres comptes, en bas à gauche."""
             self.osk, self.osk_button, self.osk_auto = None, None, False
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.END, halign=Gtk.Align.FILL)
             module = osk_module()
-            if module is None or self.entry is None:
-                return box
+            if module is None or getattr(self, "password_entry", None) is None:
+                return
             try:
                 keys = module.keyboard_widget(send=self.osk_send, on_close=self.osk_toggle)
                 self.osk_auto = module.icon_wanted()
             except Exception:  # Clavier indisponible : l'écran reste utilisable.
-                return box
-            corner = Gtk.Box(halign=Gtk.Align.END, margin_end=24, margin_bottom=16)
+                return
             self.osk_button = Gtk.Button.new_from_icon_name("input-keyboard-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
+            self.osk_button.set_halign(Gtk.Align.END)
+            self.osk_button.set_valign(Gtk.Align.END)
+            self.osk_button.set_margin_end(24)
+            self.osk_button.set_margin_bottom(24)
             self.osk_button.get_style_context().add_class("lock-go")
             self.osk_button.set_tooltip_text(_t("Clavier tactile"))
             self.osk_button.connect("clicked", lambda *_: self.osk_toggle())
-            corner.pack_start(self.osk_button, False, False, 0)
-            box.pack_start(corner, False, False, 0)
-            keys.set_size_request(-1, 280)
-            box.pack_start(keys, False, False, 0)
+            overlay.add_overlay(self.osk_button)
+            keys.set_valign(Gtk.Align.END)
+            keys.set_halign(Gtk.Align.FILL)
+            screen = Gdk.Screen.get_default()
+            keys.set_size_request(-1, max(220, min(300, int((screen.get_height() if screen else 768) * 0.36))))
+            overlay.add_overlay(keys)
             self.osk = keys
-            return box
 
         def osk_toggle(self):
             if self.osk is None:
                 return
-            if self.osk.get_visible():
-                self.osk.hide()
-            else:
-                self.osk.show()
+            self.osk_show(not self.osk.get_visible())
             self.last_typing = time.monotonic()
+
+        def osk_show(self, visible):
+            """Clavier affiché : le compte remonte en haut pour garder le champ
+            du mot de passe visible au-dessus des touches."""
+            if self.osk is None:
+                return
+            self.osk.set_visible(visible)
+            self.signin.set_valign(Gtk.Align.START if visible else Gtk.Align.CENTER)
+            self.signin.set_margin_top(32 if visible else 0)
 
         def osk_send(self, key, _modifiers):
             """Touches du clavier tactile vers le champ du mot de passe."""
             self.last_typing = time.monotonic()
             if self.entry is not None:
                 type_into(self.entry, key, self.submit)
+                self.accounts.hide()
+                self.select_account(self.user)
+            return window
+
+        def accounts_view(self):
+            """Autres comptes en bas à gauche : un clic change de compte."""
+            self.accounts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, halign=Gtk.Align.START,
+                                    valign=Gtk.Align.END, margin_start=28, margin_bottom=28)
+            self.account_names = [self.owner] + other_accounts(self.owner)
+            if len(self.account_names) > 1:
+                for name in self.account_names:
+                    button = Gtk.Button(label=name)
+                    button.get_style_context().add_class("lock-signin")
+                    button.get_accessible().set_name(_t("Autre compte : {name}").format(name=name))
+                    button.connect("clicked", lambda _b, n=name: self.select_account(n))
+                    self.accounts.pack_start(button, False, False, 0)
+            return self.accounts
+
+        def select_account(self, name):
+            """Compte affiché au centre : celui de la session ou un autre."""
+            self.user = name
+            self.password = requires_password(name)
+            self.name_label.set_text(name)
+            self.face = None
+            home = account_home(name)
+            if home and Path(home, ".face").is_file():
+                try:
+                    self.face = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(Path(home, ".face")), 176, 176, False)
+                except GLib.Error:
+                    self.face = None
+            self.avatar.queue_draw()
+            self.password_entry.set_text("")
+            self.error.set_text("")
+            self.entry = self.password_entry if self.password else None
+            if self.view == "signin":
+                self.password_row.set_visible(self.password)
+                self.signin_button.set_visible(not self.password)
+                if self.entry is not None:
+                    self.entry.grab_focus()
 
         def clock_view(self):
             self.clock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER,
@@ -610,6 +697,7 @@ def run_lock():
             avatar = Gtk.DrawingArea()
             avatar.set_size_request(176, 176)
             avatar.set_halign(Gtk.Align.CENTER)
+            self.avatar = avatar
             self.face = None
             home = account_home(self.user)
             if home and Path(home, ".face").is_file():
@@ -621,28 +709,35 @@ def run_lock():
             self.signin.pack_start(avatar, False, False, 0)
             name = Gtk.Label(label=self.user)
             name.get_style_context().add_class("lock-name")
+            self.name_label = name
             self.signin.pack_start(name, False, False, 6)
-            if self.password:
-                row = Gtk.Box(spacing=0, halign=Gtk.Align.CENTER)
-                self.entry = Gtk.Entry(visibility=False, placeholder_text=_t("Mot de passe"))
-                self.entry.get_style_context().add_class("lock-password")
-                self.entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
-                self.entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Afficher le mot de passe"))
-                self.entry.connect("icon-press", lambda e, *_: e.set_visibility(not e.get_visibility()))
-                self.entry.connect("activate", lambda *_: self.submit())
-                self.entry.connect("changed", self.on_typing)
-                go = Gtk.Button.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON)
-                go.get_style_context().add_class("lock-go")
-                go.connect("clicked", lambda *_: self.submit())
-                row.pack_start(self.entry, False, False, 0)
-                row.pack_start(go, False, False, 4)
-                self.signin.pack_start(row, False, False, 0)
-            else:
-                self.entry = None
-                button = Gtk.Button(label=_t("Se connecter"), halign=Gtk.Align.CENTER)
-                button.get_style_context().add_class("lock-signin")
-                button.connect("clicked", lambda *_: self.unlock())
-                self.signin.pack_start(button, False, False, 0)
+            # Champ et bouton construits tous deux : le compte choisi en bas à
+            # gauche peut avoir un mot de passe ou non.
+            row = Gtk.Box(spacing=0, halign=Gtk.Align.CENTER)
+            self.password_entry = Gtk.Entry(visibility=False, placeholder_text=_t("Mot de passe"))
+            self.password_entry.get_style_context().add_class("lock-password")
+            self.password_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
+            self.password_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Afficher le mot de passe"))
+            self.password_entry.connect("icon-press", lambda e, *_: e.set_visibility(not e.get_visibility()))
+            self.password_entry.connect("activate", lambda *_: self.submit())
+            self.password_entry.connect("changed", self.on_typing)
+            go = Gtk.Button.new_from_icon_name("go-next-symbolic", Gtk.IconSize.BUTTON)
+            go.get_style_context().add_class("lock-go")
+            go.connect("clicked", lambda *_: self.submit())
+            row.pack_start(self.password_entry, False, False, 0)
+            row.pack_start(go, False, False, 4)
+            row.set_no_show_all(True)
+            self.password_row = row
+            self.signin.pack_start(row, False, False, 0)
+            button = Gtk.Button(label=_t("Se connecter"), halign=Gtk.Align.CENTER)
+            button.get_style_context().add_class("lock-signin")
+            button.connect("clicked", lambda *_: self.sign_in())
+            button.set_no_show_all(True)
+            self.signin_button = button
+            self.signin.pack_start(button, False, False, 0)
+            for widget in (row, go, self.password_entry):
+                widget.show()
+            self.entry = self.password_entry if self.password else None
             self.error = Gtk.Label(wrap=True, max_width_chars=44, justify=Gtk.Justification.CENTER)
             self.error.get_style_context().add_class("lock-error")
             self.signin.pack_start(self.error, False, False, 0)
@@ -732,18 +827,28 @@ def run_lock():
             self.last_typing = time.monotonic()
             self.clock.hide()
             self.signin.show()
+            self.password_row.set_visible(self.password)
+            self.signin_button.set_visible(not self.password)
+            if len(self.account_names) > 1:
+                self.accounts.show_all()
             self.area.queue_draw()
             if self.entry is not None:
                 self.entry.grab_focus()
-            if self.osk is not None and self.osk_auto:
-                self.osk.show()
+            if self.osk is not None:
+                self.osk_button.show()
+                if self.osk_auto and self.entry is not None:
+                    self.osk_show(True)
             self.tick()
 
         def show_clock(self):
             self.view = "clock"
             self.signin.hide()
             if self.osk is not None:
-                self.osk.hide()
+                self.osk_show(False)
+                self.osk_button.hide()
+            self.accounts.hide()
+            if self.user != self.owner:
+                self.select_account(self.owner)
             self.clock.show()
             self.error.set_text("")
             self.area.queue_draw()
@@ -773,14 +878,21 @@ def run_lock():
                     self.show_clock()
                 return True
             if self.entry is None and event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-                self.unlock()
+                self.sign_in()
                 return True
             return False
 
         def submit(self):
             if self.entry is None or time.monotonic() < self.blocked_until:
                 return
-            if check_password(self.user, self.entry.get_text()):
+            if self.user != self.owner:
+                # Autre compte : le relais root vérifie et bascule de session ;
+                # celle-ci reste verrouillée derrière.
+                if relay_switch(self.user, self.entry.get_text()):
+                    self.failures = 0
+                    self.show_clock()
+                    return
+            elif check_password(self.user, self.entry.get_text()):
                 self.unlock()
                 return
             self.failures += 1
@@ -792,11 +904,20 @@ def run_lock():
             else:
                 self.error.set_text(_t("Le mot de passe est incorrect. Réessayez."))
 
+        def sign_in(self):
+            """Compte sans mot de passe : sa session, ou celle d'un autre."""
+            if self.user == self.owner:
+                self.unlock()
+            elif relay_switch(self.user, ""):
+                self.show_clock()
+            else:
+                self.error.set_text(_t("Impossible d’ouvrir la session de {name}.").format(name=self.user))
+
         def unlock(self):
             Gdk.Display.get_default().get_default_seat().ungrab()
             Gtk.main_quit()
 
-    Lock()
+    Lock(start)
     Gtk.main()
 
 
@@ -828,7 +949,7 @@ def claim_marker(marker):
     return False
 
 
-def lock_now():
+def lock_now(start="clock"):
     marker = active_file()
     if not claim_marker(marker):
         return 0
@@ -836,7 +957,7 @@ def lock_now():
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
         signal.signal(sig, signal.SIG_IGN)
     try:
-        run_lock()
+        run_lock(start)
     finally:
         for done in (shown_file(), marker):
             try:
@@ -850,6 +971,8 @@ def main(argv):
     command = argv[1] if len(argv) > 1 else "now"
     if command == "now":
         return lock_now()
+    if command == "switch":
+        return lock_now("signin")
     if command == "daemon":
         daemon()
         return 0

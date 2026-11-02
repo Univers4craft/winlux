@@ -207,6 +207,7 @@ def keyboard_widget(send=send_x11, layout=None, on_close=None):
     gi.require_version("Gtk", "3.0")
     from gi.repository import GLib, Gtk
 
+    install_css()
     letters = LAYOUTS.get(layout or layout_name(), LAYOUTS["fr"])
     state = {"shift": False, "caps": False, "symbols": False, "ctrl": False, "alt": False, "super": False}
     grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -381,6 +382,23 @@ CSS = b"""
 """
 
 
+_CSS_DONE = []
+
+
+def install_css():
+    """Style du clavier, une fois par écran (fenêtre du clavier ou écran de connexion)."""
+    if _CSS_DONE:
+        return
+    from gi.repository import Gdk, Gtk
+    screen = Gdk.Screen.get_default()
+    if screen is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+    _CSS_DONE.append(provider)
+
+
 def run_window(start_hidden=False):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -394,10 +412,6 @@ def run_window(start_hidden=False):
         def ensure(self):
             if self.window is not None:
                 return self.window
-            provider = Gtk.CssProvider()
-            provider.load_from_data(CSS)
-            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider,
-                                                     Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
             window = Gtk.ApplicationWindow(application=self, title=_t("Clavier tactile"))
             window.set_icon_name("input-keyboard")
             window.set_accept_focus(False)

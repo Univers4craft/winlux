@@ -603,5 +603,9 @@ if __name__ == "__main__":
     # aussi pour les raccourcis Win+N déjà enregistrés vers cette page.
     if page == "notifications" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
         os.execvp("winlux-popup", ["winlux-popup", "notifications"])
+    # Réglages rapides (Win+A) : panneau à tuiles et curseurs façon Windows 11 ;
+    # la liste des réseaux Wi-Fi ci-dessous s'ouvre depuis la flèche de la tuile.
+    if page == "quick" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
+        os.execvp("winlux-popup", ["winlux-popup", "quick"])
     Tools(page)
     Gtk.main()

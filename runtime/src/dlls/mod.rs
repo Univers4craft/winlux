@@ -50,6 +50,8 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hid;
+pub mod hostcall;
 pub mod imm32;
 pub mod iphlpapi;
 pub mod ipp;
@@ -62,6 +64,7 @@ pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
@@ -77,6 +80,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod opengl32;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -88,6 +92,7 @@ pub mod sechost;
 pub mod secur32;
 pub mod security;
 pub mod seh;
+pub mod seh_hw;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
@@ -105,6 +110,7 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod vulkan1;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
@@ -335,6 +341,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(winspool::gdi_exports());
+                    e.extend(opengl32::gdi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -459,6 +466,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "hid",
+                exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "setupapi",
                 exports: setupapi::exports(),
                 handle: fake_module(),
@@ -577,6 +589,16 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: secur32::exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "opengl32",
+                exports: opengl32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "vulkan-1",
+                exports: vulkan1::exports(),
+                handle: fake_module(),
+            },
         ];
         add_basics(&mut all);
         all
@@ -609,6 +631,7 @@ fn add_basics(all: &mut [Builtin]) {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
             .chain(dialogs::user32_overrides())
+            .chain(menus::user32_overrides())
         {
             b.exports.insert(name, addr);
         }

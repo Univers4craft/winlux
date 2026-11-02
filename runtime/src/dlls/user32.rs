@@ -230,6 +230,16 @@ unsafe fn create_window_common(
     with_backend(|b| {
         if child {
             b.create_child_window(hwnd, parent, rect);
+            // Win32 : un nouvel enfant passe derrière ses voisins (le premier
+            // créé reste devant). Les contrôles de fond (cadres de groupe,
+            // onglets), transparents sous Windows mais opaques en X11,
+            // restent tout au fond pour ne jamais masquer leur contenu.
+            b.lower_window(hwnd);
+            for sibling in gui::child_windows(parent) {
+                if sibling != hwnd && super::controls::is_backdrop(sibling) {
+                    b.lower_window(sibling);
+                }
+            }
         } else {
             b.create_window(hwnd, &title, rect);
         }

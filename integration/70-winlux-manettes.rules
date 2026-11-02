@@ -1,0 +1,13 @@
+# Winlux (#271) : les jeux Windows lisent les manettes par hid.dll, que
+# Winlux sert depuis /dev/hidraw*. Ces nœuds sont réservés à root par défaut ;
+# on les ouvre au groupe input (dont fait partie chaque compte Winlux) et,
+# là où logind existe, à l'utilisateur de la session (uaccess).
+# Seuls les fabricants de manettes, volants et joysticks sont concernés :
+# les clés de sécurité (FIDO) et le reste des appareils HID restent fermés.
+#   045e Microsoft (Xbox)   054c Sony (PlayStation)   057e Nintendo
+#   28de Valve (Steam)      046d Logitech (volants)   044f Thrustmaster
+#   2dc8 8BitDo             0f0d Hori                 0e6f PDP
+#   20d6 PowerA             0738 Mad Catz             11c0/11c1 Betop
+#   0079 DragonRise         1038 SteelSeries (manettes) 3537 GameSir
+#   0eb7 Fanatec            346e Moza                 231d VKB
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="*:045E:*|*:054C:*|*:057E:*|*:28DE:*|*:046D:*|*:044F:*|*:2DC8:*|*:0F0D:*|*:0E6F:*|*:20D6:*|*:0738:*|*:11C0:*|*:11C1:*|*:0079:*|*:1038:*|*:3537:*|*:0EB7:*|*:346E:*|*:231D:*", GROUP="input", MODE="0660", TAG+="uaccess"
