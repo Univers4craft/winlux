@@ -1361,6 +1361,12 @@ TRANSLATIONS = {
 
 EXTRA_TRANSLATIONS = {
     "fr_FR": {
+        "browser_title": 'Navigateur web',
+        "browser_subtitle": "Winlux ne fournit ni n'impose aucun navigateur, dans l'esprit des règles européennes sur le choix du navigateur. Celui que vous choisissez est téléchargé sur le site officiel de son éditeur, vérifié et installé au premier démarrage (connexion Internet requise).",
+        "browser_later": 'Choisir plus tard (Paramètres > Navigateurs)',
+        "summary_browser": 'Navigateur',
+        "summary_browser_none": 'à choisir plus tard',
+        "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
         "keyboard_name_gb": "QWERTY — Anglais (UK)",
@@ -1438,6 +1444,12 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
     },
     "en_US": {
+        "browser_title": 'Web browser',
+        "browser_subtitle": "Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. The one you choose is downloaded from its publisher's official website, checked and installed at first startup (Internet connection required).",
+        "browser_later": 'Choose later (Settings > Browsers)',
+        "summary_browser": 'Browser',
+        "summary_browser_none": 'to be chosen later',
+        "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
         "keyboard_name_gb": "QWERTY — English (UK)",
@@ -1515,6 +1527,12 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Resizing Windows (may take several minutes)...",
     },
     "de_DE": {
+        "browser_title": "Webbrowser",
+        "browser_subtitle": "Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Der gewählte Browser wird beim ersten Start von der offiziellen Website des Herstellers heruntergeladen, geprüft und installiert (Internetverbindung erforderlich).",
+        "browser_later": "Später auswählen (Einstellungen > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "später auswählen",
+        "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
         "keyboard_name_gb": "QWERTY — Englisch (GB)",
@@ -1592,6 +1610,12 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
     },
     "es_ES": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. El que elija se descarga del sitio oficial de su editor, se comprueba y se instala en el primer arranque (se requiere conexión a Internet).",
+        "browser_later": "Elegir más tarde (Configuración > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "por elegir más tarde",
+        "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
         "keyboard_name_gb": "QWERTY — Inglés (Reino Unido)",
@@ -1669,6 +1693,12 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
     },
     "it_IT": {
+        "browser_title": "Browser web",
+        "browser_subtitle": "Winlux non include né impone alcun browser, nello spirito delle norme europee sulla scelta del browser. Quello scelto viene scaricato dal sito ufficiale del suo editore, verificato e installato al primo avvio (connessione Internet richiesta).",
+        "browser_later": "Scegli più tardi (Impostazioni > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "da scegliere più tardi",
+        "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
         "keyboard_name_gb": "QWERTY — Inglese (Regno Unito)",
@@ -1746,6 +1776,12 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
     },
     "pt_BR": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "O Winlux não inclui nem impõe nenhum navegador, no espírito das regras europeias sobre a escolha do navegador. O que você escolher é baixado do site oficial do editor, verificado e instalado na primeira inicialização (conexão com a Internet necessária).",
+        "browser_later": "Escolher depois (Configurações > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "a escolher depois",
+        "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
         "keyboard_name_gb": "QWERTY — Inglês (Reino Unido)",
@@ -1907,6 +1943,9 @@ Ce logiciel est fourni « en l'état », sans aucune garantie.
 
 Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 """
+
+# Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
+BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
 
 STEPS = [
     "Langue",
@@ -2724,6 +2763,8 @@ class InstallerApp(Gtk.Application):
             "password_hash": "",
             "timezone": None,
             "packages": [],
+            # Aucun navigateur présélectionné : None = choisir plus tard.
+            "browser": None,
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
@@ -2938,7 +2979,7 @@ class InstallerApp(Gtk.Application):
             return
         self.answer_settings = settings
         for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
-                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages"):
+                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser"):
             if key in settings:
                 self.config[key] = settings[key]
         self.skip_steps = set(steps)
@@ -3105,7 +3146,16 @@ class InstallerApp(Gtk.Application):
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
+        box.pack_end(self.independent_label(), False, False, 0)
         self.pages.add_named(box, page_name("language"))
+
+    def independent_label(self):
+        """« Projet indépendant, non affilié à Microsoft » (docs/DEFENSE-DU-NOM.md)."""
+        label = Gtk.Label(label=tr("independent_notice"), xalign=0)
+        label.set_line_wrap(True)
+        label.set_margin_top(12)
+        label.get_style_context().add_class("card-detail")
+        return label
 
     def on_lang_toggle(self, btn, locale, kb):
         if btn.get_active():
@@ -4187,9 +4237,40 @@ class InstallerApp(Gtk.Application):
         apps_check.set_margin_top(8)
         apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
         box.pack_start(apps_check, False, False, 0)
+        box.pack_start(self.build_browser_choice(), False, False, 0)
         self.selecting_profile = False
         self.select_profile("office")
         self.pages.add_named(box, page_name("profile"))
+
+    def build_browser_choice(self):
+        """Choix du navigateur : ordre alphabétique, aucun présélectionné (docs/BROWSERS.md)."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("browser_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("browser_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        row = Gtk.Box(spacing=16)
+        later = Gtk.RadioButton.new_with_label_from_widget(None, tr("browser_later"))
+        later.connect("toggled", self.on_browser_toggle, None)
+        row.pack_start(later, False, False, 0)
+        self.browser_buttons = {None: later}
+        for browser, name in BROWSER_CHOICES:
+            button = Gtk.RadioButton.new_with_label_from_widget(later, name)
+            button.connect("toggled", self.on_browser_toggle, browser)
+            row.pack_start(button, False, False, 0)
+            self.browser_buttons[browser] = button
+        card.pack_start(row, False, False, 0)
+        self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
+        return card
+
+    def on_browser_toggle(self, button, browser):
+        if button.get_active():
+            self.config["browser"] = browser
 
     def select_profile(self, pid):
         self.selecting_profile = True
@@ -4372,6 +4453,8 @@ class InstallerApp(Gtk.Application):
         if self.config["install_apps"]:
             profile_line += " " + tr("summary_profile_apps")
         lines.append(profile_line)
+        browser = dict(BROWSER_CHOICES).get(self.config.get("browser"))
+        lines.append(f"{tr('summary_browser')} : {browser or tr('summary_browser_none')}")
         score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
                  else tr("summary_benchmark_none"))
         lines.append(f"{tr('summary_benchmark')} : {score}")
@@ -4471,6 +4554,11 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
+        notice = self.independent_label()
+        notice.set_xalign(0.5)
+        notice.set_justify(Gtk.Justification.CENTER)
+        notice.set_margin_top(24)
+        box.pack_start(notice, False, False, 0)
         self.pages.add_named(box, page_name("done"))
 
     def on_reboot(self, _btn):
@@ -5039,6 +5127,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "autologin": self.config["autologin"],
             "timezone": self.config.get("timezone"),
             "packages": self.config.get("packages", []),
+            "browser": self.config.get("browser"),
             "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
@@ -5062,6 +5151,11 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             # Installés par l'init du système au premier démarrage avec réseau.
             with open(f"{etc}/first-boot-packages", "w") as f:
                 f.write("\n".join(self.config["packages"]) + "\n")
+        if self.config.get("browser") in dict(BROWSER_CHOICES):
+            # Téléchargé chez l'éditeur et installé par l'init au premier
+            # démarrage avec réseau (winlux-browsers --default), jamais fourni.
+            with open(f"{etc}/first-boot-browser", "w") as f:
+                f.write(self.config["browser"] + "\n")
         try:
             self.configure_network_target(root_path)
         except Exception as e:

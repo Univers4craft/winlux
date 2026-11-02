@@ -148,12 +148,16 @@ def listing():
     cached = read(STATE / "available-manifest")
     if cached:
         data = manifest(cached)
-        print("Version disponible : " + data["version"])
-        if data["version"] == read("/usr/share/winlux/version"): print("Winlux est à jour.")
-        print("Composants : bureau et runtime Winlux (APT)")
-        print("Taille à télécharger : " + data["download_bytes"] + " octets")
-        print("Taille décompressée : " + data["unpacked_kib"] + " Kio (hors sauvegarde et marge)")
-        print("Action après installation : redémarrage conseillé")
+        if data["version"] == read("/usr/share/winlux/version"):
+            # À jour : ni taille ni composants, qui laissaient croire à une
+            # mise à jour en attente (« Taille à télécharger : 463 Mo »).
+            print("Winlux est à jour.")
+        else:
+            print("Version disponible : " + data["version"])
+            print("Composants : bureau et runtime Winlux (APT)")
+            print("Taille à télécharger : " + data["download_bytes"] + " octets")
+            print("Taille décompressée : " + data["unpacked_kib"] + " Kio (hors sauvegarde et marge)")
+            print("Action après installation : redémarrage conseillé")
         if read(BLOCKED) and read(BLOCKED) == data["version"]:
             print("Installation automatique suspendue : " + data["version"])
     else: print("Aucune vérification disponible. Lancez Rechercher.")
