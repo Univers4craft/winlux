@@ -329,7 +329,8 @@ if panel_config.is_file() and not grouping_marker.exists():
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
-              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c")
+              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
+              "W-C-t", "W-S-c")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.
@@ -410,6 +411,19 @@ uca = home / ".config/Thunar/uca.xml"
 try:
     if uca.is_file() and uca.read_text(encoding="utf-8").count("<action>") == 1 and "<name>Open Terminal Here</name>" in uca.read_text(encoding="utf-8"):
         shutil.copyfile(source / "config/Thunar/uca.xml", uca)
+except (OSError, UnicodeDecodeError):
+    pass
+# « Renommer plusieurs fichiers… » (#279) ajouté une fois aux actions déjà copiées.
+try:
+    if uca.is_file() and "winlux-rename" not in uca.read_text(encoding="utf-8"):
+        shipped = (source / "config/Thunar/uca.xml").read_text(encoding="utf-8")
+        start = shipped.rfind("<action>", 0, shipped.find("winlux-rename"))
+        block = shipped[start:shipped.find("</action>", start) + len("</action>")]
+        current = uca.read_text(encoding="utf-8")
+        if start >= 0 and "</actions>" in current:
+            temporary = uca.with_suffix(".xml.tmp")
+            temporary.write_text(current.replace("</actions>", block + "\n</actions>", 1), encoding="utf-8")
+            temporary.replace(uca)
 except (OSError, UnicodeDecodeError):
     pass
 # « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus

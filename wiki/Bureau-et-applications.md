@@ -72,6 +72,9 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 | **Windows + Tab** | Vue des tâches : aperçus des fenêtres, bureaux virtuels (nouveau, renommer, supprimer, déplacer une fenêtre par clic droit). Windows + Ctrl + D crée un bureau, Windows + Ctrl + F4 le ferme, Windows + Ctrl + ← / → passe de l'un à l'autre. |
 | **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
 | Menu Démarrer › **Horloge** | Alarmes (répétées ou uniques, rappel dans 5 min), minuteurs, chronomètre avec tours, horloges du monde, sessions de concentration avec Ne pas déranger. Les alarmes sonnent même l'application fermée. |
+| **Windows + Maj + C** | Pipette : l'écran se fige avec une loupe, un clic choisit la couleur, son code HEX est copié ; la fenêtre montre aussi RGB et HSL et les 20 dernières couleurs. |
+| **Windows + Ctrl + T** | Garde la fenêtre active au premier plan, entourée d'un cadre coloré ; le même raccourci la libère. |
+| Clic droit › **Renommer plusieurs fichiers…** | Dès que plusieurs fichiers sont sélectionnés (Explorateur ou Thunar) : rechercher / remplacer (texte ou expression régulière), nom numéroté, préfixe, suffixe, casse. L'aperçu signale doublons et caractères interdits ; le dernier renommage s'annule. |
 | Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
 
 ## Applications Linux
