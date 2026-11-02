@@ -77,6 +77,10 @@ course à la main (la session était verrouillée pendant la mesure).
    n'avaient que les 3 méthodes d'IUnknown. Leur table a maintenant les
    9 méthodes de `ID3D11DeviceChild` et des vues. SuperTuxKart : pas de
    régression avec #326 (course de démonstration à 117,5 FPS).
+10. **Passage 8** : ANGLE s'initialise sur le D3D11 de Winlux (« ANGLE
+    Direct3D11 vs_5_0 ps_5_0 », OpenGL ES 3.0), puis
+    `ID3D11View::GetResource` rendait un pointeur nul. Les vues gardent
+    maintenant leur ressource (avec une référence) et leur descripteur.
 
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
 rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
