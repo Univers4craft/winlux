@@ -25,3 +25,13 @@ lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/eh_msvc.obj
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fasync-exceptions -c "$src/hwexc_msvc.c" -o "$tmp/hwexc_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hwexc_msvc.obj" \
     "$tmp/vcruntime140.lib" "$tmp/kernel32.lib" /out:"$out/hwexc_msvc.exe"
+# Manettes et périphériques HID (#271) : setupapi, hid.dll, ReadFile.
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nReadFile\nWriteFile\nGetOverlappedResult\nCreateEventW\nCloseHandle\nGetLastError\n' >"$tmp/kernel32_hid.def"
+printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupDiGetClassDevsW\nSetupDiEnumDeviceInterfaces\nSetupDiGetDeviceInterfaceDetailW\nSetupDiGetDeviceRegistryPropertyW\nSetupDiDestroyDeviceInfoList\n' >"$tmp/setupapi.def"
+printf 'LIBRARY hid.dll\nEXPORTS\nHidD_GetHidGuid\nHidD_GetAttributes\nHidD_GetProductString\nHidD_GetPreparsedData\nHidD_FreePreparsedData\nHidP_GetCaps\n' >"$tmp/hid.def"
+for d in kernel32_hid setupapi hid; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hid_msvc.c" -o "$tmp/hid_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_msvc.obj" \
+    "$tmp/kernel32_hid.lib" "$tmp/setupapi.lib" "$tmp/hid.lib" /out:"$out/hid_msvc.exe"
