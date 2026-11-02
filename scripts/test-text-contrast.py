@@ -69,6 +69,7 @@ def screens():
         ("permission", [str(directory / "winlux-permission.py"), "ask", "camera", "/tmp/Zoom.exe", "Zoom.exe"], {}),
         ("report", [str(directory / "winlux-report.py")], {}),
         ("claude-code", [str(project / "integration/native/claude-code/winlux-claude-code.py")], {}),
+        ("assistant-configurer", [str(directory / "winlux-assistant.py"), "--configurer"], {}),
     ]
     return found
 
