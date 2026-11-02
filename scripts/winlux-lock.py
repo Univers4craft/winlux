@@ -245,7 +245,7 @@ def relay_check(user, password, op="check"):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(30)
-            client.connect(path(RELAY))
+            client.connect(str(path(RELAY)))
             client.sendall((json.dumps({"op": op, "user": user, "password": password}) + "\n").encode())
             answer = client.makefile("r", encoding="utf-8").readline()
         return bool(json.loads(answer or "{}").get("ok"))

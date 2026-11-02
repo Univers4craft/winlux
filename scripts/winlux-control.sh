@@ -312,7 +312,8 @@ perform() {
             tz=${action#tz-}; tz=${tz#timezone-}
             case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
             test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
-            if have timedatectl; then
+            # timedatectl a besoin de systemd, absent de Winlux.
+            if have timedatectl && test -d /run/systemd/system; then
                 timedatectl set-timezone "$tz" || return
             else
                 ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return

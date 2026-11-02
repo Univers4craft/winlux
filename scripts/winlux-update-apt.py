@@ -325,6 +325,9 @@ def main():
     allowed = [["--check"], ["--apply"], ["--rollback"], ["--boot"], ["--auto", "enable"], ["--auto", "disable"],
                ["--confirm-boot"], ["--boot-failed"]]
     if args not in allowed: raise ValueError("Arguments de mise à jour invalides")
+    # dpkg et les caches (MIME, icônes, applications) doivent rester lisibles
+    # par le bureau, qui tourne sous le compte de l'utilisateur.
+    os.umask(0o022)
     STATE.mkdir(parents=True, exist_ok=True); RUN.mkdir(parents=True, exist_ok=True)
     with (STATE / "apt-update.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

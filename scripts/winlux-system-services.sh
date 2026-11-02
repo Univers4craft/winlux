@@ -6,6 +6,11 @@
 # qui appartient à l'utilisateur.
 set -eu
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+# Chargeurs d'images GTK (PNG, SVG) : sans ce cache, icônes et fenêtres GTK
+# plantent. Écrit en root, lu par tous les comptes.
+for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
+    if test -x "$query"; then "$query" --update-cache && chmod 644 /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache 2>/dev/null; break; fi
+done
 mkdir -p /run/winlux /var/lib/dbus
 if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
 /usr/bin/dbus-uuidgen --ensure=/etc/machine-id

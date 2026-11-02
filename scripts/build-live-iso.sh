@@ -497,7 +497,8 @@ safe_power() {
 trap 'safe_power poweroff' USR2
 trap 'safe_power reboot' TERM
 # Recovery uses static BusyBox before loading drivers/shared user services.
-while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
+# umask 022 : les fichiers posés par dpkg et les caches restent lisibles.
+while ! (umask 022; /usr/bin/winlux-update --boot) >/run/winlux/boot-update.log 2>&1; do
     echo 'Récupération système impossible. Bureau bloqué, journal : /run/winlux/boot-update.log'
     if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
         /bin/busybox cat /run/winlux/boot-update.log
@@ -560,6 +561,11 @@ if test -n "$desktop_user"; then
         /bin/busybox rm -f /etc/winlux/users.conf.new
     fi
     /bin/busybox chmod 755 /etc/winlux
+    # Anciennes installations : caches MIME et état des mises à jour écrits
+    # en umask 077 quand tout tournait en root.
+    /bin/busybox chmod -R go+rX /usr/share/mime 2>/dev/null || true
+    /bin/busybox chmod go+r /usr/share/applications/mimeinfo.cache 2>/dev/null || true
+    /bin/busybox chmod go+rx /var/lib/winlux 2>/dev/null || true
     for conf in locale.conf input.conf preferences.conf cpu.conf overlay.conf lock.conf privacy.conf power.conf display.conf \
         settings.conf update.conf firewall.conf volumes.conf sysupdate.conf report.conf browser.conf remote.conf \
         profile.json install-config.json recommended-apps.txt benchmark.json hardware-report.txt; do
