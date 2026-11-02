@@ -1,0 +1,6 @@
+/* Variante sombre d'Adwaita intégrée à GTK 3.
+ * winlux-personalize et Paramètres choisissent le thème « Adwaita-dark » ;
+ * sans ce dossier (paquet gnome-themes-extra absent de l'image), GTK
+ * retombait sur Adwaita clair : fenêtres claires en thème sombre, texte
+ * clair de Winlux sur fond clair. */
+@import url("resource:///org/gtk/libgtk/theme/Adwaita/gtk-contained-dark.css");

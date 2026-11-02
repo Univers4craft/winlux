@@ -160,12 +160,14 @@ def run_dialog(app, win_path, elevate=False):
     result = {"ok": False}
 
     css = b"""
-      .uac { background: #f3f3f3; }
-      .uac-band { background: #1f1f1f; color: white; padding: 10px 18px; font-size: 13px; }
-      .uac-question { font-size: 20px; font-weight: 600; color: #1b1b1b; }
-      .uac-app { font-size: 15px; font-weight: 600; color: #1b1b1b; }
-      .uac-info { color: #5d5d5d; font-size: 13px; }
-      .uac-error { color: #c42b1c; font-size: 13px; }
+      .uac { background: #f3f3f3; color: #1b1b1b; }
+      /* The user gtk.css (dark theme) must not repaint the inner boxes. */
+      .uac box, .uac label { background-color: transparent; }
+      .uac .uac-band { background: #1f1f1f; color: white; padding: 10px 18px; font-size: 13px; }
+      .uac .uac-question { font-size: 20px; font-weight: 600; color: #1b1b1b; }
+      .uac .uac-app { font-size: 15px; font-weight: 600; color: #1b1b1b; }
+      .uac .uac-info { color: #5d5d5d; font-size: 13px; }
+      .uac .uac-error { color: #c42b1c; font-size: 13px; }
       button.uac-yes { background: #0067c0; color: white; border: none; border-radius: 4px;
                        padding: 6px 24px; box-shadow: none; text-shadow: none; }
       button.uac-no { background: white; color: #1b1b1b; border: 1px solid #d1d1d1;

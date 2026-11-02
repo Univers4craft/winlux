@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Assistant Claude
+Name[en]=Claude assistant
+Name[es]=Asistente Claude
+Name[de]=Claude-Assistent
+Comment=Poser une question à Claude sur Winlux (Windows+C)
+Comment[en]=Ask Claude a question about Winlux (Windows+C)
+Comment[es]=Hacer una pregunta a Claude sobre Winlux (Windows+C)
+Comment[de]=Claude eine Frage zu Winlux stellen (Windows+C)
+Exec=/usr/bin/winlux-assistant
+Icon=winlux-claude-code
+StartupWMClass=winlux-assistant
+Terminal=false
+NoDisplay=true

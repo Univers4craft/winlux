@@ -149,6 +149,9 @@ pub unsafe fn text(hdc: Handle, font: Handle, color: u32, x: i32, y: i32, s: &[u
     if SPAN_CAPTURE && !s.is_empty() {
         capture_span(hdc, x, y, s);
     }
+    if AUDIT_ON {
+        audit_text(hdc, chrome(color), x, y, s);
+    }
     TextOutA(
         hdc,
         x,
@@ -224,6 +227,9 @@ pub unsafe fn text_centered(
 }
 
 pub unsafe fn fill(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, color: u32) {
+    if AUDIT_ON {
+        note_fill(hdc, l, t, r, bt, chrome(color));
+    }
     FillRect(
         hdc,
         &Rect {
@@ -236,6 +242,9 @@ pub unsafe fn fill(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32
     );
 }
 pub unsafe fn ellipse(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, color: u32) {
+    if AUDIT_ON {
+        note_fill(hdc, l, t, r, bt, chrome(color));
+    }
     SelectObject(hdc, b.get(color));
     Ellipse(hdc, l, t, r, bt);
 }
@@ -250,6 +259,9 @@ pub unsafe fn round_rect(
     color: u32,
 ) {
     let radius = radius.min((r - l) / 2).min((bt - t) / 2).max(1);
+    if AUDIT_ON {
+        note_fill(hdc, l, t, r, bt, chrome(color));
+    }
     SelectObject(hdc, b.get(color));
     RoundRect(hdc, l, t, r, bt, radius * 2, radius * 2);
 }
@@ -276,6 +288,74 @@ pub fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
         (x + (y - x) * t / n.max(1)) as u32
     };
     ch(0) | (ch(8) << 8) | (ch(16) << 16)
+}
+
+// ---------- Contraste du texte (WCAG 2) ----------
+
+/// Composante sRGB linéarisée (× 1 000 000) : ((v/255 + 0,055) / 1,055)^2,4.
+const LINEAR: [u32; 256] = [
+    0, 304, 607, 911, 1214, 1518, 1821, 2125, 2428, 2732, 3035, 3347, 3677, 4025, 4391, 4777, 5182,
+    5605, 6049, 6512, 6995, 7499, 8023, 8568, 9134, 9721, 10330, 10960, 11612, 12286, 12983, 13702,
+    14444, 15209, 15996, 16807, 17642, 18500, 19382, 20289, 21219, 22174, 23153, 24158, 25187,
+    26241, 27321, 28426, 29557, 30713, 31896, 33105, 34340, 35601, 36889, 38204, 39546, 40915,
+    42311, 43735, 45186, 46665, 48172, 49707, 51269, 52861, 54480, 56128, 57805, 59511, 61246,
+    63010, 64803, 66626, 68478, 70360, 72272, 74214, 76185, 78187, 80220, 82283, 84376, 86500,
+    88656, 90842, 93059, 95307, 97587, 99899, 102242, 104616, 107023, 109462, 111932, 114435,
+    116971, 119538, 122139, 124772, 127438, 130136, 132868, 135633, 138432, 141263, 144128, 147027,
+    149960, 152926, 155926, 158961, 162029, 165132, 168269, 171441, 174647, 177888, 181164, 184475,
+    187821, 191202, 194618, 198069, 201556, 205079, 208637, 212231, 215861, 219526, 223228, 226966,
+    230740, 234551, 238398, 242281, 246201, 250158, 254152, 258183, 262251, 266356, 270498, 274677,
+    278894, 283149, 287441, 291771, 296138, 300544, 304987, 309469, 313989, 318547, 323143, 327778,
+    332452, 337164, 341914, 346704, 351533, 356400, 361307, 366253, 371238, 376262, 381326, 386429,
+    391572, 396755, 401978, 407240, 412543, 417885, 423268, 428690, 434154, 439657, 445201, 450786,
+    456411, 462077, 467784, 473531, 479320, 485150, 491021, 496933, 502886, 508881, 514918, 520996,
+    527115, 533276, 539479, 545724, 552011, 558340, 564712, 571125, 577580, 584078, 590619, 597202,
+    603827, 610496, 617207, 623960, 630757, 637597, 644480, 651406, 658375, 665387, 672443, 679542,
+    686685, 693872, 701102, 708376, 715694, 723055, 730461, 737910, 745404, 752942, 760525, 768151,
+    775822, 783538, 791298, 799103, 806952, 814847, 822786, 830770, 838799, 846873, 854993, 863157,
+    871367, 879622, 887923, 896269, 904661, 913099, 921582, 930111, 938686, 947307, 955973, 964686,
+    973445, 982251, 991102, 1000000,
+];
+
+/// Luminance relative d'une couleur COLORREF, × 1 000 000.
+pub fn luminance(c: u32) -> u32 {
+    let (r, g, b) = (c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+    ((LINEAR[r as usize] as u64 * 2126
+        + LINEAR[g as usize] as u64 * 7152
+        + LINEAR[b as usize] as u64 * 722)
+        / 10_000) as u32
+}
+
+/// Rapport de contraste WCAG × 100 (450 = 4,5:1).
+pub fn contrast(a: u32, b: u32) -> u32 {
+    let (x, y) = (luminance(a) as u64, luminance(b) as u64);
+    let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+    ((hi + 50_000) * 100 / (lo + 50_000)) as u32
+}
+
+/// Noir ou blanc, celui qui se lit le mieux sur `bg`.
+pub fn text_on(bg: u32) -> u32 {
+    let (black, white) = (rgb(0, 0, 0), rgb(0xFF, 0xFF, 0xFF));
+    if contrast(black, bg) >= contrast(white, bg) {
+        black
+    } else {
+        white
+    }
+}
+
+/// `color` rapprochée du noir ou du blanc juste assez pour atteindre
+/// `minimum` (× 100) sur chacun des fonds `bgs`.
+pub fn readable(mut color: u32, bgs: &[u32], minimum: u32) -> u32 {
+    let Some(&first) = bgs.first() else {
+        return color;
+    };
+    let target = text_on(first);
+    let mut step = 0;
+    while step < 20 && bgs.iter().any(|&bg| contrast(color, bg) < minimum) {
+        color = mix(color, target, 1, 10);
+        step += 1;
+    }
+    color
 }
 
 // ---------- Thème ----------
@@ -397,7 +477,7 @@ pub fn contrast_palette(c: &Contrast) -> Palette {
     }
 }
 
-fn raw_pal(dark: bool) -> Palette {
+fn base_pal(dark: bool) -> Palette {
     let accent = unsafe { ACCENT };
     if let Some(c) = contrast_colors(unsafe { A11Y.contrast }) {
         return contrast_palette(&c);
@@ -414,7 +494,8 @@ fn raw_pal(dark: bool) -> Palette {
             selected: mix(rgb(0x2B, 0x2B, 0x2B), accent, 3, 10),
             text: rgb(0xF2, 0xF2, 0xF2),
             text2: rgb(0xC5, 0xC5, 0xC5),
-            text3: rgb(0x8A, 0x8A, 0x8A),
+            // #8A8A8A ne faisait que 3,3:1 sur un survol (#383A3F).
+            text3: rgb(0xA4, 0xA4, 0xA4),
             accent,
             on_accent: rgb(0x00, 0x00, 0x00),
             shadow: rgb(0x08, 0x0C, 0x18),
@@ -436,11 +517,69 @@ fn raw_pal(dark: bool) -> Palette {
             selected: mix(rgb(0xFF, 0xFF, 0xFF), accent, 2, 10),
             text: rgb(0x1A, 0x1A, 0x1A),
             text2: rgb(0x42, 0x42, 0x42),
-            text3: rgb(0x80, 0x80, 0x80),
+            // #808080 ne faisait que 3,8:1 sur le fond des fenêtres.
+            text3: rgb(0x64, 0x64, 0x64),
             accent,
             on_accent: rgb(0xFF, 0xFF, 0xFF),
             shadow: rgb(0x2A, 0x30, 0x40),
         }
+    }
+}
+
+/// Palette lisible quelle que soit la couleur d'accentuation : l'accent
+/// sert de texte (liens, onglet actif) et de fond (boutons principaux), et
+/// la ligne sélectionnée en est teintée. Un jaune ou un orange tombait à
+/// 2:1 sur fond clair ; le texte gris sur une sélection teintée à moins de 2:1.
+fn legible(mut p: Palette) -> Palette {
+    let surfaces = [p.window, p.mica, p.surface, p.surface2, p.hover, p.pressed];
+    p.accent = readable(p.accent, &surfaces, 450);
+    p.on_accent = text_on(p.accent);
+    // Sélection : teinte de l'accent réduite tant qu'un texte y passe sous 4,5:1.
+    let base = p.surface;
+    let mut tint = 3;
+    loop {
+        p.selected = mix(base, p.accent, tint, 10);
+        if tint == 1
+            || [p.text, p.text2, p.text3]
+                .iter()
+                .all(|&t| contrast(t, p.selected) >= 450)
+        {
+            break;
+        }
+        tint -= 1;
+    }
+    p.text3 = readable(p.text3, &[p.selected], 450);
+    p.text2 = readable(p.text2, &[p.selected], 450);
+    p
+}
+
+/// Dernière palette calculée (thème, accent, contraste) : `pal()` est appelé
+/// à chaque dessin, le calcul des contrastes n'est refait qu'au changement.
+static mut PAL_CACHE: Option<((bool, u32, u32, u8), Palette)> = None;
+
+fn raw_pal(dark: bool) -> Palette {
+    unsafe {
+        let key = (dark, ACCENT, ACCENT_BASE, A11Y.contrast);
+        if let Some((k, p)) = PAL_CACHE {
+            if k == key {
+                return p;
+            }
+        }
+        let p = if contrast_colors(A11Y.contrast).is_some() {
+            // Thèmes de contraste : teintes de Windows gardées, seuls les
+            // survols/sélections mélangés au fond sont rattrapés.
+            let mut p = base_pal(dark);
+            let all = [p.window, p.surface2, p.hover, p.pressed, p.selected];
+            p.text = readable(p.text, &all, 450);
+            p.text2 = p.text;
+            p.text3 = readable(p.text3, &all, 450);
+            p.accent = readable(p.accent, &all[..4], 450);
+            p
+        } else {
+            legible(base_pal(dark))
+        };
+        PAL_CACHE = Some((key, p));
+        p
     }
 }
 
@@ -1776,15 +1915,17 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 // Centré sur la page : calé à gauche, « </> » dépassait à
                 // droite et l'icône du Bloc-notes paraissait décalée dans
                 // son bouton de barre des tâches.
-                Glyph::Code => text_centered(
-                    hdc,
-                    f.small,
-                    11,
-                    rgb(0x2B, 0x7F, 0xDA),
-                    (l + r) / 2,
-                    y + s * 2 / 5,
-                    b"</>",
-                ),
+                Glyph::Code => {
+                    // Encre calculée contre la page réellement peinte : en
+                    // contraste élevé, page et encre étaient converties
+                    // séparément (cyan sur blanc, 1,4:1).
+                    let page = chrome(rgb(0xF4, 0xF6, 0xF9));
+                    let ink = readable(chrome(rgb(0x1F, 0x6F, 0xC8)), &[page], 450);
+                    let mapped = CHROME_MAP;
+                    CHROME_MAP = false;
+                    text_centered(hdc, f.small, 11, ink, (l + r) / 2, y + s * 2 / 5, b"</>");
+                    CHROME_MAP = mapped;
+                }
                 Glyph::Pdf => {
                     fill(
                         hdc,
@@ -2298,6 +2439,7 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
         }
         Glyph::Chevron => {
             let c = pal().text2;
+
             let t = (s / 8).max(1);
             line(hdc, b, x + s / 3, y + s / 6, x + s * 2 / 3, y + s / 2, t, c);
             line(
@@ -2436,7 +2578,6 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
         }
     }
 }
-
 
 // ---------- Accessibilité (réglages partagés) ----------
 
@@ -2816,10 +2957,207 @@ pub fn chrome(c: u32) -> u32 {
         t.hyperlink
     } else if lum < 0x60 {
         // Garde un léger relief entre surfaces, survols et bordures.
-        mix(t.background, t.text, (lum as i32 - 0x18).clamp(0, 0x48), 0x48 * 6)
+        mix(
+            t.background,
+            t.text,
+            (lum as i32 - 0x18).clamp(0, 0x48),
+            0x48 * 6,
+        )
     } else if lum < 0xB8 {
         t.disabled
     } else {
         t.text
     }
+}
+
+// ----- Contrôle du contraste du texte réellement dessiné -----
+//
+// Avec WINLUX_CONTRAST_AUDIT=fichier, chaque aplat (fill, round_rect,
+// ellipse) est noté ; chaque texte est comparé au dernier aplat peint sous
+// son centre dans le même contexte de dessin. Les textes sous 4,5:1 (3:1
+// pour le gros texte) sont ajoutés au fichier : test-pe-text-contrast.py
+// fait défiler les applications dans chaque thème et lit ce rapport.
+
+pub static mut AUDIT_ON: bool = false;
+const AUDIT_FILLS: usize = 4096;
+/// Couleur « inconnue » : image ou capture sous le texte, rien à mesurer.
+pub const AUDIT_IMAGE: u32 = 0xFF00_0000;
+static mut FILLS: [(Handle, Rect, u32); AUDIT_FILLS] = [(
+    core::ptr::null_mut(),
+    Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    },
+    0,
+); AUDIT_FILLS];
+static mut FILL_NEXT: usize = 0;
+static mut FILL_LEN: usize = 0;
+static mut AUDIT_SEEN: [u32; 512] = [0; 512];
+static mut AUDIT_SEEN_LEN: usize = 0;
+static mut AUDIT_PATH: [u8; 260] = [0; 260];
+
+/// Thème et accent imposés (contrôle du contraste, captures) :
+/// WINLUX_THEME=light|dark, WINLUX_ACCENT=RRGGBB.
+pub unsafe fn forced_look() {
+    let mut v = [0u8; 8];
+    match GetEnvironmentVariableA(c"WINLUX_THEME".as_ptr(), v.as_mut_ptr().cast(), 8) {
+        5 if v[..5] == *b"light" => DARK = false,
+        4 if v[..4] == *b"dark" => DARK = true,
+        _ => {}
+    }
+    if GetEnvironmentVariableA(c"WINLUX_ACCENT".as_ptr(), v.as_mut_ptr().cast(), 8) == 6 {
+        let mut value = 0u32;
+        for &c in &v[..6] {
+            let digit = match c {
+                b'0'..=b'9' => c - b'0',
+                b'a'..=b'f' => c - b'a' + 10,
+                b'A'..=b'F' => c - b'A' + 10,
+                _ => return,
+            };
+            value = value << 4 | digit as u32;
+        }
+        set_accent(rgb(value >> 16, (value >> 8) & 0xFF, value & 0xFF));
+    }
+}
+
+/// Active le contrôle si WINLUX_CONTRAST_AUDIT désigne un fichier.
+pub unsafe fn audit_init() {
+    let n = GetEnvironmentVariableA(
+        c"WINLUX_CONTRAST_AUDIT".as_ptr(),
+        AUDIT_PATH.as_mut_ptr().cast(),
+        259,
+    ) as usize;
+    AUDIT_ON = n > 0 && n < 259;
+    // Seuil ×100 modifiable (vérification de l'outil lui-même : 2100 note tout).
+    let mut v = [0u8; 8];
+    let len = GetEnvironmentVariableA(
+        c"WINLUX_CONTRAST_MINIMUM".as_ptr(),
+        v.as_mut_ptr().cast(),
+        8,
+    ) as usize;
+    if len > 0 && len < 6 && v[..len].iter().all(u8::is_ascii_digit) {
+        AUDIT_MINIMUM = v[..len].iter().fold(0, |n, &c| n * 10 + (c - b'0') as u32);
+    }
+}
+static mut AUDIT_MINIMUM: u32 = 450;
+
+unsafe fn note_fill(hdc: Handle, l: i32, t: i32, r: i32, b: i32, color: u32) {
+    if r - l < 2 || b - t < 2 {
+        return; // traits et bordures : pas un fond de texte
+    }
+    FILLS[FILL_NEXT] = (
+        hdc,
+        Rect {
+            left: l,
+            top: t,
+            right: r,
+            bottom: b,
+        },
+        color,
+    );
+    FILL_NEXT = (FILL_NEXT + 1) % AUDIT_FILLS;
+    FILL_LEN = (FILL_LEN + 1).min(AUDIT_FILLS);
+}
+
+/// Image dessinée par l'application : le texte posé dessus n'est pas mesuré.
+pub unsafe fn audit_image(hdc: Handle, l: i32, t: i32, r: i32, b: i32) {
+    if AUDIT_ON {
+        note_fill(hdc, l, t, r, b, AUDIT_IMAGE);
+    }
+}
+
+unsafe fn fill_under(hdc: Handle, x: i32, y: i32) -> Option<u32> {
+    for i in 0..FILL_LEN {
+        let (h, r, c) = FILLS[(FILL_NEXT + AUDIT_FILLS - 1 - i) % AUDIT_FILLS];
+        if h == hdc && x >= r.left && x < r.right && y >= r.top && y < r.bottom {
+            return (c != AUDIT_IMAGE).then_some(c & 0x00FF_FFFF);
+        }
+    }
+    None
+}
+
+unsafe fn audit_text(hdc: Handle, color: u32, x: i32, y: i32, s: &[u8]) {
+    if s.iter().all(|&c| c <= b' ') {
+        return;
+    }
+    let mut size = [0i32; 2];
+    GetTextExtentPoint32A(hdc, s.as_ptr().cast(), s.len() as i32, &mut size);
+    let Some(bg) = fill_under(hdc, x + size[0].max(2) / 2, y + size[1].max(2) / 2) else {
+        return;
+    };
+    let ratio = contrast(color & 0x00FF_FFFF, bg);
+    // Gros texte (≥ 24 px de haut environ) : 3:1 suffit.
+    let minimum = if size[1] >= 30 && AUDIT_MINIMUM == 450 {
+        300
+    } else {
+        AUDIT_MINIMUM
+    };
+    if ratio >= minimum {
+        return;
+    }
+    let mut hash = 2166136261u32 ^ color ^ bg.rotate_left(7);
+    for &c in s {
+        hash = (hash ^ c as u32).wrapping_mul(16777619);
+    }
+    if AUDIT_SEEN[..AUDIT_SEEN_LEN].contains(&hash) || AUDIT_SEEN_LEN >= AUDIT_SEEN.len() {
+        return;
+    }
+    AUDIT_SEEN[AUDIT_SEEN_LEN] = hash;
+    AUDIT_SEEN_LEN += 1;
+    let mut line = [0u8; 200];
+    let mut n = 0;
+    let mut put = |bytes: &[u8]| {
+        for &c in bytes {
+            if n < line.len() - 1 {
+                line[n] = c;
+                n += 1;
+            }
+        }
+    };
+    let digits = [
+        b'0' + (ratio / 100 % 10) as u8,
+        b'.',
+        b'0' + (ratio / 10 % 10) as u8,
+        b'0' + (ratio % 10) as u8,
+    ];
+    if ratio >= 1000 {
+        put(b"1");
+    }
+    put(&digits);
+    put(b"\t");
+    for c in [color, bg] {
+        let hex = b"0123456789abcdef";
+        let (r, g, b) = (c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+        put(b"#");
+        for v in [r, g, b] {
+            put(&[hex[(v >> 4) as usize], hex[(v & 15) as usize]]);
+        }
+        put(b"\t");
+    }
+    put(&s[..s.len().min(80)]);
+    put(b"\n");
+    let h = CreateFileA(
+        AUDIT_PATH.as_ptr().cast(),
+        0x4000_0000,
+        3,
+        core::ptr::null_mut(),
+        4, // OPEN_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        return;
+    }
+    SetFilePointer(h, 0, core::ptr::null_mut(), 2);
+    let mut written = 0u32;
+    WriteFile(
+        h,
+        line.as_ptr(),
+        n as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(h);
 }

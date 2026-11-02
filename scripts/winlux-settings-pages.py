@@ -175,6 +175,7 @@ _TR = {
     'Refroidissement maximal': ('Maximum cooling', 'Refrigeración máxima', 'Maximale Kühlung'),
     'Se connecter': ('Connect', 'Conectar', 'Verbinden'),
     'Secours et restauration': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Réinitialiser ce PC et clé de secours': ('Reset this PC and recovery drive', 'Restablecer este PC y unidad de recuperación', 'Diesen PC zurücksetzen und Wiederherstellungslaufwerk'),
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
@@ -404,6 +405,24 @@ _TR = {
     'Images du compte': ('Account pictures', 'Imágenes de la cuenta', 'Bilder des Kontos'),
     'Ouvrir les widgets': ('Open widgets', 'Abrir widgets', 'Widgets öffnen'),
     'Rétablir les widgets par défaut': ('Restore default widgets', 'Restablecer los widgets predeterminados', 'Standard-Widgets wiederherstellen'),
+    # Assistant Claude (#286)
+    'Assistant Claude dans la barre des tâches': ('Claude assistant on the taskbar', 'Asistente Claude en la barra de tareas', 'Claude-Assistent in der Taskleiste'),
+    'Un bouton Claude dans la barre des tâches, et Windows+C, pour poser une question sur Winlux : pourquoi un programme .exe ne s’ouvre pas, où est un fichier, comment changer un réglage.': ('A Claude button on the taskbar, and Windows+C, to ask a question about Winlux: why an .exe program won’t open, where a file is, how to change a setting.', 'Un botón Claude en la barra de tareas, y Windows+C, para preguntar sobre Winlux: por qué no se abre un programa .exe, dónde está un archivo, cómo cambiar un ajuste.', 'Eine Claude-Schaltfläche in der Taskleiste und Windows+C, um Fragen zu Winlux zu stellen: warum ein .exe-Programm nicht startet, wo eine Datei liegt, wie man eine Einstellung ändert.'),
+    'À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…).': ('When you turn it on, Claude Code is downloaded if needed (about 300 MB), then you sign in to your Claude account (Google, email…).', 'Al activarlo, se descarga Claude Code si falta (unos 300 MB) y luego inicia sesión en su cuenta de Claude (Google, correo…).', 'Beim Aktivieren wird Claude Code bei Bedarf heruntergeladen (etwa 300 MB), dann melden Sie sich bei Ihrem Claude-Konto an (Google, E-Mail…).'),
+    'Compte Claude': ('Claude account', 'Cuenta de Claude', 'Claude-Konto'),
+    'Vérification de la connexion…': ('Checking the sign-in…', 'Comprobando el inicio de sesión…', 'Anmeldung wird geprüft…'),
+    'Connecté': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
+    'Connecté : {account}': ('Signed in: {account}', 'Sesión iniciada: {account}', 'Angemeldet: {account}'),
+    'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
+    'Claude Code n’est pas installé': ('Claude Code is not installed', 'Claude Code no está instalado', 'Claude Code ist nicht installiert'),
+    'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
+    'Se connecter': ('Sign in', 'Iniciar sesión', 'Anmelden'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
+    'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
+    'Seuls votre question et la conversation en cours partent vers Claude (Anthropic). Rien n’est gardé sur ce PC une fois la fenêtre fermée.': ('Only your question and the current conversation go to Claude (Anthropic). Nothing is kept on this PC once the window is closed.', 'Solo su pregunta y la conversación actual se envían a Claude (Anthropic). No se guarda nada en este equipo al cerrar la ventana.', 'Nur Ihre Frage und das aktuelle Gespräch gehen an Claude (Anthropic). Nach dem Schließen des Fensters bleibt nichts auf diesem PC gespeichert.'),
+    'Claude ne lit rien et ne change rien tout seul : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi, et chaque action attend votre clic.': ('Claude reads and changes nothing on its own: each read (a program’s log, a file search) shows you the exact text before it is sent, and each action waits for your click.', 'Claude no lee ni cambia nada por sí solo: cada lectura (registro de un programa, búsqueda de archivos) le muestra el texto exacto antes del envío, y cada acción espera su clic.', 'Claude liest und ändert nichts von selbst: Jeder Lesezugriff (Protokoll eines Programms, Dateisuche) zeigt Ihnen vor dem Senden den genauen Text, und jede Aktion wartet auf Ihren Klick.'),
+    'La connexion à votre compte est gardée par Claude Code dans votre dossier personnel, lisible par vous seul.': ('The sign-in to your account is kept by Claude Code in your home folder, readable only by you.', 'El inicio de sesión de su cuenta lo guarda Claude Code en su carpeta personal, legible solo por usted.', 'Die Anmeldung bei Ihrem Konto speichert Claude Code in Ihrem persönlichen Ordner, nur für Sie lesbar.'),
+    'Désactivé, l’assistant n’apparaît nulle part et rien ne tourne.': ('When off, the assistant appears nowhere and nothing runs.', 'Desactivado, el asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint der Assistent nirgends und nichts läuft.'),
 }
 
 
@@ -425,6 +444,8 @@ PAGE_PROGRAMS, PAGE_ACCESSIBILITY, PAGE_EFFECTS, PAGE_LOCALE, PAGE_FILES = 10, 1
 PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 17, 20, 21, 22
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
 PAGE_GAMES = 29
+PAGE_ASSISTANT = 30
+PAGE_RECOVERY = 31
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -445,6 +466,67 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
 ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+
+
+# ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
+
+def _rgb(color):
+    color = color.lstrip("#")
+    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def luminance(color):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb(color)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast(first, second):
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def mix(first, second, amount):
+    """Mélange first → second (amount de 0 à 1)."""
+    return "#%02x%02x%02x" % tuple(round(a + (b - a) * amount) for a, b in zip(_rgb(first), _rgb(second)))
+
+
+def text_on(background):
+    """Texte noir ou blanc, celui qui se lit le mieux sur ce fond."""
+    return "#000000" if contrast("#000000", background) >= contrast("#ffffff", background) else "#ffffff"
+
+
+def readable(color, background, minimum=4.5):
+    """color assombrie ou éclaircie juste assez pour atteindre minimum:1 sur background."""
+    target = text_on(background)
+    step = 0
+    while contrast(color, background) < minimum and step < 20:
+        step += 1
+        color = mix(color, target, 0.1)
+    return color if contrast(color, background) >= minimum else target
+
+
+def settings_palette(dark, accent="#8178b7"):
+    """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
+    if dark:
+        p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
+             "card_hover": "#2c3344", "entry": "#171b25", "border": "#48536b", "button": "#30384b",
+             "button_hover": "#414b64", "disabled_fg": "#858da0", "disabled_bg": "#252a36", "dim": "#adb6c9"}
+    else:
+        p = {"bg": "#f3f5fa", "fg": "#1f2330", "side": "#e9ecf4", "hover": "#dce1ec", "card": "#ffffff",
+             "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
+             "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
+    p["accent"] = accent
+    # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
+    p["selected"] = mix(p["side"], accent, 0.45)
+    p["selected_fg"] = text_on(p["selected"])
+    p["selected_dim"] = p["selected_fg"]
+    for key in ("dim",):
+        for surface in ("bg", "side", "card", "hover"):
+            p[key] = readable(p[key], p[surface])
+    return p
 EXE_SCALES = (("auto", "Automatique (comme l’écran)"), ("1", "100 %"), ("1.25", "125 %"), ("1.5", "150 %"), ("2", "200 %"))
 # Pavé tactile : (clé touchpad_*, titre, explication), comme la page PE.
 TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
@@ -764,6 +846,11 @@ def page_available(page, status=None):
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
     if page == PAGE_GAMES:
         return games_module() is not None
+    if page == PAGE_ASSISTANT:
+        return assistant_module() is not None
+    if page == PAGE_RECOVERY:
+        module = reset_page()
+        return module is not None and module.available()
     return True
 
 
@@ -783,6 +870,46 @@ def games_module():
                 module = importlib.util.module_from_spec(spec)
                 loader.exec_module(module)
                 module.APP_PATH = candidate
+                return module
+            except Exception:
+                return None
+    return None
+
+
+_ASSISTANT = []
+
+
+def assistant_module():
+    """winlux-assistant (installé à côté, ou scripts/ du dépôt), chargé une fois."""
+    if _ASSISTANT: return _ASSISTANT[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-assistant.py"), here.with_name("winlux-assistant")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_assistant", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_assistant", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _ASSISTANT.append(module)
+    return module
+def reset_page():
+    """Page Récupération (winlux-reset-page, installée à côté), None si absente."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-reset-page.py"), here.with_name("winlux-reset-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_reset_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_reset_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
                 return module
             except Exception:
                 return None
@@ -816,7 +943,8 @@ class ExtraPages:
                    PAGE_DESKTOP: "page_desktop", PAGE_BLUETOOTH: "page_bluetooth", PAGE_APPS: "page_apps",
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
-                   PAGE_GAMES: "page_games"}
+                   PAGE_GAMES: "page_games",
+                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1001,7 +1129,9 @@ class ExtraPages:
             swatch = Gtk.Button(label="✓" if prefs.get("accent", "").lower() == color else " ")
             swatch.set_size_request(44, 36)
             provider = Gtk.CssProvider()
-            provider.load_from_data(f"button {{ background: {color}; color: #ffffff; border-color: {color}; }}".encode())
+            # Coche noire ou blanche selon la teinte (blanc sur turquoise : 2,6:1).
+            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; "
+                                    f"border-color: {color}; }}".encode())
             swatch.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
             swatch.connect("clicked", lambda *_, c=color: self.tool(["winlux-personalize", "accent", c]))
             palette.pack_start(swatch, False, False, 0)
@@ -1594,6 +1724,15 @@ class ExtraPages:
                  _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
+        if page_available(PAGE_RECOVERY):
+            self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
+
+    def page_recovery(self):
+        module = reset_page()
+        if module is not None:
+            self.recovery_panel = module.RecoveryPanel(self)
 
     # ── Signaler un problème ──
 
@@ -1692,6 +1831,69 @@ class ExtraPages:
             allowed = info.get("allowed", "").split(",")
             for name in accounts:
                 self.switch(box, name, name in allowed, lambda on, n=name: self.execute("remote-allow" if on else "remote-deny", n))
+
+    # ── Assistant Claude (#286) : désactivé par défaut ──
+
+    def page_assistant(self):
+        import sys, threading
+        module = assistant_module()
+        enabled = module.is_enabled()
+        module.protect_credentials()
+        box = self.card()
+        self.switch(box, _t("Assistant Claude dans la barre des tâches"), enabled, self.assistant_toggle,
+                    _t("Un bouton Claude dans la barre des tâches, et Windows+C, pour poser une question sur Winlux : pourquoi un programme .exe ne s’ouvre pas, où est un fichier, comment changer un réglage."))
+        if not enabled:
+            self.hint(_t("À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…)."), box)
+        else:
+            account = Gtk.Label(label=_t("Vérification de la connexion…"), xalign=0)
+            account.get_style_context().add_class("subtitle")
+            self.row(box, _t("Compte Claude"), account)
+            buttons = self.actions(box, [(_t("Ouvrir l’assistant"), lambda: self.spawn([sys.executable, module.__file__])),
+                                         (_t("Se déconnecter"), lambda: self.tool([sys.executable, module.__file__, "--deconnecter"]))])
+
+            def checked(status):
+                if not status.get("installed"): text = _t("Claude Code n’est pas installé")
+                elif status.get("loggedIn"):
+                    who = module.account_name(status)
+                    text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté")
+                else: text = _t("Non connecté")
+                if account.get_toplevel() is not None: account.set_text(text)
+                if not status.get("loggedIn"):
+                    for child in buttons.get_children(): child.destroy()
+                    login = Gtk.Button(label=_t("Se connecter"))
+                    login.connect("clicked", lambda *_: self.assistant_toggle(True))
+                    buttons.pack_start(login, False, False, 0)
+                    login.show()
+                return False
+            threading.Thread(target=lambda: GLib.idle_add(checked, module.auth_status()), daemon=True).start()
+        self.section(_t("Ce qui est envoyé"))
+        box = self.card()
+        for text in ("Seuls votre question et la conversation en cours partent vers Claude (Anthropic). Rien n’est gardé sur ce PC une fois la fenêtre fermée.",
+                     "Claude ne lit rien et ne change rien tout seul : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi, et chaque action attend votre clic.",
+                     "La connexion à votre compte est gardée par Claude Code dans votre dossier personnel, lisible par vous seul.",
+                     "Désactivé, l’assistant n’apparaît nulle part et rien ne tourne."):
+            self.hint(_t(text), box)
+
+    def assistant_toggle(self, on):
+        """Activer ouvre la fenêtre de configuration (téléchargement, connexion) ;
+        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat."""
+        import sys
+        module = assistant_module()
+        if not on:
+            self.tool([sys.executable, module.__file__, "--desactiver"])
+            return
+        if getattr(self, "assistant_setup", None) is not None and self.assistant_setup.poll() is None: return
+        try:
+            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer"], start_new_session=True)
+        except OSError as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+            return
+
+        def wait():
+            if self.assistant_setup.poll() is None: return True
+            self.extra_refresh()
+            return False
+        GLib.timeout_add(500, wait)
 
     # ── Partage et transfert ──
 
