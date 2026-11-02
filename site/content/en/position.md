@@ -52,6 +52,8 @@ The name Winlux does not take the word Windows and does not look or sound like i
 
 **French Civil Code, Article 1240**: whoever causes harm to another through their fault must repair it; this is the basis of unfair competition and free-riding claims. To never ride on Microsoft's efforts: our own identity (Prisme logo, wallpapers, sounds and icons made by the project), no sales, no comparison with Windows in our communication, and the non-affiliation notice on every page of the website and in the system's About screen.
 
+**Browser choice.** In the spirit of the European rules on browser choice, Winlux lets users pick their own browser among several, in Settings > Browsers, and change the default one at any time. Those rules target large systems: **Regulation (EU) 2022/1925 on digital markets (Digital Markets Act), Article 6(3)**, requires gatekeepers to let users easily uninstall applications and change default settings, with a choice screen; before it, the European Commission made binding Microsoft's commitments to offer a browser choice screen (**case COMP/39.530, decision of 16 December 2009**). Winlux is not a gatekeeper and is not bound by these rules; it follows the principle of its own accord. Browsers appear under their real name, that of their publisher.
+
 ## 5. Commitments anyone can check
 
 Everything can be checked in the [public repository](https://github.com/Univers4craft/winlux):

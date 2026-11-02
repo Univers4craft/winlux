@@ -52,6 +52,8 @@ Le nom Winlux ne reprend pas le mot Windows et ne lui ressemble ni à l'œil ni 
 
 **Code civil, article 1240** : celui qui cause à autrui un dommage par sa faute doit le réparer ; c'est le fondement de la concurrence déloyale et du parasitisme. Pour ne jamais profiter des efforts de Microsoft : identité propre (logo Prisme, fonds d'écran, sons et icônes créés par le projet), aucune vente, aucune comparaison avec Windows dans notre communication, et la mention de non-affiliation sur chaque page du site et dans l'écran « À propos » du système.
 
+**Choix du navigateur.** Dans l'esprit des règles européennes sur le choix du navigateur, Winlux laisse l'utilisateur choisir lui-même son navigateur parmi plusieurs, dans Paramètres > Navigateurs, et changer à tout moment celui qui s'ouvre par défaut. Ces règles visent les grands systèmes : le **règlement (UE) 2022/1925 sur les marchés numériques, article 6, paragraphe 3**, impose aux contrôleurs d'accès de permettre de désinstaller facilement les applications et de changer les réglages par défaut, avec un écran de choix ; avant lui, la Commission européenne avait rendu obligatoires les engagements de Microsoft de proposer un écran de choix du navigateur (**affaire COMP/39.530, décision du 16 décembre 2009**). Winlux n'est pas un contrôleur d'accès et n'y est pas tenu ; il suit ce principe de lui-même. Les navigateurs y apparaissent sous leur vrai nom, celui de leur éditeur.
+
 ## 5. Nos engagements vérifiables
 
 Tout se vérifie dans le [dépôt public](https://github.com/Univers4craft/winlux) :

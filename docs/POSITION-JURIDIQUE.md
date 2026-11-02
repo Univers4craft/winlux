@@ -156,6 +156,8 @@ Pour ne jamais nous placer dans le sillage de Microsoft :
 - chaque page du site et l'écran « À propos » du système affichent que le
   projet n'est ni affilié à Microsoft, ni approuvé par elle.
 
+**Choix du navigateur.** Dans l'esprit des règles européennes sur le choix du navigateur, Winlux laisse l'utilisateur choisir lui-même son navigateur parmi plusieurs, dans Paramètres > Navigateurs, et changer à tout moment celui qui s'ouvre par défaut. Ces règles visent les grands systèmes : le **règlement (UE) 2022/1925 sur les marchés numériques, article 6, paragraphe 3**, impose aux contrôleurs d'accès de permettre de désinstaller facilement les applications et de changer les réglages par défaut, avec un écran de choix ; avant lui, la Commission européenne avait rendu obligatoires les engagements de Microsoft de proposer un écran de choix du navigateur (**affaire COMP/39.530, décision du 16 décembre 2009**). Winlux n'est pas un contrôleur d'accès et n'y est pas tenu ; il suit ce principe de lui-même. Les navigateurs y apparaissent sous leur vrai nom, celui de leur éditeur.
+
 ## 5. Nos engagements vérifiables
 
 Chacun peut les contrôler dans le dépôt public
@@ -220,6 +222,9 @@ et il n'engage que le projet. Il doit être relu par un conseil en propriété
 industrielle ou un avocat avant d'être opposé à quiconque.
 
 ## Références
+
+- Règlement (UE) 2022/1925 du 14 septembre 2022 sur les marchés contestables et équitables dans le secteur numérique (règlement sur les marchés numériques), article 6, paragraphe 3.
+- Commission européenne, affaire COMP/39.530, Microsoft (vente liée), décision d'engagements du 16 décembre 2009 ; amende de 561 millions d'euros le 6 mars 2013 pour non-respect de l'écran de choix.
 
 Textes vérifiés le 2 novembre 2026 :
 

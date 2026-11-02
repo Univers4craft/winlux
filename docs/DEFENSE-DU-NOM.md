@@ -262,6 +262,31 @@ Windows 11.
 
 ---
 
+### 2.4 Choix du navigateur
+
+Argument apporté par damien, à présenter **dans l'esprit** des règles
+européennes, jamais comme une obligation de Winlux :
+
+- Le **règlement (UE) 2022/1925** (marchés numériques, « DMA »),
+  **article 6, paragraphe 3**, impose aux **contrôleurs d'accès** désignés
+  par la Commission de permettre de désinstaller facilement les applications
+  et de changer les réglages par défaut, avec un écran de choix du
+  navigateur. Windows est concerné ; Winlux ne l'est pas.
+- Antécédent : **affaire COMP/39.530, Microsoft (vente liée)**, engagements
+  rendus obligatoires le **16 décembre 2009** (écran de choix du navigateur
+  pendant cinq ans) ; amende de **561 millions d'euros le 6 mars 2013**
+  pour ne pas l'avoir affiché entre mai 2011 et juillet 2012.
+- Ce que cela démontre : en laissant l'utilisateur choisir son navigateur
+  sous le vrai nom de chaque éditeur, Winlux applique de lui-même ce que
+  l'Europe exige des grands systèmes, et ne se sert pas du nom d'un tiers
+  pour se mettre en avant (usage référentiel, règlement 2017/1001,
+  article 14, paragraphe 1, point c).
+- Formule publique : « Dans l'esprit des règles européennes sur le choix du
+  navigateur, Winlux laisse l'utilisateur choisir lui-même son navigateur ».
+  **Ne pas écrire** « l'Union européenne nous demande », ni « aucun
+  navigateur n'est préinstallé ni favorisé » tant que la section 3, lignes 8
+  et 9, n'est pas fusionnée et publiée.
+
 ## 3. Les endroits à corriger
 
 Relevé fait dans le dépôt le 2 novembre 2026.
@@ -291,8 +316,9 @@ Relevé fait dans le dépôt le 2 novembre 2026.
 | 4 | Captures du site, du wiki et du dossier partagé | Fait le 2 novembre 2026 : les huit images de `site/static/img` ne montrent aucun élément Microsoft ; le wiki n'a pas d'image | Coordinateur (fait) |
 | 5 | Wiki, pages techniques (`Reseau-et-disques`, `Registre-Windows`, `Bureau-et-applications`, `Architecture`, `Parametres`…) | Relire avec la liste 2.1 ; « Registre Windows » reste un nom descriptif acceptable | Fil de la documentation, ou le coordinateur |
 | 6 | Accent de couleur et bouton Démarrer par défaut | Vérifier que le logo Prisme et l'accent violet sont bien les réglages par défaut dans les deux bureaux | Fil de l'interface |
-| 7 | Épingle « Microsoft Edge » avec son logo dans le menu Démarrer d'un compte neuf | La remplacer par une entrée générique « Navigateur » à icône neutre ; vérifier qu'aucune épingle par défaut ne porte un nom ou un logo Microsoft. Tant que ce n'est pas fusionné, la page publique ne parle que du code et des ressources du projet, pas de l'image | Fil des comptes |
-| 8 | Paquet Edge intégré à l'ISO (`WINLUX_EDGE_DEB`, `build/browser-packages/edge.deb`) | Vérifier dans la licence d'Edge pour Linux que la redistribution dans une image tierce est permise ; sinon, ne proposer Edge qu'en téléchargement depuis Microsoft après installation | Fil des versions, avec un avis juridique si la licence est ambiguë |
+| 7 | Épingle « Microsoft Edge » avec son logo dans le menu Démarrer d'un compte neuf, et dessin imitant le logo Edge dans le shell PE | Remplacés par une entrée générique « Navigateur » à icône neutre, vérifiée par `scripts/test-no-microsoft-branding.py` (#317, à fusionner). Tant que ce n'est pas fusionné, la page publique ne parle que du code et des ressources du projet | Fil des comptes |
+| 8 | Paquets Edge et Chrome intégrés aux ISO jusqu'à v0.2.14 | Voir section 4, point 4. Corrigé pour les versions suivantes : aucun navigateur dans l'image. Retrait des anciennes ISO de GitHub : décision de damien | Fil des versions |
+| 9 | Navigateur par défaut quand l'utilisateur n'en a choisi aucun (`winlux-browsers.sh` retombe sur `edge`) | Ne retomber sur aucun navigateur : ouvrir l'écran de choix ; présenter la liste dans un ordre neutre (alphabétique ou aléatoire). Ensuite seulement, la page publique pourra dire « aucun navigateur n'est préinstallé ni favorisé » | Fil des versions ou fil des comptes |
 
 ---
 
@@ -317,6 +343,17 @@ Relevé fait dans le dépôt le 2 novembre 2026.
    procès et arrive plus tôt, mais elle peut aussi déclencher une demande
    de cesser l'usage. Ne pas déposer laisse en revanche le nom sans
    protection face aux tiers.
+
+4. **Paquets de navigateurs propriétaires dans les ISO publiées (point
+   faible identifié et traité le 2 novembre 2026).** Les ISO publiées
+   jusqu'à v0.2.14 contiennent les paquets officiels d'Edge et de Chrome,
+   pour une installation hors ligne. Selon le fil des versions, la licence
+   d'Edge interdit cette redistribution (section 2.8 f de ses conditions ;
+   texte à relire avant toute réponse écrite). Correction : plus aucun
+   navigateur dans l'image à partir de la version suivante ; le retrait des
+   anciennes ISO de GitHub est soumis à damien. À dire tel quel si la
+   question est posée : erreur repérée par nous-mêmes, corrigée dès qu'elle
+   a été vue, sans profit tiré. Rien d'autre de propriétaire n'est embarqué.
 
 ---
 

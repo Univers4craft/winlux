@@ -52,6 +52,8 @@ Der Name Winlux übernimmt das Wort Windows nicht und ähnelt ihm weder im Schri
 
 **Französisches Zivilgesetzbuch, Artikel 1240**: Wer einem anderen schuldhaft einen Schaden zufügt, muss ihn ersetzen; darauf beruhen unlauterer Wettbewerb und Schmarotzertum. Damit wir nie von Microsofts Leistungen profitieren: eigene Identität (Prisme-Logo, Hintergründe, Töne und Symbole des Projekts), kein Verkauf, kein Vergleich mit Windows in unserer Kommunikation und der Hinweis auf fehlende Verbindung auf jeder Seite der Website und im Info-Fenster des Systems.
 
+**Wahl des Browsers.** Im Sinne der europäischen Regeln zur Browserwahl lässt Winlux die Nutzer ihren Browser selbst unter mehreren wählen, unter Einstellungen > Browser, und den Standardbrowser jederzeit ändern. Diese Regeln zielen auf große Systeme: Die **Verordnung (EU) 2022/1925 über digitale Märkte (Digital Markets Act), Artikel 6 Absatz 3**, verpflichtet Torwächter, die einfache Deinstallation von Anwendungen und die Änderung von Standardeinstellungen zu ermöglichen, mit einem Auswahlbildschirm; zuvor hatte die Europäische Kommission die Zusagen von Microsoft für einen Browser-Auswahlbildschirm für verbindlich erklärt (**Sache COMP/39.530, Beschluss vom 16. Dezember 2009**). Winlux ist kein Torwächter und daran nicht gebunden; es folgt diesem Grundsatz aus eigenem Antrieb. Die Browser erscheinen unter ihrem echten Namen, dem ihres Herstellers.
+
 ## 5. Überprüfbare Verpflichtungen
 
 Alles lässt sich im [öffentlichen Repository](https://github.com/Univers4craft/winlux) prüfen:
