@@ -1690,7 +1690,9 @@ def apt_candidate(name):
     if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]+", name) or not shutil.which("apt-cache"):
         return False
     try:
-        out = subprocess.run(["apt-cache", "policy", name], capture_output=True, text=True, timeout=30).stdout
+        # LC_ALL=C : sous la session en français, apt écrit « Candidat : ».
+        out = subprocess.run(["apt-cache", "policy", name], capture_output=True, text=True, timeout=30,
+                             env={**os.environ, "LC_ALL": "C"}).stdout
     except (OSError, subprocess.SubprocessError):
         return False
     return any(line.strip().startswith("Candidate:") and "(none)" not in line for line in out.splitlines())

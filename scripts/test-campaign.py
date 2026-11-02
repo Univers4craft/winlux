@@ -305,4 +305,11 @@ ok('chmod 644 "$resolver"' in (SCRIPTS / "winlux-dhcp-hook.sh").read_text(),
 ok("Éditeur vérifié : Winlux" in (SCRIPTS / "winlux-uac.py").read_text(),
    "UAC : un outil de Winlux (Store, Paramètres) affiche un éditeur vérifié, pas « inconnu »")
 
+ok('"LC_ALL": "C"' in (SCRIPTS / "winlux-store.py").read_text(),
+   "Boutique : version candidate APT lue en anglais (session en français : « Candidat : »)")
+for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
+    text = (SCRIPTS / script).read_text()
+    ok(".local/share/themes/$gtk_theme" in text and "winlux-personalize theme" in text,
+       f"{script} : thème du compte reconnu, thème absent remplacé par le thème Winlux")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

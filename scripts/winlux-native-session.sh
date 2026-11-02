@@ -102,12 +102,17 @@ fi
 # sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
 # absent est remplacé par Adwaita.
 gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
-# Le sombre vient de gtk-application-prefer-dark-theme (settings.ini) :
-# « Adwaita-dark », écrit par d'anciennes versions, n'existe pas en GTK 3.
+# Thème absent (défaut XFCE Greybird, « Adwaita-dark » d'anciennes versions) :
+# le thème Winlux du compte est créé d'après Personnalisation (clair ou
+# sombre), sinon Adwaita. Une installation neuve restait claire en mode sombre.
 case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
     # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
     if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
-        /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        mode=dark
+        if grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then mode=light; fi
+        if ! { test -x /usr/bin/winlux-personalize && WINLUX_PERSONALIZE_NO_SYSTEM=1 /usr/bin/winlux-personalize theme "$mode" >/dev/null 2>&1; }; then
+            /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        fi
     fi ;;
 esac
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
