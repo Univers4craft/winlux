@@ -56,7 +56,10 @@ def _t(text):
 
 
 # Noms par défaut (rc.xml, openbox « desktop N ») : affichés « Bureau N » dans la langue du bureau.
-GENERIC_NAME = re.compile(r"\s*((desktop|bureau)\s*\d*|bureau winlux)?\s*", re.I)
+# Noms automatiques (openbox nomme les nouveaux bureaux dans la langue du
+# système, « Espace de travail 2 » en français) : affichés « Bureau N ».
+GENERIC_NAME = re.compile(r"\s*((desktop|bureau|workspace|espace de travail|escritorio|[áa]rea de trabajo"
+                          r"|arbeitsfl[äa]che|arbeitsbereich|schreibtisch)\s*\d*|bureau winlux)?\s*", re.I)
 
 
 def _run(args, timeout=3):
@@ -143,7 +146,11 @@ def set_desktop_names(names):
 
 def new_desktop():
     count = len(desktops()) or 1
+    names = (desktop_names() + [""] * count)[:count]
     _run(["wmctrl", "-n", str(count + 1)])
+    # Sans nom, openbox appelle le bureau « Espace de travail N » (sa traduction),
+    # ce qu'affichent sa bulle de changement de bureau et les autres outils.
+    set_desktop_names(names + [_t("Bureau {n}").format(n=count + 1)])
     _run(["wmctrl", "-s", str(count)])
     return 0
 

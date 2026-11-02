@@ -41,6 +41,9 @@ assert view["removal_moves"](2, 0, [("a", 0), ("b", 1)]) == [("a", 0), ("b", 0)]
 name = view["display_name"]
 assert name(1, "desktop 2") == view["_t"]("Bureau {n}").format(n=2) and name(0, "Bureau Winlux").endswith("1")
 assert name(2, "Travail") == "Travail"
+# openbox nomme les nouveaux bureaux dans la langue du système (VM : « Espace de travail 2 »).
+for automatic in ("Espace de travail 2", "Workspace 2", "Escritorio 2", "Arbeitsfläche 2"):
+    assert name(1, automatic) == view["_t"]("Bureau {n}").format(n=2), automatic
 for module in (snap, view):
     for key, row in module["_TR"].items():
         assert len(row) == 3 and all(row), key

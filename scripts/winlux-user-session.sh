@@ -131,7 +131,8 @@ gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || 
 # Le sombre vient de gtk-application-prefer-dark-theme (settings.ini) :
 # « Adwaita-dark », écrit par d'anciennes versions, n'existe pas en GTK 3.
 case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
-    if test -z "$gtk_theme" || ! test -d "/usr/share/themes/$gtk_theme/gtk-3.0"; then
+    # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
+    if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
         /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
     fi ;;
 esac

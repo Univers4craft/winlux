@@ -1622,7 +1622,11 @@ class ExtraPages:
     def set_contrast(self, index):
         a11y_write(contrast=index)
         theme = CONTRAST_GTK[index] if 0 <= index < len(CONTRAST_GTK) else None
-        # Sombre ou clair : gtk-application-prefer-dark-theme (settings.ini) ;
+        mode = appearance().get("theme", "dark")
+        if theme is None and have("winlux-personalize"):
+            # Retour au thème Winlux du compte (couleurs et accent compris).
+            run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
+            return
         # « Adwaita-dark » n'est pas un thème GTK 3 installé (rendu clair).
         if theme is None: theme = "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
