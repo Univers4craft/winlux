@@ -5244,6 +5244,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
     }
+    // Jeton d'accès (OpenProcessToken) : partagé, rien à libérer. Chromium
+    // (Electron) vérifie que sa fermeture réussit.
+    if handle == crate::dlls::security::TOKEN_HANDLE {
+        return 1;
+    }
     if handle == 1
         || handle == 2
         || handle == (-10isize) as usize
@@ -8494,6 +8499,12 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Fermer le jeton d'OpenProcessToken réussit (Chromium le vérifie).
+    #[test]
+    fn fermer_le_jeton_du_processus_reussit() {
+        assert_eq!(super::close_handle(crate::dlls::security::TOKEN_HANDLE), 1);
+    }
+
     #[test]
     fn open_process_ouvre_un_processus_etranger_et_le_termine() {
         let mut child = std::process::Command::new("sleep")
