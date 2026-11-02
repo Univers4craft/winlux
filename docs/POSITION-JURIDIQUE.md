@@ -173,7 +173,9 @@ Chacun peut les contrôler dans le dépôt public
    ses bibliothèques d'exécution) restent ceux de l'utilisateur, sous la
    licence qu'il a reçue. De même, les programmes d'autres éditeurs que
    l'utilisateur choisit d'installer, par exemple un navigateur, restent les
-   leurs, sous leur propre licence.
+   leurs, sous leur propre licence ; ils s'affichent sous leur vrai nom, ce
+   qui désigne le produit de son éditeur (règlement (UE) 2017/1001,
+   article 14, paragraphe 1, point c).
 3. **Salle blanche** : le guide des contributeurs (`AGENTS.md`) interdit de
    consulter ou de reproduire du code source de Microsoft, publié ou divulgué
    illicitement, et de décompiler une bibliothèque de Microsoft pour écrire
