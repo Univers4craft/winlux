@@ -1,17 +1,33 @@
 # Paint.NET sur Winlux
 
-État au 31/10/2026, mesuré avec Paint.NET 5.1.12 portable x64.
+État au 02/11/2026, mesuré avec Paint.NET 5.1.12 portable x64.
 
 ## Résumé
 
-**Paint.NET ne fonctionne pas encore.** Son lanceur natif
-(`paintdotnet.exe`) traverse `hostfxr.dll` et `hostpolicy.dll`, puis démarre
-le runtime que l'appli embarque (`coreclr.dll`). Depuis la PR 2, coreclr
-s'initialise, charge `System.Private.CoreLib.dll`, exécute du code managé et
-charge l'assembly principale `paintdotnet.dll`. Il s'arrête ensuite : une
-exception C++ interne à coreclr est relancée en boucle, coreclr affiche
-« Stack overflow. » puis lève une exception managée non gérée (HRESULT
-0x8007007E, module introuvable).
+**Paint.NET ne fonctionne pas encore, mais il exécute son propre code.**
+Son lanceur natif (`paintdotnet.exe`) traverse `hostfxr.dll` et
+`hostpolicy.dll` et démarre le runtime que l'appli embarque (`coreclr.dll`).
+Depuis #201, coreclr charge `System.Private.CoreLib.dll` et `paintdotnet.dll`,
+puis exécute `Program.Start()`.
+
+La « boucle d'exceptions » décrite plus bas (mesures du 31/10) ne venait pas
+de `__CxxFrameHandler4`. coreclr chargeait `System.Runtime.dll`, une assembly
+IL seul au format PE32 (AnyCPU). Winlux refusait tout PE32 (erreur 126) et le
+chemin d'erreur de coreclr enchaînait les relances jusqu'au débordement de
+pile. #201 charge ces assemblies comme Windows.
+
+Blocages suivants, dans l'ordre où Paint.NET les rencontre :
+
+1. `InitializeDispatcherQueueController` appelle `CreateDispatcherQueueController`
+   de `coremessaging.dll`, absente (#265).
+2. `TaskDialogIndirect` de `comctl32` (#266).
+3. `LoadLibraryEx(…, LOAD_LIBRARY_AS_DATAFILE)` sur `mscorrc.dll` : le drapeau
+   est ignoré (#267).
+4. Suspension de threads pour le ramasse-miettes et fautes matérielles en
+   exceptions SEH (#269), `__CxxFrameHandler4` (#14).
+5. WPF : `wpfgfx_cor3`, `PresentationNative_cor3`, `DirectWriteForwarder` (#268).
+
+Suivi d'ensemble : #138.
 
 ## Obtenir l'appli
 

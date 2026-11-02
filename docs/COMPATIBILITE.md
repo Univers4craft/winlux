@@ -12,7 +12,9 @@ Issues des grands chantiers : #14 et #26 (fonctions et DLL système), #232
 (32 bits), #233 (OpenGL et Vulkan), #234 (System32 et redistribuables), #235
 (HTTPS), #137 (shaders Direct3D), #236 (Chromium/Electron), #22 et #138
 (.NET bureau), #16, #19 et #20 (processus et COM), #237 (anciens DirectX),
-#179 (installeurs).
+#179 (installeurs), et depuis le 2 novembre #269 (fautes matérielles en
+exceptions, suspension de threads), #270 (`ReadDirectoryChangesW`, ConPTY),
+#271 (périphériques), #272 (MSIX) et #265 à #268 (suite de Paint.NET).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
@@ -292,7 +294,7 @@ Ampleur : **L**. Suivi : #16, #17, #19, #20.
 série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
 
-Ampleur : **M**. À ranger dans #14/#26.
+Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
