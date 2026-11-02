@@ -200,3 +200,40 @@ fn sid_alloues_et_convertis() {
         assert_eq!(luid, [19, 0]);
     }
 }
+
+#[test]
+fn absolute_descriptor_and_explicit_acl() {
+    unsafe {
+        let mut sd = [0u8; 40];
+        assert_eq!(InitializeSecurityDescriptor(sd.as_mut_ptr(), 1), 1);
+        let owner = sid_bytes(&uid_sid(1000)).unwrap();
+        // EXPLICIT_ACCESS_W : GENERIC_ALL accordé au SID du propriétaire.
+        let mut entry = [0u8; 48];
+        entry[0..4].copy_from_slice(&0x1000_0000u32.to_le_bytes());
+        entry[4..8].copy_from_slice(&1u32.to_le_bytes()); // GRANT_ACCESS
+        entry[40..48].copy_from_slice(&(owner.as_ptr() as usize).to_le_bytes());
+        let mut acl: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            SetEntriesInAclW(1, entry.as_ptr(), std::ptr::null(), &mut acl),
+            0
+        );
+        assert_eq!(std::ptr::read_unaligned(acl.add(4) as *const u16), 1);
+        assert_eq!(SetSecurityDescriptorDacl(sd.as_mut_ptr(), 1, acl, 0), 1);
+        assert_eq!(
+            SetSecurityDescriptorOwner(sd.as_mut_ptr(), owner.as_ptr() as *mut u8, 0),
+            1
+        );
+        let (mut present, mut dacl, mut defaulted) = (0, std::ptr::null_mut(), 1);
+        assert_eq!(
+            GetSecurityDescriptorDacl(sd.as_ptr(), &mut present, &mut dacl, &mut defaulted),
+            1
+        );
+        assert_eq!((present, dacl), (1, acl));
+        let mut got: *mut u8 = std::ptr::null_mut();
+        assert_eq!(
+            GetSecurityDescriptorOwner(sd.as_ptr(), &mut got, std::ptr::null_mut()),
+            1
+        );
+        assert_eq!(EqualSid(got, owner.as_ptr()), 1);
+    }
+}
