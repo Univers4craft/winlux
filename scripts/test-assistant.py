@@ -65,26 +65,35 @@ assert stat.S_IMODE((home / ".config/winlux/assistant.conf").stat().st_mode) == 
 assert assistant.read_config() == {"enabled_claude": "0"}
 assert not assistant.is_enabled()
 
-# ── Identifiants de Claude Code remis en 700/600 ──
-claude_dir = home / ".claude"
-claude_dir.mkdir(mode=0o755)
-(claude_dir / ".credentials.json").write_text('{"claudeAiOauth": {"accessToken": "x"}}')
-(claude_dir / ".credentials.json").chmod(0o644)
-(home / ".claude.json").write_text("{}")
-(home / ".claude.json").chmod(0o644)
-fixed = assistant.protect_credentials()
-assert len(fixed) == 3, fixed
-codex_home = home / ".codex"
-codex_home.mkdir(mode=0o755)
-(codex_home / "auth.json").write_text('{"tokens": {"access_token": "x"}}')
-(codex_home / "auth.json").chmod(0o644)
-assert len(assistant.protect_credentials()) == 2
-assert stat.S_IMODE(codex_home.stat().st_mode) == 0o700
-assert stat.S_IMODE((codex_home / "auth.json").stat().st_mode) == 0o600
-assert stat.S_IMODE(claude_dir.stat().st_mode) == 0o700
-assert stat.S_IMODE((claude_dir / ".credentials.json").stat().st_mode) == 0o600
-assert stat.S_IMODE((home / ".claude.json").stat().st_mode) == 0o600
+# ── Connexions propres à l'assistant, remises en 700/600 ; ~/.claude et ~/.codex jamais touchés ──
+others = []
+for name, token in ((".claude", ".credentials.json"), (".codex", "auth.json")):
+    (home / name).mkdir(mode=0o755)
+    (home / name / token).write_text("{}")
+    (home / name / token).chmod(0o644)
+    others += [home / name, home / name / token]
+accounts = home / ".local/share/winlux/assistant-comptes"
+claude_dir, codex_home = accounts / "claude", accounts / "chatgpt"
+for folder in (claude_dir, codex_home):
+    folder.mkdir(parents=True, mode=0o755)
+for path in (claude_dir / ".credentials.json", claude_dir / ".claude.json", codex_home / "auth.json"):
+    path.write_text("{}")
+    path.chmod(0o644)
+accounts.chmod(0o755)
+assert len(assistant.protect_credentials()) == 6
+for path in (accounts, claude_dir, codex_home):
+    assert stat.S_IMODE(path.stat().st_mode) == 0o700, path
+for path in (claude_dir / ".credentials.json", claude_dir / ".claude.json", codex_home / "auth.json"):
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
 assert assistant.protect_credentials() == []
+for path in others:
+    assert stat.S_IMODE(path.stat().st_mode) in (0o644, 0o755), f"autre outil touché : {path}"
+assert ".claude" not in assistant.claude_env()["CLAUDE_CONFIG_DIR"]
+pe_launcher = work / "claude-pe"
+pe_launcher.write_text('#!/bin/sh\nexec winlux "/x/claude.exe" "$@"\n')
+assert assistant.claude_env(pe_launcher)["CLAUDE_CONFIG_DIR"] == "Z:" + str(claude_dir).replace("/", "\\")
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-ne-doit-pas-partir"
+assert "ANTHROPIC_API_KEY" not in assistant.claude_env(), "le compte Claude, jamais une clé d'API"
 
 # ── Conversation : faux claude qui note ses arguments, son entrée et son environnement ──
 fake = bin_dir / "claude"
@@ -97,7 +106,8 @@ if sys.argv[1:3] == ["auth", "status"]:
     sys.exit(0)
 data = sys.stdin.read()
 json.dump({{"argv": sys.argv[1:], "stdin": data, "cwd": os.getcwd(),
-           "env": {{k: os.environ.get(k) for k in ("DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")}}}},
+           "env": {{k: os.environ.get(k) for k in ("DISABLE_TELEMETRY", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                                                     "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY")}}}},
           open({str(record)!r}, "w"))
 if mode == "logout":
     print(json.dumps({{"type": "result", "is_error": True, "result": "Not logged in · Please run /login"}}))
@@ -124,7 +134,8 @@ for flag in ("-p", "--no-session-persistence", "--strict-mcp-config", "--disable
     assert flag in argv, flag
 assert argv[argv.index("--setting-sources") + 1] == "", "ni crochets ni réglages personnels de Claude Code"
 assert "--dangerously-skip-permissions" not in argv and "--bare" not in argv
-assert call["env"] == {"DISABLE_TELEMETRY": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+assert call["env"] == {"DISABLE_TELEMETRY": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                       "CLAUDE_CONFIG_DIR": str(claude_dir), "ANTHROPIC_API_KEY": None}
 assert Path(call["cwd"]) == home / ".local/share/winlux/assistant"
 assert stat.S_IMODE(Path(call["cwd"]).stat().st_mode) == 0o700
 schema = json.loads(argv[argv.index("--json-schema") + 1])
@@ -341,6 +352,7 @@ if args[:2] == ["login", "status"]:
     sys.exit(1 if mode == "logout" else 0)
 data = sys.stdin.read()
 json.dump({{"argv": args, "stdin": data, "cwd": os.getcwd(), "openai_key": os.environ.get("OPENAI_API_KEY"),
+           "codex_home": os.environ.get("CODEX_HOME"),
            "schema": json.load(open(args[args.index("--output-schema") + 1]))}}, open({str(codex_record)!r}, "w"))
 if mode == "logout":
     print(json.dumps({{"type": "turn.failed", "error": {{"message": "401 Unauthorized: please log in"}}}}))
@@ -375,6 +387,7 @@ for setting in ("features.shell_tool=false", "features.unified_exec=false", 'web
     assert setting in argv, setting
 assert "--dangerously-bypass-approvals-and-sandbox" not in argv and "--full-auto" not in argv
 assert call["openai_key"] is None, "le compte ChatGPT, jamais une clé d'API de l'environnement"
+assert call["codex_home"] == str(codex_home), "connexion propre à l'assistant, jamais ~/.codex"
 assert Path(call["cwd"]) == home / ".local/share/winlux/assistant"
 assert set(call["schema"]["required"]) == set(call["schema"]["properties"]), "format strict d'OpenAI"
 assert not (home / ".local/share/winlux/assistant/reponse.txt").exists(), "rien de gardé sur le disque"

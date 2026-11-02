@@ -22,8 +22,9 @@ Garde-fous :
   d'une liste fermée et attendent un clic sur « Faire », pour les trois.
 - Seuls partent la question et la conversation en cours ; rien n'est gardé
   sur le disque, la télémétrie est coupée. L'IA locale n'envoie rien.
-- Les connexions restent celles de Claude Code (~/.claude) et de Codex
-  (~/.codex), remises en lecture seule pour le propriétaire à chaque lancement.
+- Les connexions sont propres à l'assistant (~/.local/share/winlux/
+  assistant-comptes) : ~/.claude et ~/.codex des autres outils ne sont jamais
+  lus ni réutilisés. Dossiers en 700, jetons en 600 à chaque lancement.
 
 Commandes : winlux-assistant [--configurer | --activer | --desactiver |
 --deconnecter] [claude|chatgpt|local], --supprimer local, --etat.
@@ -53,6 +54,11 @@ DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "winlux"
 WORK = DATA / "assistant"
 CODEX_DIR = DATA / "codex"
 LOCAL_DIR = DATA / "ia-locale"
+# Connexions propres à l'assistant : jamais celles de ~/.claude ou ~/.codex
+# (Claude Code ou Codex installés à part par l'utilisateur).
+ACCOUNTS = DATA / "assistant-comptes"
+CLAUDE_ACCOUNT = ACCOUNTS / "claude"
+CODEX_ACCOUNT = ACCOUNTS / "chatgpt"
 JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
 DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
@@ -205,8 +211,7 @@ _TR = {
     # Trois assistants : Claude, ChatGPT, IA locale.
     'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'IA locale': ('Local AI', 'IA local', 'Lokale KI'),
-    'Assistant {name}': ('{name} assistant', 'Asistente {name}', '{name}-Assistent'),
-    "Activer l'assistant : {name}": ('Turn on the assistant: {name}', 'Activar el asistente: {name}', 'Assistent aktivieren: {name}'),
+    "Assistant IA : activer {name}": ('AI assistant: turn on {name}', 'Asistente de IA: activar {name}', 'KI-Assistent: {name} aktivieren'),
     'Annulé.': ('Cancelled.', 'Cancelado.', 'Abgebrochen.'),
     'Archive inattendue : {name}': ('Unexpected archive: {name}', 'Archivo inesperado: {name}', 'Unerwartetes Archiv: {name}'),
     "C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des tâches ou appuyez sur Windows+C.": ('All set! Click the assistant button on the taskbar or press Windows+C.', '¡Listo! Haga clic en el botón del asistente en la barra de tareas o pulse Windows+C.', 'Fertig! Klicken Sie auf die Assistent-Schaltfläche in der Taskleiste oder drücken Sie Windows+C.'),
@@ -501,7 +506,7 @@ class ChatGPTProvider(Provider):
                 _t("Se connecter à votre compte {name}", name=self.name), _t("Ajouter le bouton à la barre des tâches"))
 
     def home(self):
-        return Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
+        return CODEX_ACCOUNT
 
     def launcher(self):
         forced = os.environ.get("WINLUX_ASSISTANT_CODEX")
@@ -547,6 +552,8 @@ class ChatGPTProvider(Provider):
     def env(self):
         env = dict(os.environ)
         env.pop("OPENAI_API_KEY", None)  # le compte ChatGPT, pas une clé d'API
+        _private_dir(CODEX_ACCOUNT)
+        env["CODEX_HOME"] = str(CODEX_ACCOUNT)  # jamais ~/.codex
         env["PATH"] = f"{CODEX_DIR / 'codex-path'}:{env.get('PATH', '/usr/bin:/bin')}"
         return env
 
@@ -756,22 +763,49 @@ def claude_launcher():
     return app.installed_launcher() if app else None
 
 
-def claude_env():
-    """Rien d'autre que la conversation ne part : télémétrie et rapports coupés."""
+def _private_dir(path):
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+    return path
+
+
+def _runs_pe(launcher):
+    """Le lanceur de Claude Code passe-t-il par la couche PE (claude.exe) ?"""
+    try:
+        return launcher is not None and Path(launcher).stat().st_size < 4096 and \
+            "claude.exe" in Path(launcher).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def windows_path(path):
+    """Chemin Linux vu par un programme Windows : Z:\\ est la racine (paths::to_windows)."""
+    return "Z:" + str(path).replace("/", "\\")
+
+
+def claude_env(launcher=None):
+    """Rien d'autre que la conversation ne part : télémétrie et rapports coupés.
+    Connexion propre à l'assistant (CLAUDE_CONFIG_DIR), jamais ~/.claude."""
     env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)  # le compte Claude, pas une clé d'API
     env.update(DISABLE_TELEMETRY="1", DISABLE_ERROR_REPORTING="1", DISABLE_BUG_COMMAND="1",
                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
+    _private_dir(CLAUDE_ACCOUNT)
+    launcher = launcher or claude_launcher()
+    env["CLAUDE_CONFIG_DIR"] = windows_path(CLAUDE_ACCOUNT) if _runs_pe(launcher) else str(CLAUDE_ACCOUNT)
     return env
 
 
 def protect_credentials():
-    """Identifiants de Claude Code et de Codex lisibles par le seul propriétaire.
+    """Connexions de l'assistant lisibles par le seul propriétaire.
 
-    Créés par claude.exe à travers la couche PE, ils pouvaient hériter de
-    droits 644 : dossier ~/.claude en 700, jetons et compte en 600."""
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
+    Créées par claude.exe à travers la couche PE, elles pouvaient hériter de
+    droits 644 : dossiers en 700, jetons et compte en 600. ~/.claude et
+    ~/.codex ne sont jamais touchés."""
+    base = CLAUDE_ACCOUNT
     fixed = []
-    for path, mode in ((base, 0o700), (base / ".credentials.json", 0o600), (HOME / ".claude.json", 0o600)):
+    for path, mode in ((ACCOUNTS, 0o700), (base, 0o700), (base / ".credentials.json", 0o600),
+                       (base / ".claude.json", 0o600)):
         try:
             if path.stat().st_mode & 0o077:
                 path.chmod(mode)
@@ -788,7 +822,7 @@ def auth_status(launcher=None, timeout=60):
         return {"loggedIn": False, "installed": False}
     try:
         out = subprocess.run([str(launcher), "auth", "status", "--json"], capture_output=True, text=True,
-                             timeout=timeout, env=claude_env(), stdin=subprocess.DEVNULL).stdout
+                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL).stdout
         start = out.find("{")
         status = json.loads(out[start:out.rindex("}") + 1]) if start >= 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -1448,7 +1482,7 @@ def run_setup(key="claude"):
     backend = provider(key)
     name = display_name(key)
     Gdk, GLib, Gtk = _gtk()
-    heading_text = _t("Activer l'assistant : {name}", name=name)
+    heading_text = _t("Assistant IA : activer {name}", name=name)
     win = Gtk.Window(title=heading_text)
     win.set_role("winlux-assistant-setup")
     win.set_default_size(540, -1)
@@ -1664,7 +1698,7 @@ def run_chat():
                 # Plusieurs assistants activés : on choisit ici, le choix est retenu.
                 self.chooser = Gtk.ComboBoxText()
                 for key in enabled:
-                    self.chooser.append(key, _t("Assistant {name}", name=display_name(key)))
+                    self.chooser.append(key, display_name(key))
                 self.chooser.set_active_id(self.key)
                 self.chooser.connect("changed", lambda combo: self.switch_provider(combo.get_active_id()))
                 head.pack_start(self.chooser, True, True, 0)
@@ -1753,7 +1787,7 @@ def run_chat():
 
         def start_state(self):
             if self.title is not None:
-                self.title.set_text(_t("Assistant {name}", name=self.name))
+                self.title.set_text(_t("Assistant IA") + " · " + self.name)
             if provider(self.key).remote:
                 company = {"claude": "Anthropic", "chatgpt": "OpenAI"}[self.key]
                 self.hint.set_text(_t("Envoyé à {name} ({company}) : votre question et cette conversation. "

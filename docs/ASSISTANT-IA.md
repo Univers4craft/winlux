@@ -57,8 +57,43 @@ ou qui a moins de 3 Gio de mémoire.
     lu sur le PC.
 - **Pour les trois, chaque action** (réglage, dossier, page des Paramètres)
   vient d'une liste fermée, montre la commande exacte et attend « Faire ».
-- Les connexions restent celles de Claude Code (`~/.claude`) et de Codex
-  (`~/.codex/auth.json`), remises en 700/600 à chaque lancement.
+- **Connexions propres à l'assistant**, dans
+  `~/.local/share/winlux/assistant-comptes/` (`claude/` passé à Claude Code
+  par `CLAUDE_CONFIG_DIR`, `chatgpt/` passé à Codex par `CODEX_HOME`), remises
+  en 700/600 à chaque lancement. `~/.claude` et `~/.codex` (Claude Code ou Codex
+  installés à part par l'utilisateur) ne sont **jamais lus ni réutilisés** :
+  l'assistant demande sa propre connexion. Les clés d'API éventuellement
+  présentes dans l'environnement (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) sont
+  retirées : seul le compte de l'utilisateur sert.
+- **Langue** : l'assistant répond toujours dans la langue choisie dans
+  Paramètres > Langue (`/etc/winlux/locale.conf`), quelle que soit la langue
+  de la question ; toute l'interface suit la même langue (fr, en, es, de).
+
+## Nom, marques et conditions d'utilisation
+
+- Le produit s'appelle **Assistant IA** dans les quatre langues (« AI
+  assistant », « Asistente de IA », « KI-Assistent ») et a sa propre icône
+  (`winlux-assistant.svg`). Les noms Claude (marque d'Anthropic), ChatGPT et
+  Codex (marques d'OpenAI) ne servent qu'à désigner le service que
+  l'utilisateur choisit, jamais à nommer le produit ; Winlux n'est ni affilié
+  à Anthropic ou OpenAI, ni approuvé par eux. L'icône de l'application Claude
+  Code du menu Démarrer (`winlux-claude-code.svg`) est neutre (gris ardoise).
+- **Codex** (OpenAI) : le programme est publié sous licence Apache 2.0. Winlux
+  ne le redistribue pas : chaque utilisateur le télécharge depuis le registre
+  npm au moment de l'activation. Son usage avec un compte ChatGPT relève des
+  conditions d'utilisation d'OpenAI
+  (<https://openai.com/policies/terms-of-use/>) et de ses politiques d'usage
+  (<https://openai.com/policies/usage-policies/>) ; l'accès à Codex et ses
+  limites dépendent de l'offre ChatGPT du compte. L'utilisateur accepte ces
+  conditions lui-même, à la connexion, sur la page d'OpenAI.
+- **Claude Code** (Anthropic) n'est pas un logiciel libre ; il est lui aussi
+  téléchargé par l'utilisateur (voir [CLAUDE-CODE.md](CLAUDE-CODE.md)), et son
+  usage avec un compte Claude relève des conditions d'Anthropic
+  (<https://www.anthropic.com/legal/consumer-terms>) et de sa politique
+  d'usage (<https://www.anthropic.com/legal/aup>).
+- **IA locale** : llama.cpp est sous licence MIT, Qwen2.5 1,5B Instruct sous
+  Apache 2.0 ; les deux sont téléchargés par l'utilisateur et ne sont pas
+  dans l'ISO.
 
 ## Commandes
 
