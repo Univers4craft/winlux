@@ -113,6 +113,7 @@ _TR = {
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Changer d’utilisateur': ('Switch user', 'Cambiar de usuario', 'Benutzer wechseln'),
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
@@ -590,7 +591,17 @@ class Start(Gtk.Application):
             self.hide()
             subprocess.Popen(["winlux-control", "power-suspend"], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def logoff():
+            # Ferme la session de ce compte (applications comprises), comme
+            # « Se déconnecter » de Windows ; le relais root vérifie le compte.
+            self.hide()
+            subprocess.Popen(["winlux-control", "session-logoff", current_account()], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Ordre de Windows 11 : Verrouiller, Se déconnecter, Changer
+        # d'utilisateur, Mettre en veille, Redémarrer, Arrêter.
         entries = [(_t("Verrouiller"), lock, "system-lock-screen-symbolic")]
+        if power_menu_has_logoff():
+            entries.append((_t("Se déconnecter"), logoff, "system-log-out-symbolic"))
         if power_menu_has_switch():
             entries.append((_t("Changer d’utilisateur"), lambda: lock("switch"), "system-switch-user-symbolic"))
         if power_menu_has_sleep():
@@ -606,6 +617,17 @@ def power_menu_has_sleep():
     except OSError:
         return False
     return "mem" in states or "freeze" in states
+
+
+def current_account():
+    """Compte de la session (USER, sinon celui du processus)."""
+    return os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+
+
+def power_menu_has_logoff():
+    """« Se déconnecter » dans une session installée ; la session Live n'a
+    pas d'écran de connexion vers lequel revenir."""
+    return not Path(os.environ.get("WINLUX_LIVE_MARKER", "/etc/winlux/live-session")).exists()
 
 
 def power_menu_has_switch():
