@@ -246,6 +246,10 @@ fn main() {
         gamemode::register_current(name.as_deref().unwrap_or("jeu"));
         // Temps de jeu affiché par l'application Jeux.
         playtime::start(&exe);
+    } else if std::env::var_os("WINLUX_GAME").is_some_and(|v| v == "1") {
+        // Lancé depuis l'application Jeux : un jeu même sans import
+        // graphique visible (Unity, Direct3D chargé à la demande).
+        playtime::start(&exe);
     }
     dlls::kernel32::init();
     dlls::inherit::adopt();

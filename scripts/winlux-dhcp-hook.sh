@@ -34,6 +34,10 @@ case "${1:-}" in
             ipv4 "$server" || continue
             printf 'nameserver %s\n' "$server" >>"$resolver"
         done
+        # Lisible par tous : apt télécharge sous le compte _apt, et un
+        # resolv.conf en 0600 (umask du lanceur) rendait tout nom introuvable
+        # (« Temporary failure resolving ») après un renouvellement DHCP.
+        chmod 644 "$resolver"
         if grep -q '^nameserver ' "$resolver"; then mv "$resolver" "$task_root/etc/resolv.conf"; else rm -f "$resolver"; fi
         printf 'interface=%s\nip=%s\n' "$interface" "$ip" >"$run/network-lease.txt"
         echo "DHCP $interface: $ip/$prefix"

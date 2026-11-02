@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 root="$work/root"
 mkdir -p "$root/etc/winlux" "$work/x11" "$work/bin"
-printf 'root:root:winlux\nalice:user:secret\n' > "$root/etc/winlux/users.conf"
+printf 'root:root:winlux\nalice:user:secret\nbob:user:secret\n' > "$root/etc/winlux/users.conf"
 export WINLUX_CONTROL_ROOT="$root" WINLUX_X11_SOCKETS="$work/x11" WINLUX_TEST_LOG="$work/log"
 cat > "$work/bin/Xorg" <<MOCK
 #!/bin/sh
@@ -63,4 +63,12 @@ sleep 0.5
 WINLUX_TEST_VT=1 sessions list
 if grep -q alice "$root/run/winlux/sessions.txt"; then fail "session alice encore listée"; fi
 grep -qx 'session=root|:0|1|active' "$root/run/winlux/sessions.txt" || fail "session root perdue"
+# Système installé : le premier bureau est sur le VT 2 (celui de l'init) ;
+# un second compte ne doit pas viser le même terminal (écran noir).
+rm -f "$root/run/winlux/sessions/"* "$work/x11/X1" "$work/x11/X2" "$work/x11/X3"
+DISPLAY=:0 WINLUX_TEST_VT=2 sessions register root
+: > "$work/log"
+WINLUX_TEST_VT=2 sessions switch bob
+if grep -qx 'chvt 2' "$work/log"; then fail "second bureau lancé sur le terminal du premier"; fi
+WINLUX_TEST_VT=3 sessions logoff bob
 echo "Sessions simultanées : OK"

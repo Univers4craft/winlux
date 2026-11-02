@@ -107,6 +107,13 @@ start_session() {
     n=$(free_display)
     vt=$((n + 1))
     test "$vt" -lt 7 || vt=$((n + 7))
+    # Terminal libre : sur un système installé, le premier bureau occupe le
+    # VT 2 (celui de l'init), le même que « :1 → VT 2 ». Le second Xorg ne
+    # pouvait alors pas prendre l'affichage (drmSetMaster : Device or resource
+    # busy) et l'écran restait noir.
+    used=" $(current_vt) "
+    for f in "$registry"/*; do test -f "$f" && used="$used$(get "$f" vt) "; done
+    while case "$used" in *" $vt "*) true ;; *) false ;; esac; do vt=$((vt + 1)); done
     home=$(home_of "$user")
     mkdir -p "$root$home"
     for sub in Bureau Documents Images Musique Vidéos Téléchargements; do mkdir -p "$root$home/$sub"; done

@@ -247,6 +247,15 @@ cargo fmt --check -p winlux              # exigé par la CI
 cargo clippy -p winlux -- -D warnings    # exigé par la CI
 ```
 
+Toute la suite d'un coup, comme la CI (étapes lues dans `ci.yml` et `release.yml`, hors VM) :
+
+```sh
+sh scripts/test-all.sh                   # compilation, tests Rust, PE et scripts
+sh scripts/test-all.sh --rapide          # sans compilation ni PE (quelques minutes)
+```
+
+Les défauts trouvés en VM pendant la campagne de tests v0.2.13 ont chacun leur vérification dans `scripts/test-campaign.py`.
+
 La construction de l'ISO demande un hôte **Ubuntu 26.04** avec KVM : elle prépare la base Ubuntu officielle dans une VM jetable, puis assemble l'image. Elle est normalement faite par le workflow de publication. Les commandes, variables et pièges connus sont dans [docs/BUILD.md](docs/BUILD.md), [docs/NATIVE-APT.md](docs/NATIVE-APT.md) et la page [Construire l'ISO](wiki/Construire-l-ISO.md) du wiki.
 
 ### Intégration continue

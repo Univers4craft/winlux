@@ -1762,6 +1762,19 @@ class Progress:
 
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha"}
 
+def apt_candidate(name):
+    """Le paquet existe dans les dépôts APT configurés (version candidate)."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]+", name) or not shutil.which("apt-cache"):
+        return False
+    try:
+        # LC_ALL=C : sous la session en français, apt écrit « Candidat : ».
+        out = subprocess.run(["apt-cache", "policy", name], capture_output=True, text=True, timeout=30,
+                             env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.strip().startswith("Candidate:") and "(none)" not in line for line in out.splitlines())
+
+
 def operate(action, target, hook=None, reindex=True, known=""):
     progress = Progress(action, target, hook)
     lock = RUN / "store.lock"
@@ -1782,6 +1795,12 @@ def operate(action, target, hook=None, reindex=True, known=""):
                     code = s.update_all(progress) or code
         else:
             src, app = find(target)
+            if app is None and not known and action == "install" and target.startswith("apt:") and apt_candidate(target[4:]):
+                # Composant demandé par un outil Winlux (police d'emojis, moteur
+                # de reconnaissance de texte) : un paquet Ubuntu réel hors du
+                # catalogue s'installe comme les autres. Avant : « Logiciel
+                # inconnu », et Win+. ou Win+Maj+T ne pouvaient rien télécharger.
+                known = target[4:]
             if app is None and known and action == "install":
                 # Paquet hors de l'index (logiciels courants de Bienvenue) : la
                 # source l'installe directement d'après sa référence.

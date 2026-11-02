@@ -319,12 +319,15 @@ def run_app(argv):
                 content.set_line_wrap_mode(2)   # PANGO_WRAP_WORD_CHAR
             box.pack_start(content, True, True, 0)
             tools = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.START)
-            pin = Gtk.Button(label="📌" if item.get("pinned") else "📍")
+            # Icônes du thème, pas des emojis : sans police d'emojis en couleur
+            # (absente de l'image), 📌 et 🗑 s'affichaient en codes « 01F4CD ».
+            pin = Gtk.Button.new_from_icon_name("starred-symbolic" if item.get("pinned") else "non-starred-symbolic",
+                                                Gtk.IconSize.BUTTON)
             pin.get_style_context().add_class("flat")
             if item.get("pinned"): pin.get_style_context().add_class("pinned")
             pin.set_tooltip_text(_t("Désépingler") if item.get("pinned") else _t("Épingler"))
             pin.connect("clicked", lambda *_, k=item["key"]: (save(toggle_pin(load(), k)), self.refresh()))
-            delete = Gtk.Button(label="🗑")
+            delete = Gtk.Button.new_from_icon_name("user-trash-symbolic", Gtk.IconSize.BUTTON)
             delete.get_style_context().add_class("flat")
             delete.set_tooltip_text(_t("Supprimer"))
             delete.connect("clicked", lambda *_, k=item["key"]: (save(remove(load(), k)), self.refresh()))

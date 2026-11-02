@@ -105,7 +105,9 @@ play_sound() {
         warning) name=dialog-warning ;;
         *) name=audio-volume-change ;;
     esac
-    sound="/usr/share/sounds/freedesktop/stereo/$name.oga"
+    # WINLUX_SOUND_DIR : sons absents pour les tests (test-speak.sh), sinon le
+    # pw-play de la machine de développement passait avant aplay simulé.
+    sound="${WINLUX_SOUND_DIR:-/usr/share/sounds/freedesktop/stereo}/$name.oga"
     for player in pw-play paplay; do
         if have "$player" && test -r "$sound"; then
             "$player" "$sound" </dev/null >/dev/null 2>&1 &
