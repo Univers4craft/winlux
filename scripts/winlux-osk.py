@@ -10,6 +10,7 @@ fenêtre où l'on tapait, par xdotool.
 
     winlux-osk               ouvre ou ferme le clavier (icône de la barre)
     winlux-osk show|hide     l'ouvre ou le ferme
+    winlux-osk need          l'ouvre seulement sans clavier physique (champ de mot de passe)
     winlux-osk detect        keyboard=1 si un clavier physique est branché
     winlux-osk icon          icon=1 si l'icône de la barre doit apparaître
 
@@ -545,6 +546,13 @@ def main(argv):
         save_setting(argv[2])
         set_panel(argv[2] != "never")
         return 0
+    if command == "need":
+        # Un mot de passe est demandé (Contrôle de compte, installation) :
+        # sans clavier physique, le clavier tactile s'ouvre de lui-même.
+        if keyboards():
+            return 0
+        sys.argv[1:] = ["show"]
+        return run_window()
     if command in ("toggle", "show", "hide"):
         return run_window()
     print(__doc__.strip().split("\n\n")[2], file=sys.stderr)
