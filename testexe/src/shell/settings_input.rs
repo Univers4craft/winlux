@@ -65,45 +65,19 @@ unsafe fn tp(name: &[u8]) -> &'static [u8] {
 fn number(v: &[u8]) -> u32 {
     v.iter()
         .take_while(|b| b.is_ascii_digit())
-        .fold(0u32, |n, b| {
-            n.saturating_mul(10).saturating_add(u32::from(b - b'0'))
-        })
+        .fold(0u32, |n, b| n.saturating_mul(10).saturating_add(u32::from(b - b'0')))
 }
 
 unsafe fn items(mut visit: impl FnMut(Item)) {
-    visit(Item::Header(tr4(&[
-        b"Clavier",
-        b"Keyboard",
-        b"Teclado",
-        b"Tastatur",
-    ])));
+    visit(Item::Header(tr4(&[b"Clavier", b"Keyboard", b"Teclado", b"Tastatur"])));
     let layout = value(b"layout");
     let keyboards = [
-        btn(
-            tr4(&[
-                b"AZERTY fran\xE7ais",
-                b"French AZERTY",
-                b"AZERTY franc\xE9s",
-                b"AZERTY Franz\xF6sisch",
-            ]),
-            act(KEYBOARD, 0),
-            layout == b"fr",
-        ),
+        btn(tr4(&[b"AZERTY fran\xE7ais", b"French AZERTY", b"AZERTY franc\xE9s", b"AZERTY Franz\xF6sisch"]), act(KEYBOARD, 0), layout == b"fr"),
         btn(b"QWERTY US", act(KEYBOARD, 1), layout == b"us"),
     ];
     visit(Item::Row(
-        tr4(&[
-            b"Disposition actuelle",
-            b"Current layout",
-            b"Distribuci\xF3n actual",
-            b"Aktuelles Layout",
-        ]),
-        tr4(&[
-            b"Autres dispositions : Heure et langue.",
-            b"Other layouts: Time & language.",
-            b"Otras distribuciones: Hora e idioma.",
-            b"Weitere Layouts: Zeit und Sprache.",
-        ]),
+        tr4(&[b"Disposition actuelle", b"Current layout", b"Distribuci\xF3n actual", b"Aktuelles Layout"]),
+        tr4(&[b"Autres dispositions : Heure et langue.", b"Other layouts: Time & language.", b"Otras distribuciones: Hora e idioma.", b"Weitere Layouts: Zeit und Sprache."]),
         &keyboards,
     ));
     visit(Item::Header(tr4(&[b"Souris", b"Mouse", b"Mouse", b"Maus"])));
@@ -113,116 +87,39 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         _ => 1,
     };
     let mice = [
-        btn(
-            tr4(&[b"Lente", b"Slow", b"Lenta", b"Langsam"]),
-            act(MOUSE, 0),
-            speed == 0,
-        ),
-        btn(
-            tr4(&[b"Normale", b"Normal", b"Normal", b"Normal"]),
-            act(MOUSE, 1),
-            speed == 1,
-        ),
-        btn(
-            tr4(&[b"Rapide", b"Fast", b"R\xE1pida", b"Schnell"]),
-            act(MOUSE, 2),
-            speed == 2,
-        ),
+        btn(tr4(&[b"Lente", b"Slow", b"Lenta", b"Langsam"]), act(MOUSE, 0), speed == 0),
+        btn(tr4(&[b"Normale", b"Normal", b"Normal", b"Normal"]), act(MOUSE, 1), speed == 1),
+        btn(tr4(&[b"Rapide", b"Fast", b"R\xE1pida", b"Schnell"]), act(MOUSE, 2), speed == 2),
     ];
     visit(Item::Row(
-        tr4(&[
-            b"Rapidit\xE9 de la souris",
-            b"Mouse speed",
-            b"Velocidad del mouse",
-            b"Mausgeschwindigkeit",
-        ]),
-        tr4(&[
-            b"Vitesse du pointeur pour toutes les souris branch\xE9es.",
-            b"Pointer speed for every connected mouse.",
-            b"Velocidad del puntero para todos los ratones conectados.",
-            b"Zeigergeschwindigkeit f\xFCr alle angeschlossenen M\xE4use.",
-        ]),
+        tr4(&[b"Rapidit\xE9 de la souris", b"Mouse speed", b"Velocidad del mouse", b"Mausgeschwindigkeit"]),
+        tr4(&[b"Vitesse du pointeur pour toutes les souris branch\xE9es.", b"Pointer speed for every connected mouse.", b"Velocidad del puntero para todos los ratones conectados.", b"Zeigergeschwindigkeit f\xFCr alle angeschlossenen M\xE4use."]),
         &mice,
     ));
     if tp(b"present") != b"1" {
         return;
     }
-    visit(Item::Header(tr4(&[
-        b"Pav\xE9 tactile",
-        b"Touchpad",
-        b"Panel t\xE1ctil",
-        b"Touchpad",
-    ])));
+    visit(Item::Header(tr4(&[b"Pav\xE9 tactile", b"Touchpad", b"Panel t\xE1ctil", b"Touchpad"])));
     let labels: [(&[u8], &[u8]); 5] = [
         (
-            tr4(&[
-                b"Taper pour cliquer",
-                b"Tap to click",
-                b"Tocar para hacer clic",
-                b"Tippen zum Klicken",
-            ]),
-            tr4(&[
-                b"Une touche l\xE9g\xE8re vaut un clic.",
-                b"A light tap counts as a click.",
-                b"Un toque ligero equivale a un clic.",
-                b"Leichtes Tippen gilt als Klick.",
-            ]),
+            tr4(&[b"Taper pour cliquer", b"Tap to click", b"Tocar para hacer clic", b"Tippen zum Klicken"]),
+            tr4(&[b"Une touche l\xE9g\xE8re vaut un clic.", b"A light tap counts as a click.", b"Un toque ligero equivale a un clic.", b"Leichtes Tippen gilt als Klick."]),
         ),
         (
-            tr4(&[
-                b"D\xE9filer avec deux doigts",
-                b"Two-finger scrolling",
-                b"Desplazar con dos dedos",
-                b"Mit zwei Fingern scrollen",
-            ]),
-            tr4(&[
-                b"Sinon, d\xE9filement sur le bord du pav\xE9.",
-                b"Otherwise, scroll along the edge of the pad.",
-                b"Si no, desplazamiento por el borde del panel.",
-                b"Sonst Scrollen am Rand des Touchpads.",
-            ]),
+            tr4(&[b"D\xE9filer avec deux doigts", b"Two-finger scrolling", b"Desplazar con dos dedos", b"Mit zwei Fingern scrollen"]),
+            tr4(&[b"Sinon, d\xE9filement sur le bord du pav\xE9.", b"Otherwise, scroll along the edge of the pad.", b"Si no, desplazamiento por el borde del panel.", b"Sonst Scrollen am Rand des Touchpads."]),
         ),
         (
-            tr4(&[
-                b"Clic droit \xE0 deux doigts",
-                b"Two-finger right-click",
-                b"Clic derecho con dos dedos",
-                b"Rechtsklick mit zwei Fingern",
-            ]),
-            tr4(&[
-                b"Sinon, appui dans le coin inf\xE9rieur droit.",
-                b"Otherwise, press the bottom-right corner.",
-                b"Si no, pulse la esquina inferior derecha.",
-                b"Sonst unten rechts dr\xFCcken.",
-            ]),
+            tr4(&[b"Clic droit \xE0 deux doigts", b"Two-finger right-click", b"Clic derecho con dos dedos", b"Rechtsklick mit zwei Fingern"]),
+            tr4(&[b"Sinon, appui dans le coin inf\xE9rieur droit.", b"Otherwise, press the bottom-right corner.", b"Si no, pulse la esquina inferior derecha.", b"Sonst unten rechts dr\xFCcken."]),
         ),
         (
-            tr4(&[
-                b"D\xE9filement naturel",
-                b"Natural scrolling",
-                b"Desplazamiento natural",
-                b"Nat\xFCrliches Scrollen",
-            ]),
-            tr4(&[
-                b"Le contenu suit les doigts, comme sur un t\xE9l\xE9phone.",
-                b"Content follows your fingers, like on a phone.",
-                b"El contenido sigue a los dedos, como en un tel\xE9fono.",
-                b"Inhalt folgt den Fingern wie beim Telefon.",
-            ]),
+            tr4(&[b"D\xE9filement naturel", b"Natural scrolling", b"Desplazamiento natural", b"Nat\xFCrliches Scrollen"]),
+            tr4(&[b"Le contenu suit les doigts, comme sur un t\xE9l\xE9phone.", b"Content follows your fingers, like on a phone.", b"El contenido sigue a los dedos, como en un tel\xE9fono.", b"Inhalt folgt den Fingern wie beim Telefon."]),
         ),
         (
-            tr4(&[
-                b"D\xE9sactiver pendant la frappe",
-                b"Turn off while typing",
-                b"Desactivar al escribir",
-                b"Beim Tippen deaktivieren",
-            ]),
-            tr4(&[
-                b"\xC9vite les clics involontaires avec la paume.",
-                b"Avoids accidental clicks with your palm.",
-                b"Evita clics involuntarios con la palma.",
-                b"Verhindert versehentliche Klicks mit dem Handballen.",
-            ]),
+            tr4(&[b"D\xE9sactiver pendant la frappe", b"Turn off while typing", b"Desactivar al escribir", b"Beim Tippen deaktivieren"]),
+            tr4(&[b"\xC9vite les clics involontaires avec la paume.", b"Avoids accidental clicks with your palm.", b"Evita clics involuntarios con la palma.", b"Verhindert versehentliche Klicks mit dem Handballen."]),
         ),
     ];
     let yes = tr4(&[b"Oui", b"On", b"S\xED", b"Ein"]);
@@ -246,20 +143,11 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         let line = l;
         let buttons = [
             btn(b"-", act(SPEED, 0), false),
-            btn(
-                tr4(&[b"Par d\xE9faut", b"Default", b"Predeterminada", b"Standard"]),
-                act(SPEED, 1),
-                speed == b"50",
-            ),
+            btn(tr4(&[b"Par d\xE9faut", b"Default", b"Predeterminada", b"Standard"]), act(SPEED, 1), speed == b"50"),
             btn(b"+", act(SPEED, 2), false),
         ];
         visit(Item::Row(
-            tr4(&[
-                b"Vitesse du pointeur",
-                b"Pointer speed",
-                b"Velocidad del puntero",
-                b"Zeigergeschwindigkeit",
-            ]),
+            tr4(&[b"Vitesse du pointeur", b"Pointer speed", b"Velocidad del puntero", b"Zeigergeschwindigkeit"]),
             line.get(),
             &buttons,
         ));
@@ -316,42 +204,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     walk(&c, |item, y| match item {
         Item::Header(title) => {
             if visible(&c, y, HEADER_H) {
-                text_fit(
-                    g.hdc,
-                    g.f.semibold,
-                    13,
-                    p.text,
-                    c.left,
-                    y + 12,
-                    title,
-                    c.right - c.left,
-                );
+                text_fit(g.hdc, g.f.semibold, 13, p.text, c.left, y + 12, title, c.right - c.left);
             }
         }
         Item::Row(label, val, buttons) => {
             if !visible(&c, y, ROW_H) {
                 return;
             }
-            round_rect(
-                g.hdc,
-                g.b,
-                c.left - 8,
-                y,
-                c.right + 8,
-                y + ROW_H - 6,
-                8,
-                p.border,
-            );
-            round_rect(
-                g.hdc,
-                g.b,
-                c.left - 7,
-                y + 1,
-                c.right + 7,
-                y + ROW_H - 7,
-                7,
-                p.surface,
-            );
+            round_rect(g.hdc, g.b, c.left - 8, y, c.right + 8, y + ROW_H - 6, 8, p.border);
+            round_rect(g.hdc, g.b, c.left - 7, y + 1, c.right + 7, y + ROW_H - 7, 7, p.surface);
             let text_right = if buttons.is_empty() {
                 c.right
             } else {
@@ -362,16 +223,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             text_fit(g.hdc, g.f.small, 11, p.text2, c.left, y + 28, val, tw);
             for (k, b) in buttons.iter().enumerate() {
                 let r = button_rect(&c, y, k, buttons.len());
-                round_rect(
-                    g.hdc,
-                    g.b,
-                    r.left,
-                    r.top,
-                    r.right,
-                    r.bottom,
-                    6,
-                    if b.selected { p.accent } else { p.border },
-                );
+                round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, if b.selected { p.accent } else { p.border });
                 round_rect(
                     g.hdc,
                     g.b,
@@ -392,15 +244,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 while end > 0 && text_width(&b.label[..end], 11) > r.right - r.left - 8 {
                     end -= 1;
                 }
-                text_centered(
-                    g.hdc,
-                    g.f.small,
-                    11,
-                    p.text,
-                    (r.left + r.right) / 2,
-                    r.top + 9,
-                    &b.label[..end],
-                );
+                text_centered(g.hdc, g.f.small, 11, p.text, (r.left + r.right) / 2, r.top + 9, &b.label[..end]);
             }
         }
     });
@@ -444,11 +288,7 @@ pub unsafe fn click(f: &Frame, x: i32, y: i32) -> bool {
     let (kind, arg) = (id >> 8, id & 0xff);
     match kind {
         KEYBOARD => {
-            control(if arg == 0 {
-                c"keyboard-fr"
-            } else {
-                c"keyboard-us"
-            });
+            control(if arg == 0 { c"keyboard-fr" } else { c"keyboard-us" });
         }
         MOUSE => {
             control(match arg {

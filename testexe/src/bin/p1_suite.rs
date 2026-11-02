@@ -646,63 +646,27 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let sh_set = GetProcAddress(shlwapi, c"SHSetValueA".as_ptr());
         let sh_get = GetProcAddress(shlwapi, c"SHGetValueA".as_ptr());
         let sh_delete = GetProcAddress(shlwapi, c"SHDeleteKeyA".as_ptr());
-        let shlwapi_ok =
-            if shlwapi.is_null() || sh_set.is_null() || sh_get.is_null() || sh_delete.is_null() {
-                false
-            } else {
-                type SetFn = extern "system" fn(
-                    Handle,
-                    *const c_char,
-                    *const c_char,
-                    u32,
-                    *const u8,
-                    u32,
-                ) -> i32;
-                type GetFn = extern "system" fn(
-                    Handle,
-                    *const c_char,
-                    *const c_char,
-                    *mut u32,
-                    *mut u8,
-                    *mut u32,
-                ) -> i32;
-                type DeleteFn = extern "system" fn(Handle, *const c_char) -> i32;
-                let set: SetFn = core::mem::transmute(sh_set);
-                let get: GetFn = core::mem::transmute(sh_get);
-                let delete: DeleteFn = core::mem::transmute(sh_delete);
-                let hkcu = 0x8000_0001usize as Handle;
-                let text = b"Winlux\0";
-                let mut kind = 0u32;
-                let mut out = [0u8; 16];
-                let mut size = out.len() as u32;
-                set(
-                    hkcu,
-                    key_path.as_ptr(),
-                    c"Nom".as_ptr(),
-                    1,
-                    text.as_ptr(),
-                    text.len() as u32,
-                ) == 0
-                    && get(
-                        hkcu,
-                        key_path.as_ptr(),
-                        c"Nom".as_ptr(),
-                        &mut kind,
-                        out.as_mut_ptr(),
-                        &mut size,
-                    ) == 0
-                    && kind == 1
-                    && out[..size as usize] == text[..]
-                    && delete(hkcu, key_path.as_ptr()) == 0
-                    && get(
-                        hkcu,
-                        key_path.as_ptr(),
-                        c"Nom".as_ptr(),
-                        &mut kind,
-                        out.as_mut_ptr(),
-                        &mut size,
-                    ) == 2
-            };
+        let shlwapi_ok = if shlwapi.is_null() || sh_set.is_null() || sh_get.is_null() || sh_delete.is_null() {
+            false
+        } else {
+            type SetFn = extern "system" fn(Handle, *const c_char, *const c_char, u32, *const u8, u32) -> i32;
+            type GetFn = extern "system" fn(Handle, *const c_char, *const c_char, *mut u32, *mut u8, *mut u32) -> i32;
+            type DeleteFn = extern "system" fn(Handle, *const c_char) -> i32;
+            let set: SetFn = core::mem::transmute(sh_set);
+            let get: GetFn = core::mem::transmute(sh_get);
+            let delete: DeleteFn = core::mem::transmute(sh_delete);
+            let hkcu = 0x8000_0001usize as Handle;
+            let text = b"Winlux\0";
+            let mut kind = 0u32;
+            let mut out = [0u8; 16];
+            let mut size = out.len() as u32;
+            set(hkcu, key_path.as_ptr(), c"Nom".as_ptr(), 1, text.as_ptr(), text.len() as u32) == 0
+                && get(hkcu, key_path.as_ptr(), c"Nom".as_ptr(), &mut kind, out.as_mut_ptr(), &mut size) == 0
+                && kind == 1
+                && out[..size as usize] == text[..]
+                && delete(hkcu, key_path.as_ptr()) == 0
+                && get(hkcu, key_path.as_ptr(), c"Nom".as_ptr(), &mut kind, out.as_mut_ptr(), &mut size) == 2
+        };
         check!(shlwapi_ok, "SHSetValue/SHGetValue/SHDeleteKey (shlwapi)");
 
         // --- événements, mutex récursif et thread Win32 ---

@@ -143,12 +143,7 @@ unsafe fn session_control(verb: &[u8], user: usize) {
     }
     let mut cmd = [0u8; 64];
     let mut n = 0;
-    for part in [
-        b"session-".as_slice(),
-        verb,
-        b" ",
-        &USERS[user].name[..USERS[user].name_len],
-    ] {
+    for part in [b"session-".as_slice(), verb, b" ", &USERS[user].name[..USERS[user].name_len]] {
         cmd[n..n + part.len()].copy_from_slice(part);
         n += part.len();
     }

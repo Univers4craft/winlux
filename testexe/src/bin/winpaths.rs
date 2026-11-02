@@ -109,9 +109,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         // 1. Profil et dossiers connus.
         let mut profile = W::new();
-        profile.len =
-            GetEnvironmentVariableW(W::of("USERPROFILE").ptr(), profile.buf.as_mut_ptr(), 1024)
-                as usize;
+        profile.len = GetEnvironmentVariableW(W::of("USERPROFILE").ptr(), profile.buf.as_mut_ptr(), 1024) as usize;
         check!(
             profile.len > 9 && profile.slice().starts_with(W::of("C:\\Users\\").slice()),
             "USERPROFILE = C:\\Users\\<nom>"
@@ -124,44 +122,26 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         let mut expected = W::new();
         expected.push_w(profile.slice()).push("\\Documents");
-        check!(
-            hr == 0 && docs.slice() == expected.slice(),
-            "SHGetKnownFolderPath(Documents)"
-        );
+        check!(hr == 0 && docs.slice() == expected.slice(), "SHGetKnownFolderPath(Documents)");
 
         let mut expanded = W::new();
-        let n = ExpandEnvironmentStringsW(
-            W::of("%USERPROFILE%\\AppData").ptr(),
-            expanded.buf.as_mut_ptr(),
-            1024,
-        );
+        let n = ExpandEnvironmentStringsW(W::of("%USERPROFILE%\\AppData").ptr(), expanded.buf.as_mut_ptr(), 1024);
         expanded.len = n.saturating_sub(1) as usize;
         let mut appdata = W::new();
         appdata.push_w(profile.slice()).push("\\AppData");
-        check!(
-            expanded.slice() == appdata.slice(),
-            "ExpandEnvironmentStringsW(%USERPROFILE%)"
-        );
+        check!(expanded.slice() == appdata.slice(), "ExpandEnvironmentStringsW(%USERPROFILE%)");
 
         // 2. Accents via les API « W » : le fichier doit arriver dans
         //    ~/Mes documents avec son vrai nom (vérifié par le script).
         let mut report = W::new();
         report.push_w(docs.slice()).push("\\Été 2026 — rapport.txt");
-        check!(
-            write_file(&report, b"bonjour"),
-            "CreateFileW avec accents dans Documents"
-        );
+        check!(write_file(&report, b"bonjour"), "CreateFileW avec accents dans Documents");
 
         // 3. Casse : on relit en majuscules, séparateurs mélangés.
         let mut upper = W::new();
-        upper
-            .push_w(profile.slice())
-            .push("/DOCUMENTS//ÉTÉ 2026 — RAPPORT.TXT");
+        upper.push_w(profile.slice()).push("/DOCUMENTS//ÉTÉ 2026 — RAPPORT.TXT");
         let mut buf = [0u8; 32];
-        check!(
-            read_file(&upper, &mut buf) == Some(7) && &buf[..7] == b"bonjour",
-            "relecture insensible à la casse"
-        );
+        check!(read_file(&upper, &mut buf) == Some(7) && &buf[..7] == b"bonjour", "relecture insensible à la casse");
 
         // 4. Fichier Linux au nom interdit sous Windows (« : »).
         let mut pattern = W::new();
@@ -187,22 +167,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let mut messy = W::new();
         messy.push_w(profile.slice()).push("/../");
         // Remonte puis redescend dans le profil par son nom.
-        let name_start = profile
-            .slice()
-            .iter()
-            .rposition(|&c| c == b'\\' as u16)
-            .unwrap_or(0)
-            + 1;
-        messy
-            .push_w(&profile.slice()[name_start..])
-            .push("\\.\\Documents//a.txt. ");
+        let name_start = profile.slice().iter().rposition(|&c| c == b'\\' as u16).unwrap_or(0) + 1;
+        messy.push_w(&profile.slice()[name_start..]).push("\\.\\Documents//a.txt. ");
         full.len = GetFullPathNameW(messy.ptr(), 1024, full.buf.as_mut_ptr(), null_mut()) as usize;
         let mut want = W::new();
         want.push_w(docs.slice()).push("\\a.txt");
-        check!(
-            full.slice() == want.slice(),
-            "GetFullPathNameW (.., ., //, point final)"
-        );
+        check!(full.slice() == want.slice(), "GetFullPathNameW (.., ., //, point final)");
 
         // 6. Périphérique NUL.
         check!(write_file(&W::of("NUL"), b"rien"), "écriture dans NUL");
@@ -215,10 +185,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let made = CreateDirectoryW(target.ptr(), null_mut()) != 0
             && CreateSymbolicLinkW(link.ptr(), W::of("cible").ptr(), 1) != 0;
         let attrs = GetFileAttributesW(link.ptr());
-        check!(
-            made && attrs != u32::MAX && attrs & 0x410 == 0x410,
-            "lien vers dossier = REPARSE_POINT|DIRECTORY"
-        );
+        check!(made && attrs != u32::MAX && attrs & 0x410 == 0x410, "lien vers dossier = REPARSE_POINT|DIRECTORY");
         check!(
             RemoveDirectoryW(link.ptr()) != 0 && GetFileAttributesW(target.ptr()) & 0x10 != 0,
             "RemoveDirectoryW supprime le lien, pas la cible"
@@ -237,30 +204,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
         ok &= long.len > 300 && write_file(&long, b"x");
         let mut plain = W::new();
         plain.push_w(&long.slice()[4..]);
-        check!(
-            ok && GetFileAttributesW(plain.ptr()) != u32::MAX,
-            "chemin de plus de 260 caractères"
-        );
+        check!(ok && GetFileAttributesW(plain.ptr()) != u32::MAX, "chemin de plus de 260 caractères");
 
         // 9. Lecture seule : vraie protection, et retour sans « écriture pour tous ».
-        let ro =
-            SetFileAttributesW(report.ptr(), 1) != 0 && GetFileAttributesW(report.ptr()) & 1 != 0;
-        let h = CreateFileW(
-            report.ptr(),
-            0x4000_0000,
-            0,
-            null_mut(),
-            3,
-            0x80,
-            null_mut(),
-        );
+        let ro = SetFileAttributesW(report.ptr(), 1) != 0 && GetFileAttributesW(report.ptr()) & 1 != 0;
+        let h = CreateFileW(report.ptr(), 0x4000_0000, 0, null_mut(), 3, 0x80, null_mut());
         let refused = h as usize == usize::MAX && GetLastError() == 5;
-        let back = SetFileAttributesW(report.ptr(), 0x80) != 0
-            && GetFileAttributesW(report.ptr()) & 1 == 0;
-        check!(
-            ro && refused && back,
-            "lecture seule posée, respectée puis retirée"
-        );
+        let back = SetFileAttributesW(report.ptr(), 0x80) != 0 && GetFileAttributesW(report.ptr()) & 1 == 0;
+        check!(ro && refused && back, "lecture seule posée, respectée puis retirée");
     }
     finish()
 }

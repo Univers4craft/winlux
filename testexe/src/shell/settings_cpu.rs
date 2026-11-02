@@ -887,7 +887,11 @@ unsafe fn game_section(w: &mut Walk) {
         w.row(t(b"Partie en cours", b"Game running"), l.get());
     }
     w.options(&[
-        (t(b"Automatique", b"Automatic"), ID_GAME, mode != b"off"),
+        (
+            t(b"Automatique", b"Automatic"),
+            ID_GAME,
+            mode != b"off",
+        ),
         (t(b"D\xE9sactiv\xE9", b"Off"), ID_GAME + 1, mode == b"off"),
     ]);
     w.note(t(
@@ -901,10 +905,7 @@ unsafe fn game_section(w: &mut Walk) {
         ));
     }
     if cap(b"cap_game_priority") {
-        w.note(t(
-            b"- priorit\xE9 du jeu relev\xE9e",
-            b"- game priority raised",
-        ));
+        w.note(t(b"- priorit\xE9 du jeu relev\xE9e", b"- game priority raised"));
     }
     w.note(t(
         b"- sauvegardes et mises \xE0 jour en pause",

@@ -1097,12 +1097,7 @@ extern "C" {
         flags: u32,
     ) -> i32;
     pub fn MoveWindow(hwnd: Handle, x: i32, y: i32, cx: i32, cy: i32, repaint: i32) -> i32;
-    pub fn SystemParametersInfoA(
-        action: u32,
-        param: u32,
-        data: *mut core::ffi::c_void,
-        update: u32,
-    ) -> i32;
+    pub fn SystemParametersInfoA(action: u32, param: u32, data: *mut core::ffi::c_void, update: u32) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
     pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
     pub fn GetDC(hwnd: Handle) -> Handle;

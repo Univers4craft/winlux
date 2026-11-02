@@ -14,7 +14,12 @@ pub static mut CURRENT_LANG: Lang = Lang::Fr;
 
 pub const LANG_COUNT: usize = 4;
 pub const LANG_CODES: [&[u8]; LANG_COUNT] = [b"fr", b"en", b"es", b"de"];
-pub const LANG_NAMES: [&[u8]; LANG_COUNT] = [b"Fran\xE7ais", b"English", b"Espa\xF1ol", b"Deutsch"];
+pub const LANG_NAMES: [&[u8]; LANG_COUNT] = [
+    b"Fran\xE7ais",
+    b"English",
+    b"Espa\xF1ol",
+    b"Deutsch",
+];
 
 /// Lettre « repliée » pour la recherche (Windows-1252) : minuscule et sans
 /// accent, pour que « parametres » trouve « Paramètres », « espanol »
@@ -1289,8 +1294,9 @@ pub fn tr(id: usize) -> &'static [u8] {
 // ── Layouts clavier ────────────────────────────────────────────────
 
 pub const KEYBOARD_COUNT: usize = 8;
-pub const KEYBOARD_CODES: [&[u8]; KEYBOARD_COUNT] =
-    [b"fr", b"us", b"de", b"es", b"gb", b"it", b"pt", b"be"];
+pub const KEYBOARD_CODES: [&[u8]; KEYBOARD_COUNT] = [
+    b"fr", b"us", b"de", b"es", b"gb", b"it", b"pt", b"be",
+];
 pub const KEYBOARD_NAMES: [&[u8]; KEYBOARD_COUNT] = [
     b"AZERTY fran\xE7ais",
     b"QWERTY US",
