@@ -225,7 +225,7 @@ _TR = {
     'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
     'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
-    'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
+    'La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation.': ('Preparing updates uses the disk. Keep the computer on during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga el ordenador encendido durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie den Computer während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
     'Comptes': ('Accounts', 'Cuentas', 'Konten'),
@@ -889,7 +889,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.body.pack_start(self.progress, False, False, 0)
         self.details = self.label("")
         if self.page == 7:
-            self.label(_t("La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation."), "subtitle")
+            self.label(_t("La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation."), "subtitle")
             restart = Gtk.Button(label=_t("Redémarrer après installation"))
             restart.connect("clicked", lambda *_: self.execute("reboot"))
             self.body.pack_start(restart, False, False, 0)

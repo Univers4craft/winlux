@@ -285,6 +285,31 @@ window.installer-window {
 .installer-content radiobutton label {
     color: @fg_primary;
 }
+/* Accent Prisme partout, pas le bleu du theme GTK. */
+radiobutton radio:checked,
+checkbutton check:checked,
+radio:checked,
+check:checked {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+    color: #ffffff;
+}
+switch:checked {
+    background-color: @accent;
+    border-color: @accent;
+}
+progressbar progress,
+scale highlight {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+}
+*:selected,
+selection {
+    background-color: @accent;
+    color: #ffffff;
+}
 .status-ok {
     color: #2ecc71;
 }
@@ -410,17 +435,17 @@ KEYBOARDS = [
 ]
 
 PART_COLORS = {
-    "ext4": (0.0, 0.47, 0.83, 1.0),
-    "ext3": (0.0, 0.47, 0.83, 0.8),
-    "ext2": (0.0, 0.47, 0.83, 0.6),
-    "btrfs": (0.0, 0.47, 0.83, 0.9),
-    "xfs": (0.15, 0.55, 0.85, 1.0),
+    "ext4": (0.416, 0.239, 0.941, 1.0),  # accent Prisme #6A3DF0
+    "ext3": (0.416, 0.239, 0.941, 0.8),
+    "ext2": (0.416, 0.239, 0.941, 0.6),
+    "btrfs": (0.416, 0.239, 0.941, 0.9),
+    "xfs": (0.486, 0.302, 1.0, 1.0),
     "ntfs": (0.9, 0.55, 0.1, 1.0),
     "vfat": (0.3, 0.75, 0.35, 1.0),
     "fat32": (0.3, 0.75, 0.35, 1.0),
     "fat16": (0.3, 0.75, 0.35, 1.0),
-    "swap": (0.55, 0.35, 0.75, 1.0),
-    "linux-swap": (0.55, 0.35, 0.75, 1.0),
+    "swap": (0.2, 0.6, 0.65, 1.0),
+    "linux-swap": (0.2, 0.6, 0.65, 1.0),
     "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
     "winlux": (0.0, 0.62, 0.95, 1.0),
@@ -510,6 +535,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applications recommandées",
         "summary_benchmark": "Note de performance",
         "summary_benchmark_none": "non mesurée",
+        "summary_benchmark_running": "mesure en cours",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -671,6 +697,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ recommended apps",
         "summary_benchmark": "Performance score",
         "summary_benchmark_none": "not measured",
+        "summary_benchmark_running": "measuring",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -832,6 +859,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ empfohlene Anwendungen",
         "summary_benchmark": "Leistungsbewertung",
         "summary_benchmark_none": "nicht gemessen",
+        "summary_benchmark_running": "Messung läuft",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -993,6 +1021,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicaciones recomendadas",
         "summary_benchmark": "Puntuación de rendimiento",
         "summary_benchmark_none": "no medida",
+        "summary_benchmark_running": "midiendo",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -1154,6 +1183,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applicazioni consigliate",
         "summary_benchmark": "Punteggio prestazioni",
         "summary_benchmark_none": "non misurato",
+        "summary_benchmark_running": "misurazione in corso",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1315,6 +1345,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicativos recomendados",
         "summary_benchmark": "Nota de desempenho",
         "summary_benchmark_none": "não medida",
+        "summary_benchmark_running": "a medir",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -3303,8 +3334,16 @@ class InstallerApp(Gtk.Application):
             if key == "network":
                 self.apply_live_proxy()
             if target > step_index("disk") and self.bench_device != (self.config["disk"] or {}).get("path"):
-                # Le benchmark lit le disque choisi : on le relance si le disque a changé.
+                # Le benchmark lit le disque choisi : on le relance si le disque a changé,
+                # et l'ancienne note ne vaut plus rien.
                 self.bench_state = "idle"
+                self.benchmark = None
+                if self.bench_proc and self.bench_proc.poll() is None:
+                    self.bench_proc.kill()
+                self.bench_proc = None
+                if step_index("benchmark") < target:
+                    # La page est déjà passée : la mesure tourne en arrière-plan.
+                    self.start_benchmark()
             if target == step_index("import"):
                 # Aussi quand le fichier de réponse a fait sauter la page des disques.
                 self.start_windows_detection()
@@ -4370,7 +4409,16 @@ class InstallerApp(Gtk.Application):
             if not self.profile_chosen_by_user:
                 self.select_profile(self.benchmark["recommended_profile"])
             self.refresh_profile_badges()
+            if STEP_KEYS[self.current_step] == "summary":
+                self.refresh_summary()  # la mesure finit après l'arrivée sur le récapitulatif
         return False
+
+    def benchmark_complete(self):
+        """Vrai si la mesure est terminée, sans composant en échec."""
+        if self.bench_state != "done" or not self.benchmark:
+            return False
+        results = self.benchmark.get("results", {})
+        return all(key in results for key in ("cpu", "ram", "gpu")) and not any("error" in r for r in results.values())
 
     def on_benchmark_exit(self, proc):
         if proc is self.bench_proc and self.bench_state == "running":
@@ -4694,8 +4742,14 @@ class InstallerApp(Gtk.Application):
         if (browser or stores) and not has_default_route():
             # Pas une erreur : l'init les installe au premier démarrage connecté.
             lines.append(tr("summary_offline_later"))
-        score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
-                 else tr("summary_benchmark_none"))
+        # Seulement une mesure complète : une note partielle (page passée trop
+        # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
+        if self.benchmark_complete():
+            score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+        elif self.bench_state == "running":
+            score = tr("summary_benchmark_running")
+        else:
+            score = tr("summary_benchmark_none")
         lines.append(f"{tr('summary_benchmark')} : {score}")
         lines.append(f"{tr('summary_migration')} : {self.migration.describe()}")
         if self.config.get("timezone"):
@@ -4824,9 +4878,42 @@ class InstallerApp(Gtk.Application):
 
     # ── Installation ─────────────────────────────────────────────
 
+    def keep_awake(self, active):
+        """Pas de veille d'écran (DPMS, économiseur) pendant l'installation.
+
+        Une installation dure jusqu'à une vingtaine de minutes : l'écran noir
+        laissait croire à un plantage. Rétabli à la fin, réussie ou non.
+        """
+        def quiet(*argv):
+            if shutil.which(argv[0]):
+                try:
+                    subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        if active:
+            quiet("xset", "s", "off")
+            quiet("xset", "-dpms")
+            quiet("xscreensaver-command", "-deactivate")
+
+            def poke():
+                if not getattr(self, "awake_timer", None):
+                    return False
+                quiet("xscreensaver-command", "-deactivate")
+                quiet("xset", "s", "reset")
+                return True
+            if not getattr(self, "awake_timer", None):
+                self.awake_timer = GLib.timeout_add_seconds(30, poke)
+        else:
+            if getattr(self, "awake_timer", None):
+                GLib.source_remove(self.awake_timer)
+                self.awake_timer = None
+            quiet("xset", "s", "default")
+            quiet("xset", "+dpms")
+
     def start_installation(self):
         self.current_step = step_index("progress")
         self.update_step()
+        self.keep_awake(True)
         self.install_cancelled = False
         self.install_thread = threading.Thread(target=self.run_installation, daemon=True)
         self.install_thread.start()
@@ -5668,6 +5755,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
     def show_done(self):
+        self.keep_awake(False)
         self.current_step = step_index("done")
         self.update_step()
 
@@ -5675,6 +5763,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         self.cleanup_windows_import()
 
         def do():
+            self.keep_awake(False)
             self.done_title.set_text(tr("error_title"))
             self.done_sub.set_text(message)
             self.current_step = step_index("done")
