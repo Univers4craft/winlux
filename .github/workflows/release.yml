@@ -27,6 +27,16 @@ on:
       - scripts/fetch-ovmf-ia32.sh
       - scripts/install.sh
       - scripts/test-install-vm-guest.sh
+      # Tout ce qui change le contenu de l'image : #359 a retiré Thunar via
+      # stage-desktop-components.sh sans que l'ISO soit reconstruite ici.
+      - scripts/build-live-iso.sh
+      - scripts/build-live-root.sh
+      - scripts/stage-*.sh
+      - scripts/stage-*.py
+      - scripts/prepare-*.py
+      - scripts/winlux-native-config.py
+      - integration/native/dbus/**
+      - integration/native/filemanager/**
   workflow_dispatch:
 
 permissions:
