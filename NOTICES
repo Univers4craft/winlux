@@ -41,6 +41,14 @@ L'image ISO de test utilise également :
   BusyBox (initramfs) — GPL-2.0-only (non modifié, fourni séparément)
   Xvfb / Xorg         — MIT (non modifié, fourni séparément)
 
+Données intégrées au bureau :
+
+  emojibase-data 18   — MIT (Copyright (c) 2017-2019 Miles Johnson)
+    Noms et mots-clés des emojis en quatre langues (sélecteur Win+.),
+    tirés des annotations CLDR (Unicode License v3).
+    integration/native/emoji/emoji.tsv, régénéré par
+    scripts/generate-emoji-data.py. https://emojibase.dev
+
 Microsoft Edge, lorsqu'il est embarqué via WINLUX_EDGE_DEB, est distribué
 selon les conditions de licence de Microsoft et n'est pas inclus par défaut.
 

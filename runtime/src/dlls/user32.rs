@@ -122,6 +122,8 @@ unsafe fn create_window_common(
     cy: i32,
     parent: usize,
     instance: usize,
+    menu: usize,
+    create_params: *mut c_void,
 ) -> usize {
     let Some(info) = gui::lookup_class(&class) else {
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
@@ -144,18 +146,24 @@ unsafe fn create_window_common(
     let rect = Rect::from_size(px, py, w, h);
     let visible = style & 0x1000_0000 != 0; // WS_VISIBLE
 
+    // Un contrôle enfant reçoit son identifiant dans hMenu (GetDlgItem).
+    if style & WS_CHILD != 0 {
+        set_control_id(hwnd, menu as isize);
+    }
+    let class_z: Vec<u8> = class.bytes().chain([0]).collect();
+    let title_z: Vec<u8> = title.bytes().chain([0]).collect();
     let cs = CreateStructA {
-        create_params: std::ptr::null_mut(),
+        create_params,
         instance,
-        menu: 0,
+        menu,
         parent,
         cy: h,
         cx: w,
         y: py,
         x: px,
         style: style as i32,
-        name: std::ptr::null(),
-        class: std::ptr::null(),
+        name: title_z.as_ptr().cast(),
+        class: class_z.as_ptr().cast(),
         ex_style,
     };
 
@@ -178,7 +186,20 @@ unsafe fn create_window_common(
         },
     );
 
-    // WM_CREATE synchrone (le wndproc peut refuser la fenêtre).
+    // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
+    // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
+    let nc = crate::dlls::gui::call_wndproc(
+        info.wnd_proc,
+        hwnd,
+        WM_NCCREATE,
+        0,
+        &cs as *const CreateStructA as isize,
+    );
+    if nc == 0 {
+        gui::destroy_window(hwnd);
+        forget_window_longs(hwnd);
+        return 0;
+    }
     let created = crate::dlls::gui::call_wndproc(
         info.wnd_proc,
         hwnd,
@@ -192,7 +213,11 @@ unsafe fn create_window_common(
     }
 
     with_backend(|b| {
-        b.create_window(hwnd, &title, rect);
+        if style & WS_CHILD != 0 && parent != 0 {
+            b.create_child_window(hwnd, parent, rect);
+        } else {
+            b.create_window(hwnd, &title, rect);
+        }
         if visible {
             b.show_window(hwnd, true);
         }
@@ -236,24 +261,26 @@ pub unsafe extern "win64" fn create_window_ex_a(
     instance: usize,
     param: *mut c_void,
 ) -> usize {
-    let _ = param;
-    let _ = menu;
     if class.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    create_window_common(
-        read_class_name_a(class),
-        read_class_name_a(title),
-        style,
-        ex_style,
-        x,
-        y,
-        cx,
-        cy,
-        parent,
-        instance,
-    )
+    super::controls::with_charset(false, || {
+        create_window_common(
+            read_class_name_a(class),
+            read_class_name_a(title),
+            style,
+            ex_style,
+            x,
+            y,
+            cx,
+            cy,
+            parent,
+            instance,
+            menu,
+            param,
+        )
+    })
 }
 
 pub unsafe extern "win64" fn create_window_ex_w(
@@ -270,24 +297,26 @@ pub unsafe extern "win64" fn create_window_ex_w(
     instance: usize,
     param: *mut c_void,
 ) -> usize {
-    let _ = param;
-    let _ = menu;
     if class.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    create_window_common(
-        read_class_name_w(class),
-        read_class_name_w(title),
-        style,
-        ex_style,
-        x,
-        y,
-        cx,
-        cy,
-        parent,
-        instance,
-    )
+    super::controls::with_charset(true, || {
+        create_window_common(
+            read_class_name_w(class),
+            read_class_name_w(title),
+            style,
+            ex_style,
+            x,
+            y,
+            cx,
+            cy,
+            parent,
+            instance,
+            menu,
+            param,
+        )
+    })
 }
 
 // ---------- Boucle de messages ----------
@@ -446,6 +475,14 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
         return 0;
     }
+    // WM_TIMER d'un minuteur à fonction de rappel : lParam est la TIMERPROC,
+    // appelée à la place de la procédure de fenêtre.
+    if m.message == 0x0113 && m.lparam != 0 {
+        let callback: unsafe extern "win64" fn(usize, u32, usize, u32) =
+            std::mem::transmute(m.lparam as usize);
+        callback(m.hwnd, m.message, m.wparam, m.time);
+        return 0;
+    }
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
@@ -503,6 +540,10 @@ pub unsafe extern "win64" fn send_message_a(
     wparam: usize,
     lparam: isize,
 ) -> isize {
+    super::controls::with_charset(false, || send_message(hwnd, message, wparam, lparam))
+}
+
+unsafe fn send_message(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
@@ -519,7 +560,7 @@ pub unsafe extern "win64" fn send_message_w(
     wparam: usize,
     lparam: isize,
 ) -> isize {
-    send_message_a(hwnd, message, wparam, lparam)
+    super::controls::with_charset(true, || send_message(hwnd, message, wparam, lparam))
 }
 
 // ---------- Propriétés de fenêtre ----------
@@ -647,7 +688,7 @@ pub unsafe extern "win64" fn get_window_rect(hwnd: usize, out: *mut Rect) -> i32
         crate::process::set_last_error(87);
         return 0;
     }
-    match gui::window_rect(hwnd) {
+    match gui::screen_rect(hwnd) {
         Some(r) => {
             std::ptr::write_unaligned(out, r);
             1
@@ -788,6 +829,7 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
     let t = read_class_name_a(text);
     if gui::set_title(hwnd, &t) {
         with_backend(|b| b.set_title(hwnd, &t));
+        super::controls::text_changed(hwnd);
         1
     } else {
         0
@@ -798,6 +840,7 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
     let t = read_class_name_w(text);
     if gui::set_title(hwnd, &t) {
         with_backend(|b| b.set_title(hwnd, &t));
+        super::controls::text_changed(hwnd);
         1
     } else {
         0
@@ -1111,16 +1154,36 @@ const _GWLP_WNDPROC: i32 = -4;
 const _GWLP_HINSTANCE: i32 = -6;
 const _GWLP_USERDATA: i32 = -21;
 const _GWLP_ID: i32 = -12;
-const DWL_DLGPROC: i32 = 4;
-const DWL_MSGRESULT: i32 = 0;
-const DWL_USER: i32 = 8;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-fn user_data_map() -> &'static Mutex<HashMap<usize, isize>> {
-    static M: OnceLock<Mutex<HashMap<usize, isize>>> = OnceLock::new();
+/// GWLP_USERDATA, GWLP_ID et données de fenêtre (cbWndExtra, DWLP_* des
+/// dialogues), par fenêtre et par index. Les HWND se suivent : une clé
+/// « hwnd + index » mélangeait les données de fenêtres voisines.
+fn user_data_map() -> &'static Mutex<HashMap<(usize, i32), isize>> {
+    static M: OnceLock<Mutex<HashMap<(usize, i32), isize>>> = OnceLock::new();
     M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+const WS_CHILD: u32 = 0x4000_0000;
+const WM_NCCREATE: u32 = 0x0081;
+
+fn set_control_id(hwnd: usize, id: isize) {
+    lock(user_data_map()).insert((hwnd, GWL_ID), id);
+}
+
+/// Identifiant de contrôle d'une fenêtre enfant (0 s'il n'en a pas).
+pub fn control_id(hwnd: usize) -> isize {
+    lock(user_data_map())
+        .get(&(hwnd, GWL_ID))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Efface les données d'une fenêtre détruite.
+pub fn forget_window_longs(hwnd: usize) {
+    lock(user_data_map()).retain(|(h, _), _| *h != hwnd);
 }
 
 use super::lock;
@@ -1130,20 +1193,18 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
         GWL_STYLE => gui::window_style(hwnd).unwrap_or(0) as isize,
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
         GWL_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
-        GWL_USERDATA => lock(user_data_map()).get(&hwnd).copied().unwrap_or(0),
         GWL_HINSTANCE => 0x0040_0000_isize,
-        GWL_ID | DWL_DLGPROC | DWL_MSGRESULT | DWL_USER => 0,
-        _ => {
-            // Offset positif = données supplémentaires de classe (cbWndExtra)
-            if index >= 0 {
-                lock(user_data_map())
-                    .get(&(hwnd.wrapping_add(index as usize)))
-                    .copied()
-                    .unwrap_or(0)
-            } else {
-                0
-            }
-        }
+        // GWLP_USERDATA, GWLP_ID et index positifs : données de la fenêtre
+        // (cbWndExtra ; DWLP_MSGRESULT 0, DWLP_DLGPROC 8, DWLP_USER 16 en x64).
+        GWL_USERDATA | GWL_ID => lock(user_data_map())
+            .get(&(hwnd, index))
+            .copied()
+            .unwrap_or(0),
+        _ if index >= 0 => lock(user_data_map())
+            .get(&(hwnd, index))
+            .copied()
+            .unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -1159,12 +1220,12 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
         GWL_WNDPROC => {
             gui::set_wnd_proc(hwnd, value as usize);
         }
-        GWL_USERDATA => {
-            lock(user_data_map()).insert(hwnd, value);
+        GWL_USERDATA | GWL_ID => {
+            lock(user_data_map()).insert((hwnd, index), value);
         }
         _ => {
             if index >= 0 {
-                lock(user_data_map()).insert(hwnd.wrapping_add(index as usize), value);
+                lock(user_data_map()).insert((hwnd, index), value);
             }
         }
     }
@@ -1297,12 +1358,32 @@ pub unsafe extern "win64" fn is_window_visible(hwnd: usize) -> i32 {
     gui::is_window_visible(hwnd) as i32
 }
 
-pub unsafe extern "win64" fn is_window_enabled(_hwnd: usize) -> i32 {
-    1 // Toutes les fenêtres sont « enabled » pour l'instant
+const WS_DISABLED: u32 = 0x0800_0000;
+
+pub unsafe extern "win64" fn is_window_enabled(hwnd: usize) -> i32 {
+    gui::window_style(hwnd).is_some_and(|s| s & WS_DISABLED == 0) as i32
 }
 
-pub unsafe extern "win64" fn enable_window(_hwnd: usize, _enable: i32) -> i32 {
-    0 // Était « enabled » avant
+/// Active ou désactive une fenêtre ; renvoie vrai si elle était désactivée.
+pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
+    let Some(style) = gui::window_style(hwnd) else {
+        return 0;
+    };
+    let was_disabled = style & WS_DISABLED != 0;
+    let new = if enable != 0 {
+        style & !WS_DISABLED
+    } else {
+        style | WS_DISABLED
+    };
+    if new != style {
+        gui::set_window_style(hwnd, new);
+        if enable == 0 && gui::focused_window() == hwnd {
+            set_focus(0);
+        }
+        send_message_w(hwnd, 0x000A, (enable != 0) as usize, 0); // WM_ENABLE
+        invalidate_rect(hwnd, std::ptr::null(), 1);
+    }
+    was_disabled as i32
 }
 
 pub unsafe extern "win64" fn is_iconic(_hwnd: usize) -> i32 {
@@ -1486,7 +1567,7 @@ pub unsafe extern "win64" fn screen_to_client(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::window_rect(hwnd) {
+    if let Some(r) = gui::screen_rect(hwnd) {
         (*point).x -= r.left;
         (*point).y -= r.top;
         1
@@ -1499,7 +1580,7 @@ pub unsafe extern "win64" fn client_to_screen(hwnd: usize, point: *mut Point) ->
     if point.is_null() {
         return 0;
     }
-    if let Some(r) = gui::window_rect(hwnd) {
+    if let Some(r) = gui::screen_rect(hwnd) {
         (*point).x += r.left;
         (*point).y += r.top;
         1
@@ -1774,48 +1855,67 @@ pub unsafe extern "win64" fn create_dialog_param_w(
     0
 }
 
-pub extern "win64" fn get_dlg_item(_dlg: usize, _id: i32) -> usize {
-    0
+/// GetDlgItem : enfant direct de `dlg` dont l'identifiant de contrôle est `id`.
+pub extern "win64" fn get_dlg_item(dlg: usize, id: i32) -> usize {
+    let found = gui::child_windows(dlg)
+        .into_iter()
+        .find(|h| control_id(*h) as i32 == id);
+    if found.is_none() {
+        crate::process::set_last_error(1421); // ERROR_CONTROL_ID_NOT_FOUND
+    }
+    found.unwrap_or(0)
 }
 
 pub extern "win64" fn end_dialog(_dlg: usize, _result: isize) -> i32 {
     1
 }
 
-pub unsafe extern "win64" fn set_dlg_item_text_a(_dlg: usize, _id: i32, _text: *const u8) -> i32 {
-    1
+pub unsafe extern "win64" fn set_dlg_item_text_a(dlg: usize, id: i32, text: *const u8) -> i32 {
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => set_window_text_a(item, text),
+    }
 }
 
-pub unsafe extern "win64" fn set_dlg_item_text_w(_dlg: usize, _id: i32, _text: *const u16) -> i32 {
-    1
+pub unsafe extern "win64" fn set_dlg_item_text_w(dlg: usize, id: i32, text: *const u16) -> i32 {
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => set_window_text_w(item, text),
+    }
 }
 
 pub unsafe extern "win64" fn get_dlg_item_text_a(
-    _dlg: usize,
-    _id: i32,
+    dlg: usize,
+    id: i32,
     buf: *mut u8,
     max: i32,
 ) -> u32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
-    0
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => get_window_text_a(item, buf, max).max(0) as u32,
+    }
 }
 
 pub unsafe extern "win64" fn get_dlg_item_text_w(
-    _dlg: usize,
-    _id: i32,
+    dlg: usize,
+    id: i32,
     buf: *mut u16,
     max: i32,
 ) -> u32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
-    0
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => get_window_text_w(item, buf, max).max(0) as u32,
+    }
 }
 
-pub unsafe extern "win64" fn get_dlg_ctrl_id(_hwnd: usize) -> i32 {
-    0
+pub unsafe extern "win64" fn get_dlg_ctrl_id(hwnd: usize) -> i32 {
+    control_id(hwnd) as i32
 }
 
 pub unsafe extern "win64" fn is_dialog_message_a(_dlg: usize, _msg: *const Msg) -> i32 {
@@ -1827,23 +1927,29 @@ pub unsafe extern "win64" fn is_dialog_message_w(_dlg: usize, _msg: *const Msg) 
 }
 
 pub unsafe extern "win64" fn send_dlg_item_message_a(
-    _dlg: usize,
-    _id: i32,
-    _msg: u32,
-    _wp: usize,
-    _lp: isize,
+    dlg: usize,
+    id: i32,
+    msg: u32,
+    wp: usize,
+    lp: isize,
 ) -> isize {
-    0
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => send_message_a(item, msg, wp, lp),
+    }
 }
 
 pub unsafe extern "win64" fn send_dlg_item_message_w(
-    _dlg: usize,
-    _id: i32,
-    _msg: u32,
-    _wp: usize,
-    _lp: isize,
+    dlg: usize,
+    id: i32,
+    msg: u32,
+    wp: usize,
+    lp: isize,
 ) -> isize {
-    0
+    match get_dlg_item(dlg, id) {
+        0 => 0,
+        item => send_message_w(item, msg, wp, lp),
+    }
 }
 
 // =====================================================================
@@ -1998,12 +2104,12 @@ pub unsafe extern "win64" fn map_window_points(
     let from_offset = if from == 0 {
         (0i32, 0i32)
     } else {
-        gui::window_rect(from).map_or((0, 0), |r| (r.left, r.top))
+        gui::screen_rect(from).map_or((0, 0), |r| (r.left, r.top))
     };
     let to_offset = if to == 0 {
         (0i32, 0i32)
     } else {
-        gui::window_rect(to).map_or((0, 0), |r| (r.left, r.top))
+        gui::screen_rect(to).map_or((0, 0), |r| (r.left, r.top))
     };
     let dx = from_offset.0 - to_offset.0;
     let dy = from_offset.1 - to_offset.1;
@@ -2329,16 +2435,23 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
 
 // ---------- Scroll bar stubs ----------
 
-pub extern "win64" fn get_scroll_info(_hwnd: usize, _bar: i32, _info: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn get_scroll_info(hwnd: usize, bar: i32, info: *mut c_void) -> i32 {
+    if bar == 2 {
+        // SB_CTL : le contrôle SCROLLBAR lui-même.
+        return super::controls::scroll_info(hwnd, info.cast(), false, false).unwrap_or(0);
+    }
     0
 }
 
-pub extern "win64" fn set_scroll_info(
-    _hwnd: usize,
-    _bar: i32,
-    _info: *const c_void,
-    _redraw: i32,
+pub unsafe extern "win64" fn set_scroll_info(
+    hwnd: usize,
+    bar: i32,
+    info: *const c_void,
+    redraw: i32,
 ) -> i32 {
+    if bar == 2 {
+        return super::controls::scroll_info(hwnd, info as *mut _, true, redraw != 0).unwrap_or(0);
+    }
     0
 }
 

@@ -74,7 +74,7 @@ jobs:
             libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
             libqt6core6t64 libqt6gui6 libqt6widgets6 \
             python3-gi gir1.2-gtk-3.0
-          sudo apt-get install -y -q openbox wmctrl xdotool
+          sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
 
       - name: Préparer Edge, Chrome et Firefox hors ligne
         run: python3 scripts/prepare-browser-packages.py build/browser-packages

@@ -390,6 +390,25 @@ _TR = {
     "Installer ou désinstaller des programmes": ("Install or uninstall programs", "Instalar o desinstalar programas", "Programme installieren oder deinstallieren"),
     "Enregistrement impossible : le dossier du programme doit être accessible en écriture.": ("Unable to save: the program folder must be writable.", "No se puede guardar: la carpeta del programa debe admitir escritura.", "Speichern nicht möglich: Der Programmordner muss beschreibbar sein."),
     "Les réglages s’appliquent au prochain lancement du programme.": ("Settings apply the next time the program starts.", "Los ajustes se aplican la próxima vez que se inicie el programa.", "Die Einstellungen gelten beim nächsten Programmstart."),
+    # Presse-papiers
+    'Historique du presse-papiers': ('Clipboard history', 'Historial del portapapeles', 'Zwischenablageverlauf'),
+    'Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V.': ('Keep several copied items and find them with Windows + V.', 'Guarde varios elementos copiados y encuéntrelos con Windows + V.', 'Behalten Sie mehrere kopierte Elemente und finden Sie sie mit Windows + V.'),
+    'Effacer les données du presse-papiers': ('Clear clipboard data', 'Borrar los datos del portapapeles', 'Zwischenablagedaten löschen'),
+    'Efface tout l’historique, sauf les éléments épinglés.': ('Clears the whole history except pinned items.', 'Borra todo el historial excepto los elementos anclados.', 'Löscht den gesamten Verlauf außer angehefteten Elementen.'),
+    'Effacer': ('Clear', 'Borrar', 'Löschen'),
+    # Éclairage nocturne (Écran)
+    'Éclairage nocturne': ('Night light', 'Luz nocturna', 'Nachtmodus'),
+    'Des couleurs plus chaudes le soir reposent les yeux et aident à s’endormir.': ('Warmer colours in the evening rest your eyes and help you fall asleep.', 'Los colores más cálidos por la noche descansan la vista y ayudan a dormir.', 'Wärmere Farben am Abend schonen die Augen und helfen beim Einschlafen.'),
+    'Activer maintenant': ('Turn on now', 'Activar ahora', 'Jetzt einschalten'),
+    'Intensité': ('Strength', 'Intensidad', 'Stärke'),
+    'Planifier l’éclairage nocturne': ('Schedule night light', 'Programar la luz nocturna', 'Nachtmodus planen'),
+    'Jamais': ('Never', 'Nunca', 'Nie'),
+    'Du coucher au lever du soleil ({sunset} – {sunrise})': ('Sunset to sunrise ({sunset} – {sunrise})', 'Del atardecer al amanecer ({sunset} – {sunrise})', 'Sonnenuntergang bis Sonnenaufgang ({sunset} – {sunrise})'),
+    'Définir les heures': ('Set hours', 'Establecer horas', 'Uhrzeiten festlegen'),
+    'Activer à': ('Turn on at', 'Activar a las', 'Einschalten um'),
+    'Désactiver à': ('Turn off at', 'Desactivar a las', 'Ausschalten um'),
+    'Heures calculées pour votre fuseau horaire, sans connexion à Internet.': ('Times calculated for your time zone, without an Internet connection.', 'Horas calculadas para su zona horaria, sin conexión a Internet.', 'Zeiten für Ihre Zeitzone berechnet, ohne Internetverbindung.'),
+    'Fuseau horaire sans coordonnées : 20:00 – 07:00 par défaut.': ('Time zone without coordinates: 20:00 – 07:00 by default.', 'Zona horaria sin coordenadas: 20:00 – 07:00 por defecto.', 'Zeitzone ohne Koordinaten: standardmäßig 20:00 – 07:00.'),
     # Widgets (Windows + W)
     'Widgets': ('Widgets', 'Widgets', 'Widgets'),
     'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
@@ -446,6 +465,7 @@ PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1
 PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
 PAGE_RECOVERY = 31
+PAGE_CLIPBOARD = 32
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -558,6 +578,25 @@ def keyvals(text):
 
 def have(command):
     return shutil.which(command) is not None
+
+
+def ambiance_tool():
+    """winlux-ambiance installé, ou le script du dépôt à côté de celui-ci."""
+    if have("winlux-ambiance"): return ["winlux-ambiance"]
+    script = Path(__file__).resolve().with_name("winlux-ambiance.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def clipboard_tool():
+    if have("winlux-clipboard"): return ["winlux-clipboard"]
+    script = Path(__file__).resolve().with_name("winlux-clipboard.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def ambiance_status():
+    tool = ambiance_tool()
+    result = run(tool + ["status"]) if tool else None
+    return keyvals(result.stdout) if result else {}
 
 
 def run(args, timeout=5):
@@ -842,6 +881,8 @@ def page_available(page, status=None):
         return have("lpstat")
     if page == PAGE_REMOTE:
         return have("winlux-remote-config") or (RUN / "remote.txt").is_file()
+    if page == PAGE_CLIPBOARD:
+        return clipboard_tool() is not None
     if page == PAGE_SHARING:
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
     if page == PAGE_GAMES:
@@ -944,9 +985,10 @@ class ExtraPages:
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
-                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery"}
+                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
+                   PAGE_CLIPBOARD: "page_clipboard"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
-    EXTRA_SECTIONS = {2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
+    EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
     def extra_page(self, page):
         """Construit la page ; False si elle n’est pas gérée ici."""
@@ -1025,7 +1067,7 @@ class ExtraPages:
         try: subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError as error: self.show_error(_t("L’opération a échoué"), str(error))
 
-    def tool(self, args, refresh=True):
+    def tool(self, args, refresh=True, after=None):
         """Commande d’un réglage (winlux-personalize…) sans figer la fenêtre."""
         try:
             process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -1038,6 +1080,7 @@ class ExtraPages:
             if process.returncode:
                 self.show_error(_t("L’opération a échoué"), (process.stderr.read() or "").strip()[-2000:])
             if refresh: self.extra_refresh()
+            if after is not None: after()
             return False
         GLib.timeout_add(200, wait)
 
@@ -1611,6 +1654,69 @@ class ExtraPages:
                        report.get("fan_curve") if report.get("fan_curve") in dict(CPU_FANS) else "auto",
                        lambda value: self.execute("cpu-fan-" + value))
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── Presse-papiers (Windows + V) ──
+
+    def page_clipboard(self):
+        tool = clipboard_tool()
+        result = run(tool + ["status"])
+        state = keyvals(result.stdout) if result else {}
+        box = self.card()
+        self.switch(box, _t("Historique du presse-papiers"), state.get("history", "on") == "on",
+                    lambda on: self.tool(tool + ["set", "HISTORY", "on" if on else "off"]),
+                    _t("Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V."))
+        box = self.card()
+        self.row(box, _t("Effacer les données du presse-papiers"), None,
+                 _t("Efface tout l’historique, sauf les éléments épinglés."))
+        self.actions(box, [(_t("Effacer"), lambda: self.tool(tool + ["clear"]),
+                            state.get("items", "0") != state.get("pinned", "0"))])
+
+    # ── Écran : éclairage nocturne ──
+
+    def sections_display(self):
+        state = ambiance_status()
+        # Pilote sans rampe gamma (certaines VM) : section masquée.
+        if state.get("supported") != "1": return
+        tool = ambiance_tool()
+        self.section(_t("Éclairage nocturne"), _t("Des couleurs plus chaudes le soir reposent les yeux et aident à s’endormir."))
+        box = self.card()
+        self.switch(box, _t("Activer maintenant"), state.get("nightlight") == "on",
+                    lambda on: self.tool(tool + ["set", "NIGHTLIGHT", "on" if on else "off"], refresh=False))
+        try: strength = int(state.get("strength", "50"))
+        except ValueError: strength = 50
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
+        scale.set_value(strength)
+        scale.set_size_request(240, -1)
+        scale.set_draw_value(False)
+        pending = {}
+
+        def moved(widget):
+            # Valeur envoyée quand le curseur s’arrête, pas à chaque pixel.
+            if pending.get("id"): GLib.source_remove(pending["id"])
+            def send():
+                pending["id"] = None
+                self.tool(tool + ["set", "STRENGTH", str(int(widget.get_value()))], refresh=False)
+                return False
+            pending["id"] = GLib.timeout_add(250, send)
+        scale.connect("value-changed", moved)
+        self.row(box, _t("Intensité"), scale)
+        sunset, sunrise = state.get("sunset", "20:00"), state.get("sunrise", "07:00")
+        schedule = state.get("schedule") if state.get("schedule") in ("off", "sun", "manual") else "off"
+        self.combo(box, _t("Planifier l’éclairage nocturne"),
+                   [("off", _t("Jamais")),
+                    ("sun", _t("Du coucher au lever du soleil ({sunset} – {sunrise})").format(sunset=sunset, sunrise=sunrise)),
+                    ("manual", _t("Définir les heures"))], schedule,
+                   lambda value: self.tool(tool + ["set", "SCHEDULE", value], refresh=False,
+                                           after=lambda: self.select(self.nav, None)))
+        if schedule == "sun":
+            self.hint(_t("Heures calculées pour votre fuseau horaire, sans connexion à Internet.")
+                      if state.get("sun_known") == "1" else _t("Fuseau horaire sans coordonnées : 20:00 – 07:00 par défaut."), box)
+        if schedule == "manual":
+            for title, key, value in ((_t("Activer à"), "FROM", state.get("from", "21:00")),
+                                      (_t("Désactiver à"), "TO", state.get("to", "07:00"))):
+                entry = Gtk.Entry(text=value, width_chars=6, max_length=5)
+                entry.connect("activate", lambda widget, k=key: self.tool(tool + ["set", k, widget.get_text()], refresh=False))
+                self.row(box, title, entry)
 
     # ── Jeux : bibliothèque, temps de jeu, dossiers de jeux ──
 
