@@ -95,6 +95,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Chantiers actifs (issue ouverte)
 
+- [ ] Démarrer en moins de 10 s (bureau utilisable) : menu GRUB caché 1 s, noyau silencieux, inventaire matériel et services hors du chemin critique, premier démarrage sans installation bloquante (`docs/PERFORMANCES.md`, objectif 10 s).
 - [ ] Release v0.2.12 en préparation ; v0.2.7 à v0.2.11 ont échoué (paquets Qt 6 renommés, base APT dans QEMU, bureau bloqué sans Bluetooth, ISO > 2 Gio), corrigés par #128, #132, #142 et la compression xz (#32).
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).

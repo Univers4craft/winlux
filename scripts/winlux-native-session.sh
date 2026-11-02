@@ -4,27 +4,10 @@ set -eu
 export DISPLAY=${DISPLAY:-:0}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
-mkdir -p "$XDG_RUNTIME_DIR" /run/winlux /var/lib/dbus
-if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
-chmod 700 "$XDG_RUNTIME_DIR"
-/usr/bin/dbus-uuidgen --ensure=/etc/machine-id
-chmod 644 /etc/machine-id
-chmod 755 /var/lib/dbus
-ln -sf /etc/machine-id /var/lib/dbus/machine-id
-if ! test -S /run/winlux/session-bus; then
-    /usr/bin/dbus-daemon --session --fork --address=unix:path=/run/winlux/session-bus --print-address=1 > /run/winlux/dbus-address 2>/run/winlux/session-bus.log
-fi
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
-/usr/bin/winlux-native-config
-# Hardware services run on the system bus; applications use the session bus.
-mkdir -p /run/dbus
-chmod 755 /run/dbus
-if ! test -S /run/dbus/system_bus_socket; then
-    /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1
-fi
 # Winlux uses its own init, so start hardware daemons directly instead of
 # relying on systemd activation from the distribution's D-Bus service files.
 wait_bus_name() {
@@ -44,41 +27,85 @@ wait_bus_name() {
     cat "$service_log" >&2
     return 1
 }
-# polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
-polkit_pid=
-udisks_pid=
-if test -x /usr/lib/polkit-1/polkitd; then
-    /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
-    polkit_pid=$!
-fi
-if test -x /usr/libexec/udisks2/udisksd; then
-    /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
-    udisks_pid=$!
-fi
-if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
-if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
-if test -x /usr/sbin/NetworkManager; then
-    mkdir -p /etc/netplan /etc/NetworkManager/system-connections
-    if test -x /usr/sbin/wpa_supplicant; then
-        /usr/sbin/wpa_supplicant -u -s >/run/winlux/wpa-supplicant.log 2>&1 &
+# Services sans écran (bus D-Bus, polkit, udisks, réseau, impression, son) :
+# l'init les lance avec --early pendant que Xorg démarre, en parallèle.
+early_services() {
+    mkdir -p "$XDG_RUNTIME_DIR" /run/winlux /var/lib/dbus
+    if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
+    chmod 700 "$XDG_RUNTIME_DIR"
+    /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
+    chmod 644 /etc/machine-id
+    chmod 755 /var/lib/dbus
+    ln -sf /etc/machine-id /var/lib/dbus/machine-id
+    if ! test -S /run/winlux/session-bus; then
+        /usr/bin/dbus-daemon --session --fork --address=unix:path=/run/winlux/session-bus --print-address=1 > /run/winlux/dbus-address 2>/run/winlux/session-bus.log
     fi
-    /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
-    network_pid=$!
-    echo "$network_pid" >/run/winlux/network-manager.pid
-    /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
+    /usr/bin/winlux-native-config
+    # Hardware services run on the system bus; applications use the session bus.
+    mkdir -p /run/dbus
+    chmod 755 /run/dbus
+    if ! test -S /run/dbus/system_bus_socket; then
+        /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1
+    fi
+    # polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
+    polkit_pid=
+    udisks_pid=
+    if test -x /usr/lib/polkit-1/polkitd; then
+        /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
+        polkit_pid=$!
+    fi
+    if test -x /usr/libexec/udisks2/udisksd; then
+        /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
+        udisks_pid=$!
+    fi
+    if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
+    if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
+    if test -x /usr/sbin/NetworkManager; then
+        mkdir -p /etc/netplan /etc/NetworkManager/system-connections
+        if test -x /usr/sbin/wpa_supplicant; then
+            /usr/sbin/wpa_supplicant -u -s >/run/winlux/wpa-supplicant.log 2>&1 &
+        fi
+        /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
+        network_pid=$!
+        echo "$network_pid" >/run/winlux/network-manager.pid
+        /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
+    fi
+    # Printing (#111): there is no systemd to socket-activate CUPS, start it here.
+    if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
+        mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
+        /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+    fi
+    # Sound (#115): PipeWire with its session manager and Pulse server gives every
+    # .exe its own stream (per-app volume). ALSA alone stays the fallback.
+    if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber; then
+        /usr/bin/pipewire >/run/winlux/pipewire.log 2>&1 &
+        /usr/bin/wireplumber >/run/winlux/wireplumber.log 2>&1 &
+        if test -x /usr/bin/pipewire-pulse; then /usr/bin/pipewire-pulse >/run/winlux/pipewire-pulse.log 2>&1 & fi
+    fi
+}
+early_done=/run/winlux/session-early.done early_failed=/run/winlux/session-early.failed
+if test "${1:-}" = --early; then
+    rm -f "$early_done" "$early_failed"
+    trap 'if test -e "$early_done"; then :; else touch "$early_failed"; fi' EXIT
+    early_services
+    touch "$early_done"
+    exit 0
 fi
-# Printing (#111): there is no systemd to socket-activate CUPS, start it here.
-if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
-    mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
-    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+# Lancement par l'init : attendre la partie déjà partie avec Xorg.
+early_pid=$(cat /run/winlux/session-early.pid 2>/dev/null || true)
+case "$early_pid" in
+    ''|*[!0-9]*) ;;
+    *) while ! test -e "$early_done" && ! test -e "$early_failed" && kill -0 "$early_pid" 2>/dev/null; do sleep 0.05; done ;;
+esac
+if test -e "$early_failed"; then
+    echo "Services de session en échec (voir /run/winlux/native-early.log)" >&2
+    cat /run/winlux/native-early.log >&2 2>/dev/null || true
+    exit 1
 fi
-# Sound (#115): PipeWire with its session manager and Pulse server gives every
-# .exe its own stream (per-app volume). ALSA alone stays the fallback.
-if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber; then
-    /usr/bin/pipewire >/run/winlux/pipewire.log 2>&1 &
-    /usr/bin/wireplumber >/run/winlux/wireplumber.log 2>&1 &
-    if test -x /usr/bin/pipewire-pulse; then /usr/bin/pipewire-pulse >/run/winlux/pipewire-pulse.log 2>&1 & fi
-fi
+test -e "$early_done" || early_services
+# Gestionnaire de fenêtres lancé d'emblée : il est prêt quand la barre arrive.
+/usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
+echo $! > /run/winlux/window-manager.pid
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
@@ -168,8 +195,6 @@ fi
     done
 ) </dev/null >/run/winlux/catalogue.log 2>&1 &
 echo $! > /run/winlux/catalogue.pid
-/usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
-echo $! > /run/winlux/window-manager.pid
 for attempt in $(seq 1 30); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     sleep 0.1
@@ -183,15 +208,23 @@ fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 wait_bus_name session org.xfce.FileManager "$thunar_pid" /run/winlux/file-manager.log
-# Name ownership precedes GTK/GVfs initialization. Wait for an actual method
-# reply so the desktop cannot send file-launch requests to a busy startup loop.
-/usr/bin/gdbus call --session --dest org.xfce.FileManager \
-    --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
-    --timeout 90 >>/run/winlux/file-manager.log 2>&1 || {
-        cat /run/winlux/file-manager.log >&2
-        exit 1
-    }
-/usr/bin/winlux-trust-shortcuts
+# Name ownership precedes GTK/GVfs initialization. Une fois le nom pris, une
+# demande d'ouverture envoyée par le bureau attend simplement dans la file de
+# Thunar : la réponse complète n'est attendue avant le bureau que pour les
+# tests automatiques, qui cliquent dès la première seconde.
+thunar_ping() {
+    /usr/bin/gdbus call --session --dest org.xfce.FileManager \
+        --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
+        --timeout 90 >>/run/winlux/file-manager.log 2>&1
+}
+if grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
+    thunar_ping || { cat /run/winlux/file-manager.log >&2; exit 1; }
+else
+    thunar_ping </dev/null >/dev/null 2>&1 &
+fi
+# Raccourcis du Bureau approuvés en arrière-plan : seule leur ouverture
+# en dépend, pas l'affichage du bureau.
+/usr/bin/winlux-trust-shortcuts </dev/null >/run/winlux/trust-shortcuts.log 2>&1 &
 # Programmes « au démarrage » : lancés après le bureau, comme sous Windows.
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1 &
 # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
@@ -199,7 +232,15 @@ if command -v winlux-store >/dev/null 2>&1; then
     winlux-store starter --resume >/run/winlux/starter.log 2>&1 &
 fi
 if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
-    /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
+    # Bienvenue s'ouvre une fois le bureau dessiné : ouverte avant, sa
+    # fenêtre restait parfois noire (cadre vide au centre de l'écran).
+    (
+        for attempt in $(seq 1 100); do
+            /usr/bin/xdotool search --onlyvisible --classname xfdesktop >/dev/null 2>&1 && break
+            sleep 0.2
+        done
+        exec /usr/bin/winlux-welcome
+    ) </dev/null >/run/winlux/welcome.log 2>&1 &
 fi
 gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
 if test "$gpu_count" -gt 0; then

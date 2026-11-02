@@ -511,14 +511,15 @@ while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
 done
 boot_mark recovery
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-input.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/usbhid.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
+kernel_modules=/lib/modules/$(/bin/busybox uname -r)
+/bin/busybox insmod "$kernel_modules"/virtio_dma_buf.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/virtio-gpu.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/virtio-input.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/hid.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/usbhid.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/hid-generic.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/serio-raw.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/psmouse.ko 2>/dev/null || true
 # Pilotes des cartes PCI présentes (réseau, son, affichage bochs/qxl/vmwgfx
 # des VM…) en un seul appel, d'après leur modalias, au lieu de 13 modprobe à
 # l'aveugle ; udev complète ensuite pour l'USB et le reste.
@@ -722,6 +723,14 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /bin/busybox touch /run/winlux/splash.stop
     /usr/bin/Xorg :0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
+    # Bus D-Bus, polkit, udisks, réseau, impression et son n'ont pas besoin de
+    # l'écran : ils démarrent pendant que Xorg s'initialise.
+    (
+        if test -d /usr/lib/locale/fr_FR.utf8; then LANG=fr_FR.UTF-8; else LANG=C.UTF-8; fi
+        export LANG DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0
+        exec /usr/bin/winlux-native-session --early
+    ) >/run/winlux/native-early.log 2>&1 &
+    echo "$!" >/run/winlux/session-early.pid
     # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
     for attempt in $(/bin/busybox seq 1 100); do
         if test -S /tmp/.X11-unix/X0; then
