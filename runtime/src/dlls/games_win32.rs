@@ -585,13 +585,59 @@ pub fn gdi32_exports() -> Exports {
 // setupapi, cfgmgr32, hid
 // =====================================================================
 
-unsafe extern "win64" fn SetupDiGetClassDevsA(
-    guid: usize,
-    _enumerator: *const u8,
-    parent: usize,
-    flags: u32,
-) -> usize {
-    crate::dlls::setupapi::SetupDiGetClassDevsW(guid, std::ptr::null(), parent, flags)
+/// Variantes ANSI de setupapi (SDL2) : appel de la version W, chemins
+/// et chaînes convertis dans la page ANSI.
+unsafe extern "win64" fn SetupDiGetDeviceInterfaceDetailA(set: usize, iface: *const u8, detail: *mut u8, size: u32, required: *mut u32, devinfo: *mut u8) -> i32 {
+    let mut need = 0u32;
+    crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(set, iface, std::ptr::null_mut(), 0, &mut need, std::ptr::null_mut());
+    if need < 8 {
+        return 0;
+    }
+    let mut wide = vec![0u8; need as usize + 8];
+    std::ptr::write_unaligned(wide.as_mut_ptr() as *mut u32, 8);
+    if crate::dlls::setupapi::SetupDiGetDeviceInterfaceDetailW(set, iface, wide.as_mut_ptr(), wide.len() as u32, &mut need, devinfo) == 0 {
+        return 0;
+    }
+    let units: Vec<u16> = wide[4..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+    let mut path = crate::dlls::encode_ansi(&String::from_utf16_lossy(&units));
+    path.push(0);
+    let total = 4 + path.len() as u32;
+    if !required.is_null() {
+        *required = total.max(5);
+    }
+    if detail.is_null() || size < total {
+        set_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(path.as_ptr(), detail.add(4), path.len());
+    1
+}
+unsafe extern "win64" fn SetupDiGetDeviceRegistryPropertyA(set: usize, data: *const u8, prop: u32, kind: *mut u32, buf: *mut u8, size: u32, required: *mut u32) -> i32 {
+    let mut need = 0u32;
+    let mut t = 0u32;
+    crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(set, data, prop, &mut t, std::ptr::null_mut(), 0, &mut need);
+    if need == 0 {
+        return 0;
+    }
+    let mut wide = vec![0u8; need as usize];
+    if crate::dlls::setupapi::SetupDiGetDeviceRegistryPropertyW(set, data, prop, &mut t, wide.as_mut_ptr(), need, &mut need) == 0 {
+        return 0;
+    }
+    let units: Vec<u16> = wide.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    // Chaînes (REG_SZ, REG_MULTI_SZ) converties ; données binaires recopiées.
+    let out: Vec<u8> = if matches!(t, 1 | 2 | 7) { crate::dlls::encode_ansi(&String::from_utf16_lossy(&units)) } else { wide.clone() };
+    if !kind.is_null() {
+        *kind = t;
+    }
+    if !required.is_null() {
+        *required = out.len() as u32;
+    }
+    if buf.is_null() || size < out.len() as u32 {
+        set_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(out.as_ptr(), buf, out.len());
+    1
 }
 extern "win64" fn no_more_items() -> i32 {
     set_error(259);
@@ -603,9 +649,8 @@ extern "win64" fn cr_no_such_devnode() -> u32 {
 }
 pub fn setupapi_exports() -> Exports {
     crate::exports! {
-        "SetupDiGetClassDevsA" => fn SetupDiGetClassDevsA, "SetupDiGetClassDevsExW" => fn SetupDiGetClassDevsA,
-        "SetupDiGetDeviceInterfaceDetailA" => fn no_more_items, "SetupDiGetDeviceInterfaceDetailW" => fn no_more_items,
-        "SetupDiGetDeviceRegistryPropertyA" => fn no_more_items,
+        "SetupDiGetDeviceInterfaceDetailA" => fn SetupDiGetDeviceInterfaceDetailA,
+        "SetupDiGetDeviceRegistryPropertyA" => fn SetupDiGetDeviceRegistryPropertyA,
         "SetupDiGetDeviceInstanceIdA" => fn no_more_items, "SetupDiGetDeviceInstanceIdW" => fn no_more_items,
         "SetupDiOpenDevRegKey" => fn no_more_items,
         "CM_Get_Device_IDA" => fn cr_no_such_devnode, "CM_Get_Device_IDW" => fn cr_no_such_devnode,
@@ -615,17 +660,6 @@ pub fn setupapi_exports() -> Exports {
     }
 }
 
-/// GUID_DEVINTERFACE_HID {4D1E55B2-F16F-11CF-88CB-001111000030}.
-unsafe extern "win64" fn HidD_GetHidGuid(out: *mut u8) {
-    if out.is_null() {
-        return;
-    }
-    let g: [u8; 16] = [
-        0xB2, 0x55, 0x1E, 0x4D, 0x6F, 0xF1, 0xCF, 0x11, 0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00,
-        0x30,
-    ];
-    std::ptr::copy_nonoverlapping(g.as_ptr(), out, 16);
-}
 extern "win64" fn hid_false() -> i32 {
     set_error(1);
     0
@@ -634,16 +668,11 @@ extern "win64" fn hid_false() -> i32 {
 extern "win64" fn hidp_invalid() -> u32 {
     0xC011_0001
 }
+/// Compléments de hid.rs (fonctions qu'il ne fournit pas encore).
 pub fn hid_exports() -> Exports {
     crate::exports! {
-        "HidD_GetHidGuid" => fn HidD_GetHidGuid,
-        "HidD_GetAttributes" => fn hid_false, "HidD_SetOutputReport" => fn hid_false,
-        "HidD_GetInputReport" => fn hid_false, "HidD_GetFeature" => fn hid_false, "HidD_SetFeature" => fn hid_false,
-        "HidD_GetPreparsedData" => fn hid_false, "HidD_FreePreparsedData" => fn ok1,
-        "HidD_GetManufacturerString" => fn hid_false, "HidD_GetProductString" => fn hid_false,
-        "HidD_GetSerialNumberString" => fn hid_false, "HidD_GetIndexedString" => fn hid_false,
-        "HidD_SetNumInputBuffers" => fn ok1, "HidD_FlushQueue" => fn ok1,
-        "HidP_GetCaps" => fn hidp_invalid, "HidP_GetButtonCaps" => fn hidp_invalid, "HidP_GetValueCaps" => fn hidp_invalid,
+        "HidD_GetIndexedString" => fn hid_false,
+        "HidP_GetButtonCaps" => fn hidp_invalid, "HidP_GetValueCaps" => fn hidp_invalid,
         "HidP_GetData" => fn hidp_invalid, "HidP_GetUsages" => fn hidp_invalid, "HidP_GetUsageValue" => fn hidp_invalid,
         "HidP_MaxDataListLength" => fn zero, "HidP_MaxUsageListLength" => fn zero,
     }

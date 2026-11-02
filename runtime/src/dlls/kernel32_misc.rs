@@ -781,17 +781,126 @@ pub unsafe extern "win64" fn local_free(p: *mut c_void) -> *mut c_void {
 /// paquet répondent `APPMODEL_ERROR_NO_PACKAGE`, ce que les programmes
 /// classiques reçoivent aussi sous Windows.
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
-pub unsafe extern "win64" fn get_current_package_id(len: *mut u32, _buf: *mut u8) -> u32 {
+/// Identité de paquet MSIX du programme courant (lancé depuis
+/// `C:\Program Files\WindowsApps\<PackageFullName>`), lue une fois.
+fn current_package() -> Option<&'static (crate::setup::msix::Package, String)> {
+    static PACKAGE: std::sync::OnceLock<Option<(crate::setup::msix::Package, String)>> =
+        std::sync::OnceLock::new();
+    PACKAGE
+        .get_or_init(|| {
+            let exe = crate::loader::main_module()?.path;
+            let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+            crate::setup::msix::package_of(&exe)
+        })
+        .as_ref()
+}
+
+/// Copie `text` (UTF-16, terminé par zéro) dans un tampon de `*len`
+/// caractères, à la manière des fonctions de l'identité de paquet.
+unsafe fn package_string(len: *mut u32, buf: *mut u16, text: Option<String>) -> u32 {
     if len.is_null() {
         return 87; // ERROR_INVALID_PARAMETER
     }
-    APPMODEL_ERROR_NO_PACKAGE
+    let Some(text) = text else {
+        return APPMODEL_ERROR_NO_PACKAGE;
+    };
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let needed = wide.len() as u32;
+    if buf.is_null() || *len < needed {
+        *len = needed;
+        return 122; // ERROR_INSUFFICIENT_BUFFER
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
+    *len = needed;
+    0
 }
-pub unsafe extern "win64" fn get_current_package_name(len: *mut u32, _buf: *mut u16) -> u32 {
-    get_current_package_id(len, std::ptr::null_mut())
+
+/// Valeur Windows de l'architecture d'un paquet.
+fn package_arch(arch: &str) -> u32 {
+    match arch {
+        "x86" => 0,
+        "arm" => 5,
+        "x64" => 9,
+        "arm64" => 12,
+        _ => 11, // neutral
+    }
 }
-pub unsafe extern "win64" fn get_current_package_path(len: *mut u32, _buf: *mut u16) -> u32 {
-    get_current_package_id(len, std::ptr::null_mut())
+
+/// `GetCurrentPackageId` : structure PACKAGE_ID (48 octets en 64 bits)
+/// suivie de ses chaînes, dans le même tampon.
+pub unsafe extern "win64" fn get_current_package_id(len: *mut u32, buf: *mut u8) -> u32 {
+    if len.is_null() {
+        return 87; // ERROR_INVALID_PARAMETER
+    }
+    let Some((pkg, _)) = current_package() else {
+        return APPMODEL_ERROR_NO_PACKAGE;
+    };
+    let strings = [
+        pkg.name.clone(),
+        pkg.publisher.clone(),
+        pkg.resource_id.clone(),
+        pkg.publisher_id(),
+    ];
+    let wide: Vec<Vec<u16>> = strings
+        .iter()
+        .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect())
+        .collect();
+    let needed = 48 + wide.iter().map(|w| w.len() * 2).sum::<usize>();
+    if buf.is_null() || (*len as usize) < needed {
+        *len = needed as u32;
+        return 122; // ERROR_INSUFFICIENT_BUFFER
+    }
+    let mut v = pkg
+        .version
+        .split('.')
+        .map(|n| n.parse::<u16>().unwrap_or(0));
+    let (major, minor, build, revision) = (
+        v.next().unwrap_or(0) as u64,
+        v.next().unwrap_or(0) as u64,
+        v.next().unwrap_or(0) as u64,
+        v.next().unwrap_or(0) as u64,
+    );
+    std::ptr::write_bytes(buf, 0, 48);
+    (buf.add(4) as *mut u32).write_unaligned(package_arch(&pkg.arch));
+    (buf.add(8) as *mut u64).write_unaligned(major << 48 | minor << 32 | build << 16 | revision);
+    let mut at = 48usize;
+    for (i, w) in wide.iter().enumerate() {
+        let dst = buf.add(at);
+        std::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, dst, w.len() * 2);
+        (buf.add(16 + i * 8) as *mut usize).write_unaligned(dst as usize);
+        at += w.len() * 2;
+    }
+    *len = needed as u32;
+    0
+}
+pub unsafe extern "win64" fn get_current_package_full_name(len: *mut u32, buf: *mut u16) -> u32 {
+    package_string(len, buf, current_package().map(|(p, _)| p.full_name()))
+}
+pub unsafe extern "win64" fn get_current_package_family_name(len: *mut u32, buf: *mut u16) -> u32 {
+    package_string(len, buf, current_package().map(|(p, _)| p.family_name()))
+}
+/// `GetCurrentApplicationUserModelId` : `Famille!IdApplication`.
+pub unsafe extern "win64" fn get_current_application_user_model_id(
+    len: *mut u32,
+    buf: *mut u16,
+) -> u32 {
+    let id = current_package().map(|(p, _)| {
+        let exe = crate::loader::main_module()
+            .map(|m| m.name.to_ascii_lowercase())
+            .unwrap_or_default();
+        let app = p
+            .apps
+            .iter()
+            .find(|a| a.executable.to_ascii_lowercase().ends_with(&exe))
+            .or(p.apps.first())
+            .map(|a| a.id.clone())
+            .unwrap_or_else(|| "App".into());
+        format!("{}!{app}", p.family_name())
+    });
+    package_string(len, buf, id)
+}
+pub unsafe extern "win64" fn get_current_package_path(len: *mut u32, buf: *mut u16) -> u32 {
+    package_string(len, buf, current_package().map(|(_, dir)| dir.clone()))
 }
 
 /// IsWow64Process : Winlux exécute les programmes 64 bits nativement, sans
@@ -882,9 +991,9 @@ pub fn exports() -> crate::dlls::Exports {
         "LocalAlloc" => fn local_alloc, "LocalReAlloc" => fn local_realloc, "LocalLock" => fn local_lock,
         "LocalUnlock" => fn local_unlock, "LocalSize" => fn local_size,
         "GetCurrentPackageId" => fn get_current_package_id,
-        "GetCurrentPackageFullName" => fn get_current_package_name,
-        "GetCurrentPackageFamilyName" => fn get_current_package_name,
-        "GetCurrentApplicationUserModelId" => fn get_current_package_name,
+        "GetCurrentPackageFullName" => fn get_current_package_full_name,
+        "GetCurrentPackageFamilyName" => fn get_current_package_family_name,
+        "GetCurrentApplicationUserModelId" => fn get_current_application_user_model_id,
         "GetCurrentPackagePath" => fn get_current_package_path,
         "IsWow64Process" => fn is_wow64_process, "LCMapStringEx" => fn lc_map_string_ex,
         "GetFinalPathNameByHandleW" => fn get_final_path_name_by_handle_w,
@@ -985,7 +1094,7 @@ mod tests {
                 87
             );
             assert_eq!(
-                get_current_package_name(&mut len, std::ptr::null_mut()),
+                get_current_package_full_name(&mut len, std::ptr::null_mut()),
                 15700
             );
         }

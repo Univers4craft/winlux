@@ -54,4 +54,14 @@ if test -f "$dir/eh_msvc.exe"; then
     echo "eh_msvc : exceptions C++ et __try au format MSVC OK"
 fi
 
+# Fautes matérielles en exceptions SEH (#269), bloquant.
+if test -f "$dir/hwexc_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hw-exceptions.sh"
+fi
+
+# Manettes et périphériques HID (#271), bloquant.
+if test -f "$dir/hid_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
+fi
+
 echo "Tests MinGW réussis."

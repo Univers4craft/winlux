@@ -1896,6 +1896,8 @@ pub trait GuiBackend: Send {
     fn set_focus(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre devant ses voisines (liste déroulante ouverte).
     fn raise_window(&mut self, _hwnd: usize) {}
+    /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
+    fn lower_window(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {

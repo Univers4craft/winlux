@@ -18,4 +18,14 @@
     <comment>Paquet Windows Installer</comment>
     <glob pattern="*.msi"/>
   </mime-type>
+  <mime-type type="application/msix">
+    <comment>Paquet d'application Windows (MSIX)</comment>
+    <glob pattern="*.msix"/>
+    <glob pattern="*.appx"/>
+  </mime-type>
+  <mime-type type="application/msixbundle">
+    <comment>Ensemble de paquets d'application Windows (MSIX)</comment>
+    <glob pattern="*.msixbundle"/>
+    <glob pattern="*.appxbundle"/>
+  </mime-type>
 </mime-info>

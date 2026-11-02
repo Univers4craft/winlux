@@ -39,7 +39,10 @@ def inside():
     try:
         assert app.window and app.window.get_visible(),"Popup did not open"
         x,y=app.window.get_position()
-        subprocess.run(["xdotool","mousemove",str(x+20),str(y+20),"click","1"],check=True,timeout=5)
+        # Réglages rapides : les tuiles commencent dans le coin, un clic dessus
+        # ouvrirait Paramètres ; on clique dans la marge haute du panneau.
+        offset=(app.window.get_size()[0]//2,6) if kind=="quick" else (20,20)
+        subprocess.run(["xdotool","mousemove",str(x+offset[0]),str(y+offset[1]),"click","1"],check=True,timeout=5)
         module["GLib"].timeout_add(200,click)
     except Exception as error:
         failures.append(error);app.quit()

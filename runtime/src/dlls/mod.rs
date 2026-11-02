@@ -52,6 +52,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hid;
 pub mod hostcall;
 pub mod imm32;
 pub mod iphlpapi;
@@ -65,6 +66,7 @@ pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
@@ -91,6 +93,7 @@ pub mod sechost;
 pub mod secur32;
 pub mod security;
 pub mod seh;
+pub mod seh_hw;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
@@ -466,6 +469,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "hid",
+                exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "setupapi",
                 exports: setupapi::exports(),
                 handle: fake_module(),
@@ -595,11 +603,6 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
-                name: "hid",
-                exports: games_win32::hid_exports(),
-                handle: fake_module(),
-            },
-            Builtin {
                 name: "dnsapi",
                 exports: games_win32::dnsapi_exports(),
                 handle: fake_module(),
@@ -625,7 +628,8 @@ fn add_basics(all: &mut [Builtin]) {
         ("msvcrt", win32_basics::crt_exports()),
     ];
     // Fonctions relevées sur de vrais jeux (games_win32), elles aussi en complément.
-    let games: [(&str, Exports); 14] = [
+    let games: [(&str, Exports); 15] = [
+        ("hid", games_win32::hid_exports()),
         ("kernel32", games_win32::kernel32_exports()),
         ("user32", games_win32::user32_exports()),
         ("gdi32", games_win32::gdi32_exports()),
@@ -653,6 +657,7 @@ fn add_basics(all: &mut [Builtin]) {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
             .chain(dialogs::user32_overrides())
+            .chain(menus::user32_overrides())
         {
             b.exports.insert(name, addr);
         }

@@ -181,6 +181,10 @@ unsafe fn collect_frames(
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        // Faute du programme Windows : exception SEH qu'il peut rattraper.
+        if crate::dlls::seh_hw::on_fault(sig, info, ctx) {
+            return;
+        }
         let code = report(sig, info, ctx);
         libc::_exit(code as i32);
     }
@@ -511,6 +515,7 @@ pub fn record_failure(exception: &str, detail: &str) {
 }
 
 pub fn install() {
+    crate::dlls::seh_hw::init();
     unsafe {
         let mut fds = [-1i32; 2];
         if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) == 0 {

@@ -119,7 +119,8 @@ else:
     raise SystemExit(2)
 icon = directory / (identity + ".svg")
 if not icon.exists(): icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">{body}</svg>')
-# Son, alimentation et notifications : panneaux volants ancrés à la barre.
-command = {"audio": "/usr/bin/winlux-popup volume", "battery": "/usr/bin/winlux-popup power",
-           "notifications": "/usr/bin/winlux-popup notifications"}.get(kind, "/usr/bin/winlux-system-tools quick")
+# Réseau, son et batterie ouvrent les Réglages rapides, comme Windows 11 (le
+# mélangeur et le panneau Alimentation s'ouvrent depuis ce panneau) ; la cloche
+# ouvre les notifications.
+command = "/usr/bin/winlux-popup notifications" if kind == "notifications" else "/usr/bin/winlux-popup quick"
 print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{command}</click>")

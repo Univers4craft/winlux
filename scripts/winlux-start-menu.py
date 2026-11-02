@@ -113,6 +113,8 @@ _TR = {
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
+    'Changer d’utilisateur': ('Switch user', 'Cambiar de usuario', 'Benutzer wechseln'),
+    'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
 }
 
@@ -577,12 +579,42 @@ class Start(Gtk.Application):
         def action(name):
             self.hide()
             subprocess.Popen(["/usr/bin/winlux-power", "ask", name], start_new_session=True)
-        def lock():
+        def lock(how="now"):
             self.hide()
-            subprocess.Popen(["/usr/bin/winlux-lock", "now"], start_new_session=True)
-        self.menu(widget, None, [(_t("Verrouiller"), lock, "system-lock-screen-symbolic"),
-                                 (_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
-                                 (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
+            subprocess.Popen(["/usr/bin/winlux-lock", how], start_new_session=True)
+        def sleep():
+            # Veille : action « user » du relais root (winlux --power suspend) ;
+            # l'écran de verrouillage revient au réveil (LOCK_ON_RESUME).
+            self.hide()
+            subprocess.Popen(["winlux-control", "power-suspend"], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        entries = [(_t("Verrouiller"), lock, "system-lock-screen-symbolic")]
+        if power_menu_has_switch():
+            entries.append((_t("Changer d’utilisateur"), lambda: lock("switch"), "system-switch-user-symbolic"))
+        if power_menu_has_sleep():
+            entries.append((_t("Mettre en veille"), sleep, "weather-clear-night-symbolic"))
+        self.menu(widget, None, entries + [(_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
+                                           (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
+
+
+def power_menu_has_sleep():
+    """Veille proposée seulement si le noyau la sait faire (/sys/power/state)."""
+    try:
+        states = Path(os.environ.get("WINLUX_POWER_STATE", "/sys/power/state")).read_text().split()
+    except OSError:
+        return False
+    return "mem" in states or "freeze" in states
+
+
+def power_menu_has_switch():
+    """« Changer d'utilisateur » dès qu'un autre compte existe (comme Windows)."""
+    try:
+        lines = Path(os.environ.get("WINLUX_USERS_CONF", "/etc/winlux/users.conf")).read_text(errors="replace").splitlines()
+    except OSError:
+        return False
+    names = {line.split(":", 1)[0] for line in lines if line.split(":", 1)[0]} - {"root"}
+    return len(names) >= 2
+
 
 if __name__ == "__main__":
     raise SystemExit(Start().run())

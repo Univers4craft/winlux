@@ -93,6 +93,7 @@ CONTROL_POLICY = (
     (r"share-[a-z-]+", "admin"),
     (r"transfer-[a-z-]+", "user"),
     (r"report-(offer|redact|mode)-[a-z]+", "user"),
+    (r"account-(add|password|role|remove)", "admin"),
 )
 
 # Préférences que le bureau écrit lui-même (winlux-control save) : fichier → clés.
@@ -398,10 +399,35 @@ def give_back(uid, since):
                 pass
 
 
+def switch_request(uid, name, request):
+    """« Changer d'utilisateur » depuis l'écran de verrouillage : le mot de
+    passe du compte choisi est vérifié ici, puis sa session est ouverte ou
+    rejointe (winlux-sessions switch)."""
+    user = request.get("user")
+    password = request.get("password", "")
+    if not isinstance(user, str) or not NAME.match(user) or user not in users_conf() or \
+            not isinstance(password, str):
+        return {"ok": False}
+    throttle(uid)
+    if not password_ok(user, password):
+        FAILURES[uid] = FAILURES.get(uid, 0) + 1
+        return {"ok": False}
+    FAILURES.pop(uid, None)
+    try:
+        result = subprocess.run([CONTROL, "session-switch", user], env=root_env(request, name),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=90)
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False}
+    return {"ok": result.returncode == 0}
+
+
 def handle(connection, uid, name, request, fds):
     op = request.get("op")
     if op in ("check", "elevate"):
         return check_request(uid, name, request)
+    if op == "switch":
+        return switch_request(uid, name, request)
     if op == "conf":
         file, key, value = request.get("file"), request.get("key"), request.get("value", "")
         allowed = CONF_KEYS.get(file, False)
@@ -419,6 +445,10 @@ def handle(connection, uid, name, request, fds):
             return {"error": "Action non autorisée : " + (args[0] if args else "?")}
         # Une sauvegarde ne concerne que le compte qui la demande.
         if op == "control" and args[0].startswith("backup-") and len(args) > 1 and args[1] != name:
+            level = "admin"
+        # Ouvrir ou fermer la session d'un autre compte : son mot de passe
+        # passe par l'écran de verrouillage (op « switch »), sinon un administrateur.
+        if op == "control" and args[0] in ("session-switch", "session-logoff") and len(args) > 1 and args[1] != name:
             level = "admin"
         if level == "admin" and not elevated(uid, name):
             return {"auth": "required"}
