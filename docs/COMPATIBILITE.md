@@ -442,14 +442,16 @@ Ampleur : **L**. Suivi : #235.
   `CRYPT_DELETEKEYSET`, `CRYPT_VERIFYCONTEXT` ; clés gardées dans
   `~/.config/winlux/crypto/`, chiffrées par la DPAPI), `CryptGenKey`
   (`AT_KEYEXCHANGE`, `AT_SIGNATURE`), `CryptGetUserKey`, `CryptExportKey` et
-  `CryptImportKey` (`PUBLICKEYBLOB`, `PRIVATEKEYBLOB`, `PLAINTEXTKEYBLOB`),
+  `CryptImportKey` (`PUBLICKEYBLOB`, `PRIVATEKEYBLOB`, `PLAINTEXTKEYBLOB`,
+  `SIMPLEBLOB`), HMAC (`CALG_HMAC`, `HP_HMAC_INFO`, `CRYPT_IPSEC_HMAC_KEY`),
+  `CryptSetHashParam(HP_HASHVAL)`,
   `CryptSignHash`/`CryptVerifySignature` (PKCS #1 v1.5, MD5, SHA-1, SHA-2),
   `CryptEncrypt`/`CryptDecrypt` RSA (PKCS #1 v1.5 ou `CRYPT_OAEP`),
   `CryptAcquireCertificatePrivateKey` (clé d'un certificat importé d'un
   PKCS #12) et `CryptImportPublicKeyInfo(Ex)`. Calculs par l'OpenSSL du
   système.
-- Reste : `ncrypt`, `SIMPLEBLOB` (clé de session chiffrée par RSA), HMAC de
-  la CryptoAPI, rôle serveur de Schannel.
+- Reste : `ncrypt`, `CALG_MAC` (MAC par chiffrement), rôle serveur de
+  Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 

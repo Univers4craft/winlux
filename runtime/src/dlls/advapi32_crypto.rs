@@ -27,12 +27,23 @@ const NTE_BAD_LEN: u32 = 0x8009_0004;
 const NTE_BAD_FLAGS: u32 = 0x8009_0009;
 
 const CALG_MD4: u32 = 0x8002;
+const CALG_HMAC: u32 = 0x8009;
+const HP_HASHVAL: u32 = 2;
+const HP_HMAC_INFO: u32 = 5;
+const CRYPT_IPSEC_HMAC_KEY: u32 = 0x100;
+const SIMPLEBLOB: u8 = 1;
 
+#[derive(Default)]
 struct Hash {
     algid: u32,
     data: Vec<u8>,
     /// Fournisseur qui a créé le condensat (CryptSignHash signe avec sa clé).
     prov: usize,
+    /// Clé d'un HMAC (CALG_HMAC) ; l'algorithme interne vient de HP_HMAC_INFO.
+    hmac: Option<Vec<u8>>,
+    /// Valeur imposée par CryptSetHashParam(HP_HASHVAL) (signer un condensat
+    /// calculé ailleurs).
+    fixed: Option<Vec<u8>>,
 }
 
 fn hashes() -> &'static Mutex<HashMap<usize, Hash>> {
@@ -157,6 +168,12 @@ pub(crate) fn hash_value(h: usize) -> Option<(u32, Vec<u8>, usize)> {
 }
 
 fn digest(h: &Hash) -> Option<Vec<u8>> {
+    if let Some(v) = &h.fixed {
+        return Some(v.clone());
+    }
+    if let Some(key) = &h.hmac {
+        return hmac(h.algid, key, &h.data);
+    }
     if h.algid == CALG_MD4 {
         return Some(md4(&h.data).to_vec());
     }
@@ -194,21 +211,118 @@ pub unsafe extern "win64" fn crypt_create_hash(
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if key != 0 || (algid != CALG_MD4 && bcrypt_alg(algid).is_none()) {
-        // HMAC et MAC (avec clé) ne sont pas fournis.
+    let hmac = if algid == CALG_HMAC {
+        match super::lock(keys()).get(&key) {
+            Some(k) => Some(k.key.clone()),
+            None => {
+                set_last_error(NTE_BAD_KEY);
+                return 0;
+            }
+        }
+    } else if key != 0 || (algid != CALG_MD4 && bcrypt_alg(algid).is_none()) {
+        // Les MAC par chiffrement (CALG_MAC) ne sont pas fournis.
         set_last_error(NTE_BAD_ALGID);
         return 0;
-    }
+    } else {
+        None
+    };
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     super::lock(hashes()).insert(
         id,
         Hash {
             algid,
-            data: Vec::new(),
             prov,
+            hmac,
+            ..Default::default()
         },
     );
     *out = id;
+    1
+}
+
+/// HMAC (RFC 2104) sur le condensat `algid`.
+fn hmac(algid: u32, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+    if algid == CALG_HMAC {
+        // HP_HMAC_INFO pas encore donné.
+        return None;
+    }
+    let plain = |d: Vec<u8>| {
+        digest(&Hash {
+            algid,
+            data: d,
+            ..Default::default()
+        })
+    };
+    let block = if matches!(algid, 0x800d | 0x800e) {
+        128
+    } else {
+        64
+    };
+    let mut k = if key.len() > block {
+        plain(key.to_vec())?
+    } else {
+        key.to_vec()
+    };
+    k.resize(block, 0);
+    let inner: Vec<u8> = k
+        .iter()
+        .map(|b| b ^ 0x36)
+        .chain(data.iter().copied())
+        .collect();
+    let ih = plain(inner)?;
+    plain(k.iter().map(|b| b ^ 0x5c).chain(ih).collect())
+}
+
+/// CryptSetHashParam : HP_HMAC_INFO (algorithme interne du HMAC, avec les
+/// chaînes 0x36/0x5c par défaut) et HP_HASHVAL (valeur imposée).
+pub unsafe extern "win64" fn crypt_set_hash_param(
+    h: usize,
+    param: u32,
+    data: *const u8,
+    _flags: u32,
+) -> i32 {
+    let mut map = super::lock(hashes());
+    let Some(st) = map.get_mut(&h) else {
+        set_last_error(NTE_BAD_HASH);
+        return 0;
+    };
+    if data.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    match param {
+        HP_HMAC_INFO if st.hmac.is_some() => {
+            // HMAC_INFO { HashAlgid, pbInnerString, cbInnerString,
+            // pbOuterString, cbOuterString } (x64).
+            let alg = (data as *const u32).read_unaligned();
+            let inner = (data.add(16) as *const u32).read_unaligned();
+            let outer = (data.add(32) as *const u32).read_unaligned();
+            if inner != 0 || outer != 0 {
+                set_last_error(NTE_BAD_DATA);
+                return 0;
+            }
+            if alg != CALG_MD4 && bcrypt_alg(alg).is_none() {
+                set_last_error(NTE_BAD_ALGID);
+                return 0;
+            }
+            st.algid = alg;
+        }
+        HP_HASHVAL => {
+            let Some(n) = digest(&Hash {
+                algid: st.algid,
+                ..Default::default()
+            })
+            .map(|d| d.len()) else {
+                set_last_error(NTE_BAD_ALGID);
+                return 0;
+            };
+            st.fixed = Some(std::slice::from_raw_parts(data, n).to_vec());
+        }
+        _ => {
+            set_last_error(NTE_BAD_TYPE);
+            return 0;
+        }
+    }
     1
 }
 
@@ -264,8 +378,7 @@ pub unsafe extern "win64" fn crypt_get_hash_param(
         // HP_HASHSIZE
         4 => (digest(&Hash {
             algid: st.algid,
-            data: Vec::new(),
-            prov: 0,
+            ..Default::default()
         })
         .map_or(0, |d| d.len()) as u32)
             .to_le_bytes()
@@ -308,6 +421,8 @@ pub unsafe extern "win64" fn crypt_duplicate_hash(
         algid: st.algid,
         data: st.data.clone(),
         prov: st.prov,
+        hmac: st.hmac.clone(),
+        fixed: st.fixed.clone(),
     };
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     map.insert(id, copy);
@@ -491,6 +606,28 @@ pub unsafe extern "win64" fn crypt_import_key(
     if let Some(r) = super::advapi32_rsa::import_key(prov, blob, flags, out) {
         return r;
     }
+    if blob[0] == SIMPLEBLOB {
+        // BLOBHEADER, ALG_ID de la clé d'échange, puis la clé de session
+        // chiffrée par RSA (petit-boutiste).
+        let algid = u32::from_le_bytes([blob[4], blob[5], blob[6], blob[7]]);
+        let plain = match super::advapi32_rsa::unwrap_key(pub_key, &blob[12..]) {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error(e);
+                return 0;
+            }
+        };
+        return match new_key(algid, &plain) {
+            Ok(id) => {
+                *out = id;
+                1
+            }
+            Err(e) => {
+                set_last_error(e);
+                0
+            }
+        };
+    }
     // BLOBHEADER { bType, bVersion, reserved, aiKeyAlg } puis, pour
     // PLAINTEXTKEYBLOB, dwKeySize et la clé en clair.
     if blob[0] != PLAINTEXTKEYBLOB || pub_key != 0 {
@@ -502,6 +639,24 @@ pub unsafe extern "win64" fn crypt_import_key(
     if 12 + size > blob.len() {
         set_last_error(NTE_BAD_DATA);
         return 0;
+    }
+    if flags & CRYPT_IPSEC_HMAC_KEY != 0 {
+        // Clé HMAC de longueur libre (souvent déclarée CALG_RC2) : elle ne
+        // sert qu'à CryptCreateHash(CALG_HMAC).
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        super::lock(keys()).insert(
+            id,
+            Key {
+                algid,
+                key: blob[12..12 + size].to_vec(),
+                mode: CRYPT_MODE_CBC,
+                iv: vec![0; 8],
+                chain: vec![0; 8],
+                rc4: None,
+            },
+        );
+        *out = id;
+        return 1;
     }
     match new_key(algid, &blob[12..12 + size]) {
         Ok(id) => {
@@ -606,7 +761,7 @@ pub unsafe extern "win64" fn crypt_derive_key(
             digest(&Hash {
                 algid: halg,
                 data: b.to_vec(),
-                prov: 0,
+                ..Default::default()
             })
             .unwrap_or_default()
         };
@@ -888,8 +1043,8 @@ pub extern "win64" fn crypt_destroy_key(key: usize) -> i32 {
     }
 }
 
-/// CryptExportKey d'une clé symétrique : PLAINTEXTKEYBLOB seulement (le
-/// chiffrement par une clé RSA, SIMPLEBLOB, n'est pas fourni).
+/// CryptExportKey d'une clé symétrique : PLAINTEXTKEYBLOB, ou SIMPLEBLOB
+/// (clé chiffrée par la clé RSA publique `exp_key`).
 pub(crate) unsafe fn export_symmetric(
     key: usize,
     exp_key: usize,
@@ -905,14 +1060,32 @@ pub(crate) unsafe fn export_symmetric(
         set_last_error(NTE_BAD_KEY);
         return 0;
     };
-    if blob_type != PLAINTEXTKEYBLOB as u32 || exp_key != 0 {
-        set_last_error(NTE_BAD_TYPE);
-        return 0;
-    }
-    let mut blob = vec![PLAINTEXTKEYBLOB, 2, 0, 0];
-    blob.extend_from_slice(&k.algid.to_le_bytes());
-    blob.extend_from_slice(&(k.key.len() as u32).to_le_bytes());
-    blob.extend_from_slice(&k.key);
+    let blob = match (blob_type as u8, exp_key) {
+        (PLAINTEXTKEYBLOB, 0) => {
+            let mut b = vec![PLAINTEXTKEYBLOB, 2, 0, 0];
+            b.extend_from_slice(&k.algid.to_le_bytes());
+            b.extend_from_slice(&(k.key.len() as u32).to_le_bytes());
+            b.extend_from_slice(&k.key);
+            b
+        }
+        (SIMPLEBLOB, e) if e != 0 => match super::advapi32_rsa::wrap_key(e, &k.key) {
+            Ok(wrapped) => {
+                let mut b = vec![SIMPLEBLOB, 2, 0, 0];
+                b.extend_from_slice(&k.algid.to_le_bytes());
+                b.extend_from_slice(&0xa400u32.to_le_bytes());
+                b.extend_from_slice(&wrapped);
+                b
+            }
+            Err(e) => {
+                set_last_error(e);
+                return 0;
+            }
+        },
+        _ => {
+            set_last_error(NTE_BAD_TYPE);
+            return 0;
+        }
+    };
     if out.is_null() {
         *len = blob.len() as u32;
         return 1;
@@ -945,6 +1118,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CryptCreateHash" => fn crypt_create_hash,
         "CryptHashData" => fn crypt_hash_data,
         "CryptGetHashParam" => fn crypt_get_hash_param,
+        "CryptSetHashParam" => fn crypt_set_hash_param,
         "CryptDuplicateHash" => fn crypt_duplicate_hash,
         "CryptDestroyHash" => fn crypt_destroy_hash,
         "CryptImportKey" => fn crypt_import_key,
@@ -1085,6 +1259,63 @@ mod tests {
             assert_eq!(crypt_destroy_key(k), 1);
             assert_eq!(crypt_destroy_key(c), 1);
             assert_eq!(crypt_destroy_key(c), 0);
+        }
+    }
+
+    #[test]
+    fn hmac_sha256_rfc4231() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            // Clé HMAC de longueur libre, déclarée CALG_RC2 comme le font les applis.
+            let key = [0x0bu8; 20];
+            let mut blob = vec![8u8, 2, 0, 0];
+            blob.extend_from_slice(&0x6602u32.to_le_bytes());
+            blob.extend_from_slice(&20u32.to_le_bytes());
+            blob.extend_from_slice(&key);
+            let mut k = 0usize;
+            assert_eq!(
+                crypt_import_key(
+                    1,
+                    blob.as_ptr(),
+                    blob.len() as u32,
+                    0,
+                    CRYPT_IPSEC_HMAC_KEY,
+                    &mut k
+                ),
+                1
+            );
+            let mut h = 0usize;
+            assert_eq!(crypt_create_hash(1, CALG_HMAC, k, 0, &mut h), 1);
+            // HMAC_INFO { CALG_SHA_256, null, 0, null, 0 }
+            let mut info = [0u8; 40];
+            info[..4].copy_from_slice(&0x800cu32.to_le_bytes());
+            assert_eq!(crypt_set_hash_param(h, HP_HMAC_INFO, info.as_ptr(), 0), 1);
+            assert_eq!(crypt_hash_data(h, b"Hi There".as_ptr(), 8, 0), 1);
+            let mut out = [0u8; 32];
+            let mut n = 32u32;
+            assert_eq!(crypt_get_hash_param(h, 2, out.as_mut_ptr(), &mut n, 0), 1);
+            assert_eq!(
+                hex(&out),
+                "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+            );
+            // Une clé plus longue que le bloc est d'abord condensée (cas 6).
+            let long = [0xaau8; 131];
+            assert_eq!(
+                hex(&hmac(
+                    0x800c,
+                    &long,
+                    b"Test Using Larger Than Block-Size Key - Hash Key First"
+                )
+                .unwrap()),
+                "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+            );
+            // Valeur imposée.
+            let fixed = [7u8; 32];
+            assert_eq!(crypt_set_hash_param(h, HP_HASHVAL, fixed.as_ptr(), 0), 1);
+            assert_eq!(crypt_get_hash_param(h, 2, out.as_mut_ptr(), &mut n, 0), 1);
+            assert_eq!(out, fixed);
+            crypt_destroy_hash(h);
+            crypt_destroy_key(k);
         }
     }
 

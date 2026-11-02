@@ -630,8 +630,11 @@ pub unsafe extern "win64" fn crypt_export_key(
     out: *mut u8,
     len: *mut u32,
 ) -> i32 {
-    let (pkey, spec, private, exportable) = match super::lock(keys()).get(&key) {
-        Some(k) => (k.pkey as P, k.spec, k.private, k.exportable),
+    let found = super::lock(keys())
+        .get(&key)
+        .map(|k| (k.pkey as P, k.spec, k.private, k.exportable));
+    let (pkey, spec, private, exportable) = match found {
+        Some(k) => k,
         None => return super::advapi32_crypto::export_symmetric(key, exp_key, blob_type, out, len),
     };
     if exp_key != 0 {
@@ -934,6 +937,36 @@ pub unsafe fn decrypt(key: usize, final_: i32, flags: u32, data: *mut u8, len: *
     1
 }
 
+/// Chiffre une clé de session pour un SIMPLEBLOB (PKCS #1 v1.5,
+/// petit-boutiste).
+pub(crate) fn wrap_key(key: usize, plain: &[u8]) -> Result<Vec<u8>, u32> {
+    if !is_rsa(key) {
+        return Err(NTE_BAD_KEY);
+    }
+    let mut buf = vec![0u8; 2048];
+    buf[..plain.len()].copy_from_slice(plain);
+    let mut len = plain.len() as u32;
+    if unsafe { encrypt(key, 1, 0, buf.as_mut_ptr(), &mut len, buf.len() as u32) } != 1 {
+        return Err(NTE_BAD_DATA);
+    }
+    buf.truncate(len as usize);
+    Ok(buf)
+}
+
+/// Déchiffre la clé de session d'un SIMPLEBLOB avec la clé privée `key`.
+pub(crate) fn unwrap_key(key: usize, wrapped: &[u8]) -> Result<Vec<u8>, u32> {
+    if !is_rsa(key) {
+        return Err(NTE_BAD_KEY);
+    }
+    let mut buf = wrapped.to_vec();
+    let mut len = buf.len() as u32;
+    if unsafe { decrypt(key, 1, 0, buf.as_mut_ptr(), &mut len) } != 1 {
+        return Err(NTE_BAD_DATA);
+    }
+    buf.truncate(len as usize);
+    Ok(buf)
+}
+
 /// Paramètres d'une clé RSA (KP_ALGID, KP_KEYLEN, KP_BLOCKLEN, KP_PERMISSIONS).
 pub unsafe fn get_param(key: usize, param: u32, out: *mut u8, len: *mut u32) -> i32 {
     let (pkey, spec, exportable) = super::lock(keys())
@@ -1216,6 +1249,65 @@ mod tests {
                 assert_eq!(&buf[..len as usize], msg);
             }
 
+            // Clé de session AES transportée dans un SIMPLEBLOB.
+            let aes = [0x11u8; 32];
+            let mut plain = vec![8u8, 2, 0, 0];
+            plain.extend_from_slice(&0x6610u32.to_le_bytes());
+            plain.extend_from_slice(&32u32.to_le_bytes());
+            plain.extend_from_slice(&aes);
+            let mut session = 0;
+            assert_eq!(
+                capi::crypt_import_key(
+                    prov,
+                    plain.as_ptr(),
+                    plain.len() as u32,
+                    0,
+                    0,
+                    &mut session
+                ),
+                1
+            );
+            let mut n = 0u32;
+            assert_eq!(
+                crypt_export_key(session, pubk, 1, 0, std::ptr::null_mut(), &mut n),
+                1
+            );
+            let mut simple = vec![0u8; n as usize];
+            assert_eq!(
+                crypt_export_key(session, pubk, 1, 0, simple.as_mut_ptr(), &mut n),
+                1
+            );
+            assert_eq!(simple.len(), 12 + 128);
+            assert_eq!(simple[0], 1);
+            let mut back = 0;
+            assert_eq!(
+                capi::crypt_import_key(
+                    prov,
+                    simple.as_ptr(),
+                    simple.len() as u32,
+                    privk,
+                    0,
+                    &mut back
+                ),
+                1
+            );
+            assert_eq!(export(back, 8), plain);
+            // Sans la clé privée, le blob ne s'ouvre pas.
+            let mut none = 0;
+            assert_eq!(
+                capi::crypt_import_key(
+                    prov,
+                    simple.as_ptr(),
+                    simple.len() as u32,
+                    pubk,
+                    0,
+                    &mut none
+                ),
+                0
+            );
+            capi::crypt_destroy_key(session);
+            capi::crypt_destroy_key(back);
+
             // Clé non exportable : pas de PRIVATEKEYBLOB.
             let mut locked = 0;
             assert_eq!(
@@ -1340,6 +1432,19 @@ mod tests {
                 ),
                 0
             );
+
+            // Signer un condensat calculé ailleurs (HP_HASHVAL) donne la même signature.
+            let mut digest = [0u8; 32];
+            let mut dn = 32u32;
+            assert_eq!(
+                capi::crypt_get_hash_param(h, 2, digest.as_mut_ptr(), &mut dn, 0),
+                1
+            );
+            let mut hf = 0;
+            assert_eq!(capi::crypt_create_hash(prov, 0x800c, 0, 0, &mut hf), 1);
+            assert_eq!(capi::crypt_set_hash_param(hf, 2, digest.as_ptr(), 0), 1);
+            assert_eq!(sign(hf, AT_SIGNATURE).unwrap(), sig);
+            capi::crypt_destroy_hash(hf);
 
             // La clé est gardée, chiffrée, et retrouvée par un nouveau fournisseur.
             assert_eq!(crypt_release_context(prov, 0), 1);
