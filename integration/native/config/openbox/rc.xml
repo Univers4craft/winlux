@@ -28,6 +28,7 @@
     <keybind key="W-v"><action name="Execute"><command>winlux-clipboard show</command></action></keybind>
     <keybind key="W-period"><action name="Execute"><command>winlux-emoji</command></action></keybind>
     <keybind key="W-semicolon"><action name="Execute"><command>winlux-emoji</command></action></keybind>
+    <keybind key="W-w"><action name="Execute"><command>winlux-widgets</command></action></keybind>
     <keybind key="W-F10"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
     <!-- Ancrage comme Windows 11 (winlux-snap) : Windows + flèches enchaîne moitiés,
          quarts, agrandissement et taille d'avant ; Windows + Z ouvre les dispositions. -->

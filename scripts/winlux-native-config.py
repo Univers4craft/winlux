@@ -329,7 +329,7 @@ if panel_config.is_file() and not grouping_marker.exists():
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
-              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4")
+              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.
