@@ -19,6 +19,15 @@ case "${1:-explorer}" in
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     store|fonts|programs|taskschd|firewall|welcome|regedit|taskmgr|eventviewer|msinfo32)
         export WINLUX_SHELL_APP=$1
+        # Lanceur d'une boutique (winlux-store-catalogs) : le Store n'affiche
+        # que ses logiciels, sous son nom (« flatpak: Flathub »).
+        if test "$1" = store && test -n "${2:-}"; then
+            case "$2" in *[!a-z0-9:/-]*|[!a-z]*) exit 2 ;; esac
+            case "${3:-}" in *[!A-Za-z0-9_]*) exit 2 ;; esac
+            export WINLUX_STORE_SOURCE=$2
+            WINLUX_STORE_TITLE=$(printf '%s' "${3:-}" | tr _ ' ')
+            export WINLUX_STORE_TITLE
+        fi
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
     *) echo 'Application Winlux inconnue' >&2; exit 2 ;;

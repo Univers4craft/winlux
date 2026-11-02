@@ -61,37 +61,37 @@ pub const MF_MT_FRAME_RATE: Guid = guid(
     0x4e44,
     [0xb1, 0x32, 0xfe, 0xe5, 0x15, 0x6c, 0x7b, 0xb0],
 );
-const MF_MT_PIXEL_ASPECT_RATIO: Guid = guid(
+pub(crate) const MF_MT_PIXEL_ASPECT_RATIO: Guid = guid(
     0xc6376a1e,
     0x8d0a,
     0x4027,
     [0xbe, 0x45, 0x6d, 0x9a, 0x0a, 0xd3, 0x9b, 0xb6],
 );
-const MF_MT_INTERLACE_MODE: Guid = guid(
+pub(crate) const MF_MT_INTERLACE_MODE: Guid = guid(
     0xe2724bb8,
     0xe676,
     0x4806,
     [0xb4, 0xb2, 0xa8, 0xd6, 0xef, 0xb4, 0x4c, 0xcd],
 );
-const MF_MT_ALL_SAMPLES_INDEPENDENT: Guid = guid(
+pub(crate) const MF_MT_ALL_SAMPLES_INDEPENDENT: Guid = guid(
     0xc9173739,
     0x5e56,
     0x461c,
     [0xb7, 0x13, 0x46, 0xfb, 0x99, 0x5c, 0xb9, 0x5f],
 );
-const MF_MT_FIXED_SIZE_SAMPLES: Guid = guid(
+pub(crate) const MF_MT_FIXED_SIZE_SAMPLES: Guid = guid(
     0xb8ebefaf,
     0xb718,
     0x4e04,
     [0xb0, 0xa9, 0x11, 0x67, 0x75, 0xe3, 0x32, 0x1b],
 );
-const MF_MT_SAMPLE_SIZE: Guid = guid(
+pub(crate) const MF_MT_SAMPLE_SIZE: Guid = guid(
     0xdad3ab78,
     0x1990,
     0x408b,
     [0xbc, 0xe2, 0xeb, 0xa6, 0x73, 0xda, 0xcc, 0x10],
 );
-const MF_MT_DEFAULT_STRIDE: Guid = guid(
+pub(crate) const MF_MT_DEFAULT_STRIDE: Guid = guid(
     0x644b4e48,
     0x1e02,
     0x4516,
@@ -170,13 +170,13 @@ const IID_IMFMEDIAEVENTGENERATOR: Guid = guid(
     0x4b89,
     [0xb6, 0x2c, 0xea, 0xdc, 0x0c, 0x03, 0x1e, 0x7d],
 );
-const IID_IMFSOURCEREADER: Guid = guid(
+pub(crate) const IID_IMFSOURCEREADER: Guid = guid(
     0x70ae66f2,
     0xc809,
     0x4e4f,
     [0x89, 0x15, 0xbd, 0xcb, 0x40, 0x6b, 0x79, 0x93],
 );
-const IID_IMFSOURCEREADERCALLBACK: Guid = guid(
+pub(crate) const IID_IMFSOURCEREADERCALLBACK: Guid = guid(
     0xdeec8d99,
     0xfa1d,
     0x4d82,
@@ -186,29 +186,29 @@ const IID_IMFSOURCEREADERCALLBACK: Guid = guid(
 // ---------- Appels sur des objets COM quelconques ----------
 
 /// Entrée `idx` de la table virtuelle de l'objet `obj`.
-unsafe fn slot(obj: *mut c_void, idx: usize) -> *const () {
+pub(crate) unsafe fn slot(obj: *mut c_void, idx: usize) -> *const () {
     *(*(obj as *const *const *const ())).add(idx)
 }
-unsafe fn com_addref(obj: *mut c_void) {
+pub(crate) unsafe fn com_addref(obj: *mut c_void) {
     if !obj.is_null() {
         let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(slot(obj, 1));
         f(obj);
     }
 }
-unsafe fn com_release(obj: *mut c_void) {
+pub(crate) unsafe fn com_release(obj: *mut c_void) {
     if !obj.is_null() {
         let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(slot(obj, 2));
         f(obj);
     }
 }
-unsafe fn com_qi(obj: *mut c_void, iid: &Guid) -> Option<*mut c_void> {
+pub(crate) unsafe fn com_qi(obj: *mut c_void, iid: &Guid) -> Option<*mut c_void> {
     let f: unsafe extern "win64" fn(*mut c_void, *const u8, *mut *mut c_void) -> i32 =
         std::mem::transmute(slot(obj, 0));
     let mut out = std::ptr::null_mut();
     (f(obj, iid.as_ptr(), &mut out) >= 0 && !out.is_null()).then_some(out)
 }
 /// IMFAttributes::GetGUID (index 10) sur un objet étranger.
-unsafe fn attr_get_guid(obj: *mut c_void, key: &Guid) -> Option<Guid> {
+pub(crate) unsafe fn attr_get_guid(obj: *mut c_void, key: &Guid) -> Option<Guid> {
     if obj.is_null() {
         return None;
     }
@@ -218,7 +218,7 @@ unsafe fn attr_get_guid(obj: *mut c_void, key: &Guid) -> Option<Guid> {
     (f(obj, key.as_ptr(), &mut g) >= 0).then_some(g)
 }
 /// IMFAttributes::GetUINT64 (index 8).
-unsafe fn attr_get_u64(obj: *mut c_void, key: &Guid) -> Option<u64> {
+pub(crate) unsafe fn attr_get_u64(obj: *mut c_void, key: &Guid) -> Option<u64> {
     if obj.is_null() {
         return None;
     }
@@ -244,7 +244,11 @@ unsafe fn attr_get_string(obj: *mut c_void, key: &Guid) -> Option<String> {
     Some(s)
 }
 /// IMFAttributes::GetUnknown (index 17).
-unsafe fn attr_get_unknown(obj: *mut c_void, key: &Guid, iid: &Guid) -> Option<*mut c_void> {
+pub(crate) unsafe fn attr_get_unknown(
+    obj: *mut c_void,
+    key: &Guid,
+    iid: &Guid,
+) -> Option<*mut c_void> {
     if obj.is_null() {
         return None;
     }
@@ -423,7 +427,7 @@ unsafe extern "win64" fn a_release(this: *mut MfObj) -> u32 {
 }
 
 /// Écrit une valeur dans un PROPVARIANT (24 octets).
-unsafe fn write_propvariant(pv: *mut u8, v: &Val) {
+pub(crate) unsafe fn write_propvariant(pv: *mut u8, v: &Val) {
     std::ptr::write_bytes(pv, 0, 24);
     (pv as *mut u16).write_unaligned(v.vt());
     let data = pv.add(8);
@@ -455,7 +459,7 @@ unsafe fn write_propvariant(pv: *mut u8, v: &Val) {
 }
 
 /// Lit un PROPVARIANT ; `None` pour un type non pris en charge.
-unsafe fn read_propvariant(pv: *const u8) -> Option<Val> {
+pub(crate) unsafe fn read_propvariant(pv: *const u8) -> Option<Val> {
     let vt = (pv as *const u16).read_unaligned();
     let data = pv.add(8);
     Some(match vt {
@@ -1040,6 +1044,18 @@ fn out_size(mode: &Mode, out: Out) -> (usize, i32) {
     }
 }
 
+/// IMFMediaType fait des paires (clé, valeur) données.
+pub(crate) fn media_type_from(values: Vec<(Guid, Val)>) -> *mut c_void {
+    let t = new_obj(Ext::MediaType);
+    {
+        let mut a = lock(unsafe { &(*t).attrs });
+        for (k, v) in values {
+            a.set(k, v);
+        }
+    }
+    t as *mut c_void
+}
+
 /// Construit un IMFMediaType décrivant `mode` converti en `out`.
 fn media_type_for(mode: &Mode, out: Out) -> *mut c_void {
     let t = new_obj(Ext::MediaType);
@@ -1443,7 +1459,7 @@ static SAMPLE_VTBL: VTable<47> = VTable(concat(
 ));
 
 /// Échantillon contenant une copie de `bytes`.
-fn sample_from(bytes: &[u8], time: i64, duration: i64) -> *mut c_void {
+pub(crate) fn sample_from(bytes: &[u8], time: i64, duration: i64) -> *mut c_void {
     let s = create_sample();
     unsafe {
         let b = buffer_from(bytes);

@@ -358,7 +358,7 @@ def window(paths):
         current["rows"] = rows
         store.clear()
         for p, name, problem in rows:
-            color = "#c42b1c" if problem else ("" if name == p.name else "#0f6cbd")
+            color = "#c42b1c" if problem else ("" if name == p.name else "#6a3df0")
             store.append([p.name, name, _t(problem) if problem else "", color or None])
         changed = sum(1 for p, name, _ in rows if name != p.name)
         problems = any(problem for _, _, problem in rows)

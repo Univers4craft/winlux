@@ -925,9 +925,27 @@ impl<'a, 'b> Vm<'a, 'b> {
                 let dll = self.path(p[0]);
                 let func = self.string(p[1]);
                 let name = dll.rsplit('\\').next().unwrap_or("").to_string();
-                self.skip(format!("greffon ignoré : {name}::{func}"));
-                if !self.in_plugins(&dll) {
-                    self.error();
+                let lang = crate::dlls::dialogs::session_lang();
+                let known = if self.in_plugins(&dll) {
+                    plugin_call(&name, &func, &mut self.stack, &lang)
+                } else {
+                    None
+                };
+                match known {
+                    Some(done) => {
+                        for (var, value) in done.vars {
+                            self.set_var(var, value);
+                        }
+                        if let Some(note) = done.note {
+                            self.skip(note);
+                        }
+                    }
+                    None => {
+                        self.skip(format!("greffon ignoré : {name}::{func}"));
+                        if !self.in_plugins(&dll) {
+                            self.error();
+                        }
+                    }
                 }
             }
             45 => {
@@ -1582,9 +1600,212 @@ pub fn install(
     Ok(())
 }
 
+/// Effet d'un greffon NSIS reproduit par Winlux.
+#[derive(Debug, Default, PartialEq)]
+struct PluginDone {
+    /// Variables écrites ($0-$9 = 0-9, $R0-$R9 = 10-19).
+    vars: Vec<(i32, String)>,
+    /// Ce qui n'a pas été fait réellement (journal de l'installation).
+    note: Option<String>,
+}
+
+/// Greffons NSIS courants, interprétés sans exécuter leur code : chacun
+/// retire de la pile exactement ses paramètres et y pose ses résultats,
+/// pour que le script continue comme sous Windows. `None` : greffon
+/// inconnu, pile laissée telle quelle.
+fn plugin_call(dll: &str, func: &str, stack: &mut Vec<String>, lang: &str) -> Option<PluginDone> {
+    let dll = dll.to_ascii_lowercase();
+    let dll = dll.trim_end_matches(".dll");
+    let func = func.to_ascii_lowercase();
+    fn take(stack: &mut Vec<String>, n: usize) -> Vec<String> {
+        (0..n).map(|_| stack.pop().unwrap_or_default()).collect()
+    }
+    let mut done = PluginDone::default();
+    let mut push = Vec::new();
+    match (dll, func.as_str()) {
+        // Langue de l'installation : celle de la session si elle est proposée.
+        ("langdll", "langdialog") => {
+            take(stack, 3); // titre, texte, options
+            let mut choices = Vec::new();
+            loop {
+                let name = take(stack, 1).remove(0);
+                if name.is_empty() {
+                    break;
+                }
+                let id = take(stack, 1).remove(0);
+                choices.push((name, id));
+                if choices.len() > 200 {
+                    break;
+                }
+            }
+            // Noms anglais (LangDLL de base) ou natifs (MUI2).
+            let wanted: &[&str] = match lang {
+                "fr" => &["french", "fran"],
+                "de" => &["german", "deutsch"],
+                "es" => &["spanish", "espa"],
+                "it" => &["italian", "italiano"],
+                "pt" => &["portug"],
+                _ => &["english"],
+            };
+            let chosen = choices
+                .iter()
+                .find(|(n, _)| {
+                    let n = n.to_lowercase();
+                    wanted.iter().any(|w| n.starts_with(w))
+                })
+                .or(choices.first())
+                .map_or_else(String::new, |(_, id)| id.clone());
+            push.push(chosen);
+        }
+        // Commandes lancées par l'installateur : notées, pas exécutées ;
+        // code de sortie 0 pour que l'installation continue.
+        ("nsexec", "exec" | "exectolog" | "exectostack") => {
+            let mut args = take(stack, 1);
+            while args.last().is_some_and(|a| a.starts_with('/')) {
+                args = take(stack, 1); // /TIMEOUT=…, /OEM : options avant la commande
+            }
+            done.note = Some(format!("commande ignorée : {}", args.join(" ").trim()));
+            if func == "exectostack" {
+                push.push(String::new());
+            }
+            push.push("0".into());
+        }
+        ("nsprocess", "_findprocess" | "_killprocess" | "_closeprocess") => {
+            take(stack, 1);
+            push.push("603".into()); // processus absent
+        }
+        ("nsprocess", "_unload") => {}
+        // System::Call : seules les sorties sont simulées (0) ; « ?e »
+        // pose la dernière erreur.
+        ("system", "call") => {
+            let call = take(stack, 1).remove(0);
+            for (i, _) in call.match_indices(".r").chain(call.match_indices(".R")) {
+                let rest = &call[i + 2..];
+                if let Some(d) = rest.chars().next().and_then(|c| c.to_digit(10)) {
+                    let upper = call[i + 1..].starts_with('R');
+                    done.vars
+                        .push((d as i32 + if upper { 10 } else { 0 }, "0".into()));
+                }
+            }
+            if call.contains("?e") {
+                push.push("0".into());
+            }
+            done.note = Some(format!(
+                "appel système ignoré : {}",
+                call.chars().take(80).collect::<String>()
+            ));
+        }
+        ("system", "alloc") => {
+            take(stack, 1);
+            push.push("0".into());
+        }
+        ("system", "free") => {
+            take(stack, 1);
+        }
+        // Pages personnalisées : rien n'est affiché en installation
+        // automatique, chaque contrôle reçoit un identifiant.
+        ("nsdialogs", "create") => {
+            take(stack, 1);
+            push.push("1".into());
+        }
+        ("nsdialogs", "createcontrol") => {
+            take(stack, 8);
+            push.push("1".into());
+        }
+        ("nsdialogs", "show") => {}
+        ("nsdialogs", "setuserdata" | "onclick" | "onchange" | "onnotify" | "createtimer") => {
+            take(stack, 2);
+        }
+        ("nsdialogs", "onback" | "killtimer") => {
+            take(stack, 1);
+        }
+        ("nsdialogs", "getuserdata") => {
+            take(stack, 1);
+            push.push(String::new());
+        }
+        ("nsdialogs", "selectfiledialog") => {
+            take(stack, 3);
+            push.push(String::new());
+        }
+        ("nsdialogs", "selectfolderdialog") => {
+            take(stack, 2);
+            push.push("error".into());
+        }
+        // Téléchargements pendant l'installation : non faits, résultat
+        // « annulé » que les scripts traitent comme un échec propre.
+        ("nsisdl", "download" | "download_quiet") => {
+            let args = take(stack, 2);
+            done.note = Some(format!("téléchargement ignoré : {}", args[0]));
+            push.push("cancel".into());
+        }
+        ("inetc", "get" | "post" | "head" | "put") => {
+            let mut first = String::new();
+            for _ in 0..64 {
+                let a = take(stack, 1).remove(0);
+                if a.eq_ignore_ascii_case("/end") || (a.is_empty() && stack.is_empty()) {
+                    break;
+                }
+                if first.is_empty() && !a.starts_with('/') {
+                    first = a;
+                }
+            }
+            done.note = Some(format!("téléchargement ignoré : {first}"));
+            push.push("Cancelled".into());
+        }
+        _ => return None,
+    }
+    stack.extend(push);
+    Some(done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn greffons_courants() {
+        // LangDLL : la langue de la session parmi celles proposées.
+        let mut stack: Vec<String> = [
+            "",
+            "1033",
+            "English",
+            "1036",
+            "Français",
+            "A",
+            "texte",
+            "titre",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert!(plugin_call("LangDLL.dll", "LangDialog", &mut stack, "fr").is_some());
+        assert_eq!(stack, vec!["1036".to_string()]);
+        // nsExec::ExecToStack : code de sortie au sommet, puis la sortie.
+        let mut stack = vec!["avant".to_string(), "cmd /c echo".to_string()];
+        let done = plugin_call("nsExec.dll", "ExecToStack", &mut stack, "en").unwrap();
+        assert_eq!(stack, vec!["avant", "", "0"]);
+        assert!(done.note.unwrap().contains("cmd /c echo"));
+        // System::Call : sorties .r0 et .R1, ?e pose l'erreur.
+        let mut stack = vec!["kernel32::CreateMutex(i 0, i 0, t \"x\") i .r0 ?e".to_string()];
+        let done = plugin_call("System.dll", "Call", &mut stack, "en").unwrap();
+        assert_eq!(done.vars, vec![(0, "0".to_string())]);
+        assert_eq!(stack, vec!["0"]);
+        // nsDialogs : la pile reste équilibrée.
+        let mut stack: Vec<String> = ["base", "Texte", "10", "200", "0", "0", "0", "0", "STATIC"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        plugin_call("nsDialogs.dll", "CreateControl", &mut stack, "en").unwrap();
+        assert_eq!(stack, vec!["base", "1"]);
+        let mut stack = vec![
+            "/END".to_string(),
+            "C:\\x.zip".to_string(),
+            "https://exemple.org/x.zip".to_string(),
+        ];
+        plugin_call("INetC.dll", "get", &mut stack, "en").unwrap();
+        assert_eq!(stack, vec!["Cancelled"]);
+        assert!(plugin_call("Inconnu.dll", "Truc", &mut stack, "en").is_none());
+    }
 
     #[test]
     fn atoi_like_nsis() {

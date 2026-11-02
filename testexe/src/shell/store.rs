@@ -384,7 +384,54 @@ unsafe fn app_field(i: usize, f: usize) -> &'static [u8] {
     slice(APPS[i][f])
 }
 
+/// Boutique ouverte par son propre lanceur (winlux-store-catalogs) : seules
+/// ses clés (« flatpak: », « windows:scoop-games/ ») sont affichées, sous son
+/// nom. Vide : toute la bibliothèque.
+static mut SOURCE_FILTER: Buf<48> = Buf::new();
+static mut SOURCE_TITLE: Buf<48> = Buf::new();
+static mut FILTER_READ: bool = false;
+
+unsafe fn read_filter() {
+    if FILTER_READ {
+        return;
+    }
+    FILTER_READ = true;
+    let mut value = [0u8; 48];
+    let n = GetEnvironmentVariableA(
+        c"WINLUX_STORE_SOURCE".as_ptr(),
+        value.as_mut_ptr().cast(),
+        48,
+    ) as usize;
+    if n > 0 && n < 48 {
+        SOURCE_FILTER.push(&value[..n]);
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_STORE_TITLE".as_ptr(),
+            value.as_mut_ptr().cast(),
+            48,
+        ) as usize;
+        if n > 0
+            && n < 48
+            && value[..n]
+                .iter()
+                .all(|c| c.is_ascii_graphic() || *c == b' ')
+        {
+            SOURCE_TITLE.push(&value[..n]);
+        }
+    }
+}
+
+/// Titre du volet de navigation : « Store » ou le nom de la boutique.
+unsafe fn store_title() -> &'static [u8] {
+    read_filter();
+    if SOURCE_TITLE.n > 0 {
+        SOURCE_TITLE.get()
+    } else {
+        b"Store"
+    }
+}
+
 unsafe fn load_index() {
+    read_filter();
     let n = read_file(c"Z:\\run\\winlux\\store.txt", &mut INDEX);
     if n == 0 {
         return;
@@ -402,7 +449,8 @@ unsafe fn load_index() {
         let line = &INDEX[pos..end];
         let value = |prefix: &[u8]| line.strip_prefix(prefix);
         if let Some(v) = value(b"app=") {
-            if APP_COUNT < MAX_APPS {
+            if APP_COUNT < MAX_APPS && (SOURCE_FILTER.n == 0 || v.starts_with(SOURCE_FILTER.get()))
+            {
                 split_fields(pos + 4, v, &mut APPS[APP_COUNT]);
                 APP_COUNT += 1;
             }
@@ -951,7 +999,7 @@ unsafe fn draw_nav(g: &mut Gfx, f: &Frame) {
     let mut y = c.top + 14;
     if !narrow {
         glyph(g.hdc, g.b, g.f, Glyph::Store, c.left + 18, y + 2, 20);
-        text(g.hdc, g.f.title, p.text, c.left + 48, y + 3, b"Store");
+        text(g.hdc, g.f.title, p.text, c.left + 48, y + 3, store_title());
     }
     y += 44;
     let items = 8u8;
@@ -1343,7 +1391,10 @@ unsafe fn draw_search(g: &mut Gfx, body: &Rect) {
         // Le nom du paquet aussi (sans « apt: ») : « mines » trouve le
         // Démineur (gnome-mines).
         let key = app_field(i, F_KEY);
-        let reference = key.iter().position(|&c| c == b':').map_or(key, |p| &key[p + 1..]);
+        let reference = key
+            .iter()
+            .position(|&c| c == b':')
+            .map_or(key, |p| &key[p + 1..]);
         let m = contains_ci(app_field(i, F_NAME), q)
             || contains_ci(app_field(i, F_SUMMARY), q)
             || contains_ci(app_field(i, F_PUB), q)

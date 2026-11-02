@@ -322,7 +322,20 @@ _TR = {
     "Clair": ("Light", "Claro", "Hell"),
     "Couleur d’accentuation": ("Accent color", "Color de énfasis", "Akzentfarbe"),
     "Personnalisée…": ("Custom…", "Personalizado…", "Benutzerdefiniert…"),
+    "Icônes du bureau": ("Desktop icons", "Iconos del escritorio", "Desktopsymbole"),
+    "Corbeille": ("Recycle Bin", "Papelera de reciclaje", "Papierkorb"),
+    "Ce PC": ("This PC", "Este equipo", "Dieser PC"),
+    "Explorateur": ("File Explorer", "Explorador de archivos", "Explorer"),
+    "Documents": ("Documents", "Documentos", "Dokumente"),
     "Barre des tâches": ("Taskbar", "Barra de tareas", "Taskleiste"),
+    "Ce PC (système de fichiers)": ("This PC (file system)", "Este equipo (sistema de archivos)", "Dieser PC (Dateisystem)"),
+    "Dossier de l’utilisateur": ("User's files", "Archivos del usuario", "Benutzerdateien"),
+    "Lecteurs amovibles et réseau": ("Removable and network drives", "Unidades extraíbles y de red", "Wechsel- und Netzlaufwerke"),
+    "Réorganiser les icônes": ("Arrange icons", "Organizar iconos", "Symbole anordnen"),
+    "Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci.": (
+        "Added shortcuts are removed with a right-click. Right-clicking an app in the Start menu also creates its shortcut.",
+        "Los accesos directos añadidos se quitan con un clic derecho. Un clic derecho en una aplicación del menú Inicio también crea su acceso directo.",
+        "Hinzugefügte Verknüpfungen werden per Rechtsklick entfernt. Ein Rechtsklick auf eine App im Startmenü erstellt ebenfalls ihre Verknüpfung."),
     "Taille": ("Size", "Tamaño", "Größe"),
     "Petite": ("Small", "Pequeña", "Klein"),
     "Moyenne": ("Medium", "Mediana", "Mittel"),
@@ -574,6 +587,12 @@ _TR = {
     'IA locale : rien ne quitte ce PC. Ce qu’elle lit (recherche de fichier, journal) vous est montré.': ('Local AI: nothing leaves this PC. What it reads (file search, log) is shown to you.', 'IA local: nada sale de este equipo. Lo que lee (búsqueda de archivos, registro) se le muestra.', 'Lokale KI: Nichts verlässt diesen PC. Was sie liest (Dateisuche, Protokoll), wird Ihnen angezeigt.'),
     'Pour les trois, chaque action (réglage, dossier, page des Paramètres) attend votre clic sur « Faire ».': ('For all three, each action (setting, folder, Settings page) waits for your click on “Do it”.', 'Para los tres, cada acción (ajuste, carpeta, página de Configuración) espera su clic en «Hacerlo».', 'Bei allen dreien wartet jede Aktion (Einstellung, Ordner, Einstellungsseite) auf Ihren Klick auf „Ausführen“.'),
     'Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.': ('The sign-ins to your accounts are kept in your home folder, readable only by you.', 'Los inicios de sesión de sus cuentas se guardan en su carpeta personal, legibles solo por usted.', 'Die Anmeldungen bei Ihren Konten werden in Ihrem persönlichen Ordner gespeichert, nur für Sie lesbar.'),
+    'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
+    'Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant.': ('Winlux neither ships nor imposes any store. The ones you turn on are added to the Store: what they need is downloaded from the publisher and checked, then the store appears in the Start menu. Without a connection, it is added at the next startup.', 'Winlux no incluye ni impone ninguna tienda. Las que active se añaden a la Tienda: lo necesario se descarga del editor y se comprueba, y la tienda aparece en el menú Inicio. Sin conexión, se añade en el siguiente arranque.', 'Winlux liefert und erzwingt keinen Store. Die von Ihnen aktivierten werden dem Store hinzugefügt: Das Nötige wird beim Herausgeber heruntergeladen und geprüft, dann erscheint der Store im Startmenü. Ohne Verbindung wird er beim nächsten Start hinzugefügt.'),
+    'Logiciels Windows': ('Windows software', 'Programas de Windows', 'Windows-Programme'),
+    'Logiciels Linux': ('Linux software', 'Programas de Linux', 'Linux-Programme'),
+    'En attente du réseau : ajoutée au prochain démarrage.': ('Waiting for the network: added at the next startup.', 'Esperando la red: se añadirá en el próximo arranque.', 'Wartet auf das Netzwerk: wird beim nächsten Start hinzugefügt.'),
+    'Ouvrir le Store': ('Open the Store', 'Abrir la Tienda', 'Store öffnen'),
     'Désactivé, un assistant n’apparaît nulle part et rien ne tourne.': ('When off, an assistant appears nowhere and nothing runs.', 'Desactivado, un asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint ein Assistent nirgends und nichts läuft.'),
 }
 
@@ -620,7 +639,7 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
                 "disconnected": "Hors ligne"}
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
-ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+ACCENTS = ("#6a3df0", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
 
 
 # ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
@@ -663,7 +682,7 @@ def readable(color, background, minimum=4.5):
     return color if contrast(color, background) >= minimum else target
 
 
-def settings_palette(dark, accent="#8178b7"):
+def settings_palette(dark, accent="#6a3df0"):
     """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
     if dark:
         p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
@@ -716,6 +735,17 @@ def keyvals(text):
 
 def have(command):
     return shutil.which(command) is not None
+
+
+# Icônes spéciales du bureau (xfdesktop) : clé, libellé, présence par défaut.
+DESKTOP_ICONS = [("trash", "Corbeille"), ("filesystem", "Ce PC (système de fichiers)"),
+                 ("home", "Dossier de l’utilisateur"), ("removable", "Lecteurs amovibles et réseau")]
+DESKTOP_ICON_DEFAULTS = {"trash": True, "filesystem": False, "home": False, "removable": False}
+
+
+def desktop_icon_shown(key):
+    value = xfconf_get("xfce4-desktop", f"/desktop-icons/file-icons/show-{key}")
+    return DESKTOP_ICON_DEFAULTS[key] if value is None else value == "true"
 
 
 def ambiance_tool():
@@ -854,7 +884,7 @@ def a11y_write(**changes):
 
 def appearance():
     try: return json.loads(APPEARANCE.read_text())
-    except (OSError, ValueError): return {"theme": "dark", "accent": "#8178b7"}
+    except (OSError, ValueError): return {"theme": "dark", "accent": "#6a3df0"}
 
 
 # ── Registre Windows (reg.exe intégré au runtime) ───────────────────────────
@@ -1180,6 +1210,16 @@ def hardware_page():
     return module
 
 
+def store_catalogs():
+    """Lignes de « winlux-store-catalogs --list » : id, état, plateforme, nom, résumé, site."""
+    if not have("winlux-store-catalogs"): return []
+    try:
+        out = subprocess.run(["winlux-store-catalogs", "--list"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [parts for parts in (line.split("|") for line in out.splitlines()) if len(parts) == 6]
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1443,11 +1483,23 @@ class ExtraPages:
             self.widget_settings()
         self.section(_t("Icônes du bureau"))
         box = self.card()
-        self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
-                           (_t("Ce PC"), lambda: self.execute("desktop-icon-computer")),
-                           (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
+        if have("xfconf-query"):
+            # Icônes du bureau d'XFCE : Windows 11 démarre avec la Corbeille seule.
+            for key, title in DESKTOP_ICONS:
+                self.switch(box, _t(title), desktop_icon_shown(key),
+                            lambda on, k=key: xfconf_set("xfce4-desktop", f"/desktop-icons/file-icons/show-{k}",
+                                                         "bool", str(on).lower()))
+        else:
+            self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
+                               (_t("Ce PC"), lambda: self.execute("desktop-icon-computer"))])
+        self.actions(box, [(_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
-        self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+        self.hint(_t("Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci."), box)
+        if have("xfdesktop"):
+            # xfdesktop range toujours les icônes sur une grille, comme
+            # « Aligner les icônes sur la grille » de Windows : seul le
+            # rangement automatique est proposé.
+            self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
@@ -2683,7 +2735,22 @@ class ExtraPages:
 
     # ── Applications : installer, par défaut, démarrage (dans la page) ──
 
+    def store_catalogs_section(self):
+        """Boutiques de logiciels (docs/BOUTIQUES.md) : aucune fournie ni
+        présélectionnée, ordre alphabétique, téléchargées chez l'éditeur."""
+        rows = store_catalogs()
+        if not rows: return
+        self.section(_t("Boutiques de logiciels"), _t("Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant."))
+        box = self.card()
+        for ident, state, platform, name, summary, _site in rows:
+            label = f"{name} · {_t('Logiciels Windows') if platform == 'windows' else _t('Logiciels Linux')}"
+            if state == "pending": summary = _t("En attente du réseau : ajoutée au prochain démarrage.") + "\n" + summary
+            self.switch(box, label, state != "off",
+                        lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
+        self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
+
     def page_apps(self):
+        self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:
             self.section(_t("Applications par défaut"))

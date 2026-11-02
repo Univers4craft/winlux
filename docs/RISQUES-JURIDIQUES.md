@@ -26,7 +26,7 @@
 | 2 | ISO distribuée sans les sources des logiciels GPL qu'elle contient | **Élevée** (certaine, mais facile à corriger) | Ayants droit GPL (noyau, BusyBox, GRUB…), Software Freedom Conservancy | Publier les sources avec chaque version, corriger `NOTICES` |
 | 3 | Assistant Claude et ChatGPT intégrés | **Moyenne** | Anthropic, OpenAI | Accepter les conditions commerciales d'Anthropic, renommer « Assistant Claude » en « Assistant IA », écrire l'information aux utilisateurs |
 | 4 | Imitation de l'interface de Windows 11 | **Moyenne** | Microsoft | Ne jamais reprendre un fichier Microsoft (icône, son, police, fond) ; garder une différence visible ; ne pas suivre au pixel les nouveautés récentes |
-| 5 | Installation de logiciels tiers, dont MSIX sans vérifier la signature | **Moyenne**, qui monte si le projet devient commercial | Utilisateurs, éventuellement autorités (règlement européen sur la cyber-résilience) | Bloquer par défaut ou avertir clairement « éditeur non vérifié » |
+| 5 | Installation de logiciels tiers, dont MSIX | **Faible** depuis #332 et #345 (MSIX vérifiés), à revoir si le projet devient commercial | Utilisateurs, éventuellement autorités (règlement européen sur la cyber-résilience) | Bloquer par défaut ou avertir clairement « éditeur non vérifié » |
 | 6 | Base Ubuntu redistribuée modifiée | **Moyenne-faible** | Canonical | Retirer les marques Ubuntu de l'image, écrire « construit à partir de paquets Ubuntu » |
 | 7 | Réimplémentation des API Windows | **Faible** tant que la méthode reste propre | Microsoft | Écrire une règle de « salle blanche » dans `AGENTS.md` et la respecter |
 | 8 | Vie privée (RGPD) et mentions légales du site | **Faible** aujourd'hui | CNIL, utilisateurs | Une page « Confidentialité » et une page « Mentions légales » sur le site |
@@ -528,14 +528,23 @@ est permis.
 
 ---
 
-## 7. Logiciels tiers installés par Winlux, et MSIX non signés
+## 7. Logiciels tiers installés par Winlux, et MSIX
 
 ### Le constat
 
-`runtime/src/setup/msix.rs` installe un paquet MSIX en vérifiant les
-empreintes du *block map*, mais **pas la signature `AppxSignature.p7x`**
-(le journal le dit : « présente, pas encore vérifiée »). Un paquet modifié
-par un tiers pourrait donc être installé comme s'il venait de son éditeur.
+*Mise à jour du 2 novembre 2026 : traité par #332 et #345.* Les paquets
+MSIX signés sont désormais vérifiés de bout en bout : signature
+(`AppxSignature.p7x`), contenu et chaîne de certificats. Un paquet
+entièrement vérifié s'installe sans question ; une signature fausse ou un
+paquet modifié est refusé ; une autorité inconnue demande une confirmation
+de l'utilisateur (« Éditeur non vérifié »). C'est encore le cas des paquets
+du Store, parce que les autorités de signature propres à Windows ne sont
+pas présentes sous Linux.
+
+Constat d'origine : `runtime/src/setup/msix.rs` vérifiait les empreintes
+du *block map*, mais pas la signature `AppxSignature.p7x`. Un paquet
+modifié par un tiers pouvait donc être installé comme s'il venait de son
+éditeur.
 Plus largement, Winlux installe des paquets Ubuntu, des `.exe`, des `.msi`
 et des applications du Store.
 
@@ -563,10 +572,8 @@ et des applications du Store.
 
 ### Que faire
 
-1. **Vérifier la signature MSIX** (chaîne de certificats et empreinte du
-   paquet) ; en attendant, **refuser par défaut** un MSIX dont la signature
-   n'est pas vérifiée, ou afficher un avertissement bloquant « Éditeur non
-   vérifié » avec le nom tel qu'il figure dans le manifeste.
+1. ~~Vérifier la signature MSIX et refuser par défaut un paquet non
+   vérifié~~ : **fait** (#332, #345).
 2. Ne jamais présenter un logiciel installé depuis le Store ou un MSIX comme
    « approuvé par Winlux » s'il n'a pas été vérifié.
 3. Garder la règle actuelle : les gros composants propriétaires sont
@@ -639,8 +646,7 @@ sa machine.
 4. Renommer « Assistant Claude » en « **Assistant IA** » et remplacer son
    icône ; accepter les **conditions commerciales d'Anthropic** ; relire
    celles d'OpenAI avant de fusionner #300.
-5. **Bloquer par défaut les MSIX non vérifiés** ou afficher « Éditeur non
-   vérifié ».
+5. ~~Bloquer par défaut les MSIX non vérifiés~~ : **fait** (#332, #345).
 6. Ajouter la **règle de salle blanche** dans `AGENTS.md` ; reformuler les
    messages d'erreur recopiés de Windows ; confirmer l'origine des fichiers
    `sample.msi` et `tables.msi`.

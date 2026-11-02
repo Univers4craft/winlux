@@ -2701,7 +2701,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             }
             let name = crate::login::user_name(i);
             let initial = [name.first().map_or(b'?', |c| c.to_ascii_uppercase())];
-            ellipse(hdc, b, m.left + 12, iy + 6, m.left + 36, iy + 30, rgb(0x00, 0x78, 0xD4));
+            ellipse(hdc, b, m.left + 12, iy + 6, m.left + 36, iy + 30, rgb(0x6A, 0x3D, 0xF0));
             text_centered(hdc, f.small, 11, rgb(0xFF, 0xFF, 0xFF), m.left + 24, iy + 11, &initial);
             text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), m.left + 46, iy + 4, name);
             text(

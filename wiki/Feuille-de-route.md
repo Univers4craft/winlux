@@ -16,16 +16,12 @@
 | Récupération | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), clé de secours, démarrage avancé, réparation du démarrage, menu de secours en quatre langues (#283). |
 | Langues | Bureau en quatre langues, installateur en six. |
 
-## Prochaine version : v0.2.14
+## Prochaine version : v0.2.15
 
-- Sécurité : sur un système installé, le bureau et les .exe tournent sous le compte de l'utilisateur, plus en root (#258).
-- Démarrage plus rapide : menu GRUB caché 1 s, noyau silencieux, matériel et services hors du chemin critique (#254, #259, #260).
-- Claude Code (claude.exe officiel) tourne par la couche PE maison, avec une entrée au menu Démarrer (#255, #257).
-- Applications Ubuntu traduites en quatre langues (#253) et correctifs de la campagne de tests en VM : raccourcis Windows, menu clic droit du bureau, glisser-déposer et Corbeille de l'Explorateur, copier-coller, icônes de la barre des tâches (#252, #263, #264).
-
-## En cours (pull requests ouvertes)
-
-Aucune pull request ouverte pour la v0.2.14.
+- Aucun navigateur dans l'image : l'installateur, le premier démarrage et Paramètres > Navigateurs proposent Chrome, Edge et Firefox par ordre alphabétique ; Winlux télécharge le choix chez son éditeur et l'installe. La licence d'Edge interdit de le redistribuer : les ISO v0.2.14 et antérieures, qui le contenaient, sont retirées.
+- Système au nom de Winlux (« construit à partir de paquets Ubuntu »), liste des sources GPL publiée, mention de non-affiliation à Microsoft dans l'installateur, le premier démarrage et le créateur USB.
+- Contrôles et boîtes de dialogue Win32, OpenGL et Vulkan, manettes, MSIX, PuTTY, premiers jeux (#301 à #332).
+- « Redémarrer maintenant » de l'installateur réparé en Live (#303), taille de mise à jour affichée seulement quand une mise à jour existe.
 
 ## Priorités suivantes
 

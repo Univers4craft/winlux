@@ -1,50 +1,87 @@
 //! Signature d'un paquet MSIX ou AppX (`AppxSignature.p7x`).
 //!
-//! Le fichier commence par `PKCX`, suivi d'une structure PKCS #7
-//! SignedData en DER. On lit les certificats qu'elle contient et on exige
-//! que l'un d'eux porte exactement l'éditeur annoncé par le manifeste
-//! (`Identity Publisher`), comme Windows. La chaîne de certificats et la
-//! signature elle-même ne sont pas encore vérifiées (#235) : un paquet
-//! signé reste donc « éditeur non vérifié » et l'utilisateur doit
-//! confirmer, exactement comme pour un paquet sans signature.
+//! Le fichier commence par `PKCX`, suivi d'une structure PKCS #7 SignedData
+//! en DER (Authenticode). Comme Windows, on vérifie :
+//! - que le certificat du signataire porte exactement l'éditeur annoncé par
+//!   le manifeste (`Identity Publisher`) ;
+//! - que la signature est bien celle de la clé de ce certificat, sur des
+//!   attributs dont le condensat `messageDigest` est celui du contenu
+//!   (`SpcIndirectDataContent`) ;
+//! - que ce contenu porte les condensats du paquet reçu : `AXBM` (block
+//!   map, qui protège à son tour chaque fichier), `AXCT`
+//!   (`[Content_Types].xml`), `AXCI` (`AppxMetadata/CodeIntegrity.cat`),
+//!   `AXPC` (les fichiers de l'archive) et `AXCD` (son répertoire central) ;
+//! - que la chaîne de certificats mène à une autorité reconnue par le
+//!   système (magasin d'OpenSSL, `SSL_CERT_FILE` / `SSL_CERT_DIR`) et que le
+//!   certificat est prévu pour signer du code.
+//!
+//! Une signature fausse, ou un paquet modifié après signature, est refusé
+//! sans recours. Une signature correcte dont l'autorité n'est pas reconnue
+//! (certificat de test, autorité d'entreprise non installée, certificat
+//! expiré) reste « éditeur non vérifié » : l'utilisateur peut confirmer.
+//! Seul un paquet entièrement vérifié s'installe sans question.
+//!
+//! Les calculs (condensats, vérification RSA ou ECDSA, chaîne) passent par
+//! la bibliothèque OpenSSL du système (`dlls::hostssl`).
+
+use crate::archive::zip::{self, ZipEntry};
+use crate::dlls::hostssl;
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 /// Ce que l'on sait de la signature d'un paquet.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Signature {
     /// Pas de `AppxSignature.p7x`.
     Absent,
-    /// Signature illisible, ou certificat qui ne correspond pas à l'éditeur
-    /// du manifeste : le paquet est refusé, même avec confirmation.
+    /// Signature illisible ou fausse, certificat qui ne correspond pas à
+    /// l'éditeur du manifeste, paquet modifié après signature : le paquet
+    /// est refusé, même avec confirmation.
     Invalid(String),
-    /// Certificat au nom de l'éditeur, chaîne non vérifiée.
-    Unverified { signer: String },
+    /// Signature correcte au nom de l'éditeur, mais pas entièrement
+    /// vérifiée (`reason` : pourquoi), à confirmer par l'utilisateur.
+    Unverified { signer: String, reason: String },
+    /// Signature, contenu et chaîne de certificats vérifiés.
+    Verified { signer: String },
 }
 
 /// Début des messages d'erreur qui demandent une confirmation : le lanceur
 /// du double-clic le reconnaît (code de sortie 3) et pose la question.
 pub const UNVERIFIED: &str = "Éditeur non vérifié";
 
-/// Examine le contenu de `AppxSignature.p7x` (ou son absence).
-pub fn examine(p7x: Option<&[u8]>, publisher: &str) -> Signature {
-    let Some(data) = p7x else {
+/// Examine la signature du paquet `package` (fichier .msix, .appx ou
+/// bundle) dont le manifeste annonce l'éditeur `publisher`.
+pub fn examine(package: &Path, publisher: &str) -> Signature {
+    let mut f = match File::open(package) {
+        Ok(f) => f,
+        Err(e) => return Signature::Invalid(format!("{} : {e}", package.display())),
+    };
+    let entries = match zip::list(&mut f) {
+        Ok(e) => e,
+        Err(e) => return Signature::Invalid(format!("{} : {e}", package.display())),
+    };
+    let Some(sig_entry) = find(&entries, "AppxSignature.p7x").cloned() else {
         return Signature::Absent;
     };
-    let Some(der) = data.strip_prefix(b"PKCX") else {
-        return Signature::Invalid("AppxSignature.p7x ne commence pas par PKCX".into());
+    let p7x = match read_entry(&mut f, &sig_entry) {
+        Ok(d) => d,
+        Err(e) => return Signature::Invalid(e),
     };
-    let subjects = match certificate_subjects(der) {
-        Ok(s) => s,
+    let parsed = match parse_p7x(&p7x) {
+        Ok(p) => p,
         Err(e) => return Signature::Invalid(format!("AppxSignature.p7x illisible : {e}")),
     };
-    let wanted = parse_dn(publisher);
-    match subjects.into_iter().find(|s| same_dn(s, &wanted)) {
-        Some(s) => Signature::Unverified {
-            signer: format_dn(&s),
+    check(
+        &parsed,
+        publisher,
+        &mut Archive {
+            f,
+            entries,
+            sig_offset: sig_entry.offset,
         },
-        None => Signature::Invalid(format!(
-            "aucun certificat de la signature n'est au nom de l'éditeur « {publisher} » : paquet modifié ou falsifié"
-        )),
-    }
+    )
 }
 
 /// Texte expliqué à l'utilisateur avant la confirmation.
@@ -53,11 +90,536 @@ pub fn warning(sig: &Signature, display_publisher: &str) -> String {
         Signature::Absent => format!(
             "{UNVERIFIED} : ce paquet n'est pas signé. Rien ne garantit qu'il vient de « {display_publisher} » ni qu'il n'a pas été modifié. Ne l'installez que si vous faites confiance à sa provenance."
         ),
-        Signature::Unverified { signer } => format!(
-            "{UNVERIFIED} : ce paquet est signé au nom de « {signer} », mais Winlux ne vérifie pas encore la chaîne de certificats. Ne l'installez que si vous faites confiance à sa provenance."
+        Signature::Unverified { signer, reason } => format!(
+            "{UNVERIFIED} : ce paquet est signé au nom de « {signer} », mais {reason}. Ne l'installez que si vous faites confiance à sa provenance."
         ),
         Signature::Invalid(e) => format!("signature refusée : {e}"),
+        Signature::Verified { signer } => format!("paquet signé par « {signer} », signature vérifiée"),
     }
+}
+
+// ============================================================
+//  Vérification
+// ============================================================
+
+/// Accès au paquet reçu, pour recalculer les condensats signés.
+struct Archive {
+    f: File,
+    entries: Vec<ZipEntry>,
+    /// Position de l'en-tête local de `AppxSignature.p7x`.
+    sig_offset: u64,
+}
+
+fn check(p: &Parsed, publisher: &str, a: &mut Archive) -> Signature {
+    let Some(signer) = p.certs.iter().find(|c| p.signer_id.matches(c)) else {
+        return Signature::Invalid("le certificat du signataire est absent de la signature".into());
+    };
+    let wanted = parse_dn(publisher);
+    if !same_dn(&signer.subject, &wanted) {
+        return Signature::Invalid(format!(
+            "la signature est au nom de « {} » et non de l'éditeur « {publisher} » : paquet modifié ou falsifié",
+            format_dn(&signer.subject)
+        ));
+    }
+    let name = format_dn(&signer.subject);
+    let unverified = |reason: &str| Signature::Unverified {
+        signer: name.clone(),
+        reason: reason.into(),
+    };
+    if hostssl::ssl().is_none() {
+        return unverified("la bibliothèque OpenSSL du système est absente : la signature n'a pas pu être vérifiée");
+    }
+
+    // 1. Signature des attributs signés par la clé du certificat.
+    let Some(content_digest) = hostssl::digest(p.signer_md, &p.content) else {
+        return unverified("son algorithme de condensat n'est pas pris en charge");
+    };
+    let signed: Vec<u8> = match &p.signed_attrs {
+        Some(attrs) => {
+            if attrs.message_digest != content_digest {
+                return Signature::Invalid(
+                    "le condensat signé ne correspond pas au contenu de la signature : signature altérée".into(),
+                );
+            }
+            attrs.der.clone()
+        }
+        None => p.content.clone(),
+    };
+    match hostssl::verify_signature(&signer.der, p.signer_md, &p.signature, &signed) {
+        Some(true) => {}
+        Some(false) => return Signature::Invalid(
+            "la signature ne correspond pas à la clé du certificat : signature fausse ou altérée"
+                .into(),
+        ),
+        None => return unverified("la clé de son certificat n'a pas pu être lue"),
+    }
+
+    // 2. Condensats du paquet reçu.
+    let md = p.appx_md;
+    let digest_of = |a: &mut Archive, name: &str| -> Result<Option<Vec<u8>>, String> {
+        match find(&a.entries, name).cloned() {
+            None => Ok(None),
+            Some(e) => {
+                let data = read_entry(&mut a.f, &e)?;
+                Ok(hostssl::digest(md, &data))
+            }
+        }
+    };
+    for (tag, file, required) in [
+        (*b"AXBM", "AppxBlockMap.xml", true),
+        (*b"AXCT", "[Content_Types].xml", true),
+        (*b"AXCI", "AppxMetadata/CodeIntegrity.cat", false),
+    ] {
+        let signed = p.appx.iter().find(|(t, _)| *t == tag).map(|(_, h)| h);
+        let actual = match digest_of(a, file) {
+            Ok(h) => h,
+            Err(e) => return Signature::Invalid(e),
+        };
+        match (signed, actual) {
+            (Some(s), Some(h)) if *s == h => {}
+            (None, None) if !required => {}
+            (None, _) => {
+                return Signature::Invalid(format!("la signature ne couvre pas {file}"));
+            }
+            (Some(_), None) => {
+                return Signature::Invalid(format!(
+                    "{file} est signé mais absent du paquet : paquet altéré"
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Signature::Invalid(format!(
+                    "{file} a été modifié après la signature : paquet altéré"
+                ));
+            }
+        }
+    }
+    let structure = match archive_digests(a, md) {
+        Ok(d) => d,
+        Err(e) => return Signature::Invalid(e),
+    };
+    let tagged = |tag: &[u8; 4]| {
+        p.appx
+            .iter()
+            .find(|(t, _)| t == tag)
+            .map(|(_, h)| h.clone())
+    };
+    // Le block map protège déjà chaque fichier (et le paquet refuse tout
+    // fichier qu'il ne liste pas) : un écart ici n'est pas une preuve
+    // d'altération, mais l'archive n'est alors pas confirmée bit à bit.
+    if tagged(b"AXPC") != Some(structure.0) || tagged(b"AXCD") != Some(structure.1) {
+        return unverified(
+            "la structure de l'archive ne correspond pas exactement à celle qui a été signée",
+        );
+    }
+
+    // 3. Usage du certificat et chaîne de confiance.
+    if signer
+        .eku
+        .as_ref()
+        .is_some_and(|u| !u.iter().any(|o| o == OID_CODE_SIGNING))
+    {
+        return unverified("son certificat n'est pas prévu pour signer du code");
+    }
+    let others: Vec<Vec<u8>> = p
+        .certs
+        .iter()
+        .filter(|c| c.der != signer.der)
+        .map(|c| c.der.clone())
+        .collect();
+    match hostssl::verify(&signer.der, &others, None) {
+        None => unverified("la chaîne de certificats n'a pas pu être vérifiée"),
+        Some(v) if v.error == 0 => Signature::Verified { signer: name },
+        Some(v) => unverified(chain_reason(v.error)),
+    }
+}
+
+fn chain_reason(error: i32) -> &'static str {
+    match error {
+        // X509_V_ERR_CERT_NOT_YET_VALID, X509_V_ERR_CERT_HAS_EXPIRED
+        9 => "son certificat n'est pas encore valide",
+        10 => "son certificat a expiré",
+        // DEPTH_ZERO_SELF_SIGNED, SELF_SIGNED_IN_CHAIN, UNABLE_TO_GET_ISSUER_LOCALLY…
+        2 | 18 | 19 | 20 | 21 => {
+            "son certificat ne vient pas d'une autorité reconnue par ce système"
+        }
+        23 => "son certificat a été révoqué",
+        _ => "sa chaîne de certificats n'est pas valide",
+    }
+}
+
+/// Condensats `AXPC` (tout ce qui précède l'en-tête local de la signature)
+/// et `AXCD` (répertoire central et fin d'archive, tels qu'ils seraient
+/// sans l'entrée de la signature).
+fn archive_digests(a: &mut Archive, md: &CStr) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let io = |e: std::io::Error| format!("lecture du paquet : {e}");
+    let len = a.f.seek(SeekFrom::End(0)).map_err(io)?;
+    let tail_len = len.min(65_557 + 76);
+    let mut tail = vec![0u8; tail_len as usize];
+    a.f.seek(SeekFrom::Start(len - tail_len)).map_err(io)?;
+    a.f.read_exact(&mut tail).map_err(io)?;
+    let eocd = (0..tail.len().saturating_sub(21))
+        .rev()
+        .find(|&i| tail[i..i + 4] == [0x50, 0x4B, 0x05, 0x06])
+        .ok_or("fin d'archive introuvable")?;
+    let le16 = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]) as u64;
+    let le32 = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) as u64;
+    let le64 = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    let mut end = tail[eocd..].to_vec();
+    let mut cd_size = le32(&end, 12);
+    let mut cd_off = le32(&end, 16);
+    // Enregistrements Zip64 (fin d'archive + localisateur), s'il y en a.
+    let mut z64: Option<(Vec<u8>, Vec<u8>)> = None;
+    if eocd >= 20 && tail[eocd - 20..eocd - 16] == [0x50, 0x4B, 0x06, 0x07] {
+        let loc = tail[eocd - 20..eocd].to_vec();
+        let rec_off = le64(&loc, 8);
+        let mut rec = vec![0u8; 56];
+        a.f.seek(SeekFrom::Start(rec_off)).map_err(io)?;
+        a.f.read_exact(&mut rec).map_err(io)?;
+        if rec[..4] != [0x50, 0x4B, 0x06, 0x06] {
+            return Err("fin d'archive Zip64 invalide".into());
+        }
+        let rec_len = 12 + le64(&rec, 4);
+        let mut full = vec![0u8; rec_len.min(1 << 16) as usize];
+        a.f.seek(SeekFrom::Start(rec_off)).map_err(io)?;
+        a.f.read_exact(&mut full).map_err(io)?;
+        cd_size = le64(&full, 40);
+        cd_off = le64(&full, 48);
+        z64 = Some((full, loc));
+    }
+    if cd_off + cd_size > len || cd_size > 1 << 30 {
+        return Err("répertoire central invalide".into());
+    }
+    let mut cd = vec![0u8; cd_size as usize];
+    a.f.seek(SeekFrom::Start(cd_off)).map_err(io)?;
+    a.f.read_exact(&mut cd).map_err(io)?;
+    // Retire l'enregistrement de AppxSignature.p7x.
+    let mut out = Vec::with_capacity(cd.len());
+    let mut i = 0;
+    let mut removed = 0u64;
+    while i + 46 <= cd.len() && cd[i..i + 4] == [0x50, 0x4B, 0x01, 0x02] {
+        let n = le16(&cd, i + 28) as usize;
+        let size = 46 + n + le16(&cd, i + 30) as usize + le16(&cd, i + 32) as usize;
+        let rec = cd.get(i..i + size).ok_or("répertoire central tronqué")?;
+        if rec[46..46 + n].eq_ignore_ascii_case(b"AppxSignature.p7x") {
+            removed += size as u64;
+        } else {
+            out.extend_from_slice(rec);
+        }
+        i += size;
+    }
+    if removed == 0 {
+        return Err("AppxSignature.p7x absent du répertoire central".into());
+    }
+    let new_size = cd_size - removed;
+    let new_off = a.sig_offset;
+    let set16 = |b: &mut [u8], o: usize, v: u64| {
+        if b[o..o + 2] != [0xFF, 0xFF] {
+            b[o..o + 2].copy_from_slice(&(v as u16).to_le_bytes())
+        }
+    };
+    let set32 = |b: &mut [u8], o: usize, v: u64| {
+        if b[o..o + 4] != [0xFF; 4] {
+            b[o..o + 4].copy_from_slice(&(v as u32).to_le_bytes())
+        }
+    };
+    if let Some((mut rec, mut loc)) = z64 {
+        let n = le64(&rec, 24) - 1;
+        let total = le64(&rec, 32) - 1;
+        rec[24..32].copy_from_slice(&n.to_le_bytes());
+        rec[32..40].copy_from_slice(&total.to_le_bytes());
+        rec[40..48].copy_from_slice(&new_size.to_le_bytes());
+        rec[48..56].copy_from_slice(&new_off.to_le_bytes());
+        loc[8..16].copy_from_slice(&(new_off + new_size).to_le_bytes());
+        out.extend(rec);
+        out.extend(loc);
+    }
+    let (n, total) = (
+        le16(&end, 8).wrapping_sub(1),
+        le16(&end, 10).wrapping_sub(1),
+    );
+    set16(&mut end, 8, n);
+    set16(&mut end, 10, total);
+    set32(&mut end, 12, new_size);
+    set32(&mut end, 16, new_off);
+    out.extend(end);
+
+    let mut h = hostssl::Hasher::new(md).ok_or("algorithme de condensat indisponible")?;
+    a.f.seek(SeekFrom::Start(0)).map_err(io)?;
+    let mut left = a.sig_offset;
+    let mut buf = vec![0u8; 1 << 20];
+    while left > 0 {
+        let n = left.min(buf.len() as u64) as usize;
+        a.f.read_exact(&mut buf[..n]).map_err(io)?;
+        h.update(&buf[..n]);
+        left -= n as u64;
+    }
+    let axpc = h.finish();
+    let axcd = hostssl::digest(md, &out).ok_or("algorithme de condensat indisponible")?;
+    Ok((axpc, axcd))
+}
+
+fn find<'a>(entries: &'a [ZipEntry], name: &str) -> Option<&'a ZipEntry> {
+    entries.iter().find(|e| e.name.eq_ignore_ascii_case(name))
+}
+
+fn read_entry(f: &mut File, e: &ZipEntry) -> Result<Vec<u8>, String> {
+    let mut data = Vec::with_capacity(e.usize.min(1 << 26) as usize);
+    zip::open_entry(f, e, None)
+        .map_err(|err| format!("{} : {err}", e.name))?
+        .read_to_end(&mut data)
+        .map_err(|err| format!("{} : {err}", e.name))?;
+    Ok(data)
+}
+
+// ============================================================
+//  Lecture du SignedData
+// ============================================================
+
+const OID_SIGNED_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
+const OID_SPC_INDIRECT_DATA: &[u8] = &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04];
+const OID_MESSAGE_DIGEST: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x04];
+const OID_CODE_SIGNING: &[u8] = &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03];
+
+/// Certificat de la signature.
+struct Cert {
+    der: Vec<u8>,
+    issuer: Vec<u8>,
+    serial: Vec<u8>,
+    subject: Vec<(String, String)>,
+    ski: Option<Vec<u8>>,
+    /// Usages étendus (None : extension absente, tout usage permis).
+    eku: Option<Vec<Vec<u8>>>,
+}
+
+enum SignerId {
+    IssuerSerial(Vec<u8>, Vec<u8>),
+    KeyId(Vec<u8>),
+}
+
+impl SignerId {
+    fn matches(&self, c: &Cert) -> bool {
+        match self {
+            SignerId::IssuerSerial(i, s) => *i == c.issuer && *s == c.serial,
+            SignerId::KeyId(k) => c.ski.as_ref() == Some(k),
+        }
+    }
+}
+
+struct SignedAttrs {
+    /// Attributs ré-étiquetés en SET (0x31), tels qu'ils sont signés.
+    der: Vec<u8>,
+    message_digest: Vec<u8>,
+}
+
+struct Parsed {
+    certs: Vec<Cert>,
+    /// Octets dont `messageDigest` est le condensat.
+    content: Vec<u8>,
+    /// Algorithme des condensats `APPX`.
+    appx_md: &'static CStr,
+    /// Condensats `APPX` : (étiquette, valeur).
+    appx: Vec<([u8; 4], Vec<u8>)>,
+    signer_id: SignerId,
+    signer_md: &'static CStr,
+    signed_attrs: Option<SignedAttrs>,
+    signature: Vec<u8>,
+}
+
+fn raw<'a>(d: &'a [u8], t: &Tlv<'a>) -> &'a [u8] {
+    &d[..d.len() - t.rest.len()]
+}
+
+fn digest_name(alg_id: &[u8]) -> Result<(&'static CStr, usize), String> {
+    let oid = expect(alg_id, 0x06)?.body;
+    match oid {
+        [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01] => Ok((c"SHA256", 32)),
+        [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02] => Ok((c"SHA384", 48)),
+        [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03] => Ok((c"SHA512", 64)),
+        _ => Err(format!(
+            "algorithme de condensat {} non pris en charge",
+            dotted(oid)
+        )),
+    }
+}
+
+fn parse_p7x(data: &[u8]) -> Result<Parsed, String> {
+    let der = data
+        .strip_prefix(b"PKCX")
+        .ok_or("ne commence pas par PKCX")?;
+    let content_info = expect(der, 0x30)?;
+    let oid = expect(content_info.body, 0x06)?;
+    if oid.body != OID_SIGNED_DATA {
+        return Err("ce n'est pas une structure PKCS #7 SignedData".into());
+    }
+    let explicit = expect(oid.rest, 0xA0)?;
+    let signed = expect(explicit.body, 0x30)?;
+    let mut d = expect(signed.body, 0x02)?.rest; // version
+    d = expect(d, 0x31)?.rest; // digestAlgorithms
+
+    // encapContentInfo : SpcIndirectDataContent.
+    let encap = expect(d, 0x30)?;
+    d = encap.rest;
+    let ctype = expect(encap.body, 0x06)?;
+    if ctype.body != OID_SPC_INDIRECT_DATA {
+        return Err("le contenu signé n'est pas un SpcIndirectDataContent".into());
+    }
+    let wrapped = expect(ctype.rest, 0xA0).map_err(|_| "contenu signé absent")?;
+    let inner = tlv(wrapped.body)?;
+    // PKCS #7 (Authenticode) : la SEQUENCE elle-même, condensat de son
+    // corps ; CMS : une OCTET STRING, condensat de sa valeur.
+    let (content, spc) = match inner.tag {
+        0x30 => (inner.body.to_vec(), inner.body),
+        0x04 => (inner.body.to_vec(), expect(inner.body, 0x30)?.body),
+        t => return Err(format!("contenu signé d'étiquette {t:#04x}")),
+    };
+    let attr = expect(spc, 0x30)?; // SpcAttributeTypeAndOptionalValue
+    let digest_info = expect(attr.rest, 0x30)?;
+    let alg = expect(digest_info.body, 0x30)?;
+    let (appx_md, hlen) = digest_name(alg.body)?;
+    let value = expect(alg.rest, 0x04)?.body;
+    let body = value
+        .strip_prefix(b"APPX")
+        .ok_or("condensats APPX absents")?;
+    if body.is_empty() || body.len() % (4 + hlen) != 0 {
+        return Err("condensats APPX de taille invalide".into());
+    }
+    let appx = body
+        .chunks(4 + hlen)
+        .map(|c| ([c[0], c[1], c[2], c[3]], c[4..].to_vec()))
+        .collect();
+
+    // Certificats.
+    let certs_tlv = expect(d, 0xA0).map_err(|_| "aucun certificat dans la signature")?;
+    d = certs_tlv.rest;
+    let mut certs = Vec::new();
+    let mut c = certs_tlv.body;
+    while !c.is_empty() {
+        let t = tlv(c)?;
+        let whole = raw(c, &t);
+        c = t.rest;
+        if t.tag == 0x30 {
+            certs.push(parse_cert(whole, t.body)?);
+        }
+    }
+    if certs.is_empty() {
+        return Err("aucun certificat dans la signature".into());
+    }
+    if d.first() == Some(&0xA1) {
+        d = tlv(d)?.rest; // CRL
+    }
+
+    // Premier SignerInfo.
+    let infos = expect(d, 0x31)?;
+    let info = expect(infos.body, 0x30).map_err(|_| "aucun signataire")?;
+    let mut s = expect(info.body, 0x02)?.rest; // version
+    let sid = tlv(s)?;
+    s = sid.rest;
+    let signer_id = match sid.tag {
+        0x30 => {
+            let issuer = expect(sid.body, 0x30)?;
+            let serial = expect(issuer.rest, 0x02)?;
+            SignerId::IssuerSerial(raw(sid.body, &issuer).to_vec(), serial.body.to_vec())
+        }
+        0x80 => SignerId::KeyId(sid.body.to_vec()),
+        t => return Err(format!("identifiant de signataire d'étiquette {t:#04x}")),
+    };
+    let md = expect(s, 0x30)?;
+    s = md.rest;
+    let (signer_md, _) = digest_name(md.body)?;
+    let mut signed_attrs = None;
+    if s.first() == Some(&0xA0) {
+        let t = tlv(s)?;
+        let mut der = raw(s, &t).to_vec();
+        der[0] = 0x31;
+        let mut message_digest = None;
+        let mut a = t.body;
+        while !a.is_empty() {
+            let at = expect(a, 0x30)?;
+            a = at.rest;
+            let oid = expect(at.body, 0x06)?;
+            if oid.body == OID_MESSAGE_DIGEST {
+                let set = expect(oid.rest, 0x31)?;
+                message_digest = Some(expect(set.body, 0x04)?.body.to_vec());
+            }
+        }
+        signed_attrs = Some(SignedAttrs {
+            der,
+            message_digest: message_digest.ok_or("attribut messageDigest absent")?,
+        });
+        s = t.rest;
+    }
+    s = expect(s, 0x30)?.rest; // signatureAlgorithm
+    let signature = expect(s, 0x04)?.body.to_vec();
+    Ok(Parsed {
+        certs,
+        content,
+        appx_md,
+        appx,
+        signer_id,
+        signer_md,
+        signed_attrs,
+        signature,
+    })
+}
+
+fn parse_cert(whole: &[u8], body: &[u8]) -> Result<Cert, String> {
+    let tbs = expect(body, 0x30)?;
+    let mut f = tbs.body;
+    if f.first() == Some(&0xA0) {
+        f = tlv(f)?.rest; // version
+    }
+    let serial = expect(f, 0x02)?;
+    f = serial.rest;
+    f = expect(f, 0x30)?.rest; // algorithme
+    let issuer = expect(f, 0x30)?;
+    let issuer_raw = raw(f, &issuer).to_vec();
+    f = issuer.rest;
+    f = expect(f, 0x30)?.rest; // validité
+    let subject = expect(f, 0x30)?;
+    f = subject.rest;
+    f = expect(f, 0x30)?.rest; // clé publique
+    let mut ski = None;
+    let mut eku = None;
+    while !f.is_empty() {
+        let t = tlv(f)?;
+        f = t.rest;
+        if t.tag != 0xA3 {
+            continue;
+        }
+        let mut e = expect(t.body, 0x30)?.body;
+        while !e.is_empty() {
+            let ext = expect(e, 0x30)?;
+            e = ext.rest;
+            let oid = expect(ext.body, 0x06)?;
+            let mut v = oid.rest;
+            if v.first() == Some(&0x01) {
+                v = tlv(v)?.rest; // critique
+            }
+            let value = expect(v, 0x04)?.body;
+            match oid.body {
+                [0x55, 0x1D, 0x0E] => ski = Some(expect(value, 0x04)?.body.to_vec()),
+                [0x55, 0x1D, 0x25] => {
+                    let mut list = Vec::new();
+                    let mut u = expect(value, 0x30)?.body;
+                    while !u.is_empty() {
+                        let o = expect(u, 0x06)?;
+                        u = o.rest;
+                        list.push(o.body.to_vec());
+                    }
+                    eku = Some(list);
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(Cert {
+        der: whole.to_vec(),
+        issuer: issuer_raw,
+        serial: serial.body.to_vec(),
+        subject: parse_name(subject.body)?,
+        ski,
+        eku,
+    })
 }
 
 // ============================================================
@@ -105,47 +667,6 @@ fn expect(d: &[u8], tag: u8) -> Result<Tlv<'_>, String> {
         ));
     }
     Ok(t)
-}
-
-const OID_SIGNED_DATA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02];
-
-/// Sujets (noms distingués) de tous les certificats du SignedData.
-fn certificate_subjects(der: &[u8]) -> Result<Vec<Vec<(String, String)>>, String> {
-    let content_info = expect(der, 0x30)?;
-    let oid = expect(content_info.body, 0x06)?;
-    if oid.body != OID_SIGNED_DATA {
-        return Err("ce n'est pas une structure PKCS #7 SignedData".into());
-    }
-    let explicit = expect(oid.rest, 0xA0)?;
-    let signed = expect(explicit.body, 0x30)?;
-    // version, digestAlgorithms, encapContentInfo
-    let mut d = expect(signed.body, 0x02)?.rest;
-    d = expect(d, 0x31)?.rest;
-    d = expect(d, 0x30)?.rest;
-    let certs = expect(d, 0xA0).map_err(|_| "aucun certificat dans la signature")?;
-    let mut out = Vec::new();
-    let mut c = certs.body;
-    while !c.is_empty() {
-        let cert = tlv(c)?;
-        c = cert.rest;
-        if cert.tag != 0x30 {
-            continue;
-        }
-        let tbs = expect(cert.body, 0x30)?;
-        let mut f = tbs.body;
-        if f.first() == Some(&0xA0) {
-            f = tlv(f)?.rest; // version
-        }
-        f = expect(f, 0x02)?.rest; // numéro de série
-        f = expect(f, 0x30)?.rest; // algorithme
-        f = expect(f, 0x30)?.rest; // émetteur
-        f = expect(f, 0x30)?.rest; // validité
-        out.push(parse_name(expect(f, 0x30)?.body)?);
-    }
-    if out.is_empty() {
-        return Err("aucun certificat dans la signature".into());
-    }
-    Ok(out)
 }
 
 fn parse_name(mut d: &[u8]) -> Result<Vec<(String, String)>, String> {
@@ -278,120 +799,44 @@ fn format_dn(v: &[(String, String)]) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
-    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
-        let mut v = vec![tag];
-        if body.len() < 0x80 {
-            v.push(body.len() as u8);
-        } else {
-            v.extend([0x82, (body.len() >> 8) as u8, body.len() as u8]);
-        }
-        v.extend(body);
-        v
+    #[test]
+    fn noms_distingues() {
+        let a = parse_dn(r#"CN="Exemple, SARL", O=Exemple, C=FR"#);
+        assert_eq!(format_dn(&a), "CN=Exemple, SARL, O=Exemple, C=FR");
+        // L'ordre des attributs et ST/S ne comptent pas.
+        assert!(same_dn(
+            &a,
+            &parse_dn(r#"C=FR, O=Exemple, CN="Exemple, SARL""#)
+        ));
+        assert!(same_dn(
+            &parse_dn("CN=x, ST=Paris"),
+            &parse_dn("S=Paris, CN=x")
+        ));
+        assert!(!same_dn(&a, &parse_dn("CN=Exemple")));
     }
-
-    fn name(attrs: &[(&[u8], &str)]) -> Vec<u8> {
-        let mut body = Vec::new();
-        for (oid, val) in attrs {
-            let atv = [der(0x06, oid), der(0x0C, val.as_bytes())].concat();
-            body.extend(der(0x31, &der(0x30, &atv)));
-        }
-        der(0x30, &body)
-    }
-
-    /// Faux `AppxSignature.p7x` : un certificat au sujet donné.
-    pub(crate) fn fake_p7x(subject: &[(&[u8], &str)]) -> Vec<u8> {
-        let issuer = name(&[(&[0x55, 0x04, 0x03], "Autorité de test")]);
-        let tbs = [
-            der(0xA0, &der(0x02, &[2])),
-            der(0x02, &[1]),
-            der(
-                0x30,
-                &der(
-                    0x06,
-                    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B],
-                ),
-            ),
-            issuer,
-            der(0x30, &[]),
-            name(subject),
-            der(0x30, &[]),
-        ]
-        .concat();
-        let cert = der(
-            0x30,
-            &[der(0x30, &tbs), der(0x30, &[]), der(0x03, &[0])].concat(),
-        );
-        let signed = [
-            der(0x02, &[1]),
-            der(0x31, &[]),
-            der(
-                0x30,
-                &der(
-                    0x06,
-                    &[0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04],
-                ),
-            ),
-            der(0xA0, &cert),
-            der(0x31, &[]),
-        ]
-        .concat();
-        let ci = der(
-            0x30,
-            &[der(0x06, OID_SIGNED_DATA), der(0xA0, &der(0x30, &signed))].concat(),
-        );
-        [b"PKCX".as_slice(), &ci].concat()
-    }
-
-    const CN: &[u8] = &[0x55, 0x04, 0x03];
-    const O: &[u8] = &[0x55, 0x04, 0x0A];
-    const C: &[u8] = &[0x55, 0x04, 0x06];
 
     #[test]
-    fn sans_signature() {
-        assert_eq!(examine(None, "CN=Test"), Signature::Absent);
+    fn avertissements() {
         assert!(warning(&Signature::Absent, "Test").starts_with(UNVERIFIED));
-    }
-
-    #[test]
-    fn certificat_au_nom_de_l_editeur() {
-        let p7x = fake_p7x(&[(CN, "Exemple, SARL"), (O, "Exemple"), (C, "FR")]);
-        let sig = examine(Some(&p7x), r#"CN="Exemple, SARL", O=Exemple, C=FR"#);
-        assert_eq!(
-            sig,
-            Signature::Unverified {
-                signer: "CN=Exemple, SARL, O=Exemple, C=FR".into()
-            }
+        let w = warning(
+            &Signature::Unverified {
+                signer: "CN=Test".into(),
+                reason: "son certificat a expiré".into(),
+            },
+            "Test",
         );
-        assert!(warning(&sig, "Exemple").starts_with(UNVERIFIED));
-        // L'ordre des attributs ne compte pas.
-        assert!(matches!(
-            examine(Some(&p7x), r#"C=FR, O=Exemple, CN="Exemple, SARL""#),
-            Signature::Unverified { .. }
-        ));
-    }
-
-    #[test]
-    fn autre_editeur_refuse() {
-        let p7x = fake_p7x(&[(CN, "Quelqu'un d'autre")]);
-        assert!(matches!(
-            examine(Some(&p7x), "CN=Exemple"),
-            Signature::Invalid(_)
-        ));
+        assert!(w.starts_with(UNVERIFIED) && w.contains("signé au nom de « CN=Test »"));
+        assert!(w.contains("expiré"));
     }
 
     #[test]
     fn signature_illisible_refusee() {
-        assert!(matches!(
-            examine(Some(b"PKCX\x30\x05\x06"), "CN=Exemple"),
-            Signature::Invalid(_)
-        ));
-        assert!(matches!(
-            examine(Some(b"n'importe quoi"), "CN=Exemple"),
-            Signature::Invalid(_)
-        ));
+        for bad in [&b"PKCX\x30\x05\x06"[..], b"n'importe quoi", b"PKCX"] {
+            assert!(parse_p7x(bad).is_err());
+        }
     }
 
     #[test]
@@ -400,5 +845,18 @@ pub(crate) mod tests {
             attribute_name(&[0x2B, 0x06, 0x01, 0x04, 0x01]),
             "OID.1.3.6.1.4.1"
         );
+        assert!(digest_name(&[0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A]).is_err());
+        assert_eq!(
+            digest_name(&[0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01])
+                .unwrap()
+                .1,
+            32
+        );
+    }
+
+    #[test]
+    fn raisons_de_la_chaine() {
+        assert!(chain_reason(20).contains("autorité"));
+        assert!(chain_reason(10).contains("expiré"));
     }
 }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prepare shared Linux support libraries plus offline vendor payloads.
+# Prepare the shared Linux support libraries of downloaded browsers (no browser payload).
 set -eu
 stage=${1:?stage required}
 cache=${2:?browser cache required}
@@ -27,21 +27,14 @@ for tool in dpkg-deb setpriv xhost tar; do
     cp --remove-destination "$binary" "$stage/usr/bin/$tool"
     libraries "$binary"
 done
+# Aucun navigateur n'est copié dans l'image : l'utilisateur choisit le sien,
+# téléchargé chez son éditeur (winlux-browsers --install). La licence d'Edge
+# en interdit d'ailleurs la redistribution (section 2.8 f).
 for id in edge chrome firefox; do
-    test -f "$cache/$id.deb" && test -f "$cache/$id.sha256" && test -f "$cache/$id.version"
-    printf '%s  %s\n' "$(cat "$cache/$id.sha256")" "$cache/$id.deb" | sha256sum -c -
-    for suffix in deb sha256 version source; do cp "$cache/$id.$suffix" "$target/"; done
-    mkdir "$work/$id"
-    dpkg-deb -x "$cache/$id.deb" "$work/$id"
-    case "$id" in
-        edge) vendor="$work/$id/opt/microsoft/msedge"; main="$vendor/msedge" ;;
-        chrome) vendor="$work/$id/opt/google/chrome"; main="$vendor/chrome" ;;
-        firefox) vendor="$work/$id/usr/lib/firefox"; main="$vendor/firefox-bin" ;;
-    esac
-    test -f "$main"
-    libraries "$main"
-    find "$vendor" -type f -name '*.so' > "$work/vendor-libraries"
-    while IFS= read -r lib; do libraries "$lib"; done < "$work/vendor-libraries"
+    if test -e "$cache/$id.deb"; then
+        echo "$id.deb refusé : aucun navigateur dans l'image, téléchargement à la demande uniquement" >&2
+        exit 1
+    fi
 done
 # Chromium loads GTK/NSS dynamically; they do not all appear in ldd(main).
 vendor=

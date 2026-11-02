@@ -1,49 +1,75 @@
-# Navigateurs Linux dans Winlux
+# Navigateurs dans Winlux : aucun n'est fourni, l'utilisateur choisit
 
-Le catalogue contient les paquets AMD64 officiels de Microsoft Edge, Google Chrome
-et Mozilla Firefox. Edge est installé depuis ce catalogue au premier démarrage,
-avant l’affichage du bureau. Les démarrages suivants conservent l’installation.
+**Décision du 2 novembre 2026 (damien).** L'image de Winlux ne contient plus
+aucun navigateur, ni Microsoft Edge, ni Google Chrome, ni Mozilla Firefox.
+L'utilisateur choisit le sien dans **Paramètres > Navigateurs**. Winlux le
+télécharge sur le site officiel de son éditeur, vérifie le fichier et
+l'installe pour lui, sans qu'il ait rien à faire à la main.
 
-Dans **Paramètres > Navigateurs**, chaque navigateur dispose de trois actions :
-installer, choisir par défaut (qui l’installe au besoin), ouvrir. Le bouton
-Navigateur du bureau utilise ce choix. Si le navigateur manque, il ouvre cette
-page des paramètres plutôt que de rester silencieux.
+## Pourquoi ce choix
 
-Les archives sont extraites dans `/opt/winlux/browsers`. Winlux n’étant pas une
-distribution Debian complète, cette opération n’exécute pas les scripts des
-paquets et ne crée pas de base APT/dpkg. Les bibliothèques nécessaires sont
-préparées dans l’image système. Les profils et téléchargements des navigateurs
-appartiennent au compte dédié `winlux-web`, dans `/home/winlux-web`.
-Les navigateurs démarrent sous ce compte, avec leur sandbox activée.
+1. **La licence d'Edge interdit de le redistribuer.** Le texte « MICROSOFT
+   SOFTWARE LICENSE TERMS – MICROSOFT EDGE », section 2.8 (plateformes autres
+   que Windows), dit : « you will not (and have no right to): … (f) share,
+   publish, distribute, or lend the Software, provide the Software as a
+   stand-alone hosted solution for others to use, or transfer the Software or
+   this agreement to any third party. » Les conditions de Google (« You may not
+   copy, modify, distribute, sell, or lease any part of our services or
+   software ») posent la même limite pour Chrome.
+2. **Aucun lien avec Microsoft au-delà de la compatibilité des `.exe`.** Une ISO
+   qui contient un exécutable et des logos Microsoft contredit la position
+   publique du projet (docs/DEFENSE-DU-NOM.md, docs/RISQUES-JURIDIQUES.md).
+3. **Le libre choix du navigateur.** Dans l'esprit des règles européennes sur
+   le choix du navigateur (règlement sur les marchés numériques, qui l'impose
+   aux grands systèmes d'exploitation), Winlux n'en fournit ni n'en favorise
+   aucun. Firefox, pourtant redistribuable (binaire officiel, licence MPL), est
+   donc retiré lui aussi, pour que les trois soient traités de la même façon.
 
-## Construire une image avec le catalogue
+## Ce qui a été retiré
 
-```sh
-python3 scripts/prepare-browser-packages.py build/browser-packages
-WINLUX_KERNEL=/chemin/vmlinuz WINLUX_KERNEL_RELEASE=version-du-noyau \
-  sh scripts/build-live-iso.sh build/winlux-live.iso
-```
+Depuis #155, `release.yml` préparait les `.deb` officiels d'Edge, de Chrome et
+de Firefox (`scripts/prepare-browser-packages.py`). Ils étaient copiés dans
+`/usr/share/winlux/browsers` de l'ISO, et l'init installait Edge au premier
+démarrage comme navigateur par défaut. Les fichiers ISO des versions publiées
+qui les contiennent (v0.2.14 et antérieures) sont retirés des versions GitHub.
+Les paquets de mise à jour `.deb` de ces versions restent : ils ne contiennent
+aucun navigateur. Le détail (versions, date) est noté dans les notes de
+v0.2.15. Un PC déjà installé garde le navigateur que son utilisateur avait :
+c'est sa copie, faite sur sa machine.
 
-Le préparateur télécharge les paquets depuis les dépôts HTTPS officiels,
-vérifie leurs SHA-256 contre les index de ces dépôts et contrôle le nom du
-paquet. Il ne réalise pas de vérification de signature GPG. Les archives
-restent dans `build/` ; elles ne sont pas ajoutées au dépôt Git.
-La construction des publications prépare ce catalogue automatiquement.
-Une construction locale sans catalogue ne fournit aucun navigateur et la
-page indique que les paquets sont indisponibles.
+## Comment ça marche maintenant
 
-Les mises à jour système peuvent renouveler le catalogue. Edge est alors
-actualisé au démarrage ; les autres navigateurs affichent leur mise à jour
-disponible dans cette page. Fermer un navigateur avant de remplacer sa version.
+- **Écran de choix** : Paramètres > Navigateurs liste Google Chrome, Microsoft
+  Edge et Mozilla Firefox dans l'ordre alphabétique, sans mise en avant, avec
+  pour chacun « Installer », « Par défaut » (qui l'installe au besoin) et
+  « Ouvrir ». Aucun navigateur par défaut tant que l'utilisateur n'en a pas
+  choisi un. Ouvrir un lien sans navigateur ouvre cet écran.
+- **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`
+  lance `/usr/lib/winlux/winlux-browser-fetch` (copie de
+  `scripts/prepare-browser-packages.py`). Il lit l'index du dépôt officiel de
+  l'éditeur en HTTPS (packages.microsoft.com, dl.google.com,
+  packages.mozilla.org) et télécharge le `.deb` dans `/var/cache/winlux/browsers`.
+  Il vérifie ensuite le SHA-256 donné par l'index, le nom du paquet et
+  l'architecture. Sans réseau, l'installation s'arrête avec « Téléchargement
+  impossible » et ne laisse ni fichier partiel ni verrou.
+- **Installation isolée** : l'archive est extraite dans
+  `/opt/winlux/browsers/<nom>`, sans exécuter les scripts du paquet. Le
+  navigateur tourne sous le compte dédié `winlux-web`, avec sa sandbox.
+- **Contrôle de construction** : `scripts/check-image-redistributable.sh` fait
+  échouer la construction si l'image contient un logiciel d'éditeur tiers
+  propriétaire : Edge, Chrome, VS Code, Teams, Zoom, Discord, Spotify, Brave,
+  Vivaldi, Opera… Il cherche leurs dossiers d'installation, leurs paquets dpkg
+  ou des `.deb` en cache. `stage-browser-packages.sh` refuse en plus tout
+  paquet de navigateur (Firefox compris), et `build-live-iso.sh` refuse
+  `WINLUX_EDGE_DEB`.
 
 ## Vérifications
 
-`sh scripts/test-browsers.sh` couvre les installations isolées, le choix par
-défaut, les arguments URL, le refus des archives altérées et le nettoyage après
-échec. `scripts/test-browsers-guest.sh` est un diagnostic réservé à une VM jetable :
-il installe les trois vrais paquets et vérifie le rendu local en mode headless,
-sans désactiver leur sandbox. Le paramètre noyau `winlux.browser-smoke=1`
-déclenche ce diagnostic puis éteint la VM.
-`sh scripts/test-browsers-vm.sh` crée son propre disque jetable à partir du stage
-de construction, lance ce diagnostic et vérifie les marqueurs de réussite.
-Il conserve le journal et supprime son disque après le test.
+- `sh scripts/test-browsers.sh` : aucun navigateur par défaut, écran de choix,
+  téléchargement à la demande (faux éditeur), échec du téléchargement sans
+  installation partielle, refus des archives altérées.
+- VM de validation (`test-browsers-vm.sh`, `test-native-session-vm.sh`) : aucun
+  `.deb` de navigateur dans l'image, les trois proposés au téléchargement, et
+  un lien ouvert sans navigateur mène à l'écran de choix.
+- `python3 scripts/test-image-identity.py` : branchement des contrôles dans la
+  construction et la publication.

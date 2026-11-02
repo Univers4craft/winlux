@@ -403,7 +403,7 @@ def run_app():
               .card { background: #242a38; border-radius: 8px; padding: 14px; }
               .subtitle { color: #adb6c9; }
               button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 8px 14px; box-shadow: none; }
-              button.accent { background: #8178b7; border-color: #9d95d1; }
+              button.accent { background: #6a3df0; border-color: #7c4dff; }
               entry, spinbutton { background: #171b25; color: #ecedf5; }
             """)
             Gtk.StyleContext.add_provider_for_screen(self.get_screen(), css, 600)

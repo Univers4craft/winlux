@@ -362,11 +362,12 @@ pub fn readable(mut color: u32, bgs: &[u32], minimum: u32) -> u32 {
 
 /// Mode sombre (par défaut) ou clair, partagé par toutes les fenêtres.
 pub static mut DARK: bool = true;
-/// Couleur d'accentuation (COLORREF), bleu Windows par défaut.
-pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
-/// Couleur d'accentuation choisie (teinte « de base » de la palette Windows).
+/// Couleur d'accentuation (COLORREF), violet du logo Prisme par défaut
+/// (identité propre, distincte du bleu de Windows).
+pub static mut ACCENT: u32 = rgb(0xB6, 0x9C, 0xFF);
+/// Couleur d'accentuation choisie (teinte « de base » de la palette).
 pub static mut ACCENT_BASE: u32 = DEFAULT_ACCENT;
-pub const DEFAULT_ACCENT: u32 = rgb(0x00, 0x78, 0xD4);
+pub const DEFAULT_ACCENT: u32 = rgb(0x7C, 0x4D, 0xFF);
 /// Accent sur la barre de titre et la bordure de la fenêtre active.
 pub static mut ACCENT_TITLES: bool = false;
 /// Thème de contraste actif (0 = aucun), copie de `A11Y.contrast`.
@@ -502,7 +503,7 @@ fn base_pal(dark: bool) -> Palette {
         }
     } else {
         let accent = if unsafe { ACCENT_BASE } == DEFAULT_ACCENT {
-            mix(accent, rgb(0, 0x3E, 0x92), 6, 10)
+            rgb(0x6A, 0x3D, 0xF0)
         } else {
             mix(unsafe { ACCENT_BASE }, 0, 1, 10)
         };
@@ -624,7 +625,7 @@ pub fn pal() -> Palette {
 pub unsafe fn set_accent(base: u32) {
     ACCENT_BASE = base;
     ACCENT = if base == DEFAULT_ACCENT {
-        rgb(0x4C, 0xC2, 0xFF)
+        rgb(0xB6, 0x9C, 0xFF)
     } else {
         mix(base, rgb(0xFF, 0xFF, 0xFF), 4, 10)
     };
@@ -903,7 +904,6 @@ pub enum Glyph {
     Mail,
     Calc,
     Exe,
-    Edge,
     Home,
     Desktop,
     Download,
@@ -1469,45 +1469,6 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 rgb(0x60, 0x6A, 0x78),
             );
             glyph(hdc, b, f, Glyph::Start, x + s / 3, y + s * 2 / 5, s / 3);
-        }
-        Glyph::Edge => {
-            ellipse(hdc, b, x, y, x + s, y + s, rgb(0x0B, 0x53, 0x9F));
-            ellipse(
-                hdc,
-                b,
-                x + s / 16,
-                y + s / 3,
-                x + s * 15 / 16,
-                y + s * 31 / 32,
-                rgb(0x1F, 0xB5, 0x7E),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s / 8,
-                y + s / 8,
-                x + s * 7 / 8,
-                y + s * 3 / 4,
-                rgb(0x13, 0x7C, 0xE0),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s * 3 / 8,
-                y + s * 3 / 8,
-                x + s * 13 / 16,
-                y + s * 13 / 16,
-                rgb(0x5E, 0xE0, 0xC0),
-            );
-            ellipse(
-                hdc,
-                b,
-                x + s * 7 / 16,
-                y + s * 7 / 16,
-                x + s * 3 / 4,
-                y + s * 11 / 16,
-                rgb(0x13, 0x7C, 0xE0),
-            );
         }
         Glyph::Home => {
             let c = rgb(0x4C, 0xA6, 0xF0);

@@ -370,6 +370,7 @@ unsafe fn write_msg(out: *mut Msg, m: &Msg) {
 pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
+        super::ws2_32::pump_async();
         let q = gui::current_queue();
         // Un minuteur très en retard passe avant les entrées (anti-famine).
         if let Some(m) = gui::due_timer(hwnd, min, max, true) {
@@ -400,7 +401,13 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         // File vide : en headless on rend la main (fin de boucle); avec un
         // backend réel on dort jusqu'au prochain événement hôte, dépôt d'un
         // autre thread ou minuteur (borne de sûreté : 500 ms).
-        let wait = gui::next_timer_ms(hwnd).map_or(500, |ms| ms.min(500));
+        // Sockets WSAAsyncSelect : sondées toutes les 10 ms au plus.
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
             return 0;
         }
@@ -427,6 +434,7 @@ pub unsafe extern "win64" fn peek_message_a(
     remove: u32,
 ) -> i32 {
     gui::pump_backend();
+    super::ws2_32::pump_async();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
@@ -449,13 +457,20 @@ pub unsafe extern "win64" fn peek_message_a(
         return 1;
     }
     // File vide : WM_PAINT tant que la fenêtre n'a pas validé sa zone.
-    match gui::pending_paint(hwnd, min, max) {
-        Some(m) => {
-            write_msg(out, &m);
-            1
-        }
-        None => 0,
+    if let Some(m) = gui::pending_paint(hwnd, min, max) {
+        write_msg(out, &m);
+        return 1;
     }
+    // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
+    // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
+    // vide sa file par PeekMessage tournerait sans fin (PuTTY).
+    if remove & 0x1 != 0 {
+        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
+            write_msg(out, &m);
+            return 1;
+        }
+    }
+    0
 }
 
 pub unsafe extern "win64" fn peek_message_w(
@@ -1566,20 +1581,7 @@ pub extern "win64" fn map_virtual_key_ex_w(code: u32, map_type: u32, _hkl: usize
 }
 
 fn map_virtual_key_impl(code: u32, map_type: u32) -> u32 {
-    // Mappage simplifié VK <-> scan code
-    match map_type {
-        0 => code, // MAPVK_VK_TO_VSC
-        1 => code, // MAPVK_VSC_TO_VK
-        2 => {
-            if (0x30..=0x39).contains(&code) || (0x41..=0x5A).contains(&code) {
-                code
-            } else {
-                0
-            }
-        }
-        3 => code, // MAPVK_VSC_TO_VK_EX
-        _ => 0,
-    }
+    crate::intl::keymap::map_virtual_key(crate::intl::keymap::current_klid(), code, map_type)
 }
 
 pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
@@ -2335,28 +2337,23 @@ pub unsafe extern "win64" fn load_image_w(
     0
 }
 
+/// LoadStringA/W : les tables de chaînes du module (voir resource.rs).
 pub unsafe extern "win64" fn load_string_a(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u8,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_a(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_string_w(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u16,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_w(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_accelerators_a(_instance: usize, _name: *const u8) -> usize {
@@ -2391,33 +2388,106 @@ pub extern "win64" fn get_key_name_text_w(_lparam: i32, _buf: *mut u16, _max: i3
     0
 }
 
+/// VkKeyScan(Ex) : touche et modificateurs d'un caractère dans la
+/// disposition réelle (voir intl::keymap).
 pub extern "win64" fn vk_key_scan_a(ch: u8) -> i16 {
-    ch as i16
+    let text = crate::intl::codepage::decode(crate::intl::codepage::resolve(0), &[ch], false)
+        .unwrap_or_default();
+    text.chars().next().map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
 pub extern "win64" fn vk_key_scan_w(ch: u16) -> i16 {
-    ch as i16
+    char::from_u32(ch as u32).map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
+pub extern "win64" fn vk_key_scan_ex_a(ch: u8, _hkl: usize) -> i16 {
+    vk_key_scan_a(ch)
+}
+
+pub extern "win64" fn vk_key_scan_ex_w(ch: u16, _hkl: usize) -> i16 {
+    vk_key_scan_w(ch)
+}
+
+/// ToUnicodeEx : caractères de la touche selon la disposition réelle,
+/// touches mortes comprises (-1 puis la lettre composée).
 pub unsafe extern "win64" fn to_unicode_ex(
     vk: u32,
     scan: u32,
     state: *const u8,
     buf: *mut u16,
     buf_size: i32,
-    _flags: u32,
+    flags: u32,
     _hkl: usize,
 ) -> i32 {
-    let _ = (scan, state);
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
-    if (0x20..=0x7E).contains(&vk) {
-        *buf = vk as u16;
-        1
-    } else {
-        0
+    let mut keys = [0u8; 256];
+    if !state.is_null() {
+        std::ptr::copy_nonoverlapping(state, keys.as_mut_ptr(), 256);
     }
+    let typed = crate::intl::keymap::to_unicode(
+        crate::intl::keymap::current_klid(),
+        vk,
+        scan,
+        &keys,
+        flags,
+    );
+    let mut n = 0usize;
+    for c in &typed.chars {
+        let mut units = [0u16; 2];
+        for u in c.encode_utf16(&mut units).iter() {
+            if n < buf_size as usize {
+                *buf.add(n) = *u;
+                n += 1;
+            }
+        }
+    }
+    if n < buf_size as usize {
+        *buf.add(n) = 0;
+    }
+    typed.code
+}
+
+/// ToAscii(Ex) : comme ToUnicode, dans la page ANSI ; renvoie 1 ou 2
+/// caractères, -1 pour une touche morte.
+pub unsafe extern "win64" fn to_ascii_ex(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+    hkl: usize,
+) -> i32 {
+    let mut wide = [0u16; 4];
+    let code = to_unicode_ex(vk, scan, state, wide.as_mut_ptr(), 4, flags, hkl);
+    if code == 0 || out.is_null() {
+        return code;
+    }
+    let count = code.unsigned_abs().min(2) as usize;
+    let text = String::from_utf16_lossy(&wide[..count]);
+    let bytes = crate::intl::codepage::encode(crate::intl::codepage::resolve(0), &text, b'?', true)
+        .map(|e| e.bytes)
+        .unwrap_or_default();
+    let out = out as *mut u8;
+    for (i, b) in bytes.iter().take(2).enumerate() {
+        *out.add(i) = *b;
+    }
+    code
+}
+
+pub unsafe extern "win64" fn to_ascii(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+) -> i32 {
+    to_ascii_ex(vk, scan, state, out, flags, 0)
 }
 
 pub unsafe extern "win64" fn to_unicode(
@@ -2535,6 +2605,7 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
 /// Un message, un WM_PAINT en attente ou un minuteur échu pour ce thread ?
 fn message_waiting() -> bool {
     gui::pump_backend();
+    super::ws2_32::pump_async();
     let q = gui::current_queue();
     gui::peek_message(&q, 0, 0, 0).is_some()
         || gui::pending_paint(0, 0, 0).is_some()
@@ -2852,6 +2923,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetKeyNameTextA"=>fn get_key_name_text_a, "GetKeyNameTextW"=>fn get_key_name_text_w,
         "VkKeyScanA"=>fn vk_key_scan_a, "VkKeyScanW"=>fn vk_key_scan_w,
         "ToUnicode"=>fn to_unicode, "ToUnicodeEx"=>fn to_unicode_ex,
+        "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
+        "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
         "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
         "GetCapture"=>fn get_capture,
@@ -2936,6 +3009,31 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peek_message_rend_wm_timer_comme_get_message() {
+        unsafe {
+            // Minuteur de thread (hwnd 0), comme SetTimer(NULL, …).
+            let id = set_timer(0, 0, 30, 0);
+            assert_ne!(id, 0);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            // MsgWait voit le minuteur échu…
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                0
+            );
+            // …et PeekMessage(PM_REMOVE) le rend, sinon la boucle tournerait.
+            let mut m: Msg = std::mem::zeroed();
+            assert_eq!(peek_message_a(&mut m, 0, 0, 0, 1), 1);
+            let msg = std::ptr::read_unaligned(&m).message;
+            assert_eq!(msg, 0x0113);
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                258
+            );
+            kill_timer(0, id);
+        }
+    }
 
     #[test]
     fn msg_wait_respecte_le_delai_et_les_evenements() {

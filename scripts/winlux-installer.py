@@ -47,14 +47,14 @@ import winlux_screen  # noqa: E402
 UI_SCALE = 1.0
 
 CSS = b"""
-@define-color bg_primary #0078D4;
+@define-color bg_primary #6A3DF0;
 @define-color bg_dark #1a1a2e;
 @define-color bg_surface #2d2d44;
 @define-color bg_card #363654;
 @define-color fg_primary #ffffff;
 @define-color fg_secondary #b4b4cc;
-@define-color accent #0078D4;
-@define-color accent_hover #1a8aff;
+@define-color accent #6A3DF0;
+@define-color accent_hover #7C4DFF;
 @define-color danger #e74856;
 
 window.installer-window {
@@ -1361,6 +1361,16 @@ TRANSLATIONS = {
 
 EXTRA_TRANSLATIONS = {
     "fr_FR": {
+        "browser_title": 'Navigateur web',
+        "browser_subtitle": "Winlux ne fournit ni n'impose aucun navigateur, dans l'esprit des règles européennes sur le choix du navigateur. Celui que vous choisissez est téléchargé sur le site officiel de son éditeur, vérifié et installé au premier démarrage (connexion Internet requise).",
+        "browser_later": 'Choisir plus tard (Paramètres > Navigateurs)',
+        "summary_browser": 'Navigateur',
+        "summary_browser_none": 'à choisir plus tard',
+        "store_title": 'Boutiques de logiciels',
+        "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
+        "summary_store": 'Boutiques',
+        "summary_store_none": 'aucune (Paramètres > Applications)',
+        "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
         "keyboard_name_gb": "QWERTY — Anglais (UK)",
@@ -1438,6 +1448,16 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
     },
     "en_US": {
+        "browser_title": 'Web browser',
+        "browser_subtitle": "Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. The one you choose is downloaded from its publisher's official website, checked and installed at first startup (Internet connection required).",
+        "browser_later": 'Choose later (Settings > Browsers)',
+        "summary_browser": 'Browser',
+        "summary_browser_none": 'to be chosen later',
+        "store_title": 'Software stores',
+        "store_subtitle": 'Winlux neither ships nor imposes any store. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'none (Settings > Apps)',
+        "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
         "keyboard_name_gb": "QWERTY — English (UK)",
@@ -1515,6 +1535,16 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Resizing Windows (may take several minutes)...",
     },
     "de_DE": {
+        "browser_title": "Webbrowser",
+        "browser_subtitle": "Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Der gewählte Browser wird beim ersten Start von der offiziellen Website des Herstellers heruntergeladen, geprüft und installiert (Internetverbindung erforderlich).",
+        "browser_later": "Später auswählen (Einstellungen > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "später auswählen",
+        "store_title": 'Software-Stores',
+        "store_subtitle": 'Winlux liefert und erzwingt keinen Store. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'keine (Einstellungen > Apps)',
+        "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
         "keyboard_name_gb": "QWERTY — Englisch (GB)",
@@ -1592,6 +1622,16 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
     },
     "es_ES": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. El que elija se descarga del sitio oficial de su editor, se comprueba y se instala en el primer arranque (se requiere conexión a Internet).",
+        "browser_later": "Elegir más tarde (Configuración > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "por elegir más tarde",
+        "store_title": 'Tiendas de programas',
+        "store_subtitle": 'Winlux no incluye ni impone ninguna tienda. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
+        "summary_store": 'Tiendas',
+        "summary_store_none": 'ninguna (Configuración > Aplicaciones)',
+        "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
         "keyboard_name_gb": "QWERTY — Inglés (Reino Unido)",
@@ -1669,6 +1709,16 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
     },
     "it_IT": {
+        "browser_title": "Browser web",
+        "browser_subtitle": "Winlux non include né impone alcun browser, nello spirito delle norme europee sulla scelta del browser. Quello scelto viene scaricato dal sito ufficiale del suo editore, verificato e installato al primo avvio (connessione Internet richiesta).",
+        "browser_later": "Scegli più tardi (Impostazioni > Browser)",
+        "summary_browser": "Browser",
+        "summary_browser_none": "da scegliere più tardi",
+        "store_title": 'Negozi di software',
+        "store_subtitle": "Winlux non include né impone alcun negozio. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
+        "summary_store": 'Negozi',
+        "summary_store_none": 'nessuno (Impostazioni > App)',
+        "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
         "keyboard_name_gb": "QWERTY — Inglese (Regno Unito)",
@@ -1746,6 +1796,16 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
     },
     "pt_BR": {
+        "browser_title": "Navegador web",
+        "browser_subtitle": "O Winlux não inclui nem impõe nenhum navegador, no espírito das regras europeias sobre a escolha do navegador. O que você escolher é baixado do site oficial do editor, verificado e instalado na primeira inicialização (conexão com a Internet necessária).",
+        "browser_later": "Escolher depois (Configurações > Navegadores)",
+        "summary_browser": "Navegador",
+        "summary_browser_none": "a escolher depois",
+        "store_title": 'Lojas de software',
+        "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
+        "summary_store": 'Lojas',
+        "summary_store_none": 'nenhuma (Configurações > Aplicativos)',
+        "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
         "keyboard_name_gb": "QWERTY — Inglês (Reino Unido)",
@@ -1907,6 +1967,22 @@ Ce logiciel est fourni « en l'état », sans aucune garantie.
 
 Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 """
+
+# Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
+BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
+
+
+def store_catalog_choices():
+    """Boutiques proposées (docs/BOUTIQUES.md), ordre alphabétique : (id, nom, résumé par langue)."""
+    for path in (os.path.join(SCRIPT_DIR, "..", "integration", "store-catalogs.json"), "/usr/share/winlux/store-catalogs.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = json.load(f).get("catalogs", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        rows = [r for r in rows if isinstance(r, dict) and re.fullmatch(r"[a-z0-9-]+", str(r.get("id", "")))]
+        return sorted(((r["id"], r.get("name", r["id"]), r.get("summary", {})) for r in rows), key=lambda r: r[1].casefold())
+    return []
 
 STEPS = [
     "Langue",
@@ -2724,6 +2800,10 @@ class InstallerApp(Gtk.Application):
             "password_hash": "",
             "timezone": None,
             "packages": [],
+            # Aucun navigateur présélectionné : None = choisir plus tard.
+            "browser": None,
+            # Aucune boutique tierce cochée d'office (docs/BOUTIQUES.md).
+            "store_catalogs": [],
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
@@ -2938,7 +3018,7 @@ class InstallerApp(Gtk.Application):
             return
         self.answer_settings = settings
         for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
-                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages"):
+                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser", "store_catalogs"):
             if key in settings:
                 self.config[key] = settings[key]
         self.skip_steps = set(steps)
@@ -3105,7 +3185,16 @@ class InstallerApp(Gtk.Application):
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
+        box.pack_end(self.independent_label(), False, False, 0)
         self.pages.add_named(box, page_name("language"))
+
+    def independent_label(self):
+        """« Projet indépendant, non affilié à Microsoft » (docs/DEFENSE-DU-NOM.md)."""
+        label = Gtk.Label(label=tr("independent_notice"), xalign=0)
+        label.set_line_wrap(True)
+        label.set_margin_top(12)
+        label.get_style_context().add_class("card-detail")
+        return label
 
     def on_lang_toggle(self, btn, locale, kb):
         if btn.get_active():
@@ -4187,9 +4276,75 @@ class InstallerApp(Gtk.Application):
         apps_check.set_margin_top(8)
         apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
         box.pack_start(apps_check, False, False, 0)
+        box.pack_start(self.build_browser_choice(), False, False, 0)
+        store_card = self.build_store_choice()
+        if store_card is not None:
+            box.pack_start(store_card, False, False, 0)
         self.selecting_profile = False
         self.select_profile("office")
         self.pages.add_named(box, page_name("profile"))
+
+    def build_browser_choice(self):
+        """Choix du navigateur : ordre alphabétique, aucun présélectionné (docs/BROWSERS.md)."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("browser_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("browser_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        row = Gtk.Box(spacing=16)
+        later = Gtk.RadioButton.new_with_label_from_widget(None, tr("browser_later"))
+        later.connect("toggled", self.on_browser_toggle, None)
+        row.pack_start(later, False, False, 0)
+        self.browser_buttons = {None: later}
+        for browser, name in BROWSER_CHOICES:
+            button = Gtk.RadioButton.new_with_label_from_widget(later, name)
+            button.connect("toggled", self.on_browser_toggle, browser)
+            row.pack_start(button, False, False, 0)
+            self.browser_buttons[browser] = button
+        card.pack_start(row, False, False, 0)
+        self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
+        return card
+
+    def build_store_choice(self):
+        """Boutiques de logiciels : cases à cocher, aucune cochée, ordre alphabétique."""
+        choices = store_catalog_choices()
+        if not choices:
+            return None
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("store_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("store_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        self.store_buttons = {}
+        lang = (self.config.get("language") or "fr")[:2]
+        for ident, name, summary in choices:
+            button = Gtk.CheckButton(label=name)
+            button.set_tooltip_text(summary.get(lang) or summary.get("en") or summary.get("fr", ""))
+            button.set_active(ident in self.config.get("store_catalogs", []))
+            button.connect("toggled", self.on_store_toggle, ident)
+            card.pack_start(button, False, False, 0)
+            self.store_buttons[ident] = button
+        return card
+
+    def on_store_toggle(self, button, ident):
+        chosen = [i for i in self.config.get("store_catalogs", []) if i != ident]
+        if button.get_active():
+            chosen.append(ident)
+        self.config["store_catalogs"] = chosen
+
+    def on_browser_toggle(self, button, browser):
+        if button.get_active():
+            self.config["browser"] = browser
 
     def select_profile(self, pid):
         self.selecting_profile = True
@@ -4372,6 +4527,10 @@ class InstallerApp(Gtk.Application):
         if self.config["install_apps"]:
             profile_line += " " + tr("summary_profile_apps")
         lines.append(profile_line)
+        browser = dict(BROWSER_CHOICES).get(self.config.get("browser"))
+        lines.append(f"{tr('summary_browser')} : {browser or tr('summary_browser_none')}")
+        stores = [name for ident, name, _ in store_catalog_choices() if ident in self.config.get("store_catalogs", [])]
+        lines.append(f"{tr('summary_store')} : {', '.join(stores) or tr('summary_store_none')}")
         score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
                  else tr("summary_benchmark_none"))
         lines.append(f"{tr('summary_benchmark')} : {score}")
@@ -4471,6 +4630,11 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
+        notice = self.independent_label()
+        notice.set_xalign(0.5)
+        notice.set_justify(Gtk.Justification.CENTER)
+        notice.set_margin_top(24)
+        box.pack_start(notice, False, False, 0)
         self.pages.add_named(box, page_name("done"))
 
     def on_reboot(self, _btn):
@@ -5039,6 +5203,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "autologin": self.config["autologin"],
             "timezone": self.config.get("timezone"),
             "packages": self.config.get("packages", []),
+            "browser": self.config.get("browser"),
+            "store_catalogs": self.config.get("store_catalogs", []),
             "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
@@ -5062,6 +5228,20 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             # Installés par l'init du système au premier démarrage avec réseau.
             with open(f"{etc}/first-boot-packages", "w") as f:
                 f.write("\n".join(self.config["packages"]) + "\n")
+        if self.config.get("browser") in dict(BROWSER_CHOICES):
+            # Téléchargé chez l'éditeur et installé par l'init au premier
+            # démarrage avec réseau (winlux-browsers --default), jamais fourni.
+            with open(f"{etc}/first-boot-browser", "w") as f:
+                f.write(self.config["browser"] + "\n")
+        known = [ident for ident, _, _ in store_catalog_choices()]
+        stores = [ident for ident in known if ident in self.config.get("store_catalogs", [])]
+        # Choix enregistré tel quel (même vide) ; les boutiques choisies sont
+        # ajoutées par l'init au premier démarrage avec réseau, puis reprises
+        # à chaque démarrage tant qu'il en reste en attente.
+        with open(f"{etc}/store-catalogs", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
+        with open(f"{etc}/store-catalogs-pending", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
         try:
             self.configure_network_target(root_path)
         except Exception as e:

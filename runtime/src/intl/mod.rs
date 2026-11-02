@@ -5,6 +5,7 @@
 pub mod api;
 pub mod codepage;
 pub mod keyboard;
+pub mod keymap;
 pub mod locale;
 pub mod text;
 pub mod tz;

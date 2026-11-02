@@ -105,6 +105,9 @@ jobs:
       - name: Compiler le runtime
         run: cargo build --release -p winlux
 
+      - name: Installer glslang (validation du GLSL traduit depuis DXBC)
+        run: sudo apt-get update -q && sudo apt-get install -y -q glslang-tools
+
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
@@ -123,6 +126,12 @@ jobs:
       - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
         run: python3 -B scripts/test-gpl-sources.py
 
+      - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
+        run: python3 -B scripts/test-image-identity.py
+
+      - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
+        run: python3 -B scripts/test-update-listing.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 
@@ -134,6 +143,12 @@ jobs:
 
       - name: Vérifier les comptes locaux, « Changer d'utilisateur » et la veille du menu Démarrer
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-accounts.py
+
+      - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py
+
+      - name: Vérifier la fenêtre Bienvenue et sa réouverture depuis le menu Démarrer
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-welcome.py
 
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
@@ -241,6 +256,12 @@ jobs:
           python3 -B scripts/test-update-guard.py
           python3 -B scripts/test-apt-metadata.py
 
+      - name: Clé de signature de Flathub inchangée
+        # Réseau des runners : l'empreinte publiée par Flathub doit rester celle
+        # épinglée dans integration/store-catalogs.json (docs/BOUTIQUES.md).
+        run: |
+          WINLUX_STORE_CATALOGS_DEFS=integration/store-catalogs.json python3 -B scripts/winlux-store-catalogs.py --check-key flathub
+
       - name: Valider le réseau et les commandes des paramètres
         run: |
           sh scripts/test-install-safety.sh
@@ -250,6 +271,7 @@ jobs:
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          python3 -B scripts/test-store-catalogs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
@@ -314,7 +336,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm xvfb xauth libgl1-mesa-dri
 
       - name: Compiler et exécuter les tests C MinGW
         run: |
@@ -390,8 +412,21 @@ jobs:
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
 
+      - name: Navigation au clavier (menu Démarrer, réglages rapides)
+        run: |
+          for kind in start quick; do
+            xvfb-run -a -s '-screen 0 1920x1080x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-keyboard-nav.py "$kind"
+          done
+
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
+
+      - name: Bureau en 1080p, 1440p et 4K (menu Démarrer, réglages rapides, Paramètres)
+        run: |
+          mkdir -p build/captures
+          for size in 1920x1080 2560x1440 3840x2160; do
+            xvfb-run -a -s "-screen 0 ${size}x24" /usr/bin/python3 -B scripts/test-resolutions.py build/captures
+          done
 
       - name: Capturer les écrans
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures

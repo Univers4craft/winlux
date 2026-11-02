@@ -84,11 +84,18 @@ fn code_page_name(cp: u32) -> String {
     let label = match cp {
         437 => "(OEM - United States)",
         850 => "(OEM - Multilingual Latin I)",
+        852 => "(OEM - Latin II)",
         858 => "(OEM - Multilingual Latin I + Euro)",
+        866 => "(OEM - Russian)",
+        1250 => "(ANSI - Central Europe)",
+        1251 => "(ANSI - Cyrillic)",
         1252 => "(ANSI - Latin I)",
         20127 => "(US-ASCII)",
         28591 => "(ISO 8859-1 Latin I)",
         28605 => "(ISO 8859-15 Latin 9)",
+        20866 => "(Russian - KOI8)",
+        28592 => "(ISO 8859-2 Central Europe)",
+        28595 => "(ISO 8859-5 Cyrillic)",
         65001 => "(UTF-8)",
         _ => "",
     };

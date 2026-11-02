@@ -1,4 +1,4 @@
-favorites=winlux-explorer.desktop,winlux-settings.desktop,winlux-terminal.desktop,org.xfce.mousepad.desktop,winlux-browser-edge.desktop
+favorites=winlux-explorer.desktop,winlux-settings.desktop,winlux-terminal.desktop,org.xfce.mousepad.desktop,winlux-browser.desktop,winlux-store.desktop
 button-title=Démarrer
 button-icon=/usr/share/winlux/native/start.svg
 show-button-title=false

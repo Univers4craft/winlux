@@ -232,6 +232,20 @@ def session_account():
     return "root"
 
 
+def display_name(user):
+    """Nom affiché d'un compte : le nom complet (champ GECOS de /etc/passwd,
+    rempli par Paramètres > Comptes et l'installateur), sinon l'identifiant."""
+    try:
+        for line in path("/etc/passwd").read_text(errors="replace").splitlines():
+            parts = line.split(":")
+            if len(parts) >= 7 and parts[0] == user:
+                full = parts[4].split(",")[0].strip()
+                return full or user
+    except OSError:
+        pass
+    return user
+
+
 def account_home(user):
     for name, _uid, home, _shell in _passwd():
         if name == user:
@@ -648,9 +662,9 @@ def run_lock(start="clock"):
             self.account_names = [self.owner] + other_accounts(self.owner)
             if len(self.account_names) > 1:
                 for name in self.account_names:
-                    button = Gtk.Button(label=name)
+                    button = Gtk.Button(label=display_name(name))
                     button.get_style_context().add_class("lock-signin")
-                    button.get_accessible().set_name(_t("Autre compte : {name}").format(name=name))
+                    button.get_accessible().set_name(_t("Autre compte : {name}").format(name=display_name(name)))
                     button.connect("clicked", lambda _b, n=name: self.select_account(n))
                     self.accounts.pack_start(button, False, False, 0)
             return self.accounts
@@ -659,7 +673,7 @@ def run_lock(start="clock"):
             """Compte affiché au centre : celui de la session ou un autre."""
             self.user = name
             self.password = requires_password(name)
-            self.name_label.set_text(name)
+            self.name_label.set_text(display_name(name))
             self.face = None
             home = account_home(name)
             if home and Path(home, ".face").is_file():
@@ -707,7 +721,7 @@ def run_lock(start="clock"):
                     self.face = None
             avatar.connect("draw", self.draw_avatar)
             self.signin.pack_start(avatar, False, False, 0)
-            name = Gtk.Label(label=self.user)
+            name = Gtk.Label(label=display_name(self.user))
             name.get_style_context().add_class("lock-name")
             self.name_label = name
             self.signin.pack_start(name, False, False, 6)
@@ -777,7 +791,7 @@ def run_lock(start="clock"):
             cr.set_source_rgb(1, 1, 1)
             cr.select_font_face("Sans")
             cr.set_font_size(size * 0.42)
-            letter = (self.user[:1] or "?").upper()
+            letter = (display_name(self.user)[:1] or "?").upper()
             ext = cr.text_extents(letter)
             cr.move_to(size / 2 - ext.width / 2 - ext.x_bearing, size / 2 - ext.height / 2 - ext.y_bearing)
             cr.show_text(letter)
