@@ -27,9 +27,12 @@ Mesa 25.2.8, OpenGL 4.6, Vulkan 1.4 (ANV), session X11.
 |---|---|---|
 | Imports résolus (analyse statique) | oui, 0 manquant | oui, 0 manquant |
 | Démarrage de la CRT et des DLL | oui | oui |
-| Fenêtre | en cours | en cours |
-| Menu | — | — |
-| Partie jouable | — | — |
+| Fenêtre | oui (fenêtre 1040×815 et plein écran 1920×1080) | oui |
+| Menu | oui | en cours (passe 5) |
+| Partie jouable | **oui, 117 FPS** (limite `max_fps=120` du jeu), fenêtre et plein écran | en cours (passe 5) |
+
+Souris, clavier et son de SuperTuxKart restent à confirmer en jouant une
+course à la main (la session était verrouillée pendant la mesure).
 
 ### Corrigé en chemin
 
@@ -46,6 +49,15 @@ Mesa 25.2.8, OpenGL 4.6, Vulkan 1.4 (ANV), session X11.
    laissait `ppvBits` indéfini) ; Warzone 2100 lisait
    `PEB->LoaderLock->OwningThread` (pointeur nul). Corrigés.
 4. `_filelength` prenait un `FILE*` au lieu d'un descripteur.
+5. **Passage 3** : SuperTuxKart s'affichait dans un coin de la fenêtre avec la
+   mise à l'échelle de l'écran ; un jeu qui dessine lui-même (Direct3D, DXGI,
+   OpenGL, Vulkan, SDL, GLFW, ANGLE) est maintenant lancé à l'échelle 1.
+   `crashpad_handler.exe` n'est plus lancé (Warzone 2100 continue sans lui).
+6. **Passage 4** (Warzone 2100) : `CloseHandle(-1)` échouait et le `CHECK` de
+   crashpad gelait le jeu ; `SleepConditionVariableSRW` expirait avec 258 au
+   lieu de 1460 ; la table `ID3D11DeviceContext` n'avait pas les 38 méthodes
+   `Get*` (72 à 109), donc ANGLE appelait `Flush` à la place de
+   `ClearState` et plantait. Test : `offset_of!(clear_state) == 110 × 8`.
 
 ## Manques connus, par fil
 
@@ -60,12 +72,13 @@ Mesa 25.2.8, OpenGL 4.6, Vulkan 1.4 (ANV), session X11.
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
 | Shaders HLSL compilés (DXBC/DXIL) | Warzone 2100 en `--gfxbackend=directx` (ANGLE produit du HLSL pour D3D11) | à mesurer | #137 |
+| libcurl : `curl_global_init` échoue | Warzone 2100 | partie en ligne et mises à jour indisponibles | #235 |
+| Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)
 
-- Rendu OpenGL de SuperTuxKart : menu, course rapide, images par seconde
-  (F12) ;
+- SuperTuxKart : une course jouée à la main (souris, clavier, son) ;
 - Warzone 2100 avec chacun des moteurs : `--gfxbackend=opengl`, `vulkan`,
   `directx` ;
 - souris et clavier dans le menu et en partie ; plein écran (Alt+Entrée) ;
