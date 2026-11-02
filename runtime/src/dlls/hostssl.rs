@@ -51,6 +51,16 @@ pub struct Ssl {
     pub OPENSSL_sk_free: unsafe extern "C" fn(P),
     pub OPENSSL_sk_pop_free: unsafe extern "C" fn(P, unsafe extern "C" fn(P)),
     pub CRYPTO_free: unsafe extern "C" fn(*mut c_void, *const c_char, c_int),
+    // condensats par morceaux et vérification de signature (MSIX)
+    pub EVP_MD_CTX_new: unsafe extern "C" fn() -> P,
+    pub EVP_MD_CTX_free: unsafe extern "C" fn(P),
+    pub EVP_DigestInit_ex: unsafe extern "C" fn(P, P, P) -> c_int,
+    pub EVP_DigestUpdate: unsafe extern "C" fn(P, *const c_void, usize) -> c_int,
+    pub EVP_DigestFinal_ex: unsafe extern "C" fn(P, *mut u8, *mut u32) -> c_int,
+    pub EVP_DigestVerifyInit: unsafe extern "C" fn(P, *mut P, P, P, P) -> c_int,
+    pub EVP_DigestVerify: unsafe extern "C" fn(P, *const u8, usize, *const u8, usize) -> c_int,
+    pub X509_get_pubkey: unsafe extern "C" fn(P) -> P,
+    pub EVP_PKEY_free: unsafe extern "C" fn(P),
     // libssl
     pub TLS_client_method: unsafe extern "C" fn() -> P,
     pub SSL_CTX_new: unsafe extern "C" fn(P) -> P,
@@ -145,6 +155,15 @@ pub fn ssl() -> Option<&'static Ssl> {
             OPENSSL_sk_free: f!(c, "OPENSSL_sk_free"),
             OPENSSL_sk_pop_free: f!(c, "OPENSSL_sk_pop_free"),
             CRYPTO_free: f!(c, "CRYPTO_free"),
+            EVP_MD_CTX_new: f!(c, "EVP_MD_CTX_new"),
+            EVP_MD_CTX_free: f!(c, "EVP_MD_CTX_free"),
+            EVP_DigestInit_ex: f!(c, "EVP_DigestInit_ex"),
+            EVP_DigestUpdate: f!(c, "EVP_DigestUpdate"),
+            EVP_DigestFinal_ex: f!(c, "EVP_DigestFinal_ex"),
+            EVP_DigestVerifyInit: f!(c, "EVP_DigestVerifyInit"),
+            EVP_DigestVerify: f!(c, "EVP_DigestVerify"),
+            X509_get_pubkey: f!(c, "X509_get_pubkey"),
+            EVP_PKEY_free: f!(c, "EVP_PKEY_free"),
             TLS_client_method: f!(s, "TLS_client_method"),
             SSL_CTX_new: f!(s, "SSL_CTX_new"),
             SSL_CTX_free: f!(s, "SSL_CTX_free"),
@@ -178,6 +197,80 @@ pub fn ssl() -> Option<&'static Ssl> {
         })
     })
     .as_ref()
+}
+
+/// Condensat calculé par morceaux (gros fichiers).
+pub struct Hasher {
+    ctx: P,
+}
+
+impl Hasher {
+    pub fn new(name: &CStr) -> Option<Hasher> {
+        let s = ssl()?;
+        unsafe {
+            let md = (s.EVP_get_digestbyname)(name.as_ptr());
+            if md.is_null() {
+                return None;
+            }
+            let ctx = (s.EVP_MD_CTX_new)();
+            if ctx.is_null() || (s.EVP_DigestInit_ex)(ctx, md, std::ptr::null_mut()) != 1 {
+                (s.EVP_MD_CTX_free)(ctx);
+                return None;
+            }
+            Some(Hasher { ctx })
+        }
+    }
+    pub fn update(&mut self, data: &[u8]) {
+        if let Some(s) = ssl() {
+            unsafe {
+                (s.EVP_DigestUpdate)(self.ctx, data.as_ptr() as *const c_void, data.len());
+            }
+        }
+    }
+    pub fn finish(self) -> Vec<u8> {
+        let mut out = vec![0u8; 64];
+        let mut n = 0u32;
+        if let Some(s) = ssl() {
+            unsafe {
+                (s.EVP_DigestFinal_ex)(self.ctx, out.as_mut_ptr(), &mut n);
+            }
+        }
+        out.truncate(n as usize);
+        out
+    }
+}
+
+impl Drop for Hasher {
+    fn drop(&mut self) {
+        if let Some(s) = ssl() {
+            unsafe { (s.EVP_MD_CTX_free)(self.ctx) }
+        }
+    }
+}
+
+/// La signature `sig` de `data` (condensat `digest`) est-elle celle de la clé
+/// publique du certificat `cert` (RSA PKCS #1 v1.5 ou ECDSA) ? None : OpenSSL
+/// absent ou certificat illisible.
+pub fn verify_signature(cert: &[u8], digest: &CStr, sig: &[u8], data: &[u8]) -> Option<bool> {
+    let s = ssl()?;
+    unsafe {
+        let x = x509_of(cert)?;
+        let key = (s.X509_get_pubkey)(x);
+        (s.X509_free)(x);
+        if key.is_null() {
+            return None;
+        }
+        let md = (s.EVP_get_digestbyname)(digest.as_ptr());
+        let ctx = (s.EVP_MD_CTX_new)();
+        let ok = !md.is_null()
+            && !ctx.is_null()
+            && (s.EVP_DigestVerifyInit)(ctx, std::ptr::null_mut(), md, std::ptr::null_mut(), key)
+                == 1
+            && (s.EVP_DigestVerify)(ctx, sig.as_ptr(), sig.len(), data.as_ptr(), data.len()) == 1;
+        (s.EVP_MD_CTX_free)(ctx);
+        (s.EVP_PKEY_free)(key);
+        Some(ok)
+    }
 }
 
 /// Condensat `name` (« MD5 », « SHA1 », « SHA256 »…) de `data`.

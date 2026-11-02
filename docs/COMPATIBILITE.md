@@ -39,11 +39,18 @@ protocoles, `LocalState`, identité de paquet à l'exécution
 avertissement. Il est refusé par défaut avec « Éditeur non vérifié » (code 3), et le
 double-clic demande une confirmation explicite (« Annuler » par défaut,
 « Installer quand même ») avant de relancer avec `--allow-unverified`. Un paquet signé
-dont le certificat porte bien l'éditeur du manifeste passe par la même confirmation,
-tant que la chaîne de certificats n'est pas vérifiée (#235). Un certificat au nom d'un
-autre éditeur est refusé dans tous les cas (`runtime/src/setup/appx_signature.rs`).
-Pas encore : la vérification cryptographique de la signature et de sa chaîne (#235),
-les paquets de ressources des bundles, et les paquets 32 bits (#232).
+est vérifié entièrement (#235, `runtime/src/setup/appx_signature.rs`, calculs par
+l'OpenSSL du système) : signature RSA ou ECDSA des attributs signés, `messageDigest`
+du `SpcIndirectDataContent`, condensats `AXBM` (block map, qui protège chaque
+fichier), `AXCT`, `AXCI`, `AXPC` et `AXCD` du paquet reçu, usage « signature de
+code » du certificat et chaîne jusqu'à une autorité du système. Entièrement vérifié,
+il s'installe sans question ; signé par une autorité inconnue (certificat de test,
+autorité d'entreprise non installée) ou expiré, il passe par la même confirmation ;
+une signature fausse, au nom d'un autre éditeur, ou un paquet modifié après
+signature est refusé dans tous les cas.
+Pas encore : la contre-signature d'horodatage (un certificat expiré reste à confirmer),
+la révocation en ligne, les autorités de signature de code propres à Windows (absentes du
+magasin du système : un paquet du Store reste donc à confirmer), les paquets de ressources des bundles, et les paquets 32 bits (#232).
 Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
