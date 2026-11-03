@@ -23,19 +23,25 @@ state = tmp / "pactl-state.json"
 fake = tmp / "bin/pactl"
 fake.parent.mkdir()
 fake.write_text(f"""#!/usr/bin/python3
-import json, sys
+import json, os, sys
 data = json.load(open({str(state)!r}))
 args = sys.argv[1:]
 if args == ["info"]:
     print("Server Name: PulseAudio (on PipeWire 1.4.2)"); sys.exit(0)
 if args[:3] == ["-f", "json", "list"]:
-    print(json.dumps(data.get(args[3], []))); sys.exit(0)
+    text = json.dumps(data.get(args[3], []))
+    # Comme le vrai pactl en français : décimales à virgule, JSON invalide.
+    if os.environ.get("LC_ALL", os.environ.get("LC_NUMERIC", os.environ.get("LANG", ""))) not in ("C", "C.UTF-8", "POSIX"):
+        text = text.replace('"balance": 0.0', '"balance": 0,00')
+    print(text); sys.exit(0)
 if args and args[0].startswith("get-default-"):
     print(data.get(args[0], "")); sys.exit(0)
 sys.exit(0)
 """)
 fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
 os.environ["PATH"] = f"{fake.parent}:{os.environ['PATH']}"
+# Session de damien : tout en français.
+os.environ["LANG"] = os.environ["LC_ALL"] = "fr_FR.UTF-8"
 
 NULL_SINK = {"index": 30, "name": "auto_null", "description": "Sortie factice", "mute": False,
              "volume": {"front-left": {"value_percent": "40%"}},
@@ -43,7 +49,7 @@ NULL_SINK = {"index": 30, "name": "auto_null", "description": "Sortie factice", 
 NULL_SOURCE = {"index": 31, "name": "auto_null.monitor", "description": "Monitor of Sortie factice",
                "monitor_of_sink": "auto_null", "properties": {}}
 SPEAKERS = {"index": 50, "name": "alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Speaker__sink",
-            "description": "Haut-parleurs", "mute": False, "volume": {"front-left": {"value_percent": "62%"}},
+            "description": "Haut-parleurs", "mute": False, "balance": 0.0, "volume": {"front-left": {"value_percent": "62%"}},
             "properties": {"device.api": "alsa", "factory.name": "api.alsa.pcm.sink"}}
 MIC = {"index": 51, "name": "alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__Mic1__source",
        "description": "Micro numérique", "mute": False, "volume": {"front-left": {"value_percent": "80%"}},
@@ -121,6 +127,20 @@ check(combos.get("Haut-parleurs ou casque") == [(SPEAKERS["name"], "Haut-parleur
 check(combos.get("Micro") == [(MIC["name"], "Micro numérique")], f"entrée : {combos}")
 check(("volume", "Volume", 62) in page.calls, "volume des haut-parleurs")
 check(not [c for c in page.calls if c[0] == "hint" and "Aucun haut-parleur" in c[1]], "message « aucun » avec une carte")
+
+# 2 bis. PC de damien : description « (null) » côté PulseAudio, le vrai nom est
+# dans les propriétés du nœud. La page affichait « (null) » dans les deux listes.
+NULL_SPEAKERS = dict(SPEAKERS, description="(null)",
+                     properties=dict(SPEAKERS["properties"], **{"node.description": "Haut-parleurs du portable"}))
+NULL_MIC = dict(MIC, description="(null)", properties={"device.api": "alsa", "alsa.card_name": "sof-hda-dsp"})
+write([NULL_SINK, NULL_SPEAKERS], [NULL_SOURCE, NULL_MIC], SPEAKERS["name"], MIC["name"])
+page = Page()
+page.page_sound()
+combos = {c[1]: c[2] for c in page.calls if c[0] == "combo"}
+check("(null)" not in repr(combos), f"« (null) » affiché : {combos}")
+check(combos.get("Haut-parleurs ou casque") == [(SPEAKERS["name"], "Haut-parleurs du portable")], f"sortie (null) : {combos}")
+check(combos.get("Micro") == [(MIC["name"], "sof-hda-dsp")], f"entrée (null) : {combos}")
+check('LC_ALL="C"' in (HERE / "winlux-popup.py").read_text(), "réglages rapides : pactl sans LC_ALL=C")
 
 # 3. Traductions du message.
 tr = pages["_TR"]

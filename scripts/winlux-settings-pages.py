@@ -799,10 +799,10 @@ def ambiance_status():
     return keyvals(result.stdout) if result else {}
 
 
-def run(args, timeout=5):
+def run(args, timeout=5, env=None):
     """Commande courte et silencieuse ; None si elle est absente ou échoue."""
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     return result if result.returncode == 0 else None
@@ -918,8 +918,14 @@ def reg_set_dword(key, name, value):
 
 # ── Son (PipeWire via pactl) ────────────────────────────────────────────────
 
+def pactl_env():
+    """pactl en locale C : en français, son JSON écrivait les nombres à virgule
+    (« "balance":0,00 »), JSON invalide, et ses libellés changent de forme."""
+    return dict(os.environ, LC_ALL="C", LANG="C")
+
+
 def pactl_list(kind):
-    result = run(["pactl", "-f", "json", "list", kind], timeout=2) if have("pactl") else None
+    result = run(["pactl", "-f", "json", "list", kind], timeout=2, env=pactl_env()) if have("pactl") else None
     if not result: return []
     try: items = json.loads(result.stdout or "[]")
     except ValueError: return []
@@ -927,7 +933,7 @@ def pactl_list(kind):
 
 
 def pactl_default(kind):
-    result = run(["pactl", f"get-default-{kind}"], timeout=2) if have("pactl") else None
+    result = run(["pactl", f"get-default-{kind}"], timeout=2, env=pactl_env()) if have("pactl") else None
     return result.stdout.strip() if result else ""
 
 
@@ -937,6 +943,16 @@ def volume_percent(item):
         try: values.append(int(str(channel.get("value_percent", "0")).rstrip("%")))
         except (AttributeError, ValueError): pass
     return max(values) if values else 0
+
+
+def device_label(device):
+    """Nom lisible d'une sortie ou d'une entrée, jamais « (null) »."""
+    props = device.get("properties") or {}
+    for value in (device.get("description"), props.get("device.description"), props.get("node.description"),
+                  props.get("node.nick"), props.get("alsa.card_name")):
+        if isinstance(value, str) and value.strip() and value.strip() not in ("(null)", "null"):
+            return value.strip()
+    return str(device.get("name") or "?")
 
 
 def placeholder_device(device):
@@ -1755,7 +1771,7 @@ class ExtraPages:
             if not devices: continue
             self.section(_t(title))
             box = self.card()
-            items = [(d.get("name", ""), d.get("description") or d.get("name", "")) for d in devices]
+            items = [(d.get("name", ""), device_label(d)) for d in devices]
             self.combo(box, _t("Haut-parleurs ou casque") if kind == "sink" else _t("Micro"), items, default,
                        lambda name, k=kind: run(["pactl", f"set-default-{k}", name]) and self.audio_refresh())
             device = next((d for d in devices if d.get("name") == default), devices[0])

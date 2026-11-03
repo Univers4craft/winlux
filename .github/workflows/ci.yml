@@ -454,6 +454,9 @@ jobs:
             xvfb-run -a -s '-screen 0 1920x1080x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-keyboard-nav.py "$kind"
           done
 
+      - name: Menu Démarrer sur tablette (clavier tactile intégré, appuis xdotool)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-osk.py
+
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
 
