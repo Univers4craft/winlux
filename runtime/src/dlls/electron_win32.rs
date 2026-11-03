@@ -433,6 +433,35 @@ unsafe extern "win64" fn WTSGetActiveConsoleSessionId() -> u32 {
     1
 }
 
+/// TransactNamedPipe : écrit un message sur le tube puis lit la réponse
+/// (client crashpad → gestionnaire de plantage). Avec OVERLAPPED,
+/// l'opération est faite tout de suite et l'OVERLAPPED est terminé.
+unsafe extern "win64" fn TransactNamedPipe(
+    pipe: usize,
+    input: *const u8,
+    in_len: u32,
+    output: *mut u8,
+    out_len: u32,
+    read: *mut u32,
+    ov: usize,
+) -> i32 {
+    use crate::dlls::kernel32 as k;
+    let mut written = 0u32;
+    if k::write_file(pipe, input, in_len, &mut written, 0) == 0 {
+        return 0;
+    }
+    let mut got = 0u32;
+    let ok = k::read_file(pipe, output, out_len, &mut got, 0);
+    if !read.is_null() {
+        *read = got;
+    }
+    if ov != 0 {
+        let err = if ok == 0 { k::get_last_error() } else { 0 };
+        k::complete_overlapped(pipe, ov, got, err);
+    }
+    ok
+}
+
 pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "CheckRemoteDebuggerPresent" => fn CheckRemoteDebuggerPresent,
@@ -456,6 +485,7 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "ReplaceFileW" => fn ReplaceFileW,
         "TerminateJobObject" => fn TerminateJobObject,
         "VirtualFreeEx" => fn VirtualFreeEx,
+        "TransactNamedPipe" => fn TransactNamedPipe,
         "WTSGetActiveConsoleSessionId" => fn WTSGetActiveConsoleSessionId,
     }
 }
@@ -557,8 +587,31 @@ pub(crate) unsafe extern "win64" fn IsValidAcl(acl: *const u8) -> i32 {
     1
 }
 
+/// TRUSTEE_W { pMultipleTrustee, MultipleTrusteeOperation, TrusteeForm,
+/// TrusteeType, ptstrName } : forme 0 = SID, 1 = nom.
+unsafe fn build_trustee(trustee: *mut u8, form: u32, value: usize) {
+    if trustee.is_null() {
+        return;
+    }
+    std::ptr::write_bytes(trustee, 0, 32);
+    (trustee.add(12) as *mut u32).write_unaligned(form);
+    (trustee.add(24) as *mut usize).write_unaligned(value);
+}
+
+unsafe extern "win64" fn BuildTrusteeWithSid(trustee: *mut u8, sid: usize) {
+    build_trustee(trustee, 0, sid);
+}
+
+unsafe extern "win64" fn BuildTrusteeWithName(trustee: *mut u8, name: usize) {
+    build_trustee(trustee, 1, name);
+}
+
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "BuildTrusteeWithSidW" => fn BuildTrusteeWithSid,
+        "BuildTrusteeWithSidA" => fn BuildTrusteeWithSid,
+        "BuildTrusteeWithNameW" => fn BuildTrusteeWithName,
+        "BuildTrusteeWithNameA" => fn BuildTrusteeWithName,
         "IsValidAcl" => fn IsValidAcl,
     }
 }
@@ -1365,6 +1418,66 @@ mod tests {
             assert_eq!(build(0, 0, 0, 0, 0, 0, 0, &mut size, &mut sd), 0);
             assert_eq!(size, 20);
             assert_ne!(sd, 0);
+        }
+    }
+
+    #[test]
+    fn tube_nomme_transaction_et_fin() {
+        use crate::dlls::kernel32 as k;
+        let name = format!("\\\\.\\pipe\\winlux-transact-{}", std::process::id());
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            // PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE.
+            let server = k::create_named_pipe_w(wide.as_ptr(), 3, 6, 1, 512, 512, 0, 0);
+            assert_ne!(server, usize::MAX);
+            let srv = server;
+            let t = std::thread::spawn(move || {
+                let _teb = crate::process::test_teb();
+                k::connect_named_pipe(srv, 0);
+                let mut buf = [0u8; 16];
+                let mut n = 0u32;
+                assert_eq!(k::read_file(srv, buf.as_mut_ptr(), 16, &mut n, 0), 1);
+                assert_eq!(&buf[..n as usize], b"ping");
+                assert_eq!(k::write_file(srv, b"pong!".as_ptr(), 5, &mut n, 0), 1);
+                // Le client ferme : la lecture suivante rend ERROR_BROKEN_PIPE,
+                // jamais un succès à 0 octet (crashpad bouclait dessus).
+                assert_eq!(k::read_file(srv, buf.as_mut_ptr(), 16, &mut n, 0), 0);
+                assert_eq!(k::get_last_error(), 109);
+            });
+            let mut client = usize::MAX;
+            for _ in 0..200 {
+                client = k::create_file_w(wide.as_ptr(), 0xC000_0000, 0, 0, 3, 0, 0);
+                if client != usize::MAX {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_ne!(client, usize::MAX, "client du tube");
+            let mut out = [0u8; 16];
+            let mut got = 0u32;
+            assert_eq!(
+                TransactNamedPipe(
+                    client,
+                    b"ping".as_ptr(),
+                    4,
+                    out.as_mut_ptr(),
+                    16,
+                    &mut got,
+                    0
+                ),
+                1
+            );
+            assert_eq!(&out[..got as usize], b"pong!");
+            k::close_handle(client);
+            t.join().unwrap();
+            k::close_handle(server);
+            let mut trustee = [0u8; 32];
+            BuildTrusteeWithSid(trustee.as_mut_ptr(), 0x1234);
+            assert_eq!(u32::from_le_bytes(trustee[12..16].try_into().unwrap()), 0);
+            assert_eq!(
+                usize::from_le_bytes(trustee[24..32].try_into().unwrap()),
+                0x1234
+            );
         }
     }
 

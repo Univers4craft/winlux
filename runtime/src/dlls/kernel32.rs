@@ -4596,9 +4596,10 @@ pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
     }
 }
 /// Le descripteur est-il un tube (CreatePipe, `|` du shell) ?
+/// Tube anonyme (FIFO) ou tube nommé (socket Unix) : une lecture de 0 octet
+/// y signifie que l'autre bout est fermé.
 fn fd_is_pipe(fd: i32) -> bool {
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    unsafe { libc::fstat(fd, &mut st) == 0 && st.st_mode & libc::S_IFMT == libc::S_IFIFO }
+    file_type_of_fd(fd) == 3
 }
 /// Entrée/sortie standard d'un enfant d'après un handle de STARTUPINFO :
 /// 0 ou INVALID_HANDLE_VALUE → rien (/dev/null), sinon une copie du fd.
