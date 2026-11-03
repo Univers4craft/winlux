@@ -3011,22 +3011,49 @@ class InstallerApp(Gtk.Application):
         self.osk = osk_module()
         self.osk_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.osk_box.set_no_show_all(True)
+        # Les rangées de touches s'étirent (vexpand) : sans ce blocage, la boîte
+        # réclamerait une part de la hauteur libre et rognerait la page.
+        self.osk_box.set_vexpand(False)
         self.osk_widget = None
         self.osk_layout = None
         self.content_area.pack_end(self.osk_box, False, False, 0)
         if self.osk is None:
             return
         self.btn_osk = Gtk.Button(label=tr("btn_osk"))
+        # Le bouton ne prend pas le focus : le champ choisi avant de l'ouvrir le garde.
+        self.btn_osk.set_can_focus(False)
         self.btn_osk.get_style_context().add_class("btn-secondary")
         self.btn_osk.set_tooltip_text(tr("btn_osk"))
         self.btn_osk.connect("clicked", lambda _b: self.show_touch_keyboard(not self.osk_box.get_visible()))
         self.nav_box.pack_start(self.btn_osk, False, False, 0)
         try:
-            missing = not self.osk.keyboards()
+            self.osk_auto = not self.osk.keyboards()
         except Exception:
-            missing = False
-        if missing:
-            GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+            self.osk_auto = False
+        # Sans clavier physique, le clavier s'ouvre dès qu'un champ de saisie
+        # reçoit le focus, et à chaque étape qui en contient un (Compte local,
+        # Wi-Fi, chiffrement…) ; les autres étapes (Licence…) restent entières.
+        self.win.connect("set-focus", self.on_focus_for_keyboard)
+
+    def page_has_entry(self, widget=None):
+        widget = widget if widget is not None else self.pages.get_visible_child()
+        if widget is None or not widget.get_visible():
+            return False
+        if isinstance(widget, Gtk.Entry) and widget.get_editable() and widget.get_sensitive():
+            return True
+        if isinstance(widget, Gtk.Container):
+            return any(self.page_has_entry(child) for child in widget.get_children())
+        return False
+
+    def on_focus_for_keyboard(self, _win, widget):
+        if getattr(self, "osk_auto", False) and isinstance(widget, Gtk.Entry) and widget.get_editable():
+            if not self.osk_box.get_visible():
+                GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+
+    def auto_touch_keyboard(self):
+        """Étape affichée : clavier ouvert s'il y a un champ à remplir (sans clavier physique)."""
+        if getattr(self, "osk_auto", False):
+            self.show_touch_keyboard(self.page_has_entry())
 
     def touch_keyboard_layout(self):
         code = str(getattr(self, "config", {}).get("keyboard") or "")[:2]
@@ -3048,7 +3075,17 @@ class InstallerApp(Gtk.Application):
                 send=self.touch_key, layout=layout,
                 on_close=lambda: self.show_touch_keyboard(False))
             self.osk_layout = wanted
+            # Hauteur fixe : la page garde l'essentiel de l'écran et défile.
+            screen = self.win.get_screen()
+            height = screen.get_height() if screen is not None else 768
+            self.osk_widget.set_size_request(-1, max(180, min(270, int(height * 0.32))))
+            self.osk_widget.set_margin_top(8)
             self.osk_box.pack_start(self.osk_widget, False, False, 0)
+        # Barre de défilement toujours visible tant que le clavier est ouvert :
+        # une tablette n'a pas de molette pour faire défiler la page.
+        for scroll in self.pages.get_children():
+            if isinstance(scroll, Gtk.ScrolledWindow):
+                scroll.set_overlay_scrolling(not visible)
         if visible:
             # set_no_show_all : show_all() ne toucherait pas la boîte elle-même.
             self.osk_widget.show_all()
@@ -3099,6 +3136,13 @@ class InstallerApp(Gtk.Application):
                 scroll = Gtk.ScrolledWindow()
                 scroll.add(child)
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            # Le champ qui reçoit le focus (clic, Tab du clavier tactile) défile
+            # dans la partie visible, même quand le clavier tactile prend le bas.
+            inner = scroll.get_child()
+            if isinstance(inner, Gtk.Viewport) and inner.get_child() is not None:
+                inner = inner.get_child()
+            if isinstance(inner, Gtk.Container):
+                inner.set_focus_vadjustment(scroll.get_vadjustment())
             scroll.show_all()
             self.pages.add_named(scroll, name)
 
@@ -3280,8 +3324,11 @@ class InstallerApp(Gtk.Application):
         if key == "summary":
             self.refresh_summary()
         self.pages.set_visible_child_name(page_name(key))
-        if getattr(self, "osk_box", None) is not None and self.osk_box.get_visible():
-            self.show_touch_keyboard(True)
+        if getattr(self, "osk_box", None) is not None:
+            if getattr(self, "osk_auto", False):
+                GLib.idle_add(lambda: self.auto_touch_keyboard() and False)
+            elif self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
         if key == "benchmark" and self.bench_state == "idle":

@@ -241,11 +241,12 @@ jobs:
           python3 -B scripts/test-reset.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-reset-page.py
 
-      - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes)
+      - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes, À propos > Votre PC)
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth python3-gi gir1.2-gtk-3.0
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-drivers.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-about-pc.py
 
       - name: Vérifier le clavier tactile et les réglages avancés de la souris
         run: |
