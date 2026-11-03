@@ -135,6 +135,12 @@ with tempfile.TemporaryDirectory() as directory:
 source = (SCRIPTS / "winlux-trust-shortcuts.py").read_text()
 ok("metadata::xfce-exe-checksum" in source and "hashlib.sha256" in source,
    "winlux-trust-shortcuts pose la somme SHA-256 lue par xfdesktop 4.20")
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("def forget_uninstalled" in pages_source and "timeout_add(1500, self.forget_uninstalled" in pages_source,
+   "Paramètres > Programmes Windows : un programme désinstallé quitte la liste sans rouvrir la page")
+programs_source = (ROOT / "testexe/src/shell/programs.rs").read_text()
+ok('b"squirrel" => b"Squirrel"' in programs_source and 'b" application Windows"' in programs_source,
+   "Applications installées : type Squirrel affiché, « 1 application Windows » au singulier")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -233,6 +239,8 @@ installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
 ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
    "installateur : « Redémarrer maintenant » passe par winlux-power")
+ok("def show_license_required" in installer and installer.count('"license_required":') == 6,
+   "installateur : « Suivant » sans licence acceptée montre la case et un message (6 langues)")
 tools = (SCRIPTS / "winlux-system-tools.py").read_text()
 ok("/sys/class/ieee80211" in tools and "/sys/class/bluetooth" in tools,
    "réglages rapides : Wi-Fi et Bluetooth masqués sans matériel")
@@ -326,5 +334,12 @@ ok('9: "sections_about"' in about_pages and "def pc_section" in hardware_page,
 ok("lines.update(pc_status(devices))" in (SCRIPTS / "winlux-drivers.py").read_text(),
    "Votre PC : relevé de winlux-drivers (même détection que Matériel et pilotes)")
 ok('"Votre PC": ("Your PC", "Su PC", "Ihr PC")' in hardware_page, "Votre PC : quatre langues")
+
+# ── xdg-open ~/Téléchargements ouvrait « e:///home/…/T%C3%A9l… » (introuvable) ──
+shell_app = SCRIPTS / "winlux-shell-app.sh"
+for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\home\\damien\\Téléchargements"),
+                      ("file:///tmp/Mes%20documents%20%231", "Z:\\tmp\\Mes documents #1")):
+    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
+    ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -674,8 +674,72 @@ def browsers():
             managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/winlux-browsers --launch {key} %U\nIcon={root / icon}\nTerminal=false\nCategories=Network;WebBrowser;\n")
     return keep
 
+def desktop_dir(home):
+    """XDG desktop folder (~/Bureau on Winlux)."""
+    try:
+        for line in (home / ".config/user-dirs.dirs").read_text().splitlines():
+            if line.startswith("XDG_DESKTOP_DIR="):
+                return Path(line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(home)))
+    except OSError: pass
+    return home / "Bureau" if (home / "Bureau").is_dir() else home / "Desktop"
+
+def trust(path):
+    """Mark a generated desktop launcher as trusted (xfdesktop 4.18+ reads the SHA-256)."""
+    path.chmod(0o755)
+    if not any((Path(d) / "gio").is_file() for d in os.environ.get("PATH", "").split(":")): return
+    for key, value in [("metadata::trusted", "true"), ("metadata::xfce-exe-checksum", hashlib.sha256(path.read_bytes()).hexdigest())]:
+        subprocess.run(["gio", "set", "-t", "string", str(path), key, value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+def desktop_shortcuts(home=None):
+    """Windows shortcuts on the desktop show their name without « .lnk », like Windows.
+
+    xfdesktop labels a file with its file name: each Name.lnk gets a trusted
+    launcher showing « Name » with the program's icon, and the .lnk itself is
+    listed in the folder's .hidden file. Only our own entries are touched.
+    """
+    home = home or HOME
+    desk = desktop_dir(home)
+    if not desk.is_dir() or desk.is_symlink(): return
+    hidden_file = desk / ".hidden"
+    try: hidden = [line for line in hidden_file.read_text().splitlines() if line]
+    except OSError: hidden = []
+    ours_file = STATE / "desktop-lnk-hidden.json"
+    try: ours = set(json.loads(ours_file.read_text()))
+    except (OSError, ValueError, TypeError): ours = set()
+    wanted, keep = set(), set()
+    for link in sorted(desk.glob("*.lnk"))[:512]:
+        if link.is_symlink() or not link.is_file(): continue
+        try:
+            target, _, _, icon_file, _ = lnk_resolve(link, home)
+        except (OSError, ValueError, UnicodeError, struct.error): continue
+        if not valid_exe(target): continue
+        identity = hashlib.sha256(str(link).encode()).hexdigest()[:16]
+        entry = desk / f"winlux-lnk-{identity}.desktop"
+        icon_source = icon_file if icon_file is not None and icon_file.is_file() and valid_exe(icon_file) else target
+        icon = icon_for(icon_source, "lnk-" + identity)
+        name = link.stem.replace("\n", " ").replace("\r", " ")[:200]
+        text = (f"[Desktop Entry]\nType=Application\nName={escaped(name)}\nExec=/usr/bin/winlux-open {argument(link)}\n"
+                f"Icon={escaped(icon)}\nTerminal=false\nX-Winlux-Lnk={escaped(link.name)}\n")
+        before = entry.read_bytes() if entry.is_file() else None
+        managed_desktop(entry, text)
+        if entry.is_file() and (before != entry.read_bytes() or not os.access(entry, os.X_OK)): trust(entry)
+        keep.add(entry.name)
+        wanted.add(link.name)
+    for entry in desk.glob("winlux-lnk-*.desktop"):
+        if entry.name not in keep and "X-Winlux-Generated-Hash=" in entry.read_text(errors="replace"):
+            entry.unlink()
+            CHANGED.append(entry)
+    stale = ours - wanted
+    lines = [line for line in hidden if line not in stale] + sorted(wanted - set(hidden))
+    if lines != hidden:
+        if lines: save(hidden_file, "\n".join(lines) + "\n")
+        elif hidden_file.is_file(): hidden_file.unlink()
+    STATE.mkdir(parents=True, exist_ok=True)
+    save(ours_file, json.dumps(sorted(wanted)))
+
 def refresh():
     APPS.mkdir(parents=True, exist_ok=True)
+    desktop_shortcuts()
     keep = browsers()
     homes = [(HOME, "desktop")]
     if os.getuid() == 0 and Path("/home/winlux-web").is_dir(): homes.append((Path("/home/winlux-web"), "browser"))

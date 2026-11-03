@@ -101,12 +101,13 @@ pub fn list() -> Vec<Program> {
                 let kind = if msi {
                     "msi"
                 } else if let Some(m) = Manifest::find(&sub) {
-                    if m.kind.is_empty() {
-                        "setup"
-                    } else if m.kind == "nsis" {
-                        "nsis"
-                    } else {
-                        "inno"
+                    match m.kind.as_str() {
+                        "" => "setup",
+                        "nsis" => "nsis",
+                        "squirrel" => "squirrel",
+                        "7z" => "7z",
+                        "msix" => "msix",
+                        _ => "inno",
                     }
                 } else if lower.ends_with("_is1") {
                     "inno"

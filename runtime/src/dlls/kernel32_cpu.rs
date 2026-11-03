@@ -72,8 +72,7 @@ fn process_mask() -> u64 {
 }
 
 fn is_current_process(h: usize) -> bool {
-    h == super::kernel32::get_current_process()
-        || super::kernel32::process_os_pid(h) == Some(std::process::id() as i32)
+    super::kernel32::is_current_process_handle(h)
 }
 
 // --- Affinité ----------------------------------------------------------------
