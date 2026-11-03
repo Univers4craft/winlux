@@ -220,7 +220,9 @@ case "${1:---status}" in
     --status) status ;;
     --install) install_browser "$browser" ;;
     --default)
-        install_browser "$browser"
+        # Déjà installé (choix fait depuis une fenêtre « Ouvrir avec ») : pas de
+        # nouveau téléchargement, seul le choix change.
+        test -x "$(binary "$browser")" || install_browser "$browser"
         mkdir -p "${config%/*}"; printf 'default=%s\n' "$browser" > "$config.new"; mv "$config.new" "$config" ;;
     --launch) shift 2; launch "$browser" "$@" ;;
     --open) shift; launch "$(default_browser)" "$@" ;;

@@ -116,6 +116,9 @@ jobs:
           sh scripts/test-browsers.sh
           python3 -B scripts/test-browser-fetch.py
 
+      - name: Vérifier que les liens web s'ouvrent dans le navigateur installé
+        run: sh scripts/test-browser-links.sh
+
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 
