@@ -611,6 +611,16 @@ TRANSLATIONS = {
         "network_connecting": "Connexion à {ssid}...",
         "network_failed": "Échec de la connexion : {error}",
         "network_proxy_invalid": "Proxy invalide : indiquez un nom d'hôte ou une adresse IP et un port (1-65535).",
+        "time_title": "Date et heure",
+        "time_tz": "Fuseau horaire",
+        "time_auto": "Automatique (par Internet)",
+        "time_manual": "Saisir la date et l'heure",
+        "time_date": "Date",
+        "time_hour": "Heure",
+        "time_auto_ok": "Heure réglée par Internet : {time}",
+        "time_auto_wait": "Connectez-vous au Wi-Fi ou au câble pour régler l'heure automatiquement, ou saisissez-la.",
+        "time_auto_failed": "Heure non réglée par Internet : saisissez la date et l'heure.",
+        "time_manual_hint": "Sans Internet, une date fausse fait refuser les sites sécurisés : vérifiez-la. Elle sera recalée dès la première connexion.",
         "network_open": "Ouvert",
         "import_title": "Importer vos données Windows",
         "import_subtitle": "Nous avons détecté une installation Windows. Vous pouvez importer certaines données.",
@@ -789,6 +799,16 @@ TRANSLATIONS = {
         "network_connecting": "Connecting to {ssid}...",
         "network_failed": "Connection failed: {error}",
         "network_proxy_invalid": "Invalid proxy: enter a host name or IP address and a port (1-65535).",
+        "time_title": "Date and time",
+        "time_tz": "Time zone",
+        "time_auto": "Automatic (from the Internet)",
+        "time_manual": "Enter the date and time",
+        "time_date": "Date",
+        "time_hour": "Time",
+        "time_auto_ok": "Time set from the Internet: {time}",
+        "time_auto_wait": "Connect to Wi-Fi or a cable to set the time automatically, or enter it.",
+        "time_auto_failed": "Time not set from the Internet: enter the date and time.",
+        "time_manual_hint": "Without Internet, a wrong date makes secure sites refuse to connect: check it. It will be corrected at the first connection.",
         "network_open": "Open",
         "import_title": "Import your Windows data",
         "import_subtitle": "A Windows installation was detected. You can import some of your data.",
@@ -967,6 +987,16 @@ TRANSLATIONS = {
         "network_connecting": "Verbindung mit {ssid}...",
         "network_failed": "Verbindung fehlgeschlagen: {error}",
         "network_proxy_invalid": "Ungültiger Proxy: Geben Sie einen Hostnamen oder eine IP-Adresse und einen Port (1-65535) an.",
+        "time_title": "Datum und Uhrzeit",
+        "time_tz": "Zeitzone",
+        "time_auto": "Automatisch (über das Internet)",
+        "time_manual": "Datum und Uhrzeit eingeben",
+        "time_date": "Datum",
+        "time_hour": "Uhrzeit",
+        "time_auto_ok": "Uhrzeit über das Internet gestellt: {time}",
+        "time_auto_wait": "Verbinden Sie sich mit WLAN oder Kabel, um die Uhrzeit automatisch zu stellen, oder geben Sie sie ein.",
+        "time_auto_failed": "Uhrzeit nicht über das Internet gestellt: Geben Sie Datum und Uhrzeit ein.",
+        "time_manual_hint": "Ohne Internet lassen sichere Websites bei falschem Datum keine Verbindung zu: Prüfen Sie es. Es wird bei der ersten Verbindung korrigiert.",
         "network_open": "Offen",
         "import_title": "Ihre Windows-Daten importieren",
         "import_subtitle": "Eine Windows-Installation wurde erkannt. Sie können einige Ihrer Daten importieren.",
@@ -1145,6 +1175,16 @@ TRANSLATIONS = {
         "network_connecting": "Conectando a {ssid}...",
         "network_failed": "Error de conexión: {error}",
         "network_proxy_invalid": "Proxy no válido: indique un nombre de host o una dirección IP y un puerto (1-65535).",
+        "time_title": "Fecha y hora",
+        "time_tz": "Zona horaria",
+        "time_auto": "Automática (por Internet)",
+        "time_manual": "Introducir la fecha y la hora",
+        "time_date": "Fecha",
+        "time_hour": "Hora",
+        "time_auto_ok": "Hora ajustada por Internet: {time}",
+        "time_auto_wait": "Conéctese al Wi-Fi o al cable para ajustar la hora automáticamente, o introdúzcala.",
+        "time_auto_failed": "Hora no ajustada por Internet: introduzca la fecha y la hora.",
+        "time_manual_hint": "Sin Internet, una fecha incorrecta hace que los sitios seguros rechacen la conexión: compruébela. Se corregirá en la primera conexión.",
         "network_open": "Abierta",
         "import_title": "Importar sus datos de Windows",
         "import_subtitle": "Se detectó una instalación de Windows. Puede importar algunos de sus datos.",
@@ -1323,6 +1363,16 @@ TRANSLATIONS = {
         "network_connecting": "Connessione a {ssid}...",
         "network_failed": "Connessione non riuscita: {error}",
         "network_proxy_invalid": "Proxy non valido: indica un nome host o un indirizzo IP e una porta (1-65535).",
+        "time_title": "Data e ora",
+        "time_tz": "Fuso orario",
+        "time_auto": "Automatica (da Internet)",
+        "time_manual": "Inserisci data e ora",
+        "time_date": "Data",
+        "time_hour": "Ora",
+        "time_auto_ok": "Ora impostata da Internet: {time}",
+        "time_auto_wait": "Connettiti al Wi-Fi o al cavo per impostare l'ora automaticamente, oppure inseriscila.",
+        "time_auto_failed": "Ora non impostata da Internet: inserisci data e ora.",
+        "time_manual_hint": "Senza Internet, una data errata fa rifiutare i siti sicuri: controllala. Verrà corretta alla prima connessione.",
         "network_open": "Aperta",
         "import_title": "Importa i tuoi dati di Windows",
         "import_subtitle": "È stata rilevata un'installazione di Windows. Puoi importare alcuni dei tuoi dati.",
@@ -1501,6 +1551,16 @@ TRANSLATIONS = {
         "network_connecting": "Conectando a {ssid}...",
         "network_failed": "Falha na conexão: {error}",
         "network_proxy_invalid": "Proxy inválido: informe um nome de host ou endereço IP e uma porta (1-65535).",
+        "time_title": "Data e hora",
+        "time_tz": "Fuso horário",
+        "time_auto": "Automática (pela Internet)",
+        "time_manual": "Introduzir a data e a hora",
+        "time_date": "Data",
+        "time_hour": "Hora",
+        "time_auto_ok": "Hora acertada pela Internet: {time}",
+        "time_auto_wait": "Ligue-se ao Wi-Fi ou ao cabo para acertar a hora automaticamente, ou introduza-a.",
+        "time_auto_failed": "Hora não acertada pela Internet: introduza a data e a hora.",
+        "time_manual_hint": "Sem Internet, uma data errada faz os sites seguros recusarem a ligação: verifique-a. Será corrigida na primeira ligação.",
         "network_open": "Aberta",
         "import_title": "Importar seus dados do Windows",
         "import_subtitle": "Uma instalação do Windows foi detectada. Você pode importar alguns dos seus dados.",
@@ -3001,6 +3061,93 @@ def detect_image_ext(path):
     return ".jpg"
 
 
+TIMEZONE_BY_LOCALE = {
+    "fr_FR": "Europe/Paris", "fr_BE": "Europe/Brussels", "fr_CH": "Europe/Zurich", "fr_CA": "America/Toronto",
+    "fr_LU": "Europe/Luxembourg", "de_DE": "Europe/Berlin", "de_AT": "Europe/Vienna", "de_CH": "Europe/Zurich",
+    "es_ES": "Europe/Madrid", "es_MX": "America/Mexico_City", "es_AR": "America/Argentina/Buenos_Aires",
+    "en_US": "America/New_York", "en_GB": "Europe/London", "en_CA": "America/Toronto", "en_AU": "Australia/Sydney",
+    "it_IT": "Europe/Rome", "pt_PT": "Europe/Lisbon", "pt_BR": "America/Sao_Paulo",
+}
+TIMEZONE_BY_LANGUAGE = {"fr": "Europe/Paris", "de": "Europe/Berlin", "es": "Europe/Madrid",
+                        "en": "Europe/London", "it": "Europe/Rome", "pt": "Europe/Lisbon"}
+ZONEINFO = "/usr/share/zoneinfo"
+
+
+def default_timezone(language):
+    """Fuseau proposé d'après la langue choisie (fr_FR → Europe/Paris)."""
+    language = (language or "").split(".")[0]
+    return TIMEZONE_BY_LOCALE.get(language) or TIMEZONE_BY_LANGUAGE.get(language[:2], "Europe/Paris")
+
+
+def list_timezones(zoneinfo=ZONEINFO):
+    """Fuseaux « Région/Ville » connus (zone1970.tab), triés."""
+    zones = set()
+    try:
+        with open(os.path.join(zoneinfo, "zone1970.tab"), encoding="utf-8") as f:
+            for line in f:
+                fields = line.split("\t")
+                if not line.startswith("#") and len(fields) >= 3:
+                    zones.add(fields[2].strip())
+    except OSError:
+        pass
+    zones.update(TIMEZONE_BY_LOCALE.values())
+    zones.add("UTC")
+    return sorted(zones)
+
+
+def local_to_epoch(year, month, day, hour, minute, timezone):
+    """Date et heure saisies dans le fuseau choisi → secondes UTC."""
+    import datetime
+    import zoneinfo
+    try:
+        zone = zoneinfo.ZoneInfo(timezone)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        zone = datetime.timezone.utc
+    return int(datetime.datetime(year, month, day, hour, minute, tzinfo=zone).timestamp())
+
+
+def zone_now(timezone):
+    """Heure actuelle dans le fuseau choisi (le live tourne en UTC)."""
+    import datetime
+    import zoneinfo
+    try:
+        return datetime.datetime.now(zoneinfo.ZoneInfo(timezone)).timetuple()
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, TypeError):
+        return time.gmtime()
+
+
+def set_system_clock(epoch, rtc="/dev/rtc0"):
+    """Horloge du live et horloge matérielle (UTC) réglées sur epoch."""
+    import fcntl
+    import struct
+    time.clock_settime(time.CLOCK_REALTIME, epoch)
+    moment = time.gmtime(epoch)
+    data = struct.pack("9i", moment.tm_sec, moment.tm_min, moment.tm_hour, moment.tm_mday,
+                       moment.tm_mon - 1, moment.tm_year - 1900, 0, 0, 0)
+    try:
+        descriptor = os.open(rtc, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.ioctl(descriptor, 0x4024700a, data)   # RTC_SET_TIME
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def sync_clock_now():
+    """Heure par Internet tout de suite (winlux-certificates, SNTP), RTC comprise."""
+    tool = shutil.which("winlux-certificates")
+    if not tool:
+        return False
+    try:
+        return subprocess.run([tool, "time", "sync"], capture_output=True, timeout=40).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 HARDWARE_CATEGORIES = (
     ("nvidia-", "hw_nvidia"),
     ("linux-modules-extra-", "hw_modules"),
@@ -3566,6 +3713,7 @@ class InstallerApp(Gtk.Application):
             target = self.next_step(self.current_step, 1)
             if key == "network":
                 self.apply_live_proxy()
+                self.apply_time_choice()
             if target > step_index("disk") and self.bench_device != (self.config["disk"] or {}).get("path"):
                 # Le benchmark lit le disque choisi : on le relance si le disque a changé,
                 # et l'ancienne note ne vaut plus rien.
@@ -3638,6 +3786,7 @@ class InstallerApp(Gtk.Application):
         for i, lbl in enumerate(self.step_labels):
             if i < len(steps):
                 lbl.set_text(f"  {i + 1}. {steps[i]}")
+        self.follow_language_timezone()
         if previous == tr._lang:
             return
         # Les pages sont construites une seule fois : on retraduit leurs textes sur
@@ -3842,6 +3991,7 @@ class InstallerApp(Gtk.Application):
         self.net_message.get_style_context().add_class("progress-text")
         self.net_message.set_line_wrap(True)
         box.pack_start(self.net_message, False, False, 0)
+        self.build_time_section(box)
         proxy_title = Gtk.Label(label=tr("network_proxy_title"), xalign=0)
         proxy_title.get_style_context().add_class("card-title")
         proxy_title.set_margin_top(12)
@@ -3879,6 +4029,130 @@ class InstallerApp(Gtk.Application):
         self.wifi_selected = None
         self.pages.add_named(box, page_name("network"))
 
+    def build_time_section(self, box):
+        """Date, heure et fuseau : automatiques si le réseau est là, sinon à
+        saisir. Une date fausse fait refuser tous les sites sécurisés."""
+        title = Gtk.Label(label=tr("time_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        title.set_margin_top(12)
+        box.pack_start(title, False, False, 0)
+        tz_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        tz_label = Gtk.Label(label=tr("time_tz"))
+        tz_label.get_style_context().add_class("input-label")
+        tz_row.pack_start(tz_label, False, False, 0)
+        self.tz_combo = Gtk.ComboBoxText()
+        self.tz_zones = list_timezones()
+        for zone in self.tz_zones:
+            self.tz_combo.append(zone, zone.replace("_", " "))
+        self.tz_chosen = bool(self.config.get("timezone"))
+        self.tz_combo.set_active_id(self.config.get("timezone") or default_timezone(self.config.get("language")))
+        self.tz_combo.connect("changed", self.on_timezone_changed)
+        self.config["timezone"] = self.tz_combo.get_active_id()
+        tz_row.pack_start(self.tz_combo, True, True, 0)
+        box.pack_start(tz_row, False, False, 0)
+        self.time_auto = Gtk.RadioButton.new_with_label(None, tr("time_auto"))
+        self.time_manual = Gtk.RadioButton.new_with_label_from_widget(self.time_auto, tr("time_manual"))
+        modes = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=24)
+        modes.pack_start(self.time_auto, False, False, 0)
+        modes.pack_start(self.time_manual, False, False, 0)
+        box.pack_start(modes, False, False, 0)
+        self.time_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        now = zone_now(self.config["timezone"])
+
+        def spin(low, high, value, width):
+            button = Gtk.SpinButton.new_with_range(low, high, 1)
+            button.set_value(value)
+            button.set_width_chars(width)
+            button.set_numeric(True)
+            return button
+        self.time_spins = {
+            "day": spin(1, 31, now.tm_mday, 2), "month": spin(1, 12, now.tm_mon, 2),
+            "year": spin(2024, 2099, max(2024, now.tm_year), 4),
+            "hour": spin(0, 23, now.tm_hour, 2), "minute": spin(0, 59, now.tm_min, 2)}
+        date_label = Gtk.Label(label=tr("time_date"))
+        date_label.get_style_context().add_class("input-label")
+        self.time_row.pack_start(date_label, False, False, 0)
+        for key, sep in (("day", "/"), ("month", "/"), ("year", None)):
+            self.time_row.pack_start(self.time_spins[key], False, False, 0)
+            if sep:
+                self.time_row.pack_start(Gtk.Label(label=sep), False, False, 0)
+        hour_label = Gtk.Label(label=tr("time_hour"))
+        hour_label.get_style_context().add_class("input-label")
+        hour_label.set_margin_start(18)
+        self.time_row.pack_start(hour_label, False, False, 0)
+        self.time_row.pack_start(self.time_spins["hour"], False, False, 0)
+        self.time_row.pack_start(Gtk.Label(label=":"), False, False, 0)
+        self.time_row.pack_start(self.time_spins["minute"], False, False, 0)
+        box.pack_start(self.time_row, False, False, 0)
+        self.time_message = Gtk.Label(label=tr("time_auto_wait"), xalign=0)
+        self.time_message.get_style_context().add_class("progress-text")
+        self.time_message.set_line_wrap(True)
+        box.pack_start(self.time_message, False, False, 0)
+        self.time_auto.connect("toggled", self.on_time_mode)
+        self.time_synced = False
+        self.time_manual.set_active(True)
+        self.on_time_mode(self.time_auto)
+
+    def on_timezone_changed(self, combo):
+        self.config["timezone"] = combo.get_active_id()
+        if not getattr(self, "tz_programmatic", False):
+            self.tz_chosen = True
+
+    def follow_language_timezone(self):
+        """Langue changée : fuseau qui va avec, sauf s'il a été choisi à la main."""
+        if getattr(self, "tz_combo", None) is None or self.tz_chosen:
+            return
+        self.tz_programmatic = True
+        self.tz_combo.set_active_id(default_timezone(self.config.get("language")))
+        self.tz_programmatic = False
+
+    def on_time_mode(self, _button):
+        manual = self.time_manual.get_active()
+        self.time_row.set_sensitive(manual)
+        if manual:
+            self.time_message.set_text(tr("time_manual_hint"))
+        elif self.time_synced:
+            self.time_message.set_text(tr("time_auto_ok", time=time.strftime("%d/%m/%Y %H:%M")))
+        else:
+            self.time_message.set_text(tr("time_auto_wait"))
+
+    def start_clock_sync(self):
+        """Connexion établie : l'heure d'abord, avant toute autre opération réseau."""
+        if getattr(self, "time_sync_running", False):
+            return
+        self.time_sync_running = True
+        self.time_auto.set_active(True)
+
+        def work():
+            ok = sync_clock_now()
+            GLib.idle_add(self.on_clock_synced, ok)
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_clock_synced(self, ok):
+        self.time_sync_running = False
+        self.time_synced = ok
+        if ok:
+            zone = self.tz_combo.get_active_id() or "UTC"
+            os.environ["TZ"] = zone
+            time.tzset()
+            self.time_message.set_text(tr("time_auto_ok", time=time.strftime("%d/%m/%Y %H:%M")))
+        elif self.time_auto.get_active():
+            self.time_manual.set_active(True)
+            self.time_message.set_text(tr("time_auto_failed"))
+        return False
+
+    def apply_time_choice(self):
+        """En quittant la page Réseau : fuseau retenu, heure saisie appliquée."""
+        self.config["timezone"] = self.tz_combo.get_active_id() or default_timezone(self.config.get("language"))
+        if self.time_manual.get_active():
+            values = {key: int(button.get_value()) for key, button in self.time_spins.items()}
+            try:
+                epoch = local_to_epoch(values["year"], values["month"], values["day"],
+                                       values["hour"], values["minute"], self.config["timezone"])
+                set_system_clock(epoch)
+            except (OSError, ValueError) as error:
+                print("Heure saisie non appliquée :", error, file=sys.stderr)
+
     def on_wifi_scan(self, _btn):
         self.wifi_scanned = True
         self.btn_scan.set_sensitive(False)
@@ -3913,6 +4187,8 @@ class InstallerApp(Gtk.Application):
         self.net_status.set_text("  ·  ".join(parts) or tr("network_status_none"))
         ctx = self.net_status.get_style_context()
         (ctx.add_class if parts else ctx.remove_class)("status-ok")
+        if parts and not self.time_synced:
+            self.start_clock_sync()
         for child in self.wifi_list.get_children():
             child.destroy()
         self.wifi_selected = None
@@ -6030,6 +6306,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             report["state"] = "unavailable"
         elif self.online():
             self.set_progress(0.92, tr("progress_drivers"))
+            # Heure juste d'abord : sinon les dépôts (HTTPS) refusent la connexion.
+            sync_clock_now()
             try:
                 with self.target_chroot(root_path, network=True):
                     before = installed_packages(root_path)

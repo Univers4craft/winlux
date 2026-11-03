@@ -645,6 +645,21 @@ fi
 if test -s /etc/winlux/install-config.json && test -x /usr/bin/winlux-accounts-repair; then
     /usr/bin/winlux-accounts-repair >/run/winlux/accounts-repair.log 2>&1 || true
 fi
+# Fuseau jamais choisi (installateur ≤ v0.2.18 : « timezone » vide, système
+# resté en UTC, une heure de retard à Paris) : celui de la langue installée.
+if test -s /etc/winlux/install-config.json && ! test -s /etc/timezone; then
+    tz_locale=$(/bin/busybox sed -n 's/^LANG=\([a-zA-Z_]*\).*/\1/p' /etc/default/locale 2>/dev/null | /bin/busybox head -n 1)
+    case "$tz_locale" in
+        fr_BE) tz=Europe/Brussels ;; fr_CH|de_CH) tz=Europe/Zurich ;; fr_CA|en_CA) tz=America/Toronto ;;
+        fr_LU) tz=Europe/Luxembourg ;; fr*) tz=Europe/Paris ;; de_AT) tz=Europe/Vienna ;; de*) tz=Europe/Berlin ;;
+        es_MX) tz=America/Mexico_City ;; es*) tz=Europe/Madrid ;; en_US) tz=America/New_York ;; en*) tz=Europe/London ;;
+        it*) tz=Europe/Rome ;; pt_BR) tz=America/Sao_Paulo ;; pt*) tz=Europe/Lisbon ;; *) tz= ;;
+    esac
+    if test -n "$tz" && test -f "/usr/share/zoneinfo/$tz"; then
+        /bin/busybox ln -sfn "/usr/share/zoneinfo/$tz" /etc/localtime
+        echo "$tz" >/etc/timezone
+    fi
+fi
 # policy-rc.d de construction resté dans les systèmes installés en v0.2.18 :
 # retiré, sinon aucun service d'un paquet installé ensuite ne démarre.
 if test -f /usr/sbin/policy-rc.d && test "$(/bin/busybox cat /usr/sbin/policy-rc.d)" = "$(printf '#!/bin/sh\nexit 101')"; then

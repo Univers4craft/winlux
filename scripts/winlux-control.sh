@@ -75,7 +75,9 @@ status() {
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
         printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
-        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || printf 'Europe/Paris')"
+        # Le fuseau réel : /etc/timezone, sinon la cible de /etc/localtime,
+        # sinon UTC (jamais « Paris » affiché pour un système resté en UTC).
+        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || { readlink /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p' | grep . ; } || printf 'UTC')"
         printf 'network='; if have ip; then
             iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
             if test -n "$iface"; then
