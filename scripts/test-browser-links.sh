@@ -166,4 +166,22 @@ for session in winlux-native-session.sh winlux-user-session.sh; do
     grep -q 'export BROWSER="${BROWSER:-/usr/bin/winlux-browser}"' "$project/scripts/$session" || fail "$session : BROWSER"
     grep -q '/usr/bin/winlux-browser --pending' "$project/scripts/$session" || fail "$session : lien gardé"
 done
+# Contrôle de la langue réelle de Firefox (scripts/check-firefox-langue.sh,
+# lancé sur le Winlux installé) : il juge l'en-tête Accept-Language envoyé.
+cat > "$work/faux-browsers" <<'FAUX'
+#!/bin/sh
+for url in "$@"; do :; done
+case "$FAUX_LANGUE" in
+    fr) header='fr-FR,fr;q=0.8,en-US;q=0.5,en;q=0.3' ;;
+    *) header='en-US,en;q=0.5' ;;
+esac
+exec curl -s -o /dev/null -H "Accept-Language: $header" "$url"
+FAUX
+chmod 755 "$work/faux-browsers"
+FAUX_LANGUE=fr WINLUX_BROWSERS="$work/faux-browsers" sh "$project/scripts/check-firefox-langue.sh" fr > "$work/langue.txt" || fail "contrôle de langue : $(cat "$work/langue.txt")"
+test "$(grep -c '^OK' "$work/langue.txt")" = 2 || fail "contrôle de langue incomplet : $(cat "$work/langue.txt")"
+if FAUX_LANGUE=en WINLUX_BROWSERS="$work/faux-browsers" sh "$project/scripts/check-firefox-langue.sh" fr > "$work/langue.txt"; then
+    fail 'Firefox en anglais non détecté'
+fi
+grep -q "Firefox en « en » au lieu de « fr »" "$work/langue.txt" || fail "message : $(cat "$work/langue.txt")"
 echo 'OK: liens web ouverts dans le navigateur installé, choix seulement sans navigateur, lien gardé puis ouvert'
