@@ -159,7 +159,7 @@ rc = (HERE.parent / "integration/native/config/openbox/rc.xml").read_text()
 ok('key="XF86MonBrightnessUp"' in rc and "winlux-brightness key up" in rc and "winlux-brightness key down" in rc,
    "touches de luminosité : même chemin, avec l'indicateur")
 control = (HERE / "winlux-control.sh").read_text()
-ok("power-brightness-up) winlux-brightness set +10" in control, "Paramètres > Alimentation : boutons sur le même chemin")
+ok("then winlux-brightness set +10 --osd" in control, "Paramètres > Alimentation : boutons sur le même chemin")
 stage = (HERE / "stage-desktop-components.sh").read_text()
 ok(" winlux-brightness " in stage.split("winlux-root winlux-wifi", 1)[1].split("; do", 1)[0] + " ", "winlux-brightness installé dans l'image")
 ok('"ddcutil"' in (HERE / "prepare-desktop-packages.py").read_text() and "i2c_dev" in (HERE / "hardware-modules.list").read_text(),
