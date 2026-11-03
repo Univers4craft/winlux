@@ -212,6 +212,8 @@ jobs:
         run: python3 -B scripts/test-installer-drivers.py
       - name: Vérifier la date, l'heure et le fuseau dès l'installation
         run: python3 -B scripts/test-installer-time.py
+      - name: Vérifier l'entrée de démarrage UEFI « Winlux » (NVRAM) en plus du chemin de secours
+        run: python3 -B scripts/test-efi-boot-entry.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py

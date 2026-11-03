@@ -510,6 +510,7 @@ else
     ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime 2>/dev/null || true
 fi
 printf '%s\n' "$TIMEZONE" >/etc/timezone 2>/dev/null || true
+chmod 644 /etc/timezone 2>/dev/null || true
 
 # --- Nom de la machine ---
 log "Hostname : $HOSTNAME_CHOICE"

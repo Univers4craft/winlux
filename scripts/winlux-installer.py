@@ -50,6 +50,35 @@ def efi_variables_writable():
         return False
 
 
+def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
+    """Entrée de démarrage UEFI (NVRAM) vers loader, sur la partition EFI donnée.
+
+    Le chemin de secours EFI/BOOT reste en place pour les micrologiciels qui
+    ignorent les entrées ; celle-ci sert à ceux qui ne tentent pas ce chemin
+    (OVMF tombé sur le shell UEFI, certains portables). Les anciennes
+    entrées « Winlux » sont retirées d'abord. Faux si rien n'a été créé."""
+    run = run or subprocess.run
+    if not shutil.which("efibootmgr") or not efi_variables_writable():
+        return False
+    name = os.path.basename(os.path.realpath(esp_partition))
+    try:
+        with open(f"/sys/class/block/{name}/partition") as f:
+            number = f.read().strip()
+        disk = "/dev/" + os.path.basename(os.path.dirname(os.path.realpath(f"/sys/class/block/{name}")))
+    except OSError:
+        return False
+    try:
+        listing = run(["efibootmgr"], capture_output=True, text=True, timeout=30).stdout
+        for line in listing.splitlines():
+            match = re.match(r"Boot([0-9A-Fa-f]{4})\*?\s+(.*)", line)
+            if match and match.group(2).split("\t")[0].strip() == label:
+                run(["efibootmgr", "--quiet", "--bootnum", match.group(1), "--delete-bootnum"], timeout=30)
+        return run(["efibootmgr", "--quiet", "--create", "--disk", disk, "--part", number,
+                    "--label", label, "--loader", loader], timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
     """Chargeurs UEFI à installer : un processeur 64 bits peut avoir un micrologiciel 32 bits.
 
@@ -6002,6 +6031,13 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             # The Secure Boot chain goes to EFI/BOOT, which belongs to Windows on a shared ESP.
             if layout["own_esp"] and SECUREBOOT_SH and os.path.exists("/usr/lib/shim/shimx64.efi.signed"):
                 subprocess.run(["sh", SECUREBOOT_SH, "install-esp", efi_dir, search_uuid], check=True, timeout=60)
+            if layout["own_esp"]:
+                # Entrée NVRAM « Winlux » vers le chargeur du chemin de secours
+                # (shim avec Secure Boot, sinon GRUB) : un micrologiciel qui ne
+                # tente pas EFI/BOOT de lui-même démarre quand même Winlux.
+                loader = "\\EFI\\BOOT\\BOOTIA32.EFI" if firmware_efi_bits() == 32 else "\\EFI\\BOOT\\BOOTX64.EFI"
+                if not efi_boot_entry(layout["esp"], loader):
+                    print("Entrée UEFI non créée : démarrage par le chemin de secours EFI/BOOT", file=sys.stderr)
         if split_root:
             with open(f"{target}/boot/winlux-split-root", "w") as f:
                 f.write("1\n")
@@ -6170,6 +6206,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         if timezone:
             with open(f"{root_path}/etc/timezone", "w") as f:
                 f.write(timezone + "\n")
+            # Lisible par tous (Java, scripts, Paramètres) même sous umask 077.
+            os.chmod(f"{root_path}/etc/timezone", 0o644)
             if os.path.exists(f"{root_path}/usr/share/zoneinfo/{timezone}"):
                 localtime = f"{root_path}/etc/localtime"
                 if os.path.lexists(localtime):
