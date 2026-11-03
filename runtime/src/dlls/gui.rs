@@ -1898,6 +1898,9 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// SetParent entre deux fenêtres connues : la sous-fenêtre suit son
+    /// nouveau parent, à la place `rect` (coordonnées client du parent).
+    fn reparent_window(&mut self, _hwnd: usize, _parent: usize, _rect: Rect) {}
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}
