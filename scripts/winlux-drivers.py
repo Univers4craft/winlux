@@ -240,6 +240,182 @@ def candidates():
     return keyvals(read(CANDIDATES))
 
 
+# ── Votre PC (Paramètres > À propos) : ce que le système a détecté ─────────
+
+# Valeurs de remplissage des fabricants : pas un vrai nom.
+DMI_PLACEHOLDERS = ("to be filled", "system product name", "system manufacturer", "default string",
+                    "not applicable", "not specified", "o.e.m.", "oem", "none", "unknown", "123456789")
+SECURE_BOOT_VAR = "sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+
+
+def dmi(name):
+    value = " ".join(read(path(f"sys/class/dmi/id/{name}")).split())
+    return "" if not value or value.lower().startswith(DMI_PLACEHOLDERS) or value.lower() in DMI_PLACEHOLDERS else value
+
+
+def pc_cpu():
+    info = read(path("proc/cpuinfo"))
+    threads = len(re.findall(r"^processor\s*:", info, re.M))
+    cores = set()
+    for block in info.split("\n\n"):
+        phys = re.search(r"^physical id\s*:\s*(\S+)", block, re.M)
+        core = re.search(r"^core id\s*:\s*(\S+)", block, re.M)
+        if core:
+            cores.add((phys.group(1) if phys else "0", core.group(1)))
+    name = cpu_field("model name") or cpu_field("Model") or cpu_field("Hardware")
+    return " ".join(name.split()), len(cores) or threads, threads
+
+
+def pc_disks():
+    """Disques physiques (ni loop, ni RAM, ni lecteur optique) avec la place
+    libre des partitions montées."""
+    mounts = {}
+    for line in read(path("proc/mounts")).splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].startswith("/dev/"):
+            mounts.setdefault(parts[0][5:], parts[1].replace("\\040", " "))
+    disks = []
+    base = path("sys/block")
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        entries = []
+    for dev in entries:
+        name = dev.name
+        if name.startswith(("loop", "ram", "zram", "sr", "fd", "dm-", "md", "nbd")):
+            continue
+        try:
+            size = int(read(dev / "size", "0")) * 512
+        except ValueError:
+            size = 0
+        if size < 64 * 1048576:  # disques factices et lecteurs vides
+            continue
+        removable = read(dev / "removable") == "1" or "/usb" in os.path.realpath(dev / "device")
+        if name.startswith("nvme"):
+            kind = "nvme"
+        elif name.startswith("mmcblk"):
+            kind = "sd" if read(dev / "device/type") == "SD" else "emmc"
+        elif removable:
+            kind = "usb"
+        else:
+            kind = "hdd" if read(dev / "queue/rotational") == "1" else "ssd"
+        free = total = 0
+        parts = [name] + sorted(p.name for p in dev.iterdir() if p.name.startswith(name) and p.name != name) if dev.is_dir() else [name]
+        for part in parts:
+            mount = mounts.get(part)
+            if not mount:
+                continue
+            try:
+                stat = os.statvfs(path(mount))
+            except OSError:
+                continue
+            free += stat.f_bavail * stat.f_frsize
+            total += stat.f_blocks * stat.f_frsize
+        model = " ".join((read(dev / "device/model") or read(dev / "device/name")).split())
+        disks.append({"name": name, "model": model, "kind": kind, "size": size,
+                      "free": free if total else "", "mounted": total})
+    return disks
+
+
+def pc_network():
+    """Cartes réseau physiques (une interface avec un appareil derrière)."""
+    cards = []
+    base = path("sys/class/net")
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        entries = []
+    for dev in entries:
+        if dev.name == "lo" or not (dev / "device").exists():
+            continue
+        kind = "wifi" if (dev / "wireless").exists() or (dev / "phy80211").exists() else "ethernet"
+        cards.append({"name": dev.name, "kind": kind, "up": read(dev / "operstate") == "up"})
+    return cards
+
+
+def pc_sound():
+    names = []
+    for line in read(path("proc/asound/cards")).splitlines():
+        match = re.match(r"\s*\d+\s+\[[^\]]*\]:\s*(.*?)\s+-\s+(.+)$", line)
+        if match:
+            names.append(" ".join(match.group(2).split()))
+    return names
+
+
+def pc_batteries():
+    found = []
+    base = path("sys/class/power_supply")
+    try:
+        entries = sorted(base.iterdir())
+    except OSError:
+        entries = []
+    for supply in entries:
+        if read(supply / "type") != "Battery" or read(supply / "present", "1") != "1" or not (supply / "capacity").exists():
+            continue
+        if read(supply / "scope") == "Device":  # souris, manette : pas la batterie du PC
+            continue
+        health = ""
+        for full, design in (("energy_full", "energy_full_design"), ("charge_full", "charge_full_design")):
+            try:
+                ratio = int(read(supply / full, "0")) * 100 // int(read(supply / design, "0"))
+            except (ValueError, ZeroDivisionError):
+                continue
+            if 0 < ratio <= 150:
+                health = min(ratio, 100)
+                break
+        found.append({"capacity": read(supply / "capacity"), "status": read(supply / "status").lower().replace(" ", "-"),
+                      "health": health, "model": " ".join(" ".join((read(supply / "manufacturer"), read(supply / "model_name"))).split())})
+    return found
+
+
+def secure_boot():
+    """« 1 », « 0 », ou vide si inconnu (BIOS hérité, variable illisible)."""
+    try:
+        data = path(SECURE_BOOT_VAR).read_bytes()
+    except OSError:
+        return ""
+    return str(data[4]) if len(data) >= 5 and data[4] in (0, 1) else ""
+
+
+def pc_status(devices):
+    """Clés pc_* du relevé : tout ce que le système a détecté sur la machine."""
+    lines = {"pc_vendor": dmi("sys_vendor") or dmi("board_vendor"),
+             "pc_model": dmi("product_name") or dmi("board_name"),
+             "pc_family": dmi("product_version") if dmi("product_version") and dmi("product_version") != dmi("product_name") else ""}
+    model, cores, threads = pc_cpu()
+    lines.update(pc_cpu_model=model, pc_cpu_cores=cores or "", pc_cpu_threads=threads or "")
+    total = re.search(r"^MemTotal:\s*(\d+)\s*kB", read(path("proc/meminfo")), re.M)
+    lines["pc_memory_kb"] = total.group(1) if total else ""
+    # Toutes les cartes d'affichage, y compris celle d'une machine virtuelle.
+    shown = [d for d in devices if d["class"].startswith("0x03")]
+    lines["pc_gpus"] = "|".join(gpu_name(dict(d, kind=VENDORS.get(d["vendor"], "other"))) for d in shown[:4])
+    disks = pc_disks()
+    lines["pc_disk_count"] = len(disks[:8])
+    for i, disk in enumerate(disks[:8]):
+        for key, value in disk.items():
+            lines[f"pc_disk{i}_{key}"] = value
+    nets = pc_network()
+    lines["pc_net_count"] = len(nets[:8])
+    for i, net in enumerate(nets[:8]):
+        lines[f"pc_net{i}_name"], lines[f"pc_net{i}_kind"], lines[f"pc_net{i}_up"] = net["name"], net["kind"], int(net["up"])
+    lines["pc_sound"] = "|".join(pc_sound()[:4])
+    batteries = pc_batteries()
+    lines["pc_battery_count"] = len(batteries[:2])
+    for i, bat in enumerate(batteries[:2]):
+        for key, value in bat.items():
+            lines[f"pc_battery{i}_{key}"] = value
+    uefi = path("sys/firmware/efi").is_dir()
+    lines["pc_firmware"] = "uefi" if uefi else "bios"
+    lines["pc_firmware_bits"] = read(path("sys/firmware/efi/fw_platform_size")) if uefi else ""
+    lines["pc_bios_vendor"] = dmi("bios_vendor")
+    lines["pc_bios_version"] = dmi("bios_version")
+    lines["pc_bios_date"] = dmi("bios_date")
+    lines["pc_secure_boot"] = secure_boot() if uefi else ""
+    lines["pc_arch"] = os.environ.get("WINLUX_MACHINE") or os.uname().machine
+    lines["pc_cpu_64bit"] = int(bool(re.search(r"^flags\s*:.*\blm\b", read(path("proc/cpuinfo")), re.M)))
+    return lines
+
+
 def grub_text():
     return read(GRUB)
 
@@ -332,6 +508,7 @@ def status():
     lines["reboot_needed"] = int(path("var/lib/winlux/drivers/reboot-needed").is_file())
     lines["busy"] = int(path("run/winlux/drivers.lock").is_dir())
     lines["last"] = read(STATE / "last")
+    lines.update(pc_status(devices))
     return "".join(f"{k}={v}\n" for k, v in lines.items())
 
 
