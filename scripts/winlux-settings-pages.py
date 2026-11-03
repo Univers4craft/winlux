@@ -40,6 +40,16 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    "Luminosité et couleur": ("Brightness & color", "Brillo y color", "Helligkeit und Farbe"),
+    "Luminosité": ("Brightness", "Brillo", "Helligkeit"),
+    "Luminosité de l’écran, en pourcentage": ("Screen brightness, as a percentage", "Brillo de la pantalla, en porcentaje",
+                                              "Bildschirmhelligkeit in Prozent"),
+    "Écran réglé par son câble (DDC/CI).": ("Monitor adjusted through its cable (DDC/CI).",
+                                            "Pantalla ajustada por su cable (DDC/CI).", "Bildschirm über das Kabel geregelt (DDC/CI)."),
+    "Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.": (
+        "This screen has no adjustable backlight: Winlux dims the picture instead.",
+        "Esta pantalla no tiene retroiluminación ajustable: Winlux oscurece la imagen.",
+        "Dieser Bildschirm hat keine regelbare Hintergrundbeleuchtung: Winlux dunkelt das Bild ab."),
     "Disposition": ("Arrangement", "Disposición", "Anordnung"),
     "Écran": ("Display", "Pantalla", "Bildschirm"),
     "Plusieurs écrans": ("Multiple displays", "Varias pantallas", "Mehrere Bildschirme"),
@@ -628,6 +638,7 @@ PAGE_CLIPBOARD = 32
 PAGE_HARDWARE = 34
 PAGE_ACCOUNTS = 33
 PAGE_WIFI = 35
+PAGE_CERTS = 36
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -761,6 +772,21 @@ def ambiance_tool():
     if have("winlux-ambiance"): return ["winlux-ambiance"]
     script = Path(__file__).resolve().with_name("winlux-ambiance.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if have("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def brightness_state(tool=None):
+    tool = tool or brightness_tool()
+    if tool is None: return {}
+    result = run(tool + ["get"], timeout=10)
+    try: return json.loads((result.stdout if result else "").strip().splitlines()[-1])
+    except (IndexError, ValueError): return {}
 
 
 def clipboard_tool():
@@ -1138,6 +1164,9 @@ def page_available(page, status=None):
     if page == PAGE_WIFI:
         module = wifi_page()
         return module is not None and module.available()
+    if page == PAGE_CERTS:
+        module = certificates_page()
+        return module is not None and module.available()
     return True
 
 
@@ -1276,6 +1305,30 @@ def wifi_page():
     return module
 
 
+_CERTS = []
+
+
+def certificates_page():
+    """Page Certificats (winlux-certificates, installé à côté), None si absente."""
+    if _CERTS: return _CERTS[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-certificates.py"), here.with_name("winlux-certificates")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_certificates_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_certificates_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _CERTS.append(module)
+    return module
+
+
 def store_catalogs():
     """Lignes de « winlux-store-catalogs --list » : id, état, plateforme, nom, résumé, site."""
     if not have("winlux-store-catalogs"): return []
@@ -1316,7 +1369,8 @@ class ExtraPages:
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
-                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi"}
+                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
+                   PAGE_CERTS: "page_certificates"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1910,6 +1964,9 @@ class ExtraPages:
             self.row(box, _t("Fuseau horaire"), line)
         now = GLib.DateTime.new_now_local().format("%x %X")
         self.hint(_t("Date et heure actuelles : {now}").format(now=now), box)
+        # Heure réglée automatiquement : une date fausse fait refuser tous les sites sécurisés.
+        module = certificates_page()
+        if module is not None: self.time_switch = module.time_section(self)
 
     # ── Accessibilité ──
 
@@ -2429,6 +2486,7 @@ class ExtraPages:
             self.hint(_t("La nouvelle échelle s’applique complètement à la prochaine ouverture de session."))
 
     def sections_display(self):
+        self.section_brightness()
         self.sections_screens()
         state = ambiance_status()
         # Pilote sans rampe gamma (certaines VM) : section masquée.
@@ -2549,6 +2607,37 @@ class ExtraPages:
         self.switch(box, _t("Afficher au lancement d’un jeu"), status.get("overlay_autoshow") == "1",
                     lambda on: self.execute("overlay-auto-on" if on else "overlay-auto-off"))
 
+    # ── Écran : luminosité (winlux-brightness), cachée sans contrôle réel ──
+
+    def section_brightness(self):
+        tool = brightness_tool()
+        state = brightness_state(tool)
+        if state.get("method") in (None, "none") or state.get("percent") is None: return
+        self.section(_t("Luminosité et couleur"))
+        box = self.card()
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 5, 100, 1)
+        scale.set_name("winlux-brightness")
+        scale.set_value(int(state["percent"]))
+        scale.set_size_request(240, -1)
+        scale.set_draw_value(True)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
+        pending = {}
+
+        def moved(widget):
+            # Valeur envoyée quand le curseur s’arrête, pas à chaque pixel.
+            if pending.get("id"): GLib.source_remove(pending["id"])
+            def send():
+                pending["id"] = None
+                self.tool(tool + ["set", str(int(widget.get_value()))], refresh=False)
+                return False
+            pending["id"] = GLib.timeout_add(150, send)
+        scale.connect("value-changed", moved)
+        self.brightness_scale = scale
+        hint = {"backlight": None, "ddc": _t("Écran réglé par son câble (DDC/CI)."),
+                "soft": _t("Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.")}.get(state["method"])
+        self.row(box, _t("Luminosité"), scale, hint)
+
     # ── Réseau : renvoi vers la page Wi-Fi, seulement avec une carte Wi-Fi ──
 
     def sections_network(self):
@@ -2565,6 +2654,13 @@ class ExtraPages:
         module = wifi_page()
         if module is not None:
             self.wifi_panel = module.page(self)
+
+    # ── Certificats : autorités ajoutées, heure, test d'un site (winlux-certificates) ──
+
+    def page_certificates(self):
+        module = certificates_page()
+        if module is not None:
+            self.certificates_panel = module.page(self)
 
     # ── Mises à jour : secours et restauration, dans la page ──
 

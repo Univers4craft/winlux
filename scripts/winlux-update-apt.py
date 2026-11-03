@@ -149,7 +149,22 @@ RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 OFFLINE_CODES = {5: "proxy introuvable", 6: "nom github.com introuvable (DNS)", 7: "connexion refusée",
                  28: "délai dépassé", 35: "échec TLS", 56: "connexion coupée"}
 
+def certificate_error(error, url=MANIFEST_URL):
+    """Échec TLS (35, 60) : la raison en clair (date fausse, portail, autorité…)."""
+    if error.returncode not in (35, 51, 60): return None
+    tool = shutil.which("winlux-certificates") or str(Path(__file__).resolve().with_name("winlux-certificates.py"))
+    if not Path(tool).exists(): return None
+    try:
+        result = subprocess.run([sys.executable, "-B", tool, "explain-curl", str(error.returncode), url],
+                                capture_output=True, text=True, timeout=40)
+        text = json.loads(result.stdout.strip().splitlines()[-1]).get("message", "")
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+    return RuntimeError(text) if text else None
+
 def offline_error(error):
+    explained = certificate_error(error)
+    if explained: return explained
     reason = OFFLINE_CODES.get(error.returncode)
     if reason is None: return None
     return RuntimeError("GitHub est injoignable (" + reason + ") : vérifiez la connexion réseau puis relancez la recherche.")
