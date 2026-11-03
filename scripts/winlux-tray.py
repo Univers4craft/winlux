@@ -207,7 +207,9 @@ elif kind == "balance":
     try:
         listing = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids"],
                                  capture_output=True, text=True, timeout=2).stdout
-        ids = [int(line) for line in listing.split() if line.isdigit()]
+        # Une ligne par id ; la première annonce le nombre d'éléments, traduite
+        # (« La valeur est un tableau de 12 éléments : ») : son nombre n'est pas un id.
+        ids = [int(line.strip()) for line in listing.splitlines() if line.strip().isdigit()]
     except (OSError, subprocess.SubprocessError):
         ids = []
     if 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
