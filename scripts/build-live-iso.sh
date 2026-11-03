@@ -158,6 +158,10 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
 # Réinitialiser ce PC, clé de secours, réparation du démarrage (#283).
 install -m 755 "$root/scripts/winlux-reset.py" "$stage/usr/bin/winlux-reset"
+# Fichiers de comptes abîmés par un arrêt brutal : réparés par l'init.
+install -m 755 "$root/scripts/winlux-accounts-repair.py" "$stage/usr/bin/winlux-accounts-repair"
+# Écran de secours quand le bureau ne s'ouvre pas (au lieu d'un écran noir).
+install -m 755 "$root/scripts/winlux-rescue-screen.py" "$stage/usr/bin/winlux-rescue-screen"
 cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
 cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
 chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
@@ -614,6 +618,11 @@ fi
 # plus en root. Seuls les services système restent en root ; le bureau passe
 # par le relais winlux-root pour ce qui touche au système. winlux.root-session=1
 # (ligne du noyau) rouvre l'ancien bureau root pour un dépannage.
+# Comptes perdus ou à moitié créés après une coupure (octets nuls dans
+# /etc/passwd, verrous orphelins) : réparés avant de chercher le compte.
+if test -s /etc/winlux/install-config.json && test -x /usr/bin/winlux-accounts-repair; then
+    /usr/bin/winlux-accounts-repair >/run/winlux/accounts-repair.log 2>&1 || true
+fi
 desktop_user=
 desktop_autologin=1
 if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
@@ -1010,6 +1019,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         # Une version tout juste installée qui n'ouvre pas le bureau est
         # remplacée par la précédente, puis la machine redémarre.
         /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
+        # Sinon un écran lisible dit quoi faire, au lieu d'un écran noir.
+        test -x /usr/bin/winlux-rescue-screen && /usr/bin/winlux-rescue-screen >/run/winlux/rescue-screen.log 2>&1
         /bin/sh
     fi
     boot_mark session

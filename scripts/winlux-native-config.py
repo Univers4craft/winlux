@@ -41,47 +41,97 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def _append_account_line(path, line, mode):
+    """Ajoute une ligne par fichier temporaire + fsync + rename."""
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8", errors="surrogateescape")
+        info = target.stat()
+        mode, owner, group = info.st_mode & 0o7777, info.st_uid, info.st_gid
+    except OSError:
+        text, owner, group = "", 0, 0
+    if text and not text.endswith("\n"):
+        text += "\n"
+    temporary = target.with_name(f".{target.name}.winlux-{os.getpid()}")
+    with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as stream:
+        stream.write(text + line)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chown(temporary, owner, group)
+    os.chmod(temporary, mode)
+    os.rename(temporary, target)
+
+
 def ensure_system_account(name, first_uid, comment, home):
     """Compte système « name » créé par useradd/groupadd (verrous, shadow,
-    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence.
-    Rien n'est écrit si le compte existe déjà."""
+    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence
+    ou s'ils échouent. Rien n'est écrit si le compte existe déjà ; un groupe
+    du même nom déjà présent (création interrompue) est réutilisé, et l'UID
+    choisi est libre à la fois comme UID et comme GID."""
     try: return pwd.getpwnam(name)
     except KeyError: pass
     used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-    uid = first_uid
-    while uid in used: uid += 1
-    if shutil.which("groupadd") and shutil.which("useradd"):
-        try: grp.getgrnam(name)
-        except KeyError: subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
-        subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(uid), "--no-create-home",
-                        "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+    try:
+        gid = grp.getgrnam(name).gr_gid
+    except KeyError:
+        gid = None
+    if gid is not None and gid not in {entry.pw_uid for entry in pwd.getpwall()}:
+        uid = gid
     else:
-        try: grp.getgrnam(name)
-        except KeyError:
-            with Path("/etc/group").open("a") as stream: stream.write(f"{name}:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"{name}:!:{uid}:{uid}:{comment}:{home}:/bin/false\n")
+        uid = first_uid
+        while uid in used: uid += 1
+    if shutil.which("groupadd") and shutil.which("useradd"):
+        try:
+            if gid is None:
+                subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
+                gid = uid
+            subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(gid), "--no-create-home",
+                            "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+            return pwd.getpwnam(name)
+        except (subprocess.CalledProcessError, OSError, KeyError) as error:
+            print(f"winlux-native-config : useradd {name} : {error} ; ajout direct", file=sys.stderr)
+            try: gid = grp.getgrnam(name).gr_gid
+            except KeyError: gid = None
+    if gid is None:
+        gid = uid
+        _append_account_line("/etc/group", f"{name}:x:{gid}:\n", 0o644)
+    _append_account_line("/etc/passwd", f"{name}:!:{uid}:{gid}:{comment}:{home}:/bin/false\n", 0o644)
     return pwd.getpwnam(name)
 
 
+def ensure_account_or_log(name, first_uid, comment, home):
+    """Compte annexe : un échec est journalisé, il ne bloque jamais la session."""
+    try:
+        return ensure_system_account(name, first_uid, comment, home)
+    except Exception as error:
+        print(f"winlux-native-config : compte {name} impossible ({error}) ; suite sans lui", file=sys.stderr)
+        return None
+
+
 if os.geteuid() == 0:
-    ensure_system_account("messagebus", 990, "D-Bus", "/nonexistent")
-    bus_group=grp.getgrnam("messagebus")
+    # Fichiers de comptes abîmés par un arrêt brutal : réparés d'abord
+    # (l'init le fait aussi ; ici pour une session lancée autrement).
+    if shutil.which("winlux-accounts-repair"):
+        subprocess.run(["winlux-accounts-repair"], check=False)
+    bus_user = ensure_account_or_log("messagebus", 990, "D-Bus", "/nonexistent")
     helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
-    if helper.is_file():
-        os.chown(helper,0,bus_group.gr_gid)
+    if bus_user and helper.is_file():
+        os.chown(helper,0,bus_user.pw_gid)
         helper.chmod(0o4754)
-    policy_user=ensure_system_account("polkitd", 980, "PolicyKit", "/nonexistent")
+    policy_user = ensure_account_or_log("polkitd", 980, "PolicyKit", "/nonexistent")
     policy_state=Path("/var/lib/polkit-1")
     policy_state.mkdir(parents=True,exist_ok=True)
-    os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
+    if policy_user:
+        os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
     for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
         Path(directory).mkdir(parents=True,exist_ok=True)
-    saver = ensure_system_account("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
-    directory = Path(saver.pw_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    directory.chmod(0o700)
-    os.chown(directory, saver.pw_uid, saver.pw_gid)
+    saver = ensure_account_or_log("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
+    if saver:
+        directory = Path(saver.pw_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+        os.chown(directory, saver.pw_uid, saver.pw_gid)
 
 home = Path.home()
 # WINLUX_NATIVE_SOURCE : dossier du dépôt pour les tests (test-campaign.py).
