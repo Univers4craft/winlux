@@ -69,6 +69,9 @@ link="$work/home/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Demo SA/D
 test -f "$link" || { echo "raccourci absent : $link" >&2; exit 1; }
 grep -qa 'Demo.exe' "$link" || LC_ALL=C tr -d '\000' <"$link" | grep -q 'Demo.exe' || { echo "le raccourci ne vise pas Demo.exe" >&2; exit 1; }
 if LC_ALL=C tr -d '\000' <"$link" | grep -qi 'squirrel.exe'; then echo "le raccourci vise squirrel.exe" >&2; exit 1; fi
+desk="$work/home/Desktop"
+test -f "$desk/Demo.lnk" || { echo "raccourci du Bureau absent" >&2; ls -la "$work/home" >&2; exit 1; }
+grep -qx 'Demo.lnk' "$desk/.hidden" || { echo "Demo.lnk non masqué sur le Bureau (.hidden)" >&2; exit 1; }
 run --setup --list | grep -q "^DemoApp	Demo	2.0.1	squirrel" || { echo "absent de la liste" >&2; exit 1; }
 run --setup --uninstall DemoApp >/dev/null 2>&1
 test ! -e "$app/app-2.0.1/Demo.exe" || { echo "désinstallation incomplète" >&2; exit 1; }

@@ -1177,8 +1177,34 @@ unsafe extern "win64" fn BuildExplicitAccessWithNameW(
     std::ptr::write_unaligned(ea.add(4) as *mut u32, mode);
     std::ptr::write_unaligned(ea.add(8) as *mut u32, inherit);
 }
-extern "win64" fn BuildSecurityDescriptorW() -> u32 {
-    120 // ERROR_CALL_NOT_IMPLEMENTED
+/// BuildSecurityDescriptorW(owner, group, nacc, acc, naud, aud, old, size,
+/// out) : descripteur relatif minimal (DACL nulle), comme
+/// ConvertStringSecurityDescriptorToSecurityDescriptorW. Winlux applique les
+/// droits Linux ; crashpad s'en sert pour son tube nommé.
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn BuildSecurityDescriptorW(
+    _owner: usize,
+    _group: usize,
+    _n_access: u32,
+    _access: usize,
+    _n_audit: u32,
+    _audit: usize,
+    _old: usize,
+    size: *mut u32,
+    out: *mut usize,
+) -> u32 {
+    if out.is_null() || size.is_null() {
+        return 87;
+    }
+    let p = crate::dlls::kernel32_misc::local_alloc(0x40, 20) as *mut u8;
+    if p.is_null() {
+        return 8;
+    }
+    *p = 1; // SECURITY_DESCRIPTOR_REVISION
+    std::ptr::write_unaligned(p.add(2) as *mut u16, 0x8004); // SE_SELF_RELATIVE | SE_DACL_PRESENT
+    *out = p as usize;
+    *size = 20;
+    0
 }
 /// Descripteur relatif minimal (DACL nulle : accès à tous) : Winlux
 /// applique les droits Linux, pas les ACL de la chaîne SDDL.
