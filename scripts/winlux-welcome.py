@@ -73,7 +73,8 @@ class Welcome(Gtk.Window):
             (_t("Choisir et installer un navigateur"), ["winlux-shell-app", "settings", "11"]),
             # Aucune boutique tierce non plus : Paramètres > Applications.
             (_t("Choisir des boutiques de logiciels"), ["winlux-shell-app", "settings", "1"]),
-            (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
+            # Page Wi-Fi (ou Réseau sans carte Wi-Fi) de Paramètres.
+            (_t("Configurer le réseau"), ["winlux-shell-app", "settings", "35"]),
             (_t("Personnaliser l’apparence"), ["winlux-shell-app", "settings", "21"]),
             (_t("Découvrir le secours"), ["winlux-shell-app", "settings", "7"]),
         ):

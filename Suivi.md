@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **293**
+- Réalisé : **294**
 - À faire ou en cours : **46**
-- Total : **339**
-- Progression : **86.4%**
+- Total : **340**
+- Progression : **86.5%**
 - Dernière mise à jour : 02/11/2026 (14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
@@ -136,6 +136,7 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Page Wi-Fi dédiée (03/11/2026, signalé par damien sur son PC) : Paramètres > Réseau et Internet > Wi-Fi (page 35). Cliquer un réseau demande sa clé dans une boîte propre (afficher les caractères, clavier tactile intégré sous le champ), le WPS de la box, les réseaux cachés, l’oubli et le mode avion sont gérés. Cause du « non autorisé » : nmcli lancé par le compte, sans logind, polkit ne voyait aucune session active ; tout passe maintenant par `winlux-wifi` en root (relais `winlux-root exec`), la clé par l’entrée standard, le réseau devient un profil système 0600 qui se reconnecte seul au démarrage. La tuile Wi-Fi, Bienvenue, le menu Démarrer et Outils Winlux ouvrent la page dédiée (Bluetooth : page 22). Test : `scripts/test-wifi.py`.
 - [x] Electron 45 (02/11/2026, essai en VM) : deux bugs du runtime trouvés sur le chemin de démarrage. CloseHandle sur le jeton d'OpenProcessToken échouait (Chromium vérifie la fermeture). RegisterClassExW rendait toujours l'atome 1, et CreateWindowExW(MAKEINTATOM) lisait l'atome comme un pointeur : plantage dans le runtime. Chaque classe a maintenant son atome (0xC000 et plus), relu en nom. Le reste des fonctions manquantes relevées est traité par #349.
 - [x] Vrai vc_redist.x64.exe de Microsoft (02/11/2026, essai en VM) : le double-clic refusait l'installateur comme « programme Windows 32 bits » (le moteur WiX Burn est en 32 bits, même pour le paquet x64), et le runtime échouait sur « cabinet invalide » : dans un bundle signé, la signature du moteur est rangée entre le conteneur d'interface et les paquets. `winlux --inspect` répond maintenant « setup » (Burn, NSIS, Inno Setup) ou « uninstall », winlux-open les déroule même en 32 bits et dit « est installé », le décalage de signature est lu, et les `InstallCondition` sont évaluées (Windows 10 x64) : le paquet ARM64 n'est plus installé. En VM : les runtimes x64 Minimum et Additional s'installent dans System32 (26 DLL x64), `/uninstall` les retire, `system32_suite.exe` passe.
 - [x] Code de sortie au hasard des programmes graphiques en headless (02/11/2026) : quand la boucle GetMessage se termine faute de fenêtre (sans WM_QUIT), le MSG n'était pas renseigné et `ExitProcess(msg.wParam)` reprenait le wParam du dernier message (l'identifiant 1 d'un minuteur). voicerecorder.exe sortait ainsi avec le code 1 une fois sur deux dans la VM de validation. Le MSG reçoit maintenant un WM_QUIT de wParam 0, comme pour un vrai WM_QUIT.

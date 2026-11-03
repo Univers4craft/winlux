@@ -39,7 +39,12 @@ if test -d "$stage/usr/lib/firmware" && ! test -L "$stage/lib"; then
 fi
 mkdir -p "$stage/usr/lib/NetworkManager/conf.d"
 cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkManager/conf.d/90-winlux.conf"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root; do
+# Sans logind, polkit ne voit aucune session « active » : nmcli lancé par un
+# compte du bureau recevait « non autorisé ». Les membres de netdev (tous les
+# comptes créés par Winlux) pilotent le réseau, comme sous Windows.
+mkdir -p "$stage/etc/polkit-1/rules.d"
+install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
