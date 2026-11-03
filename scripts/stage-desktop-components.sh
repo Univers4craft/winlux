@@ -23,6 +23,20 @@ for directory in dbus-1 xdg gtk-3.0 fonts NetworkManager bluetooth udisks2 polki
         cp -a --remove-destination "$components/etc/$directory/." "$stage/etc/$directory/"
     fi
 done
+# Firmwares (Wi-Fi, son SOF, cartes graphiques, Bluetooth) : Ubuntu 26.04 les
+# installe dans /usr/lib/firmware, mais le noyau ne les cherche que dans
+# /lib/firmware, et /lib est ici un vrai dossier (pas le lien vers usr/lib
+# d'Ubuntu). Sans ce lien, aucun firmware n'était chargé sur un vrai PC :
+# portable récent sans haut-parleurs ni micro (« Sortie factice »), Wi-Fi Intel
+# muet.
+if test -d "$stage/usr/lib/firmware" && ! test -L "$stage/lib"; then
+    if test -d "$stage/lib/firmware" && ! test -L "$stage/lib/firmware"; then
+        cp -a --remove-destination "$stage/lib/firmware/." "$stage/usr/lib/firmware/"
+        rm -rf "$stage/lib/firmware"
+    fi
+    mkdir -p "$stage/lib"
+    ln -sfn ../usr/lib/firmware "$stage/lib/firmware"
+fi
 mkdir -p "$stage/usr/lib/NetworkManager/conf.d"
 cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkManager/conf.d/90-winlux.conf"
 for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root; do
