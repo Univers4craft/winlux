@@ -32,7 +32,8 @@ RESTORE_KEEP = 3
 # et seuls les fichiers réinstallés ensuite par APT (su, mount, sudo)
 # figuraient dans apt-base-permissions.json. Version 2 du marqueur : un
 # système déjà installé les reçoit aussi au démarrage qui suit la mise à jour.
-BASE_MODES_VERSION = "2"
+# Version 3 : « su » vers root passe par sudo (install_su_wrapper).
+BASE_MODES_VERSION = "3"
 BASE_MODES = (
     ("etc/shadow", "root", "shadow", 0o640),
     ("etc/gshadow", "root", "shadow", 0o640),
@@ -46,6 +47,7 @@ BASE_MODES = (
     ("usr/bin/passwd", "root", "root", 0o4755),
     ("usr/bin/newgrp", "root", "root", 0o4755),
     ("usr/bin/su", "root", "root", 0o4755),
+    ("usr/bin/su.util-linux", "root", "root", 0o4755),
     ("usr/bin/mount", "root", "root", 0o4755),
     ("usr/bin/umount", "root", "root", 0o4755),
     ("usr/bin/sudo.ws", "root", "root", 0o4755),
@@ -80,6 +82,8 @@ def restore_base_modes(root=Path("/")):
     for relative, user, group, mode in BASE_MODES:
         path = root / relative
         if path.is_symlink() or not path.exists() or user not in users or group not in groups: continue
+        # Le su de Winlux est un script : jamais de setuid sur un script.
+        if path.is_file() and path.read_bytes()[:2] == b"#!": continue
         info = path.stat()
         if (info.st_uid, info.st_gid, info.st_mode & 0o7777) == (users[user], groups[group], mode): continue
         os.chown(path, users[user], groups[group], follow_symlinks=False)
@@ -87,6 +91,32 @@ def restore_base_modes(root=Path("/")):
         path.chmod(mode)
         fixed.append(relative)
     return fixed
+
+SU_WRAPPER = "usr/share/winlux/native/shell/su"
+REAL_SU = "usr/bin/su.util-linux"
+
+def divert_su():
+    """Détourne le su d'util-linux (survit aux mises à jour du paquet)."""
+    run("dpkg-divert", "--quiet", "--local", "--rename", "--divert", "/" + REAL_SU, "--add", "/usr/bin/su")
+
+def install_su_wrapper(root=Path("/"), divert=divert_su):
+    """Root est verrouillé : /usr/bin/su devient la bascule vers sudo de
+    Winlux, le vrai su reste en /usr/bin/su.util-linux (setuid conservé par
+    le renommage). Renvoie True si /usr/bin/su a changé."""
+    wrapper, su, real = root / SU_WRAPPER, root / "usr/bin/su", root / REAL_SU
+    if not wrapper.is_file(): return False
+    content = wrapper.read_bytes()
+    if not real.exists():
+        if not su.is_file() or su.is_symlink() or su.read_bytes()[:2] == b"#!": return False
+        divert()
+        if not real.exists(): return False
+    if su.is_file() and not su.is_symlink() and su.read_bytes() == content and (su.stat().st_mode & 0o7777) == 0o755:
+        return False
+    temporary = su.with_name(".su.winlux")
+    temporary.write_bytes(content)
+    temporary.chmod(0o755)
+    os.replace(temporary, su)
+    return True
 
 def manifest(text):
     fields = {}
@@ -431,9 +461,10 @@ def main():
                 # Jamais bloquant : un bureau sans sudo vaut mieux que pas de bureau.
                 try:
                     restore_base_modes()
+                    install_su_wrapper()
                     restored.write_text(BASE_MODES_VERSION + "\n")
-                except OSError as error:
-                    print(f"Droits de la base Ubuntu non rétablis : {error}", file=sys.stderr)
+                except (OSError, subprocess.CalledProcessError) as error:
+                    print(f"Droits de la base Ubuntu ou su non rétablis : {error}", file=sys.stderr)
             # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
             # une installation inachevée se termine ici, sans bloquer le démarrage.
             audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()

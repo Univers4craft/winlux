@@ -75,7 +75,9 @@ status() {
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
         printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
-        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || printf 'Europe/Paris')"
+        # Le fuseau réel : /etc/timezone, sinon la cible de /etc/localtime,
+        # sinon UTC (jamais « Paris » affiché pour un système resté en UTC).
+        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || { readlink /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p' | grep . ; } || printf 'UTC')"
         printf 'network='; if have ip; then
             iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
             if test -n "$iface"; then
@@ -390,7 +392,8 @@ perform() {
                 # derrière son dos ne change pas le panneau en cours.
                 for spec in 'plugin-8:string:separator' 'plugin-8/style:uint:0' 'plugin-8/expand:bool:true' 'plugin-9:string:genmon' \
                     'plugin-9/command:string:/usr/bin/winlux-tray notifications' 'plugin-9/use-label:bool:false' \
-                    'plugin-9/update-period:int:5000'; do
+                    'plugin-9/update-period:int:5000' 'plugin-13:string:genmon' 'plugin-13/command:string:/usr/bin/winlux-tray balance' \
+                    'plugin-13/use-label:bool:false' 'plugin-13/update-period:int:2000'; do
                     property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
                     if ! xfconf-query -c xfce4-panel -p "/plugins/$property" >/dev/null 2>&1; then
                         xfconf-query -c xfce4-panel -p "/plugins/$property" -n -t "$kind" -s "$setting" || return
@@ -415,16 +418,26 @@ perform() {
                 # Icône du clavier tactile (winlux-osk panel), avant le réseau.
                 keyboard=
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-12 2>/dev/null)" = genmon; then keyboard=12; fi
+                # Greffon 13 : contrepoids de largeur égale au bloc de droite
+                # (winlux-tray balance), sans quoi le groupe centré tombe trop
+                # à gauche de la moitié de ce bloc. Barre à gauche : il reste
+                # au bout, d'un pixel, pour ne pas relancer la barre.
                 if test "$alignment" = center; then
-                    ids="${widgets:+11 }3 1 2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
+                    ids="${widgets:+11 }3 13 1 2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 else
-                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
+                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7 13"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 if test "$current" != "$ids "; then
                     set --
                     for id in $ids; do set -- "$@" -t int -s "$id"; done
                     xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a "$@" || return
+                    # Une barre déjà lancée ne charge pas un greffon ajouté
+                    # après coup : une seule relance, la première fois.
+                    case " $current" in
+                        *' 13 '*) ;;
+                        *) if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then xfce4-panel -r >/dev/null 2>&1 || true; fi ;;
+                    esac
                 fi
                 expand=false; test "$alignment" != center || expand=true
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then

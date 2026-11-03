@@ -103,6 +103,13 @@ code=0; manager --install edge 2>"$work/failed.txt" || code=$?
 test "$code" = 1
 if grep -q Traceback "$work/failed.txt"; then echo 'Trace technique affichée' >&2; exit 1; fi
 grep -q Traceback "$WINLUX_BROWSER_ROOT/run/winlux/browser-fetch.log"
+# Horloge fausse (pile vide, 2015) : le vrai motif, pas « ne répond pas ».
+printf '#!/bin/sh\necho "curl: (60) SSL certificate problem: certificate is not yet valid" >&2\nexit 1\n' > "$work/fetch"
+code=0; manager --install edge 2>"$work/clock.txt" || code=$?
+test "$code" = 1
+grep -q "La date de ce PC est fausse" "$work/clock.txt"
+grep -q "Paramètres > Heure et langue" "$work/clock.txt"
+if grep -q "ne répond pas" "$work/clock.txt"; then echo 'Date fausse annoncée comme site muet' >&2; exit 1; fi
 # Retour du réseau : installé, plus rien en attente.
 sed 's/chrome/edge/g' > "$work/fetch" <<FETCH
 #!/bin/sh

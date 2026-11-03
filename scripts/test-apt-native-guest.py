@@ -17,11 +17,15 @@ assert "winlux.native-smoke=1" in Path("/proc/cmdline").read_text().split(), "Di
 assert Path("/usr/share/winlux/update-backend").read_text().strip() == "apt"
 assert stat.S_IMODE(Path("/usr/bin/sudo").stat().st_mode) & stat.S_ISUID, "Native package modes were not restored"
 # Droits de la base Ubuntu (su et sudo d'un compte normal, mot de passe vérifié par unix_chkpwd).
-for tool, bit in (("/usr/bin/su", stat.S_ISUID), ("/usr/bin/passwd", stat.S_ISUID), ("/usr/sbin/unix_chkpwd", stat.S_ISGID)):
+for tool, bit in (("/usr/bin/su.util-linux", stat.S_ISUID), ("/usr/bin/passwd", stat.S_ISUID), ("/usr/sbin/unix_chkpwd", stat.S_ISGID)):
     assert stat.S_IMODE(Path(tool).stat().st_mode) & bit, f"Base Ubuntu modes were not restored: {tool}"
 import grp
 assert Path("/etc/shadow").stat().st_gid == grp.getgrnam("shadow").gr_gid, "/etc/shadow must belong to group shadow"
-assert Path("/var/lib/winlux/apt-base-permissions-restored").read_text().strip() == "2"
+assert Path("/var/lib/winlux/apt-base-permissions-restored").read_text().strip() == "3"
+# « su » vers root passe par sudo : /usr/bin/su est la bascule, le vrai su est détourné.
+assert Path("/usr/bin/su").read_bytes()[:2] == b"#!", "/usr/bin/su must be the Winlux sudo switch"
+assert stat.S_IMODE(Path("/usr/bin/su.util-linux").stat().st_mode) & stat.S_ISUID, "Real su must stay setuid"
+assert "su.util-linux" in run("dpkg-divert", "--list", "/usr/bin/su")
 assert run("dpkg", "--audit").strip() == ""
 run("apt-get", "check")
 release = run("uname", "-r").strip()

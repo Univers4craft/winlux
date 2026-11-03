@@ -176,9 +176,9 @@ with tempfile.TemporaryDirectory() as directory:
         ok(gesture in arguments, f"terminal : {label} utilise le presse-papiers (CLIPBOARD)")
 
 # ── su sous root verrouillé (signalé par damien sur la v0.2.17) ────────────
-ok("--rcfile" in (ROOT / "integration/winlux-terminal").read_text()
-   and (ROOT / "integration/native/shell/winlux-su.sh").is_file(),
-   "terminal : « su » passe par sudo quand root est verrouillé")
+ok((ROOT / "integration/native/shell/su").is_file()
+   and "install_su_wrapper()" in (ROOT / "scripts/winlux-update-apt.py").read_text(),
+   "/usr/bin/su passe par sudo quand root est verrouillé (pas seulement dans le terminal)")
 ok('("usr/bin/passwd", "root", "root", 0o4755)' in (ROOT / "scripts/winlux-update-apt.py").read_text(),
    "droits setuid de la base Ubuntu rétablis au démarrage (passwd, unix_chkpwd, shadow)")
 

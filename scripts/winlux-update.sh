@@ -12,7 +12,7 @@ if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$targ
     # Python (aucune version à l'essai, permissions et caches déjà faits,
     # aucune opération dpkg interrompue). Sinon le moteur APT fait tout.
     if test "$*" = --boot && ! test -e /var/lib/winlux/update-trial &&
-        test "$(cat /var/lib/winlux/apt-base-permissions-restored 2>/dev/null)" = 2 &&
+        test "$(cat /var/lib/winlux/apt-base-permissions-restored 2>/dev/null)" = 3 &&
         test "$(cat /var/lib/winlux/apt-desktop-cache-version 2>/dev/null)" = "$(cat /usr/share/winlux/version 2>/dev/null)" &&
         test -z "$(ls -A /var/lib/dpkg/updates 2>/dev/null)" &&
         ! grep -Eq '^Status: [a-z]+ [a-z]+ (half-installed|half-configured|unpacked|triggers-awaited|triggers-pending)$' /var/lib/dpkg/status; then
