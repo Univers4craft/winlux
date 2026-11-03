@@ -98,18 +98,34 @@ fetch_logged() {
 # Firefox dans la langue du système (fr, de, es ; l'anglais est intégré) :
 # paquets de langue officiels de Mozilla, vérifiés comme le navigateur.
 # Facultatifs : un paquet absent ou altéré est ignoré, Firefox reste en anglais.
+# Chaque langpack-*.xpi est placé à deux endroits : distribution/extensions
+# (installé dans un profil neuf) et browser/extensions (relu à chaque
+# démarrage : un profil déjà créé en anglais le reçoit aussi).
 add_langpacks() {
+    firefox_dir="$1/usr/lib/firefox"
     for lang in fr de es; do
         pack="$cache/firefox-l10n-$lang"
-        test -r "$pack.deb" && test -r "$pack.sha256" || continue
+        if ! test -r "$pack.deb" || ! test -r "$pack.sha256"; then
+            # Trace pour le diagnostic : sans lui, Firefox reste en anglais dans cette langue.
+            echo "Paquet de langue de Firefox absent : $lang" >&2
+            continue
+        fi
         printf '%s  %s\n' "$(cat "$pack.sha256")" "$pack.deb" | sha256sum -c - >/dev/null 2>&1 || { echo "Paquet de langue altéré ignoré : $lang" >&2; continue; }
         test "$(/usr/bin/dpkg-deb -f "$pack.deb" Package)" = "firefox-l10n-$lang" || continue
         /usr/bin/dpkg-deb -x "$pack.deb" "$1"
     done
-    # Préférence vide = langue du système (LANG) quand son paquet est présent.
-    mkdir -p "$1/usr/lib/firefox/defaults/pref"
-    printf 'pref("intl.locale.requested", "");\n' > "$1/usr/lib/firefox/defaults/pref/winlux-langue.js"
-    chmod -R a+rX "$1/usr/lib/firefox"
+    mkdir -p "$firefox_dir/distribution/extensions" "$firefox_dir/browser/extensions" "$firefox_dir/defaults/pref"
+    find "$1" -name 'langpack-*.xpi' -type f | while IFS= read -r xpi; do
+        for target in distribution/extensions browser/extensions; do
+            test "$xpi" -ef "$firefox_dir/$target/${xpi##*/}" || cp "$xpi" "$firefox_dir/$target/"
+        done
+    done
+    # Préférence vide = langue du système (LANG, que winlux-browsers donne au
+    # lancement) ; les paquets de langue du dossier de l'application (portée 4)
+    # sont activés sans demande, comme ceux d'une distribution.
+    printf '%s\n' 'pref("intl.locale.requested", "");' 'pref("extensions.autoDisableScopes", 11);' \
+        > "$firefox_dir/defaults/pref/winlux-langue.js"
+    chmod -R a+rX "$firefox_dir"
 }
 install_browser() {
     id=$1
@@ -186,8 +202,26 @@ install_browser() {
     echo "Navigateur installé : $id"
     if command -v winlux-applications >/dev/null 2>&1; then winlux-applications refresh >/dev/null 2>&1 || true; fi
 }
+# Langue de l'interface Winlux (Paramètres > Langue : fr, en, de, es), donnée
+# au navigateur : Firefox (avec son paquet de langue), Chrome et Edge suivent
+# LANG/LANGUAGE. La session met LANG=fr_FR.UTF-8 quelle que soit la langue
+# choisie, et un LANG absent ou « C » laissait Firefox en anglais.
+browser_locale() {
+    code=$(sed -n 's/^LANG=//p' "$root/etc/winlux/locale.conf" 2>/dev/null | head -n 1 | cut -c1-2)
+    test -n "$code" || code=$(printf '%s' "${LANG:-fr}" | cut -c1-2)
+    case "$code" in
+        en) printf 'en_US.UTF-8\n' ;;
+        de) printf 'de_DE.UTF-8\n' ;;
+        es) printf 'es_ES.UTF-8\n' ;;
+        *) printf 'fr_FR.UTF-8\n' ;;
+    esac
+}
 launch() {
     id=$1; shift
+    locale=$(browser_locale)
+    LANG=$locale; LANGUAGE=${locale%%_*}; LC_MESSAGES=$locale
+    export LANG LANGUAGE LC_MESSAGES
+    unset LC_ALL
     program=$(binary "$id")
     if ! test -x "$program"; then
         mkdir -p "$run"
@@ -224,7 +258,7 @@ launch() {
             test ! -f "${downloads%/*}/session-bus.conf" || bus_config="--config-file=${downloads%/*}/session-bus.conf"
         fi
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
-            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" LANG="${LANG:-C.UTF-8}" \
+            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" LANG="$LANG" LANGUAGE="$LANGUAGE" LC_MESSAGES="$LC_MESSAGES" \
             /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
