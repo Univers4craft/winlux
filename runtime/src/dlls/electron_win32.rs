@@ -752,6 +752,7 @@ unsafe extern "win64" fn BuildTrusteeWithName(trustee: *mut u8, name: usize) {
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "MapGenericMask" => fn MapGenericMask,
+        "AccessCheck" => fn AccessCheck,
         "BuildTrusteeWithSidW" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithSidA" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithNameW" => fn BuildTrusteeWithName,
@@ -1192,6 +1193,17 @@ unsafe extern "win64" fn GetPointerType(_id: u32, kind: *mut u32) -> i32 {
 
 /// `SystemParametersInfoForDpi` : mêmes valeurs que SystemParametersInfoW
 /// (les métriques sont déjà celles de l'échelle de la session).
+/// RegisterHotKey(hwnd, id, modifiers, vk) : les raccourcis globaux de la
+/// session appartiennent à Winlux (openbox) ; l'appli est acceptée sans
+/// rien voler aux raccourcis du bureau.
+unsafe extern "win64" fn RegisterHotKey(_hwnd: usize, _id: i32, _mods: u32, _vk: u32) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn UnregisterHotKey(_hwnd: usize, _id: i32) -> i32 {
+    1
+}
+
 unsafe extern "win64" fn SystemParametersInfoForDpi(
     action: u32,
     param: u32,
@@ -1210,6 +1222,8 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "RegisterTouchWindow" => fn WindowOk2,
         "UnregisterTouchWindow" => fn WindowOk,
         "SetWindowDisplayAffinity" => fn WindowOk2,
+        "RegisterHotKey" => fn RegisterHotKey,
+        "UnregisterHotKey" => fn UnregisterHotKey,
         "RegisterPointerDeviceNotifications" => fn WindowOk2,
         "IsWindowArranged" => fn IsWindowArranged,
         "ChangeWindowMessageFilterEx" => fn ChangeWindowMessageFilterEx,
@@ -2196,6 +2210,58 @@ unsafe extern "win64" fn MapGenericMask(mask: *mut u32, mapping: *const u32) {
     mask.write_unaligned(map_generic_mask(mask.read_unaligned(), map));
 }
 
+/// Droits accordés par AccessCheck : le jeton unique de Winlux est celui de
+/// l'utilisateur, propriétaire de ses objets ; il reçoit ce qu'il demande
+/// (MAXIMUM_ALLOWED donne GENERIC_ALL traduit).
+pub fn access_check_granted(desired: u32, mapping: [u32; 4]) -> u32 {
+    const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+    let mut want = desired;
+    if want & MAXIMUM_ALLOWED != 0 {
+        want = (want & !MAXIMUM_ALLOWED) | 0x1000_0000;
+    }
+    map_generic_mask(want, mapping)
+}
+
+/// AccessCheck(sd, token, desired, mapping, privileges, privileges_len,
+/// granted, status) -> BOOL
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn AccessCheck(
+    sd: usize,
+    _token: usize,
+    desired: u32,
+    mapping: *const u32,
+    privileges: *mut u32,
+    privileges_len: *mut u32,
+    granted: *mut u32,
+    status: *mut i32,
+) -> i32 {
+    if sd == 0 || mapping.is_null() || granted.is_null() || status.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    // PRIVILEGE_SET vide : PrivilegeCount = 0, Control = 0 (8 octets).
+    if !privileges_len.is_null() {
+        if privileges_len.read_unaligned() < 8 {
+            privileges_len.write_unaligned(8);
+            crate::process::set_last_error(122);
+            return 0;
+        }
+        if !privileges.is_null() {
+            privileges.write_unaligned(0);
+            privileges.add(1).write_unaligned(0);
+        }
+    }
+    let map = [
+        mapping.read_unaligned(),
+        mapping.add(1).read_unaligned(),
+        mapping.add(2).read_unaligned(),
+        mapping.add(3).read_unaligned(),
+    ];
+    granted.write_unaligned(access_check_granted(desired, map));
+    status.write_unaligned(1);
+    1
+}
+
 /// Toutes les tables, par DLL, pour `add_basics`.
 pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
     vec![
@@ -2678,6 +2744,51 @@ mod tests {
             assert_eq!(mask, 0x11);
         }
         assert_eq!(map_generic_mask(0x1000_0000, [1, 2, 4, 0x1F]), 0x1F);
+    }
+
+    #[test]
+    fn verification_d_acces_et_raccourcis() {
+        let _teb = crate::process::test_teb();
+        let mapping = [0x10u32, 0x20, 0x40, 0x1FF];
+        assert_eq!(access_check_granted(0x8000_0000, mapping), 0x10);
+        assert_eq!(access_check_granted(0x0200_0000, mapping), 0x1FF);
+        unsafe {
+            let sd = [0u8; 20];
+            let mut privs = [0xFFFF_FFFFu32; 5];
+            let mut len = 20u32;
+            let (mut granted, mut ok) = (0u32, 0i32);
+            assert_eq!(
+                AccessCheck(
+                    sd.as_ptr() as usize,
+                    crate::dlls::security::TOKEN_HANDLE,
+                    0x4000_0000,
+                    mapping.as_ptr(),
+                    privs.as_mut_ptr(),
+                    &mut len,
+                    &mut granted,
+                    &mut ok,
+                ),
+                1
+            );
+            assert_eq!((granted, ok, privs[0]), (0x20, 1, 0));
+            let mut small = 4u32;
+            assert_eq!(
+                AccessCheck(
+                    sd.as_ptr() as usize,
+                    0,
+                    1,
+                    mapping.as_ptr(),
+                    privs.as_mut_ptr(),
+                    &mut small,
+                    &mut granted,
+                    &mut ok,
+                ),
+                0
+            );
+            assert_eq!(small, 8);
+            assert_eq!(RegisterHotKey(0, 1, 2, 0x41), 1);
+            assert_eq!(UnregisterHotKey(0, 1), 1);
+        }
     }
 
     #[test]
