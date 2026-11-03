@@ -37,6 +37,17 @@ bin_dir.mkdir()
 (bin_dir / "winlux-osk").write_text("#!/bin/sh\nexit 0\n")
 (bin_dir / "winlux-osk").chmod(0o755)
 os.environ["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
+# Recherche « par » (VM, 3 novembre) : un Paint.NET dézippé dans Téléchargements
+# faisait passer System.Threading.Tasks.Parallel.dll avant l'application
+# Paramètres, et Entrée ouvrait la DLL.
+home = tmp / "home"
+(home / "Téléchargements/pdn").mkdir(parents=True)
+(home / "Téléchargements/pdn/System.Threading.Tasks.Parallel.dll").write_bytes(b"MZ")
+applications = home / ".local/share/applications"
+applications.mkdir(parents=True)
+(applications / "winlux-settings.desktop").write_text(
+    "[Desktop Entry]\nType=Application\nName=Paramètres\nExec=true\nCategories=Settings;\n")
+os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
 
 here = Path(__file__).resolve().parent
 module = runpy.run_path(str(here / "winlux-start-menu.py"), run_name="start_osk_test")
@@ -164,6 +175,33 @@ def clear_search():
     app.search.set_text("")
 
 
+launched = []
+
+
+def search_par():
+    app.search.set_text("par")
+
+
+def ranked():
+    labels = []
+    for child in app.content.get_children():
+        if isinstance(child, Gtk.Button):
+            labels.append(child.get_tooltip_text() or child.get_label() or "")
+    assert labels and labels[0] == "Paramètres", ("« par » : l'application Paramètres doit venir en premier", labels)
+    files = [i for i, label in enumerate(labels) if label.startswith("Fichier")]
+    pages = [i for i, label in enumerate(labels) if label.startswith("Paramètres · ")]
+    assert files, ("le fichier Parallel.dll devrait être trouvé", labels)
+    assert pages and max(pages) < min(files), ("pages des Paramètres avant les fichiers", labels)
+    app.launch = lambda target: launched.append(target.get_display_name())
+    app.first_result()
+    assert launched == ["Paramètres"], ("Entrée doit ouvrir Paramètres", launched)
+
+
+def still_open_with_text():
+    assert app.window.get_visible(), "⌨ avec une recherche remplie a fermé le menu"
+    assert app.search.get_text() == "par", app.search.get_text()
+
+
 steps += [
     step(lambda: None, lambda: (opened_without_keyboard(), recommendations_hidden(), button_visible())),
     step(lambda: tap(find_key("p")), typed("p")),
@@ -175,6 +213,9 @@ steps += [
     step(lambda: tap(app.osk_button), shown_by_icon),
     step(lambda: (tap(app.osk_button), clear_search()), hidden_by_icon),
     step(reopen_by_button, shown_by_icon),
+    step(search_par, ranked, delay=1200),
+    step(lambda: tap(app.osk_button), lambda: (hidden_by_icon(), still_open_with_text()), delay=1000),
+    step(lambda: tap(app.osk_button), lambda: (shown_by_icon(), still_open_with_text()), delay=1000),
     step(reopen_with_keyboard, lambda: (closed_with_keyboard(), button_visible()), delay=700),
     step(reopen_by_button, shown_by_icon),
 ]
