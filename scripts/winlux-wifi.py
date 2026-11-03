@@ -166,6 +166,7 @@ _TR = {
     "Réseau « {name} » momentanément introuvable : il a disparu de la liste pendant la connexion. Votre mot de passe est gardé : rapprochez-vous de la box, puis cliquez sur « Se connecter ».": ("The network “{name}” cannot be found for the moment: it left the list during the connection. Your password is kept: move closer to the router, then click “Connect”.", "La red «{name}» no se encuentra por el momento: desapareció de la lista durante la conexión. Su contraseña se conserva: acérquese al router y haga clic en «Conectar».", "Das Netzwerk „{name}“ ist im Moment nicht auffindbar: Es ist während der Verbindung aus der Liste verschwunden. Ihr Kennwort bleibt erhalten: Gehen Sie näher an den Router und klicken Sie auf „Verbinden“."),
     "Winlux s’y connectera aussi tout seul, avec ce mot de passe, dès que le réseau réapparaîtra.": ("Winlux will also connect to it on its own, with this password, as soon as the network comes back.", "Winlux también se conectará solo, con esta contraseña, en cuanto la red vuelva a aparecer.", "Winlux verbindet sich außerdem selbst mit diesem Kennwort, sobald das Netzwerk wieder erscheint."),
     "Connecté à « {name} » avec le mot de passe que vous aviez tapé.": ("Connected to “{name}” with the password you typed.", "Conectado a «{name}» con la contraseña que escribió.", "Mit „{name}“ verbunden, mit dem eingegebenen Kennwort."),
+    "La box « {name} » utilise un chiffrement que ce Wi-Fi ne prend pas en charge (GCMP-256 seul). Dans les réglages de la box, choisissez WPA2/WPA3 ou le chiffrement AES (CCMP), puis réessayez.": ("The router “{name}” uses an encryption this Wi-Fi does not support (GCMP-256 only). In the router settings, choose WPA2/WPA3 or AES (CCMP) encryption, then try again.", "El router «{name}» usa un cifrado que este Wi-Fi no admite (solo GCMP-256). En la configuración del router, elija WPA2/WPA3 o el cifrado AES (CCMP) y vuelva a intentarlo.", "Der Router „{name}“ verwendet eine Verschlüsselung, die dieses WLAN nicht unterstützt (nur GCMP-256). Wählen Sie in den Router-Einstellungen WPA2/WPA3 oder AES-Verschlüsselung (CCMP) und versuchen Sie es erneut."),
     "Recherche de « {name} »…": ("Looking for “{name}”…", "Buscando «{name}»…", "„{name}“ wird gesucht…"),
     "Une clé WPA compte de 8 à 63 caractères (ou 64 chiffres hexadécimaux).": ("A WPA key has 8 to 63 characters (or 64 hexadecimal digits).", "Una clave WPA tiene de 8 a 63 caracteres (o 64 dígitos hexadecimales).", "Ein WPA-Schlüssel hat 8 bis 63 Zeichen (oder 64 Hexadezimalziffern)."),
     "Une clé WEP compte 5 ou 13 caractères (ou 10 ou 26 chiffres hexadécimaux).": ("A WEP key has 5 or 13 characters (or 10 or 26 hexadecimal digits).", "Una clave WEP tiene 5 o 13 caracteres (o 10 o 26 dígitos hexadecimales).", "Ein WEP-Schlüssel hat 5 oder 13 Zeichen (oder 10 oder 26 Hexadezimalziffern)."),
@@ -401,6 +402,45 @@ def profiles_for(ssid):
     return [p for p in profiles() if p["ssid"] == ssid]
 
 
+def wps_configured(ies):
+    """Éléments 802.11 bruts -> vrai si la box annonce le WPS à l'état
+    « Configured » (élément fournisseur 00:50:F2 type 4, attribut 0x1044 = 2).
+    L'élément WPS peut être découpé en plusieurs morceaux : ils sont recollés."""
+    wps, index = b"", 0
+    while index + 2 <= len(ies):
+        kind, size = ies[index], ies[index + 1]
+        body = ies[index + 2:index + 2 + size]
+        index += 2 + size
+        if kind == 221 and body[:4] == b"\x00\x50\xf2\x04":
+            wps += body[4:]
+    index = 0
+    while index + 4 <= len(wps):
+        kind = int.from_bytes(wps[index:index + 2], "big")
+        size = int.from_bytes(wps[index + 2:index + 4], "big")
+        value = wps[index + 4:index + 4 + size]
+        index += 4 + size
+        if kind == 0x1044:
+            return value[:1] == b"\x02"
+    return False
+
+
+def cipher_unsupported(ssid):
+    """Box WPA2/WPA3 sans CCMP ni TKIP (GCMP-256 seul, Wi-Fi 7 réglé en WPA3
+    strict) : NetworkManager n'y propose que CCMP et TKIP, il ne la trouve donc
+    jamais. Vrai seulement si tous ses points d'accès sont dans ce cas."""
+    result = nm(["-t", "-f", "SSID,WPA-FLAGS,RSN-FLAGS", "device", "wifi", "list"], timeout=10)
+    seen = False
+    for line in result.stdout.splitlines():
+        fields = split_terse(line)
+        if len(fields) < 3 or fields[0] != ssid:
+            continue
+        flags = (fields[1] + " " + fields[2]).replace("(none)", "").split()
+        if not flags or any(flag in flags for flag in ("pair_ccmp", "pair_tkip", "pair_wep40", "pair_wep104")):
+            return False
+        seen = True
+    return seen
+
+
 def wps_bsses(device):
     """SSID des box qui annoncent le WPS (wpa_supplicant, D-Bus système), None sans WPS."""
     try:
@@ -422,7 +462,10 @@ def wps_bsses(device):
                                                     "org.freedesktop.DBus.Properties", None)
             values = bss_properties.call_sync("GetAll", GLib.Variant("(s)", ("fi.w1.wpa_supplicant1.BSS",)),
                                               0, 3000, None).unpack()[0]
-            if (values.get("WPS") or {}).get("Type") in ("pbc", "pin"):
+            # « pbc » n'apparaît que pendant l'appui sur le bouton de la box :
+            # une box qui annonce le WPS « configuré » le propose dès l'ouverture.
+            if (values.get("WPS") or {}).get("Type") in ("pbc", "pin") or \
+                    wps_configured(bytes(values.get("IEs") or b"") + bytes(values.get("BeaconIEs") or b"")):
                 names.add(bytes(values.get("SSID") or b"").decode("utf-8", errors="replace"))
         return names
     except Exception:
@@ -543,6 +586,8 @@ def activate_patiently(ident, ssid, hidden=False):
     error, detail = None, ""
     for attempt in range(ACTIVATE_TRIES):
         error, detail = activate(ident, ssid)
+        if error == "out-of-range" and not hidden and cipher_unsupported(ssid):
+            return "cipher", detail
         if error == "bad-key" and not hidden and not visible(ssid, True):
             error = "out-of-range"
         if error != "out-of-range" or hidden or time.monotonic() > deadline:
@@ -882,6 +927,7 @@ def call(args, key=None, timeout=200):
 
 ERRORS = {
     "bad-key": "Mot de passe refusé : la box n’accepte pas cette clé de sécurité. Vérifiez-la (majuscules comprises) et réessayez.",
+    "cipher": "La box « {name} » utilise un chiffrement que ce Wi-Fi ne prend pas en charge (GCMP-256 seul). Dans les réglages de la box, choisissez WPA2/WPA3 ou le chiffrement AES (CCMP), puis réessayez.",
     "lost": "Réseau « {name} » momentanément introuvable : il a disparu de la liste pendant la connexion. Votre mot de passe est gardé : rapprochez-vous de la box, puis cliquez sur « Se connecter ».",
     "key-format": "Une clé WPA compte de 8 à 63 caractères (ou 64 chiffres hexadécimaux).",
     "wep-format": "Une clé WEP compte 5 ou 13 caractères (ou 10 ou 26 chiffres hexadécimaux).",
