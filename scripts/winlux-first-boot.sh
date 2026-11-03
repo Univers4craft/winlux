@@ -602,7 +602,7 @@ if test "$DISABLE_ROOT" = 1; then
 else
     log 'Mot de passe root défini'
     printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
-    # « su » garde alors son sens habituel dans le terminal (winlux-su.sh).
+    # « su » garde alors son sens habituel (bascule /usr/bin/su de Winlux).
     mkdir -p /etc/winlux && : >/etc/winlux/root-enabled
 fi
 
