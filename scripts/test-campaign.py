@@ -373,4 +373,21 @@ drivers_tool = (SCRIPTS / "winlux-drivers.py").read_text()
 ok("def module_packages" in drivers_tool and "if apt_available(p)" in drivers_tool,
    "« Installer les pilotes complets » : linux-modules-extra n'est plus exigé (noyau 7.0)")
 
+# ── Liens web sur le portable réel (v0.2.18, 2026-11-03) ───────────────────
+# La connexion d'une application ouvrait les Paramètres > Navigateurs alors
+# qu'un navigateur était installé (installé sans être « par défaut »).
+with tempfile.TemporaryDirectory() as directory:
+    base = Path(directory)
+    firefox = base / "system/opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox"
+    firefox.parent.mkdir(parents=True)
+    fake_tool(firefox.parent, "firefox", f'printf "%s\\n" "$@" > "{base}/ouvert"')
+    fake_tool(base, "winlux-browsers", f'exec sh "{SCRIPTS}/winlux-browsers.sh" "$@"')
+    env = {**os.environ, "WINLUX_BROWSER_ROOT": str(base / "system"), "WINLUX_BROWSER_CANDIDATES": "",
+           "PATH": f"{base}:{os.environ['PATH']}"}
+    env.pop("WINLUX_BROWSER", None)
+    url = "https://example.invalid/oauth?code=1"
+    subprocess.run(["sh", str(ROOT / "integration/winlux-browser"), url], env=env, check=True)
+    ok((base / "ouvert").read_text().split() == [url] and not (base / "system/run/winlux/browser-chooser").exists(),
+       "lien d'une application : ouvert dans le navigateur installé, sans renvoyer aux Paramètres")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

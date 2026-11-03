@@ -114,6 +114,9 @@ jobs:
       - name: Vérifier les navigateurs hors ligne
         run: sh scripts/test-browsers.sh
 
+      - name: Vérifier que les liens web s'ouvrent dans le navigateur installé
+        run: sh scripts/test-browser-links.sh
+
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 

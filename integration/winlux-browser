@@ -1,38 +1,94 @@
 #!/bin/sh
 # Navigateur par défaut de Winlux : celui choisi dans Paramètres > Navigateurs,
 # quel qu'il soit (Edge, Chrome ou Firefox du catalogue, ou un navigateur du
-# système). Un lien ne reste jamais sans réponse : sans navigateur choisi, le
-# premier navigateur présent l'ouvre, et sans aucun navigateur le choix
-# s'ouvre. WINLUX_BROWSER force un autre programme.
+# système). C'est le point d'arrivée de tous les liens web : xdg-open (via
+# exo-open ou GIO), les applications Linux, et ShellExecute des .exe.
+#
+# Un lien ne reste jamais sans réponse et ne mène au choix du navigateur que
+# s'il n'y en a vraiment aucun :
+#   1. WINLUX_BROWSER, s'il est défini ;
+#   2. le navigateur par défaut du catalogue, s'il est installé ;
+#   3. sinon un navigateur installé du catalogue (Chrome, Edge, Firefox,
+#      ordre alphabétique : aucun n'est favorisé) ;
+#   4. sinon un navigateur du système ;
+#   5. sinon le choix s'ouvre (Paramètres > Navigateurs) et le lien est gardé :
+#      la session l'ouvre dès qu'un navigateur est installé (--pending).
 set -u
 
-if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
-    exec "$WINLUX_BROWSER" "$@"
-fi
-
-# Catalogue de Winlux : le navigateur par défaut s'il est installé (toujours
-# en session Live, où winlux-browsers propose le choix au besoin).
-if command -v winlux-browsers >/dev/null 2>&1; then
-    state=$(winlux-browsers --status 2>/dev/null)
-    default=$(printf '%s\n' "$state" | sed -n 's/^browser_default=//p')
-    if [ -f /etc/winlux/live-session ] || printf '%s\n' "$state" | grep -Eq "^browser_${default:-none}=(installed|update)$"; then
-        exec winlux-browsers --open "$@"
-    fi
-fi
-
-# Chromium et ses dérivés refusent de tourner en root sans --no-sandbox.
+root=${WINLUX_BROWSER_ROOT:-}
 uid=$(id -u 2>/dev/null || /bin/busybox id -u 2>/dev/null || echo 1000)
-sandbox=
-if [ "$uid" = 0 ]; then sandbox=--no-sandbox; fi
+pending="$root/run/winlux/browser-pending-$uid"
 
-for other in firefox chromium chromium-browser google-chrome-stable microsoft-edge-stable microsoft-edge; do
-    if command -v "$other" >/dev/null 2>&1; then
-        case "$other" in firefox) exec "$other" "$@" ;; *) exec "$other" $sandbox "$@" ;; esac
+# Navigateur du catalogue à utiliser : le défaut s'il est installé (« open »),
+# sinon le premier installé (« launch »). Rien si aucun ne l'est.
+catalogue_browser() {
+    command -v winlux-browsers >/dev/null 2>&1 || return 1
+    state=$(winlux-browsers --status 2>/dev/null) || return 1
+    default=$(printf '%s\n' "$state" | sed -n 's/^browser_default=//p')
+    for id in ${default:-none} chrome edge firefox; do
+        if printf '%s\n' "$state" | grep -Eq "^browser_$id=(installed|update)$"; then
+            if [ "$id" = "${default:-none}" ]; then printf 'open %s\n' "$id"; else printf 'launch %s\n' "$id"; fi
+            return 0
+        fi
+    done
+    return 1
+}
+
+system_browser() {
+    for other in ${WINLUX_BROWSER_CANDIDATES-firefox chromium chromium-browser google-chrome-stable microsoft-edge-stable microsoft-edge}; do
+        if command -v "$other" >/dev/null 2>&1; then
+            printf '%s\n' "$other"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Ouvre les arguments dans un navigateur présent ; code 3 s'il n'y en a aucun.
+open_now() {
+    if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
+        exec "$WINLUX_BROWSER" "$@"
     fi
-done
+    if choice=$(catalogue_browser); then
+        case "$choice" in
+            open\ *) exec winlux-browsers --open "$@" ;;
+            *) exec winlux-browsers --launch "${choice#launch }" "$@" ;;
+        esac
+    fi
+    if other=$(system_browser); then
+        # Chromium et ses dérivés refusent de tourner en root sans --no-sandbox.
+        case "$other" in
+            firefox) exec "$other" "$@" ;;
+            *) if [ "$uid" = 0 ]; then exec "$other" --no-sandbox "$@"; fi; exec "$other" "$@" ;;
+        esac
+    fi
+    return 3
+}
 
+# Lien gardé pendant le choix du navigateur : la session appelle --pending
+# toutes les quelques secondes ; il s'ouvre dès qu'un navigateur est là.
+# Un lien vieux de plus d'une heure n'est plus attendu.
+if [ "${1:-}" = --pending ]; then
+    [ -f "$pending" ] || exit 0
+    if [ -n "$(find "$pending" -mmin +60 2>/dev/null)" ]; then rm -f "$pending"; exit 0; fi
+    catalogue_browser >/dev/null || system_browser >/dev/null || [ -n "${WINLUX_BROWSER:-}" ] || exit 0
+    set --
+    while IFS= read -r line; do set -- "$@" "$line"; done < "$pending"
+    rm -f "$pending"
+    [ "$#" -gt 0 ] || exit 0
+    open_now "$@"
+    exit 0
+fi
+
+open_now "$@"
+
+# Aucun navigateur : le lien est gardé, puis le choix s'ouvre.
+if [ "$#" -gt 0 ]; then
+    mkdir -p "${pending%/*}" 2>/dev/null || true
+    ( umask 077; printf '%s\n' "$@" > "$pending" ) 2>/dev/null || true
+fi
 if command -v winlux-browsers >/dev/null 2>&1; then
-    exec winlux-browsers --open "$@"
+    exec winlux-browsers --open
 fi
 message="Aucun navigateur n'est installé. Choisissez-en un dans Paramètres > Navigateurs."
 if command -v notify-send >/dev/null 2>&1; then
