@@ -347,7 +347,20 @@ done
 # récents (SOF, AMD ACP) chargent leur pilote de machine et leurs codecs par
 # leur nom au démarrage de la carte, sans dépendance déclarée : sans eux, la
 # carte ne se crée pas et PipeWire n'offre qu'une sortie factice.
-for directory in sound drivers/soundwire; do
+# Wi-Fi : la pile 802.11 entière, tous les pilotes Wi-Fi (PCIe, USB, SDIO des
+# tablettes, staging dont r8723bs des Bay Trail/Cherry Trail) et la crypto du
+# noyau. mac80211 demande ccm(aes) par son nom pour poser la clé CCMP de tout
+# réseau WPA2/WPA3 (cmac : trames de gestion protégées, michael_mic : TKIP,
+# gcm/ghash : GCMP) ; sans ces modules la poignée de main échouait et le mot
+# de passe Wi-Fi semblait refusé (v0.2.17, PC de damien). brcmfmac charge de
+# même ses modules « vendeur » (cyw, wcc, bca) par leur nom.
+# Pare-feu et partage de connexion : netfilter entier (nf_tables, NAT,
+# conntrack), pont et veth ; sans eux winlux-firewall ne faisait rien
+# (« Unable to initialize Netlink socket ») et aucun NAT n'était possible.
+# Partage de connexion d'un téléphone : USB (cdc_ether, rndis_host, cdc_ncm,
+# ipheth pour l'iPhone) et Bluetooth (bnep) sont dans drivers/net/usb et
+# net/bluetooth.
+for directory in sound drivers/soundwire crypto arch/x86/crypto lib/crypto net/wireless net/mac80211 drivers/net/wireless drivers/staging net/netfilter net/ipv4/netfilter net/ipv6/netfilter net/bridge drivers/net/usb net/bluetooth; do
     test -d "/lib/modules/$kernel_release/kernel/$directory" || continue
     find "/lib/modules/$kernel_release/kernel/$directory" -name '*.ko*' | while read -r module; do
         destination="$stage${module%.zst}"
@@ -496,6 +509,8 @@ if command -v fc-cache >/dev/null 2>&1; then
     fc-cache -f "$stage/usr/share/fonts" 2>/dev/null || true
 fi
 sh "$root/scripts/stage-desktop-components.sh" "$stage"
+# Wi-Fi chiffré : la construction échoue si ce qui l'a cassé en v0.2.17 manque.
+sh "$root/scripts/check-image-wifi.sh" "$stage" "$kernel_release"
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh

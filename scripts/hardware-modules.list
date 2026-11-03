@@ -8,7 +8,7 @@
 i915 xe amdgpu radeon nouveau
 # Ethernet courant des PC de bureau et portables, adaptateurs USB et partage
 # de connexion d'un téléphone (USB).
-igc igb e1000e r8169 atlantic alx tg3 r8152 cdc_ether cdc_ncm rndis_host ax88179_178a
+igc igb e1000e r8169 atlantic alx tg3 r8152 cdc_ether cdc_ncm rndis_host ax88179_178a ipheth veth tun wireguard
 # Wi-Fi : Intel, Qualcomm Atheros, MediaTek, Realtek, Broadcom.
 iwlwifi iwlmvm iwlmld iwldvm ath9k ath10k_pci ath11k_pci ath12k mt7921e mt7925e mt7921u
 rtw88_8822ce rtw88_8821ce rtw88_8822be rtw88_8821cu rtw89_8852ae rtw89_8852be rtw89_8852ce rtw89_8851be

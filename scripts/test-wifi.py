@@ -123,7 +123,8 @@ def setup():
     env = dict(os.environ, PATH=f"{work / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                FAKE_NM_STATE=str(work), WINLUX_WIFI_CONNECTIONS=str(work / "connections"),
                WINLUX_SYS_ROOT=str(sys_root), WINLUX_WIFI_DIRECT="1", WINLUX_LANG="fr",
-               XDG_CONFIG_HOME=str(work / "config"))
+               XDG_CONFIG_HOME=str(work / "config"), WINLUX_AIRPLANE_MARK=str(work / "airplane-mark"),
+               WINLUX_WIFI_CERTS=str(work / "certificats-gardes"))
     return work, env
 
 
@@ -207,12 +208,82 @@ def test_backend():
     enterprise = backend(env, "connect", "Bureau", "--security", "eap", "--key-stdin", key="mdp")
     ok(enterprise.get("error") == "eap-identity", "réseau d'entreprise : nom d'utilisateur demandé")
 
+    def profile_of(ssid):
+        for path in connections.glob("*.nmconnection"):
+            text = path.read_text()
+            if f"id={ssid}\n" in text: return text
+        return ""
+    # Entreprise PEAP/MSCHAPv2, serveur vérifié par les certificats du système.
+    peap = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "peap",
+                   "--phase2", "mschapv2", "--ca", "system", "--domain", "radius.exemple.fr", "--key-stdin", key="mdp-secret")
+    text = profile_of("Bureau")
+    ok(peap.get("ok") and "eap=peap;" in text and "phase2-auth=mschapv2" in text and "system-ca-certs=true" in text
+       and "domain-suffix-match=radius.exemple.fr" in text and "password=mdp-secret" in text,
+       f"Entreprise PEAP/MSCHAPv2 : profil complet ({peap})")
+    ok("mdp-secret" not in calls.read_text(), "Entreprise : le mot de passe ne passe pas en argument")
+    ttls = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "ttls",
+                   "--phase2", "pap", "--ca", "none", "--key-stdin", key="mdp-secret")
+    text = profile_of("Bureau")
+    ok(ttls.get("ok") and "eap=ttls;" in text and "phase2-auth=pap" in text and "system-ca-certs" not in text
+       and "ca-cert=" not in text, f"Entreprise TTLS/PAP sans vérification du serveur ({ttls})")
+    certs = work / "certs"
+    certs.mkdir(exist_ok=True)
+    (certs / "alice.p12").write_bytes(b"p12")
+    (certs / "ca.pem").write_text("-----BEGIN CERTIFICATE-----\n")
+    tls = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls",
+                  "--ca", str(certs / "ca.pem"), "--client-cert", str(certs / "alice.p12"), "--key-stdin", key="code-p12")
+    text = profile_of("Bureau")
+    kept = Path(env["WINLUX_WIFI_CERTS"])
+    folders = [path for path in kept.iterdir()] if kept.is_dir() else []
+    ok(len(folders) == 1, f"certificats copiés à l'abri, un dossier par profil ({folders})")
+    copy = folders[0] if folders else kept
+    ok(tls.get("ok") and "eap=tls;" in text and f"client-cert={copy / 'client-cert.p12'}" in text
+       and f"private-key={copy / 'client-cert.p12'}" in text and "private-key-password=code-p12" in text
+       and f"ca-cert={copy / 'ca.pem'}" in text and "password=" not in text.replace("private-key-password=", ""),
+       f"Entreprise TLS : certificat client .p12, autorité choisie ({tls})")
+    ok((copy / "client-cert.p12").read_bytes() == b"p12" and (copy / "client-cert.p12").stat().st_mode & 0o077 == 0,
+       "copie du certificat personnel en 0600")
+    (certs / "alice.p12").unlink()
+    ok((copy / "client-cert.p12").is_file(), "le profil garde son certificat si l'original disparaît")
+    (certs / "alice.p12").write_bytes(b"p12")
+    no_cert = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls")
+    ok(no_cert.get("error") == "eap-certificate", f"Entreprise TLS sans certificat : demandé en clair ({no_cert})")
+    lost = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls",
+                   "--client-cert", str(certs / "absent.p12"))
+    ok(lost.get("error") == "eap-file", f"certificat introuvable dit en clair ({lost})")
+    bad_method = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "a", "--eap", "md5", "--key-stdin", key="x")
+    ok(not bad_method.get("ok"), "méthode EAP inconnue refusée")
+    # WPA3 personnel : SAE, trames de gestion protégées obligatoires.
+    sae = backend(env, "connect", "Voisin", "--security", "sae", "--key-stdin", key=GOOD_KEY)
+    text = profile_of("Voisin")
+    ok(sae.get("ok") and "key-mgmt=sae" in text and "pmf=3" in text, f"WPA3 personnel : SAE et PMF obligatoire ({sae})")
+    # WEP (vieux matériel) : clé de 13 caractères.
+    wep = backend(env, "connect", "Café", "--security", "wep", "--key-stdin", key="abcdefghijklm")
+    text = profile_of("Café")
+    ok(wep.get("ok") and "key-mgmt=none" in text and "wep-key0=abcdefghijklm" in text, f"WEP : clé enregistrée ({wep})")
+    for ssid in ("Bureau", "Voisin", "Café"):
+        backend(env, "forget", ssid)
+    backend(env, "connect", "Café", "--security", "open")
+
     forget = backend(env, "forget", "Maison:5G")
     ok(forget.get("ok") and forget.get("removed") == 1 and not any(
         "Maison" in p.read_text() for p in connections.glob("*.nmconnection")), "« Oublier » efface le profil et sa clé")
 
-    airplane = backend(env, "airplane", "on")
+    # Couper le seul Wi-Fi n'est pas le mode avion (même sans Bluetooth).
     sys_root = Path(env["WINLUX_SYS_ROOT"])
+    (sys_root / "sys/class/rfkill/rfkill1/soft").write_text("1\n")
+    backend(env, "radio", "off")
+    off_state = backend(env, "status")
+    ok(off_state.get("radio") is False and off_state.get("airplane") is False,
+       f"Wi-Fi coupé seul : le mode avion reste éteint ({off_state})")
+    backend(env, "radio", "on")
+    (sys_root / "sys/class/rfkill/rfkill1/soft").write_text("0\n")
+    # En-tête : le profil actif compte, même si la liste n'est pas encore à jour.
+    backend(env, "connect", "Voisin", "--security", "sae", "--key-stdin", key=GOOD_KEY)
+    cafe_state = backend(env, "status")
+    ok(cafe_state.get("connected") == "Voisin", f"état : réseau connecté d'après le profil actif ({cafe_state})")
+    backend(env, "forget", "Voisin")
+    airplane = backend(env, "airplane", "on")
     ok(airplane.get("ok") and (sys_root / "sys/class/rfkill/rfkill1/soft").read_text().strip() == "1"
        and '["radio", "all", "off"]' in calls.read_text(), "mode avion : Wi-Fi et Bluetooth coupés")
     ok(backend(env, "status").get("airplane") is True, "état : mode avion reconnu")
@@ -257,7 +328,16 @@ def test_messages():
                            (["winlux-wifi", "connect", "Box", "--security", "rm"], None),
                            (["winlux-wifi", "connect", "--key-stdin"], None), (["winlux-wifi", "radio", "maybe"], None),
                            (["winlux-wifi", "connect", "Box", "--exec", "x"], None), (["winlux-wifi", "sh"], None),
-                           (["winlux-wifi", "list", "--rescan", "x"], None)):
+                           (["winlux-wifi", "list", "--rescan", "x"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--identity", "moi", "--eap", "peap",
+                             "--phase2", "mschapv2", "--ca", "system", "--domain", "radius.exemple.fr", "--key-stdin"], "user"),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--identity", "moi", "--eap", "tls",
+                             "--ca", "/home/moi/ca.pem", "--client-cert", "/home/moi/alice.p12",
+                             "--private-key", "/home/moi/alice.key", "--key-stdin"], "user"),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--eap", "md5"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--ca", "relatif.pem"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--client-cert", "x.p12"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--domain", "a;b"], None)):
         ok(level(args) == expected, f"relais root : {' '.join(args)} → {expected or 'refusé'}")
 
 
@@ -294,7 +374,7 @@ def walk(widget, Gtk):
 
 
 def test_page(work, env):
-    for key in ("PATH", "FAKE_NM_STATE", "WINLUX_WIFI_CONNECTIONS", "WINLUX_SYS_ROOT", "WINLUX_WIFI_DIRECT", "XDG_CONFIG_HOME"):
+    for key in ("PATH", "FAKE_NM_STATE", "WINLUX_WIFI_CONNECTIONS", "WINLUX_SYS_ROOT", "WINLUX_WIFI_DIRECT", "XDG_CONFIG_HOME", "WINLUX_AIRPLANE_MARK", "WINLUX_WIFI_CERTS"):
         os.environ[key] = env[key]
     for path in Path(env["WINLUX_WIFI_CONNECTIONS"]).glob("*"):
         path.unlink()
@@ -393,6 +473,49 @@ def test_page(work, env):
         from gi.repository import Gdk
         pixbuf = Gdk.pixbuf_get_from_window(window.get_window(), 0, 0, window.get_allocated_width(), window.get_allocated_height())
         pixbuf.savev(os.environ["WINLUX_WIFI_CAPTURE"], "png", [], [])
+    # Entreprise : méthode, authentification interne, certificat du serveur,
+    # domaine ; TLS : certificat personnel au lieu du mot de passe.
+    enterprise = {}
+
+    def enterprise_dialog():
+        box = dialog()
+        if box is None: return True
+        widgets = list(walk(box, Gtk))
+        combos = [w for w in widgets if isinstance(w, Gtk.ComboBoxText)]
+        method = next((c for c in combos if c.get_active_id() == "peap"), None)
+        labels = [w.get_text() for w in widgets if isinstance(w, Gtk.Label) and w.get_mapped()]
+        enterprise["peap"] = method is not None and all(t in labels for t in (
+            "Nom d’utilisateur", "Méthode", "Authentification interne", "Certificat du serveur", "Domaine (facultatif)", "Mot de passe"))
+        enterprise["no_cert_row"] = "Certificat personnel" not in labels
+        if method is not None:
+            method.set_active_id("tls")
+            pump(Gtk, 0.2)
+            labels = [w.get_text() for w in walk(box, Gtk) if isinstance(w, Gtk.Label) and w.get_mapped()]
+            enterprise["tls"] = ("Certificat personnel" in labels and "Authentification interne" not in labels
+                                 and "Mot de passe de la clé privée (facultatif)" in labels)
+        box.response(Gtk.ResponseType.CANCEL)
+        return False
+
+    GLib.timeout_add(300, enterprise_dialog)
+    bureau = next(w for w in walk(panel.network_box, Gtk) if isinstance(w, Gtk.Button)
+                  and w.get_accessible().get_name() == "Se connecter Bureau")
+    bureau.clicked()
+    pump(Gtk, 0.5)
+    ok(enterprise.get("peap"), "boîte Entreprise : identifiant, méthode, authentification interne, certificat du serveur, domaine")
+    ok(enterprise.get("no_cert_row"), "boîte Entreprise PEAP : pas de certificat personnel demandé")
+    ok(enterprise.get("tls"), "boîte Entreprise TLS : certificat personnel et mot de passe de la clé privée")
+    # Wi-Fi public : bouton « Page de connexion du réseau » sur le réseau ouvert connecté.
+    state = json.loads((work / "state.json").read_text())
+    state["active"] = "Café"
+    (work / "state.json").write_text(json.dumps(state))
+    panel.refresh(False)
+    deadline = time.time() + 15
+    portal = None
+    while time.time() < deadline and portal is None:
+        pump(Gtk, 0.2)
+        portal = next((w for w in walk(panel.network_box, Gtk) if isinstance(w, Gtk.Button) and w.get_name() == "wifi-portal"), None)
+    ok(portal is not None and portal.get_label() == "Page de connexion du réseau",
+       "Wi-Fi public connecté : « Page de connexion du réseau » proposée")
     window.destroy()
 
 
