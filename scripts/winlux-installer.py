@@ -5021,7 +5021,10 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            subprocess.run(["sync"], timeout=10)
+            try:
+                subprocess.run(["sync"], timeout=10)
+            except subprocess.TimeoutExpired:
+                pass  # l'init synchronise de toute façon avant de redémarrer
             # En live, PID 1 est le script /init : « reboot » (systemctl)
             # ne faisait rien et le bouton fermait seulement l'installateur.
             # winlux-power sait redémarrer dans les deux cas.
@@ -5032,7 +5035,18 @@ class InstallerApp(Gtk.Application):
             # (mise à jour en cours…), pour afficher la raison.
             power = shutil.which("winlux-power")
             if power:
-                done = subprocess.run([power, "execute", "reboot"], timeout=30).returncode == 0
+                try:
+                    done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
+                    refused = not done
+                except (OSError, subprocess.SubprocessError):
+                    # Écriture des disques encore longue juste après
+                    # l'installation : le délai expirait et le bouton
+                    # fermait l'installateur sans redémarrer.
+                    done = refused = False
+                if not done and not refused and os.geteuid() == 0:
+                    # Session live (root) : l'init redémarre sur SIGTERM.
+                    os.kill(1, signal.SIGTERM)
+                    done = True
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:

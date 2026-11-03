@@ -540,10 +540,29 @@ safe_power() {
         return
     fi
     # Ask remaining background services to terminate before flushing disks.
+    echo "Winlux : arrêt des programmes ($1)"
     /bin/busybox kill -TERM -1 2>/dev/null || true
+    # Garde-fou : si l'écriture des disques, le remontage ou l'appel au noyau
+    # restent bloqués (session live juste après une installation : la
+    # machine restait sur le logo et il fallait forcer l'arrêt), le noyau
+    # termine lui-même au bout de 25 s : synchronisation, disques en lecture
+    # seule, puis redémarrage (b) ou arrêt (o).
+    sysrq_key=b
+    test "$1" = poweroff && sysrq_key=o
+    (
+        /bin/busybox sleep 25
+        echo "Winlux : arrêt forcé par le noyau ($1)"
+        echo s >/proc/sysrq-trigger
+        /bin/busybox sleep 2
+        echo u >/proc/sysrq-trigger
+        /bin/busybox sleep 1
+        echo "$sysrq_key" >/proc/sysrq-trigger
+    ) &
     /bin/busybox sleep 5
+    echo "Winlux : écriture des disques"
     /bin/busybox sync
     /bin/busybox mount -o remount,ro / 2>/dev/null || true
+    echo "Winlux : $1"
     /bin/busybox "$1" -f
 }
 trap 'safe_power poweroff' USR2
