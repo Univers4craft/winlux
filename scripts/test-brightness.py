@@ -32,6 +32,8 @@ bin_dir = work / "bin"
 bin_dir.mkdir()
 (bin_dir / "winlux-root").write_text(f"""#!/bin/sh
 echo "$@" >>{work}/relay.log
+# Le vrai relais tourne en root, qui écrit malgré le 0444 : simulé ici.
+find "$WINLUX_SYS_ROOT/sys/class/backlight" -name brightness -exec chmod 644 {{}} + 2>/dev/null
 WINLUX_BRIGHTNESS_AS=root WINLUX_CONTROL_RELAYED=1 exec {sys.executable} {TOOL} "$3" "$4"
 """)
 (bin_dir / "ddcutil").write_text(f"""#!/bin/sh
