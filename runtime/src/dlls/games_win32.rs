@@ -171,10 +171,6 @@ extern "win64" fn not_supported() -> i32 {
     set_error(50);
     0
 }
-extern "win64" fn invalid_function() -> i32 {
-    set_error(1);
-    0
-}
 extern "win64" fn privilege_not_held() -> i32 {
     set_error(1314);
     0
@@ -265,7 +261,6 @@ pub fn kernel32_exports() -> Exports {
         "Module32First" => fn Module32FirstW, "Module32Next" => fn Module32FirstW,
         "ReadProcessMemory" => fn ReadProcessMemory, "WriteProcessMemory" => fn WriteProcessMemory,
         "SetConsoleScreenBufferSize" => fn ok1,
-        "TransactNamedPipe" => fn invalid_function,
         "VirtualAllocEx" => fn VirtualAllocEx, "VirtualProtectEx" => fn VirtualProtectEx,
         "VirtualLock" => fn VirtualLock, "VirtualUnlock" => fn VirtualUnlock,
         "CopyFileExW" => fn CopyFileExW,
