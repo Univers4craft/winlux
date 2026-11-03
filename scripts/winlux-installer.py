@@ -1469,6 +1469,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Mémoire",
         "bench_disk": "Disque",
         "bench_gpu": "Graphique",
+        "bench_limited_by": "La note globale est celle du composant le plus lent : {part}.",
         "bench_waiting": "en attente",
         "bench_tips": "Recommandations",
         "bench_running": "Test en cours… vous pouvez continuer, il se termine en arrière-plan.",
@@ -1557,6 +1558,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memory",
         "bench_disk": "Disk",
         "bench_gpu": "Graphics",
+        "bench_limited_by": "The overall score is that of the slowest component: {part}.",
         "bench_waiting": "waiting",
         "bench_tips": "Recommendations",
         "bench_running": "Test in progress… you can continue, it finishes in the background.",
@@ -1645,6 +1647,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Arbeitsspeicher",
         "bench_disk": "Datenträger",
         "bench_gpu": "Grafik",
+        "bench_limited_by": "Die Gesamtbewertung ist die der langsamsten Komponente: {part}.",
         "bench_waiting": "wartet",
         "bench_tips": "Empfehlungen",
         "bench_running": "Test läuft… Sie können fortfahren, er wird im Hintergrund beendet.",
@@ -1733,6 +1736,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "La puntuación global es la del componente más lento: {part}.",
         "bench_waiting": "en espera",
         "bench_tips": "Recomendaciones",
         "bench_running": "Prueba en curso… puede continuar, termina en segundo plano.",
@@ -1821,6 +1825,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Grafica",
+        "bench_limited_by": "Il punteggio globale è quello del componente più lento: {part}.",
         "bench_waiting": "in attesa",
         "bench_tips": "Raccomandazioni",
         "bench_running": "Test in corso… puoi continuare, termina in background.",
@@ -1909,6 +1914,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memória",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "A nota geral é a do componente mais lento: {part}.",
         "bench_waiting": "aguardando",
         "bench_tips": "Recomendações",
         "bench_running": "Teste em andamento… você pode continuar, ele termina em segundo plano.",
@@ -4408,7 +4414,9 @@ class InstallerApp(Gtk.Application):
             self.benchmark = event["summary"]
             self.bench_state = "done"
             self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
-            self.bench_status.set_text(tr("bench_done"))
+            weakest = self.benchmark_weakest()
+            # « 2,0 » à côté d'un processeur à 8,7 : dire d'où vient la note.
+            self.bench_status.set_text(tr("bench_done") + ("\n" + tr("bench_limited_by", part=tr("bench_" + weakest)) if weakest else ""))
             tips = self.benchmark["recommendations"] or [tr("bench_no_tip")]
             self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
             self.bench_retry.set_sensitive(True)
@@ -4418,6 +4426,14 @@ class InstallerApp(Gtk.Application):
             if STEP_KEYS[self.current_step] == "summary":
                 self.refresh_summary()  # la mesure finit après l'arrivée sur le récapitulatif
         return False
+
+    def benchmark_weakest(self):
+        """Composant qui fixe la note globale (la plus basse), ou None si toutes sont égales."""
+        results = (self.benchmark or {}).get("results", {})
+        scores = [(r["score"], key) for key, r in results.items() if "score" in r]
+        if scores and min(scores)[0] < max(scores)[0]:
+            return min(scores)[1]
+        return None
 
     def benchmark_complete(self):
         """Vrai si la mesure est terminée, sans composant en échec."""
@@ -4755,10 +4771,8 @@ class InstallerApp(Gtk.Application):
             # La note globale est la plus basse des notes (comme l'indice de
             # performance) : nommer le composant qui la fixe, sinon « 2,0 »
             # à côté d'un processeur à 8,7 ressemble à une mesure inachevée.
-            results = self.benchmark.get("results", {})
-            scores = [(r["score"], key) for key, r in results.items() if "score" in r]
-            if scores and min(scores)[0] < max(scores)[0]:
-                weakest = min(scores)[1]
+            weakest = self.benchmark_weakest()
+            if weakest:
                 score = tr("summary_benchmark_limited", score=score, part=tr("bench_" + weakest))
         elif self.bench_state == "running":
             score = tr("summary_benchmark_running")
@@ -4908,19 +4922,31 @@ class InstallerApp(Gtk.Application):
             quiet("xset", "s", "off")
             quiet("xset", "-dpms")
             quiet("xscreensaver-command", "-deactivate")
+            if getattr(self, "awake_stop", None) is None:
+                # Fil à part, pas un minuteur GLib : le réveil continue même si
+                # la boucle de l'interface est occupée par la copie. En v0.2.16,
+                # l'économiseur « tuyaux 3D » démarrait encore après 10 min de
+                # copie. Trois signaux indépendants : la commande de
+                # XScreenSaver, le compteur d'inactivité du serveur X (DPMS,
+                # verrouillage Winlux) et un vrai mouvement de pointeur d'un
+                # pixel aller-retour, que tout détecteur d'activité voit.
+                stop = threading.Event()
+                self.awake_stop = stop
 
-            def poke():
-                if not getattr(self, "awake_timer", None):
-                    return False
-                quiet("xscreensaver-command", "-deactivate")
-                quiet("xset", "s", "reset")
-                return True
-            if not getattr(self, "awake_timer", None):
-                self.awake_timer = GLib.timeout_add_seconds(30, poke)
+                interval = getattr(self, "awake_interval", 30)
+
+                def poke():
+                    while not stop.wait(interval):
+                        quiet("xscreensaver-command", "-deactivate")
+                        quiet("xset", "s", "reset")
+                        quiet("xdotool", "mousemove_relative", "--", "1", "0",
+                              "mousemove_relative", "--", "-1", "0")
+                threading.Thread(target=poke, name="winlux-keep-awake", daemon=True).start()
         else:
-            if getattr(self, "awake_timer", None):
-                GLib.source_remove(self.awake_timer)
-                self.awake_timer = None
+            stop = getattr(self, "awake_stop", None)
+            if stop is not None:
+                stop.set()
+                self.awake_stop = None
             quiet("xset", "s", "default")
             quiet("xset", "+dpms")
 
