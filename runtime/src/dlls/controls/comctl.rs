@@ -166,6 +166,7 @@ pub(super) fn init(kind: Kind, hwnd: usize) {
             place_status_bar(hwnd);
         }
         Kind::UpDown => attach_buddy(hwnd),
+        Kind::ToolBar | Kind::ReBar | Kind::ComboBoxEx => super::bars::init(kind, hwnd),
         Kind::ToolTip => {
             gui::set_window_style(hwnd, style(hwnd) & !0x1000_0000);
             unsafe {
@@ -185,6 +186,7 @@ pub(super) fn paint(kind: Kind, hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         Kind::Progress => paint_progress(hwnd, p, r),
         Kind::TrackBar => paint_trackbar(hwnd, p, r),
         Kind::UpDown => paint_updown(hwnd, c, p, r),
+        Kind::ToolBar | Kind::ReBar | Kind::ComboBoxEx => super::bars::paint(kind, hwnd, c, p, r),
         _ => {}
     }
 }
@@ -204,6 +206,9 @@ pub(super) unsafe fn proc_impl(
         Kind::Progress => progress_proc(hwnd, msg, wp, lp),
         Kind::TrackBar => trackbar_proc(hwnd, msg, wp, lp),
         Kind::UpDown => updown_proc(hwnd, msg, wp, lp),
+        Kind::ToolBar | Kind::ReBar | Kind::ComboBoxEx => {
+            super::bars::proc_impl(kind, hwnd, msg, wp, lp)
+        }
         Kind::ToolTip => Some(match msg {
             0x0404 | 0x0432 => 1, // TTM_ADDTOOLA/W
             _ if (0x0400..0x0500).contains(&msg) => 0,

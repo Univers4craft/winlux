@@ -647,3 +647,191 @@ fn onglets_barre_d_etat_progression_et_curseur() {
     assert_eq!(sendw(track, 0x0400, 0, 0), 7);
     gui::destroy_window(p);
 }
+
+#[repr(C)]
+struct TbButtonT {
+    bitmap: i32,
+    command: i32,
+    state: u8,
+    style: u8,
+    reserved: [u8; 6],
+    data: usize,
+    string: isize,
+}
+
+#[test]
+fn barre_d_outils_bandes_et_liste_etendue() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for name in ["ToolbarWindow32", "ReBarWindow32", "ComboBoxEx32"] {
+        assert!(gui::lookup_class(name).is_some(), "{name}");
+    }
+    let p = parent_window();
+    notes();
+    notify_codes();
+
+    // Barre d'outils : boutons texte (chaîne en pointeur ou en index).
+    let tb = child(
+        p,
+        "ToolbarWindow32",
+        "",
+        0x0800 | 0x4 | 0x8,
+        60,
+        (0, 0, 0, 0),
+    );
+    assert!(tb != 0);
+    sendw(tb, 0x041E, std::mem::size_of::<TbButtonT>(), 0); // TB_BUTTONSTRUCTSIZE
+    let names = w("Extraire\0Tester\0");
+    assert_eq!(sendw(tb, 0x044D, 0, names.as_ptr() as isize), 0); // TB_ADDSTRINGW
+    let add = w("Ajouter");
+    let buttons = [
+        TbButtonT {
+            bitmap: 0,
+            command: 1001,
+            state: 0x4,
+            style: 0,
+            reserved: [0; 6],
+            data: 7,
+            string: add.as_ptr() as isize,
+        },
+        TbButtonT {
+            bitmap: 1,
+            command: 1002,
+            state: 0x4,
+            style: 0,
+            reserved: [0; 6],
+            data: 0,
+            string: 0,
+        },
+        TbButtonT {
+            bitmap: 0,
+            command: 0,
+            state: 0,
+            style: 0x1, // séparateur
+            reserved: [0; 6],
+            data: 0,
+            string: -1,
+        },
+        TbButtonT {
+            bitmap: 2,
+            command: 1003,
+            state: 0x4,
+            style: 0x2, // BTNS_CHECK
+            reserved: [0; 6],
+            data: 0,
+            string: 1,
+        },
+    ];
+    assert_eq!(sendw(tb, 0x0444, 4, buttons.as_ptr() as isize), 1); // TB_ADDBUTTONSW
+    assert_eq!(sendw(tb, 0x0418, 0, 0), 4);
+    assert_eq!(sendw(tb, 0x0419, 1003, 0), 3, "TB_COMMANDTOINDEX");
+    let mut buf = [0u16; 32];
+    let n = sendw(tb, 0x044B, 1002, buf.as_mut_ptr() as isize);
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Extraire");
+    let mut r = Rect::default();
+    assert_eq!(sendw(tb, 0x041D, 0, &mut r as *mut Rect as isize), 1);
+    assert!(r.width() > 0 && r.height() > 0);
+    // Clic sur « Ajouter » : WM_COMMAND(1001) au parent.
+    let at = (((r.top + 4) as isize) << 16) | (r.left + 4) as isize;
+    sendw(tb, WM_LBUTTONDOWN, 1, at);
+    sendw(tb, WM_LBUTTONUP, 0, at);
+    assert_eq!(notes(), vec![(1001, 0)]);
+    // Bouton à cocher ; bouton désactivé qui ne répond plus.
+    let mut r3 = Rect::default();
+    sendw(tb, 0x041D, 3, &mut r3 as *mut Rect as isize);
+    let at3 = (((r3.top + 4) as isize) << 16) | (r3.left + 4) as isize;
+    sendw(tb, WM_LBUTTONDOWN, 1, at3);
+    sendw(tb, WM_LBUTTONUP, 0, at3);
+    assert_eq!(sendw(tb, 0x040A, 1003, 0), 1, "TB_ISBUTTONCHECKED");
+    sendw(tb, 0x0401, 1001, 0); // TB_ENABLEBUTTON(FALSE)
+    assert_eq!(sendw(tb, 0x0409, 1001, 0), 0);
+    notes();
+    sendw(tb, WM_LBUTTONDOWN, 1, at);
+    sendw(tb, WM_LBUTTONUP, 0, at);
+    assert!(notes().is_empty());
+    let mut size = [0i32; 2];
+    sendw(tb, 0x0453, 0, size.as_mut_ptr() as isize); // TB_GETMAXSIZE
+    assert!(size[0] > r.width() * 2 && size[1] > 0);
+
+    // Bande : la barre d'outils devient son enfant, la hauteur suit.
+    let rebar = child(p, "ReBarWindow32", "", 0x0400, 61, (0, 0, 400, 10));
+    assert!(rebar != 0);
+    let mut info = [0u8; 128];
+    info[0..4].copy_from_slice(&128u32.to_le_bytes());
+    info[4..8].copy_from_slice(&(0x10u32 | 0x20 | 0x40 | 0x1).to_le_bytes()); // CHILD|CHILDSIZE|SIZE|STYLE
+    info[8..12].copy_from_slice(&0x100u32.to_le_bytes()); // RBBS_NOGRIPPER
+    info[40..48].copy_from_slice(&tb.to_le_bytes());
+    info[48..52].copy_from_slice(&50u32.to_le_bytes());
+    info[52..56].copy_from_slice(&(size[1] as u32).to_le_bytes());
+    info[56..60].copy_from_slice(&200u32.to_le_bytes());
+    assert_eq!(sendw(rebar, 0x040A, usize::MAX, info.as_ptr() as isize), 1);
+    assert_eq!(sendw(rebar, 0x040C, 0, 0), 1, "RB_GETBANDCOUNT");
+    assert_eq!(
+        gui::window_parent(tb),
+        Some(rebar),
+        "SetParent vers la bande"
+    );
+    let h = sendw(rebar, 0x041B, 0, 0);
+    assert_eq!(h, size[1] as isize + 4, "RB_GETBARHEIGHT");
+    assert_eq!(gui::window_rect(rebar).unwrap().height() as isize, h);
+    assert!(notify_codes().contains(&-831), "RBN_HEIGHTCHANGE");
+    // Un WM_COMMAND de la barre d'outils arrive toujours au parent d'origine.
+    sendw(tb, 0x0401, 1001, 1);
+    sendw(tb, WM_LBUTTONDOWN, 1, at);
+    sendw(tb, WM_LBUTTONUP, 0, at);
+    assert_eq!(notes(), vec![(1001, 0)]);
+
+    // ComboBoxEx : éléments, texte du champ et notifications relayées.
+    let cbex = child(
+        p,
+        "ComboBoxEx32",
+        "",
+        0x0002 | 0x0020_0000,
+        62,
+        (0, 40, 300, 200),
+    );
+    assert!(cbex != 0);
+    let combo = sendw(cbex, 0x0406, 0, 0) as usize; // CBEM_GETCOMBOCONTROL
+    assert!(combo != 0);
+    assert_eq!(gui::window_parent(combo), Some(cbex));
+    assert_eq!(
+        sendw(cbex, 0x0407, 0, 0) as usize,
+        combo,
+        "CBEM_GETEDITCONTROL"
+    );
+    for (i, t) in ["C:\\", "Documents", "Bureau"].iter().enumerate() {
+        let text = w(t);
+        let item = [
+            0x21usize, // CBEIF_TEXT | CBEIF_LPARAM
+            usize::MAX,
+            text.as_ptr() as usize,
+            0,
+            0,
+            0,
+            100 + i,
+        ];
+        assert_eq!(sendw(cbex, 0x040B, 0, item.as_ptr() as isize), i as isize);
+    }
+    assert_eq!(sendw(cbex, 0x0146, 0, 0), 3, "CB_GETCOUNT relayé");
+    let mut out = [0u16; 32];
+    let mut item = [0x21usize, 1, out.as_mut_ptr() as usize, 32, 0, 0, 0];
+    assert_eq!(sendw(cbex, 0x040D, 0, item.as_mut_ptr() as isize), 1);
+    let n = out.iter().position(|&c| c == 0).unwrap();
+    assert_eq!(String::from_utf16_lossy(&out[..n]), "Documents");
+    assert_eq!(item[6], 101);
+    let path = w("D:\\Photos");
+    let set = [0x1usize, usize::MAX, path.as_ptr() as usize, 0, 0, 0, 0];
+    assert_eq!(sendw(cbex, 0x040C, 0, set.as_ptr() as isize), 1);
+    assert_eq!(text_of(combo), "D:\\Photos");
+    notes();
+    sendw(cbex, 0x014E, 2, 0); // CB_SETCURSEL
+    sendw(combo, WM_SETFOCUS, 0, 0); // CBN_SETFOCUS
+    let got = notes();
+    assert!(
+        got.iter().any(|&(id, _)| id == 62),
+        "WM_COMMAND avec l'identifiant de la ComboBoxEx : {got:?}"
+    );
+    notify_codes();
+    sendw(combo, WM_KEYDOWN, VK_RETURN, 0);
+    assert!(notify_codes().contains(&-806), "CBEN_ENDEDITW");
+    gui::destroy_window(p);
+}

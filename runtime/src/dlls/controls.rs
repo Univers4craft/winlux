@@ -180,6 +180,9 @@ pub enum Kind {
     TrackBar,
     UpDown,
     ToolTip,
+    ToolBar,
+    ReBar,
+    ComboBoxEx,
 }
 
 #[derive(Clone, Default)]
@@ -296,6 +299,9 @@ control_proc!(progress_proc, Kind::Progress);
 control_proc!(trackbar_proc, Kind::TrackBar);
 control_proc!(updown_proc, Kind::UpDown);
 control_proc!(tooltip_proc, Kind::ToolTip);
+control_proc!(toolbar_proc, Kind::ToolBar);
+control_proc!(rebar_proc, Kind::ReBar);
+control_proc!(comboboxex_proc, Kind::ComboBoxEx);
 
 /// Procédure d'une classe prédéfinie (le nom ne tient pas compte de la casse).
 /// `ComboLBox` est la liste déroulante d'une COMBOBOX créée à part par
@@ -311,7 +317,7 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
             "#32768" => popup::popup_proc,
-            _ => match comctl::class_kind(&lower)? {
+            _ => match comctl::class_kind(&lower).or_else(|| bars::class_kind(&lower))? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
                 Kind::Tab => tab_proc,
@@ -320,6 +326,9 @@ pub fn builtin_class(name: &str) -> Option<usize> {
                 Kind::TrackBar => trackbar_proc,
                 Kind::UpDown => updown_proc,
                 Kind::ToolTip => tooltip_proc,
+                Kind::ToolBar => toolbar_proc,
+                Kind::ReBar => rebar_proc,
+                Kind::ComboBoxEx => comboboxex_proc,
                 _ => return None,
             },
         };
@@ -1264,7 +1273,13 @@ fn paint_edit_text(
     } else {
         0
     };
-    let align = style(hwnd) & (ES_CENTER | ES_RIGHT);
+    // Pour une COMBOBOX, ces bits sont CBS_SIMPLE / CBS_DROPDOWN : le champ
+    // d'une liste modifiable reste aligné à gauche.
+    let align = if kind_of(hwnd) == Some(Kind::Edit) {
+        style(hwnd) & (ES_CENTER | ES_RIGHT)
+    } else {
+        0
+    };
     for (line, &start) in starts.iter().enumerate().skip(first) {
         let y = if multiline {
             area.top + (line - first) as i32 * lh
@@ -2786,6 +2801,15 @@ fn cb_to_lb(msg: u32) -> Option<u32> {
 
 unsafe fn combobox_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
     let editable = combo_editable(hwnd);
+    // Liste d'une ComboBoxEx : Entrée et Échap terminent la saisie.
+    if msg == WM_KEYDOWN
+        && editable
+        && kind_of(parent(hwnd)) == Some(Kind::ComboBoxEx)
+        && !with_ctl(hwnd, |c| c.dropped).unwrap_or(false)
+        && bars::combo_end_edit(parent(hwnd), wp)
+    {
+        return Some(0);
+    }
     if let Some(lb) = cb_to_lb(msg) {
         let r = list_message(hwnd, lb, wp, lp);
         return r.map(|v| if v == LB_ERR { -1 } else { v });
@@ -3167,6 +3191,9 @@ unsafe fn scrollbar_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Op
 // ---------- Procédure commune ----------
 
 unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+    if let Some(r) = bars::pre_proc(kind, hwnd, msg, wp, lp) {
+        return r;
+    }
     match msg {
         WM_NCCREATE => {
             let wide = WIDE.with(|w| w.get()).unwrap_or(true);
@@ -3215,6 +3242,7 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
         WM_NCDESTROY => {
             lock(state()).remove(&hwnd);
             comctl::forget(hwnd);
+            bars::forget(hwnd);
             return 0;
         }
         WM_DESTROY => return 0,
@@ -3248,7 +3276,14 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
                 keep_caret_visible(hwnd);
             }
             invalidate(hwnd);
-            return 0;
+            // Les contrôles qui se placent seuls (barre d'état, barres
+            // d'outils, bandes) suivent la nouvelle taille de leur parent.
+            if !matches!(
+                kind,
+                Kind::StatusBar | Kind::ToolBar | Kind::ReBar | Kind::ComboBoxEx
+            ) {
+                return 0;
+            }
         }
         _ => {}
     }
@@ -3316,6 +3351,7 @@ pub fn user32_overrides() -> Exports {
     }
 }
 
+mod bars;
 mod comctl;
 pub(crate) mod popup;
 
