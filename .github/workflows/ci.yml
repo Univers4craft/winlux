@@ -175,6 +175,8 @@ jobs:
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
+      - name: su et sudo (droits de la base Ubuntu, su par sudo)
+        run: python3 -B scripts/test-su-sudo.py
       - name: Vérifier « winlux-settings about » et les noms de page
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-args.py
 
@@ -256,6 +258,9 @@ jobs:
           python3 -B scripts/test-reset.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-reset-page.py
 
+      - name: Vérifier les pilotes embarqués dans l'image et le diagnostic winlux-hardware-check
+        run: python3 -B scripts/test-hardware-image.py
+
       - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes, À propos > Votre PC)
         run: |
           sudo apt-get update -q
@@ -268,6 +273,7 @@ jobs:
           sudo apt-get install -y -q xvfb xauth xdotool python3-gi python3-gi-cairo gir1.2-gtk-3.0
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-input-devices.py
           /usr/bin/python3 -B scripts/test-sound-devices.py
+          /usr/bin/python3 -B scripts/test-wifi-image.py
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py

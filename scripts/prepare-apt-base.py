@@ -23,6 +23,10 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
              "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello",
              "nftables"]
 PACKAGES += ["rsync", "openssh-client"]
+# Microcode Intel et AMD dans l'image : un système installé hors ligne a ses
+# correctifs du processeur dès le premier démarrage (winlux-drivers boot
+# construit /boot/winlux-microcode.cpio depuis ces paquets).
+PACKAGES += ["intel-microcode", "amd64-microcode"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
              "libqt6core6t64", "libqt6gui6", "libqt6widgets6"]

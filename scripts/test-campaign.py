@@ -175,6 +175,13 @@ with tempfile.TemporaryDirectory() as directory:
                            ("Shift Ctrl <Key>C: copy-selection(CLIPBOARD)", "Ctrl+Maj+C (copier)")):
         ok(gesture in arguments, f"terminal : {label} utilise le presse-papiers (CLIPBOARD)")
 
+# ── su sous root verrouillé (signalé par damien sur la v0.2.17) ────────────
+ok("--rcfile" in (ROOT / "integration/winlux-terminal").read_text()
+   and (ROOT / "integration/native/shell/winlux-su.sh").is_file(),
+   "terminal : « su » passe par sudo quand root est verrouillé")
+ok('("usr/bin/passwd", "root", "root", 0o4755)' in (ROOT / "scripts/winlux-update-apt.py").read_text(),
+   "droits setuid de la base Ubuntu rétablis au démarrage (passwd, unix_chkpwd, shadow)")
+
 # ── .exe qui ne démarre pas : message clair, pas de charabia ───────────────
 with tempfile.TemporaryDirectory() as directory:
     work = Path(directory)
@@ -354,5 +361,16 @@ for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\hom
                       ("file:///tmp/Mes%20documents%20%231", "Z:\\tmp\\Mes documents #1")):
     resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
     ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
+
+# ── Support matériel des PC (audit de la v0.2.17, 2026-11-03) ──────────────
+build = (SCRIPTS / "build-live-iso.sh").read_text()
+ok("hardware-module-dirs.list" in build and "check-image-hardware.py" in build,
+   "image : dossiers entiers de pilotes et contrôle des pilotes essentiels (911 modules sur 6 901 en v0.2.17)")
+essentials = (SCRIPTS / "hardware-essentials.list").read_text()
+ok("module pinctrl_sunrisepoint" in essentials and "module uhid" in essentials and "module binfmt_misc" in essentials,
+   "pavés tactiles Intel 6e–9e gén., Bluetooth LE et ./programme.exe ne peuvent plus disparaître de l'image")
+drivers_tool = (SCRIPTS / "winlux-drivers.py").read_text()
+ok("def module_packages" in drivers_tool and "if apt_available(p)" in drivers_tool,
+   "« Installer les pilotes complets » : linux-modules-extra n'est plus exigé (noyau 7.0)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

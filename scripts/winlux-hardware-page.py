@@ -35,6 +35,9 @@ def _interface_lang():
 _LANG = _interface_lang()
 _COL = {"en": 0, "es": 1, "de": 2}
 _TR = {
+    "Diagnostic du matériel": ("Hardware check", "Diagnóstico de hardware", "Hardwarediagnose"),
+    "Dit quels appareils de ce PC n’ont pas de pilote et pourquoi ; le rapport s’ouvre et peut être joint à un signalement.": ("Lists the devices of this PC that have no driver and why; the report opens and can be attached to a bug report.", "Indica qué dispositivos de este PC no tienen controlador y por qué; el informe se abre y puede adjuntarse a un aviso.", "Zeigt, welche Geräte dieses PCs keinen Treiber haben und warum; der Bericht öffnet sich und kann einer Meldung beigefügt werden."),
+    "Lancer le diagnostic": ("Run the check", "Iniciar el diagnóstico", "Diagnose starten"),
     "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
     "Pilote de la carte graphique": ("Graphics card driver", "Controlador de la tarjeta gráfica", "Grafikkartentreiber"),
     "Pilote : {driver}": ("Driver: {driver}", "Controlador: {driver}", "Treiber: {driver}"),
@@ -578,6 +581,27 @@ def unbound(r):
     return out
 
 
+def check_tool():
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-hardware-check.py"), here.with_name("winlux-hardware-check")):
+        if candidate.is_file():
+            return ["/usr/bin/python3", str(candidate)]
+    found = shutil.which("winlux-hardware-check")
+    return [found] if found else None
+
+
+def run_check():
+    """winlux-hardware-check écrit son rapport dans le dossier personnel, puis
+    l'éditeur de texte l'ouvre (même rapport qu'en terminal)."""
+    command = check_tool()
+    if not command:
+        return
+    report_file = Path.home() / "winlux-diagnostic-materiel.txt"
+    subprocess.run(command + ["--save", str(report_file)], capture_output=True, timeout=120, check=False)
+    if report_file.is_file():
+        subprocess.Popen(["xdg-open", str(report_file)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def page(w):
     r = report()
     installable = can_install(r) and r.get("busy") != "1"
@@ -632,6 +656,9 @@ def page(w):
                             lambda: w.confirm(_t("Mettre à jour le micrologiciel maintenant ? Gardez l’ordinateur branché sur le secteur ; certains appareils redémarrent pour terminer."))
                             and w.execute("drivers-firmware-update"), installable))
         w.actions(box, buttons)
+    w.section(_t("Diagnostic du matériel"), _t("Dit quels appareils de ce PC n’ont pas de pilote et pourquoi ; le rapport s’ouvre et peut être joint à un signalement."))
+    box = w.card()
+    w.actions(box, [(_t("Lancer le diagnostic"), run_check, True)])
     w.hint(_t("Microcode, pilote de fréquence et températures : Processeur. Pilote NVIDIA et vidéo matérielle : Graphismes."))
     w.actions(w.body, [(_t("Ouvrir Processeur"), lambda: w.open_page(PAGE_CPU)),
                        (_t("Ouvrir Graphismes"), lambda: w.open_page(PAGE_GRAPHICS))])

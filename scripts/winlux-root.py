@@ -133,9 +133,13 @@ RESET_ARG = re.compile(r"^(--(mode|source|user|fullname|device)|--clean|--scan|k
 
 # Wi-Fi (Paramètres > Wi-Fi) : rejoindre un réseau est permis à un compte
 # standard, comme sous Windows. La clé arrive sur l'entrée standard.
-WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 7, "up": 1, "wps": 1, "forget": 1,
+WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 21, "up": 1, "wps": 1, "forget": 1,
                     "autoconnect": 2, "disconnect": 0, "radio": 1, "airplane": 1}
-WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity"}
+WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity",
+                "--eap", "--phase2", "--ca", "--domain", "--client-cert", "--private-key"}
+# Fichiers de certificat : chemins absolus ; winlux-wifi vérifie que le compte
+# appelant peut les lire avant de les copier.
+WIFI_FILE = re.compile(r"^/[^\n\r\0]{1,400}$")
 
 
 def wifi_level(rest):
@@ -159,6 +163,18 @@ def wifi_level(rest):
             if option == "--security" and next(it, "") not in ("open", "wpa", "sae", "wep", "owe", "eap"):
                 return None
             if option == "--identity" and not next(it, ""):
+                return None
+            if option == "--eap" and next(it, "") not in ("peap", "ttls", "tls"):
+                return None
+            if option == "--phase2" and next(it, "") not in ("mschapv2", "pap", "gtc"):
+                return None
+            if option == "--ca":
+                value = next(it, "")
+                if value not in ("system", "none") and not WIFI_FILE.match(value):
+                    return None
+            if option in ("--client-cert", "--private-key") and not WIFI_FILE.match(next(it, "")):
+                return None
+            if option == "--domain" and not re.fullmatch(r"[A-Za-z0-9.*-]{1,253}", next(it, "")):
                 return None
     if command in ("up", "forget", "wps", "autoconnect") and args and args[0].startswith("-"):
         return None

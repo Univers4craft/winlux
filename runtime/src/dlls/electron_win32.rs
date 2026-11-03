@@ -524,8 +524,48 @@ unsafe extern "win64" fn RtlGetLastNtStatus() -> u32 {
     0
 }
 
+/// `NtQuerySection` : SectionBasicInformation (classe 0, 24 octets :
+/// BaseAddress, AllocationAttributes, MaximumSize) pour les mappings de
+/// CreateFileMapping. Chromium (PlatformSharedMemoryRegion) lit ainsi la
+/// taille d'une mémoire partagée reçue et appelle la fonction sans vérifier
+/// qu'elle existe : son absence faisait sauter Claude en 0.
+unsafe extern "win64" fn NtQuerySection(
+    h: usize,
+    class: u32,
+    info: *mut u8,
+    len: usize,
+    ret: *mut usize,
+) -> u32 {
+    const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+    const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
+    const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
+    const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
+    const SEC_COMMIT: u32 = 0x0800_0000;
+    let Some((_, size)) = crate::dlls::mmap::export(h) else {
+        return STATUS_INVALID_HANDLE;
+    };
+    match class {
+        0 => {
+            if !ret.is_null() {
+                *ret = 24;
+            }
+            if info.is_null() || len < 24 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            std::ptr::write_bytes(info, 0, 24);
+            put_u32(info, 8, SEC_COMMIT);
+            (info.add(16) as *mut u64).write_unaligned(size);
+            0
+        }
+        1 => STATUS_SECTION_NOT_IMAGE,
+        _ => STATUS_INVALID_INFO_CLASS,
+    }
+}
+
 pub fn ntdll_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "NtQuerySection" => fn NtQuerySection,
+        "ZwQuerySection" => fn NtQuerySection,
         "NtDeleteKey" => fn NtDeleteKey,
         "ZwDeleteKey" => fn NtDeleteKey,
         "NtQueryObject" => fn NtQueryObject,
@@ -2275,6 +2315,39 @@ mod tests {
         assert!(wts
             .iter()
             .any(|(_, e)| e.contains_key("WTSRegisterSessionNotification")));
+    }
+
+    #[test]
+    fn taille_d_une_section() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let h = crate::dlls::mmap::create_file_mapping_w(
+                usize::MAX,
+                0,
+                4,
+                0,
+                0x40000,
+                std::ptr::null(),
+            );
+            assert_ne!(h, 0);
+            let mut info = [0u8; 24];
+            let mut got = 0usize;
+            assert_eq!(NtQuerySection(h, 0, info.as_mut_ptr(), 24, &mut got), 0);
+            assert_eq!(got, 24);
+            assert_eq!(
+                u64::from_le_bytes(info[16..24].try_into().unwrap()),
+                0x40000
+            );
+            assert_eq!(
+                NtQuerySection(h, 0, info.as_mut_ptr(), 8, &mut got),
+                0xC000_0004
+            );
+            assert_eq!(
+                NtQuerySection(0x99_9999, 0, info.as_mut_ptr(), 24, &mut got),
+                0xC000_0008
+            );
+            crate::dlls::kernel32::close_handle(h);
+        }
     }
 
     #[test]

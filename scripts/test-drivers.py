@@ -103,7 +103,9 @@ case "$1" in
       nvidia-driver-595-open) echo "Package: $p"; echo 'Modaliases: nvidia(pci:v000010DEd00002560sv*sd*bc03sc*i*, pci:v000010DEd00002504sv*sd*bc03sc*i*)' ;;
       nvidia-driver-580|nvidia-driver-580-open) echo "Package: $p"; echo 'Modaliases: nvidia(pci:v000010DEd00002560sv*sd*bc03sc*i*)' ;;
       nvidia-driver-470) echo "Package: $p"; echo 'Modaliases: nvidia(pci:v000010DEd00000FC0sv*sd*bc03sc*i*)' ;;
-      linux-modules-{RELEASE}|linux-modules-extra-{RELEASE}|intel-media-va-driver-non-free|mesa-va-drivers|nvidia-vaapi-driver) echo "Package: $p" ;;
+      # Noyau 7.0 (Ubuntu 26.04) : plus de linux-modules-extra.
+      linux-modules-extra-{RELEASE}) test -e {state}/no-extra || echo "Package: $p" ;;
+      linux-modules-{RELEASE}|intel-media-va-driver-non-free|mesa-va-drivers|nvidia-vaapi-driver) echo "Package: $p" ;;
       *) exit 0 ;;
     esac ;;
 esac
@@ -235,6 +237,19 @@ def main():
         ok(drivers(root, "install", "modules").returncode == 0, "install modules")
         calls = log.read_text()
         ok(f"linux-modules-extra-{RELEASE}" in calls and f"depmod -a {RELEASE}" in calls, "linux-modules-extra du noyau Winlux puis depmod")
+        ok(status(root)["modules_full"] == "1", "pilotes complets signalés installés")
+        # Noyau 7.0 : linux-modules contient tout, linux-modules-extra n'existe
+        # plus ; le demander faisait échouer apt-get à chaque fois (v0.2.17).
+        (state / "no-extra").touch()
+        (state / "installed").write_text("")
+        log.write_text("")
+        ok(drivers(root, "install", "modules").returncode == 0, "install modules sans linux-modules-extra (noyau 7.0)")
+        calls = log.read_text()
+        installs = [line for line in calls.splitlines() if line.startswith("apt-get install")]
+        ok(any(f"linux-modules-{RELEASE}" in line for line in installs) and not any("linux-modules-extra" in line for line in installs),
+           "noyau 7.0 : seul linux-modules est demandé à apt-get")
+        ok(status(root)["modules_full"] == "1", "noyau 7.0 : linux-modules seul suffit pour « pilotes complets »")
+        (state / "no-extra").unlink()
         ok(drivers(root, "install", "vaapi").returncode == 0, "install vaapi")
         ok("intel-media-va-driver-non-free" in log.read_text() and "nvidia-vaapi-driver" in log.read_text(), "iHD (avec encodage) et NVDEC")
         ok(drivers(root, "install", "fingerprint").returncode == 0 and "fprintd" in log.read_text(), "fprintd")
