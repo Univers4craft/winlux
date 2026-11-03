@@ -254,7 +254,10 @@ _TR = {
     'Mise à jour': ('Update', 'Actualización', 'Update'),
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
     'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
-    'Par défaut : {name}': ('Default: {name}', 'Predeterminado: {name}', 'Standard: {name}'),
+    'Définir {name} par défaut': ('Set {name} as default', 'Establecer {name} como predeterminado', '{name} als Standard festlegen'),
+    '{name} (seul navigateur installé)': ('{name} (only browser installed)', '{name} (único navegador instalado)', '{name} (einziger installierter Browser)'),
+    'Aucun : le navigateur vous sera demandé à chaque lien': ('None: you will be asked which browser to use for each link',
+        'Ninguno: se le preguntará qué navegador usar en cada enlace', 'Keiner: Sie werden bei jedem Link nach dem Browser gefragt'),
     'Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous.': ('Winlux neither ships nor imposes any browser, in the spirit of the European rules on browser choice. Pick the one you prefer: Winlux downloads it from its publisher’s official website, checks the file and installs it for you.', 'Winlux no incluye ni impone ningún navegador, en el espíritu de las normas europeas sobre la elección del navegador. Elija el que prefiera: Winlux lo descarga del sitio oficial de su editor, comprueba el archivo y lo instala por usted.', 'Winlux liefert und erzwingt keinen Browser, im Sinne der europäischen Regeln zur Browserwahl. Wählen Sie Ihren bevorzugten Browser: Winlux lädt ihn von der offiziellen Website des Herstellers herunter, prüft die Datei und installiert ihn für Sie.'),
     'Aucun : choisissez-en un ci-dessous': ('None: choose one below', 'Ninguno: elija uno abajo', 'Keiner: unten einen auswählen'),
     'Ouvrir {name}': ('Open {name}', 'Abrir {name}', '{name} öffnen'),
@@ -855,7 +858,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
             # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
             actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
-                       for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
+                       for verb, action in (("Installer {name}", "install"), ("Définir {name} par défaut", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
@@ -1022,6 +1025,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             elif result:
                 detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
                 self.show_error(_t("L’opération a échoué"), _t("Code : {code}\n\n{detail}").format(code=result, detail=detail))
+            if result == 0 and action and action.startswith(("browser-install-", "browser-default-")):
+                # Lien demandé avant qu'un navigateur soit là : ouvert maintenant,
+                # sous le compte de l'utilisateur (l'installation passe par le relais root).
+                open_pending_link()
             # Page branchée : l'état relu après l'action (appareil appairé, mode changé…).
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
@@ -1037,7 +1044,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 except ValueError:
                     return value
             if key == "browser_default":
-                return BROWSER_NAMES.get(value, _t("Aucun : choisissez-en un ci-dessous"))
+                return browser_default_text(status)
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
@@ -1126,13 +1133,40 @@ BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox":
 
 
 def browser_buttons_shown(status, action):
-    """« Par défaut » et « Ouvrir » seulement pour un navigateur installé ;
-    « Installer » seulement pour un navigateur absent (ou à mettre à jour)."""
+    """« Définir par défaut » et « Ouvrir » seulement pour un navigateur installé
+    (« Définir par défaut » pas pour celui qui l'est déjà) ; « Installer »
+    seulement pour un navigateur absent (ou à mettre à jour)."""
     verb, _, ident = action[len("browser-"):].partition("-")
     installed = status.get(f"browser_{ident}") in ("installed", "update")
     if verb == "install":
         return not installed or status.get(f"browser_{ident}") == "update"
+    if verb == "default" and status.get("browser_default") == ident:
+        return False
     return installed
+
+
+def browser_default_text(status):
+    """Navigateur qui ouvre vraiment les liens (comme winlux-browser) : le
+    défaut choisi, sinon le seul navigateur installé ; avec plusieurs
+    navigateurs et aucun défaut, le choix est demandé à chaque lien."""
+    default = status.get("browser_default")
+    installed = [i for i in BROWSER_NAMES if status.get(f"browser_{i}") in ("installed", "update")]
+    if default in installed:
+        return BROWSER_NAMES[default]
+    if len(installed) == 1:
+        return _t("{name} (seul navigateur installé)").format(name=BROWSER_NAMES[installed[0]])
+    if installed:
+        return _t("Aucun : le navigateur vous sera demandé à chaque lien")
+    return _t("Aucun : choisissez-en un ci-dessous")
+
+
+def open_pending_link():
+    """winlux-browser --pending : ouvre le lien gardé pendant le choix du navigateur."""
+    try:
+        subprocess.Popen(["/usr/bin/winlux-browser", "--pending"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
 
 
 def browsers_waiting():

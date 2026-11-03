@@ -390,4 +390,12 @@ with tempfile.TemporaryDirectory() as directory:
     ok((base / "ouvert").read_text().split() == [url] and not (base / "system/run/winlux/browser-chooser").exists(),
        "lien d'une application : ouvert dans le navigateur installé, sans renvoyer aux Paramètres")
 
+# Retour du testeur sur #418 : lien gardé jamais ouvert après l'installation
+# depuis Paramètres, Firefox en anglais sur un système en français.
+settings = (SCRIPTS / "winlux-settings.py").read_text()
+ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in settings,
+   "Paramètres ouvre le lien gardé dès le navigateur installé ; bouton « Définir … par défaut »")
+ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
+   "Firefox installé avec ses paquets de langue fr, de, es")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

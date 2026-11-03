@@ -26,6 +26,11 @@ SOURCES = {
     "firefox": ("firefox", "https://packages.mozilla.org/apt/", "dists/mozilla/main/binary-amd64/Packages"),
 }
 
+# Langues de Winlux autres que l'anglais : paquets de langue officiels de
+# Firefox (firefox-l10n-<langue>, même dépôt Mozilla), installés avec lui pour
+# qu'il s'affiche dans la langue du système. Chrome et Edge les contiennent déjà.
+LANGPACKS = {"firefox": ("firefox-l10n-{lang}", ("fr", "de", "es"))}
+
 # Miroir de test (file:///…) : jamais utilisé par Winlux lui-même.
 MIRROR = os.environ.get("WINLUX_BROWSER_MIRROR", "")
 
@@ -49,13 +54,13 @@ def fetch_package(url, partial):
                     "--retry", "5", "--retry-delay", "5", "--max-filesize", "536870912",
                     "--continue-at", "-", url, "--output", str(partial)], check=True)
 
-def select(data, package):
+def select(data, package, architectures=("amd64",)):
     if data.startswith(b"\x1f\x8b"):
         data = gzip.decompress(data)
     best = None
     for stanza in data.decode("utf-8").split("\n\n"):
         fields = dict(line.split(": ", 1) for line in stanza.splitlines() if ": " in line and not line.startswith(" "))
-        if fields.get("Package") != package or fields.get("Architecture") != "amd64":
+        if fields.get("Package") != package or fields.get("Architecture") not in architectures:
             continue
         filename = fields.get("Filename", "")
         if not filename.startswith("pool/") or ".." in filename.split("/") or not re.fullmatch(r"[A-Za-z0-9_+~./:-]+\.deb", filename):
@@ -115,6 +120,31 @@ def main():
             (output / f"{browser}.version").write_text(fields["Version"] + "\n")
             (output / f"{browser}.source").write_text(urllib.parse.urljoin(base, fields["Filename"]) + "\n")
             print(f"{browser}: {fields['Version']} verified", flush=True)
+            fetch_langpacks(browser, base, work / "Packages.gz", output)
+
+
+def fetch_langpacks(browser, base, index, output):
+    """Paquets de langue : facultatifs, un échec n'empêche pas l'installation."""
+    template, langs = LANGPACKS.get(browser, ("", ()))
+    for lang in langs:
+        name = f"{browser}-l10n-{lang}"
+        try:
+            fields = select(index.read_bytes(), template.format(lang=lang), ("all", "amd64"))
+            destination = output / f"{name}.deb"
+            if not destination.exists() or checksum(destination) != fields["SHA256"]:
+                partial = output / f".l10n-{name}.partial"
+                partial.unlink(missing_ok=True)
+                fetch_package(urllib.parse.urljoin(base, fields["Filename"]), partial)
+                if checksum(partial) != fields["SHA256"]:
+                    partial.unlink()
+                    raise ValueError("checksum mismatch")
+                partial.replace(destination)
+            (output / f"{name}.sha256").write_text(fields["SHA256"] + "\n")
+            print(f"{name}: {fields['Version']} verified", flush=True)
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            for stale in (output / f"{name}.deb", output / f"{name}.sha256"):
+                stale.unlink(missing_ok=True)
+            print(f"{name}: indisponible ({error})", file=sys.stderr, flush=True)
 
 if __name__ == "__main__":
     main()
