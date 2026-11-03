@@ -586,6 +586,19 @@ InstallShield et les installeurs 32 bits (point 3).
 
 Ampleur : **M** à **L**. Suivi : #179.
 
+## Installateurs Squirrel (Claude pour Windows, Discord, Slack…)
+
+`winlux --setup Setup.exe` reconnaît un installateur Squirrel.Windows : le
+paquet zip est lu dans la ressource DATA 131 du Setup.exe 32 bits (qui n'est
+pas exécuté), puis le .nupkg est déplié dans `%LocalAppData%\<Id>\app-<version>`,
+avec Update.exe à la racine, un raccourci dans le menu Démarrer et un sur le
+Bureau, et une entrée dans Applications installées. Essai réel : Claude 0.14.10
+(Anthropic PBC) s'installe à l'identique, 324 Mo. Les imports directs de
+claude.exe sont tous servis, sauf deux fonctions d'impression (winspool) en
+bouchon. Le lancement d'Electron reste à vérifier en VM. Test :
+`scripts/test-squirrel.sh`. ChatGPT pour Windows n'existe que dans le
+Microsoft Store (paquet MSIX), que Winlux sait déjà installer.
+
 ## Hors de portée ou exclu
 
 - **Anti-triche en mode noyau** (Easy Anti-Cheat noyau, BattlEye, Vanguard,

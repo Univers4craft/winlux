@@ -356,6 +356,9 @@ jobs:
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
 
+      - name: Installer une appli Squirrel (Claude pour Windows)
+        run: sh scripts/test-squirrel.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 

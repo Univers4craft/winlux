@@ -20,6 +20,7 @@ pub mod msix;
 pub mod nsis;
 pub mod programs;
 pub mod sevenz;
+pub mod squirrel;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
@@ -45,6 +46,8 @@ pub enum Kind {
     Msix,
     /// Exécutable auto-extractible 7z (installateur de 7-Zip…).
     SevenZip,
+    /// Setup.exe Squirrel.Windows (Claude, Slack, Discord…).
+    Squirrel,
 }
 
 impl Kind {
@@ -54,6 +57,7 @@ impl Kind {
             Kind::Inno => "inno",
             Kind::Msix => "msix",
             Kind::SevenZip => "7z",
+            Kind::Squirrel => "squirrel",
         }
     }
 }
@@ -62,6 +66,9 @@ impl Kind {
 pub fn detect(data: &[u8]) -> Option<Kind> {
     if data.len() < 64 || &data[..2] != b"MZ" {
         return None;
+    }
+    if squirrel::find_package(data).is_some() {
+        return Some(Kind::Squirrel);
     }
     if inno::find_offsets(data).is_some() {
         return Some(Kind::Inno);
@@ -723,6 +730,7 @@ pub fn info(path: &Path) -> Result<Info, String> {
         Some(Kind::Inno) => inno::info(&data),
         Some(Kind::Nsis) => nsis::info(&data, path),
         Some(Kind::SevenZip) => sevenz::info(&data, path),
+        Some(Kind::Squirrel) => squirrel::info(&data),
         Some(Kind::Msix) | None => {
             Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into())
         }
@@ -744,6 +752,7 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
             Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
             Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
             Kind::SevenZip => sevenz::install(&data, path, opts, &mut inst)?,
+            Kind::Squirrel => squirrel::install(&data, opts, &mut inst)?,
             Kind::Msix => unreachable!("un .exe n'est jamais un paquet MSIX"),
         }
     }
