@@ -42,12 +42,23 @@ try:
     resolv = work / "etc/resolv.conf"
     resolv.write_text("nameserver 192.168.1.1\n")
     resolv.chmod(0o600)
+    # /etc/timezone écrit en 0600 au premier démarrage (umask 077) : le compte
+    # lisait « Permission denied » (testeur VM, #419).
+    timezone = work / "etc/timezone"
+    timezone.write_text("Europe/Paris\n")
+    timezone.chmod(0o600)
+    (work / "etc/default").mkdir()
+    locale = work / "etc/default/locale"
+    locale.write_text("LANG=fr_FR.UTF-8\n")
+    locale.chmod(0o600)
     (work / "usr/share/winlux/native/network").mkdir(parents=True)
     shutil.copy(RULE, work / "usr/share/winlux/native/network/")
     result = repair(work)
     check(result.returncode == 0, f"winlux-network-perms : {result.stderr}")
     rule = work / "etc/polkit-1/rules.d/50-winlux-network.rules"
     check(mode(resolv) == 0o644, f"resolv.conf en {oct(mode(resolv))}, attendu 0644")
+    check(mode(timezone) == 0o644, f"/etc/timezone en {oct(mode(timezone))}, attendu 0644")
+    check(mode(locale) == 0o644, f"/etc/default/locale en {oct(mode(locale))}, attendu 0644")
     check(rule.is_file() and rule.read_text() == RULE.read_text(), "règle polkit du réseau absente du disque installé")
     check(rule.is_file() and mode(rule) == 0o644, "règle polkit illisible par polkitd")
     check(mode(work / "etc/polkit-1/rules.d") == 0o755, "dossier rules.d illisible par polkitd")

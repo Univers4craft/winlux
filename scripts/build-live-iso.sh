@@ -658,6 +658,7 @@ if test -s /etc/winlux/install-config.json && ! test -s /etc/timezone; then
     if test -n "$tz" && test -f "/usr/share/zoneinfo/$tz"; then
         /bin/busybox ln -sfn "/usr/share/zoneinfo/$tz" /etc/localtime
         echo "$tz" >/etc/timezone
+        /bin/busybox chmod 644 /etc/timezone
     fi
 fi
 # policy-rc.d de construction resté dans les systèmes installés en v0.2.18 :

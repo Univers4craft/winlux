@@ -366,6 +366,7 @@ perform() {
             else
                 ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return
                 printf '%s\n' "$tz" > /etc/timezone || return
+                chmod 644 /etc/timezone 2>/dev/null || true
             fi
             save "$config/locale.conf" TIMEZONE "$tz" ;;
         touchpad-set) winlux-touchpad set "${2:-}" "${3:-}" ;;
