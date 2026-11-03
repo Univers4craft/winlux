@@ -313,7 +313,16 @@ class Start(Gtk.Application):
         """Taille et position du menu, avec ou sans son clavier tactile."""
         area = self.workarea()
         width, height = 660, 650
+        # Clavier ouvert : marges resserrées, et touches moins hautes sur un
+        # petit écran. En 1366x768 la 2e ligne des épinglés perdait son libellé
+        # sous le clavier.
+        compact = keyboard_shown
+        self.body.set_spacing(6 if compact else 18)
+        self.body.set_margin_top(8 if compact else 28)
+        self.body.set_margin_bottom(4 if compact else 28)
         if self.osk_widget is not None:
+            self.osk_height = 180 if area.height < 900 else 220
+            self.osk_widget.set_size_request(-1, self.osk_height)
             self.osk_widget.set_visible(keyboard_shown)
             if keyboard_shown:
                 self.osk_widget.show_all()
@@ -393,6 +402,7 @@ class Start(Gtk.Application):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.window.add(outer)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
+        self.body = body
         outer.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
         self.search.connect("search-changed", lambda *_: self.render())

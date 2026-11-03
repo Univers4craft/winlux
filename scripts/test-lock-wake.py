@@ -7,6 +7,9 @@ dans le mot de passe et le testeur y a tapé « par » sans le voir. Ici, avec
 xdotool sur le vrai écran (winlux-lock en vue horloge) : « p » affiche la
 connexion avec un champ vide, les touches suivantes s'y écrivent.
 
+Vérifie aussi que l'heure, la date et l'invite restent au-dessus du losange
+du fond d'écran (1366x768 comme 1920x1080).
+
 À lancer avec xvfb-run (xdotool requis).
 """
 import gc
@@ -86,6 +89,17 @@ def scenario():
         pump(0.2)
         if app.view != "clock":
             failures.append(f"vue de départ {app.view!r} au lieu de l'horloge")
+        # Le losange du fond d'écran (1920x1080, mis à l'échelle « cover »)
+        # commence à 367/1080 de la hauteur : l'horloge doit finir au-dessus.
+        # En 1366x768 il recouvrait la date et l'invite (VM, 3 novembre).
+        width, height = window.get_width(), window.get_height()
+        cover = max(width / 1920, height / 1080)
+        logo_top = (height - 1080 * cover) / 2 + 367 * cover
+        hint = app.clock.get_children()[-1]
+        bottom = hint.translate_coordinates(hint.get_toplevel(), 0, 0)[1] + hint.get_allocation().height
+        print(f"écran {width}x{height} : horloge jusqu'à {bottom}, losange dès {logo_top:.0f}")
+        if bottom > logo_top - 8:
+            failures.append(f"horloge et invite (jusqu'à {bottom} px) sur le losange du fond (dès {logo_top:.0f} px)")
         key("p")
         if app.view != "signin":
             failures.append("la première touche n'affiche pas la connexion")
