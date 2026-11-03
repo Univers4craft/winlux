@@ -179,10 +179,11 @@ alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/nu
 # panneau suit en direct toute correction ; souris et processeur n'ont pas
 # besoin d'attendre non plus.
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
+# Icône du clavier tactile (tablette sans clavier) écrite avant le lancement
+# de la barre, plus bas : un xfce4-panel déjà lancé ne chargeait pas le greffon.
+if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk panel || true; fi
 (
     export WINLUX_CONTROL_NO_STATUS=1
-    # Icône du clavier tactile (sans clavier physique) avant l'alignement.
-    if test -x /usr/bin/winlux-osk; then /usr/bin/winlux-osk panel || true; fi
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
     # Restore the user's input choice on each session, without resetting defaults.
     case "$speed" in
@@ -234,6 +235,9 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
+# Clavier ou souris USB branché pendant la session : disposition et réglages
+# réappliqués (un clavier branché à chaud tapait en QWERTY).
+if test -x /usr/bin/winlux-input-watch; then /usr/bin/winlux-input-watch >/run/winlux/input-watch.log 2>&1 & fi
 wait_bus_name session org.xfce.FileManager "$thunar_pid" /run/winlux/file-manager.log
 # Name ownership precedes GTK/GVfs initialization. Une fois le nom pris, une
 # demande d'ouverture envoyée par le bureau attend simplement dans la file de

@@ -5,6 +5,7 @@ touches envoyées, réglages enregistrés et appliqués par xinput, thème de
 pointeurs recoloré, fichier lu par les programmes Windows. Avec DISPLAY, le
 clavier est aussi construit en GTK dans les quatre langues, et l'écran de
 connexion y tape un mot de passe."""
+import json
 import os
 from pathlib import Path
 import runpy
@@ -108,6 +109,99 @@ for script, needle in (("winlux-lock.py", "keyboard_widget"), ("winlux-uac.py", 
 uac = (HERE / "winlux-uac.py").read_text(encoding="utf-8")
 check('"Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur")' in uac, "UAC : 4 langues")
 
+
+# Icône de la barre (tablette après installation, v0.2.16) : le greffon est
+# écrit avant le lancement de xfce4-panel, et une barre déjà lancée est
+# relancée quand on l'ajoute à chaud (elle ne le chargeait pas).
+panel_bin = tmp / "panel-bin"
+panel_bin.mkdir()
+store = tmp / "xfconf.json"
+store.write_text(json.dumps({"/panels/panel-1/plugin-ids": [3, 1, 2, 8, 10, 4, 5]}))
+restarts = tmp / "panel-restarts.log"
+(panel_bin / "xfconf-query").write_text(f"""#!/usr/bin/python3
+import json, sys
+data = json.load(open({str(store)!r}))
+args = sys.argv[1:]
+path = args[args.index("-p") + 1]
+values = [args[i + 1] for i, a in enumerate(args) if a == "-s"]
+if "-r" in args:
+    for key in [k for k in data if k == path or k.startswith(path + "/")]:
+        del data[key]
+elif "-a" in args:
+    data[path] = [int(v) for v in values]
+elif values:
+    if path not in data and "-n" not in args:
+        sys.exit(1)
+    data[path] = values[0]
+else:
+    if path not in data:
+        sys.exit(1)
+    value = data[path]
+    print("\\n".join(str(v) for v in value) if isinstance(value, list) else value)
+    sys.exit(0)
+json.dump(data, open({str(store)!r}, "w"))
+""")
+(panel_bin / "pgrep").write_text("#!/bin/sh\nexit 0\n")
+(panel_bin / "xfce4-panel").write_text(f"#!/bin/sh\necho \"$*\" >>{restarts}\n")
+for tool in panel_bin.iterdir():
+    tool.chmod(0o755)
+panel_env = dict(os.environ, PATH=f"{panel_bin}:{os.environ['PATH']}", HOME=str(tmp / "home-panel"))
+panel_env.pop("WINLUX_OSK_NO_RESTART", None)
+(tmp / "proc/bus/input/devices").write_text(NOT_KEYBOARDS)
+out = subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "panel"], capture_output=True, text=True,
+                     env=dict(panel_env, WINLUX_OSK_NO_RESTART="1"), timeout=20)
+data = json.loads(store.read_text())
+check(out.returncode == 0 and data["/panels/panel-1/plugin-ids"] == [3, 1, 2, 8, 10, 12, 4, 5],
+      f"greffon 12 avant le son et le réseau : {data.get('/panels/panel-1/plugin-ids')} {out.stderr}")
+check(data.get("/plugins/plugin-12") == "genmon" and data.get("/plugins/plugin-12/command", "").endswith("tray"),
+      "greffon genmon du clavier tactile")
+check(not restarts.exists(), "barre relancée au démarrage de session (elle n'est pas encore lancée)")
+store.write_text(json.dumps({"/panels/panel-1/plugin-ids": [3, 1, 2, 8, 10, 4, 5]}))
+subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "panel"], env=panel_env, timeout=20)
+check(restarts.exists() and restarts.read_text().strip() == "-r", "barre déjà lancée non relancée après ajout du greffon")
+restarts.unlink()
+subprocess.run([sys.executable, "-B", str(HERE / "winlux-osk.py"), "panel"], env=panel_env, timeout=20)
+check(not restarts.exists(), "barre relancée sans changement")
+for script in ("winlux-user-session.sh", "winlux-native-session.sh"):
+    text = (HERE / script).read_text(encoding="utf-8")
+    osk_at = text.find("winlux-osk panel")
+    panel_at = text.find("/usr/bin/xfce4-panel --disable-wm-check")
+    check(0 <= osk_at < panel_at, f"{script} : greffon du clavier écrit après le lancement de la barre")
+
+# Clavier USB branché pendant la session (v0.2.16) : la disposition choisie
+# est réappliquée, sinon le nouveau clavier tape en QWERTY.
+import time
+watch_root = tmp / "watch-root"
+(watch_root / "proc/bus/input").mkdir(parents=True)
+(watch_root / "etc/winlux").mkdir(parents=True)
+(watch_root / "etc/winlux/input.conf").write_text("MOUSE_SPEED=50\nXKB_LAYOUT=fr\n")
+(watch_root / "proc/bus/input/devices").write_text(NOT_KEYBOARDS)
+watch_bin = tmp / "watch-bin"
+watch_bin.mkdir()
+xkb_log = tmp / "setxkbmap.log"
+(watch_bin / "setxkbmap").write_text(f"#!/bin/sh\necho \"$*\" >>{xkb_log}\n")
+(watch_bin / "setxkbmap").chmod(0o755)
+watch_env = dict(os.environ, PATH=f"{watch_bin}:{os.environ['PATH']}", WINLUX_INPUT_ROOT=str(watch_root),
+                 WINLUX_INPUT_INTERVAL="0.2", XDG_RUNTIME_DIR=str(tmp), DISPLAY=":98")
+watcher = subprocess.Popen(["sh", str(HERE / "winlux-input-watch.sh")], env=watch_env)
+try:
+    time.sleep(0.8)
+    check(not xkb_log.exists(), "disposition réappliquée sans rien brancher")
+    second = subprocess.run(["sh", str(HERE / "winlux-input-watch.sh")], env=watch_env, timeout=5)
+    check(second.returncode == 0, "deuxième surveillance sur le même affichage non refusée")
+    (watch_root / "proc/bus/input/devices").write_text(NOT_KEYBOARDS + KEYBOARD)
+    for _ in range(40):
+        if xkb_log.exists():
+            break
+        time.sleep(0.1)
+    check(xkb_log.exists() and xkb_log.read_text().split() == ["fr"],
+          f"clavier branché à chaud : setxkbmap {xkb_log.read_text() if xkb_log.exists() else 'jamais appelé'}")
+finally:
+    watcher.terminate()
+    watcher.wait(timeout=5)
+for script in ("winlux-user-session.sh", "winlux-native-session.sh"):
+    check("/usr/bin/winlux-input-watch" in (HERE / script).read_text(encoding="utf-8"), f"{script} : pas de surveillance des claviers branchés")
+check("'winlux-input-watch.sh:winlux-input-watch'" in (HERE / "stage-desktop-components.sh").read_text(), "winlux-input-watch absent de l'image")
 
 # ── Souris ──────────────────────────────────────────────────────────────────
 

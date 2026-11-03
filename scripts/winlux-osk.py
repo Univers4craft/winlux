@@ -532,7 +532,25 @@ def set_panel(enabled):
         _xfconf(*args)
     if not enabled:
         _xfconf("-p", f"/plugins/plugin-{PLUGIN}", "-r", "-R")
+    if wanted != ids and os.environ.get("WINLUX_OSK_NO_RESTART") != "1":
+        restart_panel()
     return True
+
+
+def restart_panel():
+    """Barre déjà lancée (réglage changé dans Paramètres, clavier débranché) :
+    xfce4-panel ne charge pas un greffon ajouté à chaud, on la relance."""
+    if not shutil.which("xfce4-panel"):
+        return False
+    try:
+        running = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "xfce4-panel"],
+                                 capture_output=True, timeout=3).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if running:
+        subprocess.Popen(["xfce4-panel", "-r"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    return running
 
 
 def main(argv):
