@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Widgets
+Name[en]=Widgets
+Name[es]=Widgets
+Name[de]=Widgets
+Comment=Météo, agenda, état du PC, pense-bête, photos et minuteur (Windows + W)
+Comment[en]=Weather, agenda, PC status, sticky note, photos and timer (Windows + W)
+Comment[es]=Tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador (Windows + W)
+Comment[de]=Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer (Windows + W)
+Keywords=météo;meteo;agenda;minuteur;pense-bête;weather;timer;notes;tiempo;Wetter;
+Exec=/usr/bin/winlux-widgets
+Icon=weather-few-clouds
+Categories=Utility;
+Terminal=false

@@ -811,15 +811,68 @@ mod reviewed_dib_tests {
     }
 }
 
+/// GetDIBits sans tampon de pixels : description du format, comme Windows
+/// pour un écran en 32 bits. Premier appel (biBitCount = 0) : en-tête seul,
+/// 32 bits, BI_BITFIELDS ; second appel : les trois masques 8 bits par
+/// composante après l'en-tête. SDL3 en tire le format de l'écran (Warzone
+/// 2100 écartait tous les modes faute de 8 bits par composante).
+/// La lecture des pixels eux-mêmes n'est pas encore prise en charge.
 pub unsafe extern "win64" fn get_dib_its(
     _hdc: usize,
-    _bmp: usize,
+    bmp: usize,
     _start: u32,
-    _lines: u32,
-    _bits: *mut c_void,
-    _info: *mut c_void,
+    lines: u32,
+    bits: *mut c_void,
+    info: *mut c_void,
     _usage: u32,
 ) -> i32 {
+    const BI_BITFIELDS: u32 = 3;
+    if !bits.is_null() || info.is_null() {
+        return 0;
+    }
+    let head = info as *mut u8;
+    let size = (head as *const u32).read_unaligned() as usize;
+    if size < 40 {
+        return 0;
+    }
+    let bit_count = (head.add(14) as *const u16).read_unaligned();
+    let compression = (head.add(16) as *const u32).read_unaligned();
+    if bit_count == 0 {
+        let mut bm = [0u8; 32];
+        let (w, h) =
+            if crate::dlls::gdi32::get_object_w(bmp, 32, bm.as_mut_ptr() as *mut c_void) > 0 {
+                (
+                    i32::from_le_bytes([bm[4], bm[5], bm[6], bm[7]]).max(1),
+                    i32::from_le_bytes([bm[8], bm[9], bm[10], bm[11]]).max(1),
+                )
+            } else {
+                (1, 1)
+            };
+        (head.add(4) as *mut i32).write_unaligned(w);
+        (head.add(8) as *mut i32).write_unaligned(h);
+        (head.add(12) as *mut u16).write_unaligned(1);
+        (head.add(14) as *mut u16).write_unaligned(32);
+        (head.add(16) as *mut u32).write_unaligned(BI_BITFIELDS);
+        (head.add(20) as *mut u32).write_unaligned((w * h * 4) as u32);
+        (head.add(32) as *mut u32).write_unaligned(0);
+        (head.add(36) as *mut u32).write_unaligned(0);
+        return lines.max(1) as i32;
+    }
+    if bit_count == 32 && compression == BI_BITFIELDS {
+        // BITMAPINFOHEADER : masques après l'en-tête ; V4/V5 : dans l'en-tête.
+        let masks = if size >= 52 {
+            head.add(40)
+        } else {
+            head.add(size)
+        };
+        for (i, m) in [0x00FF_0000u32, 0x0000_FF00, 0x0000_00FF]
+            .iter()
+            .enumerate()
+        {
+            (masks.add(i * 4) as *mut u32).write_unaligned(*m);
+        }
+        return lines.max(1) as i32;
+    }
     0
 }
 

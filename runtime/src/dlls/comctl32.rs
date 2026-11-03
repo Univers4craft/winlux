@@ -1,8 +1,11 @@
-//! comctl32.dll — Contrôles communs Windows (stubs).
+//! comctl32.dll — Contrôles communs Windows.
 //!
-//! Notepad++ utilise les contrôles Tab, ListView, TreeView, Toolbar,
-//! StatusBar et RichEdit. Pour l'instant on fournit les stubs nécessaires
-//! au démarrage : les contrôles sont enregistrés mais rendus à vide.
+//! Les classes (SysTreeView32, SysListView32, SysTabControl32,
+//! msctls_statusbar32, msctls_progress32, msctls_trackbar32,
+//! msctls_updown32, tooltips_class32) sont dessinées par
+//! `controls::comctl` ; ce module fournit les fonctions exportées.
+//! Barre d'outils, listes d'images et feuilles de propriétés restent
+//! sommaires.
 
 use std::ffi::c_void;
 
@@ -54,22 +57,61 @@ pub extern "win64" fn image_list_get_image_count(_himl: usize) -> i32 {
     0
 }
 
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+const WS_CHILD: u32 = 0x4000_0000;
+const WS_VISIBLE: u32 = 0x1000_0000;
+
+/// CreateStatusWindow : une barre d'état placée en bas du parent.
+unsafe fn create_status(style: u32, text: &str, parent: usize, id: u32) -> usize {
+    let class = wide("msctls_statusbar32");
+    let title = wide(text);
+    crate::dlls::controls::with_charset(true, || {
+        crate::dlls::user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            style | WS_CHILD,
+            0,
+            0,
+            0,
+            0,
+            parent,
+            id as usize,
+            0,
+            std::ptr::null_mut(),
+        )
+    })
+}
+
 /// CreateStatusWindowA
 pub unsafe extern "win64" fn create_status_window_a(
-    _style: u32,
-    _text: *const u8,
-    _parent: usize,
-    _id: u32,
+    style: u32,
+    text: *const u8,
+    parent: usize,
+    id: u32,
 ) -> usize {
-    0
+    let t = if text.is_null() {
+        String::new()
+    } else {
+        crate::dlls::cstr(text)
+    };
+    create_status(style, &t, parent, id)
 }
 pub unsafe extern "win64" fn create_status_window_w(
-    _style: u32,
-    _text: *const u16,
-    _parent: usize,
-    _id: u32,
+    style: u32,
+    text: *const u16,
+    parent: usize,
+    id: u32,
 ) -> usize {
-    0
+    let t = if text.is_null() {
+        String::new()
+    } else {
+        crate::dlls::wstr(text)
+    };
+    create_status(style, &t, parent, id)
 }
 
 /// PropertySheet (stub)
@@ -80,41 +122,107 @@ pub unsafe extern "win64" fn property_sheet_w(_psh: *const c_void) -> isize {
     0
 }
 
-/// CreateToolbarEx
+/// CreateToolbarEx : barre d'outils enfant, ses images et ses boutons.
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn create_toolbar_ex(
-    _parent: usize,
-    _style: u32,
-    _id: u32,
-    _nbmp: i32,
-    _hinst: usize,
-    _bmp_id: usize,
-    _buttons: *const c_void,
-    _nbuttons: i32,
-    _dxbutton: i32,
-    _dybutton: i32,
-    _dxbitmap: i32,
-    _dybitmap: i32,
-    _size: u32,
+    parent: usize,
+    style: u32,
+    id: u32,
+    nbmp: i32,
+    hinst: usize,
+    bmp_id: usize,
+    buttons: *const c_void,
+    nbuttons: i32,
+    dxbutton: i32,
+    dybutton: i32,
+    dxbitmap: i32,
+    dybitmap: i32,
+    size: u32,
 ) -> usize {
-    0
+    let class: Vec<u16> = "ToolbarWindow32".encode_utf16().chain([0]).collect();
+    let tb = crate::dlls::user32::create_window_ex_w(
+        0,
+        class.as_ptr(),
+        std::ptr::null(),
+        style | 0x4000_0000, // WS_CHILD
+        0,
+        0,
+        0,
+        0,
+        parent,
+        id as usize,
+        hinst,
+        std::ptr::null_mut(),
+    );
+    if tb == 0 {
+        return 0;
+    }
+    let send =
+        |msg: u32, wp: usize, lp: isize| crate::dlls::user32::send_message_w(tb, msg, wp, lp);
+    send(0x041E, if size == 0 { 32 } else { size as usize }, 0); // TB_BUTTONSTRUCTSIZE
+    let pack = |w: i32, h: i32| ((w as u16 as u32) | ((h as u16 as u32) << 16)) as isize;
+    if dxbitmap > 0 && dybitmap > 0 {
+        send(0x0420, 0, pack(dxbitmap, dybitmap)); // TB_SETBITMAPSIZE
+    }
+    if dxbutton > 0 && dybutton > 0 {
+        send(0x041F, 0, pack(dxbutton, dybutton)); // TB_SETBUTTONSIZE
+    }
+    if nbmp > 0 {
+        let add = [hinst, bmp_id]; // TBADDBITMAP
+        send(0x0413, nbmp as usize, add.as_ptr() as isize);
+    }
+    if !buttons.is_null() && nbuttons > 0 {
+        send(0x0444, nbuttons as usize, buttons as isize); // TB_ADDBUTTONSW
+    }
+    send(0x0421, 0, 0); // TB_AUTOSIZE
+    tb
 }
 
-/// CreateUpDownControl
-pub extern "win64" fn create_up_down_control(
-    _style: u32,
-    _x: i32,
-    _y: i32,
-    _cx: i32,
-    _cy: i32,
-    _parent: usize,
-    _id: i32,
-    _hinst: usize,
-    _buddy: usize,
-    _upper: i32,
-    _lower: i32,
-    _pos: i32,
+/// CreateUpDownControl : flèches haut/bas avec leur champ associé.
+pub unsafe extern "win64" fn create_up_down_control(
+    style: u32,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    parent: usize,
+    id: i32,
+    hinst: usize,
+    buddy: usize,
+    upper: i32,
+    lower: i32,
+    pos: i32,
 ) -> usize {
-    0
+    let class = wide("msctls_updown32");
+    let hwnd = crate::dlls::controls::with_charset(true, || {
+        crate::dlls::user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            std::ptr::null(),
+            style | WS_CHILD | WS_VISIBLE,
+            x,
+            y,
+            cx,
+            cy,
+            parent,
+            id as usize,
+            hinst,
+            std::ptr::null_mut(),
+        )
+    });
+    if hwnd != 0 {
+        let send = |m: u32, wp: usize, lp: isize| {
+            crate::dlls::controls::with_charset(true, || {
+                crate::dlls::user32::send_message_w(hwnd, m, wp, lp)
+            })
+        };
+        if buddy != 0 {
+            send(0x0469, buddy, 0); // UDM_SETBUDDY
+        }
+        send(0x046F, lower as usize, upper as isize); // UDM_SETRANGE32
+        send(0x0471, 0, pos as isize); // UDM_SETPOS32
+    }
+    hwnd
 }
 
 /// FlatSB_* (flat scroll bars)
@@ -126,20 +234,6 @@ pub extern "win64" fn flat_sb_show_scroll_bar(_hwnd: usize, _code: i32, _show: i
 }
 pub extern "win64" fn init_flat_sb(_hwnd: usize) -> i32 {
     0
-}
-
-/// TaskDialog (Vista+, stub renvoyant une erreur)
-pub unsafe extern "win64" fn task_dialog(
-    _parent: usize,
-    _instance: usize,
-    _title: *const u16,
-    _main: *const u16,
-    _content: *const u16,
-    _buttons: i32,
-    _icon: *const u16,
-    _button: *mut i32,
-) -> i32 {
-    1 // E_NOTIMPL, les appelants testent le retour
 }
 
 pub fn exports() -> crate::dlls::Exports {
@@ -162,6 +256,7 @@ pub fn exports() -> crate::dlls::Exports {
         "FlatSB_EnableScrollBar" => fn flat_sb_enable_scroll_bar,
         "FlatSB_ShowScrollBar" => fn flat_sb_show_scroll_bar,
         "InitializeFlatSB" => fn init_flat_sb,
-        "TaskDialog" => fn task_dialog,
+        "TaskDialog" => fn super::taskdialog::task_dialog,
+        "TaskDialogIndirect" => fn super::taskdialog::task_dialog_indirect,
     }
 }

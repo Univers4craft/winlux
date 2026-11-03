@@ -21,7 +21,7 @@ const WSAEFAULT: i32 = 10014;
 const WSAEINVAL: i32 = 10022;
 const _WSAENOBUFS: i32 = 10055;
 const WSAEOPNOTSUPP: i32 = 10045;
-const _WSAEWOULDBLOCK: i32 = 10035;
+const WSAEWOULDBLOCK: i32 = 10035;
 const WSAENOPROTOOPT: i32 = 10042;
 const SOCKET_ERROR: i32 = -1;
 const WSAHOST_NOT_FOUND: i32 = 11001;
@@ -249,6 +249,187 @@ fn rearm_write(s: usize) {
     if let Some(a) = lock(event_assoc()).get_mut(&s) {
         a.write_armed = true;
     }
+    async_arm(s, FD_WRITE);
+}
+
+// ── WSAAsyncSelect : notifications par message de fenêtre ───────────────
+//
+// PuTTY (et beaucoup de programmes anciens) demande à être prévenu par un
+// message posté à sa fenêtre (wParam = socket, lParam = événement | erreur
+// << 16). Comme sous Windows, chaque événement est envoyé une fois puis
+// réactivé par l'appel qui le consomme : recv pour FD_READ, accept pour
+// FD_ACCEPT, un envoi refusé (WSAEWOULDBLOCK) pour FD_WRITE. FD_CONNECT et
+// FD_CLOSE ne partent qu'une fois. Les files de messages interrogent les
+// sockets (`pump_async`) à chaque PeekMessage / GetMessage.
+
+#[derive(Clone, Copy)]
+struct AsyncSel {
+    hwnd: usize,
+    msg: u32,
+    mask: i32,
+    /// Événements qui peuvent encore être postés.
+    armed: i32,
+    /// connect() appelé : FD_CONNECT attendu.
+    connecting: bool,
+}
+
+fn async_sel() -> &'static Mutex<HashMap<usize, AsyncSel>> {
+    static A: OnceLock<Mutex<HashMap<usize, AsyncSel>>> = OnceLock::new();
+    A.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn async_arm(s: usize, bits: i32) {
+    if let Some(a) = lock(async_sel()).get_mut(&s) {
+        a.armed |= bits & a.mask;
+    }
+}
+
+fn async_connecting(s: usize) {
+    if let Some(a) = lock(async_sel()).get_mut(&s) {
+        a.connecting = true;
+        a.armed |= a.mask & (FD_CONNECT | FD_WRITE);
+    }
+}
+
+/// Des sockets attendent-elles une notification par message ?
+pub(crate) fn async_active() -> bool {
+    !lock(async_sel()).is_empty()
+}
+
+fn sock_flag(s: i32, opt: i32) -> i32 {
+    let mut v: i32 = 0;
+    let mut len = 4u32;
+    // SAFETY : tampon de 4 octets valide.
+    unsafe {
+        libc::getsockopt(
+            s,
+            libc::SOL_SOCKET,
+            opt,
+            &mut v as *mut i32 as *mut c_void,
+            &mut len,
+        );
+    }
+    v
+}
+
+fn is_connected(s: i32) -> bool {
+    // SAFETY : adresse de taille suffisante pour IPv4 et IPv6.
+    unsafe {
+        let mut addr: libc::sockaddr_storage = std::mem::zeroed();
+        let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        libc::getpeername(s, &mut addr as *mut _ as *mut libc::sockaddr, &mut len) == 0
+    }
+}
+
+/// Événements prêts pour une socket enregistrée par WSAAsyncSelect, dans
+/// l'ordre de Windows : (événement, erreur Winsock).
+fn async_ready(s: usize, a: &mut AsyncSel) -> Vec<(i32, i32)> {
+    let fd = s as i32;
+    let listening = sock_flag(fd, libc::SO_ACCEPTCONN) != 0;
+    if !listening && !a.connecting && !is_connected(fd) {
+        // Socket pas encore connectée : Linux la dit « prête » à tort.
+        return Vec::new();
+    }
+    let mut events = 0i16;
+    if a.armed & (FD_READ | FD_ACCEPT | FD_CLOSE | FD_OOB) != 0 {
+        events |= libc::POLLIN | libc::POLLPRI;
+    }
+    if a.armed & (FD_WRITE | FD_CONNECT) != 0 {
+        events |= libc::POLLOUT;
+    }
+    if events == 0 {
+        return Vec::new();
+    }
+    let mut p = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    // SAFETY : un seul pollfd, attente nulle.
+    if unsafe { libc::poll(&mut p, 1, 0) } <= 0 {
+        return Vec::new();
+    }
+    let r = p.revents;
+    let mut out = Vec::new();
+    let take = |a: &mut AsyncSel, bit: i32| {
+        let ok = a.armed & bit != 0;
+        a.armed &= !bit;
+        ok
+    };
+    if a.connecting && r & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0 {
+        a.connecting = false;
+        let err = sock_flag(fd, libc::SO_ERROR);
+        if take(a, FD_CONNECT) {
+            out.push((FD_CONNECT, if err != 0 { error_from_errno(err) } else { 0 }));
+        }
+        if err != 0 {
+            a.armed = 0;
+            return out;
+        }
+    }
+    if listening {
+        if r & libc::POLLIN != 0 && take(a, FD_ACCEPT) {
+            out.push((FD_ACCEPT, 0));
+        }
+        return out;
+    }
+    if r & libc::POLLPRI != 0 && take(a, FD_OOB) {
+        out.push((FD_OOB, 0));
+    }
+    if r & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+        let mut b = 0u8;
+        // SAFETY : un octet lu sans le retirer de la file.
+        let n = unsafe {
+            libc::recv(
+                fd,
+                &mut b as *mut u8 as *mut c_void,
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if n > 0 {
+            if take(a, FD_READ) {
+                out.push((FD_READ, 0));
+            }
+        } else if n == 0 || r & (libc::POLLHUP | libc::POLLERR) != 0 {
+            let err = if n < 0 {
+                error_from_errno(unsafe { *libc::__errno_location() })
+            } else {
+                0
+            };
+            let err = if err == WSAEWOULDBLOCK { 0 } else { err };
+            if take(a, FD_CLOSE) {
+                out.push((FD_CLOSE, err));
+                a.armed &= !(FD_READ | FD_WRITE);
+            }
+        }
+    }
+    if r & libc::POLLOUT != 0 && r & libc::POLLHUP == 0 && take(a, FD_WRITE) {
+        out.push((FD_WRITE, 0));
+    }
+    out
+}
+
+/// Poste les notifications WSAAsyncSelect prêtes. Renvoie vrai si au moins
+/// un message est parti.
+pub(crate) fn pump_async() -> bool {
+    let mut posts = Vec::new();
+    {
+        let mut map = lock(async_sel());
+        if map.is_empty() {
+            return false;
+        }
+        for (&s, a) in map.iter_mut() {
+            for (ev, err) in async_ready(s, a) {
+                posts.push((a.hwnd, a.msg, s, ((err as u32) << 16 | ev as u32) as isize));
+            }
+        }
+    }
+    let any = !posts.is_empty();
+    for (hwnd, msg, s, lp) in posts {
+        crate::dlls::gui::post_to_window(hwnd, crate::dlls::gui::Msg::new(hwnd, msg, s, lp));
+    }
+    any
 }
 /// Événements poll à surveiller pour une socket associée par WSAEventSelect.
 fn assoc_poll_events(a: &EventAssoc) -> i16 {
@@ -263,6 +444,55 @@ fn assoc_poll_events(a: &EventAssoc) -> i16 {
         e |= libc::POLLPRI;
     }
     e
+}
+
+/// Le handle est-il un événement créé par WSACreateEvent ?
+pub(crate) fn is_wsa_event(h: usize) -> bool {
+    lock(events()).contains_key(&h)
+}
+
+/// État d'un handle attendu par MsgWaitForMultipleObjects : un événement
+/// WSACreateEvent signalé, ou une socket associée au handle par
+/// WSAEventSelect (même un événement CreateEvent, comme PuTTY) qui est prête.
+/// Sous Windows la pile réseau signale l'événement ; ici on interroge les
+/// sockets au moment de l'attente.
+pub(crate) fn handle_ready(h: usize) -> bool {
+    {
+        let ev = lock(events());
+        if let Some(st) = ev.get(&h) {
+            if st.triggered {
+                return true;
+            }
+            let mut p = libc::pollfd {
+                fd: st.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY : un seul pollfd valide, attente nulle.
+            if unsafe { libc::poll(&mut p, 1, 0) } > 0 && p.revents & libc::POLLIN != 0 {
+                return true;
+            }
+        }
+    }
+    let mut pfds: Vec<libc::pollfd> = lock(event_assoc())
+        .iter()
+        .filter(|(_, a)| a.event == h)
+        .map(|(&sock, a)| libc::pollfd {
+            fd: sock as i32,
+            events: assoc_poll_events(a),
+            revents: 0,
+        })
+        .filter(|p| p.events != 0)
+        .collect();
+    if pfds.is_empty() {
+        return false;
+    }
+    // SAFETY : `pfds` est un tableau valide pour la durée de l'appel.
+    let rc = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 0) };
+    rc > 0
+        && pfds
+            .iter()
+            .any(|p| p.revents & (p.events | libc::POLLHUP | libc::POLLERR) != 0)
 }
 
 #[repr(C)]
@@ -340,7 +570,9 @@ fn error_from_errno(e: i32) -> i32 {
         libc::EADDRINUSE => 10048,
         libc::EADDRNOTAVAIL => 10049,
         libc::EAFNOSUPPORT => 10047,
-        libc::EINPROGRESS => 10036,
+        // Windows signale un connect non bloquant en cours par WSAEWOULDBLOCK
+        // (10035), jamais WSAEINPROGRESS (10036) que PuTTY traite comme fatal.
+        libc::EINPROGRESS => WSAEWOULDBLOCK,
         libc::EINTR => 10004,
         libc::EINVAL => 10022,
         libc::EMFILE => 10024,
@@ -518,6 +750,7 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
         lock(sockets()).remove(&s);
         // Un fd réutilisé ne doit pas hériter du masque WSAEventSelect.
         lock(event_assoc()).remove(&s);
+        lock(async_sel()).remove(&s);
         0
     }
 }
@@ -548,13 +781,15 @@ pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32
     );
     if rc < 0 {
         let e = last_error();
-        if e == libc::EINPROGRESS || e == libc::EWOULDBLOCK {
+        if e == WSAEWOULDBLOCK {
             rearm_write(s);
+            async_connecting(s);
         }
         set_error(e);
         SOCKET_ERROR
     } else {
         rearm_write(s);
+        async_connecting(s);
         0
     }
 }
@@ -598,6 +833,7 @@ pub unsafe extern "win64" fn accept(s: usize, name: *mut u8, len: *mut i32) -> u
         set_error(10038);
         return usize::MAX;
     }
+    async_arm(s, FD_ACCEPT);
     let mut n = if len.is_null() {
         0
     } else {
@@ -637,7 +873,11 @@ pub unsafe extern "win64" fn send(s: usize, b: *const u8, n: i32, flags: i32) ->
     );
     crate::trace!("send({s}, {n}) = {r}");
     if r < 0 {
-        set_error(last_error());
+        let e = last_error();
+        if e == WSAEWOULDBLOCK {
+            rearm_write(s);
+        }
+        set_error(e);
         SOCKET_ERROR
     } else {
         r as i32
@@ -648,6 +888,7 @@ pub unsafe extern "win64" fn recv(s: usize, b: *mut u8, n: i32, flags: i32) -> i
         set_error(10038);
         return SOCKET_ERROR;
     }
+    async_arm(s, FD_READ | FD_OOB);
     if n < 0 || (n > 0 && b.is_null()) {
         set_error(if n < 0 { WSA_INVALID_PARAMETER } else { 10014 });
         return SOCKET_ERROR;
@@ -716,7 +957,7 @@ pub unsafe extern "win64" fn send_to(
     );
     if r < 0 {
         let e = last_error();
-        if e == libc::EWOULDBLOCK {
+        if e == WSAEWOULDBLOCK {
             rearm_write(s);
         }
         set_error(e);
@@ -741,6 +982,7 @@ pub unsafe extern "win64" fn recv_from(
         set_error(10038);
         return SOCKET_ERROR;
     }
+    async_arm(s, FD_READ | FD_OOB);
     let mut addrlen = if len.is_null() {
         0
     } else {
@@ -2269,7 +2511,11 @@ pub unsafe extern "win64" fn wsa_send(
     msg.msg_iovlen = n;
     let r = libc::sendmsg(s as i32, &msg, flags as i32 | libc::MSG_NOSIGNAL);
     if r < 0 {
-        set_error(last_error());
+        let e = last_error();
+        if e == WSAEWOULDBLOCK {
+            rearm_write(s);
+        }
+        set_error(e);
         SOCKET_ERROR
     } else {
         if !bytes_sent.is_null() {
@@ -2292,6 +2538,7 @@ pub unsafe extern "win64" fn wsa_recv(
         set_error(WSAENOTSOCK);
         return SOCKET_ERROR;
     }
+    async_arm(s, FD_READ | FD_OOB);
     if bufs.is_null() || buf_count == 0 {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
@@ -2517,6 +2764,7 @@ pub extern "win64" fn wsa_event_select(s: usize, event: usize, mask: i32) -> i32
             libc::fcntl(s as i32, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
     }
+    lock(async_sel()).remove(&s);
     if event == 0 || mask == 0 {
         lock(event_assoc()).remove(&s);
     } else {
@@ -2870,20 +3118,36 @@ pub unsafe extern "win64" fn wsa_address_to_string_w(
 }
 
 // ── WSAAsyncSelect (stub: sets non-blocking, tracks mask) ───────────────
-pub extern "win64" fn wsa_async_select(s: usize, _hwnd: usize, _msg: u32, mask: i32) -> i32 {
+pub extern "win64" fn wsa_async_select(s: usize, hwnd: usize, msg: u32, mask: i32) -> i32 {
     if !valid_socket(s) {
         set_error(WSAENOTSOCK);
         return SOCKET_ERROR;
     }
+    // Comme sous Windows : la socket passe en non bloquant (et y reste
+    // même si le masque est vidé) et WSAEventSelect est annulé.
     unsafe {
         let flags = libc::fcntl(s as i32, libc::F_GETFL);
         if flags >= 0 {
-            if mask != 0 {
-                libc::fcntl(s as i32, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            } else {
-                libc::fcntl(s as i32, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-            }
+            libc::fcntl(s as i32, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
+    }
+    lock(event_assoc()).remove(&s);
+    let mut map = lock(async_sel());
+    if hwnd == 0 || mask == 0 {
+        map.remove(&s);
+    } else {
+        let connecting = map.get(&s).is_some_and(|a| a.connecting);
+        map.insert(
+            s,
+            AsyncSel {
+                hwnd,
+                msg,
+                mask,
+                // FD_WRITE est signalé dès que la socket est connectée.
+                armed: mask & (FD_READ | FD_OOB | FD_ACCEPT | FD_CLOSE | FD_WRITE),
+                connecting,
+            },
+        );
     }
     0
 }
@@ -3015,18 +3279,169 @@ fn named_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn init() {
+    /// Les tests partagent le compteur global WSAStartup/WSACleanup : un
+    /// test qui vide ce compteur pendant qu'un autre utilise ses sockets le
+    /// faisait échouer au hasard. Ils passent donc l'un après l'autre.
+    static WSA_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serialise() -> std::sync::MutexGuard<'static, ()> {
+        WSA_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn init() -> std::sync::MutexGuard<'static, ()> {
+        let guard = serialise();
         unsafe {
             let mut d = [0u8; 408];
             wsa_startup(0x0202, d.as_mut_ptr());
         }
+        guard
     }
     fn cleanup() {
         wsa_cleanup();
     }
 
     #[test]
+    fn connect_non_bloquant_signale_wsaewouldblock_comme_windows() {
+        // PuTTY abandonne sur WSAEINPROGRESS (10036) : Windows renvoie
+        // WSAEWOULDBLOCK (10035) pour un connect non bloquant en cours.
+        assert_eq!(error_from_errno(libc::EINPROGRESS), WSAEWOULDBLOCK);
+        assert_eq!(error_from_errno(libc::EWOULDBLOCK), WSAEWOULDBLOCK);
+    }
+
+    #[test]
+    fn handle_associe_par_wsaeventselect_est_pret_quand_la_socket_l_est() {
+        let mut fds = [0i32; 2];
+        // SAFETY : tableau de deux descripteurs.
+        unsafe {
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+        }
+        let h = 0x7777_0001usize;
+        lock(event_assoc()).insert(
+            fds[0] as usize,
+            EventAssoc {
+                event: h,
+                mask: FD_READ,
+                write_armed: false,
+            },
+        );
+        assert!(!handle_ready(h));
+        // SAFETY : écrit un octet sur le pair.
+        unsafe { libc::write(fds[1], b"x".as_ptr() as *const c_void, 1) };
+        assert!(handle_ready(h));
+        lock(event_assoc()).remove(&(fds[0] as usize));
+        assert!(!handle_ready(h));
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
+
+    #[test]
+    fn wsaasyncselect_annonce_connexion_donnees_et_fermeture_une_fois() {
+        unsafe {
+            let srv = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            let mut a: libc::sockaddr_in = std::mem::zeroed();
+            a.sin_family = libc::AF_INET as libc::sa_family_t;
+            a.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            let sz = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            assert_eq!(
+                libc::bind(srv, &a as *const _ as *const libc::sockaddr, sz),
+                0
+            );
+            assert_eq!(libc::listen(srv, 1), 0);
+            let mut len = sz;
+            libc::getsockname(srv, &mut a as *mut _ as *mut libc::sockaddr, &mut len);
+            let cli = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
+            let mask = FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE;
+            let mut sel = AsyncSel {
+                hwnd: 1,
+                msg: 0x8005,
+                mask,
+                armed: mask & !FD_CONNECT,
+                connecting: false,
+            };
+            // Pas encore connectée : rien, malgré le « prêt » de Linux.
+            assert!(async_ready(cli as usize, &mut sel).is_empty());
+            libc::connect(cli, &a as *const _ as *const libc::sockaddr, sz);
+            sel.connecting = true;
+            sel.armed |= FD_CONNECT | FD_WRITE;
+            let wait = |sel: &mut AsyncSel| {
+                for _ in 0..200 {
+                    let r = async_ready(cli as usize, sel);
+                    if !r.is_empty() {
+                        return r;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Vec::new()
+            };
+            assert_eq!(wait(&mut sel), vec![(FD_CONNECT, 0), (FD_WRITE, 0)]);
+            assert!(
+                async_ready(cli as usize, &mut sel).is_empty(),
+                "une seule fois"
+            );
+            let peer = libc::accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            libc::write(peer, b"SSH-2.0-x\r\n".as_ptr() as *const c_void, 11);
+            assert_eq!(wait(&mut sel), vec![(FD_READ, 0)]);
+            assert!(
+                async_ready(cli as usize, &mut sel).is_empty(),
+                "réarmé par recv"
+            );
+            sel.armed |= FD_READ; // recv()
+            assert_eq!(wait(&mut sel), vec![(FD_READ, 0)]);
+            let mut buf = [0u8; 32];
+            libc::read(cli, buf.as_mut_ptr() as *mut c_void, 32);
+            libc::close(peer);
+            sel.armed |= FD_READ;
+            assert_eq!(wait(&mut sel), vec![(FD_CLOSE, 0)]);
+            assert!(async_ready(cli as usize, &mut sel).is_empty());
+            libc::close(cli);
+            libc::close(srv);
+        }
+    }
+
+    #[test]
+    fn wsaasyncselect_signale_un_refus_de_connexion() {
+        unsafe {
+            // Port fermé : on prend un port libre puis on le referme.
+            let tmp = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            let mut a: libc::sockaddr_in = std::mem::zeroed();
+            a.sin_family = libc::AF_INET as libc::sa_family_t;
+            a.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            let sz = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            libc::bind(tmp, &a as *const _ as *const libc::sockaddr, sz);
+            let mut len = sz;
+            libc::getsockname(tmp, &mut a as *mut _ as *mut libc::sockaddr, &mut len);
+            libc::close(tmp);
+            let cli = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_NONBLOCK, 0);
+            libc::connect(cli, &a as *const _ as *const libc::sockaddr, sz);
+            let mask = FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE;
+            let mut sel = AsyncSel {
+                hwnd: 1,
+                msg: 0x8005,
+                mask,
+                armed: mask,
+                connecting: true,
+            };
+            let mut got = Vec::new();
+            for _ in 0..200 {
+                got = async_ready(cli as usize, &mut sel);
+                if !got.is_empty() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(got, vec![(FD_CONNECT, 10061)]);
+            libc::close(cli);
+        }
+    }
+
+    #[test]
     fn winsock_startup_ouvre_ferme_et_valide_un_socket() {
+        let _wsa = serialise();
         unsafe {
             // drain any leftover startups from other tests
             while STARTUPS.load(Ordering::Acquire) > 0 {
@@ -3066,7 +3481,7 @@ mod tests {
             addr_out(sa.as_mut_ptr(), 28);
             assert_eq!(sa[0], 23);
         }
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_ne!(s, INVALID_SOCKET);
@@ -3105,7 +3520,7 @@ mod tests {
 
     #[test]
     fn setsockopt_reuseaddr() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             assert_ne!(s, INVALID_SOCKET);
@@ -3140,7 +3555,7 @@ mod tests {
 
     #[test]
     fn ioctlsocket_nonblock() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let mut val: u32 = 1;
@@ -3183,7 +3598,7 @@ mod tests {
 
     #[test]
     fn af_inet6_windows_est_traduit() {
-        init();
+        let _wsa = init();
         unsafe {
             // Sans IPv6 sur la machine de test, rien à vérifier.
             let probe = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
@@ -3244,7 +3659,7 @@ mod tests {
 
     #[test]
     fn wsaeventselect_reveille_sur_connexion_entrante() {
-        init();
+        let _wsa = init();
         unsafe {
             let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let mut addr: libc::sockaddr_in = std::mem::zeroed();
@@ -3289,7 +3704,7 @@ mod tests {
 
     #[test]
     fn select_non_blocking() {
-        init();
+        let _wsa = init();
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             // unconnected socket should be writable
@@ -3322,7 +3737,7 @@ mod tests {
 
     #[test]
     fn wsa_send_recv_tcp() {
-        init();
+        let _wsa = init();
         unsafe {
             let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             let val: i32 = 1;

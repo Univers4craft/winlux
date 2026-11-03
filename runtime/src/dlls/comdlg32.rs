@@ -33,6 +33,11 @@ pub extern "win64" fn comm_dlg_extended_error() -> u32 {
     LAST_ERROR.load(Ordering::Relaxed)
 }
 
+/// Erreur rendue par CommDlgExtendedError (boîtes de fichiers, couleur, police).
+pub(crate) fn set_extended_error(code: u32) {
+    LAST_ERROR.store(code, Ordering::Relaxed);
+}
+
 fn fail(code: u32) -> i32 {
     LAST_ERROR.store(code, Ordering::Relaxed);
     0
@@ -218,7 +223,7 @@ fn theme(dark: bool) -> Theme {
             border: rgb(0x45, 0x45, 0x45),
             text: rgb(0xF2, 0xF2, 0xF2),
             text2: rgb(0xB8, 0xB8, 0xB8),
-            accent: rgb(0x4C, 0xC2, 0xFF),
+            accent: rgb(0xB6, 0x9C, 0xFF),
             on_accent: rgb(0x00, 0x00, 0x00),
             selected: rgb(0x23, 0x3A, 0x4A),
         }
@@ -1368,6 +1373,16 @@ pub fn exports() -> crate::dlls::Exports {
         "PageSetupDlgA" => fn page_setup_dlg_a,
         "PageSetupDlgW" => fn page_setup_dlg_w,
         "CommDlgExtendedError" => fn comm_dlg_extended_error,
+        "GetOpenFileNameA" => fn super::comdlg32_files::get_open_file_name_a,
+        "GetOpenFileNameW" => fn super::comdlg32_files::get_open_file_name_w,
+        "GetSaveFileNameA" => fn super::comdlg32_files::get_save_file_name_a,
+        "GetSaveFileNameW" => fn super::comdlg32_files::get_save_file_name_w,
+        "GetFileTitleA" => fn super::comdlg32_files::get_file_title_a,
+        "GetFileTitleW" => fn super::comdlg32_files::get_file_title_w,
+        "ChooseColorA" => fn super::comdlg32_ui::choose_color_a,
+        "ChooseColorW" => fn super::comdlg32_ui::choose_color_w,
+        "ChooseFontA" => fn super::comdlg32_ui::choose_font_a,
+        "ChooseFontW" => fn super::comdlg32_ui::choose_font_w,
     }
 }
 

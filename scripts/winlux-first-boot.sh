@@ -291,16 +291,16 @@ THEME_CHOICE=${REPLY:-dark}
 
 if test "$TUI" != none; then
     if test "$THEME_CHOICE" = dark; then
-        preview="Thème sombre sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond sombre #181b24  █  │\n  │  █  Texte clair #ecedf5  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+        preview="Thème sombre sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond sombre #181b24  █  │\n  │  █  Texte clair #ecedf5  █  │\n  │  █  Accent    #6a3df0    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
     else
-        preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+        preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #6a3df0    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
     fi
     "$TUI" --title "Aperçu du thème" --msgbox "$preview" "$(dlg_h 14)" "$(dlg_w 40)" 2>/dev/null || true
 else
     if test "$THEME_CHOICE" = dark; then
-        echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #8178b7"
+        echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #6a3df0"
     else
-        echo "  -> Thème clair : fond #f3f5fa, texte #202430, accent #8178b7"
+        echo "  -> Thème clair : fond #f3f5fa, texte #202430, accent #6a3df0"
     fi
 fi
 
@@ -309,9 +309,31 @@ fi
 # ============================================================
 log "Étape 6/$TOTAL_STEPS : Applications"
 
-CHECKLIST_ARGS='firefox Navigateur_Firefox on libreoffice Suite_bureautique_LibreOffice on vlc Lecteur_multimédia_VLC on gimp Éditeur_images_GIMP off git Outils_développeur_(git,build-essential) off geany Éditeur_de_code_Geany off audacity Éditeur_audio_Audacity off obs-studio Capture_vidéo_OBS_Studio off'
+CHECKLIST_ARGS='libreoffice Suite_bureautique_LibreOffice on vlc Lecteur_multimédia_VLC on gimp Éditeur_images_GIMP off git Outils_développeur_(git,build-essential) off geany Éditeur_de_code_Geany off audacity Éditeur_audio_Audacity off obs-studio Capture_vidéo_OBS_Studio off'
 checklist "Applications à pré-installer" $CHECKLIST_ARGS
-APPS_SELECTED=${REPLY:-firefox libreoffice vlc}
+APPS_SELECTED=${REPLY:-libreoffice vlc}
+
+# Navigateur : aucun n'est fourni ni présélectionné (docs/BROWSERS.md). La
+# liste est alphabétique ; le choix est téléchargé sur le site officiel de
+# l'éditeur et installé par l'init dès que le réseau répond.
+log "Étape 6/$TOTAL_STEPS : Navigateur"
+MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'
+menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun)" $MENU_ARGS
+BROWSER_CHOICE=${REPLY:-aucun}
+case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
+
+# Boutiques de logiciels : aucune fournie ni cochée d'office (docs/BOUTIQUES.md),
+# ordre alphabétique. Ajoutées au Store par winlux-store-catalogs, reprises au
+# démarrage suivant sans réseau.
+log "Étape 6/$TOTAL_STEPS : Boutiques de logiciels"
+store_mark() { if grep -qx "$1" /etc/winlux/store-catalogs 2>/dev/null; then echo on; else echo off; fi; }
+CHECKLIST_ARGS="flathub Flathub_(logiciels_Linux) $(store_mark flathub) scoop-extras Scoop_Extras_(logiciels_Windows) $(store_mark scoop-extras) scoop-games Scoop_Games_(jeux_Windows) $(store_mark scoop-games)"
+checklist "Boutiques de logiciels (téléchargées chez l'éditeur ; Winlux n'en impose aucune)" $CHECKLIST_ARGS
+STORE_CHOICE=
+for store in ${REPLY:-}; do
+    store=$(printf '%s' "$store" | tr -d '"')
+    case "$store" in flathub|scoop-extras|scoop-games) STORE_CHOICE="$STORE_CHOICE $store" ;; esac
+done
 
 # ============================================================
 #  Étape 7 : Compte utilisateur local
@@ -409,10 +431,20 @@ fi
 #  Étape 10 : Récapitulatif
 # ============================================================
 log "Étape 10/$TOTAL_STEPS : Récapitulatif"
-summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED"
+summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED\nNavigateur : $BROWSER_CHOICE\nBoutiques :${STORE_CHOICE:- aucune}"
 if test -n "$USER_AVATAR"; then
     summary="$summary\nAvatar : $(basename "$USER_AVATAR")"
 fi
+# Mention de non-affiliation (docs/DEFENSE-DU-NOM.md), dans la langue choisie.
+case "$LANG_CHOICE" in
+    en_*) independent='Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.' ;;
+    de_*) independent='Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.' ;;
+    es_*) independent='Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.' ;;
+    it_*) independent='Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.' ;;
+    pt_*) independent='Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.' ;;
+    *)    independent='Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.' ;;
+esac
+summary="$summary\n\n$independent"
 
 if test "$TUI" != none; then
     "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" "$(dlg_h 18)" "$(dlg_w 60)" 2>/dev/null || true
@@ -538,7 +570,7 @@ done
 user_home=$(getent passwd "$USERNAME" | cut -d: -f6)
 if test -n "$user_home"; then
     mkdir -p "$user_home/.config/winlux"
-    printf '{"theme":"%s","accent":"#8178b7"}\n' "$THEME_CHOICE" >"$user_home/.config/winlux/appearance.json"
+    printf '{"theme":"%s","accent":"#6a3df0"}\n' "$THEME_CHOICE" >"$user_home/.config/winlux/appearance.json"
     chown -R "$USERNAME:" "$user_home/.config" 2>/dev/null || true
 fi
 
@@ -566,9 +598,12 @@ fi
 if test "$DISABLE_ROOT" = 1; then
     log 'Compte root désactivé (sudo recommandé)'
     passwd -l root 2>/dev/null || true
+    rm -f /etc/winlux/root-enabled
 else
     log 'Mot de passe root défini'
     printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
+    # « su » garde alors son sens habituel dans le terminal (winlux-su.sh).
+    mkdir -p /etc/winlux && : >/etc/winlux/root-enabled
 fi
 
 # --- Connexion automatique ---
@@ -602,18 +637,36 @@ EOF
     # install-config.json (autologin) pour les outils qui l'affichent.
 fi
 
+# --- Navigateur choisi : téléchargé et installé par l'init (réseau requis) ---
+if test "$BROWSER_CHOICE" != aucun; then
+    mkdir -p /etc/winlux
+    printf '%s\n' "$BROWSER_CHOICE" > /etc/winlux/first-boot-browser
+    if command -v winlux-browsers >/dev/null 2>&1 && winlux-browsers --default "$BROWSER_CHOICE"; then
+        mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
+    else
+        log "Navigateur $BROWSER_CHOICE : installation reportée au prochain démarrage avec réseau"
+    fi
+fi
+
+# --- Boutiques choisies : ajoutées maintenant si le réseau répond, sinon par
+# l'init au démarrage suivant (store-catalogs-pending) ---
+mkdir -p /etc/winlux
+if command -v winlux-store-catalogs >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    if winlux-store-catalogs --set $STORE_CHOICE; then :; else
+        log "Boutiques$STORE_CHOICE : ajout reporté au prochain démarrage avec réseau"
+    fi
+else
+    printf '%s\n' $STORE_CHOICE > /etc/winlux/store-catalogs
+    printf '%s\n' $STORE_CHOICE > /etc/winlux/store-catalogs-pending
+fi
+
 # --- Installation des applications sélectionnées ---
 log "Installation des applications : $APPS_SELECTED"
 if command -v apt-get >/dev/null 2>&1 && test -n "$APPS_SELECTED"; then
     apt-get update -qq 2>/dev/null || true
     for app in $APPS_SELECTED; do
         case "$app" in
-            firefox)
-                log "Installation de Firefox..."
-                apt-get install -y --no-install-recommends firefox 2>/dev/null || \
-                apt-get install -y --no-install-recommends firefox-esr 2>/dev/null || \
-                log "Échec de l'installation de Firefox"
-                ;;
             libreoffice)
                 log "Installation de LibreOffice..."
                 apt-get install -y --no-install-recommends \
@@ -682,34 +735,12 @@ else
     log 'Script de détection matériel non trouvé, sauté'
 fi
 
-# Installer les pilotes GPU si APT est disponible
-if command -v apt-get >/dev/null 2>&1; then
-    gpu_vendors=$(lspci 2>/dev/null | grep -iE 'VGA|3D|Display' || true)
-
-    if printf '%s' "$gpu_vendors" | grep -qi nvidia; then
-        log 'GPU NVIDIA détecté — installation des pilotes...'
-        apt-get install -y --no-install-recommends \
-            nvidia-driver nvidia-utils 2>/dev/null || \
-        apt-get install -y --no-install-recommends \
-            nvidia-driver-535 2>/dev/null || \
-        log 'Installation des pilotes NVIDIA échouée (pas de dépôt configuré ?)'
-    fi
-
-    if printf '%s' "$gpu_vendors" | grep -qi 'AMD\|ATI\|Radeon'; then
-        log 'GPU AMD détecté — firmware Mesa/AMDGPU'
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers firmware-amd-graphics 2>/dev/null || \
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers linux-firmware 2>/dev/null || \
-        log 'Installation des pilotes AMD échouée'
-    fi
-
-    if printf '%s' "$gpu_vendors" | grep -qi intel; then
-        log 'GPU Intel détecté — pilotes Mesa i965/iris'
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers intel-media-va-driver 2>/dev/null || \
-        log 'Installation des pilotes Intel échouée'
-    fi
+# Pilotes recommandés pour ce matériel (NVIDIA, pilotes complets du noyau,
+# VA-API, microcode, fwupd) : winlux-drivers choisit d'après les cartes
+# réellement présentes et les dépôts Ubuntu, comme Windows Update.
+if command -v winlux-drivers >/dev/null 2>&1; then
+    log 'Installation des pilotes recommandés...'
+    winlux-drivers auto 2>/dev/null || log 'Pilotes recommandés : nouvel essai au prochain démarrage'
 fi
 
 # --- Profil d'utilisation et applications recommandées ---

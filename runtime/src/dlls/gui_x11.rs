@@ -27,6 +27,9 @@ struct XWin {
     y: i32,
     width: u16,
     height: u16,
+    /// Sous-fenêtre X d'un contrôle `WS_CHILD` : coordonnées relatives au
+    /// parent, ni décorations ni propriétés de gestionnaire de fenêtres.
+    child: bool,
 }
 
 /// Dégradé de fond déjà calculé, invalidé quand le contraste change.
@@ -677,6 +680,28 @@ fn screen_density_randr(conn: &RustConnection, root: u32, root_height: u16) -> S
     density
 }
 
+/// Jeu ou programme qui dessine lui-même (SDL, OpenGL, Vulkan, Direct3D) :
+/// il n'est pas « DPI-aware » et appelle glViewport avec la taille logique de
+/// sa fenêtre. Ses fenêtres restent donc à l'échelle 1 (pixels réels).
+pub static RENDERS_ITSELF: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Imports qui désignent un programme dessinant lui-même sa fenêtre.
+pub fn renders_itself(imports: &[String]) -> bool {
+    imports.iter().any(|name| {
+        let n = name.to_ascii_lowercase();
+        n.starts_with("d3d")
+            || n.starts_with("dxgi")
+            || n == "opengl32.dll"
+            || n.starts_with("vulkan-1")
+            || n.starts_with("sdl2")
+            || n.starts_with("sdl3")
+            || n.starts_with("glfw")
+            || n == "libglesv2.dll"
+            || n == "libegl.dll"
+    })
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -757,6 +782,7 @@ impl X11Backend {
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
         let scale = match requested_scale {
+            _ if RENDERS_ITSELF.load(std::sync::atomic::Ordering::Relaxed) => 1.0,
             Some(scale) => dpi_scale(96.0, Some(scale)),
             None => automatic_scale(screen_density(&conn, scr)),
         };
@@ -2270,6 +2296,7 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                crate::dlls::rawinput::set_app_focus(true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -2282,6 +2309,8 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
+                crate::dlls::rawinput::set_app_focus(false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -2403,7 +2432,7 @@ impl X11Backend {
 
     fn on_configure(&mut self, e: ConfigureNotifyEvent) -> Option<PendingEvent> {
         let hwnd = *self.by_xwin.get(&e.window)?;
-        let (old_x, old_y, old_w, old_h, window, root) = {
+        let (old_x, old_y, old_w, old_h, window, root, child) = {
             let w = self.windows.get(&hwnd)?;
             (
                 w.x,
@@ -2412,17 +2441,22 @@ impl X11Backend {
                 w.height,
                 w.window,
                 self.conn.setup().roots[self.screen].root,
+                w.child,
             )
         };
         // ConfigureNotify.x/y sont relatifs au parent; traduire l'origine vers
         // la racine couvre les fenêtres reparentées par un gestionnaire X11.
-        let (x, y) = self
-            .conn
-            .translate_coordinates(window, root, 0, 0)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .map(|reply| (reply.dst_x as i32, reply.dst_y as i32))
-            .unwrap_or((e.x as i32, e.y as i32));
+        // Un contrôle enfant garde ses coordonnées relatives au parent (Win32).
+        let (x, y) = if child {
+            (e.x as i32, e.y as i32)
+        } else {
+            self.conn
+                .translate_coordinates(window, root, 0, 0)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| (reply.dst_x as i32, reply.dst_y as i32))
+                .unwrap_or((e.x as i32, e.y as i32))
+        };
         if let Some(w) = self.windows.get_mut(&hwnd) {
             w.x = x;
             w.y = y;
@@ -2967,6 +3001,7 @@ mod tests {
             y: 0,
             width: 64,
             height: 64,
+            child: false,
         };
         backend.paint_cmds(
             &window,
@@ -3078,6 +3113,7 @@ mod tests {
             y: 0,
             width: 1920,
             height: 1080,
+            child: false,
         };
         let rect = Rect {
             left: 0,
@@ -3517,6 +3553,84 @@ impl gui::GuiBackend for X11Backend {
                 y: y as i32,
                 width: w,
                 height: h,
+                child: false,
+            },
+        );
+        self.by_xwin.insert(win, hwnd);
+    }
+
+    fn create_child_window(&mut self, hwnd: usize, parent: usize, rect: Rect) {
+        let Some(parent_win) = self.windows.get(&parent).map(|w| w.window) else {
+            // Parent inconnu du serveur X (headless, détruit) : fenêtre isolée.
+            self.create_window(hwnd, "", rect);
+            return;
+        };
+        if self.x11_cursors.is_empty() {
+            self.init_cursors();
+        }
+        let visual = self.conn.setup().roots[self.screen].root_visual;
+        let x = self
+            .scaled(rect.left)
+            .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let y = self
+            .scaled(rect.top)
+            .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let w = self.scaled(rect.width()).max(1).clamp(1, u16::MAX as i32) as u16;
+        let h = self.scaled(rect.height()).max(1).clamp(1, u16::MAX as i32) as u16;
+        let Ok(win) = self.conn.generate_id() else {
+            return;
+        };
+        let bg = self.alloc_color(theme::BG_DEEP);
+        let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+            x11rb::protocol::xproto::EventMask::EXPOSURE
+                | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
+                | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
+                | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
+                | x11rb::protocol::xproto::EventMask::POINTER_MOTION
+                | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
+                | x11rb::protocol::xproto::EventMask::KEY_PRESS
+                | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
+        );
+        let aux = match self.x11_cursors.get(&0x0001_0001).copied() {
+            Some(cursor) => aux.cursor(cursor),
+            None => aux,
+        };
+        if self
+            .conn
+            .create_window(
+                0,
+                win,
+                parent_win,
+                x,
+                y,
+                w,
+                h,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                visual,
+                &aux,
+            )
+            .is_err()
+        {
+            return;
+        }
+        let Ok(gc) = self.conn.generate_id() else {
+            return;
+        };
+        let _ = self
+            .conn
+            .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+        let _ = self.conn.flush();
+        self.windows.insert(
+            hwnd,
+            XWin {
+                window: win,
+                gc,
+                x: x as i32,
+                y: y as i32,
+                width: w,
+                height: h,
+                child: true,
             },
         );
         self.by_xwin.insert(win, hwnd);
@@ -3626,6 +3740,81 @@ impl gui::GuiBackend for X11Backend {
             .height(height as u32);
         let _ = self.conn.configure_window(window, &aux);
         let _ = self.conn.flush();
+    }
+
+    fn reparent_window(&mut self, hwnd: usize, parent: usize, rect: Rect) {
+        let Some(parent_win) = self.windows.get(&parent).map(|w| w.window) else {
+            return;
+        };
+        let x = self
+            .scaled(rect.left)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
+        let y = self
+            .scaled(rect.top)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
+        let Some(w) = self.windows.get_mut(&hwnd) else {
+            return;
+        };
+        if !w.child {
+            return; // fenêtre de premier niveau : laissée au gestionnaire
+        }
+        w.x = x;
+        w.y = y;
+        let win = w.window;
+        let _ = self
+            .conn
+            .reparent_window(win, parent_win, x as i16, y as i16);
+        let _ = self.conn.flush();
+    }
+
+    fn set_popup(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux = ChangeWindowAttributesAux::new().override_redirect(1);
+            let _ = self.conn.change_window_attributes(w.window, &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn grab_pointer(&mut self, hwnd: usize, grab: bool) {
+        use x11rb::protocol::xproto::{EventMask, GrabMode};
+        if !grab {
+            let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+            let _ = self.conn.flush();
+            return;
+        }
+        if let Some(w) = self.windows.get(&hwnd) {
+            // owner_events : les fenêtres du programme reçoivent toujours
+            // leurs clics ; le reste de l'écran arrive au menu.
+            let _ = self.conn.grab_pointer(
+                true,
+                w.window,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            );
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn lower_window(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux =
+                ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
+            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn raise_window(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux =
+                ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.flush();
+        }
     }
 
     fn set_focus(&mut self, hwnd: usize) {

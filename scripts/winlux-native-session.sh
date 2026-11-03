@@ -98,6 +98,23 @@ icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/nul
 if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
+# Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
+# sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
+# absent est remplacé par Adwaita.
+gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+# Thème absent (défaut XFCE Greybird, « Adwaita-dark » d'anciennes versions) :
+# le thème Winlux du compte est créé d'après Personnalisation (clair ou
+# sombre), sinon Adwaita. Une installation neuve restait claire en mode sombre.
+case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
+    # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
+    if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
+        mode=dark
+        if grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then mode=light; fi
+        if ! { test -x /usr/bin/winlux-personalize && WINLUX_PERSONALIZE_NO_SYSTEM=1 /usr/bin/winlux-personalize theme "$mode" >/dev/null 2>&1; }; then
+            /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        fi
+    fi ;;
+esac
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
@@ -114,8 +131,42 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
+# Bureau de Windows 11 : la Corbeille seule (#30). Les autres icônes
+# d'xfdesktop s'activent dans Paramètres ; un choix existant est gardé.
+for icon in trash:true filesystem:false home:false removable:false; do
+    property="/desktop-icons/file-icons/show-${icon%%:*}"
+    /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
+done
+# Échelle des applications GTK (#29), comme XFCE : facteur entier pour GTK
+# (200 % en 4K), le reste par la densité des polices (150 % → 144 ppp).
+# Un réglage fait à la main dans xsettings est gardé.
+gtk_scale() {
+    test -x /usr/bin/xfconf-query || return 0
+    marker="$HOME/.local/share/winlux/gtk-scale"
+    case "$1" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) return 0 ;; esac
+    factor=$(awk -v s="$1" 'BEGIN { print (s >= 2) ? 2 : 1 }')
+    dpi=$(awk -v s="$1" -v f="$factor" 'BEGIN { printf "%d", 96 * s / f + 0.5 }')
+    current=$(/usr/bin/xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || true)
+    previous=$(cat "$marker" 2>/dev/null || true)
+    if test -n "$current" && test "$current" != "${previous#*:}"; then return 0; fi
+    test "$previous" = "$factor:$dpi" && test "$current" = "$dpi" && return 0
+    for setting in "/Gdk/WindowScalingFactor:$factor" "/Xft/DPI:$dpi"; do
+        /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -s "${setting##*:}" 2>/dev/null ||
+            /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -n -t int -s "${setting##*:}" || true
+    done
+    mkdir -p "${marker%/*}" && printf '%s:%s\n' "$factor" "$dpi" >"$marker"
+}
+gtk_scale "${WINLUX_UI_SCALE:-$(/usr/bin/winlux-display session-scale 2>/dev/null || echo 1)}"
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
+# Session live (root) : mêmes services que la session d'un compte
+# (winlux-user-session.sh). Sans eux, Windows+V restait vide, les alarmes de
+# l'Horloge ne sonnaient pas fenêtre fermée et l'éclairage nocturne ne
+# s'appliquait pas.
+if test -x /usr/bin/winlux-clipboard; then /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
+if test -x /usr/bin/winlux-alarms; then /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
+if test -x /usr/bin/winlux-ambiance; then /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
@@ -130,6 +181,9 @@ alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/nu
 # panneau suit en direct toute correction ; souris et processeur n'ont pas
 # besoin d'attendre non plus.
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
+# Icône du clavier tactile (tablette sans clavier) écrite avant le lancement
+# de la barre, plus bas : un xfce4-panel déjà lancé ne chargeait pas le greffon.
+if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk panel || true; fi
 (
     export WINLUX_CONTROL_NO_STATUS=1
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
@@ -139,6 +193,8 @@ speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
         50) /usr/bin/winlux-control mouse-normal || true ;;
         75) /usr/bin/winlux-control mouse-fast || true ;;
     esac
+    # Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+    if test -x /usr/bin/winlux-mouse; then /usr/bin/winlux-mouse apply || true; fi
     # Profil processeur et courbe de ventilateurs choisis dans les Parametres.
     if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
 ) </dev/null >/run/winlux/session-settings.log 2>&1 &
@@ -181,6 +237,9 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
+# Clavier ou souris USB branché pendant la session : disposition et réglages
+# réappliqués (un clavier branché à chaud tapait en QWERTY).
+if test -x /usr/bin/winlux-input-watch; then /usr/bin/winlux-input-watch >/run/winlux/input-watch.log 2>&1 & fi
 wait_bus_name session org.xfce.FileManager "$thunar_pid" /run/winlux/file-manager.log
 # Name ownership precedes GTK/GVfs initialization. Une fois le nom pris, une
 # demande d'ouverture envoyée par le bureau attend simplement dans la file de

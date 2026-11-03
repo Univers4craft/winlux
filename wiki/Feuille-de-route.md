@@ -7,24 +7,21 @@
 | Étape | Contenu |
 |---|---|
 | Runtime PE | Chargeur PE32+ x86-64, ~100 DLL réimplémentées, SEH et exceptions C++, registre, chemins, UAC. |
-| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (29 pages), Explorateur et applications maison. |
+| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (30 pages), Explorateur et applications maison. |
 | ISO installable | Live, installateur graphique (automatique, manuel, LUKS, double démarrage), Secure Boot, récupération. |
 | Base native | Ubuntu 26.04 avec APT, mises à jour par paquet `.deb` avec retour arrière (v0.2.12). |
 | Multimédia et jeux | Lecteur FFmpeg, son PipeWire, Direct2D/DirectWrite/WIC maison, Direct3D 9/11/12 vers OpenGL/Vulkan, manettes. |
 | Intégration | Clés USB et partitions Windows avec lettres, lecteurs réseau, partage Samba, impression CUPS, presse-papiers et glisser-déposer communs. |
 | Identité | Logo Prisme, fonds, son de démarrage, aucune marque Microsoft. |
+| Récupération | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), clé de secours, démarrage avancé, réparation du démarrage, menu de secours en quatre langues (#283). |
 | Langues | Bureau en quatre langues, installateur en six. |
 
-## Prochaine version : v0.2.14
+## Prochaine version : v0.2.15
 
-- Sécurité : sur un système installé, le bureau et les .exe tournent sous le compte de l'utilisateur, plus en root (#258).
-- Démarrage plus rapide : menu GRUB caché 1 s, noyau silencieux, matériel et services hors du chemin critique (#254, #259, #260).
-- Claude Code (claude.exe officiel) tourne par la couche PE maison, avec une entrée au menu Démarrer (#255, #257).
-- Applications Ubuntu traduites en quatre langues (#253) et correctifs de la campagne de tests en VM : raccourcis Windows, menu clic droit du bureau, glisser-déposer et Corbeille de l'Explorateur, copier-coller, icônes de la barre des tâches (#252, #263, #264).
-
-## En cours (pull requests ouvertes)
-
-Aucune pull request ouverte pour la v0.2.14.
+- Aucun navigateur dans l'image : l'installateur, le premier démarrage et Paramètres > Navigateurs proposent Chrome, Edge et Firefox par ordre alphabétique ; Winlux télécharge le choix chez son éditeur et l'installe. La licence d'Edge interdit de le redistribuer : les ISO v0.2.14 et antérieures, qui le contenaient, sont retirées.
+- Système au nom de Winlux (« construit à partir de paquets Ubuntu »), liste des sources GPL publiée, mention de non-affiliation à Microsoft dans l'installateur, le premier démarrage et le créateur USB.
+- Contrôles et boîtes de dialogue Win32, OpenGL et Vulkan, manettes, MSIX, PuTTY, premiers jeux (#301 à #332).
+- « Redémarrer maintenant » de l'installateur réparé en Live (#303), taille de mise à jour affichée seulement quand une mise à jour existe.
 
 ## Priorités suivantes
 
@@ -54,12 +51,9 @@ Aucune pull request ouverte pour la v0.2.14.
 - Traduction des dernières applications (#139) et de tout l'installateur (#140).
 - « Ouvrir avec… » dans l'Explorateur (#152).
 
-### Idées proposées, pas encore commencées
+### Idées proposées, pas encore commencées (02/11/2026)
 
-- Jeux : Direct3D 11 complet, Steam, overlay FPS.
-- Suite bureautique et lecteur PDF avancé, navigateur intégré.
-- Finition Windows 11 de la session native : Snap Layouts, animations, bureaux virtuels, widgets, panneau de notifications.
-- Menu de récupération étendu, clé USB de secours, réinitialisation du PC.
-- Site web et documentation utilisateur.
+- Petits plaisirs : éclairage nocturne (#274), emojis Win+. (#275), historique Win+V natif (#276), Snap Layouts, Win+Tab et bureaux virtuels natifs (#277), Horloge (#278), pipette et petits outils (#279), copier le texte d'une image (#280), thème automatique et diaporama (#281).
+- Gros chantiers : widgets Win+W (#282), lien avec le téléphone (#284), coin jeux puis Steam (#285), assistant intégré (#286), site web et guide utilisateur (#287).
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)

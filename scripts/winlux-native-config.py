@@ -41,50 +41,101 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def _append_account_line(path, line, mode):
+    """Ajoute une ligne par fichier temporaire + fsync + rename."""
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8", errors="surrogateescape")
+        info = target.stat()
+        mode, owner, group = info.st_mode & 0o7777, info.st_uid, info.st_gid
+    except OSError:
+        text, owner, group = "", 0, 0
+    if text and not text.endswith("\n"):
+        text += "\n"
+    temporary = target.with_name(f".{target.name}.winlux-{os.getpid()}")
+    with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as stream:
+        stream.write(text + line)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chown(temporary, owner, group)
+    os.chmod(temporary, mode)
+    os.rename(temporary, target)
+
+
 def ensure_system_account(name, first_uid, comment, home):
     """Compte système « name » créé par useradd/groupadd (verrous, shadow,
-    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence.
-    Rien n'est écrit si le compte existe déjà."""
+    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence
+    ou s'ils échouent. Rien n'est écrit si le compte existe déjà ; un groupe
+    du même nom déjà présent (création interrompue) est réutilisé, et l'UID
+    choisi est libre à la fois comme UID et comme GID."""
     try: return pwd.getpwnam(name)
     except KeyError: pass
     used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-    uid = first_uid
-    while uid in used: uid += 1
-    if shutil.which("groupadd") and shutil.which("useradd"):
-        try: grp.getgrnam(name)
-        except KeyError: subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
-        subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(uid), "--no-create-home",
-                        "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+    try:
+        gid = grp.getgrnam(name).gr_gid
+    except KeyError:
+        gid = None
+    if gid is not None and gid not in {entry.pw_uid for entry in pwd.getpwall()}:
+        uid = gid
     else:
-        try: grp.getgrnam(name)
-        except KeyError:
-            with Path("/etc/group").open("a") as stream: stream.write(f"{name}:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"{name}:!:{uid}:{uid}:{comment}:{home}:/bin/false\n")
+        uid = first_uid
+        while uid in used: uid += 1
+    if shutil.which("groupadd") and shutil.which("useradd"):
+        try:
+            if gid is None:
+                subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
+                gid = uid
+            subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(gid), "--no-create-home",
+                            "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+            return pwd.getpwnam(name)
+        except (subprocess.CalledProcessError, OSError, KeyError) as error:
+            print(f"winlux-native-config : useradd {name} : {error} ; ajout direct", file=sys.stderr)
+            try: gid = grp.getgrnam(name).gr_gid
+            except KeyError: gid = None
+    if gid is None:
+        gid = uid
+        _append_account_line("/etc/group", f"{name}:x:{gid}:\n", 0o644)
+    _append_account_line("/etc/passwd", f"{name}:!:{uid}:{gid}:{comment}:{home}:/bin/false\n", 0o644)
     return pwd.getpwnam(name)
 
 
+def ensure_account_or_log(name, first_uid, comment, home):
+    """Compte annexe : un échec est journalisé, il ne bloque jamais la session."""
+    try:
+        return ensure_system_account(name, first_uid, comment, home)
+    except Exception as error:
+        print(f"winlux-native-config : compte {name} impossible ({error}) ; suite sans lui", file=sys.stderr)
+        return None
+
+
 if os.geteuid() == 0:
-    ensure_system_account("messagebus", 990, "D-Bus", "/nonexistent")
-    bus_group=grp.getgrnam("messagebus")
+    # Fichiers de comptes abîmés par un arrêt brutal : réparés d'abord
+    # (l'init le fait aussi ; ici pour une session lancée autrement).
+    if shutil.which("winlux-accounts-repair"):
+        subprocess.run(["winlux-accounts-repair"], check=False)
+    bus_user = ensure_account_or_log("messagebus", 990, "D-Bus", "/nonexistent")
     helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
-    if helper.is_file():
-        os.chown(helper,0,bus_group.gr_gid)
+    if bus_user and helper.is_file():
+        os.chown(helper,0,bus_user.pw_gid)
         helper.chmod(0o4754)
-    policy_user=ensure_system_account("polkitd", 980, "PolicyKit", "/nonexistent")
+    policy_user = ensure_account_or_log("polkitd", 980, "PolicyKit", "/nonexistent")
     policy_state=Path("/var/lib/polkit-1")
     policy_state.mkdir(parents=True,exist_ok=True)
-    os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
+    if policy_user:
+        os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
     for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
         Path(directory).mkdir(parents=True,exist_ok=True)
-    saver = ensure_system_account("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
-    directory = Path(saver.pw_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    directory.chmod(0o700)
-    os.chown(directory, saver.pw_uid, saver.pw_gid)
+    saver = ensure_account_or_log("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
+    if saver:
+        directory = Path(saver.pw_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+        os.chown(directory, saver.pw_uid, saver.pw_gid)
 
 home = Path.home()
-source = Path("/usr/share/winlux/native")
+# WINLUX_NATIVE_SOURCE : dossier du dépôt pour les tests (test-campaign.py).
+source = Path(os.environ.get("WINLUX_NATIVE_SOURCE", "/usr/share/winlux/native"))
 reset_panel = "--reset-panel" in sys.argv
 for path in (source / "config").rglob("*"):
     if path.is_file():
@@ -327,53 +378,96 @@ if panel_config.is_file() and not grouping_marker.exists():
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
-if openbox_config.is_file():
-    namespace = "http://openbox.org/3.4/rc"
-    ET.register_namespace("", namespace)
-    try:
-        tree = ET.parse(openbox_config)
-        keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
-        changed = False
-        default_rc = source / "config/openbox/rc.xml"
-        if keyboard is not None:
-            keys = {binding.get("key") for binding in keyboard}
-            for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
-                if key not in keys:
-                    binding = ET.SubElement(keyboard, f"{{{namespace}}}keybind", key=key)
-                    action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
-                    ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
-                    changed = True
-            if default_rc.is_file():
-                defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
-                if defaults is not None:
-                    for binding in defaults:
-                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t") and binding.get("key") not in keys:
-                            keyboard.append(ET.fromstring(ET.tostring(binding)))
-                            changed = True
-            for binding in list(keyboard):
-                commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
-                if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
-                    keyboard.remove(binding)
-                    changed = True
-        # Le clic droit sur le bureau ouvrait toujours le menu d'Openbox, même sur
-        # un fichier (ni Renommer ni Supprimer) et le bureau n'avait jamais le
-        # clavier : remplacer la liaison livrée par celle d'aujourd'hui.
-        mouse = tree.getroot().find(f"{{{namespace}}}mouse")
-        desktop = next((item for item in mouse if item.get("name") == "Desktop"), None) if mouse is not None else None
-        if desktop is not None and default_rc.is_file() and len(desktop) == 1 and desktop[0].get("button") == "Right" \
-                and desktop[0].findtext(f"{{{namespace}}}action/{{{namespace}}}menu") == "root-menu":
-            default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
-            position = list(mouse).index(desktop)
-            mouse.remove(desktop)
-            for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
-                mouse.insert(position, ET.fromstring(ET.tostring(context)))
-            changed = True
-        if changed:
-            temporary = openbox_config.with_suffix(".xml.tmp")
-            tree.write(temporary, encoding="utf-8", xml_declaration=True)
-            temporary.replace(openbox_config)
-    except ET.ParseError:
-        print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
+ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
+              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
+              "W-C-t", "W-S-c", "W-S-t")
+# Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
+# fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
+# Un raccourci personnel (une commande Execute) n'est pas touché.
+REPLACED_KEYS = ("W-Up", "W-Down", "W-Left", "W-Right", "W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right")
+OLD_SNAP_ACTIONS = {"Maximize", "UnmaximizeFull", "MoveResizeTo"}
+def migrate_openbox(openbox_config, default_rc):
+    """Raccourcis et clics livrés par Winlux mis à jour dans un rc.xml existant."""
+    if openbox_config.is_file():
+        namespace = "http://openbox.org/3.4/rc"
+        ET.register_namespace("", namespace)
+        try:
+            tree = ET.parse(openbox_config)
+            keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
+            changed = False
+            if keyboard is not None:
+                keys = {binding.get("key") for binding in keyboard}
+                for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
+                    if key not in keys:
+                        binding = ET.SubElement(keyboard, f"{{{namespace}}}keybind", key=key)
+                        action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
+                        ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
+                        changed = True
+                if default_rc.is_file():
+                    defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
+                    if defaults is not None:
+                        # Tout raccourci livré que ce compte n'a encore jamais reçu est
+                        # ajouté (touches de luminosité…) ; un raccourci déjà proposé puis
+                        # supprimé par l'utilisateur ne revient pas.
+                        offered_file = openbox_config.with_name("winlux-raccourcis-proposes.txt")
+                        try: offered = set(offered_file.read_text().split())
+                        except OSError: offered = set()
+                        for binding in defaults:
+                            key = binding.get("key")
+                            if key and key not in keys and (key in ADDED_KEYS or key not in offered):
+                                keyboard.append(ET.fromstring(ET.tostring(binding)))
+                                keys.add(key)
+                                changed = True
+                        shipped_keys = {binding.get("key") for binding in defaults if binding.get("key")}
+                        if not shipped_keys <= offered:
+                            try: offered_file.write_text("\n".join(sorted(offered | shipped_keys)) + "\n")
+                            except OSError: pass
+                        shipped = {binding.get("key"): binding for binding in defaults if binding.get("key") in REPLACED_KEYS}
+                        for binding in list(keyboard):
+                            actions = {action.get("name") for action in binding.findall(f"{{{namespace}}}action")}
+                            replacement = shipped.get(binding.get("key"))
+                            if replacement is not None and actions and actions <= OLD_SNAP_ACTIONS \
+                                    and ET.tostring(binding) != ET.tostring(replacement):
+                                keyboard.insert(list(keyboard).index(binding), ET.fromstring(ET.tostring(replacement)))
+                                keyboard.remove(binding)
+                                changed = True
+                for binding in list(keyboard):
+                    commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
+                    if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
+                        keyboard.remove(binding)
+                        changed = True
+            # Le clic droit sur le bureau ouvrait toujours le menu d'Openbox, même sur
+            # un fichier (ni Renommer ni Supprimer) et le bureau n'avait jamais le
+            # clavier : remplacer la liaison livrée par celle d'aujourd'hui.
+            mouse = tree.getroot().find(f"{{{namespace}}}mouse")
+            desktop = next((item for item in mouse if item.get("name") == "Desktop"), None) if mouse is not None else None
+            if desktop is not None and default_rc.is_file() and len(desktop) == 1 and desktop[0].get("button") == "Right" \
+                    and desktop[0].findtext(f"{{{namespace}}}action/{{{namespace}}}menu") == "root-menu":
+                default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
+                position = list(mouse).index(desktop)
+                mouse.remove(desktop)
+                for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
+                    mouse.insert(position, ET.fromstring(ET.tostring(context)))
+                changed = True
+            # Clic droit sur le bouton Agrandir : dispositions d'ancrage (Windows + Z).
+            maximize = next((item for item in mouse if item.get("name") == "Maximize"), None) if mouse is not None else None
+            if maximize is not None and default_rc.is_file() and not any(item.get("button") == "Right" for item in maximize):
+                default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
+                shipped = next((item for item in default_mouse if item.get("name") == "Maximize"), None)
+                for item in (shipped if shipped is not None else []):
+                    if item.get("button") == "Right":
+                        maximize.append(ET.fromstring(ET.tostring(item)))
+                        changed = True
+            if changed:
+                temporary = openbox_config.with_suffix(".xml.tmp")
+                tree.write(temporary, encoding="utf-8", xml_declaration=True)
+                temporary.replace(openbox_config)
+        except ET.ParseError:
+            print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+
+
+migrate_openbox(openbox_config, source / "config/openbox/rc.xml")
 # Action « Open Terminal Here » d'origine (anglaise) du menu des dossiers et du
 # bureau : remplacée par celle livrée, traduite.
 uca = home / ".config/Thunar/uca.xml"
@@ -382,6 +476,31 @@ try:
         shutil.copyfile(source / "config/Thunar/uca.xml", uca)
 except (OSError, UnicodeDecodeError):
     pass
+# Actions Thunar livrées après coup (#279 renommage, #280 texte d'une image) :
+# ajoutées une fois aux actions déjà copiées, sans toucher aux actions personnelles.
+UCA_ADDED = ("winlux-rename", "winlux-ocr")
+def migrate_uca(uca, shipped_file):
+    if not uca.is_file(): return
+    try:
+        shipped = shipped_file.read_text(encoding="utf-8")
+        current = uca.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    changed = current
+    for command in UCA_ADDED:
+        at = shipped.find("<command>" + command)
+        if at < 0 or "<command>" + command in changed or "</actions>" not in changed: continue
+        start = shipped.rfind("<action>", 0, at)
+        block = shipped[start:shipped.find("</action>", start) + len("</action>")]
+        changed = changed.replace("</actions>", block + "\n</actions>", 1)
+    if changed != current:
+        try:
+            temporary = uca.with_suffix(".xml.tmp")
+            temporary.write_text(changed, encoding="utf-8")
+            temporary.replace(uca)
+        except OSError:
+            pass
+migrate_uca(uca, source / "config/Thunar/uca.xml")
 # « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
 # Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
 openbox_menu = home / ".config/openbox/menu.xml"
@@ -416,3 +535,32 @@ for line in user_dirs.read_text(encoding="utf-8").splitlines():
 mimeapps = home / ".config/mimeapps.list"
 if not mimeapps.exists():
     mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\ntext/x-ms-regedit=winlux-regedit.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")
+
+
+def folder_handler(text):
+    """mimeapps.list avec les dossiers ouverts par l'Explorateur Winlux.
+
+    Un fichier écrit par une autre application (navigateur…) n'avait pas de
+    ligne inode/directory, et GIO prenait Thunar : « Afficher dans le dossier »
+    ouvrait Thunar. Le choix d'un autre gestionnaire que Thunar est gardé."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("inode/directory="):
+            first = line.partition("=")[2].split(";")[0].strip().lower()
+            if first and first not in ("thunar.desktop", "org.xfce.thunar.desktop"):
+                return text
+            lines[index] = "inode/directory=winlux-explorer.desktop;"
+            return "\n".join(lines) + "\n"
+    if "[Default Applications]" not in lines:
+        lines += ["[Default Applications]"]
+    lines.insert(lines.index("[Default Applications]") + 1, "inode/directory=winlux-explorer.desktop;")
+    return "\n".join(lines) + "\n"
+
+
+try:
+    current = mimeapps.read_text(encoding="utf-8")
+    fixed = folder_handler(current)
+    if fixed != current:
+        mimeapps.write_text(fixed, encoding="utf-8")
+except (OSError, UnicodeDecodeError):
+    pass

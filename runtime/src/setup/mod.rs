@@ -11,19 +11,26 @@
 //! `winlux setup.exe` (double-clic) passe ici automatiquement ;
 //! `winlux --setup …` donne accès aux options (voir `USAGE`).
 
+pub mod appx_signature;
+pub mod burn;
 pub mod inno;
 mod inno_layout;
 pub mod lzma;
+pub mod msix;
 pub mod nsis;
 pub mod programs;
+pub mod sevenz;
+pub mod squirrel;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup
+const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup, paquets MSIX et AppX
   winlux --setup installateur.exe [/D=dossier]   installer
+  winlux --setup paquet.msix|.appx|.msixbundle   installer un paquet MSIX
+        [--allow-unverified]                      même d'un éditeur non vérifié (code 3 sinon)
   winlux --setup --info installateur.exe          type, nom, version, dossier
   winlux --setup --list                           applications installées ainsi
   winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe
@@ -35,6 +42,12 @@ const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup
 pub enum Kind {
     Nsis,
     Inno,
+    /// Paquet MSIX ou AppX (archive ZIP, pas un .exe).
+    Msix,
+    /// Exécutable auto-extractible 7z (installateur de 7-Zip…).
+    SevenZip,
+    /// Setup.exe Squirrel.Windows (Claude, Slack, Discord…).
+    Squirrel,
 }
 
 impl Kind {
@@ -42,6 +55,9 @@ impl Kind {
         match self {
             Kind::Nsis => "nsis",
             Kind::Inno => "inno",
+            Kind::Msix => "msix",
+            Kind::SevenZip => "7z",
+            Kind::Squirrel => "squirrel",
         }
     }
 }
@@ -51,11 +67,17 @@ pub fn detect(data: &[u8]) -> Option<Kind> {
     if data.len() < 64 || &data[..2] != b"MZ" {
         return None;
     }
+    if squirrel::find_package(data).is_some() {
+        return Some(Kind::Squirrel);
+    }
     if inno::find_offsets(data).is_some() {
         return Some(Kind::Inno);
     }
     if nsis::find_header(data).is_some() {
         return Some(Kind::Nsis);
+    }
+    if sevenz::find_archive(data).is_some() {
+        return Some(Kind::SevenZip);
     }
     None
 }
@@ -99,6 +121,9 @@ pub struct Options {
     pub dir: Option<String>,
     /// Pas de raccourci sur le Bureau.
     pub no_desktop: bool,
+    /// L'utilisateur a confirmé l'installation d'un paquet MSIX dont
+    /// l'éditeur n'est pas vérifié (`--allow-unverified`).
+    pub allow_unverified: bool,
 }
 
 fn clean(s: &str) -> String {
@@ -448,6 +473,7 @@ impl Installer {
             return Ok(());
         }
         let bytes = crate::msi::shortcut_bytes(target, args, workdir, desc);
+        hide_desktop_link(link);
         self.write_file(link, &bytes)?;
         Ok(())
     }
@@ -693,26 +719,46 @@ pub fn remove(m: &Manifest, log: &mut Logger) {
     }
     let _ = std::fs::remove_file(manifest_path(&m.id));
     log.log(&format!("{} est désinstallé.", m.name));
+    // Quel que soit le chemin (--remove, --uninstall, désinstalleur) : le
+    // lanceur « Nom » du Bureau part avec le raccourci.
+    refresh_launchers();
 }
 
 /// Informations sur un installateur.
 pub fn info(path: &Path) -> Result<Info, String> {
+    if msix::is_package(path) {
+        return msix::info(path);
+    }
     let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     match detect(&data) {
         Some(Kind::Inno) => inno::info(&data),
         Some(Kind::Nsis) => nsis::info(&data, path),
-        None => Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into()),
+        Some(Kind::SevenZip) => sevenz::info(&data, path),
+        Some(Kind::Squirrel) => squirrel::info(&data),
+        Some(Kind::Msix) | None => {
+            Err("ce programme n'est pas un installateur NSIS ou Inno Setup".into())
+        }
     }
 }
 
 /// Installe. Renvoie le manifeste enregistré.
 pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
-    let kind = detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
-    let mut inst = Installer::new(kind, log);
-    match kind {
-        Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
-        Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
+    let mut inst;
+    if msix::is_package(path) {
+        inst = Installer::new(Kind::Msix, log);
+        msix::install(path, opts, &mut inst)?;
+    } else {
+        let data = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+        let kind =
+            detect(&data).ok_or("ce programme n'est pas un installateur NSIS ou Inno Setup")?;
+        inst = Installer::new(kind, log);
+        match kind {
+            Kind::Inno => inno::install(&data, path, opts, &mut inst)?,
+            Kind::Nsis => nsis::install(&data, path, opts, &mut inst)?,
+            Kind::SevenZip => sevenz::install(&data, path, opts, &mut inst)?,
+            Kind::Squirrel => squirrel::install(&data, opts, &mut inst)?,
+            Kind::Msix => unreachable!("un .exe n'est jamais un paquet MSIX"),
+        }
     }
     // Réinstallation : les fichiers de l'ancienne version absents de la
     // nouvelle sont retirés, le reste est conservé.
@@ -731,6 +777,49 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
     let m = inst.finish()?;
     eprintln!("setup : {name} est installé.");
     Ok(m)
+}
+
+/// Met à jour les lanceurs du menu et du Bureau (winlux-applications) après
+/// une désinstallation : un raccourci retiré ne laisse pas d'icône morte.
+fn refresh_launchers() {
+    let tool = std::path::Path::new("/usr/bin/winlux-applications");
+    if tool.is_file() {
+        let _ = std::process::Command::new(tool)
+            .arg("refresh")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Raccourci posé sur le Bureau : son nom est inscrit dans `.hidden` AVANT
+/// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
+/// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
+/// winlux-applications pose ensuite le lanceur « Claude » à sa place.
+fn hide_desktop_link(link: &str) {
+    let desktop = Folders::desktop();
+    let Some((dir, name)) = link.rsplit_once('\\') else {
+        return;
+    };
+    if !dir.eq_ignore_ascii_case(&desktop) || !name.to_ascii_lowercase().ends_with(".lnk") {
+        return;
+    }
+    let path = crate::paths::to_linux(&format!("{desktop}\\.hidden"));
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if current.lines().any(|l| l == name) {
+        return;
+    }
+    let mut text = current;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(name);
+    text.push('\n');
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, text);
 }
 
 /// Lit un argument chemin (Linux existant ou Windows).
@@ -818,6 +907,11 @@ pub fn cli(args: &[String]) -> i32 {
                     return 2;
                 };
                 let (rc, msg) = programs::uninstall_key(k);
+                if rc == 0 {
+                    // msiexec et désinstalleurs externes ne passent pas par
+                    // la désinstallation intégrée : lanceurs remis à jour ici.
+                    refresh_launchers();
+                }
                 match &out {
                     Some(o) => {
                         let mut text = format!("code={rc}\nmessage={msg}\n");
@@ -842,6 +936,7 @@ pub fn cli(args: &[String]) -> i32 {
             "/s" | "/silent" | "/verysilent" | "/sp-" | "/suppressmsgboxes" | "/norestart"
             | "--quiet" => log.quiet = lower == "--quiet",
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
+            "--allow-unverified" => opts.allow_unverified = true,
             _ => {
                 if let Some(d) = a.strip_prefix("/D=").or_else(|| a.strip_prefix("/DIR=")) {
                     opts.dir = Some(d.trim_matches('"').to_string());
@@ -862,6 +957,12 @@ pub fn cli(args: &[String]) -> i32 {
     };
     match install(&host_path(&file), &opts, log) {
         Ok(_) => 0,
+        // Paquet MSIX d'un éditeur non vérifié : le lanceur du double-clic
+        // demande une confirmation puis relance avec --allow-unverified.
+        Err(e) if e.starts_with(appx_signature::UNVERIFIED) => {
+            eprintln!("setup : {e}");
+            3
+        }
         Err(e) => {
             eprintln!("setup : échec de l'installation : {e}");
             1
@@ -921,7 +1022,13 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
         remove(&m, &mut log);
         return Some(0);
     }
-    detect_file(exe)?;
+    // Bundles WiX Burn (vc_redist…) : chaîne de paquets MSI installée ici.
+    if let Some(code) = burn::launch(exe, args) {
+        return Some(code);
+    }
+    if !(msix::is_package_name(exe) && msix::is_package(exe)) {
+        detect_file(exe)?;
+    }
     let mut cli_args: Vec<String> = args.to_vec();
     cli_args.push(exe.to_string_lossy().into_owned());
     Some(cli(&cli_args))

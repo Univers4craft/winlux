@@ -44,8 +44,18 @@ def targets(runtime, testdir):
                       {"WINLUX_SETTINGS_PAGE": str(page)}))
     found.append(("menu-demarrer", [python, "-B", str(scripts / "winlux-start-menu.py")], {}))
     found.append(("menu-demarrer-clair", [python, "-B", str(scripts / "winlux-start-menu.py")], {"GTK_THEME": "Adwaita"}))
-    for kind in ("volume", "power", "calendar"):
+    for kind in ("volume", "power", "calendar", "quick"):
         found.append((f"popup-{kind}", [python, "-B", str(scripts / "winlux-popup.py"), kind], {}))
+    # Volet de widgets (Win+W) avec un relevé météo fixe, sans réseau.
+    weather = Path(tempfile.mkdtemp(prefix="winlux-capture-weather."))
+    (weather / "weather.json").write_text(
+        "temp=14\nfeels_like=12\nhumidity=72\nwind=18\ncondition=partly\ncity=Lyon\nunits=c\nupdated=1793541600\n"
+        "forecast0_day=dim\nforecast0_min=8\nforecast0_max=15\nforecast0_cond=partly\n"
+        "forecast1_day=lun\nforecast1_min=7\nforecast1_max=13\nforecast1_cond=rain\n"
+        "forecast2_day=mar\nforecast2_min=5\nforecast2_max=11\nforecast2_cond=sunny\n", encoding="cp1252")
+    found.append(("widgets", [python, "-B", str(scripts / "winlux-widgets.py")],
+                  {"WINLUX_RUN_DIR": str(weather), "WINLUX_WEATHER_OFFLINE": "1", "WINLUX_WIDGETS_NO_ANIMATION": "1",
+                   "WINLUX_WIDGETS_TIME": "09:41"}))
     for page in ("quick", "notifications", "tasks", "appearance", "apps", "files", "recovery"):
         found.append((f"outils-{page}", [python, "-B", str(scripts / "winlux-system-tools.py"), page], {}))
     found.append(("bienvenue", [python, "-B", str(scripts / "winlux-welcome.py")], {}))

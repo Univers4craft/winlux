@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Pipette
+Name[en]=Color Picker
+Name[es]=Selector de colores
+Name[de]=Farbwähler
+Comment=Choisir une couleur n’importe où à l’écran et copier son code (Windows + Maj + C)
+Comment[en]=Pick a color anywhere on screen and copy its code (Windows + Shift + C)
+Comment[es]=Elegir un color en cualquier parte de la pantalla y copiar su código (Windows + Mayús + C)
+Comment[de]=Eine Farbe irgendwo auf dem Bildschirm auswählen und ihren Code kopieren (Windows + Umschalt + C)
+Keywords=pipette;couleur;color;picker;hex;rgb;colores;Farbe;Farbwähler;
+Exec=/usr/bin/winlux-colorpicker
+Icon=color-select
+Categories=Utility;Graphics;
+Terminal=false

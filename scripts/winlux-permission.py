@@ -8,6 +8,9 @@ Usage :
   winlux-permission set CAPACITÉ allow|deny CHEMIN_EXE
   winlux-permission forget CHEMIN_EXE             tout redemander à cette appli
 
+La fenêtre enregistre elle-même la réponse, se ferme seule si le programme
+qui demande a quitté, et ne s'ouvre pas si la réponse est déjà connue.
+
 Capacités : files, camera, microphone, screen, network. Le runtime Winlux
 (runtime/src/permissions.rs) pose la question et mémorise la réponse dans
 ~/.config/winlux/permissions.tsv (capacité<TAB>allow|deny<TAB>chemin).
@@ -111,6 +114,7 @@ QUESTIONS = {
                 "L’application pourra se connecter à Internet et à votre réseau local.", "network-workgroup"),
 }
 TIMEOUT_SECONDS = 120
+WATCH_MILLISECONDS = 500
 
 
 # ── Mémoire des choix (même format que le runtime) ──────────────────────────
@@ -164,9 +168,68 @@ def by_app():
     return dict(sorted(apps.items(), key=lambda item: Path(item[0]).name.casefold()))
 
 
+def stored(cap, exe):
+    """Décision déjà mémorisée pour ce programme, ou None."""
+    for c, decision, path in load():
+        if c == cap and path == exe:
+            return decision
+    return None
+
+
+def remember_answer(cap, exe, code):
+    """La fenêtre mémorise elle-même la réponse : elle reste acquise même si
+    le programme qui a posé la question a quitté ou a été tué entre-temps."""
+    if code in (0, 1):
+        try:
+            set_decision(cap, "allow" if code == 0 else "deny", exe)
+        except (OSError, ValueError) as error:
+            print(f"winlux-permission : {error}", file=sys.stderr)
+
+
+def process_start(pid):
+    """Date de démarrage du processus (champ 22 de /proc/PID/stat), ou None
+    s'il n'existe plus : distingue un numéro de processus réutilisé."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as stat:
+            fields = stat.read().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+    # fields[0] est l'état (champ 3) ; un zombie a déjà quitté.
+    if not fields or fields[0] in ("Z", "X"):
+        return None
+    return fields[19] if len(fields) > 19 else None
+
+
+def requester():
+    """(pid, démarrage) du programme qui pose la question : le parent direct,
+    sauf WINLUX_PERMISSION_PARENT."""
+    try:
+        pid = int(os.environ.get("WINLUX_PERMISSION_PARENT") or os.getppid())
+    except ValueError:
+        pid = os.getppid()
+    return pid, process_start(pid)
+
+
+def watch(cap, exe, parent):
+    """Code de sortie si la fenêtre doit se fermer seule, sinon None :
+    réponse donnée entre-temps (autre fenêtre du même programme), ou
+    programme demandeur terminé (plus personne n'attend la réponse)."""
+    decision = stored(cap, exe)
+    if decision is not None:
+        return 0 if decision == "allow" else 1
+    pid, start = parent
+    if pid > 1 and start is not None and process_start(pid) != start:
+        return 2
+    return None
+
+
 # ── Fenêtre de demande ──────────────────────────────────────────────────────
 
 def ask(cap, name, exe):
+    parent = requester()
+    early = watch(cap, exe, parent)
+    if early is not None:
+        return early
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
@@ -177,12 +240,14 @@ def ask(cap, name, exe):
     css = Gtk.CssProvider()
     css.load_from_data(b"""
       window.winlux-consent { background: #202020; color: #f3f3f3; }
-      .consent-title { font-size: 19px; font-weight: 600; }
-      .consent-detail { color: #d0d0d0; font-size: 13px; }
-      .consent-path { color: #9a9a9a; font-size: 11px; }
-      .consent-footer { background: #2b2b2b; padding: 18px 24px; }
-      .consent-note { color: #a8a8a8; font-size: 11px; }
-      button.consent-allow { background: #4cc2ff; color: #000; border: none; border-radius: 4px;
+      /* The user gtk.css (light theme) must not repaint the inner boxes. */
+      .winlux-consent box, .winlux-consent label { background-color: transparent; color: inherit; }
+      .winlux-consent .consent-title { font-size: 19px; font-weight: 600; }
+      .winlux-consent .consent-detail { color: #d0d0d0; font-size: 13px; }
+      .winlux-consent .consent-path { color: #9a9a9a; font-size: 11px; }
+      .winlux-consent .consent-footer { background: #2b2b2b; padding: 18px 24px; }
+      .winlux-consent .consent-note { color: #a8a8a8; font-size: 11px; }
+      button.consent-allow { background: #b19af9; color: #000; border: none; border-radius: 4px;
                              padding: 7px 22px; font-weight: 600; box-shadow: none; text-shadow: none; }
       button.consent-allow:hover { background: #48b2e9; }
       button.consent-deny { background: #3a3a3a; color: #f3f3f3; border: 1px solid #4a4a4a; border-radius: 4px;
@@ -199,9 +264,22 @@ def ask(cap, name, exe):
     window.set_default_size(460, -1)
     window.set_icon_name(icon)
 
-    def finish(code):
+    def finish(code, save=False):
+        if result.get("done"):
+            return
+        result["done"] = True
         result["code"] = code
+        if save:
+            remember_answer(cap, exe, code)
+        window.hide()
         Gtk.main_quit()
+
+    def poll():
+        code = watch(cap, exe, parent)
+        if code is not None:
+            finish(code)
+            return False
+        return True
 
     window.connect("delete-event", lambda *_: finish(2) or False)
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -224,10 +302,10 @@ def ask(cap, name, exe):
     buttons = Gtk.Box(spacing=8, homogeneous=True)
     allow = Gtk.Button(label=_t("Autoriser"))
     allow.get_style_context().add_class("consent-allow")
-    allow.connect("clicked", lambda *_: finish(0))
+    allow.connect("clicked", lambda *_: finish(0, save=True))
     deny = Gtk.Button(label=_t("Ne pas autoriser"))
     deny.get_style_context().add_class("consent-deny")
-    deny.connect("clicked", lambda *_: finish(1))
+    deny.connect("clicked", lambda *_: finish(1, save=True))
     buttons.pack_start(allow, True, True, 0)
     buttons.pack_start(deny, True, True, 0)
     footer.pack_start(buttons, False, False, 0)
@@ -240,6 +318,7 @@ def ask(cap, name, exe):
     deny.grab_focus()
     window.present()
     GLib.timeout_add_seconds(TIMEOUT_SECONDS, lambda: finish(2) or False)
+    GLib.timeout_add(WATCH_MILLISECONDS, poll)
     Gtk.main()
     return result["code"]
 

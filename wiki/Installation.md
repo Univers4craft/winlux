@@ -1,5 +1,7 @@
 # Installation
 
+> Vous découvrez Winlux ? Le [guide de l'utilisateur](https://univers4craft.github.io/winlux/fr/guide.html) du site web explique l'installation pas à pas, en français, anglais, allemand et espagnol. Cette page en donne le détail technique.
+
 > **Préversion technique.** Découvrez Winlux d'abord dans une machine virtuelle. Avant d'installer sur un vrai PC, **sauvegardez vos données**.
 
 ## Ce qu'il faut
@@ -68,17 +70,25 @@ Pour déployer plusieurs postes, un **fichier de réponses** YAML ou JSON pré-r
 
 ## 5. Premier démarrage
 
-L'assistant **Bienvenue** propose : thème clair ou sombre, fond d'écran, position de la barre des tâches, choix des applications à installer, et une courte visite (lancer un `.exe`, installer les logiciels courants en un clic). Il peut être relancé depuis Démarrer.
+La fenêtre **Bienvenue** (`winlux-welcome`) s'ouvre à la première session et ne modifie rien d'elle-même. Elle propose cinq boutons : **Visite guidée et logiciels courants** (la visite du bureau, les logiciels courants en un clic, thème et position de la barre), **Choisir le clavier** (Paramètres › Clavier et souris), **Configurer le réseau** (réglages rapides), **Personnaliser l’apparence** (Paramètres › Fond d’écran et couleurs) et **Découvrir le secours** (Paramètres › Mises à jour). Elle revient à chaque session jusqu'au clic sur « Terminer » (marqueur `~/.config/winlux/welcome-complete`) ; ensuite, l'entrée « Bienvenue dans Winlux » du menu Démarrer (`winlux-welcome.desktop`) la rouvre.
 
 ## Récupération
 
-Le menu GRUB contient une entrée de secours (**« Winlux Recovery »** sur la clé USB, touche `r` ; **« Winlux secours »** sur un système installé, touche `s`) :
+**Paramètres › Système › Récupération** (comme Windows 11) :
+
+- **Réinitialiser ce PC** : « Conserver mes fichiers » (comptes et dossiers personnels gardés, système et applications remis d'origine) ou « Tout supprimer » (nouveau compte, nettoyage du lecteur en option). Réinstallation depuis la clé de secours, une ISO ou Internet ; rien n'est effacé avant le redémarrage.
+- **Démarrage avancé** : redémarre une fois sur le menu de secours.
+- **Réparer le démarrage** : GRUB BIOS et UEFI, menu réécrit s'il est abîmé.
+- **Créer une clé de secours** : clé USB qui démarre directement sur le menu de secours de ce PC et peut réinstaller Winlux.
+
+Le menu de secours (**« Winlux secours »** au démarrage, touche `s` ; **« Winlux Recovery »** sur la clé d'installation, touche `r` ; ou la clé de secours), dans la langue du système :
 
 1. Réparer le démarrage (GRUB BIOS et UEFI, chaîne Secure Boot) ;
 2. Restaurer le point de restauration précédent (`winlux-update --rollback`) ;
 3. Terminal de secours ;
 4. Vérifier le système de fichiers (`e2fsck`) ;
-5. Redémarrer / éteindre.
+7. Réinitialiser ce PC (source : clé de secours ou ISO) ;
+5. Redémarrer / 6. éteindre.
 
 Détails : [docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md).
 

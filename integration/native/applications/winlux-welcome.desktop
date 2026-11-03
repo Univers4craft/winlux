@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Bienvenue dans Winlux
+Name[en]=Welcome to Winlux
+Name[es]=Bienvenido a Winlux
+Name[de]=Willkommen bei Winlux
+Comment=Rouvre la fenêtre de bienvenue : visite guidée, clavier, réseau, apparence et secours
+Comment[en]=Reopens the welcome window: guided tour, keyboard, network, appearance and recovery
+Comment[es]=Vuelve a abrir la ventana de bienvenida: visita guiada, teclado, red, apariencia y recuperación
+Comment[de]=Öffnet das Willkommensfenster erneut: Rundgang, Tastatur, Netzwerk, Darstellung und Wiederherstellung
+Keywords=bienvenue;visite;guide;démarrage;demarrage;welcome;tour;getting started;bienvenida;visita;willkommen;Rundgang;
+Exec=/usr/bin/winlux-welcome
+Icon=help-about
+Categories=Utility;
+Terminal=false

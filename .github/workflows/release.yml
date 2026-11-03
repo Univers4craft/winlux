@@ -19,8 +19,24 @@ on:
       - scripts/winlux-user-session.sh
       - scripts/winlux-network-watch.sh
       - scripts/stage-apt-root.py
+      - scripts/winlux-brand-image.sh
+      - scripts/list-gpl-sources.py
       - scripts/winlux-update-apt.py
       - scripts/test-update-curl-shim.py
+      - scripts/check-iso-boot-paths.sh
+      - scripts/fetch-ovmf-ia32.sh
+      - scripts/install.sh
+      - scripts/test-install-vm-guest.sh
+      # Tout ce qui change le contenu de l'image : #359 a retiré Thunar via
+      # stage-desktop-components.sh sans que l'ISO soit reconstruite ici.
+      - scripts/build-live-iso.sh
+      - scripts/build-live-root.sh
+      - scripts/stage-*.sh
+      - scripts/stage-*.py
+      - scripts/prepare-*.py
+      - scripts/winlux-native-config.py
+      - integration/native/dbus/**
+      - integration/native/filemanager/**
   workflow_dispatch:
 
 permissions:
@@ -63,7 +79,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q \
-            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static mtools cryptsetup-bin \
@@ -74,10 +90,14 @@ jobs:
             libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
             libqt6core6t64 libqt6gui6 libqt6widgets6 \
             python3-gi gir1.2-gtk-3.0
-          sudo apt-get install -y -q openbox wmctrl xdotool
+          sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
+          # UEFI 32 bits pour QEMU : Ubuntu 26.04 n a plus ovmf-ia32 (paquet 24.04 vérifié par SHA-256).
+          ovmf32=$(sh scripts/fetch-ovmf-ia32.sh "$RUNNER_TEMP/ovmf-ia32")
+          echo "WINLUX_OVMF32=$ovmf32/OVMF32_CODE_4M.fd" >>"$GITHUB_ENV"
+          echo "WINLUX_OVMF32_VARS=$ovmf32/OVMF32_VARS_4M.fd" >>"$GITHUB_ENV"
 
-      - name: Préparer Edge, Chrome et Firefox hors ligne
-        run: python3 scripts/prepare-browser-packages.py build/browser-packages
+      # Aucun navigateur dans l'ISO : l'utilisateur choisit le sien, téléchargé
+      # chez son éditeur après l'installation (Paramètres > Navigateurs).
 
       - name: Préparer le bureau natif et ses applications
         run: python3 scripts/prepare-desktop-packages.py build/desktop-components
@@ -133,6 +153,9 @@ jobs:
           size=$(stat -c %s "build/winlux-live-$RELEASE_NAME.iso")
           echo "Taille de l'ISO : $size octets"
           test "$size" -lt 2147483648 || { echo "ISO trop grande pour une release GitHub (limite 2 Gio)" >&2; exit 1; }
+          # Offre de sources GPL : la liste des paquets sources part avec l'ISO.
+          test -s build/sources-gpl.tsv
+          grep -q 'GPL' build/sources-gpl.tsv
           echo "SKIP_ISO=false" >> "$GITHUB_ENV"
 
       - name: Valider les navigateurs en VM
@@ -169,6 +192,7 @@ jobs:
           if [ "$SKIP_ISO" = "false" ]; then
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" bios
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi
+            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$RELEASE_NAME.iso" uefi32
             # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
             WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
           fi
@@ -216,13 +240,20 @@ jobs:
             set -- "$@" build/winlux-release-notes.txt
           fi
           if [ "$SKIP_ISO" = "false" ]; then
-            set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256"
+            set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256" build/sources-gpl.tsv
           fi
+          # Mention de non-affiliation sous chaque note de version (docs/DEFENSE-DU-NOM.md).
+          {
+            cat "docs/releases/$GITHUB_REF_NAME.md"
+            printf '\n---\n\n'
+            printf '%s\n\n' "Winlux est un projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation, citée uniquement pour décrire la compatibilité. Winlux est construit à partir de paquets Ubuntu ; Ubuntu est une marque de Canonical Ltd., qui n'approuve pas ce projet. Liste des sources GPL : sources-gpl.tsv."
+            printf '%s\n' "_Winlux is an independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation, named only to describe compatibility._"
+          } > build/release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             "$@" \
             --repo "$GITHUB_REPOSITORY" \
             --draft --verify-tag \
-            --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
+            --notes-file build/release-notes.md \
             --title "Winlux $GITHUB_REF_NAME"
           # Le manifeste latest ne devient visible qu'après tous les uploads.
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

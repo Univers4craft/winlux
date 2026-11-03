@@ -30,6 +30,8 @@ fi
 
 # Pavé tactile : réglages mémorisés (deux doigts, toucher-clic, vitesse).
 winlux-touchpad apply 2>/dev/null || true
+# Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+if command -v winlux-mouse >/dev/null 2>&1; then winlux-mouse apply 2>/dev/null || true; fi
 
 locale_conf=/etc/winlux/locale.conf
 winlux_lang=fr

@@ -33,7 +33,7 @@ C'est la session par défaut, en Live comme sur un système installé. Elle est 
 - **Écran de verrouillage** (`winlux-lock`) : heure et date sur le fond d'écran, puis avatar et mot de passe sur fond flouté. Déclenché par Windows+L, Démarrer › Verrouiller, l'inactivité (5 minutes par défaut) et le réveil de veille. Cinq erreurs bloquent la saisie trente secondes.
 - **UAC** (`winlux-uac`) : « Voulez-vous autoriser cette application à apporter des modifications à votre appareil ? », pour les programmes qui demandent les droits administrateur. Voir [Chemins et droits](Chemins-et-droits).
 - **Autorisations** (`winlux-permission`) : caméra, micro, capture d'écran, dossiers personnels, demandées une fois par programme.
-- **Bienvenue** (`winlux-welcome`) : visite guidée au premier démarrage, lancer un `.exe`, installer les logiciels courants en un clic.
+- **Bienvenue** (`winlux-welcome`) : fenêtre de la première session, avec cinq raccourcis (visite guidée et logiciels courants, clavier, réseau, apparence, secours) ; elle revient jusqu'au clic sur « Terminer », puis se rouvre depuis le menu Démarrer.
 - **Personnalisation** (`winlux-personalize`) : fonds, couleurs, position de la barre des tâches, appliqués à GTK, Openbox et XFCE.
 - **Notifications** et **zone de notification** : centre de notifications, icônes `Shell_NotifyIcon` des programmes Windows (`winlux-notify-icon`).
 - **Écran d'arrêt**, **sessions multiples** (Verrouiller, Se déconnecter, Changer d'utilisateur ; un Xorg par compte), **signalement de problème** (`winlux-report`).
@@ -63,6 +63,21 @@ Ces applications sont de vrais programmes Windows écrits en Rust `no_std`, comp
 
 L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, code dans `shell/desktop.rs` et `shell/wm.rs`) n'est plus la session par défaut, mais reste dans les tests et sert de banc d'essai au runtime.
 
+## Petits plaisirs du bureau natif
+
+| Raccourci ou endroit | Fonction |
+|---|---|
+| **Windows + .** ou **Windows + ;** | Sélecteur d'emojis, kaomojis et symboles ; recherche sans accents dans la langue du bureau et en anglais ; le choix est tapé dans la fenêtre active. Les emojis en couleur se téléchargent au premier usage (10 Mo). |
+| **Windows + flèches**, **Windows + Z** | Ancrage comme Windows 11 : moitiés, quarts, agrandir, taille d'avant ; l'Assistant d'ancrage propose les autres fenêtres. Windows + Z ou clic droit sur Agrandir : cinq dispositions (moitiés, deux tiers, trois colonnes, quarts). Windows + Maj + flèche : écran voisin. |
+| **Windows + Tab** | Vue des tâches : aperçus des fenêtres, bureaux virtuels (nouveau, renommer, supprimer, déplacer une fenêtre par clic droit). Windows + Ctrl + D crée un bureau, Windows + Ctrl + F4 le ferme, Windows + Ctrl + ← / → passe de l'un à l'autre. |
+| **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
+| Menu Démarrer › **Horloge** | Alarmes (répétées ou uniques, rappel dans 5 min), minuteurs, chronomètre avec tours, horloges du monde, sessions de concentration avec Ne pas déranger. Les alarmes sonnent même l'application fermée. |
+| **Windows + Maj + C** | Pipette : l'écran se fige avec une loupe, un clic choisit la couleur, son code HEX est copié ; la fenêtre montre aussi RGB et HSL et les 20 dernières couleurs. |
+| **Windows + Ctrl + T** | Garde la fenêtre active au premier plan, entourée d'un cadre coloré ; le même raccourci la libère. |
+| Clic droit › **Renommer plusieurs fichiers…** | Dès que plusieurs fichiers sont sélectionnés (Explorateur ou Thunar) : rechercher / remplacer (texte ou expression régulière), nom numéroté, préfixe, suffixe, casse. L'aperçu signale doublons et caractères interdits ; le dernier renommage s'annule. |
+| **Windows + Maj + T** | Copier le texte de l'écran : on encadre une zone, son texte est copié et montré pour retouche. Aussi « Copier le texte » dans la visionneuse d'images et au clic droit sur une image. Le moteur et les langues (fr, en, es, de, environ 15 Mo) se téléchargent au premier usage. |
+| Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
+
 ## Applications Linux
 
 Les applications Linux s'installent normalement (`apt`, Store, Flatpak, Snap, AppImage). Leurs fichiers `.desktop` sont reconnus par Démarrer, et un crochet APT actualise le catalogue après chaque installation. Un navigateur web est préparé hors ligne dans l'ISO (Paramètres › Navigateurs permet d'en choisir un autre et de le mettre par défaut) ; il tourne sous un compte isolé, et ses téléchargements arrivent dans `C:\Users\<nom>\Downloads` (voir [docs/BROWSERS.md](https://github.com/Univers4craft/winlux/blob/master/docs/BROWSERS.md)).
@@ -79,7 +94,7 @@ Le bureau, l'Explorateur, les Paramètres, l'écran de verrouillage et les appli
 
 - Corbeille complète (restaurer, vider) et barre de progression des copies (#10, #11).
 - Navigation au clavier (Tab) dans toutes les fenêtres du shell.
-- Dans la session native : aperçu d'ancrage à la souris (Snap Layouts), animations, bureaux virtuels et widgets plus proches de Windows 11 (ils existent dans l'ancien bureau PE).
+- Dans la session native : ancrage en glissant une fenêtre au bord de l'écran, animations.
 - Écran de chargement du noyau, sons système et jeu d'icônes à l'identité Prisme (#170).
 
 Voir aussi : [Paramètres](Parametres) · [INTERFACE.md](https://github.com/Univers4craft/winlux/blob/master/INTERFACE.md) · [docs/NATIVE-DESKTOP.md](https://github.com/Univers4craft/winlux/blob/master/docs/NATIVE-DESKTOP.md)

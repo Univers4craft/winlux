@@ -23,9 +23,28 @@ for directory in dbus-1 xdg gtk-3.0 fonts NetworkManager bluetooth udisks2 polki
         cp -a --remove-destination "$components/etc/$directory/." "$stage/etc/$directory/"
     fi
 done
+# Firmwares (Wi-Fi, son SOF, cartes graphiques, Bluetooth) : Ubuntu 26.04 les
+# installe dans /usr/lib/firmware, mais le noyau ne les cherche que dans
+# /lib/firmware, et /lib est ici un vrai dossier (pas le lien vers usr/lib
+# d'Ubuntu). Sans ce lien, aucun firmware n'était chargé sur un vrai PC :
+# portable récent sans haut-parleurs ni micro (« Sortie factice »), Wi-Fi Intel
+# muet.
+if test -d "$stage/usr/lib/firmware" && ! test -L "$stage/lib"; then
+    if test -d "$stage/lib/firmware" && ! test -L "$stage/lib/firmware"; then
+        cp -a --remove-destination "$stage/lib/firmware/." "$stage/usr/lib/firmware/"
+        rm -rf "$stage/lib/firmware"
+    fi
+    mkdir -p "$stage/lib"
+    ln -sfn ../usr/lib/firmware "$stage/lib/firmware"
+fi
 mkdir -p "$stage/usr/lib/NetworkManager/conf.d"
 cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkManager/conf.d/90-winlux.conf"
-for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-phone; do
+# Sans logind, polkit ne voit aucune session « active » : nmcli lancé par un
+# compte du bureau recevait « non autorisé ». Les membres de netdev (tous les
+# comptes créés par Winlux) pilotent le réseau, comme sous Windows.
+mkdir -p "$stage/etc/polkit-1/rules.d"
+install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-phone winlux-wifi winlux-brightness winlux-certificates; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -41,6 +60,13 @@ mkdir -p "$stage/usr/share/winlux/native"
 cp -a "$project/integration/native/." "$stage/usr/share/winlux/native/"
 mkdir -p "$stage/usr/share/dbus-1/services"
 cp "$project/integration/native/dbus/org.freedesktop.Notifications.service" "$stage/usr/share/dbus-1/services/"
+# « Afficher dans le dossier » des navigateurs et des applications passe par
+# org.freedesktop.FileManager1 : c'est l'Explorateur Winlux, plus Thunar
+# (org.xfce.Thunar.FileManager1.service retiré, un seul fournisseur).
+grep -l '^Name=org.freedesktop.FileManager1$' "$stage"/usr/share/dbus-1/services/*.service 2>/dev/null | while IFS= read -r other; do
+    rm -f "$other"
+done
+cp "$project/integration/native/dbus/org.freedesktop.FileManager1.service" "$stage/usr/share/dbus-1/services/"
 mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 # Identité Winlux : thème d'icônes maison (complété par Adwaita) et sons système.
@@ -63,6 +89,14 @@ while IFS= read -r type; do
     grep -q "^$type=" "$mimeapps" && continue
     sed -i "/^\[Default Applications\]/a $type=winlux-explorer.desktop;" "$mimeapps"
 done
+# Dossiers : toujours l'Explorateur (xdg-open, GIO, liens des navigateurs et
+# des .exe), y compris dans la liste propre à XFCE, qui passe avant.
+for list in "$mimeapps" "$stage/etc/xdg/xfce-mimeapps.list" "$stage/usr/share/applications/xfce-mimeapps.list"; do
+    test -f "$list" || continue
+    sed -i '/^inode\/directory=/d' "$list"
+    grep -q '^\[Default Applications\]' "$list" || printf '[Default Applications]\n' >>"$list"
+    sed -i '/^\[Default Applications\]/a inode/directory=winlux-explorer.desktop;' "$list"
+done
 # Icônes des .exe et des raccourcis .lnk (Bureau, Explorateur, Thunar) via tumbler.
 mkdir -p "$stage/usr/share/thumbnailers"
 cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage/usr/share/thumbnailers/"
@@ -75,7 +109,7 @@ cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/us
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
 cp --remove-destination "$project/scripts/winlux-boot-menu.sh" "$stage/usr/share/winlux/boot-menu"
 chmod 755 "$stage/usr/share/winlux/boot-menu"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-first-boot-notice.sh:winlux-first-boot-notice'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-network-perms.sh:winlux-network-perms' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-input-watch.sh:winlux-input-watch' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"
@@ -98,4 +132,25 @@ rm -rf "$stage/usr/share/i18n"
 certificate="$stage/usr/share/ca-certificates/mozilla/NetLock_Arany_=Class_Gold=_Főtanúsítvány.crt"
 if test -f "$certificate"; then
     mv "$certificate" "$stage/usr/share/ca-certificates/mozilla/NetLock_Arany_Class_Gold_CA.crt"
+fi
+# Liste des autorités actives d'update-ca-certificates (créée d'ordinaire par
+# le script d'installation du paquet, qui ne tourne pas ici) : sans elle, une
+# mise à jour de ca-certificates ou l'ajout d'une autorité d'entreprise
+# reconstruirait un magasin vide.
+if test -d "$stage/usr/share/ca-certificates/mozilla" && ! test -s "$stage/etc/ca-certificates.conf"; then
+    (cd "$stage/usr/share/ca-certificates" && find mozilla -name '*.crt' | LC_ALL=C sort) >"$stage/etc/ca-certificates.conf"
+fi
+# Dossier /etc/ssl/certs avec un fichier par autorité et ses liens par
+# empreinte (openssl rehash) : le Wi-Fi d'entreprise (« Certificats du
+# système » : wpa_supplicant lit ce dossier, pas le fichier groupé) et les
+# programmes qui utilisent un CApath ne trouvaient aucune autorité.
+if test -d "$stage/usr/share/ca-certificates/mozilla"; then
+    mkdir -p "$stage/etc/ssl/certs"
+    for certificate in "$stage"/usr/share/ca-certificates/mozilla/*.crt; do
+        name=${certificate##*/}
+        ln -sfn "../../../usr/share/ca-certificates/mozilla/$name" "$stage/etc/ssl/certs/${name%.crt}.pem"
+    done
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rehash "$stage/etc/ssl/certs" 2>/dev/null || c_rehash "$stage/etc/ssl/certs" >/dev/null 2>&1 || true
+    fi
 fi

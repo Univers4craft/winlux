@@ -4,6 +4,12 @@
 répond à une question simple : **que faut-il encore écrire pour que la
 quasi-totalité des logiciels Windows démarrent et fonctionnent sur Winlux ?**
 
+> **Mise à jour du 2 novembre 2026** ([compat/mesure-2026-11-02.md](compat/mesure-2026-11-02.md)) :
+> le premier manque n'est pas une DLL. Les boîtes de dialogue, les contrôles
+> standard (boutons, champs, listes) et les fenêtres enfants ne sont pas
+> encore implémentés : les logiciels Win32 classiques démarrent sans rien
+> afficher. C'est le chantier prioritaire, devant tous ceux listés ci-dessous.
+
 Il complète [COMPATIBILITY.md](../COMPATIBILITY.md), qui décrit API par API ce
 qui existe, et ne remplace aucun des suivis existants : chaque manque renvoie à
 son issue GitHub quand elle existe déjà.
@@ -15,6 +21,121 @@ Issues des grands chantiers : #14 et #26 (fonctions et DLL système), #232
 #179 (installeurs), et depuis le 2 novembre #269 (fautes matérielles en
 exceptions, suspension de threads), #270 (`ReadDirectoryChangesW`, ConPTY),
 #271 (périphériques), #272 (MSIX) et #265 à #268 (suite de Paint.NET).
+
+Depuis #269 (première partie), les fautes matérielles du code d'un programme
+(accès mémoire invalide, division par zéro, `int3`, `ud2`, pas à pas,
+instruction privilégiée, page de garde `PAGE_GUARD`, débordement de pile)
+deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
+blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
+`scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
+
+Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
+par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
+empreintes du block map vérifiées avant toute écriture, installation dans
+`C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
+protocoles, `LocalState`, identité de paquet à l'exécution
+(`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
+Éditeur : comme Windows, un paquet non signé n'est pas installé sans
+avertissement. Il est refusé par défaut avec « Éditeur non vérifié » (code 3), et le
+double-clic demande une confirmation explicite (« Annuler » par défaut,
+« Installer quand même ») avant de relancer avec `--allow-unverified`. Un paquet signé
+est vérifié entièrement (#235, `runtime/src/setup/appx_signature.rs`, calculs par
+l'OpenSSL du système) : signature RSA ou ECDSA des attributs signés, `messageDigest`
+du `SpcIndirectDataContent`, condensats `AXBM` (block map, qui protège chaque
+fichier), `AXCT`, `AXCI`, `AXPC` et `AXCD` du paquet reçu, usage « signature de
+code » du certificat et chaîne jusqu'à une autorité du système. Entièrement vérifié,
+il s'installe sans question ; signé par une autorité inconnue (certificat de test,
+autorité d'entreprise non installée) ou expiré, il passe par la même confirmation ;
+une signature fausse, au nom d'un autre éditeur, ou un paquet modifié après
+signature est refusé dans tous les cas.
+Pas encore : la contre-signature d'horodatage (un certificat expiré reste à confirmer),
+la révocation en ligne, les autorités de signature de code propres à Windows (absentes du
+magasin du système : un paquet du Store reste donc à confirmer), les paquets de ressources des bundles, et les paquets 32 bits (#232).
+Test : `scripts/test-msix.sh`.
+
+Depuis #271 (première partie), les manettes, volants et joysticks se lisent
+aussi en HID brut, comme le font SDL, les moteurs de jeu et les outils de
+configuration : `setupapi` énumère `GUID_DEVINTERFACE_HID` depuis
+`/sys/class/hidraw`, `CreateFileW` ouvre le chemin `\\?\hid#vid_…#hidrawN#{…}`,
+et `hid.dll` rend attributs, noms, capacités (`HidP_GetCaps`, tirées du
+descripteur) et rapports de fonction (`runtime/src/dlls/hid.rs`). Les lectures
+et écritures, OVERLAPPED compris, passent par un relais qui ajoute ou retire
+l'octet d'identifiant de rapport que Windows impose et que hidraw omet. La règle
+`integration/70-winlux-manettes.rules` ouvre les `/dev/hidraw*` des fabricants
+de manettes au groupe `input`. Test : `scripts/test-hid.sh`.
+
+`DeviceIoControl` (#271) répond aux codes de disques, de volumes et de fichiers
+(`runtime/src/dlls/devio.rs`) : `\\.\C:` et `\\.\PhysicalDriveN` s'ouvrent
+sans toucher au vrai périphérique, et `IOCTL_STORAGE_QUERY_PROPERTY` (fabricant,
+modèle, numéro de série, bus, SSD ou non, TRIM, alignement),
+`IOCTL_DISK_GET_DRIVE_GEOMETRY(_EX)`, `GET_LENGTH_INFO`, `GET_PARTITION_INFO_EX`,
+`IOCTL_STORAGE_GET_DEVICE_NUMBER`, `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` sont lus
+dans /sys/block. Côté fichiers : `FSCTL_SET_SPARSE`, `SET_ZERO_DATA` (trou
+percé), `QUERY_ALLOCATED_RANGES` (SEEK_DATA/SEEK_HOLE), compression et
+identifiant d'objet. Les rapports HID passent aussi par `IOCTL_HID_*`.
+Verrouiller ou démonter un volume est refusé (accès refusé), tout autre code
+rend `ERROR_NOT_SUPPORTED`. Test : `scripts/test-devio.sh`.
+
+L'entrée brute (#271, `runtime/src/dlls/rawinput.rs`) donne aux jeux de tir la
+souris en déplacements relatifs, sans accélération ni blocage au bord de
+l'écran : `RegisterRawInputDevices` lance un fil qui lit les souris et claviers
+evdev de l'hôte (`/dev/input/event*`, ouverts au groupe `input`) et poste
+`WM_INPUT` à la fenêtre inscrite tant que le programme a le focus (toujours avec
+`RIDEV_INPUTSINK`). `GetRawInputData`, `GetRawInputBuffer`,
+`GetRawInputDeviceList` et `GetRawInputDeviceInfoA/W` (nom, fiche, manettes HID)
+suivent. Boutons 1 à 5, molettes (haute résolution comprise), scancodes PS/2 avec
+le préfixe E0. Test : `scripts/test-rawinput.sh` (fausse souris et faux clavier
+sur des FIFO, `WINLUX_RAWINPUT_DEVICES`).
+
+Les ports série (`COMn` sur `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, DCB et
+délais sur termios) se trouvent désormais comme sous Windows (#271,
+`runtime/src/dlls/serial.rs`) : `QueryDosDeviceW/A` liste les lecteurs et les
+ports présents, `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` est rafraîchie à chaque
+ouverture, et `SetCommMask`/`WaitCommEvent` (OVERLAPPED compris),
+`GetCommProperties`, `BuildCommDCBA/W`, `TransmitCommChar`, `Get/SetCommConfig`
+et `GetDefaultCommConfig` complètent. Test : `scripts/test-serial.sh` (COM7 sur
+un pseudo-terminal qui répond).
+
+Les jeux en plein écran exclusif changent la définition et la rampe gamma
+(#271, `runtime/src/dlls/displaymode.rs`) : `EnumDisplaySettings(Ex)A/W` liste les
+vrais modes et fréquences de chaque écran (`xrandr --query`, `\\.\DISPLAY1` =
+écran principal), `ChangeDisplaySettings(Ex)A/W` applique la demande par
+`xrandr --output … --mode … --rate …` (CDS_TEST, DISP_CHANGE_BADMODE,
+WM_DISPLAYCHANGE), et `SetDeviceGammaRamp`/`GetDeviceGammaRamp` passent par la
+rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
+plante : un gardien `winlux --display-restore`, lancé au premier changement avec
+l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
+Rien n'est écrit dans la configuration d'écran mémorisée. Test :
+`scripts/test-display-mode.sh` (faux xrandr). `GetDIBits` décrit l'écran comme
+Windows (32 bits, `BI_BITFIELDS`, 8 bits par composante) : SDL3 en tire le
+format des modes, que Warzone 2100 écartait tous.
+
+Les ports COM se trouvent aussi comme le fait pyserial, l'IDE Arduino ou un
+logiciel de flashage (#271, `runtime/src/dlls/devnodes.rs`). Un arbre de
+périphériques Plug and Play est construit à partir de sysfs : la racine, les
+ports (`USB\VID_…&PID_…&MI_…` sous leur appareil USB `USB\VID_…&PID_…\<série>`,
+`ACPI\PNP0501`, `ROOT\PORTS`) et les manettes HID. `setupapi` sert la classe Ports et
+l'interface COMPORT (`SetupDiOpenDevRegKey` → `PortName`,
+`SetupDiGetDeviceInstanceId`, `FRIENDLYNAME` « … (COM5) », `HARDWAREID`,
+`SetupDiClassGuidsFromName`). `cfgmgr32` parcourt l'arbre (`CM_Locate_DevNode`,
+`CM_Get_Parent/Child/Sibling`, `CM_Get_Device_ID`, `CM_Get_DevNode_Status`,
+`CM_Get_DevNode_Registry_Property`, `CM_Get_Device_Interface_List`). Un chemin
+d'interface COMPORT s'ouvre avec `CreateFileW` comme le port lui-même. Test :
+`scripts/test-devnodes.sh` (faux sysfs d'une Arduino Uno, plus COM7 sur un
+pseudo-terminal).
+
+L'accès USB direct des outils de flashage, de radio logicielle et de libusb
+passe par `winusb.dll` (#271, `runtime/src/dlls/winusb.rs`). Les appareils de
+`/sys/bus/usb/devices` sont listés par setupapi sous `GUID_DEVINTERFACE_USB_DEVICE`,
+puis `CreateFileW` sur leur chemin ouvre `/dev/bus/usb/BBB/DDD` (usbfs).
+`WinUsb_Initialize` réclame l'interface sans jamais détacher un pilote du noyau
+(ERROR_BUSY sinon). Fonctions servies : descripteurs, vitesse, réglages
+d'interface et points de terminaison (`QueryInterfaceSettings`, `QueryPipe`),
+`ControlTransfer`, `ReadPipe`/`WritePipe` (bulk et interruption), délais par
+`PIPE_TRANSFER_TIMEOUT`, `ResetPipe`, réglage alternatif, interfaces associées.
+Sans droit sur usbfs, la description vient du fichier `descriptors` de sysfs et
+les transferts échouent proprement (ERROR_ACCESS_DENIED). L'isochrone n'est pas
+pris en charge. Test : `scripts/test-winusb.sh` (faux sysfs).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
@@ -198,14 +319,27 @@ changent (Windows x64 vers System V), il faut donc des thunks générés.
 
 Ampleur : **M** pour chacun. Suivi : #233.
 
+**Fait (novembre 2026).** `opengl32.dll` et `vulkan-1.dll` existent
+(`runtime/src/dlls/opengl32.rs`, `vulkan1.rs`). Un pont générique
+(`hostcall.rs`) traduit chaque appel Windows x64 en appel System V d'après la
+signature de la fonction, tirée des registres Khronos (`sigs/gl.txt` : 3 295
+fonctions OpenGL, `sigs/vk.txt` : 716 commandes Vulkan, regénérés par
+`scripts/gen-host-signatures.py`). WGL est relié à GLX sur la fenêtre X11 du
+HWND (formats de pixel, `WGL_ARB_create_context`, `WGL_ARB_pixel_format`,
+`WGL_EXT_swap_control`), `ChoosePixelFormat` / `SwapBuffers` sont dans gdi32.
+Côté Vulkan, `VK_KHR_win32_surface` devient une surface Xlib, les rappels de
+débogage sont enveloppés et les allocateurs du programme remplacés par celui
+du pilote. Vérifié par `gl_vk_suite.exe` (OpenGL 4.5 Mesa, Vulkan lavapipe).
+Reste : `wglUseFontBitmaps` et le rendu dans un bitmap (`PFD_DRAW_TO_BITMAP`).
+
 ### 5. Bibliothèque C++ de Visual Studio et dossier System32
 
 `msvcp140.dll`, `mfc140u.dll`, `concrt140.dll`, `vcomp140.dll` et
 `d3dcompiler_47.dll` sont normalement installés par le « redistribuable » de
 Visual Studio ou de DirectX. Beaucoup d'applis supposent qu'ils sont déjà là
 (wxPython : 22 modules en dépendent). Winlux ne les fournit pas et son
-chargeur ne cherche que dans le dossier de l'appli, le dossier courant et
-`PATH` : il n'existe pas de `C:\Windows\System32`.
+chargeur ne cherchait que dans le dossier de l'appli, le dossier courant et
+`PATH` : il n'existait pas de `C:\Windows\System32`.
 
 Ce qu'il faut : un dossier système où les installeurs peuvent déposer leurs
 DLL (et que le chargeur parcourt), le support des installeurs WiX Burn
@@ -215,6 +349,29 @@ existante).
 
 Ampleur : **S** pour le dossier système, **M** pour Burn, **L** pour une
 `msvcp140` complète. Suivi : #234.
+
+**Fait (novembre 2026).**
+- `C:\Windows\System32` est parcouru par le chargeur juste après le dossier
+  de l'appli, dans l'ordre de Windows (`loader::find_dll_file`).
+- Les bundles WiX Burn s'installent sans exécuter leur moteur
+  (`runtime/src/setup/burn.rs`) : Winlux lit la section `.wixburn`, extrait
+  les conteneurs (cabinets), lit `BurnManifest.xml` et installe la chaîne.
+  Les paquets MSI passent par le msiexec maison, les `.exe` sont relancés
+  avec leurs arguments d'installation, `.msu`/`.msp` sont ignorés.
+  `/uninstall` retire les paquets. Un MSI 32 bits dépose ses DLL système
+  dans `SysWOW64`, comme sous Windows 64 bits. Les redistribuables
+  arrivent donc avec les applis, après l'installation de Winlux, et ne sont
+  pas dans l'ISO.
+- Une `msvcp140` maison sert quand aucun redistribuable n'est installé :
+  threads, mutex et variables de condition (compatibles avec les deux
+  dispositions du STL), horloges, `random_device`, tables d'erreurs. Les
+  `_X*` (erreurs fatales de conteneur) arrêtent le programme avec un
+  message au lieu de lever l'exception C++. La vraie `msvcp140.dll`, si
+  elle est présente, passe toujours avant (`dlls::prefers_real_file`).
+- Vérifié par `system32_suite.exe` et par un bundle de test réel (MSI
+  produit par wixl) dans les tests unitaires.
+- Reste : flux et locale C++ (`iostream`), MFC, `concrt140`, `vcomp140`,
+  et `d3dcompiler_47` (avec #137).
 
 ### 6. HTTPS et sécurité des applications
 
@@ -234,6 +391,68 @@ WinINet sur le même moteur que WinHTTP.
 
 Ampleur : **L**. Suivi : #235.
 
+**Fait (novembre 2026).**
+- WinINet (`InternetOpen`, `InternetOpenUrl`, `HttpOpenRequest`,
+  `HttpSendRequest`, `HttpQueryInfo`…) passe par le moteur de WinHTTP ;
+  urlmon fournit `URLDownloadToFile` et `URLDownloadToCacheFile`.
+- `crypt32` donne de vrais certificats : `CERT_CONTEXT` et `CERT_INFO`
+  remplis par un lecteur DER maison, magasin `ROOT` alimenté par les
+  autorités de l'hôte (`/etc/ssl/certs/ca-certificates.crt`), magasins en
+  mémoire, recherche (SHA-1, sujet, émetteur), propriétés de condensat,
+  `CertGetNameString`, `CertNameToStr`, `CryptStringToBinary` et
+  `CryptBinaryToString`. Les chaînes (`CertGetCertificateChain`) et la
+  stratégie SSL (`CertVerifyCertificateChainPolicy`, nom du serveur compris)
+  sont vérifiées par l'OpenSSL de l'hôte (`runtime/src/dlls/hostssl.rs`).
+- Schannel (`runtime/src/dlls/schannel.rs`) : `AcquireCredentialsHandle`,
+  `InitializeSecurityContext` (codes `SEC_I_CONTINUE_NEEDED`,
+  `SEC_E_INCOMPLETE_MESSAGE`, tampons `EXTRA` et `MISSING` comme Windows),
+  `EncryptMessage`, `DecryptMessage`, fermeture par `ApplyControlToken`,
+  attributs (tailles du flux, certificat du serveur, protocole, ALPN) et la
+  table `InitSecurityInterface`. Le certificat du serveur est validé
+  automatiquement avec les autorités du système, sauf validation manuelle
+  demandée par l'appli. Kerberos, NTLM et Negotiate restent absents.
+- CryptoAPI : `CryptCreateHash`, `CryptHashData`, `CryptGetHashParam`,
+  `CryptDuplicateHash` (MD4, MD5, SHA-1, SHA-2) ; `bcrypt` gagne MD5, SHA-384,
+  SHA-512 et HMAC. Clés symétriques : `CryptImportKey` (`PLAINTEXTKEYBLOB`),
+  `CryptGenKey`, `CryptDeriveKey`, `CryptEncrypt`/`CryptDecrypt` en CBC ou
+  ECB avec bourrage PKCS#5 (DES, 3DES, AES 128/192/256, RC4), paramètres de
+  clé (IV, mode, longueur). C'est ce que demande le NTLM de libcurl.
+- Le chemin de libcurl avec un fichier d'autorités (`CURLOPT_CAINFO`) :
+  `CryptQueryObject` (certificat binaire, PEM ou base64, tampon ou fichier),
+  `CertCreateCertificateChainEngine` avec racines exclusives
+  (`hExclusiveRoot`, chaîne partielle acceptée), `CertGetNameString` avec
+  tous les noms DNS (`CERT_NAME_SEARCH_ALL_NAMES_FLAG`), `CryptDecodeObjectEx`
+  pour les noms alternatifs et les contraintes de base.
+- Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
+  `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
+  unitaires.
+- Données protégées (`runtime/src/dlls/dpapi.rs`) : `CryptProtectData`,
+  `CryptUnprotectData` (AES-256-CBC et HMAC-SHA256, clé maîtresse par compte
+  dans `~/.config/winlux/dpapi/master.key`, clé de la machine avec
+  `CRYPTPROTECT_LOCAL_MACHINE`, entropie et description gérées),
+  `CryptProtectMemory`/`CryptUnprotectMemory` et `RtlEncryptMemory`. Un blob
+  venu d'un vrai Windows ne se relit pas : il dépend des secrets du compte
+  Windows.
+- Certificats client : `PFXImportCertStore` (PKCS #12 déchiffré par
+  OpenSSL, clé privée attachée au certificat, `CERT_KEY_PROV_INFO_PROP_ID`),
+  `PFXIsPFXBlob`, `PFXVerifyPassword`, `CERT_FIND_HAS_PRIVATE_KEY` ; Schannel
+  présente le certificat de `SCHANNEL_CRED.paCred` au serveur qui le demande.
+- Clés RSA de la CryptoAPI (`runtime/src/dlls/advapi32_rsa.rs`) : conteneurs
+  de clés par compte (`CryptAcquireContext` avec `CRYPT_NEWKEYSET`,
+  `CRYPT_DELETEKEYSET`, `CRYPT_VERIFYCONTEXT` ; clés gardées dans
+  `~/.config/winlux/crypto/`, chiffrées par la DPAPI), `CryptGenKey`
+  (`AT_KEYEXCHANGE`, `AT_SIGNATURE`), `CryptGetUserKey`, `CryptExportKey` et
+  `CryptImportKey` (`PUBLICKEYBLOB`, `PRIVATEKEYBLOB`, `PLAINTEXTKEYBLOB`,
+  `SIMPLEBLOB`), HMAC (`CALG_HMAC`, `HP_HMAC_INFO`, `CRYPT_IPSEC_HMAC_KEY`),
+  `CryptSetHashParam(HP_HASHVAL)`,
+  `CryptSignHash`/`CryptVerifySignature` (PKCS #1 v1.5, MD5, SHA-1, SHA-2),
+  `CryptEncrypt`/`CryptDecrypt` RSA (PKCS #1 v1.5 ou `CRYPT_OAEP`),
+  `CryptAcquireCertificatePrivateKey` (clé d'un certificat importé d'un
+  PKCS #12) et `CryptImportPublicKeyInfo(Ex)`. Calculs par l'OpenSSL du
+  système.
+- Reste : `ncrypt`, `CALG_MAC` (MAC par chiffrement), rôle serveur de
+  Schannel.
+
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 
 Déjà suivi par #137. Sans traduction DXBC (SM4/5) et DXIL (SM6) vers GLSL ou
@@ -246,6 +465,22 @@ DirectDraw (point 12).
 
 Ampleur : **XL** (deux traducteurs de bytecode complets, le plus gros chantier
 graphique). Suivi : #137.
+
+Fait (Direct3D 11, SM4/5) : `runtime/src/dlls/dxbc.rs` traduit le bytecode
+DXBC en GLSL 4.30 (signatures, tampons de constantes, textures et
+échantillonneurs, calcul flottant et entier, sauts et boucles, geometry
+shaders). `d3d11_pipeline.rs` applique au tirage la mise en page des entrées,
+les tampons de sommets, d'index et de constantes, les vues de textures, les
+échantillonneurs, les états de mélange, de profondeur et de rastérisation, et
+les ciseaux. Un périphérique sans chaîne d'échange rend hors écran. Test :
+`scripts/test-d3d11-rendu.sh`, un .exe qui dessine un quad texturé sous Mesa
+et relit ses pixels.
+
+Reste : DXIL (SM6, Direct3D 12), compute shaders et UAV, sortie de flux,
+hull et domain shaders, textures 3D, cubes et tableaux. Il reste aussi le HLSL
+compilé à la volée : notre `D3DCompile` garde le texte dans un chunk « HLSL »
+sans produire de DXBC, donc ANGLE (Chromium, Warzone 2100) n'en profite pas
+encore.
 
 ### 8. Chromium, Electron, CEF et WebView2 — une grande partie des applis modernes
 
@@ -286,6 +521,39 @@ compléments Office et de l'automatisation.
 
 Ampleur : **L**. Suivi : #16, #17, #19, #20.
 
+**Fait (novembre 2026), pour crashpad (Chromium, Electron).** Héritage des
+handles entre processus .exe (`runtime/src/dlls/inherit.rs`) : `bInheritHandle`
+de `SECURITY_ATTRIBUTES`, `SetHandleInformation`/`GetHandleInformation`,
+`DuplicateHandle(…, bInheritHandle)` (y compris un vrai handle vers le
+processus courant) et `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. L'enfant retrouve
+chaque handle à la même valeur : fichiers, tubes et sockets en descripteurs
+hérités, événements dans une page partagée attendue par futex, processus par
+leur PID, instances de tube nommé reprises par l'enfant. Les tubes nommés se
+joignent d'un processus à l'autre par leur nom (socket Unix de rendez-vous dans
+`$XDG_RUNTIME_DIR/winlux-tubes`, droits 0700). Test : `scripts/test-heritage.sh`.
+Pas encore : `DuplicateHandle` vers un **autre** processus (le courtier de
+Chromium), la mémoire partagée (`CreateFileMapping`) et les mutex et sémaphores
+hérités, l'écoute des clients d'autres processus avant `ConnectNamedPipe`, le
+mode message des tubes entre processus. `crashpad_handler.exe` (Warzone 2100,
+Sentry) reste non lancé tant qu'il n'a pas été essayé avec ces handles.
+
+**Démarrage d'Electron (novembre 2026).** Relevé sur un vrai Electron 45 dans la
+VM, chaque absence arrêtant Chromium (CHECK). Ajoutés
+(`runtime/src/dlls/chromium_win32.rs`) :
+- atténuations `Get/SetProcessMitigationPolicy`, lues comme désactivées ;
+- `Get/SetProcessInformation`, `SetThreadInformation`, `FlsGetValue2` ;
+- contrôle, SACL et contrôle RM des descripteurs de sécurité, `MakeSelfRelativeSD`
+  et `MakeAbsoluteSD` ;
+- notifications de veille, contextes de DPI et `SetWinEventHook` ;
+- shcore (`GetDpiForMonitor`, `GetScaleFactorForMonitor`,
+  `Set/GetProcessDpiAwareness`, contrat `api-ms-win-shcore-scaling-*`) ;
+- les contrats `api-ms-win-downlevel-*` ;
+- les bibliothèques de types d'oleaut32, par nom et par ordinal (#161 à #164,
+  #183), qui rendent l'erreur documentée ;
+- `CONOUT$`/`CONIN$` sans terminal, qui rendent la sortie ou l'entrée standard.
+
+Test : `scripts/test-chromium-api.sh`.
+
 ### 11. Périphériques et entrées des jeux
 
 `DeviceIoControl` (le plus demandé du corpus), entrée brute
@@ -293,6 +561,11 @@ Ampleur : **L**. Suivi : #16, #17, #19, #20.
 `setupapi`/`cfgmgr32` (`CM_Get_Parent`…, manettes et périphériques USB), ports
 série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
+
+Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
+sur disques, volumes et fichiers, entrée brute, ports série, définition
+d'écran et rampe gamma, `cfgmgr32` et la classe Ports de `setupapi` (voir plus haut).
+Reste : les transferts isochrones de `winusb`.
 
 Ampleur : **M**. Suivi : #271.
 
@@ -312,6 +585,19 @@ NSIS, Inno Setup et MSI marchent ; il reste les plugins NSIS
 InstallShield et les installeurs 32 bits (point 3).
 
 Ampleur : **M** à **L**. Suivi : #179.
+
+## Installateurs Squirrel (Claude pour Windows, Discord, Slack…)
+
+`winlux --setup Setup.exe` reconnaît un installateur Squirrel.Windows : le
+paquet zip est lu dans la ressource DATA 131 du Setup.exe 32 bits (qui n'est
+pas exécuté), puis le .nupkg est déplié dans `%LocalAppData%\<Id>\app-<version>`,
+avec Update.exe à la racine, un raccourci dans le menu Démarrer et un sur le
+Bureau, et une entrée dans Applications installées. Essai réel : Claude 0.14.10
+(Anthropic PBC) s'installe à l'identique, 324 Mo. Les imports directs de
+claude.exe sont tous servis, sauf deux fonctions d'impression (winspool) en
+bouchon. Le lancement d'Electron reste à vérifier en VM. Test :
+`scripts/test-squirrel.sh`. ChatGPT pour Windows n'existe que dans le
+Microsoft Store (paquet MSIX), que Winlux sait déjà installer.
 
 ## Hors de portée ou exclu
 

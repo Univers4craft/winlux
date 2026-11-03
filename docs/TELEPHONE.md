@@ -19,7 +19,7 @@ embarqué : le côté Winlux est écrit entièrement dans `scripts/winlux-phone.
 | --- | --- |
 | Service de session (un par compte) | `winlux-phone serve --if-paired`, lancé par `winlux-user-session` et `winlux-native-session` une fois le bureau affiché, **seulement si un téléphone est associé** |
 | Application « Téléphone connecté » | menu Démarrer (`winlux-phone.desktop`), `winlux-phone gui` ; associe un premier téléphone et lance le service si besoin |
-| Paramètres › Bluetooth et appareils › **Appareils mobiles** (page 29) | masquée tant qu'aucun téléphone n'est associé ; interrupteur général, notifications / SMS / fichiers par téléphone, Faire sonner, Dissocier |
+| Paramètres › Bluetooth et appareils › **Appareils mobiles** (page 37) | masquée tant qu'aucun téléphone n'est associé ; interrupteur général, notifications / SMS / fichiers par téléphone, Faire sonner, Dissocier |
 | Pare-feu | `winlux-control phone-firewall-on|off` (relais root, niveau « user ») : règles 9447 (TCP 1716, 1739-1764) et 9448 (UDP 1716), réseaux **privés et de domaine** seulement |
 
 Données du compte : `~/.config/winlux/phone/` (identifiant, certificat, clé

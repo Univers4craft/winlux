@@ -41,6 +41,7 @@ _LANG = LOCK["_LANG"]
 _COL = {"en": 0, "es": 1, "de": 2}
 
 _TR = {
+    "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Contrôle de compte d'utilisateur": (
         "User Account Control", "Control de cuentas de usuario", "Benutzerkontensteuerung"),
     "Voulez-vous autoriser cette application à apporter des modifications à votre appareil ?": (
@@ -48,6 +49,7 @@ _TR = {
         "¿Quieres permitir que esta aplicación haga cambios en el dispositivo?",
         "Möchten Sie zulassen, dass durch diese App Änderungen an Ihrem Gerät vorgenommen werden?"),
     "Éditeur : inconnu": ("Publisher: Unknown", "Editor: desconocido", "Herausgeber: Unbekannt"),
+    "Éditeur vérifié : Winlux": ("Verified publisher: Winlux", "Editor comprobado: Winlux", "Verifizierter Herausgeber: Winlux"),
     "Origine du fichier : disque dur de cet ordinateur": (
         "File origin: Hard drive on this computer",
         "Origen del archivo: unidad de disco duro de este equipo",
@@ -160,13 +162,15 @@ def run_dialog(app, win_path, elevate=False):
     result = {"ok": False}
 
     css = b"""
-      .uac { background: #f3f3f3; }
-      .uac-band { background: #1f1f1f; color: white; padding: 10px 18px; font-size: 13px; }
-      .uac-question { font-size: 20px; font-weight: 600; color: #1b1b1b; }
-      .uac-app { font-size: 15px; font-weight: 600; color: #1b1b1b; }
-      .uac-info { color: #5d5d5d; font-size: 13px; }
-      .uac-error { color: #c42b1c; font-size: 13px; }
-      button.uac-yes { background: #0067c0; color: white; border: none; border-radius: 4px;
+      .uac { background: #f3f3f3; color: #1b1b1b; }
+      /* The user gtk.css (dark theme) must not repaint the inner boxes. */
+      .uac box, .uac label { background-color: transparent; }
+      .uac .uac-band { background: #1f1f1f; color: white; padding: 10px 18px; font-size: 13px; }
+      .uac .uac-question { font-size: 20px; font-weight: 600; color: #1b1b1b; }
+      .uac .uac-app { font-size: 15px; font-weight: 600; color: #1b1b1b; }
+      .uac .uac-info { color: #5d5d5d; font-size: 13px; }
+      .uac .uac-error { color: #c42b1c; font-size: 13px; }
+      button.uac-yes { background: #6a3df0; color: white; border: none; border-radius: 4px;
                        padding: 6px 24px; box-shadow: none; text-shadow: none; }
       button.uac-no { background: white; color: #1b1b1b; border: 1px solid #d1d1d1;
                       border-radius: 4px; padding: 6px 24px; box-shadow: none; }
@@ -201,7 +205,10 @@ def run_dialog(app, win_path, elevate=False):
     name = Gtk.Label(label=app, xalign=0, margin_top=8, wrap=True)
     name.get_style_context().add_class("uac-app")
     body.pack_start(name, False, False, 0)
-    for line in (_t("Éditeur : inconnu"), _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
+    # --elevate : un outil de Winlux lui-même (Store, Paramètres) passe par le
+    # relais root ; comme Windows pour ses composants, l'éditeur est connu.
+    publisher = _t("Éditeur vérifié : Winlux") if elevate else _t("Éditeur : inconnu")
+    for line in (publisher, _t("Origine du fichier : disque dur de cet ordinateur"), win_path):
         if line:
             label = Gtk.Label(label=line, xalign=0, wrap=True)
             label.get_style_context().add_class("uac-info")
@@ -217,6 +224,16 @@ def run_dialog(app, win_path, elevate=False):
         prompt = (_t("Pour continuer, entrez le mot de passe de {name}.", name=user) if user != "root"
                   else _t("Pour continuer, entrez le mot de passe d'un administrateur."))
         body.pack_start(Gtk.Label(label=prompt, xalign=0, wrap=True, margin_top=10), False, False, 0)
+        osk = osk_command()
+        if osk:
+            # Tablette sans clavier : bouton du clavier tactile dans le champ,
+            # et clavier ouvert d'office s'il n'y a aucun clavier physique.
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "input-keyboard-symbolic")
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Clavier tactile"))
+            entry.connect("icon-press", lambda *_: osk_run(osk, "show"))
+            if not physical_keyboard(osk):
+                osk_run(osk, "show")
+                result["osk"] = osk
         body.pack_start(entry, False, False, 0)
         body.pack_start(error, False, False, 0)
 
@@ -250,7 +267,34 @@ def run_dialog(app, win_path, elevate=False):
     window.set_default(yes)
     (entry if ask_password else no).grab_focus()
     Gtk.main()
+    if result.get("osk"):
+        # Le clavier ouvert pour ce mot de passe se referme avec la fenêtre.
+        osk_run(result["osk"], "hide")
     return result["ok"]
+
+
+def osk_command():
+    """Clavier tactile (winlux-osk), installé ou à côté de ce script."""
+    if os.path.exists("/usr/bin/winlux-osk"):
+        return ["/usr/bin/winlux-osk"]
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "winlux-osk.py")
+    return [sys.executable, script] if os.path.exists(script) else None
+
+
+def physical_keyboard(command):
+    try:
+        out = subprocess.run(command + ["detect"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return not out.startswith("keyboard=0")
+
+
+def osk_run(command, verb):
+    try:
+        subprocess.Popen(command + [verb], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+    return False
 
 
 def main(argv):

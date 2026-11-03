@@ -30,7 +30,7 @@ Non. Winlux n'utilise que des **comptes locaux**, et ne propose aucune applicati
 
 ### Pourquoi le logo n'est-il pas celui de Windows ?
 
-Winlux reprend l'ergonomie de Windows 11 mais pas la marque. Son logo est **Prisme**, un losange violet et cyan.
+Winlux offre une ergonomie familière, avec sa propre identité : il n'est ni affilié à Microsoft, ni approuvé par elle. Son logo est **Prisme**, un losange violet et cyan.
 
 ### Winlux démarre-t-il avec Secure Boot ?
 

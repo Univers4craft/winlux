@@ -33,11 +33,14 @@ _TR = {
     'Préparez votre ordinateur à votre rythme. Ces réglages restent accessibles à tout moment dans Paramètres.': ('Set up your computer at your own pace. These settings remain available at any time in Settings.', 'Prepare su equipo a su ritmo. Estos ajustes siguen disponibles en cualquier momento en Configuración.', 'Richten Sie Ihren Computer in Ihrem Tempo ein. Diese Einstellungen bleiben jederzeit in den Einstellungen verfügbar.'),
     'Visite guidée et logiciels courants': ('Guided tour and common apps', 'Recorrido guiado y aplicaciones habituales', 'Geführte Tour und gängige Programme'),
     'Choisir le clavier': ('Choose the keyboard', 'Elegir el teclado', 'Tastatur auswählen'),
+    'Choisir et installer un navigateur': ('Choose and install a browser', 'Elegir e instalar un navegador', 'Browser auswählen und installieren'),
+    'Choisir des boutiques de logiciels': ('Choose software stores', 'Elegir tiendas de programas', 'Software-Stores auswählen'),
     'Configurer le réseau': ('Set up the network', 'Configurar la red', 'Netzwerk einrichten'),
     'Personnaliser l’apparence': ('Personalize the appearance', 'Personalizar la apariencia', 'Darstellung anpassen'),
     'Découvrir le secours': ('Discover recovery', 'Descubrir la recuperación', 'Wiederherstellung entdecken'),
     'Astuce : Windows + E ouvre l’Explorateur, Windows + A les réglages rapides et Windows + N les notifications.': ('Tip: Windows + E opens File Explorer, Windows + A opens quick settings and Windows + N opens notifications.', 'Consejo: Windows + E abre el Explorador, Windows + A la configuración rápida y Windows + N las notificaciones.', 'Tipp: Windows + E öffnet den Explorer, Windows + A die Schnelleinstellungen und Windows + N die Benachrichtigungen.'),
     'Terminer': ('Finish', 'Finalizar', 'Fertigstellen'),
+    'Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.': ('Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.', 'Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.', 'Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.'),
     'Impossible d’ouvrir ce réglage': ('Unable to open this setting', 'No se puede abrir este ajuste', 'Diese Einstellung kann nicht geöffnet werden'),
     'Impossible d’enregistrer cette préférence': ('Unable to save this preference', 'No se puede guardar esta preferencia', 'Diese Einstellung kann nicht gespeichert werden'),
 }
@@ -66,7 +69,12 @@ class Welcome(Gtk.Window):
         for label, command in (
             (_t("Visite guidée et logiciels courants"), ["winlux-shell-app", "welcome"]),
             (_t("Choisir le clavier"), ["winlux-shell-app", "settings", "4"]),
-            (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
+            # Aucun navigateur n'est fourni : l'utilisateur choisit le sien.
+            (_t("Choisir et installer un navigateur"), ["winlux-shell-app", "settings", "11"]),
+            # Aucune boutique tierce non plus : Paramètres > Applications.
+            (_t("Choisir des boutiques de logiciels"), ["winlux-shell-app", "settings", "1"]),
+            # Page Wi-Fi (ou Réseau sans carte Wi-Fi) de Paramètres.
+            (_t("Configurer le réseau"), ["winlux-shell-app", "settings", "35"]),
             (_t("Personnaliser l’apparence"), ["winlux-shell-app", "settings", "21"]),
             (_t("Découvrir le secours"), ["winlux-shell-app", "settings", "7"]),
         ):
@@ -78,6 +86,10 @@ class Welcome(Gtk.Window):
         finish = Gtk.Button(label=_t("Terminer"))
         finish.connect("clicked", self.finish)
         box.pack_end(finish, False, False, 0)
+        # Mention de non-affiliation (docs/DEFENSE-DU-NOM.md).
+        notice = Gtk.Label(label=_t("Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation."), xalign=0, wrap=True)
+        notice.get_style_context().add_class("dim-label")
+        box.pack_end(notice, False, False, 0)
 
     def launch(self, command):
         try: subprocess.Popen(command)

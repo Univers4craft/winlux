@@ -5,6 +5,11 @@
 # en root, ou session du compte sur un système installé) ne lance que ce
 # qui appartient à l'utilisateur.
 set -eu
+# L'init tourne en umask 077 : les services lancés ici (NetworkManager,
+# polkit…) écriraient des fichiers illisibles par le compte du bureau, dont
+# /etc/resolv.conf (aucun nom résolu depuis le compte, « connecté mais rien
+# ne marche »).
+umask 022
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 # Chargeurs d'images GTK (PNG, SVG) : sans ce cache, icônes et fenêtres GTK
 # plantent. Régénéré seulement s'il manque ou si un chargeur a été installé
@@ -50,6 +55,9 @@ wait_bus_name() {
 # polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
 polkit_pid=
 udisks_pid=
+# Règle polkit du réseau (comptes netdev) posée et lisible avant polkitd,
+# resolv.conf lisible : sur le système installé comme en Live.
+if test -x /usr/bin/winlux-network-perms; then /usr/bin/winlux-network-perms || true; fi
 if test -x /usr/lib/polkit-1/polkitd; then
     /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
     polkit_pid=$!
@@ -85,4 +93,17 @@ if "$has_bluetooth"; then
     for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
         if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
     done
+fi
+# Luminosité : sans rétroéclairage (PC de bureau), on cherche un écran réglable
+# par son câble (DDC/CI). En arrière-plan : ddcutil met quelques secondes.
+if test -x /usr/bin/winlux-brightness && test -x /usr/bin/ddcutil && \
+        test -z "$(ls -A /sys/class/backlight/ 2>/dev/null)"; then
+    /usr/bin/winlux-brightness detect-ddc >/run/winlux/brightness-ddc.log 2>&1 &
+fi
+# Heure : une date fausse fait refuser tous les certificats (sites, mises à
+# jour, Wi-Fi d'entreprise). Le noyau a déjà lu l'horloge matérielle ; le
+# démon la règle par SNTP dès que le réseau répond (désactivable dans
+# Paramètres > Heure et langue), avant toute vérification TLS du bureau.
+if test -x /usr/bin/winlux-certificates; then
+    /usr/bin/winlux-certificates time-daemon >/run/winlux/time-sync.log 2>&1 &
 fi

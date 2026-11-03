@@ -697,7 +697,8 @@ pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i3
     }
 }
 
-/// Crée une DIB section 24/32bpp BI_RGB; le tampon exposé utilise des pixels BGR(X).
+/// Crée une DIB section 24/32bpp BI_RGB (ou BI_BITFIELDS BGRX en 32 bpp) ;
+/// le tampon exposé utilise des pixels BGR(X).
 pub unsafe extern "win64" fn create_dib_section(
     dc: usize,
     info: *const BitmapInfoHeader,
@@ -706,7 +707,12 @@ pub unsafe extern "win64" fn create_dib_section(
     section: usize,
     offset: u32,
 ) -> usize {
-    if gui::dc_window(dc).is_none() {
+    if !bits.is_null() {
+        // Les appelants (SDL) copient parfois sans vérifier : jamais de pointeur indéfini.
+        std::ptr::write_unaligned(bits, std::ptr::null_mut());
+    }
+    // DC 0 ou DC de l'écran (GetDC(NULL)) : le format vient de la BITMAPINFO.
+    if dc != 0 && gui::dc_window(dc).is_none() {
         crate::process::set_last_error(1400);
         return 0;
     }
@@ -715,13 +721,24 @@ pub unsafe extern "win64" fn create_dib_section(
         return 0;
     }
     let header = std::ptr::read_unaligned(info);
+    // BI_BITFIELDS en 32 bits (en-têtes V4/V5 des curseurs SDL) : les masques
+    // usuels B8G8R8(A8) correspondent au tampon BGRX de Winlux.
+    let bitfields_ok = header.compression == 3 && header.bit_count == 32 && {
+        let masks = (info as *const u8).add(40) as *const u32;
+        let (r, g, b) = (
+            std::ptr::read_unaligned(masks),
+            std::ptr::read_unaligned(masks.add(1)),
+            std::ptr::read_unaligned(masks.add(2)),
+        );
+        (r, g, b) == (0x00FF_0000, 0x0000_FF00, 0x0000_00FF) || (r, g, b) == (0, 0, 0)
+    };
     if header.size < std::mem::size_of::<BitmapInfoHeader>() as u32
         || header.width <= 0
         || header.height == 0
         || header.height == i32::MIN
         || header.planes != 1
         || !matches!(header.bit_count, 24 | 32)
-        || header.compression != 0 // BI_RGB
+        || (header.compression != 0 && !bitfields_ok) // BI_RGB ou BI_BITFIELDS BGRX
         || usage != 0 // DIB_RGB_COLORS
         || section != 0
         || offset != 0
@@ -2221,6 +2238,16 @@ pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
 
 /// `CreateDC`/`CreateIC` : DC imprimante quand le pilote ou le périphérique
 /// désigne une imprimante (`WINSPOOL`, nom d'imprimante), sinon DC sans fenêtre.
+/// « DISPLAY » ou un écran nommé « \\.\DISPLAYn » (SDL3 ouvre ainsi le DC
+/// de chaque écran) : un DC d'écran, pas une imprimante.
+fn is_display_name(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    up == "DISPLAY"
+        || up
+            .strip_prefix("\\\\.\\DISPLAY")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 unsafe fn create_dc_common(
     driver: *const c_void,
     device: *const c_void,
@@ -2238,12 +2265,10 @@ unsafe fn create_dc_common(
         }
     };
     let (driver, device) = (read(driver), read(device));
-    let printing = driver
-        .as_deref()
-        .is_some_and(|d| !d.eq_ignore_ascii_case("DISPLAY"))
+    let printing = driver.as_deref().is_some_and(|d| !is_display_name(d))
         || device
             .as_deref()
-            .is_some_and(|d| !d.is_empty() && !d.eq_ignore_ascii_case("DISPLAY"));
+            .is_some_and(|d| !d.is_empty() && !is_display_name(d));
     if printing {
         if let Some(dc) = crate::dlls::winspool::create_printer_dc(
             driver,
@@ -2484,5 +2509,17 @@ pub fn exports() -> crate::dlls::Exports {
         "GdiSetBatchLimit"=>fn gdi_set_batch_limit, "GdiGetBatchLimit"=>fn gdi_get_batch_limit,
         // --- Custom ---
         "WinluxDrawIconA"=>fn winlux_draw_icon_a, "WinluxDrawImageA"=>fn winlux_draw_image_a,
+    }
+}
+
+#[cfg(test)]
+mod display_name_tests {
+    #[test]
+    fn screen_device_names_are_not_printers() {
+        assert!(super::is_display_name("DISPLAY"));
+        assert!(super::is_display_name("\\\\.\\DISPLAY1"));
+        assert!(super::is_display_name("\\\\.\\display12"));
+        assert!(!super::is_display_name("\\\\.\\DISPLAY"));
+        assert!(!super::is_display_name("Microsoft Print to PDF"));
     }
 }

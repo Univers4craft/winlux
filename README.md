@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="https://univers4craft.github.io/winlux/"><b>Site web et guide</b></a> ·
   <a href="wiki/Home.md"><b>Wiki complet</b></a> ·
   <a href="https://github.com/Univers4craft/winlux/releases/latest">Télécharger l'ISO</a> ·
   <a href="Suivi.md">Suivi des tâches</a> ·
@@ -53,7 +54,7 @@ Winlux est un système d'exploitation complet, distribué sous forme d'**ISO ins
 
 1. **Un vrai noyau Linux** et une base Ubuntu 26.04 LTS avec `apt` et `dpkg` natifs. Les logiciels Linux s'installent et fonctionnent normalement.
 2. **Une couche de compatibilité Windows écrite de zéro en Rust** (le *runtime* Winlux) : elle charge directement les exécutables Windows 64 bits (format PE32+) et leur fournit les DLL Windows dont ils ont besoin (`kernel32`, `user32`, `gdi32`, `ntdll`, `advapi32`, `ole32`, `ws2_32`, Direct3D, etc.), réimplémentées au-dessus de Linux.
-3. **Un bureau qui ressemble à Windows 11** : menu Démarrer centré (ou à gauche), barre des tâches, Explorateur, Paramètres, écran de verrouillage, gestionnaire des tâches, sans aucun logo ni marque Microsoft.
+3. **Un bureau à l'ergonomie familière** : menu Démarrer centré (ou à gauche), barre des tâches, Explorateur, Paramètres, écran de verrouillage, gestionnaire des tâches, sans aucun logo ni marque Microsoft.
 
 **Le but** : qu'un utilisateur habitué à Windows puisse double-cliquer sur un `.exe` n'importe où (bureau, clé USB, dossier Téléchargements) et qu'il s'ouvre, comme sous Windows, tout en profitant d'un système Linux avec un accès complet à ses fichiers. Il n'y a **qu'un seul noyau** : aucune machine virtuelle Windows ne tourne en arrière-plan, et aucune licence Windows n'est nécessaire.
 
@@ -65,7 +66,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 |---|---|
 | **Tout est fait maison** | La couche de compatibilité Windows n'utilise **ni Wine, ni Proton, ni DXVK**, ni aucune couche tierce. Une étape de la CI refuse toute dépendance à Wine. Les briques Linux standard restent permises : FFmpeg pour les médias, CUPS pour l'impression, Samba pour le partage, `mount.cifs`/`sshfs`/`rclone` pour les lecteurs réseau. |
 | **Aucun lien avec Microsoft** | En dehors de la compatibilité `.exe`, Winlux n'est pas associé à Microsoft : **comptes locaux uniquement**, aucun compte en ligne, aucune application Microsoft proposée par défaut. Seule exception assumée : le démarrage Secure Boot passe par le *shim* contresigné par l'autorité UEFI tierce, la seule façon de démarrer sur un PC du commerce sans réglage. |
-| **Identité visuelle propre** | L'ergonomie est celle de Windows 11, mais il n'y a **aucun logo Windows**. Le logo de Winlux s'appelle **« Prisme »** : un losange taillé, violet à gauche (Linux) et cyan à droite (*lux*, la lumière). |
+| **Identité visuelle propre** | L'ergonomie est familière, mais l'identité est propre au projet : **aucun logo, police, icône ni son de Microsoft**. Le logo de Winlux s'appelle **« Prisme »** : un losange taillé, violet à gauche (Linux) et cyan à droite (*lux*, la lumière). |
 | **Paramètres honnêtes** | Une section qui ne correspond à rien sur la machine (pas de Bluetooth, pas de batterie, pas de réglage CPU possible) est **masquée**, jamais grisée ni vide. Les réglages avancés du matériel vivent uniquement dans Paramètres. |
 | **Ne rien promettre qui n'existe pas** | Une fonction partielle est documentée comme partielle. Un import Windows non implémenté arrête le programme avec un message clair plutôt que de faire semblant de réussir. |
 | **Multilingue** | Le bureau, l'Explorateur, les Paramètres et les applications intégrées sont traduits en **français, anglais, espagnol et allemand** ; l'installateur propose aussi l'italien et le portugais. |
@@ -74,9 +75,9 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.13**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.13) (1er novembre 2026) : ISO de 1,93 Gio, outil de mise à jour corrigé, changement rapide d'utilisateur, impression, son PipeWire, lecteurs réseau SMB/NFS. |
-| **Version en préparation** | **v0.2.14** : bureau et programmes sous le compte de l'utilisateur (plus en root), démarrage plus rapide, Claude Code dans Winlux, applications Ubuntu traduites. |
-| **Architecture prise en charge** | PC x86-64, démarrage BIOS ou UEFI, Secure Boot compatible. |
+| **Dernière version publiée** | [**v0.2.17**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.17) (3 novembre 2026) : page Wi-Fi avec saisie de la clé et WPS, firmwares du son et du Wi-Fi chargés sur les vrais PC, menu de démarrage utilisable au clavier, clavier tactile dans l'installateur, matériel détaillé dans Performances et À propos. |
+| **Version en préparation** | **v0.2.18** : Wi-Fi WPA2/WPA3 et Entreprise qui se connecte vraiment, réseau du compte réparé, 3 581 pilotes de plus pour les vrais PC, rotation des tablettes, clé live qui démarre toujours son live, redémarrage après installation jamais bloqué, su et sudo. |
+| **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
 | **Matériel réel** | Testé surtout en machine virtuelle (QEMU/KVM, VirtualBox, VMware). La validation sur une large gamme de PC réels reste à faire. |
@@ -88,7 +89,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Bureau façon Windows 11                                                │
+│ Bureau à l'ergonomie familière                                         │
 │  Session native : xfdesktop + xfce4-panel + Openbox + Thunar, habillés │
 │  Menu Démarrer GTK, Paramètres GTK, écran de verrouillage, UAC…        │
 │  Applications maison PE : Explorateur, Gestionnaire des tâches,        │
@@ -134,7 +135,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 
 ### Bureau
 
-- Menu Démarrer façon Windows 11 : recherche, épingles, « Toutes les applications » avec catégories, recommandations, menu d'alimentation et de compte. Les programmes Windows installés y apparaissent automatiquement, avec leur icône extraite du `.exe`.
+- Menu Démarrer : recherche, épingles, « Toutes les applications » avec catégories, recommandations, menu d'alimentation et de compte. Les programmes Windows installés y apparaissent automatiquement, avec leur icône extraite du `.exe`.
 - Échelle d'affichage automatique selon la taille physique réelle de l'écran (paliers Windows de 100 à 300 %), du portable 1366×768 à l'écran 4K.
 - Barre des tâches centrée ou alignée à gauche, zone de notification avec les icônes des applications Windows (`Shell_NotifyIcon`), réglages rapides réseau et volume.
 - **Explorateur** (application maison) : onglets, double volet, recherche, tri, copier/couper/coller, corbeille, ouverture des **archives ZIP, 7z, RAR et tar**, « Extraire tout », partage de dossier en un clic droit.
@@ -246,6 +247,15 @@ cargo fmt --check -p winlux              # exigé par la CI
 cargo clippy -p winlux -- -D warnings    # exigé par la CI
 ```
 
+Toute la suite d'un coup, comme la CI (étapes lues dans `ci.yml` et `release.yml`, hors VM) :
+
+```sh
+sh scripts/test-all.sh                   # compilation, tests Rust, PE et scripts
+sh scripts/test-all.sh --rapide          # sans compilation ni PE (quelques minutes)
+```
+
+Les défauts trouvés en VM pendant la campagne de tests v0.2.13 ont chacun leur vérification dans `scripts/test-campaign.py`.
+
 La construction de l'ISO demande un hôte **Ubuntu 26.04** avec KVM : elle prépare la base Ubuntu officielle dans une VM jetable, puis assemble l'image. Elle est normalement faite par le workflow de publication. Les commandes, variables et pièges connus sont dans [docs/BUILD.md](docs/BUILD.md), [docs/NATIVE-APT.md](docs/NATIVE-APT.md) et la page [Construire l'ISO](wiki/Construire-l-ISO.md) du wiki.
 
 ### Intégration continue
@@ -275,6 +285,7 @@ Une CI verte ne garantit pas que tous les logiciels Windows fonctionnent : elle 
 
 ## Documentation
 
+- **[Le site web](https://univers4craft.github.io/winlux/)** : présentation, téléchargement et guide de l'utilisateur pas à pas, en français, anglais, allemand et espagnol (sources dans [`site/`](site/)).
 - **[Le wiki](wiki/Home.md)** : la documentation complète et organisée (but, architecture, compatibilité, registre, chemins et droits, réseau et disques, Paramètres, installation, publication, construction, tests, feuille de route).
 - **Référence technique** dans `docs/` : [BUILD](docs/BUILD.md), [REGISTRY](docs/REGISTRY.md), [CHEMINS-ET-DROITS](docs/CHEMINS-ET-DROITS.md), [VOLUMES](docs/VOLUMES.md), [PARTAGE](docs/PARTAGE.md), [NATIVE-DESKTOP](docs/NATIVE-DESKTOP.md), [NATIVE-APT](docs/NATIVE-APT.md), [SECURE-BOOT](docs/SECURE-BOOT.md), [RECOVERY](docs/RECOVERY.md), [MEDIA](docs/MEDIA.md), [AUDIO](docs/AUDIO.md), [INTL](docs/INTL.md), [STORE](docs/STORE.md), [MSIEXEC](docs/MSIEXEC.md), [SETUP-EXE](docs/SETUP-EXE.md), [PAINTNET](docs/PAINTNET.md), [IDENTITE-VISUELLE](docs/IDENTITE-VISUELLE.md), [AB_UPDATES](docs/AB_UPDATES.md)…
 - **Notes de version** : [docs/releases/](docs/releases/).

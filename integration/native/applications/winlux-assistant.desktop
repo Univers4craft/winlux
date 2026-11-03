@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Assistant IA
+Name[en]=AI assistant
+Name[es]=Asistente de IA
+Name[de]=KI-Assistent
+Comment=Poser une question sur Winlux à Claude, ChatGPT ou l'IA locale (Windows+C)
+Comment[en]=Ask Claude, ChatGPT or the local AI a question about Winlux (Windows+C)
+Comment[es]=Preguntar sobre Winlux a Claude, ChatGPT o la IA local (Windows+C)
+Comment[de]=Claude, ChatGPT oder der lokalen KI eine Frage zu Winlux stellen (Windows+C)
+Exec=/usr/bin/winlux-assistant
+Icon=winlux-assistant
+StartupWMClass=winlux-assistant
+Terminal=false
+NoDisplay=true

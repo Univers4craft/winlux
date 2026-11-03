@@ -288,6 +288,45 @@ pub fn init(exe: &Path, args: &[String]) {
     });
 }
 
+/// Programme installé (Program Files, AppData) : son chemin Windows.
+pub fn is_installed_program(exe_windows: &str) -> bool {
+    let w = exe_windows.to_lowercase();
+    let Some(rest) = w.strip_prefix("c:\\") else {
+        return false;
+    };
+    if rest.starts_with("program files") {
+        return true;
+    }
+    // C:\Users\<nom>\AppData\…
+    let mut parts = rest.split('\\');
+    parts.next() == Some("users") && parts.nth(1) == Some("appdata")
+}
+
+/// Au lancement d'un programme installé, ouvert par l'utilisateur (pas par
+/// un autre programme Windows) : la question des dossiers personnels est
+/// posée tout de suite, avant que l'application ne démarre, et non plus au
+/// milieu de son démarrage (Claude pour Windows ouvrait sa fenêtre
+/// pendant que la boîte attendait). Rien ne change si la réponse est déjà
+/// connue.
+pub fn ask_files_before_start(exe_windows: &str) {
+    const PARENT: &str = "WINLUX_PARENT_PID";
+    let launched_by_program = std::env::var_os(PARENT).is_some();
+    // Les enfants de ce processus sauront qu'un programme les a lancés.
+    std::env::set_var(PARENT, std::process::id().to_string());
+    let Some(app) = APP.get() else {
+        return;
+    };
+    if launched_by_program || app.trusted || !is_installed_program(exe_windows) {
+        return;
+    }
+    let text = store_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    if stored_in(&text, &app.exe, Capability::Files).is_none() {
+        allowed(Capability::Files);
+    }
+}
+
 /// Ouvre la fenêtre de demande. `None` : impossible de demander.
 fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
     let helper = std::env::var_os("WINLUX_PERMISSION_HELPER")
@@ -428,6 +467,17 @@ pub unsafe fn sockaddr_is_local(name: *const u8, len: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn programme_installe() {
+        use super::is_installed_program as installed;
+        assert!(installed(
+            "C:\\Users\\damien\\AppData\\Local\\AnthropicClaude\\claude.exe"
+        ));
+        assert!(installed("C:\\Program Files\\7-Zip\\7zFM.exe"));
+        assert!(!installed("C:\\Users\\damien\\Téléchargements\\Setup.exe"));
+        assert!(!installed("Z:\\tmp\\test.exe"));
+    }
+
     use super::*;
 
     #[test]

@@ -159,6 +159,27 @@ cp -a "$work/source/." "$work/target/"
 mkdir -p "$work/target/etc/winlux"
 printf 'LANG=%s\n' "$install_lang" > "$work/target/etc/winlux/locale.conf"
 printf 'XKB_LAYOUT=%s\n' "$install_kb" > "$work/target/etc/winlux/input.conf"
+# Travail unique du premier démarrage (droits de la base APT, déclencheurs
+# dpkg reportés, caches) fait ici, dans le système cible : sinon la phase
+# « recovery » du premier démarrage durait plus de 15 s. En cas d'échec, le
+# premier démarrage s'en charge comme avant.
+if test -f "$work/target/usr/share/winlux/update-backend" && command -v chroot >/dev/null 2>&1; then
+    prepared=
+    for fs in proc sys dev; do
+        mkdir -p "$work/target/$fs"
+        mount --bind "/$fs" "$work/target/$fs" && prepared="$fs $prepared"
+    done
+    policy="$work/target/usr/sbin/policy-rc.d"
+    own_policy=0
+    if ! test -e "$policy"; then
+        mkdir -p "$work/target/usr/sbin"
+        printf '#!/bin/sh\nexit 101\n' >"$policy" && chmod 755 "$policy" && own_policy=1
+    fi
+    DEBIAN_FRONTEND=noninteractive chroot "$work/target" /usr/bin/winlux-update --boot ||
+        echo 'Préparation du premier démarrage reportée au premier démarrage.' >&2
+    if test "$own_policy" = 1; then rm -f "$policy"; fi
+    for fs in $prepared; do umount -l "$work/target/$fs" || true; done
+fi
 mkdir -p "$work/target/boot/grub" "$work/target/boot/efi"
 cp "$work/vmlinuz" "$work/target/boot/vmlinuz"
 cp "$work/initramfs.gz" "$work/target/boot/winlux-initramfs.cpio.gz"
@@ -182,7 +203,11 @@ fi
 # theme was copied, and is nested ifs otherwise.
 theme_block=
 if test "$winlux_term" = gfxterm; then
-    theme_block='if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+    theme_block='# UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
+# au démarrage (mode mixte, vérifié sous QEMU) ; menu en texte.
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_term=console
+elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png
@@ -195,21 +220,33 @@ fi'
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "\${grub_platform}-\${grub_cpu}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout=1
 set timeout_style=hidden
 set winlux_term=console
 $theme_block
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output \$winlux_term serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "\$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output \$winlux_term serial
+    fi
+fi
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 \$winlux_efi_args
     $initrd_line
 }
 menuentry "Winlux diagnostic installé" --hotkey=d {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8 \$winlux_efi_args
     $initrd_line
 }
 EOF
@@ -217,7 +254,7 @@ if test "$split_root" = 1; then
     cat >>"$work/target/boot/grub/grub.cfg" <<EOF
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1 \$winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 EOF
@@ -228,6 +265,10 @@ grub-install --target=i386-pc --boot-directory="$work/target/boot" --recheck "$d
 mount -t vfat -o iocharset=ascii "$esp" "$work/target/boot/efi"
 esp_mounted=1
 grub-install --target=x86_64-efi --efi-directory="$work/target/boot/efi" --boot-directory="$work/target/boot" --removable --no-nvram --recheck
+# Processeur 64 bits sur micrologiciel UEFI 32 bits (tablettes Atom) : BOOTIA32.EFI à côté.
+if test -d /usr/lib/grub/i386-efi; then
+    grub-install --target=i386-efi --efi-directory="$work/target/boot/efi" --boot-directory="$work/target/boot" --removable --no-nvram --recheck
+fi
 # Replace the unsigned removable loader with shim + signed GRUB when available.
 if test -f /usr/lib/shim/shimx64.efi.signed; then
     sh "$root/scripts/winlux-secureboot.sh" install-esp "$work/target/boot/efi" "$fsuuid"

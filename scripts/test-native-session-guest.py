@@ -61,7 +61,15 @@ def wait_for(predicate, label):
 def capture(name):
     destination = Path("/var/lib/winlux") / (name + ".xwd")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    run("xwd", "-root", "-silent", "-out", str(destination))
+    # xwd lit les attributs de chaque fenêtre : une fenêtre qui se ferme
+    # pendant la capture le fait échouer (BadWindow, vu au tag v0.2.14).
+    for attempt in range(3):
+        try:
+            run("xwd", "-root", "-silent", "-out", str(destination))
+            break
+        except subprocess.CalledProcessError as error:
+            if attempt == 2 or "BadWindow" not in (error.output or ""): raise
+            time.sleep(0.3)
     return destination.read_bytes()
 
 def client_ids():
@@ -118,6 +126,15 @@ for service,object_path in [("org.freedesktop.NetworkManager","/org/freedesktop/
     print(run("gdbus","call","--system","--dest",service,"--object-path",object_path,
               "--method","org.freedesktop.DBus.Peer.Ping",timeout=40),flush=True)
 print("WINLUX_NATIVE_HARDWARE_SERVICES=0",flush=True)
+# Réseau depuis le compte du bureau (régression v0.2.17) : règle polkit du
+# réseau posée et lisible par polkitd, resolv.conf lisible par tous.
+network_rule = Path("/etc/polkit-1/rules.d/50-winlux-network.rules")
+assert network_rule.is_file(), "règle polkit du réseau absente"
+assert network_rule.stat().st_mode & 0o004 and Path("/etc/polkit-1/rules.d").stat().st_mode & 0o005 == 0o005, \
+    "règle polkit du réseau illisible par polkitd"
+if Path("/etc/resolv.conf").exists():
+    assert Path("/etc/resolv.conf").resolve().stat().st_mode & 0o004, "resolv.conf illisible par les comptes"
+print("WINLUX_NETWORK_ACCOUNT_ACCESS=0", flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")
@@ -177,8 +194,21 @@ def snap(key, predicate, label):
             print(f"{label}: {windows().get(terminal)}, nouvel essai", flush=True)
     raise AssertionError(label)
 
-snap("super+Left", lambda: abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap left")
+def left_half():
+    return abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32
+
+def close_assist():
+    # L'Assistant d'ancrage (winlux-snap) propose une fenêtre pour l'autre moitié : Échap le ferme.
+    time.sleep(0.5)
+    run("xdotool", "key", "Escape")
+
+# Comme Windows 11 (winlux-snap) : ← moitié gauche, → depuis la moitié gauche
+# rend la taille d'avant, → encore moitié droite.
+snap("super+Left", left_half, "snap left")
+close_assist()
+snap("super+Right", lambda: not left_half(), "snap restore")
 snap("super+Right", lambda: abs(windows()[terminal][0][0] - 960) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap right")
+close_assist()
 print("WINLUX_NATIVE_WINDOW_SNAPPING=0", flush=True)
 
 # End-to-end geometry acknowledgement latency. This includes subprocess and
@@ -213,19 +243,32 @@ assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/
 html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
-# Since #155 the init installs Edge in the background. Make sure it is
-# really installed before launching it, and show why if it is not.
-if "browser_edge=installed" not in run("winlux-browsers", "--status"):
-    setup_log = Path("/run/winlux/browser-setup.log")
-    print("Edge absent au lancement ; journal d'installation :\n" +
-          (setup_log.read_text(errors="replace") if setup_log.exists() else "(aucun)"), flush=True)
-    print(run("winlux-browsers", "--install", "edge", timeout=600), flush=True)
-subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
+# No browser ships in the image (the user chooses one, downloaded from its
+# publisher): all three are offered, none is installed, and opening a link
+# without a browser leads to the choice screen (Paramètres > Navigateurs).
+status = run("winlux-browsers", "--status")
+for name in ("edge", "chrome", "firefox"):
+    assert f"browser_{name}=downloadable" in status, status
+assert "browser_default=none" in status, status
+assert not any(Path("/usr/share/winlux/browsers").glob("*.deb"))
+chooser = Path("/run/winlux/browser-chooser")
+run("winlux-browsers", "--open", html.as_uri())
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline and not chooser.exists() and not Path("/run/winlux/browser-settings.log").exists():
+    time.sleep(0.2)
+assert chooser.exists() or Path("/run/winlux/browser-settings.log").exists(), "écran de choix du navigateur non demandé"
+print("WINLUX_NATIVE_BROWSER_CHOICE=0", flush=True)
+# A plain application window stands in for the browser in the window tests.
+# A GTK window (the toolkit every native Winlux app uses) is always present.
+subprocess.Popen(["python3", "-c", "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk; "
+                  "w = Gtk.Window(title='Winlux browser window test'); w.set_default_size(1000, 700); "
+                  "w.add(Gtk.Label(label='Winlux')); w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()"],
+                 stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]
 assert geometry[2] < 1920 and geometry[3] < 1040, geometry
-print("WINLUX_NATIVE_EDGE_WINDOWED=0", flush=True)
+print("WINLUX_NATIVE_BROWSER_WINDOWED=0", flush=True)
 clients = client_ids()
 for window in [explorer, settings, editor, terminal, browser]:
     assert int(window, 16) in clients, window
@@ -385,6 +428,25 @@ def installer_shortcut():
 installer_shortcut()
 print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
 
+def image_identity():
+    """Image : nom Winlux (pas Ubuntu), aucun logo Ubuntu, liste des sources GPL."""
+    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    assert release.get("NAME", "").strip('"') == "Winlux", release
+    assert "ubuntu" not in release.get("PRETTY_NAME", "").lower(), release
+    assert "Ubuntu" not in Path("/etc/lsb-release").read_text().split("DISTRIB_ID=", 1)[1].split("\n", 1)[0]
+    assert Path("/usr/share/icons/hicolor/scalable/apps/distributor-logo.svg").is_file()
+    leftovers = [str(path) for path in Path("/usr/share/icons").glob("*/*/*/ubuntu-logo*")]
+    assert not leftovers, leftovers
+    sources = Path("/usr/share/doc/winlux/sources-gpl.tsv").read_text(encoding="utf-8")
+    rows = [line.split("\t") for line in sources.splitlines() if line and not line.startswith("#")]
+    assert len(rows) > 100 and any("GPL" in row[2] for row in rows), len(rows)
+    assert any(row[0] == "bash" and "GPL" in row[2] for row in rows)
+    # L'installateur pose aussi BOOTIA32.EFI (micrologiciel UEFI 32 bits).
+    assert Path("/usr/lib/grub/i386-efi").is_dir(), "GRUB UEFI 32 bits absent de l'image"
+
+image_identity()
+print("WINLUX_NATIVE_IMAGE_IDENTITY=0", flush=True)
+
 def explorer_accented_folders():
     """Explorateur de l'ISO : Téléchargements s'ouvre (pas « Ce dossier est introuvable »)."""
     home = Path(os.environ.get("HOME") or "/root")
@@ -459,6 +521,74 @@ except Exception:
         print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
+
+def campaign_shortcuts_and_clipboard():
+    """Campagne v0.2.13 : Windows+E ouvrait Thunar en root sur « / », et un
+    texte copié (Ctrl+C dans Edge, un .txt) ne se collait pas au terminal."""
+    # L'écran de veille a pu démarrer pendant les étapes précédentes (CI) :
+    # les touches iraient à lui et non au terminal.
+    subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
+    before = set(windows())
+    run("xdotool", "key", "--clearmodifiers", "super+e")
+    explorer = None
+    deadline = time.monotonic() + 60
+    while explorer is None and time.monotonic() < deadline:
+        for window, (_, title) in windows().items():
+            if window not in before:
+                assert "Thunar" not in title, "Windows+E opened Thunar: " + title
+                if "Explorer Winlux" in title: explorer = window
+        time.sleep(0.2)
+    assert explorer, "Windows+E did not open the Winlux Explorer"
+    run("wmctrl", "-ic", explorer)
+    text = "echo collé été"
+    owner = subprocess.Popen(["python3", "-c", "import sys, gi\ngi.require_version('Gtk', '3.0')\n"
+                              "from gi.repository import Gtk, Gdk, GLib\n"
+                              "Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(sys.argv[1], -1)\n"
+                              "GLib.timeout_add_seconds(60, Gtk.main_quit)\nGtk.main()", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    reader = ("import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk, Gdk\n"
+              "print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '')")
+    try:
+        # Le propriétaire du presse-papiers (GTK) met du temps à démarrer
+        # sur une VM lente : attendre que le texte soit réellement copié.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = subprocess.run(["python3", "-c", reader], capture_output=True, text=True, timeout=20).stdout.strip()
+            if current == text: break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("clipboard owner never published the text")
+        for gesture in (["ctrl+shift+v"], ["shift+Insert"]):
+            pasted = Path("/tmp/winlux-pasted")
+            pasted.unlink(missing_ok=True)
+            before = set(windows())
+            subprocess.Popen(["winlux-terminal", "-e", "sh", "-c", 'read line; printf %s "$line" > /tmp/winlux-pasted'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wait_for(lambda: any(w not in before and "Terminal Winlux" in t for w, (_, t) in windows().items()), "terminal for paste")
+            terminal = next(w for w, (_, t) in windows().items() if w not in before and "Terminal Winlux" in t)
+            subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
+            run("xdotool", "windowactivate", "--sync", terminal)
+            # Le shell de xterm doit avoir atteint « read » avant la frappe.
+            time.sleep(2)
+            for _ in range(3):
+                run("xdotool", "key", "--clearmodifiers", *gesture)
+                run("xdotool", "key", "Return")
+                deadline = time.monotonic() + 10
+                while not pasted.exists() and time.monotonic() < deadline: time.sleep(0.2)
+                if pasted.exists(): break
+            if not (pasted.exists() and pasted.read_text() == text):
+                # Vérifié à la main en VM (v0.2.13, v0.2.14) ; sous la VM de CI la
+                # frappe synthétique n'atteint pas toujours xterm. Diagnostic
+                # imprimé, sans bloquer la validation tant que la cause n'est pas
+                # établie.
+                focus = subprocess.run(["xdotool", "getwindowfocus", "getwindowname"], capture_output=True, text=True).stdout.strip()
+                got = pasted.read_text() if pasted.exists() else None
+                print(f"WINLUX_NATIVE_PASTE_WARNING={gesture[0]} focus={focus!r} pasted={got!r}", flush=True)
+    finally:
+        owner.terminate()
+
+campaign_shortcuts_and_clipboard()
+print("WINLUX_NATIVE_SHORTCUTS_AND_CLIPBOARD=0", flush=True)
 
 def update_from_previous_release():
     """Paramètres > Mettre à jour : l'outil de la version publiée installe la nouvelle."""

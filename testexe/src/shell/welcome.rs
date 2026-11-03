@@ -78,7 +78,7 @@ const STEPS: [Step; 10] = [
         tips: [
             [b"Th\xE8me clair ou sombre, automatique selon l'heure.", b"Light or dark theme, automatic by time of day.", b"Tema claro u oscuro, autom\xE1tico seg\xFAn la hora.", b"Helles oder dunkles Design, automatisch nach Tageszeit."],
             [b"D\xE9finition de l'\xE9cran et \xE9chelle du texte.", b"Screen resolution and text scaling.", b"Resoluci\xF3n de pantalla y escala del texto.", b"Bildschirmaufl\xF6sung und Textskalierung."],
-            [b"Navigateur par d\xE9faut : Edge, Chrome ou Firefox.", b"Default browser: Edge, Chrome or Firefox.", b"Navegador predeterminado: Edge, Chrome o Firefox.", b"Standardbrowser: Edge, Chrome oder Firefox."],
+            [b"Navigateur : vous choisissez le v\xF4tre, Winlux n'en impose aucun.", b"Browser: you choose yours, Winlux imposes none.", b"Navegador: usted elige el suyo, Winlux no impone ninguno.", b"Browser: Sie w\xE4hlen Ihren eigenen, Winlux schreibt keinen vor."],
         ],
         action: [b"Ouvrir les Param\xE8tres", b"Open Settings", b"Abrir Configuraci\xF3n", b"Einstellungen \xF6ffnen"],
     },
@@ -94,7 +94,7 @@ const STEPS: [Step; 10] = [
     },
     Step {
         title: [b"Raccourcis clavier", b"Keyboard shortcuts", b"M\xE9todos abreviados de teclado", b"Tastenkombinationen"],
-        text: [b"Les raccourcis de Windows 11 fonctionnent dans Winlux :", b"Windows 11 shortcuts work in Winlux:", b"Los atajos de Windows 11 funcionan en Winlux:", b"Die Tastenkombinationen von Windows 11 funktionieren in Winlux:"],
+        text: [b"Raccourcis clavier utiles dans Winlux :", b"Handy keyboard shortcuts in Winlux:", b"Atajos de teclado \xFAtiles en Winlux:", b"N\xFCtzliche Tastenkombinationen in Winlux:"],
         tips: [NONE, NONE, NONE],
         action: NONE,
     },
@@ -499,7 +499,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
     let h = w * 2 / 3;
     let cx = (pr.left + pr.right) / 2;
     let cy = (pr.top + pr.bottom) / 2 - 20;
-    // Légère montée à chaque étape, comme les pages d'accueil de Windows 11.
+    // Légère montée à chaque étape.
     let t = ease_out(GetTickCount().wrapping_sub(ANIM).min(10_000) as i32, ANIM_MS);
     let dy = 14 - 14 * t / 1000;
     let r = rect(cx - w / 2, cy - h / 2 + dy, cx + w / 2, cy + h / 2 + dy);

@@ -537,7 +537,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
         ay,
         ax + avatar_size,
         ay + avatar_size,
-        mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+        mix(0, rgb(0x6A, 0x3D, 0xF0), alpha, 1000),
     );
     let initial = if name.is_empty() {
         b'?'
@@ -673,7 +673,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
             btn_x + field_h,
             btn_y + field_h,
             4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+            mix(0, rgb(0x6A, 0x3D, 0xF0), alpha, 1000),
         );
         text_centered(
             hdc,
@@ -698,7 +698,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
             bx + btn_w,
             by + btn_h,
             4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+            mix(0, rgb(0x6A, 0x3D, 0xF0), alpha, 1000),
         );
         text_centered(
             hdc,
@@ -751,7 +751,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
         let avatar_bg = if user.is_root {
             rgb(0xD4, 0x50, 0x00)
         } else {
-            rgb(0x00, 0x78, 0xD4)
+            rgb(0x6A, 0x3D, 0xF0)
         };
         ellipse(
             hdc,
@@ -915,7 +915,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             btn_x + field_h,
             fy + field_h,
             4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+            mix(0, rgb(0x6A, 0x3D, 0xF0), alpha, 1000),
         );
         text_centered(
             hdc,
@@ -939,7 +939,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             bx + btn_w,
             by + btn_h,
             4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+            mix(0, rgb(0x6A, 0x3D, 0xF0), alpha, 1000),
         );
         text_centered(
             hdc,
@@ -1462,7 +1462,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         text(
             hdc,
             f.caption,
-            rgb(0x60, 0x70, 0x80),
+            rgb(0x8A, 0x98, 0xA8),
             fx + 8,
             fy + 9,
             tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
@@ -1499,7 +1499,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         dx + dw - btn_w - 16,
         btn_y + btn_h,
         4,
-        rgb(0x00, 0x78, 0xD4),
+        rgb(0x6A, 0x3D, 0xF0),
     );
     text_centered(
         hdc,

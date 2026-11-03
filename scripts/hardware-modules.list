@@ -1,0 +1,33 @@
+# Pilotes du noyau pour le matériel réel, embarqués dans l'ISO (build-live-iso.sh).
+# udev ne charge que ceux dont le matériel est présent : rien ne change en VM.
+# Le reste des pilotes Ubuntu (linux-modules-extra) se télécharge après
+# l'installation (winlux-drivers install modules). Un nom absent du noyau
+# de la version est ignoré.
+#
+# Cartes graphiques : Intel (i915, xe), AMD (amdgpu, radeon), NVIDIA libre (nouveau).
+i915 xe amdgpu radeon nouveau
+# Ethernet courant des PC de bureau et portables, adaptateurs USB et partage
+# de connexion d'un téléphone (USB).
+igc igb e1000e r8169 atlantic alx tg3 r8152 cdc_ether cdc_ncm rndis_host ax88179_178a ipheth veth tun wireguard
+# Wi-Fi : Intel, Qualcomm Atheros, MediaTek, Realtek, Broadcom.
+iwlwifi iwlmvm iwlmld iwldvm ath9k ath10k_pci ath11k_pci ath12k mt7921e mt7925e mt7921u
+rtw88_8822ce rtw88_8821ce rtw88_8822be rtw88_8821cu rtw89_8852ae rtw89_8852be rtw89_8852ce rtw89_8851be
+brcmfmac rtl8192ee rtl8188ee rtl8xxxu
+# Bluetooth (USB et série) et ses protocoles.
+btusb hci_uart bnep rfcomm hidp
+# Son : codecs HDA, Sound Open Firmware (portables Intel récents), USB, AMD.
+snd_hda_codec_realtek snd_hda_codec_hdmi snd_hda_codec_generic snd_hda_codec_conexant
+snd_sof_pci_intel_tgl snd_sof_pci_intel_mtl snd_sof_pci_intel_cnl snd_sof_pci_intel_lnl snd_usb_audio
+snd_pci_acp6x snd_acp_pci snd_sof_amd_rembrandt
+# Pavés tactiles et écrans tactiles I2C, souris et claviers sans fil, manettes.
+i2c_hid_acpi hid_multitouch hid_logitech_dj hid_logitech_hidpp hid_apple hid_sensor_hub elan_i2c
+intel_lpss_pci pinctrl_tigerlake pinctrl_alderlake pinctrl_meteorlake pinctrl_cannonlake pinctrl_amd
+joydev xpad hid_playstation hid_nintendo
+# Températures, ventilateurs, touches et profils des portables, webcam.
+coretemp k10temp nct6775 it87 thinkpad_acpi asus_nb_wmi hp_wmi ideapad_laptop dell_laptop acer_wmi
+intel_rapl_msr processor_thermal_device_pci intel_pmc_core amd_pmc uvcvideo
+# Lecteurs de cartes, eMMC, Intel VMD (NVMe derrière le RST), Thunderbolt et USB-C.
+sdhci_acpi rtsx_pci_sdmmc mmc_block vmd thunderbolt ucsi_acpi
+# Luminosité des écrans de bureau en DDC/CI (winlux-brightness, ddcutil),
+# et rétroéclairage des portables pilotés par la carte ou l'ACPI.
+i2c_dev video intel_backlight apple_bl

@@ -25,7 +25,7 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_NONE_MAPPED: u32 = 1332;
 
 /// Pseudo-handle de jeton : CloseHandle l'ignore sans dommage.
-const TOKEN_HANDLE: usize = 0x5EC0_0001;
+pub const TOKEN_HANDLE: usize = 0x5EC0_0001;
 
 const SE_GROUP_MANDATORY: u32 = 0x1;
 const SE_GROUP_ENABLED_BY_DEFAULT: u32 = 0x2;
@@ -33,6 +33,7 @@ const SE_GROUP_ENABLED: u32 = 0x4;
 const SE_GROUP_OWNER: u32 = 0x8;
 const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
 const SE_GROUP_INTEGRITY: u32 = 0x20;
+const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 const GROUP_ON: u32 = SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED;
 
 // ---------- SID ----------
@@ -171,6 +172,11 @@ fn token_groups() -> Vec<(String, u32)> {
     }
     // SAFETY: getgid est un appel système sans argument.
     g.push((gid_sid(unsafe { libc::getegid() }), GROUP_ON));
+    // SID de la session d'ouverture (S-1-5-5-0-n) : le bac à sable de
+    // Chromium le cherche pour restreindre les jetons de ses enfants.
+    // SAFETY: getsid(0) est un appel système sans pointeur.
+    let session = unsafe { libc::getsid(0) }.max(0) as u32;
+    g.push((format!("S-1-5-5-0-{session}"), GROUP_ON | SE_GROUP_LOGON_ID));
     g
 }
 
@@ -223,7 +229,26 @@ fn token_info(class: u32) -> Option<(Vec<u8>, Vec<(usize, usize)>)> {
             }
             Some((b, fix))
         }
-        3 => dword(0),  // TokenPrivileges : aucun privilège listé
+        3 => dword(0), // TokenPrivileges : aucun privilège listé
+        6 => {
+            // TokenDefaultDacl : pointeur vers une ACL vide (révision 2).
+            let mut b = vec![0u8; 8];
+            b.extend_from_slice(&[2, 0, 8, 0, 0, 0, 0, 0]);
+            Some((b, vec![(0, 8)]))
+        }
+        9 => dword(2), // TokenImpersonationLevel : SecurityImpersonation
+        10 => {
+            // TokenStatistics (56 octets) : jeton primaire, aucun compteur.
+            let mut b = vec![0u8; 56];
+            b[32..36].copy_from_slice(&1u32.to_le_bytes());
+            Some((b, vec![]))
+        }
+        11 => dword(0).map(|(mut b, f)| {
+            b.extend_from_slice(&[0; 4]); // TokenRestrictedSids : aucun
+            (b, f)
+        }),
+        29 => dword(0), // TokenIsAppContainer
+        42 => dword(0), // TokenIsRestricted
         8 => dword(1),  // TokenType : primaire
         12 => dword(1), // TokenSessionId
         18 => dword(if elevated() {
@@ -703,8 +728,15 @@ pub unsafe extern "win64" fn GetFileSecurityA(
     get_file_security(&crate::dlls::cstr(name), info, sd, len, needed)
 }
 
-/// Pointeur vers une partie d'un descripteur auto-relatif (0 = absente).
+/// Pointeur vers une partie d'un descripteur (0 = absente). `field` est
+/// le décalage auto-relatif (4 propriétaire, 8 groupe, 12 SACL, 16 DACL) ;
+/// un descripteur absolu (InitializeSecurityDescriptor, sans
+/// SE_SELF_RELATIVE) range des pointeurs à 8, 16, 24 et 32.
 unsafe fn sd_part(sd: *const u8, field: usize) -> *mut u8 {
+    let control = std::ptr::read_unaligned(sd.add(2) as *const u16);
+    if control & SE_SELF_RELATIVE == 0 {
+        return std::ptr::read_unaligned(sd.add(field * 2) as *const *mut u8);
+    }
     let off = std::ptr::read_unaligned(sd.add(field) as *const u32) as usize;
     if off == 0 {
         std::ptr::null_mut()
@@ -915,6 +947,547 @@ pub unsafe extern "win64" fn GetAclInformation(
     1
 }
 
+const SE_SELF_RELATIVE: u16 = 0x8000;
+const SE_DACL_PRESENT: u16 = 0x4;
+const SE_DACL_DEFAULTED: u16 = 0x8;
+const SE_OWNER_DEFAULTED: u16 = 0x1;
+/// Taille d'un SECURITY_DESCRIPTOR absolu en x64.
+const ABSOLUTE_SD_SIZE: usize = 40;
+
+/// InitializeSecurityDescriptor : descripteur absolu vide (révision 1).
+pub unsafe extern "win64" fn InitializeSecurityDescriptor(sd: *mut u8, revision: u32) -> i32 {
+    if sd.is_null() || revision != 1 {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    std::ptr::write_bytes(sd, 0, ABSOLUTE_SD_SIZE);
+    *sd = 1;
+    1
+}
+
+unsafe fn absolute_sd(sd: *mut u8) -> Option<*mut u16> {
+    if sd.is_null() || *sd != 1 {
+        crate::process::set_last_error(1338); // ERROR_INVALID_SECURITY_DESCR
+        return None;
+    }
+    let control = sd.add(2) as *mut u16;
+    if std::ptr::read_unaligned(control) & SE_SELF_RELATIVE != 0 {
+        crate::process::set_last_error(1340); // ERROR_BAD_DESCRIPTOR_FORMAT
+        return None;
+    }
+    Some(control)
+}
+
+pub unsafe extern "win64" fn SetSecurityDescriptorDacl(
+    sd: *mut u8,
+    present: i32,
+    dacl: *mut u8,
+    defaulted: i32,
+) -> i32 {
+    let Some(control) = absolute_sd(sd) else {
+        return 0;
+    };
+    let mut c = std::ptr::read_unaligned(control) & !(SE_DACL_PRESENT | SE_DACL_DEFAULTED);
+    if present != 0 {
+        c |= SE_DACL_PRESENT;
+        if defaulted != 0 {
+            c |= SE_DACL_DEFAULTED;
+        }
+    }
+    std::ptr::write_unaligned(control, c);
+    std::ptr::write_unaligned(
+        sd.add(32) as *mut *mut u8,
+        if present != 0 {
+            dacl
+        } else {
+            std::ptr::null_mut()
+        },
+    );
+    1
+}
+
+pub unsafe extern "win64" fn SetSecurityDescriptorOwner(
+    sd: *mut u8,
+    owner: *mut u8,
+    defaulted: i32,
+) -> i32 {
+    let Some(control) = absolute_sd(sd) else {
+        return 0;
+    };
+    let mut c = std::ptr::read_unaligned(control) & !SE_OWNER_DEFAULTED;
+    if defaulted != 0 {
+        c |= SE_OWNER_DEFAULTED;
+    }
+    std::ptr::write_unaligned(control, c);
+    std::ptr::write_unaligned(sd.add(8) as *mut *mut u8, owner);
+    1
+}
+
+pub unsafe extern "win64" fn SetSecurityDescriptorGroup(
+    sd: *mut u8,
+    group: *mut u8,
+    _defaulted: i32,
+) -> i32 {
+    if absolute_sd(sd).is_none() {
+        return 0;
+    }
+    std::ptr::write_unaligned(sd.add(16) as *mut *mut u8, group);
+    1
+}
+
+/// InitializeAcl : en-tête d'une ACL vide (révision 2 ou 4).
+pub unsafe extern "win64" fn InitializeAcl(acl: *mut u8, len: u32, revision: u32) -> i32 {
+    if acl.is_null() || len < 8 || !(2..=4).contains(&revision) {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    std::ptr::write_bytes(acl, 0, 8);
+    *acl = revision as u8;
+    std::ptr::write_unaligned(acl.add(2) as *mut u16, len.min(0xFFFF) as u16);
+    1
+}
+
+unsafe fn add_ace(acl: *mut u8, kind: u8, flags: u8, mask: u32, sid: *const u8) -> i32 {
+    let Some(sid) = sid_at(sid) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if acl.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let size = std::ptr::read_unaligned(acl.add(2) as *const u16) as usize;
+    let count = std::ptr::read_unaligned(acl.add(4) as *const u16) as usize;
+    let mut end = 8usize;
+    for _ in 0..count {
+        end += std::ptr::read_unaligned(acl.add(end + 2) as *const u16) as usize;
+    }
+    let len = 8 + sid.len();
+    if end + len > size {
+        crate::process::set_last_error(1344); // ERROR_ALLOTTED_SPACE_EXCEEDED
+        return 0;
+    }
+    let p = acl.add(end);
+    *p = kind;
+    *p.add(1) = flags;
+    std::ptr::write_unaligned(p.add(2) as *mut u16, len as u16);
+    std::ptr::write_unaligned(p.add(4) as *mut u32, mask);
+    std::ptr::copy_nonoverlapping(sid.as_ptr(), p.add(8), sid.len());
+    std::ptr::write_unaligned(acl.add(4) as *mut u16, (count + 1) as u16);
+    1
+}
+
+pub unsafe extern "win64" fn AddAccessAllowedAce(
+    acl: *mut u8,
+    _rev: u32,
+    mask: u32,
+    sid: *const u8,
+) -> i32 {
+    add_ace(acl, 0, 0, mask, sid)
+}
+
+pub unsafe extern "win64" fn AddAccessAllowedAceEx(
+    acl: *mut u8,
+    _rev: u32,
+    flags: u32,
+    mask: u32,
+    sid: *const u8,
+) -> i32 {
+    add_ace(acl, 0, flags as u8, mask, sid)
+}
+
+pub unsafe extern "win64" fn AddAccessDeniedAce(
+    acl: *mut u8,
+    _rev: u32,
+    mask: u32,
+    sid: *const u8,
+) -> i32 {
+    add_ace(acl, 1, 0, mask, sid)
+}
+
+/// SetEntriesInAcl : nouvelle ACL = entrées de l'ancienne + EXPLICIT_ACCESS
+/// (GRANT/SET → autorisation, DENY → refus ; REVOKE retire le SID). Seuls
+/// les administrés désignés par SID (TRUSTEE_IS_SID) ou par nom de compte
+/// connu sont pris en compte. Libérée par LocalFree.
+unsafe fn set_entries_in_acl(
+    count: u32,
+    entries: *const u8,
+    old: *const u8,
+    out: *mut *mut u8,
+    wide: bool,
+) -> u32 {
+    if out.is_null() || (count > 0 && entries.is_null()) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let mut aces: Vec<(u8, u8, u32, Vec<u8>)> = Vec::new();
+    if !old.is_null() {
+        let n = std::ptr::read_unaligned(old.add(4) as *const u16) as usize;
+        let mut off = 8usize;
+        for _ in 0..n {
+            let p = old.add(off);
+            let len = std::ptr::read_unaligned(p.add(2) as *const u16) as usize;
+            if let Some(sid) = sid_at(p.add(8)) {
+                aces.push((
+                    *p,
+                    *p.add(1),
+                    std::ptr::read_unaligned(p.add(4) as *const u32),
+                    sid.to_vec(),
+                ));
+            }
+            off += len.max(8);
+        }
+    }
+    for i in 0..count as usize {
+        let e = entries.add(i * 48);
+        let mask = std::ptr::read_unaligned(e as *const u32);
+        let mode = std::ptr::read_unaligned(e.add(4) as *const u32);
+        let inherit = std::ptr::read_unaligned(e.add(8) as *const u32) as u8;
+        let form = std::ptr::read_unaligned(e.add(28) as *const u32);
+        let name = std::ptr::read_unaligned(e.add(40) as *const *const u8);
+        let sid = match form {
+            0 => sid_at(name).map(<[u8]>::to_vec),
+            1 => {
+                let text = if wide {
+                    crate::dlls::wstr(name as *const u16)
+                } else {
+                    crate::dlls::cstr(name)
+                };
+                trustee_sid(&text)
+            }
+            _ => None,
+        };
+        let Some(sid) = sid else {
+            return 1332; // ERROR_NONE_MAPPED
+        };
+        match mode {
+            1 => aces.push((0, inherit, mask, sid)),
+            2 => {
+                aces.retain(|a| a.3 != sid);
+                aces.push((0, inherit, mask, sid));
+            }
+            3 => aces.insert(0, (1, inherit, mask, sid)),
+            4 => aces.retain(|a| a.3 != sid),
+            _ => {}
+        }
+    }
+    let size = 8 + aces.iter().map(|a| 8 + a.3.len()).sum::<usize>();
+    let mut acl = vec![2u8, 0];
+    acl.extend_from_slice(&(size as u16).to_le_bytes());
+    acl.extend_from_slice(&(aces.len() as u16).to_le_bytes());
+    acl.extend_from_slice(&[0, 0]);
+    for (kind, flags, mask, sid) in aces {
+        acl.extend_from_slice(&[kind, flags]);
+        acl.extend_from_slice(&((8 + sid.len()) as u16).to_le_bytes());
+        acl.extend_from_slice(&mask.to_le_bytes());
+        acl.extend_from_slice(&sid);
+    }
+    let p = heap_copy(&acl);
+    if p.is_null() {
+        return 8;
+    }
+    *out = p;
+    0
+}
+
+/// SID d'un nom d'administré : « CURRENT_USER », un compte Linux ou un
+/// SID écrit « S-1-… ».
+fn trustee_sid(name: &str) -> Option<Vec<u8>> {
+    if name.starts_with("S-1-") {
+        return sid_bytes(name);
+    }
+    if name.eq_ignore_ascii_case("CURRENT_USER") {
+        return sid_bytes(&uid_sid(euid()));
+    }
+    let account = name.rsplit('\\').next().unwrap_or(name);
+    if account.eq_ignore_ascii_case("Everyone") || account.eq_ignore_ascii_case("Tout le monde") {
+        return sid_bytes(EVERYONE);
+    }
+    let c = std::ffi::CString::new(account).ok()?;
+    let pw = unsafe { libc::getpwnam(c.as_ptr()) };
+    if pw.is_null() {
+        return None;
+    }
+    sid_bytes(&uid_sid(unsafe { (*pw).pw_uid }))
+}
+
+pub unsafe extern "win64" fn SetEntriesInAclA(
+    count: u32,
+    entries: *const u8,
+    old: *const u8,
+    out: *mut *mut u8,
+) -> u32 {
+    set_entries_in_acl(count, entries, old, out, false)
+}
+
+pub unsafe extern "win64" fn SetEntriesInAclW(
+    count: u32,
+    entries: *const u8,
+    old: *const u8,
+    out: *mut *mut u8,
+) -> u32 {
+    set_entries_in_acl(count, entries, old, out, true)
+}
+
+/// GetSecurityInfo : descripteur d'un objet ouvert. Un fichier est décrit
+/// d'après ses droits Linux ; un objet du noyau (processus, canal, jeton…)
+/// appartient au compte qui fait tourner le programme.
+pub unsafe extern "win64" fn GetSecurityInfo(
+    handle: usize,
+    kind: u32,
+    info: u32,
+    owner: *mut *mut u8,
+    group: *mut *mut u8,
+    dacl: *mut *mut u8,
+    sacl: *mut *mut u8,
+    sd: *mut *mut u8,
+) -> u32 {
+    let fd = crate::dlls::kernel32::handle_to_fd(handle);
+    let path = if kind == 1 && fd >= 0 {
+        std::fs::read_link(format!("/proc/self/fd/{fd}")).unwrap_or_else(|_| "/proc/self".into())
+    } else {
+        std::path::PathBuf::from("/proc/self")
+    };
+    let d = match file_descriptor(&path, info & 7) {
+        Ok(d) => d,
+        Err(e) => return crate::dlls::kernel32::io_error_code(&e),
+    };
+    let p = heap_copy(&d);
+    if p.is_null() {
+        return 8;
+    }
+    for (out, field) in [(owner, 4), (group, 8), (dacl, 16)] {
+        if !out.is_null() {
+            *out = sd_part(p, field);
+        }
+    }
+    if !sacl.is_null() {
+        *sacl = std::ptr::null_mut();
+    }
+    if !sd.is_null() {
+        *sd = p;
+    }
+    0
+}
+
+/// SetSecurityInfo / SetNamedSecurityInfo : les droits Windows ne sont pas
+/// reportés sur les objets Linux (un canal ou un processus n'est de toute
+/// façon accessible qu'au compte qui l'a créé). Accepté sans effet.
+pub unsafe extern "win64" fn SetSecurityInfo(
+    _handle: usize,
+    _kind: u32,
+    _info: u32,
+    _owner: *mut u8,
+    _group: *mut u8,
+    _dacl: *mut u8,
+    _sacl: *mut u8,
+) -> u32 {
+    0
+}
+
+// ---------- Jetons du bac à sable de Chromium ----------
+//
+// Winlux n'a qu'un jeton par compte : les copies et les jetons restreints
+// que le bac à sable fabrique avant de lancer un moteur de rendu sont ce
+// même jeton (TOKEN_HANDLE), que CloseHandle accepte toujours. La
+// séparation réelle des processus vient des comptes Linux, pas du jeton.
+
+unsafe fn give_token(out: *mut usize) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    *out = TOKEN_HANDLE;
+    crate::process::set_last_error(0);
+    1
+}
+
+pub unsafe extern "win64" fn DuplicateTokenEx(
+    _token: usize,
+    _access: u32,
+    _sa: usize,
+    _level: u32,
+    _kind: u32,
+    out: *mut usize,
+) -> i32 {
+    give_token(out)
+}
+
+pub unsafe extern "win64" fn DuplicateToken(_token: usize, _level: u32, out: *mut usize) -> i32 {
+    give_token(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn CreateRestrictedToken(
+    _token: usize,
+    _flags: u32,
+    _n_disable: u32,
+    _disable: usize,
+    _n_delete: u32,
+    _delete: usize,
+    _n_restrict: u32,
+    _restrict: usize,
+    out: *mut usize,
+) -> i32 {
+    give_token(out)
+}
+
+/// SetTokenInformation (niveau d'intégrité, DACL par défaut…) : accepté.
+pub unsafe extern "win64" fn SetTokenInformation(
+    _token: usize,
+    _class: u32,
+    _info: usize,
+    _len: u32,
+) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn TokenOk(_token: usize) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn ImpersonateSelf(_level: u32) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn SetThreadToken(_thread: usize, _token: usize) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn IsTokenRestricted(_token: usize) -> i32 {
+    crate::process::set_last_error(0);
+    0
+}
+
+/// SID bien connus de `CreateWellKnownSid` (WELL_KNOWN_SID_TYPE).
+fn well_known_sid(kind: u32) -> Option<&'static str> {
+    Some(match kind {
+        0 => "S-1-0-0",
+        1 => "S-1-1-0",
+        2 => "S-1-2-0",
+        3 => "S-1-3-0",
+        4 => "S-1-3-1",
+        7 => "S-1-5",
+        9 => "S-1-5-2",
+        10 => "S-1-5-3",
+        11 => "S-1-5-4",
+        12 => "S-1-5-6",
+        13 => "S-1-5-7",
+        16 => "S-1-5-10",
+        17 => "S-1-5-11",
+        18 => "S-1-5-12",
+        19 => "S-1-5-13",
+        22 => "S-1-5-18",
+        23 => "S-1-5-19",
+        24 => "S-1-5-20",
+        25 => "S-1-5-32",
+        26 => "S-1-5-32-544",
+        27 => "S-1-5-32-545",
+        28 => "S-1-5-32-546",
+        65 => "S-1-16-0",
+        66 => "S-1-16-4096",
+        67 => "S-1-16-8192",
+        68 => "S-1-16-12288",
+        69 => "S-1-16-16384",
+        _ => return None,
+    })
+}
+
+pub unsafe extern "win64" fn CreateWellKnownSid(
+    kind: u32,
+    _domain: *const u8,
+    sid: *mut u8,
+    size: *mut u32,
+) -> i32 {
+    let Some(bytes) = well_known_sid(kind).and_then(sid_bytes) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if size.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let room = *size as usize;
+    *size = bytes.len() as u32;
+    if sid.is_null() || room < bytes.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), sid, bytes.len());
+    1
+}
+
+/// GetKernelObjectSecurity : descripteur de l'objet (au nom du compte).
+pub unsafe extern "win64" fn GetKernelObjectSecurity(
+    _handle: usize,
+    info: u32,
+    buf: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    let d = match file_descriptor(std::path::Path::new("/proc/self"), info & 7) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::process::set_last_error(crate::dlls::kernel32::io_error_code(&e));
+            return 0;
+        }
+    };
+    if !needed.is_null() {
+        *needed = d.len() as u32;
+    }
+    if buf.is_null() || (len as usize) < d.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(d.as_ptr(), buf, d.len());
+    1
+}
+
+pub unsafe extern "win64" fn SetKernelObjectSecurity(_h: usize, _info: u32, _sd: usize) -> i32 {
+    1
+}
+
+/// SetNamedSecurityInfoW/A : comme SetSecurityInfo, sans effet sur Linux.
+pub unsafe extern "win64" fn SetNamedSecurityInfo(
+    _name: usize,
+    _kind: u32,
+    _info: u32,
+    _owner: usize,
+    _group: usize,
+    _dacl: usize,
+    _sacl: usize,
+) -> u32 {
+    0
+}
+
+/// CreateProcessAsUserW : même compte Linux, donc CreateProcessW.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn CreateProcessAsUserW(
+    _token: usize,
+    application: *const u16,
+    command_line: *mut u16,
+    process_attributes: usize,
+    thread_attributes: usize,
+    inherit: i32,
+    flags: u32,
+    environment: *const c_void,
+    current_directory: *const u16,
+    startup: *const crate::dlls::kernel32::StartupInfoA,
+    info: *mut crate::dlls::kernel32::ProcessInformation,
+) -> i32 {
+    crate::dlls::kernel32::create_process_w(
+        application,
+        command_line,
+        process_attributes,
+        thread_attributes,
+        inherit,
+        flags,
+        environment,
+        current_directory,
+        startup,
+        info,
+    )
+}
+
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "OpenProcessToken" => fn OpenProcessToken,
@@ -939,6 +1512,18 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "LookupAccountSidW" => fn LookupAccountSidW,
         "GetFileSecurityW" => fn GetFileSecurityW,
         "GetFileSecurityA" => fn GetFileSecurityA,
+        "InitializeSecurityDescriptor" => fn InitializeSecurityDescriptor,
+        "SetSecurityDescriptorDacl" => fn SetSecurityDescriptorDacl,
+        "SetSecurityDescriptorOwner" => fn SetSecurityDescriptorOwner,
+        "SetSecurityDescriptorGroup" => fn SetSecurityDescriptorGroup,
+        "InitializeAcl" => fn InitializeAcl,
+        "AddAccessAllowedAce" => fn AddAccessAllowedAce,
+        "AddAccessAllowedAceEx" => fn AddAccessAllowedAceEx,
+        "AddAccessDeniedAce" => fn AddAccessDeniedAce,
+        "SetEntriesInAclA" => fn SetEntriesInAclA,
+        "SetEntriesInAclW" => fn SetEntriesInAclW,
+        "GetSecurityInfo" => fn GetSecurityInfo,
+        "SetSecurityInfo" => fn SetSecurityInfo,
         "GetNamedSecurityInfoW" => fn GetNamedSecurityInfoW,
         "GetNamedSecurityInfoA" => fn GetNamedSecurityInfoA,
         "GetSecurityDescriptorOwner" => fn GetSecurityDescriptorOwner,
@@ -948,6 +1533,20 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "IsValidSecurityDescriptor" => fn IsValidSecurityDescriptor,
         "GetAce" => fn GetAce,
         "GetAclInformation" => fn GetAclInformation,
+        "DuplicateTokenEx" => fn DuplicateTokenEx,
+        "DuplicateToken" => fn DuplicateToken,
+        "CreateRestrictedToken" => fn CreateRestrictedToken,
+        "SetTokenInformation" => fn SetTokenInformation,
+        "ImpersonateLoggedOnUser" => fn TokenOk,
+        "ImpersonateSelf" => fn ImpersonateSelf,
+        "SetThreadToken" => fn SetThreadToken,
+        "IsTokenRestricted" => fn IsTokenRestricted,
+        "CreateWellKnownSid" => fn CreateWellKnownSid,
+        "GetKernelObjectSecurity" => fn GetKernelObjectSecurity,
+        "SetKernelObjectSecurity" => fn SetKernelObjectSecurity,
+        "SetNamedSecurityInfoW" => fn SetNamedSecurityInfo,
+        "SetNamedSecurityInfoA" => fn SetNamedSecurityInfo,
+        "CreateProcessAsUserW" => fn CreateProcessAsUserW,
     }
 }
 

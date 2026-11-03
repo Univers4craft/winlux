@@ -34,6 +34,10 @@ pub struct Mode {
     pub h: u32,
     pub current: bool,
     pub preferred: bool,
+    /// Fréquences proposées (« 60.00 », « 143.98 »), comme xrandr les écrit.
+    pub rates: Vec<String>,
+    /// Fréquence en cours (marquée « * » par xrandr).
+    pub current_rate: Option<String>,
 }
 
 impl Mode {
@@ -73,6 +77,31 @@ impl Output {
     pub fn find_mode(&self, name: &str) -> Option<&Mode> {
         self.modes.iter().find(|m| m.name() == name)
     }
+}
+
+/// Fréquence lisible : « 143.98 » → « 144 Hz » (arrondi comme Windows).
+pub fn rate_label(rate: &str) -> String {
+    rate.parse::<f64>()
+        .map_or_else(|_| rate.to_string(), |r| format!("{} Hz", r.round()))
+}
+
+/// Fréquences d'une ligne de mode xrandr : « 60.00*+ 59.94 » ou « 60.00 + 74.97* ».
+fn parse_rates(words: &[&str]) -> (Vec<String>, Option<String>) {
+    let mut rates: Vec<String> = Vec::new();
+    let mut current = None;
+    for word in words {
+        let value = word.trim_end_matches(['*', '+']);
+        if !value.is_empty() {
+            if value.parse::<f64>().is_err() {
+                continue;
+            }
+            rates.push(value.to_string());
+        }
+        if word.contains('*') {
+            current = rates.last().cloned();
+        }
+    }
+    (rates, current)
 }
 
 fn parse_size(s: &str) -> Option<(u32, u32)> {
@@ -132,18 +161,27 @@ pub fn parse_query(text: &str) -> Vec<Output> {
         let Some((w, h)) = parse_size(first) else {
             continue;
         };
-        let rates: Vec<&str> = words.collect();
-        let current = rates.iter().any(|r| r.contains('*'));
-        let preferred = rates.iter().any(|r| r.contains('+'));
+        let words: Vec<&str> = words.collect();
+        let current = words.iter().any(|r| r.contains('*'));
+        let preferred = words.iter().any(|r| r.contains('+'));
+        let (rates, current_rate) = parse_rates(&words);
         if let Some(m) = out.modes.iter_mut().find(|m| m.w == w && m.h == h) {
             m.current |= current;
             m.preferred |= preferred;
+            for r in rates {
+                if !m.rates.contains(&r) {
+                    m.rates.push(r);
+                }
+            }
+            m.current_rate = m.current_rate.take().or(current_rate);
         } else {
             out.modes.push(Mode {
                 w,
                 h,
                 current,
                 preferred,
+                rates,
+                current_rate,
             });
         }
     }
@@ -315,6 +353,8 @@ pub struct Wanted {
     pub layout: Layout,
     pub primary: Option<String>,
     pub modes: BTreeMap<String, String>,
+    /// Fréquence choisie par écran (proposée par sa définition).
+    pub rates: BTreeMap<String, String>,
     pub places: BTreeMap<String, Place>,
     pub scales: BTreeMap<String, f64>,
     /// Une seule sortie, politique « suivre la fenêtre VM » (mode préféré).
@@ -332,6 +372,7 @@ pub fn wanted(config: &Config, outputs: &[Output]) -> Wanted {
             .unwrap_or(Layout::Extend),
         primary: config.pget(&id, "primary", None).map(str::to_string),
         modes: BTreeMap::new(),
+        rates: BTreeMap::new(),
         places: BTreeMap::new(),
         scales: BTreeMap::new(),
         follow: single && config.get("POLICY") != Some("fixed"),
@@ -347,6 +388,9 @@ pub fn wanted(config: &Config, outputs: &[Output]) -> Wanted {
         });
         if let Some(m) = mode.filter(|m| o.find_mode(m).is_some()) {
             w.modes.insert(name.to_string(), m.to_string());
+        }
+        if let Some(r) = config.pget(&id, "rate", Some(name)) {
+            w.rates.insert(name.to_string(), r.to_string());
         }
         if let Some(p) = config.pget(&id, "place", Some(name)).and_then(Place::parse) {
             w.places.insert(name.to_string(), p);
@@ -402,6 +446,16 @@ fn chosen_mode<'a>(w: &Wanted, o: &'a Output) -> Option<&'a Mode> {
         .or_else(|| o.preferred_mode())
 }
 
+/// Fréquence voulue pour une sortie, si sa définition la propose.
+fn chosen_rate(w: &Wanted, o: &Output, mode: (u32, u32)) -> Option<String> {
+    let r = w.rates.get(&o.name)?;
+    o.modes
+        .iter()
+        .find(|m| (m.w, m.h) == mode)
+        .filter(|m| m.rates.contains(r))
+        .map(|_| r.clone())
+}
+
 /// Échelle de la session : la plus grande demandée parmi les écrans
 /// allumés (les autres sont réduits par RandR, jamais agrandis en flou).
 pub fn session_scale(w: &Wanted, outputs: &[Output], lid_closed: bool) -> f64 {
@@ -441,6 +495,8 @@ pub struct On {
     pub primary: bool,
     /// Duplication d'une définition différente : `--scale-from`.
     pub scale_from: Option<(u32, u32)>,
+    /// Fréquence demandée (`--rate`), sinon celle que choisit le serveur.
+    pub rate: Option<String>,
 }
 
 impl On {
@@ -509,6 +565,7 @@ pub fn plan(w: &Wanted, outputs: &[Output], lid_closed: bool, g: f64) -> Vec<Tar
                     y: 0,
                     primary: Some(&o.name) == primary.as_ref(),
                     scale_from: (mode != pri_mode || factor != 1.0).then_some(area),
+                    rate: chosen_rate(w, o, mode),
                 },
             );
         }
@@ -524,6 +581,7 @@ pub fn plan(w: &Wanted, outputs: &[Output], lid_closed: bool, g: f64) -> Vec<Tar
                     y: 0,
                     primary: Some(&o.name) == primary.as_ref(),
                     scale_from: None,
+                    rate: chosen_rate(w, o, (m.w, m.h)),
                 },
             );
         }
@@ -608,6 +666,9 @@ pub fn matches(outputs: &[Output], plan: &[Target]) -> bool {
                 o.geometry == Some((w, h, on.x, on.y))
                     && o.current_mode().map(|m| (m.w, m.h)) == Some(on.mode)
                     && o.primary == on.primary
+                    && (on.rate.is_none()
+                        || o.current_mode().and_then(|m| m.current_rate.as_ref())
+                            == on.rate.as_ref())
             }
         }
     })
@@ -627,6 +688,11 @@ pub fn xrandr_args(plan: &[Target]) -> Vec<String> {
             t.name.clone(),
             "--mode".into(),
             format!("{}x{}", on.mode.0, on.mode.1),
+        ]);
+        if let Some(rate) = &on.rate {
+            args.extend(["--rate".into(), rate.clone()]);
+        }
+        args.extend([
             "--pos".into(),
             format!("{}x{}", on.x, on.y),
             "--rotate".into(),
@@ -831,6 +897,17 @@ pub fn status_lines(root: &Path, outputs: &[Output], config: &Config) -> String 
             u8::from(!w.scales.contains_key(&o.name)),
             w.places.get(&o.name).copied().unwrap_or(Place::Right).key(),
         ));
+        // Fréquences de la définition choisie ; « auto » : celle du serveur.
+        let mode = chosen_mode(&w, o);
+        let rates = mode.map(|m| m.rates.join(",")).unwrap_or_default();
+        let rate = mode
+            .and_then(|m| chosen_rate(&w, o, (m.w, m.h)))
+            .or_else(|| mode.and_then(|m| m.current_rate.clone()))
+            .unwrap_or_default();
+        s.push_str(&format!(
+            "display_{n}_rates={rates}\ndisplay_{n}_rate={rate}\ndisplay_{n}_rate_auto={}\n",
+            u8::from(!w.rates.contains_key(&o.name))
+        ));
         if let Some(on) = on {
             let (ww, hh) = on.size();
             s.push_str(&format!(
@@ -889,6 +966,22 @@ pub fn apply_command(
                 config.set("POLICY", "fixed");
             }
             Ok(format!("{name} : {mode}"))
+        }
+        ["rate", rate] => apply_command(config, outputs, &["rate", &primary, rate]),
+        ["rate", name, rate] => {
+            let o = connected_name(outputs, name)?;
+            let key = format!("display.{id}.rate.{name}");
+            if *rate == "auto" {
+                config.values.remove(&key);
+                return Ok(format!("{name} : fr\u{e9}quence automatique"));
+            }
+            let w = wanted(config, outputs);
+            let offered = chosen_mode(&w, o).is_some_and(|m| m.rates.iter().any(|r| r == rate));
+            if !offered {
+                return Err("Fr\u{e9}quence non propos\u{e9}e par cet \u{e9}cran.".into());
+            }
+            config.set(&key, rate);
+            Ok(format!("{name} : {}", rate_label(rate)))
         }
         ["scale", value] if single => apply_command(config, outputs, &["scale", &primary, value]),
         ["scale", value] => {
@@ -956,7 +1049,7 @@ pub fn apply_command(
 
 const USAGE: &str = "usage: winlux --display status | sync | watch | session-scale\n\
   | layout extend|duplicate | layout only ECRAN | primary ECRAN\n\
-  | mode [ECRAN] LxH | place ECRAN right|left|above|below\n\
+  | mode [ECRAN] LxH | rate [ECRAN] HZ|auto | place ECRAN right|left|above|below\n\
   | scale [ECRAN] 1|1.25|1.5|1.75|2|2.5|3|auto | scale-step ECRAN up|down\n\
   | follow | fixed";
 

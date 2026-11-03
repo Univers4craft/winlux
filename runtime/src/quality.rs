@@ -149,8 +149,30 @@ unsafe fn walk_stack(initial_rbp: u64, initial_rip: u64) -> Vec<CrashFrame> {
         if rbp == 0 || !rbp.is_multiple_of(8) {
             break;
         }
-        let next_rbp = *(rbp as *const u64);
-        let ret_addr = *((rbp + 8) as *const u64);
+        // rbp peut ne pas être un pointeur de cadre (code compilé sans) :
+        // lecture par process_vm_readv, qui échoue proprement sur une adresse
+        // non lisible au lieu de planter le gestionnaire de plantage.
+        let mut pair = [0u64; 2];
+        let local = libc::iovec {
+            iov_base: pair.as_mut_ptr().cast(),
+            iov_len: 16,
+        };
+        let remote = libc::iovec {
+            iov_base: rbp as *mut libc::c_void,
+            iov_len: 16,
+        };
+        if libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) != 16 {
+            break;
+        }
+        let [next_rbp, ret_addr] = pair;
+        // La pile croît vers le bas : chaque cadre appelant est plus haut.
+        if next_rbp != 0 && (next_rbp <= rbp || next_rbp - rbp > 64 << 20) {
+            frames.push(CrashFrame {
+                rip: ret_addr,
+                rbp: 0,
+            });
+            break;
+        }
         if ret_addr == 0 {
             break;
         }
@@ -196,6 +218,9 @@ unsafe fn write_dec_fd(fd: i32, mut n: u64) {
 
 extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        if crate::dlls::seh_hw::on_fault(sig, info, ctx) {
+            return;
+        }
         // Journal centralisé + écran bleu + signalement d'abord : ce chemin
         // ne relit la mémoire que par sondage sûr, contrairement au dump
         // détaillé ci-dessous.

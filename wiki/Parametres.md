@@ -7,7 +7,7 @@
 1. **Masqué plutôt que grisé.** Une page ou une section qui ne correspond à rien sur la machine n'apparaît pas : pas de page Bluetooth sans adaptateur ni périphérique, pas de page Son sans carte son, pas de Lecteurs réseau sans outil de montage, pas de réglage CPU que le matériel ne permet pas. La détection est faite au démarrage par `winlux-hardware`.
 2. **Les réglages matériels avancés vivent ici, et seulement ici** (processeur, GPU, alimentation), après détection réelle du matériel.
 
-## Les 29 pages
+## Les 36 pages
 
 | # | Page | Ce qu'on y règle |
 |---|---|---|
@@ -19,8 +19,8 @@
 | 5 | **Souris** | Vitesse, boutons, pavé tactile (appui pour cliquer). |
 | 6 | **Personnalisation** | Thème clair/sombre, couleur d'accent. |
 | 7 | **Mises à jour** | Rechercher et installer les mises à jour de Winlux, mises à jour automatiques, retour arrière. |
-| 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle). |
-| 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), matériel réel, en quatre langues. |
+| 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle), **éclairage nocturne** (intensité, planning du coucher au lever du soleil calculé hors ligne ou heures choisies ; masqué si l’écran n’a pas de rampe gamma). |
+| 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), puis **Votre PC** : fabricant et modèle, processeur, mémoire, cartes graphiques, disques et place libre, écran et définition, réseau, son, batterie, micrologiciel (BIOS hérité ou UEFI 32/64 bits), architecture et Secure Boot — seulement ce qui a été détecté, en quatre langues. |
 | 10 | **Programmes Windows** | Réglages par `.exe` (fichiers `<programme>.exe.winlux.ini` partagés avec le runtime). |
 | 11 | **Navigateurs** | Installer un navigateur préparé hors ligne, choisir le navigateur par défaut. |
 | 12 | **Accessibilité** | Loupe, Narrateur, contraste élevé, aides clavier. |
@@ -32,7 +32,7 @@
 | 18 | **Confidentialité et sécurité** | Verrouillage (délai, au réveil), autorisations des applications (caméra, micro, écran, fichiers, réseau), « Tout redemander ». |
 | 19 | **Processeur** | Profils de performance, gouverneur, mode jeu, temps de démarrage mesuré, affichés selon le matériel. |
 | 20 | **Lecteurs réseau** | SMB, NFS, SFTP, FTP, WebDAV, S3 montés comme un disque. |
-| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). |
+| 21 | **Personnalisation du bureau** | Fond d'écran, couleurs, position de la barre des tâches (centrée ou à gauche, haut, bas…). Mode de couleur automatique (clair le jour, sombre le soir), arrière-plan en diaporama ou Winlux Aube / Nuit selon l'heure, thèmes `.wlxtheme` à enregistrer et partager. |
 | 22 | **Bluetooth et appareils** | Appairage BlueZ, manettes, caméras, micros, périphériques d'entrée. |
 | 23 | **Alimentation et batterie** | Mise en veille, écran, plans d'alimentation, batterie (affichée seulement si présente). |
 | 24 | **Graphismes** | GPU (y compris hybrides), Direct3D 9/12 et backend Vulkan, décodage vidéo matériel, overlay de performances. |
@@ -40,6 +40,13 @@
 | 26 | **Imprimantes et scanners** | Ajout d'imprimantes CUPS, page de test, imprimer en PDF. |
 | 27 | **Bureau à distance** | Serveur RFB/VNC de la session. |
 | 28 | **Partage et transfert** | Dossiers partagés (Samba) et transfert des réglages par fichier `.wlxprofile`. |
+| 29 | **Jeux** | Bibliothèque des jeux Windows, temps de jeu, raccourcis (docs/JEUX.md). |
+| 30 | **Assistant IA** | Trois assistants, tous désactivés par défaut, chacun avec son interrupteur : **Claude** (compte Claude, Claude Code téléchargé), **ChatGPT** (compte ChatGPT, Codex d'OpenAI téléchargé) et **IA locale** (llama.cpp et le petit modèle Qwen2.5 1,5B, rien ne quitte le PC, cachée sous 3 Gio de mémoire). Un seul bouton dans la barre des tâches (et Windows+C), choix de l'assistant dans le panneau, ce qui est envoyé. Session native seulement. |
+| 31 | **Récupération** | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), revenir en arrière, démarrage avancé, réparer le démarrage, créer une clé de secours ([docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md)). |
+| 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés), reconnaissance de texte (télécharger, langues installées, retirer). Page native seulement. |
+| 33 | **Comptes** | Comptes locaux (ajout, mot de passe, rôle). Page native seulement. |
+| 34 | **Matériel et pilotes** | Diagnostic du matériel et pilotes recommandés. Page native seulement. |
+| 35 | **Wi-Fi** | Réseaux à portée (nom, signal, sécurité), clé de sécurité dans une boîte avec « Afficher les caractères » et clavier tactile intégré, bouton WPS de la box, réseau caché, réseaux enregistrés (oublier, reconnexion automatique au démarrage), mode avion. Les erreurs sont dites en clair (clé refusée, hors de portée, pas d’adresse…). Passe par `winlux-wifi` en root via le relais `winlux-root` ; masquée sans carte Wi-Fi. Page native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

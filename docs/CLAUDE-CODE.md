@@ -47,6 +47,12 @@ choisir la dernière version publiée plutôt que la stable.
 Au premier lancement, Claude Code ouvre la connexion au compte dans le
 navigateur.
 
+## Assistant IA dans la barre des tâches (#286)
+
+Claude Code sert aussi à l'assistant de la barre des tâches (Windows+C),
+désactivé par défaut et activé dans Paramètres > Applications > Assistant IA,
+à côté de ChatGPT et d'une IA locale : voir [ASSISTANT-IA.md](ASSISTANT-IA.md).
+
 ## État vérifié (2 novembre 2026, claude.exe 2.1.316 et 2.1.309)
 
 Les essais ont été faits sur le runtime compilé depuis cette branche, dans
@@ -114,10 +120,18 @@ Ce qui reste à valider sur la vraie machine :
 
 ## Limites connues
 
-- `fs.watch` (ReadDirectoryChangesW) n'est pas encore pris en charge. Claude
-  Code le détecte et s'en passe.
-- ConPTY (CreatePseudoConsole) renvoie E_NOTIMPL : les programmes retombent
-  sur des tubes.
+- `fs.watch` repose sur `ReadDirectoryChangesW` / `ReadDirectoryChangesExW`,
+  écrits sur inotify (`runtime/src/dlls/dirwatch.rs`) : appel synchrone,
+  OVERLAPPED + événement, port de complétion et routine d'achèvement (APC
+  rendue pendant `SleepEx` / `WaitForSingleObjectEx` alertables),
+  sous-dossiers, renommages appariés et débordement (`ERROR_NOTIFY_ENUM_DIR`).
+  `FindFirstChangeNotification` utilise le même moteur. Pas encore essayé
+  avec un vrai Node.js sous Winlux.
+- ConPTY : `CreatePseudoConsole` ouvre un vrai pseudo-terminal Linux
+  (`openpty`) ; `CreateProcess` avec `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
+  lui donne le programme comme terminal de contrôle (couleurs VT, taille avec
+  `ResizePseudoConsole`, saisie interactive). `ClosePseudoConsole` envoie
+  SIGHUP aux programmes attachés.
 - Les commandes passent par le bash Linux. Les outils Windows
   (`cmd.exe`, PowerShell) ne sont pas fournis.
 

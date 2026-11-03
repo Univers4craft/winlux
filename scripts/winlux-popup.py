@@ -5,6 +5,10 @@
     winlux-popup power           alimentation : batterie, mode, redémarrer/éteindre
     winlux-popup calendar        notifications et calendrier (clic sur l'horloge)
     winlux-popup notifications   même panneau (cloche, Win+N)
+    winlux-popup quick           réglages rapides (Win+A, icônes réseau, son et
+                                 batterie) : tuiles Wi-Fi, Bluetooth, mode avion,
+                                 économiseur, éclairage nocturne, accessibilité,
+                                 curseurs de luminosité et de volume
 
 Une seule instance par panneau : un second clic sur l'icône le referme. Le
 panneau est ancré au coin de la barre (en bas à droite, ou en haut si la barre
@@ -54,6 +58,23 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Réglages rapides': ('Quick settings', 'Configuración rápida', 'Schnelleinstellungen'),
+    'Wi-Fi': ('Wi-Fi', 'Wi-Fi', 'WLAN'),
+    'Ethernet': ('Ethernet', 'Ethernet', 'Ethernet'),
+    'Ethernet virtuel': ('Virtual Ethernet', 'Ethernet virtual', 'Virtuelles Ethernet'),
+    'Non connecté': ('Not connected', 'No conectado', 'Nicht verbunden'),
+    'Bluetooth': ('Bluetooth', 'Bluetooth', 'Bluetooth'),
+    'Mode avion': ('Airplane mode', 'Modo avión', 'Flugzeugmodus'),
+    'Économiseur de batterie': ('Battery saver', 'Ahorro de batería', 'Energiesparmodus'),
+    'Éclairage nocturne': ('Night light', 'Luz nocturna', 'Nachtmodus'),
+    'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
+    'Luminosité': ('Brightness', 'Brillo', 'Helligkeit'),
+    'Luminosité de l’écran, en pourcentage': ('Screen brightness, as a percentage', 'Brillo de la pantalla, en porcentaje', 'Bildschirmhelligkeit in Prozent'),
+    'Réseaux Wi-Fi disponibles': ('Available Wi-Fi networks', 'Redes Wi-Fi disponibles', 'Verfügbare WLAN-Netzwerke'),
+    'Périphériques Bluetooth': ('Bluetooth devices', 'Dispositivos Bluetooth', 'Bluetooth-Geräte'),
+    'Tous les paramètres': ('All settings', 'Toda la configuración', 'Alle Einstellungen'),
+    'Options d’alimentation et de batterie': ('Power and battery options', 'Opciones de energía y batería', 'Energie- und Akkuoptionen'),
+    '{level} %': ('{level}%', '{level} %', '{level} %'),
     'Application': ('Application', 'Aplicación', 'Anwendung'),
     'Volume Winlux': ('Winlux volume', 'Volumen de Winlux', 'Winlux-Lautstärke'),
     'Alimentation Winlux': ('Winlux power', 'Energía de Winlux', 'Winlux-Energie'),
@@ -149,8 +170,10 @@ def long_date(day):
 # ── Son : sortie par défaut et flux des applications ────────────────────────
 
 def _run(args, timeout=2):
+    # pactl en locale C : en français son JSON écrit « 0,00 » (JSON invalide).
+    env = dict(os.environ, LC_ALL="C", LANG="C") if args and args[0] == "pactl" else None
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
         return result.stdout if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
         return None
@@ -162,6 +185,17 @@ def _percent(volume):
         try: levels.append(int(str(channel.get("value_percent", "0")).strip().rstrip("%")))
         except (ValueError, AttributeError): pass
     return max(levels or [0])
+
+
+def device_label(device):
+    """Nom lisible d'une sortie pactl. Sur certains PC (SOF), PulseAudio donne
+    la description « (null) » : le vrai nom est alors dans les propriétés."""
+    properties = device.get("properties") or {}
+    for value in (device.get("description"), properties.get("device.description"), properties.get("node.description"),
+                  properties.get("node.nick"), properties.get("alsa.card_name")):
+        if isinstance(value, str) and value.strip() and value.strip().lower() not in ("(null)", "null"):
+            return value.strip()
+    return ""
 
 
 def audio():
@@ -177,7 +211,7 @@ def audio():
                 for sink in json.loads(sinks):
                     if sink.get("name") == default:
                         return ("pactl", min(100, _percent(sink.get("volume"))), bool(sink.get("mute")),
-                                sink.get("description") or default)
+                                device_label(sink) or default)
             except (ValueError, TypeError, AttributeError):
                 pass
     if shutil.which("wpctl"):
@@ -187,7 +221,7 @@ def audio():
             inspect = _run(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"]) or ""
             name = re.search(r'node\.description = "([^"]*)"', inspect)
             return ("wpctl", min(100, round(float(found[1]) * 100)), "MUTED" in output,
-                    name[1] if name else _t("Sortie audio"))
+                    name[1] if name and name[1].lower() not in ("(null)", "null") else _t("Sortie audio"))
     if shutil.which("amixer"):
         output = _run(["amixer", "get", "Master"])
         found = re.findall(r"\[(\d+)%\]", output or "")
@@ -246,6 +280,133 @@ def power_modes():
     return None
 
 
+
+# ── Réglages rapides : matériel présent et état réel ────────────────────────
+
+# WINLUX_SYS_ROOT remplace « / » pour lire /sys et /proc (tests).
+SYS_ROOT = Path(os.environ.get("WINLUX_SYS_ROOT", "/"))
+AIRPLANE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/airplane-mode"
+
+
+def _present(relative, pattern="*"):
+    try:
+        return any((SYS_ROOT / relative).glob(pattern))
+    except OSError:
+        return False
+
+
+def quick_hardware():
+    """Tuiles et curseurs à proposer : jamais grisés, cachés sans matériel."""
+    return {"wifi": _present("sys/class/ieee80211") or _present("sys/class/net", "*/wireless"),
+            "bluetooth": _present("sys/class/bluetooth") and bool(shutil.which("bluetoothctl")),
+            # Luminosité : rétroéclairage, écran DDC/CI ou rampes gamma ;
+            # winlux-brightness dit lequel (method=none : curseur caché).
+            "backlight": brightness_tool() is not None,
+            "battery": _present("sys/class/power_supply", "BAT*/capacity")}
+
+
+def virtual_machine():
+    """Machine virtuelle : drapeau « hypervisor » du processeur."""
+    try:
+        with open(SYS_ROOT / "proc/cpuinfo", encoding="utf-8", errors="replace") as cpuinfo:
+            for line in cpuinfo:
+                if line.startswith("flags"):
+                    return "hypervisor" in line.split()
+    except OSError:
+        pass
+    return False
+
+
+def battery_level():
+    for capacity in sorted((SYS_ROOT / "sys/class/power_supply").glob("BAT*/capacity")):
+        try:
+            level = max(0, min(100, int(capacity.read_text().strip())))
+            status = (capacity.parent / "status").read_text().strip()
+            return level, status
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def battery_icon(level, status):
+    if status == "Charging": return "battery-good-charging-symbolic" if level >= 30 else "battery-low-charging-symbolic"
+    return "battery-full-symbolic" if level >= 90 else "battery-good-symbolic" if level >= 50 else \
+        "battery-low-symbolic" if level >= 20 else "battery-caution-symbolic"
+
+
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if shutil.which("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return [sys.executable, str(script)] if script.is_file() else None
+
+
+def brightness():
+    """Luminosité en %, None sans aucun contrôle (le curseur se cache)."""
+    tool = brightness_tool()
+    output = _run(tool + ["get"], timeout=10) if tool else ""
+    try:
+        state = json.loads((output or "").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return None
+    if state.get("method") in (None, "none") or state.get("percent") is None: return None
+    return max(0, min(100, int(state["percent"])))
+
+
+def quick_state(hardware, modes_module=None):
+    """État lu sur la machine (appelé hors de la boucle GTK : commandes lentes)."""
+    state = {"airplane": AIRPLANE.exists()}
+    if hardware["wifi"] and shutil.which("nmcli"):
+        state["wifi_on"] = (_run(["nmcli", "-t", "-f", "WIFI", "radio"]) or "").strip() == "enabled"
+        for line in (_run(["nmcli", "-t", "-f", "TYPE,NAME", "connection", "show", "--active"]) or "").splitlines():
+            kind, _, name = line.partition(":")
+            if kind == "802-11-wireless" and name:
+                state["wifi_name"] = name.replace("\\:", ":")
+                break
+    route = _run(["ip", "-4", "route", "show", "default"]) or ""
+    state["online"] = bool(route.strip())
+    if hardware["bluetooth"]:
+        state["bluetooth_on"] = "Powered: yes" in (_run(["bluetoothctl", "show"], timeout=3) or "")
+    if hardware["backlight"]:
+        state["brightness"] = brightness()
+    if hardware["battery"] and modes_module:
+        try:
+            source, available, active = modes_module.detect()
+        except Exception:
+            source, available, active = None, [], None
+        if "saver" in available:
+            state["saver"] = (source, active == "saver")
+    tool = shutil.which("winlux-ambiance")
+    if tool:
+        values = dict(line.split("=", 1) for line in (_run([tool, "status"], timeout=5) or "").splitlines() if "=" in line)
+        if values.get("supported") == "1":
+            state["night"] = values.get("nightlight") == "on"
+    return state
+
+
+def quick_tiles(hardware, state, in_vm):
+    """(clé, titre, icône, actif, détail) dans l'ordre de Windows 11."""
+    tiles = []
+    if hardware["wifi"]:
+        tiles.append(("wifi", state.get("wifi_name") or _t("Wi-Fi"), "network-wireless-symbolic",
+                      bool(state.get("wifi_on")) and not state.get("airplane"), True))
+    else:
+        # Sans carte Wi-Fi (VM, PC fixe) : la connexion filaire, jamais « Wi-Fi indisponible ».
+        tiles.append(("ethernet", _t("Ethernet virtuel") if in_vm else _t("Ethernet"), "network-wired-symbolic",
+                      bool(state.get("online")), False))
+    if hardware["bluetooth"]:
+        tiles.append(("bluetooth", _t("Bluetooth"), "bluetooth-active-symbolic",
+                      bool(state.get("bluetooth_on")) and not state.get("airplane"), True))
+    if hardware["wifi"] or hardware["bluetooth"]:
+        tiles.append(("airplane", _t("Mode avion"), "airplane-mode-symbolic", bool(state.get("airplane")), False))
+    if "saver" in state:
+        tiles.append(("saver", _t("Économiseur de batterie"), "power-profile-power-saver-symbolic", state["saver"][1], False))
+    if "night" in state:
+        tiles.append(("night", _t("Éclairage nocturne"), "night-light-symbolic", state["night"], False))
+    tiles.append(("accessibility", _t("Accessibilité"), "preferences-desktop-accessibility-symbolic", False, False))
+    return tiles
+
+
 STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "winlux/notifications.json"
 DND = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/do-not-disturb"
 
@@ -298,6 +459,12 @@ POPUP_CSS = Template("""
   #winlux-popup button.day.today { background: $accent; border-color: $accent; }
   #winlux-popup button.day.today label { color: $on_accent; font-weight: bold; }
   #winlux-popup .weekday { color: $dim; font-size: smaller; }
+  #winlux-popup button.tile { padding: 12px 6px; min-height: 22px; }
+  #winlux-popup button.tile:checked, #winlux-popup button.tile-arrow.on { background: $accent; border-color: $accent; }
+  #winlux-popup button.tile:checked image, #winlux-popup button.tile-arrow.on image { color: $on_accent; }
+  #winlux-popup button.tile.split { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  #winlux-popup button.tile-arrow { padding: 6px 2px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; }
+  #winlux-popup .tile-label { font-size: smaller; }
 """)
 
 
@@ -306,6 +473,7 @@ def dark_theme():
     if forced:return "dark" in forced.casefold()  # GTK ignore alors la préférence
     settings=Gtk.Settings.get_default()
     name=(settings.get_property("gtk-theme-name") or "").casefold()
+    if name.startswith("winlux-"): return "-dark" in name  # thème de winlux-personalize
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
 
 
@@ -329,7 +497,8 @@ def rounded(region, x, y, width, height, radius):
 
 
 class Popup(Gtk.Application):
-    KINDS = {"volume": "volume", "power": "power", "calendar": "center", "notifications": "center", "center": "center"}
+    KINDS = {"volume": "volume", "power": "power", "calendar": "center", "notifications": "center", "center": "center",
+             "quick": "quick"}
 
     def __init__(self,kind):
         self.kind=self.KINDS[kind]
@@ -347,8 +516,10 @@ class Popup(Gtk.Application):
 
     def activate_seat(self):
         if self.window.get_visible():
+            # owner_events=True : les clics dans le panneau restent livrés à ses
+            # boutons et curseurs ; seuls les clics extérieurs arrivent à outside.
             self.pointer_status=self.window.get_display().get_default_seat().grab(
-                self.window.get_window(),Gdk.SeatCapabilities.POINTER,False,None,None,None,None)
+                self.window.get_window(),Gdk.SeatCapabilities.POINTER,True,None,None,None,None)
             if self.pointer_status==Gdk.GrabStatus.SUCCESS:self.window.grab_add()
         return False
 
@@ -393,7 +564,8 @@ class Popup(Gtk.Application):
         GLib.idle_add(self.place)
 
     def build(self):
-        titles={"volume":_t("Volume Winlux"),"power":_t("Alimentation Winlux"),"center":_t("Notifications et calendrier")}
+        titles={"volume":_t("Volume Winlux"),"power":_t("Alimentation Winlux"),"center":_t("Notifications et calendrier"),
+                "quick":_t("Réglages rapides")}
         self.window=Gtk.ApplicationWindow(application=self,title=titles[self.kind])
         self.window.set_name("winlux-popup")
         # Même palette que le menu Démarrer, au-dessus du gtk.css utilisateur.
@@ -454,6 +626,7 @@ class Popup(Gtk.Application):
 
     def on_open(self):
         if self.kind=="power":self.refresh_modes()
+        if self.kind=="quick":self.quick_stamp=0
         if self.kind=="center":
             self.shown_month=None;self.selected=None
             now=today();self.month=(now.tm_year,now.tm_mon)
@@ -463,7 +636,9 @@ class Popup(Gtk.Application):
         self.child=subprocess.Popen(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def settings(self,page):
-        self.hide();subprocess.Popen(["winlux-shell-app","settings",page])
+        self.hide()
+        try:subprocess.Popen(["winlux-shell-app","settings",page],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        except OSError:pass
 
     def refresh(self):
         if not self.window or not self.window.get_visible():return True
@@ -683,6 +858,226 @@ class Popup(Gtk.Application):
             self.battery_detail.set_text(_t("Aucune batterie exposée par cet ordinateur"))
         self.power_ticks=getattr(self,"power_ticks",0)+1
         if self.power_ticks%5==0:self.refresh_modes()  # mode changé ailleurs (Paramètres)
+
+    # ── Réglages rapides (Win+A) ────────────────────────────────────────────
+
+    def build_quick(self):
+        frame,body=self.panel(380)
+        self.hardware=quick_hardware();self.in_vm=virtual_machine()
+        self.modes_module=power_modes() if self.hardware["battery"] else None
+        self.tile_grid=Gtk.Grid(column_spacing=10,row_spacing=12,column_homogeneous=True)
+        body.pack_start(self.tile_grid,False,False,0)
+        self.tiles={};self.tile_layout=None;self.quick={};self.quick_busy=False;self.quick_stamp=0
+        # Luminosité : seulement avec un contrôle réel (rétroéclairage, DDC/CI, gamma).
+        self.light_row=Gtk.Box(spacing=8)
+        self.light_row.pack_start(Gtk.Image.new_from_icon_name("display-brightness-symbolic",Gtk.IconSize.BUTTON),False,False,6)
+        self.light=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,5,100,1)
+        self.light.set_draw_value(False);self.light.set_hexpand(True)
+        self.light.set_tooltip_text(_t("Luminosité"))
+        self.light.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
+        self.light.connect("value-changed",self.change_brightness)
+        self.light_timer=0
+        self.light_row.pack_start(self.light,True,True,0)
+        # Valeur affichée à droite, comme le volume.
+        self.light_value=self.label("",width_chars=4,xalign=1)
+        self.light_value.set_name("winlux-brightness-value")
+        self.light_row.pack_start(self.light_value,False,False,0)
+        self.light_row.set_no_show_all(True)
+        body.pack_start(self.light_row,False,False,4)
+        # Volume : même réglage que le panneau Son, flèche vers le mélangeur.
+        self.volume_row=Gtk.Box(spacing=6)
+        self.mute=self.icon_button("audio-volume-high-symbolic",_t("Muet / rétablir"),self.toggle_mute)
+        self.slider=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,100,1)
+        self.slider.set_draw_value(False);self.slider.set_hexpand(True)
+        self.slider.set_tooltip_text(_t("Volume de sortie"))
+        self.slider.get_accessible().set_name(_t("Volume de sortie, en pourcentage"))
+        self.slider.connect("value-changed",self.change_volume)
+        self.value=self.label("",width_chars=4,xalign=1)
+        self.volume_row.pack_start(self.mute,False,False,0);self.volume_row.pack_start(self.slider,True,True,0)
+        self.volume_row.pack_start(self.value,False,False,0)
+        self.volume_row.pack_start(self.icon_button("pan-end-symbolic",_t("Mélangeur de volume"),lambda:self.open_popup("volume")),False,False,0)
+        self.volume_row.set_no_show_all(True)
+        body.pack_start(self.volume_row,False,False,0)
+        # Pied : batterie à gauche (vers le panneau Alimentation), engrenage à droite.
+        bar=Gtk.Box(spacing=8);bar.get_style_context().add_class("footer")
+        inner=Gtk.Box(spacing=8,margin=6,margin_start=10,margin_end=10);bar.pack_start(inner,True,True,0)
+        self.battery_button=Gtk.Button();self.battery_button.get_style_context().add_class("flat")
+        content=Gtk.Box(spacing=6)
+        self.battery_image=Gtk.Image.new_from_icon_name("battery-good-symbolic",Gtk.IconSize.BUTTON)
+        self.battery_text=self.label("")
+        content.pack_start(self.battery_image,False,False,0);content.pack_start(self.battery_text,False,False,0)
+        self.battery_button.add(content)
+        self.battery_button.set_tooltip_text(_t("Options d’alimentation et de batterie"))
+        self.battery_button.get_accessible().set_name(_t("Options d’alimentation et de batterie"))
+        self.battery_button.connect("clicked",lambda *_:self.open_popup("power"))
+        self.battery_button.set_no_show_all(True)
+        inner.pack_start(self.battery_button,False,False,0)
+        inner.pack_end(self.icon_button("emblem-system-symbolic",_t("Tous les paramètres"),self.settings_home),False,False,0)
+        frame.pack_end(bar,False,False,0)
+
+    def open_popup(self,kind):
+        """Ouvre un autre panneau (mélangeur, alimentation) à la place de celui-ci."""
+        self.hide()
+        tool=shutil.which("winlux-popup")
+        args=[tool,kind] if tool else [sys.executable,str(Path(__file__).resolve()),kind]
+        subprocess.Popen(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+
+    def settings_home(self):
+        self.hide()
+        try:subprocess.Popen(["winlux-shell-app","settings"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        except OSError:pass
+
+    def tile(self,key,title,icon,detail):
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=6)
+        row=Gtk.Box(spacing=0)
+        button=Gtk.ToggleButton()
+        theme=Gtk.IconTheme.get_default()
+        image=Gtk.Image.new_from_icon_name(icon if theme.has_icon(icon) else "emblem-system-symbolic",Gtk.IconSize.LARGE_TOOLBAR)
+        button.add(image);button.get_style_context().add_class("tile")
+        button.set_tooltip_text(title);button.get_accessible().set_name(title)
+        button.connect("toggled",lambda widget,value=key:self.tile_toggled(widget,value))
+        row.pack_start(button,True,True,0)
+        arrow=None
+        if detail:
+            button.get_style_context().add_class("split")
+            arrow=Gtk.Button.new_from_icon_name("pan-end-symbolic",Gtk.IconSize.BUTTON)
+            arrow.get_style_context().add_class("tile-arrow")
+            hint={"wifi":_t("Réseaux Wi-Fi disponibles"),"bluetooth":_t("Périphériques Bluetooth")}.get(key,title)
+            arrow.set_tooltip_text(hint);arrow.get_accessible().set_name(hint)
+            arrow.connect("clicked",lambda *_,value=key:self.tile_detail(value))
+            row.pack_start(arrow,False,False,0)
+        box.pack_start(row,False,False,0)
+        label=self.label(title,"tile-label",xalign=0.5,justify=Gtk.Justification.CENTER,wrap=True,
+                         lines=2,ellipsize=3,max_width_chars=12,width_chars=12)
+        box.pack_start(label,False,False,0)
+        return box,button,arrow,label
+
+    def show_tiles(self):
+        tiles=quick_tiles(self.hardware,self.quick,self.in_vm)
+        layout=tuple((key,detail) for key,_,_,_,detail in tiles)
+        if layout!=self.tile_layout:
+            self.tile_layout=layout;self.tiles={}
+            for child in self.tile_grid.get_children():self.tile_grid.remove(child)
+            for index,(key,title,icon,_,detail) in enumerate(tiles):
+                box,button,arrow,label=self.tile(key,title,icon,detail)
+                self.tile_grid.attach(box,index%3,index//3,1,1);self.tiles[key]=(button,arrow,label)
+            self.tile_grid.show_all()
+        self.updating=True
+        for key,title,_,active,_ in tiles:
+            button,arrow,label=self.tiles[key]
+            button.set_active(active);label.set_text(title)
+            button.set_tooltip_text(title);button.get_accessible().set_name(title)
+            if arrow:(arrow.get_style_context().add_class if active else arrow.get_style_context().remove_class)("on")
+        self.updating=False
+
+    def tile_toggled(self,button,key):
+        if self.updating:return
+        on=button.get_active()
+        if arrow:=self.tiles.get(key,(None,None,None))[1]:
+            (arrow.get_style_context().add_class if on else arrow.get_style_context().remove_class)("on")
+        if key=="ethernet":
+            self.updating=True;button.set_active(not on);self.updating=False
+            self.settings("2");return
+        if key=="accessibility":
+            self.updating=True;button.set_active(False);self.updating=False
+            self.settings("12");return
+        commands=[]
+        if key=="wifi":
+            # winlux-wifi passe par le relais root : nmcli lancé par le compte
+            # recevait « non autorisé » (pas de session active pour polkit).
+            commands=[["winlux-wifi","radio","on" if on else "off"]] if shutil.which("winlux-wifi") else [["nmcli","radio","wifi","on" if on else "off"]]
+            if on:AIRPLANE.unlink(missing_ok=True)
+        elif key=="bluetooth":
+            commands=[["bluetoothctl","power","on" if on else "off"]]
+            if on:AIRPLANE.unlink(missing_ok=True)
+        elif key=="airplane":
+            try:
+                if on:AIRPLANE.parent.mkdir(parents=True,exist_ok=True);AIRPLANE.touch(mode=0o600)
+                else:AIRPLANE.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if shutil.which("winlux-wifi") and self.hardware["wifi"]:commands.append(["winlux-wifi","airplane","on" if on else "off"])
+            elif self.hardware["wifi"] and shutil.which("nmcli"):commands.append(["nmcli","radio","all","off" if on else "on"])
+            if self.hardware["bluetooth"]:commands.append(["bluetoothctl","power","off" if on else "on"])
+        elif key=="night":
+            commands=[["winlux-ambiance","toggle"]]
+        elif key=="saver":
+            source=self.quick.get("saver",(None,False))[0]
+            module=self.modes_module
+            def worker():
+                try:module.apply("saver" if on else "balanced",source)
+                except Exception:pass
+                GLib.idle_add(self.poll_quick,True)
+            threading.Thread(target=worker,daemon=True).start()
+            return
+        def run_all():
+            for args in commands:_run(args,timeout=10)
+            GLib.idle_add(self.poll_quick,True)
+        threading.Thread(target=run_all,daemon=True).start()
+
+    def tile_detail(self,key):
+        self.hide()
+        try:self.open_detail(key)
+        except OSError:pass
+
+    def open_detail(self,key):
+        if key=="wifi":
+            # La page Wi-Fi de Paramètres (réseaux, clé, WPS), pas un outil générique.
+            subprocess.Popen(["winlux-shell-app","settings","35"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        elif key=="bluetooth":
+            subprocess.Popen(["winlux-shell-app","settings","22"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
+    def change_brightness(self,scale):
+        self.light_value.set_text(f"{round(scale.get_value())}")
+        if self.updating:return
+        if self.light_timer:GLib.source_remove(self.light_timer)
+        self.light_timer=GLib.timeout_add(120,self.set_brightness)
+
+    def set_brightness(self):
+        self.light_timer=0
+        tool=brightness_tool()
+        if tool:subprocess.Popen(tool+["set",str(round(self.light.get_value()))],
+                                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        return False
+
+    def poll_quick(self,force=False):
+        """État des tuiles lu en arrière-plan toutes les deux secondes."""
+        if self.quick_busy:return False
+        now=time.monotonic()
+        if not force and now-self.quick_stamp<2:return False
+        self.quick_busy=True;self.quick_stamp=now
+        def worker():
+            try:state=quick_state(self.hardware,self.modes_module)
+            except Exception:state={}
+            GLib.idle_add(self.apply_quick,state)
+        threading.Thread(target=worker,daemon=True).start()
+        return False
+
+    def apply_quick(self,state):
+        self.quick_busy=False;self.quick=state
+        self.show_tiles()
+        level=state.get("brightness")
+        reveal(self.light_row,level is not None)
+        if level is not None and not self.light_timer and not self.light.get_state_flags() & Gtk.StateFlags.ACTIVE:
+            self.updating=True;self.light.set_value(max(5,level));self.light_value.set_text(f"{max(5,level)}");self.updating=False
+        return False
+
+    def refresh_quick(self):
+        if self.tile_layout is None:self.show_tiles()
+        self.poll_quick()
+        self.backend,value,muted,_=audio()
+        if bool(self.backend)!=self.volume_row.get_visible():reveal(self.volume_row,bool(self.backend))
+        if self.backend:
+            self.mute.get_image().set_from_icon_name(volume_icon(value,muted),Gtk.IconSize.BUTTON)
+            if not self.timer and not (self.child and self.child.poll() is None) and not self.slider.get_state_flags() & Gtk.StateFlags.ACTIVE:
+                self.updating=True;self.slider.set_value(value);self.value.set_text(f"{value}");self.updating=False
+        battery=battery_level()
+        if battery:
+            level,status=battery
+            self.battery_image.set_from_icon_name(battery_icon(level,status),Gtk.IconSize.BUTTON)
+            self.battery_text.set_text(_t("{level} %").format(level=level))
+        if bool(battery)!=self.battery_button.get_visible():reveal(self.battery_button,bool(battery))
+
 
     # ── Notifications et calendrier ─────────────────────────────────────────
 

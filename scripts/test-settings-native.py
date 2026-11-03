@@ -10,6 +10,15 @@ fold = module["fold"]
 for typed, label in (("parametres", "Paramètres"), ("RESEAU", "Réseau Wi-Fi"), ("offnen", "Öffnen"),
                      ("strasse", "Straße"), ("configuracion", "Configuración"), ("oeuvre", "Œuvre")):
     assert fold(typed) in fold(label), (typed, label)
+# Navigateurs : vrais noms, « Par défaut »/« Ouvrir » seulement une fois installé.
+shown, names = module["browser_buttons_shown"], module["BROWSER_NAMES"]
+assert list(names) == ["chrome", "edge", "firefox"] and names["firefox"] == "Mozilla Firefox", names
+state = {"browser_chrome": "installed", "browser_edge": "downloadable", "browser_firefox": "update"}
+assert shown(state, "browser-default-chrome") and shown(state, "browser-launch-chrome")
+assert not shown(state, "browser-install-chrome")
+assert shown(state, "browser-install-edge") and not shown(state, "browser-default-edge") and not shown(state, "browser-launch-edge")
+assert shown(state, "browser-install-firefox") and shown(state, "browser-launch-firefox")
+assert not shown({}, "browser-default-chrome") and shown({}, "browser-install-chrome")
 # Temps de démarrage (page Processeur) : durée lisible et étape la plus longue.
 boot = module["boot_summary"]({"boot_known": "1", "boot_total_ms": "8420", "boot_phases": "init:1500,drivers:3150",
                                "boot_slowest": "drivers", "boot_slowest_ms": "3150"})
@@ -39,6 +48,17 @@ with tempfile.TemporaryDirectory() as folder:
     pages["openbox_set"].__globals__["have"] = lambda command: False
     assert pages["openbox_set"]("resize", "drawContents", "no") and pages["openbox_get"]("resize", "drawContents") == "no"
     assert pages["openbox_set"]("theme", "animateIconify", "no") and pages["openbox_get"]("theme", "animateIconify") == "no"
+# Icônes du bureau (#30) : Corbeille seule par défaut, choix xfconf respecté.
+shown = pages["desktop_icon_shown"]
+stored = {}
+shown.__globals__["xfconf_get"] = lambda channel, prop: stored.get(prop)
+assert shown("trash") and not shown("filesystem") and not shown("home") and not shown("removable")
+stored["/desktop-icons/file-icons/show-home"] = "true"
+stored["/desktop-icons/file-icons/show-trash"] = "false"
+assert shown("home") and not shown("trash")
+for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
+    text = Path(__file__).with_name(script).read_text()
+    assert "for icon in trash:true filesystem:false home:false removable:false" in text, script
 window = module["Settings"]()
 failures = []
 

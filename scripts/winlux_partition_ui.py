@@ -35,7 +35,7 @@ treeview.pm-tree {
     font-size: 12px;
 }
 treeview.pm-tree:selected {
-    background-color: #0078D4;
+    background-color: #6A3DF0;
     color: #ffffff;
 }
 treeview.pm-tree header button {

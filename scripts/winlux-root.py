@@ -9,6 +9,10 @@ tourne en root et n'exécute que des actions connues :
   winlux-root serve                       (root) écoute /run/winlux-root.sock
   winlux-root control ACTION [ARGS…]      action de winlux-control, exécutée en root
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
+  winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
+  winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
+  winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
+  winlux-root exec winlux-certificates …   autorités ajoutées, heure automatique
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -64,6 +68,7 @@ PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.:~-]{0,127}$")
 # : confirmation par le Contrôle de compte d'utilisateur.
 CONTROL_POLICY = (
     (r"browser-(install|default)-(edge|chrome|firefox)", "admin"),
+    (r"store-catalog-(add|remove)-[a-z0-9-]+", "admin"),
     (r"network-(renew|scan|connect|disconnect)", "user"),
     (r"bluetooth-(on|off|scan|pair|connect|disconnect|remove)", "user"),
     (r"(tz|timezone)-[A-Za-z0-9/_+-]+", "user"),
@@ -75,6 +80,8 @@ CONTROL_POLICY = (
     (r"cpu-profile-(performance|balanced|powersave)|game-mode-(auto|off)", "user"),
     (r"cpu-hybrid-[a-z]+|cpu-fan-[a-z]+|cpu-restore", "user"),
     (r"gpu-set", "admin"),
+    (r"drivers-(refresh|firmware-check|auto-on|auto-off)", "user"),
+    (r"drivers-(install-[a-z-]+|remove-nvidia|firmware-update)", "admin"),
     (r"display-[a-z0-9x-]+", "user"),
     (r"power-hibernate-setup", "admin"),
     (r"power-[a-z-]+", "user"),
@@ -93,6 +100,7 @@ CONTROL_POLICY = (
     (r"transfer-[a-z-]+", "user"),
     (r"phone-firewall-(on|off)", "user"),
     (r"report-(offer|redact|mode)-[a-z]+", "user"),
+    (r"account-(add|password|role|remove)", "admin"),
 )
 
 # Préférences que le bureau écrit lui-même (winlux-control save) : fichier → clés.
@@ -111,10 +119,69 @@ CONF_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,40}$")
 APT_SUBCOMMANDS = {"install": "admin", "remove": "admin", "purge": "admin", "upgrade": "admin",
                    "dist-upgrade": "admin", "full-upgrade": "admin", "autoremove": "admin",
                    "update": "user"}
+# --autoremove et --purge : la désinstallation du Store (apt-get purge
+# --autoremove) était refusée par le relais, sans demande ni message.
 APT_FLAGS = {"-y", "-q", "-qq", "--no-install-recommends", "--reinstall", "-f", "--fix-broken",
-             "--only-upgrade", "--no-remove"}
+             "--only-upgrade", "--no-remove", "--autoremove", "--purge"}
 APT_OPTIONS = re.compile(r"^(DPkg::Lock::Timeout=[0-9]{1,4}|Dpkg::Use-Pty=0|APT::Status-Fd=[0-9]{1,3})$")
 SNAP_SUBCOMMANDS = {"install": "admin", "remove": "admin", "refresh": "admin"}
+# Réinitialiser ce PC, clé de secours, réparation du démarrage (Paramètres >
+# Récupération) : tout ce qui modifie un disque demande un administrateur.
+RESET_SUBCOMMANDS = {"status": "user", "sources": "user", "list-keys": "user",
+                     "prepare": "admin", "cancel": "admin", "repair-boot": "admin",
+                     "reboot-recovery": "admin", "make-key": "admin"}
+RESET_ARG = re.compile(r"^(--(mode|source|user|fullname|device)|--clean|--scan|keep|wipe|cloud|auto|"
+                       r"(media|iso):/[^\n\r\0]{1,400}|/dev/[A-Za-z0-9/_-]{1,64}|[^\n\r\0:,-][^\n\r\0:,]{0,63})$")
+
+
+# Wi-Fi (Paramètres > Wi-Fi) : rejoindre un réseau est permis à un compte
+# standard, comme sous Windows. La clé arrive sur l'entrée standard.
+WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 21, "up": 1, "wps": 1, "forget": 1,
+                    "autoconnect": 2, "disconnect": 0, "radio": 1, "airplane": 1}
+WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity",
+                "--eap", "--phase2", "--ca", "--domain", "--client-cert", "--private-key"}
+# Fichiers de certificat : chemins absolus ; winlux-wifi vérifie que le compte
+# appelant peut les lire avant de les copier.
+WIFI_FILE = re.compile(r"^/[^\n\r\0]{1,400}$")
+
+
+def wifi_level(rest):
+    """Niveau d'une commande winlux-wifi, None si elle est refusée."""
+    if not rest or rest[0] not in WIFI_SUBCOMMANDS or len(rest) - 1 > WIFI_SUBCOMMANDS[rest[0]]:
+        return None
+    command, args = rest[0], rest[1:]
+    if command in ("radio", "airplane") and args not in (["on"], ["off"]):
+        return None
+    if command == "autoconnect" and (len(args) != 2 or args[1] not in ("on", "off")):
+        return None
+    if command == "list" and args not in ([], ["--rescan"]):
+        return None
+    if command == "connect":
+        if not args or args[0].startswith("-"):
+            return None
+        it = iter(args[1:])
+        for option in it:
+            if option not in WIFI_OPTIONS:
+                return None
+            if option == "--security" and next(it, "") not in ("open", "wpa", "sae", "wep", "owe", "eap"):
+                return None
+            if option == "--identity" and not next(it, ""):
+                return None
+            if option == "--eap" and next(it, "") not in ("peap", "ttls", "tls"):
+                return None
+            if option == "--phase2" and next(it, "") not in ("mschapv2", "pap", "gtc"):
+                return None
+            if option == "--ca":
+                value = next(it, "")
+                if value not in ("system", "none") and not WIFI_FILE.match(value):
+                    return None
+            if option in ("--client-cert", "--private-key") and not WIFI_FILE.match(next(it, "")):
+                return None
+            if option == "--domain" and not re.fullmatch(r"[A-Za-z0-9.*-]{1,253}", next(it, "")):
+                return None
+    if command in ("up", "forget", "wps", "autoconnect") and args and args[0].startswith("-"):
+        return None
+    return "user"
 
 
 def control_level(args):
@@ -159,6 +226,29 @@ def exec_level(args):
             else:
                 return None
         return level
+    if tool == "winlux-reset" and rest and rest[0] in RESET_SUBCOMMANDS:
+        if all(RESET_ARG.match(a) for a in rest[1:]):
+            return RESET_SUBCOMMANDS[rest[0]]
+        return None
+    if tool == "winlux-wifi":
+        return wifi_level(rest)
+    if tool == "winlux-certificates":
+        # Ajouter une autorité de confiance touche à la sécurité de tout le
+        # système : mot de passe d'un administrateur, comme sous Windows.
+        if len(rest) == 2 and rest[0] == "add" and re.fullmatch(r"/[^\n\r\0]{1,400}", rest[1]):
+            return "admin"
+        if len(rest) == 2 and rest[0] == "remove" and re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}", rest[1]):
+            return "admin"
+        if rest in (["time", "auto", "on"], ["time", "auto", "off"]):
+            return "admin"
+        if rest == ["time", "sync"]:
+            return "user"
+        return None
+    if tool == "winlux-brightness":
+        # Luminosité : le compte n'écrit pas dans /sys/class/backlight ni sur l'i2c.
+        if rest == ["detect-ddc"] or (len(rest) == 2 and rest[0] == "set" and re.fullmatch(r"\d{1,3}", rest[1])):
+            return "user"
+        return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]
@@ -366,7 +456,8 @@ def run_command(command, fds, extra, env, peer_uid, cwd="/"):
 # Fichiers d'état écrits pendant une action relayée et réécrits ensuite par
 # le bureau : ils sont rendus au compte (le dossier /run/winlux est collant).
 GIVE_BACK = ("updates.txt", "networks.txt", "cpu.txt", "control.txt", "action.txt", "sessions.txt",
-             "update-error-phase", "browser.log", "sysupdate.txt", "remote-state.txt")
+             "update-error-phase", "browser.log", "sysupdate.txt", "remote-state.txt", "drivers.txt",
+             "drivers.log")
 
 
 def give_back(uid, since):
@@ -387,10 +478,35 @@ def give_back(uid, since):
                 pass
 
 
+def switch_request(uid, name, request):
+    """« Changer d'utilisateur » depuis l'écran de verrouillage : le mot de
+    passe du compte choisi est vérifié ici, puis sa session est ouverte ou
+    rejointe (winlux-sessions switch)."""
+    user = request.get("user")
+    password = request.get("password", "")
+    if not isinstance(user, str) or not NAME.match(user) or user not in users_conf() or \
+            not isinstance(password, str):
+        return {"ok": False}
+    throttle(uid)
+    if not password_ok(user, password):
+        FAILURES[uid] = FAILURES.get(uid, 0) + 1
+        return {"ok": False}
+    FAILURES.pop(uid, None)
+    try:
+        result = subprocess.run([CONTROL, "session-switch", user], env=root_env(request, name),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=90)
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False}
+    return {"ok": result.returncode == 0}
+
+
 def handle(connection, uid, name, request, fds):
     op = request.get("op")
     if op in ("check", "elevate"):
         return check_request(uid, name, request)
+    if op == "switch":
+        return switch_request(uid, name, request)
     if op == "conf":
         file, key, value = request.get("file"), request.get("key"), request.get("value", "")
         allowed = CONF_KEYS.get(file, False)
@@ -408,6 +524,10 @@ def handle(connection, uid, name, request, fds):
             return {"error": "Action non autorisée : " + (args[0] if args else "?")}
         # Une sauvegarde ne concerne que le compte qui la demande.
         if op == "control" and args[0].startswith("backup-") and len(args) > 1 and args[1] != name:
+            level = "admin"
+        # Ouvrir ou fermer la session d'un autre compte : son mot de passe
+        # passe par l'écran de verrouillage (op « switch »), sinon un administrateur.
+        if op == "control" and args[0] in ("session-switch", "session-logoff") and len(args) > 1 and args[1] != name:
             level = "admin"
         if level == "admin" and not elevated(uid, name):
             return {"auth": "required"}

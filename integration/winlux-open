@@ -68,6 +68,43 @@ dialog.run()
 PY
 }
 
+# Paquet MSIX d'un éditeur non vérifié : « Annuler » par défaut, il faut
+# choisir « Installer quand même ». Sans affichage ni boîte : refus.
+confirm_unverified() {
+    name=$1; reason=$2
+    text="« $name » : éditeur non vérifié.
+
+$reason"
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "Éditeur non vérifié" --warningcontinuecancel "$text" --continue-label "Installer quand même"
+        return
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --question --default-cancel --title="Éditeur non vérifié" \
+            --ok-label="Installer quand même" --cancel-label="Annuler" --no-wrap --text="$text"
+        return
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$name" "$reason" <<'PY' 2>/dev/null
+import sys
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+name, reason = sys.argv[1], sys.argv[2]
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.NONE,
+                      text="« %s » : éditeur non vérifié" % name)
+d.set_title("Éditeur non vérifié")
+d.format_secondary_text(reason)
+d.add_button("Annuler", Gtk.ResponseType.CANCEL)
+d.add_button("Installer quand même", Gtk.ResponseType.ACCEPT)
+d.set_default_response(Gtk.ResponseType.CANCEL)
+d.set_keep_above(True)
+sys.exit(0 if d.run() == Gtk.ResponseType.ACCEPT else 1)
+PY
+        return
+    fi
+    return 1
+}
+
 # Message clair pour un programme qui n'a pas pu démarrer, d'après le journal.
 explain_failure() {
     name=$1; status=$2; journal=$3
@@ -209,6 +246,42 @@ EOF_ARGS
         ;;
 esac
 
+# Nom de l'appli installée, lu dans le journal du runtime (« setup : Claude
+# est installé. ») ; à défaut, le nom du fichier de l'installateur.
+installed_name() {
+    name=$(sed -n 's/^\(setup : \)\{0,1\}\(.*\) est installé\.$/\2/p' "$log" 2>/dev/null | tail -n 1)
+    printf '%s' "${name:-$(basename -- "$exe")}"
+}
+
+# Paquet MSIX ou AppX : installé par le module setup du runtime (#272).
+case "$exe" in
+    *.msix|*.MSIX|*.Msix|*.appx|*.APPX|*.Appx|*.msixbundle|*.MSIXBUNDLE|*.appxbundle|*.APPXBUNDLE)
+        cd "$(dirname -- "$exe")" 2>/dev/null || true
+        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        "$winlux" --setup "$exe" >"$log" 2>&1
+        status=$?
+        # Code 3 : éditeur non vérifié (paquet non signé ou chaîne non
+        # vérifiée). Rien n'est installé sans un « oui » explicite.
+        if [ "$status" -eq 3 ]; then
+            reason=$(sed -n 's/^setup : //p' "$log" 2>/dev/null | tail -n 1)
+            if confirm_unverified "$(basename -- "$exe")" "$reason"; then
+                "$winlux" --setup --allow-unverified "$exe" >"$log" 2>&1
+                status=$?
+            else
+                exit 3
+            fi
+        fi
+        if [ "$status" -eq 0 ]; then
+            command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
+            show_message "« $(installed_name) » est installé." info
+        else
+            show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
+$(tail -n 5 "$log" 2>/dev/null)"
+        fi
+        exit "$status"
+        ;;
+esac
+
 # Paquet Windows Installer : le msiexec intégré au runtime l'installe.
 case "$exe" in
     *.msi|*.MSI|*.Msi)
@@ -218,7 +291,7 @@ case "$exe" in
         status=$?
         if [ "$status" -eq 0 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
-            show_message "« $(basename -- "$exe") » est installé." info
+            show_message "« $(installed_name) » est installé." info
         else
             show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
@@ -240,6 +313,30 @@ Ce fichier n’est pas un programme Windows que Winlux sait lancer." "${reason:-
     esac
     exit 1
 fi
+# Installateur (WiX Burn comme vc_redist, NSIS, Inno Setup) ou désinstalleur
+# connu : déroulé par le runtime sans exécuter son code, même en 32 bits.
+case "$kind" in
+    setup|uninstall)
+        cd "$(dirname -- "$exe")" 2>/dev/null || true
+        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        "$winlux" "$exe" "$@" >"$log" 2>&1
+        status=$?
+        if [ "$status" -eq 0 ] || [ "$status" -eq 3010 ]; then
+            command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
+            if [ "$kind" = uninstall ]; then
+                show_message "Le programme est désinstallé." info
+            else
+                show_message "« $(installed_name) » est installé." info
+            fi
+            exit 0
+        fi
+        if [ "$kind" = uninstall ]; then what="Désinstallation"; else what="Installation de « $(basename -- "$exe") »"; fi
+        show_error "$what impossible (code $status).
+$(tail -n 5 "$log" 2>/dev/null)"
+        exit "$status"
+        ;;
+esac
+
 if command -v winlux-applications >/dev/null 2>&1; then
     winlux-applications register "$exe" >/dev/null 2>&1 || true
 fi
@@ -274,14 +371,21 @@ status=$?
 if [ "$status" -ne 0 ]; then
     # Un plantage enregistré depuis le lancement : la boîte « Signaler un
     # problème » explique la cause et propose l'envoi (jamais automatique).
-    # Depuis le bureau Winlux, c'est le bureau qui la propose après l'écran bleu.
-    if [ "${WINLUX_DESKTOP_LAUNCH:-0}" != 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+    # Seul le bureau PE (gui_demo.exe, WINLUX_DESKTOP_DEMO) affiche lui-même
+    # l'écran bleu puis cette boîte. L'Explorateur et les autres applications
+    # PE de la session native (WINLUX_NATIVE_SHELL) passent aussi par
+    # ShellExecute (WINLUX_DESKTOP_LAUNCH=1) mais n'affichent rien : sans la
+    # boîte ici, un .exe graphique qui plantait disparaissait sans un mot.
+    pe_desktop=0
+    if [ -n "${WINLUX_DESKTOP_DEMO:-}" ] && [ -z "${WINLUX_NATIVE_SHELL:-}" ]; then pe_desktop=1; fi
+    if [ "$pe_desktop" != 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
         && command -v winlux-report >/dev/null 2>&1; then
         winlux-report --crash --since "$started"
         case $? in 0) exit "$status" ;; esac
     fi
-    [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] && [ -e /run/winlux/journal/crash.log ] \
-        && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' /run/winlux/journal/crash.log | tail -n 1)" -ge "$started" ] 2>/dev/null \
+    crashes=${WINLUX_JOURNAL_DIR:-/run/winlux/journal}/crash.log
+    [ "$pe_desktop" = 1 ] && [ -e "$crashes" ] \
+        && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' "$crashes" | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
     show_error "$(explain_failure "$(basename -- "$exe")" "$status" "$log")" "$detail"

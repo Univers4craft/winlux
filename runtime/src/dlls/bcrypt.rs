@@ -89,8 +89,11 @@ fn alg_from_name(name: &str) -> Option<usize> {
     }
 }
 
+/// Les poignées HMAC valent l'algorithme + 0x10 (BCRYPT_ALG_HANDLE_HMAC_FLAG).
+const HMAC_BIT: usize = 0x10;
+
 fn hash_length(alg: usize) -> Option<u32> {
-    match alg {
+    match alg & !HMAC_BIT {
         ALG_SHA256 => Some(32),
         ALG_SHA1 => Some(20),
         ALG_MD5 => Some(16),
@@ -112,11 +115,15 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
         return STATUS_INVALID_PARAMETER;
     }
     // BCRYPT_ALG_HANDLE_HMAC_FLAG = 0x8
-    let _hmac = flags & 0x8 != 0;
+    let hmac = flags & 0x8 != 0;
     let name = crate::dlls::wstr(id);
     match alg_from_name(&name) {
+        Some(h) if hmac && h == ALG_RNG => {
+            *out = 0;
+            STATUS_NOT_FOUND
+        }
         Some(h) => {
-            *out = h;
+            *out = if hmac { h | HMAC_BIT } else { h };
             0
         }
         None => {
@@ -126,7 +133,7 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
     }
 }
 pub extern "win64" fn bcrypt_close_algorithm_provider(h: usize, _flags: u32) -> i32 {
-    if (1..=6).contains(&h) {
+    if (1..=6).contains(&(h & !HMAC_BIT)) {
         0
     } else {
         0xC000_0008u32 as i32
@@ -169,14 +176,21 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
     hash_handle: *mut usize,
     _obj: *mut u8,
     _obj_len: u32,
-    _secret: *const u8,
-    _secret_len: u32,
+    secret: *const u8,
+    secret_len: u32,
     _flags: u32,
 ) -> i32 {
     if hash_handle.is_null() || hash_length(alg).is_none() {
         return 0xC000_000Du32 as i32;
     }
-    if digest(alg, b"").is_none() {
+    let key = (alg & HMAC_BIT != 0).then(|| {
+        if secret.is_null() || secret_len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(secret, secret_len as usize).to_vec()
+        }
+    });
+    if compute(alg, key.as_deref(), b"").is_none() {
         return STATUS_NOT_SUPPORTED;
     }
     // Handle = algorithme (16 bits bas) | numéro de séquence (bits hauts).
@@ -185,7 +199,7 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
     hash_states()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(h, Vec::new());
+        .insert(h, (key, Vec::new()));
     *hash_handle = h;
     0
 }
@@ -193,26 +207,52 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
 // SHA-1/SHA-256 maison, partagés avec winlux-remote.
 #[allow(dead_code)]
 #[path = "../remote/crypto.rs"]
-mod crypto;
+pub(crate) mod crypto;
+
+/// SHA-256 pour le reste du runtime (block map des paquets MSIX).
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
+    crypto::sha256(&[data])
+}
 
 const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
 
-/// Données accumulées par handle de hachage (BCryptHashData), jusqu'à
-/// BCryptFinishHash.
-fn hash_states() -> &'static std::sync::Mutex<std::collections::HashMap<usize, Vec<u8>>> {
-    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, Vec<u8>>>> =
+/// Clé HMAC éventuelle et données accumulées par handle de hachage
+/// (BCryptHashData), jusqu'à BCryptFinishHash.
+type HashState = (Option<Vec<u8>>, Vec<u8>);
+fn hash_states() -> &'static std::sync::Mutex<std::collections::HashMap<usize, HashState>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, HashState>>> =
         std::sync::OnceLock::new();
     S.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 static HASH_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
-/// Condensat réel pour les algorithmes implémentés en interne ; `None` pour
-/// les autres (plutôt que des zéros présentés comme un succès).
+/// Condensat réel, ou `None` (plutôt que des zéros présentés comme un
+/// succès). SHA-1, SHA-256 et MD5 sont maison ; SHA-384, SHA-512 et les
+/// HMAC passent par l'OpenSSL de l'hôte.
 fn digest(alg: usize, data: &[u8]) -> Option<Vec<u8>> {
     match alg {
         ALG_SHA256 => Some(crypto::sha256(&[data]).to_vec()),
         ALG_SHA1 => Some(crypto::sha1(&[data]).to_vec()),
-        _ => None,
+        ALG_MD5 => Some(crate::dlls::games_win32::md5(data).to_vec()),
+        _ => crate::dlls::hostssl::digest(ossl_name(alg)?, data),
+    }
+}
+
+fn ossl_name(alg: usize) -> Option<&'static std::ffi::CStr> {
+    Some(match alg & !HMAC_BIT {
+        ALG_SHA256 => c"SHA256",
+        ALG_SHA1 => c"SHA1",
+        ALG_MD5 => c"MD5",
+        ALG_SHA384 => c"SHA384",
+        ALG_SHA512 => c"SHA512",
+        _ => return None,
+    })
+}
+
+fn compute(alg: usize, key: Option<&[u8]>, data: &[u8]) -> Option<Vec<u8>> {
+    match key {
+        Some(k) => crate::dlls::hostssl::hmac(ossl_name(alg)?, k, data),
+        None => digest(alg, data),
     }
 }
 
@@ -223,7 +263,7 @@ pub unsafe extern "win64" fn bcrypt_hash_data(
     _flags: u32,
 ) -> i32 {
     let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
-    let Some(buf) = states.get_mut(&hash) else {
+    let Some((_, buf)) = states.get_mut(&hash) else {
         return 0xC000_0008u32 as i32; // STATUS_INVALID_HANDLE
     };
     if input_len > 0 {
@@ -253,10 +293,10 @@ pub unsafe extern "win64" fn bcrypt_finish_hash(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&hash);
-    let Some(data) = data else {
+    let Some((key, data)) = data else {
         return 0xC000_0008u32 as i32;
     };
-    let Some(d) = digest(alg, &data) else {
+    let Some(d) = compute(alg, key.as_deref(), &data) else {
         return STATUS_NOT_SUPPORTED;
     };
     std::ptr::copy_nonoverlapping(d.as_ptr(), output, d.len());
@@ -273,8 +313,8 @@ pub unsafe extern "win64" fn bcrypt_destroy_hash(hash: usize) -> i32 {
 
 pub unsafe extern "win64" fn bcrypt_hash(
     alg: usize,
-    _secret: *const u8,
-    _secret_len: u32,
+    secret: *const u8,
+    secret_len: u32,
     _input: *const u8,
     _input_len: u32,
     output: *mut u8,
@@ -287,15 +327,19 @@ pub unsafe extern "win64" fn bcrypt_hash(
     if output_len != expected {
         return 0xC000_000Du32 as i32;
     }
-    if _secret_len != 0 {
-        return STATUS_NOT_SUPPORTED; // HMAC non pris en charge
-    }
+    let key = (alg & HMAC_BIT != 0).then(|| {
+        if secret.is_null() || secret_len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(secret, secret_len as usize).to_vec()
+        }
+    });
     let data: &[u8] = if _input.is_null() || _input_len == 0 {
         &[]
     } else {
         std::slice::from_raw_parts(_input, _input_len as usize)
     };
-    let Some(d) = digest(alg, data) else {
+    let Some(d) = compute(alg, key.as_deref(), data) else {
         return STATUS_NOT_SUPPORTED;
     };
     std::ptr::copy_nonoverlapping(d.as_ptr(), output, d.len());
@@ -362,5 +406,48 @@ mod tests {
             0xC000000Du32 as i32
         );
         assert_eq!(bcrypt_close_algorithm_provider(h, 0), 0);
+    }
+
+    #[test]
+    fn md5_sha512_et_hmac() {
+        if crate::dlls::hostssl::ssl().is_none() {
+            return;
+        }
+        let name: Vec<u16> = "SHA256".encode_utf16().chain([0]).collect();
+        let mut alg = 0usize;
+        assert_eq!(
+            unsafe { bcrypt_open_algorithm_provider(&mut alg, name.as_ptr(), std::ptr::null(), 8) },
+            0
+        );
+        let mut mac = [0u8; 32];
+        let msg = b"The quick brown fox jumps over the lazy dog";
+        let r = unsafe {
+            bcrypt_hash(
+                alg,
+                b"key".as_ptr(),
+                3,
+                msg.as_ptr(),
+                msg.len() as u32,
+                mac.as_mut_ptr(),
+                32,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(mac[..4], [0xf7, 0xbc, 0x83, 0xf4]);
+        assert_eq!(bcrypt_close_algorithm_provider(alg, 0), 0);
+        let mut md5 = [0u8; 16];
+        let r = unsafe {
+            bcrypt_hash(
+                ALG_MD5,
+                std::ptr::null(),
+                0,
+                b"abc".as_ptr(),
+                3,
+                md5.as_mut_ptr(),
+                16,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(md5[..4], [0x90, 0x01, 0x50, 0x98]);
     }
 }

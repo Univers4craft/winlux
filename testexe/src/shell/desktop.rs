@@ -1559,7 +1559,7 @@ unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
     );
     text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 14, y + 10, &line1[..n1]);
     text(hdc, f.body, rgb(0xC5, 0xC5, 0xC5), x + 14, y + 30, &line2[..n2]);
-    text(hdc, f.small, rgb(0x9A, 0x9A, 0x9A), x + 14, y + 51, mode);
+    text(hdc, f.small, rgb(0xAD, 0xAD, 0xAD), x + 14, y + 51, mode);
 }
 
 unsafe fn two_digits(v: u16) -> [u8; 2] {
@@ -2329,7 +2329,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             text(
                 hdc,
                 f.body,
-                rgb(0x88, 0x88, 0x88),
+                rgb(0xA4, 0xA4, 0xA4),
                 inner_l + 4,
                 results_y + 36,
                 tr4(&[b"Aucun r\xE9sultat", b"No results", b"No hay resultados", b"Keine Ergebnisse"]),
@@ -2546,7 +2546,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 text(
                     hdc,
                     f.small,
-                    rgb(0x9A, 0xA3, 0xAE),
+                    rgb(0xB0, 0xB8, 0xC2),
                     c.left + 48,
                     c.top + 26,
                     sub,
@@ -2701,7 +2701,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             }
             let name = crate::login::user_name(i);
             let initial = [name.first().map_or(b'?', |c| c.to_ascii_uppercase())];
-            ellipse(hdc, b, m.left + 12, iy + 6, m.left + 36, iy + 30, rgb(0x00, 0x78, 0xD4));
+            ellipse(hdc, b, m.left + 12, iy + 6, m.left + 36, iy + 30, rgb(0x6A, 0x3D, 0xF0));
             text_centered(hdc, f.small, 11, rgb(0xFF, 0xFF, 0xFF), m.left + 24, iy + 11, &initial);
             text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), m.left + 46, iy + 4, name);
             text(
@@ -2960,7 +2960,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         text(
             hdc,
             f.body,
-            rgb(0x88, 0x88, 0x88),
+            rgb(0xA4, 0xA4, 0xA4),
             il + 36,
             fy + 10,
             tr4(&[b"Tapez pour rechercher...", b"Type to search...", b"Escriba para buscar...", b"Zum Suchen tippen..."]),
@@ -2980,7 +2980,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             text(
                 hdc,
                 f.body,
-                rgb(0x88, 0x88, 0x88),
+                rgb(0xA4, 0xA4, 0xA4),
                 il + 4,
                 ry + 8,
                 tr4(&[b"Aucun r\xE9sultat", b"No results", b"No hay resultados", b"Keine Ergebnisse"]),
@@ -3008,7 +3008,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         text(
             hdc,
             f.body,
-            rgb(0x88, 0x88, 0x88),
+            rgb(0xA4, 0xA4, 0xA4),
             il + 4,
             ry + 8,
             tr4(&[b"Recherchez des applications et des fichiers", b"Search for apps and files", b"Busque aplicaciones y archivos", b"Nach Apps und Dateien suchen"]),
@@ -3218,7 +3218,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             text(
                 hdc,
                 f.small,
-                rgb(0x9A, 0xA3, 0xAE),
+                rgb(0xB0, 0xB8, 0xC2),
                 x + 36,
                 sy + 30,
                 &NET_ADDR[..NET_ADDR_LEN],
@@ -3237,7 +3237,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         text(
             hdc,
             f.body,
-            rgb(0x9A, 0xA3, 0xAE),
+            rgb(0xB0, 0xB8, 0xC2),
             x + 36,
             sy + 14,
             tr4(&[b"Non connect\xE9", b"Not connected", b"No conectado", b"Nicht verbunden"]),
@@ -3252,7 +3252,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             hdc,
             f.body,
             13,
-            rgb(0x9A, 0xA3, 0xAE),
+            rgb(0xB0, 0xB8, 0xC2),
             x + w / 2,
             list_y + 14,
             tr4(&[b"Aucun r\xE9seau d\xE9tect\xE9", b"No network detected", b"No se detect\xF3 ninguna red", b"Kein Netzwerk erkannt"]),
@@ -3349,7 +3349,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 text(
                     hdc,
                     f.small,
-                    rgb(0x9A, 0xA3, 0xAE),
+                    rgb(0xB0, 0xB8, 0xC2),
                     x + 44,
                     ry + 28,
                     tr4(&[b"S\xE9curis\xE9", b"Secured", b"Protegida", b"Gesichert"]),
@@ -3358,7 +3358,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 text(
                     hdc,
                     f.small,
-                    rgb(0x9A, 0xA3, 0xAE),
+                    rgb(0xB0, 0xB8, 0xC2),
                     x + 44,
                     ry + 28,
                     tr4(&[b"Ouvert", b"Open", b"Abierta", b"Offen"]),
@@ -3512,7 +3512,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     text(
         hdc,
         f.body,
-        rgb(0x9A, 0xA3, 0xAE),
+        rgb(0xB0, 0xB8, 0xC2),
         x + w - 50,
         y + 18,
         &pct[..plen],
@@ -3573,7 +3573,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     text(
         hdc,
         f.small,
-        rgb(0x9A, 0xA3, 0xAE),
+        rgb(0xB0, 0xB8, 0xC2),
         x + 16,
         sep_y + 10,
         tr4(&[b"Applications", b"Apps", b"Aplicaciones", b"Apps"]),
@@ -3639,7 +3639,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         text(
             hdc,
             f.small,
-            rgb(0x9A, 0xA3, 0xAE),
+            rgb(0xB0, 0xB8, 0xC2),
             x + 16,
             ay + 4,
             tr4(&[b"Aucune application ouverte", b"No open apps", b"No hay aplicaciones abiertas", b"Keine ge\xF6ffneten Apps"]),
@@ -3823,7 +3823,7 @@ unsafe fn boot_splash(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             hdc,
             f.body,
             13,
-            rgb(0x9A, 0xA3, 0xAE),
+            rgb(0xB0, 0xB8, 0xC2),
             l.w / 2,
             l.h - 90,
             label,

@@ -12,7 +12,7 @@ if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$targ
     # Python (aucune version à l'essai, permissions et caches déjà faits,
     # aucune opération dpkg interrompue). Sinon le moteur APT fait tout.
     if test "$*" = --boot && ! test -e /var/lib/winlux/update-trial &&
-        test -e /var/lib/winlux/apt-base-permissions-restored &&
+        test "$(cat /var/lib/winlux/apt-base-permissions-restored 2>/dev/null)" = 2 &&
         test "$(cat /var/lib/winlux/apt-desktop-cache-version 2>/dev/null)" = "$(cat /usr/share/winlux/version 2>/dev/null)" &&
         test -z "$(ls -A /var/lib/dpkg/updates 2>/dev/null)" &&
         ! grep -Eq '^Status: [a-z]+ [a-z]+ (half-installed|half-configured|unpacked|triggers-awaited|triggers-pending)$' /var/lib/dpkg/status; then
@@ -336,8 +336,12 @@ list_updates() {
     if test -f "$target_root/run/winlux/update-action"; then echo "Action en attente : $(sed -n '1p' "$target_root/run/winlux/update-action")"; fi
     if ! test -f "$state_dir/available-manifest"; then echo "Aucune vérification disponible. Lancez une recherche de mises à jour (--check)."; return; fi
     validate_manifest "$state_dir/available-manifest"
+    if up_to_date; then
+        # À jour : ni taille ni composants, qui laissaient croire à une mise à jour en attente.
+        echo "Winlux est à jour."
+        return
+    fi
     echo "Version disponible : $version"
-    if up_to_date; then echo "Winlux est à jour."; fi
     echo "Portée : $scope"
     echo "Composants : $components"
     shown_bytes=$(value download_bytes "$state_dir/available-manifest" || true)

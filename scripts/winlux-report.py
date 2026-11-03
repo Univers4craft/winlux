@@ -1342,10 +1342,17 @@ def gui(report, conf):
       #cause { background: #2a2f42; border-radius: 6px; padding: 10px; }
       #diag { padding: 6px 10px; }
       #headline { font-size: 15pt; font-weight: bold; }
-      button { padding: 8px 14px; }
-      button.suggested-action { background: #4a6cf7; color: white; }
+      window box, window label { background-color: transparent; }
+      label { color: #eceef6; }
+      button { padding: 8px 14px; background: #30384b; background-image: none; color: #eceef6;
+               border: 1px solid #48536b; box-shadow: none; text-shadow: none; }
+      button label { color: #eceef6; }
+      button:hover { background: #414b64; }
+      button.suggested-action, button.suggested-action label { background: #3a56d4; color: #ffffff; border-color: #3a56d4; }
+      button.suggested-action:hover { background: #4664e6; }
     """)
-    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    # Above the user gtk.css (USER priority): this window always keeps its dark colors.
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
 
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=18)
     win.add(box)

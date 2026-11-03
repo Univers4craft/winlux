@@ -166,13 +166,13 @@ pub const WALLPAPERS: [Wallpaper; 15] = [
         name: b"Winlux classique",
         slug: b"winlux",
         category: 2,
-        accent: hex(0x0078D4),
+        accent: hex(0x7C4DFF),
     },
     Wallpaper {
         name: b"Bloom",
         slug: b"bloom",
         category: 2,
-        accent: hex(0x0078D4),
+        accent: hex(0x7C4DFF),
     },
     Wallpaper {
         name: b"Vagues",
@@ -961,6 +961,7 @@ unsafe fn load_image(hdc: Handle) -> bool {
 /// Dessine le fond `id` dans `r` ; `slot` choisit le cache utilisé.
 unsafe fn paint_wallpaper(hdc: Handle, r: &Rect, id: usize, slot: &mut Canvas) {
     let (w, h) = (r.right - r.left, r.bottom - r.top);
+    audit_image(hdc, r.left, r.top, r.right, r.bottom);
     if id == 0 && load_image(hdc) {
         StretchBlt(
             hdc,
@@ -1315,6 +1316,7 @@ pub unsafe fn load() {
         SOUND = i;
     }
     apply_accent();
+    forced_look();
     let mut v = [0i8; 4];
     let forced = GetEnvironmentVariableA(c"WINLUX_OOBE".as_ptr(), v.as_mut_ptr(), 4) > 0;
     let skipped = GetEnvironmentVariableA(c"WINLUX_NO_OOBE".as_ptr(), v.as_mut_ptr(), 4) > 0;
@@ -3028,6 +3030,87 @@ pub unsafe fn regression_checks() {
         );
     }
     (BAR_POS, BAR_SIZE, ACCENT_INDEX) = saved;
+    palette_contrast_checks();
+}
+
+/// Chaque couleur de texte de la palette atteint 4,5:1 sur chaque fond où
+/// elle s'affiche, en thème clair et sombre, avec chacune des 48 couleurs
+/// d'accentuation et dans les quatre thèmes de contraste.
+unsafe fn palette_contrast_checks() {
+    let saved = (DARK, ACCENT, ACCENT_BASE, A11Y.contrast);
+    let mut failures = 0;
+    let mut report = |p: &Palette, what: &[u8]| {
+        let backgrounds = [
+            (p.window, &b"fenetre"[..]),
+            (p.mica, b"mica"),
+            (p.surface, b"surface"),
+            (p.surface2, b"surface2"),
+            (p.hover, b"survol"),
+            (p.pressed, b"appui"),
+            (p.selected, b"selection"),
+        ];
+        for (fg, fg_name) in [
+            (p.text, &b"texte"[..]),
+            (p.text2, b"texte2"),
+            (p.text3, b"texte3"),
+        ] {
+            for &(bg, bg_name) in &backgrounds {
+                if contrast(fg, bg) < 450 {
+                    failures += 1;
+                    if failures <= 12 {
+                        out(b"    illisible : ");
+                        out(what);
+                        out(b" ");
+                        out(fg_name);
+                        out(b" sur ");
+                        out(bg_name);
+                        out(b"\n");
+                    }
+                }
+            }
+        }
+        // L'accent sert de texte (liens) sur les fonds de fenêtre…
+        for &(bg, bg_name) in &backgrounds[..6] {
+            if contrast(p.accent, bg) < 450 {
+                failures += 1;
+                if failures <= 12 {
+                    out(b"    lien illisible : ");
+                    out(what);
+                    out(b" sur ");
+                    out(bg_name);
+                    out(b"\n");
+                }
+            }
+        }
+        // … et de fond aux boutons principaux ; repère de sélection à 3:1.
+        if contrast(p.on_accent, p.accent) < 450 || contrast(p.accent, p.selected) < 300 {
+            failures += 1;
+            if failures <= 12 {
+                out(b"    bouton principal illisible : ");
+                out(what);
+                out(b"\n");
+            }
+        }
+    };
+    A11Y.contrast = 0;
+    for dark in [true, false] {
+        DARK = dark;
+        for &base in ACCENTS.iter().chain([DEFAULT_ACCENT].iter()) {
+            set_accent(base);
+            let p = pal();
+            report(&p, if dark { b"sombre" } else { b"clair" });
+        }
+    }
+    for theme in 1..=4u8 {
+        A11Y.contrast = theme;
+        let p = pal();
+        report(&p, b"contraste eleve");
+    }
+    (DARK, ACCENT, ACCENT_BASE, A11Y.contrast) = saved;
+    check!(
+        failures == 0,
+        "Texte de la palette lisible (4,5:1) dans chaque theme et avec chaque accent"
+    );
 }
 
 // ---------- Traductions des listes constantes ----------

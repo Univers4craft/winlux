@@ -179,10 +179,39 @@ fn unicode_string(at: usize, s: &[u16]) {
     }
 }
 
+/// Processus enfant de Chromium (moteur de rendu, GPU, réseau, crashpad) :
+/// sous Windows il s'arrête quand son application disparaît. Ici, quand le processus parent meurt (même
+/// tué), l'enfant est rattaché à un autre parent : il s'arrête alors aussi,
+/// au lieu de rester seul en mémoire (450 Mo après un plantage de Claude).
+fn exit_with_parent() {
+    let parent = unsafe { libc::getppid() };
+    if parent <= 1 {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("winlux-parent-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if unsafe { libc::getppid() } != parent {
+                crate::trace!("parent {parent} disparu : arrêt de l'enfant de Chromium");
+                unsafe { libc::_exit(0) };
+            }
+        });
+}
+
 pub fn init_process(exe: &Module, args: &[String]) {
     // Identité de l'application pour ses autorisations (caméra, micro…).
     crate::permissions::init(&exe.path, args);
     let exe_win = crate::paths::to_windows(&exe.path);
+    crate::permissions::ask_files_before_start(&exe_win);
+    // Enfants de Chromium/Electron (--type=gpu-process, renderer, utility,
+    // crashpad-handler…) : Windows les tue avec leur navigateur (objet Job
+    // KILL_ON_JOB_CLOSE), ils s'arrêtent donc avec leur parent.
+    let chromium_child = args.iter().any(|a| a.starts_with("--type="))
+        || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="));
+    if chromium_child {
+        exit_with_parent();
+    }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
     let mut cmd = all
@@ -212,6 +241,11 @@ pub fn init_process(exe: &Module, args: &[String]) {
         *((peb + PEB_PROCESS_HEAP) as *mut usize) = crate::dlls::kernel32::process_heap();
         *((peb + PEB_BEING_DEBUGGED) as *mut u8) = 0;
         // OSMajorVersion / OSMinorVersion / OSBuildNumber : Windows 10 (10.0.19045).
+        // LoaderLock (RTL_CRITICAL_SECTION libre) : du code lit son OwningThread
+        // pour savoir s'il tourne sous le verrou du chargeur (Warzone 2100).
+        let loader_lock = alloc_zeroed(64);
+        *((loader_lock + 8) as *mut i32) = -1; // LockCount (OwningThread à +0x10 reste 0)
+        *((peb + 0x110) as *mut usize) = loader_lock;
         *((peb + 0x118) as *mut u32) = 10;
         *((peb + 0x11c) as *mut u32) = 0;
         *((peb + 0x120) as *mut u16) = 19045;
@@ -234,6 +268,8 @@ pub fn init_process(exe: &Module, args: &[String]) {
         command_line_w,
         command_line_a: cmd_a,
     });
+    // Variables _acmdln/_wcmdln de la CRT, lues directement par les programmes.
+    crate::dlls::crt_extra::process_started();
 }
 
 /// Crée le TEB du thread courant et fait pointer GS dessus.

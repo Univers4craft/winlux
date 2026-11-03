@@ -1,0 +1,11 @@
+// Winlux n'a ni systemd ni logind : polkit ne voit jamais la session du bureau
+// comme « active » et NetworkManager refusait (« non autorisé ») d'activer le
+// Wi-Fi, de chercher des réseaux ou de s'y connecter depuis le compte de
+// l'utilisateur. Les comptes du bureau sont tous dans le groupe netdev
+// (winlux-accounts, installateur) : ils pilotent le réseau, comme sous Windows.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});

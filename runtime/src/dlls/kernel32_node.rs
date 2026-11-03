@@ -196,21 +196,64 @@ const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
 pub unsafe extern "win64" fn DeviceIoControl(
     h: usize,
     code: u32,
-    _inb: *const u8,
-    _inl: u32,
+    inb: *const u8,
+    inl: u32,
     outb: *mut u8,
     outl: u32,
     returned: *mut u32,
     ov: *mut c_void,
 ) -> i32 {
+    use crate::dlls::devio;
     if !returned.is_null() {
         *returned = 0;
     }
+    // Fin immédiate : OVERLAPPED.Internal / InternalHigh, puis l'événement.
+    let finish = |n: u32, status: usize| {
+        if !returned.is_null() {
+            *returned = n;
+        }
+        if !ov.is_null() {
+            (ov as *mut usize).write(status);
+            (ov as *mut usize).add(1).write(n as usize);
+            let ev = (ov as *const usize).add(3).read();
+            if ev != 0 {
+                crate::dlls::kernel32::set_event(ev);
+            }
+        }
+    };
+    // Rapports HID par code de contrôle (hidapi, outils de manettes).
+    match code {
+        devio::IOCTL_HID_GET_FEATURE | devio::IOCTL_HID_GET_INPUT_REPORT => {
+            let f = if code == devio::IOCTL_HID_GET_FEATURE {
+                crate::dlls::hid::HidD_GetFeature
+            } else {
+                crate::dlls::hid::HidD_GetInputReport
+            };
+            if f(h, outb, outl) == 0 {
+                return 0;
+            }
+            finish(outl, 0);
+            return 1;
+        }
+        devio::IOCTL_HID_SET_FEATURE | devio::IOCTL_HID_SET_OUTPUT_REPORT => {
+            let f = if code == devio::IOCTL_HID_SET_FEATURE {
+                crate::dlls::hid::HidD_SetFeature
+            } else {
+                crate::dlls::hid::HidD_SetOutputReport
+            };
+            if f(h, inb as *mut u8, inl) == 0 {
+                return 0;
+            }
+            finish(0, 0);
+            return 1;
+        }
+        _ => {}
+    }
+    let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
     if code == FSCTL_GET_REPARSE_POINT {
-        let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) else {
-            crate::process::set_last_error(6);
-            return 0;
-        };
         let mut iosb = [0u64; 2];
         let st = crate::dlls::ntdll_file::reparse_point_of_fd(
             fd,
@@ -219,25 +262,41 @@ pub unsafe extern "win64" fn DeviceIoControl(
             iosb.as_mut_ptr() as *mut c_void,
         );
         if st == 0 {
-            if !returned.is_null() {
-                *returned = iosb[1] as u32;
-            }
-            if !ov.is_null() {
-                // OVERLAPPED.Internal / InternalHigh : terminé tout de suite.
-                (ov as *mut usize).write(0);
-                (ov as *mut usize).add(1).write(iosb[1] as usize);
-                let ev = (ov as *const usize).add(3).read();
-                if ev != 0 {
-                    crate::dlls::kernel32::set_event(ev);
-                }
-            }
+            finish(iosb[1] as u32, 0);
             return 1;
         }
         crate::process::set_last_error(if st == 0xC000_0023 { 122 } else { 4390 });
         return 0;
     }
-    crate::process::set_last_error(50); // ERROR_NOT_SUPPORTED
-    0
+    let input = if inb.is_null() || inl == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(inb, inl as usize)
+    };
+    let (data, error) = match devio::control(fd, code, input, outl as usize) {
+        devio::Reply::Data(d) => (d, 0),
+        devio::Reply::Header(d) => (d, devio::header_error(code)),
+        devio::Reply::Error(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
+    };
+    if data.len() > outl as usize || (!data.is_empty() && outb.is_null()) {
+        crate::process::set_last_error(devio::ERROR_BUFFER);
+        return 0;
+    }
+    if !data.is_empty() {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), outb, data.len());
+    }
+    if error != 0 {
+        // ERROR_MORE_DATA : réponse partielle, STATUS_BUFFER_OVERFLOW.
+        finish(data.len() as u32, 0x8000_0005);
+        crate::process::set_last_error(error);
+        return 0;
+    }
+    finish(data.len() as u32, 0);
+    crate::process::set_last_error(0);
+    1
 }
 
 /// `ReOpenFile` : nouveau handle sur le même fichier, éventuellement en
@@ -861,11 +920,23 @@ pub unsafe extern "win64" fn fail_no_more_files() -> usize {
     usize::MAX
 }
 
-/// `ProcThreadAttributeList` : liste opaque ; les attributs (ConPTY,
-/// handles hérités) sont acceptés et ignorés.
+/// `ProcThreadAttributeList` : liste maison (en-tête « WLXA », capacité,
+/// nombre, puis triplets attribut/valeur/taille). CreateProcess y lit la
+/// pseudo-console (PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE) et les handles
+/// hérités (PROC_THREAD_ATTRIBUTE_HANDLE_LIST) ; les autres attributs
+/// (parent…) sont gardés et ignorés.
+const ATTRIBUTE_MAGIC: u32 = 0x4158_4C57; // « WLXA »
+const ATTRIBUTE_ENTRY: usize = 24;
+pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
+
+fn attribute_list_size(count: u32) -> usize {
+    16 + (count.max(1) as usize) * ATTRIBUTE_ENTRY
+}
+
 pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
     list: *mut u8,
-    _count: u32,
+    count: u32,
     _flags: u32,
     size: *mut usize,
 ) -> i32 {
@@ -873,24 +944,86 @@ pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
         crate::process::set_last_error(87);
         return 0;
     }
-    if list.is_null() || *size < 64 {
-        *size = 64;
+    let needed = attribute_list_size(count).max(64);
+    if list.is_null() || *size < needed {
+        *size = needed;
         crate::process::set_last_error(122);
         return 0;
     }
-    std::ptr::write_bytes(list, 0, 64);
+    std::ptr::write_bytes(list, 0, needed);
+    let capacity = ((needed - 16) / ATTRIBUTE_ENTRY) as u32;
+    std::ptr::write_unaligned(list as *mut u32, ATTRIBUTE_MAGIC);
+    std::ptr::write_unaligned(list.add(4) as *mut u32, capacity);
     1
 }
 pub unsafe extern "win64" fn UpdateProcThreadAttribute(
-    _list: usize,
+    list: usize,
     _flags: u32,
-    _attr: usize,
-    _value: usize,
-    _size: usize,
+    attr: usize,
+    value: usize,
+    size: usize,
     _prev: usize,
     _ret: usize,
 ) -> i32 {
+    let list = list as *mut u8;
+    if list.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if std::ptr::read_unaligned(list as *const u32) != ATTRIBUTE_MAGIC {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let capacity = std::ptr::read_unaligned(list.add(4) as *const u32);
+    let used = std::ptr::read_unaligned(list.add(8) as *const u32);
+    if used >= capacity {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    // PSEUDOCONSOLE : la valeur est le HPCON lui-même ; ailleurs un pointeur.
+    let entry = list.add(16 + used as usize * ATTRIBUTE_ENTRY);
+    std::ptr::write_unaligned(entry as *mut usize, attr);
+    std::ptr::write_unaligned(entry.add(8) as *mut usize, value);
+    std::ptr::write_unaligned(entry.add(16) as *mut usize, size);
+    std::ptr::write_unaligned(list.add(8) as *mut u32, used + 1);
     1
+}
+
+/// (valeur, taille) d'un attribut d'une liste remplie par UpdateProcThreadAttribute.
+unsafe fn attribute_entry(list: usize, attr: usize) -> Option<(usize, usize)> {
+    let list = list as *const u8;
+    if list.is_null() || std::ptr::read_unaligned(list as *const u32) != ATTRIBUTE_MAGIC {
+        return None;
+    }
+    let used = std::ptr::read_unaligned(list.add(8) as *const u32) as usize;
+    (0..used).find_map(|index| {
+        let entry = list.add(16 + index * ATTRIBUTE_ENTRY);
+        (std::ptr::read_unaligned(entry as *const usize) == attr).then(|| {
+            (
+                std::ptr::read_unaligned(entry.add(8) as *const usize),
+                std::ptr::read_unaligned(entry.add(16) as *const usize),
+            )
+        })
+    })
+}
+
+/// Valeur d'un attribut d'une liste remplie par UpdateProcThreadAttribute.
+pub(crate) unsafe fn proc_thread_attribute(list: usize, attr: usize) -> Option<usize> {
+    attribute_entry(list, attr).map(|(value, _)| value)
+}
+
+/// Handles de `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, s'il y en a.
+pub(crate) unsafe fn attribute_handle_list(list: usize) -> Option<Vec<usize>> {
+    let (ptr, size) = attribute_entry(list, PROC_THREAD_ATTRIBUTE_HANDLE_LIST)?;
+    let n = size / 8;
+    if ptr == 0 || n > 4096 {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| std::ptr::read_unaligned((ptr + i * 8) as *const usize))
+            .collect(),
+    )
 }
 pub unsafe extern "win64" fn DeleteProcThreadAttributeList(_list: usize) {}
 
@@ -929,7 +1062,7 @@ pub unsafe extern "win64" fn GetModuleHandleExA(
 }
 
 fn is_current_process(h: usize) -> bool {
-    h == usize::MAX || h == crate::dlls::kernel32::get_current_process()
+    h == usize::MAX || crate::dlls::kernel32::is_current_process_handle(h)
 }
 
 /// `K32EnumProcessModules` (processus courant) : base de chaque module.

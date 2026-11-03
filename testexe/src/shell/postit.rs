@@ -103,7 +103,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         btn_y,
         r.left + 116,
         btn_y + 30,
-        rgb(0x0A, 0x84, 0xFF),
+        rgb(0x00, 0x67, 0xC0),
     );
     text(
         g.hdc,

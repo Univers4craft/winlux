@@ -18,7 +18,7 @@ cat > "$work/bin/aplay" <<'MOCK'
 printf 'aplay %s\n' "$*" >> "$LOG"
 MOCK
 chmod 755 "$work/bin/"*
-speak() { PATH="$work/bin:/usr/bin:/bin" sh "$project/scripts/winlux-speak.sh" "$@"; }
+speak() { WINLUX_SOUND_DIR="$work/aucun-son" PATH="$work/bin:/usr/bin:/bin" sh "$project/scripts/winlux-speak.sh" "$@"; }
 wait_for() { i=0; while ! grep -q "$1" "$LOG" 2>/dev/null; do i=$((i + 1)); test "$i" -lt 50 || { echo "Attendu : $1" >&2; cat "$LOG" >&2 || true; exit 1; }; sleep 0.1; done; }
 
 speak --rate 7 "Paramètres, fenêtre"
