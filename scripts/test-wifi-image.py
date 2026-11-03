@@ -1,0 +1,84 @@
+#!/usr/bin/python3
+"""Wi-Fi chiffré dans l'image (v0.2.17, PC de damien : mot de passe « refusé »).
+
+L'image ne contenait aucun module crypto du noyau : sans ccm, mac80211 ne
+pose pas la clé CCMP, la poignée de main WPA2 échoue et NetworkManager
+redemande le mot de passe. regulatory.db manquait aussi, et 54 pilotes Wi-Fi
+(SDIO des tablettes, USB, staging). Vérifie :
+- build-live-iso.sh copie crypto, la pile 802.11, tous les pilotes Wi-Fi et
+  staging, puis appelle check-image-wifi.sh ;
+- wireless-regdb fait partie des paquets ;
+- check-image-wifi.sh échoue sans ccm, sans entrée depmod ou sans
+  regulatory.db, et passe quand tout y est.
+"""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+failures = []
+
+
+def check(cond, message):
+    if not cond:
+        failures.append(message)
+
+
+build = (HERE / "build-live-iso.sh").read_text()
+loop = next((line for line in build.splitlines() if line.startswith("for directory in sound")), "")
+for directory in ("crypto", "arch/x86/crypto", "net/wireless", "net/mac80211", "drivers/net/wireless", "drivers/staging"):
+    check(f" {directory}" in loop, f"build-live-iso.sh ne copie pas kernel/{directory}")
+check('scripts/check-image-wifi.sh" "$stage" "$kernel_release"' in build, "build-live-iso.sh n'appelle pas check-image-wifi.sh")
+check(build.index("check-image-wifi.sh") > build.index("stage-desktop-components.sh"),
+      "check-image-wifi.sh doit passer après les firmwares (regulatory.db)")
+check('"wireless-regdb"' in (HERE / "prepare-desktop-packages.py").read_text(), "paquet wireless-regdb absent")
+
+release = "7.0.0-42-generic"
+tmp = Path(tempfile.mkdtemp(prefix="winlux-wifi-"))
+host = tmp / "host"
+NAMES = {"ccm": "crypto", "cmac": "crypto", "michael_mic": "crypto", "gcm": "crypto",
+         "mac80211": "net/mac80211", "cfg80211": "net/wireless",
+         "brcmfmac-cyw": "drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw",
+         "r8723bs": "drivers/staging/rtl8723bs"}
+for name, directory in NAMES.items():
+    (host / release / "kernel" / directory).mkdir(parents=True, exist_ok=True)
+    (host / release / "kernel" / directory / f"{name}.ko.zst").write_bytes(b"x")
+
+
+def stage(with_ccm=True, depmod=True, regdb=True):
+    root = Path(tempfile.mkdtemp(dir=tmp))
+    modules = root / "lib/modules" / release
+    for name, directory in NAMES.items():
+        if name == "ccm" and not with_ccm:
+            continue
+        (modules / "kernel" / directory).mkdir(parents=True, exist_ok=True)
+        (modules / "kernel" / directory / f"{name}.ko").write_bytes(b"x")
+    (modules / "modules.dep").write_text("kernel/crypto/ccm.ko:\n" if depmod else "kernel/crypto/cmac.ko:\n")
+    (root / "usr/lib/firmware").mkdir(parents=True)
+    os.symlink("../usr/lib/firmware", root / "lib/firmware")
+    if regdb:
+        (root / "usr/lib/firmware/regulatory.db").write_bytes(b"RGDB")
+    return root
+
+
+def run(root):
+    return subprocess.run(["sh", str(HERE / "check-image-wifi.sh"), str(root), release],
+                          env={**os.environ, "WINLUX_HOST_MODULES": str(host)},
+                          capture_output=True, text=True)
+
+
+result = run(stage())
+check(result.returncode == 0, f"image complète refusée : {result.stderr}")
+result = run(stage(with_ccm=False))
+check(result.returncode != 0 and "ccm" in result.stderr, f"ccm absent non détecté : {result.stderr!r}")
+result = run(stage(depmod=False))
+check(result.returncode != 0 and "depmod" in result.stderr, f"ccm hors modules.dep non détecté : {result.stderr!r}")
+result = run(stage(regdb=False))
+check(result.returncode != 0 and "regulatory.db" in result.stderr, f"regulatory.db absent non détecté : {result.stderr!r}")
+
+if failures:
+    for failure in failures:
+        print("ÉCHEC :", failure)
+    raise SystemExit(1)
+print("OK : Wi-Fi chiffré dans l'image (crypto du noyau, pilotes Wi-Fi, regulatory.db)")
