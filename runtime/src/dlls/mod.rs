@@ -51,6 +51,7 @@ pub mod dwrite;
 pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
+pub mod electron_win32;
 pub mod evdev;
 pub mod eventing;
 pub mod games_win32;
@@ -681,6 +682,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: usp10::usp10_exports(),
                 handle: fake_module(),
             },
+            // Client DHCP (WPAD de Chromium), importé par claude.exe.
+            Builtin {
+                name: "dhcpcsvc",
+                exports: electron_win32::dhcpcsvc_exports(),
+                handle: fake_module(),
+            },
         ];
         add_basics(&mut all);
         all
@@ -732,7 +739,9 @@ fn add_basics(all: &mut [Builtin]) {
         ("msvcrt", apps_win32::crt_exports()),
         ("ucrtbase", apps_win32::crt_exports()),
     ];
-    for (dll, exports) in extra.into_iter().chain(games).chain(apps) {
+    // Imports de l'appli de bureau Claude (electron_win32), en complément.
+    let electron = electron_win32::all();
+    for (dll, exports) in extra.into_iter().chain(games).chain(apps).chain(electron) {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
