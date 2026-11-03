@@ -132,6 +132,50 @@ _TR = {
     "Microcode, pilote de fréquence et températures : Processeur. Pilote NVIDIA et vidéo matérielle : Graphismes.": ("Microcode, frequency driver and temperatures: Processor. NVIDIA driver and hardware video: Graphics.", "Microcódigo, controlador de frecuencia y temperaturas: Procesador. Controlador NVIDIA y vídeo por hardware: Gráficos.", "Microcode, Frequenztreiber und Temperaturen: Prozessor. NVIDIA-Treiber und Hardware-Video: Grafik."),
     "Ouvrir Processeur": ("Open Processor", "Abrir Procesador", "Prozessor öffnen"),
     "Ouvrir Graphismes": ("Open Graphics", "Abrir Gráficos", "Grafik öffnen"),
+    # Votre PC (À propos)
+    "Votre PC": ("Your PC", "Su PC", "Ihr PC"),
+    "Tout ce que Winlux a détecté sur cette machine.": ("Everything Winlux detected on this machine.", "Todo lo que Winlux ha detectado en este equipo.", "Alles, was Winlux auf diesem Gerät erkannt hat."),
+    "Fabricant": ("Manufacturer", "Fabricante", "Hersteller"),
+    "Modèle": ("Model", "Modelo", "Modell"),
+    "{cores} cœurs, {threads} threads": ("{cores} cores, {threads} threads", "{cores} núcleos, {threads} hilos", "{cores} Kerne, {threads} Threads"),
+    "Mémoire (RAM)": ("Memory (RAM)", "Memoria (RAM)", "Arbeitsspeicher (RAM)"),
+    "Disque": ("Drive", "Disco", "Laufwerk"),
+    "SSD NVMe": ("NVMe SSD", "SSD NVMe", "NVMe-SSD"),
+    "SSD": ("SSD", "SSD", "SSD"),
+    "Disque dur": ("Hard drive", "Disco duro", "Festplatte"),
+    "Mémoire eMMC": ("eMMC storage", "Memoria eMMC", "eMMC-Speicher"),
+    "Carte SD": ("SD card", "Tarjeta SD", "SD-Karte"),
+    "Amovible (USB)": ("Removable (USB)", "Extraíble (USB)", "Wechseldatenträger (USB)"),
+    "{size} libres": ("{size} free", "{size} libres", "{size} frei"),
+    "Écran": ("Display", "Pantalla", "Bildschirm"),
+    "écran intégré": ("built-in display", "pantalla integrada", "integrierter Bildschirm"),
+    "{width} × {height} à {rate} Hz": ("{width} × {height} at {rate} Hz", "{width} × {height} a {rate} Hz", "{width} × {height} bei {rate} Hz"),
+    "Ethernet": ("Ethernet", "Ethernet", "Ethernet"),
+    "connecté": ("connected", "conectado", "verbunden"),
+    "déconnecté": ("disconnected", "desconectado", "getrennt"),
+    "Batterie": ("Battery", "Batería", "Akku"),
+    "en charge": ("charging", "cargando", "wird geladen"),
+    "sur batterie": ("on battery", "con batería", "Akkubetrieb"),
+    "chargée": ("fully charged", "cargada", "voll geladen"),
+    "branchée, ne charge pas": ("plugged in, not charging", "enchufada, sin cargar", "angeschlossen, wird nicht geladen"),
+    "santé {value} %": ("health {value} %", "salud {value} %", "Zustand {value} %"),
+    "UEFI {bits} bits": ("UEFI {bits}-bit", "UEFI de {bits} bits", "UEFI {bits} Bit"),
+    "BIOS hérité": ("Legacy BIOS", "BIOS heredado", "Legacy-BIOS"),
+    "Architecture": ("Architecture", "Arquitectura", "Architektur"),
+    "{arch} (64 bits)": ("{arch} (64-bit)", "{arch} (64 bits)", "{arch} (64 Bit)"),
+    "{arch} (32 bits)": ("{arch} (32-bit)", "{arch} (32 bits)", "{arch} (32 Bit)"),
+    "processeur 64 bits": ("64-bit processor", "procesador de 64 bits", "64-Bit-Prozessor"),
+    "Secure Boot": ("Secure Boot", "Arranque seguro", "Secure Boot"),
+    "Activé": ("On", "Activado", "Aktiviert"),
+    "Désactivé": ("Off", "Desactivado", "Deaktiviert"),
+    "Adaptateur détecté": ("Adapter detected", "Adaptador detectado", "Adapter erkannt"),
+    "Détecté": ("Detected", "Detectado", "Erkannt"),
+    "Machine virtuelle": ("Virtual machine", "Máquina virtual", "Virtuelle Maschine"),
+    "o": ("B", "B", "B"),
+    "Ko": ("KB", "KB", "KB"),
+    "Mo": ("MB", "MB", "MB"),
+    "Go": ("GB", "GB", "GB"),
+    "To": ("TB", "TB", "TB"),
 }
 
 PAGE_HARDWARE = 34
@@ -308,6 +352,159 @@ def cpu_section(w):
         w.section(_t("Températures"))
         box = w.card()
         w.row(box, " · ".join(temps), None)
+
+
+# ── Votre PC (Paramètres > À propos) ───────────────────────────────────────
+
+VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware", "hyperv": "Hyper-V",
+            "xen": "Xen", "parallels": "Parallels"}
+DISK_KINDS = {"nvme": "SSD NVMe", "ssd": "SSD", "hdd": "Disque dur", "emmc": "Mémoire eMMC", "sd": "Carte SD", "usb": "Amovible (USB)"}
+BATTERY_STATES = {"charging": "en charge", "discharging": "sur batterie", "full": "chargée", "not-charging": "branchée, ne charge pas"}
+
+
+def size_text(value, binary=False):
+    """Taille lisible : 1 To, 512 Go, 15,5 Go (virgule sauf en anglais)."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return ""
+    step = 1024 if binary else 1000
+    unit = "o"
+    for name in ("Ko", "Mo", "Go", "To"):
+        if value < step:
+            break
+        value /= step
+        unit = name
+    text = f"{value:.0f}" if value >= 100 or unit == "o" else f"{value:.1f}".rstrip("0").rstrip(".")
+    if _LANG != "en":
+        text = text.replace(".", ",")
+    return f"{text} {_t(unit)}"
+
+
+def _split(value):
+    return [part for part in (value or "").split("|") if part]
+
+
+def pc_rows(r, status=None):
+    """(titre, valeur) de chaque élément détecté ; rien n'est inventé : ce qui
+    n'a pas été détecté (batterie d'un PC de bureau, Secure Boot en BIOS
+    hérité…) n'a pas de ligne."""
+    status = status or {}
+    rows = []
+    vendor, model = r.get("pc_vendor", ""), r.get("pc_model", "")
+    virtual = r.get("drivers_virtual", "")
+    if vendor:
+        rows.append((_t("Fabricant"), vendor))
+    if model:
+        if r.get("pc_family"):
+            model += f" ({r['pc_family']})"
+        rows.append((_t("Modèle"), model))
+    if virtual:
+        rows.append((_t("Machine virtuelle"), VM_NAMES.get(virtual, virtual)))
+    if r.get("pc_cpu_model"):
+        detail = r["pc_cpu_model"]
+        if _int(r.get("pc_cpu_threads")):
+            detail += " · " + _t("{cores} cœurs, {threads} threads").format(
+                cores=_int(r.get("pc_cpu_cores")) or r["pc_cpu_threads"], threads=r["pc_cpu_threads"])
+        rows.append((_t("Processeur"), detail))
+    if _int(r.get("pc_memory_kb")):
+        rows.append((_t("Mémoire (RAM)"), size_text(_int(r["pc_memory_kb"]) * 1024, binary=True)))
+    for name in _split(r.get("pc_gpus")):
+        rows.append((_t("Carte graphique"), name))
+    for i in range(min(8, _int(r.get("pc_disk_count")))):
+        get = lambda key: r.get(f"pc_disk{i}_{key}", "")
+        parts = [get("model")] if get("model") else []
+        if get("kind") in DISK_KINDS:
+            parts.append(_t(DISK_KINDS[get("kind")]))
+        if _int(get("size")):
+            parts.append(size_text(get("size")))
+        if _int(get("mounted")) and get("free") != "":
+            parts.append(_t("{size} libres").format(size=size_text(get("free"))))
+        rows.append((_t("Disque") + f" ({get('name')})" if get("name") else _t("Disque"), " · ".join(parts)))
+    try:
+        screens = min(4, int(status.get("display_count", "0")))
+    except ValueError:
+        screens = 0
+    for n in range(1, screens + 1):
+        get = lambda key: status.get(f"display_{n}_{key}", "")
+        if not get("name"):
+            continue
+        parts = [get("name")]
+        mode = get("mode")
+        if "x" in mode:
+            width, _, height = mode.partition("x")
+            rate = get("rate").split(".")[0] if get("rate") and get("rate") != "auto" else ""
+            parts.append(_t("{width} × {height} à {rate} Hz").format(width=width, height=height, rate=rate) if rate
+                         else f"{width} × {height}")
+        if get("internal") == "1":
+            parts.append(_t("écran intégré"))
+        rows.append((_t("Écran"), " · ".join(parts)))
+    if not screens and status.get("display_current"):
+        rows.append((_t("Écran"), status["display_current"].replace("x", " × ")))
+    address = ""
+    if status.get("network_connected") == "1":
+        iface, _, address = status.get("network", "").partition(" ")
+    else:
+        iface = ""
+    for i in range(min(8, _int(r.get("pc_net_count")))):
+        get = lambda key: r.get(f"pc_net{i}_{key}", "")
+        parts = [_t("Wi-Fi") if get("kind") == "wifi" else _t("Ethernet"), get("name"),
+                 _t("connecté") if get("up") == "1" else _t("déconnecté")]
+        if address and get("name") == iface:
+            parts.append(address.split("/")[0])
+        rows.append((_t("Réseau"), " · ".join(p for p in parts if p)))
+    for name in _split(r.get("pc_sound")):
+        rows.append((_t("Son"), name))
+    if r.get("bluetooth") == "1":
+        rows.append((_t("Bluetooth"), _t("Adaptateur détecté")))
+    if _int(r.get("webcam_count")):
+        rows.append((_t("Webcam"), _t("{count} caméra(s)").format(count=r["webcam_count"])))
+    if r.get("touchscreen") == "1":
+        rows.append((_t("Écran tactile"), _t("Détecté")))
+    if r.get("touchpad") == "1":
+        rows.append((_t("Pavé tactile"), _t("Détecté")))
+    for i in range(min(2, _int(r.get("pc_battery_count")))):
+        get = lambda key: r.get(f"pc_battery{i}_{key}", "")
+        parts = [f"{get('capacity')} %"] if get("capacity") else []
+        if get("status") in BATTERY_STATES:
+            parts.append(_t(BATTERY_STATES[get("status")]))
+        if get("health"):
+            parts.append(_t("santé {value} %").format(value=get("health")))
+        if get("model"):
+            parts.append(get("model"))
+        rows.append((_t("Batterie"), " · ".join(parts)))
+    if r.get("pc_firmware") == "uefi":
+        firmware = _t("UEFI {bits} bits").format(bits=r["pc_firmware_bits"]) if r.get("pc_firmware_bits") in ("32", "64") else "UEFI"
+    elif r.get("pc_firmware") == "bios":
+        firmware = _t("BIOS hérité")
+    else:
+        firmware = ""
+    if firmware:
+        bios = " ".join(part for part in (r.get("pc_bios_vendor", ""), r.get("pc_bios_version", "")) if part)
+        if r.get("pc_bios_date"):
+            bios += f" ({r['pc_bios_date']})" if bios else r["pc_bios_date"]
+        rows.append((_t("Micrologiciel"), firmware + (f" · {bios}" if bios else "")))
+    if r.get("pc_arch"):
+        arch = r["pc_arch"]
+        bits = "64" if arch in ("x86_64", "aarch64", "ppc64le", "riscv64", "s390x") else "32"
+        text = _t("{arch} (%s bits)" % bits).format(arch=arch)
+        if bits == "32" and r.get("pc_cpu_64bit") == "1":
+            text += " · " + _t("processeur 64 bits")
+        rows.append((_t("Architecture"), text))
+    if r.get("pc_firmware") == "uefi" and r.get("pc_secure_boot") in ("0", "1"):
+        rows.append((_t("Secure Boot"), _t("Activé") if r["pc_secure_boot"] == "1" else _t("Désactivé")))
+    return [(title, value) for title, value in rows if value]
+
+
+def pc_section(w, status=None):
+    """Section « Votre PC », sous la version et le noyau de la page À propos."""
+    rows = pc_rows(report(), status)
+    if not rows:
+        return
+    w.section(_t("Votre PC"), _t("Tout ce que Winlux a détecté sur cette machine."))
+    box = w.card()
+    for title, value in rows:
+        w.row(box, title, None, value)
 
 
 # ── Page Matériel et pilotes ───────────────────────────────────────────────

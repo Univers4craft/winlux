@@ -206,7 +206,7 @@ def keyboard_widget(send=send_x11, layout=None, on_close=None):
     modificateurs X tenus (ctrl, alt, super, shift)."""
     import gi
     gi.require_version("Gtk", "3.0")
-    from gi.repository import GLib, Gtk
+    from gi.repository import Gdk, GLib, Gtk
 
     install_css()
     letters = LAYOUTS.get(layout or layout_name(), LAYOUTS["fr"])
@@ -265,6 +265,7 @@ def keyboard_widget(send=send_x11, layout=None, on_close=None):
         for variant in variants:
             shown = variant.upper() if base.isupper() else variant
             item = Gtk.Button(label=shown)
+            item.set_can_focus(False)
             item.get_style_context().add_class("osk-key")
             item.set_size_request(48, 48)
             item.connect("clicked", lambda _b, v=shown: (popover.popdown(), press_char(v)))
@@ -277,12 +278,20 @@ def keyboard_widget(send=send_x11, layout=None, on_close=None):
     def char_key(char):
         shown = char.upper() if (state["shift"] or state["caps"]) and char.isalpha() else char
         button = Gtk.Button(label=shown)
+        button.set_can_focus(False)
         button.get_style_context().add_class("osk-key")
         timer = {}
 
-        def down(*_):
+        def down(_button, event):
+            # Frappes rapides : un deuxième appui en moins de 400 ms envoie aussi
+            # un « double clic » (2BUTTON_PRESS). Il ne doit pas relancer de minuterie,
+            # sinon la première, orpheline, ouvrait les accents et mangeait la suite.
+            if event.type != Gdk.EventType.BUTTON_PRESS:
+                return True
+            if timer.get("id"):
+                GLib.source_remove(timer["id"])
             timer["long"] = False
-            timer["id"] = GLib.timeout_add(450, lambda: timer.update(long=accent_popup(button, shown)) or False)
+            timer["id"] = GLib.timeout_add(450, lambda: timer.update(long=accent_popup(button, shown), id=None) or False)
             return False
 
         def up(*_):
@@ -299,6 +308,7 @@ def keyboard_widget(send=send_x11, layout=None, on_close=None):
 
     def special(label, action, width=1.5, active=False, tooltip=None):
         button = Gtk.Button(label=label)
+        button.set_can_focus(False)
         context = button.get_style_context()
         context.add_class("osk-key")
         context.add_class("osk-special")
@@ -522,7 +532,25 @@ def set_panel(enabled):
         _xfconf(*args)
     if not enabled:
         _xfconf("-p", f"/plugins/plugin-{PLUGIN}", "-r", "-R")
+    if wanted != ids and os.environ.get("WINLUX_OSK_NO_RESTART") != "1":
+        restart_panel()
     return True
+
+
+def restart_panel():
+    """Barre déjà lancée (réglage changé dans Paramètres, clavier débranché) :
+    xfce4-panel ne charge pas un greffon ajouté à chaud, on la relance."""
+    if not shutil.which("xfce4-panel"):
+        return False
+    try:
+        running = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "xfce4-panel"],
+                                 capture_output=True, timeout=3).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if running:
+        subprocess.Popen(["xfce4-panel", "-r"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    return running
 
 
 def main(argv):

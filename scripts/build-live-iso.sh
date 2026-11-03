@@ -343,6 +343,19 @@ for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmo
         case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
     done
 done
+# Son : tous les pilotes ALSA/ASoC et SoundWire. Les cartes des portables
+# récents (SOF, AMD ACP) chargent leur pilote de machine et leurs codecs par
+# leur nom au démarrage de la carte, sans dépendance déclarée : sans eux, la
+# carte ne se crée pas et PipeWire n'offre qu'une sortie factice.
+for directory in sound drivers/soundwire; do
+    test -d "/lib/modules/$kernel_release/kernel/$directory" || continue
+    find "/lib/modules/$kernel_release/kernel/$directory" -name '*.ko*' | while read -r module; do
+        destination="$stage${module%.zst}"
+        test -e "$destination" && continue
+        mkdir -p "$(dirname -- "$destination")"
+        case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
+    done
+done
 sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do

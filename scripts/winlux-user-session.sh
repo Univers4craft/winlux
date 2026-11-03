@@ -177,8 +177,17 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HO
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
     compositor_pid=$!
 fi
+# Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
+# de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
+# ensuite, et une tablette restait sans aucun moyen de taper.
+if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk panel >"$logs/osk-panel.log" 2>&1 || true; fi
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
+fi
+# Clavier ou souris USB branché pendant la session : disposition (AZERTY…)
+# et réglages réappliqués, sinon un clavier branché à chaud tape en QWERTY.
+if test -x /usr/bin/winlux-input-watch; then
+    start input-watch.log /usr/bin/winlux-input-watch
 fi
 if test -x /usr/bin/winlux-notifications; then
     start notifications.log /usr/bin/winlux-notifications
@@ -188,9 +197,6 @@ fi
 if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
     # L'état est publié par la boucle de la session : pas de sondes ici.
     export WINLUX_CONTROL_NO_STATUS=1
-    # Icône du clavier tactile (sans clavier physique) : greffon placé
-    # avant que l'alignement range la barre.
-    if test -x /usr/bin/winlux-osk; then /usr/bin/winlux-osk panel >/dev/null 2>&1 || true; fi
     alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" >/dev/null 2>&1 || true ;; esac
     speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)

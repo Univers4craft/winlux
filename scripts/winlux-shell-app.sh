@@ -2,6 +2,36 @@
 set -eu
 export WINLUX_NATIVE_SHELL=1
 unset WINLUX_DESKTOP_DEMO
+
+# Chemin passé à l'Explorateur. xdg-open et GIO donnent parfois une URI
+# (file:///home/damien/T%C3%A9l%C3%A9chargements) : on la décode (accents,
+# espaces, # ? % …) en chemin Linux, puis /a/b devient Z:\a\b.
+shell_path() {
+    value=$1
+    case "$value" in
+        [Ff][Ii][Ll][Ee]:*)
+            value=$(/usr/bin/python3 -I -c '
+import os, sys
+from urllib.parse import unquote_to_bytes, urlsplit
+uri = urlsplit(sys.argv[1])
+if uri.netloc not in ("", "localhost") or not uri.path.startswith("/"):
+    sys.exit(1)
+path = unquote_to_bytes(os.fsencode(uri.path))
+if b"\0" in path:
+    sys.exit(1)
+sys.stdout.buffer.write(path)
+' "$value") || return 1 ;;
+    esac
+    case "$value" in
+        /*) printf 'Z:%s' "$value" | sed 's@/@\\@g' ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+if test "${1:-}" = --chemin; then
+    shell_path "${2:-}"
+    exit
+fi
 case "${1:-explorer}" in
     explorer|settings)
         export WINLUX_SHELL_APP=$1
@@ -10,7 +40,7 @@ case "${1:-explorer}" in
             export WINLUX_SETTINGS_PAGE=$2
         fi
         if test "$1" = explorer && test -n "${2:-}"; then
-            case "$2" in /*) WINLUX_SHELL_PATH="Z:$(printf '%s' "$2" | sed 's@/@\\@g')" ;; *) WINLUX_SHELL_PATH=$2 ;; esac
+            WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
             export WINLUX_SHELL_PATH
         fi
         if test "$1" = settings && test "${WINLUX_LEGACY_SETTINGS:-0}" != 1; then

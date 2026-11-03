@@ -1537,7 +1537,7 @@ pub unsafe extern "win64" fn nt_query_virtual_memory(
     length: usize,
     return_length: *mut usize,
 ) -> i32 {
-    if handle != crate::dlls::kernel32::get_current_process() {
+    if !crate::dlls::kernel32::is_current_process_handle(handle) {
         return STATUS_INVALID_HANDLE;
     }
     if info_class != 0 {
@@ -1625,7 +1625,7 @@ pub unsafe extern "win64" fn nt_protect_virtual_memory(
     new_protect: u32,
     old_protect: *mut u32,
 ) -> i32 {
-    if process != crate::dlls::kernel32::get_current_process() {
+    if !crate::dlls::kernel32::is_current_process_handle(process) {
         return STATUS_INVALID_HANDLE;
     }
     if base.is_null() || size.is_null() || old_protect.is_null() || *size == 0 {
