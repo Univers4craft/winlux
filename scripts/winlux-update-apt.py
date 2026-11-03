@@ -26,6 +26,36 @@ RESTORE_POINT = STATE / "update-restore-point"
 TRIAL_BOOTS = 2
 RESTORE_PREFIX = "Avant Winlux "
 RESTORE_KEEP = 3
+# Droits spéciaux de l'Ubuntu Base (ubuntu-base-26.04.1, `tar tv`). La
+# construction de l'image les efface (chown -R 0:0 avant APT) : passwd, chfn
+# ou gpasswd sans setuid, unix_chkpwd et /etc/shadow sans le groupe shadow,
+# et seuls les fichiers réinstallés ensuite par APT (su, mount, sudo)
+# figuraient dans apt-base-permissions.json. Version 2 du marqueur : un
+# système déjà installé les reçoit aussi au démarrage qui suit la mise à jour.
+BASE_MODES_VERSION = "2"
+BASE_MODES = (
+    ("etc/shadow", "root", "shadow", 0o640),
+    ("etc/gshadow", "root", "shadow", 0o640),
+    ("usr/bin/chage", "root", "shadow", 0o2755),
+    ("usr/bin/expiry", "root", "shadow", 0o2755),
+    ("usr/sbin/unix_chkpwd", "root", "shadow", 0o2755),
+    ("usr/sbin/pam_extrausers_chkpwd", "root", "shadow", 0o2755),
+    ("usr/bin/chfn", "root", "root", 0o4755),
+    ("usr/bin/chsh", "root", "root", 0o4755),
+    ("usr/bin/gpasswd", "root", "root", 0o4755),
+    ("usr/bin/passwd", "root", "root", 0o4755),
+    ("usr/bin/newgrp", "root", "root", 0o4755),
+    ("usr/bin/su", "root", "root", 0o4755),
+    ("usr/bin/mount", "root", "root", 0o4755),
+    ("usr/bin/umount", "root", "root", 0o4755),
+    ("usr/bin/sudo.ws", "root", "root", 0o4755),
+    ("usr/bin/sudo-rs", "root", "root", 0o4755),
+    ("usr/bin/pkexec", "root", "root", 0o4755),
+    ("var/log/btmp", "root", "utmp", 0o660),
+    ("var/log/lastlog", "root", "utmp", 0o664),
+    ("var/log/wtmp", "root", "utmp", 0o664),
+    ("var/mail", "root", "mail", 0o2775),
+)
 
 def run(*args):
     return subprocess.run(args, check=True)
@@ -33,6 +63,30 @@ def run(*args):
 def read(path):
     try: return Path(path).read_text().strip()
     except FileNotFoundError: return ""
+
+def ids(path):
+    """{nom: numéro} d'après un fichier passwd ou group (racine quelconque)."""
+    found = {}
+    for line in read(path).splitlines():
+        fields = line.split(":")
+        if len(fields) > 2 and fields[2].isdigit(): found.setdefault(fields[0], int(fields[2]))
+    return found
+
+def restore_base_modes(root=Path("/")):
+    """Remet les droits de BASE_MODES ; renvoie les chemins corrigés.
+    Un groupe absent de /etc/group laisse le fichier tel quel."""
+    users, groups = ids(root / "etc/passwd"), ids(root / "etc/group")
+    fixed = []
+    for relative, user, group, mode in BASE_MODES:
+        path = root / relative
+        if path.is_symlink() or not path.exists() or user not in users or group not in groups: continue
+        info = path.stat()
+        if (info.st_uid, info.st_gid, info.st_mode & 0o7777) == (users[user], groups[group], mode): continue
+        os.chown(path, users[user], groups[group], follow_symlinks=False)
+        # chmod après chown : chown efface les bits setuid et setgid.
+        path.chmod(mode)
+        fixed.append(relative)
+    return fixed
 
 def manifest(text):
     fields = {}
@@ -357,7 +411,14 @@ def main():
                 # The image builder defers native cache triggers to the guest;
                 # never execute distribution maintainer scripts on the host.
                 run("dpkg", "--configure", "--pending")
-                restored.touch()
+                restored.write_text("1\n")
+            if read(restored) != BASE_MODES_VERSION:
+                # Jamais bloquant : un bureau sans sudo vaut mieux que pas de bureau.
+                try:
+                    restore_base_modes()
+                    restored.write_text(BASE_MODES_VERSION + "\n")
+                except OSError as error:
+                    print(f"Droits de la base Ubuntu non rétablis : {error}", file=sys.stderr)
             # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
             # une installation inachevée se termine ici, sans bloquer le démarrage.
             audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
