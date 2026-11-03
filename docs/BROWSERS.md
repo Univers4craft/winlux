@@ -53,7 +53,13 @@ c'est sa copie, faite sur sa machine.
   de choisir à chaque fois, et « Toujours utiliser ce navigateur » en fait le
   navigateur par défaut. L'écran de choix ne s'ouvre que s'il n'y a aucun navigateur : le
   lien est alors gardé dans `/run/winlux/browser-pending-<uid>` et la session
-  l'ouvre dès qu'un navigateur est installé (pendant une heure au plus).
+  l'ouvre dès qu'un navigateur est installé (pendant une heure au plus) :
+  Paramètres l'ouvre à la fin de l'installation, et la session le reprend
+  sinon. L'en-tête « Navigateur par défaut » indique le navigateur qui ouvre
+  vraiment les liens (le seul installé, ou « demandé à chaque lien »).
+- **Langue** : Firefox est installé avec les paquets de langue officiels de
+  Mozilla (`firefox-l10n-fr`, `-de`, `-es`, même dépôt, SHA-256 de l'index)
+  et suit la langue du système. Chrome et Edge contiennent déjà leurs langues.
 - **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`
   lance `/usr/lib/winlux/winlux-browser-fetch` (copie de
   `scripts/prepare-browser-packages.py`). Il lit l'index du dépôt officiel de

@@ -95,6 +95,22 @@ fetch_logged() {
     cat "$run/browser-fetch.last" >>"$run/browser-fetch.log" 2>/dev/null || true
     return "$status"
 }
+# Firefox dans la langue du système (fr, de, es ; l'anglais est intégré) :
+# paquets de langue officiels de Mozilla, vérifiés comme le navigateur.
+# Facultatifs : un paquet absent ou altéré est ignoré, Firefox reste en anglais.
+add_langpacks() {
+    for lang in fr de es; do
+        pack="$cache/firefox-l10n-$lang"
+        test -r "$pack.deb" && test -r "$pack.sha256" || continue
+        printf '%s  %s\n' "$(cat "$pack.sha256")" "$pack.deb" | sha256sum -c - >/dev/null 2>&1 || { echo "Paquet de langue altéré ignoré : $lang" >&2; continue; }
+        test "$(/usr/bin/dpkg-deb -f "$pack.deb" Package)" = "firefox-l10n-$lang" || continue
+        /usr/bin/dpkg-deb -x "$pack.deb" "$1"
+    done
+    # Préférence vide = langue du système (LANG) quand son paquet est présent.
+    mkdir -p "$1/usr/lib/firefox/defaults/pref"
+    printf 'pref("intl.locale.requested", "");\n' > "$1/usr/lib/firefox/defaults/pref/winlux-langue.js"
+    chmod -R a+rX "$1/usr/lib/firefox"
+}
 install_browser() {
     id=$1
     if ! test -r "$cache/$id.deb"; then
@@ -153,6 +169,7 @@ install_browser() {
     test -x "$work/$relative" || { echo 'Programme navigateur absent du paquet' >&2; return 1; }
     /usr/bin/dpkg-deb -f "$work/package.deb" Version > "$work/version"
     rm "$work/package.deb"
+    if test "$id" = firefox; then add_langpacks "$work/root"; fi
     # Refuse replacement while any process still has the previous browser mapped.
     if test -d "$installed/$id"; then
         for mapping in /proc/[0-9]*/maps; do
@@ -207,7 +224,7 @@ launch() {
             test ! -f "${downloads%/*}/session-bus.conf" || bus_config="--config-file=${downloads%/*}/session-bus.conf"
         fi
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
-            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" \
+            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" LANG="${LANG:-C.UTF-8}" \
             /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
