@@ -746,6 +746,48 @@ unsafe extern "win64" fn GetPointerDevices(count: *mut u32, _devices: *mut u8) -
 }
 
 // ============================================================
+//  wtsapi32 : notifications de changement de session
+// ============================================================
+//
+// Chromium (WtsSessionChangeObserver) inscrit sa fenêtre de messages et
+// vérifie le résultat par un CHECK. Winlux n'a qu'une session console :
+// l'inscription réussit et aucun WM_WTSSESSION_CHANGE n'est émis pour
+// l'instant (le verrouillage de session pourra les envoyer plus tard).
+
+unsafe extern "win64" fn WTSRegisterSessionNotification(hwnd: usize, _flags: u32) -> i32 {
+    if hwnd == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    1
+}
+
+unsafe extern "win64" fn WTSUnRegisterSessionNotification(_hwnd: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WTSRegisterSessionNotificationEx(
+    _server: usize,
+    hwnd: usize,
+    flags: u32,
+) -> i32 {
+    WTSRegisterSessionNotification(hwnd, flags)
+}
+
+unsafe extern "win64" fn WTSUnRegisterSessionNotificationEx(_server: usize, hwnd: usize) -> i32 {
+    WTSUnRegisterSessionNotification(hwnd)
+}
+
+pub fn wtsapi32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "WTSRegisterSessionNotification" => fn WTSRegisterSessionNotification,
+        "WTSUnRegisterSessionNotification" => fn WTSUnRegisterSessionNotification,
+        "WTSRegisterSessionNotificationEx" => fn WTSRegisterSessionNotificationEx,
+        "WTSUnRegisterSessionNotificationEx" => fn WTSUnRegisterSessionNotificationEx,
+    }
+}
+
+// ============================================================
 //  user32 : API de configuration d'affichage (QueryDisplayConfig)
 // ============================================================
 //
@@ -964,8 +1006,91 @@ unsafe extern "win64" fn DisplayConfigSetDeviceInfo(_hdr: usize) -> i32 {
     ERROR_NOT_SUPPORTED_L
 }
 
+// Fonctions de fenêtre de Windows 8 à 11 que Chromium appelle au démarrage
+// du navigateur : réponses neutres d'un poste à un seul utilisateur, sans
+// écran tactile déclaré.
+
+static POWER_NOTIFY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5000);
+
+/// `RegisterPowerSettingNotification` : inscription acceptée (handle
+/// propre à chaque appel), aucun WM_POWERBROADCAST de réglage émis.
+unsafe extern "win64" fn RegisterPowerSettingNotification(
+    recipient: usize,
+    _guid: usize,
+    _flags: u32,
+) -> usize {
+    if recipient == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    POWER_NOTIFY.fetch_add(4, std::sync::atomic::Ordering::Relaxed)
+}
+
+unsafe extern "win64" fn UnregisterPowerSettingNotification(_h: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WindowOk(_hwnd: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WindowOk2(_hwnd: usize, _arg: u32) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn IsWindowArranged(_hwnd: usize) -> i32 {
+    0
+}
+
+/// `ChangeWindowMessageFilterEx` : pas de niveaux d'intégrité entre
+/// fenêtres sous Winlux ; CHANGEFILTERSTRUCT.ExtStatus = MSGFLTINFO_NONE.
+unsafe extern "win64" fn ChangeWindowMessageFilterEx(
+    _hwnd: usize,
+    _msg: u32,
+    _action: u32,
+    info: *mut u32,
+) -> i32 {
+    if !info.is_null() && *info >= 8 {
+        *info.add(1) = 0;
+    }
+    1
+}
+
+/// `GetPointerType` : tout pointeur est la souris (PT_MOUSE).
+unsafe extern "win64" fn GetPointerType(_id: u32, kind: *mut u32) -> i32 {
+    if kind.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *kind = 4;
+    1
+}
+
+/// `SystemParametersInfoForDpi` : mêmes valeurs que SystemParametersInfoW
+/// (les métriques sont déjà celles de l'échelle de la session).
+unsafe extern "win64" fn SystemParametersInfoForDpi(
+    action: u32,
+    param: u32,
+    data: *mut std::ffi::c_void,
+    winini: u32,
+    _dpi: u32,
+) -> i32 {
+    crate::dlls::user32::system_parameters_info_w(action, param, data, winini)
+}
+
 pub fn user32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "RegisterPowerSettingNotification" => fn RegisterPowerSettingNotification,
+        "UnregisterPowerSettingNotification" => fn UnregisterPowerSettingNotification,
+        "EnableNonClientDpiScaling" => fn WindowOk,
+        "RegisterTouchWindow" => fn WindowOk2,
+        "UnregisterTouchWindow" => fn WindowOk,
+        "SetWindowDisplayAffinity" => fn WindowOk2,
+        "RegisterPointerDeviceNotifications" => fn WindowOk2,
+        "IsWindowArranged" => fn IsWindowArranged,
+        "ChangeWindowMessageFilterEx" => fn ChangeWindowMessageFilterEx,
+        "GetPointerType" => fn GetPointerType,
+        "SystemParametersInfoForDpi" => fn SystemParametersInfoForDpi,
         "GetDisplayConfigBufferSizes" => fn GetDisplayConfigBufferSizes,
         "QueryDisplayConfig" => fn QueryDisplayConfig,
         "DisplayConfigGetDeviceInfo" => fn DisplayConfigGetDeviceInfo,
@@ -1820,6 +1945,7 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         ("uxtheme", uxtheme_exports()),
         ("user32", user32_exports()),
         ("ole32", ole32_exports()),
+        ("wtsapi32", wtsapi32_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -2120,6 +2246,35 @@ mod tests {
             tgt[4..8].copy_from_slice(&40u32.to_le_bytes());
             assert_eq!(DisplayConfigGetDeviceInfo(tgt.as_mut_ptr()), 87);
         }
+    }
+
+    #[test]
+    fn notifications_de_session() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            assert_eq!(WTSRegisterSessionNotification(0x1234, 0), 1);
+            assert_eq!(WTSRegisterSessionNotificationEx(0, 0x1234, 1), 1);
+            assert_eq!(WTSUnRegisterSessionNotification(0x1234), 1);
+            assert_eq!(WTSRegisterSessionNotification(0, 0), 0);
+            let a = RegisterPowerSettingNotification(0x1234, 0, 0);
+            let b = RegisterPowerSettingNotification(0x1234, 0, 0);
+            assert!(a != 0 && b != 0 && a != b);
+            let mut kind = 0u32;
+            assert_eq!(GetPointerType(1, &mut kind), 1);
+            assert_eq!(kind, 4);
+            let mut filter = [8u32, 9];
+            assert_eq!(
+                ChangeWindowMessageFilterEx(0x1234, 0x4a, 1, filter.as_mut_ptr()),
+                1
+            );
+            assert_eq!(filter[1], 0);
+        }
+        // Trouvées par GetProcAddress à côté de celles de sandbox_dlls.
+        let all = all();
+        let wts: Vec<_> = all.iter().filter(|(n, _)| *n == "wtsapi32").collect();
+        assert!(wts
+            .iter()
+            .any(|(_, e)| e.contains_key("WTSRegisterSessionNotification")));
     }
 
     #[test]
