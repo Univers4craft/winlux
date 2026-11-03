@@ -36,7 +36,13 @@ case "${1:-explorer}" in
     explorer|settings)
         export WINLUX_SHELL_APP=$1
         if test "$1" = settings && test -n "${2:-}"; then
-            case "$2" in *[!0-9]*) exit 2 ;; esac
+            # Nom de page (about, display…) : traduit par winlux-settings.
+            case "$2" in
+                *[!0-9]*)
+                    case "$2" in *[!A-Za-z0-9:_-]*) exit 2 ;; esac
+                    test "${WINLUX_LEGACY_SETTINGS:-0}" != 1 || exit 2
+                    exec /usr/bin/python3 /usr/bin/winlux-settings "$2" ;;
+            esac
             export WINLUX_SETTINGS_PAGE=$2
         fi
         if test "$1" = explorer && test -n "${2:-}"; then
