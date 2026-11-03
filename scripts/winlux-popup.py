@@ -878,6 +878,10 @@ class Popup(Gtk.Application):
         self.light.connect("value-changed",self.change_brightness)
         self.light_timer=0
         self.light_row.pack_start(self.light,True,True,0)
+        # Valeur affichée à droite, comme le volume.
+        self.light_value=self.label("",width_chars=4,xalign=1)
+        self.light_value.set_name("winlux-brightness-value")
+        self.light_row.pack_start(self.light_value,False,False,0)
         self.light_row.set_no_show_all(True)
         body.pack_start(self.light_row,False,False,4)
         # Volume : même réglage que le panneau Son, flèche vers le mélangeur.
@@ -1024,6 +1028,7 @@ class Popup(Gtk.Application):
             subprocess.Popen(["winlux-shell-app","settings","22"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def change_brightness(self,scale):
+        self.light_value.set_text(f"{round(scale.get_value())}")
         if self.updating:return
         if self.light_timer:GLib.source_remove(self.light_timer)
         self.light_timer=GLib.timeout_add(120,self.set_brightness)
@@ -1054,7 +1059,7 @@ class Popup(Gtk.Application):
         level=state.get("brightness")
         reveal(self.light_row,level is not None)
         if level is not None and not self.light_timer and not self.light.get_state_flags() & Gtk.StateFlags.ACTIVE:
-            self.updating=True;self.light.set_value(max(1,level));self.updating=False
+            self.updating=True;self.light.set_value(max(5,level));self.light_value.set_text(f"{max(5,level)}");self.updating=False
         return False
 
     def refresh_quick(self):

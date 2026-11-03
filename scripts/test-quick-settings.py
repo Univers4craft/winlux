@@ -116,6 +116,7 @@ assert laptop.tiles["wifi"][0].get_active() and laptop.tiles["bluetooth"][0].get
 assert laptop.tiles["wifi"][1] is not None and laptop.tiles["airplane"][1] is None, "Flèche de détail sur Wi-Fi seulement"
 assert not laptop.tiles["airplane"][0].get_active() and not laptop.tiles["saver"][0].get_active()
 assert laptop.light_row.get_no_show_all() and laptop.light_row.get_visible() and round(laptop.light.get_value()) == 40
+assert laptop.light_value.get_text() == "40", "valeur de la luminosité affichée, comme le volume"
 laptop.refresh_quick()
 assert laptop.battery_button.get_visible() and laptop.battery_text.get_text() == "76 %"
 
