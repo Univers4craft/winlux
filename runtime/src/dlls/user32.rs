@@ -24,9 +24,38 @@ fn now_tick() -> u32 {
         .unwrap_or(0)
 }
 
+// ATOM de classe : chaque nom reçoit le sien (0xC000 et plus, comme les
+// atomes de chaînes de Windows). Chromium (Electron) passe ensuite
+// MAKEINTATOM(atome) à CreateWindowExW au lieu du nom.
+fn class_atoms() -> &'static std::sync::Mutex<Vec<String>> {
+    static ATOMS: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    ATOMS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn class_atom(name: &str) -> u16 {
+    let mut atoms = class_atoms().lock().unwrap_or_else(|e| e.into_inner());
+    let index = match atoms.iter().position(|n| n.eq_ignore_ascii_case(name)) {
+        Some(i) => i,
+        None => {
+            atoms.push(name.to_string());
+            atoms.len() - 1
+        }
+    };
+    0xC000u16.wrapping_add(index as u16)
+}
+
+fn class_name_of_atom(atom: usize) -> String {
+    let atoms = class_atoms().lock().unwrap_or_else(|e| e.into_inner());
+    atom.checked_sub(0xC000)
+        .and_then(|i| atoms.get(i).cloned())
+        .unwrap_or_else(|| format!("#{atom}"))
+}
+
 unsafe fn read_class_name_a(p: *const u8) -> String {
     if p.is_null() {
         String::new()
+    } else if (p as usize) < 0x1_0000 {
+        class_name_of_atom(p as usize)
     } else {
         crate::dlls::cstr(p)
     }
@@ -35,6 +64,8 @@ unsafe fn read_class_name_a(p: *const u8) -> String {
 unsafe fn read_class_name_w(p: *const u16) -> String {
     if p.is_null() {
         String::new()
+    } else if (p as usize) < 0x1_0000 {
+        class_name_of_atom(p as usize)
     } else {
         crate::dlls::wstr(p)
     }
@@ -52,20 +83,17 @@ unsafe fn register_class_common(
         crate::process::set_last_error(87);
         return 0;
     }
-    if gui::register_class(
+    // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
+    // classe ; on rend son atome.
+    gui::register_class(
         &name,
         ClassInfo {
             wnd_proc,
             background,
             instance,
         },
-    ) {
-        // ATOM : petit entier stable, jamais nul.
-        1
-    } else {
-        // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la classe.
-        1
-    }
+    );
+    class_atom(&name) as usize
 }
 
 pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
@@ -129,6 +157,12 @@ unsafe fn create_window_common(
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
         return 0;
     };
+    // Comme Windows : une fenêtre WS_CHILD sans parent est refusée, au lieu
+    // de devenir une fenêtre isolée sans titre dans la barre des tâches.
+    if style & WS_CHILD != 0 && parent == 0 {
+        crate::process::set_last_error(1406); // ERROR_TLW_WITH_WSCHILD
+        return 0;
+    }
     let hwnd = gui::alloc_hwnd();
     // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut. Un contrôle
     // enfant garde la taille demandée, même nulle (barre d'état, flèches
@@ -197,6 +231,33 @@ unsafe fn create_window_common(
         },
     );
 
+    // La fenêtre X existe avant WM_CREATE, comme la HWND sous Windows : un
+    // programme y crée souvent ses enfants (panneaux, barres d'outils de
+    // 7-Zip). Créée après, chaque enfant serait devenu une fenêtre isolée,
+    // sans titre, dans la barre des tâches, et le parent serait resté blanc.
+    // Elle n'est montrée qu'après WM_CREATE.
+    with_backend(|b| {
+        if child {
+            b.create_child_window(hwnd, parent, rect);
+            // Win32 : un nouvel enfant passe derrière ses voisins (le premier
+            // créé reste devant). Les contrôles de fond (cadres de groupe,
+            // onglets), transparents sous Windows mais opaques en X11,
+            // restent tout au fond pour ne jamais masquer leur contenu.
+            b.lower_window(hwnd);
+            for sibling in gui::child_windows(parent) {
+                if sibling != hwnd && super::controls::is_backdrop(sibling) {
+                    b.lower_window(sibling);
+                }
+            }
+        } else {
+            b.create_window(hwnd, &title, rect);
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+                // Menu surgissant : ni cadre ni placement du gestionnaire.
+                b.set_popup(hwnd);
+            }
+        }
+    });
+
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
     let nc = crate::dlls::gui::call_wndproc(
@@ -223,34 +284,23 @@ unsafe fn create_window_common(
         return 0;
     }
 
-    // WM_CREATE a pu déplacer la fenêtre (SetWindowPos) : on crée la
-    // fenêtre X à sa place actuelle.
+    // WM_CREATE a pu déplacer la fenêtre ou la montrer (SetWindowPos,
+    // ShowWindow) : la fenêtre X suit sa place actuelle.
+    // (Certains contrôles changent leur taille sans SetWindowPos, comme la
+    // COMBOBOX fermée.)
+    let initial = rect;
     let rect = gui::window_rect(hwnd).unwrap_or(rect);
+    let shown = gui::is_window_visible(hwnd);
     let (w, h) = (rect.width(), rect.height());
     with_backend(|b| {
-        if child {
-            b.create_child_window(hwnd, parent, rect);
-            // Win32 : un nouvel enfant passe derrière ses voisins (le premier
-            // créé reste devant). Les contrôles de fond (cadres de groupe,
-            // onglets), transparents sous Windows mais opaques en X11,
-            // restent tout au fond pour ne jamais masquer leur contenu.
-            b.lower_window(hwnd);
-            for sibling in gui::child_windows(parent) {
-                if sibling != hwnd && super::controls::is_backdrop(sibling) {
-                    b.lower_window(sibling);
-                }
-            }
-        } else {
-            b.create_window(hwnd, &title, rect);
-            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
-                // Menu surgissant : ni cadre ni placement du gestionnaire.
-                b.set_popup(hwnd);
-            }
+        if rect != initial {
+            b.set_window_rect(hwnd, rect);
         }
-        if visible {
+        if shown {
             b.show_window(hwnd, true);
         }
     });
+    let visible = shown;
 
     // WM_SIZE puis, si visible, demande de peinture.
     gui::post_to_window(
@@ -409,6 +459,22 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         };
         let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
+            // Fin de boucle headless : comme pour un vrai WM_QUIT, le MSG est
+            // renseigné (wParam 0). Sinon `ExitProcess(msg.wParam)` reprenait
+            // le wParam du dernier message, l'identifiant d'un minuteur par
+            // exemple, et le programme sortait au hasard avec le code 1.
+            write_msg(
+                out,
+                &gui::Msg {
+                    hwnd: 0,
+                    message: gui::WM_QUIT,
+                    wparam: 0,
+                    lparam: 0,
+                    time: 0,
+                    pt: Default::default(),
+                    l_private: 0,
+                },
+            );
             return 0;
         }
         // WM_TIMER est le message le moins prioritaire, comme sous Windows :
@@ -1042,6 +1108,11 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         4 => 4,                               // SM_CYBORDER
         7 => 32,                              // SM_CYHSCROLL
         8 => 16,                              // SM_CYVSCROLL
+        19 => 1,                              // SM_MOUSEPRESENT
+        23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
+        36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        43 => 3,                              // SM_CMOUSEBUTTONS
+        75 => 1,                              // SM_MOUSEWHEELPRESENT
         90 => 96,                             // LOGPIXELSX
         91 => 96,                             // LOGPIXELSY
         _ => 0,
@@ -1447,7 +1518,14 @@ pub extern "win64" fn get_parent(hwnd: usize) -> usize {
 }
 
 pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
-    gui::set_window_parent(hwnd, new_parent).unwrap_or(0)
+    let old = gui::set_window_parent(hwnd, new_parent).unwrap_or(0);
+    if new_parent != 0 && new_parent != old {
+        // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
+        // ReBar, panneaux déplacés d'une fenêtre à l'autre).
+        let rect = gui::window_rect(hwnd).unwrap_or_default();
+        with_backend(|b| b.reparent_window(hwnd, new_parent, rect));
+    }
+    old
 }
 
 // =====================================================================
@@ -1576,20 +1654,7 @@ pub extern "win64" fn map_virtual_key_ex_w(code: u32, map_type: u32, _hkl: usize
 }
 
 fn map_virtual_key_impl(code: u32, map_type: u32) -> u32 {
-    // Mappage simplifié VK <-> scan code
-    match map_type {
-        0 => code, // MAPVK_VK_TO_VSC
-        1 => code, // MAPVK_VSC_TO_VK
-        2 => {
-            if (0x30..=0x39).contains(&code) || (0x41..=0x5A).contains(&code) {
-                code
-            } else {
-                0
-            }
-        }
-        3 => code, // MAPVK_VSC_TO_VK_EX
-        _ => 0,
-    }
+    crate::intl::keymap::map_virtual_key(crate::intl::keymap::current_klid(), code, map_type)
 }
 
 pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
@@ -1650,11 +1715,14 @@ pub extern "win64" fn show_cursor(show: i32) -> i32 {
 }
 
 pub extern "win64" fn get_double_click_time() -> u32 {
-    500 // Valeur Windows par défaut
+    // Paramètres > Souris (500 ms par défaut, comme Windows).
+    crate::dlls::mouse::current().double_click
 }
 
 pub extern "win64" fn swap_mouse_button(_swap: i32) -> i32 {
-    0 // Pas de swap
+    // Les boutons sont déjà inversés par libinput quand le réglage gaucher est
+    // actif : on renvoie l'état précédent sans le modifier pour tout le bureau.
+    i32::from(crate::dlls::mouse::current().swap_buttons)
 }
 
 // =====================================================================
@@ -2188,6 +2256,18 @@ pub unsafe extern "win64" fn system_parameters_info_a(
             *data.cast::<i32>() = i32::from(a11y.animations);
             return 1;
         }
+        // Souris (Paramètres > Souris) : SPI_GETMOUSETRAILS, SPI_GETWHEELSCROLLLINES,
+        // SPI_GETMOUSESPEED (1 à 20) et SPI_GETWHEELSCROLLCHARS (3, comme Windows).
+        0x005E | 0x0068 | 0x0070 | 0x006C if !data.is_null() => {
+            let mouse = crate::dlls::mouse::current();
+            *data.cast::<u32>() = match action {
+                0x005E => mouse.trails,
+                0x0068 => mouse.wheel_lines,
+                0x0070 => mouse.speed,
+                _ => 3,
+            };
+            return 1;
+        }
         // SPI_GETCARETWIDTH : DWORD en pixels.
         0x2006 if !data.is_null() => {
             *data.cast::<u32>() = u32::from(a11y.caret_width);
@@ -2330,28 +2410,23 @@ pub unsafe extern "win64" fn load_image_w(
     0
 }
 
+/// LoadStringA/W : les tables de chaînes du module (voir resource.rs).
 pub unsafe extern "win64" fn load_string_a(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u8,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_a(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_string_w(
-    _instance: usize,
-    _id: u32,
+    instance: usize,
+    id: u32,
     buf: *mut u16,
     max: i32,
 ) -> i32 {
-    if !buf.is_null() && max > 0 {
-        *buf = 0;
-    }
-    0
+    super::resource::load_string_w(instance, id, buf, max)
 }
 
 pub unsafe extern "win64" fn load_accelerators_a(_instance: usize, _name: *const u8) -> usize {
@@ -2386,33 +2461,106 @@ pub extern "win64" fn get_key_name_text_w(_lparam: i32, _buf: *mut u16, _max: i3
     0
 }
 
+/// VkKeyScan(Ex) : touche et modificateurs d'un caractère dans la
+/// disposition réelle (voir intl::keymap).
 pub extern "win64" fn vk_key_scan_a(ch: u8) -> i16 {
-    ch as i16
+    let text = crate::intl::codepage::decode(crate::intl::codepage::resolve(0), &[ch], false)
+        .unwrap_or_default();
+    text.chars().next().map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
 pub extern "win64" fn vk_key_scan_w(ch: u16) -> i16 {
-    ch as i16
+    char::from_u32(ch as u32).map_or(-1, |c| {
+        crate::intl::keymap::vk_key_scan(crate::intl::keymap::current_klid(), c)
+    })
 }
 
+pub extern "win64" fn vk_key_scan_ex_a(ch: u8, _hkl: usize) -> i16 {
+    vk_key_scan_a(ch)
+}
+
+pub extern "win64" fn vk_key_scan_ex_w(ch: u16, _hkl: usize) -> i16 {
+    vk_key_scan_w(ch)
+}
+
+/// ToUnicodeEx : caractères de la touche selon la disposition réelle,
+/// touches mortes comprises (-1 puis la lettre composée).
 pub unsafe extern "win64" fn to_unicode_ex(
     vk: u32,
     scan: u32,
     state: *const u8,
     buf: *mut u16,
     buf_size: i32,
-    _flags: u32,
+    flags: u32,
     _hkl: usize,
 ) -> i32 {
-    let _ = (scan, state);
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
-    if (0x20..=0x7E).contains(&vk) {
-        *buf = vk as u16;
-        1
-    } else {
-        0
+    let mut keys = [0u8; 256];
+    if !state.is_null() {
+        std::ptr::copy_nonoverlapping(state, keys.as_mut_ptr(), 256);
     }
+    let typed = crate::intl::keymap::to_unicode(
+        crate::intl::keymap::current_klid(),
+        vk,
+        scan,
+        &keys,
+        flags,
+    );
+    let mut n = 0usize;
+    for c in &typed.chars {
+        let mut units = [0u16; 2];
+        for u in c.encode_utf16(&mut units).iter() {
+            if n < buf_size as usize {
+                *buf.add(n) = *u;
+                n += 1;
+            }
+        }
+    }
+    if n < buf_size as usize {
+        *buf.add(n) = 0;
+    }
+    typed.code
+}
+
+/// ToAscii(Ex) : comme ToUnicode, dans la page ANSI ; renvoie 1 ou 2
+/// caractères, -1 pour une touche morte.
+pub unsafe extern "win64" fn to_ascii_ex(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+    hkl: usize,
+) -> i32 {
+    let mut wide = [0u16; 4];
+    let code = to_unicode_ex(vk, scan, state, wide.as_mut_ptr(), 4, flags, hkl);
+    if code == 0 || out.is_null() {
+        return code;
+    }
+    let count = code.unsigned_abs().min(2) as usize;
+    let text = String::from_utf16_lossy(&wide[..count]);
+    let bytes = crate::intl::codepage::encode(crate::intl::codepage::resolve(0), &text, b'?', true)
+        .map(|e| e.bytes)
+        .unwrap_or_default();
+    let out = out as *mut u8;
+    for (i, b) in bytes.iter().take(2).enumerate() {
+        *out.add(i) = *b;
+    }
+    code
+}
+
+pub unsafe extern "win64" fn to_ascii(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    out: *mut u16,
+    flags: u32,
+) -> i32 {
+    to_ascii_ex(vk, scan, state, out, flags, 0)
 }
 
 pub unsafe extern "win64" fn to_unicode(
@@ -2848,6 +2996,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetKeyNameTextA"=>fn get_key_name_text_a, "GetKeyNameTextW"=>fn get_key_name_text_w,
         "VkKeyScanA"=>fn vk_key_scan_a, "VkKeyScanW"=>fn vk_key_scan_w,
         "ToUnicode"=>fn to_unicode, "ToUnicodeEx"=>fn to_unicode_ex,
+        "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
+        "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
         "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
         "GetCapture"=>fn get_capture,
@@ -2932,6 +3082,52 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de
+    /// wParam 0, pas le wParam d'un message précédent (code de sortie au
+    /// hasard de voicerecorder.exe dans la VM de validation).
+    #[test]
+    fn fin_de_boucle_headless_renseigne_wm_quit() {
+        if gui::backend_is_interactive() {
+            return;
+        }
+        let (r, message, wparam) = std::thread::spawn(|| unsafe {
+            let mut m = gui::Msg {
+                hwnd: 0,
+                message: 0x0113,
+                wparam: 1,
+                lparam: 0,
+                time: 0,
+                pt: Default::default(),
+                l_private: 0,
+            };
+            let r = get_message_a(&mut m, 0, 0, 0);
+            (r, m.message, m.wparam)
+        })
+        .join()
+        .unwrap();
+        assert_eq!((r, message, wparam), (0, gui::WM_QUIT, 0));
+    }
+
+    /// Chromium (Electron) crée ses fenêtres avec MAKEINTATOM(atome rendu
+    /// par RegisterClassExW) : chaque classe a son atome, relu en nom.
+    #[test]
+    fn atome_de_classe_relu_comme_nom() {
+        let a = class_atom("Chrome_WidgetWin_0");
+        let b = class_atom("Chrome_MessageWindow");
+        assert!(a >= 0xC000 && b >= 0xC000 && a != b);
+        assert_eq!(class_atom("chrome_widgetwin_0"), a);
+        unsafe {
+            assert_eq!(
+                read_class_name_w(a as usize as *const u16),
+                "Chrome_WidgetWin_0"
+            );
+            assert_eq!(
+                read_class_name_a(b as usize as *const u8),
+                "Chrome_MessageWindow"
+            );
+        }
+    }
 
     #[test]
     fn peek_message_rend_wm_timer_comme_get_message() {

@@ -5,9 +5,12 @@
 pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_crypto;
+pub mod advapi32_rsa;
 pub mod advapi32_services;
+pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod chromium_win32;
 pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
@@ -39,18 +42,23 @@ pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
 pub mod dinput8;
+pub mod dirwatch;
 pub mod displaymode;
+pub mod dpapi;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
+pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
+pub mod electron_win32;
 pub mod evdev;
 pub mod eventing;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
+pub mod gdi32_palette;
 pub mod gl_bindings;
 pub mod gl_legacy;
 pub mod gpu_caps;
@@ -76,9 +84,11 @@ pub mod libstdcpp;
 pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
+pub mod mfreader;
 pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
+pub mod mouse;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -111,11 +121,13 @@ pub mod shell32;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
+pub mod usp10;
 pub mod uxtheme;
 pub mod v4l2;
 pub mod va_bindings;
@@ -215,6 +227,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
+                    e.extend(chromium_win32::kernel32_exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
@@ -280,8 +293,16 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(rawinput::exports());
                     e.extend(displaymode::user32_exports());
                     e.extend(crate::intl::api::user32_exports());
+                    for (name, addr) in chromium_win32::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "shcore",
+                exports: chromium_win32::shcore_exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -296,6 +317,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(credentials::exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
+                    e.extend(chromium_win32::advapi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -455,6 +477,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "crypt32",
                 exports: crypt32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpapi",
+                exports: dpapi::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -651,6 +678,17 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: games_win32::dnsapi_exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "usp10",
+                exports: usp10::usp10_exports(),
+                handle: fake_module(),
+            },
+            // Client DHCP (WPAD de Chromium), importé par claude.exe.
+            Builtin {
+                name: "dhcpcsvc",
+                exports: electron_win32::dhcpcsvc_exports(),
+                handle: fake_module(),
+            },
         ];
         add_basics(&mut all);
         all
@@ -689,14 +727,64 @@ fn add_basics(all: &mut [Builtin]) {
         ("powrprof", games_win32::powrprof_exports()),
         ("rpcrt4", games_win32::rpcrt4_exports()),
     ];
-    for (dll, exports) in extra.into_iter().chain(games) {
+    // Fonctions relevées sur de vrais logiciels (apps_win32), en complément.
+    let apps: [(&str, Exports); 10] = [
+        ("winmm", apps_win32::winmm_exports()),
+        ("gdi32", usp10::gdi32_exports()),
+        ("kernel32", apps_win32::kernel32_exports()),
+        ("kernel32", seh::exports()),
+        ("user32", apps_win32::user32_exports()),
+        ("comctl32", apps_win32::comctl32_exports()),
+        ("shell32", apps_win32::shell32_exports()),
+        ("advapi32", apps_win32::advapi32_exports()),
+        ("msvcrt", apps_win32::crt_exports()),
+        ("ucrtbase", apps_win32::crt_exports()),
+    ];
+    // Imports de l'appli de bureau Claude (electron_win32), en complément.
+    let electron = electron_win32::all();
+    for (dll, exports) in extra.into_iter().chain(games).chain(apps).chain(electron) {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
             }
         }
     }
+    // Winsock importé par numéro d'ordre.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "ws2_32") {
+        for &(ord, name) in apps_win32::WS2_32_ORDINALS {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
+        }
+    }
+    // ?terminate@@YAXXZ est le nom décoré C++ de terminate().
+    for crt in ["msvcrt", "ucrtbase"] {
+        if let Some(b) = all.iter_mut().find(|b| b.name == crt) {
+            if let Some(&t) = b.exports.get("terminate") {
+                b.exports.entry("?terminate@@YAXXZ").or_insert(t);
+            }
+        }
+    }
     // Versions réelles qui remplacent d'anciens exports vides.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "shell32") {
+        for (name, addr) in apps_win32::shell32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "gdi32") {
+        for (name, addr) in usp10::gdi32_overrides()
+            .into_iter()
+            .chain(gdi32_palette::gdi32_overrides())
+        {
+            b.exports.insert(name, addr);
+        }
+    }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "advapi32") {
+        for (name, addr) in apps_win32::advapi32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
     if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
@@ -732,6 +820,27 @@ pub fn normalize(dll: &str) -> String {
     // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
         return "setupapi".into();
+    }
+    // combase.dll (COM et Windows Runtime depuis Windows 8) : notre ole32.
+    if base == "combase" {
+        return "ole32".into();
+    }
+    // DPI par écran (Chromium, Electron) : shcore.
+    if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
+        return "shcore".into();
+    }
+    // Contrats « downlevel » de Windows 7 : la DLL qu'ils nomment.
+    for (prefix, dll) in [
+        ("api-ms-win-downlevel-shell32-", "shell32"),
+        ("api-ms-win-downlevel-user32-", "user32"),
+        ("api-ms-win-downlevel-advapi32-", "advapi32"),
+        ("api-ms-win-downlevel-ole32-", "ole32"),
+        ("api-ms-win-downlevel-shlwapi-", "shlwapi"),
+        ("api-ms-win-downlevel-version-", "version"),
+    ] {
+        if base.starts_with(prefix) {
+            return dll.into();
+        }
     }
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();

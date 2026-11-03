@@ -128,15 +128,17 @@ now = int(time.time())
 sessions = games.data_dir() / "sessions"
 sessions.mkdir(parents=True)
 (sessions / "10-1.session").write_text(f"exe={super_jeu}\nstart={now - 4000}\nlast={now - 400}\n")
-(sessions / "11-2.session").write_text(f"exe={super_jeu}\nstart={now - 300}\nlast={now - 10}\n")
+(sessions / f"{os.getpid()}-2.session").write_text(f"exe={super_jeu}\nstart={now - 300}\nlast={now - 10}\n")
+# Processus fini depuis moins de 90 s : plus « En cours », replié dans le total.
+(sessions / "999999999-6.session").write_text(f"exe={witcher}\nstart={now - 70}\nlast={now - 10}\n")
 (sessions / "12-3.session").write_text(f"exe={witcher}\nstart={now - 1000}\nlast={now - 940}\n")
 (sessions / "13-4.session").write_text("exe=relatif.exe\nstart=1\nlast=2\n")
 (sessions / "14-5.session").write_text(f"exe={tiny}\nstart={now}\nlast={now - 50}\n")
 times = games.playtime(now)
 assert times[str(super_jeu)] == {"seconds": 3600 + 290, "last": now - 10, "running": True}, times
-assert times[str(witcher)] == {"seconds": 60, "last": now - 940, "running": False}, times
+assert times[str(witcher)] == {"seconds": 60 + 60, "last": now - 10, "running": False}, times
 assert str(tiny) not in times and "relatif.exe" not in times
-assert sorted(p.name for p in sessions.iterdir()) == ["11-2.session"], "séances finies repliées dans le total"
+assert sorted(p.name for p in sessions.iterdir()) == [f"{os.getpid()}-2.session"], "séances finies repliées dans le total"
 assert games.playtime(now) == times, "relecture identique"
 later = games.playtime(now + 500)
 assert later[str(super_jeu)] == {"seconds": 3890, "last": now - 10, "running": False}, later
@@ -201,7 +203,7 @@ print(f"OK : {len(found)} jeux détectés (GOG, itch.io, dossiers, installés, a
 if "--gtk" in sys.argv:
     games.save_cache(games.scan())
     sessions.mkdir(parents=True, exist_ok=True)
-    (sessions / "20-1.session").write_text(f"exe={witcher}\nstart={now - 9000}\nlast={now - 5}\n")
+    (sessions / f"{os.getpid()}-1.session").write_text(f"exe={witcher}\nstart={now - 9000}\nlast={now - 5}\n")
     (sessions / "21-1.session").write_text(f"exe={super_jeu}\nstart={now - 90000}\nlast={now - 80000}\n")
     games.update_config(lambda c: c.update(AUTOSCAN="0"))
     window, Gtk = games.run_window()

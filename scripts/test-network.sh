@@ -24,6 +24,8 @@ grep -q 'addr add 192.0.2.20/24 dev eth0' "$task_dir/ip.log"
 grep -q 'route replace default via 192.0.2.1 dev eth0' "$task_dir/ip.log"
 grep -q '^nameserver 192.0.2.53$' "$task_dir/etc/resolv.conf"
 test "$(grep -c '^nameserver' "$task_dir/etc/resolv.conf")" -eq 1
+# apt (compte _apt) doit pouvoir lire les serveurs DNS, même avec un umask 077.
+test "$(stat -c %a "$task_dir/etc/resolv.conf")" = 644
 if interface=eth0 ip='bad;command' sh "$root/scripts/winlux-dhcp-hook.sh" bound; then
     echo 'Malformed lease accepted' >&2; exit 1
 fi

@@ -5,7 +5,7 @@ description: Obtenga la imagen de instalación de la última versión y el cread
 
 {{download}}
 
-Los archivos vienen directamente de la página de versiones publicadas del proyecto en GitHub. La imagen se llama, por ejemplo, `winlux-live-v0.2.15.iso`; ocupa unos 2 GB.
+Los archivos vienen directamente de la página de versiones publicadas del proyecto en GitHub. La imagen se llama, por ejemplo, `winlux-live-v0.2.18.iso`; ocupa unos 1,3 GB.
 
 ## Lo que necesita
 
@@ -46,7 +46,7 @@ Arranque la máquina virtual desde el archivo ISO y siga [la instalación](page:
 El creador de memoria USB comprueba la imagen por sí solo. Si la usa de otro modo, compare su suma SHA-256 con el archivo `.sha256` publicado junto a ella. En Linux:
 
 ```sh
-sha256sum -c winlux-live-v0.2.15.iso.sha256
+sha256sum -c winlux-live-v0.2.18.iso.sha256
 ```
 
 Las dos sumas deben coincidir; si no, vuelva a descargar la imagen.

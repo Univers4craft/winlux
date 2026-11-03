@@ -977,7 +977,7 @@ fn system_brushes() -> &'static Mutex<HashMap<usize, usize>> {
 /// Compteur d'handles invités : HDC à partir de `0x0011_0000`, objets GDI à
 /// partir de `0x0021_0000`. Les valeurs faibles restent réservées aux objets
 /// « stock » (`GetStockObject` renvoie `index + 1`).
-fn next_handle(base: usize) -> usize {
+pub(crate) fn next_handle(base: usize) -> usize {
     static A: OnceLock<Mutex<usize>> = OnceLock::new();
     let a = A.get_or_init(|| Mutex::new(0x0011_0000));
     let mut v = lock(a);
@@ -1898,6 +1898,9 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// SetParent entre deux fenêtres connues : la sous-fenêtre suit son
+    /// nouveau parent, à la place `rect` (coordonnées client du parent).
+    fn reparent_window(&mut self, _hwnd: usize, _parent: usize, _rect: Rect) {}
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}

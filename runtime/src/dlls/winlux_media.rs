@@ -497,6 +497,8 @@ pub struct StreamInfo {
     /// Rapport d'aspect des pixels (numérateur, dénominateur).
     pub sar: (u32, u32),
     pub channels: u32,
+    /// Fréquence d'échantillonnage (audio), en Hz.
+    pub sample_rate: u32,
     pub fps_x100: u32,
     pub attached_pic: bool,
     pub default: bool,
@@ -573,6 +575,7 @@ impl MediaInfo {
                 height: num("height"),
                 sar: ratio(&get(&format!("{p}.sample_aspect_ratio"))).unwrap_or((1, 1)),
                 channels: num("channels"),
+                sample_rate: num("sample_rate"),
                 fps_x100: fps,
                 attached_pic: num("disposition.attached_pic") == 1,
                 default: num("disposition.default") == 1,

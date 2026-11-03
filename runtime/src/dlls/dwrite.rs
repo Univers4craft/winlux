@@ -243,6 +243,19 @@ fn match_face(fams: &[Family], name: &str, weight: u32, italic: bool) -> Option<
     fams.first().map(|f| pick(f, weight, italic))
 }
 
+/// Face TrueType retenue pour une police GDI (nom, graisse, italique), avec
+/// les mêmes remplacements que DirectWrite. Les polices ajoutées par
+/// AddFontResource(Ex) sont prises en compte.
+pub(crate) fn gdi_face(name: &str, weight: u32, italic: bool) -> Option<FaceInfo> {
+    let added: Vec<FaceInfo> = super::gdi32_fonts::all_faces()
+        .iter()
+        .filter(|f| !f.cff)
+        .map(info)
+        .collect();
+    let fams = group(added.into_iter().chain(super::lock(extra()).clone()));
+    match_face(&fams, name, weight, italic)
+}
+
 /// Police de secours pour un caractère absent de la police demandée.
 fn fallback_for(
     fams: &[Family],

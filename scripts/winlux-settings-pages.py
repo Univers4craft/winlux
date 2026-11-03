@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 
 def _interface_lang():
@@ -40,6 +40,61 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    "Luminosité et couleur": ("Brightness & color", "Brillo y color", "Helligkeit und Farbe"),
+    "Luminosité": ("Brightness", "Brillo", "Helligkeit"),
+    "Luminosité de l’écran, en pourcentage": ("Screen brightness, as a percentage", "Brillo de la pantalla, en porcentaje",
+                                              "Bildschirmhelligkeit in Prozent"),
+    "Écran réglé par son câble (DDC/CI).": ("Monitor adjusted through its cable (DDC/CI).",
+                                            "Pantalla ajustada por su cable (DDC/CI).", "Bildschirm über das Kabel geregelt (DDC/CI)."),
+    "Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.": (
+        "This screen has no adjustable backlight: Winlux dims the picture instead.",
+        "Esta pantalla no tiene retroiluminación ajustable: Winlux oscurece la imagen.",
+        "Dieser Bildschirm hat keine regelbare Hintergrundbeleuchtung: Winlux dunkelt das Bild ab."),
+    "Disposition": ("Arrangement", "Disposición", "Anordnung"),
+    "Écran": ("Display", "Pantalla", "Bildschirm"),
+    "Plusieurs écrans": ("Multiple displays", "Varias pantallas", "Mehrere Bildschirme"),
+    "Étendre ces écrans": ("Extend these displays", "Extender estas pantallas", "Diese Anzeigen erweitern"),
+    "Dupliquer ces écrans": ("Duplicate these displays", "Duplicar estas pantallas", "Diese Anzeigen duplizieren"),
+    "Afficher seulement sur {name}": ("Show only on {name}", "Mostrar solo en {name}", "Nur auf {name} anzeigen"),
+    "Écran principal": ("Main display", "Pantalla principal", "Hauptanzeige"),
+    "écran intégré": ("built-in display", "pantalla integrada", "integrierte Anzeige"),
+    "Définition de l’écran": ("Display resolution", "Resolución de pantalla", "Bildschirmauflösung"),
+    "Fréquence d’actualisation": ("Refresh rate", "Frecuencia de actualización", "Bildwiederholfrequenz"),
+    "Plus elle est élevée, plus les mouvements sont fluides (jeux, défilement).": ("The higher it is, the smoother motion looks (games, scrolling).", "Cuanto más alta, más fluidos son los movimientos (juegos, desplazamiento).", "Je höher, desto flüssiger wirken Bewegungen (Spiele, Bildlauf)."),
+    "La nouvelle échelle s’applique complètement à la prochaine ouverture de session.": ("The new scale fully applies at the next sign-in.", "La nueva escala se aplica por completo en el próximo inicio de sesión.", "Die neue Skalierung gilt vollständig ab der nächsten Anmeldung."),
+    # Clavier tactile et souris avancée
+    "Icône du clavier tactile": ("Touch keyboard icon", "Icono del teclado táctil", "Symbol der Bildschirmtastatur"),
+    "Dans la barre des tâches. « Sans clavier physique » la montre quand aucun clavier n’est branché.": ("On the taskbar. “Without a physical keyboard” shows it when no keyboard is connected.", "En la barra de tareas. «Sin teclado físico» lo muestra cuando no hay ningún teclado conectado.", "In der Taskleiste. „Ohne physische Tastatur“ zeigt es, wenn keine Tastatur angeschlossen ist."),
+    "Sans clavier physique": ("Without a physical keyboard", "Sin teclado físico", "Ohne physische Tastatur"),
+    "Toujours": ("Always", "Siempre", "Immer"),
+    "Ouvrir le clavier tactile": ("Open the touch keyboard", "Abrir el teclado táctil", "Bildschirmtastatur öffnen"),
+    "Bouton principal de la souris": ("Primary mouse button", "Botón principal del mouse", "Primäre Maustaste"),
+    "Gauche": ("Left", "Izquierdo", "Links"),
+    "Droit": ("Right", "Derecho", "Rechts"),
+    "Améliorer la précision du pointeur": ("Enhance pointer precision", "Mejorar la precisión del puntero", "Zeigerbeschleunigung verbessern"),
+    "Le pointeur va plus loin quand la souris bouge vite.": ("The pointer travels further when the mouse moves fast.", "El puntero llega más lejos cuando el mouse se mueve rápido.", "Der Zeiger bewegt sich weiter, wenn die Maus schnell bewegt wird."),
+    "Défilement": ("Scrolling", "Desplazamiento", "Bildlauf"),
+    "Lignes à faire défiler à chaque cran de la molette": ("Lines to scroll at a time", "Líneas que se desplazan cada vez", "Zeilen pro Bildlauf"),
+    "Programmes Windows ; 3 par défaut.": ("Windows programs; 3 by default.", "Programas de Windows; 3 de forma predeterminada.", "Windows-Programme; standardmäßig 3."),
+    "Sens de défilement inversé": ("Reverse scrolling direction", "Invertir la dirección de desplazamiento", "Bildlaufrichtung umkehren"),
+    "Tourner la molette vers le bas fait monter le contenu.": ("Turning the wheel down moves the content up.", "Girar la rueda hacia abajo sube el contenido.", "Das Mausrad nach unten drehen bewegt den Inhalt nach oben."),
+    "Double-clic": ("Double-click", "Doble clic", "Doppelklick"),
+    "Vitesse du double-clic": ("Double-click speed", "Velocidad del doble clic", "Doppelklickgeschwindigkeit"),
+    "Plus lente à gauche, plus rapide à droite.": ("Slower to the left, faster to the right.", "Más lenta a la izquierda, más rápida a la derecha.", "Links langsamer, rechts schneller."),
+    "Double-cliquez sur le dossier pour tester.": ("Double-click the folder to test.", "Haga doble clic en la carpeta para probar.", "Doppelklicken Sie zum Testen auf den Ordner."),
+    "Zone de test": ("Test area", "Área de prueba", "Testbereich"),
+    "Double-cliquez sur le dossier : il s’ouvre ou se ferme si la vitesse vous convient.": ("Double-click the folder: it opens or closes if the speed suits you.", "Haga doble clic en la carpeta: se abre o se cierra si la velocidad le conviene.", "Doppelklicken Sie auf den Ordner: Er öffnet oder schließt sich, wenn die Geschwindigkeit passt."),
+    "Pointeur": ("Pointer", "Puntero", "Zeiger"),
+    "Couleur du pointeur": ("Pointer colour", "Color del puntero", "Zeigerfarbe"),
+    "Thème du système": ("System theme", "Tema del sistema", "Systemdesign"),
+    "Blanc": ("White", "Blanco", "Weiß"),
+    "Noir": ("Black", "Negro", "Schwarz"),
+    "Vert vif": ("Lime", "Verde lima", "Hellgrün"),
+    "Traînée du pointeur": ("Pointer trails", "Rastro del puntero", "Mausspur"),
+    "Des copies du pointeur le suivent quand il bouge : il se repère mieux sur un grand écran.": ("Copies of the pointer follow it as it moves, so it is easier to find on a large screen.", "Copias del puntero lo siguen al moverse: se localiza mejor en una pantalla grande.", "Kopien des Zeigers folgen ihm beim Bewegen, so findet man ihn auf großen Bildschirmen leichter."),
+    "Aucune": ("None", "Ninguno", "Keine"),
+    "Courte": ("Short", "Corto", "Kurz"),
+    "Longue": ("Long", "Largo", "Lang"),
     'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Votre compte': ('Your account', 'Su cuenta', 'Ihr Konto'),
     'Autres utilisateurs': ('Other users', 'Otros usuarios', 'Andere Benutzer'),
@@ -113,6 +168,8 @@ _TR = {
     'Arrêter le partage': ('Stop sharing', 'Dejar de compartir', 'Freigabe beenden'),
     'Aucun programme ne démarre avec la session.': ('No program starts with the session.', 'Ningún programa se inicia con la sesión.', 'Kein Programm startet mit der Sitzung.'),
     'Aucun réseau Wi-Fi visible pour l’instant.': ('No Wi-Fi network visible right now.', 'Ninguna red Wi-Fi visible por ahora.', 'Zurzeit ist kein WLAN sichtbar.'),
+    'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
+    'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
@@ -277,7 +334,20 @@ _TR = {
     "Clair": ("Light", "Claro", "Hell"),
     "Couleur d’accentuation": ("Accent color", "Color de énfasis", "Akzentfarbe"),
     "Personnalisée…": ("Custom…", "Personalizado…", "Benutzerdefiniert…"),
+    "Icônes du bureau": ("Desktop icons", "Iconos del escritorio", "Desktopsymbole"),
+    "Corbeille": ("Recycle Bin", "Papelera de reciclaje", "Papierkorb"),
+    "Ce PC": ("This PC", "Este equipo", "Dieser PC"),
+    "Explorateur": ("File Explorer", "Explorador de archivos", "Explorer"),
+    "Documents": ("Documents", "Documentos", "Dokumente"),
     "Barre des tâches": ("Taskbar", "Barra de tareas", "Taskleiste"),
+    "Ce PC (système de fichiers)": ("This PC (file system)", "Este equipo (sistema de archivos)", "Dieser PC (Dateisystem)"),
+    "Dossier de l’utilisateur": ("User's files", "Archivos del usuario", "Benutzerdateien"),
+    "Lecteurs amovibles et réseau": ("Removable and network drives", "Unidades extraíbles y de red", "Wechsel- und Netzlaufwerke"),
+    "Réorganiser les icônes": ("Arrange icons", "Organizar iconos", "Symbole anordnen"),
+    "Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci.": (
+        "Added shortcuts are removed with a right-click. Right-clicking an app in the Start menu also creates its shortcut.",
+        "Los accesos directos añadidos se quitan con un clic derecho. Un clic derecho en una aplicación del menú Inicio también crea su acceso directo.",
+        "Hinzugefügte Verknüpfungen werden per Rechtsklick entfernt. Ein Rechtsklick auf eine App im Startmenü erstellt ebenfalls ihre Verknüpfung."),
     "Taille": ("Size", "Tamaño", "Größe"),
     "Petite": ("Small", "Pequeña", "Klein"),
     "Moyenne": ("Medium", "Mediana", "Mittel"),
@@ -342,6 +412,11 @@ _TR = {
     "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
+    "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
+    "Aucun haut-parleur, casque ni micro n’est reconnu sur ce PC. Si l’ordinateur en a, son pilote ou son firmware audio manque : la page Matériel et pilotes l’installe.": (
+        "No speakers, headphones or microphone are recognized on this PC. If the computer has them, its audio driver or firmware is missing: the Hardware and drivers page installs it.",
+        "No se reconoce ningún altavoz, auricular ni micrófono en este PC. Si el equipo los tiene, falta su controlador o firmware de audio: la página Hardware y controladores lo instala.",
+        "Auf diesem PC werden keine Lautsprecher, Kopfhörer oder Mikrofone erkannt. Wenn der Computer welche hat, fehlt der Audiotreiber oder die Firmware: Die Seite Hardware und Treiber installiert sie."),
     "Entrée": ("Input", "Entrada", "Eingabe"),
     "Haut-parleurs ou casque": ("Speakers or headphones", "Altavoces o auriculares", "Lautsprecher oder Kopfhörer"),
     "Micro": ("Microphone", "Micrófono", "Mikrofon"),
@@ -529,6 +604,12 @@ _TR = {
     'IA locale : rien ne quitte ce PC. Ce qu’elle lit (recherche de fichier, journal) vous est montré.': ('Local AI: nothing leaves this PC. What it reads (file search, log) is shown to you.', 'IA local: nada sale de este equipo. Lo que lee (búsqueda de archivos, registro) se le muestra.', 'Lokale KI: Nichts verlässt diesen PC. Was sie liest (Dateisuche, Protokoll), wird Ihnen angezeigt.'),
     'Pour les trois, chaque action (réglage, dossier, page des Paramètres) attend votre clic sur « Faire ».': ('For all three, each action (setting, folder, Settings page) waits for your click on “Do it”.', 'Para los tres, cada acción (ajuste, carpeta, página de Configuración) espera su clic en «Hacerlo».', 'Bei allen dreien wartet jede Aktion (Einstellung, Ordner, Einstellungsseite) auf Ihren Klick auf „Ausführen“.'),
     'Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.': ('The sign-ins to your accounts are kept in your home folder, readable only by you.', 'Los inicios de sesión de sus cuentas se guardan en su carpeta personal, legibles solo por usted.', 'Die Anmeldungen bei Ihren Konten werden in Ihrem persönlichen Ordner gespeichert, nur für Sie lesbar.'),
+    'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
+    'Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant.': ('Winlux neither ships nor imposes any store. The ones you turn on are added to the Store: what they need is downloaded from the publisher and checked, then the store appears in the Start menu. Without a connection, it is added at the next startup.', 'Winlux no incluye ni impone ninguna tienda. Las que active se añaden a la Tienda: lo necesario se descarga del editor y se comprueba, y la tienda aparece en el menú Inicio. Sin conexión, se añade en el siguiente arranque.', 'Winlux liefert und erzwingt keinen Store. Die von Ihnen aktivierten werden dem Store hinzugefügt: Das Nötige wird beim Herausgeber heruntergeladen und geprüft, dann erscheint der Store im Startmenü. Ohne Verbindung wird er beim nächsten Start hinzugefügt.'),
+    'Logiciels Windows': ('Windows software', 'Programas de Windows', 'Windows-Programme'),
+    'Logiciels Linux': ('Linux software', 'Programas de Linux', 'Linux-Programme'),
+    'En attente du réseau : ajoutée au prochain démarrage.': ('Waiting for the network: added at the next startup.', 'Esperando la red: se añadirá en el próximo arranque.', 'Wartet auf das Netzwerk: wird beim nächsten Start hinzugefügt.'),
+    'Ouvrir le Store': ('Open the Store', 'Abrir la Tienda', 'Store öffnen'),
     'Désactivé, un assistant n’apparaît nulle part et rien ne tourne.': ('When off, an assistant appears nowhere and nothing runs.', 'Desactivado, un asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint ein Assistent nirgends und nichts läuft.'),
 }
 
@@ -554,7 +635,10 @@ PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
 PAGE_RECOVERY = 31
 PAGE_CLIPBOARD = 32
+PAGE_HARDWARE = 34
 PAGE_ACCOUNTS = 33
+PAGE_WIFI = 35
+PAGE_CERTS = 36
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -643,6 +727,9 @@ TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
             ("clickfinger", "Clic droit à deux doigts", "Sinon, appui dans le coin inférieur droit."),
             ("natural", "Défilement naturel", "Le contenu suit les doigts, comme sur un téléphone."),
             ("dwt", "Désactiver pendant la frappe", "Évite les clics involontaires avec la paume."))
+OSK_ICON = (("auto", "Sans clavier physique"), ("always", "Toujours"), ("never", "Jamais"))
+POINTER_COLORS = (("default", "Thème du système"), ("white", "Blanc"), ("black", "Noir"), ("lime", "Vert vif"))
+POINTER_TRAILS = (("0", "Aucune"), ("3", "Courte"), ("5", "Moyenne"), ("7", "Longue"))
 CPU_PROFILES = {"performance": "Performances", "balanced": "Équilibré", "powersave": "Économie d’énergie"}
 CPU_HYBRID = (("auto", "Automatique (recommandé)"), ("heavy", "Programmes lourds sur les P-cores"),
               ("performance", "Toujours les P-cores"), ("efficiency", "Toujours les E-cores"))
@@ -669,6 +756,17 @@ def have(command):
     return shutil.which(command) is not None
 
 
+# Icônes spéciales du bureau (xfdesktop) : clé, libellé, présence par défaut.
+DESKTOP_ICONS = [("trash", "Corbeille"), ("filesystem", "Ce PC (système de fichiers)"),
+                 ("home", "Dossier de l’utilisateur"), ("removable", "Lecteurs amovibles et réseau")]
+DESKTOP_ICON_DEFAULTS = {"trash": True, "filesystem": False, "home": False, "removable": False}
+
+
+def desktop_icon_shown(key):
+    value = xfconf_get("xfce4-desktop", f"/desktop-icons/file-icons/show-{key}")
+    return DESKTOP_ICON_DEFAULTS[key] if value is None else value == "true"
+
+
 def ambiance_tool():
     """winlux-ambiance installé, ou le script du dépôt à côté de celui-ci."""
     if have("winlux-ambiance"): return ["winlux-ambiance"]
@@ -676,9 +774,45 @@ def ambiance_tool():
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if have("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def brightness_state(tool=None):
+    tool = tool or brightness_tool()
+    if tool is None: return {}
+    result = run(tool + ["get"], timeout=10)
+    try: return json.loads((result.stdout if result else "").strip().splitlines()[-1])
+    except (IndexError, ValueError): return {}
+
+
 def clipboard_tool():
     if have("winlux-clipboard"): return ["winlux-clipboard"]
     script = Path(__file__).resolve().with_name("winlux-clipboard.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+DISPLAY_SCALES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
+
+
+def rate_label(rate):
+    """« 143.97 » → « 144 Hz », comme Windows."""
+    try: return f"{round(float(rate))} Hz"
+    except ValueError: return rate
+
+
+def osk_tool():
+    if have("winlux-osk"): return ["winlux-osk"]
+    script = Path(__file__).resolve().with_name("winlux-osk.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def mouse_tool():
+    if have("winlux-mouse"): return ["winlux-mouse"]
+    script = Path(__file__).resolve().with_name("winlux-mouse.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
@@ -694,10 +828,10 @@ def ambiance_status():
     return keyvals(result.stdout) if result else {}
 
 
-def run(args, timeout=5):
+def run(args, timeout=5, env=None):
     """Commande courte et silencieuse ; None si elle est absente ou échoue."""
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     return result if result.returncode == 0 else None
@@ -813,8 +947,14 @@ def reg_set_dword(key, name, value):
 
 # ── Son (PipeWire via pactl) ────────────────────────────────────────────────
 
+def pactl_env():
+    """pactl en locale C : en français, son JSON écrivait les nombres à virgule
+    (« "balance":0,00 »), JSON invalide, et ses libellés changent de forme."""
+    return dict(os.environ, LC_ALL="C", LANG="C")
+
+
 def pactl_list(kind):
-    result = run(["pactl", "-f", "json", "list", kind], timeout=2) if have("pactl") else None
+    result = run(["pactl", "-f", "json", "list", kind], timeout=2, env=pactl_env()) if have("pactl") else None
     if not result: return []
     try: items = json.loads(result.stdout or "[]")
     except ValueError: return []
@@ -822,7 +962,7 @@ def pactl_list(kind):
 
 
 def pactl_default(kind):
-    result = run(["pactl", f"get-default-{kind}"], timeout=2) if have("pactl") else None
+    result = run(["pactl", f"get-default-{kind}"], timeout=2, env=pactl_env()) if have("pactl") else None
     return result.stdout.strip() if result else ""
 
 
@@ -834,11 +974,36 @@ def volume_percent(item):
     return max(values) if values else 0
 
 
+def device_label(device):
+    """Nom lisible d'une sortie ou d'une entrée, jamais « (null) »."""
+    props = device.get("properties") or {}
+    for value in (device.get("description"), props.get("device.description"), props.get("node.description"),
+                  props.get("node.nick"), props.get("alsa.card_name")):
+        if isinstance(value, str) and value.strip() and value.strip() not in ("(null)", "null"):
+            return value.strip()
+    return str(device.get("name") or "?")
+
+
+def placeholder_device(device):
+    """Sortie ou entrée factice de PipeWire (« auto_null », « Dummy Output ») :
+    elle n'existe que quand aucune carte son n'est reliée."""
+    props = device.get("properties") or {}
+    name = str(device.get("name", ""))
+    if name in ("auto_null", "auto_null.monitor") or name.startswith("null"):
+        return True
+    return props.get("factory.name") == "support.null-audio-sink" and not props.get("device.api")
+
+
 def audio_devices():
-    sinks = pactl_list("sinks")
+    sinks = [s for s in pactl_list("sinks") if not placeholder_device(s)]
     sources = [s for s in pactl_list("sources")
-               if not str(s.get("name", "")).endswith(".monitor") and s.get("monitor_of_sink") in (None, "", "n/a")]
+               if not str(s.get("name", "")).endswith(".monitor") and s.get("monitor_of_sink") in (None, "", "n/a")
+               and not placeholder_device(s)]
     return sinks, sources
+
+
+def audio_server_running():
+    return have("pactl") and run(["pactl", "info"], timeout=2) is not None
 
 
 # ── Lecteurs réseau (winlux-drives) ─────────────────────────────────────────
@@ -956,8 +1121,10 @@ def wallpapers():
 def page_available(page, status=None):
     status = keyvals(read(CONTROL)) if status is None else status
     if page == PAGE_SOUND:
+        # Serveur son en marche : la page s'affiche, même sans carte reconnue,
+        # pour le dire clairement au lieu d'une « Sortie factice ».
         sinks, sources = audio_devices()
-        return bool(sinks or sources)
+        return bool(sinks or sources) or audio_server_running()
     if page == PAGE_SYSUPDATE:
         if status.get("sysupdate_apt") == "0": return False
         return have("winlux-sysupdate") and have("apt-get")
@@ -990,6 +1157,15 @@ def page_available(page, status=None):
         return assistant_module() is not None
     if page == PAGE_RECOVERY:
         module = reset_page()
+        return module is not None and module.available()
+    if page == PAGE_HARDWARE:
+        module = hardware_page()
+        return module is not None and module.available()
+    if page == PAGE_WIFI:
+        module = wifi_page()
+        return module is not None and module.available()
+    if page == PAGE_CERTS:
+        module = certificates_page()
         return module is not None and module.available()
     return True
 
@@ -1083,6 +1259,86 @@ def reset_page():
     return None
 
 
+_HARDWARE = []
+_WIFI = []
+
+
+def hardware_page():
+    """Matériel et pilotes (winlux-hardware-page, installé à côté), None si absent."""
+    if _HARDWARE: return _HARDWARE[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-hardware-page.py"), here.with_name("winlux-hardware-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_hardware_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_hardware_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _HARDWARE.append(module)
+    return module
+
+
+def wifi_page():
+    """Page Wi-Fi (winlux-wifi, installé à côté), None si absente."""
+    if _WIFI: return _WIFI[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-wifi.py"), here.with_name("winlux-wifi")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_wifi_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_wifi_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _WIFI.append(module)
+    return module
+
+
+_CERTS = []
+
+
+def certificates_page():
+    """Page Certificats (winlux-certificates, installé à côté), None si absente."""
+    if _CERTS: return _CERTS[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-certificates.py"), here.with_name("winlux-certificates")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_certificates_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_certificates_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _CERTS.append(module)
+    return module
+
+
+def store_catalogs():
+    """Lignes de « winlux-store-catalogs --list » : id, état, plateforme, nom, résumé, site."""
+    if not have("winlux-store-catalogs"): return []
+    try:
+        out = subprocess.run(["winlux-store-catalogs", "--list"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [parts for parts in (line.split("|") for line in out.splitlines()) if len(parts) == 6]
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1112,9 +1368,11 @@ class ExtraPages:
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
-                   PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts"}
+                   PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
+                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
+                   PAGE_CERTS: "page_certificates"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
-    EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
+    EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
     def extra_page(self, page):
         """Construit la page ; False si elle n’est pas gérée ici."""
@@ -1345,11 +1603,23 @@ class ExtraPages:
             self.widget_settings()
         self.section(_t("Icônes du bureau"))
         box = self.card()
-        self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
-                           (_t("Ce PC"), lambda: self.execute("desktop-icon-computer")),
-                           (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
+        if have("xfconf-query"):
+            # Icônes du bureau d'XFCE : Windows 11 démarre avec la Corbeille seule.
+            for key, title in DESKTOP_ICONS:
+                self.switch(box, _t(title), desktop_icon_shown(key),
+                            lambda on, k=key: xfconf_set("xfce4-desktop", f"/desktop-icons/file-icons/show-{k}",
+                                                         "bool", str(on).lower()))
+        else:
+            self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
+                               (_t("Ce PC"), lambda: self.execute("desktop-icon-computer"))])
+        self.actions(box, [(_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
-        self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+        self.hint(_t("Les raccourcis ajoutés se retirent d’un clic droit. Un clic droit sur une application du menu Démarrer crée aussi son raccourci."), box)
+        if have("xfdesktop"):
+            # xfdesktop range toujours les icônes sur une grille, comme
+            # « Aligner les icônes sur la grille » de Windows : seul le
+            # rangement automatique est proposé.
+            self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
@@ -1571,12 +1841,19 @@ class ExtraPages:
 
     def page_sound(self):
         sinks, sources = audio_devices()
+        if not sinks and not sources:
+            self.section(_t("Sortie"))
+            box = self.card()
+            self.hint(_t("Aucun haut-parleur, casque ni micro n’est reconnu sur ce PC. Si l’ordinateur en a, "
+                         "son pilote ou son firmware audio manque : la page Matériel et pilotes l’installe."), box)
+            self.actions(box, [(_t("Matériel et pilotes"), lambda: self.open_page(PAGE_HARDWARE))])
+            self.watch_audio_cards()
         for kind, title, devices, default in (("sink", "Sortie", sinks, pactl_default("sink")),
                                               ("source", "Entrée", sources, pactl_default("source"))):
             if not devices: continue
             self.section(_t(title))
             box = self.card()
-            items = [(d.get("name", ""), d.get("description") or d.get("name", "")) for d in devices]
+            items = [(d.get("name", ""), device_label(d)) for d in devices]
             self.combo(box, _t("Haut-parleurs ou casque") if kind == "sink" else _t("Micro"), items, default,
                        lambda name, k=kind: run(["pactl", f"set-default-{k}", name]) and self.audio_refresh())
             device = next((d for d in devices if d.get("name") == default), devices[0])
@@ -1614,6 +1891,23 @@ class ExtraPages:
     def audio_refresh(self):
         GLib.idle_add(self.extra_refresh)
         return True
+
+    def watch_audio_cards(self):
+        """Carte reconnue plus tard (pilote installé, casque USB branché) : la
+        page se met à jour seule, sans redémarrer."""
+        if getattr(self, "_audio_watch", None): return
+
+        def check():
+            if self.page != PAGE_SOUND:
+                self._audio_watch = None
+                return False
+            sinks, sources = audio_devices()
+            if sinks or sources:
+                self._audio_watch = None
+                self.extra_refresh()
+                return False
+            return True
+        self._audio_watch = GLib.timeout_add_seconds(3, check)
 
     # ── Gestionnaire de fichiers ──
 
@@ -1670,6 +1964,9 @@ class ExtraPages:
             self.row(box, _t("Fuseau horaire"), line)
         now = GLib.DateTime.new_now_local().format("%x %X")
         self.hint(_t("Date et heure actuelles : {now}").format(now=now), box)
+        # Heure réglée automatiquement : une date fausse fait refuser tous les sites sécurisés.
+        module = certificates_page()
+        if module is not None: self.time_switch = module.time_section(self)
 
     # ── Accessibilité ──
 
@@ -1704,7 +2001,8 @@ class ExtraPages:
             # Retour au thème Winlux du compte (couleurs et accent compris).
             run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
             return
-        if theme is None: theme = "Adwaita-dark" if mode == "dark" else "Adwaita"
+        # « Adwaita-dark » n'est pas un thème GTK 3 installé (rendu clair).
+        if theme is None: theme = "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
 
     def set_pointer(self, size):
@@ -1760,8 +2058,20 @@ class ExtraPages:
         self.body.pack_start(self.programs_box, False, False, 0)
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
+        self.program_cards = {}
         for exe, name in programs:
             self.program_card(module, exe, name)
+        GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
+
+    def forget_uninstalled(self, programs_box):
+        """Un programme désinstallé (fenêtre « Applications installées ») disparaît
+        de la liste sans rouvrir la page."""
+        if programs_box is not self.programs_box or programs_box.get_parent() is None: return False
+        for exe, card in list(self.program_cards.items()):
+            if not exe.is_file():
+                card.destroy()
+                del self.program_cards[exe]
+        return True
 
     def program_card(self, module, exe, name, first=False):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1795,6 +2105,7 @@ class ExtraPages:
         self.switch(box, _t("Journal de diagnostic"), profile.get("trace") == "1",
                     lambda on: self.save_program(exe, trace="1" if on else "0"))
         self.programs_box.pack_start(box, False, False, 0)
+        if not first: self.program_cards[exe] = box
         if first: self.programs_box.reorder_child(box, 0)
         box.show_all()
 
@@ -1811,11 +2122,15 @@ class ExtraPages:
         box = self.card()
         self.combo(box, _t("Disposition du clavier"), [(k, _t(v)) for k, v in LAYOUTS], status.get("layout") or "fr",
                    lambda value: self.execute("keyboard-" + value), _t("Langue et fuseau horaire : Heure et langue."))
-        self.section(_t("Souris"))
-        box = self.card()
-        speeds = [("25", _t("Lente")), ("50", _t("Normale")), ("75", _t("Rapide"))]
-        self.combo(box, _t("Vitesse du pointeur"), speeds, status.get("mouse_speed") if status.get("mouse_speed") in ("25", "75") else "50",
-                   lambda value: self.execute({"25": "mouse-slow", "75": "mouse-fast"}.get(value, "mouse-normal")))
+        osk = osk_tool()
+        if osk is not None:
+            state = keyvals(getattr(run(osk + ["icon"], timeout=5), "stdout", "") or "")
+            self.combo(box, _t("Icône du clavier tactile"), [(k, _t(v)) for k, v in OSK_ICON], state.get("setting", "auto"),
+                       lambda value: self.tool(osk + ["set", value], refresh=False),
+                       _t("Dans la barre des tâches. « Sans clavier physique » la montre quand aucun clavier n’est branché."))
+            self.actions(box, [(_t("Ouvrir le clavier tactile"), lambda: self.spawn(osk + ["show"]))])
+        self.sections_mouse(status)
+        if status.get("touchpad_present") != "1": return
         if status.get("touchpad_present") != "1": return
         self.section(_t("Pavé tactile"))
         box = self.card()
@@ -1829,6 +2144,80 @@ class ExtraPages:
             self.level_row(box, _t("Vitesse du curseur"), int(speed), lambda v: self.execute("touchpad-set", "speed", str(v)))
         if status.get("touchpad_gestures") == "1":
             self.row(box, _t("Pincer pour zoomer"), None, _t("Les applications zooment comme avec Ctrl + molette."))
+
+    def sections_mouse(self, status):
+        """Souris : comme Paramètres > Bluetooth et appareils > Souris de Windows 11."""
+        tool = mouse_tool()
+        result = run(tool + ["status"], timeout=10) if tool else None
+        mouse = keyvals(result.stdout) if result else {}
+        if not mouse:
+            self.section(_t("Souris"))
+            box = self.card()
+            speeds = [("25", _t("Lente")), ("50", _t("Normale")), ("75", _t("Rapide"))]
+            self.combo(box, _t("Vitesse du pointeur"), speeds, status.get("mouse_speed") if status.get("mouse_speed") in ("25", "75") else "50",
+                       lambda value: self.execute({"25": "mouse-slow", "75": "mouse-fast"}.get(value, "mouse-normal")))
+            return
+
+        def set_value(key, value):
+            self.tool(tool + ["set", key, str(value)], refresh=False)
+        # Section masquée sans souris libinput (tablette d'une VM, écran tactile seul).
+        if "1" in (mouse.get("cap_left"), mouse.get("cap_speed"), mouse.get("cap_precision")):
+            self.section(_t("Souris"))
+            box = self.card()
+        if mouse.get("cap_left") == "1":
+            self.combo(box, _t("Bouton principal de la souris"), [("0", _t("Gauche")), ("1", _t("Droit"))],
+                       mouse.get("left", "0"), lambda value: set_value("left", value))
+        if mouse.get("cap_speed") == "1":
+            speed = mouse.get("speed", "50")
+            self.level_row(box, _t("Vitesse du pointeur"), int(speed) if speed.isdigit() else 50,
+                           lambda value: set_value("speed", value))
+        if mouse.get("cap_precision") == "1":
+            self.switch(box, _t("Améliorer la précision du pointeur"), mouse.get("precision", "1") == "1",
+                        lambda on: set_value("precision", int(on)),
+                        _t("Le pointeur va plus loin quand la souris bouge vite."))
+        self.section(_t("Défilement"))
+        box = self.card()
+        lines = mouse.get("lines", "3")
+        choices = sorted({1, 2, 3, 4, 5, 6, 8, 10, 15, 20} | ({int(lines)} if lines.isdigit() else set()))
+        self.combo(box, _t("Lignes à faire défiler à chaque cran de la molette"), [(str(n), str(n)) for n in choices], lines,
+                   lambda value: set_value("lines", value), _t("Programmes Windows ; 3 par défaut."))
+        if mouse.get("cap_natural") == "1":
+            self.switch(box, _t("Sens de défilement inversé"), mouse.get("natural") == "1",
+                        lambda on: set_value("natural", int(on)),
+                        _t("Tourner la molette vers le bas fait monter le contenu."))
+        self.section(_t("Double-clic"))
+        box = self.card()
+        double = mouse.get("double", "500")
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 200, 900, 50)
+        scale.set_value(int(double) if double.isdigit() else 500)
+        scale.set_inverted(True)  # à droite : plus rapide, comme Windows
+        scale.set_draw_value(False)
+        scale.set_size_request(260, -1)
+        scale.connect("button-release-event", lambda w, _: set_value("double", int(round(w.get_value() / 50) * 50)) and False)
+        self.row(box, _t("Vitesse du double-clic"), scale, _t("Plus lente à gauche, plus rapide à droite."))
+        test = Gtk.EventBox()
+        icon = Gtk.Image.new_from_icon_name("folder", Gtk.IconSize.DIALOG)
+        test.add(icon)
+        test.set_tooltip_text(_t("Double-cliquez sur le dossier pour tester."))
+
+        def clicked(_widget, event):
+            if event.type == Gdk.EventType._2BUTTON_PRESS:
+                closed = icon.get_icon_name()[0] == "folder"
+                icon.set_from_icon_name("folder-open" if closed else "folder", Gtk.IconSize.DIALOG)
+            return True
+        test.connect("button-press-event", clicked)
+        self.row(box, _t("Zone de test"), test, _t("Double-cliquez sur le dossier : il s’ouvre ou se ferme si la vitesse vous convient."))
+        self.section(_t("Pointeur"))
+        box = self.card()
+        if mouse.get("cap_color") == "1":
+            self.combo(box, _t("Couleur du pointeur"), [(k, _t(v)) for k, v in POINTER_COLORS], mouse.get("color", "default"),
+                       lambda value: set_value("color", value))
+        self.combo(box, _t("Taille du pointeur"), [(i + 1, f"{size} px") for i, size in enumerate(POINTER_SIZES)],
+                   a11y_read().get("pointer_size", 1), lambda value: self.set_pointer(int(value)))
+        trail = mouse.get("trail", "0")
+        self.combo(box, _t("Traînée du pointeur"), [(k, _t(v)) for k, v in POINTER_TRAILS],
+                   trail if trail in dict(POINTER_TRAILS) else "0", lambda value: set_value("trail", value),
+                   _t("Des copies du pointeur le suivent quand il bouge : il se repère mieux sur un grand écran."))
 
     def level_row(self, parent, title, value, changed):
         """Curseur 0-100 appliqué quand on le relâche (une commande, pas cent)."""
@@ -1868,7 +2257,15 @@ class ExtraPages:
             self.combo(box, _t("Courbe des ventilateurs"), [(k, _t(v)) for k, v in CPU_FANS],
                        report.get("fan_curve") if report.get("fan_curve") in dict(CPU_FANS) else "auto",
                        lambda value: self.execute("cpu-fan-" + value))
+        hardware = hardware_page()
+        if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── À propos : « Votre PC », sous la version et le noyau ──
+
+    def sections_about(self):
+        hardware = hardware_page()
+        if hardware is not None: hardware.pc_section(self, self.status)
 
     # ── Presse-papiers (Windows + V) ──
 
@@ -2039,7 +2436,58 @@ class ExtraPages:
 
     # ── Écran : éclairage nocturne ──
 
+    def sections_screens(self):
+        """Chaque écran : définition, fréquence d’actualisation, échelle ; avec
+        plusieurs écrans, disposition et écran principal (comme Windows 11)."""
+        status = self.status
+        try: count = min(4, int(status.get("display_count", "0")))
+        except ValueError: count = 0
+        if count < 1 or not status.get("display_1_name"): return
+        names = [status.get(f"display_{n}_name", "") for n in range(1, count + 1)]
+
+        def display_set(*words):
+            self.execute("display-set", *words)
+        if count > 1:
+            self.section(_t("Plusieurs écrans"))
+            box = self.card()
+            layouts = [("extend", _t("Étendre ces écrans")), ("duplicate", _t("Dupliquer ces écrans"))]
+            layouts += [(f"only:{name}", _t("Afficher seulement sur {name}").format(name=name)) for name in names if name]
+            self.combo(box, _t("Disposition"), layouts, status.get("display_layout", "extend"),
+                       lambda value: display_set("layout", "only", value[5:]) if value.startswith("only:")
+                       else display_set("layout", value))
+            primary = next((name for n, name in enumerate(names, 1) if status.get(f"display_{n}_primary") == "1"), names[0])
+            self.combo(box, _t("Écran principal"), [(name, name) for name in names if name], primary,
+                       lambda value: display_set("primary", value))
+        for n, name in enumerate(names, 1):
+            if not name: continue
+            title = name if count > 1 else _t("Écran")
+            if status.get(f"display_{n}_internal") == "1": title += " · " + _t("écran intégré")
+            self.section(title)
+            box = self.card()
+            modes = [m for m in status.get(f"display_{n}_modes", "").split(",") if m]
+            if modes:
+                self.combo(box, _t("Définition de l’écran"), [(m, m.replace("x", " × ")) for m in modes],
+                           status.get(f"display_{n}_mode") or modes[0], lambda value, name=name: display_set("mode", name, value))
+            rates = [r for r in status.get(f"display_{n}_rates", "").split(",") if r]
+            # Une seule fréquence (VM, écran 60 Hz) : rien à choisir, ligne masquée.
+            if len(rates) > 1:
+                labels = {}
+                for rate in rates: labels.setdefault(rate_label(rate), rate)
+                choices = [("auto", _t("Automatique"))] + [(rate, label) for label, rate in labels.items()]
+                active = "auto" if status.get(f"display_{n}_rate_auto", "1") == "1" else status.get(f"display_{n}_rate")
+                self.combo(box, _t("Fréquence d’actualisation"), choices, active if active in dict(choices) else "auto",
+                           lambda value, name=name: display_set("rate", name, value),
+                           _t("Plus elle est élevée, plus les mouvements sont fluides (jeux, défilement)."))
+            scales = [("auto", _t("Automatique"))] + [(v, f"{round(float(v) * 100)} %") for v in DISPLAY_SCALES]
+            self.combo(box, _t("Échelle"), scales,
+                       "auto" if status.get(f"display_{n}_scale_auto", "1") == "1" else status.get(f"display_{n}_scale", "auto"),
+                       lambda value, name=name: display_set("scale", name, value))
+        if status.get("display_restart_hint") == "1":
+            self.hint(_t("La nouvelle échelle s’applique complètement à la prochaine ouverture de session."))
+
     def sections_display(self):
+        self.section_brightness()
+        self.sections_screens()
         state = ambiance_status()
         # Pilote sans rampe gamma (certaines VM) : section masquée.
         if state.get("supported") != "1": return
@@ -2143,6 +2591,9 @@ class ExtraPages:
 
     def sections_graphics(self):
         status = self.status
+        # Pilote de la carte, NVIDIA propriétaire, VA-API/NVENC (#matériel réel).
+        hardware = hardware_page()
+        if hardware is not None: hardware.gpu_section(self)
         self.section(_t("Overlay de performances en jeu"))
         box = self.card()
         enabled = status.get("overlay_enabled") == "1"
@@ -2156,31 +2607,60 @@ class ExtraPages:
         self.switch(box, _t("Afficher au lancement d’un jeu"), status.get("overlay_autoshow") == "1",
                     lambda on: self.execute("overlay-auto-on" if on else "overlay-auto-off"))
 
-    # ── Réseau : Wi-Fi, seulement avec une carte Wi-Fi ──
+    # ── Écran : luminosité (winlux-brightness), cachée sans contrôle réel ──
+
+    def section_brightness(self):
+        tool = brightness_tool()
+        state = brightness_state(tool)
+        if state.get("method") in (None, "none") or state.get("percent") is None: return
+        self.section(_t("Luminosité et couleur"))
+        box = self.card()
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 5, 100, 1)
+        scale.set_name("winlux-brightness")
+        scale.set_value(int(state["percent"]))
+        scale.set_size_request(240, -1)
+        scale.set_draw_value(True)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
+        pending = {}
+
+        def moved(widget):
+            # Valeur envoyée quand le curseur s’arrête, pas à chaque pixel.
+            if pending.get("id"): GLib.source_remove(pending["id"])
+            def send():
+                pending["id"] = None
+                self.tool(tool + ["set", str(int(widget.get_value()))], refresh=False)
+                return False
+            pending["id"] = GLib.timeout_add(150, send)
+        scale.connect("value-changed", moved)
+        self.brightness_scale = scale
+        hint = {"backlight": None, "ddc": _t("Écran réglé par son câble (DDC/CI)."),
+                "soft": _t("Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.")}.get(state["method"])
+        self.row(box, _t("Luminosité"), scale, hint)
+
+    # ── Réseau : renvoi vers la page Wi-Fi, seulement avec une carte Wi-Fi ──
 
     def sections_network(self):
-        if not have("nmcli"): return
-        devices = run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"], timeout=3)
-        if not devices or ":wifi:" not in devices.stdout: return
+        if not page_available(PAGE_WIFI): return
         self.section(_t("Wi-Fi"))
         box = self.card()
-        radio = run(["nmcli", "radio", "wifi"], timeout=3)
-        self.switch(box, _t("Wi-Fi"), bool(radio) and radio.stdout.strip() == "enabled",
-                    lambda on: self.tool(["nmcli", "radio", "wifi", "on" if on else "off"]))
-        found = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"], timeout=8)
-        networks = []
-        for line in (found.stdout.splitlines() if found else []):
-            parts = re.split(r"(?<!\\):", line)
-            if len(parts) == 4 and parts[1] and parts[1] not in [n[1] for n in networks]:
-                networks.append((parts[0] == "*", parts[1].replace("\\:", ":"), parts[2], parts[3]))
-        if not networks: self.hint(_t("Aucun réseau Wi-Fi visible pour l’instant."), box)
-        for in_use, ssid, signal, security in networks[:12]:
-            detail = f"{signal} % · " + (security or _t("Ouvert"))
-            button = Gtk.Button(label=_t("Connecté") if in_use else _t("Se connecter"))
-            button.set_sensitive(not in_use)
-            button.connect("clicked", lambda *_, name=ssid: self.tool(["nmcli", "--ask", "--wait", "90", "device", "wifi", "connect", name]))
-            self.row(box, ssid, button, detail)
-        self.actions(box, [(_t("Actualiser"), lambda: self.tool(["nmcli", "device", "wifi", "rescan"]))])
+        button = Gtk.Button(label=_t("Réseaux Wi-Fi…"))
+        button.connect("clicked", lambda *_: GLib.idle_add(self.open_page, PAGE_WIFI))
+        self.row(box, _t("Wi-Fi"), button, _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion."))
+
+    # ── Wi-Fi : réseaux, clé de sécurité, WPS, réseaux cachés (winlux-wifi) ──
+
+    def page_wifi(self):
+        module = wifi_page()
+        if module is not None:
+            self.wifi_panel = module.page(self)
+
+    # ── Certificats : autorités ajoutées, heure, test d'un site (winlux-certificates) ──
+
+    def page_certificates(self):
+        module = certificates_page()
+        if module is not None:
+            self.certificates_panel = module.page(self)
 
     # ── Mises à jour : secours et restauration, dans la page ──
 
@@ -2205,6 +2685,12 @@ class ExtraPages:
         module = reset_page()
         if module is not None:
             self.recovery_panel = module.RecoveryPanel(self)
+
+    # ── Matériel et pilotes : diagnostic et pilotes recommandés ──
+
+    def page_hardware(self):
+        module = hardware_page()
+        if module is not None: module.page(self)
 
     # ── Signaler un problème ──
 
@@ -2446,7 +2932,22 @@ class ExtraPages:
 
     # ── Applications : installer, par défaut, démarrage (dans la page) ──
 
+    def store_catalogs_section(self):
+        """Boutiques de logiciels (docs/BOUTIQUES.md) : aucune fournie ni
+        présélectionnée, ordre alphabétique, téléchargées chez l'éditeur."""
+        rows = store_catalogs()
+        if not rows: return
+        self.section(_t("Boutiques de logiciels"), _t("Winlux ne fournit ni n’impose aucune boutique. Celles que vous activez s’ajoutent au Store : le nécessaire est téléchargé chez l’éditeur et vérifié, puis la boutique apparaît dans le menu Démarrer. Sans connexion, elle est ajoutée au démarrage suivant."))
+        box = self.card()
+        for ident, state, platform, name, summary, _site in rows:
+            label = f"{name} · {_t('Logiciels Windows') if platform == 'windows' else _t('Logiciels Linux')}"
+            if state == "pending": summary = _t("En attente du réseau : ajoutée au prochain démarrage.") + "\n" + summary
+            self.switch(box, label, state != "off",
+                        lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
+        self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
+
     def page_apps(self):
+        self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:
             self.section(_t("Applications par défaut"))

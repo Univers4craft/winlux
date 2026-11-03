@@ -441,6 +441,9 @@ def assist(window, free_zones):
             button.connect("clicked", lambda _, c=candidate: (picked.setdefault("window", c), Gtk.main_quit()))
             flow.add(button)
         popup.connect("key-press-event", lambda _, event: event.keyval == Gdk.KEY_Escape and (Gtk.main_quit() or True))
+        # Comme sous Windows : passer à une autre fenêtre ferme l'assistant
+        # (il restait affiché au premier plan, sans fin, si on l'ignorait).
+        popup.connect("focus-out-event", lambda *_: GLib.timeout_add(200, lambda: popup.is_active() or Gtk.main_quit()) and False)
         x, y, w, h = zone_rect(zone, area)
         popup.set_default_size(min(w - 40, 640), -1)
         popup.show_all()

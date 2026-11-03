@@ -48,7 +48,7 @@ grep -q '^application/x-ms-dos-executable=winlux.desktop;$' "$dest/etc/xdg/mimea
 test -x "$dest/usr/bin/winlux-browser" || fail "winlux-browser non installé"
 grep -q '^Exec=/usr/bin/winlux-browser %U$' "$dest/usr/share/applications/winlux-browser.desktop" || fail "Exec du navigateur incorrect"
 for type in x-scheme-handler/http x-scheme-handler/https text/html; do
-    grep -q "^$type=winlux-browser.desktop;$" "$dest/etc/xdg/mimeapps.list" || fail "$type n'ouvre pas Edge par défaut"
+    grep -q "^$type=winlux-browser.desktop;$" "$dest/etc/xdg/mimeapps.list" || fail "$type n'ouvre pas le navigateur par défaut"
 done
 DESTDIR="$dest" WINLUX_VERSION=test sh "$root/integration/install.sh" /usr >/dev/null
 test "$(grep -c 'winlux.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 6 || fail "réinstallation non idempotente"
@@ -61,18 +61,17 @@ test ! -e "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt non désinstallé"
 cmp -s "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant" || fail "mimeapps.list non restauré"
 ok "désinstallation et restauration de mimeapps.list"
 
-# --- Navigateur par défaut : Microsoft Edge ----------------------------------
+# --- Navigateur par défaut : celui qui est installé, sans marque imposée ----
 edgebin="$work/edge-bin"
 mkdir -p "$edgebin"
-printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/microsoft-edge-stable"
+printf '#!/bin/sh\nprintf "edge %%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/microsoft-edge-stable"
 printf '#!/bin/sh\nprintf "firefox %%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/firefox"
 chmod +x "$edgebin/microsoft-edge-stable" "$edgebin/firefox"
 # Only fixture browsers may be discovered. Hosted runners can have Chrome,
 # Chromium or Edge installed; launching one here is neither deterministic nor
 # safe on a headless machine. Preserve the launcher's real exec/PATH behavior
 # while excluding its absolute /opt fallback from this isolated fixture.
-ln -s "$(command -v id)" "$edgebin/id"
-ln -s "$(command -v dirname)" "$edgebin/dirname"
+for tool in id dirname sed grep; do ln -s "$(command -v "$tool")" "$edgebin/$tool"; done
 printf '#!/bin/sh\nexit 0\n' >"$edgebin/notify-send"
 chmod +x "$edgebin/notify-send"
 browser_launch() (
@@ -84,12 +83,21 @@ browser_launch() (
     }
     . "$root/integration/winlux-browser"
 )
-browser_launch https://www.bing.com
-grep -q '^https://www.bing.com$' "$work/edge.log" || fail "winlux-browser n'ouvre pas Edge"
-rm "$edgebin/microsoft-edge-stable"
-browser_launch https://example.org 2>/dev/null
-grep -q '^firefox https://example.org$' "$work/edge.log" || fail "pas de repli quand Edge est absent"
-ok "winlux-browser préfère Edge et se replie sur un autre navigateur"
+browser_launch https://example.org
+grep -q '^firefox https://example.org$' "$work/edge.log" || fail "winlux-browser n'ouvre pas le navigateur présent"
+rm "$edgebin/firefox"
+browser_launch https://example.com 2>/dev/null
+grep -q '^edge https://example.com$' "$work/edge.log" || fail "pas de repli sur l'autre navigateur présent"
+# Navigateur choisi dans Paramètres > Navigateurs : il passe en premier.
+printf '#!/bin/sh\ncase "$1" in --status) printf "browser_default=chrome\\nbrowser_chrome=installed\\n" ;; --open) shift; printf "catalogue %%s\\n" "$@" >"%s/edge.log" ;; esac\n' "$work" >"$edgebin/winlux-browsers"
+chmod +x "$edgebin/winlux-browsers"
+browser_launch https://example.net
+grep -q '^catalogue https://example.net$' "$work/edge.log" || fail "le navigateur choisi n'est pas utilisé"
+rm "$edgebin/winlux-browsers"
+# Aucune marque Microsoft dans l'entrée générique du navigateur.
+! grep -qi 'microsoft\|edge' "$root/integration/winlux-browser.desktop" || fail "marque Microsoft dans winlux-browser.desktop"
+for lang in en de es; do grep -q "^Name\[$lang\]=" "$root/integration/winlux-browser.desktop" || fail "Name[$lang] absent"; done
+ok "winlux-browser ouvre le navigateur choisi ou présent, nom et icône neutres"
 
 # --- Lanceur de double-clic ------------------------------------------------
 fake="$work/bin"
@@ -201,5 +209,27 @@ crash_launch WINLUX_DESKTOP_DEMO=1
 set -e
 test ! -s "$work/dialogue.log" || fail "bureau PE : boîte en double avec l'écran bleu"
 ok "plantage d'un .exe graphique ouvert depuis l'Explorateur : message affiché"
+
+# Installateur 32 bits que le runtime déroule lui-même (WiX Burn comme
+# vc_redist.x64.exe, NSIS, Inno Setup) : --inspect répond « setup » et le
+# double-clic l'installe au lieu de refuser un programme 32 bits.
+setupbin="$work/setup-bin"
+mkdir -p "$setupbin"
+cat >"$setupbin/winlux" <<EOF
+#!/bin/sh
+if [ "\$1" = --inspect ]; then echo setup; exit 0; fi
+echo "\$@" >"$work/setup-args.log"
+echo "setup : Visual C++ Demo est installé." >&2
+exit 0
+EOF
+chmod +x "$setupbin/winlux"
+cp "$apps/fenetre.exe" "$apps/vc_redist.x64.exe"
+: >"$work/dialogue.log"
+env PATH="$fake:$PATH" DISPLAY=:99 XDG_STATE_HOME="$work/state" WINLUX_RUNTIME="$setupbin/winlux" \
+    "$open" "$apps/vc_redist.x64.exe" </dev/null >"$work/sortie.log" 2>&1 || fail "installateur : échec"
+grep -q 'vc_redist.x64.exe' "$work/setup-args.log" || fail "installateur : runtime non appelé"
+grep -q '« Visual C++ Demo » est installé' "$work/dialogue.log" || fail "installateur : le message de fin ne nomme pas l'appli"
+if grep -q '32 bits' "$work/dialogue.log"; then fail "installateur refusé comme programme 32 bits"; fi
+ok "installateur 32 bits (vc_redist) : installé par double-clic"
 
 echo "Intégration bureau validée."

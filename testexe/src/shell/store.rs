@@ -384,8 +384,99 @@ unsafe fn app_field(i: usize, f: usize) -> &'static [u8] {
     slice(APPS[i][f])
 }
 
+/// Boutique ouverte par son propre lanceur (winlux-store-catalogs) : seules
+/// ses clés (« flatpak: », « windows:scoop-games/ ») sont affichées, sous son
+/// nom. Vide : toute la bibliothèque.
+static mut SOURCE_FILTER: Buf<48> = Buf::new();
+static mut SOURCE_TITLE: Buf<48> = Buf::new();
+static mut FILTER_READ: bool = false;
+
+/// Dossier d'échange avec `winlux-store` : propre à chaque compte
+/// (`WINLUX_STORE_RUN`, posé par winlux-shell-app), sinon `Z:\run\winlux`.
+/// Partagé, le fichier d'index écrit par un premier compte ne pouvait pas
+/// être remplacé par un second (dossier « sticky ») : Store vide.
+static mut RUN_DIR: Buf<240> = Buf::new();
+
+unsafe fn run_file(name: &[u8]) -> [u8; 300] {
+    if RUN_DIR.n == 0 {
+        let mut value = [0u8; 200];
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_STORE_RUN".as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len() as u32,
+        ) as usize;
+        if n > 1
+            && n < value.len()
+            && value[0] == b'/'
+            && value[..n].iter().all(|c| c.is_ascii_graphic())
+        {
+            RUN_DIR.push(b"Z:");
+            for &c in &value[..n] {
+                RUN_DIR.push(&[if c == b'/' { b'\\' } else { c }]);
+            }
+        } else {
+            RUN_DIR.push(b"Z:\\run\\winlux");
+        }
+    }
+    let mut out = [0u8; 300];
+    let dir = RUN_DIR.get();
+    let n = name.len().min(out.len() - dir.len() - 2);
+    out[..dir.len()].copy_from_slice(dir);
+    out[dir.len()] = b'\\';
+    out[dir.len() + 1..dir.len() + 1 + n].copy_from_slice(&name[..n]);
+    out
+}
+
+unsafe fn read_run(name: &[u8], buf: &mut [u8]) -> usize {
+    let path = run_file(name);
+    read_file(
+        core::ffi::CStr::from_bytes_until_nul(&path).unwrap_or(c""),
+        buf,
+    )
+}
+
+unsafe fn read_filter() {
+    if FILTER_READ {
+        return;
+    }
+    FILTER_READ = true;
+    let mut value = [0u8; 48];
+    let n = GetEnvironmentVariableA(
+        c"WINLUX_STORE_SOURCE".as_ptr(),
+        value.as_mut_ptr().cast(),
+        48,
+    ) as usize;
+    if n > 0 && n < 48 {
+        SOURCE_FILTER.push(&value[..n]);
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_STORE_TITLE".as_ptr(),
+            value.as_mut_ptr().cast(),
+            48,
+        ) as usize;
+        if n > 0
+            && n < 48
+            && value[..n]
+                .iter()
+                .all(|c| c.is_ascii_graphic() || *c == b' ')
+        {
+            SOURCE_TITLE.push(&value[..n]);
+        }
+    }
+}
+
+/// Titre du volet de navigation : « Store » ou le nom de la boutique.
+unsafe fn store_title() -> &'static [u8] {
+    read_filter();
+    if SOURCE_TITLE.n > 0 {
+        SOURCE_TITLE.get()
+    } else {
+        b"Store"
+    }
+}
+
 unsafe fn load_index() {
-    let n = read_file(c"Z:\\run\\winlux\\store.txt", &mut INDEX);
+    read_filter();
+    let n = read_run(b"store.txt", &mut INDEX);
     if n == 0 {
         return;
     }
@@ -402,7 +493,8 @@ unsafe fn load_index() {
         let line = &INDEX[pos..end];
         let value = |prefix: &[u8]| line.strip_prefix(prefix);
         if let Some(v) = value(b"app=") {
-            if APP_COUNT < MAX_APPS {
+            if APP_COUNT < MAX_APPS && (SOURCE_FILTER.n == 0 || v.starts_with(SOURCE_FILTER.get()))
+            {
                 split_fields(pos + 4, v, &mut APPS[APP_COUNT]);
                 APP_COUNT += 1;
             }
@@ -470,7 +562,7 @@ unsafe fn detail_value(prefix: &[u8]) -> &'static [u8] {
 }
 
 unsafe fn load_detail() {
-    let n = read_file(c"Z:\\run\\winlux\\store-detail.txt", &mut DETAIL);
+    let n = read_run(b"store-detail.txt", &mut DETAIL);
     let len = utf8_to_cp1252(&mut DETAIL, n);
     DETAIL_LEN = len;
     let key = detail_value(b"key=");
@@ -492,7 +584,7 @@ static mut OP_STARTED: u32 = 0;
 
 unsafe fn poll_progress() -> bool {
     let mut buf = [0u8; 1024];
-    let n = read_file(c"Z:\\run\\winlux\\store-progress.txt", &mut buf);
+    let n = read_run(b"store-progress.txt", &mut buf);
     let n = utf8_to_cp1252(&mut buf, n);
     let text = &buf[..n];
     let mut state: &[u8] = b"";
@@ -714,7 +806,7 @@ unsafe fn operate(verb: &[u8], key: &[u8]) {
     }
     let mut raw = [0u8; 1000];
     let n = cp1252_to_utf8(args.get(), &mut raw);
-    DeleteFileA(c"Z:\\run\\winlux\\store-progress.txt".as_ptr());
+    DeleteFileA(run_file(b"store-progress.txt").as_ptr().cast());
     if spawn(c"winlux-store", &raw[..n]) {
         OP_ACTIVE = true;
         OP_STARTED = GetTickCount();
@@ -951,7 +1043,7 @@ unsafe fn draw_nav(g: &mut Gfx, f: &Frame) {
     let mut y = c.top + 14;
     if !narrow {
         glyph(g.hdc, g.b, g.f, Glyph::Store, c.left + 18, y + 2, 20);
-        text(g.hdc, g.f.title, p.text, c.left + 48, y + 3, b"Store");
+        text(g.hdc, g.f.title, p.text, c.left + 48, y + 3, store_title());
     }
     y += 44;
     let items = 8u8;
@@ -1343,7 +1435,10 @@ unsafe fn draw_search(g: &mut Gfx, body: &Rect) {
         // Le nom du paquet aussi (sans « apt: ») : « mines » trouve le
         // Démineur (gnome-mines).
         let key = app_field(i, F_KEY);
-        let reference = key.iter().position(|&c| c == b':').map_or(key, |p| &key[p + 1..]);
+        let reference = key
+            .iter()
+            .position(|&c| c == b':')
+            .map_or(key, |p| &key[p + 1..]);
         let m = contains_ci(app_field(i, F_NAME), q)
             || contains_ci(app_field(i, F_SUMMARY), q)
             || contains_ci(app_field(i, F_PUB), q)

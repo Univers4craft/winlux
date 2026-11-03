@@ -124,6 +124,23 @@ icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/nul
 if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
+# Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
+# sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
+# absent est remplacé par Adwaita.
+gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+# Thème absent (défaut XFCE Greybird, « Adwaita-dark » d'anciennes versions) :
+# le thème Winlux du compte est créé d'après Personnalisation (clair ou
+# sombre), sinon Adwaita. Une installation neuve restait claire en mode sombre.
+case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
+    # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
+    if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
+        mode=dark
+        if grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then mode=light; fi
+        if ! { test -x /usr/bin/winlux-personalize && WINLUX_PERSONALIZE_NO_SYSTEM=1 /usr/bin/winlux-personalize theme "$mode" >/dev/null 2>&1; }; then
+            /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        fi
+    fi ;;
+esac
 for attempt in $(seq 1 50); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     kill -0 "$wm_pid" 2>/dev/null || { cat "$logs/window-manager.log" >&2; exit 1; }
@@ -146,13 +163,34 @@ if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
         fi
     done
 fi
+# Bureau de Windows 11 : la Corbeille seule (#30). Les autres icônes
+# d'xfdesktop s'activent dans Paramètres ; un choix existant est gardé.
+if test -x /usr/bin/xfconf-query; then
+    for icon in trash:true filesystem:false home:false removable:false; do
+        property="/desktop-icons/file-icons/show-${icon%%:*}"
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1 ||
+            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t bool -s "${icon#*:}" || true
+    done
+fi
 # Compositeur facultatif : sans lui, un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
     compositor_pid=$!
 fi
+# Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
+# de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
+# ensuite, et une tablette restait sans aucun moyen de taper.
+if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk panel >"$logs/osk-panel.log" 2>&1 || true; fi
+# Tablettes et convertibles : l'écran suit l'accéléromètre (s'arrête aussitôt
+# sans accéléromètre ou sur un PC qui n'est pas une tablette).
+if test -x /usr/bin/winlux-rotation; then start rotation.log /usr/bin/winlux-rotation watch; fi
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
+fi
+# Clavier ou souris USB branché pendant la session : disposition (AZERTY…)
+# et réglages réappliqués, sinon un clavier branché à chaud tape en QWERTY.
+if test -x /usr/bin/winlux-input-watch; then
+    start input-watch.log /usr/bin/winlux-input-watch
 fi
 if test -x /usr/bin/winlux-notifications; then
     start notifications.log /usr/bin/winlux-notifications
@@ -274,6 +312,25 @@ wait_desktop() {
 ) </dev/null >/dev/null 2>&1 &
 pids="$pids $!"
 
+# Échelle des applications GTK (#29), comme XFCE : facteur entier pour GTK
+# (200 % en 4K), le reste par la densité des polices (150 % → 144 ppp).
+# Un réglage fait à la main dans xsettings est gardé.
+gtk_scale() {
+    test -x /usr/bin/xfconf-query || return 0
+    marker="$HOME/.local/share/winlux/gtk-scale"
+    case "$1" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) return 0 ;; esac
+    factor=$(awk -v s="$1" 'BEGIN { print (s >= 2) ? 2 : 1 }')
+    dpi=$(awk -v s="$1" -v f="$factor" 'BEGIN { printf "%d", 96 * s / f + 0.5 }')
+    current=$(/usr/bin/xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || true)
+    previous=$(cat "$marker" 2>/dev/null || true)
+    if test -n "$current" && test "$current" != "${previous#*:}"; then return 0; fi
+    test "$previous" = "$factor:$dpi" && test "$current" = "$dpi" && return 0
+    for setting in "/Gdk/WindowScalingFactor:$factor" "/Xft/DPI:$dpi"; do
+        /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -s "${setting##*:}" 2>/dev/null ||
+            /usr/bin/xfconf-query -c xsettings -p "${setting%:*}" -n -t int -s "${setting##*:}" || true
+    done
+    mkdir -p "${marker%/*}" && printf '%s:%s\n' "$factor" "$dpi" >"$marker"
+}
 # Le bureau (fond d'écran, icônes) est relancé s'il s'arrête ; la session
 # vit tant que son gestionnaire de fenêtres vit.
 while kill -0 "$wm_pid" 2>/dev/null; do
@@ -283,11 +340,14 @@ while kill -0 "$wm_pid" 2>/dev/null; do
         (
             case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
             if test -x /usr/bin/winlux-touchpad; then /usr/bin/winlux-touchpad apply 2>/dev/null || true; fi
+            # Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+            if test -x /usr/bin/winlux-mouse; then /usr/bin/winlux-mouse apply 2>/dev/null || true; fi
         ) </dev/null >/dev/null 2>&1 &
         ui_scale=$(/usr/bin/winlux-display session-scale 2>/dev/null || true)
         case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac
         WINLUX_THEME=$(sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
         export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME
+        gtk_scale "$ui_scale"
     fi
     if test -x /usr/bin/xfdesktop; then
         /usr/bin/xfdesktop --disable-wm-check >>"$logs/desktop.log" 2>&1 &

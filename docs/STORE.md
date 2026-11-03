@@ -11,9 +11,9 @@ réseau disponible).
 | Source | Catalogue et métadonnées | Installation |
 |---|---|---|
 | `apt` | AppStream DEP-11 des dépôts (`/var/lib/swcatalog`, `/var/lib/app-info`) + sélection Winlux `integration/store-catalog.txt` ; captures de screenshots.debian.net à défaut | `apt-get` avec `APT::Status-Fd` |
-| `flatpak` | AppStream XML des remotes configurées (Flathub…) | `flatpak install/update/uninstall` |
+| `flatpak` | AppStream XML des remotes configurées (Flathub quand l'utilisateur l'a choisi) | `flatpak install --user`, `update`, `uninstall` |
 | `snap` | API locale de snapd (`/run/snapd.socket`) | `snap install/refresh/remove` |
-| `appimage` | flux AppImageHub, dernière version sur GitHub | `~/Applications` + lanceur `.desktop` |
+| `appimage` | flux AppImageHub, dernière version sur GitHub ; lu seulement pour un compte qui a déjà installé une AppImage (catalogue ni examiné ni signé, `docs/BOUTIQUES.md`) | `~/Applications` + lanceur `.desktop` |
 | `windows` | catalogues interchangeables, Scoop Extras par défaut (voir plus bas) | runtime Winlux (`winlux setup.exe`, msiexec intégré, applications portables) |
 
 Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
@@ -29,7 +29,14 @@ verrous sont utilisés tels quels : `apt update` / `apt upgrade` en terminal
 continuent de fonctionner, et ce que le Store installe se met à jour aussi
 par `apt upgrade`, `flatpak update` ou `snap refresh`.
 
-Fichiers échangés avec le shell (`/run/winlux`, UTF-8) :
+**Lanceurs.** Le Store est dans Toutes les applications et épinglé au menu
+Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
+boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls
+logiciels (`winlux-shell-app store flatpak: Flathub` → `WINLUX_STORE_SOURCE`).
+
+Fichiers échangés avec le shell (UTF-8), dans le dossier propre au compte
+`WINLUX_STORE_RUN` (`/run/winlux/store-<uid>`, posé par `winlux-shell-app`),
+sinon `/run/winlux` ; partagé, l'index d'un premier compte bloquait celui d'un second :
 
 - `store.txt` : `app=clé|catégorie|nom|résumé|éditeur|état|version|disponible|taille_ko|icône|badge|sélection|autres_clés`
   (état `a` disponible, `i` installé, `u` mise à jour), `updates=`, `system_updates=`, `sources=`, `refreshing=`, `win=nom|exe` ;
@@ -71,9 +78,12 @@ un catalogue :
 (`"file": "/chemin/catalog.json"` pour un fichier local, `"enabled": false`
 pour le désactiver.)
 
-**Catalogue par défaut : Scoop Extras.** L'ISO livre
-`/etc/winlux/store-sources.d/scoop-extras.json` (format `scoop`), qui lit
-l'archive du dépôt communautaire [ScoopInstaller/Extras](https://github.com/ScoopInstaller/Extras) :
+**Boutiques au choix : Scoop Extras et Scoop Games.** Aucun catalogue Windows
+n'est actif d'office : l'utilisateur choisit ses boutiques (installateur,
+premier démarrage, Paramètres > Applications ; voir `docs/BOUTIQUES.md`, qui
+liste aussi les boutiques écartées et pourquoi). Une installation antérieure
+garde son `/etc/winlux/store-sources.d/scoop-extras.json`. Scoop Extras (format
+`scoop`) lit l'archive du dépôt communautaire [ScoopInstaller/Extras](https://github.com/ScoopInstaller/Extras) :
 manifestes libres (domaine public), sans compte ni clé, mis à jour en continu,
 indépendants de Microsoft. Le Store n'en garde que ce que Winlux sait installer
 seul, soit environ 630 applications graphiques :

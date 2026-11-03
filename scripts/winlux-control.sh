@@ -182,6 +182,7 @@ status() {
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
     cpu_status
+    drivers_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
     # Refait seulement si l'une de ses sources a change depuis (les dossiers
     # d'etat comptent : un fichier supprime change leur date).
@@ -213,6 +214,14 @@ cpu_status() {
         winlux --gamemode status "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
         mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
     else rm -f "$run/cpu.txt.tmp.$$"; fi
+}
+# Pilotes du matériel réel (Paramètres > Matériel et pilotes, Graphismes,
+# Processeur) : relevé sysfs de winlux-drivers, repris s'il a moins d'une minute.
+drivers_status() {
+    have winlux-drivers || { rm -f "$run/drivers.txt"; return 0; }
+    if cached drivers env WINLUX_DRIVERS_ROOT="${root:-/}" winlux-drivers status > "$run/drivers.txt.tmp.$$" 2>/dev/null; then
+        mv "$run/drivers.txt.tmp.$$" "$run/drivers.txt"
+    else rm -f "$run/drivers.txt.tmp.$$"; fi
 }
 fan_daemon() {
     pid=$(cat "$run/fan-daemon.pid" 2>/dev/null || true)
@@ -262,6 +271,14 @@ perform() {
         browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
         browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
         browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
+        # Boutiques de logiciels (docs/BOUTIQUES.md) : 75 = reporté faute de réseau
+        # (Paramètres l'explique, l'init reprend au démarrage suivant).
+        store-catalog-add-*|store-catalog-remove-*)
+            id=${action#store-catalog-add-}; verb=--add
+            case "$action" in store-catalog-remove-*) id=${action#store-catalog-remove-}; verb=--remove ;; esac
+            case "$id" in ''|*[!a-z0-9-]*) message 'Boutique inconnue'; exit 2 ;; esac
+            code=0; winlux-store-catalogs "$verb" "$id" || code=$?
+            return "$code" ;;
         network-renew) winlux-network restart ;;
         network-scan)
             # Write available networks to a file the desktop shell can read.
@@ -395,10 +412,13 @@ perform() {
                     ''|*[!0-9]*) assistant= ;;
                     *) test "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$assistant" 2>/dev/null)" = launcher || assistant= ;;
                 esac
+                # Icône du clavier tactile (winlux-osk panel), avant le réseau.
+                keyboard=
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-12 2>/dev/null)" = genmon; then keyboard=12; fi
                 if test "$alignment" = center; then
-                    ids="${widgets:+11 }3 1 2 8 ${assistant:+$assistant }${tray:+10 }4 5 6 9 7"
+                    ids="${widgets:+11 }3 1 2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 else
-                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }4 5 6 9 7"
+                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 if test "$current" != "$ids "; then
@@ -456,6 +476,16 @@ perform() {
             save "$config/cpu.conf" CPU_PROFILE "${action#cpu-profile-}" ;;
         game-mode-auto|game-mode-off)
             save "$config/cpu.conf" GAME_MODE "${action#game-mode-}" ;;
+        # Pilotes : installation depuis les dépôts Ubuntu (système installé).
+        drivers-refresh) winlux-drivers refresh ;;
+        drivers-install-modules|drivers-install-nvidia|drivers-install-mesa|drivers-install-vaapi|drivers-install-microcode|\
+        drivers-install-amd-pstate|drivers-install-fwupd|drivers-install-fingerprint|drivers-install-scanner|drivers-install-printer-drivers)
+            winlux-drivers install "${action#drivers-install-}" ;;
+        drivers-remove-nvidia) winlux-drivers remove nvidia ;;
+        drivers-firmware-check) winlux-drivers firmware-check ;;
+        drivers-firmware-update) winlux-drivers firmware-update ;;
+        drivers-auto-on) winlux-drivers set-auto 1 ;;
+        drivers-auto-off) winlux-drivers set-auto 0 ;;
         cpu-hybrid-auto|cpu-hybrid-heavy|cpu-hybrid-performance|cpu-hybrid-efficiency)
             save "$config/cpu.conf" HYBRID_POLICY "${action#cpu-hybrid-}" ;;
         cpu-fan-auto|cpu-fan-quiet|cpu-fan-balanced|cpu-fan-performance)
@@ -526,8 +556,11 @@ perform() {
             winlux --power set "${action#power-}" next ;;
         power-lid) winlux --power set lid next ;;
         power-button) winlux --power set button next ;;
-        power-brightness-up) winlux --power set brightness + ;;
-        power-brightness-down) winlux --power set brightness - ;;
+        # Même chemin que les réglages rapides et les touches (winlux-brightness).
+        power-brightness-up)
+            if have winlux-brightness; then winlux-brightness set +10 --osd >/dev/null; else winlux --power set brightness +; fi ;;
+        power-brightness-down)
+            if have winlux-brightness; then winlux-brightness set -10 --osd >/dev/null; else winlux --power set brightness -; fi ;;
         power-suspend) winlux --power suspend ;;
         power-hibernate) winlux --power hibernate ;;
         power-hibernate-setup) winlux --power hibernate-setup ;;
@@ -576,7 +609,10 @@ if perform "$@" > "$log" 2>&1; then
     result=0
 else
     result=$?
-    if test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
+    if test "$result" = 75; then
+        # Reporté faute de réseau (navigateur, boutique) : pas une panne.
+        message 'Pas de connexion Internet : ce sera fait automatiquement au prochain démarrage connecté.'
+    elif test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
         detail=$(tail -n 1 "$log")
         message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
     else

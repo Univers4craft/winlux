@@ -536,24 +536,237 @@ pub unsafe extern "win64" fn set_console_screen_buffer_info_ex(h: usize, _info: 
     (h == (-11isize) as usize || h == (-12isize) as usize) as i32
 }
 
-/// Pseudo-consoles (ConPTY) : non prises en charge, les programmes
-/// retombent alors sur des tubes.
+// ── Pseudo-consoles (ConPTY) sur un vrai pseudo-terminal Linux ──────────────
+//
+// CreatePseudoConsole(taille, entrée, sortie) ouvre un pty (openpty). Deux
+// fils relaient : ce que l'appelant écrit dans son tube d'entrée part vers le
+// maître du pty ; ce que le programme lancé écrit (séquences VT, couleurs)
+// revient dans le tube de sortie. CreateProcess avec
+// PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE donne l'esclave au programme comme
+// terminal de contrôle (entrée, sortie, erreur) : il voit une vraie console,
+// avec couleurs, taille (ResizePseudoConsole → TIOCSWINSZ → SIGWINCH) et
+// saisie interactive.
+
+struct PseudoConsole {
+    master: std::sync::Arc<std::os::fd::OwnedFd>,
+    /// Gardé ouvert jusqu'à ClosePseudoConsole : comme sous Windows, la
+    /// sortie reste ouverte même après la fin du programme.
+    slave: Option<std::os::fd::OwnedFd>,
+    closed: std::sync::Arc<AtomicBool>,
+}
+
+static CONSOLES: Mutex<Vec<(usize, PseudoConsole)>> = Mutex::new(Vec::new());
+static NEXT_CONSOLE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0x7c00_0010);
+
+fn winsize(size: u32) -> libc::winsize {
+    let columns = (size & 0xffff) as u16;
+    let rows = (size >> 16) as u16;
+    libc::winsize {
+        ws_row: if rows == 0 { 25 } else { rows },
+        ws_col: if columns == 0 { 80 } else { columns },
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    }
+}
+
+/// Copie du descripteur Linux d'un handle (tube de CreatePipe, fichier).
+fn dup_handle(h: usize) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let fd = super::kernel32::fd_of_handle(h)?;
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    (copy >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(copy) })
+}
+
+fn write_all(fd: i32, mut data: &[u8]) -> bool {
+    while !data.is_empty() {
+        let n = unsafe { libc::write(fd, data.as_ptr() as *const libc::c_void, data.len()) };
+        if n < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return false;
+        }
+        data = &data[n as usize..];
+    }
+    true
+}
+
 pub unsafe extern "win64" fn create_pseudo_console(
-    _size: u32,
-    _input: usize,
-    _output: usize,
+    size: u32,
+    input: usize,
+    output: usize,
     _flags: u32,
     out: *mut usize,
 ) -> i32 {
-    if !out.is_null() {
-        *out = 0;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+    const E_HANDLE: i32 = 0x8007_0006u32 as i32;
+    if out.is_null() {
+        return E_INVALIDARG;
     }
-    0x8000_4001u32 as i32 // E_NOTIMPL
+    *out = 0;
+    let (Some(input), Some(output)) = (dup_handle(input), dup_handle(output)) else {
+        return E_HANDLE;
+    };
+    let (mut master, mut slave) = (0, 0);
+    let size = winsize(size);
+    if libc::openpty(
+        &mut master,
+        &mut slave,
+        std::ptr::null_mut(),
+        std::ptr::null(),
+        &size,
+    ) != 0
+    {
+        return 0x8000_4005u32 as i32; // E_FAIL
+    }
+    for fd in [master, slave] {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    let master = std::sync::Arc::new(std::os::fd::OwnedFd::from_raw_fd(master));
+    let slave = std::os::fd::OwnedFd::from_raw_fd(slave);
+    let closed = std::sync::Arc::new(AtomicBool::new(false));
+    // Entrée : tube de l'appelant → maître du pty (attente bornée pour voir
+    // ClosePseudoConsole même si l'appelant garde son tube ouvert).
+    let (to_master, stop) = (master.clone(), closed.clone());
+    let _ = std::thread::Builder::new()
+        .name("winlux-conpty-in".into())
+        .spawn(move || {
+            let mut buffer = [0u8; 4096];
+            while !stop.load(Ordering::Acquire) {
+                let mut poll = libc::pollfd {
+                    fd: input.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut poll, 1, 200) } <= 0 {
+                    continue;
+                }
+                let n = unsafe {
+                    libc::read(
+                        input.as_raw_fd(),
+                        buffer.as_mut_ptr() as *mut libc::c_void,
+                        buffer.len(),
+                    )
+                };
+                if n <= 0 || !write_all(to_master.as_raw_fd(), &buffer[..n as usize]) {
+                    break;
+                }
+            }
+        });
+    // Sortie : maître du pty → tube de l'appelant, jusqu'à la fermeture.
+    let from_master = master.clone();
+    let _ = std::thread::Builder::new()
+        .name("winlux-conpty-out".into())
+        .spawn(move || {
+            let mut buffer = [0u8; 8192];
+            loop {
+                let n = unsafe {
+                    libc::read(
+                        from_master.as_raw_fd(),
+                        buffer.as_mut_ptr() as *mut libc::c_void,
+                        buffer.len(),
+                    )
+                };
+                if n < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                if n <= 0 || !write_all(output.as_raw_fd(), &buffer[..n as usize]) {
+                    break;
+                }
+            }
+            // Fin : `output` se ferme ici, l'appelant lit la fin du tube.
+        });
+    let handle = NEXT_CONSOLE.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::lock(&CONSOLES).push((
+        handle,
+        PseudoConsole {
+            master,
+            slave: Some(slave),
+            closed,
+        },
+    ));
+    crate::trace!(
+        "CreatePseudoConsole : {}x{} → {handle:#x}",
+        size.ws_col,
+        size.ws_row
+    );
+    *out = handle;
+    0
 }
-pub extern "win64" fn resize_pseudo_console(_h: usize, _size: u32) -> i32 {
-    0x8000_4001u32 as i32
+
+pub extern "win64" fn resize_pseudo_console(h: usize, size: u32) -> i32 {
+    use std::os::fd::AsRawFd;
+    let consoles = crate::dlls::lock(&CONSOLES);
+    let Some((_, console)) = consoles.iter().find(|(handle, _)| *handle == h) else {
+        return 0x8007_0006u32 as i32; // E_HANDLE
+    };
+    let size = winsize(size);
+    if unsafe { libc::ioctl(console.master.as_raw_fd(), libc::TIOCSWINSZ, &size) } != 0 {
+        return 0x8000_4005u32 as i32;
+    }
+    0
 }
-pub extern "win64" fn close_pseudo_console(_h: usize) {}
+
+/// Ferme la console : les programmes attachés reçoivent SIGHUP (comme
+/// CTRL_CLOSE_EVENT), puis le tube de sortie se ferme.
+pub extern "win64" fn close_pseudo_console(h: usize) {
+    use std::os::fd::AsRawFd;
+    let console = {
+        let mut consoles = crate::dlls::lock(&CONSOLES);
+        let Some(index) = consoles.iter().position(|(handle, _)| *handle == h) else {
+            return;
+        };
+        consoles.remove(index).1
+    };
+    console.closed.store(true, Ordering::Release);
+    let group = unsafe { libc::tcgetpgrp(console.master.as_raw_fd()) };
+    if group > 0 {
+        unsafe { libc::kill(-group, libc::SIGHUP) };
+    }
+    drop(console.slave);
+}
+
+/// Prépare `cmd` pour un programme attaché à la pseudo-console `h` :
+/// l'esclave du pty devient son entrée, sa sortie, son erreur et son
+/// terminal de contrôle (nouvelle session). Faux si `h` est inconnu.
+pub(crate) fn attach_pseudo_console(cmd: &mut std::process::Command, h: usize) -> bool {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::process::CommandExt;
+    let consoles = crate::dlls::lock(&CONSOLES);
+    let Some((_, console)) = consoles.iter().find(|(handle, _)| *handle == h) else {
+        return false;
+    };
+    let Some(slave) = console.slave.as_ref() else {
+        return false;
+    };
+    let copy = |fd: i32| {
+        let c = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        (c >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(c) })
+    };
+    let (Some(i), Some(o), Some(e)) = (
+        copy(slave.as_raw_fd()),
+        copy(slave.as_raw_fd()),
+        copy(slave.as_raw_fd()),
+    ) else {
+        return false;
+    };
+    cmd.stdin(i).stdout(o).stderr(e);
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Le terminal de l'entrée standard devient celui de la session.
+            libc::ioctl(0, libc::TIOCSCTTY, 0);
+            Ok(())
+        });
+    }
+    true
+}
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -583,6 +796,74 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lit le tube de sortie jusqu'à voir `until` (5 s au plus).
+    fn read_until(h: usize, until: &str) -> String {
+        let fd = super::super::kernel32::fd_of_handle(h).unwrap();
+        let mut text = Vec::new();
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs() < 5 && !String::from_utf8_lossy(&text).contains(until) {
+            let mut poll = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut poll, 1, 100) } <= 0 {
+                continue;
+            }
+            let mut buffer = [0u8; 1024];
+            let n =
+                unsafe { libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len()) };
+            if n <= 0 {
+                break;
+            }
+            text.extend_from_slice(&buffer[..n as usize]);
+        }
+        String::from_utf8_lossy(&text).into_owned()
+    }
+
+    #[test]
+    fn pseudo_console_vraie() {
+        use super::super::kernel32::{create_pipe, fd_of_handle};
+        let (mut in_read, mut in_write, mut out_read, mut out_write) =
+            (0usize, 0usize, 0usize, 0usize);
+        unsafe {
+            assert_eq!(
+                create_pipe(&mut in_read, &mut in_write, std::ptr::null(), 0),
+                1
+            );
+            assert_eq!(
+                create_pipe(&mut out_read, &mut out_write, std::ptr::null(), 0),
+                1
+            );
+        }
+        let mut console = 0usize;
+        // 100 colonnes, 30 lignes (COORD : X en bas, Y en haut).
+        let hr =
+            unsafe { create_pseudo_console(100 | (30 << 16), in_read, out_write, 0, &mut console) };
+        assert_eq!(hr, 0);
+        assert_ne!(console, 0);
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c").arg("stty size; test -t 0 && echo TTY; read ligne; echo \"lu:$ligne\"; printf '\\033[31mrouge\\033[0m\\n'");
+        assert!(attach_pseudo_console(&mut cmd, console));
+        let mut child = cmd.spawn().unwrap();
+        let text = read_until(out_read, "TTY");
+        assert!(text.contains("30 100"), "taille transmise : {text:?}");
+        // Saisie interactive : ce que l'appelant écrit arrive au programme.
+        let fd = fd_of_handle(in_write).unwrap();
+        assert!(write_all(fd, b"bonjour\r"));
+        let text = read_until(out_read, "rouge");
+        assert!(text.contains("lu:bonjour"), "saisie : {text:?}");
+        assert!(text.contains("\u{1b}[31mrouge"), "couleurs VT : {text:?}");
+        assert!(child.wait().unwrap().success());
+        assert_eq!(resize_pseudo_console(console, 120 | (40 << 16)), 0);
+        close_pseudo_console(console);
+        assert_ne!(
+            resize_pseudo_console(console, 80 | (25 << 16)),
+            0,
+            "console fermée"
+        );
+    }
 
     #[test]
     fn enregistrement_de_touche() {

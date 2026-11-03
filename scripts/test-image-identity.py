@@ -105,7 +105,17 @@ with tempfile.TemporaryDirectory() as temp:
 browsers_sh = (project / "scripts/winlux-browsers.sh").read_text()
 assert "browser=${2:-none}" in browsers_sh and "printf 'none\\n'" in browsers_sh and "edge\\n' ;;" not in browsers_sh
 settings_py = (project / "scripts/winlux-settings.py").read_text()
-assert 'for name in ("chrome", "edge", "firefox")' in settings_py
+# Ordre alphabétique, aucun navigateur mis en avant (vrais noms dans BROWSER_NAMES).
+assert 'BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}' in settings_py
+assert "for ident in BROWSER_NAMES" in settings_py
+# Paquet d'intégration (hors ISO) : même règle, aucun script dédié à un éditeur.
+assert not (project / "scripts/install-edge.sh").exists()
+integration = (project / "integration/install.sh").read_text()
+assert "install-browser.sh" in integration and "install-edge" not in integration
+refused = subprocess.run(["sh", str(project / "scripts/install-browser.sh"), "safari"], capture_output=True, text=True)
+assert refused.returncode == 2 and "chrome|edge|firefox" in refused.stderr, refused
+shell32 = (project / "runtime/src/dlls/shell32.rs").read_text()
+assert "Microsoft Edge" not in shell32, "shell32 présente encore Edge comme navigateur par défaut"
 guest = (project / "scripts/test-native-session-guest.py").read_text()
 assert "/usr/share/doc/winlux/sources-gpl.tsv" in guest and "WINLUX_NATIVE_IMAGE_IDENTITY" in guest
 

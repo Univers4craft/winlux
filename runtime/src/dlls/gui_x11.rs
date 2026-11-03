@@ -3742,6 +3742,31 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn reparent_window(&mut self, hwnd: usize, parent: usize, rect: Rect) {
+        let Some(parent_win) = self.windows.get(&parent).map(|w| w.window) else {
+            return;
+        };
+        let x = self
+            .scaled(rect.left)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
+        let y = self
+            .scaled(rect.top)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
+        let Some(w) = self.windows.get_mut(&hwnd) else {
+            return;
+        };
+        if !w.child {
+            return; // fenêtre de premier niveau : laissée au gestionnaire
+        }
+        w.x = x;
+        w.y = y;
+        let win = w.window;
+        let _ = self
+            .conn
+            .reparent_window(win, parent_win, x as i16, y as i16);
+        let _ = self.conn.flush();
+    }
+
     fn set_popup(&mut self, hwnd: usize) {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux = ChangeWindowAttributesAux::new().override_redirect(1);

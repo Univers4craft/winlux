@@ -130,6 +130,25 @@ TEXT = {
 _COLUMN = {"en": 0, "es": 1, "de": 2}
 
 
+EFI32_ARGS = ('# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante\n'
+              '# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).\n'
+              'set winlux_efi_args=\n'
+              'if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then\n'
+              '    set winlux_efi_args=efi=noruntime\n'
+              'fi\n')
+
+
+def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
+    """Comme l'installateur : les deux chargeurs UEFI dans EFI/BOOT, sinon celui du micrologiciel."""
+    ia32 = os.path.isdir(os.path.join(grub_dir, "i386-efi"))
+    if not own_esp:
+        try:
+            bits = Path("/sys/firmware/efi/fw_platform_size").read_text().strip()
+        except OSError:
+            bits = "64"
+        return ["i386-efi"] if ia32 and bits == "32" else ["x86_64-efi"]
+    return ["x86_64-efi", "i386-efi"] if ia32 else ["x86_64-efi"]
+
 def language():
     code = os.environ.get("WINLUX_LANG", "")
     if not code:
@@ -649,7 +668,7 @@ def resolve_source(spec, work, start=3, end=40):
 def check_support(source):
     if not initramfs_supports_reset(source.initramfs):
         raise ResetError(_("Cette image de Winlux est trop ancienne pour réinitialiser un PC : utilisez la version {version} ou plus récente.",
-                           version=read_text(ROOT / "usr/share/winlux/version").strip() or "v0.2.15"))
+                           version=read_text(ROOT / "usr/share/winlux/version").strip() or "v0.2.18"))
 
 
 # ── Préparer, annuler ───────────────────────────────────────────────────────
@@ -925,24 +944,36 @@ def grub_template(search_uuid, root_arg, extra, windows_esp_uuid=None):
                    f'    chainloader /EFI/Microsoft/Boot/bootmgfw.efi\n}}\n')
     timeout, style = (5, "menu") if windows else (1, "hidden")
     return f"""set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout={timeout}
 set timeout_style={style}
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output console serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output console serial
+    fi
+fi
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 {windows}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
@@ -992,9 +1023,16 @@ def repair_boot():
                 windows_esp_uuid = output(["blkid", "-s", "UUID", "-o", "value", esp["name"]]).strip() or None
             # ESP partagée avec Windows : dossier et entrée à nous, jamais EFI/BOOT.
             efi_args = ["--bootloader-id=winlux"] if shared else ["--removable", "--no-nvram"]
-            result = run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
-                          f"--boot-directory={boot}", "--recheck", *efi_args], check=False, capture_output=True, text=True)
-            if result.returncode:
+            if shared and not any(Path("/sys/firmware/efi/efivars").glob("*")):
+                efi_args.append("--no-nvram")  # efi=noruntime (UEFI 32 bits) : pas de variables
+            failed = None
+            for efi_target in efi_grub_targets(not shared):
+                result = run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
+                              f"--boot-directory={boot}", "--recheck", *efi_args], check=False, capture_output=True, text=True)
+                if result.returncode and failed is None:
+                    failed = result
+            if failed is not None:
+                result = failed
                 warnings.append((result.stdout + result.stderr).strip()[-300:])
             elif not shared and have("winlux-secureboot") and Path("/usr/lib/shim/shimx64.efi.signed").exists():
                 uuid = output(["blkid", "-s", "UUID", "-o", "value", device]).strip()
@@ -1099,33 +1137,35 @@ def key_grub_cfg(root_spec, extra, theme):
     common = "rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=0 loglevel=3 winlux.recovery=1"
     if root_spec and not root_spec.startswith("LABEL=WINLUX_ROOT"):
         entries.append(f'menuentry "{_("Menu de secours de ce PC")}" --hotkey=r {{\n'
-                       f'    linux /boot/vmlinuz root={root_spec} {common}{extra}\n'
+                       f'    linux /boot/vmlinuz root={root_spec} {common}{extra} $winlux_efi_args\n'
                        f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
         title = _("Menu de secours (autre PC Winlux)")
     else:
         title = _("Menu de secours de ce PC")
     entries.append(f'menuentry "{title}" {{\n'
                    f'    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then\n'
-                   f'        linux /boot/vmlinuz root=LABEL=WINLUX_ROOT {common}\n'
+                   f'        linux /boot/vmlinuz root=LABEL=WINLUX_ROOT {common} $winlux_efi_args\n'
                    f'        initrd /boot/winlux-initramfs.cpio.gz\n'
                    f'    else\n        echo "{_("Aucune installation Winlux trouvée sur les disques.")}"\n        sleep 6\n    fi\n}}\n')
     live = "console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0"
     entries.append(f'menuentry "{_("Démarrer Winlux depuis la clé (réinstaller)")}" --hotkey=i {{\n'
-                   f'    linux /boot/vmlinuz {live} quiet winlux.interactive=1\n'
+                   f'    linux /boot/vmlinuz {live} quiet winlux.interactive=1 $winlux_efi_args\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
     entries.append(f'menuentry "{_("Vérifier la clé puis démarrer")}" --hotkey=v {{\n'
-                   f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1\n'
+                   f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1 $winlux_efi_args\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
     # Sans thème, la police Unicode de GRUB (posée par grub-install) garde les accents.
-    themed = ("if loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
+    themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
               "    set gfxmode=auto\n    if terminal_output gfxterm; then\n        set winlux_term=gfxterm\n    fi\nfi\n")
     if theme:
-        themed = ("if loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
+        themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
                   "    insmod png\n    set gfxmode=auto\n    if terminal_output gfxterm; then\n"
                   "        set theme=/boot/grub/themes/winlux/theme.txt\n        set winlux_term=gfxterm\n    fi\nfi\n")
-    return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + themed +
-            "if serial --unit=0 --speed=115200; then\n    terminal_input serial console\n"
-            "    terminal_output serial $winlux_term\nfi\n" + "".join(entries))
+    return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + EFI32_ARGS + themed +
+            "set winlux_vendor=\nsmbios --type 1 --get-string 4 --set winlux_vendor\n"
+            "if [ \"$winlux_vendor\" = \"QEMU\" ]; then\n"
+            "    if serial --unit=0 --speed=115200; then\n        terminal_input serial console\n"
+            "        terminal_output serial $winlux_term\n    fi\nfi\n" + "".join(entries))
 
 
 def copy_with_progress(source, target, digests, relative, done, total, start, end):
@@ -1225,8 +1265,10 @@ def make_key(args):
         if have("grub-install"):
             run(["grub-install", "--target=i386-pc", f"--boot-directory={boot}", "--recheck", device],
                 check=False, capture_output=True)
-            run(["grub-install", "--target=x86_64-efi", "--removable", "--no-nvram", f"--efi-directory={target}",
-                 f"--boot-directory={boot}", "--recheck"], check=False, capture_output=True)
+            # Clé : BOOTX64.EFI et BOOTIA32.EFI, pour les PC à micrologiciel 32 bits.
+            for efi_target in efi_grub_targets(True):
+                run(["grub-install", f"--target={efi_target}", "--removable", "--no-nvram", f"--efi-directory={target}",
+                     f"--boot-directory={boot}", "--recheck"], check=False, capture_output=True)
         if source.efi and (source.efi / "BOOT/BOOTX64.EFI").is_file():
             # Chaîne Secure Boot de l'ISO (shim signé -> GRUB signé) : ses
             # petits grub.cfg cherchent la clé par son fichier témoin.

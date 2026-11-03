@@ -34,6 +34,7 @@ _TR = {
     'Visite guidée et logiciels courants': ('Guided tour and common apps', 'Recorrido guiado y aplicaciones habituales', 'Geführte Tour und gängige Programme'),
     'Choisir le clavier': ('Choose the keyboard', 'Elegir el teclado', 'Tastatur auswählen'),
     'Choisir et installer un navigateur': ('Choose and install a browser', 'Elegir e instalar un navegador', 'Browser auswählen und installieren'),
+    'Choisir des boutiques de logiciels': ('Choose software stores', 'Elegir tiendas de programas', 'Software-Stores auswählen'),
     'Configurer le réseau': ('Set up the network', 'Configurar la red', 'Netzwerk einrichten'),
     'Personnaliser l’apparence': ('Personalize the appearance', 'Personalizar la apariencia', 'Darstellung anpassen'),
     'Découvrir le secours': ('Discover recovery', 'Descubrir la recuperación', 'Wiederherstellung entdecken'),
@@ -70,7 +71,10 @@ class Welcome(Gtk.Window):
             (_t("Choisir le clavier"), ["winlux-shell-app", "settings", "4"]),
             # Aucun navigateur n'est fourni : l'utilisateur choisit le sien.
             (_t("Choisir et installer un navigateur"), ["winlux-shell-app", "settings", "11"]),
-            (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
+            # Aucune boutique tierce non plus : Paramètres > Applications.
+            (_t("Choisir des boutiques de logiciels"), ["winlux-shell-app", "settings", "1"]),
+            # Page Wi-Fi (ou Réseau sans carte Wi-Fi) de Paramètres.
+            (_t("Configurer le réseau"), ["winlux-shell-app", "settings", "35"]),
             (_t("Personnaliser l’apparence"), ["winlux-shell-app", "settings", "21"]),
             (_t("Découvrir le secours"), ["winlux-shell-app", "settings", "7"]),
         ):

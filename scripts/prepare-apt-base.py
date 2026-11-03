@@ -23,12 +23,16 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
              "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello",
              "nftables"]
 PACKAGES += ["rsync", "openssh-client"]
+# Microcode Intel et AMD dans l'image : un système installé hors ligne a ses
+# correctifs du processeur dès le premier démarrage (winlux-drivers boot
+# construit /boot/winlux-microcode.cpio depuis ces paquets).
+PACKAGES += ["intel-microcode", "amd64-microcode"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
              "libqt6core6t64", "libqt6gui6", "libqt6widgets6"]
 # Tools the graphical installer runs from the live session.
 PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
-             "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
+             "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "grub-efi-ia32-bin", "efibootmgr",
              "xorriso", "openssl", "python3-gi-cairo"]
 # Decoding engine of the media player (winlux_media runs ffmpeg/ffprobe from PATH).
 PACKAGES += ["ffmpeg"]

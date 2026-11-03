@@ -210,7 +210,9 @@ def run_view():
             screen = self.get_screen()
             visual = screen.get_rgba_visual()
             if visual is not None and screen.is_composited(): self.set_visual(visual)
-            self.set_app_paintable(True)
+            # Pas d'app_paintable : GTK ne peignait alors le voile que sous la
+            # zone centrale (marge de 40 px), les fenêtres restaient nettes et
+            # cliquables sur tout le pourtour de l'écran.
             css = Gtk.CssProvider()
             css.load_from_data(b"""
               window { background: rgba(16, 18, 26, 0.86); color: #ecedf5; }

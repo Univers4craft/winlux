@@ -75,9 +75,9 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.14**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.14) (2 novembre 2026) : bureau et programmes sous le compte de l'utilisateur (plus en root), démarrage plus rapide, Claude Code dans Winlux, applications Ubuntu traduites. |
-| **Version en préparation** | **v0.2.15** : aucun navigateur fourni (vous choisissez le vôtre, téléchargé chez son éditeur), système au nom de Winlux, sources GPL publiées, contrôles et boîtes de dialogue Win32, OpenGL et Vulkan. |
-| **Architecture prise en charge** | PC x86-64, démarrage BIOS ou UEFI, Secure Boot compatible. |
+| **Dernière version publiée** | [**v0.2.17**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.17) (3 novembre 2026) : page Wi-Fi avec saisie de la clé et WPS, firmwares du son et du Wi-Fi chargés sur les vrais PC, menu de démarrage utilisable au clavier, clavier tactile dans l'installateur, matériel détaillé dans Performances et À propos. |
+| **Version en préparation** | **v0.2.18** : Wi-Fi WPA2/WPA3 et Entreprise qui se connecte vraiment, réseau du compte réparé, 3 581 pilotes de plus pour les vrais PC, rotation des tablettes, clé live qui démarre toujours son live, redémarrage après installation jamais bloqué, su et sudo. |
+| **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
 | **Matériel réel** | Testé surtout en machine virtuelle (QEMU/KVM, VirtualBox, VMware). La validation sur une large gamme de PC réels reste à faire. |
@@ -246,6 +246,15 @@ sh scripts/build-mingw-tests.sh && sh scripts/test-mingw.sh   # suites C MinGW
 cargo fmt --check -p winlux              # exigé par la CI
 cargo clippy -p winlux -- -D warnings    # exigé par la CI
 ```
+
+Toute la suite d'un coup, comme la CI (étapes lues dans `ci.yml` et `release.yml`, hors VM) :
+
+```sh
+sh scripts/test-all.sh                   # compilation, tests Rust, PE et scripts
+sh scripts/test-all.sh --rapide          # sans compilation ni PE (quelques minutes)
+```
+
+Les défauts trouvés en VM pendant la campagne de tests v0.2.13 ont chacun leur vérification dans `scripts/test-campaign.py`.
 
 La construction de l'ISO demande un hôte **Ubuntu 26.04** avec KVM : elle prépare la base Ubuntu officielle dans une VM jetable, puis assemble l'image. Elle est normalement faite par le workflow de publication. Les commandes, variables et pièges connus sont dans [docs/BUILD.md](docs/BUILD.md), [docs/NATIVE-APT.md](docs/NATIVE-APT.md) et la page [Construire l'ISO](wiki/Construire-l-ISO.md) du wiki.
 

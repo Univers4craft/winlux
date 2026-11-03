@@ -121,7 +121,9 @@ Ajouté par la PR 2 (démarrage de coreclr) :
   `GetUserPreferredUILanguages`, `EventSetInformation`,
   `RtlDllShutdownInProgress`.
 - Diagnostic : `WINLUX_APITRACE=1` journalise chaque appel d'API intégrée
-  avec son appelant, et `WINLUX_LOG=trace` chaque exception levée.
+  avec son appelant dans `~/.cache/winlux/apitrace/<programme>-<pid>.log`
+  (ou `$WINLUX_APITRACE_DIR`, jamais /tmp ; 32 Mo puis `.1`, 512 Mo au
+  plus pour le dossier), et `WINLUX_LOG=trace` chaque exception levée.
 
 ## La boucle d'exceptions après `paintdotnet.dll` (état au 31/10/2026)
 

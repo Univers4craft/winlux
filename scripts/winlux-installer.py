@@ -10,6 +10,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
+import contextlib
 import gzip
 import html
 import json
@@ -30,6 +31,37 @@ HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
 INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
                   os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
+
+
+def firmware_efi_bits():
+    """32 sur un UEFI 32 bits (tablettes Atom), 64 sinon (lu dans /sys)."""
+    try:
+        with open("/sys/firmware/efi/fw_platform_size") as f:
+            return 32 if f.read().strip() == "32" else 64
+    except OSError:
+        return 64
+
+
+def efi_variables_writable():
+    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    try:
+        return any(os.scandir("/sys/firmware/efi/efivars"))
+    except OSError:
+        return False
+
+
+def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):
+    """Chargeurs UEFI à installer : un processeur 64 bits peut avoir un micrologiciel 32 bits.
+
+    Sur une partition EFI à nous (EFI/BOOT), on pose les deux : BOOTX64.EFI et
+    BOOTIA32.EFI, le micrologiciel prend celui de son mode. Sur une partition
+    partagée avec Windows, l'entrée de démarrage est propre à ce micrologiciel :
+    seul le chargeur de son mode est installé.
+    """
+    ia32 = os.path.isdir(os.path.join(grub_dir, "i386-efi"))
+    if not own_esp:
+        return ["i386-efi"] if ia32 and firmware_efi_bits() == 32 else ["x86_64-efi"]
+    return ["x86_64-efi", "i386-efi"] if ia32 else ["x86_64-efi"]
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
 # Modules partagés : à côté du script dans le dépôt, /usr/lib/winlux/python une fois installé.
@@ -55,6 +87,7 @@ CSS = b"""
 @define-color fg_secondary #b4b4cc;
 @define-color accent #6A3DF0;
 @define-color accent_hover #7C4DFF;
+@define-color accent_light #B69CFF;
 @define-color danger #e74856;
 
 window.installer-window {
@@ -200,6 +233,22 @@ window.installer-window {
     color: #2ecc71;
     font-size: 64px;
 }
+/* Licence non acceptee : la case est entouree de l accent et une phrase dit pourquoi
+   Suivant n avance pas (#B69CFF, lisible sur le fond sombre de l installateur). */
+.license-accept-box {
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+.license-accept-box.license-attention {
+    border-color: @accent_light;
+    background-color: alpha(@accent, 0.22);
+}
+.installer-content .license-hint {
+    color: @accent_light;
+    font-size: 13px;
+    font-weight: bold;
+}
 .license-text {
     color: @fg_secondary;
     font-size: 12px;
@@ -253,6 +302,31 @@ window.installer-window {
 .installer-content checkbutton label,
 .installer-content radiobutton label {
     color: @fg_primary;
+}
+/* Accent Prisme partout, pas le bleu du theme GTK. */
+radiobutton radio:checked,
+checkbutton check:checked,
+radio:checked,
+check:checked {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+    color: #ffffff;
+}
+switch:checked {
+    background-color: @accent;
+    border-color: @accent;
+}
+progressbar progress,
+scale highlight {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+}
+*:selected,
+selection {
+    background-color: @accent;
+    color: #ffffff;
 }
 .status-ok {
     color: #2ecc71;
@@ -379,20 +453,20 @@ KEYBOARDS = [
 ]
 
 PART_COLORS = {
-    "ext4": (0.0, 0.47, 0.83, 1.0),
-    "ext3": (0.0, 0.47, 0.83, 0.8),
-    "ext2": (0.0, 0.47, 0.83, 0.6),
-    "btrfs": (0.0, 0.47, 0.83, 0.9),
-    "xfs": (0.15, 0.55, 0.85, 1.0),
+    "ext4": (0.416, 0.239, 0.941, 1.0),  # accent Prisme #6A3DF0
+    "ext3": (0.416, 0.239, 0.941, 0.8),
+    "ext2": (0.416, 0.239, 0.941, 0.6),
+    "btrfs": (0.416, 0.239, 0.941, 0.9),
+    "xfs": (0.486, 0.302, 1.0, 1.0),
     "ntfs": (0.9, 0.55, 0.1, 1.0),
     "vfat": (0.3, 0.75, 0.35, 1.0),
     "fat32": (0.3, 0.75, 0.35, 1.0),
     "fat16": (0.3, 0.75, 0.35, 1.0),
-    "swap": (0.55, 0.35, 0.75, 1.0),
-    "linux-swap": (0.55, 0.35, 0.75, 1.0),
+    "swap": (0.2, 0.6, 0.65, 1.0),
+    "linux-swap": (0.2, 0.6, 0.65, 1.0),
     "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
-    "winlux": (0.0, 0.62, 0.95, 1.0),
+    "winlux": (0.416, 0.239, 0.941, 1.0),  # partition Winlux : accent Prisme
     "bios": (0.45, 0.45, 0.55, 1.0),
 }
 
@@ -408,6 +482,7 @@ TRANSLATIONS = {
         "license_title": "Contrat de licence",
         "license_subtitle": "Veuillez lire et accepter les termes de la licence.",
         "license_accept": "J'accepte les termes de la licence GPL v3",
+        "license_required": "Pour continuer, acceptez les termes de la licence en cochant la case ci-dessus.",
         "part_title": "Partitionnement",
         "part_subtitle": "Choisissez le disque et le mode de partitionnement.",
         "part_select_disk": "Sélectionnez un disque :",
@@ -458,6 +533,7 @@ TRANSLATIONS = {
         "done_title": "Installation terminée !",
         "done_subtitle": "Winlux a été installé avec succès. Retirez le média d'installation et redémarrez.",
         "btn_next": "Suivant",
+        "btn_osk": "Clavier tactile",
         "btn_back": "Retour",
         "btn_install": "Installer",
         "btn_reboot": "Redémarrer maintenant",
@@ -478,6 +554,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applications recommandées",
         "summary_benchmark": "Note de performance",
         "summary_benchmark_none": "non mesurée",
+        "summary_benchmark_running": "mesure en cours",
+        "summary_benchmark_limited": "{score} (limitée par : {part})",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -499,6 +577,20 @@ TRANSLATIONS = {
         "progress_account": "Configuration du compte utilisateur...",
         "progress_firstboot": "Configuration du premier démarrage...",
         "progress_sync": "Synchronisation et démontage...",
+        "hw_rgb": "Éclairage RGB du clavier et des périphériques (OpenRGB)",
+        "hw_printer": "Pilotes d'imprimantes",
+        "progress_drivers": "Pilotes et micrologiciels pour cet ordinateur...",
+        "hw_show": "Voir ce qui a été ajouté pour cet ordinateur",
+        "hw_none": "Rien à ajouter : tout ce qu'il faut à cet ordinateur est déjà dans Winlux.",
+        "hw_offline": "Hors ligne : ce qui est propre à cet ordinateur sera ajouté au premier démarrage connecté. Tout le reste est déjà installé.",
+        "hw_partial": "Le reste sera terminé automatiquement au premier démarrage connecté.",
+        "hw_nvidia": "Pilote NVIDIA pour la carte graphique",
+        "hw_modules": "Pilotes complets du noyau (Wi-Fi, son, capteurs…)",
+        "hw_microcode": "Microcode du processeur",
+        "hw_vaapi": "Décodage et encodage vidéo matériels (VA-API)",
+        "hw_fwupd": "Mises à jour du micrologiciel (fwupd)",
+        "hw_fingerprint": "Lecteur d'empreintes digitales",
+        "err_unmount": "Le disque {path} n'a pas pu être libéré proprement. N'éteignez pas l'ordinateur : utilisez « Redémarrer maintenant ».",
         "progress_done": "Installation terminée avec succès !",
         "network_title": "Connexion réseau",
         "network_subtitle": "Connectez-vous à Internet pour télécharger les mises à jour pendant l'installation.",
@@ -568,6 +660,7 @@ TRANSLATIONS = {
         "license_title": "License agreement",
         "license_subtitle": "Please read and accept the license terms.",
         "license_accept": "I accept the terms of the GPL v3 license",
+        "license_required": "To continue, accept the license terms by checking the box above.",
         "part_title": "Partitioning",
         "part_subtitle": "Choose the disk and partitioning mode.",
         "part_select_disk": "Select a disk:",
@@ -618,6 +711,7 @@ TRANSLATIONS = {
         "done_title": "Installation complete!",
         "done_subtitle": "Winlux has been installed successfully. Remove the installation media and reboot.",
         "btn_next": "Next",
+        "btn_osk": "Touch keyboard",
         "btn_back": "Back",
         "btn_install": "Install",
         "btn_reboot": "Reboot now",
@@ -638,6 +732,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ recommended apps",
         "summary_benchmark": "Performance score",
         "summary_benchmark_none": "not measured",
+        "summary_benchmark_running": "measuring",
+        "summary_benchmark_limited": "{score} (limited by: {part})",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -659,6 +755,20 @@ TRANSLATIONS = {
         "progress_account": "Configuring user account...",
         "progress_firstboot": "Configuring first boot...",
         "progress_sync": "Syncing and unmounting...",
+        "hw_rgb": "RGB lighting for the keyboard and devices (OpenRGB)",
+        "hw_printer": "Printer drivers",
+        "progress_drivers": "Drivers and firmware for this computer...",
+        "hw_show": "Show what was added for this computer",
+        "hw_none": "Nothing to add: everything this computer needs is already in Winlux.",
+        "hw_offline": "Offline: what is specific to this computer will be added at the first connected start. Everything else is already installed.",
+        "hw_partial": "The rest will be finished automatically at the first connected start.",
+        "hw_nvidia": "NVIDIA driver for the graphics card",
+        "hw_modules": "Full kernel drivers (Wi-Fi, sound, sensors…)",
+        "hw_microcode": "Processor microcode",
+        "hw_vaapi": "Hardware video decoding and encoding (VA-API)",
+        "hw_fwupd": "Firmware updates (fwupd)",
+        "hw_fingerprint": "Fingerprint reader",
+        "err_unmount": "The disk {path} could not be released cleanly. Do not switch the computer off: use “Restart now”.",
         "progress_done": "Installation completed successfully!",
         "network_title": "Network connection",
         "network_subtitle": "Connect to the Internet to download updates during installation.",
@@ -728,6 +838,7 @@ TRANSLATIONS = {
         "license_title": "Lizenzvereinbarung",
         "license_subtitle": "Bitte lesen und akzeptieren Sie die Lizenzbedingungen.",
         "license_accept": "Ich akzeptiere die Bedingungen der GPL v3-Lizenz",
+        "license_required": "Um fortzufahren, akzeptieren Sie die Lizenzbedingungen mit dem Kästchen oben.",
         "part_title": "Partitionierung",
         "part_subtitle": "Wählen Sie die Festplatte und den Partitionierungsmodus.",
         "part_select_disk": "Wählen Sie eine Festplatte:",
@@ -778,6 +889,7 @@ TRANSLATIONS = {
         "done_title": "Installation abgeschlossen!",
         "done_subtitle": "Winlux wurde erfolgreich installiert. Entfernen Sie das Installationsmedium und starten Sie neu.",
         "btn_next": "Weiter",
+        "btn_osk": "Bildschirmtastatur",
         "btn_back": "Zurück",
         "btn_install": "Installieren",
         "btn_reboot": "Jetzt neu starten",
@@ -798,6 +910,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ empfohlene Anwendungen",
         "summary_benchmark": "Leistungsbewertung",
         "summary_benchmark_none": "nicht gemessen",
+        "summary_benchmark_running": "Messung läuft",
+        "summary_benchmark_limited": "{score} (begrenzt durch: {part})",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -819,6 +933,20 @@ TRANSLATIONS = {
         "progress_account": "Benutzerkonto wird konfiguriert...",
         "progress_firstboot": "Erster Start wird konfiguriert...",
         "progress_sync": "Synchronisierung und Aushängen...",
+        "hw_rgb": "RGB-Beleuchtung von Tastatur und Geräten (OpenRGB)",
+        "hw_printer": "Druckertreiber",
+        "progress_drivers": "Treiber und Firmware für diesen Computer...",
+        "hw_show": "Anzeigen, was für diesen Computer hinzugefügt wurde",
+        "hw_none": "Nichts hinzuzufügen: alles, was dieser Computer braucht, ist bereits in Winlux.",
+        "hw_offline": "Offline: Was speziell für diesen Computer ist, wird beim ersten Start mit Internet hinzugefügt. Alles andere ist bereits installiert.",
+        "hw_partial": "Der Rest wird beim ersten Start mit Internet automatisch abgeschlossen.",
+        "hw_nvidia": "NVIDIA-Treiber für die Grafikkarte",
+        "hw_modules": "Vollständige Kerneltreiber (WLAN, Ton, Sensoren…)",
+        "hw_microcode": "Prozessor-Mikrocode",
+        "hw_vaapi": "Hardware-Videodekodierung und -kodierung (VA-API)",
+        "hw_fwupd": "Firmware-Updates (fwupd)",
+        "hw_fingerprint": "Fingerabdruckleser",
+        "err_unmount": "Das Laufwerk {path} konnte nicht sauber freigegeben werden. Schalten Sie den Computer nicht aus: verwenden Sie „Jetzt neu starten“.",
         "progress_done": "Installation erfolgreich abgeschlossen!",
         "network_title": "Netzwerkverbindung",
         "network_subtitle": "Verbinden Sie sich mit dem Internet, um während der Installation Updates herunterzuladen.",
@@ -888,6 +1016,7 @@ TRANSLATIONS = {
         "license_title": "Acuerdo de licencia",
         "license_subtitle": "Lea y acepte los términos de la licencia.",
         "license_accept": "Acepto los términos de la licencia GPL v3",
+        "license_required": "Para continuar, acepte los términos de la licencia marcando la casilla de arriba.",
         "part_title": "Particionamiento",
         "part_subtitle": "Elija el disco y el modo de particionamiento.",
         "part_select_disk": "Seleccione un disco:",
@@ -938,6 +1067,7 @@ TRANSLATIONS = {
         "done_title": "¡Instalación completada!",
         "done_subtitle": "Winlux se ha instalado correctamente. Retire el medio de instalación y reinicie.",
         "btn_next": "Siguiente",
+        "btn_osk": "Teclado táctil",
         "btn_back": "Atrás",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar ahora",
@@ -958,6 +1088,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicaciones recomendadas",
         "summary_benchmark": "Puntuación de rendimiento",
         "summary_benchmark_none": "no medida",
+        "summary_benchmark_running": "midiendo",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -979,6 +1111,20 @@ TRANSLATIONS = {
         "progress_account": "Configurando cuenta de usuario...",
         "progress_firstboot": "Configurando primer arranque...",
         "progress_sync": "Sincronizando y desmontando...",
+        "hw_rgb": "Iluminación RGB del teclado y los periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impresora",
+        "progress_drivers": "Controladores y firmware para este equipo...",
+        "hw_show": "Ver lo que se añadió para este equipo",
+        "hw_none": "Nada que añadir: todo lo que necesita este equipo ya está en Winlux.",
+        "hw_offline": "Sin conexión: lo propio de este equipo se añadirá en el primer inicio con conexión. Todo lo demás ya está instalado.",
+        "hw_partial": "El resto se terminará automáticamente en el primer inicio con conexión.",
+        "hw_nvidia": "Controlador NVIDIA para la tarjeta gráfica",
+        "hw_modules": "Controladores completos del núcleo (Wi-Fi, sonido, sensores…)",
+        "hw_microcode": "Microcódigo del procesador",
+        "hw_vaapi": "Decodificación y codificación de vídeo por hardware (VA-API)",
+        "hw_fwupd": "Actualizaciones de firmware (fwupd)",
+        "hw_fingerprint": "Lector de huellas",
+        "err_unmount": "No se pudo liberar correctamente el disco {path}. No apague el equipo: use «Reiniciar ahora».",
         "progress_done": "¡Instalación completada con éxito!",
         "network_title": "Conexión de red",
         "network_subtitle": "Conéctese a Internet para descargar actualizaciones durante la instalación.",
@@ -1048,6 +1194,7 @@ TRANSLATIONS = {
         "license_title": "Contratto di licenza",
         "license_subtitle": "Leggere e accettare i termini della licenza.",
         "license_accept": "Accetto i termini della licenza GPL v3",
+        "license_required": "Per continuare, accetta i termini della licenza selezionando la casella qui sopra.",
         "part_title": "Partizionamento",
         "part_subtitle": "Scegli il disco e la modalità di partizionamento.",
         "part_select_disk": "Seleziona un disco:",
@@ -1098,6 +1245,7 @@ TRANSLATIONS = {
         "done_title": "Installazione completata!",
         "done_subtitle": "Winlux è stato installato con successo. Rimuovi il supporto di installazione e riavvia.",
         "btn_next": "Avanti",
+        "btn_osk": "Tastiera virtuale",
         "btn_back": "Indietro",
         "btn_install": "Installa",
         "btn_reboot": "Riavvia ora",
@@ -1118,6 +1266,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applicazioni consigliate",
         "summary_benchmark": "Punteggio prestazioni",
         "summary_benchmark_none": "non misurato",
+        "summary_benchmark_running": "misurazione in corso",
+        "summary_benchmark_limited": "{score} (limitato da: {part})",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1139,6 +1289,20 @@ TRANSLATIONS = {
         "progress_account": "Configurazione dell'account utente...",
         "progress_firstboot": "Configurazione del primo avvio...",
         "progress_sync": "Sincronizzazione e smontaggio...",
+        "hw_rgb": "Illuminazione RGB di tastiera e periferiche (OpenRGB)",
+        "hw_printer": "Driver per stampanti",
+        "progress_drivers": "Driver e firmware per questo computer...",
+        "hw_show": "Mostra cosa è stato aggiunto per questo computer",
+        "hw_none": "Niente da aggiungere: tutto ciò che serve a questo computer è già in Winlux.",
+        "hw_offline": "Offline: ciò che è specifico di questo computer verrà aggiunto al primo avvio connesso. Tutto il resto è già installato.",
+        "hw_partial": "Il resto verrà completato automaticamente al primo avvio connesso.",
+        "hw_nvidia": "Driver NVIDIA per la scheda grafica",
+        "hw_modules": "Driver completi del kernel (Wi-Fi, audio, sensori…)",
+        "hw_microcode": "Microcodice del processore",
+        "hw_vaapi": "Decodifica e codifica video hardware (VA-API)",
+        "hw_fwupd": "Aggiornamenti firmware (fwupd)",
+        "hw_fingerprint": "Lettore di impronte",
+        "err_unmount": "Impossibile liberare correttamente il disco {path}. Non spegnere il computer: usa «Riavvia ora».",
         "progress_done": "Installazione completata con successo!",
         "network_title": "Connessione di rete",
         "network_subtitle": "Connettiti a Internet per scaricare gli aggiornamenti durante l'installazione.",
@@ -1208,6 +1372,7 @@ TRANSLATIONS = {
         "license_title": "Acordo de licença",
         "license_subtitle": "Leia e aceite os termos da licença.",
         "license_accept": "Aceito os termos da licença GPL v3",
+        "license_required": "Para continuar, aceite os termos da licença marcando a caixa acima.",
         "part_title": "Particionamento",
         "part_subtitle": "Escolha o disco e o modo de particionamento.",
         "part_select_disk": "Selecione um disco:",
@@ -1258,6 +1423,7 @@ TRANSLATIONS = {
         "done_title": "Instalação concluída!",
         "done_subtitle": "O Winlux foi instalado com sucesso. Remova a mídia de instalação e reinicie.",
         "btn_next": "Próximo",
+        "btn_osk": "Teclado virtual",
         "btn_back": "Voltar",
         "btn_install": "Instalar",
         "btn_reboot": "Reiniciar agora",
@@ -1278,6 +1444,8 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicativos recomendados",
         "summary_benchmark": "Nota de desempenho",
         "summary_benchmark_none": "não medida",
+        "summary_benchmark_running": "a medir",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -1299,6 +1467,20 @@ TRANSLATIONS = {
         "progress_account": "Configurando conta de usuário...",
         "progress_firstboot": "Configurando primeira inicialização...",
         "progress_sync": "Sincronizando e desmontando...",
+        "hw_rgb": "Iluminação RGB do teclado e periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impressora",
+        "progress_drivers": "Controladores e firmware para este computador...",
+        "hw_show": "Ver o que foi adicionado para este computador",
+        "hw_none": "Nada a adicionar: tudo o que este computador precisa já está no Winlux.",
+        "hw_offline": "Sem ligação: o que é específico deste computador será adicionado no primeiro arranque com ligação. Todo o resto já está instalado.",
+        "hw_partial": "O resto será concluído automaticamente no primeiro arranque com ligação.",
+        "hw_nvidia": "Controlador NVIDIA para a placa gráfica",
+        "hw_modules": "Controladores completos do núcleo (Wi-Fi, som, sensores…)",
+        "hw_microcode": "Microcódigo do processador",
+        "hw_vaapi": "Descodificação e codificação de vídeo por hardware (VA-API)",
+        "hw_fwupd": "Atualizações de firmware (fwupd)",
+        "hw_fingerprint": "Leitor de impressões digitais",
+        "err_unmount": "Não foi possível libertar corretamente o disco {path}. Não desligue o computador: use «Reiniciar agora».",
         "progress_done": "Instalação concluída com sucesso!",
         "network_title": "Conexão de rede",
         "network_subtitle": "Conecte-se à Internet para baixar atualizações durante a instalação.",
@@ -1366,6 +1548,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": 'Choisir plus tard (Paramètres > Navigateurs)',
         "summary_browser": 'Navigateur',
         "summary_browser_none": 'à choisir plus tard',
+        "store_title": 'Boutiques de logiciels',
+        "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
+        "summary_store": 'Boutiques',
+        "summary_store_none": 'aucune (Paramètres > Applications)',
+        "summary_offline_later": "Pas de connexion Internet pour l'instant : le navigateur et les boutiques choisis seront installés automatiquement au premier démarrage connecté.",
         "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
@@ -1390,6 +1577,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Mémoire",
         "bench_disk": "Disque",
         "bench_gpu": "Graphique",
+        "bench_limited_by": "La note globale est celle du composant le plus lent : {part}.",
         "bench_waiting": "en attente",
         "bench_tips": "Recommandations",
         "bench_running": "Test en cours… vous pouvez continuer, il se termine en arrière-plan.",
@@ -1449,6 +1637,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": 'Choose later (Settings > Browsers)',
         "summary_browser": 'Browser',
         "summary_browser_none": 'to be chosen later',
+        "store_title": 'Software stores',
+        "store_subtitle": 'Winlux neither ships nor imposes any store. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'none (Settings > Apps)',
+        "summary_offline_later": 'No Internet connection for now: the chosen browser and stores will be installed automatically at the first startup with a connection.',
         "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
@@ -1473,6 +1666,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memory",
         "bench_disk": "Disk",
         "bench_gpu": "Graphics",
+        "bench_limited_by": "The overall score is that of the slowest component: {part}.",
         "bench_waiting": "waiting",
         "bench_tips": "Recommendations",
         "bench_running": "Test in progress… you can continue, it finishes in the background.",
@@ -1532,6 +1726,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": "Später auswählen (Einstellungen > Browser)",
         "summary_browser": "Browser",
         "summary_browser_none": "später auswählen",
+        "store_title": 'Software-Stores',
+        "store_subtitle": 'Winlux liefert und erzwingt keinen Store. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
+        "summary_store": 'Stores',
+        "summary_store_none": 'keine (Einstellungen > Apps)',
+        "summary_offline_later": 'Derzeit keine Internetverbindung: Der gewählte Browser und die Stores werden beim ersten Start mit Verbindung automatisch installiert.',
         "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
@@ -1556,6 +1755,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Arbeitsspeicher",
         "bench_disk": "Datenträger",
         "bench_gpu": "Grafik",
+        "bench_limited_by": "Die Gesamtbewertung ist die der langsamsten Komponente: {part}.",
         "bench_waiting": "wartet",
         "bench_tips": "Empfehlungen",
         "bench_running": "Test läuft… Sie können fortfahren, er wird im Hintergrund beendet.",
@@ -1615,6 +1815,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": "Elegir más tarde (Configuración > Navegadores)",
         "summary_browser": "Navegador",
         "summary_browser_none": "por elegir más tarde",
+        "store_title": 'Tiendas de programas',
+        "store_subtitle": 'Winlux no incluye ni impone ninguna tienda. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
+        "summary_store": 'Tiendas',
+        "summary_store_none": 'ninguna (Configuración > Aplicaciones)',
+        "summary_offline_later": 'Sin conexión a Internet por ahora: el navegador y las tiendas elegidos se instalarán automáticamente en el primer arranque con conexión.',
         "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
@@ -1639,6 +1844,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "La puntuación global es la del componente más lento: {part}.",
         "bench_waiting": "en espera",
         "bench_tips": "Recomendaciones",
         "bench_running": "Prueba en curso… puede continuar, termina en segundo plano.",
@@ -1698,6 +1904,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": "Scegli più tardi (Impostazioni > Browser)",
         "summary_browser": "Browser",
         "summary_browser_none": "da scegliere più tardi",
+        "store_title": 'Negozi di software',
+        "store_subtitle": "Winlux non include né impone alcun negozio. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
+        "summary_store": 'Negozi',
+        "summary_store_none": 'nessuno (Impostazioni > App)',
+        "summary_offline_later": 'Nessuna connessione Internet per ora: il browser e i negozi scelti verranno installati automaticamente al primo avvio con connessione.',
         "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
@@ -1722,6 +1933,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Grafica",
+        "bench_limited_by": "Il punteggio globale è quello del componente più lento: {part}.",
         "bench_waiting": "in attesa",
         "bench_tips": "Raccomandazioni",
         "bench_running": "Test in corso… puoi continuare, termina in background.",
@@ -1781,6 +1993,11 @@ EXTRA_TRANSLATIONS = {
         "browser_later": "Escolher depois (Configurações > Navegadores)",
         "summary_browser": "Navegador",
         "summary_browser_none": "a escolher depois",
+        "store_title": 'Lojas de software',
+        "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
+        "summary_store": 'Lojas',
+        "summary_store_none": 'nenhuma (Configurações > Aplicativos)',
+        "summary_offline_later": 'Sem conexão com a Internet por enquanto: o navegador e as lojas escolhidos serão instalados automaticamente na primeira inicialização com conexão.',
         "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
@@ -1805,6 +2022,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memória",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "A nota geral é a do componente mais lento: {part}.",
         "bench_waiting": "aguardando",
         "bench_tips": "Recomendações",
         "bench_running": "Teste em andamento… você pode continuar, ele termina em segundo plano.",
@@ -1946,6 +2164,19 @@ Pour le texte complet : https://www.gnu.org/licenses/gpl-3.0.html
 
 # Navigateurs proposés, par ordre alphabétique : aucun n'est fourni ni favorisé.
 BROWSER_CHOICES = [("chrome", "Google Chrome"), ("edge", "Microsoft Edge"), ("firefox", "Mozilla Firefox")]
+
+
+def store_catalog_choices():
+    """Boutiques proposées (docs/BOUTIQUES.md), ordre alphabétique : (id, nom, résumé par langue)."""
+    for path in (os.path.join(SCRIPT_DIR, "..", "integration", "store-catalogs.json"), "/usr/share/winlux/store-catalogs.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = json.load(f).get("catalogs", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        rows = [r for r in rows if isinstance(r, dict) and re.fullmatch(r"[a-z0-9-]+", str(r.get("id", "")))]
+        return sorted(((r["id"], r.get("name", r["id"]), r.get("summary", {})) for r in rows), key=lambda r: r[1].casefold())
+    return []
 
 STEPS = [
     "Langue",
@@ -2241,6 +2472,24 @@ def cpio_newc(entries):
     return bytes(out)
 
 
+def osk_module():
+    """Module du clavier tactile (/usr/bin/winlux-osk, ou le script voisin), ou None."""
+    import importlib.machinery
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in ("/usr/bin/winlux-osk", os.path.join(here, "winlux-osk.py"), os.path.join(here, "winlux-osk")):
+        if os.path.isfile(path):
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", path)
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def keymap_tools_available():
     return bool(shutil.which("ckbcomp") and shutil.which("loadkeys"))
 
@@ -2482,6 +2731,15 @@ def nm_available():
         return out.strip() == "running"
     except Exception:
         return False
+
+
+def has_default_route():
+    """Route par défaut présente (même test que l'init avant de télécharger)."""
+    try:
+        with open("/proc/net/route", encoding="ascii", errors="replace") as routes:
+            return any(len(f) > 1 and f[1] == "00000000" for f in (line.split() for line in list(routes)[1:]))
+    except OSError:
+        return True
 
 
 def network_status():
@@ -2743,6 +3001,67 @@ def detect_image_ext(path):
     return ".jpg"
 
 
+HARDWARE_CATEGORIES = (
+    ("nvidia-", "hw_nvidia"),
+    ("linux-modules-extra-", "hw_modules"),
+    ("intel-microcode", "hw_microcode"),
+    ("amd64-microcode", "hw_microcode"),
+    ("va-driver", "hw_vaapi"),
+    ("intel-media-va", "hw_vaapi"),
+    ("mesa-va", "hw_vaapi"),
+    ("fwupd", "hw_fwupd"),
+    ("fprintd", "hw_fingerprint"),
+    ("openrgb", "hw_rgb"),
+    ("printer-driver", "hw_printer"),
+)
+
+
+def installed_packages(root_path):
+    """Paquets installés dans la cible (ensemble vide si dpkg-query échoue)."""
+    try:
+        out = subprocess.run(["chroot", root_path, "dpkg-query", "-W", "-f", "${Package}\\n"],
+                             capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def hardware_categories(packages):
+    """Clés de traduction de ce qui a été ajouté, une fois chacune, dans l'ordre."""
+    keys = []
+    for prefix, key in HARDWARE_CATEGORIES:
+        if key not in keys and any(prefix in package for package in packages):
+            keys.append(key)
+    return keys
+
+
+def write_account_file(path, lines, mode):
+    """Écrit un fichier de comptes et sa sauvegarde « path- » sans jamais
+    laisser de fichier à moitié écrit : temporaire, fsync, rename, fsync du
+    dossier. Propriétaire et droits de l'ancien fichier conservés."""
+    try:
+        info = os.stat(path)
+        mode, owner, group = info.st_mode & 0o7777, info.st_uid, info.st_gid
+    except OSError:
+        owner = group = 0
+    text = "\n".join(lines) + "\n"
+    directory = os.path.dirname(path)
+    for destination in (path, path + "-"):
+        temporary = os.path.join(directory, f".{os.path.basename(destination)}.winlux-install")
+        with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chown(temporary, owner, group)
+        os.chmod(temporary, mode)
+        os.rename(temporary, destination)
+    handle = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(handle)
+    finally:
+        os.close(handle)
+
+
 class InstallerApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Installer")
@@ -2765,6 +3084,8 @@ class InstallerApp(Gtk.Application):
             "packages": [],
             # Aucun navigateur présélectionné : None = choisir plus tard.
             "browser": None,
+            # Aucune boutique tierce cochée d'office (docs/BOUTIQUES.md).
+            "store_catalogs": [],
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
@@ -2840,6 +3161,126 @@ class InstallerApp(Gtk.Application):
             return True
         return False
 
+    # ── Clavier tactile (tablette sans clavier physique) ──────────────────────
+
+    def setup_touch_keyboard(self):
+        """Clavier visuel en bas de la fenêtre : ouvert d'office quand aucun clavier
+        physique n'est branché, toujours ouvrable par le bouton « Clavier tactile »."""
+        self.osk = osk_module()
+        self.osk_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.osk_box.set_no_show_all(True)
+        # Les rangées de touches s'étirent (vexpand) : sans ce blocage, la boîte
+        # réclamerait une part de la hauteur libre et rognerait la page.
+        self.osk_box.set_vexpand(False)
+        self.osk_widget = None
+        self.osk_layout = None
+        self.content_area.pack_end(self.osk_box, False, False, 0)
+        if self.osk is None:
+            return
+        self.btn_osk = Gtk.Button(label=tr("btn_osk"))
+        # Le bouton ne prend pas le focus : le champ choisi avant de l'ouvrir le garde.
+        self.btn_osk.set_can_focus(False)
+        self.btn_osk.get_style_context().add_class("btn-secondary")
+        self.btn_osk.set_tooltip_text(tr("btn_osk"))
+        self.btn_osk.connect("clicked", lambda _b: self.show_touch_keyboard(not self.osk_box.get_visible()))
+        self.nav_box.pack_start(self.btn_osk, False, False, 0)
+        try:
+            self.osk_auto = not self.osk.keyboards()
+        except Exception:
+            self.osk_auto = False
+        # Sans clavier physique, le clavier s'ouvre dès qu'un champ de saisie
+        # reçoit le focus, et à chaque étape qui en contient un (Compte local,
+        # Wi-Fi, chiffrement…) ; les autres étapes (Licence…) restent entières.
+        self.win.connect("set-focus", self.on_focus_for_keyboard)
+
+    def page_has_entry(self, widget=None):
+        widget = widget if widget is not None else self.pages.get_visible_child()
+        if widget is None or not widget.get_visible():
+            return False
+        if isinstance(widget, Gtk.Entry) and widget.get_editable() and widget.get_sensitive():
+            return True
+        if isinstance(widget, Gtk.Container):
+            return any(self.page_has_entry(child) for child in widget.get_children())
+        return False
+
+    def on_focus_for_keyboard(self, _win, widget):
+        if getattr(self, "osk_auto", False) and isinstance(widget, Gtk.Entry) and widget.get_editable():
+            if not self.osk_box.get_visible():
+                GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+
+    def auto_touch_keyboard(self):
+        """Étape affichée : clavier ouvert s'il y a un champ à remplir (sans clavier physique)."""
+        if getattr(self, "osk_auto", False):
+            self.show_touch_keyboard(self.page_has_entry())
+
+    def touch_keyboard_layout(self):
+        code = str(getattr(self, "config", {}).get("keyboard") or "")[:2]
+        code = {"be": "fr", "gb": "us"}.get(code, code)
+        return code if self.osk is not None and code in self.osk.LAYOUTS else None
+
+    def show_touch_keyboard(self, visible):
+        if self.osk is None:
+            return False
+        layout = self.touch_keyboard_layout()
+        # Disposition choisie à l'étape Clavier et langue de l'installateur.
+        wanted = (layout, tr._lang[:2])
+        if visible and (self.osk_widget is None or wanted != self.osk_layout):
+            if self.osk_widget is not None:
+                self.osk_box.remove(self.osk_widget)
+            os.environ["WINLUX_LANG"] = tr._lang[:2]
+            self.osk._LANG = self.osk._interface_lang()
+            self.osk_widget = self.osk.keyboard_widget(
+                send=self.touch_key, layout=layout,
+                on_close=lambda: self.show_touch_keyboard(False))
+            self.osk_layout = wanted
+            # Hauteur fixe : la page garde l'essentiel de l'écran et défile.
+            screen = self.win.get_screen()
+            height = screen.get_height() if screen is not None else 768
+            self.osk_widget.set_size_request(-1, max(180, min(270, int(height * 0.32))))
+            self.osk_widget.set_margin_top(8)
+            self.osk_box.pack_start(self.osk_widget, False, False, 0)
+        # Barre de défilement toujours visible tant que le clavier est ouvert :
+        # une tablette n'a pas de molette pour faire défiler la page.
+        for scroll in self.pages.get_children():
+            if isinstance(scroll, Gtk.ScrolledWindow):
+                scroll.set_overlay_scrolling(not visible)
+        if visible:
+            # set_no_show_all : show_all() ne toucherait pas la boîte elle-même.
+            self.osk_widget.show_all()
+            self.osk_box.show()
+        else:
+            self.osk_box.hide()
+        return True
+
+    def touch_key(self, key, _modifiers=()):
+        """Une touche du clavier tactile dans le champ qui a le focus (Gtk.Entry)."""
+        widget = self.win.get_focus()
+        if key == "Tab":
+            self.win.child_focus(Gtk.DirectionType.TAB_FORWARD)
+            return
+        if not isinstance(widget, Gtk.Entry):
+            return
+        position = widget.get_position()
+        if key == "BackSpace":
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+            elif position > 0:
+                widget.delete_text(position - 1, position)
+        elif key == "Return":
+            widget.activate()
+        elif key in ("Left", "Right"):
+            widget.set_position(max(0, position + (1 if key == "Right" else -1)))
+        elif key == "Escape":
+            self.show_touch_keyboard(False)
+        elif len(key) == 1:
+            bounds = widget.get_selection_bounds()
+            if bounds:
+                widget.delete_text(*bounds)
+                position = bounds[0]
+            widget.insert_text(key, position)
+            widget.set_position(position + 1)
+
     def make_pages_scrollable(self):
         """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
         # Toutes les pages sont retirées puis remises dans leur ordre d'origine : un
@@ -2853,6 +3294,13 @@ class InstallerApp(Gtk.Application):
                 scroll = Gtk.ScrolledWindow()
                 scroll.add(child)
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            # Le champ qui reçoit le focus (clic, Tab du clavier tactile) défile
+            # dans la partie visible, même quand le clavier tactile prend le bas.
+            inner = scroll.get_child()
+            if isinstance(inner, Gtk.Viewport) and inner.get_child() is not None:
+                inner = inner.get_child()
+            if isinstance(inner, Gtk.Container):
+                inner.set_focus_vadjustment(scroll.get_vadjustment())
             scroll.show_all()
             self.pages.add_named(scroll, name)
 
@@ -2906,6 +3354,7 @@ class InstallerApp(Gtk.Application):
         self.nav_box.pack_end(self.btn_next, False, False, 0)
         self.nav_box.pack_end(self.btn_back, False, False, 0)
         self.content_area.pack_end(self.nav_box, False, False, 0)
+        self.setup_touch_keyboard()
         self.ui_lang = tr._lang
         self.lang_keyboard_labels = []
         self.profile_tune_labels = {}
@@ -2979,7 +3428,7 @@ class InstallerApp(Gtk.Application):
             return
         self.answer_settings = settings
         for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
-                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser"):
+                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser", "store_catalogs"):
             if key in settings:
                 self.config[key] = settings[key]
         self.skip_steps = set(steps)
@@ -3033,6 +3482,11 @@ class InstallerApp(Gtk.Application):
         if key == "summary":
             self.refresh_summary()
         self.pages.set_visible_child_name(page_name(key))
+        if getattr(self, "osk_box", None) is not None:
+            if getattr(self, "osk_auto", False):
+                GLib.idle_add(lambda: self.auto_touch_keyboard() and False)
+            elif self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
         if key == "benchmark" and self.bench_state == "idle":
@@ -3059,7 +3513,9 @@ class InstallerApp(Gtk.Application):
         ok = True
         key = STEP_KEYS[self.current_step]
         if key == "license":
-            ok = self.config["license_accepted"]
+            # « Suivant » reste cliquable : un clic sans avoir accepté montre pourquoi
+            # on ne peut pas continuer (show_license_required) au lieu de ne rien faire.
+            ok = True
         elif key == "network":
             ok = not self.config["proxy_enabled"] or self.proxy_settings() is not None
             self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
@@ -3096,6 +3552,9 @@ class InstallerApp(Gtk.Application):
 
     def on_next(self, _btn):
         key = STEP_KEYS[self.current_step]
+        if key == "license" and not self.config["license_accepted"]:
+            self.show_license_required()
+            return
         if key == "summary":
             if self.config["install_type"] == "manual" and not winlux_partition_ui.confirm_apply(
                     self.win, self.manual_editor.plan, tr, UI_SCALE):
@@ -3108,8 +3567,16 @@ class InstallerApp(Gtk.Application):
             if key == "network":
                 self.apply_live_proxy()
             if target > step_index("disk") and self.bench_device != (self.config["disk"] or {}).get("path"):
-                # Le benchmark lit le disque choisi : on le relance si le disque a changé.
+                # Le benchmark lit le disque choisi : on le relance si le disque a changé,
+                # et l'ancienne note ne vaut plus rien.
                 self.bench_state = "idle"
+                self.benchmark = None
+                if self.bench_proc and self.bench_proc.poll() is None:
+                    self.bench_proc.kill()
+                self.bench_proc = None
+                if step_index("benchmark") < target:
+                    # La page est déjà passée : la mesure tourne en arrière-plan.
+                    self.start_benchmark()
             if target == step_index("import"):
                 # Aussi quand le fichier de réponse a fait sauter la page des disques.
                 self.start_windows_detection()
@@ -3177,6 +3644,10 @@ class InstallerApp(Gtk.Application):
         # place, sans rien reconstruire, pour garder la saisie et les choix en cours.
         self.ui_lang = tr._lang
         relabel_widgets(self.win, relabel_map(previous, tr._lang))
+        if getattr(self, "btn_osk", None) is not None:
+            self.btn_osk.set_tooltip_text(tr("btn_osk"))
+            if self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         for label, kb in self.lang_keyboard_labels:
             label.set_text(tr("language_keyboard", kb=kb))
         for pid, label in self.profile_tune_labels.items():
@@ -3239,7 +3710,9 @@ class InstallerApp(Gtk.Application):
         box.pack_start(sub, False, False, 0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_min_content_height(250)
+        # Petite hauteur minimale : la case et le message restent visibles en 1366x768
+        # même avec le clavier tactile ouvert ; le texte prend le reste de la place.
+        scroll.set_min_content_height(120)
         text_view = Gtk.TextView()
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
@@ -3250,13 +3723,73 @@ class InstallerApp(Gtk.Application):
         box.pack_start(scroll, True, True, 0)
         accept = Gtk.CheckButton(label=tr("license_accept"))
         accept.connect("toggled", self.on_license_toggle)
-        accept.set_margin_top(12)
-        box.pack_start(accept, False, False, 0)
+        self.license_accept = accept
+        self.license_accept_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.license_accept_box.get_style_context().add_class("license-accept-box")
+        self.license_accept_box.set_margin_top(12)
+        self.license_accept_box.pack_start(accept, False, False, 0)
+        self.license_hint = Gtk.Label(label=tr("license_required"), xalign=0)
+        self.license_hint.set_line_wrap(True)
+        self.license_hint.get_style_context().add_class("license-hint")
+        self.license_hint.set_no_show_all(True)
+        self.license_accept_box.pack_start(self.license_hint, False, False, 0)
+        self.license_pulse = 0
+        box.pack_start(self.license_accept_box, False, False, 0)
         self.pages.add_named(box, page_name("license"))
 
     def on_license_toggle(self, btn):
         self.config["license_accepted"] = btn.get_active()
+        if btn.get_active():
+            self.license_pulse = 0
+            self.license_accept_box.get_style_context().remove_class("license-attention")
+            self.license_hint.hide()
         self.validate_step()
+
+    def scroll_to_license_accept(self):
+        scroll = self.license_accept_box.get_ancestor(Gtk.ScrolledWindow)
+        page = scroll.get_child() if scroll is not None else None
+        if page is None:
+            return False
+        if isinstance(page, Gtk.Viewport):
+            page = page.get_child()
+        pos = self.license_accept_box.translate_coordinates(page, 0, 0)
+        if pos is None:
+            return False
+        adj = scroll.get_vadjustment()
+        top, bottom = pos[1], pos[1] + self.license_accept_box.get_allocated_height()
+        value = adj.get_value()
+        if bottom > value + adj.get_page_size():
+            value = bottom - adj.get_page_size()
+        adj.set_value(max(adj.get_lower(), min(value, top)))
+        return False
+
+    def show_license_required(self):
+        """« Suivant » sans avoir coché : la case clignote deux fois puis reste entourée,
+        avec une phrase qui dit qu'il faut accepter la licence pour continuer."""
+        self.license_hint.set_label(tr("license_required"))
+        self.license_hint.show()
+        self.license_accept.grab_focus()
+        ctx = self.license_accept_box.get_style_context()
+        ctx.add_class("license-attention")
+        # Petit écran ou clavier tactile ouvert : la page défile jusqu'à la case et
+        # au message, une fois le message mis en page.
+        GLib.idle_add(self.scroll_to_license_accept)
+        if self.license_pulse:
+            return
+        self.license_pulse = 4
+
+        def blink():
+            if not self.license_pulse or self.config["license_accepted"]:
+                self.license_pulse = 0
+                return False
+            self.license_pulse -= 1
+            if self.license_pulse % 2:
+                ctx.remove_class("license-attention")
+            else:
+                ctx.add_class("license-attention")
+            return self.license_pulse > 0
+
+        GLib.timeout_add(180, blink)
 
     # ── Page : Réseau ──────────────────────────────────────────
 
@@ -4164,14 +4697,33 @@ class InstallerApp(Gtk.Application):
             self.benchmark = event["summary"]
             self.bench_state = "done"
             self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
-            self.bench_status.set_text(tr("bench_done"))
+            weakest = self.benchmark_weakest()
+            # « 2,0 » à côté d'un processeur à 8,7 : dire d'où vient la note.
+            self.bench_status.set_text(tr("bench_done") + ("\n" + tr("bench_limited_by", part=tr("bench_" + weakest)) if weakest else ""))
             tips = self.benchmark["recommendations"] or [tr("bench_no_tip")]
             self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
             self.bench_retry.set_sensitive(True)
             if not self.profile_chosen_by_user:
                 self.select_profile(self.benchmark["recommended_profile"])
             self.refresh_profile_badges()
+            if STEP_KEYS[self.current_step] == "summary":
+                self.refresh_summary()  # la mesure finit après l'arrivée sur le récapitulatif
         return False
+
+    def benchmark_weakest(self):
+        """Composant qui fixe la note globale (la plus basse), ou None si toutes sont égales."""
+        results = (self.benchmark or {}).get("results", {})
+        scores = [(r["score"], key) for key, r in results.items() if "score" in r]
+        if scores and min(scores)[0] < max(scores)[0]:
+            return min(scores)[1]
+        return None
+
+    def benchmark_complete(self):
+        """Vrai si la mesure est terminée, sans composant en échec."""
+        if self.bench_state != "done" or not self.benchmark:
+            return False
+        results = self.benchmark.get("results", {})
+        return all(key in results for key in ("cpu", "ram", "gpu")) and not any("error" in r for r in results.values())
 
     def on_benchmark_exit(self, proc):
         if proc is self.bench_proc and self.bench_state == "running":
@@ -4238,6 +4790,9 @@ class InstallerApp(Gtk.Application):
         apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
         box.pack_start(apps_check, False, False, 0)
         box.pack_start(self.build_browser_choice(), False, False, 0)
+        store_card = self.build_store_choice()
+        if store_card is not None:
+            box.pack_start(store_card, False, False, 0)
         self.selecting_profile = False
         self.select_profile("office")
         self.pages.add_named(box, page_name("profile"))
@@ -4267,6 +4822,38 @@ class InstallerApp(Gtk.Application):
         card.pack_start(row, False, False, 0)
         self.browser_buttons.get(self.config.get("browser"), later).set_active(True)
         return card
+
+    def build_store_choice(self):
+        """Boutiques de logiciels : cases à cocher, aucune cochée, ordre alphabétique."""
+        choices = store_catalog_choices()
+        if not choices:
+            return None
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        card.get_style_context().add_class("card")
+        card.set_margin_top(12)
+        title = Gtk.Label(label=tr("store_title"), xalign=0)
+        title.get_style_context().add_class("card-title")
+        card.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("store_subtitle"), xalign=0)
+        sub.get_style_context().add_class("card-detail")
+        sub.set_line_wrap(True)
+        card.pack_start(sub, False, False, 0)
+        self.store_buttons = {}
+        lang = (self.config.get("language") or "fr")[:2]
+        for ident, name, summary in choices:
+            button = Gtk.CheckButton(label=name)
+            button.set_tooltip_text(summary.get(lang) or summary.get("en") or summary.get("fr", ""))
+            button.set_active(ident in self.config.get("store_catalogs", []))
+            button.connect("toggled", self.on_store_toggle, ident)
+            card.pack_start(button, False, False, 0)
+            self.store_buttons[ident] = button
+        return card
+
+    def on_store_toggle(self, button, ident):
+        chosen = [i for i in self.config.get("store_catalogs", []) if i != ident]
+        if button.get_active():
+            chosen.append(ident)
+        self.config["store_catalogs"] = chosen
 
     def on_browser_toggle(self, button, browser):
         if button.get_active():
@@ -4455,8 +5042,25 @@ class InstallerApp(Gtk.Application):
         lines.append(profile_line)
         browser = dict(BROWSER_CHOICES).get(self.config.get("browser"))
         lines.append(f"{tr('summary_browser')} : {browser or tr('summary_browser_none')}")
-        score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
-                 else tr("summary_benchmark_none"))
+        stores = [name for ident, name, _ in store_catalog_choices() if ident in self.config.get("store_catalogs", [])]
+        lines.append(f"{tr('summary_store')} : {', '.join(stores) or tr('summary_store_none')}")
+        if (browser or stores) and not has_default_route():
+            # Pas une erreur : l'init les installe au premier démarrage connecté.
+            lines.append(tr("summary_offline_later"))
+        # Seulement une mesure complète : une note partielle (page passée trop
+        # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
+        if self.benchmark_complete():
+            score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+            # La note globale est la plus basse des notes (comme l'indice de
+            # performance) : nommer le composant qui la fixe, sinon « 2,0 »
+            # à côté d'un processeur à 8,7 ressemble à une mesure inachevée.
+            weakest = self.benchmark_weakest()
+            if weakest:
+                score = tr("summary_benchmark_limited", score=score, part=tr("bench_" + weakest))
+        elif self.bench_state == "running":
+            score = tr("summary_benchmark_running")
+        else:
+            score = tr("summary_benchmark_none")
         lines.append(f"{tr('summary_benchmark')} : {score}")
         lines.append(f"{tr('summary_migration')} : {self.migration.describe()}")
         if self.config.get("timezone"):
@@ -4542,6 +5146,12 @@ class InstallerApp(Gtk.Application):
         self.done_sub.set_line_wrap(True)
         self.done_sub.set_justify(Gtk.Justification.CENTER)
         box.pack_start(self.done_sub, False, False, 0)
+        # Ce qui a été ajouté pour CET ordinateur (pilotes, microcode…),
+        # rempli par show_done d'après install_hardware_support.
+        self.hardware_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.hardware_box.set_halign(Gtk.Align.CENTER)
+        self.hardware_box.set_no_show_all(True)
+        box.pack_start(self.hardware_box, False, False, 0)
         btn_box = Gtk.Box(spacing=12)
         btn_box.set_halign(Gtk.Align.CENTER)
         btn_box.set_margin_top(24)
@@ -4563,7 +5173,10 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            subprocess.run(["sync"], timeout=10)
+            try:
+                subprocess.run(["sync"], timeout=10)
+            except subprocess.TimeoutExpired:
+                pass  # l'init synchronise de toute façon avant de redémarrer
             # En live, PID 1 est le script /init : « reboot » (systemctl)
             # ne faisait rien et le bouton fermait seulement l'installateur.
             # winlux-power sait redémarrer dans les deux cas.
@@ -4574,7 +5187,18 @@ class InstallerApp(Gtk.Application):
             # (mise à jour en cours…), pour afficher la raison.
             power = shutil.which("winlux-power")
             if power:
-                done = subprocess.run([power, "execute", "reboot"], timeout=30).returncode == 0
+                try:
+                    done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
+                    refused = not done
+                except (OSError, subprocess.SubprocessError):
+                    # Écriture des disques encore longue juste après
+                    # l'installation : le délai expirait et le bouton
+                    # fermait l'installateur sans redémarrer.
+                    done = refused = False
+                if not done and not refused and os.geteuid() == 0:
+                    # Session live (root) : l'init redémarre sur SIGTERM.
+                    os.kill(1, signal.SIGTERM)
+                    done = True
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
@@ -4585,9 +5209,54 @@ class InstallerApp(Gtk.Application):
 
     # ── Installation ─────────────────────────────────────────────
 
+    def keep_awake(self, active):
+        """Pas de veille d'écran (DPMS, économiseur) pendant l'installation.
+
+        Une installation dure jusqu'à une vingtaine de minutes : l'écran noir
+        laissait croire à un plantage. Rétabli à la fin, réussie ou non.
+        """
+        def quiet(*argv):
+            if shutil.which(argv[0]):
+                try:
+                    subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        if active:
+            quiet("xset", "s", "off")
+            quiet("xset", "-dpms")
+            quiet("xscreensaver-command", "-deactivate")
+            if getattr(self, "awake_stop", None) is None:
+                # Fil à part, pas un minuteur GLib : le réveil continue même si
+                # la boucle de l'interface est occupée par la copie. En v0.2.16,
+                # l'économiseur « tuyaux 3D » démarrait encore après 10 min de
+                # copie. Trois signaux indépendants : la commande de
+                # XScreenSaver, le compteur d'inactivité du serveur X (DPMS,
+                # verrouillage Winlux) et un vrai mouvement de pointeur d'un
+                # pixel aller-retour, que tout détecteur d'activité voit.
+                stop = threading.Event()
+                self.awake_stop = stop
+
+                interval = getattr(self, "awake_interval", 30)
+
+                def poke():
+                    while not stop.wait(interval):
+                        quiet("xscreensaver-command", "-deactivate")
+                        quiet("xset", "s", "reset")
+                        quiet("xdotool", "mousemove_relative", "--", "1", "0",
+                              "mousemove_relative", "--", "-1", "0")
+                threading.Thread(target=poke, name="winlux-keep-awake", daemon=True).start()
+        else:
+            stop = getattr(self, "awake_stop", None)
+            if stop is not None:
+                stop.set()
+                self.awake_stop = None
+            quiet("xset", "s", "default")
+            quiet("xset", "+dpms")
+
     def start_installation(self):
         self.current_step = step_index("progress")
         self.update_step()
+        self.keep_awake(True)
         self.install_cancelled = False
         self.install_thread = threading.Thread(target=self.run_installation, daemon=True)
         self.install_thread.start()
@@ -4661,10 +5330,13 @@ class InstallerApp(Gtk.Application):
             self.import_windows_data(target)
             self.set_progress(0.90, tr("progress_firstboot"))
             self.configure_first_boot(target)
+            self.install_hardware_support(target)
             self.write_manual_fstab(layout, target)
             self.run_migration(target)
             self.set_progress(0.95, tr("progress_sync"))
-            subprocess.run(["sync"], timeout=60)
+            # « Terminée » seulement une fois tout écrit et la cible démontée :
+            # couper juste après ne doit plus rien perdre (/etc/passwd…).
+            self.finalize_target()
         except subprocess.CalledProcessError as e:
             self.release_target()
             self.install_error(f"{tr('error_title')} : {' '.join(map(str, e.cmd[:2]))} ({e.returncode})")
@@ -4878,6 +5550,63 @@ class InstallerApp(Gtk.Application):
         with open(f"{target}/etc/fstab", "w") as f:
             f.write(plan.fstab(winlux_partitioner.blkid_uuid, root_luks=self.config["luks_enabled"]))
 
+    @staticmethod
+    def stop_processes_under(path):
+        """Arrête les programmes qui utilisent encore la cible (lancés dans le
+        chroot de préparation, par exemple) : sinon umount échoue « occupé »."""
+        prefix = os.path.realpath(path).rstrip("/") + "/"
+        found = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit() or int(entry) == os.getpid():
+                continue
+            for link in ("root", "cwd", "exe"):
+                try:
+                    where = os.readlink(f"/proc/{entry}/{link}")
+                except OSError:
+                    continue
+                if (where.rstrip("/") + "/").startswith(prefix):
+                    found.append(int(entry))
+                    break
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in found:
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+            if found:
+                time.sleep(1)
+        return found
+
+    def unmount_verified(self, mountpoint):
+        """Vrai quand le système de fichiers est démonté, ou au moins figé sur
+        le disque (lecture seule, ou fsfreeze qui écrit tout le journal)."""
+        for attempt in range(3):
+            if subprocess.run(["umount", mountpoint], timeout=120).returncode == 0:
+                return True
+            self.stop_processes_under(mountpoint)
+            subprocess.run(["sync"], timeout=300)
+        if subprocess.run(["mount", "-o", "remount,ro", mountpoint], timeout=120).returncode == 0:
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        if shutil.which("fsfreeze") and subprocess.run(["fsfreeze", "--freeze", mountpoint], timeout=300).returncode == 0:
+            subprocess.run(["fsfreeze", "--unfreeze", mountpoint], timeout=60)
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        return False
+
+    def finalize_target(self):
+        """sync puis démontage vérifié de chaque point de montage de la cible
+        (ESP et /boot compris), du plus profond au plus haut."""
+        subprocess.run(["sync"], timeout=600)
+        for mountpoint in reversed(getattr(self, "_mounts", [])):
+            if not self.unmount_verified(mountpoint):
+                raise RuntimeError(tr("err_unmount", path=mountpoint))
+            self._mounts.remove(mountpoint)
+        if getattr(self, "_luks_open", False):
+            subprocess.run(["cryptsetup", "close", LUKS_NAME], timeout=60)
+            self._luks_open = False
+        subprocess.run(["sync"], timeout=600)
+
     def release_target(self):
         for mountpoint in reversed(getattr(self, "_mounts", [])):
             subprocess.run(["umount", mountpoint], timeout=60)
@@ -4935,24 +5664,36 @@ class InstallerApp(Gtk.Application):
         # visible 5 s quand Windows est proposé à côté.
         menu_timeout, menu_style = (5, "menu") if windows_entry else (1, "hidden")
         grub_cfg = f"""set default=0
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output console serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output console serial
+    fi
+fi
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
     {initrd}
 }}
 {windows_entry}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra} $winlux_efi_args
     {initrd}
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra} $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
@@ -4971,9 +5712,14 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             else:
                 # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
                 efi_args = ["--bootloader-id=winlux"]
-            subprocess.run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
-                            f"--boot-directory={target}/boot", "--recheck", *efi_args],
-                           check=True, timeout=120)
+                if not efi_variables_writable():
+                    # UEFI 32 bits démarré avec efi=noruntime : pas de variables UEFI,
+                    # donc pas d'entrée de démarrage (docs/SECURE-BOOT.md).
+                    efi_args.append("--no-nvram")
+            for efi_target in efi_grub_targets(layout["own_esp"]):
+                subprocess.run(["grub-install", f"--target={efi_target}", f"--efi-directory={efi_dir}",
+                                f"--boot-directory={target}/boot", "--recheck", *efi_args],
+                               check=True, timeout=120)
             # The Secure Boot chain goes to EFI/BOOT, which belongs to Windows on a shared ESP.
             if layout["own_esp"] and SECUREBOOT_SH and os.path.exists("/usr/lib/shim/shimx64.efi.signed"):
                 subprocess.run(["sh", SECUREBOOT_SH, "install-esp", efi_dir, search_uuid], check=True, timeout=60)
@@ -5006,37 +5752,35 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         passwd_line = f"{username}:x:{uid}:{gid}:{fullname}:/home/{username}:/bin/bash\n"
         groups_to_join = ["sudo", "audio", "video", "plugdev", "netdev", "bluetooth",
                           "input", "dialout", "cdrom", "floppy"]
-        if os.path.exists(passwd_path):
-            with open(passwd_path, "a") as f:
-                f.write(passwd_line)
-        else:
-            with open(passwd_path, "w") as f:
-                f.write("root:x:0:0:root:/root:/bin/bash\n")
-                f.write(passwd_line)
-        if not os.path.exists(group_path):
-            with open(group_path, "w") as f:
-                f.write(f"root:x:0:\n{username}:x:{gid}:\n")
-                for grp in groups_to_join:
-                    f.write(f"{grp}:x::{username}\n")
-        else:
-            with open(group_path, "r") as f:
-                lines = f.readlines()
-            with open(group_path, "w") as f:
-                user_group_found = False
-                for line in lines:
-                    parts = line.strip().split(":")
-                    if len(parts) >= 4 and parts[0] in groups_to_join:
-                        members = parts[3].split(",") if parts[3] else []
-                        if username not in members:
-                            members.append(username)
-                        parts[3] = ",".join(members)
-                        f.write(":".join(parts) + "\n")
-                    else:
-                        f.write(line)
-                        if len(parts) >= 1 and parts[0] == username:
-                            user_group_found = True
-                if not user_group_found:
-                    f.write(f"{username}:x:{gid}:\n")
+        # Comptes écrits par fichier temporaire + fsync + rename, avec leur
+        # copie de sauvegarde (passwd-…) : une coupure juste après
+        # l'installation laissait des octets nuls à la place du compte.
+        def read_lines(path):
+            try:
+                with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                    return [line for line in f.read().split("\n") if line.strip()]
+            except OSError:
+                return []
+
+        passwd_lines = read_lines(passwd_path) or ["root:x:0:0:root:/root:/bin/bash"]
+        passwd_lines = [line for line in passwd_lines if line.split(":")[0] != username]
+        passwd_lines.append(passwd_line.rstrip("\n"))
+        group_lines = read_lines(group_path)
+        if not group_lines:
+            group_lines = ["root:x:0:"] + [f"{grp}:x::" for grp in groups_to_join]
+        user_group_found = False
+        for index, line in enumerate(group_lines):
+            parts = line.split(":")
+            if len(parts) >= 4 and parts[0] in groups_to_join:
+                members = [m for m in parts[3].split(",") if m]
+                if username not in members:
+                    members.append(username)
+                parts[3] = ",".join(members)
+                group_lines[index] = ":".join(parts)
+            elif parts[0] == username:
+                user_group_found = True
+        if not user_group_found:
+            group_lines.append(f"{username}:x:{gid}:")
         hashed = self.config.get("password_hash") or ""
         if password and not hashed:
             try:
@@ -5046,15 +5790,19 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 ).stdout.strip()
             except Exception:
                 hashed = "!"
+        write_account_file(passwd_path, passwd_lines, 0o644)
+        write_account_file(group_path, group_lines, 0o644)
         if hashed:
-            if os.path.exists(shadow_path):
-                with open(shadow_path, "a") as f:
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-            else:
-                with open(shadow_path, "w") as f:
-                    f.write(f"root:!:19000:0:99999:7:::\n")
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-                os.chmod(shadow_path, 0o640)
+            shadow_lines = read_lines(shadow_path) or ["root:!:19000:0:99999:7:::"]
+            shadow_lines = [line for line in shadow_lines if line.split(":")[0] != username]
+            shadow_lines.append(f"{username}:{hashed}:19000:0:99999:7:::")
+            write_account_file(shadow_path, shadow_lines, 0o640)
+        gshadow_path = f"{etc}/gshadow"
+        if os.path.exists(gshadow_path):
+            gshadow_lines = read_lines(gshadow_path)
+            if not any(line.split(":")[0] == username for line in gshadow_lines):
+                gshadow_lines.append(f"{username}:!::")
+            write_account_file(gshadow_path, gshadow_lines, 0o640)
         for d in [".config", ".local/share", "Bureau", "Documents",
                   "Téléchargements", "Images", "Musique", "Vidéos"]:
             os.makedirs(f"{home}/{d}", exist_ok=True)
@@ -5128,6 +5876,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "timezone": self.config.get("timezone"),
             "packages": self.config.get("packages", []),
             "browser": self.config.get("browser"),
+            "store_catalogs": self.config.get("store_catalogs", []),
             "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
@@ -5156,6 +5905,15 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             # démarrage avec réseau (winlux-browsers --default), jamais fourni.
             with open(f"{etc}/first-boot-browser", "w") as f:
                 f.write(self.config["browser"] + "\n")
+        known = [ident for ident, _, _ in store_catalog_choices()]
+        stores = [ident for ident in known if ident in self.config.get("store_catalogs", [])]
+        # Choix enregistré tel quel (même vide) ; les boutiques choisies sont
+        # ajoutées par l'init au premier démarrage avec réseau, puis reprises
+        # à chaque démarrage tant qu'il en reste en attente.
+        with open(f"{etc}/store-catalogs", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
+        with open(f"{etc}/store-catalogs-pending", "w") as f:
+            f.write("".join(i + "\n" for i in stores))
         try:
             self.configure_network_target(root_path)
         except Exception as e:
@@ -5170,6 +5928,138 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             dest = f"{root_path}/usr/bin/winlux-hw-detect"
             subprocess.run(["cp", hw_script, dest], timeout=10)
             os.chmod(dest, 0o755)
+        self.prepare_system_state(root_path)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def target_chroot(root_path, network=False):
+        """Chroot de la cible prêt pour APT : /proc, /sys, /dev (et /dev/pts),
+        l'inventaire matériel du live (/run/winlux/hw) et, en ligne, la
+        résolution de noms ; aucun service n'y démarre (policy-rc.d)."""
+        mounted = []
+        policy = f"{root_path}/usr/sbin/policy-rc.d"
+        had_policy = os.path.exists(policy)
+        resolv = f"{root_path}/etc/resolv.conf"
+        saved_resolv = None
+        try:
+            binds = ["/proc", "/sys", "/dev", "/dev/pts"]
+            if os.path.isdir("/run/winlux/hw"):
+                binds.append("/run/winlux/hw")
+            for source in binds:
+                if not os.path.isdir(source):
+                    continue
+                destination = f"{root_path}{source}"
+                os.makedirs(destination, exist_ok=True)
+                subprocess.run(["mount", "--bind", source, destination], check=True, timeout=30)
+                mounted.append(destination)
+            if not had_policy:
+                os.makedirs(os.path.dirname(policy), exist_ok=True)
+                with open(policy, "w") as f:
+                    f.write("#!/bin/sh\nexit 101\n")
+                os.chmod(policy, 0o755)
+            if network and os.path.isfile("/etc/resolv.conf"):
+                if os.path.lexists(resolv):
+                    saved_resolv = f"{resolv}.winlux-install"
+                    os.rename(resolv, saved_resolv)
+                shutil.copyfile("/etc/resolv.conf", resolv)
+            yield
+        finally:
+            if network and os.path.isfile("/etc/resolv.conf"):
+                try:
+                    os.remove(resolv)
+                except OSError:
+                    pass
+                if saved_resolv:
+                    os.rename(saved_resolv, resolv)
+            if not had_policy:
+                try:
+                    os.remove(policy)
+                except OSError:
+                    pass
+            for destination in reversed(mounted):
+                subprocess.run(["umount", "-l", destination], timeout=30)
+
+    def prepare_system_state(self, root_path):
+        """Fait pendant l'installation le travail unique du premier démarrage.
+
+        `winlux-update --boot` rétablit les droits de la base APT, finit les
+        déclencheurs dpkg reportés par la construction de l'image et refait
+        les caches (applications, types MIME). Fait au premier démarrage, il
+        y ajoutait plus de 15 s (phase « recovery »). Ici, dans le système
+        cible (chroot), il n'est plus fait au démarrage ; en cas d'échec, le
+        premier démarrage s'en charge comme avant.
+        """
+        if not os.path.exists(f"{root_path}/usr/share/winlux/update-backend") or not shutil.which("chroot"):
+            return
+        try:
+            with self.target_chroot(root_path):
+                result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-update", "--boot"],
+                                        capture_output=True, text=True, timeout=900,
+                                        env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+            if result.returncode != 0:
+                print("winlux-update --boot (installation) :", result.stdout, result.stderr, file=sys.stderr)
+        except (OSError, subprocess.SubprocessError) as error:
+            print("Préparation du premier démarrage reportée :", error, file=sys.stderr)
+
+    @staticmethod
+    def online():
+        """Route par défaut présente (Wi-Fi ou câble connecté dans le live)."""
+        try:
+            with open("/proc/net/route") as f:
+                return any(line.split()[1:2] == ["00000000"] for line in f.read().splitlines()[1:])
+        except OSError:
+            return False
+
+    def install_hardware_support(self, root_path):
+        """Pilotes, micrologiciels et microcode propres à CET ordinateur.
+
+        Tout ce qui sert à la plupart des machines est déjà dans l'image
+        (firmwares, profils son, pilotes libres) : l'installation reste
+        complète hors ligne. En ligne, `winlux-drivers auto` relève le
+        matériel réel (le live voit le vrai /sys) et ajoute ce que l'image
+        ne contient pas : NVIDIA, pilotes complets du noyau, VA-API,
+        microcode, fwupd, lecteur d'empreintes. Ce qui échoue ou qui
+        attend le réseau est refait au premier démarrage connecté
+        (auto.done absent), comme le navigateur."""
+        report = {"state": "offline", "added": []}
+        drivers = f"{root_path}/usr/bin/winlux-drivers"
+        if not os.path.exists(drivers) or not shutil.which("chroot"):
+            report["state"] = "unavailable"
+        elif self.online():
+            self.set_progress(0.92, tr("progress_drivers"))
+            try:
+                with self.target_chroot(root_path, network=True):
+                    before = installed_packages(root_path)
+                    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+                    result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "auto"],
+                                            capture_output=True, text=True, timeout=1800, env=env)
+                    # Inventaire du fil matériel (winlux-hardware-check) : les
+                    # éléments recommandés que « auto » ne couvre pas (RGB,
+                    # imprimantes…) sont installés un par un.
+                    if os.path.exists(f"{root_path}/usr/bin/winlux-hardware-check"):
+                        items = subprocess.run(["chroot", root_path, "/usr/bin/winlux-hardware-check", "--items"],
+                                               capture_output=True, text=True, timeout=120)
+                        for item in items.stdout.split():
+                            if re.fullmatch(r"[a-z0-9-]+", item):
+                                step = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "install", item],
+                                                      capture_output=True, text=True, timeout=1800, env=env)
+                                result.stdout += step.stdout
+                                result.stderr += step.stderr
+                                if step.returncode != 0:
+                                    result.returncode = step.returncode
+                    added = installed_packages(root_path) - before
+                report["added"] = hardware_categories(added)
+                report["packages"] = sorted(added)
+                report["state"] = "done" if result.returncode == 0 else "partial"
+                log = f"{root_path}/var/log/winlux-drivers.log"
+                os.makedirs(os.path.dirname(log), exist_ok=True)
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(f"── installation {time.strftime('%Y-%m-%d %H:%M')}\n{result.stdout}{result.stderr}")
+            except (OSError, subprocess.SubprocessError) as error:
+                report["state"] = "partial"
+                print("Pilotes de cet ordinateur reportés au premier démarrage :", error, file=sys.stderr)
+        self.hardware_report = report
+        return report
 
     def configure_network_target(self, root_path):
         src_dir = "/etc/NetworkManager/system-connections"
@@ -5363,7 +6253,42 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         if self.answer_settings.get("unattended") and self.answer_settings.get("reboot"):
             GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
+    def hardware_lines(self):
+        """Lignes du récapitulatif matériel (texte traduit)."""
+        report = getattr(self, "hardware_report", None) or {}
+        state, added = report.get("state"), report.get("added") or []
+        lines = [tr(key) for key in added]
+        if state == "offline":
+            lines.append(tr("hw_offline"))
+        elif state == "partial":
+            lines.append(tr("hw_partial"))
+        elif state == "done" and not added:
+            lines.append(tr("hw_none"))
+        return lines
+
+    def fill_hardware_box(self):
+        lines = self.hardware_lines()
+        for child in self.hardware_box.get_children():
+            self.hardware_box.remove(child)
+        if not lines:
+            self.hardware_box.hide()
+            return
+        toggle = Gtk.CheckButton(label=tr("hw_show"))
+        added = len((getattr(self, "hardware_report", None) or {}).get("added") or [])
+        details = Gtk.Label(label="\n".join(("• " + line) if index < added else line
+                                            for index, line in enumerate(lines)), xalign=0)
+        details.set_line_wrap(True)
+        details.set_max_width_chars(70)
+        details.set_no_show_all(True)
+        toggle.connect("toggled", lambda button: details.set_visible(button.get_active()))
+        self.hardware_box.pack_start(toggle, False, False, 0)
+        self.hardware_box.pack_start(details, False, False, 0)
+        toggle.show()
+        self.hardware_box.show()
+
     def show_done(self):
+        self.fill_hardware_box()
+        self.keep_awake(False)
         self.current_step = step_index("done")
         self.update_step()
 
@@ -5371,6 +6296,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         self.cleanup_windows_import()
 
         def do():
+            self.keep_awake(False)
             self.done_title.set_text(tr("error_title"))
             self.done_sub.set_text(message)
             self.current_step = step_index("done")

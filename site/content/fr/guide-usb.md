@@ -22,14 +22,14 @@ Le créateur de clé USB de Winlux télécharge la dernière image, la vérifie 
 L'image de Winlux est « hybride » : n'importe quel outil qui copie une image disque sur une clé USB convient, et Ventoy la démarre aussi. Sur Linux, en ligne de commande, en remplaçant `/dev/sdX` par la clé (et surtout pas par un disque) :
 
 ```sh
-sudo dd if=winlux-live-v0.2.15.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.18.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 ## Démarrer le PC sur la clé
 
 1. Branchez la clé et allumez (ou redémarrez) le PC.
 2. Appuyez tout de suite sur la touche du menu de démarrage : souvent **F12**, **F11**, **F8** ou **Échap**, selon le fabricant.
-3. Choisissez la clé USB. Elle démarre en UEFI comme en BIOS ancien, et Secure Boot peut rester activé.
+3. Choisissez la clé USB. Elle démarre en UEFI comme en BIOS ancien, et Secure Boot peut rester activé. Sur une tablette à démarrage 32 bits (Atom), désactivez Secure Boot : la clé démarre aussi dans ce mode.
 4. Le menu Winlux s'affiche : choisissez la session Live pour essayer, ou l'installation.
 
 > [!tip]

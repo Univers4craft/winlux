@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::Mutex as StdMutex;
 
-static SERIAL: StdMutex<()> = StdMutex::new(());
+pub(crate) static SERIAL: StdMutex<()> = StdMutex::new(());
 static SEEN: StdMutex<Vec<(u32, usize)>> = StdMutex::new(Vec::new());
 
 /// Modèle DLGTEMPLATE (ou EX) : une boîte, un champ, deux boutons.

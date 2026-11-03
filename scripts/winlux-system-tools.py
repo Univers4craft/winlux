@@ -8,7 +8,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 import gi
 gi.require_version("Gtk", "3.0")
@@ -61,6 +60,9 @@ _TR = {
     'Se connecter au réseau sélectionné': ('Connect to the selected network', 'Conectarse a la red seleccionada', 'Mit dem ausgewählten Netzwerk verbinden'),
     'Choisissez d’abord un réseau.': ('Choose a network first.', 'Elija primero una red.', 'Wählen Sie zuerst ein Netzwerk.'),
     'Réseaux Wi-Fi disponibles': ('Available Wi-Fi networks', 'Redes Wi-Fi disponibles', 'Verfügbare WLAN-Netzwerke'),
+    'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
+    'Paramètres réseau…': ('Network settings…', 'Configuración de red…', 'Netzwerkeinstellungen…'),
+    'Bluetooth et appareils…': ('Bluetooth and devices…', 'Bluetooth y dispositivos…', 'Bluetooth und Geräte…'),
     'Actualiser la recherche Wi-Fi': ('Refresh Wi-Fi search', 'Actualizar la búsqueda Wi-Fi', 'WLAN-Suche aktualisieren'),
     'État des cartes Ethernet et Wi-Fi': ('Ethernet and Wi-Fi adapter status', 'Estado de las tarjetas Ethernet y Wi-Fi', 'Status der Ethernet- und WLAN-Adapter'),
     'Wi-Fi : activer': ('Wi-Fi: turn on', 'Wi-Fi: activar', 'WLAN: einschalten'),
@@ -220,6 +222,16 @@ class Tools(Gtk.Window):
         self.content.pack_start(entry, False, False, 0)
         return entry
 
+    def open_settings(self, page):
+        """Page dédiée de Paramètres ; cette fenêtre se ferme derrière elle."""
+        try:
+            subprocess.Popen(["winlux-shell-app", "settings", page], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as error:
+            self.notice.set_text(str(error))
+            return
+        self.destroy()
+
     def command(self, args):
         if self.process is not None: return
         try:
@@ -258,15 +270,16 @@ class Tools(Gtk.Window):
         wifi = present("/sys/class/ieee80211") or present("/sys/class/net", "*/wireless")
         bluetooth = present("/sys/class/bluetooth")
         backlight = present("/sys/class/backlight")
-        if not wifi:
-            self.button(_t("État des cartes Ethernet et Wi-Fi"), lambda: self.command(["nmcli", "device", "status"]), bool(shutil.which("nmcli")))
-            self.button(_t("Configurer les réseaux"), lambda: self.command(["nm-connection-editor"]), bool(shutil.which("nm-connection-editor")))
+        # Chaque réglage ouvre sa page dédiée de Paramètres, pas une liste de commandes.
+        if wifi:
+            self.button(_t("Réseaux Wi-Fi…"), lambda: self.open_settings("35"), bool(shutil.which("winlux-shell-app")))
+        else:
+            self.button(_t("Paramètres réseau…"), lambda: self.open_settings("2"), bool(shutil.which("winlux-shell-app")))
+        if bluetooth:
+            self.button(_t("Bluetooth et appareils…"), lambda: self.open_settings("22"), bool(shutil.which("winlux-shell-app")))
         for title, args, binary, shown in [
-            (_t("Bluetooth : activer"), ["bluetoothctl","power","on"],"bluetoothctl", bluetooth),
-            (_t("Bluetooth : désactiver"), ["bluetoothctl","power","off"],"bluetoothctl", bluetooth),
-            (_t("Associer un périphérique Bluetooth"), ["blueman-manager"],"blueman-manager", bluetooth),
-            (_t("Luminosité −"), ["brightnessctl","set","10%-"],"brightnessctl", backlight),
-            (_t("Luminosité +"), ["brightnessctl","set","+10%"],"brightnessctl", backlight),
+            (_t("Luminosité −"), ["winlux-brightness","set","-10","--osd"],"winlux-brightness", backlight),
+            (_t("Luminosité +"), ["winlux-brightness","set","+10","--osd"],"winlux-brightness", backlight),
             ("Volume −", ["winlux-control","volume-down"],"winlux-control", True),
             (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control", True),
             ("Volume +", ["winlux-control","volume-up"],"winlux-control", True),
@@ -274,8 +287,6 @@ class Tools(Gtk.Window):
             if shown:
                 self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         self.night_light()
-        if wifi:
-            self.wifi()
 
     def night_light(self):
         """Bouton Éclairage nocturne, masqué si l’écran n’a pas de rampe gamma."""
@@ -299,46 +310,6 @@ class Tools(Gtk.Window):
             now_on = "nightlight=on" in again.splitlines()
             button.set_label(_t("Éclairage nocturne : désactiver") if now_on else _t("Éclairage nocturne : activer"))
         button.connect("clicked", toggled)
-
-    def wifi(self):
-        self.label(_t("Ethernet est prioritaire quand il est disponible. Le Wi-Fi peut rester configuré et prendre le relais lorsque le câble est débranché. Dans une VM, la connexion apparaît généralement comme Ethernet."))
-        networks = Gtk.ComboBoxText()
-        self.content.pack_start(networks, False, False, 0)
-        def scan():
-            self.notice.set_text(_t("Recherche des réseaux Wi-Fi…"))
-            def worker():
-                try:
-                    result = subprocess.run(["nmcli", "-t", "-f", "BSSID,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"],
-                                            capture_output=True, text=True, timeout=30, check=True)
-                    rows = [split_nmcli(line) for line in result.stdout.splitlines()]
-                    def display():
-                        networks.remove_all()
-                        count = 0
-                        for row in rows:
-                            if len(row) != 4 or not row[0] or not row[1]: continue
-                            networks.append(row[0], f"{row[1]} · {row[2]} % · {row[3] or _t('Ouvert')}")
-                            count += 1
-                        if count: networks.set_active(0)
-                        self.notice.set_text(_t("{count} réseau(x) trouvé(s).").format(count=count) if count else _t("Aucun réseau visible ou aucune carte Wi-Fi disponible."))
-                        return False
-                    GLib.idle_add(display)
-                except (OSError, subprocess.SubprocessError) as error:
-                    detail = getattr(error, "stderr", "") or str(error)
-                    GLib.idle_add(lambda: (self.notice.set_text(_t("Recherche Wi-Fi impossible : ") + detail.strip()), False)[1])
-            threading.Thread(target=worker, daemon=True).start()
-        self.button(_t("Rechercher les réseaux Wi-Fi"), scan, bool(shutil.which("nmcli")))
-        self.button(_t("Se connecter au réseau sélectionné"), lambda: self.command(["nmcli", "--wait", "90", "device", "wifi", "connect", networks.get_active_id()]) if networks.get_active_id() else self.notice.set_text(_t("Choisissez d’abord un réseau.")), bool(shutil.which("nmcli")))
-        for title, args, binary in [
-            (_t("Réseaux Wi-Fi disponibles"), ["nmcli","-f","SSID,SIGNAL,SECURITY","device","wifi","list"],"nmcli"),
-            (_t("Actualiser la recherche Wi-Fi"), ["nmcli","device","wifi","rescan"],"nmcli"),
-            (_t("État des cartes Ethernet et Wi-Fi"), ["nmcli","device","status"],"nmcli"),
-            (_t("Wi-Fi : activer"), ["nmcli","radio","wifi","on"],"nmcli"),
-            (_t("Wi-Fi : désactiver"), ["nmcli","radio","wifi","off"],"nmcli"),
-            (_t("Configurer les réseaux"), ["nm-connection-editor"],"nm-connection-editor")]:
-            self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
-        ssid=self.entry(_t("Nom du réseau Wi-Fi à rejoindre"))
-        self.button(_t("Se connecter au réseau"),lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
-        self.label(_t("Pour un réseau protégé, l’agent réseau demande le mot de passe. Si le point d’accès et l’agent proposent WPS, appuyez sur le bouton WPS de la box pendant la connexion. Les réseaux cachés et réglages avancés sont accessibles dans Configurer les réseaux."))
 
     def notification_call(self, method, parameters=None):
         try:
@@ -542,7 +513,7 @@ class Tools(Gtk.Window):
             available = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
         self.label(_t("Sauvegarde précédente détectée.") if available else _t("Aucune sauvegarde précédente détectée."))
         self.label(_t("Pour restaurer, ouvrez Mises à jour et choisissez Restaurer. Une confirmation est demandée avant toute modification."))
-        self.button(_t("Ouvrir les mises à jour"), lambda: self.command(["winlux-shell-app", "settings", "7"]))
+        self.button(_t("Ouvrir les mises à jour"), lambda: self.open_settings("7"))
         self.label(_t("Si le bureau ne démarre plus : utilisez l’entrée Winlux secours au démarrage si elle est disponible. Sinon, démarrez sur une clé USB d’installation Winlux. Le menu de secours ne remplace pas une sauvegarde de vos documents."))
         self.button(_t("Ouvrir le guide d’accueil"), lambda: self.command(["winlux-welcome"]))
 

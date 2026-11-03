@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import pwd
+import re
 from pathlib import Path
 import shutil
 from string import Template
 import subprocess
 import threading
+import time
 import unicodedata
 import gi
 gi.require_version("Gtk", "3.0")
@@ -71,7 +73,12 @@ _TR = {
     'Système et alimentation': ('System and power', 'Sistema y energía', 'System und Energie'),
     'Applications et démarrage': ('Apps and startup', 'Aplicaciones e inicio', 'Apps und Autostart'),
     'Réseau Wi-Fi': ('Wi-Fi network', 'Red Wi-Fi', 'WLAN-Netzwerk'),
+    'Luminosité écran': ('Screen brightness', 'Brillo de la pantalla', 'Bildschirmhelligkeit'),
+    'Certificats sécurité': ('Security certificates', 'Certificados de seguridad', 'Sicherheitszertifikate'),
+    'Date et heure': ('Date & time', 'Fecha y hora', 'Datum und Uhrzeit'),
+    'Bluetooth et appareils': ('Bluetooth and devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Son': ('Sound', 'Sonido', 'Sound'),
+    'Clavier tactile': ('Touch keyboard', 'Teclado táctil', 'Bildschirmtastatur'),
     'Alimentation batterie veille': ('Power battery sleep', 'Energía batería suspensión', 'Energie Akku Standby'),
     'Clavier': ('Keyboard', 'Teclado', 'Tastatur'),
     'Souris': ('Mouse', 'Ratón', 'Maus'),
@@ -80,6 +87,7 @@ _TR = {
     'Écran résolution': ('Display resolution', 'Pantalla resolución', 'Bildschirm Auflösung'),
     'À propos version': ('About version', 'Acerca de versión', 'Info Version'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
+    'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
     'Partage de dossiers et transfert des réglages': ('Folder sharing and settings transfer', 'Compartir carpetas y transferir ajustes', 'Ordnerfreigabe und Übertragung der Einstellungen'),
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Bureautique': ('Office', 'Oficina', 'Büro'),
@@ -113,6 +121,7 @@ _TR = {
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Changer d’utilisateur': ('Switch user', 'Cambiar de usuario', 'Benutzer wechseln'),
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
@@ -126,12 +135,13 @@ def _t(text):
 
 
 STATE = Path.home() / ".config/winlux/start.json"
-DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-firefox.desktop", "org.xfce.mousepad.desktop",
+DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
-SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
+SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 35), (_t("Bluetooth et appareils"), 22),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
-            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
-            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29)]
+            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11), (_t("Boutiques de logiciels"), 1),
+            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29),
+            (_t("Luminosité écran"), 8), (_t("Certificats sécurité"), 36), (_t("Date et heure"), 14)]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
 # les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
 # recherche trouve les pages ci-dessus).
@@ -155,7 +165,10 @@ def category(app):
         if key in categories: return label
     return _t("Autres applications")
 
-SESSION_SERVICES = {"picom.desktop"}
+# Services de la session, et Thunar : l'Explorateur Winlux le remplace (« par »
+# proposait « Gestionnaire de fichiers Thunar » juste après Paramètres).
+SESSION_SERVICES = {"picom.desktop", "thunar.desktop", "org.xfce.thunar.desktop", "Thunar.desktop",
+                    "Thunar-folder-handler.desktop", "thunar-folder-handler.desktop"}
 
 # Couleurs du menu Démarrer : texte/fond au moins 4,5:1 (WCAG AA) dans les deux
 # thèmes, vérifié par scripts/test-shell-contrast.py.
@@ -175,6 +188,9 @@ MENU_CSS = Template("""
   #winlux-start entry selection { background: $selected; color: $on_selected; }
   #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
   #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  #winlux-start #winlux-start-osk label { font-size: 20px; }
+  /* Navigation au clavier (#28) : cadre visible seulement au clavier, comme Windows. */
+  #winlux-start button { outline: 2px solid $accent; outline-offset: -2px; }
   #winlux-start .heading { font-weight: bold; font-size: 12pt; }
   #winlux-start .footer { background: $footer; padding: 12px 25px; }
   #winlux-start .app-name { font-size: 9pt; }
@@ -221,6 +237,23 @@ def on_click(button, callback):
     button.connect("clicked", clicked)
 
 
+def osk_module():
+    """Clavier tactile (/usr/bin/winlux-osk, ou le script voisin), ou None."""
+    import importlib.machinery
+    import importlib.util
+    for path in (Path("/usr/bin/winlux-osk"), Path(__file__).resolve().with_name("winlux-osk.py")):
+        if path.is_file():
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", str(path))
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -232,6 +265,8 @@ class Start(Gtk.Application):
         self.file_results = []
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
+        if not isinstance(self.state, dict): self.state = {"pins": DEFAULTS, "recent": []}
+        self.state["pins"] = migrate_pins(self.state.get("pins", DEFAULTS))
 
     def save(self):
         STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -251,26 +286,96 @@ class Start(Gtk.Application):
         # Services de la session livrés avec une entrée de menu par leur paquet.
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
                      if listed(app) and app.get_id() not in SESSION_SERVICES}
+        if auto_pin(self.state, self.apps): self.save()
         self.all_apps = False
         self.search.set_text("")
         self.render()
-        monitor = self.window.get_display().get_primary_monitor()
-        if monitor is None: monitor = self.window.get_display().get_monitor(0)
-        area = monitor.get_workarea()
-        width, height = min(660, area.width - 24), min(650, area.height - 24)
-        self.window.set_default_size(width, height)
-        self.window.set_size_request(width, height)
+        # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
+        # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
+        # premier appui et se trouvait en partie dessous.
+        keyboard_shown = self.osk_widget is not None and self.osk_auto()
+        if keyboard_shown:
+            try: subprocess.Popen(["winlux-osk", "hide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError: pass
+        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
+        area = self.workarea()
         # Comme Windows 11 : barre alignée à gauche, le menu s'ouvre au-dessus
         # du bouton Démarrer ; barre centrée ou ouverture au clavier, il est
         # centré.
-        x = area.x + (area.width - width) // 2
-        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
-        if pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3:
-            x = area.x + 12
-        self.window.move(x, area.y + area.height - height - 10)
+        self.menu_left = pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3
+        self.place(keyboard_shown)
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+
+    def workarea(self):
+        display = self.window.get_display()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        return monitor.get_workarea()
+
+    def place(self, keyboard_shown):
+        """Taille et position du menu, avec ou sans son clavier tactile."""
+        area = self.workarea()
+        width, height = 660, 650
+        # Clavier ouvert : marges resserrées, et touches moins hautes sur un
+        # petit écran. En 1366x768 la 2e ligne des épinglés perdait son libellé
+        # sous le clavier.
+        compact = keyboard_shown
+        self.body.set_spacing(6 if compact else 18)
+        self.body.set_margin_top(8 if compact else 28)
+        self.body.set_margin_bottom(4 if compact else 28)
+        if self.osk_widget is not None:
+            self.osk_height = 180 if area.height < 900 else 220
+            self.osk_widget.set_size_request(-1, self.osk_height)
+            self.osk_widget.set_visible(keyboard_shown)
+            if keyboard_shown:
+                self.osk_widget.show_all()
+                width = max(width, self.osk_widget.get_preferred_width()[1] + 24)
+                height += self.osk_height + 12
+        width, height = min(width, area.width - 24), min(height, area.height - 24)
+        self.window.set_default_size(width, height)
+        self.window.set_size_request(width, height)
+        self.window.resize(width, height)
+        x = area.x + 12 if getattr(self, "menu_left", False) else area.x + (area.width - width) // 2
+        self.window.move(x, area.y + area.height - height - 10)
+        self.render()
+
+    # ── Clavier tactile intégré (tablette sans clavier) ──
+
+    def keyboard_open(self):
+        return getattr(self, "osk_widget", None) is not None and self.osk_widget.get_visible()
+
+    def osk_auto(self):
+        try: return not self.osk.keyboards()
+        except Exception: return False
+
+    def osk_toggle(self):
+        if self.osk_widget is None: return
+        # Le menu change de taille et de place : la perte de focus ou le clic
+        # vus pendant ce temps ne doivent pas le fermer (⌨ avec une recherche
+        # remplie fermait tout le menu).
+        self.resized_at = time.monotonic()
+        self.place(not self.osk_widget.get_visible())
+        # Curseur en fin de texte : grab_focus() sélectionnait toute la
+        # recherche et la touche suivante remplaçait « par ».
+        self.search.grab_focus_without_selecting()
+        self.search.set_position(-1)
+
+    def osk_send(self, key, _modifiers=()):
+        """Touches du clavier intégré vers la recherche du menu."""
+        entry = self.search
+        position = entry.get_position()
+        if key == "BackSpace":
+            if position > 0: entry.delete_text(position - 1, position)
+        elif key == "Return":
+            self.first_result()
+        elif key == "Escape":
+            self.hide()
+        elif key in ("Left", "Right"):
+            entry.set_position(max(0, position + (1 if key == "Right" else -1)))
+        elif len(key) == 1:
+            entry.insert_text(key, position)
+            entry.set_position(position + 1)
 
     def build(self):
         self.window = Gtk.ApplicationWindow(application=self, title=_t("Démarrer Winlux"))
@@ -301,11 +406,38 @@ class Start(Gtk.Application):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.window.add(outer)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
+        self.body = body
         outer.pack_start(body, True, True, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
         self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
-        body.pack_start(self.search, False, False, 0)
+        search_row = Gtk.Box(spacing=8)
+        search_row.pack_start(self.search, True, True, 0)
+        body.pack_start(search_row, False, False, 0)
+        self.osk = osk_module()
+        self.osk_widget, self.osk_height = None, 0
+        if self.osk is not None:
+            try:
+                self.osk_widget = self.osk.keyboard_widget(send=self.osk_send, on_close=self.osk_toggle)
+            except Exception:
+                self.osk_widget = None
+        if self.osk_widget is not None:
+            self.osk_height = 220
+            self.osk_widget.set_size_request(-1, self.osk_height)
+            self.osk_widget.set_margin_start(12)
+            self.osk_widget.set_margin_end(12)
+            self.osk_widget.set_no_show_all(True)
+            # Bouton clavier à droite de la recherche, toujours visible : l'ouvre
+            # ou le ferme, avec ou sans clavier physique. (Une icône dans le
+            # champ ne tenait pas : GtkSearchEntry y met et enlève sa croix
+            # d'effacement.)
+            self.osk_button = Gtk.Button(label="⌨")
+            self.osk_button.set_name("winlux-start-osk")
+            self.osk_button.set_can_focus(False)
+            self.osk_button.set_tooltip_text(_t("Clavier tactile"))
+            self.osk_button.set_size_request(48, -1)
+            self.osk_button.connect("clicked", lambda *_: self.osk_toggle())
+            search_row.pack_end(self.osk_button, False, False, 0)
         header = Gtk.Box()
         self.heading = Gtk.Label(label=_t("Épinglé"), xalign=0)
         self.heading.get_style_context().add_class("heading")
@@ -328,6 +460,8 @@ class Start(Gtk.Application):
         on_click(power, lambda: self.power(power))
         footer.pack_end(power, False, False, 0)
         outer.pack_end(footer, False, False, 0)
+        if self.osk_widget is not None:
+            outer.pack_end(self.osk_widget, False, False, 0)
 
     def apply_theme(self):
         """Menu clair en thème clair, sombre en thème sombre, comme Windows 11.
@@ -362,14 +496,18 @@ class Start(Gtk.Application):
                 return self.grab_attempts < 30
         return False
 
+    def settling(self):
+        return time.monotonic() - getattr(self, "resized_at", 0) < 0.8
+
     def outside_click(self, _, event):
+        if self.settling(): return False
         x,y=self.window.get_position();width,height=self.window.get_size()
         if not (x<=event.x_root<x+width and y<=event.y_root<y+height):return self.hide()
         return False
 
     def blur(self, *_):
         def later():
-            if not self.window.is_active() and not self.context: self.hide()
+            if not self.window.is_active() and not self.context and not self.settling(): self.hide()
             return False
         GLib.timeout_add(150, later)
         return False
@@ -388,10 +526,11 @@ class Start(Gtk.Application):
         self.render()
 
     def first_result(self, *_):
+        # Même ordre que la liste : applications, Paramètres, fichiers.
         query=fold(self.search.get_text().strip())
-        setting=next((page for label,page in SETTINGS if query and query in fold(label)),None)
-        if setting is not None:self.open_setting(setting)
-        elif self.results:self.launch(self.results[0])
+        found=settings_for(query) if query else []
+        if self.results:self.launch(self.results[0])
+        elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
     def launch(self, app):
@@ -436,14 +575,28 @@ class Start(Gtk.Application):
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
-        self.results = sorted((app for app in self.apps.values() if query in fold(app.get_display_name())), key=lambda app: app.get_display_name().casefold())
+        self.results = sorted((app for app in self.apps.values() if matches(app, query)),
+                              key=lambda app: (rank(app.get_display_name(), query), app.get_display_name().casefold()))
         if listing:
+            # Ordre des résultats : applications (le nom qui commence par la
+            # recherche d'abord), puis pages des Paramètres, puis fichiers. Avec
+            # « par », un Parallel.dll téléchargé passait avant l'application
+            # Paramètres et Entrée l'ouvrait.
+            previous = None
+            if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
+            for app in self.results:
+                group = category(app)
+                if not query and group != previous:
+                    heading = Gtk.Label(label=group, xalign=0, margin_top=10)
+                    heading.get_style_context().add_class("heading")
+                    self.content.pack_start(heading, False, False, 0)
+                    previous = group
+                self.content.pack_start(self.app_button(app), False, False, 0)
             if query:
-                for label, page in SETTINGS:
-                    if query in fold(label):
-                        button = Gtk.Button(label=_t("Paramètres · ") + label)
-                        on_click(button, lambda target=page: self.open_setting(target))
-                        self.content.pack_start(button, False, False, 0)
+                for label, page in settings_for(query):
+                    button = Gtk.Button(label=_t("Paramètres · ") + label)
+                    on_click(button, lambda target=page: self.open_setting(target))
+                    self.content.pack_start(button, False, False, 0)
                 if query != self.file_query:
                     self.file_query = query
                     self.file_generation += 1
@@ -456,16 +609,6 @@ class Start(Gtk.Application):
                     self.content.pack_start(button, False, False, 0)
                 if len(self.file_results) == 30:
                     self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
-            previous = None
-            if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
-            for app in self.results:
-                group = category(app)
-                if not query and group != previous:
-                    heading = Gtk.Label(label=group, xalign=0, margin_top=10)
-                    heading.get_style_context().add_class("heading")
-                    self.content.pack_start(heading, False, False, 0)
-                    previous = group
-                self.content.pack_start(self.app_button(app), False, False, 0)
             if not self.results and not (query and (self.file_results or any(query in fold(label) for label, _ in SETTINGS))):
                 self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
@@ -473,6 +616,11 @@ class Start(Gtk.Application):
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
             for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
+            # Clavier tactile ouvert : la place manque, les épinglés seuls (le
+            # titre « Recommandations » était coupé par le bas de la liste).
+            if self.keyboard_open():
+                self.content.show_all()
+                return
             heading = Gtk.Label(label=_t("Recommandations"), xalign=0, margin_top=15)
             heading.get_style_context().add_class("heading")
             self.content.pack_start(heading, False, False, 0)
@@ -588,13 +736,76 @@ class Start(Gtk.Application):
             self.hide()
             subprocess.Popen(["winlux-control", "power-suspend"], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def logoff():
+            # Ferme la session de ce compte (applications comprises), comme
+            # « Se déconnecter » de Windows ; le relais root vérifie le compte.
+            self.hide()
+            subprocess.Popen(["winlux-control", "session-logoff", current_account()], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Ordre de Windows 11 : Verrouiller, Se déconnecter, Changer
+        # d'utilisateur, Mettre en veille, Redémarrer, Arrêter.
         entries = [(_t("Verrouiller"), lock, "system-lock-screen-symbolic")]
+        if power_menu_has_logoff():
+            entries.append((_t("Se déconnecter"), logoff, "system-log-out-symbolic"))
         if power_menu_has_switch():
             entries.append((_t("Changer d’utilisateur"), lambda: lock("switch"), "system-switch-user-symbolic"))
         if power_menu_has_sleep():
             entries.append((_t("Mettre en veille"), sleep, "weather-clear-night-symbolic"))
         self.menu(widget, None, entries + [(_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
                                            (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
+
+
+# Anciennes épingles par défaut remplacées : l'épingle Edge des premières
+# versions devient le « Navigateur » générique (aucune marque imposée).
+RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
+
+
+def rank(text, query):
+    """0 : le nom commence par la recherche ; 1 : un de ses mots ; 2 : ailleurs."""
+    text = fold(text)
+    if text.startswith(query): return 0
+    if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
+    return 2
+
+
+def settings_for(query):
+    """Pages des Paramètres trouvées, les mieux classées d'abord."""
+    return sorted(((label, page) for label, page in SETTINGS if query in fold(label)), key=lambda item: rank(item[0], query))
+
+
+def matches(app, query):
+    """Nom affiché ou mot-clé du lanceur (« boutique » trouve le Store)."""
+    if query in fold(app.get_display_name()): return True
+    keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
+    return bool(query) and any(query in fold(word) for word in keywords or [])
+
+
+def auto_pin(state, apps):
+    """Lanceurs marqués X-Winlux-Pin=true (Store, boutiques choisies) épinglés
+    une seule fois par compte : détachés ensuite, ils le restent. Une boutique
+    retirée puis choisie de nouveau est épinglée de nouveau."""
+    done = [ident for ident in state.get("auto_pinned", []) if ident in apps]
+    pins = state.setdefault("pins", list(DEFAULTS))
+    for ident, app in apps.items():
+        if ident in done or not hasattr(app, "get_boolean") or not app.has_key("X-Winlux-Pin"): continue
+        if not app.get_boolean("X-Winlux-Pin"): continue
+        if ident not in pins: pins.append(ident)
+        done.append(ident)
+    if done == state.get("auto_pinned"): return False
+    state["auto_pinned"] = done
+    return True
+
+
+def migrate_pins(pins):
+    """Épingles enregistrées, anciennes épingles par défaut remplacées, sans doublon."""
+    if not isinstance(pins, list):
+        return list(DEFAULTS)
+    result = []
+    for pin in pins:
+        pin = RENAMED_PINS.get(pin, pin)
+        if pin not in result:
+            result.append(pin)
+    return result
 
 
 def power_menu_has_sleep():
@@ -604,6 +815,17 @@ def power_menu_has_sleep():
     except OSError:
         return False
     return "mem" in states or "freeze" in states
+
+
+def current_account():
+    """Compte de la session (USER, sinon celui du processus)."""
+    return os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
+
+
+def power_menu_has_logoff():
+    """« Se déconnecter » dans une session installée ; la session Live n'a
+    pas d'écran de connexion vers lequel revenir."""
+    return not Path(os.environ.get("WINLUX_LIVE_MARKER", "/etc/winlux/live-session")).exists()
 
 
 def power_menu_has_switch():

@@ -11,6 +11,7 @@ import zipfile
 import os
 from pathlib import Path
 import struct
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -47,20 +48,22 @@ with tempfile.TemporaryDirectory() as tmp:
            "XDG_CONFIG_HOME": str(home / ".config"), "WINLUX_DRIVE_C": str(home),
            "WINLUX_STORE_CATALOG": str(project / "integration/store-catalog.txt"),
            "WINLUX_STORE_OFFLINE": "1", "LOG": str(log), "LANG": "fr_FR.UTF-8",
-           "WINLUX_APPIMAGE_FEED": (w / "feed.json").as_uri(),
+           "WINLUX_APPIMAGE_FEED": (w / "feed.json").as_uri(), "WINLUX_STORE_APPIMAGEHUB": "1",
            "PATH": f"{bindir}:/usr/bin:/bin"}
 
     # --- apt simulé : VLC installé avec mise à jour, GIMP disponible ---
     mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
     mock(bindir, "apt-cache", """case "$1" in
-policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
+policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad|inconnu) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
 show) printf 'Package: gimp\\nVersion: 2.10.36-3\\nInstalled-Size: 20480\\nHomepage: https://www.gimp.org\\nDescription: retouche\\n Premier paragraphe.\\n .\\n Second paragraphe.\\n';;
 esac
 """)
     mock(bindir, "apt-get", """printf 'apt-get %s\\n' "$*" >> "$LOG"
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
+eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
+printf 'LC_ALL=%s\\n' "$LC_ALL" >> "$LOG"
 """)
     mock(bindir, "id", "echo 0\n")
     # Élévation simulée : la CI a un sudo sans mot de passe dont le
@@ -306,6 +309,10 @@ esac
     check(state["windows"]["msi/outil"]["msi"] == "{AAAA-BBBB}", "code produit MSI retenu")
     st("remove", "windows:msi/outil")
     check("winlux --msiexec /x {AAAA-BBBB} /qn" in log.read_text(), "désinstallation MSI")
+    # Paquet Ubuntu réel hors du catalogue (police d'emojis, moteur OCR) :
+    # installé directement au lieu de « Logiciel inconnu ».
+    st("install", "apt:fonts-noto-color-emoji")
+    check("install --no-install-recommends -- fonts-noto-color-emoji" in log.read_text(), "paquet hors catalogue installé")
     st("install", "apt:inconnu", code=2)
     check("Logiciel inconnu" in (run / "store-progress.txt").read_text(), "message en français")
     for code, text in (("en", "Unknown software"), ("es", "Software desconocido"), ("de", "Unbekannte Software")):
@@ -340,4 +347,38 @@ esac
     check(starter_state()["keepassxc"][1] == "f", "échec signalé")
     st("starter", "keepassxc")
     check(starter_state()["keepassxc"][1] == "a", "nouvel essai après échec")
+    # Un dossier d'échange par compte (WINLUX_STORE_RUN) : un second compte
+    # ne pouvait pas remplacer l'index écrit par le premier (/run/winlux sticky).
+    mine = w / "run-compte"
+    r = subprocess.run([sys.executable, "-I", "-B", str(store), "refresh"],
+                       env={**env, "WINLUX_STORE_RUN": str(mine)}, capture_output=True, text=True)
+    check(r.returncode == 0 and "refreshing=0" in (mine / "store.txt").read_text(), "index dans le dossier du compte")
+    launcher = (project / "scripts/winlux-shell-app.sh").read_text()
+    check('"/run/winlux/store-$uid"' in launcher and "test -O" in launcher and "export WINLUX_STORE_RUN" in launcher,
+          "winlux-shell-app donne au Store un dossier propre au compte")
+    ui = (project / "testexe/src/shell/store.rs").read_text()
+    check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
+    # Désinstallation apt, et toutes les commandes apt-get du Store acceptées par
+    # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
+    st("remove", "apt:vlc")
+    check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
+    relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
+    check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
+    for args in apt_lines:
+        check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")
+    # Messages d'apt traduits, jamais l'anglais brut d'APT::Status-Fd.
+    check("LC_ALL=C.UTF-8" in log.read_text(), "apt lancé en C.UTF-8 pour des messages prévisibles")
+    ns = runpy.run_path(str(store), run_name="store_test")
+    for lang, expected in (("fr", "abiword installé"), ("en", "abiword installed"),
+                           ("es", "abiword instalado"), ("de", "abiword installiert")):
+        ns["LANG"] = lang
+        apt_message = ns["apt_message"]
+        apt_message.__globals__["LANG"] = lang
+        check(apt_message("pmstatus", "Installed abiword (amd64)") == expected, f"message apt traduit ({lang})")
+        check(apt_message("pmstatus", "Unpacking abiword:amd64 (3.0.5-1)") != "Unpacking abiword:amd64 (3.0.5-1)",
+              f"décompression traduite ({lang})")
+        check(apt_message("dlstatus", "Retrieving file 1 of 3") == ns["T"][lang]["apt_download"], f"téléchargement ({lang})")
+        check(apt_message("pmstatus", "Quelque chose d'inconnu") == ns["T"][lang]["apt_working"], f"repli générique ({lang})")
+    check("Installed abiword" not in (run / "store-progress.txt").read_text(), "pas d'anglais brut dans le Store")
     print("Store : OK")

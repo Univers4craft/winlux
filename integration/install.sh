@@ -28,7 +28,8 @@ install -Dm755 "$root/scripts/winlux-report.py" "$bin/winlux-report"
 # Fenêtre UAC (requireAdministrator) et sa vérification de mot de passe.
 install -Dm755 "$root/scripts/winlux-uac.py" "$bin/winlux-uac"
 install -Dm644 "$root/scripts/winlux-lock.py" "$share/winlux/winlux-lock.py"
-install -Dm755 "$root/scripts/install-edge.sh" "$share/winlux/install-edge.sh"
+install -Dm755 "$root/scripts/install-browser.sh" "$share/winlux/install-browser.sh"
+install -Dm755 "$root/scripts/prepare-browser-packages.py" "$share/winlux/winlux-browser-fetch"
 install -Dm755 "$root/scripts/winlux-update.sh" "$bin/winlux-update"
 install -Dm755 "$root/integration/uninstall.sh" "$share/winlux/uninstall.sh"
 printf '%s\n' "$version" | install -Dm644 /dev/stdin "$share/winlux/version"
@@ -50,7 +51,7 @@ touch "$mimeapps"
 if ! grep -q '^\[Default Applications\]' "$mimeapps"; then
     printf '[Default Applications]\n' >>"$mimeapps"
 fi
-# Liens web : Microsoft Edge (via winlux-browser), le navigateur par défaut.
+# Liens web : winlux-browser, qui ouvre le navigateur choisi par l'utilisateur.
 for type in $web_types; do
     if grep -q "^$type=.*winlux-browser\.desktop" "$mimeapps"; then
         continue

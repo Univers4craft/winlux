@@ -261,6 +261,12 @@ pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
 }
 
 /// PID Linux d'un handle de processus (le processus courant ou un enfant).
+/// Vrai pour le pseudo-handle du processus courant ou un vrai handle vers
+/// lui (DuplicateHandle de GetCurrentProcess, OpenProcess sur son PID).
+pub(crate) fn is_current_process_handle(h: usize) -> bool {
+    h == get_current_process() || process_os_pid(h) == Some(std::process::id() as i32)
+}
+
 pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
     if h == get_current_process() {
         return Some(std::process::id() as i32);
@@ -508,6 +514,10 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
 
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+}
+/// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
+pub(crate) fn new_handle_number() -> usize {
+    next_handle()
 }
 /// Handle hérité (voir `inherit`) : même valeur que chez le parent.
 pub(crate) fn insert_file_at(h: usize, file: File, overlapped: bool) {
@@ -1729,13 +1739,15 @@ unsafe fn create_file_opened(
             }
         };
     }
-    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
+    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal ; sans
+    // terminal (sortie redirigée, appli graphique), l'entrée ou la sortie
+    // standard, et surtout pas un fichier nommé « CONOUT$ ».
     let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
-    if device == "CONIN$" && libc::isatty(0) == 1 {
+    if device == "CONIN$" {
         crate::process::set_last_error(0);
         return STD_INPUT_REAL;
     }
-    if device == "CONOUT$" && libc::isatty(1) == 1 {
+    if device == "CONOUT$" {
         crate::process::set_last_error(0);
         return STD_OUTPUT_REAL;
     }
@@ -2926,8 +2938,16 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
+    // LOAD_IGNORE_CODE_AUTHZ_LEVEL : sans effet.
+    let flags = flags & !0x10;
     if flags == 0 {
         return load_library_a(name);
+    }
+    // LOAD_LIBRARY_AS_DATAFILE(_EXCLUSIVE) et LOAD_LIBRARY_AS_IMAGE_RESOURCE :
+    // ressources seulement (mscorrc.dll de .NET, fichiers .mui, icônes).
+    const AS_DATA: u32 = 0x2 | 0x20 | 0x40;
+    if flags & AS_DATA != 0 {
+        return load_as_data(&value, flags);
     }
     // Never execute DLL entry points for resource/data-only loading requests.
     // AddDllDirectory/user search directories and signature flags are not yet
@@ -2964,6 +2984,38 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
     }
     crate::loader::with_dll_search(directories, || load_library_a(name))
 }
+/// LoadLibraryEx en mode données : l'image est projetée en lecture seule,
+/// sans imports ni DllMain ; le handle porte le bit 1 (fichier de données)
+/// ou 2 (image de ressources) et sert aux fonctions de ressources.
+fn load_as_data(value: &str, flags: u32) -> usize {
+    // Une DLL déjà chargée normalement est renvoyée telle quelle.
+    if let Some(h) = crate::dlls::module_handle(value) {
+        crate::loader::increment_ref(h);
+        return h;
+    }
+    let importer = crate::loader::main_module()
+        .map(|m| m.path)
+        .unwrap_or_else(|| crate::paths::to_linux("C:\\Windows\\System32\\winlux.exe"));
+    let path = crate::loader::find_dll_file(value, &importer).or_else(|| {
+        let system = crate::paths::to_linux("C:\\Windows\\System32");
+        crate::loader::with_dll_search(vec![system], || {
+            crate::loader::find_dll_file(value, &importer)
+        })
+    });
+    let Some(path) = path else {
+        crate::process::set_last_error(2);
+        return 0;
+    };
+    let tag = if flags & 0x20 != 0 { 2 } else { 1 };
+    match crate::loader::load_data(&path, tag) {
+        Ok(handle) => handle,
+        Err(error) => {
+            crate::trace!("LoadLibraryEx (données) {} : {error}", path.display());
+            crate::process::set_last_error(193);
+            0
+        }
+    }
+}
 pub unsafe extern "win64" fn load_library_ex_w(name: *const u16, file: usize, flags: u32) -> usize {
     let name = match cstring_from_wide(name) {
         Ok(value) => value,
@@ -2975,6 +3027,13 @@ pub unsafe extern "win64" fn load_library_ex_w(name: *const u16, file: usize, fl
     load_library_ex_a(name.as_ptr().cast(), file, flags)
 }
 pub extern "win64" fn free_library(module: usize) -> i32 {
+    if module & crate::loader::DATA_HANDLE_BITS != 0 {
+        if crate::loader::free_data(module).is_some() {
+            return 1;
+        }
+        crate::process::set_last_error(6);
+        return 0;
+    }
     if crate::dlls::builtin_by_handle(module).is_some() {
         return 1;
     }
@@ -3849,7 +3908,7 @@ pub unsafe extern "win64" fn virtual_query_ex(
     info: *mut MemoryBasicInformation,
     length: usize,
 ) -> usize {
-    if process != get_current_process() {
+    if !is_current_process_handle(process) {
         crate::process::set_last_error(6);
         return 0;
     }
@@ -3916,6 +3975,33 @@ pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let h = next_handle();
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
     h
+}
+/// Type d'objet du noyau d'un handle, tel que le nomme
+/// NtQueryObject(ObjectTypeInformation), ou None s'il n'existe pas.
+pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
+    if h == crate::dlls::security::TOKEN_HANDLE || matches!(h as isize, -6..=-4) {
+        return Some("Token");
+    }
+    if h == get_current_process() {
+        return Some("Process");
+    }
+    if h == get_current_thread() {
+        return Some("Thread");
+    }
+    if fd_of_handle(h).is_some() {
+        return Some("File");
+    }
+    if crate::dlls::mmap::export(h).is_some() {
+        return Some("Section");
+    }
+    Some(match lookup_sync(h)? {
+        SyncHandle::Event(_) => "Event",
+        SyncHandle::Mutex(_) => "Mutant",
+        SyncHandle::Thread(_) => "Thread",
+        SyncHandle::Process(_) => "Process",
+        SyncHandle::CompletionPort(_) => "IoCompletion",
+        SyncHandle::Semaphore(_) => "Semaphore",
+    })
 }
 pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
@@ -4221,11 +4307,14 @@ pub unsafe extern "win64" fn initialize_critical_section_ex(
     spin: u32,
     flags: u32,
 ) -> i32 {
-    if flags & !0x0100_0000 != 0 {
+    // Drapeaux RTL_CRITICAL_SECTION_FLAG_* (octet haut : NO_DEBUG_INFO,
+    // DYNAMIC_SPIN, STATIC_INIT, RESOURCE_TYPE, FORCE_DEBUG_INFO…) : aucun
+    // ne change le comportement ici ; le reste est réservé.
+    if flags & !0xFF00_0000 != 0 {
         crate::process::set_last_error(87);
         return 0;
     }
-    initialize_critical_section_and_spin_count(cs, spin)
+    initialize_critical_section_and_spin_count(cs, spin & 0x00FF_FFFF)
 }
 pub unsafe extern "win64" fn enter_critical_section(cs: *mut c_void) {
     let Some(m) = critical_object(cs as usize) else {
@@ -4538,9 +4627,10 @@ pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
     }
 }
 /// Le descripteur est-il un tube (CreatePipe, `|` du shell) ?
+/// Tube anonyme (FIFO) ou tube nommé (socket Unix) : une lecture de 0 octet
+/// y signifie que l'autre bout est fermé.
 fn fd_is_pipe(fd: i32) -> bool {
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    unsafe { libc::fstat(fd, &mut st) == 0 && st.st_mode & libc::S_IFMT == libc::S_IFIFO }
+    file_type_of_fd(fd) == 3
 }
 /// Entrée/sortie standard d'un enfant d'après un handle de STARTUPINFO :
 /// 0 ou INVALID_HANDLE_VALUE → rien (/dev/null), sinon une copie du fd.
@@ -4767,9 +4857,30 @@ unsafe fn create_process_common(
         let cwd = crate::paths::to_linux(&crate::dlls::cstr(current_directory));
         cmd.current_dir(cwd);
     }
+    // EXTENDED_STARTUPINFO_PRESENT + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE :
+    // le programme s'attache à la pseudo-console (pty) de CreatePseudoConsole.
+    let mut pseudo_console = false;
+    if creation_flags & 0x0008_0000 != 0
+        && !startup.is_null()
+        && (*startup).cb as usize >= std::mem::size_of::<StartupInfoA>() + 8
+    {
+        let list = std::ptr::read_unaligned(
+            (startup as *const u8).add(std::mem::size_of::<StartupInfoA>()) as *const usize,
+        );
+        if let Some(console) = crate::dlls::kernel32_node::proc_thread_attribute(
+            list,
+            crate::dlls::kernel32_node::PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+        ) {
+            if !crate::dlls::console_input::attach_pseudo_console(&mut cmd, console) {
+                crate::process::set_last_error(6);
+                return 0;
+            }
+            pseudo_console = true;
+        }
+    }
     // STARTF_USESTDHANDLES : entrée, sortie et erreur du programme lancé
     // (tubes de CreatePipe, fichiers, ou handles standard du parent).
-    if !startup.is_null() && (*startup).flags & 0x100 != 0 {
+    if !pseudo_console && !startup.is_null() && (*startup).flags & 0x100 != 0 {
         let s = &*startup;
         match (
             stdio_for_handle(s.std_input, 0),
@@ -4801,7 +4912,7 @@ unsafe fn create_process_common(
         None
     };
     // DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP : nouveau groupe de processus.
-    if creation_flags & (0x8 | 0x200) != 0 {
+    if !pseudo_console && creation_flags & (0x8 | 0x200) != 0 {
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     }
     if let Some(env) = environment {
@@ -5002,13 +5113,18 @@ pub unsafe extern "win64" fn create_process_w(
         info,
     )
 }
-pub unsafe extern "win64" fn open_process(_access: u32, _inherit: i32, pid: u32) -> usize {
+pub unsafe extern "win64" fn open_process(_access: u32, inherit: i32, pid: u32) -> usize {
     if pid == 0 || pid > i32::MAX as u32 {
         crate::process::set_last_error(87);
         return 0;
     }
     if pid == libc::getpid() as u32 {
-        return get_current_process();
+        // Vrai handle vers soi (jamais -1, qui vaut INVALID_HANDLE_VALUE) :
+        // crashpad ouvre ainsi son propre processus, héritable, et passe la
+        // valeur à son gestionnaire sur la ligne de commande.
+        let h = add_sync(foreign_process(pid as i32), None);
+        crate::dlls::inherit::set(h, inherit != 0);
+        return h;
     }
     // Les PID Windows sont les PID Linux : tout processus vivant s'ouvre, les
     // droits réels sont vérifiés par le noyau au moment d'agir (kill, nice).
@@ -5051,6 +5167,12 @@ pub unsafe extern "win64" fn get_exit_code_process(handle: usize, code: *mut u32
     1
 }
 pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 {
+    if is_current_process_handle(handle) {
+        // TerminateProcess(GetCurrentProcess()) : le processus s'arrête tout de
+        // suite, sans rendre la main ni lancer les destructeurs (Crashpad,
+        // Chromium et les CRT s'en servent comme d'un abort).
+        terminate_self(code);
+    }
     let Some(SyncHandle::Process(p)) = lookup_sync(handle) else {
         crate::process::set_last_error(6);
         return 0;
@@ -5174,6 +5296,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
     }
+    // Jeton d'accès (OpenProcessToken) : partagé, rien à libérer. Chromium
+    // (Electron) vérifie que sa fermeture réussit.
+    if handle == crate::dlls::security::TOKEN_HANDLE {
+        return 1;
+    }
     if handle == 1
         || handle == 2
         || handle == (-10isize) as usize
@@ -5195,6 +5322,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
+        forget_dir_watcher(handle);
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
         remove_waitable_timer(handle);
@@ -6187,6 +6315,16 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
     }
     1
 }
+/// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
+/// atexit ni destructeurs, comme TerminateProcess sous Windows.
+pub fn terminate_self(code: u32) -> ! {
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    crate::dlls::console_input::restore();
+    // SAFETY: _exit termine le processus sans revenir.
+    unsafe { libc::_exit(code as i32) }
+}
+
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
@@ -7145,19 +7283,437 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
     1
 }
 
-// --- ReadDirectoryChangesW (stub) ---
-pub unsafe extern "win64" fn read_directory_changes_w(
-    _h: usize,
-    _buf: *mut c_void,
-    _len: u32,
-    _subtree: i32,
-    _filter: u32,
-    _bytes: *mut u32,
-    _ov: usize,
-    _routine: usize,
-) -> i32 {
-    crate::process::set_last_error(120); // ERROR_CALL_NOT_IMPLEMENTED
+// --- Surveillance de dossiers : ReadDirectoryChangesW et FindFirstChangeNotification ---
+//
+// Moteur inotify dans `dirwatch.rs`. Un dossier ouvert par CreateFile garde
+// son surveillant jusqu'à CloseHandle : les changements survenus entre deux
+// appels sont rendus au suivant, comme sous Windows.
+
+type SharedWatcher = Arc<Mutex<crate::dlls::dirwatch::Watcher>>;
+static DIR_WATCHERS: OnceLock<Mutex<HashMap<usize, SharedWatcher>>> = OnceLock::new();
+fn dir_watchers() -> &'static Mutex<HashMap<usize, SharedWatcher>> {
+    DIR_WATCHERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+const ERROR_NOTIFY_ENUM_DIR: u32 = 1022;
+const ERROR_OPERATION_ABORTED: u32 = 995;
+
+/// Chemin Linux d'un handle de fichier (lien /proc/self/fd).
+fn handle_path(h: usize) -> Option<std::path::PathBuf> {
+    let fd = fd_of_handle(h)?;
+    std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
+}
+
+fn watcher_for(h: usize, subtree: bool, filter: u32) -> Result<SharedWatcher, u32> {
+    if let Some(found) = lock(dir_watchers()).get(&h).cloned() {
+        lock(&found).set_filter(filter);
+        return Ok(found);
+    }
+    let Some(path) = handle_path(h) else {
+        return Err(6);
+    };
+    if !path.is_dir() {
+        return Err(1); // ERROR_INVALID_FUNCTION : pas un dossier
+    }
+    let watcher = crate::dlls::dirwatch::Watcher::new(&path, subtree, filter).map_err(|e| {
+        if e.raw_os_error() == Some(libc::ENOSPC) || e.raw_os_error() == Some(libc::EMFILE) {
+            8 // plus de surveillances inotify disponibles
+        } else {
+            io_error_code(&e)
+        }
+    })?;
+    crate::trace!("ReadDirectoryChangesW : surveillance de {path:?} (sous-arbre {subtree}, filtre {filter:#x})");
+    let shared = Arc::new(Mutex::new(watcher));
+    lock(dir_watchers()).insert(h, shared.clone());
+    Ok(shared)
+}
+
+/// Oublie le surveillant d'un handle fermé (appelé par CloseHandle).
+pub(crate) fn forget_dir_watcher(h: usize) {
+    lock(dir_watchers()).remove(&h);
+}
+
+// File d'APC par thread : routines d'achèvement (ReadDirectoryChangesW,
+// ReadFileEx…) et QueueUserAPC, exécutées pendant une attente « alertable ».
+#[derive(Clone, Copy)]
+enum Apc {
+    /// PAPCFUNC(param)
+    User(usize, usize),
+    /// LPOVERLAPPED_COMPLETION_ROUTINE(erreur, octets, overlapped)
+    Completion(usize, u32, u32, usize),
+}
+static APC_QUEUES: OnceLock<(Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar)> = OnceLock::new();
+fn apc_queues() -> &'static (Mutex<HashMap<ThreadId, VecDeque<Apc>>>, Condvar) {
+    APC_QUEUES.get_or_init(|| (Mutex::new(HashMap::new()), Condvar::new()))
+}
+fn queue_apc(thread: ThreadId, apc: Apc) {
+    let (queues, changed) = apc_queues();
+    lock(queues).entry(thread).or_default().push_back(apc);
+    changed.notify_all();
+}
+fn apc_pending() -> bool {
+    let me = std::thread::current().id();
+    lock(&apc_queues().0)
+        .get(&me)
+        .is_some_and(|q| !q.is_empty())
+}
+/// Exécute les APC du thread courant ; vrai si au moins une a tourné.
+pub(crate) fn run_apcs() -> bool {
+    let me = std::thread::current().id();
+    let mut ran = false;
+    loop {
+        let next = lock(&apc_queues().0)
+            .get_mut(&me)
+            .and_then(VecDeque::pop_front);
+        let Some(apc) = next else {
+            return ran;
+        };
+        ran = true;
+        unsafe {
+            match apc {
+                Apc::User(func, param) => {
+                    let f: extern "win64" fn(usize) = std::mem::transmute(func);
+                    f(param);
+                }
+                Apc::Completion(func, error, bytes, overlapped) => {
+                    let f: extern "win64" fn(u32, u32, usize) = std::mem::transmute(func);
+                    f(error, bytes, overlapped);
+                }
+            }
+        }
+    }
+}
+/// Attente alertable : APC en attente → elles tournent et on rend
+/// WAIT_IO_COMPLETION (0xC0) ; sinon `wait(tranche)` jusqu'au délai.
+fn alertable_wait(ms: u32, mut wait: impl FnMut(u32) -> u32) -> u32 {
+    const WAIT_IO_COMPLETION: u32 = 0xC0;
+    const WAIT_TIMEOUT: u32 = 258;
+    if run_apcs() {
+        return WAIT_IO_COMPLETION;
+    }
+    let start = std::time::Instant::now();
+    loop {
+        let elapsed = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        let left = if ms == u32::MAX {
+            u32::MAX
+        } else {
+            ms.saturating_sub(elapsed)
+        };
+        let result = wait(left.min(15));
+        if result != WAIT_TIMEOUT {
+            return result;
+        }
+        if run_apcs() {
+            return WAIT_IO_COMPLETION;
+        }
+        if left <= 15 {
+            return WAIT_TIMEOUT;
+        }
+    }
+}
+
+/// `QueueUserAPC` : pour le thread courant (pseudo-handle GetCurrentThread).
+pub unsafe extern "win64" fn queue_user_apc(func: usize, thread: usize, param: usize) -> u32 {
+    if func == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if thread == get_current_thread() {
+        queue_apc(std::thread::current().id(), Apc::User(func, param));
+        return 1;
+    }
+    crate::process::set_last_error(6);
     0
+}
+
+/// Copie un lot de changements dans le tampon de l'appelant.
+unsafe fn deliver_changes(
+    watcher: &SharedWatcher,
+    buf: *mut c_void,
+    len: u32,
+    extended: bool,
+) -> (u32, u32) {
+    match lock(watcher).take(len as usize, extended) {
+        crate::dlls::dirwatch::Batch::Records(data) => {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, data.len());
+            (data.len() as u32, 0)
+        }
+        crate::dlls::dirwatch::Batch::Overflow => (0, ERROR_NOTIFY_ENUM_DIR),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn read_directory_changes(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+    extended: bool,
+) -> i32 {
+    if buf.is_null() || filter == 0 || filter & !crate::dlls::dirwatch::FILTER_ALL != 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let watcher = match watcher_for(h, subtree != 0, filter) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
+    };
+    if ov == 0 {
+        // Synchrone : attend le premier changement.
+        loop {
+            let ready = lock(&watcher).wait(200);
+            if ready {
+                break;
+            }
+            if !lock(dir_watchers()).contains_key(&h) {
+                crate::process::set_last_error(ERROR_OPERATION_ABORTED);
+                return 0;
+            }
+        }
+        let (n, error) = deliver_changes(&watcher, buf, len, extended);
+        if !bytes.is_null() {
+            *bytes = n;
+        }
+        crate::process::set_last_error(error);
+        return 1;
+    }
+    if !ov.is_multiple_of(std::mem::align_of::<Overlapped>()) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    // Asynchrone : un fil attend, puis remplit le tampon et signale
+    // l'événement, le port de complétion ou la routine d'achèvement.
+    let operation = Arc::new(IoOperation {
+        file_handle: h,
+        issuing_thread: std::thread::current().id(),
+        state: Mutex::new(IoResult {
+            done: false,
+            bytes: 0,
+            error: 0,
+        }),
+        changed: Condvar::new(),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+    });
+    {
+        let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
+        if ops.get(&ov).is_some_and(|op| !lock(&op.state).done) {
+            crate::process::set_last_error(997);
+            return 0;
+        }
+        ops.insert(ov, operation.clone());
+    }
+    let overlapped = ov as *mut Overlapped;
+    (*overlapped).internal = 0x103; // STATUS_PENDING
+    (*overlapped).internal_high = 0;
+    // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
+    let event = (*overlapped).event;
+    if event != 0 {
+        let _ = reset_event(event);
+    }
+    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&h)
+        .cloned();
+    let issuer = std::thread::current().id();
+    let (buf, op) = (buf as usize, operation.clone());
+    let spawned = std::thread::Builder::new()
+        .name("winlux-dirwatch".into())
+        .spawn(move || {
+            let error = loop {
+                if op.cancelled.load(Ordering::Acquire) || !lock(dir_watchers()).contains_key(&h) {
+                    break ERROR_OPERATION_ABORTED;
+                }
+                if lock(&watcher).wait(100) {
+                    break 0;
+                }
+            };
+            let (count, error) = if error == 0 {
+                // Débordement : succès avec 0 octet, l'appli relit le dossier.
+                let (count, _) =
+                    unsafe { deliver_changes(&watcher, buf as *mut c_void, len, extended) };
+                (count, 0)
+            } else {
+                (0, error)
+            };
+            unsafe {
+                (*(ov as *mut Overlapped)).internal = match error {
+                    0 if count == 0 => 0x10C, // STATUS_NOTIFY_ENUM_DIR
+                    0 => 0,
+                    _ => 0xC000_0120, // STATUS_CANCELLED
+                };
+                (*(ov as *mut Overlapped)).internal_high = count as usize;
+            }
+            {
+                let mut state = lock(&op.state);
+                state.bytes = count;
+                state.error = error;
+                state.done = true;
+                op.changed.notify_all();
+            }
+            if event != 0 {
+                let _ = set_event(event);
+            }
+            if let Some((port, key)) = completion {
+                post_iocp(
+                    &port,
+                    CompletionPacket {
+                        bytes: count,
+                        key,
+                        overlapped: ov,
+                        error,
+                    },
+                );
+            }
+            if routine != 0 {
+                queue_apc(issuer, Apc::Completion(routine, error, count, ov));
+            }
+        });
+    if spawned.is_err() {
+        lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&ov);
+        crate::process::set_last_error(8);
+        return 0;
+    }
+    if !bytes.is_null() {
+        *bytes = 0;
+    }
+    crate::process::set_last_error(997);
+    1
+}
+
+/// `ReadDirectoryChangesW` : synchrone, OVERLAPPED + événement, port de
+/// complétion ou routine d'achèvement (APC du thread appelant).
+pub unsafe extern "win64" fn read_directory_changes_w(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+) -> i32 {
+    read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, false)
+}
+
+/// `ReadDirectoryChangesExW` : classe 1 (FILE_NOTIFY_INFORMATION) ou
+/// 2 (FILE_NOTIFY_EXTENDED_INFORMATION : dates, taille, attributs, id).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn read_directory_changes_ex_w(
+    h: usize,
+    buf: *mut c_void,
+    len: u32,
+    subtree: i32,
+    filter: u32,
+    bytes: *mut u32,
+    ov: usize,
+    routine: usize,
+    class: u32,
+) -> i32 {
+    match class {
+        1 => read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, false),
+        2 => read_directory_changes(h, buf, len, subtree, filter, bytes, ov, routine, true),
+        _ => {
+            crate::process::set_last_error(87);
+            0
+        }
+    }
+}
+
+// FindFirstChangeNotification : un événement Windows qu'un fil signale à
+// chaque changement ; FindNextChangeNotification le réarme.
+static CHANGE_NOTIFICATIONS: OnceLock<Mutex<HashMap<usize, Arc<std::sync::atomic::AtomicBool>>>> =
+    OnceLock::new();
+fn change_notifications() -> &'static Mutex<HashMap<usize, Arc<std::sync::atomic::AtomicBool>>> {
+    CHANGE_NOTIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn find_first_change_notification(path: &str, subtree: bool, filter: u32) -> usize {
+    if filter == 0 || filter & !crate::dlls::dirwatch::FILTER_ALL != 0 {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    let linux = crate::paths::to_linux(path);
+    let mut watcher = match crate::dlls::dirwatch::Watcher::new(&linux, subtree, filter) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::process::set_last_error(if e.raw_os_error() == Some(libc::ENOTDIR) {
+                267
+            } else {
+                io_error_code(&e)
+            });
+            return usize::MAX;
+        }
+    };
+    let event = add_sync(
+        SyncHandle::Event(Arc::new(EventObject::new(true, false))),
+        None,
+    );
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    lock(change_notifications()).insert(event, stop.clone());
+    let spawned = std::thread::Builder::new()
+        .name("winlux-change-notify".into())
+        .spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                if watcher.wait(150) {
+                    watcher.clear();
+                    let _ = set_event(event);
+                }
+            }
+        });
+    if spawned.is_err() {
+        lock(change_notifications()).remove(&event);
+        remove_sync(event);
+        crate::process::set_last_error(8);
+        return usize::MAX;
+    }
+    event
+}
+
+pub unsafe extern "win64" fn find_first_change_notification_w(
+    path: *const u16,
+    subtree: i32,
+    filter: u32,
+) -> usize {
+    if path.is_null() {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    find_first_change_notification(&crate::dlls::wstr(path), subtree != 0, filter)
+}
+
+pub unsafe extern "win64" fn find_first_change_notification_a(
+    path: *const u8,
+    subtree: i32,
+    filter: u32,
+) -> usize {
+    if path.is_null() {
+        crate::process::set_last_error(87);
+        return usize::MAX;
+    }
+    find_first_change_notification(&crate::dlls::cstr(path), subtree != 0, filter)
+}
+
+pub extern "win64" fn find_next_change_notification(h: usize) -> i32 {
+    if !lock(change_notifications()).contains_key(&h) {
+        crate::process::set_last_error(6);
+        return 0;
+    }
+    reset_event(h)
+}
+
+pub extern "win64" fn find_close_change_notification(h: usize) -> i32 {
+    let Some(stop) = lock(change_notifications()).remove(&h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    stop.store(true, Ordering::Release);
+    remove_sync(h);
+    1
 }
 
 // --- CreateNamedPipeA / ConnectNamedPipe (stubs) ---
@@ -7182,8 +7738,8 @@ pub unsafe extern "win64" fn create_named_pipe_a(
 pub extern "win64" fn connect_named_pipe(h: usize, ov: usize) -> i32 {
     crate::dlls::named_pipes::connect(h, ov)
 }
-pub extern "win64" fn disconnect_named_pipe(_h: usize) -> i32 {
-    1
+pub extern "win64" fn disconnect_named_pipe(h: usize) -> i32 {
+    crate::dlls::named_pipes::disconnect(h)
 }
 
 // --- CreateFileMappingA/W, MapViewOfFile, UnmapViewOfFile (stubs) ---
@@ -7583,9 +8139,10 @@ pub unsafe extern "win64" fn duplicate_handle(
     // Pseudo-handles (processus et thread courants) : Windows rend un vrai
     // handle vers le même objet ; ici il reste utilisable tel quel.
     let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
-    let copy = if src_handle == get_current_process() && inherit != 0 {
-        // Handle héritable vers soi-même (crashpad le passe à son
-        // gestionnaire de plantage) : un vrai handle, désigné par le PID.
+    let copy = if src_handle == get_current_process() {
+        // Vrai handle vers soi-même, désigné par le PID : Chromium refuse le
+        // pseudo-handle (-1, égal à INVALID_HANDLE_VALUE) dans un ScopedHandle,
+        // et crashpad passe la copie héritable à son gestionnaire.
         let h = next_handle();
         insert_sync_at(h, foreign_process(std::process::id() as i32));
         Some(h)
@@ -7599,6 +8156,12 @@ pub unsafe extern "win64" fn duplicate_handle(
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
     } else if let Some(h) = duplicate_handle_impl(src_handle) {
+        Some(h)
+    } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
+        // Jeton unique du compte (voir security.rs) : la copie est lui-même.
+        Some(src_handle)
+    } else if let Some(h) = crate::dlls::mmap::duplicate_mapping(src_handle) {
+        // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle.
         Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
@@ -7820,13 +8383,37 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
     1
 }
 
-pub unsafe extern "win64" fn sleep_ex(ms: u32, _alertable: i32) -> u32 {
-    sleep(ms);
-    0
+pub unsafe extern "win64" fn sleep_ex(ms: u32, alertable: i32) -> u32 {
+    if alertable == 0 {
+        sleep(ms);
+        return 0;
+    }
+    // Réveillé par une APC (routine d'achèvement, QueueUserAPC).
+    match alertable_wait(ms, |slice| {
+        let (queues, changed) = apc_queues();
+        let me = std::thread::current().id();
+        let guard = lock(queues);
+        if guard.get(&me).is_some_and(|q| !q.is_empty()) {
+            return 0;
+        }
+        let _ = changed.wait_timeout(guard, std::time::Duration::from_millis(slice as u64));
+        if apc_pending() {
+            0
+        } else {
+            258
+        }
+    }) {
+        0xC0 => 0xC0,
+        0 if run_apcs() => 0xC0,
+        _ => 0,
+    }
 }
 
-pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, _alertable: i32) -> u32 {
-    wait_for_single_object(h, ms)
+pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, alertable: i32) -> u32 {
+    if alertable == 0 {
+        return wait_for_single_object(h, ms);
+    }
+    alertable_wait(ms, |slice| wait_for_single_object(h, slice))
 }
 
 pub unsafe extern "win64" fn signal_object_and_wait(
@@ -7955,7 +8542,7 @@ pub fn exports() -> crate::dlls::Exports {
      "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
      "GetActiveProcessorCount"=>fn get_active_processor_count,
      "CreateWaitableTimerA"=>fn create_waitable_timer_a,"CreateWaitableTimerW"=>fn create_waitable_timer_w,"CreateWaitableTimerExW"=>fn create_waitable_timer_ex_w,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
-     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,
+     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,"ReadDirectoryChangesExW"=>fn read_directory_changes_ex_w,"FindFirstChangeNotificationW"=>fn find_first_change_notification_w,"FindFirstChangeNotificationA"=>fn find_first_change_notification_a,"FindNextChangeNotification"=>fn find_next_change_notification,"FindCloseChangeNotification"=>fn find_close_change_notification,"QueueUserAPC"=>fn queue_user_apc,
      "CreateNamedPipeA"=>fn create_named_pipe_a,"ConnectNamedPipe"=>fn connect_named_pipe,"DisconnectNamedPipe"=>fn disconnect_named_pipe,
      "CreateFileMappingA"=>fn create_file_mapping_a,"CreateFileMappingW"=>fn create_file_mapping_w,"MapViewOfFile"=>fn map_view_of_file,"UnmapViewOfFile"=>fn unmap_view_of_file,
      "GetUserNameA"=>fn get_user_name_a,
@@ -7981,6 +8568,12 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Fermer le jeton d'OpenProcessToken réussit (Chromium le vérifie).
+    #[test]
+    fn fermer_le_jeton_du_processus_reussit() {
+        assert_eq!(super::close_handle(crate::dlls::security::TOKEN_HANDLE), 1);
+    }
+
     #[test]
     fn open_process_ouvre_un_processus_etranger_et_le_termine() {
         let mut child = std::process::Command::new("sleep")
@@ -8024,14 +8617,120 @@ mod tests {
             assert_eq!(load_library_ex_w(name.as_ptr(), 0, 0x1000), expected);
             assert_eq!(load_library_ex_w(name.as_ptr(), 1, 0), 0);
             assert_eq!(crate::process::last_error(), 87);
-            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 2), 0);
-            assert_eq!(crate::process::last_error(), 50); // data-file loading is not execution
+            // Mode données sur une DLL intégrée : son handle, sans rien exécuter.
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 2), expected);
             assert_eq!(load_library_ex_w(name.as_ptr(), 0, 8 | 0x800), 0);
             assert_eq!(crate::process::last_error(), 87);
             let relative = b"winlux-test-relative.dll\0";
             assert_eq!(load_library_ex_a(relative.as_ptr(), 0, 0x100), 0);
             assert_eq!(crate::process::last_error(), 87);
         }
+    }
+
+    /// DLL de ressources minimale (PE32+, une section .rsrc) dont la table
+    /// de chaînes contient « Prisme » à l'identifiant 3.
+    fn resource_only_dll() -> Vec<u8> {
+        let mut f = vec![0u8; 0x400];
+        f[0..2].copy_from_slice(b"MZ");
+        f[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        f[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let w16 = |f: &mut Vec<u8>, o: usize, v: u16| f[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let w32 = |f: &mut Vec<u8>, o: usize, v: u32| f[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let coff = 0x44;
+        w16(&mut f, coff, 0x8664);
+        w16(&mut f, coff + 2, 1);
+        w16(&mut f, coff + 16, 240);
+        w16(&mut f, coff + 18, 0x2022);
+        let opt = coff + 20;
+        w16(&mut f, opt, 0x20b);
+        f[opt + 24..opt + 32].copy_from_slice(&0x1_8000_0000u64.to_le_bytes());
+        w32(&mut f, opt + 32, 0x1000);
+        w32(&mut f, opt + 36, 0x200);
+        w32(&mut f, opt + 56, 0x2000);
+        w32(&mut f, opt + 60, 0x200);
+        w16(&mut f, opt + 68, 2);
+        w32(&mut f, opt + 108, 16);
+        // Répertoire 2 : ressources.
+        let mut rsrc = vec![0u8; 0x58];
+        let dir = |r: &mut Vec<u8>, at: usize, id: u32, target: u32| {
+            r[at + 14..at + 16].copy_from_slice(&1u16.to_le_bytes());
+            r[at + 16..at + 20].copy_from_slice(&id.to_le_bytes());
+            r[at + 20..at + 24].copy_from_slice(&target.to_le_bytes());
+        };
+        dir(&mut rsrc, 0, 6, 0x8000_0018);
+        dir(&mut rsrc, 0x18, 1, 0x8000_0030);
+        dir(&mut rsrc, 0x30, 0x409, 0x48);
+        let mut table = Vec::new();
+        for i in 0..16u16 {
+            if i == 3 {
+                table.extend_from_slice(&6u16.to_le_bytes());
+                for u in "Prisme".encode_utf16() {
+                    table.extend_from_slice(&u.to_le_bytes());
+                }
+            } else {
+                table.extend_from_slice(&0u16.to_le_bytes());
+            }
+        }
+        rsrc[0x48..0x4c].copy_from_slice(&(0x1000u32 + 0x58).to_le_bytes());
+        rsrc[0x4c..0x50].copy_from_slice(&(table.len() as u32).to_le_bytes());
+        rsrc.extend_from_slice(&table);
+        w32(&mut f, opt + 112 + 2 * 8, 0x1000);
+        w32(&mut f, opt + 112 + 2 * 8 + 4, rsrc.len() as u32);
+        let sec = opt + 240;
+        f[sec..sec + 5].copy_from_slice(b".rsrc");
+        w32(&mut f, sec + 8, rsrc.len() as u32);
+        w32(&mut f, sec + 12, 0x1000);
+        w32(&mut f, sec + 16, 0x200);
+        w32(&mut f, sec + 20, 0x200);
+        w32(&mut f, sec + 36, 0x4000_0040);
+        f[0x200..0x200 + rsrc.len()].copy_from_slice(&rsrc);
+        f
+    }
+
+    #[test]
+    fn load_library_ex_en_mode_donnees_pour_les_ressources() {
+        let _teb = crate::process::test_teb();
+        let name = format!("winlux-donnees-{}.dll", std::process::id());
+        let linux = std::path::Path::new("/tmp").join(&name);
+        std::fs::write(&linux, resource_only_dll()).unwrap();
+        let path = CString::new(format!("Z:\\tmp\\{name}")).unwrap();
+        unsafe {
+            let h = load_library_ex_a(path.as_ptr().cast(), 0, 0x2);
+            assert_ne!(
+                h,
+                0,
+                "fichier de données chargé : {}",
+                crate::process::last_error()
+            );
+            assert_eq!(h & 3, 1, "bit 1 : LOAD_LIBRARY_AS_DATAFILE");
+            let mut buf = [0u16; 16];
+            let n = crate::dlls::user32::load_string_w(h, 3, buf.as_mut_ptr(), 16);
+            assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Prisme");
+            // LoadStringW(…, 0) : pointeur vers la chaîne dans l'image.
+            let mut ptr = [0u16; 4];
+            assert_eq!(
+                crate::dlls::resource::load_string_w(h, 3, ptr.as_mut_ptr(), 0),
+                6
+            );
+            let found = crate::dlls::resource::find_resource_w(h, 1 as *const u16, 6 as *const u16);
+            assert_ne!(found, 0, "FindResource sur le handle de données");
+            assert!(
+                crate::dlls::module_handle(&name).is_none(),
+                "invisible pour GetModuleHandle"
+            );
+            // Deuxième chargement en image de ressources : même image, bit 2.
+            let h2 = load_library_ex_a(path.as_ptr().cast(), 0, 0x20);
+            assert_eq!(h2 & !3, h & !3);
+            assert_eq!(h2 & 3, 2);
+            assert_eq!(free_library(h2), 1);
+            assert_eq!(free_library(h), 1);
+            assert!(crate::loader::data_image(h).is_none(), "image libérée");
+            assert_eq!(free_library(h), 0);
+            let missing = b"winlux-introuvable-xyz.dll\0";
+            assert_eq!(load_library_ex_a(missing.as_ptr(), 0, 0x2), 0);
+            assert_eq!(crate::process::last_error(), 2);
+        }
+        let _ = std::fs::remove_file(linux);
     }
 
     #[test]
@@ -9390,5 +10089,151 @@ mod audit_tests {
             std::str::from_utf8(&out[..n as usize]).unwrap(),
             "Fichier a.txt : 42 octets\r\n%"
         );
+    }
+}
+
+#[cfg(test)]
+mod surveillance_de_dossiers {
+    use super::*;
+    use crate::dlls::dirwatch::{decode, FILE_ACTION_ADDED};
+    use std::sync::atomic::AtomicU32;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("winlux-rdcw-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn later(path: std::path::PathBuf) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::fs::write(path, b"x").unwrap();
+        });
+    }
+
+    #[test]
+    fn synchrone_puis_overlapped_avec_evenement() {
+        let dir = temp("sync");
+        let h = insert_file(File::open(&dir).unwrap());
+        let mut buffer = vec![0u8; 4096];
+        let mut bytes = 0u32;
+        later(dir.join("un.txt"));
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                &mut bytes,
+                0,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        let changes = decode(&buffer[..bytes as usize]);
+        assert_eq!(changes[0].action, FILE_ACTION_ADDED);
+        assert_eq!(changes[0].name, "un.txt");
+        // OVERLAPPED + événement : l'appel rend la main tout de suite.
+        let event = unsafe { create_event_a(0, 1, 0, std::ptr::null()) };
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        ov.event = event;
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        later(dir.join("deux.txt"));
+        assert_eq!(wait_for_single_object(event, 5000), 0);
+        let mut got = 0u32;
+        assert_eq!(unsafe { get_overlapped_result(h, &mut ov, &mut got, 1) }, 1);
+        assert_eq!(decode(&buffer[..got as usize])[0].name, "deux.txt");
+        // Fermer le dossier abandonne une attente en cours.
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(wait_for_single_object(event, 5000), 0);
+        assert_eq!(unsafe { get_overlapped_result(h, &mut ov, &mut got, 1) }, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    static ROUTINE_BYTES: AtomicU32 = AtomicU32::new(0);
+    extern "win64" fn routine(error: u32, bytes: u32, _ov: usize) {
+        ROUTINE_BYTES.store(if error == 0 { bytes } else { u32::MAX }, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn routine_d_achevement_pendant_sleepex() {
+        let dir = temp("apc");
+        let h = insert_file(File::open(&dir).unwrap());
+        let mut buffer = vec![0u8; 4096];
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                1,
+                0x17f,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                routine as *const () as usize,
+            )
+        };
+        assert_eq!(ok, 1);
+        later(dir.join("trois.txt"));
+        // Attente alertable : la routine tourne sur ce thread, SleepEx rend 0xC0.
+        assert_eq!(unsafe { sleep_ex(5000, 1) }, 0xC0);
+        let bytes = ROUTINE_BYTES.load(Ordering::SeqCst);
+        assert!(bytes > 0 && bytes != u32::MAX);
+        assert_eq!(decode(&buffer[..bytes as usize])[0].name, "trois.txt");
+        // Sans APC, une attente alertable expire normalement.
+        assert_eq!(unsafe { sleep_ex(30, 1) }, 0);
+        close_handle(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_first_change_notification() {
+        let dir = temp("ffcn");
+        let path: Vec<u16> = dir
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let h = unsafe { find_first_change_notification_w(path.as_ptr(), 0, 0x1) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(wait_for_single_object(h, 200), 258);
+        later(dir.join("quatre.txt"));
+        assert_eq!(wait_for_single_object(h, 5000), 0);
+        assert_eq!(find_next_change_notification(h), 1);
+        assert_eq!(wait_for_single_object(h, 200), 258);
+        assert_eq!(find_close_change_notification(h), 1);
+        let missing: Vec<u16> = "/nulle/part".encode_utf16().chain(Some(0)).collect();
+        assert_eq!(
+            unsafe { find_first_change_notification_w(missing.as_ptr(), 0, 0x1) },
+            usize::MAX
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

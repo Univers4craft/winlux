@@ -2,7 +2,7 @@
 //! dossier ou une adresse web avec le bon programme du système Linux.
 //!
 //! - une adresse web (`https://…`, `www.…`, `microsoft-edge:…`) s'ouvre dans
-//!   le navigateur par défaut de Winlux, Microsoft Edge (voir `browser_candidates`) ;
+//!   le navigateur choisi par l'utilisateur (voir `browser_candidates`) ;
 //! - `mailto:` ouvre le client mail Linux (`xdg-email`), un autre protocole
 //!   (`steam:`, `magnet:`, `tel:`…) l'appli Linux qui le gère (`xdg-open`),
 //!   et `file:///…` le fichier désigné ;
@@ -117,8 +117,10 @@ fn which(name: &str) -> Option<PathBuf> {
     crate::launch::which(name)
 }
 
-/// Navigateurs essayés dans l'ordre : `WINLUX_BROWSER`, le lanceur Winlux,
-/// puis Microsoft Edge (canaux stable, bêta, dev) et des solutions de repli.
+/// Navigateurs essayés dans l'ordre : `WINLUX_BROWSER`, puis le lanceur Winlux
+/// (le navigateur choisi par l'utilisateur, docs/BROWSERS.md). Sans lanceur,
+/// un navigateur présent, sans en favoriser aucun (ordre alphabétique de
+/// l'éditeur), puis `xdg-open`.
 pub fn browser_candidates() -> Vec<String> {
     let mut list = Vec::new();
     if let Ok(b) = std::env::var("WINLUX_BROWSER") {
@@ -128,12 +130,11 @@ pub fn browser_candidates() -> Vec<String> {
     }
     for name in [
         "winlux-browser",
-        "microsoft-edge-stable",
-        "microsoft-edge",
-        "microsoft-edge-beta",
-        "microsoft-edge-dev",
+        "google-chrome-stable",
         "chromium",
         "chromium-browser",
+        "microsoft-edge-stable",
+        "microsoft-edge",
         "firefox",
         "xdg-open",
     ] {
@@ -245,12 +246,63 @@ fn image_viewer() -> Option<PathBuf> {
 
 /// Commande Linux qui réalise `ShellExecute(file, params)`, ou le code
 /// d'erreur Win32 (`SE_ERR_*`) si rien ne convient.
+/// `explorer.exe` (avec ou sans chemin) : l'Explorateur de Windows.
+fn is_explorer(file: &str) -> bool {
+    let base = file.rsplit(['\\', '/']).next().unwrap_or(file);
+    base.eq_ignore_ascii_case("explorer") || base.eq_ignore_ascii_case("explorer.exe")
+}
+
+/// Paramètres d'`explorer.exe` : `/select,CHEMIN` (dossier de l'élément),
+/// `/e,` `/n,` `/root,` puis un dossier. Renvoie (chemin, sélection).
+fn explorer_target(params: &str) -> (String, bool) {
+    let mut rest = params.trim();
+    let mut select = false;
+    loop {
+        rest = rest.trim_start_matches([' ', ',']);
+        if !rest.starts_with('/') {
+            break;
+        }
+        let end = rest.find([',', ' ']).unwrap_or(rest.len());
+        let switch = &rest[..end];
+        select |= switch.eq_ignore_ascii_case("/select");
+        rest = &rest[end..];
+    }
+    (rest.trim().trim_matches('"').to_string(), select)
+}
+
+/// `explorer.exe [/select,]CHEMIN` → le gestionnaire de dossiers de la session
+/// (`xdg-open`, soit l'Explorateur Winlux) sur le dossier voulu. Sans chemin :
+/// le dossier personnel.
+fn explorer(params: &str) -> Option<Result<(PathBuf, Vec<String>), isize>> {
+    let opener = which("xdg-open")?;
+    let (target, select) = explorer_target(params);
+    let mut folder = if target.is_empty() {
+        PathBuf::from(std::env::var_os("HOME")?)
+    } else {
+        let path = crate::paths::to_linux(&target);
+        if select || !path.is_dir() {
+            path.parent().map(Path::to_path_buf).unwrap_or(path)
+        } else {
+            path
+        }
+    };
+    while !folder.is_dir() {
+        folder = folder.parent()?.to_path_buf();
+    }
+    Some(Ok((opener, vec![folder.to_string_lossy().into_owned()])))
+}
+
 pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize> {
     let file = file.trim();
     if file.is_empty() {
         return Err(SE_ERR_FNF);
     }
     let args = split_params(params);
+    if is_explorer(file) {
+        if let Some(opened) = explorer(params) {
+            return opened;
+        }
+    }
     if file.eq_ignore_ascii_case("shell:browser") || is_url(file) {
         let mut target = file.to_string();
         if let Some(rest) = target.strip_prefix("microsoft-edge:") {
@@ -564,6 +616,58 @@ mod tests {
     }
 
     #[test]
+    fn explorer_select_ouvre_le_dossier_de_l_element() {
+        assert_eq!(
+            explorer_target("/select,\"C:\\Users\\a b\\x.txt\""),
+            ("C:\\Users\\a b\\x.txt".to_string(), true)
+        );
+        assert_eq!(
+            explorer_target("/e, /root,D:\\"),
+            ("D:\\".to_string(), false)
+        );
+        assert_eq!(explorer_target(""), (String::new(), false));
+        assert!(is_explorer("explorer.exe") && is_explorer("C:\\Windows\\EXPLORER.EXE"));
+        assert!(!is_explorer("iexplorer.exe"));
+        let dir = std::env::temp_dir().join(format!("winlux-explorer-{}", std::process::id()));
+        let bin = dir.join("bin");
+        let folder = dir.join("Rapports");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("final.pdf"), b"x").unwrap();
+        std::fs::write(bin.join("xdg-open"), b"#!/bin/sh\n").unwrap();
+        make_executable(&bin.join("xdg-open"));
+        let item = crate::paths::to_windows(&folder.join("final.pdf"));
+        let _env = crate::launch::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+        let opened = resolve("explorer.exe", &format!("/select,\"{item}\"")).unwrap();
+        let folder_too = resolve(
+            "C:\\Windows\\explorer.exe",
+            &crate::paths::to_windows(&folder),
+        )
+        .unwrap();
+        let gone = resolve(
+            "explorer",
+            &format!("/select,{}\\parti.txt", crate::paths::to_windows(&folder)),
+        )
+        .unwrap();
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        let expected = (
+            bin.join("xdg-open"),
+            vec![folder.to_string_lossy().into_owned()],
+        );
+        assert_eq!(opened, expected);
+        assert_eq!(folder_too, expected);
+        assert_eq!(gone, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn protocoles_desktop_et_programmes_linux_du_path() {
         let dir = std::env::temp_dir().join(format!("winlux-proto-{}", std::process::id()));
         let bin = dir.join("bin");
@@ -708,9 +812,10 @@ mod tests {
 
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let edge = bin.join("microsoft-edge-stable");
-        std::fs::write(&edge, b"#!/bin/sh\n").unwrap();
-        make_executable(&edge);
+        // Le lanceur Winlux passe avant tout navigateur installé sur l'hôte.
+        let browser = bin.join("winlux-browser");
+        std::fs::write(&browser, b"#!/bin/sh\n").unwrap();
+        make_executable(&browser);
         let _env = crate::launch::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -731,11 +836,11 @@ mod tests {
             )
         );
         let (program, args) = resolve("www.bing.com", "").unwrap();
-        assert_eq!(program, edge);
+        assert_eq!(program, browser);
         assert_eq!(args, vec!["https://www.bing.com".to_string()]);
         assert_eq!(
             resolve("shell:browser", "").unwrap(),
-            (edge.clone(), vec![])
+            (browser.clone(), vec![])
         );
         assert_eq!(resolve("C:\\fichier-introuvable.txt", ""), Err(SE_ERR_FNF));
         match old_path {

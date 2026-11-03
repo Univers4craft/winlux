@@ -2159,6 +2159,23 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     );
 }
 
+/// Nom affiché d'un segment du chemin : « Users » à la racine d'un lecteur,
+/// et les dossiers connus d'un compte (Desktop, Downloads…), dans la langue
+/// de l'interface. Les autres noms restent tels quels.
+fn crumb_label<'a>(name: &'a [u8], at_root: bool, in_profile: bool) -> &'a [u8] {
+    if at_root && name.eq_ignore_ascii_case(b"Users") {
+        return tr4(&[b"Utilisateurs", b"Users", b"Usuarios", b"Benutzer"]);
+    }
+    if in_profile {
+        for (i, place) in PLACES.iter().enumerate() {
+            if name.eq_ignore_ascii_case(place.en) {
+                return place_label(i);
+            }
+        }
+    }
+    name
+}
+
 unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let p = pal();
     let mut x = a.left + 10;
@@ -2201,6 +2218,13 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
                 start = i + 1;
             }
         }
+    }
+    // Noms affichés comme sous Windows (desktop.ini) : Utilisateurs, puis
+    // Téléchargements, Images… dans le dossier d'un compte. Le chemin
+    // lui-même (C:\Users\nom\Downloads) ne change pas.
+    for i in 2..n {
+        let users = i >= 4 && segs[2].0.eq_ignore_ascii_case(b"Users");
+        segs[i].0 = crumb_label(segs[i].0, i == 2, users && i == 4);
     }
     // Si tout ne tient pas, on garde les derniers segments.
     let avail = a.right - x - 10;
@@ -7183,4 +7207,34 @@ unsafe fn archive_regression(root: &[u8]) {
         st == 1 && GetFileAttributesW(wstr(&mut wv, &out[..on])) != u32::MAX,
         "Explorer extrait l'archive modifiee"
     );
+    // Campagne v0.2.13 : « Restaurer » lit la fiche .trashinfo écrite par
+    // xfdesktop ou gio (%XX, UTF-8) et retrouve un chemin Windows en C:.
+    let mut home = [0i8; 200];
+    let hn = GetEnvironmentVariableA(c"HOME".as_ptr(), home.as_mut_ptr(), 200) as usize;
+    let home: &[u8] = core::slice::from_raw_parts(home.as_ptr() as *const u8, hn.min(199));
+    let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+    for dir in [&b"C:\\.local"[..], b"C:\\.local\\share", b"C:\\.local\\share\\Trash", TRASH_INFO] {
+        CreateDirectoryW(wstr(&mut wd, dir), core::ptr::null_mut());
+    }
+    let mut info = [0u8; PATH_LEN + NAME_LEN + 2];
+    let inf = join(&mut info, TRASH_INFO, b"winlux-regression.trashinfo");
+    let mut body = [0u8; 400];
+    let mut n = 0;
+    for part in [&b"[Trash Info]\nPath="[..], home, b"/Bureau/%C3%A9t%C3%A9%20x.txt\nDeletionDate=2026-11-01T22:21:06\n"] {
+        body[n..n + part.len()].copy_from_slice(part);
+        n += part.len();
+    }
+    let h = CreateFileW(wstr(&mut wd, &info[..inf]), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
+    let mut written = 0u32;
+    if !h.is_null() && h as isize != -1 {
+        WriteFile(h, body.as_ptr(), n as u32, &mut written, core::ptr::null_mut());
+        CloseHandle(h);
+    }
+    let mut origin = [0u8; PATH_LEN + NAME_LEN + 2];
+    let on = trash_origin(&info[..inf], &mut origin);
+    check!(
+        &origin[..on] == b"C:\\Bureau\\\xE9t\xE9 x.txt",
+        "Explorer retrouve l'emplacement d'origine d'un element de la Corbeille"
+    );
+    DeleteFileW(wstr(&mut wd, &info[..inf]));
 }
