@@ -59,12 +59,23 @@ def balance_width(screen_width, children, right_ids, left_ids=()):
     sans contrepoids. Avec un contrepoids de largeur R - L, le centre du groupe
     tombe au milieu de l'écran. children : (id du greffon, x relatif à la
     barre, largeur) ; id None pour une fenêtre sans greffon connu.
+
+    R est la LARGEUR du bloc de droite (du premier au dernier greffon), jamais
+    sa position : un contrepoids trop large repousse ce bloc vers la gauche, et
+    « écran − x du bloc » se confirmait alors tout seul (3760 px en 4K, toute la
+    barre collée à gauche). La marge au bord droit ne compte que si le bloc y
+    est collé ; décollé, le calcul suivant le recolle puis retrouve la valeur exacte.
     """
-    right = [x for plugin, x, width in children if plugin in right_ids and width > 1]
+    right = [(x, width) for plugin, x, width in children if plugin in right_ids and width > 1]
     if not right:
         return 0
-    occupied = max([x + width for plugin, x, width in children if plugin in left_ids] or [0])
-    return max(0, screen_width - min(right) - occupied)
+    start = min(x for x, _ in right)
+    end = max(x + width for x, width in right)
+    margin = screen_width - end
+    block = end - start + (margin if 0 <= margin <= 16 else 0)
+    left = [(x, width) for plugin, x, width in children if plugin in left_ids and width > 1]
+    occupied = max(x + width for x, width in left) - min(x for x, _ in left) if left else 0
+    return max(0, min(block - occupied, screen_width // 2))
 
 
 def _panel_children():

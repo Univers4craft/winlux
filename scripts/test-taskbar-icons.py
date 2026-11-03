@@ -167,6 +167,27 @@ def check_balance(problems):
     # Bloc de gauche (bouton Widgets 11, 60 px) : le contrepoids le compense.
     if balance_width(1920, children + [(11, 0, 60)], right_ids, {11}) != 219:
         problems.append("contrepoids : le bouton Widgets à gauche n'est pas déduit")
+    # ISO v0.2.19 en 3840 px : le contrepoids (13) avait repoussé le bloc de
+    # droite à x=80…319 et se confirmait à 3760 px. Il doit revenir à la
+    # largeur du bloc (239 px), puis y rester une fois le bloc recollé à droite.
+    broken = [(13, 319, 3760), (7, 243, 76), (9, 207, 36), (6, 171, 36), (5, 135, 36), (4, 99, 36), (10, 80, 18)]
+    width = balance_width(3840, broken, right_ids)
+    if width != 239:
+        problems.append(f"4K, bloc de droite repoussé : contrepoids {width} px au lieu de 239")
+    glued = [(13, 1680, 239)] + [(plugin, x + 3840 - 319, w) for plugin, x, w in broken[1:]]
+    width = balance_width(3840, glued, right_ids)
+    if width != 239:
+        problems.append(f"4K, bloc collé à droite : contrepoids {width} px au lieu de 239")
+    # Boucle complète : quel que soit le point de départ, le calcul converge.
+    for screen in (1366, 1920, 2560, 3840):
+        weight = screen - 80
+        for _ in range(4):
+            free = screen - weight - 237 - 239
+            start = screen - 239 if free >= 0 else max(0, weight + 237)
+            children = [(10, start, 18), (7, start + 163, 76)]
+            weight = balance_width(screen, children, {10, 7})
+        if weight != 239:
+            problems.append(f"{screen} px : le contrepoids ne converge pas ({weight} px)")
     if balance_width(1920, [(1, 703, 48)], right_ids) != 0:
         problems.append("contrepoids : non nul sans bloc de droite")
     # Disposition [11?][sép. 3 extensible][13 = W][1][2][sép. 8 extensible][R] :
