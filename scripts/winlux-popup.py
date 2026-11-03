@@ -957,7 +957,9 @@ class Popup(Gtk.Application):
             self.settings("12");return
         commands=[]
         if key=="wifi":
-            commands=[["nmcli","radio","wifi","on" if on else "off"]]
+            # winlux-wifi passe par le relais root : nmcli lancé par le compte
+            # recevait « non autorisé » (pas de session active pour polkit).
+            commands=[["winlux-wifi","radio","on" if on else "off"]] if shutil.which("winlux-wifi") else [["nmcli","radio","wifi","on" if on else "off"]]
             if on:AIRPLANE.unlink(missing_ok=True)
         elif key=="bluetooth":
             commands=[["bluetoothctl","power","on" if on else "off"]]
@@ -968,7 +970,8 @@ class Popup(Gtk.Application):
                 else:AIRPLANE.unlink(missing_ok=True)
             except OSError:
                 pass
-            if self.hardware["wifi"] and shutil.which("nmcli"):commands.append(["nmcli","radio","all","off" if on else "on"])
+            if shutil.which("winlux-wifi") and self.hardware["wifi"]:commands.append(["winlux-wifi","airplane","on" if on else "off"])
+            elif self.hardware["wifi"] and shutil.which("nmcli"):commands.append(["nmcli","radio","all","off" if on else "on"])
             if self.hardware["bluetooth"]:commands.append(["bluetoothctl","power","off" if on else "on"])
         elif key=="night":
             commands=[["winlux-ambiance","toggle"]]
@@ -993,9 +996,8 @@ class Popup(Gtk.Application):
 
     def open_detail(self,key):
         if key=="wifi":
-            # La liste des réseaux Wi-Fi de winlux-system-tools, en fenêtre.
-            environment=dict(os.environ,WINLUX_TOOLS_WINDOW="1")
-            subprocess.Popen(["winlux-system-tools","quick"],env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            # La page Wi-Fi de Paramètres (réseaux, clé, WPS), pas un outil générique.
+            subprocess.Popen(["winlux-shell-app","settings","35"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         elif key=="bluetooth":
             subprocess.Popen(["winlux-shell-app","settings","22"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 

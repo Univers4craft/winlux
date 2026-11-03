@@ -71,6 +71,7 @@ _TR = {
     'Système et alimentation': ('System and power', 'Sistema y energía', 'System und Energie'),
     'Applications et démarrage': ('Apps and startup', 'Aplicaciones e inicio', 'Apps und Autostart'),
     'Réseau Wi-Fi': ('Wi-Fi network', 'Red Wi-Fi', 'WLAN-Netzwerk'),
+    'Bluetooth et appareils': ('Bluetooth and devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Son': ('Sound', 'Sonido', 'Sound'),
     'Clavier tactile': ('Touch keyboard', 'Teclado táctil', 'Bildschirmtastatur'),
     'Alimentation batterie veille': ('Power battery sleep', 'Energía batería suspensión', 'Energie Akku Standby'),
@@ -131,7 +132,7 @@ def _t(text):
 STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
-SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
+SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 35), (_t("Bluetooth et appareils"), 22),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
             (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11), (_t("Boutiques de logiciels"), 1),
             (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29)]

@@ -158,6 +158,8 @@ _TR = {
     'Arrêter le partage': ('Stop sharing', 'Dejar de compartir', 'Freigabe beenden'),
     'Aucun programme ne démarre avec la session.': ('No program starts with the session.', 'Ningún programa se inicia con la sesión.', 'Kein Programm startet mit der Sitzung.'),
     'Aucun réseau Wi-Fi visible pour l’instant.': ('No Wi-Fi network visible right now.', 'Ninguna red Wi-Fi visible por ahora.', 'Zurzeit ist kein WLAN sichtbar.'),
+    'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
+    'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
@@ -625,6 +627,7 @@ PAGE_RECOVERY = 31
 PAGE_CLIPBOARD = 32
 PAGE_HARDWARE = 34
 PAGE_ACCOUNTS = 33
+PAGE_WIFI = 35
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -1132,6 +1135,9 @@ def page_available(page, status=None):
     if page == PAGE_HARDWARE:
         module = hardware_page()
         return module is not None and module.available()
+    if page == PAGE_WIFI:
+        module = wifi_page()
+        return module is not None and module.available()
     return True
 
 
@@ -1225,6 +1231,7 @@ def reset_page():
 
 
 _HARDWARE = []
+_WIFI = []
 
 
 def hardware_page():
@@ -1245,6 +1252,27 @@ def hardware_page():
             except Exception:
                 module = None
     _HARDWARE.append(module)
+    return module
+
+
+def wifi_page():
+    """Page Wi-Fi (winlux-wifi, installé à côté), None si absente."""
+    if _WIFI: return _WIFI[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-wifi.py"), here.with_name("winlux-wifi")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_wifi_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_wifi_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _WIFI.append(module)
     return module
 
 
@@ -1288,7 +1316,7 @@ class ExtraPages:
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
-                   PAGE_HARDWARE: "page_hardware"}
+                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -2521,31 +2549,22 @@ class ExtraPages:
         self.switch(box, _t("Afficher au lancement d’un jeu"), status.get("overlay_autoshow") == "1",
                     lambda on: self.execute("overlay-auto-on" if on else "overlay-auto-off"))
 
-    # ── Réseau : Wi-Fi, seulement avec une carte Wi-Fi ──
+    # ── Réseau : renvoi vers la page Wi-Fi, seulement avec une carte Wi-Fi ──
 
     def sections_network(self):
-        if not have("nmcli"): return
-        devices = run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"], timeout=3)
-        if not devices or ":wifi:" not in devices.stdout: return
+        if not page_available(PAGE_WIFI): return
         self.section(_t("Wi-Fi"))
         box = self.card()
-        radio = run(["nmcli", "radio", "wifi"], timeout=3)
-        self.switch(box, _t("Wi-Fi"), bool(radio) and radio.stdout.strip() == "enabled",
-                    lambda on: self.tool(["nmcli", "radio", "wifi", "on" if on else "off"]))
-        found = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"], timeout=8)
-        networks = []
-        for line in (found.stdout.splitlines() if found else []):
-            parts = re.split(r"(?<!\\):", line)
-            if len(parts) == 4 and parts[1] and parts[1] not in [n[1] for n in networks]:
-                networks.append((parts[0] == "*", parts[1].replace("\\:", ":"), parts[2], parts[3]))
-        if not networks: self.hint(_t("Aucun réseau Wi-Fi visible pour l’instant."), box)
-        for in_use, ssid, signal, security in networks[:12]:
-            detail = f"{signal} % · " + (security or _t("Ouvert"))
-            button = Gtk.Button(label=_t("Connecté") if in_use else _t("Se connecter"))
-            button.set_sensitive(not in_use)
-            button.connect("clicked", lambda *_, name=ssid: self.tool(["nmcli", "--ask", "--wait", "90", "device", "wifi", "connect", name]))
-            self.row(box, ssid, button, detail)
-        self.actions(box, [(_t("Actualiser"), lambda: self.tool(["nmcli", "device", "wifi", "rescan"]))])
+        button = Gtk.Button(label=_t("Réseaux Wi-Fi…"))
+        button.connect("clicked", lambda *_: GLib.idle_add(self.open_page, PAGE_WIFI))
+        self.row(box, _t("Wi-Fi"), button, _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion."))
+
+    # ── Wi-Fi : réseaux, clé de sécurité, WPS, réseaux cachés (winlux-wifi) ──
+
+    def page_wifi(self):
+        module = wifi_page()
+        if module is not None:
+            self.wifi_panel = module.page(self)
 
     # ── Mises à jour : secours et restauration, dans la page ──
 

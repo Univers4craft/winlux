@@ -10,6 +10,7 @@ tourne en root et n'exécute que des actions connues :
   winlux-root control ACTION [ARGS…]      action de winlux-control, exécutée en root
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
   winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
+  winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -128,6 +129,40 @@ RESET_ARG = re.compile(r"^(--(mode|source|user|fullname|device)|--clean|--scan|k
                        r"(media|iso):/[^\n\r\0]{1,400}|/dev/[A-Za-z0-9/_-]{1,64}|[^\n\r\0:,-][^\n\r\0:,]{0,63})$")
 
 
+# Wi-Fi (Paramètres > Wi-Fi) : rejoindre un réseau est permis à un compte
+# standard, comme sous Windows. La clé arrive sur l'entrée standard.
+WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 7, "up": 1, "wps": 1, "forget": 1,
+                    "autoconnect": 2, "disconnect": 0, "radio": 1, "airplane": 1}
+WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity"}
+
+
+def wifi_level(rest):
+    """Niveau d'une commande winlux-wifi, None si elle est refusée."""
+    if not rest or rest[0] not in WIFI_SUBCOMMANDS or len(rest) - 1 > WIFI_SUBCOMMANDS[rest[0]]:
+        return None
+    command, args = rest[0], rest[1:]
+    if command in ("radio", "airplane") and args not in (["on"], ["off"]):
+        return None
+    if command == "autoconnect" and (len(args) != 2 or args[1] not in ("on", "off")):
+        return None
+    if command == "list" and args not in ([], ["--rescan"]):
+        return None
+    if command == "connect":
+        if not args or args[0].startswith("-"):
+            return None
+        it = iter(args[1:])
+        for option in it:
+            if option not in WIFI_OPTIONS:
+                return None
+            if option == "--security" and next(it, "") not in ("open", "wpa", "sae", "wep", "owe", "eap"):
+                return None
+            if option == "--identity" and not next(it, ""):
+                return None
+    if command in ("up", "forget", "wps", "autoconnect") and args and args[0].startswith("-"):
+        return None
+    return "user"
+
+
 def control_level(args):
     """Niveau requis pour une action de winlux-control, None si elle est refusée."""
     if not args or not all(SAFE_ARG.match(a) for a in args):
@@ -174,6 +209,8 @@ def exec_level(args):
         if all(RESET_ARG.match(a) for a in rest[1:]):
             return RESET_SUBCOMMANDS[rest[0]]
         return None
+    if tool == "winlux-wifi":
+        return wifi_level(rest)
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]
