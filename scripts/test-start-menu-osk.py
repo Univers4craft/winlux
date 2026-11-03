@@ -50,6 +50,15 @@ applications.mkdir(parents=True)
 (applications / "winlux-settings.desktop").write_text(
     "[Desktop Entry]\nType=Application\nName=Paramètres\nExec=true\nCategories=Settings;\n")
 os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
+# Douze épinglés (deux lignes) : en 1366x768, la 2e ligne perdait son libellé
+# sous le clavier (VM, 3 novembre).
+pins = []
+for index in range(12):
+    (applications / f"epingle{index}.desktop").write_text(
+        f"[Desktop Entry]\nType=Application\nName=Épinglé {index}\nExec=true\nCategories=Utility;\n")
+    pins.append(f"epingle{index}.desktop")
+(home / ".config/winlux").mkdir(parents=True)
+(home / ".config/winlux/start.json").write_text(__import__("json").dumps({"pins": pins, "recent": []}))
 
 here = Path(__file__).resolve().parent
 module = runpy.run_path(str(here / "winlux-start-menu.py"), run_name="start_osk_test")
@@ -163,6 +172,15 @@ def recommendations_hidden():
     assert "Recommandations" not in labels, "« Recommandations » coupé par le clavier : à masquer quand il est ouvert"
 
 
+def pins_visible():
+    scroll = app.content.get_parent().get_parent()
+    grid = app.content.get_children()[0]
+    assert isinstance(grid, Gtk.Grid), grid
+    assert len(grid.get_children()) == 12, len(grid.get_children())
+    assert scroll.get_allocation().height >= grid.get_allocation().height, (
+        "2e ligne des épinglés coupée par le clavier", scroll.get_allocation().height, grid.get_allocation().height)
+
+
 def button_visible():
     assert app.osk_button.get_visible() and app.osk_button.get_mapped(), "bouton clavier absent à côté de la recherche"
 
@@ -209,7 +227,7 @@ def still_open_with_text():
 
 
 steps += [
-    step(lambda: None, lambda: (opened_without_keyboard(), recommendations_hidden(), button_visible())),
+    step(lambda: None, lambda: (opened_without_keyboard(), recommendations_hidden(), button_visible(), pins_visible())),
     step(lambda: tap(find_key("p")), typed("p")),
     step(lambda: tap(find_key("a")), typed("pa")),
     step(lambda: tap(find_key("i")), typed("pai")),
