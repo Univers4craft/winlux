@@ -86,6 +86,7 @@ CSS = b"""
 @define-color fg_secondary #b4b4cc;
 @define-color accent #6A3DF0;
 @define-color accent_hover #7C4DFF;
+@define-color accent_light #B69CFF;
 @define-color danger #e74856;
 
 window.installer-window {
@@ -230,6 +231,22 @@ window.installer-window {
 .success-icon {
     color: #2ecc71;
     font-size: 64px;
+}
+/* Licence non acceptee : la case est entouree de l accent et une phrase dit pourquoi
+   Suivant n avance pas (#B69CFF, lisible sur le fond sombre de l installateur). */
+.license-accept-box {
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+.license-accept-box.license-attention {
+    border-color: @accent_light;
+    background-color: alpha(@accent, 0.22);
+}
+.installer-content .license-hint {
+    color: @accent_light;
+    font-size: 13px;
+    font-weight: bold;
 }
 .license-text {
     color: @fg_secondary;
@@ -464,6 +481,7 @@ TRANSLATIONS = {
         "license_title": "Contrat de licence",
         "license_subtitle": "Veuillez lire et accepter les termes de la licence.",
         "license_accept": "J'accepte les termes de la licence GPL v3",
+        "license_required": "Pour continuer, acceptez les termes de la licence en cochant la case ci-dessus.",
         "part_title": "Partitionnement",
         "part_subtitle": "Choisissez le disque et le mode de partitionnement.",
         "part_select_disk": "Sélectionnez un disque :",
@@ -626,6 +644,7 @@ TRANSLATIONS = {
         "license_title": "License agreement",
         "license_subtitle": "Please read and accept the license terms.",
         "license_accept": "I accept the terms of the GPL v3 license",
+        "license_required": "To continue, accept the license terms by checking the box above.",
         "part_title": "Partitioning",
         "part_subtitle": "Choose the disk and partitioning mode.",
         "part_select_disk": "Select a disk:",
@@ -788,6 +807,7 @@ TRANSLATIONS = {
         "license_title": "Lizenzvereinbarung",
         "license_subtitle": "Bitte lesen und akzeptieren Sie die Lizenzbedingungen.",
         "license_accept": "Ich akzeptiere die Bedingungen der GPL v3-Lizenz",
+        "license_required": "Um fortzufahren, akzeptieren Sie die Lizenzbedingungen mit dem Kästchen oben.",
         "part_title": "Partitionierung",
         "part_subtitle": "Wählen Sie die Festplatte und den Partitionierungsmodus.",
         "part_select_disk": "Wählen Sie eine Festplatte:",
@@ -950,6 +970,7 @@ TRANSLATIONS = {
         "license_title": "Acuerdo de licencia",
         "license_subtitle": "Lea y acepte los términos de la licencia.",
         "license_accept": "Acepto los términos de la licencia GPL v3",
+        "license_required": "Para continuar, acepte los términos de la licencia marcando la casilla de arriba.",
         "part_title": "Particionamiento",
         "part_subtitle": "Elija el disco y el modo de particionamiento.",
         "part_select_disk": "Seleccione un disco:",
@@ -1112,6 +1133,7 @@ TRANSLATIONS = {
         "license_title": "Contratto di licenza",
         "license_subtitle": "Leggere e accettare i termini della licenza.",
         "license_accept": "Accetto i termini della licenza GPL v3",
+        "license_required": "Per continuare, accetta i termini della licenza selezionando la casella qui sopra.",
         "part_title": "Partizionamento",
         "part_subtitle": "Scegli il disco e la modalità di partizionamento.",
         "part_select_disk": "Seleziona un disco:",
@@ -1274,6 +1296,7 @@ TRANSLATIONS = {
         "license_title": "Acordo de licença",
         "license_subtitle": "Leia e aceite os termos da licença.",
         "license_accept": "Aceito os termos da licença GPL v3",
+        "license_required": "Para continuar, aceite os termos da licença marcando a caixa acima.",
         "part_title": "Particionamento",
         "part_subtitle": "Escolha o disco e o modo de particionamento.",
         "part_select_disk": "Selecione um disco:",
@@ -3285,7 +3308,9 @@ class InstallerApp(Gtk.Application):
         ok = True
         key = STEP_KEYS[self.current_step]
         if key == "license":
-            ok = self.config["license_accepted"]
+            # « Suivant » reste cliquable : un clic sans avoir accepté montre pourquoi
+            # on ne peut pas continuer (show_license_required) au lieu de ne rien faire.
+            ok = True
         elif key == "network":
             ok = not self.config["proxy_enabled"] or self.proxy_settings() is not None
             self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
@@ -3322,6 +3347,9 @@ class InstallerApp(Gtk.Application):
 
     def on_next(self, _btn):
         key = STEP_KEYS[self.current_step]
+        if key == "license" and not self.config["license_accepted"]:
+            self.show_license_required()
+            return
         if key == "summary":
             if self.config["install_type"] == "manual" and not winlux_partition_ui.confirm_apply(
                     self.win, self.manual_editor.plan, tr, UI_SCALE):
@@ -3477,7 +3505,9 @@ class InstallerApp(Gtk.Application):
         box.pack_start(sub, False, False, 0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_min_content_height(250)
+        # Petite hauteur minimale : la case et le message restent visibles en 1366x768
+        # même avec le clavier tactile ouvert ; le texte prend le reste de la place.
+        scroll.set_min_content_height(120)
         text_view = Gtk.TextView()
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
@@ -3488,13 +3518,73 @@ class InstallerApp(Gtk.Application):
         box.pack_start(scroll, True, True, 0)
         accept = Gtk.CheckButton(label=tr("license_accept"))
         accept.connect("toggled", self.on_license_toggle)
-        accept.set_margin_top(12)
-        box.pack_start(accept, False, False, 0)
+        self.license_accept = accept
+        self.license_accept_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.license_accept_box.get_style_context().add_class("license-accept-box")
+        self.license_accept_box.set_margin_top(12)
+        self.license_accept_box.pack_start(accept, False, False, 0)
+        self.license_hint = Gtk.Label(label=tr("license_required"), xalign=0)
+        self.license_hint.set_line_wrap(True)
+        self.license_hint.get_style_context().add_class("license-hint")
+        self.license_hint.set_no_show_all(True)
+        self.license_accept_box.pack_start(self.license_hint, False, False, 0)
+        self.license_pulse = 0
+        box.pack_start(self.license_accept_box, False, False, 0)
         self.pages.add_named(box, page_name("license"))
 
     def on_license_toggle(self, btn):
         self.config["license_accepted"] = btn.get_active()
+        if btn.get_active():
+            self.license_pulse = 0
+            self.license_accept_box.get_style_context().remove_class("license-attention")
+            self.license_hint.hide()
         self.validate_step()
+
+    def scroll_to_license_accept(self):
+        scroll = self.license_accept_box.get_ancestor(Gtk.ScrolledWindow)
+        page = scroll.get_child() if scroll is not None else None
+        if page is None:
+            return False
+        if isinstance(page, Gtk.Viewport):
+            page = page.get_child()
+        pos = self.license_accept_box.translate_coordinates(page, 0, 0)
+        if pos is None:
+            return False
+        adj = scroll.get_vadjustment()
+        top, bottom = pos[1], pos[1] + self.license_accept_box.get_allocated_height()
+        value = adj.get_value()
+        if bottom > value + adj.get_page_size():
+            value = bottom - adj.get_page_size()
+        adj.set_value(max(adj.get_lower(), min(value, top)))
+        return False
+
+    def show_license_required(self):
+        """« Suivant » sans avoir coché : la case clignote deux fois puis reste entourée,
+        avec une phrase qui dit qu'il faut accepter la licence pour continuer."""
+        self.license_hint.set_label(tr("license_required"))
+        self.license_hint.show()
+        self.license_accept.grab_focus()
+        ctx = self.license_accept_box.get_style_context()
+        ctx.add_class("license-attention")
+        # Petit écran ou clavier tactile ouvert : la page défile jusqu'à la case et
+        # au message, une fois le message mis en page.
+        GLib.idle_add(self.scroll_to_license_accept)
+        if self.license_pulse:
+            return
+        self.license_pulse = 4
+
+        def blink():
+            if not self.license_pulse or self.config["license_accepted"]:
+                self.license_pulse = 0
+                return False
+            self.license_pulse -= 1
+            if self.license_pulse % 2:
+                ctx.remove_class("license-attention")
+            else:
+                ctx.add_class("license-attention")
+            return self.license_pulse > 0
+
+        GLib.timeout_add(180, blink)
 
     # ── Page : Réseau ──────────────────────────────────────────
 

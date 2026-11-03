@@ -233,6 +233,8 @@ installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
 ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
    "installateur : « Redémarrer maintenant » passe par winlux-power")
+ok("def show_license_required" in installer and installer.count('"license_required":') == 6,
+   "installateur : « Suivant » sans licence acceptée montre la case et un message (6 langues)")
 tools = (SCRIPTS / "winlux-system-tools.py").read_text()
 ok("/sys/class/ieee80211" in tools and "/sys/class/bluetooth" in tools,
    "réglages rapides : Wi-Fi et Bluetooth masqués sans matériel")
