@@ -16,6 +16,9 @@ Deux moitiés dans un seul fichier, installé en /usr/bin/winlux-wifi :
   winlux-wifi known                     réseaux enregistrés (JSON)
   winlux-wifi connect SSID [--security wpa|sae|wep|owe|eap|open]
                      [--hidden] [--no-auto] [--identity NOM] [--key-stdin]
+                     [--eap peap|ttls|tls] [--phase2 mschapv2|pap|gtc]
+                     [--ca system|none|FICHIER] [--domain DOMAINE]
+                     [--client-cert FICHIER] [--private-key FICHIER]
                                         clé lue sur l'entrée standard, jamais
                                         dans la ligne de commande (visible de tous)
   winlux-wifi up SSID                   réseau déjà enregistré
@@ -46,6 +49,10 @@ CONNECTIONS = Path(os.environ.get("WINLUX_WIFI_CONNECTIONS", "/etc/NetworkManage
 RELAY_SOCKET = os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")
 AIRPLANE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/airplane-mode"
 SECURITIES = ("open", "wpa", "sae", "wep", "owe", "eap")
+# Entreprise (802.1X) : méthodes EAP et authentifications internes proposées.
+EAP_METHODS = ("peap", "ttls", "tls")
+PHASE2 = ("mschapv2", "pap", "gtc")
+# Certificat d'autorité « système » : celui de ca-certificates, embarqué dans l'image.
 CONNECT_WAIT = 45
 WPS_WAIT = 120
 
@@ -71,6 +78,24 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    "Méthode": ("Method", "Método", "Methode"),
+    "PEAP (le plus courant)": ("PEAP (most common)", "PEAP (el más habitual)", "PEAP (am häufigsten)"),
+    "TLS (certificat)": ("TLS (certificate)", "TLS (certificado)", "TLS (Zertifikat)"),
+    "Authentification interne": ("Inner authentication", "Autenticación interna", "Innere Authentifizierung"),
+    "Certificat du serveur": ("Server certificate", "Certificado del servidor", "Serverzertifikat"),
+    "Certificats du système": ("System certificates", "Certificados del sistema", "Systemzertifikate"),
+    "Choisir un fichier…": ("Choose a file…", "Elegir un archivo…", "Datei auswählen…"),
+    "Ne pas vérifier (déconseillé)": ("Do not verify (not recommended)", "No verificar (no recomendado)", "Nicht prüfen (nicht empfohlen)"),
+    "Fichier du certificat": ("Certificate file", "Archivo del certificado", "Zertifikatsdatei"),
+    "Domaine (facultatif)": ("Domain (optional)", "Dominio (opcional)", "Domäne (optional)"),
+    "Certificat personnel": ("Personal certificate", "Certificado personal", "Persönliches Zertifikat"),
+    "Clé privée (si à part)": ("Private key (if separate)", "Clave privada (si está aparte)", "Privater Schlüssel (falls separat)"),
+    "Clé privée": ("Private key", "Clave privada", "Privater Schlüssel"),
+    "Mot de passe de la clé privée (facultatif)": ("Private key password (optional)", "Contraseña de la clave privada (opcional)", "Kennwort des privaten Schlüssels (optional)"),
+    "Entrez votre nom d’utilisateur et choisissez votre certificat.": ("Enter your user name and choose your certificate.", "Escriba su nombre de usuario y elija su certificado.", "Geben Sie Ihren Benutzernamen ein und wählen Sie Ihr Zertifikat."),
+    "Un des fichiers de certificat choisis est introuvable.": ("One of the chosen certificate files cannot be found.", "No se encuentra uno de los archivos de certificado elegidos.", "Eine der gewählten Zertifikatsdateien wurde nicht gefunden."),
+    "Page de connexion du réseau": ("Network sign-in page", "Página de inicio de sesión de la red", "Anmeldeseite des Netzwerks"),
+    "Wi-Fi public (gare, hôtel, café) : ouvre la page où accepter les conditions ou se connecter.": ("Public Wi-Fi (station, hotel, café): opens the page to accept the terms or sign in.", "Wi-Fi público (estación, hotel, cafetería): abre la página para aceptar las condiciones o iniciar sesión.", "Öffentliches WLAN (Bahnhof, Hotel, Café): öffnet die Seite, um die Bedingungen anzunehmen oder sich anzumelden."),
     "Wi-Fi": ("Wi-Fi", "Wi-Fi", "WLAN"),
     "Mode avion": ("Airplane mode", "Modo avión", "Flugzeugmodus"),
     "Coupe le Wi-Fi, le Bluetooth et le réseau mobile.": ("Turns off Wi-Fi, Bluetooth and mobile data.", "Desactiva el Wi-Fi, el Bluetooth y los datos móviles.", "Schaltet WLAN, Bluetooth und Mobilfunk aus."),
@@ -279,14 +304,15 @@ def set_rfkill(kind, blocked):
             pass
 
 
+AIRPLANE_MARK = Path(os.environ.get("WINLUX_AIRPLANE_MARK", "/run/winlux/airplane"))
+
+
 def airplane_state():
-    """Mode avion : Wi-Fi coupé et Bluetooth coupé (ou absent)."""
-    if radio_on(): return False
-    bluetooth = rfkill_entries("bluetooth")
-    try:
-        return all((entry / "soft").read_text().strip() == "1" for entry in bluetooth)
-    except OSError:
-        return False
+    """Mode avion : demandé par « airplane on » (marque du service) et Wi-Fi
+    toujours coupé. Couper le seul Wi-Fi n'est pas le mode avion : sans
+    Bluetooth, l'ancien calcul (Wi-Fi et tout Bluetooth coupés) le disait
+    actif et l'interrupteur « Mode avion » s'allumait avec le Wi-Fi."""
+    return AIRPLANE_MARK.exists() and not radio_on()
 
 
 def scan(rescan=False):
@@ -375,10 +401,14 @@ def keyfile_ssid(ssid):
     return "".join(f"{byte};" for byte in raw)
 
 
-def key_problem(security, key, identity=""):
-    """None si la clé convient au type de sécurité, sinon le code d'erreur."""
+def key_problem(security, key, identity="", eap="peap", client_cert=""):
+    """None si la clé convient au type de sécurité, sinon le code d'erreur.
+    Entreprise TLS : la « clé » est le mot de passe de la clé privée
+    (facultatif) ; il faut l'identité et le certificat client."""
     if security in ("open", "owe"): return None
-    if security == "eap": return None if identity and key else "eap-identity"
+    if security == "eap":
+        if eap == "tls": return None if identity and client_cert else "eap-certificate"
+        return None if identity and key else "eap-identity"
     if security == "wep":
         if len(key) in (5, 13) and key.isascii() and key.isprintable(): return None
         if len(key) in (10, 26) and re.fullmatch(r"[0-9A-Fa-f]+", key): return None
@@ -388,7 +418,27 @@ def key_problem(security, key, identity=""):
     return "key-format"
 
 
-def profile_text(ssid, security, key="", identity="", hidden=False, autoconnect=True, ident=None):
+def eap_lines(identity, key, eap="peap", phase2="mschapv2", ca="system", domain="",
+              client_cert="", private_key=""):
+    """Section [802-1x] : PEAP ou TTLS (identifiant et mot de passe) ou TLS
+    (certificat client). Le serveur est vérifié par les certificats du système
+    (ca-certificates), par un fichier choisi, ou pas du tout si demandé."""
+    lines = ["[802-1x]", f"eap={eap};", f"identity={keyfile_escape(identity)}"]
+    if eap in ("peap", "ttls"):
+        lines += [f"password={keyfile_escape(key)}", f"phase2-auth={phase2}"]
+    else:
+        lines.append(f"client-cert={keyfile_escape(client_cert)}")
+        lines.append(f"private-key={keyfile_escape(private_key or client_cert)}")
+        if key: lines.append(f"private-key-password={keyfile_escape(key)}")
+    if ca == "system":
+        lines.append("system-ca-certs=true")
+    elif ca and ca != "none":
+        lines.append(f"ca-cert={keyfile_escape(ca)}")
+    if domain: lines.append(f"domain-suffix-match={keyfile_escape(domain)}")
+    return lines + [""]
+
+
+def profile_text(ssid, security, key="", identity="", hidden=False, autoconnect=True, ident=None, **eap):
     ident = ident or str(uuid.uuid4())
     lines = ["[connection]", f"id={keyfile_escape(ssid)}", f"uuid={ident}", "type=wifi",
              f"autoconnect={'true' if autoconnect else 'false'}", "",
@@ -396,18 +446,19 @@ def profile_text(ssid, security, key="", identity="", hidden=False, autoconnect=
     if hidden: lines.append("hidden=true")
     lines.append("")
     if security == "wpa":
-        lines += ["[wifi-security]", "key-mgmt=wpa-psk", f"psk={keyfile_escape(key)}", ""]
+        # WPA2 et le mode de transition WPA2/WPA3 (WPA personnel TKIP compris) :
+        # trames de gestion protégées quand la box les propose.
+        lines += ["[wifi-security]", "key-mgmt=wpa-psk", "pmf=2", f"psk={keyfile_escape(key)}", ""]
     elif security == "sae":
-        lines += ["[wifi-security]", "key-mgmt=sae", f"psk={keyfile_escape(key)}", ""]
+        # WPA3 personnel (et 6 GHz, qui l'impose) : PMF obligatoire.
+        lines += ["[wifi-security]", "key-mgmt=sae", "pmf=3", f"psk={keyfile_escape(key)}", ""]
     elif security == "owe":
         lines += ["[wifi-security]", "key-mgmt=owe", ""]
     elif security == "wep":
         lines += ["[wifi-security]", "key-mgmt=none", "auth-alg=open", "wep-key-type=1",
                   "wep-tx-keyidx=0", f"wep-key0={keyfile_escape(key)}", ""]
     elif security == "eap":
-        lines += ["[wifi-security]", "key-mgmt=wpa-eap", "",
-                  "[802-1x]", "eap=peap;", f"identity={keyfile_escape(identity)}",
-                  f"password={keyfile_escape(key)}", "phase2-auth=mschapv2", ""]
+        lines += ["[wifi-security]", "key-mgmt=wpa-eap", "pmf=2", ""] + eap_lines(identity, key, **eap)
     lines += ["[ipv4]", "method=auto", "", "[ipv6]", "addr-gen-mode=default", "method=auto", ""]
     return "\n".join(lines), ident
 
@@ -445,16 +496,24 @@ def remove_profile(ident, path=None):
         except OSError: pass
 
 
-def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True):
+def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True, **eap):
     if not ssid or len(ssid.encode("utf-8")) > 32:
         return fail("bad-ssid")
     if security not in SECURITIES:
         return fail("failed", "security")
-    problem = key_problem(security, key, identity)
+    if security == "eap":
+        if eap.get("eap", "peap") not in EAP_METHODS or eap.get("phase2", "mschapv2") not in PHASE2:
+            return fail("failed", "eap")
+        for name in ("client_cert", "private_key", "ca"):
+            value = eap.get(name, "")
+            if value and value not in ("system", "none") and not Path(value).is_file():
+                return fail("eap-file", value)
+    problem = key_problem(security, key, identity, eap.get("eap", "peap"), eap.get("client_cert", ""))
     if problem:
         return fail(problem)
     previous = profiles_for(ssid)
-    text, ident = profile_text(ssid, security, key, identity, hidden, autoconnect)
+    text, ident = profile_text(ssid, security, key, identity, hidden, autoconnect,
+                               **(eap if security == "eap" else {}))
     try:
         path = write_profile(text, ident)
     except OSError as error:
@@ -512,11 +571,21 @@ def disconnect():
 def radio(on):
     if on:
         set_rfkill("wlan", False)
+        try: AIRPLANE_MARK.unlink()
+        except OSError: pass
     result = nm(["radio", "wifi", "on" if on else "off"], timeout=10)
     return fail(classify(result.stderr), result.stderr) if result.returncode else done()
 
 
 def airplane(on):
+    try:
+        if on:
+            AIRPLANE_MARK.parent.mkdir(parents=True, exist_ok=True)
+            AIRPLANE_MARK.touch()
+        else:
+            AIRPLANE_MARK.unlink()
+    except OSError:
+        pass
     nm(["radio", "all", "off" if on else "on"], timeout=10)
     for kind in ("wlan", "bluetooth", "wwan"):
         set_rfkill(kind, on)
@@ -592,10 +661,15 @@ def status():
     device = wifi_device() if running else ""
     current = ""
     if running and device:
-        for network in scan(False):
-            if network["in_use"]:
-                current = network["ssid"]
-                break
+        # Le profil actif d'abord : la liste des réseaux (IN-USE) n'est mise à
+        # jour qu'au balayage suivant, et l'en-tête restait « Non connecté »
+        # pendant et après une connexion ou une reconnexion.
+        current = next((p["ssid"] for p in profiles() if p["active"]), "")
+        if not current:
+            for network in scan(False):
+                if network["in_use"]:
+                    current = network["ssid"]
+                    break
     on = running and radio_on()
     return done(present=present, nm=running, device=device, radio=on, connected=current,
                 airplane=running and airplane_state())
@@ -621,15 +695,19 @@ def backend_main(argv):
     if command == "connect" and rest:
         ssid, options = rest[0], rest[1:]
         security, identity, hidden, auto, key = "wpa", "", False, True, ""
+        eap = {}
+        names = {"--eap": "eap", "--phase2": "phase2", "--ca": "ca", "--domain": "domain",
+                 "--client-cert": "client_cert", "--private-key": "private_key"}
         it = iter(options)
         for option in it:
             if option == "--security": security = next(it, "")
+            elif option in names: eap[names[option]] = next(it, "")
             elif option == "--identity": identity = next(it, "")
             elif option == "--hidden": hidden = True
             elif option == "--no-auto": auto = False
             elif option == "--key-stdin": key = sys.stdin.readline().rstrip("\n")
             else: return fail("failed", "option " + option)
-        return connect(ssid, security, key, identity, hidden, auto)
+        return connect(ssid, security, key, identity, hidden, auto, **eap)
     if command == "up" and len(rest) == 1: return up(rest[0])
     if command == "forget" and len(rest) == 1: return forget(rest[0])
     if command == "autoconnect" and len(rest) == 2 and rest[1] in ("on", "off"): return autoconnect(rest[0], rest[1] == "on")
@@ -674,6 +752,8 @@ ERRORS = {
     "key-format": "Une clé WPA compte de 8 à 63 caractères (ou 64 chiffres hexadécimaux).",
     "wep-format": "Une clé WEP compte 5 ou 13 caractères (ou 10 ou 26 chiffres hexadécimaux).",
     "eap-identity": "Entrez votre nom d’utilisateur et votre mot de passe.",
+    "eap-certificate": "Entrez votre nom d’utilisateur et choisissez votre certificat.",
+    "eap-file": "Un des fichiers de certificat choisis est introuvable.",
     "out-of-range": "Le réseau « {name} » est hors de portée. Rapprochez-vous de la box ou vérifiez le nom du réseau.",
     "unknown": "Le réseau « {name} » est hors de portée. Rapprochez-vous de la box ou vérifiez le nom du réseau.",
     "timeout": "La box n’a pas répondu à temps. Réessayez ; si cela se reproduit, redémarrez la box.",
@@ -689,7 +769,21 @@ ERRORS = {
     "not-authorized": "Le service système de Winlux ne répond pas. Redémarrez l’ordinateur.",
 }
 # Erreurs qui se corrigent dans la boîte de la clé (elle se rouvre avec le message).
-KEY_ERRORS = ("bad-key", "key-format", "wep-format", "eap-identity")
+KEY_ERRORS = ("bad-key", "key-format", "wep-format", "eap-identity", "eap-certificate", "eap-file")
+
+
+PORTAL_URL = "http://example.com/"
+
+
+def open_portal():
+    """Page de connexion d'un Wi-Fi public : une adresse http neutre (IANA)
+    que le portail du réseau redirige vers sa page."""
+    try:
+        subprocess.Popen(["xdg-open", PORTAL_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return True
+    except OSError:
+        return False
 
 
 def error_text(answer, ssid=""):
@@ -774,6 +868,14 @@ class WifiPanel:
         self.updating = False
         self.say(_t("Recherche des réseaux…"))
         GLib.idle_add(lambda: self.refresh(False) and False)
+        # Reconnexion automatique, coupure de la box : l'état suit sans clic.
+        GLib.timeout_add_seconds(8, self.poll)
+
+    def poll(self):
+        if self.radio_switch.get_toplevel() is None or not self.radio_switch.get_realized():
+            return self.radio_switch.get_parent() is not None
+        if not self.busy: self.refresh(False)
+        return True
 
     def subtitle_of(self, widget):
         line = widget.get_parent()
@@ -865,6 +967,18 @@ class WifiPanel:
             self.host.hint(self.network_subtitle(network), texts)
             line.pack_start(texts, True, True, 0)
             if network.get("in_use"):
+                # Wi-Fi public (gare, hôtel) : sa page de connexion s'ouvre
+                # quand on demande une page web ordinaire (http, sans
+                # chiffrement, que le portail peut intercepter). Aucun test de
+                # connectivité en arrière-plan : rien n'est contacté sans le
+                # demander.
+                if network.get("security") in ("open", "owe"):
+                    portal = Gtk.Button(label=_t("Page de connexion du réseau"))
+                    portal.set_name("wifi-portal")
+                    portal.set_tooltip_text(_t("Wi-Fi public (gare, hôtel, café) : ouvre la page où accepter les conditions ou se connecter."))
+                    portal.set_valign(Gtk.Align.CENTER)
+                    portal.connect("clicked", lambda *_: open_portal())
+                    line.pack_start(portal, False, False, 0)
                 button = Gtk.Button(label=_t("Déconnecter"))
                 button.connect("clicked", lambda *_: self.disconnect())
             else:
@@ -1012,6 +1126,35 @@ class WifiPanel:
         identity_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         area.pack_start(identity_box, False, False, 0)
         fields["identity"] = self.field(identity_box, _t("Nom d’utilisateur"), visible=True)
+        # Entreprise (802.1X) : méthode, authentification interne, certificat du
+        # serveur, domaine, et certificat client pour TLS.
+        enterprise = Gtk.Grid(column_spacing=8, row_spacing=6)
+        identity_box.pack_start(enterprise, False, False, 0)
+
+        def labelled(row, text, widget):
+            enterprise.attach(Gtk.Label(label=_t(text), xalign=0), 0, row, 1, 1)
+            widget.set_hexpand(True)
+            enterprise.attach(widget, 1, row, 1, 1)
+            return widget
+        method = labelled(0, "Méthode", Gtk.ComboBoxText())
+        for code, label in (("peap", "PEAP (le plus courant)"), ("ttls", "TTLS"), ("tls", "TLS (certificat)")):
+            method.append(code, _t(label))
+        method.set_active_id("peap")
+        inner = labelled(1, "Authentification interne", Gtk.ComboBoxText())
+        for code, label in (("mschapv2", "MSCHAPv2"), ("pap", "PAP"), ("gtc", "GTC")):
+            inner.append(code, label)
+        inner.set_active_id("mschapv2")
+        ca_choice = labelled(2, "Certificat du serveur", Gtk.ComboBoxText())
+        for code, label in (("system", "Certificats du système"), ("file", "Choisir un fichier…"),
+                            ("none", "Ne pas vérifier (déconseillé)")):
+            ca_choice.append(code, _t(label))
+        ca_choice.set_active_id("system")
+        ca_file = labelled(3, "Fichier du certificat", Gtk.FileChooserButton(title=_t("Certificat du serveur")))
+        domain = labelled(4, "Domaine (facultatif)", Gtk.Entry())
+        client_cert = labelled(5, "Certificat personnel", Gtk.FileChooserButton(title=_t("Certificat personnel")))
+        private_key = labelled(6, "Clé privée (si à part)", Gtk.FileChooserButton(title=_t("Clé privée")))
+        fields.update(method=method, inner=inner, ca=ca_choice, ca_file=ca_file, domain=domain,
+                      client_cert=client_cert, private_key=private_key)
         key_title = Gtk.Label(xalign=0)
         area.pack_start(key_title, False, False, 0)
         key = Gtk.Entry(visibility=False, activates_default=True)
@@ -1044,18 +1187,30 @@ class WifiPanel:
         def current_security():
             return fields["security"].get_active_id() if hidden else security
 
+        def eap_method():
+            return method.get_active_id() or "peap"
+
         def update(*_):
             kind = current_security()
             identity_box.set_visible(kind == "eap")
-            key_title.set_text(_t("Mot de passe") if kind == "eap" else _t("Clé de sécurité"))
+            tls = kind == "eap" and eap_method() == "tls"
+            for row, visible in ((1, not tls), (3, ca_choice.get_active_id() == "file"), (5, tls), (6, tls)):
+                for column in (0, 1):
+                    child = enterprise.get_child_at(column, row)
+                    if child is not None: child.set_visible(visible)
+            key_title.set_text(_t("Mot de passe de la clé privée (facultatif)") if tls else
+                               _t("Mot de passe") if kind == "eap" else _t("Clé de sécurité"))
             key.set_sensitive(kind not in ("open", "owe"))
             ssid_ok = (not hidden) or bool(fields["ssid"].get_text())
             text = key.get_text()
             next_button.set_sensitive(ssid_ok and (kind in ("open", "owe") or
-                                                   key_problem(kind, text, fields["identity"].get_text() or "x") is None))
+                                                   key_problem(kind, text, fields["identity"].get_text() or "x",
+                                                               eap_method(), client_cert.get_filename() or "") is None))
         for widget in (key, fields["identity"], *( [fields["ssid"]] if hidden else [])):
             widget.connect("changed", update)
         if hidden: fields["security"].connect("changed", update)
+        for widget in (method, ca_choice): widget.connect("changed", update)
+        client_cert.connect("file-set", update)
         # Clavier tactile dans la boîte même : le champ reste toujours au-dessus.
         osk = osk_module()
         keyboard_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -1118,20 +1273,26 @@ class WifiPanel:
                 pass
         dialog.show_all()
         update()
-        (fields["ssid"] if hidden else key).grab_focus()
+        (fields["ssid"] if hidden else fields["identity"] if security == "eap" else key).grab_focus()
         if wps_button is not None:
             wps_button.connect("clicked", lambda *_: dialog.response(1))
         while True:
             response = dialog.run()
             if response == Gtk.ResponseType.OK:
                 kind = current_security()
-                problem_code = key_problem(kind, key.get_text(), fields["identity"].get_text())
+                problem_code = key_problem(kind, key.get_text(), fields["identity"].get_text(),
+                                           eap_method(), client_cert.get_filename() or "")
                 if problem_code:
                     show_problem(error_text({"error": problem_code}))
                     continue
             break
+        ca_value = ca_choice.get_active_id() or "system"
+        if ca_value == "file": ca_value = ca_file.get_filename() or "system"
         values = {"ssid": fields["ssid"].get_text() if hidden else ssid, "security": current_security(),
-                  "key": key.get_text(), "identity": fields["identity"].get_text(), "auto": auto.get_active()}
+                  "key": key.get_text(), "identity": fields["identity"].get_text(), "auto": auto.get_active(),
+                  "eap": eap_method(), "phase2": inner.get_active_id() or "mschapv2", "ca": ca_value,
+                  "domain": domain.get_text().strip(), "client_cert": client_cert.get_filename() or "",
+                  "private_key": private_key.get_filename() or ""}
         dialog.destroy()
         if response == 1:
             self.say(_t("Appuyez maintenant sur le bouton WPS de votre box (vous avez 2 minutes)…"))
@@ -1142,9 +1303,16 @@ class WifiPanel:
         args = ["connect", values["ssid"], "--security", values["security"]]
         if hidden: args.append("--hidden")
         if not values["auto"]: args.append("--no-auto")
-        if values["security"] == "eap": args += ["--identity", values["identity"]]
+        if values["security"] == "eap":
+            args += ["--identity", values["identity"], "--eap", values["eap"], "--ca", values["ca"]]
+            if values["eap"] == "tls":
+                args += ["--client-cert", values["client_cert"]]
+                if values["private_key"]: args += ["--private-key", values["private_key"]]
+            else:
+                args += ["--phase2", values["phase2"]]
+            if values["domain"]: args += ["--domain", values["domain"]]
         secret = None
-        if values["security"] not in ("open", "owe"):
+        if values["security"] not in ("open", "owe") and values["key"] or values["security"] in ("wpa", "sae", "wep"):
             args.append("--key-stdin")
             secret = values["key"]
         target_network = dict(network, ssid=values["ssid"], security=values["security"])

@@ -27,7 +27,9 @@ def check(cond, message):
 
 build = (HERE / "build-live-iso.sh").read_text()
 loop = next((line for line in build.splitlines() if line.startswith("for directory in sound")), "")
-for directory in ("crypto", "arch/x86/crypto", "net/wireless", "net/mac80211", "drivers/net/wireless", "drivers/staging"):
+for directory in ("crypto", "arch/x86/crypto", "lib/crypto", "net/wireless", "net/mac80211", "drivers/net/wireless",
+                  "drivers/staging", "net/netfilter", "net/ipv4/netfilter", "net/ipv6/netfilter", "net/bridge",
+                  "drivers/net/usb", "net/bluetooth"):
     check(f" {directory}" in loop, f"build-live-iso.sh ne copie pas kernel/{directory}")
 check('scripts/check-image-wifi.sh" "$stage" "$kernel_release"' in build, "build-live-iso.sh n'appelle pas check-image-wifi.sh")
 check(build.index("check-image-wifi.sh") > build.index("stage-desktop-components.sh"),
@@ -40,21 +42,31 @@ host = tmp / "host"
 NAMES = {"ccm": "crypto", "cmac": "crypto", "michael_mic": "crypto", "gcm": "crypto",
          "mac80211": "net/mac80211", "cfg80211": "net/wireless",
          "brcmfmac-cyw": "drivers/net/wireless/broadcom/brcm80211/brcmfmac/cyw",
-         "r8723bs": "drivers/staging/rtl8723bs"}
+         "r8723bs": "drivers/staging/rtl8723bs", "libarc4": "lib/crypto",
+         "nf_tables": "net/netfilter", "ipheth": "drivers/net/usb"}
 for name, directory in NAMES.items():
     (host / release / "kernel" / directory).mkdir(parents=True, exist_ok=True)
     (host / release / "kernel" / directory / f"{name}.ko.zst").write_bytes(b"x")
 
 
-def stage(with_ccm=True, depmod=True, regdb=True):
+def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP TTLS MSCHAPV2 WPS", certs=True):
     root = Path(tempfile.mkdtemp(dir=tmp))
     modules = root / "lib/modules" / release
     for name, directory in NAMES.items():
-        if name == "ccm" and not with_ccm:
+        if (name == "ccm" and not with_ccm) or (name == "nf_tables" and not nf):
             continue
         (modules / "kernel" / directory).mkdir(parents=True, exist_ok=True)
         (modules / "kernel" / directory / f"{name}.ko").write_bytes(b"x")
-    (modules / "modules.dep").write_text("kernel/crypto/ccm.ko:\n" if depmod else "kernel/crypto/cmac.ko:\n")
+    (modules / "modules.dep").write_text(("kernel/crypto/ccm.ko:\n" if depmod else "kernel/crypto/cmac.ko:\n")
+                                         + "kernel/net/netfilter/nf_tables.ko:\n")
+    for binary in ("usr/sbin/NetworkManager", "usr/bin/nmcli"):
+        (root / binary).parent.mkdir(parents=True, exist_ok=True)
+        (root / binary).write_bytes(b"\x7fELF")
+    if supplicant is not None:
+        (root / "usr/sbin/wpa_supplicant").write_bytes(b"\x7fELF\0" + supplicant)
+    if certs:
+        (root / "etc/ssl/certs").mkdir(parents=True)
+        (root / "etc/ssl/certs/ca-certificates.crt").write_text("-----BEGIN CERTIFICATE-----\n")
     (root / "usr/lib/firmware").mkdir(parents=True)
     os.symlink("../usr/lib/firmware", root / "lib/firmware")
     if regdb:
@@ -76,9 +88,17 @@ result = run(stage(depmod=False))
 check(result.returncode != 0 and "depmod" in result.stderr, f"ccm hors modules.dep non détecté : {result.stderr!r}")
 result = run(stage(regdb=False))
 check(result.returncode != 0 and "regulatory.db" in result.stderr, f"regulatory.db absent non détecté : {result.stderr!r}")
+result = run(stage(nf=False))
+check(result.returncode != 0 and "nf_tables" in result.stderr, f"pare-feu (nf_tables) absent non détecté : {result.stderr!r}")
+result = run(stage(supplicant=None))
+check(result.returncode != 0 and "wpa_supplicant" in result.stderr, f"wpa_supplicant absent non détecté : {result.stderr!r}")
+result = run(stage(supplicant=b"PEAP TTLS MSCHAPV2 WPS"))
+check(result.returncode != 0 and "SAE" in result.stderr, f"wpa_supplicant sans WPA3 (SAE) non détecté : {result.stderr!r}")
+result = run(stage(certs=False))
+check(result.returncode != 0 and "certificats" in result.stderr, f"certificats racine absents non détectés : {result.stderr!r}")
 
 if failures:
     for failure in failures:
         print("ÉCHEC :", failure)
     raise SystemExit(1)
-print("OK : Wi-Fi chiffré dans l'image (crypto du noyau, pilotes Wi-Fi, regulatory.db)")
+print("OK : Wi-Fi dans l'image (WEP à WPA3, Entreprise, pilotes, regulatory.db, pare-feu, partage de connexion)")

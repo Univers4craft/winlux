@@ -354,7 +354,13 @@ done
 # gcm/ghash : GCMP) ; sans ces modules la poignée de main échouait et le mot
 # de passe Wi-Fi semblait refusé (v0.2.17, PC de damien). brcmfmac charge de
 # même ses modules « vendeur » (cyw, wcc, bca) par leur nom.
-for directory in sound drivers/soundwire crypto arch/x86/crypto lib/crypto net/wireless net/mac80211 drivers/net/wireless drivers/staging; do
+# Pare-feu et partage de connexion : netfilter entier (nf_tables, NAT,
+# conntrack), pont et veth ; sans eux winlux-firewall ne faisait rien
+# (« Unable to initialize Netlink socket ») et aucun NAT n'était possible.
+# Partage de connexion d'un téléphone : USB (cdc_ether, rndis_host, cdc_ncm,
+# ipheth pour l'iPhone) et Bluetooth (bnep) sont dans drivers/net/usb et
+# net/bluetooth.
+for directory in sound drivers/soundwire crypto arch/x86/crypto lib/crypto net/wireless net/mac80211 drivers/net/wireless drivers/staging net/netfilter net/ipv4/netfilter net/ipv6/netfilter net/bridge drivers/net/usb net/bluetooth; do
     test -d "/lib/modules/$kernel_release/kernel/$directory" || continue
     find "/lib/modules/$kernel_release/kernel/$directory" -name '*.ko*' | while read -r module; do
         destination="$stage${module%.zst}"
