@@ -745,8 +745,232 @@ unsafe extern "win64" fn GetPointerDevices(count: *mut u32, _devices: *mut u8) -
     1
 }
 
+// ============================================================
+//  user32 : API de configuration d'affichage (QueryDisplayConfig)
+// ============================================================
+//
+// Chromium (display::win::ScreenWin) lit ainsi le nom et la fréquence de
+// chaque écran et s'arrête sur un CHECK quand GetDisplayConfigBufferSizes
+// manque. Un chemin par écran de EnumDisplayMonitors, dans le même ordre
+// (\\.\DISPLAY1 = principal), avec un mode source et un mode cible chacun.
+
+const DC_ADAPTER_LUID: u32 = 0x0057_4c58; // « WLX »
+const DC_TARGET_BASE: u32 = 0x100;
+const DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER: u32 = 0xFFFF_FFFF;
+const ERROR_INSUFFICIENT_BUFFER_L: i32 = 122;
+const ERROR_INVALID_PARAMETER_L: i32 = 87;
+const ERROR_NOT_SUPPORTED_L: i32 = 50;
+
+struct DcScreen {
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+    hz: u32,
+}
+
+fn dc_screens() -> Vec<DcScreen> {
+    let monitors = crate::dlls::monitors::list();
+    let modes = crate::dlls::displaymode::ordered(crate::dlls::displaymode::screens());
+    monitors
+        .iter()
+        .enumerate()
+        .map(|(i, m)| DcScreen {
+            left: m.rect.left,
+            top: m.rect.top,
+            width: (m.rect.right - m.rect.left).max(1) as u32,
+            height: (m.rect.bottom - m.rect.top).max(1) as u32,
+            hz: modes
+                .get(i)
+                .and_then(crate::dlls::displaymode::current)
+                .map(|(_, _, hz)| hz)
+                .filter(|hz| *hz > 0)
+                .unwrap_or(60),
+        })
+        .collect()
+}
+
+unsafe fn put_u32(p: *mut u8, off: usize, v: u32) {
+    (p.add(off) as *mut u32).write_unaligned(v);
+}
+
+unsafe fn put_wide(p: *mut u8, off: usize, chars: usize, text: &str) {
+    let dst = p.add(off) as *mut u16;
+    let w: Vec<u16> = text.encode_utf16().take(chars - 1).collect();
+    for i in 0..chars {
+        dst.add(i).write_unaligned(*w.get(i).unwrap_or(&0));
+    }
+}
+
+/// `GetDisplayConfigBufferSizes` : un chemin et deux modes par écran.
+unsafe extern "win64" fn GetDisplayConfigBufferSizes(
+    _flags: u32,
+    paths: *mut u32,
+    modes: *mut u32,
+) -> i32 {
+    if paths.is_null() || modes.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let n = crate::dlls::monitors::list().len() as u32;
+    *paths = n;
+    *modes = 2 * n;
+    0
+}
+
+/// `QueryDisplayConfig` : DISPLAYCONFIG_PATH_INFO (72 octets) et
+/// DISPLAYCONFIG_MODE_INFO (64 octets), mode source 2i, mode cible 2i+1.
+unsafe extern "win64" fn QueryDisplayConfig(
+    _flags: u32,
+    npaths: *mut u32,
+    paths: *mut u8,
+    nmodes: *mut u32,
+    modes: *mut u8,
+    topology: *mut u32,
+) -> i32 {
+    if npaths.is_null() || nmodes.is_null() || paths.is_null() || modes.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let list = dc_screens();
+    let n = list.len() as u32;
+    if *npaths < n || *nmodes < 2 * n {
+        return ERROR_INSUFFICIENT_BUFFER_L;
+    }
+    std::ptr::write_bytes(paths, 0, 72 * n as usize);
+    std::ptr::write_bytes(modes, 0, 64 * 2 * n as usize);
+    for (i, sc) in list.iter().enumerate() {
+        let i32_ = i as u32;
+        let p = paths.add(72 * i);
+        // sourceInfo
+        put_u32(p, 0, DC_ADAPTER_LUID);
+        put_u32(p, 8, i32_);
+        put_u32(p, 12, 2 * i32_);
+        put_u32(p, 16, 1); // DISPLAYCONFIG_SOURCE_IN_USE
+                           // targetInfo
+        put_u32(p, 20, DC_ADAPTER_LUID);
+        put_u32(p, 28, DC_TARGET_BASE + i32_);
+        put_u32(p, 32, 2 * i32_ + 1);
+        put_u32(p, 36, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER);
+        put_u32(p, 40, 1); // DISPLAYCONFIG_ROTATION_IDENTITY
+        put_u32(p, 44, 1); // DISPLAYCONFIG_SCALING_IDENTITY
+        put_u32(p, 48, sc.hz);
+        put_u32(p, 52, 1);
+        put_u32(p, 56, 1); // DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE
+        put_u32(p, 60, 1); // targetAvailable
+        put_u32(p, 64, 1); // DISPLAYCONFIG_TARGET_IN_USE
+        put_u32(p, 68, 1); // DISPLAYCONFIG_PATH_ACTIVE
+                           // Mode source : définition, 32 bits par pixel, position.
+        let m = modes.add(64 * 2 * i);
+        put_u32(m, 0, 1); // DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+        put_u32(m, 4, i32_);
+        put_u32(m, 8, DC_ADAPTER_LUID);
+        put_u32(m, 16, sc.width);
+        put_u32(m, 20, sc.height);
+        put_u32(m, 24, 4); // DISPLAYCONFIG_PIXELFORMAT_32BPP
+        put_u32(m, 28, sc.left as u32);
+        put_u32(m, 32, sc.top as u32);
+        // Mode cible : signal vidéo.
+        let t = modes.add(64 * (2 * i + 1));
+        put_u32(t, 0, 2); // DISPLAYCONFIG_MODE_INFO_TYPE_TARGET
+        put_u32(t, 4, DC_TARGET_BASE + i32_);
+        put_u32(t, 8, DC_ADAPTER_LUID);
+        let pixel_rate = u64::from(sc.width) * u64::from(sc.height) * u64::from(sc.hz);
+        (t.add(16) as *mut u64).write_unaligned(pixel_rate);
+        put_u32(t, 24, sc.height * sc.hz);
+        put_u32(t, 28, 1);
+        put_u32(t, 32, sc.hz);
+        put_u32(t, 36, 1);
+        put_u32(t, 40, sc.width);
+        put_u32(t, 44, sc.height);
+        put_u32(t, 48, sc.width);
+        put_u32(t, 52, sc.height);
+        put_u32(t, 56, 255); // D3DKMDT_VSS_OTHER
+        put_u32(t, 60, 1);
+    }
+    *npaths = n;
+    *nmodes = 2 * n;
+    if !topology.is_null() {
+        *topology = 1; // DISPLAYCONFIG_TOPOLOGY_INTERNAL
+    }
+    0
+}
+
+/// `DisplayConfigGetDeviceInfo` : noms des sources (\\.\DISPLAYn) et des
+/// cibles, couleur standard (pas de HDR), blanc SDR de 80 nits.
+unsafe extern "win64" fn DisplayConfigGetDeviceInfo(hdr: *mut u8) -> i32 {
+    if hdr.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let kind = (hdr as *const u32).read_unaligned();
+    let size = (hdr.add(4) as *const u32).read_unaligned() as usize;
+    let id = (hdr.add(16) as *const u32).read_unaligned();
+    let n = crate::dlls::monitors::list().len() as u32;
+    let need = match kind {
+        1 => 84,
+        2 => 420,
+        4 => 276,
+        6 => 24,
+        9 => 32,
+        11 => 24,
+        _ => return ERROR_NOT_SUPPORTED_L,
+    };
+    if size < need {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let index = match kind {
+        1 => id,
+        4 => 0,
+        _ => id.wrapping_sub(DC_TARGET_BASE),
+    };
+    if index >= n.max(1) {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    std::ptr::write_bytes(hdr.add(20), 0, need - 20);
+    let number = index + 1;
+    match kind {
+        1 => put_wide(hdr, 20, 32, &format!("\\\\.\\DISPLAY{number}")),
+        2 => {
+            put_u32(hdr, 24, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER);
+            put_u32(hdr, 32, number);
+            put_wide(hdr, 36, 64, &format!("Winlux {number}"));
+            put_wide(
+                hdr,
+                164,
+                128,
+                &format!(
+                    "\\\\?\\DISPLAY#WLX0000#{number}&0#{{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}}"
+                ),
+            );
+        }
+        4 => put_wide(hdr, 20, 128, "\\\\?\\WINLUX#DISPLAY#0"),
+        6 => put_u32(hdr, 20, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER),
+        9 => put_u32(hdr, 28, 8),     // 8 bits par canal, ni HDR ni WCG
+        11 => put_u32(hdr, 20, 1000), // 1000 = 80 nits
+        _ => {}
+    }
+    0
+}
+
+unsafe extern "win64" fn SetDisplayConfig(
+    _np: u32,
+    _paths: usize,
+    _nm: u32,
+    _modes: usize,
+    _flags: u32,
+) -> i32 {
+    ERROR_NOT_SUPPORTED_L
+}
+
+unsafe extern "win64" fn DisplayConfigSetDeviceInfo(_hdr: usize) -> i32 {
+    ERROR_NOT_SUPPORTED_L
+}
+
 pub fn user32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "GetDisplayConfigBufferSizes" => fn GetDisplayConfigBufferSizes,
+        "QueryDisplayConfig" => fn QueryDisplayConfig,
+        "DisplayConfigGetDeviceInfo" => fn DisplayConfigGetDeviceInfo,
+        "DisplayConfigSetDeviceInfo" => fn DisplayConfigSetDeviceInfo,
+        "SetDisplayConfig" => fn SetDisplayConfig,
         "GetPointerDevices" => fn GetPointerDevices,
         "CreateWindowStationW" => fn CreateWindowStation,
         "CreateWindowStationA" => fn CreateWindowStation,
@@ -1830,6 +2054,71 @@ mod tests {
             let mut count = 7u32;
             assert_eq!(GetPointerDevices(&mut count, std::ptr::null_mut()), 1);
             assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    fn configuration_d_affichage() {
+        unsafe {
+            let (mut np, mut nm) = (0u32, 0u32);
+            assert_eq!(GetDisplayConfigBufferSizes(2, &mut np, &mut nm), 0);
+            assert!(np >= 1);
+            assert_eq!(nm, 2 * np);
+            let mut paths = vec![0u8; 72 * np as usize];
+            let mut modes = vec![0u8; 64 * nm as usize];
+            let mut small = 0u32;
+            assert_eq!(
+                QueryDisplayConfig(
+                    2,
+                    &mut small,
+                    paths.as_mut_ptr(),
+                    &mut nm,
+                    modes.as_mut_ptr(),
+                    std::ptr::null_mut()
+                ),
+                122
+            );
+            assert_eq!(
+                QueryDisplayConfig(
+                    2,
+                    &mut np,
+                    paths.as_mut_ptr(),
+                    &mut nm,
+                    modes.as_mut_ptr(),
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+            let rd = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+            // Le mode cible du premier chemin porte la fréquence et la taille.
+            let t = 64 * rd(&paths, 32) as usize;
+            assert_eq!(rd(&modes, t), 2);
+            assert!(rd(&modes, t + 32) > 0);
+            assert_eq!(
+                rd(&modes, t + 40),
+                rd(&modes, 64 * rd(&paths, 12) as usize + 16)
+            );
+            // Nom de la source : celui de GetMonitorInfo.
+            let mut src = [0u8; 84];
+            src[0..4].copy_from_slice(&1u32.to_le_bytes());
+            src[4..8].copy_from_slice(&84u32.to_le_bytes());
+            src[16..20].copy_from_slice(&paths[8..12]);
+            assert_eq!(DisplayConfigGetDeviceInfo(src.as_mut_ptr()), 0);
+            let name: Vec<u16> = src[20..84]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|c| *c != 0)
+                .collect();
+            assert_eq!(String::from_utf16_lossy(&name), "\\\\.\\DISPLAY1");
+            let mut tgt = [0u8; 420];
+            tgt[0..4].copy_from_slice(&2u32.to_le_bytes());
+            tgt[4..8].copy_from_slice(&420u32.to_le_bytes());
+            tgt[16..20].copy_from_slice(&paths[28..32]);
+            assert_eq!(DisplayConfigGetDeviceInfo(tgt.as_mut_ptr()), 0);
+            assert_ne!(tgt[36], 0);
+            // Taille trop courte refusée.
+            tgt[4..8].copy_from_slice(&40u32.to_le_bytes());
+            assert_eq!(DisplayConfigGetDeviceInfo(tgt.as_mut_ptr()), 87);
         }
     }
 
