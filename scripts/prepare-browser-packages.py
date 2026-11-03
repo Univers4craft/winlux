@@ -12,6 +12,7 @@ install-browser.sh (paquet d'intégration) appellent ce script.
 """
 import gzip
 import hashlib
+import os
 import pathlib
 import re
 import subprocess
@@ -25,10 +26,28 @@ SOURCES = {
     "firefox": ("firefox", "https://packages.mozilla.org/apt/", "dists/mozilla/main/binary-amd64/Packages"),
 }
 
-def fetch(url, destination):
-    subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error",
-                    "--connect-timeout", "15", "--max-time", "300", "--max-filesize", "536870912",
+# Miroir de test (file:///…) : jamais utilisé par Winlux lui-même.
+MIRROR = os.environ.get("WINLUX_BROWSER_MIRROR", "")
+
+
+def fetch_index(url, destination):
+    subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
+                    "--connect-timeout", "15", "--max-time", "120", "--max-filesize", "67108864",
                     url, "--output", str(destination)], check=True)
+
+
+def fetch_package(url, partial):
+    """Paquet du navigateur (Edge 200 Mo, Chrome 120 Mo) : pas de durée maximale.
+
+    L'ancienne limite de 5 minutes faisait échouer Edge et Chrome sur une
+    connexion de moins de 5 Mbit/s (Wi-Fi d'un portable) alors que les
+    petits paquets passaient. Le transfert n'est abandonné que s'il reste
+    sous 1 ko/s pendant 2 minutes, et reprend là où il s'était arrêté
+    (nouvel essai, ou prochain clic sur Installer)."""
+    subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error",
+                    "--connect-timeout", "15", "--speed-limit", "1024", "--speed-time", "120",
+                    "--retry", "5", "--retry-delay", "5", "--max-filesize", "536870912",
+                    "--continue-at", "-", url, "--output", str(partial)], check=True)
 
 def select(data, package):
     if data.startswith(b"\x1f\x8b"):
@@ -73,17 +92,25 @@ def main():
         work = pathlib.Path(work)
         for browser in only:
             package, base, index = SOURCES[browser]
-            fetch(base + index, work / "Packages.gz")
+            base = MIRROR or base
+            fetch_index(base + index, work / "Packages.gz")
             fields = select((work / "Packages.gz").read_bytes(), package)
             destination = output / f"{browser}.deb"
             if not destination.exists() or checksum(destination) != fields["SHA256"]:
-                fetch(urllib.parse.urljoin(base, fields["Filename"]), work / "package.deb")
-                if checksum(work / "package.deb") != fields["SHA256"]:
+                # Téléchargement partiel gardé d'un essai à l'autre, propre à la version.
+                partial = output / f".{browser}-{fields['SHA256'][:16]}.partial"
+                for old in output.glob(f".{browser}-*.partial"):
+                    if old != partial:
+                        old.unlink()
+                fetch_package(urllib.parse.urljoin(base, fields["Filename"]), partial)
+                if checksum(partial) != fields["SHA256"]:
+                    partial.unlink()
                     raise ValueError(f"checksum mismatch: {browser}")
-                actual = subprocess.check_output(["dpkg-deb", "-f", str(work / "package.deb"), "Package"]).decode().strip()
+                actual = subprocess.check_output(["dpkg-deb", "-f", str(partial), "Package"]).decode().strip()
                 if actual != package:
+                    partial.unlink()
                     raise ValueError(f"unexpected DEB: {actual}")
-                (work / "package.deb").replace(destination)
+                partial.replace(destination)
             (output / f"{browser}.sha256").write_text(fields["SHA256"] + "\n")
             (output / f"{browser}.version").write_text(fields["Version"] + "\n")
             (output / f"{browser}.source").write_text(urllib.parse.urljoin(base, fields["Filename"]) + "\n")
