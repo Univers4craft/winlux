@@ -501,6 +501,105 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "NtQueryObject" => fn NtQueryObject,
         "ZwQueryObject" => fn NtQueryObject,
         "RtlGetLastNtStatus" => fn RtlGetLastNtStatus,
+        "LdrLockLoaderLock" => fn LdrLockLoaderLock,
+        "LdrUnlockLoaderLock" => fn LdrUnlockLoaderLock,
+    }
+}
+
+/// Le chargeur de Winlux n'a pas de verrou exposé aux applis : on rend un
+/// jeton non nul et l'état « verrou pris » (1), ce que Crashpad attend.
+unsafe extern "win64" fn LdrLockLoaderLock(
+    _flags: u32,
+    state: *mut u32,
+    cookie: *mut usize,
+) -> u32 {
+    if !state.is_null() {
+        state.write_unaligned(1);
+    }
+    if !cookie.is_null() {
+        cookie.write_unaligned(0x4c44_524c);
+    }
+    0
+}
+
+unsafe extern "win64" fn LdrUnlockLoaderLock(_flags: u32, _cookie: usize) -> u32 {
+    0
+}
+
+// ============================================================
+//  advapi32 : validation d'une ACL
+// ============================================================
+
+/// ACL { AclRevision u8, Sbz1 u8, AclSize u16, AceCount u16, Sbz2 u16 },
+/// suivie de AceCount ACE { AceType u8, AceFlags u8, AceSize u16, … }.
+/// Valide si la révision est 2 à 4 et que chaque ACE tient dans AclSize.
+pub(crate) unsafe extern "win64" fn IsValidAcl(acl: *const u8) -> i32 {
+    if acl.is_null() {
+        return 0;
+    }
+    let rev = *acl;
+    let size = (acl.add(2) as *const u16).read_unaligned() as usize;
+    let count = (acl.add(4) as *const u16).read_unaligned() as usize;
+    if !(2..=4).contains(&rev) || size < 8 {
+        return 0;
+    }
+    let mut off = 8usize;
+    for _ in 0..count {
+        if off + 4 > size {
+            return 0;
+        }
+        let ace = (acl.add(off + 2) as *const u16).read_unaligned() as usize;
+        if ace < 4 || off + ace > size {
+            return 0;
+        }
+        off += ace;
+    }
+    1
+}
+
+pub fn advapi32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "IsValidAcl" => fn IsValidAcl,
+    }
+}
+
+// ============================================================
+//  uxtheme : ordinaux non documentés du mode sombre (Windows 10 1903+)
+// ============================================================
+
+/// #133 AllowDarkModeForWindow(hwnd, allow) -> BOOL
+unsafe extern "win64" fn AllowDarkModeForWindow(_hwnd: usize, _allow: i32) -> i32 {
+    1
+}
+
+/// #135 SetPreferredAppMode(mode) -> ancien mode (0 = Default)
+unsafe extern "win64" fn SetPreferredAppMode(_mode: u32) -> u32 {
+    0
+}
+
+/// #132 ShouldAppsUseDarkMode, #138 ShouldSystemUseDarkMode : mode clair.
+unsafe extern "win64" fn ShouldUseDarkMode() -> i32 {
+    0
+}
+
+/// #104 RefreshImmersiveColorPolicyState, #136 FlushMenuThemes
+unsafe extern "win64" fn ThemeNoop() {}
+
+/// #137 IsDarkModeAllowedForWindow(hwnd), #139 IsDarkModeAllowedForApp()
+unsafe extern "win64" fn IsDarkModeAllowed(_hwnd: usize) -> i32 {
+    1
+}
+
+pub fn uxtheme_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "#104" => fn ThemeNoop,
+        "#132" => fn ShouldUseDarkMode,
+        "#133" => fn AllowDarkModeForWindow,
+        "#135" => fn SetPreferredAppMode,
+        "#136" => fn ThemeNoop,
+        "#137" => fn IsDarkModeAllowed,
+        "#138" => fn ShouldUseDarkMode,
+        "#139" => fn IsDarkModeAllowed,
     }
 }
 
@@ -1050,6 +1149,8 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         // Noms psapi sans K32 : psapi.dll est servie par kernel32.
         ("kernel32", psapi_exports()),
         ("ntdll", ntdll_exports()),
+        ("advapi32", advapi32_exports()),
+        ("uxtheme", uxtheme_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -1063,6 +1164,69 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acl_valide_ou_non() {
+        unsafe {
+            // ACL révision 2, une ACE de 20 octets.
+            let mut acl = [0u8; 28];
+            acl[0] = 2;
+            acl[2..4].copy_from_slice(&28u16.to_le_bytes());
+            acl[4..6].copy_from_slice(&1u16.to_le_bytes());
+            acl[10..12].copy_from_slice(&20u16.to_le_bytes());
+            assert_eq!(IsValidAcl(acl.as_ptr()), 1);
+            acl[10..12].copy_from_slice(&40u16.to_le_bytes());
+            assert_eq!(IsValidAcl(acl.as_ptr()), 0, "ACE qui déborde");
+            acl[10..12].copy_from_slice(&20u16.to_le_bytes());
+            acl[0] = 9;
+            assert_eq!(IsValidAcl(acl.as_ptr()), 0, "mauvaise révision");
+            assert_eq!(IsValidAcl(std::ptr::null()), 0);
+            let (mut st, mut ck) = (0u32, 0usize);
+            assert_eq!(LdrLockLoaderLock(0, &mut st, &mut ck), 0);
+            assert_eq!(st, 1);
+            assert_ne!(ck, 0);
+            assert!(crate::dlls::lookup("uxtheme", "#135").is_some());
+            assert!(crate::dlls::lookup("advapi32", "IsValidAcl").is_some());
+            // Le DACL rendu pour la window station (bac à sable Chromium) est valide.
+            let (mut d, mut sd) = (std::ptr::null_mut(), std::ptr::null_mut());
+            let null = std::ptr::null_mut();
+            assert_eq!(
+                crate::dlls::security::GetSecurityInfo(
+                    0x30, 7, 4, null, null, &mut d, null, &mut sd
+                ),
+                0
+            );
+            assert!(d.is_null() || IsValidAcl(d) == 1);
+        }
+    }
+
+    #[test]
+    fn handle_vers_soi_et_arret_immediat() {
+        use crate::dlls::kernel32 as k;
+        unsafe {
+            let me = k::get_current_process();
+            let mut dup = 0usize;
+            assert_eq!(k::duplicate_handle(me, me, me, &mut dup, 0, 0, 2), 1);
+            assert_ne!(
+                dup,
+                usize::MAX,
+                "pas le pseudo-handle (INVALID_HANDLE_VALUE)"
+            );
+            assert_eq!(k::get_process_id(dup), std::process::id());
+            assert!(k::is_current_process_handle(dup));
+            k::close_handle(dup);
+            // TerminateProcess(GetCurrentProcess()) termine sans rendre la main.
+            let pid = libc::fork();
+            if pid == 0 {
+                k::terminate_process(me, 7);
+                libc::_exit(99);
+            }
+            let mut st = 0;
+            assert_eq!(libc::waitpid(pid, &mut st, 0), pid);
+            assert!(libc::WIFEXITED(st));
+            assert_eq!(libc::WEXITSTATUS(st), 7);
+        }
+    }
 
     #[test]
     fn dhcp_sans_option() {

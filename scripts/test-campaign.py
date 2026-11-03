@@ -135,6 +135,12 @@ with tempfile.TemporaryDirectory() as directory:
 source = (SCRIPTS / "winlux-trust-shortcuts.py").read_text()
 ok("metadata::xfce-exe-checksum" in source and "hashlib.sha256" in source,
    "winlux-trust-shortcuts pose la somme SHA-256 lue par xfdesktop 4.20")
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("def forget_uninstalled" in pages_source and "timeout_add(1500, self.forget_uninstalled" in pages_source,
+   "Paramètres > Programmes Windows : un programme désinstallé quitte la liste sans rouvrir la page")
+programs_source = (ROOT / "testexe/src/shell/programs.rs").read_text()
+ok('b"squirrel" => b"Squirrel"' in programs_source and 'b" application Windows"' in programs_source,
+   "Applications installées : type Squirrel affiché, « 1 application Windows » au singulier")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,

@@ -219,6 +219,7 @@ cat >"$setupbin/winlux" <<EOF
 #!/bin/sh
 if [ "\$1" = --inspect ]; then echo setup; exit 0; fi
 echo "\$@" >"$work/setup-args.log"
+echo "setup : Visual C++ Demo est installé." >&2
 exit 0
 EOF
 chmod +x "$setupbin/winlux"
@@ -227,7 +228,7 @@ cp "$apps/fenetre.exe" "$apps/vc_redist.x64.exe"
 env PATH="$fake:$PATH" DISPLAY=:99 XDG_STATE_HOME="$work/state" WINLUX_RUNTIME="$setupbin/winlux" \
     "$open" "$apps/vc_redist.x64.exe" </dev/null >"$work/sortie.log" 2>&1 || fail "installateur : échec"
 grep -q 'vc_redist.x64.exe' "$work/setup-args.log" || fail "installateur : runtime non appelé"
-grep -q 'est installé' "$work/dialogue.log" || fail "installateur : pas de message de fin"
+grep -q '« Visual C++ Demo » est installé' "$work/dialogue.log" || fail "installateur : le message de fin ne nomme pas l'appli"
 if grep -q '32 bits' "$work/dialogue.log"; then fail "installateur refusé comme programme 32 bits"; fi
 ok "installateur 32 bits (vc_redist) : installé par double-clic"
 
