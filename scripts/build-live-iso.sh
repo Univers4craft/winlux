@@ -1338,26 +1338,27 @@ function winlux_live {
     linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
+# La clé démarre toujours SON live : « Winlux Desktop » ne regarde jamais les
+# disques. Avant la v0.2.18, il chargeait le noyau et la racine d'un Winlux
+# déjà installé (étiquette WINLUX_ROOT) : impossible alors de réparer ou de
+# réinstaller depuis la clé une machine où Winlux était installé.
 menuentry "Winlux Desktop" {
-    if test -n "$winlux_root"; then
-        if test -f "($winlux_root)/boot/vmlinuz"; then
-            # Load the updated kernel and persistent root from the disk.
-            if test -f "($winlux_root)/boot/winlux-split-root"; then
-                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
-                initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
-            else
-                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
-            fi
-        else
-            winlux_live
-        fi
-    else
-        winlux_live
-    fi
+    winlux_live
 }
 menuentry "Installer Winlux sur le disque" --hotkey=i {
     winlux_live
 }
+# Système déjà installé sur ce PC : entrée à part, jamais par défaut.
+if test -n "$winlux_root" -a -f "($winlux_root)/boot/vmlinuz"; then
+    menuentry "Démarrer le Winlux installé sur ce PC" --hotkey=h {
+        if test -f "($winlux_root)/boot/winlux-split-root"; then
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
+            initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+        else
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
+        fi
+    }
+fi
 menuentry "Winlux Recovery (secours)" --hotkey=r {
     if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
         if test -f "($winlux_root)/boot/winlux-split-root"; then
@@ -1388,6 +1389,17 @@ menuentry "Winlux persistent network diagnostic" --hotkey=s {
 }
 GRUB
 grub-script-check "$iso_root/boot/grub/grub.cfg"
+# Garde-fou : les entrées live de la clé ne doivent jamais résoudre sur un
+# disque installé (étiquette WINLUX_ROOT), sinon la clé ne sert plus à réparer.
+for entry in "Winlux Desktop" "Installer Winlux sur le disque"; do
+    if awk -v title="menuentry \"$entry\"" 'index($0, title) == 1 { inside = 1 }
+        inside && /winlux_root|WINLUX_ROOT/ { bad = 1 }
+        inside && /^}/ { inside = 0 }
+        END { exit !bad }' "$iso_root/boot/grub/grub.cfg"; then
+        echo "grub.cfg : l'entrée « $entry » peut démarrer un disque installé" >&2
+        exit 1
+    fi
+done
 
 # Answer file for unattended installs, if supplied: the installer finds it at the medium root.
 if test -n "${WINLUX_AUTOINSTALL:-}"; then
