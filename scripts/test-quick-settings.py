@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import stat
 import subprocess
 import sys
@@ -172,6 +173,40 @@ assert tray_battery("Not charging", "1") == ("battery-29-ac.svg", True, "Batteri
 assert tray_battery("Charging", "1", "en")[2] == "Battery: 29% — charging"
 tray_tr = re.search(r"_TR = \{(.*?)\n\}", tray, re.S)[1]
 assert tray_tr.count("{level}") >= 16, "infobulles batterie traduites dans les 4 langues"
+
+# 4 ter. Contrepoids de la barre centrée : largeur du bloc de droite lue sur X.
+fake = Path(tempfile.mkdtemp(dir=work))
+(fake / "bin").mkdir()
+shutil.copy("/bin/sleep", fake / "wrapper-2.0")
+wrappers = {plugin: subprocess.Popen([str(fake / "wrapper-2.0"), str(plugin), "600"]) for plugin in (12, 7)}
+tray_app = subprocess.Popen(["sleep", "601"])
+try:
+    (fake / "tree").write_text(
+        '     0x400001 "xfce4-panel": ("xfce4-panel" "Xfce4-panel")  1920x48+0+1032  +0+1032\n'
+        '        4 children:\n'
+        '        0x400010 (has no name): ()  30x30+1641+9  +1641+1041\n'
+        '        0x400020 "wrapper-2.0": ("wrapper-2.0" "Wrapper-2.0")  40x48+1680+0  +1680+1032\n'
+        '        0x400030 "wrapper-2.0": ("wrapper-2.0" "Wrapper-2.0")  120x48+1800+0  +1800+1032\n'
+        '        0x400040 (has no name): ()  48x48+703+0  +703+1032\n'
+        '     0x500000 "Bureau": ("xfdesktop" "Xfdesktop")  1920x1080+0+0  +0+0\n')
+    pids = {"0x400010": tray_app.pid, "0x400020": wrappers[12].pid, "0x400030": wrappers[7].pid}
+    (fake / "bin/xwininfo").write_text(f"#!/bin/sh\ncat {fake / 'tree'}\n")
+    (fake / "bin/xprop").write_text("#!/bin/sh\ncase \"$2\" in\n" + "".join(f"{w}) echo '_NET_WM_PID(CARDINAL) = {p}' ;;\n" for w, p in pids.items())
+                                    + "*) echo '_NET_WM_PID:  not found.' ;;\nesac\n")
+    (fake / "bin/xfconf-query").write_text("#!/bin/sh\nprintf '%s\\n' $FAKE_IDS\n")
+    for tool in ("xwininfo", "xprop", "xfconf-query"):
+        (fake / "bin" / tool).chmod(0o755)
+    def balance(ids):
+        result = subprocess.run([sys.executable, str(HERE / "winlux-tray.py"), "balance"], capture_output=True, text=True,
+                                env=dict(os.environ, PATH=f"{fake / 'bin'}:{os.environ['PATH']}", FAKE_IDS=ids,
+                                         WINLUX_TRAY_DIR=str(fake / "tray")))
+        assert result.returncode == 0, result.stderr
+        return Path(re.search(r"<img>(.*?)</img>", result.stdout)[1]).name
+    assert balance("3 13 1 2 8 10 12 4 5 6 9 7") == "spacer-279.svg", balance("3 13 1 2 8 10 12 4 5 6 9 7")
+    assert balance("3 1 2 8 10 12 4 5 6 9 7 13") == "spacer-0.svg"  # barre à gauche : contrepoids nul
+finally:
+    for process in [*wrappers.values(), tray_app]:
+        process.kill()
 
 # 5. Saisie du pointeur avec owner_events=True (sinon aucun clic dans le panneau).
 source = (HERE / "winlux-popup.py").read_text(encoding="utf-8")
