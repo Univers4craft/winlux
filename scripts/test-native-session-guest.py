@@ -126,6 +126,15 @@ for service,object_path in [("org.freedesktop.NetworkManager","/org/freedesktop/
     print(run("gdbus","call","--system","--dest",service,"--object-path",object_path,
               "--method","org.freedesktop.DBus.Peer.Ping",timeout=40),flush=True)
 print("WINLUX_NATIVE_HARDWARE_SERVICES=0",flush=True)
+# Réseau depuis le compte du bureau (régression v0.2.17) : règle polkit du
+# réseau posée et lisible par polkitd, resolv.conf lisible par tous.
+network_rule = Path("/etc/polkit-1/rules.d/50-winlux-network.rules")
+assert network_rule.is_file(), "règle polkit du réseau absente"
+assert network_rule.stat().st_mode & 0o004 and Path("/etc/polkit-1/rules.d").stat().st_mode & 0o005 == 0o005, \
+    "règle polkit du réseau illisible par polkitd"
+if Path("/etc/resolv.conf").exists():
+    assert Path("/etc/resolv.conf").resolve().stat().st_mode & 0o004, "resolv.conf illisible par les comptes"
+print("WINLUX_NETWORK_ACCOUNT_ACCESS=0", flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")
