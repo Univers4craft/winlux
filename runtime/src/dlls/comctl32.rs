@@ -122,23 +122,60 @@ pub unsafe extern "win64" fn property_sheet_w(_psh: *const c_void) -> isize {
     0
 }
 
-/// CreateToolbarEx
+/// CreateToolbarEx : barre d'outils enfant, ses images et ses boutons.
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn create_toolbar_ex(
-    _parent: usize,
-    _style: u32,
-    _id: u32,
-    _nbmp: i32,
-    _hinst: usize,
-    _bmp_id: usize,
-    _buttons: *const c_void,
-    _nbuttons: i32,
-    _dxbutton: i32,
-    _dybutton: i32,
-    _dxbitmap: i32,
-    _dybitmap: i32,
-    _size: u32,
+    parent: usize,
+    style: u32,
+    id: u32,
+    nbmp: i32,
+    hinst: usize,
+    bmp_id: usize,
+    buttons: *const c_void,
+    nbuttons: i32,
+    dxbutton: i32,
+    dybutton: i32,
+    dxbitmap: i32,
+    dybitmap: i32,
+    size: u32,
 ) -> usize {
-    0
+    let class: Vec<u16> = "ToolbarWindow32".encode_utf16().chain([0]).collect();
+    let tb = crate::dlls::user32::create_window_ex_w(
+        0,
+        class.as_ptr(),
+        std::ptr::null(),
+        style | 0x4000_0000, // WS_CHILD
+        0,
+        0,
+        0,
+        0,
+        parent,
+        id as usize,
+        hinst,
+        std::ptr::null_mut(),
+    );
+    if tb == 0 {
+        return 0;
+    }
+    let send =
+        |msg: u32, wp: usize, lp: isize| crate::dlls::user32::send_message_w(tb, msg, wp, lp);
+    send(0x041E, if size == 0 { 32 } else { size as usize }, 0); // TB_BUTTONSTRUCTSIZE
+    let pack = |w: i32, h: i32| ((w as u16 as u32) | ((h as u16 as u32) << 16)) as isize;
+    if dxbitmap > 0 && dybitmap > 0 {
+        send(0x0420, 0, pack(dxbitmap, dybitmap)); // TB_SETBITMAPSIZE
+    }
+    if dxbutton > 0 && dybutton > 0 {
+        send(0x041F, 0, pack(dxbutton, dybutton)); // TB_SETBUTTONSIZE
+    }
+    if nbmp > 0 {
+        let add = [hinst, bmp_id]; // TBADDBITMAP
+        send(0x0413, nbmp as usize, add.as_ptr() as isize);
+    }
+    if !buttons.is_null() && nbuttons > 0 {
+        send(0x0444, nbuttons as usize, buttons as isize); // TB_ADDBUTTONSW
+    }
+    send(0x0421, 0, 0); // TB_AUTOSIZE
+    tb
 }
 
 /// CreateUpDownControl : flèches haut/bas avec leur champ associé.
