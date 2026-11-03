@@ -5,6 +5,11 @@
 # en root, ou session du compte sur un système installé) ne lance que ce
 # qui appartient à l'utilisateur.
 set -eu
+# L'init tourne en umask 077 : les services lancés ici (NetworkManager,
+# polkit…) écriraient des fichiers illisibles par le compte du bureau, dont
+# /etc/resolv.conf (aucun nom résolu depuis le compte, « connecté mais rien
+# ne marche »).
+umask 022
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 # Chargeurs d'images GTK (PNG, SVG) : sans ce cache, icônes et fenêtres GTK
 # plantent. Régénéré seulement s'il manque ou si un chargeur a été installé
@@ -50,6 +55,9 @@ wait_bus_name() {
 # polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
 polkit_pid=
 udisks_pid=
+# Règle polkit du réseau (comptes netdev) posée et lisible avant polkitd,
+# resolv.conf lisible : sur le système installé comme en Live.
+if test -x /usr/bin/winlux-network-perms; then /usr/bin/winlux-network-perms || true; fi
 if test -x /usr/lib/polkit-1/polkitd; then
     /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
     polkit_pid=$!

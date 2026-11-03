@@ -116,8 +116,10 @@ CONF_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,40}$")
 APT_SUBCOMMANDS = {"install": "admin", "remove": "admin", "purge": "admin", "upgrade": "admin",
                    "dist-upgrade": "admin", "full-upgrade": "admin", "autoremove": "admin",
                    "update": "user"}
+# --autoremove et --purge : la désinstallation du Store (apt-get purge
+# --autoremove) était refusée par le relais, sans demande ni message.
 APT_FLAGS = {"-y", "-q", "-qq", "--no-install-recommends", "--reinstall", "-f", "--fix-broken",
-             "--only-upgrade", "--no-remove"}
+             "--only-upgrade", "--no-remove", "--autoremove", "--purge"}
 APT_OPTIONS = re.compile(r"^(DPkg::Lock::Timeout=[0-9]{1,4}|Dpkg::Use-Pty=0|APT::Status-Fd=[0-9]{1,3})$")
 SNAP_SUBCOMMANDS = {"install": "admin", "remove": "admin", "refresh": "admin"}
 # Réinitialiser ce PC, clé de secours, réparation du démarrage (Paramètres >

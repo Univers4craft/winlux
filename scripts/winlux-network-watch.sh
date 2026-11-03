@@ -1,8 +1,13 @@
 #!/bin/sh
 # Only use DHCP for a wired carrier that NetworkManager does not manage.
 set -u
-sleep 20
+# resolv.conf réécrit par NetworkManager à chaque bail : toujours lisible.
+perms() { if test -x /usr/bin/winlux-network-perms; then /usr/bin/winlux-network-perms >/dev/null 2>&1 || true; fi; }
+sleep 5
+perms
+sleep 15
 while :; do
+    perms
     if ! ip -4 route show default 2>/dev/null | grep -q '^default '; then
         for entry in /sys/class/net/*; do
             interface=${entry##*/}

@@ -173,6 +173,11 @@ jobs:
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
 
+      - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
+        run: python3 -B scripts/test-network-perms.py
+      - name: Vérifier « winlux-settings about » et les noms de page
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-args.py
+
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
 
@@ -315,6 +320,8 @@ jobs:
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          sudo apt-get update -q
+          sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
