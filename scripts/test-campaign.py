@@ -318,4 +318,17 @@ ok("def _screen_suffix" in lock and "0o1777" in lock,
 ok("Terminal libre" in (SCRIPTS / "winlux-sessions.sh").read_text(),
    "changer d'utilisateur : le second bureau évite le VT du premier")
 
+# ── Wi-Fi sur vrai matériel (03/11/2026) : « non autorisé », pas de saisie de clé ──
+wifi = (SCRIPTS / "winlux-wifi.py").read_text()
+ok('"winlux-root") or "/usr/bin/winlux-root", "exec", "winlux-wifi"' in wifi,
+   "Wi-Fi : le compte passe par le relais root (nmcli en utilisateur répondait « non autorisé »)")
+ok("--key-stdin" in wifi and "0o600" in wifi, "Wi-Fi : clé lue sur l'entrée standard, profil système 0600")
+ok('"winlux-wifi"' in (SCRIPTS / "winlux-root.py").read_text(), "relais root : winlux-wifi autorisé")
+ok('["winlux-shell-app","settings","35"]' in (SCRIPTS / "winlux-popup.py").read_text(),
+   "tuile Wi-Fi : la flèche ouvre la page Wi-Fi, plus « Outils Winlux » en entier")
+ok("nm-connection-editor" not in (SCRIPTS / "winlux-system-tools.py").read_text(),
+   "Outils Winlux : plus de liste de commandes nmcli, renvoi vers les pages Wi-Fi et Bluetooth")
+ok((ROOT / "integration/native/network/50-winlux-network.rules").is_file(),
+   "polkit : les comptes du groupe netdev pilotent NetworkManager")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

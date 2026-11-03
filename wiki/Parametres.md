@@ -7,7 +7,7 @@
 1. **Masqué plutôt que grisé.** Une page ou une section qui ne correspond à rien sur la machine n'apparaît pas : pas de page Bluetooth sans adaptateur ni périphérique, pas de page Son sans carte son, pas de Lecteurs réseau sans outil de montage, pas de réglage CPU que le matériel ne permet pas. La détection est faite au démarrage par `winlux-hardware`.
 2. **Les réglages matériels avancés vivent ici, et seulement ici** (processeur, GPU, alimentation), après détection réelle du matériel.
 
-## Les 33 pages
+## Les 36 pages
 
 | # | Page | Ce qu'on y règle |
 |---|---|---|
@@ -44,6 +44,9 @@
 | 30 | **Assistant IA** | Trois assistants, tous désactivés par défaut, chacun avec son interrupteur : **Claude** (compte Claude, Claude Code téléchargé), **ChatGPT** (compte ChatGPT, Codex d'OpenAI téléchargé) et **IA locale** (llama.cpp et le petit modèle Qwen2.5 1,5B, rien ne quitte le PC, cachée sous 3 Gio de mémoire). Un seul bouton dans la barre des tâches (et Windows+C), choix de l'assistant dans le panneau, ce qui est envoyé. Session native seulement. |
 | 31 | **Récupération** | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), revenir en arrière, démarrage avancé, réparer le démarrage, créer une clé de secours ([docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md)). |
 | 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés), reconnaissance de texte (télécharger, langues installées, retirer). Page native seulement. |
+| 33 | **Comptes** | Comptes locaux (ajout, mot de passe, rôle). Page native seulement. |
+| 34 | **Matériel et pilotes** | Diagnostic du matériel et pilotes recommandés. Page native seulement. |
+| 35 | **Wi-Fi** | Réseaux à portée (nom, signal, sécurité), clé de sécurité dans une boîte avec « Afficher les caractères » et clavier tactile intégré, bouton WPS de la box, réseau caché, réseaux enregistrés (oublier, reconnexion automatique au démarrage), mode avion. Les erreurs sont dites en clair (clé refusée, hors de portée, pas d’adresse…). Passe par `winlux-wifi` en root via le relais `winlux-root` ; masquée sans carte Wi-Fi. Page native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

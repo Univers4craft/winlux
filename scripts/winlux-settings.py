@@ -214,6 +214,7 @@ _TR = {
     'Chargement…': ('Loading…', 'Cargando…', 'Wird geladen…'),
     'Installer, désinstaller et gérer le démarrage': ('Install, uninstall and manage startup', 'Instalar, desinstalar y administrar el inicio', 'Installieren, deinstallieren und Autostart verwalten'),
     'Wi-Fi et Bluetooth': ('Wi-Fi and Bluetooth', 'Wi-Fi y Bluetooth', 'WLAN und Bluetooth'),
+    'Wi-Fi': ('Wi-Fi', 'Wi-Fi', 'WLAN'),
     'Réglages rapides': ('Quick settings', 'Configuración rápida', 'Schnelleinstellungen'),
     'Thèmes, accent, fond et barre des tâches': ('Themes, accent, background and taskbar', 'Temas, color de énfasis, fondo y barra de tareas', 'Designs, Akzentfarbe, Hintergrund und Taskleiste'),
     'Appliquer la définition': ('Apply resolution', 'Aplicar resolución', 'Auflösung übernehmen'),
@@ -315,15 +316,15 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
-         _t("Comptes"), _t("Matériel et pilotes")]
+         _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 34 n’existent que dans les Paramètres natifs.
+# Pages 29 à 35 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
-              (_t("Réseau et Internet"), [2, 20, 28]),
+              (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15, 30]),
               (_t("Comptes"), [33]),
@@ -704,6 +705,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.hidden_pages.discard(SOUND_PAGE)
         self.hidden_pages |= set(MERGED)
         # Page 33 (Comptes, #309) : cachée tant que sa page n’est pas livrée.
+        # Wi-Fi (35) sans carte Wi-Fi : la page Réseau la remplace.
+        if wanted == 35 and wanted in self.hidden_pages: wanted = 2
         if wanted in self.hidden_pages: wanted = 8
         self.current = wanted
         self.page = wanted
