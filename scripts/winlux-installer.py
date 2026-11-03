@@ -577,6 +577,8 @@ TRANSLATIONS = {
         "progress_account": "Configuration du compte utilisateur...",
         "progress_firstboot": "Configuration du premier démarrage...",
         "progress_sync": "Synchronisation et démontage...",
+        "hw_rgb": "Éclairage RGB du clavier et des périphériques (OpenRGB)",
+        "hw_printer": "Pilotes d'imprimantes",
         "progress_drivers": "Pilotes et micrologiciels pour cet ordinateur...",
         "hw_show": "Voir ce qui a été ajouté pour cet ordinateur",
         "hw_none": "Rien à ajouter : tout ce qu'il faut à cet ordinateur est déjà dans Winlux.",
@@ -753,6 +755,8 @@ TRANSLATIONS = {
         "progress_account": "Configuring user account...",
         "progress_firstboot": "Configuring first boot...",
         "progress_sync": "Syncing and unmounting...",
+        "hw_rgb": "RGB lighting for the keyboard and devices (OpenRGB)",
+        "hw_printer": "Printer drivers",
         "progress_drivers": "Drivers and firmware for this computer...",
         "hw_show": "Show what was added for this computer",
         "hw_none": "Nothing to add: everything this computer needs is already in Winlux.",
@@ -929,6 +933,8 @@ TRANSLATIONS = {
         "progress_account": "Benutzerkonto wird konfiguriert...",
         "progress_firstboot": "Erster Start wird konfiguriert...",
         "progress_sync": "Synchronisierung und Aushängen...",
+        "hw_rgb": "RGB-Beleuchtung von Tastatur und Geräten (OpenRGB)",
+        "hw_printer": "Druckertreiber",
         "progress_drivers": "Treiber und Firmware für diesen Computer...",
         "hw_show": "Anzeigen, was für diesen Computer hinzugefügt wurde",
         "hw_none": "Nichts hinzuzufügen: alles, was dieser Computer braucht, ist bereits in Winlux.",
@@ -1105,6 +1111,8 @@ TRANSLATIONS = {
         "progress_account": "Configurando cuenta de usuario...",
         "progress_firstboot": "Configurando primer arranque...",
         "progress_sync": "Sincronizando y desmontando...",
+        "hw_rgb": "Iluminación RGB del teclado y los periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impresora",
         "progress_drivers": "Controladores y firmware para este equipo...",
         "hw_show": "Ver lo que se añadió para este equipo",
         "hw_none": "Nada que añadir: todo lo que necesita este equipo ya está en Winlux.",
@@ -1281,6 +1289,8 @@ TRANSLATIONS = {
         "progress_account": "Configurazione dell'account utente...",
         "progress_firstboot": "Configurazione del primo avvio...",
         "progress_sync": "Sincronizzazione e smontaggio...",
+        "hw_rgb": "Illuminazione RGB di tastiera e periferiche (OpenRGB)",
+        "hw_printer": "Driver per stampanti",
         "progress_drivers": "Driver e firmware per questo computer...",
         "hw_show": "Mostra cosa è stato aggiunto per questo computer",
         "hw_none": "Niente da aggiungere: tutto ciò che serve a questo computer è già in Winlux.",
@@ -1457,6 +1467,8 @@ TRANSLATIONS = {
         "progress_account": "Configurando conta de usuário...",
         "progress_firstboot": "Configurando primeira inicialização...",
         "progress_sync": "Sincronizando e desmontando...",
+        "hw_rgb": "Iluminação RGB do teclado e periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impressora",
         "progress_drivers": "Controladores e firmware para este computador...",
         "hw_show": "Ver o que foi adicionado para este computador",
         "hw_none": "Nada a adicionar: tudo o que este computador precisa já está no Winlux.",
@@ -2999,6 +3011,8 @@ HARDWARE_CATEGORIES = (
     ("mesa-va", "hw_vaapi"),
     ("fwupd", "hw_fwupd"),
     ("fprintd", "hw_fingerprint"),
+    ("openrgb", "hw_rgb"),
+    ("printer-driver", "hw_printer"),
 )
 
 
@@ -6016,9 +6030,23 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             try:
                 with self.target_chroot(root_path, network=True):
                     before = installed_packages(root_path)
+                    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
                     result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "auto"],
-                                            capture_output=True, text=True, timeout=1800,
-                                            env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+                                            capture_output=True, text=True, timeout=1800, env=env)
+                    # Inventaire du fil matériel (winlux-hardware-check) : les
+                    # éléments recommandés que « auto » ne couvre pas (RGB,
+                    # imprimantes…) sont installés un par un.
+                    if os.path.exists(f"{root_path}/usr/bin/winlux-hardware-check"):
+                        items = subprocess.run(["chroot", root_path, "/usr/bin/winlux-hardware-check", "--items"],
+                                               capture_output=True, text=True, timeout=120)
+                        for item in items.stdout.split():
+                            if re.fullmatch(r"[a-z0-9-]+", item):
+                                step = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "install", item],
+                                                      capture_output=True, text=True, timeout=1800, env=env)
+                                result.stdout += step.stdout
+                                result.stderr += step.stderr
+                                if step.returncode != 0:
+                                    result.returncode = step.returncode
                     added = installed_packages(root_path) - before
                 report["added"] = hardware_categories(added)
                 report["packages"] = sorted(added)

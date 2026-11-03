@@ -48,6 +48,12 @@ def fake_run(command, **kwargs):
     if command[:2] == ["chroot", fake_run.root] and command[2:3] == ["dpkg-query"]:
         packages = fake_run.after if fake_run.done else fake_run.before
         return types.SimpleNamespace(returncode=0, stdout="".join(p + "\n" for p in packages), stderr="")
+    if command[:3] == ["chroot", fake_run.root, "/usr/bin/winlux-hardware-check"]:
+        assert command[3:] == ["--items"], command
+        return types.SimpleNamespace(returncode=0, stdout="microcode\nrgb\n", stderr="")
+    if command[:4] == ["chroot", fake_run.root, "/usr/bin/winlux-drivers", "install"]:
+        fake_run.after.append({"rgb": "openrgb", "microcode": "intel-microcode"}[command[4]])
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
     if command[:3] == ["chroot", fake_run.root, "/usr/bin/winlux-drivers"]:
         # Le chroot voit l'inventaire du live et le DNS du live.
         assert (pathlib.Path(fake_run.root) / "etc/resolv.conf").read_text() == open("/etc/resolv.conf").read()
@@ -57,7 +63,7 @@ def fake_run(command, **kwargs):
     return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
-namespace = {"os": os, "sys": sys, "time": __import__("time"), "shutil": __import__("shutil"),
+namespace = {"os": os, "re": re, "sys": sys, "time": __import__("time"), "shutil": __import__("shutil"),
              "contextlib": __import__("contextlib"),
              "subprocess": types.SimpleNamespace(run=fake_run, SubprocessError=subprocess.SubprocessError),
              "tr": lambda key, **_: f"<{key}>"}
@@ -123,9 +129,19 @@ with tempfile.TemporaryDirectory() as tmp:
         assert app.hardware_lines() == ["<hw_none>"], report
         print("échec partiel : « le reste au premier démarrage » ; rien à ajouter : dit clairement")
 
+        # Inventaire du fil matériel : éléments en plus (RGB du MSI GE73).
+        (root / "usr/bin/winlux-hardware-check").write_text("#!/bin/sh\n")
+        fake_run.done = False
+        fake_run.after = ["bash", "dpkg"]
+        calls.clear()
+        report = app.install_hardware_support(str(root))
+        assert ["chroot", str(root), "/usr/bin/winlux-drivers", "install", "rgb"] in calls, calls
+        assert report["added"] == ["hw_microcode", "hw_rgb"], report
+        print("winlux-hardware-check --items : éléments en plus installés (RGB, microcode)")
+
 # ── Traductions et premier démarrage ───────────────────────────────────
 keys = ["progress_drivers", "hw_show", "hw_none", "hw_offline", "hw_partial", "hw_nvidia", "hw_modules",
-        "hw_microcode", "hw_vaapi", "hw_fwupd", "hw_fingerprint"]
+        "hw_microcode", "hw_vaapi", "hw_fwupd", "hw_fingerprint", "hw_rgb", "hw_printer"]
 for key in keys:
     count = len(re.findall(rf'^\s+"{key}":', source, re.M))
     assert count == 6, f"{key} : {count} langue(s) sur 6"
