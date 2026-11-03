@@ -13,7 +13,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "x11-utils", "x11-xserver-utils", "xfdesktop4", "locales", "libglib2.0-bin",
             "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
-            "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
+            "bluez", "blueman", "brightnessctl",
+            # Luminosité des écrans de bureau par leur câble (DDC/CI, winlux-brightness).
+            "ddcutil", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
             "xfce4-settings", "policykit-1-gnome", "pkexec", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",

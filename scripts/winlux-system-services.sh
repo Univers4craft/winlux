@@ -94,3 +94,9 @@ if "$has_bluetooth"; then
         if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
     done
 fi
+# Luminosité : sans rétroéclairage (PC de bureau), on cherche un écran réglable
+# par son câble (DDC/CI). En arrière-plan : ddcutil met quelques secondes.
+if test -x /usr/bin/winlux-brightness && test -x /usr/bin/ddcutil && \
+        test -z "$(ls -A /sys/class/backlight/ 2>/dev/null)"; then
+    /usr/bin/winlux-brightness detect-ddc >/run/winlux/brightness-ddc.log 2>&1 &
+fi

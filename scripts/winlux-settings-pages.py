@@ -40,6 +40,16 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    "Luminosité et couleur": ("Brightness & color", "Brillo y color", "Helligkeit und Farbe"),
+    "Luminosité": ("Brightness", "Brillo", "Helligkeit"),
+    "Luminosité de l’écran, en pourcentage": ("Screen brightness, as a percentage", "Brillo de la pantalla, en porcentaje",
+                                              "Bildschirmhelligkeit in Prozent"),
+    "Écran réglé par son câble (DDC/CI).": ("Monitor adjusted through its cable (DDC/CI).",
+                                            "Pantalla ajustada por su cable (DDC/CI).", "Bildschirm über das Kabel geregelt (DDC/CI)."),
+    "Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.": (
+        "This screen has no adjustable backlight: Winlux dims the picture instead.",
+        "Esta pantalla no tiene retroiluminación ajustable: Winlux oscurece la imagen.",
+        "Dieser Bildschirm hat keine regelbare Hintergrundbeleuchtung: Winlux dunkelt das Bild ab."),
     "Disposition": ("Arrangement", "Disposición", "Anordnung"),
     "Écran": ("Display", "Pantalla", "Bildschirm"),
     "Plusieurs écrans": ("Multiple displays", "Varias pantallas", "Mehrere Bildschirme"),
@@ -761,6 +771,21 @@ def ambiance_tool():
     if have("winlux-ambiance"): return ["winlux-ambiance"]
     script = Path(__file__).resolve().with_name("winlux-ambiance.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if have("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def brightness_state(tool=None):
+    tool = tool or brightness_tool()
+    if tool is None: return {}
+    result = run(tool + ["get"], timeout=10)
+    try: return json.loads((result.stdout if result else "").strip().splitlines()[-1])
+    except (IndexError, ValueError): return {}
 
 
 def clipboard_tool():
@@ -2429,6 +2454,7 @@ class ExtraPages:
             self.hint(_t("La nouvelle échelle s’applique complètement à la prochaine ouverture de session."))
 
     def sections_display(self):
+        self.section_brightness()
         self.sections_screens()
         state = ambiance_status()
         # Pilote sans rampe gamma (certaines VM) : section masquée.
@@ -2548,6 +2574,37 @@ class ExtraPages:
                    lambda value: self.execute("overlay-pos-" + value))
         self.switch(box, _t("Afficher au lancement d’un jeu"), status.get("overlay_autoshow") == "1",
                     lambda on: self.execute("overlay-auto-on" if on else "overlay-auto-off"))
+
+    # ── Écran : luminosité (winlux-brightness), cachée sans contrôle réel ──
+
+    def section_brightness(self):
+        tool = brightness_tool()
+        state = brightness_state(tool)
+        if state.get("method") in (None, "none") or state.get("percent") is None: return
+        self.section(_t("Luminosité et couleur"))
+        box = self.card()
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 5, 100, 1)
+        scale.set_name("winlux-brightness")
+        scale.set_value(int(state["percent"]))
+        scale.set_size_request(240, -1)
+        scale.set_draw_value(True)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
+        pending = {}
+
+        def moved(widget):
+            # Valeur envoyée quand le curseur s’arrête, pas à chaque pixel.
+            if pending.get("id"): GLib.source_remove(pending["id"])
+            def send():
+                pending["id"] = None
+                self.tool(tool + ["set", str(int(widget.get_value()))], refresh=False)
+                return False
+            pending["id"] = GLib.timeout_add(150, send)
+        scale.connect("value-changed", moved)
+        self.brightness_scale = scale
+        hint = {"backlight": None, "ddc": _t("Écran réglé par son câble (DDC/CI)."),
+                "soft": _t("Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.")}.get(state["method"])
+        self.row(box, _t("Luminosité"), scale, hint)
 
     # ── Réseau : renvoi vers la page Wi-Fi, seulement avec une carte Wi-Fi ──
 

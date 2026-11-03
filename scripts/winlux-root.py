@@ -11,6 +11,7 @@ tourne en root et n'exécute que des actions connues :
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
   winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
   winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
+  winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -229,6 +230,11 @@ def exec_level(args):
         return None
     if tool == "winlux-wifi":
         return wifi_level(rest)
+    if tool == "winlux-brightness":
+        # Luminosité : le compte n'écrit pas dans /sys/class/backlight ni sur l'i2c.
+        if rest == ["detect-ddc"] or (len(rest) == 2 and rest[0] == "set" and re.fullmatch(r"\d{1,3}", rest[1])):
+            return "user"
+        return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]
