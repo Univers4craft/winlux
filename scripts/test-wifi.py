@@ -355,7 +355,7 @@ def test_wiring():
        and 'open_settings("35")' in tools and 'open_settings("22")' in tools,
        "Outils Winlux : Wi-Fi et Bluetooth renvoient vers leurs pages dédiées")
     stage = (HERE / "stage-desktop-components.sh").read_text()
-    ok("winlux-root winlux-wifi;" in stage and "50-winlux-network.rules" in stage, "image : winlux-wifi et règle polkit livrés")
+    ok("winlux-root winlux-wifi" in stage and "50-winlux-network.rules" in stage, "image : winlux-wifi et règle polkit livrés")
 
 
 def pump(Gtk, seconds=0.3):
