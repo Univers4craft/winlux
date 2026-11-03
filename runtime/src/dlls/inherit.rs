@@ -253,6 +253,10 @@ pub(crate) fn prepare(list: Option<&[usize]>) -> Passed {
             if let Some(c) = inheritable_copy(fd, &mut fds) {
                 parts.push(format!("e,{h:x},{c},{}", u8::from(manual)));
             }
+        } else if let Some((fd, size)) = crate::dlls::mmap::export(h) {
+            if let Some(c) = inheritable_copy(fd, &mut fds) {
+                parts.push(format!("m,{h:x},{c},{size}"));
+            }
         } else if let Some(pid) = crate::dlls::kernel32::inheritable_process_pid(h) {
             parts.push(format!("p,{h:x},{pid}"));
         } else {
@@ -304,6 +308,11 @@ pub(crate) fn adopt() {
                     h,
                     crate::dlls::kernel32::EventObject::adopt(flag(3), w),
                 );
+            }),
+            "m" => fd(2).and_then(|fd| {
+                let size = f.get(3)?.parse::<u64>().ok()?;
+                crate::dlls::mmap::adopt(h, fd, size);
+                Some(())
             }),
             "p" => f.get(2).and_then(|p| p.parse::<i32>().ok()).map(|pid| {
                 crate::dlls::kernel32::insert_sync_at(
