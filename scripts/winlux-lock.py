@@ -894,10 +894,11 @@ def run_lock(start="clock"):
         def on_key(self, _widget, event):
             self.last_typing = time.monotonic()
             if self.view == "clock":
+                # La première touche ne fait que réveiller l'écran : écran éteint
+                # ou horloge seule, on ne voit pas le champ. Elle partait dans le
+                # mot de passe et le testeur y a tapé « par » sans le voir (VM,
+                # 3 novembre).
                 self.show_signin()
-                if self.entry is not None and event.string and event.string.isprintable():
-                    self.entry.set_text(event.string)
-                    self.entry.set_position(-1)
                 return True
             if event.keyval == Gdk.KEY_Escape:
                 if self.entry is not None and self.entry.get_text():
