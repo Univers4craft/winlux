@@ -589,6 +589,16 @@ perform() {
         # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
         share-*) shift; winlux-share "${action#share-}" "$@" ;;
         transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
+        # Téléphone connecté (winlux-phone) : ports du protocole KDE Connect
+        # ouverts sur les réseaux privés et de domaine seulement, jamais public.
+        phone-firewall-on|phone-firewall-off)
+            fw="$config/firewall.conf" tmp="$config/firewall.conf.$$"
+            if test -r "$fw"; then grep -v '^rule=944[78]	' "$fw" > "$tmp" || true; else : > "$tmp"; fi
+            if test "$action" = phone-firewall-on; then
+                printf 'rule=9447\tTelephone connecte Winlux (TCP)\tin\tallow\ttcp\t1716,1739-1764\t\tprivate,domain\t1\n' >> "$tmp"
+                printf 'rule=9448\tTelephone connecte Winlux (UDP)\tin\tallow\tudp\t1716\t\tprivate,domain\t1\n' >> "$tmp"
+            fi
+            mv "$tmp" "$fw"; chmod 644 "$fw" ;;
         # Comptes locaux (Paramètres › Comptes) ; mot de passe sur l'entrée standard.
         account-add|account-password|account-role|account-remove) shift; winlux-accounts "${action#account-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;

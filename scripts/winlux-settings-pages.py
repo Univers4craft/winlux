@@ -40,6 +40,22 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Appareils mobiles (Téléphone connecté)
+    'Téléphone connecté': ('Connected phone', 'Teléfono conectado', 'Verbundenes Telefon'),
+    'Notifications, SMS et fichiers de votre téléphone Android sur ce PC, avec l’application KDE Connect.': ('Your Android phone’s notifications, texts and files on this PC, with the KDE Connect app.', 'Notificaciones, SMS y archivos de su teléfono Android en este PC, con la aplicación KDE Connect.', 'Benachrichtigungen, SMS und Dateien Ihres Android-Telefons auf diesem PC, mit der App KDE Connect.'),
+    'Autoriser la connexion de mes téléphones': ('Allow my phones to connect', 'Permitir que mis teléfonos se conecten', 'Verbindung meiner Telefone zulassen'),
+    'Ports ouverts sur les réseaux privés seulement.': ('Ports opened on private networks only.', 'Puertos abiertos solo en redes privadas.', 'Ports nur in privaten Netzwerken geöffnet.'),
+    'Ouvrir Téléphone connecté': ('Open Connected phone', 'Abrir Teléfono conectado', 'Verbundenes Telefon öffnen'),
+    'Hors de portée': ('Not reachable', 'Fuera de alcance', 'Nicht erreichbar'),
+    'Batterie {level} %': ('Battery {level}%', 'Batería {level} %', 'Akku {level} %'),
+    'Notifications du téléphone': ('Phone notifications', 'Notificaciones del teléfono', 'Telefonbenachrichtigungen'),
+    'Affichées sur ce PC, avec réponse rapide.': ('Shown on this PC, with quick reply.', 'Se muestran en este PC, con respuesta rápida.', 'Auf diesem PC angezeigt, mit Schnellantwort.'),
+    'Messages (SMS) et contacts': ('Text messages (SMS) and contacts', 'Mensajes (SMS) y contactos', 'Nachrichten (SMS) und Kontakte'),
+    'Lire et envoyer des SMS depuis ce PC.': ('Read and send texts from this PC.', 'Leer y enviar SMS desde este PC.', 'SMS auf diesem PC lesen und senden.'),
+    'Recevoir des fichiers': ('Receive files', 'Recibir archivos', 'Dateien empfangen'),
+    'Enregistrés dans Téléchargements.': ('Saved to Downloads.', 'Se guardan en Descargas.', 'In Downloads gespeichert.'),
+    'Faire sonner': ('Ring', 'Hacer sonar', 'Klingeln lassen'),
+    'Dissocier': ('Unpair', 'Desvincular', 'Entkoppeln'),
     "Luminosité et couleur": ("Brightness & color", "Brillo y color", "Helligkeit und Farbe"),
     "Luminosité": ("Brightness", "Brillo", "Helligkeit"),
     "Luminosité de l’écran, en pourcentage": ("Screen brightness, as a percentage", "Brillo de la pantalla, en porcentaje",
@@ -639,6 +655,9 @@ PAGE_HARDWARE = 34
 PAGE_ACCOUNTS = 33
 PAGE_WIFI = 35
 PAGE_CERTS = 36
+PAGE_PHONE = 37
+PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
+PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -1167,6 +1186,9 @@ def page_available(page, status=None):
     if page == PAGE_CERTS:
         module = certificates_page()
         return module is not None and module.available()
+    if page == PAGE_PHONE:
+        # Rien d’associé : pas de page (l’application Téléphone connecté associe).
+        return bool(phone_devices())
     return True
 
 
@@ -1337,6 +1359,16 @@ def store_catalogs():
     except (OSError, subprocess.SubprocessError):
         return []
     return [parts for parts in (line.split("|") for line in out.splitlines()) if len(parts) == 6]
+def phone_devices():
+    """Téléphones associés (winlux-phone, ~/.config/winlux/phone/devices.json)."""
+    try:
+        devices = json.loads((PHONE_CONFIG / "devices.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {key: value for key, value in devices.items() if isinstance(value, dict) and value.get("cert")} \
+        if isinstance(devices, dict) else {}
+
+
 
 
 def default_apps_panel(window):
@@ -1370,7 +1402,7 @@ class ExtraPages:
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
-                   PAGE_CERTS: "page_certificates"}
+                   PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1524,6 +1556,42 @@ class ExtraPages:
                            ("Micro par défaut", "microphone"), ("Périphériques d’entrée", "input_devices")):
             value = status.get(key)
             if value: self.row(box, _t(title), Gtk.Label(label=value, xalign=1, selectable=True))
+
+    # ── Appareils mobiles (Téléphone connecté) ──
+
+    def page_phone(self):
+        tool = shutil.which("winlux-phone") or str(Path(__file__).resolve().with_name("winlux-phone.py"))
+        try: live = json.loads((PHONE_RUNTIME / "status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError): live = {}
+        state = {d.get("id"): d for d in live.get("devices", [])} if live.get("running") else {}
+        enabled = True
+        try: enabled = json.loads((PHONE_CONFIG / "settings.json").read_text(encoding="utf-8")).get("enabled", True) is not False
+        except (OSError, ValueError, AttributeError): pass
+        self.section(_t("Téléphone connecté"), _t("Notifications, SMS et fichiers de votre téléphone Android sur ce PC, avec l’application KDE Connect."))
+        box = self.card()
+        self.switch(box, _t("Autoriser la connexion de mes téléphones"), enabled,
+                    lambda on: self.tool([tool, "enable" if on else "disable"]),
+                    _t("Ports ouverts sur les réseaux privés seulement."))
+        self.actions(box, [(_t("Ouvrir Téléphone connecté"), lambda: self.spawn([tool, "gui"]), enabled)])
+        for device_id, saved in phone_devices().items():
+            live_device = state.get(device_id, {})
+            name = live_device.get("name") or saved.get("name") or device_id
+            status = _t("Connecté") if live_device.get("connected") else _t("Hors de portée")
+            battery = live_device.get("battery")
+            if battery: status += " · " + _t("Batterie {level} %").format(level=battery.get("level"))
+            self.section(name, status)
+            box = self.card()
+            prefs = saved.get("prefs", {})
+            for key, title, subtitle in (
+                    ("notifications", "Notifications du téléphone", "Affichées sur ce PC, avec réponse rapide."),
+                    ("sms", "Messages (SMS) et contacts", "Lire et envoyer des SMS depuis ce PC."),
+                    ("files", "Recevoir des fichiers", "Enregistrés dans Téléchargements.")):
+                self.switch(box, _t(title), prefs.get(key, True) is not False,
+                            lambda on, k=key, d=device_id: self.tool([tool, "set", d, k, "on" if on else "off"]),
+                            _t(subtitle))
+            self.actions(box, [(_t("Faire sonner"), lambda d=device_id: self.tool([tool, "ring", d], refresh=False),
+                                bool(live_device.get("connected"))),
+                               (_t("Dissocier"), lambda d=device_id: self.tool([tool, "unpair", d]))])
 
     # ── Personnalisation du bureau ──
 

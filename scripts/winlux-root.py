@@ -98,6 +98,7 @@ CONTROL_POLICY = (
     (r"share-(status|list|state|ensure)", "user"),
     (r"share-[a-z-]+", "admin"),
     (r"transfer-[a-z-]+", "user"),
+    (r"phone-firewall-(on|off)", "user"),
     (r"report-(offer|redact|mode)-[a-z]+", "user"),
     (r"account-(add|password|role|remove)", "admin"),
 )

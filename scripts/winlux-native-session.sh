@@ -172,6 +172,8 @@ if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlu
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
 if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
+# Téléphone connecté : seulement si un téléphone est associé à ce compte.
+if test -x /usr/bin/winlux-phone; then /usr/bin/winlux-phone serve --if-paired >/run/winlux/phone.log 2>&1 & fi
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 # Réglages restaurés sans le rapport d'état complet de winlux-control
 # (l'init le rafraîchit toutes les 3 s) : 18 s de gagnées en VM émulée.

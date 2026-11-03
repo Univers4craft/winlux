@@ -787,7 +787,29 @@ fn prompt_file() -> PathBuf {
     admin::path(RUN_DIR).join("prompt.txt")
 }
 
+/// Port déjà ouvert à tous les programmes par une règle entrante active
+/// (Téléphone connecté, partage de fichiers…) : rien à demander.
+fn port_opened(cfg: &Config, l: &Listen) -> bool {
+    cfg.rules.iter().any(|r| {
+        r.enabled
+            && r.dir == Dir::In
+            && r.verdict == Verdict::Allow
+            && r.program.is_empty()
+            && match r.proto {
+                Proto::Tcp => !l.udp,
+                Proto::Udp => l.udp,
+                Proto::Any => true,
+                Proto::Icmp => false,
+            }
+            && parse_ports(&r.ports).is_some_and(|ports| {
+                !ports.is_empty() && ports.iter().any(|&(a, b)| (a..=b).contains(&l.port))
+            })
+    })
+}
+
 /// Programmes à signaler : en écoute, sans règle entrante, jamais signalés.
+/// Un programme dont tous les ports sont déjà ouverts par une règle
+/// système (Téléphone connecté) n'est pas signalé non plus.
 pub fn new_listeners(
     cfg: &Config,
     apps: &BTreeMap<PathBuf, BTreeSet<Listen>>,
@@ -801,6 +823,7 @@ pub fn new_listeners(
                 .iter()
                 .any(|r| r.dir == Dir::In && r.program_path().as_deref() == Some(p.as_path()))
         })
+        .filter(|p| !apps[*p].iter().all(|l| port_opened(cfg, l)))
         .cloned()
         .collect()
 }
@@ -1200,6 +1223,44 @@ mod tests {
                 port: 22,
             }]),
         );
+        // Téléphone connecté : python3 écoute sur des ports déjà ouverts par
+        // la règle « Téléphone connecté » (réseaux privés), pas d'alerte.
+        let mut phone_cfg = Config::default();
+        phone_cfg.rules.push(Rule::parse("9447\tTelephone connecte Winlux (TCP)\tin\tallow\ttcp\t1716,1739-1764\t\tprivate,domain\t1").unwrap());
+        phone_cfg.rules.push(
+            Rule::parse(
+                "9448\tTelephone connecte Winlux (UDP)\tin\tallow\tudp\t1716\t\tprivate,domain\t1",
+            )
+            .unwrap(),
+        );
+        let python = PathBuf::from("/usr/bin/python3.13");
+        let mut phone_apps = apps.clone();
+        phone_apps.insert(
+            python.clone(),
+            BTreeSet::from([
+                Listen {
+                    udp: false,
+                    port: 1716,
+                },
+                Listen {
+                    udp: true,
+                    port: 1716,
+                },
+                Listen {
+                    udp: false,
+                    port: 1740,
+                },
+            ]),
+        );
+        assert_eq!(
+            new_listeners(&phone_cfg, &phone_apps, &BTreeSet::new()),
+            vec![prog.clone()]
+        );
+        phone_apps.get_mut(&python).unwrap().insert(Listen {
+            udp: false,
+            port: 8080,
+        });
+        assert!(new_listeners(&phone_cfg, &phone_apps, &BTreeSet::new()).contains(&python));
         let fresh = new_listeners(&cfg, &apps, &BTreeSet::new());
         assert_eq!(
             fresh,

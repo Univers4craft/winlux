@@ -252,6 +252,8 @@ wait_desktop() {
     # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
     if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
     if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
+    # Téléphone connecté : seulement si un téléphone est associé à ce compte.
+    if test -x /usr/bin/winlux-phone; then start phone.log /usr/bin/winlux-phone serve --if-paired; fi
     # Programmes « au démarrage » : lancés une fois le bureau affiché.
     if test -x /usr/bin/winlux-session-startup; then (/usr/bin/winlux-session-startup </dev/null >"$logs/startup-apps.log" 2>&1 &); fi
     # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
