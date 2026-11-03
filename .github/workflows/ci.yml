@@ -112,7 +112,9 @@ jobs:
         run: cargo test -p winlux
 
       - name: Vérifier les navigateurs hors ligne
-        run: sh scripts/test-browsers.sh
+        run: |
+          sh scripts/test-browsers.sh
+          python3 -B scripts/test-browser-fetch.py
 
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
