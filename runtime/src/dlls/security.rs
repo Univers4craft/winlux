@@ -33,6 +33,7 @@ const SE_GROUP_ENABLED: u32 = 0x4;
 const SE_GROUP_OWNER: u32 = 0x8;
 const SE_GROUP_USE_FOR_DENY_ONLY: u32 = 0x10;
 const SE_GROUP_INTEGRITY: u32 = 0x20;
+const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 const GROUP_ON: u32 = SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED;
 
 // ---------- SID ----------
@@ -171,6 +172,11 @@ fn token_groups() -> Vec<(String, u32)> {
     }
     // SAFETY: getgid est un appel système sans argument.
     g.push((gid_sid(unsafe { libc::getegid() }), GROUP_ON));
+    // SID de la session d'ouverture (S-1-5-5-0-n) : le bac à sable de
+    // Chromium le cherche pour restreindre les jetons de ses enfants.
+    // SAFETY: getsid(0) est un appel système sans pointeur.
+    let session = unsafe { libc::getsid(0) }.max(0) as u32;
+    g.push((format!("S-1-5-5-0-{session}"), GROUP_ON | SE_GROUP_LOGON_ID));
     g
 }
 
@@ -223,7 +229,26 @@ fn token_info(class: u32) -> Option<(Vec<u8>, Vec<(usize, usize)>)> {
             }
             Some((b, fix))
         }
-        3 => dword(0),  // TokenPrivileges : aucun privilège listé
+        3 => dword(0), // TokenPrivileges : aucun privilège listé
+        6 => {
+            // TokenDefaultDacl : pointeur vers une ACL vide (révision 2).
+            let mut b = vec![0u8; 8];
+            b.extend_from_slice(&[2, 0, 8, 0, 0, 0, 0, 0]);
+            Some((b, vec![(0, 8)]))
+        }
+        9 => dword(2), // TokenImpersonationLevel : SecurityImpersonation
+        10 => {
+            // TokenStatistics (56 octets) : jeton primaire, aucun compteur.
+            let mut b = vec![0u8; 56];
+            b[32..36].copy_from_slice(&1u32.to_le_bytes());
+            Some((b, vec![]))
+        }
+        11 => dword(0).map(|(mut b, f)| {
+            b.extend_from_slice(&[0; 4]); // TokenRestrictedSids : aucun
+            (b, f)
+        }),
+        29 => dword(0), // TokenIsAppContainer
+        42 => dword(0), // TokenIsRestricted
         8 => dword(1),  // TokenType : primaire
         12 => dword(1), // TokenSessionId
         18 => dword(if elevated() {
@@ -1259,6 +1284,210 @@ pub unsafe extern "win64" fn SetSecurityInfo(
     0
 }
 
+// ---------- Jetons du bac à sable de Chromium ----------
+//
+// Winlux n'a qu'un jeton par compte : les copies et les jetons restreints
+// que le bac à sable fabrique avant de lancer un moteur de rendu sont ce
+// même jeton (TOKEN_HANDLE), que CloseHandle accepte toujours. La
+// séparation réelle des processus vient des comptes Linux, pas du jeton.
+
+unsafe fn give_token(out: *mut usize) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    *out = TOKEN_HANDLE;
+    crate::process::set_last_error(0);
+    1
+}
+
+pub unsafe extern "win64" fn DuplicateTokenEx(
+    _token: usize,
+    _access: u32,
+    _sa: usize,
+    _level: u32,
+    _kind: u32,
+    out: *mut usize,
+) -> i32 {
+    give_token(out)
+}
+
+pub unsafe extern "win64" fn DuplicateToken(_token: usize, _level: u32, out: *mut usize) -> i32 {
+    give_token(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn CreateRestrictedToken(
+    _token: usize,
+    _flags: u32,
+    _n_disable: u32,
+    _disable: usize,
+    _n_delete: u32,
+    _delete: usize,
+    _n_restrict: u32,
+    _restrict: usize,
+    out: *mut usize,
+) -> i32 {
+    give_token(out)
+}
+
+/// SetTokenInformation (niveau d'intégrité, DACL par défaut…) : accepté.
+pub unsafe extern "win64" fn SetTokenInformation(
+    _token: usize,
+    _class: u32,
+    _info: usize,
+    _len: u32,
+) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn TokenOk(_token: usize) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn ImpersonateSelf(_level: u32) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn SetThreadToken(_thread: usize, _token: usize) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn IsTokenRestricted(_token: usize) -> i32 {
+    crate::process::set_last_error(0);
+    0
+}
+
+/// SID bien connus de `CreateWellKnownSid` (WELL_KNOWN_SID_TYPE).
+fn well_known_sid(kind: u32) -> Option<&'static str> {
+    Some(match kind {
+        0 => "S-1-0-0",
+        1 => "S-1-1-0",
+        2 => "S-1-2-0",
+        3 => "S-1-3-0",
+        4 => "S-1-3-1",
+        7 => "S-1-5",
+        9 => "S-1-5-2",
+        10 => "S-1-5-3",
+        11 => "S-1-5-4",
+        12 => "S-1-5-6",
+        13 => "S-1-5-7",
+        16 => "S-1-5-10",
+        17 => "S-1-5-11",
+        18 => "S-1-5-12",
+        19 => "S-1-5-13",
+        22 => "S-1-5-18",
+        23 => "S-1-5-19",
+        24 => "S-1-5-20",
+        25 => "S-1-5-32",
+        26 => "S-1-5-32-544",
+        27 => "S-1-5-32-545",
+        28 => "S-1-5-32-546",
+        65 => "S-1-16-0",
+        66 => "S-1-16-4096",
+        67 => "S-1-16-8192",
+        68 => "S-1-16-12288",
+        69 => "S-1-16-16384",
+        _ => return None,
+    })
+}
+
+pub unsafe extern "win64" fn CreateWellKnownSid(
+    kind: u32,
+    _domain: *const u8,
+    sid: *mut u8,
+    size: *mut u32,
+) -> i32 {
+    let Some(bytes) = well_known_sid(kind).and_then(sid_bytes) else {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if size.is_null() {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let room = *size as usize;
+    *size = bytes.len() as u32;
+    if sid.is_null() || room < bytes.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), sid, bytes.len());
+    1
+}
+
+/// GetKernelObjectSecurity : descripteur de l'objet (au nom du compte).
+pub unsafe extern "win64" fn GetKernelObjectSecurity(
+    _handle: usize,
+    info: u32,
+    buf: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    let d = match file_descriptor(std::path::Path::new("/proc/self"), info & 7) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::process::set_last_error(crate::dlls::kernel32::io_error_code(&e));
+            return 0;
+        }
+    };
+    if !needed.is_null() {
+        *needed = d.len() as u32;
+    }
+    if buf.is_null() || (len as usize) < d.len() {
+        crate::process::set_last_error(ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(d.as_ptr(), buf, d.len());
+    1
+}
+
+pub unsafe extern "win64" fn SetKernelObjectSecurity(_h: usize, _info: u32, _sd: usize) -> i32 {
+    1
+}
+
+/// SetNamedSecurityInfoW/A : comme SetSecurityInfo, sans effet sur Linux.
+pub unsafe extern "win64" fn SetNamedSecurityInfo(
+    _name: usize,
+    _kind: u32,
+    _info: u32,
+    _owner: usize,
+    _group: usize,
+    _dacl: usize,
+    _sacl: usize,
+) -> u32 {
+    0
+}
+
+/// CreateProcessAsUserW : même compte Linux, donc CreateProcessW.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn CreateProcessAsUserW(
+    _token: usize,
+    application: *const u16,
+    command_line: *mut u16,
+    process_attributes: usize,
+    thread_attributes: usize,
+    inherit: i32,
+    flags: u32,
+    environment: *const c_void,
+    current_directory: *const u16,
+    startup: *const crate::dlls::kernel32::StartupInfoA,
+    info: *mut crate::dlls::kernel32::ProcessInformation,
+) -> i32 {
+    crate::dlls::kernel32::create_process_w(
+        application,
+        command_line,
+        process_attributes,
+        thread_attributes,
+        inherit,
+        flags,
+        environment,
+        current_directory,
+        startup,
+        info,
+    )
+}
+
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "OpenProcessToken" => fn OpenProcessToken,
@@ -1304,6 +1533,20 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "IsValidSecurityDescriptor" => fn IsValidSecurityDescriptor,
         "GetAce" => fn GetAce,
         "GetAclInformation" => fn GetAclInformation,
+        "DuplicateTokenEx" => fn DuplicateTokenEx,
+        "DuplicateToken" => fn DuplicateToken,
+        "CreateRestrictedToken" => fn CreateRestrictedToken,
+        "SetTokenInformation" => fn SetTokenInformation,
+        "ImpersonateLoggedOnUser" => fn TokenOk,
+        "ImpersonateSelf" => fn ImpersonateSelf,
+        "SetThreadToken" => fn SetThreadToken,
+        "IsTokenRestricted" => fn IsTokenRestricted,
+        "CreateWellKnownSid" => fn CreateWellKnownSid,
+        "GetKernelObjectSecurity" => fn GetKernelObjectSecurity,
+        "SetKernelObjectSecurity" => fn SetKernelObjectSecurity,
+        "SetNamedSecurityInfoW" => fn SetNamedSecurityInfo,
+        "SetNamedSecurityInfoA" => fn SetNamedSecurityInfo,
+        "CreateProcessAsUserW" => fn CreateProcessAsUserW,
     }
 }
 

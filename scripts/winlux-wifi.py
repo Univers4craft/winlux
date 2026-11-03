@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 SYS_ROOT = Path(os.environ.get("WINLUX_SYS_ROOT", "/"))
@@ -59,6 +60,13 @@ PHASE2 = ("mschapv2", "pap", "gtc")
 # Certificat d'autorité « système » : celui de ca-certificates, embarqué dans l'image.
 CONNECT_WAIT = 45
 WPS_WAIT = 120
+# Réseau disparu de la liste pendant la saisie de la clé (balayage expiré, box
+# au bord de la portée) : nouveaux balayages avant d'abandonner, dans un temps
+# borné qui reste sous l'attente de la page (200 s).
+FIND_SCANS = 4
+RETRY_PAUSE = float(os.environ.get("WINLUX_WIFI_RETRY_PAUSE", "3"))
+ACTIVATE_TRIES = 3
+LOST_BUDGET = float(os.environ.get("WINLUX_WIFI_LOST_BUDGET", "100"))
 
 
 # ── Langue de l'interface : fr, en, es ou de ────────────────────────────────
@@ -133,7 +141,6 @@ _TR = {
     "Oublier « {name} » ?": ("Forget “{name}”?", "¿Olvidar «{name}»?", "„{name}“ entfernen?"),
     "La clé de sécurité sera effacée de cet ordinateur.": ("The security key will be erased from this computer.", "La clave de seguridad se borrará de este equipo.", "Der Sicherheitsschlüssel wird von diesem Computer gelöscht."),
     "Annuler": ("Cancel", "Cancelar", "Abbrechen"),
-    "Suivant": ("Next", "Siguiente", "Weiter"),
     "Connexion à « {name} »": ("Connect to “{name}”", "Conectarse a «{name}»", "Verbindung mit „{name}“"),
     "Entrez la clé de sécurité du réseau": ("Enter the network security key", "Escriba la clave de seguridad de red", "Geben Sie den Netzwerksicherheitsschlüssel ein"),
     "Clé de sécurité": ("Security key", "Clave de seguridad", "Sicherheitsschlüssel"),
@@ -155,7 +162,11 @@ _TR = {
     "WEP (ancien, peu sûr)": ("WEP (old, insecure)", "WEP (antiguo, poco seguro)", "WEP (veraltet, unsicher)"),
     "Aucune (réseau ouvert)": ("None (open network)", "Ninguna (red abierta)", "Keine (offenes Netzwerk)"),
     "La connexion Wi-Fi a échoué": ("The Wi-Fi connection failed", "La conexión Wi-Fi ha fallado", "Die WLAN-Verbindung ist fehlgeschlagen"),
-    "La clé de sécurité est incorrecte. Vérifiez-la (majuscules comprises) et réessayez.": ("The security key is incorrect. Check it (including capital letters) and try again.", "La clave de seguridad no es correcta. Revísela (incluidas las mayúsculas) e inténtelo de nuevo.", "Der Sicherheitsschlüssel ist falsch. Prüfen Sie ihn (auch Groß- und Kleinschreibung) und versuchen Sie es erneut."),
+    "Mot de passe refusé : la box n’accepte pas cette clé de sécurité. Vérifiez-la (majuscules comprises) et réessayez.": ("Password rejected: the router does not accept this security key. Check it (including capital letters) and try again.", "Contraseña rechazada: el router no acepta esta clave de seguridad. Revísela (incluidas las mayúsculas) y vuelva a intentarlo.", "Kennwort abgelehnt: Der Router akzeptiert diesen Sicherheitsschlüssel nicht. Prüfen Sie ihn (einschließlich Großbuchstaben) und versuchen Sie es erneut."),
+    "Réseau « {name} » momentanément introuvable : il a disparu de la liste pendant la connexion. Votre mot de passe est gardé : rapprochez-vous de la box, puis cliquez sur « Se connecter ».": ("The network “{name}” cannot be found for the moment: it left the list during the connection. Your password is kept: move closer to the router, then click “Connect”.", "La red «{name}» no se encuentra por el momento: desapareció de la lista durante la conexión. Su contraseña se conserva: acérquese al router y haga clic en «Conectar».", "Das Netzwerk „{name}“ ist im Moment nicht auffindbar: Es ist während der Verbindung aus der Liste verschwunden. Ihr Kennwort bleibt erhalten: Gehen Sie näher an den Router und klicken Sie auf „Verbinden“."),
+    "Winlux s’y connectera aussi tout seul, avec ce mot de passe, dès que le réseau réapparaîtra.": ("Winlux will also connect to it on its own, with this password, as soon as the network comes back.", "Winlux también se conectará solo, con esta contraseña, en cuanto la red vuelva a aparecer.", "Winlux verbindet sich außerdem selbst mit diesem Kennwort, sobald das Netzwerk wieder erscheint."),
+    "Connecté à « {name} » avec le mot de passe que vous aviez tapé.": ("Connected to “{name}” with the password you typed.", "Conectado a «{name}» con la contraseña que escribió.", "Mit „{name}“ verbunden, mit dem eingegebenen Kennwort."),
+    "Recherche de « {name} »…": ("Looking for “{name}”…", "Buscando «{name}»…", "„{name}“ wird gesucht…"),
     "Une clé WPA compte de 8 à 63 caractères (ou 64 chiffres hexadécimaux).": ("A WPA key has 8 to 63 characters (or 64 hexadecimal digits).", "Una clave WPA tiene de 8 a 63 caracteres (o 64 dígitos hexadecimales).", "Ein WPA-Schlüssel hat 8 bis 63 Zeichen (oder 64 Hexadezimalziffern)."),
     "Une clé WEP compte 5 ou 13 caractères (ou 10 ou 26 chiffres hexadécimaux).": ("A WEP key has 5 or 13 characters (or 10 or 26 hexadecimal digits).", "Una clave WEP tiene 5 o 13 caracteres (o 10 o 26 dígitos hexadecimales).", "Ein WEP-Schlüssel hat 5 oder 13 Zeichen (oder 10 oder 26 Hexadezimalziffern)."),
     "Entrez votre nom d’utilisateur et votre mot de passe.": ("Enter your user name and password.", "Escriba su nombre de usuario y su contraseña.", "Geben Sie Benutzername und Kennwort ein."),
@@ -235,7 +246,8 @@ def classify(message):
         (("secrets were required", "no secrets", "no-secrets", "supplicant-disconnect", "wrong password",
           "802.1x supplicant", "4-way handshake", "invalid psk",
           "property is invalid: 802-11-wireless-security.psk"), "bad-key"),
-        (("no network with ssid", "could not be found", "not found", "ssid-not-found", "no network"), "out-of-range"),
+        (("no network with ssid", "could not be found", "not found", "ssid-not-found", "no network",
+          "access point"), "out-of-range"),
         (("ip configuration", "ip-config", "dhcp"), "no-ip"),
         (("radio", "wireless is disabled", "wi-fi is disabled", "rfkill"), "wifi-off"),
         (("no wi-fi device", "no suitable device", "no wifi device", "device not found"), "no-device"),
@@ -247,8 +259,8 @@ def classify(message):
     return "failed"
 
 
-def fail(code, detail=""):
-    print(json.dumps({"ok": False, "error": code, "detail": (detail or "").strip()[-400:]}))
+def fail(code, detail="", **values):
+    print(json.dumps({"ok": False, "error": code, "detail": (detail or "").strip()[-400:], **values}))
     return 1
 
 
@@ -355,6 +367,34 @@ def profiles():
         found.append({"uuid": fields[0], "ssid": ssid or fields[4], "name": fields[4],
                       "autoconnect": fields[2] == "yes", "active": fields[3] == "yes"})
     return found
+
+
+def visible(ssid, rescan=False):
+    return any(network["ssid"] == ssid for network in scan(rescan))
+
+
+def find_again(ssid, deadline):
+    """Le réseau n'est plus dans la liste : on rebalaye quelques fois avant de
+    dire qu'il est introuvable. Vrai dès qu'il réapparaît."""
+    if visible(ssid):
+        return True
+    for attempt in range(FIND_SCANS):
+        if attempt:
+            if time.monotonic() + RETRY_PAUSE > deadline:
+                break
+            time.sleep(RETRY_PAUSE)
+        if visible(ssid, True):
+            return True
+    return False
+
+
+def ever_connected(ident):
+    """NetworkManager date chaque connexion réussie d'un profil (0 : jamais)."""
+    result = nm(["-g", "connection.timestamp", "connection", "show", "uuid", ident], timeout=5)
+    try:
+        return int(result.stdout.strip() or 0) > 0
+    except ValueError:
+        return False
 
 
 def profiles_for(ssid):
@@ -493,6 +533,25 @@ def activate(ident, ssid):
     return classify(message), message
 
 
+def activate_patiently(ident, ssid, hidden=False):
+    """Active le profil sans jamais conclure trop vite : un réseau absent de la
+    liste de NetworkManager échoue tout de suite (« no compatible access
+    point »), il est alors rebalayé puis réessayé ; une clé « refusée » alors
+    que la box n'est plus visible compte comme une box perdue, pas comme un
+    mauvais mot de passe (poignée de main coupée)."""
+    deadline = time.monotonic() + LOST_BUDGET
+    error, detail = None, ""
+    for attempt in range(ACTIVATE_TRIES):
+        error, detail = activate(ident, ssid)
+        if error == "bad-key" and not hidden and not visible(ssid, True):
+            error = "out-of-range"
+        if error != "out-of-range" or hidden or time.monotonic() > deadline:
+            break
+        if attempt + 1 < ACTIVATE_TRIES:
+            find_again(ssid, deadline)
+    return error, detail
+
+
 def remove_profile(ident, path=None):
     nm(["connection", "delete", "uuid", ident], timeout=10)
     if path is not None:
@@ -584,7 +643,19 @@ def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True,
         if reload.returncode:
             path.unlink(missing_ok=True)
             return fail(classify(reload.stderr), reload.stderr)
-    error, detail = activate(ident, ssid)
+    error, detail = activate_patiently(ident, ssid, hidden)
+    if error == "out-of-range" and not hidden:
+        # Le réseau a disparu pendant la saisie ou la connexion : ce n'est pas
+        # un échec de la clé. La page garde ce qui a été tapé ; le profil reste
+        # (sauf si un profil qui a déjà marché existe) pour que NetworkManager
+        # s'y connecte seul quand le réseau revient.
+        working = [old for old in previous if ever_connected(old["uuid"])]
+        if autoconnect and not working:
+            for old in previous:
+                remove_profile(old["uuid"])
+            return fail("lost", detail, waiting=True)
+        remove_profile(ident, path)
+        return fail("lost", detail, waiting=False)
     if error:
         # Une clé refusée n'est pas gardée ; l'ancien profil (s'il existait) reste.
         remove_profile(ident, path)
@@ -600,7 +671,7 @@ def up(ssid):
     known = profiles_for(ssid)
     if not known:
         return fail("unknown")
-    error, detail = activate(known[0]["uuid"], ssid)
+    error, detail = activate_patiently(known[0]["uuid"], ssid)
     return fail(error, detail) if error else done(ssid=ssid)
 
 
@@ -810,7 +881,8 @@ def call(args, key=None, timeout=200):
 
 
 ERRORS = {
-    "bad-key": "La clé de sécurité est incorrecte. Vérifiez-la (majuscules comprises) et réessayez.",
+    "bad-key": "Mot de passe refusé : la box n’accepte pas cette clé de sécurité. Vérifiez-la (majuscules comprises) et réessayez.",
+    "lost": "Réseau « {name} » momentanément introuvable : il a disparu de la liste pendant la connexion. Votre mot de passe est gardé : rapprochez-vous de la box, puis cliquez sur « Se connecter ».",
     "key-format": "Une clé WPA compte de 8 à 63 caractères (ou 64 chiffres hexadécimaux).",
     "wep-format": "Une clé WEP compte 5 ou 13 caractères (ou 10 ou 26 chiffres hexadécimaux).",
     "eap-identity": "Entrez votre nom d’utilisateur et votre mot de passe.",
@@ -831,10 +903,14 @@ ERRORS = {
     "not-authorized": "Le service système de Winlux ne répond pas. Redémarrez l’ordinateur.",
 }
 # Erreurs qui se corrigent dans la boîte de la clé (elle se rouvre avec le message).
+# « lost » n'en fait pas partie : la boîte se rouvre aussi, mais sans message
+# d'échec, avec la clé déjà tapée (voir WifiPanel.connected).
 KEY_ERRORS = ("bad-key", "key-format", "wep-format", "eap-identity", "eap-certificate", "eap-file")
 
 
 PORTAL_URL = "http://example.com/"
+# Réponse de la boîte de la clé quand le réseau attendu s'est connecté seul.
+CONNECTED_MEANWHILE = 2
 
 
 def open_portal():
@@ -851,6 +927,8 @@ def open_portal():
 def error_text(answer, ssid=""):
     code = answer.get("error", "failed")
     text = _t(ERRORS.get(code, "La connexion a échoué.")).format(name=ssid)
+    if code == "lost" and answer.get("waiting"):
+        text += " " + _t("Winlux s’y connectera aussi tout seul, avec ce mot de passe, dès que le réseau réapparaîtra.")
     detail = answer.get("detail", "")
     if code not in ERRORS and detail:
         text += "\n" + _t("Détail : {detail}").format(detail=detail.splitlines()[-1][:200])
@@ -910,6 +988,10 @@ class WifiPanel:
         self.state = {}
         self.networks = []
         self.known = []
+        # Boîte de la clé rouverte sur « réseau momentanément introuvable » :
+        # (boîte, nom du réseau). Si NetworkManager s'y connecte seul entre-temps,
+        # la boîte se ferme sur un succès.
+        self.pending = None
         box = host.card()
         self.radio_switch = host.switch(box, _t("Wi-Fi"), True, self.toggle_radio, " ")
         self.state_label = self.subtitle_of(self.radio_switch)
@@ -975,6 +1057,8 @@ class WifiPanel:
         self.airplane_switch.set_active(bool(self.state.get("airplane")))
         self.updating = False
         connected = self.state.get("connected")
+        if self.pending is not None and connected and connected == self.pending[1] and on:
+            self.pending[0].response(CONNECTED_MEANWHILE)
         self.state_label.set_text(_t("Connecté à « {name} »").format(name=connected) if connected and on
                                   else _t("Non connecté") if on else _t("Désactivé"))
         if not state.get("ok"):
@@ -1134,33 +1218,45 @@ class WifiPanel:
         else:
             self.key_dialog(network)
 
-    def connecting(self, ssid):
-        self.say(_t("Connexion à « {name} »…").format(name=ssid))
+    def connecting(self, ssid, searching=False):
+        self.say(_t("Recherche de « {name} »…" if searching else "Connexion à « {name} »…").format(name=ssid))
 
-    def connected(self, answer, network, error=None):
+    def connected(self, answer, network, error=None, values=None):
         ssid = network["ssid"]
         if answer.get("ok"):
             self.say(_t("Connecté à « {name} ».").format(name=ssid))
             self.busy = False
             self.refresh(False)
             return
-        if answer.get("error") in KEY_ERRORS or (answer.get("error") == "unknown" and network.get("security") not in ("open", "owe")):
-            # Profil enregistré dont la clé ne marche plus, ou clé refusée : on la redemande.
+        if answer.get("error") == "lost" and values is not None:
+            # Réseau perdu pendant la saisie ou la connexion : pas un échec. La
+            # boîte revient avec tout ce qui a été tapé ; « Se connecter »
+            # relance la recherche et la connexion avec la même clé.
             self.say("")
-            self.key_dialog(dict(network, known=False), error_text(answer, ssid))
+            self.busy = False
+            self.refresh(False)
+            self.key_dialog(dict(network, known=False), notice=error_text(answer, ssid), values=values)
+            return
+        if answer.get("error") in KEY_ERRORS or (answer.get("error") == "unknown" and network.get("security") not in ("open", "owe")):
+            # Profil enregistré dont la clé ne marche plus, ou clé refusée : on la
+            # redemande, avec ce qui avait été tapé pour corriger une faute.
+            self.say("")
+            self.key_dialog(dict(network, known=False), error_text(answer, ssid), values=values)
             return
         self.say(error_text(answer, ssid), True)
         self.refresh(False)
 
-    def key_dialog(self, network, error=None, hidden=False):
-        """Boîte de la clé, façon Windows 11 ; clavier tactile intégré sous le champ."""
+    def key_dialog(self, network, error=None, hidden=False, values=None, notice=None):
+        """Boîte de la clé, façon Windows 11 ; clavier tactile intégré sous le champ.
+        `values` : saisie précédente remise dans les champs ; `notice` : message
+        sans alarme (réseau momentanément introuvable)."""
         Gtk = self.Gtk
         ssid = network.get("ssid", "")
         dialog = Gtk.Dialog(title=_t("Réseau caché") if hidden else _t("Connexion à « {name} »").format(name=ssid),
                             transient_for=self.host, modal=True)
         dialog.set_role("winlux-wifi-key")
         dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
-        next_button = dialog.add_button(_t("Suivant"), Gtk.ResponseType.OK)
+        next_button = dialog.add_button(_t("Se connecter"), Gtk.ResponseType.OK)
         next_button.get_style_context().add_class("suggested-action")
         dialog.set_default_response(Gtk.ResponseType.OK)
         screen = self.host.get_screen()
@@ -1235,10 +1331,27 @@ class WifiPanel:
         problem.set_no_show_all(True)
         area.pack_start(problem, False, False, 0)
 
-        def show_problem(text):
+        def show_problem(text, alarm=True):
             problem.set_text(text or "")
+            (problem.get_style_context().add_class if alarm else problem.get_style_context().remove_class)("error")
             problem.set_visible(bool(text))
-        show_problem(error)
+        if notice: show_problem(notice, alarm=False)
+        else: show_problem(error)
+        if values:
+            key.set_text(values.get("key", ""))
+            fields["identity"].set_text(values.get("identity", ""))
+            auto.set_active(values.get("auto", True))
+            method.set_active_id(values.get("eap") or "peap")
+            inner.set_active_id(values.get("phase2") or "mschapv2")
+            domain.set_text(values.get("domain", ""))
+            ca = values.get("ca") or "system"
+            if ca in ("system", "none"):
+                ca_choice.set_active_id(ca)
+            else:
+                ca_choice.set_active_id("file")
+                ca_file.set_filename(ca)
+            for chooser, name in ((client_cert, "client_cert"), (private_key, "private_key")):
+                if values.get(name): chooser.set_filename(values[name])
         wps_button = None
         if network.get("wps") and not hidden:
             area.pack_start(Gtk.Label(label=_t("Vous pouvez aussi vous connecter en appuyant sur le bouton WPS de votre box."),
@@ -1338,6 +1451,8 @@ class WifiPanel:
         (fields["ssid"] if hidden else fields["identity"] if security == "eap" else key).grab_focus()
         if wps_button is not None:
             wps_button.connect("clicked", lambda *_: dialog.response(1))
+        if notice:
+            self.pending = (dialog, ssid)
         while True:
             response = dialog.run()
             if response == Gtk.ResponseType.OK:
@@ -1356,6 +1471,10 @@ class WifiPanel:
                   "domain": domain.get_text().strip(), "client_cert": client_cert.get_filename() or "",
                   "private_key": private_key.get_filename() or ""}
         dialog.destroy()
+        self.pending = None
+        if response == CONNECTED_MEANWHILE:
+            self.say(_t("Connecté à « {name} » avec le mot de passe que vous aviez tapé.").format(name=ssid))
+            return
         if response == 1:
             self.say(_t("Appuyez maintenant sur le bouton WPS de votre box (vous avez 2 minutes)…"))
             self.run(["wps", ssid], lambda answer: self.connected(answer, network))
@@ -1378,9 +1497,9 @@ class WifiPanel:
             args.append("--key-stdin")
             secret = values["key"]
         target_network = dict(network, ssid=values["ssid"], security=values["security"])
-        self.connecting(values["ssid"])
+        self.connecting(values["ssid"], searching=bool(notice))
         self.run(args, lambda answer: self.connected_hidden(answer, target_network) if hidden
-                 else self.connected(answer, target_network), key=secret)
+                 else self.connected(answer, target_network, values=values), key=secret)
 
     def connected_hidden(self, answer, network):
         if answer.get("ok") or answer.get("error") not in KEY_ERRORS:
