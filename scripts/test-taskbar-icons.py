@@ -148,7 +148,61 @@ def run(alignment, temp, problems):
         process.wait(timeout=10)
 
 
+def check_balance(problems):
+    """Barre centrée : le groupe Démarrer + fenêtres au milieu de l'écran (contrepoids 13)."""
+    import ast
+    source = (directory / "winlux-tray.py").read_text(encoding="utf-8")
+    node = next(item for item in ast.parse(source).body if isinstance(item, ast.FunctionDef) and item.name == "balance_width")
+    scope = {}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "winlux-tray.py", "exec"), scope)
+    balance_width = scope["balance_width"]
+    # Mesure du portable de damien : 1920 px, bloc de droite (systray 10,
+    # genmon 12/4/5/6/9, horloge 7) à partir de x=1641, groupe 1+2 de 237 px.
+    right_ids = {10, 12, 4, 5, 6, 9, 7}
+    children = [(10, 1641, 30), (12, 1671, 32), (4, 1703, 32), (5, 1735, 32), (6, 1767, 32), (9, 1799, 32), (7, 1831, 89),
+                (None, 760, 48), (1, 703, 48)]
+    width = balance_width(1920, children, right_ids)
+    if width != 279:
+        problems.append(f"contrepoids : {width} px au lieu de 279")
+    # Bloc de gauche (bouton Widgets 11, 60 px) : le contrepoids le compense.
+    if balance_width(1920, children + [(11, 0, 60)], right_ids, {11}) != 219:
+        problems.append("contrepoids : le bouton Widgets à gauche n'est pas déduit")
+    if balance_width(1920, [(1, 703, 48)], right_ids) != 0:
+        problems.append("contrepoids : non nul sans bloc de droite")
+    # Disposition [11?][sép. 3 extensible][13 = W][1][2][sép. 8 extensible][R] :
+    # l'espace libre se partage à parts égales entre les deux séparateurs.
+    for screen, left, group, right in ((1920, 0, 237, 279), (1366, 0, 140, 200), (3840, 60, 400, 500)):
+        weight = balance_width(screen, [(10, screen - right, right), (11, 0, left)], {10}, {11})
+        free = screen - left - weight - group - right
+        center = left + free / 2 + weight + group / 2
+        if abs(center - screen / 2) > 1:
+            problems.append(f"barre centrée {screen} px : groupe centré à {center:.0f} au lieu de {screen / 2:.0f}")
+    # winlux-control align-center place le 13 juste après le séparateur 3.
+    with tempfile.TemporaryDirectory() as temp:
+        temp = Path(temp)
+        (temp / "bin").mkdir()
+        log = temp / "xfconf.log"
+        (temp / "bin/xfconf-query").write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$XFCONF_LOG\"\n"
+            "case \" $* \" in *' -s '*) exit 0 ;; *plugin-ids*) printf '3\\n1\\n2\\n8\\n10\\n4\\n5\\n6\\n9\\n7\\n' ;; esac\nexit 0\n")
+        (temp / "bin/xfconf-query").chmod(0o755)
+        env = dict(os.environ, PATH=f"{temp / 'bin'}:{os.environ['PATH']}", XFCONF_LOG=str(log),
+                   WINLUX_CONTROL_ROOT=str(temp / "root"), WINLUX_CONTROL_NO_STATUS="1", WINLUX_CONTROL_TEST_LOG=str(temp / "commands"))
+        subprocess.run(["sh", str(directory / "winlux-control.sh"), "align-center"], env=env, capture_output=True)
+        order = [line for line in log.read_text().splitlines() if "plugin-ids -a" in line]
+        ids = re.findall(r"-s (\d+)", order[-1]) if order else []
+        if ids[:3] != ["3", "13", "1"]:
+            problems.append(f"barre centrée : ordre {ids}, le contrepoids 13 doit suivre le séparateur 3")
+
+
 def main():
+    problems = []
+    check_balance(problems)
+    if problems:
+        for problem in problems:
+            print("ÉCHEC : " + problem, file=sys.stderr)
+        return 1
+    print("Contrepoids de la barre centrée : groupe au milieu de l'écran.")
     missing = [tool for tool in ("xfce4-panel", "openbox", "dbus-run-session") if not shutil.which(tool)]
     if missing:
         print("Barre réelle non vérifiée : " + ", ".join(missing) + " absent(s)")
