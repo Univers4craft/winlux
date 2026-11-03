@@ -254,6 +254,9 @@ jobs:
           python3 -B scripts/test-reset.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-reset-page.py
 
+      - name: Vérifier les pilotes embarqués dans l'image et le diagnostic winlux-hardware-check
+        run: python3 -B scripts/test-hardware-image.py
+
       - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes, À propos > Votre PC)
         run: |
           sudo apt-get update -q

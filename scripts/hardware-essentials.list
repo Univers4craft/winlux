@@ -1,0 +1,182 @@
+# Pilotes et firmwares sans lesquels une famille courante de PC devient
+# inutilisable. scripts/check-image-hardware.py fait échouer la construction de
+# l'ISO si l'un d'eux manque dans l'image finale. Politique : docs/MATERIEL.md.
+#
+#   module NOM      pilote du noyau (« - » et « _ » équivalents). Intégré au
+#                   noyau : rien à embarquer. Absent de ce noyau : signalé
+#                   sans échec (renommé par une nouvelle version ?).
+#   firmware MOTIF  au moins un fichier de /lib/firmware correspond (glob,
+#                   extension .zst/.xz facultative).
+# Le Wi-Fi, la crypto qu'il demande et le pare-feu sont contrôlés à part
+# (check-image-wifi.sh).
+
+# Graphique
+module i915
+module xe
+module amdgpu
+module radeon
+module nouveau
+module gma500_gfx
+module udl
+module hyperv_drm
+module vboxvideo
+firmware i915/*_dmc*
+firmware i915/*_guc*
+firmware xe/*
+firmware amdgpu/*
+firmware radeon/*
+firmware nvidia/*/gsp/*
+
+# Stockage
+module ahci
+module ata_piix
+module pata_atiixp
+module sata_nv
+module nvme
+module vmd
+module usb_storage
+module uas
+module mmc_block
+module sdhci_pci
+module sdhci_acpi
+module rtsx_pci_sdmmc
+module rtsx_usb_sdmmc
+module raid1
+module raid456
+module dm_raid
+module dm_crypt
+module sr_mod
+
+# USB, USB-C, Thunderbolt, série
+module xhci_pci
+module xhci_pci_renesas
+module thunderbolt
+module ucsi_acpi
+module typec_displayport
+module intel_pmc_mux
+module cdc_acm
+module ftdi_sio
+module ch341
+module cp210x
+module pl2303
+module usblp
+
+# Ethernet et partage de connexion
+module e1000e
+module igc
+module igb
+module r8169
+module tg3
+module alx
+module atl1c
+module atl1e
+module sky2
+module forcedeth
+module 8139too
+module atlantic
+module r8152
+module asix
+module ax88179_178a
+module cdc_ether
+module cdc_ncm
+module rndis_host
+module ipheth
+module cdc_mbim
+module qmi_wwan
+firmware rtl_nic/*
+
+# Bluetooth
+module btusb
+module btintel_pcie
+module hci_uart
+module bnep
+module rfcomm
+module hidp
+module uhid
+firmware intel/ibt-*
+firmware rtl_bt/*
+firmware qca/*
+
+# Son
+module snd_hda_intel
+module snd_hda_codec_alc269
+module snd_sof_pci_intel_tgl
+module snd_sof_pci_intel_mtl
+module snd_sof_amd_rembrandt
+module snd_usb_audio
+firmware intel/sof*/*
+firmware cirrus/*
+
+# Clavier, souris, pavés et écrans tactiles, stylets, manettes
+module psmouse
+module i2c_hid_acpi
+module hid_multitouch
+module elan_i2c
+module rmi_smbus
+module i2c_i801
+module i2c_designware_pci
+module intel_lpss_pci
+module intel_lpss_acpi
+module pinctrl_sunrisepoint
+module pinctrl_cannonlake
+module pinctrl_icelake
+module pinctrl_tigerlake
+module pinctrl_alderlake
+module pinctrl_meteorlake
+module pinctrl_jasperlake
+module pinctrl_geminilake
+module intel_quicki2c
+module goodix_ts
+module silead
+module soc_button_array
+module wacom
+module hid_uclogic
+module xpad
+module hid_playstation
+
+# Capteurs (rotation des tablettes et convertibles)
+module intel_ishtp_hid
+module amd_sfh
+module hid_sensor_accel_3d
+module bmc150_accel_i2c
+module kxcjk_1013
+module mxc4005
+firmware intel/ish/*
+
+# Portables : touches, batteries, températures, rétroéclairage
+module video
+module intel_hid
+module intel_vbtn
+module thinkpad_acpi
+module ideapad_laptop
+module asus_nb_wmi
+module hp_wmi
+module dell_laptop
+module acer_wmi
+module axp288_fuel_gauge
+module coretemp
+module k10temp
+module x86_pkg_temp_thermal
+module nct6775
+
+# Webcams
+module uvcvideo
+module gspca_main
+
+# Systèmes de fichiers et fonctions du système
+module binfmt_misc
+module ntfs3
+module exfat
+module btrfs
+module xfs
+module nls_cp437
+module wireguard
+
+# Machines virtuelles
+module hv_vmbus
+module hv_netvsc
+module hv_storvsc
+module vboxguest
+module vmxnet3
+module vmw_pvscsi
+module virtiofs

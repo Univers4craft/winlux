@@ -362,4 +362,15 @@ for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\hom
     resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
     ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
 
+# ── Support matériel des PC (audit de la v0.2.17, 2026-11-03) ──────────────
+build = (SCRIPTS / "build-live-iso.sh").read_text()
+ok("hardware-module-dirs.list" in build and "check-image-hardware.py" in build,
+   "image : dossiers entiers de pilotes et contrôle des pilotes essentiels (911 modules sur 6 901 en v0.2.17)")
+essentials = (SCRIPTS / "hardware-essentials.list").read_text()
+ok("module pinctrl_sunrisepoint" in essentials and "module uhid" in essentials and "module binfmt_misc" in essentials,
+   "pavés tactiles Intel 6e–9e gén., Bluetooth LE et ./programme.exe ne peuvent plus disparaître de l'image")
+drivers_tool = (SCRIPTS / "winlux-drivers.py").read_text()
+ok("def module_packages" in drivers_tool and "if apt_available(p)" in drivers_tool,
+   "« Installer les pilotes complets » : linux-modules-extra n'est plus exigé (noyau 7.0)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
