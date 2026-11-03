@@ -318,4 +318,13 @@ ok("def _screen_suffix" in lock and "0o1777" in lock,
 ok("Terminal libre" in (SCRIPTS / "winlux-sessions.sh").read_text(),
    "changer d'utilisateur : le second bureau évite le VT du premier")
 
+# ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
+about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
+hardware_page = (SCRIPTS / "winlux-hardware-page.py").read_text()
+ok('9: "sections_about"' in about_pages and "def pc_section" in hardware_page,
+   "À propos : section « Votre PC » sous la version et le noyau")
+ok("lines.update(pc_status(devices))" in (SCRIPTS / "winlux-drivers.py").read_text(),
+   "Votre PC : relevé de winlux-drivers (même détection que Matériel et pilotes)")
+ok('"Votre PC": ("Your PC", "Su PC", "Ihr PC")' in hardware_page, "Votre PC : quatre langues")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

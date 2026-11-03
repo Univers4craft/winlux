@@ -1252,7 +1252,7 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
-    EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
+    EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
     def extra_page(self, page):
         """Construit la page ; False si elle n’est pas gérée ici."""
@@ -2100,6 +2100,12 @@ class ExtraPages:
         hardware = hardware_page()
         if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── À propos : « Votre PC », sous la version et le noyau ──
+
+    def sections_about(self):
+        hardware = hardware_page()
+        if hardware is not None: hardware.pc_section(self, self.status)
 
     # ── Presse-papiers (Windows + V) ──
 

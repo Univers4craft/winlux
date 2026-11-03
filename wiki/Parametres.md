@@ -20,7 +20,7 @@
 | 6 | **Personnalisation** | Thème clair/sombre, couleur d'accent. |
 | 7 | **Mises à jour** | Rechercher et installer les mises à jour de Winlux, mises à jour automatiques, retour arrière. |
 | 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle), **éclairage nocturne** (intensité, planning du coucher au lever du soleil calculé hors ligne ou heures choisies ; masqué si l’écran n’a pas de rampe gamma). |
-| 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), matériel réel, en quatre langues. |
+| 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), puis **Votre PC** : fabricant et modèle, processeur, mémoire, cartes graphiques, disques et place libre, écran et définition, réseau, son, batterie, micrologiciel (BIOS hérité ou UEFI 32/64 bits), architecture et Secure Boot — seulement ce qui a été détecté, en quatre langues. |
 | 10 | **Programmes Windows** | Réglages par `.exe` (fichiers `<programme>.exe.winlux.ini` partagés avec le runtime). |
 | 11 | **Navigateurs** | Installer un navigateur préparé hors ligne, choisir le navigateur par défaut. |
 | 12 | **Accessibilité** | Loupe, Narrateur, contraste élevé, aides clavier. |
