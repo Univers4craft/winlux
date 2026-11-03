@@ -821,6 +821,10 @@ pub fn normalize(dll: &str) -> String {
     if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
         return "setupapi".into();
     }
+    // combase.dll (COM et Windows Runtime depuis Windows 8) : notre ole32.
+    if base == "combase" {
+        return "ole32".into();
+    }
     // DPI par écran (Chromium, Electron) : shcore.
     if base == "shcore" || base.starts_with("api-ms-win-shcore-") {
         return "shcore".into();

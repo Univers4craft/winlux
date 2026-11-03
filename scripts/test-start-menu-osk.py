@@ -139,14 +139,44 @@ def closed_with_keyboard():
     assert not app.osk_widget.get_visible(), "avec un clavier physique, le clavier du menu doit rester caché"
 
 
+def recommendations_hidden():
+    labels = []
+
+    def walk(widget):
+        if isinstance(widget, Gtk.Label): labels.append(widget.get_text())
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children(): walk(child)
+    walk(app.content)
+    assert "Recommandations" not in labels, "« Recommandations » coupé par le clavier : à masquer quand il est ouvert"
+
+
+def button_visible():
+    assert app.osk_button.get_visible() and app.osk_button.get_mapped(), "bouton clavier absent à côté de la recherche"
+
+
+def reopen_by_button():
+    assert not app.osk_widget.get_visible(), "le clavier est déjà ouvert"
+    button_visible()
+    tap(app.osk_button)
+
+
+def clear_search():
+    app.search.set_text("")
+
+
 steps += [
-    step(lambda: None, opened_without_keyboard),
+    step(lambda: None, lambda: (opened_without_keyboard(), recommendations_hidden(), button_visible())),
     step(lambda: tap(find_key("p")), typed("p")),
     step(lambda: tap(find_key("a")), typed("pa")),
     step(lambda: tap(find_key("i")), typed("pai")),
-    step(app.osk_toggle, hidden_by_icon),
-    step(app.osk_toggle, shown_by_icon),
-    step(reopen_with_keyboard, closed_with_keyboard, delay=700),
+    # Avec du texte, GtkSearchEntry affiche sa croix : le bouton clavier reste.
+    step(lambda: None, button_visible),
+    step(lambda: tap(app.osk_button), hidden_by_icon),
+    step(lambda: tap(app.osk_button), shown_by_icon),
+    step(lambda: (tap(app.osk_button), clear_search()), hidden_by_icon),
+    step(reopen_by_button, shown_by_icon),
+    step(reopen_with_keyboard, lambda: (closed_with_keyboard(), button_visible()), delay=700),
+    step(reopen_by_button, shown_by_icon),
 ]
 
 
@@ -159,4 +189,9 @@ GLib.timeout_add(300, start)
 app.run([])
 if failures:
     raise failures[0]
+# « par » : l'application Paramètres passe avant « Bluetooth et appareils ».
+rank, settings_for = module["rank"], module["settings_for"]
+assert rank("Paramètres", "par") < rank("Bluetooth et appareils", "par"), "classement de la recherche"
+assert settings_for("son")[0][0] == "Son", settings_for("son")
+assert [label for label, _ in settings_for("par")][:1] == ["Partage de dossiers et transfert des réglages"], settings_for("par")
 print("OK: menu Démarrer, clavier tactile intégré (ouvert sans clavier, appuis dans la recherche, caché avec clavier)")
