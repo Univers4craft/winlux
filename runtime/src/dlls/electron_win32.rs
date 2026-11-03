@@ -507,25 +507,148 @@ unsafe extern "win64" fn NtDeleteKey(_key: usize) -> u32 {
     STATUS_NOT_IMPLEMENTED
 }
 
+/// `NtQueryObject` : informations de base (0), nom (1), type (2) et
+/// indicateurs (4) d'un handle. Chromium vérifie ainsi le type des handles
+/// qu'un enfant reçoit par héritage (canal Mojo : « File », mémoire
+/// partagée : « Section ») et s'arrêtait sur un CHECK tant que la fonction
+/// répondait « non implémentée ».
 unsafe extern "win64" fn NtQueryObject(
-    _h: usize,
-    _class: u32,
-    _info: *mut c_void,
-    _len: u32,
+    h: usize,
+    class: u32,
+    info: *mut c_void,
+    len: u32,
     ret: *mut u32,
 ) -> u32 {
-    if !ret.is_null() {
-        *ret = 0;
+    const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+    const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
+    const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
+    let Some(kind) = crate::dlls::kernel32::object_type_name(h) else {
+        if !ret.is_null() {
+            *ret = 0;
+        }
+        return STATUS_INVALID_HANDLE;
+    };
+    let inherit = crate::dlls::inherit::is(h);
+    let mut bytes: Vec<u8>;
+    // (position d'un UNICODE_STRING, position de son texte dans `bytes`)
+    let mut string: Option<(usize, usize, usize)> = None;
+    match class {
+        0 => {
+            // OBJECT_BASIC_INFORMATION (56 octets).
+            bytes = vec![0u8; 56];
+            bytes[0..4].copy_from_slice(&(if inherit { 2u32 } else { 0 }).to_le_bytes());
+            bytes[4..8].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+            bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+            bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        }
+        1 | 2 => {
+            // UNICODE_STRING (16 octets) suivi, pour le type, du reste
+            // d'OBJECT_TYPE_INFORMATION (0x68 octets en tout), puis le texte.
+            let text = if class == 2 {
+                kind.to_string()
+            } else if kind == "File" {
+                crate::dlls::kernel32::fd_of_handle(h)
+                    .and_then(|fd| std::fs::read_link(format!("/proc/self/fd/{fd}")).ok())
+                    .filter(|p| p.is_absolute())
+                    .map(|p| {
+                        let w = crate::paths::to_windows(&p);
+                        format!("\\??\\{w}")
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let head = if class == 2 { 0x68 } else { 16 };
+            bytes = vec![0u8; head];
+            let wide: Vec<u8> = text
+                .encode_utf16()
+                .chain(Some(0))
+                .flat_map(|c| c.to_le_bytes())
+                .collect();
+            let at = bytes.len();
+            let chars = wide.len() / 2 - 1;
+            bytes.extend_from_slice(&wide);
+            string = Some((0, at, chars));
+            if class == 2 {
+                // ValidAccessMask, PoolType (Paged = 1).
+                bytes[0x50..0x54].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+                bytes[0x5C..0x60].copy_from_slice(&1u32.to_le_bytes());
+            }
+        }
+        4 => {
+            // OBJECT_HANDLE_FLAG_INFORMATION : Inherit, ProtectFromClose.
+            bytes = vec![u8::from(inherit), 0];
+        }
+        _ => {
+            if !ret.is_null() {
+                *ret = 0;
+            }
+            return STATUS_INVALID_INFO_CLASS;
+        }
     }
-    STATUS_NOT_IMPLEMENTED
+    if !ret.is_null() {
+        *ret = bytes.len() as u32;
+    }
+    if info.is_null() || (len as usize) < bytes.len() {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    let out = info as *mut u8;
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+    if let Some((at, text, chars)) = string {
+        let n = (chars * 2) as u16;
+        (out.add(at) as *mut u16).write_unaligned(n);
+        (out.add(at + 2) as *mut u16).write_unaligned(n + 2);
+        (out.add(at + 8) as *mut usize).write_unaligned(out as usize + text);
+    }
+    0
 }
 
 unsafe extern "win64" fn RtlGetLastNtStatus() -> u32 {
     0
 }
 
+/// `NtQuerySection` : SectionBasicInformation (classe 0, 24 octets :
+/// BaseAddress, AllocationAttributes, MaximumSize) pour les mappings de
+/// CreateFileMapping. Chromium (PlatformSharedMemoryRegion) lit ainsi la
+/// taille d'une mémoire partagée reçue et appelle la fonction sans vérifier
+/// qu'elle existe : son absence faisait sauter Claude en 0.
+unsafe extern "win64" fn NtQuerySection(
+    h: usize,
+    class: u32,
+    info: *mut u8,
+    len: usize,
+    ret: *mut usize,
+) -> u32 {
+    const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+    const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
+    const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
+    const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
+    const SEC_COMMIT: u32 = 0x0800_0000;
+    let Some((_, size)) = crate::dlls::mmap::export(h) else {
+        return STATUS_INVALID_HANDLE;
+    };
+    match class {
+        0 => {
+            if !ret.is_null() {
+                *ret = 24;
+            }
+            if info.is_null() || len < 24 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            std::ptr::write_bytes(info, 0, 24);
+            put_u32(info, 8, SEC_COMMIT);
+            (info.add(16) as *mut u64).write_unaligned(size);
+            0
+        }
+        1 => STATUS_SECTION_NOT_IMAGE,
+        _ => STATUS_INVALID_INFO_CLASS,
+    }
+}
+
 pub fn ntdll_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "NtQuerySection" => fn NtQuerySection,
+        "ZwQuerySection" => fn NtQuerySection,
         "NtDeleteKey" => fn NtDeleteKey,
         "ZwDeleteKey" => fn NtDeleteKey,
         "NtQueryObject" => fn NtQueryObject,
@@ -628,6 +751,8 @@ unsafe extern "win64" fn BuildTrusteeWithName(trustee: *mut u8, name: usize) {
 
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "MapGenericMask" => fn MapGenericMask,
+        "AccessCheck" => fn AccessCheck,
         "BuildTrusteeWithSidW" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithSidA" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithNameW" => fn BuildTrusteeWithName,
@@ -734,8 +859,382 @@ unsafe extern "win64" fn UserObjectOk(_h: usize) -> i32 {
     1
 }
 
+/// `GetPointerDevices` : aucun écran tactile ni stylet déclaré au sens de
+/// Windows Pointer (le toucher arrive par la souris d'X11).
+unsafe extern "win64" fn GetPointerDevices(count: *mut u32, _devices: *mut u8) -> i32 {
+    if count.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *count = 0;
+    1
+}
+
+// ============================================================
+//  wtsapi32 : notifications de changement de session
+// ============================================================
+//
+// Chromium (WtsSessionChangeObserver) inscrit sa fenêtre de messages et
+// vérifie le résultat par un CHECK. Winlux n'a qu'une session console :
+// l'inscription réussit et aucun WM_WTSSESSION_CHANGE n'est émis pour
+// l'instant (le verrouillage de session pourra les envoyer plus tard).
+
+unsafe extern "win64" fn WTSRegisterSessionNotification(hwnd: usize, _flags: u32) -> i32 {
+    if hwnd == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    1
+}
+
+unsafe extern "win64" fn WTSUnRegisterSessionNotification(_hwnd: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WTSRegisterSessionNotificationEx(
+    _server: usize,
+    hwnd: usize,
+    flags: u32,
+) -> i32 {
+    WTSRegisterSessionNotification(hwnd, flags)
+}
+
+unsafe extern "win64" fn WTSUnRegisterSessionNotificationEx(_server: usize, hwnd: usize) -> i32 {
+    WTSUnRegisterSessionNotification(hwnd)
+}
+
+pub fn wtsapi32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "WTSRegisterSessionNotification" => fn WTSRegisterSessionNotification,
+        "WTSUnRegisterSessionNotification" => fn WTSUnRegisterSessionNotification,
+        "WTSRegisterSessionNotificationEx" => fn WTSRegisterSessionNotificationEx,
+        "WTSUnRegisterSessionNotificationEx" => fn WTSUnRegisterSessionNotificationEx,
+    }
+}
+
+// ============================================================
+//  user32 : API de configuration d'affichage (QueryDisplayConfig)
+// ============================================================
+//
+// Chromium (display::win::ScreenWin) lit ainsi le nom et la fréquence de
+// chaque écran et s'arrête sur un CHECK quand GetDisplayConfigBufferSizes
+// manque. Un chemin par écran de EnumDisplayMonitors, dans le même ordre
+// (\\.\DISPLAY1 = principal), avec un mode source et un mode cible chacun.
+
+const DC_ADAPTER_LUID: u32 = 0x0057_4c58; // « WLX »
+const DC_TARGET_BASE: u32 = 0x100;
+const DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER: u32 = 0xFFFF_FFFF;
+const ERROR_INSUFFICIENT_BUFFER_L: i32 = 122;
+const ERROR_INVALID_PARAMETER_L: i32 = 87;
+const ERROR_NOT_SUPPORTED_L: i32 = 50;
+
+struct DcScreen {
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+    hz: u32,
+}
+
+fn dc_screens() -> Vec<DcScreen> {
+    let monitors = crate::dlls::monitors::list();
+    let modes = crate::dlls::displaymode::ordered(crate::dlls::displaymode::screens());
+    monitors
+        .iter()
+        .enumerate()
+        .map(|(i, m)| DcScreen {
+            left: m.rect.left,
+            top: m.rect.top,
+            width: (m.rect.right - m.rect.left).max(1) as u32,
+            height: (m.rect.bottom - m.rect.top).max(1) as u32,
+            hz: modes
+                .get(i)
+                .and_then(crate::dlls::displaymode::current)
+                .map(|(_, _, hz)| hz)
+                .filter(|hz| *hz > 0)
+                .unwrap_or(60),
+        })
+        .collect()
+}
+
+unsafe fn put_u32(p: *mut u8, off: usize, v: u32) {
+    (p.add(off) as *mut u32).write_unaligned(v);
+}
+
+unsafe fn put_wide(p: *mut u8, off: usize, chars: usize, text: &str) {
+    let dst = p.add(off) as *mut u16;
+    let w: Vec<u16> = text.encode_utf16().take(chars - 1).collect();
+    for i in 0..chars {
+        dst.add(i).write_unaligned(*w.get(i).unwrap_or(&0));
+    }
+}
+
+/// `GetDisplayConfigBufferSizes` : un chemin et deux modes par écran.
+unsafe extern "win64" fn GetDisplayConfigBufferSizes(
+    _flags: u32,
+    paths: *mut u32,
+    modes: *mut u32,
+) -> i32 {
+    if paths.is_null() || modes.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let n = crate::dlls::monitors::list().len() as u32;
+    *paths = n;
+    *modes = 2 * n;
+    0
+}
+
+/// `QueryDisplayConfig` : DISPLAYCONFIG_PATH_INFO (72 octets) et
+/// DISPLAYCONFIG_MODE_INFO (64 octets), mode source 2i, mode cible 2i+1.
+unsafe extern "win64" fn QueryDisplayConfig(
+    _flags: u32,
+    npaths: *mut u32,
+    paths: *mut u8,
+    nmodes: *mut u32,
+    modes: *mut u8,
+    topology: *mut u32,
+) -> i32 {
+    if npaths.is_null() || nmodes.is_null() || paths.is_null() || modes.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let list = dc_screens();
+    let n = list.len() as u32;
+    if *npaths < n || *nmodes < 2 * n {
+        return ERROR_INSUFFICIENT_BUFFER_L;
+    }
+    std::ptr::write_bytes(paths, 0, 72 * n as usize);
+    std::ptr::write_bytes(modes, 0, 64 * 2 * n as usize);
+    for (i, sc) in list.iter().enumerate() {
+        let i32_ = i as u32;
+        let p = paths.add(72 * i);
+        // sourceInfo
+        put_u32(p, 0, DC_ADAPTER_LUID);
+        put_u32(p, 8, i32_);
+        put_u32(p, 12, 2 * i32_);
+        put_u32(p, 16, 1); // DISPLAYCONFIG_SOURCE_IN_USE
+                           // targetInfo
+        put_u32(p, 20, DC_ADAPTER_LUID);
+        put_u32(p, 28, DC_TARGET_BASE + i32_);
+        put_u32(p, 32, 2 * i32_ + 1);
+        put_u32(p, 36, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER);
+        put_u32(p, 40, 1); // DISPLAYCONFIG_ROTATION_IDENTITY
+        put_u32(p, 44, 1); // DISPLAYCONFIG_SCALING_IDENTITY
+        put_u32(p, 48, sc.hz);
+        put_u32(p, 52, 1);
+        put_u32(p, 56, 1); // DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE
+        put_u32(p, 60, 1); // targetAvailable
+        put_u32(p, 64, 1); // DISPLAYCONFIG_TARGET_IN_USE
+        put_u32(p, 68, 1); // DISPLAYCONFIG_PATH_ACTIVE
+                           // Mode source : définition, 32 bits par pixel, position.
+        let m = modes.add(64 * 2 * i);
+        put_u32(m, 0, 1); // DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+        put_u32(m, 4, i32_);
+        put_u32(m, 8, DC_ADAPTER_LUID);
+        put_u32(m, 16, sc.width);
+        put_u32(m, 20, sc.height);
+        put_u32(m, 24, 4); // DISPLAYCONFIG_PIXELFORMAT_32BPP
+        put_u32(m, 28, sc.left as u32);
+        put_u32(m, 32, sc.top as u32);
+        // Mode cible : signal vidéo.
+        let t = modes.add(64 * (2 * i + 1));
+        put_u32(t, 0, 2); // DISPLAYCONFIG_MODE_INFO_TYPE_TARGET
+        put_u32(t, 4, DC_TARGET_BASE + i32_);
+        put_u32(t, 8, DC_ADAPTER_LUID);
+        let pixel_rate = u64::from(sc.width) * u64::from(sc.height) * u64::from(sc.hz);
+        (t.add(16) as *mut u64).write_unaligned(pixel_rate);
+        put_u32(t, 24, sc.height * sc.hz);
+        put_u32(t, 28, 1);
+        put_u32(t, 32, sc.hz);
+        put_u32(t, 36, 1);
+        put_u32(t, 40, sc.width);
+        put_u32(t, 44, sc.height);
+        put_u32(t, 48, sc.width);
+        put_u32(t, 52, sc.height);
+        put_u32(t, 56, 255); // D3DKMDT_VSS_OTHER
+        put_u32(t, 60, 1);
+    }
+    *npaths = n;
+    *nmodes = 2 * n;
+    if !topology.is_null() {
+        *topology = 1; // DISPLAYCONFIG_TOPOLOGY_INTERNAL
+    }
+    0
+}
+
+/// `DisplayConfigGetDeviceInfo` : noms des sources (\\.\DISPLAYn) et des
+/// cibles, couleur standard (pas de HDR), blanc SDR de 80 nits.
+unsafe extern "win64" fn DisplayConfigGetDeviceInfo(hdr: *mut u8) -> i32 {
+    if hdr.is_null() {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let kind = (hdr as *const u32).read_unaligned();
+    let size = (hdr.add(4) as *const u32).read_unaligned() as usize;
+    let id = (hdr.add(16) as *const u32).read_unaligned();
+    let n = crate::dlls::monitors::list().len() as u32;
+    let need = match kind {
+        1 => 84,
+        2 => 420,
+        4 => 276,
+        6 => 24,
+        9 => 32,
+        11 => 24,
+        _ => return ERROR_NOT_SUPPORTED_L,
+    };
+    if size < need {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    let index = match kind {
+        1 => id,
+        4 => 0,
+        _ => id.wrapping_sub(DC_TARGET_BASE),
+    };
+    if index >= n.max(1) {
+        return ERROR_INVALID_PARAMETER_L;
+    }
+    std::ptr::write_bytes(hdr.add(20), 0, need - 20);
+    let number = index + 1;
+    match kind {
+        1 => put_wide(hdr, 20, 32, &format!("\\\\.\\DISPLAY{number}")),
+        2 => {
+            put_u32(hdr, 24, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER);
+            put_u32(hdr, 32, number);
+            put_wide(hdr, 36, 64, &format!("Winlux {number}"));
+            put_wide(
+                hdr,
+                164,
+                128,
+                &format!(
+                    "\\\\?\\DISPLAY#WLX0000#{number}&0#{{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}}"
+                ),
+            );
+        }
+        4 => put_wide(hdr, 20, 128, "\\\\?\\WINLUX#DISPLAY#0"),
+        6 => put_u32(hdr, 20, DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER),
+        9 => put_u32(hdr, 28, 8),     // 8 bits par canal, ni HDR ni WCG
+        11 => put_u32(hdr, 20, 1000), // 1000 = 80 nits
+        _ => {}
+    }
+    0
+}
+
+unsafe extern "win64" fn SetDisplayConfig(
+    _np: u32,
+    _paths: usize,
+    _nm: u32,
+    _modes: usize,
+    _flags: u32,
+) -> i32 {
+    ERROR_NOT_SUPPORTED_L
+}
+
+unsafe extern "win64" fn DisplayConfigSetDeviceInfo(_hdr: usize) -> i32 {
+    ERROR_NOT_SUPPORTED_L
+}
+
+// Fonctions de fenêtre de Windows 8 à 11 que Chromium appelle au démarrage
+// du navigateur : réponses neutres d'un poste à un seul utilisateur, sans
+// écran tactile déclaré.
+
+static POWER_NOTIFY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5000);
+
+/// `RegisterPowerSettingNotification` : inscription acceptée (handle
+/// propre à chaque appel), aucun WM_POWERBROADCAST de réglage émis.
+unsafe extern "win64" fn RegisterPowerSettingNotification(
+    recipient: usize,
+    _guid: usize,
+    _flags: u32,
+) -> usize {
+    if recipient == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    POWER_NOTIFY.fetch_add(4, std::sync::atomic::Ordering::Relaxed)
+}
+
+unsafe extern "win64" fn UnregisterPowerSettingNotification(_h: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WindowOk(_hwnd: usize) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn WindowOk2(_hwnd: usize, _arg: u32) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn IsWindowArranged(_hwnd: usize) -> i32 {
+    0
+}
+
+/// `ChangeWindowMessageFilterEx` : pas de niveaux d'intégrité entre
+/// fenêtres sous Winlux ; CHANGEFILTERSTRUCT.ExtStatus = MSGFLTINFO_NONE.
+unsafe extern "win64" fn ChangeWindowMessageFilterEx(
+    _hwnd: usize,
+    _msg: u32,
+    _action: u32,
+    info: *mut u32,
+) -> i32 {
+    if !info.is_null() && *info >= 8 {
+        *info.add(1) = 0;
+    }
+    1
+}
+
+/// `GetPointerType` : tout pointeur est la souris (PT_MOUSE).
+unsafe extern "win64" fn GetPointerType(_id: u32, kind: *mut u32) -> i32 {
+    if kind.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *kind = 4;
+    1
+}
+
+/// `SystemParametersInfoForDpi` : mêmes valeurs que SystemParametersInfoW
+/// (les métriques sont déjà celles de l'échelle de la session).
+/// RegisterHotKey(hwnd, id, modifiers, vk) : les raccourcis globaux de la
+/// session appartiennent à Winlux (openbox) ; l'appli est acceptée sans
+/// rien voler aux raccourcis du bureau.
+unsafe extern "win64" fn RegisterHotKey(_hwnd: usize, _id: i32, _mods: u32, _vk: u32) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn UnregisterHotKey(_hwnd: usize, _id: i32) -> i32 {
+    1
+}
+
+unsafe extern "win64" fn SystemParametersInfoForDpi(
+    action: u32,
+    param: u32,
+    data: *mut std::ffi::c_void,
+    winini: u32,
+    _dpi: u32,
+) -> i32 {
+    crate::dlls::user32::system_parameters_info_w(action, param, data, winini)
+}
+
 pub fn user32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "RegisterPowerSettingNotification" => fn RegisterPowerSettingNotification,
+        "UnregisterPowerSettingNotification" => fn UnregisterPowerSettingNotification,
+        "EnableNonClientDpiScaling" => fn WindowOk,
+        "RegisterTouchWindow" => fn WindowOk2,
+        "UnregisterTouchWindow" => fn WindowOk,
+        "SetWindowDisplayAffinity" => fn WindowOk2,
+        "RegisterHotKey" => fn RegisterHotKey,
+        "UnregisterHotKey" => fn UnregisterHotKey,
+        "RegisterPointerDeviceNotifications" => fn WindowOk2,
+        "IsWindowArranged" => fn IsWindowArranged,
+        "ChangeWindowMessageFilterEx" => fn ChangeWindowMessageFilterEx,
+        "GetPointerType" => fn GetPointerType,
+        "SystemParametersInfoForDpi" => fn SystemParametersInfoForDpi,
+        "GetDisplayConfigBufferSizes" => fn GetDisplayConfigBufferSizes,
+        "QueryDisplayConfig" => fn QueryDisplayConfig,
+        "DisplayConfigGetDeviceInfo" => fn DisplayConfigGetDeviceInfo,
+        "DisplayConfigSetDeviceInfo" => fn DisplayConfigSetDeviceInfo,
+        "SetDisplayConfig" => fn SetDisplayConfig,
+        "GetPointerDevices" => fn GetPointerDevices,
         "CreateWindowStationW" => fn CreateWindowStation,
         "CreateWindowStationA" => fn CreateWindowStation,
         "OpenWindowStationW" => fn OpenWindowStation,
@@ -1573,6 +2072,196 @@ pub fn wintrust_exports() -> crate::dlls::Exports {
     }
 }
 
+// ============================================================
+//  shlwapi : PathMatchSpec ; advapi32 : MapGenericMask
+// ============================================================
+
+/// Motif MS-DOS (`*`, `?`) sur un texte, sans casse.
+fn dos_match(pattern: &[char], text: &[char]) -> bool {
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            p += 1;
+            mark = t;
+        } else if let Some(s) = star {
+            p = s + 1;
+            mark += 1;
+            t = mark;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// Un nom correspond-il à l'une des spécifications (« *.txt; *.md ») ?
+pub fn path_match_spec(file: &str, spec: &str, multiple: bool, strip: bool) -> bool {
+    let lower = |s: &str| {
+        s.chars()
+            .flat_map(char::to_lowercase)
+            .collect::<Vec<char>>()
+    };
+    let name = lower(file);
+    let one = |p: &str| {
+        let p = if strip { p.trim_start() } else { p };
+        // « *.* » accepte aussi les noms sans point, comme sous Windows.
+        p == "*.*" || dos_match(&lower(p), &name)
+    };
+    if multiple {
+        spec.split(';').any(one)
+    } else {
+        one(spec)
+    }
+}
+
+unsafe extern "win64" fn PathMatchSpecW(file: *const u16, spec: *const u16) -> i32 {
+    if file.is_null() || spec.is_null() {
+        return 0;
+    }
+    path_match_spec(
+        &crate::dlls::wstr(file),
+        &crate::dlls::wstr(spec),
+        true,
+        true,
+    ) as i32
+}
+
+unsafe extern "win64" fn PathMatchSpecA(file: *const u8, spec: *const u8) -> i32 {
+    if file.is_null() || spec.is_null() {
+        return 0;
+    }
+    path_match_spec(
+        &crate::dlls::cstr(file),
+        &crate::dlls::cstr(spec),
+        true,
+        true,
+    ) as i32
+}
+
+/// PathMatchSpecEx : S_OK si correspondance, S_FALSE sinon ;
+/// PMSF_MULTIPLE (1) pour une liste, PMSF_DONT_STRIP_SPACES (0x10000).
+unsafe extern "win64" fn PathMatchSpecExW(file: *const u16, spec: *const u16, flags: u32) -> u32 {
+    if file.is_null() || spec.is_null() {
+        return 0x8007_0057;
+    }
+    let ok = path_match_spec(
+        &crate::dlls::wstr(file),
+        &crate::dlls::wstr(spec),
+        flags & 1 != 0,
+        flags & 0x1_0000 == 0,
+    );
+    u32::from(!ok)
+}
+
+unsafe extern "win64" fn PathMatchSpecExA(file: *const u8, spec: *const u8, flags: u32) -> u32 {
+    if file.is_null() || spec.is_null() {
+        return 0x8007_0057;
+    }
+    let ok = path_match_spec(
+        &crate::dlls::cstr(file),
+        &crate::dlls::cstr(spec),
+        flags & 1 != 0,
+        flags & 0x1_0000 == 0,
+    );
+    u32::from(!ok)
+}
+
+pub fn shlwapi_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "PathMatchSpecW" => fn PathMatchSpecW,
+        "PathMatchSpecA" => fn PathMatchSpecA,
+        "PathMatchSpecExW" => fn PathMatchSpecExW,
+        "PathMatchSpecExA" => fn PathMatchSpecExA,
+    }
+}
+
+/// `MapGenericMask` : GENERIC_READ/WRITE/EXECUTE/ALL remplacés par les
+/// droits de la GENERIC_MAPPING, bits génériques effacés.
+pub fn map_generic_mask(mask: u32, mapping: [u32; 4]) -> u32 {
+    let mut m = mask;
+    for (bit, rights) in [
+        (0x8000_0000u32, mapping[0]),
+        (0x4000_0000, mapping[1]),
+        (0x2000_0000, mapping[2]),
+        (0x1000_0000, mapping[3]),
+    ] {
+        if mask & bit != 0 {
+            m |= rights;
+        }
+    }
+    m & !0xF000_0000
+}
+
+unsafe extern "win64" fn MapGenericMask(mask: *mut u32, mapping: *const u32) {
+    if mask.is_null() || mapping.is_null() {
+        return;
+    }
+    let map = [
+        mapping.read_unaligned(),
+        mapping.add(1).read_unaligned(),
+        mapping.add(2).read_unaligned(),
+        mapping.add(3).read_unaligned(),
+    ];
+    mask.write_unaligned(map_generic_mask(mask.read_unaligned(), map));
+}
+
+/// Droits accordés par AccessCheck : le jeton unique de Winlux est celui de
+/// l'utilisateur, propriétaire de ses objets ; il reçoit ce qu'il demande
+/// (MAXIMUM_ALLOWED donne GENERIC_ALL traduit).
+pub fn access_check_granted(desired: u32, mapping: [u32; 4]) -> u32 {
+    const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+    let mut want = desired;
+    if want & MAXIMUM_ALLOWED != 0 {
+        want = (want & !MAXIMUM_ALLOWED) | 0x1000_0000;
+    }
+    map_generic_mask(want, mapping)
+}
+
+/// AccessCheck(sd, token, desired, mapping, privileges, privileges_len,
+/// granted, status) -> BOOL
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn AccessCheck(
+    sd: usize,
+    _token: usize,
+    desired: u32,
+    mapping: *const u32,
+    privileges: *mut u32,
+    privileges_len: *mut u32,
+    granted: *mut u32,
+    status: *mut i32,
+) -> i32 {
+    if sd == 0 || mapping.is_null() || granted.is_null() || status.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    // PRIVILEGE_SET vide : PrivilegeCount = 0, Control = 0 (8 octets).
+    if !privileges_len.is_null() {
+        if privileges_len.read_unaligned() < 8 {
+            privileges_len.write_unaligned(8);
+            crate::process::set_last_error(122);
+            return 0;
+        }
+        if !privileges.is_null() {
+            privileges.write_unaligned(0);
+            privileges.add(1).write_unaligned(0);
+        }
+    }
+    let map = [
+        mapping.read_unaligned(),
+        mapping.add(1).read_unaligned(),
+        mapping.add(2).read_unaligned(),
+        mapping.add(3).read_unaligned(),
+    ];
+    granted.write_unaligned(access_check_granted(desired, map));
+    status.write_unaligned(1);
+    1
+}
+
 /// Toutes les tables, par DLL, pour `add_basics`.
 pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
     vec![
@@ -1584,6 +2273,8 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         ("uxtheme", uxtheme_exports()),
         ("user32", user32_exports()),
         ("ole32", ole32_exports()),
+        ("wtsapi32", wtsapi32_exports()),
+        ("shlwapi", shlwapi_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -1764,6 +2455,339 @@ mod tests {
                 usize::from_le_bytes(trustee[24..32].try_into().unwrap()),
                 0x1234
             );
+        }
+    }
+
+    #[test]
+    fn tube_nomme_deconnexion_puis_nouveau_client() {
+        use crate::dlls::kernel32 as k;
+        let _teb = crate::process::test_teb();
+        let name = format!("\\\\.\\pipe\\winlux-disconnect-{}", std::process::id());
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let open = |w: &Vec<u16>| unsafe {
+            for _ in 0..200 {
+                let c = k::create_file_w(w.as_ptr(), 0xC000_0000, 0, 0, 3, 0, 0);
+                if c != usize::MAX {
+                    return c;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            usize::MAX
+        };
+        unsafe {
+            let server = k::create_named_pipe_w(wide.as_ptr(), 3, 0, 1, 512, 512, 0, 0);
+            assert_ne!(server, usize::MAX);
+            let srv = server;
+            let t = std::thread::spawn(move || {
+                let _teb = crate::process::test_teb();
+                for word in [b"un", b"de"] {
+                    let r = k::connect_named_pipe(srv, 0);
+                    assert!(r == 1 || k::get_last_error() == 535);
+                    let mut buf = [0u8; 8];
+                    let mut n = 0u32;
+                    assert_eq!(k::read_file(srv, buf.as_mut_ptr(), 8, &mut n, 0), 1);
+                    assert_eq!(&buf[..n as usize], word);
+                    // Le serveur libère l'instance pour le client suivant,
+                    // comme le serveur d'exceptions de crashpad.
+                    assert_eq!(k::disconnect_named_pipe(srv), 1);
+                }
+            });
+            let mut n = 0u32;
+            let c1 = open(&wide);
+            assert_ne!(c1, usize::MAX);
+            assert_eq!(k::write_file(c1, b"un".as_ptr(), 2, &mut n, 0), 1);
+            // Après DisconnectNamedPipe, le premier client lit la fin du tube.
+            let mut buf = [0u8; 4];
+            assert_eq!(k::read_file(c1, buf.as_mut_ptr(), 4, &mut n, 0), 0);
+            let c2 = open(&wide);
+            assert_ne!(c2, usize::MAX, "second client après la déconnexion");
+            assert_eq!(k::write_file(c2, b"de".as_ptr(), 2, &mut n, 0), 1);
+            t.join().unwrap();
+            k::close_handle(c1);
+            k::close_handle(c2);
+            k::close_handle(server);
+            let mut count = 7u32;
+            assert_eq!(GetPointerDevices(&mut count, std::ptr::null_mut()), 1);
+            assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    fn configuration_d_affichage() {
+        unsafe {
+            let (mut np, mut nm) = (0u32, 0u32);
+            assert_eq!(GetDisplayConfigBufferSizes(2, &mut np, &mut nm), 0);
+            assert!(np >= 1);
+            assert_eq!(nm, 2 * np);
+            let mut paths = vec![0u8; 72 * np as usize];
+            let mut modes = vec![0u8; 64 * nm as usize];
+            let mut small = 0u32;
+            assert_eq!(
+                QueryDisplayConfig(
+                    2,
+                    &mut small,
+                    paths.as_mut_ptr(),
+                    &mut nm,
+                    modes.as_mut_ptr(),
+                    std::ptr::null_mut()
+                ),
+                122
+            );
+            assert_eq!(
+                QueryDisplayConfig(
+                    2,
+                    &mut np,
+                    paths.as_mut_ptr(),
+                    &mut nm,
+                    modes.as_mut_ptr(),
+                    std::ptr::null_mut()
+                ),
+                0
+            );
+            let rd = |b: &[u8], o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+            // Le mode cible du premier chemin porte la fréquence et la taille.
+            let t = 64 * rd(&paths, 32) as usize;
+            assert_eq!(rd(&modes, t), 2);
+            assert!(rd(&modes, t + 32) > 0);
+            assert_eq!(
+                rd(&modes, t + 40),
+                rd(&modes, 64 * rd(&paths, 12) as usize + 16)
+            );
+            // Nom de la source : celui de GetMonitorInfo.
+            let mut src = [0u8; 84];
+            src[0..4].copy_from_slice(&1u32.to_le_bytes());
+            src[4..8].copy_from_slice(&84u32.to_le_bytes());
+            src[16..20].copy_from_slice(&paths[8..12]);
+            assert_eq!(DisplayConfigGetDeviceInfo(src.as_mut_ptr()), 0);
+            let name: Vec<u16> = src[20..84]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|c| *c != 0)
+                .collect();
+            assert_eq!(String::from_utf16_lossy(&name), "\\\\.\\DISPLAY1");
+            let mut tgt = [0u8; 420];
+            tgt[0..4].copy_from_slice(&2u32.to_le_bytes());
+            tgt[4..8].copy_from_slice(&420u32.to_le_bytes());
+            tgt[16..20].copy_from_slice(&paths[28..32]);
+            assert_eq!(DisplayConfigGetDeviceInfo(tgt.as_mut_ptr()), 0);
+            assert_ne!(tgt[36], 0);
+            // Taille trop courte refusée.
+            tgt[4..8].copy_from_slice(&40u32.to_le_bytes());
+            assert_eq!(DisplayConfigGetDeviceInfo(tgt.as_mut_ptr()), 87);
+        }
+    }
+
+    #[test]
+    fn notifications_de_session() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            assert_eq!(WTSRegisterSessionNotification(0x1234, 0), 1);
+            assert_eq!(WTSRegisterSessionNotificationEx(0, 0x1234, 1), 1);
+            assert_eq!(WTSUnRegisterSessionNotification(0x1234), 1);
+            assert_eq!(WTSRegisterSessionNotification(0, 0), 0);
+            let a = RegisterPowerSettingNotification(0x1234, 0, 0);
+            let b = RegisterPowerSettingNotification(0x1234, 0, 0);
+            assert!(a != 0 && b != 0 && a != b);
+            let mut kind = 0u32;
+            assert_eq!(GetPointerType(1, &mut kind), 1);
+            assert_eq!(kind, 4);
+            let mut filter = [8u32, 9];
+            assert_eq!(
+                ChangeWindowMessageFilterEx(0x1234, 0x4a, 1, filter.as_mut_ptr()),
+                1
+            );
+            assert_eq!(filter[1], 0);
+        }
+        // Trouvées par GetProcAddress à côté de celles de sandbox_dlls.
+        let all = all();
+        let wts: Vec<_> = all.iter().filter(|(n, _)| *n == "wtsapi32").collect();
+        assert!(wts
+            .iter()
+            .any(|(_, e)| e.contains_key("WTSRegisterSessionNotification")));
+    }
+
+    #[test]
+    fn taille_d_une_section() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let h = crate::dlls::mmap::create_file_mapping_w(
+                usize::MAX,
+                0,
+                4,
+                0,
+                0x40000,
+                std::ptr::null(),
+            );
+            assert_ne!(h, 0);
+            let mut info = [0u8; 24];
+            let mut got = 0usize;
+            assert_eq!(NtQuerySection(h, 0, info.as_mut_ptr(), 24, &mut got), 0);
+            assert_eq!(got, 24);
+            assert_eq!(
+                u64::from_le_bytes(info[16..24].try_into().unwrap()),
+                0x40000
+            );
+            assert_eq!(
+                NtQuerySection(h, 0, info.as_mut_ptr(), 8, &mut got),
+                0xC000_0004
+            );
+            assert_eq!(
+                NtQuerySection(0x99_9999, 0, info.as_mut_ptr(), 24, &mut got),
+                0xC000_0008
+            );
+            crate::dlls::kernel32::close_handle(h);
+        }
+    }
+
+    #[test]
+    fn type_des_handles() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let section = crate::dlls::mmap::create_file_mapping_w(
+                usize::MAX,
+                0,
+                4,
+                0,
+                4096,
+                std::ptr::null(),
+            );
+            let name = |h: usize| {
+                let mut buf = [0u64; 32];
+                let mut got = 0u32;
+                assert_eq!(
+                    NtQueryObject(h, 2, buf.as_mut_ptr().cast(), 256, &mut got),
+                    0
+                );
+                let b = buf.as_ptr() as *const u8;
+                let n = (b as *const u16).read_unaligned() as usize / 2;
+                let p = (b.add(8) as *const usize).read_unaligned() as *const u16;
+                String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+            };
+            assert_eq!(name(section), "Section");
+            let path: Vec<u16> = "/proc/self/exe".encode_utf16().chain(Some(0)).collect();
+            let file =
+                crate::dlls::kernel32::create_file_w(path.as_ptr(), 0x8000_0000, 1, 0, 3, 0, 0);
+            assert_ne!(file, usize::MAX);
+            assert_eq!(name(file), "File");
+            assert_eq!(name(crate::dlls::security::TOKEN_HANDLE), "Token");
+            let mut basic = [0u8; 56];
+            let mut got = 0u32;
+            assert_eq!(
+                NtQueryObject(file, 0, basic.as_mut_ptr().cast(), 56, &mut got),
+                0
+            );
+            assert_eq!(got, 56);
+            assert_eq!(
+                NtQueryObject(file, 0, basic.as_mut_ptr().cast(), 8, &mut got),
+                0xC000_0004
+            );
+            assert_eq!(
+                NtQueryObject(0x7777_7777, 2, basic.as_mut_ptr().cast(), 56, &mut got),
+                0xC000_0008
+            );
+            crate::dlls::kernel32::close_handle(file);
+            crate::dlls::kernel32::close_handle(section);
+            // Jetons du bac à sable : copie, jeton restreint, fermeture.
+            let mut t = 0usize;
+            assert_eq!(
+                crate::dlls::security::DuplicateTokenEx(
+                    crate::dlls::security::TOKEN_HANDLE,
+                    0,
+                    0,
+                    2,
+                    1,
+                    &mut t
+                ),
+                1
+            );
+            assert_eq!(crate::dlls::kernel32::close_handle(t), 1);
+            let mut size = 68u32;
+            let mut sid = [0u8; 68];
+            assert_eq!(
+                crate::dlls::security::CreateWellKnownSid(
+                    66,
+                    std::ptr::null(),
+                    sid.as_mut_ptr(),
+                    &mut size
+                ),
+                1
+            );
+            assert_eq!(
+                crate::dlls::security::sid_text(&sid[..size as usize]).as_deref(),
+                Some("S-1-16-4096")
+            );
+        }
+    }
+
+    #[test]
+    fn filtres_de_noms_et_droits_generiques() {
+        assert!(path_match_spec(
+            "C:\\Docs\\Rapport.TXT",
+            "*.txt",
+            true,
+            true
+        ));
+        assert!(path_match_spec("photo.jpeg", "*.png; *.JPEG", true, true));
+        assert!(!path_match_spec("photo.jpeg", "*.png; *.JPEG", false, true));
+        assert!(path_match_spec("LISEZMOI", "*.*", true, true));
+        assert!(path_match_spec("été.md", "?té.*", true, true));
+        assert!(!path_match_spec("a.txt", "*.md", true, true));
+        unsafe {
+            let f: Vec<u16> = "Notes.Log".encode_utf16().chain(Some(0)).collect();
+            let p: Vec<u16> = "*.txt;*.log".encode_utf16().chain(Some(0)).collect();
+            assert_eq!(PathMatchSpecW(f.as_ptr(), p.as_ptr()), 1);
+            assert_eq!(PathMatchSpecExW(f.as_ptr(), p.as_ptr(), 1), 0);
+            assert_eq!(PathMatchSpecExW(f.as_ptr(), p.as_ptr(), 0), 1);
+            let mut mask = 0x8000_0001u32; // GENERIC_READ | 1
+            let mapping = [0x10u32, 0x20, 0x40, 0x1FF];
+            MapGenericMask(&mut mask, mapping.as_ptr());
+            assert_eq!(mask, 0x11);
+        }
+        assert_eq!(map_generic_mask(0x1000_0000, [1, 2, 4, 0x1F]), 0x1F);
+    }
+
+    #[test]
+    fn verification_d_acces_et_raccourcis() {
+        let _teb = crate::process::test_teb();
+        let mapping = [0x10u32, 0x20, 0x40, 0x1FF];
+        assert_eq!(access_check_granted(0x8000_0000, mapping), 0x10);
+        assert_eq!(access_check_granted(0x0200_0000, mapping), 0x1FF);
+        unsafe {
+            let sd = [0u8; 20];
+            let mut privs = [0xFFFF_FFFFu32; 5];
+            let mut len = 20u32;
+            let (mut granted, mut ok) = (0u32, 0i32);
+            assert_eq!(
+                AccessCheck(
+                    sd.as_ptr() as usize,
+                    crate::dlls::security::TOKEN_HANDLE,
+                    0x4000_0000,
+                    mapping.as_ptr(),
+                    privs.as_mut_ptr(),
+                    &mut len,
+                    &mut granted,
+                    &mut ok,
+                ),
+                1
+            );
+            assert_eq!((granted, ok, privs[0]), (0x20, 1, 0));
+            let mut small = 4u32;
+            assert_eq!(
+                AccessCheck(
+                    sd.as_ptr() as usize,
+                    0,
+                    1,
+                    mapping.as_ptr(),
+                    privs.as_mut_ptr(),
+                    &mut small,
+                    &mut granted,
+                    &mut ok,
+                ),
+                0
+            );
+            assert_eq!(small, 8);
+            assert_eq!(RegisterHotKey(0, 1, 2, 0x41), 1);
+            assert_eq!(UnregisterHotKey(0, 1), 1);
         }
     }
 

@@ -668,7 +668,7 @@ def resolve_source(spec, work, start=3, end=40):
 def check_support(source):
     if not initramfs_supports_reset(source.initramfs):
         raise ResetError(_("Cette image de Winlux est trop ancienne pour réinitialiser un PC : utilisez la version {version} ou plus récente.",
-                           version=read_text(ROOT / "usr/share/winlux/version").strip() or "v0.2.17"))
+                           version=read_text(ROOT / "usr/share/winlux/version").strip() or "v0.2.18"))
 
 
 # ── Préparer, annuler ───────────────────────────────────────────────────────

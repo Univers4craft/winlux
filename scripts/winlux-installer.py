@@ -10,6 +10,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
+import contextlib
 import gzip
 import html
 import json
@@ -576,6 +577,20 @@ TRANSLATIONS = {
         "progress_account": "Configuration du compte utilisateur...",
         "progress_firstboot": "Configuration du premier démarrage...",
         "progress_sync": "Synchronisation et démontage...",
+        "hw_rgb": "Éclairage RGB du clavier et des périphériques (OpenRGB)",
+        "hw_printer": "Pilotes d'imprimantes",
+        "progress_drivers": "Pilotes et micrologiciels pour cet ordinateur...",
+        "hw_show": "Voir ce qui a été ajouté pour cet ordinateur",
+        "hw_none": "Rien à ajouter : tout ce qu'il faut à cet ordinateur est déjà dans Winlux.",
+        "hw_offline": "Hors ligne : ce qui est propre à cet ordinateur sera ajouté au premier démarrage connecté. Tout le reste est déjà installé.",
+        "hw_partial": "Le reste sera terminé automatiquement au premier démarrage connecté.",
+        "hw_nvidia": "Pilote NVIDIA pour la carte graphique",
+        "hw_modules": "Pilotes complets du noyau (Wi-Fi, son, capteurs…)",
+        "hw_microcode": "Microcode du processeur",
+        "hw_vaapi": "Décodage et encodage vidéo matériels (VA-API)",
+        "hw_fwupd": "Mises à jour du micrologiciel (fwupd)",
+        "hw_fingerprint": "Lecteur d'empreintes digitales",
+        "err_unmount": "Le disque {path} n'a pas pu être libéré proprement. N'éteignez pas l'ordinateur : utilisez « Redémarrer maintenant ».",
         "progress_done": "Installation terminée avec succès !",
         "network_title": "Connexion réseau",
         "network_subtitle": "Connectez-vous à Internet pour télécharger les mises à jour pendant l'installation.",
@@ -740,6 +755,20 @@ TRANSLATIONS = {
         "progress_account": "Configuring user account...",
         "progress_firstboot": "Configuring first boot...",
         "progress_sync": "Syncing and unmounting...",
+        "hw_rgb": "RGB lighting for the keyboard and devices (OpenRGB)",
+        "hw_printer": "Printer drivers",
+        "progress_drivers": "Drivers and firmware for this computer...",
+        "hw_show": "Show what was added for this computer",
+        "hw_none": "Nothing to add: everything this computer needs is already in Winlux.",
+        "hw_offline": "Offline: what is specific to this computer will be added at the first connected start. Everything else is already installed.",
+        "hw_partial": "The rest will be finished automatically at the first connected start.",
+        "hw_nvidia": "NVIDIA driver for the graphics card",
+        "hw_modules": "Full kernel drivers (Wi-Fi, sound, sensors…)",
+        "hw_microcode": "Processor microcode",
+        "hw_vaapi": "Hardware video decoding and encoding (VA-API)",
+        "hw_fwupd": "Firmware updates (fwupd)",
+        "hw_fingerprint": "Fingerprint reader",
+        "err_unmount": "The disk {path} could not be released cleanly. Do not switch the computer off: use “Restart now”.",
         "progress_done": "Installation completed successfully!",
         "network_title": "Network connection",
         "network_subtitle": "Connect to the Internet to download updates during installation.",
@@ -904,6 +933,20 @@ TRANSLATIONS = {
         "progress_account": "Benutzerkonto wird konfiguriert...",
         "progress_firstboot": "Erster Start wird konfiguriert...",
         "progress_sync": "Synchronisierung und Aushängen...",
+        "hw_rgb": "RGB-Beleuchtung von Tastatur und Geräten (OpenRGB)",
+        "hw_printer": "Druckertreiber",
+        "progress_drivers": "Treiber und Firmware für diesen Computer...",
+        "hw_show": "Anzeigen, was für diesen Computer hinzugefügt wurde",
+        "hw_none": "Nichts hinzuzufügen: alles, was dieser Computer braucht, ist bereits in Winlux.",
+        "hw_offline": "Offline: Was speziell für diesen Computer ist, wird beim ersten Start mit Internet hinzugefügt. Alles andere ist bereits installiert.",
+        "hw_partial": "Der Rest wird beim ersten Start mit Internet automatisch abgeschlossen.",
+        "hw_nvidia": "NVIDIA-Treiber für die Grafikkarte",
+        "hw_modules": "Vollständige Kerneltreiber (WLAN, Ton, Sensoren…)",
+        "hw_microcode": "Prozessor-Mikrocode",
+        "hw_vaapi": "Hardware-Videodekodierung und -kodierung (VA-API)",
+        "hw_fwupd": "Firmware-Updates (fwupd)",
+        "hw_fingerprint": "Fingerabdruckleser",
+        "err_unmount": "Das Laufwerk {path} konnte nicht sauber freigegeben werden. Schalten Sie den Computer nicht aus: verwenden Sie „Jetzt neu starten“.",
         "progress_done": "Installation erfolgreich abgeschlossen!",
         "network_title": "Netzwerkverbindung",
         "network_subtitle": "Verbinden Sie sich mit dem Internet, um während der Installation Updates herunterzuladen.",
@@ -1068,6 +1111,20 @@ TRANSLATIONS = {
         "progress_account": "Configurando cuenta de usuario...",
         "progress_firstboot": "Configurando primer arranque...",
         "progress_sync": "Sincronizando y desmontando...",
+        "hw_rgb": "Iluminación RGB del teclado y los periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impresora",
+        "progress_drivers": "Controladores y firmware para este equipo...",
+        "hw_show": "Ver lo que se añadió para este equipo",
+        "hw_none": "Nada que añadir: todo lo que necesita este equipo ya está en Winlux.",
+        "hw_offline": "Sin conexión: lo propio de este equipo se añadirá en el primer inicio con conexión. Todo lo demás ya está instalado.",
+        "hw_partial": "El resto se terminará automáticamente en el primer inicio con conexión.",
+        "hw_nvidia": "Controlador NVIDIA para la tarjeta gráfica",
+        "hw_modules": "Controladores completos del núcleo (Wi-Fi, sonido, sensores…)",
+        "hw_microcode": "Microcódigo del procesador",
+        "hw_vaapi": "Decodificación y codificación de vídeo por hardware (VA-API)",
+        "hw_fwupd": "Actualizaciones de firmware (fwupd)",
+        "hw_fingerprint": "Lector de huellas",
+        "err_unmount": "No se pudo liberar correctamente el disco {path}. No apague el equipo: use «Reiniciar ahora».",
         "progress_done": "¡Instalación completada con éxito!",
         "network_title": "Conexión de red",
         "network_subtitle": "Conéctese a Internet para descargar actualizaciones durante la instalación.",
@@ -1232,6 +1289,20 @@ TRANSLATIONS = {
         "progress_account": "Configurazione dell'account utente...",
         "progress_firstboot": "Configurazione del primo avvio...",
         "progress_sync": "Sincronizzazione e smontaggio...",
+        "hw_rgb": "Illuminazione RGB di tastiera e periferiche (OpenRGB)",
+        "hw_printer": "Driver per stampanti",
+        "progress_drivers": "Driver e firmware per questo computer...",
+        "hw_show": "Mostra cosa è stato aggiunto per questo computer",
+        "hw_none": "Niente da aggiungere: tutto ciò che serve a questo computer è già in Winlux.",
+        "hw_offline": "Offline: ciò che è specifico di questo computer verrà aggiunto al primo avvio connesso. Tutto il resto è già installato.",
+        "hw_partial": "Il resto verrà completato automaticamente al primo avvio connesso.",
+        "hw_nvidia": "Driver NVIDIA per la scheda grafica",
+        "hw_modules": "Driver completi del kernel (Wi-Fi, audio, sensori…)",
+        "hw_microcode": "Microcodice del processore",
+        "hw_vaapi": "Decodifica e codifica video hardware (VA-API)",
+        "hw_fwupd": "Aggiornamenti firmware (fwupd)",
+        "hw_fingerprint": "Lettore di impronte",
+        "err_unmount": "Impossibile liberare correttamente il disco {path}. Non spegnere il computer: usa «Riavvia ora».",
         "progress_done": "Installazione completata con successo!",
         "network_title": "Connessione di rete",
         "network_subtitle": "Connettiti a Internet per scaricare gli aggiornamenti durante l'installazione.",
@@ -1396,6 +1467,20 @@ TRANSLATIONS = {
         "progress_account": "Configurando conta de usuário...",
         "progress_firstboot": "Configurando primeira inicialização...",
         "progress_sync": "Sincronizando e desmontando...",
+        "hw_rgb": "Iluminação RGB do teclado e periféricos (OpenRGB)",
+        "hw_printer": "Controladores de impressora",
+        "progress_drivers": "Controladores e firmware para este computador...",
+        "hw_show": "Ver o que foi adicionado para este computador",
+        "hw_none": "Nada a adicionar: tudo o que este computador precisa já está no Winlux.",
+        "hw_offline": "Sem ligação: o que é específico deste computador será adicionado no primeiro arranque com ligação. Todo o resto já está instalado.",
+        "hw_partial": "O resto será concluído automaticamente no primeiro arranque com ligação.",
+        "hw_nvidia": "Controlador NVIDIA para a placa gráfica",
+        "hw_modules": "Controladores completos do núcleo (Wi-Fi, som, sensores…)",
+        "hw_microcode": "Microcódigo do processador",
+        "hw_vaapi": "Descodificação e codificação de vídeo por hardware (VA-API)",
+        "hw_fwupd": "Atualizações de firmware (fwupd)",
+        "hw_fingerprint": "Leitor de impressões digitais",
+        "err_unmount": "Não foi possível libertar corretamente o disco {path}. Não desligue o computador: use «Reiniciar agora».",
         "progress_done": "Instalação concluída com sucesso!",
         "network_title": "Conexão de rede",
         "network_subtitle": "Conecte-se à Internet para baixar atualizações durante a instalação.",
@@ -2914,6 +2999,67 @@ def detect_image_ext(path):
     if head.startswith(b"BM"):
         return ".bmp"
     return ".jpg"
+
+
+HARDWARE_CATEGORIES = (
+    ("nvidia-", "hw_nvidia"),
+    ("linux-modules-extra-", "hw_modules"),
+    ("intel-microcode", "hw_microcode"),
+    ("amd64-microcode", "hw_microcode"),
+    ("va-driver", "hw_vaapi"),
+    ("intel-media-va", "hw_vaapi"),
+    ("mesa-va", "hw_vaapi"),
+    ("fwupd", "hw_fwupd"),
+    ("fprintd", "hw_fingerprint"),
+    ("openrgb", "hw_rgb"),
+    ("printer-driver", "hw_printer"),
+)
+
+
+def installed_packages(root_path):
+    """Paquets installés dans la cible (ensemble vide si dpkg-query échoue)."""
+    try:
+        out = subprocess.run(["chroot", root_path, "dpkg-query", "-W", "-f", "${Package}\\n"],
+                             capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def hardware_categories(packages):
+    """Clés de traduction de ce qui a été ajouté, une fois chacune, dans l'ordre."""
+    keys = []
+    for prefix, key in HARDWARE_CATEGORIES:
+        if key not in keys and any(prefix in package for package in packages):
+            keys.append(key)
+    return keys
+
+
+def write_account_file(path, lines, mode):
+    """Écrit un fichier de comptes et sa sauvegarde « path- » sans jamais
+    laisser de fichier à moitié écrit : temporaire, fsync, rename, fsync du
+    dossier. Propriétaire et droits de l'ancien fichier conservés."""
+    try:
+        info = os.stat(path)
+        mode, owner, group = info.st_mode & 0o7777, info.st_uid, info.st_gid
+    except OSError:
+        owner = group = 0
+    text = "\n".join(lines) + "\n"
+    directory = os.path.dirname(path)
+    for destination in (path, path + "-"):
+        temporary = os.path.join(directory, f".{os.path.basename(destination)}.winlux-install")
+        with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chown(temporary, owner, group)
+        os.chmod(temporary, mode)
+        os.rename(temporary, destination)
+    handle = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(handle)
+    finally:
+        os.close(handle)
 
 
 class InstallerApp(Gtk.Application):
@@ -5000,6 +5146,12 @@ class InstallerApp(Gtk.Application):
         self.done_sub.set_line_wrap(True)
         self.done_sub.set_justify(Gtk.Justification.CENTER)
         box.pack_start(self.done_sub, False, False, 0)
+        # Ce qui a été ajouté pour CET ordinateur (pilotes, microcode…),
+        # rempli par show_done d'après install_hardware_support.
+        self.hardware_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.hardware_box.set_halign(Gtk.Align.CENTER)
+        self.hardware_box.set_no_show_all(True)
+        box.pack_start(self.hardware_box, False, False, 0)
         btn_box = Gtk.Box(spacing=12)
         btn_box.set_halign(Gtk.Align.CENTER)
         btn_box.set_margin_top(24)
@@ -5021,7 +5173,10 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            subprocess.run(["sync"], timeout=10)
+            try:
+                subprocess.run(["sync"], timeout=10)
+            except subprocess.TimeoutExpired:
+                pass  # l'init synchronise de toute façon avant de redémarrer
             # En live, PID 1 est le script /init : « reboot » (systemctl)
             # ne faisait rien et le bouton fermait seulement l'installateur.
             # winlux-power sait redémarrer dans les deux cas.
@@ -5032,7 +5187,18 @@ class InstallerApp(Gtk.Application):
             # (mise à jour en cours…), pour afficher la raison.
             power = shutil.which("winlux-power")
             if power:
-                done = subprocess.run([power, "execute", "reboot"], timeout=30).returncode == 0
+                try:
+                    done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
+                    refused = not done
+                except (OSError, subprocess.SubprocessError):
+                    # Écriture des disques encore longue juste après
+                    # l'installation : le délai expirait et le bouton
+                    # fermait l'installateur sans redémarrer.
+                    done = refused = False
+                if not done and not refused and os.geteuid() == 0:
+                    # Session live (root) : l'init redémarre sur SIGTERM.
+                    os.kill(1, signal.SIGTERM)
+                    done = True
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
@@ -5164,10 +5330,13 @@ class InstallerApp(Gtk.Application):
             self.import_windows_data(target)
             self.set_progress(0.90, tr("progress_firstboot"))
             self.configure_first_boot(target)
+            self.install_hardware_support(target)
             self.write_manual_fstab(layout, target)
             self.run_migration(target)
             self.set_progress(0.95, tr("progress_sync"))
-            subprocess.run(["sync"], timeout=60)
+            # « Terminée » seulement une fois tout écrit et la cible démontée :
+            # couper juste après ne doit plus rien perdre (/etc/passwd…).
+            self.finalize_target()
         except subprocess.CalledProcessError as e:
             self.release_target()
             self.install_error(f"{tr('error_title')} : {' '.join(map(str, e.cmd[:2]))} ({e.returncode})")
@@ -5381,6 +5550,63 @@ class InstallerApp(Gtk.Application):
         with open(f"{target}/etc/fstab", "w") as f:
             f.write(plan.fstab(winlux_partitioner.blkid_uuid, root_luks=self.config["luks_enabled"]))
 
+    @staticmethod
+    def stop_processes_under(path):
+        """Arrête les programmes qui utilisent encore la cible (lancés dans le
+        chroot de préparation, par exemple) : sinon umount échoue « occupé »."""
+        prefix = os.path.realpath(path).rstrip("/") + "/"
+        found = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit() or int(entry) == os.getpid():
+                continue
+            for link in ("root", "cwd", "exe"):
+                try:
+                    where = os.readlink(f"/proc/{entry}/{link}")
+                except OSError:
+                    continue
+                if (where.rstrip("/") + "/").startswith(prefix):
+                    found.append(int(entry))
+                    break
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in found:
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+            if found:
+                time.sleep(1)
+        return found
+
+    def unmount_verified(self, mountpoint):
+        """Vrai quand le système de fichiers est démonté, ou au moins figé sur
+        le disque (lecture seule, ou fsfreeze qui écrit tout le journal)."""
+        for attempt in range(3):
+            if subprocess.run(["umount", mountpoint], timeout=120).returncode == 0:
+                return True
+            self.stop_processes_under(mountpoint)
+            subprocess.run(["sync"], timeout=300)
+        if subprocess.run(["mount", "-o", "remount,ro", mountpoint], timeout=120).returncode == 0:
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        if shutil.which("fsfreeze") and subprocess.run(["fsfreeze", "--freeze", mountpoint], timeout=300).returncode == 0:
+            subprocess.run(["fsfreeze", "--unfreeze", mountpoint], timeout=60)
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        return False
+
+    def finalize_target(self):
+        """sync puis démontage vérifié de chaque point de montage de la cible
+        (ESP et /boot compris), du plus profond au plus haut."""
+        subprocess.run(["sync"], timeout=600)
+        for mountpoint in reversed(getattr(self, "_mounts", [])):
+            if not self.unmount_verified(mountpoint):
+                raise RuntimeError(tr("err_unmount", path=mountpoint))
+            self._mounts.remove(mountpoint)
+        if getattr(self, "_luks_open", False):
+            subprocess.run(["cryptsetup", "close", LUKS_NAME], timeout=60)
+            self._luks_open = False
+        subprocess.run(["sync"], timeout=600)
+
     def release_target(self):
         for mountpoint in reversed(getattr(self, "_mounts", [])):
             subprocess.run(["umount", mountpoint], timeout=60)
@@ -5526,37 +5752,35 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         passwd_line = f"{username}:x:{uid}:{gid}:{fullname}:/home/{username}:/bin/bash\n"
         groups_to_join = ["sudo", "audio", "video", "plugdev", "netdev", "bluetooth",
                           "input", "dialout", "cdrom", "floppy"]
-        if os.path.exists(passwd_path):
-            with open(passwd_path, "a") as f:
-                f.write(passwd_line)
-        else:
-            with open(passwd_path, "w") as f:
-                f.write("root:x:0:0:root:/root:/bin/bash\n")
-                f.write(passwd_line)
-        if not os.path.exists(group_path):
-            with open(group_path, "w") as f:
-                f.write(f"root:x:0:\n{username}:x:{gid}:\n")
-                for grp in groups_to_join:
-                    f.write(f"{grp}:x::{username}\n")
-        else:
-            with open(group_path, "r") as f:
-                lines = f.readlines()
-            with open(group_path, "w") as f:
-                user_group_found = False
-                for line in lines:
-                    parts = line.strip().split(":")
-                    if len(parts) >= 4 and parts[0] in groups_to_join:
-                        members = parts[3].split(",") if parts[3] else []
-                        if username not in members:
-                            members.append(username)
-                        parts[3] = ",".join(members)
-                        f.write(":".join(parts) + "\n")
-                    else:
-                        f.write(line)
-                        if len(parts) >= 1 and parts[0] == username:
-                            user_group_found = True
-                if not user_group_found:
-                    f.write(f"{username}:x:{gid}:\n")
+        # Comptes écrits par fichier temporaire + fsync + rename, avec leur
+        # copie de sauvegarde (passwd-…) : une coupure juste après
+        # l'installation laissait des octets nuls à la place du compte.
+        def read_lines(path):
+            try:
+                with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                    return [line for line in f.read().split("\n") if line.strip()]
+            except OSError:
+                return []
+
+        passwd_lines = read_lines(passwd_path) or ["root:x:0:0:root:/root:/bin/bash"]
+        passwd_lines = [line for line in passwd_lines if line.split(":")[0] != username]
+        passwd_lines.append(passwd_line.rstrip("\n"))
+        group_lines = read_lines(group_path)
+        if not group_lines:
+            group_lines = ["root:x:0:"] + [f"{grp}:x::" for grp in groups_to_join]
+        user_group_found = False
+        for index, line in enumerate(group_lines):
+            parts = line.split(":")
+            if len(parts) >= 4 and parts[0] in groups_to_join:
+                members = [m for m in parts[3].split(",") if m]
+                if username not in members:
+                    members.append(username)
+                parts[3] = ",".join(members)
+                group_lines[index] = ":".join(parts)
+            elif parts[0] == username:
+                user_group_found = True
+        if not user_group_found:
+            group_lines.append(f"{username}:x:{gid}:")
         hashed = self.config.get("password_hash") or ""
         if password and not hashed:
             try:
@@ -5566,15 +5790,19 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 ).stdout.strip()
             except Exception:
                 hashed = "!"
+        write_account_file(passwd_path, passwd_lines, 0o644)
+        write_account_file(group_path, group_lines, 0o644)
         if hashed:
-            if os.path.exists(shadow_path):
-                with open(shadow_path, "a") as f:
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-            else:
-                with open(shadow_path, "w") as f:
-                    f.write(f"root:!:19000:0:99999:7:::\n")
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-                os.chmod(shadow_path, 0o640)
+            shadow_lines = read_lines(shadow_path) or ["root:!:19000:0:99999:7:::"]
+            shadow_lines = [line for line in shadow_lines if line.split(":")[0] != username]
+            shadow_lines.append(f"{username}:{hashed}:19000:0:99999:7:::")
+            write_account_file(shadow_path, shadow_lines, 0o640)
+        gshadow_path = f"{etc}/gshadow"
+        if os.path.exists(gshadow_path):
+            gshadow_lines = read_lines(gshadow_path)
+            if not any(line.split(":")[0] == username for line in gshadow_lines):
+                gshadow_lines.append(f"{username}:!::")
+            write_account_file(gshadow_path, gshadow_lines, 0o640)
         for d in [".config", ".local/share", "Bureau", "Documents",
                   "Téléchargements", "Images", "Musique", "Vidéos"]:
             os.makedirs(f"{home}/{d}", exist_ok=True)
@@ -5702,6 +5930,55 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             os.chmod(dest, 0o755)
         self.prepare_system_state(root_path)
 
+    @staticmethod
+    @contextlib.contextmanager
+    def target_chroot(root_path, network=False):
+        """Chroot de la cible prêt pour APT : /proc, /sys, /dev (et /dev/pts),
+        l'inventaire matériel du live (/run/winlux/hw) et, en ligne, la
+        résolution de noms ; aucun service n'y démarre (policy-rc.d)."""
+        mounted = []
+        policy = f"{root_path}/usr/sbin/policy-rc.d"
+        had_policy = os.path.exists(policy)
+        resolv = f"{root_path}/etc/resolv.conf"
+        saved_resolv = None
+        try:
+            binds = ["/proc", "/sys", "/dev", "/dev/pts"]
+            if os.path.isdir("/run/winlux/hw"):
+                binds.append("/run/winlux/hw")
+            for source in binds:
+                if not os.path.isdir(source):
+                    continue
+                destination = f"{root_path}{source}"
+                os.makedirs(destination, exist_ok=True)
+                subprocess.run(["mount", "--bind", source, destination], check=True, timeout=30)
+                mounted.append(destination)
+            if not had_policy:
+                os.makedirs(os.path.dirname(policy), exist_ok=True)
+                with open(policy, "w") as f:
+                    f.write("#!/bin/sh\nexit 101\n")
+                os.chmod(policy, 0o755)
+            if network and os.path.isfile("/etc/resolv.conf"):
+                if os.path.lexists(resolv):
+                    saved_resolv = f"{resolv}.winlux-install"
+                    os.rename(resolv, saved_resolv)
+                shutil.copyfile("/etc/resolv.conf", resolv)
+            yield
+        finally:
+            if network and os.path.isfile("/etc/resolv.conf"):
+                try:
+                    os.remove(resolv)
+                except OSError:
+                    pass
+                if saved_resolv:
+                    os.rename(saved_resolv, resolv)
+            if not had_policy:
+                try:
+                    os.remove(policy)
+                except OSError:
+                    pass
+            for destination in reversed(mounted):
+                subprocess.run(["umount", "-l", destination], timeout=30)
+
     def prepare_system_state(self, root_path):
         """Fait pendant l'installation le travail unique du premier démarrage.
 
@@ -5714,36 +5991,75 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         """
         if not os.path.exists(f"{root_path}/usr/share/winlux/update-backend") or not shutil.which("chroot"):
             return
-        mounted = []
-        policy = f"{root_path}/usr/sbin/policy-rc.d"
-        had_policy = os.path.exists(policy)
         try:
-            for source in ("/proc", "/sys", "/dev"):
-                destination = f"{root_path}{source}"
-                os.makedirs(destination, exist_ok=True)
-                subprocess.run(["mount", "--bind", source, destination], check=True, timeout=30)
-                mounted.append(destination)
-            if not had_policy:
-                # Aucun service démarré depuis le chroot de l'installateur.
-                os.makedirs(os.path.dirname(policy), exist_ok=True)
-                with open(policy, "w") as f:
-                    f.write("#!/bin/sh\nexit 101\n")
-                os.chmod(policy, 0o755)
-            result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-update", "--boot"],
-                                    capture_output=True, text=True, timeout=900,
-                                    env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+            with self.target_chroot(root_path):
+                result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-update", "--boot"],
+                                        capture_output=True, text=True, timeout=900,
+                                        env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
             if result.returncode != 0:
                 print("winlux-update --boot (installation) :", result.stdout, result.stderr, file=sys.stderr)
         except (OSError, subprocess.SubprocessError) as error:
             print("Préparation du premier démarrage reportée :", error, file=sys.stderr)
-        finally:
-            if not had_policy:
-                try:
-                    os.remove(policy)
-                except OSError:
-                    pass
-            for destination in reversed(mounted):
-                subprocess.run(["umount", "-l", destination], timeout=30)
+
+    @staticmethod
+    def online():
+        """Route par défaut présente (Wi-Fi ou câble connecté dans le live)."""
+        try:
+            with open("/proc/net/route") as f:
+                return any(line.split()[1:2] == ["00000000"] for line in f.read().splitlines()[1:])
+        except OSError:
+            return False
+
+    def install_hardware_support(self, root_path):
+        """Pilotes, micrologiciels et microcode propres à CET ordinateur.
+
+        Tout ce qui sert à la plupart des machines est déjà dans l'image
+        (firmwares, profils son, pilotes libres) : l'installation reste
+        complète hors ligne. En ligne, `winlux-drivers auto` relève le
+        matériel réel (le live voit le vrai /sys) et ajoute ce que l'image
+        ne contient pas : NVIDIA, pilotes complets du noyau, VA-API,
+        microcode, fwupd, lecteur d'empreintes. Ce qui échoue ou qui
+        attend le réseau est refait au premier démarrage connecté
+        (auto.done absent), comme le navigateur."""
+        report = {"state": "offline", "added": []}
+        drivers = f"{root_path}/usr/bin/winlux-drivers"
+        if not os.path.exists(drivers) or not shutil.which("chroot"):
+            report["state"] = "unavailable"
+        elif self.online():
+            self.set_progress(0.92, tr("progress_drivers"))
+            try:
+                with self.target_chroot(root_path, network=True):
+                    before = installed_packages(root_path)
+                    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+                    result = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "auto"],
+                                            capture_output=True, text=True, timeout=1800, env=env)
+                    # Inventaire du fil matériel (winlux-hardware-check) : les
+                    # éléments recommandés que « auto » ne couvre pas (RGB,
+                    # imprimantes…) sont installés un par un.
+                    if os.path.exists(f"{root_path}/usr/bin/winlux-hardware-check"):
+                        items = subprocess.run(["chroot", root_path, "/usr/bin/winlux-hardware-check", "--items"],
+                                               capture_output=True, text=True, timeout=120)
+                        for item in items.stdout.split():
+                            if re.fullmatch(r"[a-z0-9-]+", item):
+                                step = subprocess.run(["chroot", root_path, "/usr/bin/winlux-drivers", "install", item],
+                                                      capture_output=True, text=True, timeout=1800, env=env)
+                                result.stdout += step.stdout
+                                result.stderr += step.stderr
+                                if step.returncode != 0:
+                                    result.returncode = step.returncode
+                    added = installed_packages(root_path) - before
+                report["added"] = hardware_categories(added)
+                report["packages"] = sorted(added)
+                report["state"] = "done" if result.returncode == 0 else "partial"
+                log = f"{root_path}/var/log/winlux-drivers.log"
+                os.makedirs(os.path.dirname(log), exist_ok=True)
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(f"── installation {time.strftime('%Y-%m-%d %H:%M')}\n{result.stdout}{result.stderr}")
+            except (OSError, subprocess.SubprocessError) as error:
+                report["state"] = "partial"
+                print("Pilotes de cet ordinateur reportés au premier démarrage :", error, file=sys.stderr)
+        self.hardware_report = report
+        return report
 
     def configure_network_target(self, root_path):
         src_dir = "/etc/NetworkManager/system-connections"
@@ -5937,7 +6253,41 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         if self.answer_settings.get("unattended") and self.answer_settings.get("reboot"):
             GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
+    def hardware_lines(self):
+        """Lignes du récapitulatif matériel (texte traduit)."""
+        report = getattr(self, "hardware_report", None) or {}
+        state, added = report.get("state"), report.get("added") or []
+        lines = [tr(key) for key in added]
+        if state == "offline":
+            lines.append(tr("hw_offline"))
+        elif state == "partial":
+            lines.append(tr("hw_partial"))
+        elif state == "done" and not added:
+            lines.append(tr("hw_none"))
+        return lines
+
+    def fill_hardware_box(self):
+        lines = self.hardware_lines()
+        for child in self.hardware_box.get_children():
+            self.hardware_box.remove(child)
+        if not lines:
+            self.hardware_box.hide()
+            return
+        toggle = Gtk.CheckButton(label=tr("hw_show"))
+        added = len((getattr(self, "hardware_report", None) or {}).get("added") or [])
+        details = Gtk.Label(label="\n".join(("• " + line) if index < added else line
+                                            for index, line in enumerate(lines)), xalign=0)
+        details.set_line_wrap(True)
+        details.set_max_width_chars(70)
+        details.set_no_show_all(True)
+        toggle.connect("toggled", lambda button: details.set_visible(button.get_active()))
+        self.hardware_box.pack_start(toggle, False, False, 0)
+        self.hardware_box.pack_start(details, False, False, 0)
+        toggle.show()
+        self.hardware_box.show()
+
     def show_done(self):
+        self.fill_hardware_box()
         self.keep_awake(False)
         self.current_step = step_index("done")
         self.update_step()

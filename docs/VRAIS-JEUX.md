@@ -99,6 +99,17 @@ course à la main (la session était verrouillée pendant la mesure).
     Rejoué par `tls_suite.exe` contre un serveur HTTPS local ; à confirmer
     dans le jeu sur le vrai PC.
 
+12. **Passage 10** (après #346 et #347) : `curl_global_init` réussit, curl
+    démarre avec Schannel. Les quatre requêtes HTTPS du menu (actualités,
+    vérification de mise à jour) échouaient pourtant : au premier appel,
+    curl déclare son tampon de sortie `SECBUFFER_EMPTY` et
+    `InitializeSecurityContextW` rendait `SEC_E_BUFFER_TOO_SMALL`. Ce tampon
+    devient maintenant le jeton, comme sous Windows. Vérifié sur le PC de
+    damien : `wz2100_updates.json` et `wz2100_compat.json` (JSON signé du
+    serveur) sont téléchargés au lancement, sans erreur réseau ni TLS.
+    crashpad reste
+    volontairement non lancé (`is_crash_handler`) ; le jeu n'est pas bloqué.
+
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
 rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 
@@ -110,7 +121,7 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
-| Traduction des shaders D3D11 (DXBC/HLSL → GLSL) | Warzone 2100 en ANGLE | image noire | #137 |
+| Traduction du HLSL compilé à la volée (`D3DCompile`) vers GLSL ; le DXBC précompilé est traduit depuis #354 | Warzone 2100 en ANGLE (Direct3D 11, OpenGL ES) | image noire : utiliser OpenGL ou Vulkan | #137 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)

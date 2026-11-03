@@ -1288,11 +1288,58 @@ pub unsafe fn raise(rec: &mut ExceptionRecord, ctx: &mut Context) -> ! {
     }
 }
 
+/// Ligne de diagnostic avant de remettre une exception non gérée au filtre
+/// de dernier recours du programme. Chromium et Electron y branchent
+/// crashpad, qui écrit son rapport puis tue le processus sans rien
+/// afficher : sans cette ligne, le plantage restait invisible.
+pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
+    let site = crate::thunks::describe_site(rec.address);
+    let rip = ctx.get(CTX_RIP) as usize;
+    let rsp = ctx.get(CTX_RSP) as usize;
+    let mut line = format!(
+        "winlux: exception {:#010x} à {site} transmise au filtre de l'appli",
+        rec.code
+    );
+    let n = rec.nparams.min(15) as usize;
+    if n > 0 {
+        line.push_str(&format!(" (arguments {:x?})", &rec.info[..n]));
+    }
+    if rip != rec.address {
+        line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));
+    }
+    // Adresses de retour probables : les mots de la pile qui tombent dans
+    // un module chargé.
+    let teb = crate::process::teb();
+    let base = if teb == 0 {
+        0
+    } else {
+        unsafe { *((teb + crate::process::TEB_STACK_BASE) as *const usize) }
+    };
+    if rsp != 0 && rsp < base {
+        let end = base.min(rsp + 64 * 8);
+        let mut calls = Vec::new();
+        let mut at = rsp & !7;
+        while at + 8 <= end && calls.len() < 8 {
+            let w = unsafe { *(at as *const usize) };
+            let d = crate::thunks::describe_site(w);
+            if d.contains('+') {
+                calls.push(d);
+            }
+            at += 8;
+        }
+        if !calls.is_empty() {
+            line.push_str(&format!(", pile {}", calls.join(" ")));
+        }
+    }
+    line
+}
+
 /// Exception non gérée : filtre de dernier recours du programme, puis arrêt
 /// avec un diagnostic.
 unsafe fn unhandled(rec: &ExceptionRecord, ctx: &mut Context) -> ! {
     let filter = crate::dlls::kernel32_misc::current_unhandled_filter();
     if filter != 0 {
+        eprintln!("{}", describe_for_app_filter(rec, ctx));
         let mut copy = *rec;
         let mut ptrs = ExceptionPointers {
             record: &mut copy,
@@ -1698,6 +1745,18 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ligne_avant_le_filtre_de_l_appli() {
+        let mut rec = ExceptionRecord::new(0xC000_0005, 0, 0x1234);
+        rec.nparams = 2;
+        rec.info[1] = 0x10;
+        let ctx = Context::zeroed();
+        let line = describe_for_app_filter(&rec, &ctx);
+        assert!(line.contains("0xc0000005"), "{line}");
+        assert!(line.contains("filtre de l'appli"), "{line}");
+        assert!(line.contains("[0, 10]"), "{line}");
+    }
     use super::*;
 
     #[test]
