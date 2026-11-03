@@ -179,11 +179,37 @@ fn unicode_string(at: usize, s: &[u16]) {
     }
 }
 
+/// Gestionnaire de plantages (crashpad) : sous Windows il s'arrête quand
+/// son application disparaît. Ici, quand le processus parent meurt (même
+/// tué), l'enfant est rattaché à un autre parent : il s'arrête alors aussi,
+/// au lieu de rester seul en mémoire (450 Mo après un plantage de Claude).
+fn exit_with_parent() {
+    let parent = unsafe { libc::getppid() };
+    if parent <= 1 {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("winlux-parent-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if unsafe { libc::getppid() } != parent {
+                crate::trace!("parent {parent} disparu : arrêt du gestionnaire de plantages");
+                unsafe { libc::_exit(0) };
+            }
+        });
+}
+
 pub fn init_process(exe: &Module, args: &[String]) {
     // Identité de l'application pour ses autorisations (caméra, micro…).
     crate::permissions::init(&exe.path, args);
     let exe_win = crate::paths::to_windows(&exe.path);
     crate::permissions::ask_files_before_start(&exe_win);
+    let handler = args.iter().any(|a| a == "--type=crashpad-handler")
+        || std::env::var("WINLUX_COMMAND_LINE")
+            .is_ok_and(|l| l.contains("--type=crashpad-handler"));
+    if handler {
+        exit_with_parent();
+    }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
     let mut cmd = all
