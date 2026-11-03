@@ -124,12 +124,141 @@ extern "win64" fn traced_called(info: *const Traced, ret: usize) {
     let label = unsafe { &(*info).label };
     let site = describe_site(ret);
     let tid = unsafe { libc::syscall(libc::SYS_gettid) };
-    eprintln!("winlux[api] {tid} {label} <- {site}");
+    api_log(&format!("winlux[api] {tid} {label} <- {site}"));
+}
+
+/// Plafond d'un fichier de journal d'API ; au-delà, il devient `.1` (le
+/// précédent `.1` est effacé), si bien qu'un processus garde au plus deux
+/// fois cette taille, et toujours ses dernières lignes.
+const API_LOG_MAX: u64 = 32 << 20;
+/// Plafond du dossier des journaux : les plus anciens sont effacés.
+const API_LOG_DIR_MAX: u64 = 512 << 20;
+
+/// Dossier des journaux d'API : `$WINLUX_APITRACE_DIR`, sinon
+/// `~/.cache/winlux/apitrace`. Jamais /tmp, un tmpfs en mémoire qu'une
+/// trace de quelques minutes remplit (le bureau ne s'en remettait pas).
+fn api_log_dir() -> Option<std::path::PathBuf> {
+    if let Some(d) = std::env::var_os("WINLUX_APITRACE_DIR").filter(|d| !d.is_empty()) {
+        return Some(d.into());
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".cache")))?;
+    Some(cache.join("winlux").join("apitrace"))
+}
+
+/// Efface les journaux les plus anciens tant que le dossier dépasse `max`.
+fn prune_api_logs(dir: &std::path::Path, max: u64) {
+    let mut files: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let m = e.metadata().ok().filter(|m| m.is_file())?;
+            Some((m.modified().ok()?, m.len(), e.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    files.sort();
+    for (_, len, path) in files {
+        if total <= max {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total -= len;
+        }
+    }
+}
+
+struct ApiLog {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    written: u64,
+}
+
+/// Nom du programme Windows pour le fichier de journal (« claude »), et non
+/// celui de l'exécutable Winlux qui le porte.
+fn api_log_program() -> String {
+    let stem = |n: &str| {
+        let base = n.rsplit(['/', '\\']).next().unwrap_or(n);
+        let lower = base.to_ascii_lowercase();
+        lower
+            .strip_suffix(".exe")
+            .map(|_| base[..base.len() - 4].to_string())
+    };
+    let from_modules = crate::loader::MODULES
+        .try_lock()
+        .ok()
+        .and_then(|m| m.iter().find_map(|m| stem(&m.name)));
+    from_modules
+        .or_else(|| std::env::args().skip(1).find_map(|a| stem(&a)))
+        .filter(|n| !n.is_empty())
+        .map(|n| {
+            n.chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || "-_.".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| "winlux".into())
+}
+
+fn open_api_log() -> Option<ApiLog> {
+    let dir = api_log_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    prune_api_logs(&dir, API_LOG_DIR_MAX);
+    let exe = api_log_program();
+    let path = dir.join(format!("{exe}-{}.log", std::process::id()));
+    let file = std::fs::File::create(&path).ok()?;
+    eprintln!("winlux[api] journal des appels : {}", path.display());
+    Some(ApiLog {
+        path,
+        file,
+        written: 0,
+    })
+}
+
+/// Écrit une ligne dans le journal d'API du processus (stderr si le
+/// fichier ne peut pas être créé).
+fn api_log(line: &str) {
+    static LOG: Mutex<Option<Option<ApiLog>>> = Mutex::new(None);
+    let mut g = LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let slot = g.get_or_insert_with(open_api_log);
+    let Some(log) = slot.as_mut() else {
+        eprintln!("{line}");
+        return;
+    };
+    if log.written >= API_LOG_MAX {
+        let mut old = log.path.clone().into_os_string();
+        old.push(".1");
+        let _ = std::fs::rename(&log.path, &old);
+        match std::fs::File::create(&log.path) {
+            Ok(f) => {
+                log.file = f;
+                log.written = 0;
+            }
+            Err(_) => {
+                *slot = None;
+                eprintln!("{line}");
+                return;
+            }
+        }
+    }
+    if writeln!(log.file, "{line}").is_ok() {
+        log.written += line.len() as u64 + 1;
+    }
 }
 
 /// Avec `WINLUX_APITRACE=1` (ou une liste de fragments de noms séparés par
 /// des virgules), chaque appel d'une fonction intégrée importée est
-/// journalisé sur stderr avec l'adresse de l'appelant, puis transmis tel
+/// journalisé avec l'adresse de l'appelant (voir [`api_log_dir`]), puis transmis tel
 /// quel. Outil de diagnostic pour les programmes qui se bloquent.
 pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
     let Some(filter) = api_trace_filter() else {
@@ -216,7 +345,9 @@ fn parse_exec_ranges(maps: &str) -> Vec<(usize, usize)> {
 /// traçage d'API est actif.
 pub fn api_trace_missing(dll: &str, func: &str) {
     if api_trace_filter().is_some() {
-        eprintln!("winlux[api] GetProcAddress {dll}!{func} : absent");
+        let line = format!("winlux[api] GetProcAddress {dll}!{func} : absent");
+        eprintln!("{line}");
+        api_log(&line);
     }
 }
 
@@ -323,5 +454,34 @@ mod api_trace_tests {
         assert!(is_executable(describe_site as *const () as usize));
         let r = parse_exec_ranges("1000-2000 r-xp 0 0:0 0 x\n3000-4000 rw-p 0 0:0 0 y\n");
         assert_eq!(r, vec![(0x1000, 0x2000)]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn journal_api_plafonne() {
+        let dir = std::env::temp_dir().join(format!("winlux-apitrace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, name) in ["a.log", "b.log", "c.log"].iter().enumerate() {
+            std::fs::write(dir.join(name), vec![b'x'; 1000]).unwrap();
+            let t =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000 + i as u64);
+            std::fs::File::options()
+                .write(true)
+                .open(dir.join(name))
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        }
+        // 3000 octets pour un plafond de 2000 : le plus ancien part.
+        prune_api_logs(&dir, 2000);
+        assert!(!dir.join("a.log").exists());
+        assert!(dir.join("b.log").exists() && dir.join("c.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!api_log_dir().unwrap().starts_with("/tmp"));
     }
 }

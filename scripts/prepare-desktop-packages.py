@@ -13,7 +13,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "x11-utils", "x11-xserver-utils", "xfdesktop4", "locales", "libglib2.0-bin",
             "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
-            "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
+            "bluez", "blueman", "brightnessctl",
+            # Luminosité des écrans de bureau par leur câble (DDC/CI, winlux-brightness).
+            "ddcutil", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
             "xfce4-settings", "policykit-1-gnome", "pkexec", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
@@ -36,6 +38,13 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # depuis 2019, AMD) et profils UCM qui décrivent haut-parleurs,
             # prise casque et micros numériques à PipeWire.
             "firmware-sof-signed", "alsa-ucm-conf",
+            # Wi-Fi : base de réglementation (regulatory.db). Sans elle le pays
+            # reste « monde » : canaux 12-13 et une partie du 5 GHz bloqués, une
+            # box sur le canal 12 ou 13 est invisible.
+            "wireless-regdb",
+            # Certificats : magasin Mozilla, update-ca-certificates (openssl) et
+            # certutil pour les navigateurs NSS (winlux-certificates).
+            "ca-certificates", "openssl", "libnss3-tools",
             # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
             "libcrypt1", "libxss1", "python3-gi-cairo",
             # Compositeur : déplacements sans traînées, ombres et coins arrondis.

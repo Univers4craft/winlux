@@ -181,6 +181,9 @@ fi
 # de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
 # ensuite, et une tablette restait sans aucun moyen de taper.
 if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk panel >"$logs/osk-panel.log" 2>&1 || true; fi
+# Tablettes et convertibles : l'écran suit l'accéléromètre (s'arrête aussitôt
+# sans accéléromètre ou sur un PC qui n'est pas une tablette).
+if test -x /usr/bin/winlux-rotation; then start rotation.log /usr/bin/winlux-rotation watch; fi
 if test -x /usr/bin/xfce4-panel; then
     start panel.log /usr/bin/xfce4-panel --disable-wm-check
 fi

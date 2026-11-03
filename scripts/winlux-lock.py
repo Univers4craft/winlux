@@ -516,6 +516,21 @@ def text_veil(pixbuf, base, minimum=4.5):
     return round(alpha, 2)
 
 
+def clock_scale(width, height):
+    """Échelle de l'horloge pour qu'elle finisse au-dessus du losange du fond
+    d'écran Winlux (1920x1080, losange dès la ligne 367, image mise à
+    l'échelle pour couvrir l'écran). L'horloge mesure ~330 px à l'échelle 1."""
+    cover = max(width / 1920, height / 1080)
+    logo_top = (height - 1080 * cover) / 2 + 367 * cover
+    return max(0.5, min(1.0, (logo_top - 24) / 330))
+
+
+def clock_css(scale):
+    return (f".lock-time {{ font-size: {round(112 * scale)}px; }}\n"
+            f".lock-date {{ font-size: {round(26 * scale)}px; }}\n"
+            f".lock-hint {{ font-size: {max(11, round(13 * scale))}px; }}\n")
+
+
 def run_lock(start="clock"):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -595,7 +610,7 @@ def run_lock(start="clock"):
             if main:
                 self.main = window
                 self.area = area
-                overlay.add_overlay(self.clock_view())
+                overlay.add_overlay(self.clock_view(geo.width, geo.height))
                 overlay.add_overlay(self.signin_view())
                 self.keyboard_view(overlay)
                 overlay.add_overlay(self.accounts_view())
@@ -705,16 +720,23 @@ def run_lock(start="clock"):
                 if self.entry is not None:
                     self.entry.grab_focus()
 
-        def clock_view(self):
+        def clock_view(self, width=1920, height=1080):
+            # Heure, date et invite au-dessus du losange du fond d'écran (il
+            # commence au tiers de la hauteur). Tailles proportionnelles à la
+            # hauteur : en 1366x768 le losange recouvrait la date et l'invite.
+            scale = clock_scale(width, height)
+            provider = Gtk.CssProvider()
+            provider.load_from_data(clock_css(scale).encode())
+            Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, 901)
             self.clock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, halign=Gtk.Align.CENTER,
-                                 valign=Gtk.Align.START, margin_top=110)
+                                 valign=Gtk.Align.START, margin_top=round(110 * scale))
             self.time_label = Gtk.Label()
             self.time_label.get_style_context().add_class("lock-time")
             self.date_label = Gtk.Label()
             self.date_label.get_style_context().add_class("lock-date")
             self.clock.pack_start(self.time_label, False, False, 0)
             self.clock.pack_start(self.date_label, False, False, 0)
-            hint = Gtk.Label(label=_t("Appuyez sur une touche ou cliquez pour vous connecter"), margin_top=24)
+            hint = Gtk.Label(label=_t("Appuyez sur une touche ou cliquez pour vous connecter"), margin_top=round(24 * scale))
             hint.get_style_context().add_class("lock-hint")
             self.clock.pack_start(hint, False, False, 0)
             return self.clock
@@ -894,10 +916,11 @@ def run_lock(start="clock"):
         def on_key(self, _widget, event):
             self.last_typing = time.monotonic()
             if self.view == "clock":
+                # La première touche ne fait que réveiller l'écran : écran éteint
+                # ou horloge seule, on ne voit pas le champ. Elle partait dans le
+                # mot de passe et le testeur y a tapé « par » sans le voir (VM,
+                # 3 novembre).
                 self.show_signin()
-                if self.entry is not None and event.string and event.string.isprintable():
-                    self.entry.set_text(event.string)
-                    self.entry.set_position(-1)
                 return True
             if event.keyval == Gdk.KEY_Escape:
                 if self.entry is not None and self.entry.get_text():

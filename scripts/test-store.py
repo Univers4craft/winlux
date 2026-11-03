@@ -358,6 +358,15 @@ esac
           "winlux-shell-app donne au Store un dossier propre au compte")
     ui = (project / "testexe/src/shell/store.rs").read_text()
     check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
+    # Désinstallation apt, et toutes les commandes apt-get du Store acceptées par
+    # le relais winlux-root (sans quoi « Désinstaller » ne faisait rien, v0.2.17).
+    st("remove", "apt:vlc")
+    check("purge --autoremove -- vlc" in log.read_text(), "désinstallation apt")
+    relay = runpy.run_path(str(project / "scripts/winlux-root.py"), run_name="root_test")
+    apt_lines = [l.split()[1:] for l in log.read_text().splitlines() if l.startswith("apt-get ")]
+    check(any("purge" in a for a in apt_lines) and any("install" in a for a in apt_lines), "commandes apt relevées")
+    for args in apt_lines:
+        check(relay["exec_level"](["apt-get", *args]) == "admin", f"refusée par winlux-root : apt-get {' '.join(args)}")
     # Messages d'apt traduits, jamais l'anglais brut d'APT::Status-Fd.
     check("LC_ALL=C.UTF-8" in log.read_text(), "apt lancé en C.UTF-8 pour des messages prévisibles")
     ns = runpy.run_path(str(store), run_name="store_test")

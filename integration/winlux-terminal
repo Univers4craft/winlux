@@ -11,7 +11,12 @@ if test "${1:-}" = --cwd; then
     cd -- "$2"
     shift 2
 fi
-if test "$#" = 0; then set -- -e /bin/bash -i; fi
+# bashrc Winlux : celui d'Ubuntu et de l'utilisateur, plus « su » qui passe
+# par sudo quand root est verrouillé (winlux-su.sh).
+rcfile=/usr/share/winlux/native/shell/bashrc
+if test "$#" = 0; then
+    if test -r "$rcfile"; then set -- -e /bin/bash --rcfile "$rcfile" -i; else set -- -e /bin/bash -i; fi
+fi
 # Ubuntu's bashrc renames xterm windows (user@host: dir); keep the app name.
 # Presse-papiers comme sous Windows : Ctrl+Maj+V, Maj+Inser et clic droit
 # collent ce qui a été copié (CLIPBOARD) depuis Edge, un .txt ou un .exe ;

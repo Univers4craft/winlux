@@ -11,6 +11,8 @@ tourne en root et n'exécute que des actions connues :
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
   winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
   winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
+  winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
+  winlux-root exec winlux-certificates …   autorités ajoutées, heure automatique
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -116,8 +118,10 @@ CONF_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,40}$")
 APT_SUBCOMMANDS = {"install": "admin", "remove": "admin", "purge": "admin", "upgrade": "admin",
                    "dist-upgrade": "admin", "full-upgrade": "admin", "autoremove": "admin",
                    "update": "user"}
+# --autoremove et --purge : la désinstallation du Store (apt-get purge
+# --autoremove) était refusée par le relais, sans demande ni message.
 APT_FLAGS = {"-y", "-q", "-qq", "--no-install-recommends", "--reinstall", "-f", "--fix-broken",
-             "--only-upgrade", "--no-remove"}
+             "--only-upgrade", "--no-remove", "--autoremove", "--purge"}
 APT_OPTIONS = re.compile(r"^(DPkg::Lock::Timeout=[0-9]{1,4}|Dpkg::Use-Pty=0|APT::Status-Fd=[0-9]{1,3})$")
 SNAP_SUBCOMMANDS = {"install": "admin", "remove": "admin", "refresh": "admin"}
 # Réinitialiser ce PC, clé de secours, réparation du démarrage (Paramètres >
@@ -131,9 +135,13 @@ RESET_ARG = re.compile(r"^(--(mode|source|user|fullname|device)|--clean|--scan|k
 
 # Wi-Fi (Paramètres > Wi-Fi) : rejoindre un réseau est permis à un compte
 # standard, comme sous Windows. La clé arrive sur l'entrée standard.
-WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 7, "up": 1, "wps": 1, "forget": 1,
+WIFI_SUBCOMMANDS = {"status": 0, "list": 1, "known": 0, "connect": 21, "up": 1, "wps": 1, "forget": 1,
                     "autoconnect": 2, "disconnect": 0, "radio": 1, "airplane": 1}
-WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity"}
+WIFI_OPTIONS = {"--rescan", "--hidden", "--no-auto", "--key-stdin", "--security", "--identity",
+                "--eap", "--phase2", "--ca", "--domain", "--client-cert", "--private-key"}
+# Fichiers de certificat : chemins absolus ; winlux-wifi vérifie que le compte
+# appelant peut les lire avant de les copier.
+WIFI_FILE = re.compile(r"^/[^\n\r\0]{1,400}$")
 
 
 def wifi_level(rest):
@@ -157,6 +165,18 @@ def wifi_level(rest):
             if option == "--security" and next(it, "") not in ("open", "wpa", "sae", "wep", "owe", "eap"):
                 return None
             if option == "--identity" and not next(it, ""):
+                return None
+            if option == "--eap" and next(it, "") not in ("peap", "ttls", "tls"):
+                return None
+            if option == "--phase2" and next(it, "") not in ("mschapv2", "pap", "gtc"):
+                return None
+            if option == "--ca":
+                value = next(it, "")
+                if value not in ("system", "none") and not WIFI_FILE.match(value):
+                    return None
+            if option in ("--client-cert", "--private-key") and not WIFI_FILE.match(next(it, "")):
+                return None
+            if option == "--domain" and not re.fullmatch(r"[A-Za-z0-9.*-]{1,253}", next(it, "")):
                 return None
     if command in ("up", "forget", "wps", "autoconnect") and args and args[0].startswith("-"):
         return None
@@ -211,6 +231,23 @@ def exec_level(args):
         return None
     if tool == "winlux-wifi":
         return wifi_level(rest)
+    if tool == "winlux-certificates":
+        # Ajouter une autorité de confiance touche à la sécurité de tout le
+        # système : mot de passe d'un administrateur, comme sous Windows.
+        if len(rest) == 2 and rest[0] == "add" and re.fullmatch(r"/[^\n\r\0]{1,400}", rest[1]):
+            return "admin"
+        if len(rest) == 2 and rest[0] == "remove" and re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}", rest[1]):
+            return "admin"
+        if rest in (["time", "auto", "on"], ["time", "auto", "off"]):
+            return "admin"
+        if rest == ["time", "sync"]:
+            return "user"
+        return None
+    if tool == "winlux-brightness":
+        # Luminosité : le compte n'écrit pas dans /sys/class/backlight ni sur l'i2c.
+        if rest == ["detect-ddc"] or (len(rest) == 2 and rest[0] == "set" and re.fullmatch(r"\d{1,3}", rest[1])):
+            return "user"
+        return None
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]

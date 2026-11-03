@@ -138,6 +138,9 @@ jobs:
       - name: Vérifier le clavier dans le menu GRUB (terminal série réservé aux VM)
         run: python3 -B scripts/test-grub-keyboard.py
 
+      - name: Vérifier que la clé démarre son live même si Winlux est installé
+        run: python3 -B scripts/test-live-boot-target.py
+
       - name: Vérifier la description du matériel (cœurs, modèles du processeur et de la carte graphique)
         run: python3 -B scripts/test-benchmark-materiel.py
 
@@ -173,6 +176,13 @@ jobs:
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
 
+      - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
+        run: python3 -B scripts/test-network-perms.py
+      - name: su et sudo (droits de la base Ubuntu, su par sudo)
+        run: python3 -B scripts/test-su-sudo.py
+      - name: Vérifier « winlux-settings about » et les noms de page
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-settings-args.py
+
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
 
@@ -187,6 +197,12 @@ jobs:
         run: python3 -B scripts/test-root.py
       - name: Vérifier que le Xorg de l'init a sa session (changement d'utilisateur, VT)
         run: python3 -B scripts/test-xorg-session.py
+      - name: Vérifier que l'arrêt et le redémarrage par l'init ne restent jamais bloqués
+        run: python3 -B scripts/test-init-power.py
+      - name: Vérifier qu'une coupure après l'installation n'abîme plus les comptes (écran noir)
+        run: python3 -B scripts/test-accounts-repair.py
+      - name: Vérifier les pilotes de cet ordinateur ajoutés pendant l'installation (en ligne)
+        run: python3 -B scripts/test-installer-drivers.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
@@ -247,6 +263,9 @@ jobs:
           python3 -B scripts/test-reset.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-reset-page.py
 
+      - name: Vérifier les pilotes embarqués dans l'image et le diagnostic winlux-hardware-check
+        run: python3 -B scripts/test-hardware-image.py
+
       - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes, À propos > Votre PC)
         run: |
           sudo apt-get update -q
@@ -259,7 +278,9 @@ jobs:
           sudo apt-get install -y -q xvfb xauth xdotool python3-gi python3-gi-cairo gir1.2-gtk-3.0
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-input-devices.py
           /usr/bin/python3 -B scripts/test-sound-devices.py
+          /usr/bin/python3 -B scripts/test-wifi-image.py
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
+          for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py --clavier
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-licence.py
@@ -310,6 +331,8 @@ jobs:
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          sudo apt-get update -q
+          sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
@@ -452,6 +475,9 @@ jobs:
       - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-brightness.py
+          /usr/bin/python3 -B scripts/test-brightness.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-certificates.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick

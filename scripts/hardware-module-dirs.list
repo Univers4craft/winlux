@@ -1,0 +1,187 @@
+# Dossiers entiers de pilotes du noyau Ubuntu embarqués dans l'image
+# (scripts/stage-kernel-modules.py, appelé par build-live-iso.sh), en plus des
+# pilotes nommés de scripts/hardware-modules.list. Politique : docs/MATERIEL.md.
+#
+# Un dossier entier plutôt qu'une liste de noms : les PC réels ont des
+# milliers de variantes (contrôleurs de pavé tactile, puces Ethernet, capteurs
+# des tablettes…) et un nom oublié laisse un appareil mort sans message. udev
+# ne charge que les pilotes dont le matériel est présent : rien ne change en VM.
+# Chemins relatifs à /lib/modules/<version>/kernel. « ! » exclut un
+# sous-dossier ou un fichier (matériel de serveur ou de systèmes embarqués,
+# jamais présent sur un PC). Les dépendances d'un module retenu viennent
+# toujours, même hors de ces dossiers.
+#
+# Le Wi-Fi (net/wireless, net/mac80211, drivers/net/wireless, drivers/staging),
+# la crypto du noyau et le pare-feu (netfilter) sont embarqués à part
+# (build-live-iso.sh, check-image-wifi.sh) : ils ne sont pas répétés ici.
+
+# Stockage : SATA/IDE des anciens PC, RAID logiciel et Intel RST, NVMe,
+# lecteurs de cartes SD/MMC et Memory Stick, contrôleurs SCSI/SAS courants.
+drivers/ata
+drivers/md
+!drivers/md/dm-vdo
+!drivers/md/md-cluster.ko
+drivers/nvme
+!drivers/nvme/target
+drivers/mmc
+drivers/memstick
+drivers/scsi
+!drivers/scsi/lpfc
+!drivers/scsi/qla2xxx
+!drivers/scsi/qla4xxx
+!drivers/scsi/bfa
+!drivers/scsi/be2iscsi
+!drivers/scsi/csiostor
+!drivers/scsi/cxgbi
+!drivers/scsi/bnx2fc
+!drivers/scsi/bnx2i
+!drivers/scsi/qedi
+!drivers/scsi/qedf
+!drivers/scsi/fnic
+!drivers/scsi/snic
+!drivers/scsi/elx
+!drivers/scsi/mpi3mr
+!drivers/scsi/smartpqi
+block
+drivers/block
+drivers/cdrom
+
+# USB (contrôleurs, série des cartes Arduino, imprimantes USB, modems,
+# USB-C et sorties DisplayPort), Thunderbolt/USB4, FireWire, PCMCIA, port parallèle.
+drivers/usb
+drivers/thunderbolt
+drivers/firewire
+drivers/pcmcia
+drivers/parport
+
+# Réseau filaire : toutes les puces des PC fixes et portables, adaptateurs USB,
+# partage de connexion (Android, iPhone), modems 4G/5G, VPN, ponts, PPPoE.
+drivers/net
+!drivers/net/wireless
+!drivers/net/ethernet/mellanox
+!drivers/net/ethernet/chelsio
+!drivers/net/ethernet/qlogic
+!drivers/net/ethernet/cavium
+!drivers/net/ethernet/netronome
+!drivers/net/ethernet/sfc
+!drivers/net/ethernet/huawei
+!drivers/net/ethernet/emulex
+!drivers/net/ethernet/pensando
+!drivers/net/ethernet/fungible
+!drivers/net/ethernet/marvell/octeon_ep
+!drivers/net/ethernet/marvell/octeon_ep_vf
+!drivers/net/ethernet/marvell/octeontx2
+!drivers/net/ethernet/marvell/prestera
+!drivers/net/ethernet/mscc
+!drivers/net/ethernet/meta
+!drivers/net/can
+!drivers/net/ieee802154
+!drivers/net/ipa
+!drivers/net/dsa
+!drivers/net/fddi
+!drivers/net/hamradio
+!drivers/net/arcnet
+!drivers/net/wan
+net
+!net/wireless
+!net/mac80211
+!net/ceph
+!net/rds
+!net/tipc
+!net/can
+!net/ieee802154
+!net/mac802154
+!net/nfc
+!net/dsa
+!net/batman-adv
+!net/openvswitch
+!net/hsr
+!net/smc
+# Pare-feu (netfilter, nftables) : embarqué à part avec le Wi-Fi.
+!net/netfilter
+!net/ipv4/netfilter
+!net/ipv6/netfilter
+!net/bridge/netfilter
+!net/bridge/br_netfilter.ko
+!net/sched
+
+# Bluetooth : contrôleurs USB, série (UART des portables), SDIO, PCIe.
+drivers/bluetooth
+
+# Entrée : claviers, souris, pavés tactiles (I2C, SMBus/RMI4, SPI, Apple),
+# écrans tactiles (Goodix, Silead… des tablettes), stylets et tablettes
+# graphiques (Wacom, Huion/XP-Pen), manettes, boutons des tablettes, capteurs
+# HID (Intel ISH, AMD SFH) et accessoires Bluetooth LE (uhid).
+drivers/hid
+drivers/input
+drivers/iio
+
+# Bus et broches des pavés tactiles et capteurs : contrôleurs I2C/SPI/GPIO
+# des puces Intel (Skylake à Lunar Lake, Atom) et AMD, PMIC des tablettes Atom.
+drivers/i2c
+drivers/spi
+drivers/gpio
+drivers/pinctrl
+drivers/mfd
+drivers/dma
+!drivers/dma/idxd
+
+# Portables : touches de fonction, mode tablette, profils, rétroéclairage,
+# batteries (dont tablettes Atom), alimentation, températures et ventilateurs.
+drivers/platform
+drivers/power
+drivers/acpi
+drivers/hwmon
+drivers/thermal
+drivers/video/backlight
+drivers/leds
+drivers/cpufreq
+drivers/powercap
+
+# Cartes graphiques supplémentaires : anciens Atom (gma500), DisplayLink
+# (udl, gud), écrans des serveurs (ast, mgag200), machines virtuelles
+# (Hyper-V, VirtualBox, Cirrus de QEMU), barre tactile des Mac.
+drivers/gpu/drm
+
+# Webcams : anciennes (gspca, pwc), caméras MIPI Intel IPU, contrôleurs média.
+drivers/media/usb/gspca
+drivers/media/usb/pwc
+drivers/media/usb/uvc
+drivers/media/pci/intel
+drivers/media/i2c
+drivers/media/v4l2-core
+drivers/media/mc
+drivers/media/common/videobuf2
+drivers/media/common/uvc.ko
+
+# Divers PC : Intel ME (MEI), lecteurs de cartes Realtek/Alcor, mémoire
+# (SPD), accéléromètres HP, ntsync (primitives de synchronisation de Windows).
+drivers/misc
+!drivers/misc/sgi-gru
+!drivers/misc/sgi-xp
+!drivers/misc/genwqe
+!drivers/misc/bcm-vk
+drivers/char
+drivers/tty
+drivers/pci
+drivers/virt
+drivers/hv
+drivers/virtio
+drivers/firmware
+drivers/watchdog/iTCO_wdt.ko
+
+# Systèmes de fichiers : disques Linux (btrfs, xfs, f2fs), anciens Mac (hfs),
+# partages de dossiers des machines virtuelles (virtiofs, 9p, vboxsf), toutes
+# les pages de codes des clés FAT, binfmt_misc (.exe lancés depuis un terminal).
+fs
+!fs/ocfs2
+!fs/gfs2
+!fs/dlm
+!fs/ceph
+!fs/coda
+!fs/orangefs
+!fs/afs
+!fs/ubifs
+!fs/jffs2
+lib
+!lib/crypto

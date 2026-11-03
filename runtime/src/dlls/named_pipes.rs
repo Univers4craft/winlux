@@ -39,6 +39,9 @@ struct Instance {
     connected: bool,
     /// Rendez-vous ouvert aux autres processus (ConnectNamedPipe).
     listening: bool,
+    /// Change à chaque DisconnectNamedPipe : le fil d'écoute d'une
+    /// connexion précédente s'arrête au lieu de servir la nouvelle.
+    generation: u64,
 }
 
 struct State {
@@ -132,6 +135,7 @@ pub(crate) fn create(path: &str, open_mode: u32, _pipe_mode: u32, max_instances:
         client: Some(client),
         connected: false,
         listening: false,
+        generation: 0,
     });
     crate::trace!("CreateNamedPipe({name}) = {h:#x}");
     h
@@ -205,7 +209,8 @@ pub(crate) fn connect(h: usize, overlapped: usize) -> i32 {
             .find(|(_, l)| l.iter().any(|i| i.server == h))
             .map(|(n, _)| n.clone())
             .unwrap_or_default();
-        remote::listen(&name, h);
+        let generation = inst_generation(&mut st, h);
+        remote::listen(&name, h, generation);
     }
     if overlapped == 0 {
         loop {
@@ -258,6 +263,45 @@ pub(crate) fn connect(h: usize, overlapped: usize) -> i32 {
     }
     crate::process::set_last_error(ERROR_IO_PENDING);
     0
+}
+
+fn inst_generation(st: &mut State, h: usize) -> u64 {
+    find_server(st, h).map(|i| i.generation).unwrap_or(0)
+}
+
+/// `DisconnectNamedPipe` : le client courant perd sa connexion (il lit la
+/// fin du tube) et l'instance redevient libre pour le prochain
+/// ConnectNamedPipe, avec le même handle. Sans cela, le serveur de crashpad
+/// retrouvait l'ancien client parti à chaque tour (ConnectNamedPipe
+/// répondait ERROR_PIPE_CONNECTED, ReadFile la fin du tube) et bouclait.
+pub(crate) fn disconnect(h: usize) -> i32 {
+    use std::os::fd::AsRawFd;
+    let reg = registry();
+    let mut st = crate::dlls::lock(&reg.state);
+    let Some(inst) = find_server(&mut st, h) else {
+        // Bout cédé à un enfant ou handle ordinaire : rien à libérer.
+        return 1;
+    };
+    let (Some(server), Some((new_server, new_client))) =
+        (crate::dlls::kernel32::fd_of_handle(h), socket_pair())
+    else {
+        crate::process::set_last_error(8);
+        return 0;
+    };
+    // Le nouveau bout prend la place de l'ancien sous le même descripteur ;
+    // l'ancienne connexion se ferme avec lui.
+    if unsafe { libc::dup3(new_server.as_raw_fd(), server, libc::O_CLOEXEC) } < 0 {
+        crate::process::set_last_error(8);
+        return 0;
+    }
+    drop(new_server);
+    inst.client = Some(new_client);
+    inst.connected = false;
+    inst.listening = false;
+    inst.generation += 1;
+    reg.changed.notify_all();
+    crate::trace!("DisconnectNamedPipe({h:#x})");
+    1
 }
 
 /// Fermeture d'un bout serveur : l'instance disparaît du nom.
@@ -365,6 +409,7 @@ pub(crate) fn adopt(h: usize, name: &str, client: Option<OwnedFd>, connected: bo
             client,
             connected,
             listening: false,
+            generation: 0,
         });
     reg.changed.notify_all();
 }
@@ -477,11 +522,15 @@ mod remote {
 
     /// ConnectNamedPipe : ouvre le rendez-vous de l'instance `h` et attend,
     /// dans un fil, un client d'un autre processus.
-    pub(super) fn listen(name: &str, h: usize) {
+    pub(super) fn listen(name: &str, h: usize, generation: u64) {
         let Some(d) = dir() else {
             return;
         };
-        let path = d.join(format!("{}.{}.{h:x}", key(name), std::process::id()));
+        let path = d.join(format!(
+            "{}.{}.{h:x}.{generation}",
+            key(name),
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         let (Some(l), Some((a, len))) = (socket(), address(&path)) else {
             return;
@@ -503,6 +552,7 @@ mod remote {
                     {
                         let mut st = crate::dlls::lock(&registry().state);
                         match find_server(&mut st, h) {
+                            Some(i) if i.generation != generation => break,
                             Some(i) if !i.connected && i.client.is_some() => {}
                             Some(i) => {
                                 i.listening = false;
@@ -540,6 +590,7 @@ mod remote {
                         break;
                     };
                     if i.connected
+                        || i.generation != generation
                         || unsafe { libc::dup3(accepted.as_raw_fd(), server, libc::O_CLOEXEC) } < 0
                     {
                         continue;

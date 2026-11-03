@@ -38,6 +38,11 @@ apt = lib["exec_level"]
 check(apt(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o", "APT::Status-Fd=5",
            "install", "--no-install-recommends", "--", "gimp"]) == "admin", "installation APT")
 check(apt(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"]) == "user", "listes APT")
+# Désinstallation du Store (Apt.remove) : refusée en v0.2.17, « Désinstaller » sans effet.
+check(apt(["apt-get", "-y", "-q", "-o", "DPkg::Lock::Timeout=120", "-o", "Dpkg::Use-Pty=0", "-o", "APT::Status-Fd=5",
+           "purge", "--autoremove", "--", "lynx"]) == "admin", "désinstallation APT du Store")
+check(apt(["apt-get", "-y", "-q", "-o", "Dpkg::Use-Pty=0", "install", "--only-upgrade", "--", "vlc"]) == "admin",
+      "mise à jour APT du Store")
 check(apt(["apt-get", "-o", "APT::Update::Pre-Invoke::=sh", "update"]) is None, "option APT dangereuse refusée")
 check(apt(["apt-get", "install", "--", "/tmp/x.deb"]) == "admin", "paquet local")
 check(apt(["apt-get", "install", "--", "../x"]) is None, "chemin relatif refusé")

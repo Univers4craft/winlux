@@ -1,0 +1,4 @@
+# Terminal Winlux : configuration bash habituelle, puis les ajouts Winlux.
+test -r /etc/bash.bashrc && . /etc/bash.bashrc
+test -r "$HOME/.bashrc" && . "$HOME/.bashrc"
+test -r /usr/share/winlux/native/shell/winlux-su.sh && . /usr/share/winlux/native/shell/winlux-su.sh

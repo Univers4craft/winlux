@@ -145,6 +145,8 @@ cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
 cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
 # Pilotes du matériel réel (cartes graphiques, NVIDIA, VA-API, microcode, fwupd).
 install -m 755 "$root/scripts/winlux-drivers.py" "$stage/usr/bin/winlux-drivers"
+install -m 755 "$root/scripts/winlux-hardware-check.py" "$stage/usr/bin/winlux-hardware-check"
+install -m 755 "$root/scripts/winlux-rotation.py" "$stage/usr/bin/winlux-rotation"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
@@ -158,6 +160,10 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
 # Réinitialiser ce PC, clé de secours, réparation du démarrage (#283).
 install -m 755 "$root/scripts/winlux-reset.py" "$stage/usr/bin/winlux-reset"
+# Fichiers de comptes abîmés par un arrêt brutal : réparés par l'init.
+install -m 755 "$root/scripts/winlux-accounts-repair.py" "$stage/usr/bin/winlux-accounts-repair"
+# Écran de secours quand le bureau ne s'ouvre pas (au lieu d'un écran noir).
+install -m 755 "$root/scripts/winlux-rescue-screen.py" "$stage/usr/bin/winlux-rescue-screen"
 cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
 cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
 chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
@@ -347,7 +353,20 @@ done
 # récents (SOF, AMD ACP) chargent leur pilote de machine et leurs codecs par
 # leur nom au démarrage de la carte, sans dépendance déclarée : sans eux, la
 # carte ne se crée pas et PipeWire n'offre qu'une sortie factice.
-for directory in sound drivers/soundwire; do
+# Wi-Fi : la pile 802.11 entière, tous les pilotes Wi-Fi (PCIe, USB, SDIO des
+# tablettes, staging dont r8723bs des Bay Trail/Cherry Trail) et la crypto du
+# noyau. mac80211 demande ccm(aes) par son nom pour poser la clé CCMP de tout
+# réseau WPA2/WPA3 (cmac : trames de gestion protégées, michael_mic : TKIP,
+# gcm/ghash : GCMP) ; sans ces modules la poignée de main échouait et le mot
+# de passe Wi-Fi semblait refusé (v0.2.17, PC de damien). brcmfmac charge de
+# même ses modules « vendeur » (cyw, wcc, bca) par leur nom.
+# Pare-feu et partage de connexion : netfilter entier (nf_tables, NAT,
+# conntrack), pont et veth ; sans eux winlux-firewall ne faisait rien
+# (« Unable to initialize Netlink socket ») et aucun NAT n'était possible.
+# Partage de connexion d'un téléphone : USB (cdc_ether, rndis_host, cdc_ncm,
+# ipheth pour l'iPhone) et Bluetooth (bnep) sont dans drivers/net/usb et
+# net/bluetooth.
+for directory in sound drivers/soundwire crypto arch/x86/crypto lib/crypto net/wireless net/mac80211 drivers/net/wireless drivers/staging net/netfilter net/ipv4/netfilter net/ipv6/netfilter net/bridge drivers/net/usb net/bluetooth; do
     test -d "/lib/modules/$kernel_release/kernel/$directory" || continue
     find "/lib/modules/$kernel_release/kernel/$directory" -name '*.ko*' | while read -r module; do
         destination="$stage${module%.zst}"
@@ -357,6 +376,11 @@ for directory in sound drivers/soundwire; do
     done
 done
 sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
+# Matériel réel : dossiers entiers de pilotes (stockage, Ethernet, USB,
+# Bluetooth, pavés et écrans tactiles, capteurs, portables, webcams, systèmes
+# de fichiers, pare-feu…), dépendances comprises, compressés comme chez Ubuntu.
+# Politique et coût : docs/MATERIEL.md ; contrôle : check-image-hardware.py.
+python3 "$root/scripts/stage-kernel-modules.py" "$stage" "$kernel_release" "$root/scripts/hardware-module-dirs.list"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do
     if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
@@ -496,6 +520,8 @@ if command -v fc-cache >/dev/null 2>&1; then
     fc-cache -f "$stage/usr/share/fonts" 2>/dev/null || true
 fi
 sh "$root/scripts/stage-desktop-components.sh" "$stage"
+# Wi-Fi chiffré : la construction échoue si ce qui l'a cassé en v0.2.17 manque.
+sh "$root/scripts/check-image-wifi.sh" "$stage" "$kernel_release"
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
@@ -540,10 +566,29 @@ safe_power() {
         return
     fi
     # Ask remaining background services to terminate before flushing disks.
+    echo "Winlux : arrêt des programmes ($1)"
     /bin/busybox kill -TERM -1 2>/dev/null || true
+    # Garde-fou : si l'écriture des disques, le remontage ou l'appel au noyau
+    # restent bloqués (session live juste après une installation : la
+    # machine restait sur le logo et il fallait forcer l'arrêt), le noyau
+    # termine lui-même au bout de 25 s : synchronisation, disques en lecture
+    # seule, puis redémarrage (b) ou arrêt (o).
+    sysrq_key=b
+    test "$1" = poweroff && sysrq_key=o
+    (
+        /bin/busybox sleep 25
+        echo "Winlux : arrêt forcé par le noyau ($1)"
+        echo s >/proc/sysrq-trigger
+        /bin/busybox sleep 2
+        echo u >/proc/sysrq-trigger
+        /bin/busybox sleep 1
+        echo "$sysrq_key" >/proc/sysrq-trigger
+    ) &
     /bin/busybox sleep 5
+    echo "Winlux : écriture des disques"
     /bin/busybox sync
     /bin/busybox mount -o remount,ro / 2>/dev/null || true
+    echo "Winlux : $1"
     /bin/busybox "$1" -f
 }
 trap 'safe_power poweroff' USR2
@@ -595,6 +640,11 @@ fi
 # plus en root. Seuls les services système restent en root ; le bureau passe
 # par le relais winlux-root pour ce qui touche au système. winlux.root-session=1
 # (ligne du noyau) rouvre l'ancien bureau root pour un dépannage.
+# Comptes perdus ou à moitié créés après une coupure (octets nuls dans
+# /etc/passwd, verrous orphelins) : réparés avant de chercher le compte.
+if test -s /etc/winlux/install-config.json && test -x /usr/bin/winlux-accounts-repair; then
+    /usr/bin/winlux-accounts-repair >/run/winlux/accounts-repair.log 2>&1 || true
+fi
 desktop_user=
 desktop_autologin=1
 if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
@@ -991,6 +1041,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         # Une version tout juste installée qui n'ouvre pas le bureau est
         # remplacée par la précédente, puis la machine redémarre.
         /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
+        # Sinon un écran lisible dit quoi faire, au lieu d'un écran noir.
+        test -x /usr/bin/winlux-rescue-screen && /usr/bin/winlux-rescue-screen >/run/winlux/rescue-screen.log 2>&1
         /bin/sh
     fi
     boot_mark session
@@ -1217,6 +1269,9 @@ if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
 fi
 # Aucun logiciel d'éditeur tiers non redistribuable dans l'image publiée.
 sh "$root/scripts/check-image-redistributable.sh" "$stage"
+# Pilotes et firmwares essentiels des PC réels dans l'image finale : la
+# construction échoue si l'un d'eux disparaît (scripts/hardware-essentials.list).
+python3 "$root/scripts/check-image-hardware.py" "$stage" "$kernel_release"
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
 for unit in smbd nmbd samba samba-ad-dc wsdd; do
@@ -1283,26 +1338,27 @@ function winlux_live {
     linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
+# La clé démarre toujours SON live : « Winlux Desktop » ne regarde jamais les
+# disques. Avant la v0.2.18, il chargeait le noyau et la racine d'un Winlux
+# déjà installé (étiquette WINLUX_ROOT) : impossible alors de réparer ou de
+# réinstaller depuis la clé une machine où Winlux était installé.
 menuentry "Winlux Desktop" {
-    if test -n "$winlux_root"; then
-        if test -f "($winlux_root)/boot/vmlinuz"; then
-            # Load the updated kernel and persistent root from the disk.
-            if test -f "($winlux_root)/boot/winlux-split-root"; then
-                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
-                initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
-            else
-                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
-            fi
-        else
-            winlux_live
-        fi
-    else
-        winlux_live
-    fi
+    winlux_live
 }
 menuentry "Installer Winlux sur le disque" --hotkey=i {
     winlux_live
 }
+# Système déjà installé sur ce PC : entrée à part, jamais par défaut.
+if test -n "$winlux_root" -a -f "($winlux_root)/boot/vmlinuz"; then
+    menuentry "Démarrer le Winlux installé sur ce PC" --hotkey=h {
+        if test -f "($winlux_root)/boot/winlux-split-root"; then
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
+            initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+        else
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
+        fi
+    }
+fi
 menuentry "Winlux Recovery (secours)" --hotkey=r {
     if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
         if test -f "($winlux_root)/boot/winlux-split-root"; then
@@ -1333,6 +1389,17 @@ menuentry "Winlux persistent network diagnostic" --hotkey=s {
 }
 GRUB
 grub-script-check "$iso_root/boot/grub/grub.cfg"
+# Garde-fou : les entrées live de la clé ne doivent jamais résoudre sur un
+# disque installé (étiquette WINLUX_ROOT), sinon la clé ne sert plus à réparer.
+for entry in "Winlux Desktop" "Installer Winlux sur le disque"; do
+    if awk -v title="menuentry \"$entry\"" 'index($0, title) == 1 { inside = 1 }
+        inside && /winlux_root|WINLUX_ROOT/ { bad = 1 }
+        inside && /^}/ { inside = 0 }
+        END { exit !bad }' "$iso_root/boot/grub/grub.cfg"; then
+        echo "grub.cfg : l'entrée « $entry » peut démarrer un disque installé" >&2
+        exit 1
+    fi
+done
 
 # Answer file for unattended installs, if supplied: the installer finds it at the medium root.
 if test -n "${WINLUX_AUTOINSTALL:-}"; then

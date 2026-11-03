@@ -278,8 +278,8 @@ class Tools(Gtk.Window):
         if bluetooth:
             self.button(_t("Bluetooth et appareils…"), lambda: self.open_settings("22"), bool(shutil.which("winlux-shell-app")))
         for title, args, binary, shown in [
-            (_t("Luminosité −"), ["brightnessctl","set","10%-"],"brightnessctl", backlight),
-            (_t("Luminosité +"), ["brightnessctl","set","+10%"],"brightnessctl", backlight),
+            (_t("Luminosité −"), ["winlux-brightness","set","-10","--osd"],"winlux-brightness", backlight),
+            (_t("Luminosité +"), ["winlux-brightness","set","+10","--osd"],"winlux-brightness", backlight),
             ("Volume −", ["winlux-control","volume-down"],"winlux-control", True),
             (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control", True),
             ("Volume +", ["winlux-control","volume-up"],"winlux-control", True),

@@ -515,6 +515,10 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
+/// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
+pub(crate) fn new_handle_number() -> usize {
+    next_handle()
+}
 /// Handle hérité (voir `inherit`) : même valeur que chez le parent.
 pub(crate) fn insert_file_at(h: usize, file: File, overlapped: bool) {
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -3971,6 +3975,33 @@ pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let h = next_handle();
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
     h
+}
+/// Type d'objet du noyau d'un handle, tel que le nomme
+/// NtQueryObject(ObjectTypeInformation), ou None s'il n'existe pas.
+pub(crate) fn object_type_name(h: usize) -> Option<&'static str> {
+    if h == crate::dlls::security::TOKEN_HANDLE || matches!(h as isize, -6..=-4) {
+        return Some("Token");
+    }
+    if h == get_current_process() {
+        return Some("Process");
+    }
+    if h == get_current_thread() {
+        return Some("Thread");
+    }
+    if fd_of_handle(h).is_some() {
+        return Some("File");
+    }
+    if crate::dlls::mmap::export(h).is_some() {
+        return Some("Section");
+    }
+    Some(match lookup_sync(h)? {
+        SyncHandle::Event(_) => "Event",
+        SyncHandle::Mutex(_) => "Mutant",
+        SyncHandle::Thread(_) => "Thread",
+        SyncHandle::Process(_) => "Process",
+        SyncHandle::CompletionPort(_) => "IoCompletion",
+        SyncHandle::Semaphore(_) => "Semaphore",
+    })
 }
 pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
@@ -7707,8 +7738,8 @@ pub unsafe extern "win64" fn create_named_pipe_a(
 pub extern "win64" fn connect_named_pipe(h: usize, ov: usize) -> i32 {
     crate::dlls::named_pipes::connect(h, ov)
 }
-pub extern "win64" fn disconnect_named_pipe(_h: usize) -> i32 {
-    1
+pub extern "win64" fn disconnect_named_pipe(h: usize) -> i32 {
+    crate::dlls::named_pipes::disconnect(h)
 }
 
 // --- CreateFileMappingA/W, MapViewOfFile, UnmapViewOfFile (stubs) ---
@@ -8125,6 +8156,12 @@ pub unsafe extern "win64" fn duplicate_handle(
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
     } else if let Some(h) = duplicate_handle_impl(src_handle) {
+        Some(h)
+    } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
+        // Jeton unique du compte (voir security.rs) : la copie est lui-même.
+        Some(src_handle)
+    } else if let Some(h) = crate::dlls::mmap::duplicate_mapping(src_handle) {
+        // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle.
         Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,

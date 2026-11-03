@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Native settings: nonblocking control actions and live Linux status."""
 import os
+import sys
 import time
 from pathlib import Path
 import subprocess
@@ -215,6 +216,7 @@ _TR = {
     'Installer, désinstaller et gérer le démarrage': ('Install, uninstall and manage startup', 'Instalar, desinstalar y administrar el inicio', 'Installieren, deinstallieren und Autostart verwalten'),
     'Wi-Fi et Bluetooth': ('Wi-Fi and Bluetooth', 'Wi-Fi y Bluetooth', 'WLAN und Bluetooth'),
     'Wi-Fi': ('Wi-Fi', 'Wi-Fi', 'WLAN'),
+    'Certificats': ('Certificates', 'Certificados', 'Zertifikate'),
     'Réglages rapides': ('Quick settings', 'Configuración rápida', 'Schnelleinstellungen'),
     'Thèmes, accent, fond et barre des tâches': ('Themes, accent, background and taskbar', 'Temas, color de énfasis, fondo y barra de tareas', 'Designs, Akzentfarbe, Hintergrund und Taskleiste'),
     'Appliquer la définition': ('Apply resolution', 'Aplicar resolución', 'Auflösung übernehmen'),
@@ -316,12 +318,12 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
-         _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi")]
+         _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 35 n’existent que dans les Paramètres natifs.
+# Pages 29 à 36 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
@@ -331,7 +333,7 @@ CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
-              (_t("Confidentialité et sécurité"), [18]),
+              (_t("Confidentialité et sécurité"), [18, 36]),
               (_t("Mises à jour"), [7, 17])]
 # Anciennes pages fondues dans une autre : Son (3) dans Son, Souris (5) dans
 # Clavier et souris, Personnalisation (6) dans Fond d’écran et couleurs.
@@ -1158,5 +1160,39 @@ class SettingsApp(Gtk.Application):
         self.window.present()
         return 0
 
+# `winlux-settings about`, `winlux-settings 9`, `ms-settings:about`… : page
+# ouverte d'emblée (mêmes numéros que WINLUX_SETTINGS_PAGE).
+PAGE_NAMES = {
+    "system": 0, "systeme": 0, "apps": 1, "applications": 1, "network": 2, "reseau": 2, "network-status": 2,
+    "sound": 16, "son": 16, "keyboard": 4, "clavier": 4, "mouse": 5, "souris": 5,
+    "personalization": 6, "personnalisation": 6, "windowsupdate": 7, "updates": 7, "mises-a-jour": 7,
+    "display": 8, "ecran": 8, "about": 9, "apropos": 9, "a-propos": 9, "browsers": 11, "navigateurs": 11,
+    "defaultapps": 11, "easeofaccess": 12, "accessibility": 12, "accessibilite": 12, "privacy": 18,
+    "confidentialite": 18, "bluetooth": 22, "power": 23, "powersleep": 23, "batterysaver": 23,
+    "alimentation": 23, "graphics": 24, "graphismes": 24, "printers": 26, "imprimantes": 26,
+    "gaming": 29, "jeux": 29, "recovery": 31, "recuperation": 31, "clipboard": 32,
+    "presse-papiers": 32, "accounts": 33, "yourinfo": 33, "otherusers": 33, "comptes": 33,
+    "hardware": 34, "drivers": 34, "pilotes": 34,
+}
+
+
+def page_argument(value):
+    """Numéro de page pour un argument de la ligne de commande, sinon None."""
+    value = fold(value.strip())
+    for prefix in ("ms-settings:", "winlux-settings:"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+    value = value.strip("/").replace("_", "-").replace(" ", "-")
+    if value.isdigit():
+        return int(value) if int(value) < len(PAGES) else None
+    return PAGE_NAMES.get(value, PAGE_NAMES.get(value.replace("-", "")))
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        page = page_argument(sys.argv[1])
+        if page is None:
+            print(f"winlux-settings : page inconnue « {sys.argv[1]} »", file=sys.stderr)
+        else:
+            os.environ["WINLUX_SETTINGS_PAGE"] = str(page)
     raise SystemExit(SettingsApp().run(None))
