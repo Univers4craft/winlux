@@ -295,8 +295,65 @@ def sync_once(apply=True):
         time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
         stepped = True
     state = {"last": int(time.time()), "offset": round(offset, 3), "server": server, "stepped": stepped}
+    if apply and os.geteuid() == 0:
+        # Horloge matérielle recopiée : sans elle, chaque démarrage repartait
+        # de la date de la pile (2015 sur le portable de damien) et tous les
+        # certificats étaient « pas encore valides » pendant plusieurs minutes.
+        state["rtc"] = write_rtc()
     write_time_state(state)
     return done(**state)
+
+
+RTC_DEVICE = os.environ.get("WINLUX_RTC_DEVICE", "/dev/rtc0")
+RTC_SET_TIME = 0x4024700a       # _IOW('p', 0x0a, struct rtc_time)
+BUILD_INFO = SYS_ROOT / "usr/share/winlux/BUILD-INFO"
+
+
+def write_rtc(now=None):
+    """Recopie l'heure système (UTC) dans l'horloge matérielle ; vrai si fait."""
+    import fcntl
+    moment = time.gmtime(now if now is not None else time.time())
+    data = struct.pack("9i", moment.tm_sec, moment.tm_min, moment.tm_hour, moment.tm_mday,
+                       moment.tm_mon - 1, moment.tm_year - 1900, 0, 0, 0)
+    try:
+        descriptor = os.open(RTC_DEVICE, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.ioctl(descriptor, RTC_SET_TIME, data)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def build_floor():
+    """Date de construction de ce Winlux : l'heure ne peut pas être avant."""
+    try:
+        for line in BUILD_INFO.read_text().splitlines():
+            if line.startswith("built_at_utc="):
+                import calendar
+                return calendar.timegm(time.strptime(line.split("=", 1)[1].strip(), "%Y-%m-%dT%H:%M:%SZ"))
+    except (OSError, ValueError):
+        pass
+    try:
+        return int(BUILD_INFO.stat().st_mtime)
+    except OSError:
+        return 0
+
+
+def apply_floor():
+    """Horloge avant la construction (pile de la carte mère vide) : calée sur
+    cette date, déjà bien plus juste, en attendant le réseau."""
+    floor = build_floor()
+    if floor and time.time() < floor:
+        try:
+            time.clock_settime(time.CLOCK_REALTIME, floor)
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def write_time_state(state):
@@ -313,10 +370,16 @@ def write_time_state(state):
 def time_daemon():
     """Dès que le réseau répond, puis toutes les 6 h ; nouvel essai rapide en cas d'échec."""
     pause = 15
+    synced = False
+    if time_auto():
+        apply_floor()
     while True:
         if time_auto():
             answer = sync_once()
-            pause = 6 * 3600 if answer.get("ok") else min(300, pause * 2)
+            synced = synced or bool(answer.get("ok"))
+            # Jamais synchronisé depuis le démarrage : nouvel essai toutes les
+            # 30 s au plus (téléchargements et certificats en dépendent).
+            pause = 6 * 3600 if answer.get("ok") else min(300 if synced else 30, pause * 2)
         else:
             pause = 60
         # Réglage changé ou demande « synchroniser maintenant » : réveil anticipé.

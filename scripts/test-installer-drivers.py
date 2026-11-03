@@ -66,7 +66,7 @@ def fake_run(command, **kwargs):
 namespace = {"os": os, "re": re, "sys": sys, "time": __import__("time"), "shutil": __import__("shutil"),
              "contextlib": __import__("contextlib"),
              "subprocess": types.SimpleNamespace(run=fake_run, SubprocessError=subprocess.SubprocessError),
-             "tr": lambda key, **_: f"<{key}>"}
+             "tr": lambda key, **_: f"<{key}>", "sync_clock_now": lambda: True}
 exec(compile(ast.Module(body=functions, type_ignores=[]), "installer", "exec"), namespace)
 body = [methods[name] for name in ("target_chroot", "online", "install_hardware_support", "hardware_lines")]
 klass = ast.ClassDef(name="Fake", bases=[], keywords=[], body=body, decorator_list=[], type_params=[]) \

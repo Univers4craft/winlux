@@ -309,6 +309,44 @@ if os.environ.get("DISPLAY"):
        "Heure et langue : « Régler l’heure automatiquement » proposé et actif")
     window.destroy()
 
+# ── Horloge matérielle, date plancher, nouvel essai rapide ─────────────────
+# Portable de damien : pile vide (RTC au 2015-01-02), heure jamais recopiée
+# dans la RTC, premier essai réussi après ~4 min → navigateurs refusés.
+tool = runpy.run_path(str(TOOL), run_name="winlux_certificates")
+import fcntl
+calls = []
+real_ioctl, real_open = fcntl.ioctl, os.open
+fcntl.ioctl = lambda fd, request, data: calls.append((request, data))
+tool["write_rtc"].__globals__["RTC_DEVICE"] = os.devnull
+ok(tool["write_rtc"](1762196400) is True, "RTC : heure recopiée dans l'horloge matérielle")
+request, data = calls[-1]
+moment = time.gmtime(1762196400)
+ok(request == 0x4024700a and struct.unpack("9i", data)[:6] == (moment.tm_sec, moment.tm_min, moment.tm_hour,
+   moment.tm_mday, moment.tm_mon - 1, moment.tm_year - 1900), "RTC : RTC_SET_TIME, struct rtc_time en UTC")
+fcntl.ioctl = real_ioctl
+tool["write_rtc"].__globals__["RTC_DEVICE"] = str(work / "absente")
+ok(tool["write_rtc"]() is False, "RTC absente : pas d'erreur, juste « non »")
+info = work / "BUILD-INFO"
+info.write_text("version=0.2.18\nbuilt_at_utc=2026-11-03T17:00:00Z\n")
+tool["build_floor"].__globals__["BUILD_INFO"] = info
+ok(tool["build_floor"]() == 1793725200, "date plancher : date de construction (UTC)")
+settings = []
+real_settime = time.clock_settime
+glob = tool["apply_floor"].__globals__
+import types
+fake_time = types.SimpleNamespace(**{name: getattr(time, name) for name in dir(time) if not name.startswith("_")})
+fake_time.time = lambda: 1420156800.0       # 2015-01-02, comme la RTC du portable
+fake_time.clock_settime = lambda clock, value: settings.append(value)
+glob["time"] = fake_time
+ok(tool["apply_floor"]() is True and settings == [1793725200], "horloge en 2015 : calée sur la date de construction")
+glob["time"] = time
+source = TOOL.read_text(encoding="utf-8")
+daemon = source[source.index("def time_daemon"):source.index("# ── Certificats")]
+ok("apply_floor()" in daemon and "300 if synced else 30" in daemon,
+   "démon : date plancher au lancement, essai toutes les 30 s tant que rien n'a réussi")
+sync = source[source.index("def sync_once"):source.index("RTC_DEVICE =")]
+ok('state["rtc"] = write_rtc()' in sync, "synchro root réussie : RTC mise à jour (clé rtc)")
+
 if failures:
     print(f"\n{len(failures)} échec(s)")
     sys.exit(1)

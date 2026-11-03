@@ -77,6 +77,24 @@ offline() {
     echo "Pas de connexion Internet : $1 sera téléchargé chez son éditeur et installé automatiquement au prochain démarrage connecté." >&2
     return 75
 }
+# Heure : synchronisée avant un téléchargement tant qu'aucune synchro n'a
+# réussi depuis le démarrage (« force » : même après une synchro).
+clock_first() {
+    grep -q '^AUTO=0' "$root/etc/winlux/time.conf" 2>/dev/null && return 0
+    if test "${1:-}" != force && grep -q '"last"' "$run/time-sync.json" 2>/dev/null; then return 0; fi
+    command -v winlux-certificates >/dev/null 2>&1 || return 0
+    timeout 30 winlux-certificates time sync >/dev/null 2>&1 || true
+}
+# Dernier échec dû à la date (certificat « pas encore valide » ou expiré).
+clock_wrong() {
+    grep -qiE 'certificate is not yet valid|certificate has expired' "$run/browser-fetch.last" 2>/dev/null
+}
+fetch_logged() {
+    status=0
+    "$fetch" --only "$1" "$downloads" 2>"$run/browser-fetch.last" || status=$?
+    cat "$run/browser-fetch.last" >>"$run/browser-fetch.log" 2>/dev/null || true
+    return "$status"
+}
 install_browser() {
     id=$1
     if ! test -r "$cache/$id.deb"; then
@@ -87,11 +105,19 @@ install_browser() {
                 network_up || { offline "$id"; return 75; }
                 mkdir -p "$downloads" "$run"
                 chmod 755 "$downloads"
+                # Horloge jamais synchronisée depuis le démarrage (pile de la
+                # carte mère vide : 2015) : tous les certificats seraient
+                # « pas encore valides ». Synchronisée d'abord.
+                clock_first
                 echo "Téléchargement de $id depuis le site de son éditeur…"
                 # Détails techniques (erreurs Python, HTTP) dans un journal, pas à l'écran.
-                if ! "$fetch" --only "$id" "$downloads" 2>>"$run/browser-fetch.log"; then
+                if ! fetch_logged "$id" && ! { clock_wrong && clock_first force && fetch_logged "$id"; }; then
                     network_up || { offline "$id"; return 75; }
-                    echo "Le site de l'éditeur de $id ne répond pas. Réessayez plus tard (détails : /run/winlux/browser-fetch.log)." >&2
+                    if clock_wrong; then
+                        echo "La date de ce PC est fausse ($(date +%d/%m/%Y)) : les sites sécurisés refusent la connexion. Activez « Régler l'heure automatiquement » dans Paramètres > Heure et langue, puis réessayez." >&2
+                    else
+                        echo "Le site de l'éditeur de $id ne répond pas. Réessayez plus tard (détails : /run/winlux/browser-fetch.log)." >&2
+                    fi
                     return 1
                 fi
                 cache=$downloads
