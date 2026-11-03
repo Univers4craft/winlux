@@ -5119,6 +5119,9 @@ class InstallerApp(Gtk.Application):
         self.pages.add_named(box, page_name("progress"))
 
     def set_progress(self, fraction, text):
+        # Aussi dans le journal de l'installateur (sortie d'erreur).
+        print(f"[{int(fraction * 100):3d} %] {text}", file=sys.stderr, flush=True)
+
         def do():
             self.progress_bar.set_fraction(fraction)
             self.progress_percent.set_text(f"{int(fraction * 100)} %")
