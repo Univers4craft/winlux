@@ -638,6 +638,7 @@ PAGE_CLIPBOARD = 32
 PAGE_HARDWARE = 34
 PAGE_ACCOUNTS = 33
 PAGE_WIFI = 35
+PAGE_CERTS = 36
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -1163,6 +1164,9 @@ def page_available(page, status=None):
     if page == PAGE_WIFI:
         module = wifi_page()
         return module is not None and module.available()
+    if page == PAGE_CERTS:
+        module = certificates_page()
+        return module is not None and module.available()
     return True
 
 
@@ -1301,6 +1305,30 @@ def wifi_page():
     return module
 
 
+_CERTS = []
+
+
+def certificates_page():
+    """Page Certificats (winlux-certificates, installé à côté), None si absente."""
+    if _CERTS: return _CERTS[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-certificates.py"), here.with_name("winlux-certificates")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_certificates_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_certificates_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _CERTS.append(module)
+    return module
+
+
 def store_catalogs():
     """Lignes de « winlux-store-catalogs --list » : id, état, plateforme, nom, résumé, site."""
     if not have("winlux-store-catalogs"): return []
@@ -1341,7 +1369,8 @@ class ExtraPages:
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
-                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi"}
+                   PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
+                   PAGE_CERTS: "page_certificates"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1935,6 +1964,9 @@ class ExtraPages:
             self.row(box, _t("Fuseau horaire"), line)
         now = GLib.DateTime.new_now_local().format("%x %X")
         self.hint(_t("Date et heure actuelles : {now}").format(now=now), box)
+        # Heure réglée automatiquement : une date fausse fait refuser tous les sites sécurisés.
+        module = certificates_page()
+        if module is not None: self.time_switch = module.time_section(self)
 
     # ── Accessibilité ──
 
@@ -2622,6 +2654,13 @@ class ExtraPages:
         module = wifi_page()
         if module is not None:
             self.wifi_panel = module.page(self)
+
+    # ── Certificats : autorités ajoutées, heure, test d'un site (winlux-certificates) ──
+
+    def page_certificates(self):
+        module = certificates_page()
+        if module is not None:
+            self.certificates_panel = module.page(self)
 
     # ── Mises à jour : secours et restauration, dans la page ──
 

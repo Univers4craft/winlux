@@ -100,3 +100,10 @@ if test -x /usr/bin/winlux-brightness && test -x /usr/bin/ddcutil && \
         test -z "$(ls -A /sys/class/backlight/ 2>/dev/null)"; then
     /usr/bin/winlux-brightness detect-ddc >/run/winlux/brightness-ddc.log 2>&1 &
 fi
+# Heure : une date fausse fait refuser tous les certificats (sites, mises à
+# jour, Wi-Fi d'entreprise). Le noyau a déjà lu l'horloge matérielle ; le
+# démon la règle par SNTP dès que le réseau répond (désactivable dans
+# Paramètres > Heure et langue), avant toute vérification TLS du bureau.
+if test -x /usr/bin/winlux-certificates; then
+    /usr/bin/winlux-certificates time-daemon >/run/winlux/time-sync.log 2>&1 &
+fi

@@ -12,6 +12,7 @@ tourne en root et n'exécute que des actions connues :
   winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
   winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
   winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
+  winlux-root exec winlux-certificates …   autorités ajoutées, heure automatique
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -230,6 +231,18 @@ def exec_level(args):
         return None
     if tool == "winlux-wifi":
         return wifi_level(rest)
+    if tool == "winlux-certificates":
+        # Ajouter une autorité de confiance touche à la sécurité de tout le
+        # système : mot de passe d'un administrateur, comme sous Windows.
+        if len(rest) == 2 and rest[0] == "add" and re.fullmatch(r"/[^\n\r\0]{1,400}", rest[1]):
+            return "admin"
+        if len(rest) == 2 and rest[0] == "remove" and re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}", rest[1]):
+            return "admin"
+        if rest in (["time", "auto", "on"], ["time", "auto", "off"]):
+            return "admin"
+        if rest == ["time", "sync"]:
+            return "user"
+        return None
     if tool == "winlux-brightness":
         # Luminosité : le compte n'écrit pas dans /sys/class/backlight ni sur l'i2c.
         if rest == ["detect-ddc"] or (len(rest) == 2 and rest[0] == "set" and re.fullmatch(r"\d{1,3}", rest[1])):

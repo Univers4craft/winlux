@@ -42,6 +42,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # reste « monde » : canaux 12-13 et une partie du 5 GHz bloqués, une
             # box sur le canal 12 ou 13 est invisible.
             "wireless-regdb",
+            # Certificats : magasin Mozilla, update-ca-certificates (openssl) et
+            # certutil pour les navigateurs NSS (winlux-certificates).
+            "ca-certificates", "openssl", "libnss3-tools",
             # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
             "libcrypt1", "libxss1", "python3-gi-cairo",
             # Compositeur : déplacements sans traînées, ombres et coins arrondis.

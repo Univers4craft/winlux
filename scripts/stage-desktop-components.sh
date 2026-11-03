@@ -44,7 +44,7 @@ cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkM
 # comptes créés par Winlux) pilotent le réseau, comme sous Windows.
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness; do
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-certificates; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -132,4 +132,25 @@ rm -rf "$stage/usr/share/i18n"
 certificate="$stage/usr/share/ca-certificates/mozilla/NetLock_Arany_=Class_Gold=_Főtanúsítvány.crt"
 if test -f "$certificate"; then
     mv "$certificate" "$stage/usr/share/ca-certificates/mozilla/NetLock_Arany_Class_Gold_CA.crt"
+fi
+# Liste des autorités actives d'update-ca-certificates (créée d'ordinaire par
+# le script d'installation du paquet, qui ne tourne pas ici) : sans elle, une
+# mise à jour de ca-certificates ou l'ajout d'une autorité d'entreprise
+# reconstruirait un magasin vide.
+if test -d "$stage/usr/share/ca-certificates/mozilla" && ! test -s "$stage/etc/ca-certificates.conf"; then
+    (cd "$stage/usr/share/ca-certificates" && find mozilla -name '*.crt' | LC_ALL=C sort) >"$stage/etc/ca-certificates.conf"
+fi
+# Dossier /etc/ssl/certs avec un fichier par autorité et ses liens par
+# empreinte (openssl rehash) : le Wi-Fi d'entreprise (« Certificats du
+# système » : wpa_supplicant lit ce dossier, pas le fichier groupé) et les
+# programmes qui utilisent un CApath ne trouvaient aucune autorité.
+if test -d "$stage/usr/share/ca-certificates/mozilla"; then
+    mkdir -p "$stage/etc/ssl/certs"
+    for certificate in "$stage"/usr/share/ca-certificates/mozilla/*.crt; do
+        name=${certificate##*/}
+        ln -sfn "../../../usr/share/ca-certificates/mozilla/$name" "$stage/etc/ssl/certs/${name%.crt}.pem"
+    done
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rehash "$stage/etc/ssl/certs" 2>/dev/null || c_rehash "$stage/etc/ssl/certs" >/dev/null 2>&1 || true
+    fi
 fi
