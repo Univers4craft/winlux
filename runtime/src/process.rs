@@ -162,6 +162,29 @@ mod tests {
         assert_eq!(quote_arg("a b\\"), "\"a b\\\\\"");
         assert_eq!(quote_arg("a\"b"), "\"a\\\"b\"");
     }
+
+    #[test]
+    fn parent_de_chromium_vivant_ou_mort() {
+        assert!(super::stat_alive("42 (claude.exe) S 1 42"));
+        assert!(super::stat_alive("42 (a) b) R 1"));
+        assert!(!super::stat_alive("42 (claude.exe) Z 1 42"));
+        assert!(!super::stat_alive("42 (claude.exe) X 1"));
+        assert!(super::process_alive(std::process::id() as i32));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        // Mort mais pas encore ramassé : zombie, donc plus vivant.
+        let mut alive = true;
+        for _ in 0..50 {
+            alive = super::process_alive(pid);
+            if !alive {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!alive);
+        child.wait().unwrap();
+        assert!(!super::process_alive(pid));
+    }
 }
 
 fn unicode_string(at: usize, s: &[u16]) {
@@ -183,26 +206,53 @@ fn unicode_string(at: usize, s: &[u16]) {
 /// sous Windows il s'arrête quand son application disparaît. Ici, quand le processus parent meurt (même
 /// tué), l'enfant est rattaché à un autre parent : il s'arrête alors aussi,
 /// au lieu de rester seul en mémoire (450 Mo après un plantage de Claude).
-fn exit_with_parent() {
+fn exit_with_parent(windows_parent: Option<i32>) {
     let parent = unsafe { libc::getppid() };
-    if parent <= 1 {
+    if parent <= 1 && windows_parent.is_none() {
         return;
     }
     let _ = std::thread::Builder::new()
         .name("winlux-parent-watch".into())
         .spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            if unsafe { libc::getppid() } != parent {
+            let ppid = unsafe { libc::getppid() };
+            let gone = (parent > 1 && (ppid != parent || !process_alive(parent)))
+                || windows_parent.is_some_and(|p| !process_alive(p));
+            if gone {
                 crate::trace!("parent {parent} disparu : arrêt de l'enfant de Chromium");
                 unsafe { libc::_exit(0) };
             }
         });
 }
 
+/// Le processus `pid` tourne-t-il encore ? Un zombie (Z) ou un processus
+/// mort (X) ne compte plus : son navigateur est arrêté même s'il n'a pas
+/// encore été ramassé.
+fn process_alive(pid: i32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat_alive(&stat),
+        Err(_) => false,
+    }
+}
+
+fn stat_alive(stat: &str) -> bool {
+    // « pid (nom) état … » : le nom peut contenir des parenthèses.
+    let state = stat
+        .rfind(')')
+        .and_then(|i| stat[i + 1..].trim_start().chars().next());
+    !matches!(state, Some('Z' | 'X' | 'x') | None)
+}
+
 pub fn init_process(exe: &Module, args: &[String]) {
     // Identité de l'application pour ses autorisations (caméra, micro…).
     crate::permissions::init(&exe.path, args);
     let exe_win = crate::paths::to_windows(&exe.path);
+    // Processus Windows qui nous a lancés (avant que la variable ne prenne
+    // notre propre numéro pour nos enfants).
+    let windows_parent = std::env::var("WINLUX_PARENT_PID")
+        .ok()
+        .and_then(|p| p.parse::<i32>().ok())
+        .filter(|&p| p > 1 && p != std::process::id() as i32);
     crate::permissions::ask_files_before_start(&exe_win);
     // Enfants de Chromium/Electron (--type=gpu-process, renderer, utility,
     // crashpad-handler…) : Windows les tue avec leur navigateur (objet Job
@@ -210,7 +260,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let chromium_child = args.iter().any(|a| a.starts_with("--type="))
         || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="));
     if chromium_child {
-        exit_with_parent();
+        exit_with_parent(windows_parent);
     }
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
