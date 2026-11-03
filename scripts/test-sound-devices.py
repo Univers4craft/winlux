@@ -141,6 +141,10 @@ check("(null)" not in repr(combos), f"« (null) » affiché : {combos}")
 check(combos.get("Haut-parleurs ou casque") == [(SPEAKERS["name"], "Haut-parleurs du portable")], f"sortie (null) : {combos}")
 check(combos.get("Micro") == [(MIC["name"], "sof-hda-dsp")], f"entrée (null) : {combos}")
 check('LC_ALL="C"' in (HERE / "winlux-popup.py").read_text(), "réglages rapides : pactl sans LC_ALL=C")
+# Réglages rapides > Son (flèche à droite du volume) : même « (null) » vu en VM.
+popup = runpy.run_path(str(HERE / "winlux-popup.py"), run_name="sound_popup_test")
+engine, volume, _mute, name = popup["audio"]()
+check(engine == "pactl" and name == "Haut-parleurs du portable", f"réglages rapides : sortie {engine!r} {name!r}")
 
 # 3. Traductions du message.
 tr = pages["_TR"]

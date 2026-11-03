@@ -187,6 +187,17 @@ def _percent(volume):
     return max(levels or [0])
 
 
+def device_label(device):
+    """Nom lisible d'une sortie pactl. Sur certains PC (SOF), PulseAudio donne
+    la description « (null) » : le vrai nom est alors dans les propriétés."""
+    properties = device.get("properties") or {}
+    for value in (device.get("description"), properties.get("device.description"), properties.get("node.description"),
+                  properties.get("node.nick"), properties.get("alsa.card_name")):
+        if isinstance(value, str) and value.strip() and value.strip().lower() not in ("(null)", "null"):
+            return value.strip()
+    return ""
+
+
 def audio():
     """(moteur, volume, muet, nom de la sortie) ; moteur None sans sortie réelle.
 
@@ -200,7 +211,7 @@ def audio():
                 for sink in json.loads(sinks):
                     if sink.get("name") == default:
                         return ("pactl", min(100, _percent(sink.get("volume"))), bool(sink.get("mute")),
-                                sink.get("description") or default)
+                                device_label(sink) or default)
             except (ValueError, TypeError, AttributeError):
                 pass
     if shutil.which("wpctl"):
@@ -210,7 +221,7 @@ def audio():
             inspect = _run(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"]) or ""
             name = re.search(r'node\.description = "([^"]*)"', inspect)
             return ("wpctl", min(100, round(float(found[1]) * 100)), "MUTED" in output,
-                    name[1] if name else _t("Sortie audio"))
+                    name[1] if name and name[1].lower() not in ("(null)", "null") else _t("Sortie audio"))
     if shutil.which("amixer"):
         output = _run(["amixer", "get", "Master"])
         found = re.findall(r"\[(\d+)%\]", output or "")

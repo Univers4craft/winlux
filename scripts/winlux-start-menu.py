@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 from pathlib import Path
 import shutil
 from string import Template
@@ -179,6 +180,7 @@ MENU_CSS = Template("""
   #winlux-start entry selection { background: $selected; color: $on_selected; }
   #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
   #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  #winlux-start #winlux-start-osk label { font-size: 20px; }
   /* Navigation au clavier (#28) : cadre visible seulement au clavier, comme Windows. */
   #winlux-start button { outline: 2px solid $accent; outline-offset: -2px; }
   #winlux-start .heading { font-weight: bold; font-size: 12pt; }
@@ -319,8 +321,12 @@ class Start(Gtk.Application):
         self.window.resize(width, height)
         x = area.x + 12 if getattr(self, "menu_left", False) else area.x + (area.width - width) // 2
         self.window.move(x, area.y + area.height - height - 10)
+        self.render()
 
     # ── Clavier tactile intégré (tablette sans clavier) ──
+
+    def keyboard_open(self):
+        return getattr(self, "osk_widget", None) is not None and self.osk_widget.get_visible()
 
     def osk_auto(self):
         try: return not self.osk.keyboards()
@@ -380,7 +386,9 @@ class Start(Gtk.Application):
         self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
         self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
-        body.pack_start(self.search, False, False, 0)
+        search_row = Gtk.Box(spacing=8)
+        search_row.pack_start(self.search, True, True, 0)
+        body.pack_start(search_row, False, False, 0)
         self.osk = osk_module()
         self.osk_widget, self.osk_height = None, 0
         if self.osk is not None:
@@ -394,11 +402,17 @@ class Start(Gtk.Application):
             self.osk_widget.set_margin_start(12)
             self.osk_widget.set_margin_end(12)
             self.osk_widget.set_no_show_all(True)
-            # Icône du clavier dans la recherche : l'ouvre ou le ferme, avec ou
-            # sans clavier physique.
-            self.search.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "input-keyboard-symbolic")
-            self.search.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Clavier tactile"))
-            self.search.connect("icon-press", lambda _e, position, _ev: position == Gtk.EntryIconPosition.SECONDARY and self.osk_toggle())
+            # Bouton clavier à droite de la recherche, toujours visible : l'ouvre
+            # ou le ferme, avec ou sans clavier physique. (Une icône dans le
+            # champ ne tenait pas : GtkSearchEntry y met et enlève sa croix
+            # d'effacement.)
+            self.osk_button = Gtk.Button(label="⌨")
+            self.osk_button.set_name("winlux-start-osk")
+            self.osk_button.set_can_focus(False)
+            self.osk_button.set_tooltip_text(_t("Clavier tactile"))
+            self.osk_button.set_size_request(48, -1)
+            self.osk_button.connect("clicked", lambda *_: self.osk_toggle())
+            search_row.pack_end(self.osk_button, False, False, 0)
         header = Gtk.Box()
         self.heading = Gtk.Label(label=_t("Épinglé"), xalign=0)
         self.heading.get_style_context().add_class("heading")
@@ -484,9 +498,11 @@ class Start(Gtk.Application):
 
     def first_result(self, *_):
         query=fold(self.search.get_text().strip())
-        setting=next((page for label,page in SETTINGS if query and query in fold(label)),None)
-        if setting is not None:self.open_setting(setting)
+        found=settings_for(query) if query else []
+        app_best=rank(self.results[0].get_display_name(),query) if self.results else 9
+        if found and rank(found[0][0],query)<app_best:self.open_setting(found[0][1])
         elif self.results:self.launch(self.results[0])
+        elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
     def launch(self, app):
@@ -531,14 +547,20 @@ class Start(Gtk.Application):
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
-        self.results = sorted((app for app in self.apps.values() if matches(app, query)), key=lambda app: app.get_display_name().casefold())
+        self.results = sorted((app for app in self.apps.values() if matches(app, query)),
+                              key=lambda app: (rank(app.get_display_name(), query), app.get_display_name().casefold()))
+        settings_after = []
         if listing:
             if query:
-                for label, page in SETTINGS:
-                    if query in fold(label):
-                        button = Gtk.Button(label=_t("Paramètres · ") + label)
-                        on_click(button, lambda target=page: self.open_setting(target))
-                        self.content.pack_start(button, False, False, 0)
+                # « par » : l'application Paramètres passe avant « Bluetooth et
+                # appareils » ; une page ne passe devant que si elle répond mieux.
+                found = settings_for(query)
+                apps_best = rank(self.results[0].get_display_name(), query) if self.results else 9
+                for label, page in found:
+                    button = Gtk.Button(label=_t("Paramètres · ") + label)
+                    on_click(button, lambda target=page: self.open_setting(target))
+                    if rank(label, query) < apps_best: self.content.pack_start(button, False, False, 0)
+                    else: settings_after.append(button)
                 if query != self.file_query:
                     self.file_query = query
                     self.file_generation += 1
@@ -561,6 +583,7 @@ class Start(Gtk.Application):
                     self.content.pack_start(heading, False, False, 0)
                     previous = group
                 self.content.pack_start(self.app_button(app), False, False, 0)
+            for button in settings_after: self.content.pack_start(button, False, False, 0)
             if not self.results and not (query and (self.file_results or any(query in fold(label) for label, _ in SETTINGS))):
                 self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
@@ -568,6 +591,11 @@ class Start(Gtk.Application):
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
             for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
+            # Clavier tactile ouvert : la place manque, les épinglés seuls (le
+            # titre « Recommandations » était coupé par le bas de la liste).
+            if self.keyboard_open():
+                self.content.show_all()
+                return
             heading = Gtk.Label(label=_t("Recommandations"), xalign=0, margin_top=15)
             heading.get_style_context().add_class("heading")
             self.content.pack_start(heading, False, False, 0)
@@ -705,6 +733,19 @@ class Start(Gtk.Application):
 # Anciennes épingles par défaut remplacées : l'épingle Edge des premières
 # versions devient le « Navigateur » générique (aucune marque imposée).
 RENAMED_PINS = {"winlux-browser-edge.desktop": "winlux-browser.desktop"}
+
+
+def rank(text, query):
+    """0 : le nom commence par la recherche ; 1 : un de ses mots ; 2 : ailleurs."""
+    text = fold(text)
+    if text.startswith(query): return 0
+    if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
+    return 2
+
+
+def settings_for(query):
+    """Pages des Paramètres trouvées, les mieux classées d'abord."""
+    return sorted(((label, page) for label, page in SETTINGS if query in fold(label)), key=lambda item: rank(item[0], query))
 
 
 def matches(app, query):
