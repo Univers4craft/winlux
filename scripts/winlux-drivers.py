@@ -15,7 +15,7 @@ amorçable en machine virtuelle et sous la limite de taille des versions).
     winlux-drivers firmware-update   applique les mises à jour de micrologiciel (root)
 
 Éléments : modules, nvidia, mesa, vaapi, microcode, amd-pstate, fwupd,
-fingerprint, scanner, printer-drivers.
+fingerprint, scanner, printer-drivers, rgb.
 
 WINLUX_DRIVERS_ROOT déplace /sys, /proc, /etc, /boot, /usr et /var (tests) ;
 WINLUX_KERNEL_RELEASE remplace uname -r.
@@ -51,7 +51,11 @@ VAAPI = {"intel": ("iHD_drv_video.so", ["intel-media-va-driver-non-free"], ["int
          "amd": ("radeonsi_drv_video.so", ["mesa-va-drivers"], []),
          "nvidia": ("nvidia_drv_video.so", ["nvidia-vaapi-driver"], [])}
 ITEMS = ("modules", "nvidia", "mesa", "vaapi", "microcode", "amd-pstate", "fwupd", "fingerprint",
-         "scanner", "printer-drivers")
+         "scanner", "printer-drivers", "rgb")
+# Claviers, souris et cartes mères à éclairage RGB pilotables par OpenRGB :
+# SteelSeries (claviers des portables MSI GE/GS/GT), MSI Mystic Light, ASUS
+# Aura, Corsair, Razer, Cooler Master, contrôleurs ITE des claviers RGB.
+RGB_VENDORS = ("1038", "1462", "0b05", "1b1c", "1532", "2516", "048d")
 
 
 # ── Lecture du système ─────────────────────────────────────────────────────
@@ -891,6 +895,8 @@ def install(item):
         return simple(["fwupd"], "Mises à jour du micrologiciel disponibles (fwupd).")
     if item == "fingerprint":
         return simple(["fprintd", "libpam-fprintd"], "Lecteur d’empreintes pris en charge.")
+    if item == "rgb":
+        return simple(["openrgb"], "Éclairage RGB pilotable avec OpenRGB.")
     if item == "scanner":
         return simple(["sane-utils", "sane-airscan"], "Scanners USB et réseau pris en charge.")
     return simple(PRINTER_DRIVERS, "Pilotes d’imprimantes supplémentaires installés.")
@@ -931,6 +937,8 @@ def auto():
         failed |= install_vaapi() != 0
     if not have("fwupdtool"):
         failed |= simple(["fwupd"], "fwupd installé.") != 0
+    if usb_vendors() & set(RGB_VENDORS) and not installed("openrgb"):
+        failed |= simple(["openrgb"], "Éclairage RGB pilotable avec OpenRGB.") != 0
     if usb_vendors() & set(FINGERPRINT_VENDORS) and not installed("fprintd"):
         failed |= simple(["fprintd", "libpam-fprintd"], "Lecteur d’empreintes pris en charge.") != 0
     if not failed:

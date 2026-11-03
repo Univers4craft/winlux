@@ -2,6 +2,13 @@
 """Diagnostic du matériel : ce que Winlux ne prend pas (encore) en charge.
 
     winlux-hardware-check [--json] [--save FICHIER] [--all]
+    winlux-hardware-check --items     éléments à installer, un par ligne
+
+« --items » et la clé « recommend » du JSON nomment des éléments de
+winlux-drivers (« winlux-drivers install ÉLÉMENT ») : l'installateur et le
+premier démarrage les installent dès que le réseau est là. La clé « profile »
+décrit la machine (fixe, portable, convertible, tablette, VM ; graphique
+hybride, tactile, stylet, capteurs, batterie).
 
 Parcourt les appareils PCI, USB, I2C et SPI de la machine, dit lesquels n'ont
 aucun pilote et pourquoi (pilote absent du noyau, présent mais pas chargé,
@@ -104,6 +111,26 @@ T = {
                     "{0} problem(s): attach this report to a bug report (Settings > Report a problem).",
                     "{0} problema(s): adjunte este informe a un aviso (Configuración > Informar de un problema).",
                     "{0} Problem(e): diesen Bericht einer Meldung anhängen (Einstellungen > Problem melden)."),
+    "profile": ("Type de machine", "Device type", "Tipo de equipo", "Gerätetyp"),
+    "kind_desktop": ("PC fixe", "Desktop PC", "PC de sobremesa", "Desktop-PC"),
+    "kind_laptop": ("Portable", "Laptop", "Portátil", "Laptop"),
+    "kind_convertible": ("Portable convertible", "Convertible laptop", "Portátil convertible", "Convertible"),
+    "kind_tablet": ("Tablette", "Tablet", "Tableta", "Tablet"),
+    "kind_vm": ("Machine virtuelle", "Virtual machine", "Máquina virtual", "Virtuelle Maschine"),
+    "hybrid": ("graphique hybride", "hybrid graphics", "gráficos híbridos", "Hybridgrafik"),
+    "recommend": ("À installer pour cette machine", "To install for this device", "Para instalar en este equipo", "Für dieses Gerät zu installieren"),
+    "recommend_none": ("Rien à ajouter.", "Nothing to add.", "Nada que añadir.", "Nichts hinzuzufügen."),
+    "item_modules": ("Pilotes complets du noyau (un appareil n'a pas de pilote dans l'image)", "Complete kernel drivers (a device has no driver in the image)",
+                     "Controladores completos del núcleo (un dispositivo no tiene controlador en la imagen)", "Vollständige Kernel-Treiber (ein Gerät hat keinen Treiber im Abbild)"),
+    "item_nvidia": ("Pilote NVIDIA propriétaire (jeux, CUDA, NVENC)", "Proprietary NVIDIA driver (games, CUDA, NVENC)",
+                    "Controlador propietario de NVIDIA (juegos, CUDA, NVENC)", "Proprietärer NVIDIA-Treiber (Spiele, CUDA, NVENC)"),
+    "item_vaapi": ("Vidéo matérielle (VA-API)", "Hardware video (VA-API)", "Vídeo por hardware (VA-API)", "Hardware-Video (VA-API)"),
+    "item_microcode": ("Microcode du processeur", "Processor microcode", "Microcódigo del procesador", "Prozessor-Microcode"),
+    "item_fwupd": ("Mises à jour du micrologiciel (fwupd)", "Firmware updates (fwupd)", "Actualizaciones de firmware (fwupd)", "Firmware-Aktualisierungen (fwupd)"),
+    "item_fingerprint": ("Lecteur d'empreintes digitales", "Fingerprint reader", "Lector de huellas", "Fingerabdruckleser"),
+    "item_rgb": ("Éclairage RGB (OpenRGB)", "RGB lighting (OpenRGB)", "Iluminación RGB (OpenRGB)", "RGB-Beleuchtung (OpenRGB)"),
+    "item_printer-drivers": ("Pilotes d'imprimantes (imprimante USB branchée)", "Printer drivers (USB printer plugged in)",
+                             "Controladores de impresora (impresora USB conectada)", "Druckertreiber (USB-Drucker angeschlossen)"),
     "saved": ("Rapport enregistré : {0}", "Report saved: {0}", "Informe guardado: {0}", "Bericht gespeichert: {0}"),
 }
 
@@ -401,6 +428,80 @@ def checks(pci):
     return out
 
 
+# ── Profil de la machine et éléments recommandés ───────────────────────────
+
+VM_VENDORS = ("QEMU", "VMware", "innotek", "VirtualBox", "Microsoft Corporation", "Xen", "Parallels", "Bochs")
+# Mêmes listes que winlux-drivers (lecteurs d'empreintes, éclairage RGB).
+FINGERPRINT_VENDORS = ("138a", "06cb", "04f3", "27c6", "2808", "08ff", "147e", "1c7a")
+RGB_VENDORS = ("1038", "1462", "0b05", "1b1c", "1532", "2516", "048d")
+VAAPI_FILES = {"8086": "iHD_drv_video.so", "1002": "radeonsi_drv_video.so", "10de": "nvidia_drv_video.so"}
+
+
+def installed(package):
+    status = read(ROOT / "var/lib/dpkg/status")
+    return bool(re.search(rf"^Package: {re.escape(package)}\nStatus: install ok installed", status, re.M))
+
+
+def have_file(*candidates):
+    return any((ROOT / c.lstrip("/")).exists() for c in candidates)
+
+
+def profile(pci, usb):
+    chassis = read(ROOT / "sys/class/dmi/id/chassis_type")
+    vendor = read(ROOT / "sys/class/dmi/id/sys_vendor")
+    product = read(ROOT / "sys/class/dmi/id/product_name")
+    virtual = any(vendor.startswith(v) for v in VM_VENDORS) and ("Virtual" in product or vendor != "Microsoft Corporation")
+    kind = ("vm" if virtual else "tablet" if chassis in ("30", "32") else "convertible" if chassis == "31"
+            else "laptop" if chassis in LAPTOP_CHASSIS else "desktop")
+    gpus = sorted({d["id"].split(":")[0] for d in pci if d["class"].startswith("03")})
+    names = [n for n, _ in input_devices()]
+    iio = ROOT / "sys/bus/iio/devices"
+    supplies = ROOT / "sys/class/power_supply"
+    return {"kind": kind, "chassis": chassis, "vendor": vendor, "model": product,
+            "gpus": gpus, "hybrid": len(gpus) > 1,
+            "nvidia": "10de" in gpus,
+            "touchscreen": any(re.search(r"touchscreen|touch$", n, re.I) for n in names),
+            "pen": any(re.search(r"pen|stylus|wacom", n, re.I) for n in names),
+            "touchpad": any(re.search(r"touchpad|trackpad|clickpad", n, re.I) for n in names),
+            "accelerometer": iio.is_dir() and any(any(d.glob("in_accel_*")) for d in iio.iterdir()),
+            "battery": supplies.is_dir() and any(read(b / "type") == "Battery" and read(b / "scope") != "Device" for b in supplies.iterdir()),
+            "usb_vendors": sorted({d["id"].split(":")[0] for d in usb})}
+
+
+def cpu_vendor():
+    text = read(ROOT / "proc/cpuinfo")
+    return "intel" if "GenuineIntel" in text else "amd" if "AuthenticAMD" in text else ""
+
+
+def recommend(prof, pci, usb, problems):
+    """Éléments de winlux-drivers utiles à cette machine. En cas de doute, on
+    ajoute (règle de damien) : un élément inutile ne coûte que de la place."""
+    items = []
+    if prof["kind"] == "vm":
+        return items
+    vendor = cpu_vendor()
+    if vendor and not installed("intel-microcode" if vendor == "intel" else "amd64-microcode"):
+        items.append("microcode")
+    if prof["nvidia"] and not any(d["driver"] == "nvidia" for d in pci):
+        items.append("nvidia")
+    for gpu in prof["gpus"]:
+        if gpu in VAAPI_FILES and not have_file(f"/usr/lib/x86_64-linux-gnu/dri/{VAAPI_FILES[gpu]}"):
+            items.append("vaapi")
+            break
+    if any(not p["module"] for p in problems) and not full_modules_installed():
+        items.append("modules")
+    if not have_file("/usr/bin/fwupdtool", "/usr/libexec/fwupd/fwupdtool"):
+        items.append("fwupd")
+    vendors = set(prof["usb_vendors"])
+    if vendors & set(FINGERPRINT_VENDORS) and not installed("fprintd"):
+        items.append("fingerprint")
+    if vendors & set(RGB_VENDORS) and not installed("openrgb"):
+        items.append("rgb")
+    if any(d["class"] == "07" for d in usb) and not installed("printer-driver-gutenprint"):
+        items.append("printer-drivers")
+    return items
+
+
 # ── Rapport ─────────────────────────────────────────────────────────────────
 
 def collect():
@@ -410,19 +511,28 @@ def collect():
     log, readable = kernel_log()
     vendor = read(ROOT / "sys/class/dmi/id/sys_vendor")
     product = read(ROOT / "sys/class/dmi/id/product_name")
+    usb = [d for d in devices if d["bus"] == "usb"]
+    rows = checks(pci)
+    problems = unsupported(devices, aliases)
+    prof = profile(pci, usb)
     return {"machine": " ".join(filter(None, (vendor, product))) or "?",
+            "profile": prof,
+            "recommend": recommend(prof, pci, usb, problems),
             "chassis": read(ROOT / "sys/class/dmi/id/chassis_type"),
             "kernel": kernel_release(),
-            "unsupported": unsupported(devices, aliases),
+            "unsupported": problems,
             "firmware": missing_firmware(log) if readable else None,
-            "checks": [{"ok": ok, "text": text} for ok, text in checks(pci)],
+            "checks": [{"ok": ok, "text": text} for ok, text in rows],
             "devices": devices}
 
 
 def render(report, show_all=False):
     lines = [t("title"), "=" * len(t("title")),
              f"{t('machine')} : {report['machine']}" if LANG == "fr" else f"{t('machine')}: {report['machine']}",
-             f"{t('kernel')} : {report['kernel']}" if LANG == "fr" else f"{t('kernel')}: {report['kernel']}", ""]
+             f"{t('kernel')} : {report['kernel']}" if LANG == "fr" else f"{t('kernel')}: {report['kernel']}"]
+    prof = report["profile"]
+    kind = t("kind_" + prof["kind"]) + (f" · {t('hybrid')}" if prof["hybrid"] else "")
+    lines += [f"{t('profile')} : {kind}" if LANG == "fr" else f"{t('profile')}: {kind}", ""]
     lines.append(t("devices"))
     if report["unsupported"]:
         for dev in report["unsupported"]:
@@ -440,6 +550,8 @@ def render(report, show_all=False):
         lines.append("  ✓ " + t("firmware_none"))
     lines += ["", t("checks")]
     lines += [f"  {'✓' if c['ok'] else '✗'} {c['text']}" for c in report["checks"]]
+    lines += ["", t("recommend")]
+    lines += [f"  + {t('item_' + item)}  (winlux-drivers install {item})" for item in report["recommend"]] or ["  ✓ " + t("recommend_none")]
     if show_all:
         lines.append("")
         for dev in report["devices"]:
@@ -454,8 +566,12 @@ def main():
     parser.add_argument("--json", action="store_true", help="rapport JSON")
     parser.add_argument("--save", metavar="FICHIER", help="enregistre aussi le rapport texte")
     parser.add_argument("--all", action="store_true", help="liste aussi tous les appareils")
+    parser.add_argument("--items", action="store_true", help="éléments winlux-drivers à installer, un par ligne")
     args = parser.parse_args()
     report = collect()
+    if args.items:
+        print("\n".join(report["recommend"]))
+        return 0
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=1))
         return 0

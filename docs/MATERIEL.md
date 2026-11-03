@@ -139,6 +139,38 @@ diagnostic. L'outil liste :
 
 Le code de sortie vaut 1 s'il y a au moins un problème. Rien n'est modifié.
 
+### Profil de la machine et éléments à installer (pour l'installateur)
+
+`winlux-hardware-check --json` donne aussi :
+
+- `profile` : `kind` (`desktop`, `laptop`, `convertible`, `tablet`, `vm`,
+  d'après le châssis DMI), fabricant et modèle, cartes graphiques et
+  `hybrid` (Intel ou AMD + NVIDIA, Optimus), `touchscreen`, `pen`,
+  `touchpad`, `accelerometer`, `battery`, fabricants USB ;
+- `recommend` : les éléments de `winlux-drivers install ÉLÉMENT` utiles à
+  cette machine. On y trouve `microcode`, `nvidia` (carte NVIDIA sans pilote
+  propriétaire), `vaapi`, `modules` (un appareil sans pilote dans l'image),
+  `fwupd`, `fingerprint`, `rgb` (OpenRGB pour les claviers SteelSeries des
+  MSI, MSI Mystic Light, ASUS Aura, Corsair, Razer, ITE) et
+  `printer-drivers` (imprimante USB branchée). En cas de doute, l'élément
+  est proposé : un élément inutile ne coûte que de la place.
+
+`winlux-hardware-check --items` affiche la même liste, un élément par ligne.
+L'installateur l'appelle et installe ces éléments dès que le réseau est là ;
+`winlux-drivers auto` fait de même au premier démarrage. En VM, rien n'est
+proposé.
+
+Cas d'essai nommés (`test-hardware-image.py`) :
+
+| Machine | Profil détecté | Éléments proposés |
+|---|---|---|
+| MSI GE73 Raider RGB 8RF (i7-8750H + GTX 1070, Killer E2500 et 1550, clavier SteelSeries) | portable, hybride Intel + NVIDIA, pavé tactile, batterie | microcode, nvidia, vaapi, rgb, fwupd |
+| Acer Aspire 3 A315-56 (Ice Lake, Realtek RTL8821CE, pavé ELAN en I2C) | portable Intel, pavé tactile I2C | microcode, vaapi, fwupd |
+
+Le microcode Intel et AMD (`intel-microcode`, `amd64-microcode`) est
+maintenant dans l'image. Un système installé hors ligne a donc ses
+correctifs du processeur dès le premier démarrage.
+
 ## Rotation automatique de l'écran
 
 `winlux-rotation watch` est lancé par la session. Il s'arrête aussitôt sans
@@ -165,4 +197,5 @@ tourné. Sur un convertible, l'écran ne tourne qu'en mode tablette.
   IMSM écrite sans `mdmon` (un service systemd, absent de Winlux) risque
   d'être marquée corrompue. Il faut d'abord un démarrage de `mdmon` par
   Winlux, ou un assemblage en lecture seule.
-- **Microcode en session live** : il n'est chargé qu'après l'installation.
+- **Microcode en session live** : les paquets sont dans l'image, mais le
+  chargement précoce ne se fait qu'après l'installation.

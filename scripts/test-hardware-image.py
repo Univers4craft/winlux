@@ -177,6 +177,76 @@ with tempfile.TemporaryDirectory() as temporary:
     ok(all(len(row) == 4 and all(row) for row in tool["T"].values()), "chaque message existe en fr, en, es et de")
     del env["WINLUX_KERNEL_LOG"]
 
+print("Les deux portables de damien : profil et éléments à installer")
+
+
+def machine(base, vendor, product, pci_list, usb_list, inputs):
+    hw = base / "hw"
+    sysfs = hw / "sys"
+    drivers = sysfs / "bus/pci/drivers"
+    for slot, cls, ident, driver in pci_list:
+        d = sysfs / "bus/pci/devices" / slot
+        v, p = ident.split(":")
+        write(d / "class", cls); write(d / "vendor", "0x" + v); write(d / "device", "0x" + p)
+        if driver:
+            (drivers / driver).mkdir(parents=True, exist_ok=True)
+            (d / "driver").symlink_to(drivers / driver)
+    for number, (ident, cls, driver) in enumerate(usb_list, 1):
+        d = sysfs / f"bus/usb/devices/1-{number}"
+        v, p = ident.split(":")
+        write(d / "idVendor", v); write(d / "idProduct", p)
+        i = sysfs / f"bus/usb/devices/1-{number}:1.0"
+        write(i / "bInterfaceClass", cls)
+        if driver:
+            (sysfs / "bus/usb/drivers" / driver).mkdir(parents=True, exist_ok=True)
+            (i / "driver").symlink_to(sysfs / "bus/usb/drivers" / driver)
+    write(sysfs / "class/dmi/id/chassis_type", "10")
+    write(sysfs / "class/dmi/id/sys_vendor", vendor)
+    write(sysfs / "class/dmi/id/product_name", product)
+    write(sysfs / "class/power_supply/BAT1/type", "Battery")
+    write(sysfs / "class/power_supply/BAT1/capacity", "80")
+    write(hw / "proc/cpuinfo", "vendor_id\t: GenuineIntel\n")
+    write(hw / "proc/bus/input/devices", "".join(f'N: Name="{n}"\n\n' for n in inputs))
+    write(hw / "proc/asound/cards", " 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n")
+    write(hw / "var/lib/dpkg/status", "Package: hello\nStatus: install ok installed\n")
+    return json.loads(run(SCRIPTS / "winlux-hardware-check.py", "--json",
+                          env={"WINLUX_HW_ROOT": str(hw), "WINLUX_KERNEL_RELEASE": RELEASE, "WINLUX_KERNEL_LOG": "/dev/null",
+                               "WINLUX_LANG": "fr", "PATH": "/nonexistent"}).stdout)
+
+
+with tempfile.TemporaryDirectory() as temporary:
+    # MSI GE73 Raider RGB 8RF : Core i7-8750H (UHD 630) + GTX 1070 (Optimus),
+    # Killer E2500 (alx), Killer 1550 (iwlwifi), clavier RGB SteelSeries.
+    msi = machine(Path(temporary), "Micro-Star International Co., Ltd.", "GE73 Raider RGB 8RF",
+                  [("0000:00:02.0", "0x030000", "8086:3e9b", "i915"), ("0000:01:00.0", "0x030000", "10de:1ba1", "nouveau"),
+                   ("0000:3d:00.0", "0x020000", "1969:e0b1", "alx"), ("0000:00:14.3", "0x028000", "8086:a370", "iwlwifi"),
+                   ("0000:00:1f.3", "0x040300", "8086:a348", "snd_hda_intel")],
+                  [("1038:1122", "03", "usbhid"), ("8087:0aaa", "e0", "btusb")],
+                  ["SynPS/2 Synaptics TouchPad", "AT Translated Set 2 keyboard"])
+    prof = msi["profile"]
+    ok(prof["kind"] == "laptop" and prof["hybrid"] and prof["nvidia"] and prof["touchpad"] and prof["battery"],
+       "MSI GE73 8RF : portable, graphique hybride Intel + NVIDIA, pavé tactile, batterie")
+    ok({"microcode", "nvidia", "vaapi", "rgb", "fwupd"} <= set(msi["recommend"]),
+       "MSI GE73 8RF : microcode, pilote NVIDIA, VA-API, OpenRGB (clavier SteelSeries), fwupd")
+    ok(not msi["unsupported"], "MSI GE73 8RF : Ethernet Killer, Wi-Fi Killer et son reconnus")
+
+with tempfile.TemporaryDirectory() as temporary:
+    # Acer Aspire 3 (A315-56, Ice Lake) : Iris Plus, Realtek RTL8821CE, pavé ELAN en I2C.
+    acer = machine(Path(temporary), "Acer", "Aspire A315-56",
+                   [("0000:00:02.0", "0x030000", "8086:8a56", "i915"), ("0000:01:00.0", "0x028000", "10ec:c821", "rtw88_8821ce"),
+                    ("0000:00:15.0", "0x0c8000", "8086:34e8", "intel-lpss"), ("0000:00:1f.3", "0x040380", "8086:34c8", "sof-audio-pci-intel-icl")],
+                   [("0bda:c821", "e0", "btusb")],
+                   ["ELAN0504:00 04F3:3091 Touchpad", "AT Translated Set 2 keyboard"])
+    prof = acer["profile"]
+    ok(prof["kind"] == "laptop" and not prof["hybrid"] and not prof["nvidia"] and prof["touchpad"],
+       "Acer Aspire 3 : portable Intel seul, pavé tactile I2C")
+    ok("vaapi" in acer["recommend"] and "microcode" in acer["recommend"] and "nvidia" not in acer["recommend"] and "rgb" not in acer["recommend"],
+       "Acer Aspire 3 : microcode et VA-API Intel, ni NVIDIA ni RGB")
+    out = run(SCRIPTS / "winlux-hardware-check.py", "--items",
+              env={"WINLUX_HW_ROOT": str(Path(temporary) / "hw"), "WINLUX_KERNEL_RELEASE": RELEASE, "WINLUX_KERNEL_LOG": "/dev/null",
+                   "PATH": "/nonexistent"}).stdout.split()
+    ok(out == acer["recommend"], "--items : un élément winlux-drivers par ligne (pour l'installateur)")
+
 print("Rotation automatique (winlux-rotation)")
 rotation = runpy.run_path(str(SCRIPTS / "winlux-rotation.py"), run_name="winlux_rotation")
 orient = rotation["orientation"]
@@ -243,6 +313,15 @@ for line in ("drivers/net/wireless", "net/mac80211", "net/netfilter"):
     ok(f"!{line}" in dirs_list or line not in dirs_list, f"{line} laissé au Wi-Fi / pare-feu (#398)")
 for name in ("pinctrl_sunrisepoint", "asix", "uhid", "binfmt_misc", "raid1", "wacom", "hid_sensor_accel_3d", "typec_displayport", "cdc_acm", "hv_vmbus"):
     ok(f"module {name}\n" in essentials_list, f"essentiel : {name}")
+drivers_tool = (SCRIPTS / "winlux-drivers.py").read_text()
+ok('"rgb")' in drivers_tool and 'simple(["openrgb"]' in drivers_tool, "winlux-drivers install rgb (OpenRGB), aussi au premier démarrage")
+check_tool = (SCRIPTS / "winlux-hardware-check.py").read_text()
+ok('RGB_VENDORS = ("1038"' in check_tool and drivers_tool.split("RGB_VENDORS = ", 1)[1].split(")", 1)[0] == check_tool.split("RGB_VENDORS = ", 1)[1].split(")", 1)[0],
+   "même liste de fabricants RGB dans winlux-drivers et winlux-hardware-check")
+ok(drivers_tool.split("FINGERPRINT_VENDORS = ", 1)[1].split(")", 1)[0] == check_tool.split("FINGERPRINT_VENDORS = ", 1)[1].split(")", 1)[0],
+   "même liste de lecteurs d'empreintes")
+base_packages = runpy.run_path(str(SCRIPTS / "prepare-apt-base.py"), run_name="apt_base")["PACKAGES"]
+ok("intel-microcode" in base_packages and "amd64-microcode" in base_packages, "microcode Intel et AMD dans l'image (hors ligne)")
 page = (SCRIPTS / "winlux-hardware-page.py").read_text()
 ok("def run_check" in page and '"Lancer le diagnostic": (' in page, "Paramètres > Matériel et pilotes : bouton Lancer le diagnostic (4 langues)")
 ok((ROOT / "docs/MATERIEL.md").is_file() and "hardware-essentials.list" in (ROOT / "docs/MATERIEL.md").read_text(), "docs/MATERIEL.md")
