@@ -193,7 +193,8 @@ try:
     (fake / "bin/xwininfo").write_text(f"#!/bin/sh\ncat {fake / 'tree'}\n")
     (fake / "bin/xprop").write_text("#!/bin/sh\ncase \"$2\" in\n" + "".join(f"{w}) echo '_NET_WM_PID(CARDINAL) = {p}' ;;\n" for w, p in pids.items())
                                     + "*) echo '_NET_WM_PID:  not found.' ;;\nesac\n")
-    (fake / "bin/xfconf-query").write_text("#!/bin/sh\nprintf '%s\\n' $FAKE_IDS\n")
+    # Sortie réelle d'xfconf-query en français : l'en-tête contient un nombre (le compte).
+    (fake / "bin/xfconf-query").write_text("#!/bin/sh\nset -- $FAKE_IDS\nprintf 'La valeur est un tableau de %s éléments :\\n\\n' $#\nprintf '%s\\n' \"$@\"\n")
     for tool in ("xwininfo", "xprop", "xfconf-query"):
         (fake / "bin" / tool).chmod(0o755)
     def balance(ids):
