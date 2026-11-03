@@ -33,6 +33,21 @@ extern "C" {
 #[link(name = "comctl32", kind = "raw-dylib")]
 extern "C" {
     fn InitCommonControlsEx(icc: *const [u32; 2]) -> i32;
+    fn CreateToolbarEx(
+        parent: Handle,
+        style: u32,
+        id: u32,
+        nbmp: i32,
+        hinst: Handle,
+        bmp_id: usize,
+        buttons: *const TbButton,
+        nbuttons: i32,
+        dxbutton: i32,
+        dybutton: i32,
+        dxbitmap: i32,
+        dybitmap: i32,
+        size: u32,
+    ) -> Handle;
 }
 
 const WS_CHILD: u32 = 0x4000_0000;
@@ -426,6 +441,80 @@ pub extern "C" fn mainCRTStartup() -> ! {
             &buf[..n] == b"C:\\Users\\Public",
             "CBEM_SETITEMA sur le champ"
         );
+
+        // CreateToolbarEx (barre d'en-tête d'un panneau de 7-Zip) : boutons
+        // ajoutés, et une ComboBoxEx posée dessus.
+        let header_buttons = [
+            TbButton {
+                bitmap: 0,
+                command: 3000,
+                state: 0x4,
+                style: 0,
+                reserved: [0; 6],
+                data: 0,
+                string: c"Dossier parent".as_ptr() as isize,
+            },
+            TbButton {
+                bitmap: 1,
+                command: 3001,
+                state: 0x4,
+                style: 0,
+                reserved: [0; 6],
+                data: 0,
+                string: c"Vue".as_ptr() as isize,
+            },
+        ];
+        let header = CreateToolbarEx(
+            PANEL,
+            WS_CHILD | WS_VISIBLE | 0x0800,
+            200,
+            11,
+            -1isize as Handle, // HINST_COMMCTRL
+            1,
+            header_buttons.as_ptr(),
+            2,
+            0,
+            0,
+            0,
+            0,
+            core::mem::size_of::<TbButton>() as u32,
+        );
+        check!(!header.is_null(), "CreateToolbarEx");
+        check!(
+            SendMessageA(header, 0x0418, 0, 0) == 2,
+            "boutons de CreateToolbarEx"
+        );
+        let on_bar = create(
+            0,
+            c"ComboBoxEx32",
+            WS_CHILD | WS_VISIBLE | 0x2,
+            (60, 0, 200, 200),
+            header,
+            201,
+        );
+        check!(
+            !on_bar.is_null() && GetParent(on_bar) == header,
+            "ComboBoxEx posee sur la barre"
+        );
+        let orphan = CreateWindowExA(
+            0,
+            c"STATIC".as_ptr(),
+            c"".as_ptr(),
+            WS_CHILD,
+            0,
+            0,
+            10,
+            10,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+        check!(
+            orphan.is_null() && GetLastError() == 1406,
+            "WS_CHILD sans parent refusee"
+        );
+        DestroyWindow(header);
 
         // Clic sur le premier bouton : WM_COMMAND à la fenêtre principale.
         let mut r: Rect = core::mem::zeroed();

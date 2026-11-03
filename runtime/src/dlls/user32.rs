@@ -157,6 +157,12 @@ unsafe fn create_window_common(
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
         return 0;
     };
+    // Comme Windows : une fenêtre WS_CHILD sans parent est refusée, au lieu
+    // de devenir une fenêtre isolée sans titre dans la barre des tâches.
+    if style & WS_CHILD != 0 && parent == 0 {
+        crate::process::set_last_error(1406); // ERROR_TLW_WITH_WSCHILD
+        return 0;
+    }
     let hwnd = gui::alloc_hwnd();
     // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut. Un contrôle
     // enfant garde la taille demandée, même nulle (barre d'état, flèches

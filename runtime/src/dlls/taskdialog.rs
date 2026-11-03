@@ -1183,6 +1183,14 @@ pub unsafe extern "win64" fn task_dialog_indirect(
     let Some((spec, parent, instance, callback, data)) = read_config(config) else {
         return E_INVALIDARG;
     };
+    // Diagnostic : titre tel que le programme l'a passé (NULL, identifiant de
+    // ressource ou texte), pour distinguer un titre vide d'un texte reçu.
+    crate::log_info!(
+        "comctl32",
+        "TaskDialogIndirect : pszWindowTitle={:#x} « {} »",
+        rd::<usize>(config, 28),
+        spec.title
+    );
     let (b, r, v) = run(spec, parent, instance, callback, data);
     if !button.is_null() {
         *button = b;

@@ -1069,6 +1069,9 @@ unsafe fn toolbar_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
             let _ = TBN_HOTITEMCHANGE;
             0
         }
+        // Contrôles posés sur la barre (liste d'adresse de 7-Zip) : leurs
+        // notifications vont au destinataire de la barre.
+        WM_COMMAND | WM_NOTIFY => send(notify_target(hwnd), msg, wp, lp),
         WM_GETDLGCODE => 0,
         _ if (0x0400..0x0500).contains(&msg) => 0,
         _ => return None,

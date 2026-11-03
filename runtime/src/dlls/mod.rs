@@ -58,6 +58,7 @@ pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
+pub mod gdi32_palette;
 pub mod gl_bindings;
 pub mod gl_legacy;
 pub mod gpu_caps;
@@ -772,7 +773,10 @@ fn add_basics(all: &mut [Builtin]) {
         }
     }
     if let Some(b) = all.iter_mut().find(|b| b.name == "gdi32") {
-        for (name, addr) in usp10::gdi32_overrides() {
+        for (name, addr) in usp10::gdi32_overrides()
+            .into_iter()
+            .chain(gdi32_palette::gdi32_overrides())
+        {
             b.exports.insert(name, addr);
         }
     }

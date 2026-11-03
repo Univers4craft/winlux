@@ -977,7 +977,7 @@ fn system_brushes() -> &'static Mutex<HashMap<usize, usize>> {
 /// Compteur d'handles invités : HDC à partir de `0x0011_0000`, objets GDI à
 /// partir de `0x0021_0000`. Les valeurs faibles restent réservées aux objets
 /// « stock » (`GetStockObject` renvoie `index + 1`).
-fn next_handle(base: usize) -> usize {
+pub(crate) fn next_handle(base: usize) -> usize {
     static A: OnceLock<Mutex<usize>> = OnceLock::new();
     let a = A.get_or_init(|| Mutex::new(0x0011_0000));
     let mut v = lock(a);
