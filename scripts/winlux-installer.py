@@ -42,12 +42,32 @@ def firmware_efi_bits():
         return 64
 
 
-def efi_variables_writable():
-    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+EFIVARS = "/sys/firmware/efi/efivars"
+
+
+def mount_efivarfs(efivars=EFIVARS, run=None):
+    """Monte efivarfs s'il manque (live sans l'init à jour) ; vrai s'il y a des variables."""
+    run = run or subprocess.run
     try:
-        return any(os.scandir("/sys/firmware/efi/efivars"))
+        if any(os.scandir(efivars)):
+            return True
     except OSError:
         return False
+    try:
+        run(["mount", "-t", "efivarfs", "efivarfs", efivars], capture_output=True, timeout=30)
+        return any(os.scandir(efivars))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def efi_variables_writable():
+    """Faux si le noyau n'a pas les services UEFI (efi=noruntime en UEFI 32 bits)."""
+    return mount_efivarfs()
+
+
+def efi_log(text):
+    """Trace de l'entrée UEFI dans le journal de l'installateur (/tmp/inst.log)."""
+    print(f"Entrée UEFI : {text}", file=sys.stderr, flush=True)
 
 
 def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
@@ -58,14 +78,19 @@ def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
     (OVMF tombé sur le shell UEFI, certains portables). Les anciennes
     entrées « Winlux » sont retirées d'abord. Faux si rien n'a été créé."""
     run = run or subprocess.run
-    if not shutil.which("efibootmgr") or not efi_variables_writable():
+    if not shutil.which("efibootmgr"):
+        efi_log("non créée, efibootmgr absent")
+        return False
+    if not efi_variables_writable():
+        efi_log(f"non créée, variables UEFI indisponibles ({EFIVARS} vide, efivarfs non monté ou efi=noruntime)")
         return False
     name = os.path.basename(os.path.realpath(esp_partition))
     try:
         with open(f"/sys/class/block/{name}/partition") as f:
             number = f.read().strip()
         disk = "/dev/" + os.path.basename(os.path.dirname(os.path.realpath(f"/sys/class/block/{name}")))
-    except OSError:
+    except OSError as error:
+        efi_log(f"non créée, partition {esp_partition} introuvable ({error})")
         return False
     try:
         listing = run(["efibootmgr"], capture_output=True, text=True, timeout=30).stdout
@@ -73,10 +98,16 @@ def efi_boot_entry(esp_partition, loader, label="Winlux", run=None):
             match = re.match(r"Boot([0-9A-Fa-f]{4})\*?\s+(.*)", line)
             if match and match.group(2).split("\t")[0].strip() == label:
                 run(["efibootmgr", "--quiet", "--bootnum", match.group(1), "--delete-bootnum"], timeout=30)
-        return run(["efibootmgr", "--quiet", "--create", "--disk", disk, "--part", number,
-                    "--label", label, "--loader", loader], timeout=30).returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        result = run(["efibootmgr", "--quiet", "--create", "--disk", disk, "--part", number,
+                      "--label", label, "--loader", loader], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        efi_log(f"non créée, efibootmgr a échoué ({error})")
         return False
+    if result.returncode != 0:
+        efi_log(f"non créée, efibootmgr a échoué : {(result.stderr or '').strip()[-300:]}")
+        return False
+    efi_log(f"« {label} » créée vers {loader} ({disk}, partition {number})")
+    return True
 
 
 def efi_grub_targets(own_esp, grub_dir="/usr/lib/grub"):

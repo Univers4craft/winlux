@@ -533,6 +533,12 @@ umask 077
 
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
+# Variables UEFI (efibootmgr, entrée « Winlux » de l'installateur) : sans
+# efivarfs, efibootmgr répond « EFI variables are not supported ». Échoue
+# sans bruit avec efi=noruntime (UEFI 32 bits) ou au démarrage BIOS.
+if test -d /sys/firmware/efi/efivars && ! /bin/busybox grep -q ' /sys/firmware/efi/efivars ' /proc/mounts; then
+    /bin/busybox mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+fi
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 /bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom
 /bin/busybox ln -sf /proc/self/fd /dev/fd

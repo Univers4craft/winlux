@@ -350,6 +350,22 @@ def read_rtc():
                 difference=int(time.time() - epoch))
 
 
+def rtc_status():
+    """`time rtc` depuis le compte : /dev/rtc0 est réservé à root, donc lecture
+    par le relais root ; sans relais, le refus le dit clairement."""
+    answer = read_rtc()
+    if answer.get("ok") or os.geteuid() == 0:
+        return answer
+    if os.path.exists(RELAY_SOCKET) and os.environ.get("WINLUX_CERT_DIRECT") != "1":
+        relayed = call(["time", "rtc"], timeout=30)
+        if relayed.get("ok"):
+            return relayed
+    answer["error"] = "admin-only"
+    answer["message"] = ("Lire l’horloge matérielle est réservé à l’administrateur : "
+                         "relancez avec sudo, ou démarrez le service système (winlux-power serve).")
+    return answer
+
+
 def build_floor():
     """Date de construction de ce Winlux : l'heure ne peut pas être avant."""
     try:
@@ -965,7 +981,7 @@ def main(argv):
     elif command == "time" and args[1:] == ["sync"]:
         answer = sync_once(apply=os.geteuid() == 0 and os.environ.get("WINLUX_CLOCK_NO_SET") != "1")
     elif command == "time" and args[1:] == ["rtc"]:
-        answer = read_rtc()
+        answer = rtc_status()
     elif command == "time-daemon" and len(args) == 1:
         try: time_daemon()
         except KeyboardInterrupt: pass
