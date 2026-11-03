@@ -448,7 +448,7 @@ PART_COLORS = {
     "linux-swap": (0.2, 0.6, 0.65, 1.0),
     "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
-    "winlux": (0.0, 0.62, 0.95, 1.0),
+    "winlux": (0.416, 0.239, 0.941, 1.0),  # partition Winlux : accent Prisme
     "bios": (0.45, 0.45, 0.55, 1.0),
 }
 
@@ -536,6 +536,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Note de performance",
         "summary_benchmark_none": "non mesurée",
         "summary_benchmark_running": "mesure en cours",
+        "summary_benchmark_limited": "{score} (limitée par : {part})",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -698,6 +699,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Performance score",
         "summary_benchmark_none": "not measured",
         "summary_benchmark_running": "measuring",
+        "summary_benchmark_limited": "{score} (limited by: {part})",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -860,6 +862,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Leistungsbewertung",
         "summary_benchmark_none": "nicht gemessen",
         "summary_benchmark_running": "Messung läuft",
+        "summary_benchmark_limited": "{score} (begrenzt durch: {part})",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -1022,6 +1025,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Puntuación de rendimiento",
         "summary_benchmark_none": "no medida",
         "summary_benchmark_running": "midiendo",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -1184,6 +1188,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Punteggio prestazioni",
         "summary_benchmark_none": "non misurato",
         "summary_benchmark_running": "misurazione in corso",
+        "summary_benchmark_limited": "{score} (limitato da: {part})",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1346,6 +1351,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Nota de desempenho",
         "summary_benchmark_none": "não medida",
         "summary_benchmark_running": "a medir",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -4746,6 +4752,14 @@ class InstallerApp(Gtk.Application):
         # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
         if self.benchmark_complete():
             score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+            # La note globale est la plus basse des notes (comme l'indice de
+            # performance) : nommer le composant qui la fixe, sinon « 2,0 »
+            # à côté d'un processeur à 8,7 ressemble à une mesure inachevée.
+            results = self.benchmark.get("results", {})
+            scores = [(r["score"], key) for key, r in results.items() if "score" in r]
+            if scores and min(scores)[0] < max(scores)[0]:
+                weakest = min(scores)[1]
+                score = tr("summary_benchmark_limited", score=score, part=tr("bench_" + weakest))
         elif self.bench_state == "running":
             score = tr("summary_benchmark_running")
         else:
@@ -5269,9 +5283,15 @@ if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
 fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output console serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output console serial
+    fi
+fi
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
     linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args

@@ -26,6 +26,9 @@ colors = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getatt
 colors = ast.literal_eval(colors)
 assert colors["ext4"][:3] == (0.416, 0.239, 0.941), colors["ext4"]
 assert all(rgb[:3] != (0.0, 0.47, 0.83) for rgb in colors.values())
+# La partition « Winlux » que l'installateur va créer : violette aussi (v0.2.16).
+assert colors["winlux"][:3] == (0.416, 0.239, 0.941), colors["winlux"]
+assert all(rgb[2] < 0.9 or rgb[0] > 0.3 for rgb in colors.values()), colors  # aucun bleu
 css = next(n.value.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "CSS")
 assert b"@define-color accent #6A3DF0;" in css and b"radio:checked" in css and b"check:checked" in css
 
@@ -45,6 +48,9 @@ failed = {"results": {**full["results"], "gpu": {"score": 1.0, "error": "x"}}, "
 assert not complete(types.SimpleNamespace(bench_state="done", benchmark=failed))
 assert source.count('"summary_benchmark_running":') == 6
 assert "self.benchmark_complete()" in source
+# Note globale = la plus basse : le récapitulatif nomme le composant qui la fixe.
+assert source.count('"summary_benchmark_limited":') == 6
+assert 'tr("summary_benchmark_limited", score=score, part=tr("bench_" + weakest))' in source
 
 settings = (project / "scripts/winlux-settings.py").read_text()
 assert "Gardez la VM" not in settings and "Keep the VM running" not in settings

@@ -11,6 +11,7 @@ import json
 import math
 import mmap
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,9 @@ _COL = {"en": 0, "de": 1, "es": 2, "it": 3, "pt": 4}
 
 # Texte français -> (anglais, allemand, espagnol, italien, portugais).
 _TR = {
-    '{threads} threads · {multi} Mo/s (1 cœur : {single} Mo/s)': ('{threads} threads · {multi} MB/s (1 core: {single} MB/s)', '{threads} Threads · {multi} MB/s (1 Kern: {single} MB/s)', '{threads} hilos · {multi} MB/s (1 núcleo: {single} MB/s)', '{threads} thread · {multi} MB/s (1 core: {single} MB/s)', '{threads} threads · {multi} MB/s (1 núcleo: {single} MB/s)'),
+    '{cores} cœurs, {threads} threads · {multi} Mo/s en tout, {single} Mo/s par cœur': ('{cores} cores, {threads} threads · {multi} MB/s in total, {single} MB/s per core', '{cores} Kerne, {threads} Threads · {multi} MB/s gesamt, {single} MB/s pro Kern', '{cores} núcleos, {threads} hilos · {multi} MB/s en total, {single} MB/s por núcleo', '{cores} core, {threads} thread · {multi} MB/s in totale, {single} MB/s per core', '{cores} núcleos, {threads} threads · {multi} MB/s no total, {single} MB/s por núcleo'),
+    '{model} · {detail}': ('{model} · {detail}', '{model} · {detail}', '{model} · {detail}', '{model} · {detail}', '{model} · {detail}'),
+    '{name} · {kind}{vram}': ('{name} · {kind}{vram}', '{name} · {kind}{vram}', '{name} · {kind}{vram}', '{name} · {kind}{vram}', '{name} · {kind}{vram}'),
     '{total} Go · {gbs} Go/s': ('{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s'),
     '{kind} · lecture {mbs} Mo/s': ('{kind} · read {mbs} MB/s', '{kind} · Lesen {mbs} MB/s', '{kind} · lectura {mbs} MB/s', '{kind} · lettura {mbs} MB/s', '{kind} · leitura {mbs} MB/s'),
     'écriture {mbs} Mo/s': ('write {mbs} MB/s', 'Schreiben {mbs} MB/s', 'escritura {mbs} MB/s', 'scrittura {mbs} MB/s', 'gravação {mbs} MB/s'),
@@ -106,6 +109,39 @@ def cpu_threads():
         return os.cpu_count() or 1
 
 
+def cpu_cores(sysfs="/sys", threads=None):
+    """Cœurs physiques : un cœur par (paquet, core_id) en ligne, pas par thread."""
+    base = os.path.join(sysfs, "devices/system/cpu")
+    seen = set()
+    try:
+        names = os.listdir(base)
+    except OSError:
+        names = []
+    for name in names:
+        if not (name.startswith("cpu") and name[3:].isdigit()):
+            continue
+        topo = os.path.join(base, name, "topology")
+        core = _read(os.path.join(topo, "core_id"))
+        package = _read(os.path.join(topo, "physical_package_id"))
+        if core:
+            seen.add((package, core))
+    if seen:
+        return len(seen)
+    return threads or cpu_threads()
+
+
+def cpu_model(cpuinfo="/proc/cpuinfo"):
+    """Nom commercial du processeur (« model name »), sans les espaces en trop."""
+    try:
+        with open(cpuinfo, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.lower().startswith("model name") and ":" in line:
+                    return " ".join(line.split(":", 1)[1].split())
+    except OSError:
+        pass
+    return ""
+
+
 def _hash_worker(seconds, block, out, index):
     data = os.urandom(block)
     done = 0
@@ -132,13 +168,22 @@ def bench_cpu(seconds=1.5):
     for w in workers:
         w.join()
     multi_mbs = sum(results) / MiB / (time.perf_counter() - start)
+    # « 1 cœur : … Mo/s » se lisait comme « un seul cœur » : le nombre de
+    # cœurs physiques est affiché à part, la mesure mono-cœur dit « par cœur ».
+    cores = min(cpu_cores(threads=threads), threads)
+    detail = _t("{cores} cœurs, {threads} threads · {multi} Mo/s en tout, {single} Mo/s par cœur").format(
+        cores=cores, threads=threads, multi=fr_number(multi_mbs), single=fr_number(single_mbs))
+    model = cpu_model()
+    if model:
+        detail = _t("{model} · {detail}").format(model=model, detail=detail)
     return {
         "threads": threads,
+        "cores": cores,
+        "model": model,
         "single_mbs": round(single_mbs, 1),
         "multi_mbs": round(multi_mbs, 1),
         "score": score("cpu", multi_mbs),
-        "detail": _t("{threads} threads · {multi} Mo/s (1 cœur : {single} Mo/s)").format(
-            threads=threads, multi=fr_number(multi_mbs), single=fr_number(single_mbs)),
+        "detail": detail,
     }
 
 
@@ -307,10 +352,81 @@ def detect_gpus(sysfs="/sys"):
         gpus.append({
             "card": card,
             "vendor": vendor,
+            "device": _read(os.path.join(dev, "device")).lower(),
+            "slot": os.path.basename(os.path.realpath(dev)),
             "driver": driver,
             "vram_bytes": int(vram) if vram.isdigit() else 0,
         })
     return gpus
+
+
+PCI_IDS = ("/usr/share/misc/pci.ids", "/usr/share/hwdata/pci.ids")
+
+
+def pci_ids_name(vendor, device, paths=PCI_IDS):
+    """Nom du modèle dans la base pci.ids (paquet pci.ids, dépendance de pciutils)."""
+    vendor, device = vendor.lower().removeprefix("0x"), device.lower().removeprefix("0x")
+    if not vendor or not device:
+        return ""
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                in_vendor = False
+                for line in f:
+                    if not line.strip() or line.startswith("#"):
+                        continue
+                    if not line[0].isspace():
+                        if in_vendor:
+                            break
+                        in_vendor = line[:4].lower() == vendor
+                    elif in_vendor and line.startswith("\t") and not line.startswith("\t\t"):
+                        ident, _, name = line.strip().partition(" ")
+                        if ident.lower() == device:
+                            return name.strip()
+        except OSError:
+            continue
+    return ""
+
+
+def nvidia_proc_model(slot, proc="/proc/driver/nvidia/gpus"):
+    """Pilote NVIDIA propriétaire : il donne le nom exact dans /proc."""
+    for path in (os.path.join(proc, slot, "information"), os.path.join(proc, slot.lower(), "information")):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if line.startswith("Model:"):
+                        return line.split(":", 1)[1].strip()
+        except OSError:
+            continue
+    return ""
+
+
+def lspci_name(slot):
+    """Nom du modèle selon lspci (même base pci.ids, sous-système compris)."""
+    if not slot or not shutil.which("lspci"):
+        return ""
+    try:
+        out = subprocess.run(["lspci", "-mm", "-s", slot], capture_output=True, text=True, timeout=5).stdout
+        fields = shlex.split(out.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    # slot, classe, fabricant, modèle, …
+    return fields[3] if len(fields) >= 4 else ""
+
+
+def gpu_model(gpu, renderer="", ids_paths=PCI_IDS, proc="/proc/driver/nvidia/gpus"):
+    """Modèle lu sur le vrai matériel ; vide si rien ne le reconnaît."""
+    name = nvidia_proc_model(gpu.get("slot", ""), proc)
+    if not name:
+        name = pci_ids_name(gpu.get("vendor", ""), gpu.get("device", ""), ids_paths)
+    if not name:
+        name = lspci_name(gpu.get("slot", ""))
+    if not name and renderer and not any(s in renderer.lower() for s in ("llvmpipe", "softpipe", "swrast")):
+        name = renderer.split("/")[0].strip()
+    # pci.ids : « TU116M [GeForce GTX 1660 Ti Mobile] » → le nom commercial.
+    if "[" in name and name.rstrip().endswith("]"):
+        name = name[name.index("[") + 1:name.rstrip().rindex("]")].strip() or name
+    return name
 
 
 def gpu_renderer():
@@ -357,18 +473,28 @@ def bench_gpu(sysfs="/sys"):
     renderer = gpu_renderer()
     rated = [(gpu_tier(g, renderer), g) for g in gpus]
     (value, kind), best = max(rated, key=lambda item: item[0][0])
-    name = GPU_VENDOR_NAMES.get(best["vendor"], best["driver"] or best["vendor"] or "?")
+    brand = GPU_VENDOR_NAMES.get(best["vendor"], best["driver"] or best["vendor"] or "?")
+    model = gpu_model(best, renderer)
+    if model and brand != "?" and not model.lower().startswith(brand.lower()):
+        model = f"{brand} {model}"
     vram = _t(" · {vram} Go VRAM").format(vram=fr_number(best["vram_bytes"] / GiB, 0)) if best["vram_bytes"] else ""
+    # La note reste estimée (aucun test 3D pendant l'installation) ; le modèle,
+    # lui, est lu sur le matériel, et « estimation » ne qualifie que la note.
+    if model:
+        detail = _t("{name} · {kind}{vram}").format(name=model, kind=_t(kind), vram=vram)
+    else:
+        detail = _t("{name} · {kind}{vram} (estimation)").format(name=brand, kind=_t(kind), vram=vram)
     return {
         "available": True,
         "vendor": best["vendor"],
         "driver": best["driver"],
+        "model": model,
         "vram_bytes": best["vram_bytes"],
         "renderer": renderer,
         "kind": kind,
         "score": value,
         "estimated": True,
-        "detail": _t("{name} · {kind}{vram} (estimation)").format(name=name, kind=_t(kind), vram=vram),
+        "detail": detail,
     }
 
 

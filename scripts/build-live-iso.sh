@@ -1227,7 +1227,8 @@ set winlux_efi_args=
 if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
     set winlux_efi_args=efi=noruntime
 fi
-set timeout=2
+# 5 s : le temps de lire le menu et d'appuyer sur une flèche sur un vrai PC.
+set timeout=5
 set timeout_style=menu
 set winlux_term=console
 # UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
@@ -1244,9 +1245,17 @@ elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
         set winlux_term=gfxterm
     fi
 fi
-if serial --unit=0 --speed=115200; then
-    terminal_input serial console
-    terminal_output serial $winlux_term
+# Terminal série seulement dans une machine virtuelle (QEMU/KVM, où les tests
+# lisent et pilotent le menu par le port série). Sur un vrai PC, un port série
+# sans rien au bout, ou celui que l'UEFI expose, ralentit la lecture du
+# clavier : les flèches ne déplaçaient plus la sélection sur un portable.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input serial console
+        terminal_output serial $winlux_term
+    fi
 fi
 # Installation Winlux sur un disque : cherchée une fois, avant le menu. Une
 # recherche ratée à l'intérieur d'une entrée fait attendre GRUB 10 s sur
