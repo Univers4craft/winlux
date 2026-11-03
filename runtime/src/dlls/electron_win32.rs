@@ -531,9 +531,29 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
         "NtQueryObject" => fn NtQueryObject,
         "ZwQueryObject" => fn NtQueryObject,
         "RtlGetLastNtStatus" => fn RtlGetLastNtStatus,
+        "NtSuspendProcess" => fn NtSuspendProcess,
+        "NtResumeProcess" => fn NtResumeProcess,
         "LdrLockLoaderLock" => fn LdrLockLoaderLock,
         "LdrUnlockLoaderLock" => fn LdrUnlockLoaderLock,
     }
+}
+
+/// NtSuspendProcess / NtResumeProcess : SIGSTOP / SIGCONT au processus
+/// Linux (Crashpad fige ainsi un processus avant de lire sa mémoire).
+unsafe fn signal_process(h: usize, sig: i32) -> u32 {
+    match crate::dlls::kernel32::process_os_pid(h) {
+        Some(pid) if libc::kill(pid, sig) == 0 => 0,
+        Some(_) => 0xC000_0022, // STATUS_ACCESS_DENIED
+        None => 0xC000_0008,    // STATUS_INVALID_HANDLE
+    }
+}
+
+unsafe extern "win64" fn NtSuspendProcess(h: usize) -> u32 {
+    signal_process(h, libc::SIGSTOP)
+}
+
+unsafe extern "win64" fn NtResumeProcess(h: usize) -> u32 {
+    signal_process(h, libc::SIGCONT)
 }
 
 /// Le chargeur de Winlux n'a pas de verrou exposé aux applis : on rend un
@@ -733,6 +753,271 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "SetThreadDesktop" => fn UserObjectOk,
         "SwitchDesktop" => fn UserObjectOk,
         "CloseDesktop" => fn UserObjectOk,
+    }
+}
+
+// ============================================================
+//  combase / ole32 : chaînes HSTRING et activation Windows Runtime
+// ============================================================
+//
+// Un HSTRING pointe sur un en-tête de 24 octets (la taille de HSTRING_HEADER) :
+// { magie u32, drapeaux u32, longueur u32, réservé u32, texte *const u16 }.
+// Une chaîne créée par WindowsCreateString est allouée d'un bloc (en-tête puis
+// texte terminé par 0) ; une « référence rapide » (WindowsCreateStringReference)
+// écrit l'en-tête dans le HSTRING_HEADER de l'appelant et pointe sur son texte.
+
+const HSTRING_MAGIC: u32 = 0x4853_5452; // « HSTR »
+const HSTRING_REFERENCE: u32 = 1;
+const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+const E_POINTER: i32 = 0x8000_4003u32 as i32;
+const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
+const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154u32 as i32;
+
+fn hstring_layout(len: u32) -> std::alloc::Layout {
+    std::alloc::Layout::from_size_align(24 + (len as usize + 1) * 2, 8).expect("taille HSTRING")
+}
+
+/// (texte, longueur) d'un HSTRING ; NULL est la chaîne vide.
+unsafe fn hstring_parts(h: usize) -> Option<(*const u16, u32)> {
+    if h == 0 {
+        return Some((std::ptr::null(), 0));
+    }
+    let p = h as *const u32;
+    if p.read_unaligned() != HSTRING_MAGIC {
+        return None;
+    }
+    let len = p.add(2).read_unaligned();
+    let text = ((h + 16) as *const usize).read_unaligned() as *const u16;
+    Some((text, len))
+}
+
+unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let p = std::alloc::alloc_zeroed(hstring_layout(len));
+    if p.is_null() {
+        return 0;
+    }
+    let text = p.add(24) as *mut u16;
+    std::ptr::copy_nonoverlapping(src, text, len as usize);
+    (p as *mut u32).write(HSTRING_MAGIC);
+    (p.add(8) as *mut u32).write(len);
+    (p.add(16) as *mut usize).write(text as usize);
+    p as usize
+}
+
+unsafe extern "win64" fn WindowsCreateString(src: *const u16, len: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = 0;
+    if len == 0 {
+        return 0;
+    }
+    if src.is_null() {
+        return E_POINTER;
+    }
+    let h = hstring_alloc(src, len);
+    if h == 0 {
+        return E_OUTOFMEMORY;
+    }
+    *out = h;
+    0
+}
+
+unsafe extern "win64" fn WindowsCreateStringReference(
+    src: *const u16,
+    len: u32,
+    header: *mut u8,
+    out: *mut usize,
+) -> i32 {
+    if out.is_null() || header.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = 0;
+    if len == 0 {
+        return 0;
+    }
+    if src.is_null() || *src.add(len as usize) != 0 {
+        return E_INVALIDARG;
+    }
+    std::ptr::write_bytes(header, 0, 24);
+    (header as *mut u32).write_unaligned(HSTRING_MAGIC);
+    (header.add(4) as *mut u32).write_unaligned(HSTRING_REFERENCE);
+    (header.add(8) as *mut u32).write_unaligned(len);
+    (header.add(16) as *mut usize).write_unaligned(src as usize);
+    *out = header as usize;
+    0
+}
+
+unsafe extern "win64" fn WindowsDeleteString(h: usize) -> i32 {
+    if h == 0 {
+        return 0;
+    }
+    let Some((_, len)) = hstring_parts(h) else {
+        return E_INVALIDARG;
+    };
+    if (h as *const u32).add(1).read_unaligned() & HSTRING_REFERENCE == 0 {
+        (h as *mut u32).write(0);
+        std::alloc::dealloc(h as *mut u8, hstring_layout(len));
+    }
+    0
+}
+
+unsafe extern "win64" fn WindowsDuplicateString(h: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = 0;
+    let Some((text, len)) = hstring_parts(h) else {
+        return E_INVALIDARG;
+    };
+    if len == 0 {
+        return 0;
+    }
+    let copy = hstring_alloc(text, len);
+    if copy == 0 {
+        return E_OUTOFMEMORY;
+    }
+    *out = copy;
+    0
+}
+
+static EMPTY_WIDE: [u16; 1] = [0];
+
+unsafe extern "win64" fn WindowsGetStringRawBuffer(h: usize, len: *mut u32) -> *const u16 {
+    let (text, n) = hstring_parts(h).unwrap_or((std::ptr::null(), 0));
+    if !len.is_null() {
+        *len = n;
+    }
+    if text.is_null() {
+        EMPTY_WIDE.as_ptr()
+    } else {
+        text
+    }
+}
+
+unsafe extern "win64" fn WindowsGetStringLen(h: usize) -> u32 {
+    hstring_parts(h).map_or(0, |(_, n)| n)
+}
+
+unsafe extern "win64" fn WindowsIsStringEmpty(h: usize) -> i32 {
+    (WindowsGetStringLen(h) == 0) as i32
+}
+
+unsafe extern "win64" fn WindowsStringHasEmbeddedNull(h: usize, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let (text, n) = hstring_parts(h).unwrap_or((std::ptr::null(), 0));
+    *out = (0..n as usize).any(|i| *text.add(i) == 0) as i32;
+    0
+}
+
+unsafe fn hstring_slice<'a>(h: usize) -> &'a [u16] {
+    match hstring_parts(h) {
+        Some((text, n)) if !text.is_null() => std::slice::from_raw_parts(text, n as usize),
+        _ => &[],
+    }
+}
+
+unsafe extern "win64" fn WindowsCompareStringOrdinal(a: usize, b: usize, result: *mut i32) -> i32 {
+    if result.is_null() {
+        return E_INVALIDARG;
+    }
+    *result = match hstring_slice(a).cmp(hstring_slice(b)) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    0
+}
+
+unsafe extern "win64" fn WindowsConcatString(a: usize, b: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut v = hstring_slice(a).to_vec();
+    v.extend_from_slice(hstring_slice(b));
+    WindowsCreateString(v.as_ptr(), v.len() as u32, out)
+}
+
+unsafe extern "win64" fn WindowsSubstringWithSpecifiedLength(
+    h: usize,
+    start: u32,
+    len: u32,
+    out: *mut usize,
+) -> i32 {
+    let s = hstring_slice(h);
+    let end = start as usize + len as usize;
+    if out.is_null() || end > s.len() {
+        return E_INVALIDARG;
+    }
+    WindowsCreateString(s[start as usize..end].as_ptr(), len, out)
+}
+
+unsafe extern "win64" fn WindowsSubstring(h: usize, start: u32, out: *mut usize) -> i32 {
+    let n = WindowsGetStringLen(h);
+    if start > n {
+        return E_INVALIDARG;
+    }
+    WindowsSubstringWithSpecifiedLength(h, start, n - start, out)
+}
+
+/// Aucune classe Windows Runtime n'est inscrite : Chromium (notifications,
+/// réglages d'accessibilité, UI Automation) se rabat sur l'API Win32.
+unsafe extern "win64" fn RoGetActivationFactory(
+    _class: usize,
+    _iid: usize,
+    out: *mut usize,
+) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    REGDB_E_CLASSNOTREG
+}
+
+unsafe extern "win64" fn RoActivateInstance(_class: usize, out: *mut usize) -> i32 {
+    RoGetActivationFactory(0, 0, out)
+}
+
+unsafe extern "win64" fn RoOriginateError(_hr: i32, _message: usize) -> i32 {
+    0
+}
+
+unsafe extern "win64" fn RoTransformError(_old: i32, _new: i32, _message: usize) -> i32 {
+    0
+}
+
+unsafe extern "win64" fn GetRestrictedErrorInfo(out: *mut usize) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    1 // S_FALSE : aucune erreur enregistrée
+}
+
+pub fn ole32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "WindowsCreateString" => fn WindowsCreateString,
+        "WindowsCreateStringReference" => fn WindowsCreateStringReference,
+        "WindowsDeleteString" => fn WindowsDeleteString,
+        "WindowsDuplicateString" => fn WindowsDuplicateString,
+        "WindowsGetStringRawBuffer" => fn WindowsGetStringRawBuffer,
+        "WindowsGetStringLen" => fn WindowsGetStringLen,
+        "WindowsIsStringEmpty" => fn WindowsIsStringEmpty,
+        "WindowsStringHasEmbeddedNull" => fn WindowsStringHasEmbeddedNull,
+        "WindowsCompareStringOrdinal" => fn WindowsCompareStringOrdinal,
+        "WindowsConcatString" => fn WindowsConcatString,
+        "WindowsSubstring" => fn WindowsSubstring,
+        "WindowsSubstringWithSpecifiedLength" => fn WindowsSubstringWithSpecifiedLength,
+        "RoGetActivationFactory" => fn RoGetActivationFactory,
+        "RoActivateInstance" => fn RoActivateInstance,
+        "RoOriginateError" => fn RoOriginateError,
+        "RoOriginateErrorW" => fn RoOriginateError,
+        "RoTransformError" => fn RoTransformError,
+        "RoTransformErrorW" => fn RoTransformError,
+        "GetRestrictedErrorInfo" => fn GetRestrictedErrorInfo,
     }
 }
 
@@ -1298,6 +1583,7 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         ("advapi32", advapi32_exports()),
         ("uxtheme", uxtheme_exports()),
         ("user32", user32_exports()),
+        ("ole32", ole32_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -1478,6 +1764,64 @@ mod tests {
                 usize::from_le_bytes(trustee[24..32].try_into().unwrap()),
                 0x1234
             );
+        }
+    }
+
+    #[test]
+    fn chaines_winrt() {
+        unsafe {
+            let a: Vec<u16> = "Claude".encode_utf16().collect();
+            let mut h = 0usize;
+            assert_eq!(WindowsCreateString(a.as_ptr(), 6, &mut h), 0);
+            assert_ne!(h, 0);
+            let mut n = 0u32;
+            let p = WindowsGetStringRawBuffer(h, &mut n);
+            assert_eq!(n, 6);
+            assert_eq!(std::slice::from_raw_parts(p, 7), [&a[..], &[0]].concat());
+            let z: Vec<u16> = "Claude\0".encode_utf16().collect();
+            let mut header = [0u64; 3];
+            let mut r = 0usize;
+            assert_eq!(
+                WindowsCreateStringReference(z.as_ptr(), 6, header.as_mut_ptr().cast(), &mut r),
+                0
+            );
+            let mut cmp = 9;
+            assert_eq!(WindowsCompareStringOrdinal(h, r, &mut cmp), 0);
+            assert_eq!(cmp, 0);
+            let mut both = 0usize;
+            assert_eq!(WindowsConcatString(h, r, &mut both), 0);
+            assert_eq!(WindowsGetStringLen(both), 12);
+            let mut sub = 0usize;
+            assert_eq!(WindowsSubstring(both, 6, &mut sub), 0);
+            assert_eq!(WindowsCompareStringOrdinal(sub, h, &mut cmp), 0);
+            assert_eq!(cmp, 0);
+            let mut dup = 0usize;
+            assert_eq!(WindowsDuplicateString(r, &mut dup), 0);
+            assert_ne!(dup, r, "une référence se copie en vraie chaîne");
+            for x in [h, r, both, sub, dup, 0] {
+                assert_eq!(WindowsDeleteString(x), 0);
+            }
+            assert_eq!(WindowsIsStringEmpty(0), 1);
+            assert_eq!(*WindowsGetStringRawBuffer(0, &mut n), 0);
+            let mut f = 1usize;
+            assert_eq!(RoGetActivationFactory(h, 0, &mut f), REGDB_E_CLASSNOTREG);
+            assert_eq!(f, 0);
+            assert!(crate::dlls::lookup("ole32", "WindowsCreateString").is_some());
+            assert!(crate::dlls::lookup(
+                &crate::dlls::normalize("combase.dll"),
+                "WindowsCreateString"
+            )
+            .is_some());
+            // NtSuspendProcess / NtResumeProcess sur un enfant.
+            let mut child = std::process::Command::new("sleep")
+                .arg("5")
+                .spawn()
+                .unwrap();
+            let hp = crate::dlls::kernel32::open_process(0x1fffff, 0, child.id());
+            assert_eq!(NtSuspendProcess(hp), 0);
+            assert_eq!(NtResumeProcess(hp), 0);
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 
