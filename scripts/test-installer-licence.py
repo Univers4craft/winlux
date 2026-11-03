@@ -69,7 +69,11 @@ def check():
         expect(app.license_accept.has_focus(), "le focus n'est pas sur la case")
 
         # Clavier tactile ouvert (tablette) : la case et le message restent visibles.
-        expect(app.osk_box.get_visible(), "clavier tactile fermé sans clavier physique")
+        # Depuis #374, il ne s'ouvre seul que sur une étape avec un champ de saisie ;
+        # la licence n'en a pas, on l'ouvre comme le bouton « Clavier tactile ».
+        expect(not app.osk_box.get_visible(), "clavier tactile ouvert sur une étape sans champ de saisie")
+        app.show_touch_keyboard(True)
+        expect(app.osk_box.get_visible(), "le bouton « Clavier tactile » n'ouvre pas le clavier")
         pump(0.3)
         # Coordonnées dans la fenêtre : la case et le message tiennent dans la partie
         # visible de la page qui défile, donc au-dessus du clavier et des boutons.
