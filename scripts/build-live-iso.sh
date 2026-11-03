@@ -645,6 +645,11 @@ fi
 if test -s /etc/winlux/install-config.json && test -x /usr/bin/winlux-accounts-repair; then
     /usr/bin/winlux-accounts-repair >/run/winlux/accounts-repair.log 2>&1 || true
 fi
+# policy-rc.d de construction resté dans les systèmes installés en v0.2.18 :
+# retiré, sinon aucun service d'un paquet installé ensuite ne démarre.
+if test -f /usr/sbin/policy-rc.d && test "$(/bin/busybox cat /usr/sbin/policy-rc.d)" = "$(printf '#!/bin/sh\nexit 101')"; then
+    /bin/busybox rm -f /usr/sbin/policy-rc.d
+fi
 desktop_user=
 desktop_autologin=1
 if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
@@ -1282,6 +1287,13 @@ for unit in smbd nmbd samba samba-ad-dc wsdd; do
     fi
 done
 
+# policy-rc.d (« exit 101 ») ne sert qu'à la construction (prepare-apt-base) :
+# laissé dans l'image, il empêchait tout service d'un paquet installé plus
+# tard (Boutique, pilotes) de démarrer. L'installateur pose le sien le temps
+# de son chroot et le retire.
+if test -f "$stage/usr/sbin/policy-rc.d" && test "$(cat "$stage/usr/sbin/policy-rc.d")" = "$(printf '#!/bin/sh\nexit 101')"; then
+    rm -f "$stage/usr/sbin/policy-rc.d"
+fi
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"

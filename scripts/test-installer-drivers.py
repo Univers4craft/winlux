@@ -152,3 +152,18 @@ drivers = (ROOT / "scripts/winlux-drivers.py").read_text(encoding="utf-8")
 auto = drivers[drivers.index("def auto():"):drivers.index("def boot():")]
 assert "if not failed:" in auto and "auto.done" in auto
 print("premier démarrage connecté : winlux-drivers auto refait tant que tout n'est pas installé")
+
+# ── policy-rc.d de construction : jamais dans un système installé ───────
+init = build[build.index('cat >"$stage/init" <<'):]
+snippet = re.search(r"^if test -f /usr/sbin/policy-rc.d .*?^fi$", init, re.S | re.M)
+assert snippet, "l'init ne retire pas le policy-rc.d de construction"
+sealing = build[:build.index('sh "$root/scripts/build-live-root.sh"')]
+assert re.search(r'rm -f "\$stage/usr/sbin/policy-rc.d"', sealing), "policy-rc.d laissé dans l'image"
+with tempfile.TemporaryDirectory() as tmp:
+    for content, kept in (("#!/bin/sh\nexit 101\n", False), ("#!/bin/sh\n# réglage local\nexit 0\n", True)):
+        policy = pathlib.Path(tmp) / "policy-rc.d"
+        policy.write_text(content)
+        code = snippet.group(0).replace("/usr/sbin/policy-rc.d", str(policy)).replace("/bin/busybox ", "")
+        subprocess.run(["sh", "-c", code], check=True)
+        assert policy.exists() == kept, (content, policy.exists())
+print("policy-rc.d de construction retiré de l'image et des systèmes installés ; un fichier local est gardé")
