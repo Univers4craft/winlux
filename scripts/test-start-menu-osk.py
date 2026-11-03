@@ -45,6 +45,8 @@ home = tmp / "home"
 (home / "Téléchargements/pdn/System.Threading.Tasks.Parallel.dll").write_bytes(b"MZ")
 applications = home / ".local/share/applications"
 applications.mkdir(parents=True)
+(applications / "thunar.desktop").write_text(
+    "[Desktop Entry]\nType=Application\nName=Gestionnaire de fichiers Thunar\nKeywords=parcourir;\nExec=true\nCategories=System;\n")
 (applications / "winlux-settings.desktop").write_text(
     "[Desktop Entry]\nType=Application\nName=Paramètres\nExec=true\nCategories=Settings;\n")
 os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
@@ -188,6 +190,7 @@ def ranked():
         if isinstance(child, Gtk.Button):
             labels.append(child.get_tooltip_text() or child.get_label() or "")
     assert labels and labels[0] == "Paramètres", ("« par » : l'application Paramètres doit venir en premier", labels)
+    assert not any("Thunar" in label for label in labels), ("Thunar proposé alors que l'Explorateur le remplace", labels)
     files = [i for i, label in enumerate(labels) if label.startswith("Fichier")]
     pages = [i for i, label in enumerate(labels) if label.startswith("Paramètres · ")]
     assert files, ("le fichier Parallel.dll devrait être trouvé", labels)
@@ -200,6 +203,9 @@ def ranked():
 def still_open_with_text():
     assert app.window.get_visible(), "⌨ avec une recherche remplie a fermé le menu"
     assert app.search.get_text() == "par", app.search.get_text()
+    bounds = app.search.get_selection_bounds()
+    assert not bounds or bounds[0] == bounds[1], ("recherche sélectionnée après ⌨ : la touche suivante la remplacerait", bounds)
+    assert app.search.get_position() == 3, ("curseur pas en fin de recherche", app.search.get_position())
 
 
 steps += [
@@ -216,6 +222,7 @@ steps += [
     step(search_par, ranked, delay=1200),
     step(lambda: tap(app.osk_button), lambda: (hidden_by_icon(), still_open_with_text()), delay=1000),
     step(lambda: tap(app.osk_button), lambda: (shown_by_icon(), still_open_with_text()), delay=1000),
+    step(lambda: tap(find_key("i")), typed("pari")),
     step(reopen_with_keyboard, lambda: (closed_with_keyboard(), button_visible()), delay=700),
     step(reopen_by_button, shown_by_icon),
 ]

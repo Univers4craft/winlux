@@ -161,7 +161,10 @@ def category(app):
         if key in categories: return label
     return _t("Autres applications")
 
-SESSION_SERVICES = {"picom.desktop"}
+# Services de la session, et Thunar : l'Explorateur Winlux le remplace (« par »
+# proposait « Gestionnaire de fichiers Thunar » juste après Paramètres).
+SESSION_SERVICES = {"picom.desktop", "thunar.desktop", "org.xfce.thunar.desktop", "Thunar.desktop",
+                    "Thunar-folder-handler.desktop", "thunar-folder-handler.desktop"}
 
 # Couleurs du menu Démarrer : texte/fond au moins 4,5:1 (WCAG AA) dans les deux
 # thèmes, vérifié par scripts/test-shell-contrast.py.
@@ -340,7 +343,10 @@ class Start(Gtk.Application):
         # remplie fermait tout le menu).
         self.resized_at = time.monotonic()
         self.place(not self.osk_widget.get_visible())
-        self.search.grab_focus()
+        # Curseur en fin de texte : grab_focus() sélectionnait toute la
+        # recherche et la touche suivante remplaçait « par ».
+        self.search.grab_focus_without_selecting()
+        self.search.set_position(-1)
 
     def osk_send(self, key, _modifiers=()):
         """Touches du clavier intégré vers la recherche du menu."""
