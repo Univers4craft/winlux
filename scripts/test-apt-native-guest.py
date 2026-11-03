@@ -17,7 +17,7 @@ assert "winlux.native-smoke=1" in Path("/proc/cmdline").read_text().split(), "Di
 assert Path("/usr/share/winlux/update-backend").read_text().strip() == "apt"
 assert stat.S_IMODE(Path("/usr/bin/sudo").stat().st_mode) & stat.S_ISUID, "Native package modes were not restored"
 # Droits de la base Ubuntu (su et sudo d'un compte normal, mot de passe vérifié par unix_chkpwd).
-for tool, bit in (("/usr/bin/su", stat.S_ISUID), ("/usr/bin/passwd", stat.S_ISUID), ("/usr/sbin/unix_chkpwd", stat.S_ISGID)):
+for tool, bit in (("/usr/bin/su.util-linux", stat.S_ISUID), ("/usr/bin/passwd", stat.S_ISUID), ("/usr/sbin/unix_chkpwd", stat.S_ISGID)):
     assert stat.S_IMODE(Path(tool).stat().st_mode) & bit, f"Base Ubuntu modes were not restored: {tool}"
 import grp
 assert Path("/etc/shadow").stat().st_gid == grp.getgrnam("shadow").gr_gid, "/etc/shadow must belong to group shadow"
