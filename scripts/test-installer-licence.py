@@ -15,8 +15,8 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-# Pas de /proc/bus/input dans cette racine : aucun clavier physique, le clavier
-# tactile s'ouvre comme sur une tablette.
+# Pas de /proc/bus/input dans cette racine : aucun clavier physique, comme
+# sur une tablette.
 os.environ["WINLUX_OSK_ROOT"] = tempfile.mkdtemp(prefix="winlux-licence-root-")
 spec = importlib.util.spec_from_file_location("installer", os.path.join(HERE, "winlux-installer.py"))
 installer = importlib.util.module_from_spec(spec)
@@ -68,13 +68,13 @@ def check():
         expect(ctx.has_class("license-attention"), "la case n'est plus mise en évidence après le clignotement")
         expect(app.license_accept.has_focus(), "le focus n'est pas sur la case")
 
-        # Clavier tactile ouvert (tablette) : la case et le message restent visibles.
-        # Depuis #374, il ne s'ouvre seul que sur une étape avec un champ de saisie ;
-        # la licence n'en a pas, on l'ouvre comme le bouton « Clavier tactile ».
-        expect(not app.osk_box.get_visible(), "clavier tactile ouvert sur une étape sans champ de saisie")
+        # Tablette : la Licence n'a aucun champ, le clavier tactile n'y est pas
+        # ouvert d'office (#374) ; ouvert à la main, la case et le message
+        # restent visibles au-dessus.
+        expect(not app.osk_box.get_visible(), "clavier tactile ouvert d'office sur la Licence (aucun champ)")
         app.show_touch_keyboard(True)
-        expect(app.osk_box.get_visible(), "le bouton « Clavier tactile » n'ouvre pas le clavier")
         pump(0.3)
+        expect(app.osk_box.get_visible(), "le clavier tactile ne s'ouvre pas à la main")
         # Coordonnées dans la fenêtre : la case et le message tiennent dans la partie
         # visible de la page qui défile, donc au-dessus du clavier et des boutons.
         page = app.license_accept_box.get_ancestor(Gtk.ScrolledWindow)

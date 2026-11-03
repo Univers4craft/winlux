@@ -107,6 +107,10 @@ T = {
            "sha": "Empreinte SHA-256 invalide : installateur refusé.",
            "latest": "Recherche de la dernière version...", "download": "Téléchargement de {name}...",
            "runtime": "Installation de {name} avec le runtime Winlux...",
+           "apt_download": "Téléchargement des fichiers...", "apt_prepare": "Préparation de {name}...",
+           "apt_unpack": "Décompression de {name}...", "apt_configure": "Configuration de {name}...",
+           "apt_installed": "{name} installé", "apt_remove": "Suppression de {name}...",
+           "apt_removed": "{name} supprimé", "apt_finish": "Finalisation...", "apt_working": "Opération en cours...",
            "installed_version": "installé"},
     "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
            "all_software": "All software", "unknown": "Unknown software: {target}",
@@ -120,6 +124,10 @@ T = {
            "sha": "Invalid SHA-256 fingerprint: installer rejected.",
            "latest": "Looking for the latest version...", "download": "Downloading {name}...",
            "runtime": "Installing {name} with the Winlux runtime...",
+           "apt_download": "Downloading files...", "apt_prepare": "Preparing {name}...",
+           "apt_unpack": "Unpacking {name}...", "apt_configure": "Configuring {name}...",
+           "apt_installed": "{name} installed", "apt_remove": "Removing {name}...",
+           "apt_removed": "{name} removed", "apt_finish": "Finishing...", "apt_working": "Working...",
            "installed_version": "installed"},
     "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
            "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
@@ -133,6 +141,10 @@ T = {
            "sha": "Huella SHA-256 no válida: instalador rechazado.",
            "latest": "Buscando la última versión...", "download": "Descargando {name}...",
            "runtime": "Instalando {name} con el runtime de Winlux...",
+           "apt_download": "Descargando archivos...", "apt_prepare": "Preparando {name}...",
+           "apt_unpack": "Desempaquetando {name}...", "apt_configure": "Configurando {name}...",
+           "apt_installed": "{name} instalado", "apt_remove": "Eliminando {name}...",
+           "apt_removed": "{name} eliminado", "apt_finish": "Finalizando...", "apt_working": "Operación en curso...",
            "installed_version": "instalado"},
     "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
            "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
@@ -147,6 +159,10 @@ T = {
            "sha": "Ungültiger SHA-256-Fingerabdruck: Installationsprogramm abgelehnt.",
            "latest": "Neueste Version wird gesucht...", "download": "{name} wird heruntergeladen...",
            "runtime": "{name} wird mit der Winlux-Laufzeit installiert...",
+           "apt_download": "Dateien werden heruntergeladen...", "apt_prepare": "{name} wird vorbereitet...",
+           "apt_unpack": "{name} wird entpackt...", "apt_configure": "{name} wird eingerichtet...",
+           "apt_installed": "{name} installiert", "apt_remove": "{name} wird entfernt...",
+           "apt_removed": "{name} entfernt", "apt_finish": "Wird abgeschlossen...", "apt_working": "Vorgang läuft...",
            "installed_version": "installiert"},
 }
 
@@ -154,6 +170,23 @@ T = {
 def tr(key, **values):
     text = T[LANG].get(key) or T["fr"][key]
     return text.format(**values) if values else text
+
+# Messages d'avancement d'apt (APT::Status-Fd), toujours en anglais car apt
+# tourne en C.UTF-8 : traduits ici (« Installed abiword (amd64) » s'affichait tel quel).
+APT_STEPS = [(r"Preparing to configure (\S+)", "apt_configure"), (r"Preparing for removal of (\S+)", "apt_remove"),
+             (r"Preparing (\S+)", "apt_prepare"), (r"Unpacking (\S+)", "apt_unpack"),
+             (r"(?:Configuring|Installing) (\S+)", "apt_configure"), (r"Installed (\S+)", "apt_installed"),
+             (r"(?:Completely )?[Rr]emoving (\S+)", "apt_remove"), (r"(?:Completely )?[Rr]emoved (\S+)", "apt_removed"),
+             (r"Running ", "apt_finish")]
+
+def apt_message(kind, text):
+    if kind == "dlstatus":
+        return tr("apt_download")
+    for pattern, key in APT_STEPS:
+        m = re.match(pattern, text.strip())
+        if m:
+            return tr(key, name=m.group(1).split(":")[0]) if m.groups() else tr(key)
+    return tr("apt_working")
 
 OFFLINE = os.environ.get("WINLUX_STORE_OFFLINE") == "1"
 REMOTE_TTL = 6 * 3600
@@ -813,7 +846,7 @@ class Apt(Source):
             os.close(r)
             os.close(w)
             return 126
-        env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+        env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive", "LC_ALL": "C.UTF-8"}
         with open(STORE_RUN / "store.log", "ab") as log:
             try:
                 proc = subprocess.Popen(cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
@@ -831,7 +864,7 @@ class Apt(Source):
                             pct = int(float(parts[2]))
                         except ValueError:
                             pct = 0
-                        progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, parts[3])
+                        progress(pct // 2 if parts[0] == "dlstatus" else 50 + pct // 2, apt_message(parts[0], parts[3]))
             return proc.wait()
 
     def install(self, ref, progress):

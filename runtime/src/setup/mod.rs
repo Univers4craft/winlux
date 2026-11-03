@@ -473,6 +473,7 @@ impl Installer {
             return Ok(());
         }
         let bytes = crate::msi::shortcut_bytes(target, args, workdir, desc);
+        hide_desktop_link(link);
         self.write_file(link, &bytes)?;
         Ok(())
     }
@@ -718,6 +719,9 @@ pub fn remove(m: &Manifest, log: &mut Logger) {
     }
     let _ = std::fs::remove_file(manifest_path(&m.id));
     log.log(&format!("{} est désinstallé.", m.name));
+    // Quel que soit le chemin (--remove, --uninstall, désinstalleur) : le
+    // lanceur « Nom » du Bureau part avec le raccourci.
+    refresh_launchers();
 }
 
 /// Informations sur un installateur.
@@ -787,6 +791,35 @@ fn refresh_launchers() {
             .stderr(std::process::Stdio::null())
             .status();
     }
+}
+
+/// Raccourci posé sur le Bureau : son nom est inscrit dans `.hidden` AVANT
+/// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
+/// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
+/// winlux-applications pose ensuite le lanceur « Claude » à sa place.
+fn hide_desktop_link(link: &str) {
+    let desktop = Folders::desktop();
+    let Some((dir, name)) = link.rsplit_once('\\') else {
+        return;
+    };
+    if !dir.eq_ignore_ascii_case(&desktop) || !name.to_ascii_lowercase().ends_with(".lnk") {
+        return;
+    }
+    let path = crate::paths::to_linux(&format!("{desktop}\\.hidden"));
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if current.lines().any(|l| l == name) {
+        return;
+    }
+    let mut text = current;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(name);
+    text.push('\n');
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, text);
 }
 
 /// Lit un argument chemin (Linux existant ou Windows).
@@ -875,6 +908,8 @@ pub fn cli(args: &[String]) -> i32 {
                 };
                 let (rc, msg) = programs::uninstall_key(k);
                 if rc == 0 {
+                    // msiexec et désinstalleurs externes ne passent pas par
+                    // la désinstallation intégrée : lanceurs remis à jour ici.
                     refresh_launchers();
                 }
                 match &out {

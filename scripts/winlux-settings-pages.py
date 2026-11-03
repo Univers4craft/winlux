@@ -402,6 +402,11 @@ _TR = {
     "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
+    "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
+    "Aucun haut-parleur, casque ni micro n’est reconnu sur ce PC. Si l’ordinateur en a, son pilote ou son firmware audio manque : la page Matériel et pilotes l’installe.": (
+        "No speakers, headphones or microphone are recognized on this PC. If the computer has them, its audio driver or firmware is missing: the Hardware and drivers page installs it.",
+        "No se reconoce ningún altavoz, auricular ni micrófono en este PC. Si el equipo los tiene, falta su controlador o firmware de audio: la página Hardware y controladores lo instala.",
+        "Auf diesem PC werden keine Lautsprecher, Kopfhörer oder Mikrofone erkannt. Wenn der Computer welche hat, fehlt der Audiotreiber oder die Firmware: Die Seite Hardware und Treiber installiert sie."),
     "Entrée": ("Input", "Entrada", "Eingabe"),
     "Haut-parleurs ou casque": ("Speakers or headphones", "Altavoces o auriculares", "Lautsprecher oder Kopfhörer"),
     "Micro": ("Microphone", "Micrófono", "Mikrofon"),
@@ -937,11 +942,26 @@ def volume_percent(item):
     return max(values) if values else 0
 
 
+def placeholder_device(device):
+    """Sortie ou entrée factice de PipeWire (« auto_null », « Dummy Output ») :
+    elle n'existe que quand aucune carte son n'est reliée."""
+    props = device.get("properties") or {}
+    name = str(device.get("name", ""))
+    if name in ("auto_null", "auto_null.monitor") or name.startswith("null"):
+        return True
+    return props.get("factory.name") == "support.null-audio-sink" and not props.get("device.api")
+
+
 def audio_devices():
-    sinks = pactl_list("sinks")
+    sinks = [s for s in pactl_list("sinks") if not placeholder_device(s)]
     sources = [s for s in pactl_list("sources")
-               if not str(s.get("name", "")).endswith(".monitor") and s.get("monitor_of_sink") in (None, "", "n/a")]
+               if not str(s.get("name", "")).endswith(".monitor") and s.get("monitor_of_sink") in (None, "", "n/a")
+               and not placeholder_device(s)]
     return sinks, sources
+
+
+def audio_server_running():
+    return have("pactl") and run(["pactl", "info"], timeout=2) is not None
 
 
 # ── Lecteurs réseau (winlux-drives) ─────────────────────────────────────────
@@ -1059,8 +1079,10 @@ def wallpapers():
 def page_available(page, status=None):
     status = keyvals(read(CONTROL)) if status is None else status
     if page == PAGE_SOUND:
+        # Serveur son en marche : la page s'affiche, même sans carte reconnue,
+        # pour le dire clairement au lieu d'une « Sortie factice ».
         sinks, sources = audio_devices()
-        return bool(sinks or sources)
+        return bool(sinks or sources) or audio_server_running()
     if page == PAGE_SYSUPDATE:
         if status.get("sysupdate_apt") == "0": return False
         return have("winlux-sysupdate") and have("apt-get")
@@ -1749,6 +1771,13 @@ class ExtraPages:
 
     def page_sound(self):
         sinks, sources = audio_devices()
+        if not sinks and not sources:
+            self.section(_t("Sortie"))
+            box = self.card()
+            self.hint(_t("Aucun haut-parleur, casque ni micro n’est reconnu sur ce PC. Si l’ordinateur en a, "
+                         "son pilote ou son firmware audio manque : la page Matériel et pilotes l’installe."), box)
+            self.actions(box, [(_t("Matériel et pilotes"), lambda: self.open_page(PAGE_HARDWARE))])
+            self.watch_audio_cards()
         for kind, title, devices, default in (("sink", "Sortie", sinks, pactl_default("sink")),
                                               ("source", "Entrée", sources, pactl_default("source"))):
             if not devices: continue
@@ -1792,6 +1821,23 @@ class ExtraPages:
     def audio_refresh(self):
         GLib.idle_add(self.extra_refresh)
         return True
+
+    def watch_audio_cards(self):
+        """Carte reconnue plus tard (pilote installé, casque USB branché) : la
+        page se met à jour seule, sans redémarrer."""
+        if getattr(self, "_audio_watch", None): return
+
+        def check():
+            if self.page != PAGE_SOUND:
+                self._audio_watch = None
+                return False
+            sinks, sources = audio_devices()
+            if sinks or sources:
+                self._audio_watch = None
+                self.extra_refresh()
+                return False
+            return True
+        self._audio_watch = GLib.timeout_add_seconds(3, check)
 
     # ── Gestionnaire de fichiers ──
 
