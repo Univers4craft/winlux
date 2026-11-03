@@ -515,6 +515,10 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
+/// Numéro de handle neuf pour les objets tenus hors de kernel32 (mappings).
+pub(crate) fn new_handle_number() -> usize {
+    next_handle()
+}
 /// Handle hérité (voir `inherit`) : même valeur que chez le parent.
 pub(crate) fn insert_file_at(h: usize, file: File, overlapped: bool) {
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -8125,6 +8129,9 @@ pub unsafe extern "win64" fn duplicate_handle(
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
     } else if let Some(h) = duplicate_handle_impl(src_handle) {
+        Some(h)
+    } else if let Some(h) = crate::dlls::mmap::duplicate_mapping(src_handle) {
+        // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle.
         Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
