@@ -118,6 +118,10 @@ _TR = {
         "The secure connection to {host} failed (the server refused the encryption).",
         "La conexión segura con {host} ha fallado (el servidor rechazó el cifrado).",
         "Die sichere Verbindung zu {host} ist fehlgeschlagen (der Server hat die Verschlüsselung abgelehnt)."),
+    "Le certificat de {host} n’est pas valable (il est mal construit ou révoqué). Le problème vient du site : prévenez son responsable.": (
+        "The certificate of {host} is not valid (badly built or revoked). The problem is on the site’s side: tell its owner.",
+        "El certificado de {host} no es válido (está mal construido o revocado). El problema es del sitio: avise a su responsable.",
+        "Das Zertifikat von {host} ist ungültig (fehlerhaft erstellt oder widerrufen). Das Problem liegt bei der Website: Informieren Sie den Betreiber."),
     # Ajout d'un certificat
     "Ce fichier n’est pas un certificat (formats acceptés : .crt, .pem, .cer, .der).": (
         "This file is not a certificate (accepted formats: .crt, .pem, .cer, .der).",
@@ -573,7 +577,7 @@ def classify(verify_code, clock_is_wrong, portal):
         return "name-mismatch"
     if verify_code in (2, 18, 19, 20, 21, 27):
         return "unknown-authority"
-    return "tls-failed"
+    return "invalid-certificate"
 
 
 def check(host, port=443, timeout=8):
@@ -614,6 +618,7 @@ MESSAGES = {
     "dns": "Le nom {host} est introuvable : vérifiez la connexion à Internet.",
     "unreachable": "{host} ne répond pas : vérifiez la connexion à Internet.",
     "tls-failed": "La connexion sécurisée avec {host} a échoué (le serveur a refusé le chiffrement).",
+    "invalid-certificate": "Le certificat de {host} n’est pas valable (il est mal construit ou révoqué). Le problème vient du site : prévenez son responsable.",
     "not-certificate": "Ce fichier n’est pas un certificat (formats acceptés : .crt, .pem, .cer, .der).",
     "personal": "Un fichier .p12 ou .pfx est un certificat personnel : choisissez-le dans la page Wi-Fi, à la connexion au réseau d’entreprise (méthode TLS).",
     "unreadable": "Fichier introuvable ou illisible.",

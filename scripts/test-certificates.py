@@ -47,13 +47,16 @@ def openssl(*args):
 
 
 openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "30",
-        "-subj", "/CN=Lycée Winlux Racine/O=Académie de test", "-addext", "basicConstraints=critical,CA:TRUE")
+        "-subj", "/CN=Lycée Winlux Racine/O=Académie de test", "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign")
 openssl("x509", "-in", "ca.pem", "-outform", "DER", "-out", "ca.der")
 
 
 def server_cert(name, host):
     openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", f"{name}.key", "-out", f"{name}.csr", "-subj", f"/CN={host}")
-    (pki / f"{name}.ext").write_text(f"subjectAltName=DNS:{host}\n")
+    # Extensions exigées par OpenSSL récent (mode strict de Python 3.13).
+    (pki / f"{name}.ext").write_text(f"subjectAltName=DNS:{host}\nauthorityKeyIdentifier=keyid,issuer\n"
+                                    "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
     openssl("x509", "-req", "-in", f"{name}.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
             "-out", f"{name}.pem", "-days", "30", "-extfile", f"{name}.ext")
 
