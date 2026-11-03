@@ -734,8 +734,20 @@ unsafe extern "win64" fn UserObjectOk(_h: usize) -> i32 {
     1
 }
 
+/// `GetPointerDevices` : aucun écran tactile ni stylet déclaré au sens de
+/// Windows Pointer (le toucher arrive par la souris d'X11).
+unsafe extern "win64" fn GetPointerDevices(count: *mut u32, _devices: *mut u8) -> i32 {
+    if count.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *count = 0;
+    1
+}
+
 pub fn user32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "GetPointerDevices" => fn GetPointerDevices,
         "CreateWindowStationW" => fn CreateWindowStation,
         "CreateWindowStationA" => fn CreateWindowStation,
         "OpenWindowStationW" => fn OpenWindowStation,
@@ -1764,6 +1776,60 @@ mod tests {
                 usize::from_le_bytes(trustee[24..32].try_into().unwrap()),
                 0x1234
             );
+        }
+    }
+
+    #[test]
+    fn tube_nomme_deconnexion_puis_nouveau_client() {
+        use crate::dlls::kernel32 as k;
+        let _teb = crate::process::test_teb();
+        let name = format!("\\\\.\\pipe\\winlux-disconnect-{}", std::process::id());
+        let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let open = |w: &Vec<u16>| unsafe {
+            for _ in 0..200 {
+                let c = k::create_file_w(w.as_ptr(), 0xC000_0000, 0, 0, 3, 0, 0);
+                if c != usize::MAX {
+                    return c;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            usize::MAX
+        };
+        unsafe {
+            let server = k::create_named_pipe_w(wide.as_ptr(), 3, 0, 1, 512, 512, 0, 0);
+            assert_ne!(server, usize::MAX);
+            let srv = server;
+            let t = std::thread::spawn(move || {
+                let _teb = crate::process::test_teb();
+                for word in [b"un", b"de"] {
+                    let r = k::connect_named_pipe(srv, 0);
+                    assert!(r == 1 || k::get_last_error() == 535);
+                    let mut buf = [0u8; 8];
+                    let mut n = 0u32;
+                    assert_eq!(k::read_file(srv, buf.as_mut_ptr(), 8, &mut n, 0), 1);
+                    assert_eq!(&buf[..n as usize], word);
+                    // Le serveur libère l'instance pour le client suivant,
+                    // comme le serveur d'exceptions de crashpad.
+                    assert_eq!(k::disconnect_named_pipe(srv), 1);
+                }
+            });
+            let mut n = 0u32;
+            let c1 = open(&wide);
+            assert_ne!(c1, usize::MAX);
+            assert_eq!(k::write_file(c1, b"un".as_ptr(), 2, &mut n, 0), 1);
+            // Après DisconnectNamedPipe, le premier client lit la fin du tube.
+            let mut buf = [0u8; 4];
+            assert_eq!(k::read_file(c1, buf.as_mut_ptr(), 4, &mut n, 0), 0);
+            let c2 = open(&wide);
+            assert_ne!(c2, usize::MAX, "second client après la déconnexion");
+            assert_eq!(k::write_file(c2, b"de".as_ptr(), 2, &mut n, 0), 1);
+            t.join().unwrap();
+            k::close_handle(c1);
+            k::close_handle(c2);
+            k::close_handle(server);
+            let mut count = 7u32;
+            assert_eq!(GetPointerDevices(&mut count, std::ptr::null_mut()), 1);
+            assert_eq!(count, 0);
         }
     }
 

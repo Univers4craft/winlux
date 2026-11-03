@@ -7707,8 +7707,8 @@ pub unsafe extern "win64" fn create_named_pipe_a(
 pub extern "win64" fn connect_named_pipe(h: usize, ov: usize) -> i32 {
     crate::dlls::named_pipes::connect(h, ov)
 }
-pub extern "win64" fn disconnect_named_pipe(_h: usize) -> i32 {
-    1
+pub extern "win64" fn disconnect_named_pipe(h: usize) -> i32 {
+    crate::dlls::named_pipes::disconnect(h)
 }
 
 // --- CreateFileMappingA/W, MapViewOfFile, UnmapViewOfFile (stubs) ---
