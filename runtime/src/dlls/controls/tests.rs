@@ -15,6 +15,18 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
     if msg == 0x004E && lp != 0 {
         let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
         NOTIFY.lock().unwrap().push(code);
+        if code == -177 {
+            // LVN_GETDISPINFOW : NMHDR (24 octets) puis LVITEMW
+            unsafe {
+                let it = &mut *((lp as *mut u8).add(24) as *mut LvItemW);
+                let s: Vec<u16> = format!("auto{}-{}", it.item, it.sub_item)
+                    .encode_utf16()
+                    .chain([0])
+                    .collect();
+                let n = s.len().min(it.text_max as usize);
+                std::ptr::copy_nonoverlapping(s.as_ptr(), it.text as *mut u16, n);
+            }
+        }
         return 0;
     }
     gui::def_window_proc(hwnd, msg, wp, lp)
@@ -578,6 +590,78 @@ fn liste_a_colonnes_lignes_textes_et_selection() {
     sendw(lv, 0x102B, 1, &mut st as *mut LvItemW as isize);
     assert_eq!(sendw(lv, 0x100C, usize::MAX, 0x2), 1);
     assert!(notify_codes().contains(&-101), "LVN_ITEMCHANGED");
+    gui::destroy_window(p);
+}
+
+#[test]
+fn liste_textes_fournis_a_la_demande_et_liste_virtuelle() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 52, (0, 0, 300, 200));
+    let t = w("Nom");
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 120,
+        text: t.as_ptr(),
+        text_max: 0,
+        sub_item: 0,
+    };
+    sendw(lv, 0x1061, 0, &mut col as *mut LvColumnW as isize);
+    // LPSTR_TEXTCALLBACK : le texte vient de LVN_GETDISPINFOW
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 0,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: usize::MAX as *const u16,
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    assert_eq!(sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize), 0);
+    let get = |item: usize, sub: i32| {
+        let mut buf = [0u16; 32];
+        let mut g = LvItemW {
+            mask: 0x1,
+            item: item as i32,
+            sub_item: sub,
+            state: 0,
+            state_mask: 0,
+            text: buf.as_mut_ptr(),
+            text_max: 32,
+            image: 0,
+            param: 0,
+        };
+        let n = sendw(lv, 0x1073, item, &mut g as *mut LvItemW as isize);
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    };
+    notify_codes();
+    assert_eq!(get(0, 0), "auto0-0");
+    assert!(notify_codes().contains(&-177), "LVN_GETDISPINFOW");
+    gui::destroy_window(p);
+
+    // LVS_OWNERDATA : LVM_SETITEMCOUNT donne le nombre de lignes
+    let p = parent_window();
+    let lv2 = child(p, "SysListView32", "", 0x1 | 0x1000, 53, (0, 0, 300, 200));
+    sendw(lv2, 0x1061, 0, &mut col as *mut LvColumnW as isize);
+    assert_eq!(sendw(lv2, 0x102F, 4, 0), 1);
+    assert_eq!(sendw(lv2, 0x1004, 0, 0), 4, "LVM_GETITEMCOUNT virtuel");
+    let mut buf = [0u16; 32];
+    let mut g = LvItemW {
+        mask: 0x1,
+        item: 3,
+        sub_item: 1,
+        state: 0,
+        state_mask: 0,
+        text: buf.as_mut_ptr(),
+        text_max: 32,
+        image: 0,
+        param: 0,
+    };
+    let n = sendw(lv2, 0x1073, 3, &mut g as *mut LvItemW as isize);
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "auto3-1");
     gui::destroy_window(p);
 }
 

@@ -269,6 +269,12 @@ pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
     if !filter.is_empty() && !filter.iter().any(|f| lower.contains(f.as_str())) {
         return target;
     }
+    // Les exportations de données (msvcrt!_fmode, __initenv, _acmdln…) ne
+    // sont pas des fonctions : les envelopper dans un pont de code ferait
+    // lire du code machine au programme à la place de la variable.
+    if !is_executable(target) {
+        return target;
+    }
     static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     if let Some(&(_, t)) = CACHE.lock().unwrap().iter().find(|(a, _)| *a == target) {
         return t;
@@ -299,6 +305,40 @@ pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
     let t = alloc_code(&c);
     CACHE.lock().unwrap().push((target, t));
     t
+}
+
+/// Vrai si `addr` est dans une projection exécutable du processus
+/// (d'après /proc/self/maps, relu quand l'adresse n'est pas connue).
+fn is_executable(addr: usize) -> bool {
+    static RANGES: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    let known = |r: &[(usize, usize)]| r.iter().any(|&(lo, hi)| addr >= lo && addr < hi);
+    let mut ranges = RANGES.lock().unwrap_or_else(|e| e.into_inner());
+    if known(&ranges) {
+        return true;
+    }
+    let Ok(maps) = std::fs::read_to_string("/proc/self/maps") else {
+        return true;
+    };
+    *ranges = parse_exec_ranges(&maps);
+    known(&ranges)
+}
+
+fn parse_exec_ranges(maps: &str) -> Vec<(usize, usize)> {
+    maps.lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let range = parts.next()?;
+            let perms = parts.next()?;
+            if perms.as_bytes().get(2) != Some(&b'x') {
+                return None;
+            }
+            let (lo, hi) = range.split_once('-')?;
+            Some((
+                usize::from_str_radix(lo, 16).ok()?,
+                usize::from_str_radix(hi, 16).ok()?,
+            ))
+        })
+        .collect()
 }
 
 /// Journalise un GetProcAddress qui échoue sur une DLL intégrée, quand le
@@ -400,6 +440,21 @@ macro_rules! varargs_thunk {
             pub fn $thunk();
         }
     };
+}
+
+#[cfg(test)]
+mod api_trace_tests {
+    use super::*;
+
+    #[test]
+    fn le_tracage_n_enveloppe_pas_les_exportations_de_donnees() {
+        static DONNEE: u64 = 42;
+        let data = &DONNEE as *const u64 as usize;
+        assert!(!is_executable(data));
+        assert!(is_executable(describe_site as *const () as usize));
+        let r = parse_exec_ranges("1000-2000 r-xp 0 0:0 0 x\n3000-4000 rw-p 0 0:0 0 y\n");
+        assert_eq!(r, vec![(0x1000, 0x2000)]);
+    }
 }
 
 #[cfg(test)]
