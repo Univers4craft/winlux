@@ -68,9 +68,13 @@ def check():
         expect(ctx.has_class("license-attention"), "la case n'est plus mise en évidence après le clignotement")
         expect(app.license_accept.has_focus(), "le focus n'est pas sur la case")
 
-        # Clavier tactile ouvert (tablette) : la case et le message restent visibles.
-        expect(app.osk_box.get_visible(), "clavier tactile fermé sans clavier physique")
+        # Tablette : la Licence n'a aucun champ, le clavier tactile n'y est pas
+        # ouvert d'office (#374). Ouvert par son bouton, la case et le message
+        # restent visibles au-dessus.
+        expect(not app.osk_box.get_visible(), "clavier tactile ouvert d'office sur la Licence")
+        app.show_touch_keyboard(True)
         pump(0.3)
+        expect(app.osk_box.get_visible(), "le bouton n'ouvre pas le clavier tactile")
         # Coordonnées dans la fenêtre : la case et le message tiennent dans la partie
         # visible de la page qui défile, donc au-dessus du clavier et des boutons.
         page = app.license_accept_box.get_ancestor(Gtk.ScrolledWindow)
