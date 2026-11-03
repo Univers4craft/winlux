@@ -30,7 +30,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let found = search as usize != usize::MAX
             && data.size_low == payload.len() as u32
             && strlen(data.file_name.as_ptr()) != 0;
-        let end = found && FindNextFileA(search, &mut data) == 0 && GetLastError() == 2;
+        let end = found && FindNextFileA(search, &mut data) == 0 && GetLastError() == 18; // ERROR_NO_MORE_FILES
         let closed_search = if search as usize != usize::MAX {
             FindClose(search) != 0
         } else {

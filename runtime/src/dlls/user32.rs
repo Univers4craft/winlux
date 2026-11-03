@@ -225,6 +225,33 @@ unsafe fn create_window_common(
         },
     );
 
+    // La fenêtre X existe avant WM_CREATE, comme la HWND sous Windows : un
+    // programme y crée souvent ses enfants (panneaux, barres d'outils de
+    // 7-Zip). Créée après, chaque enfant serait devenu une fenêtre isolée,
+    // sans titre, dans la barre des tâches, et le parent serait resté blanc.
+    // Elle n'est montrée qu'après WM_CREATE.
+    with_backend(|b| {
+        if child {
+            b.create_child_window(hwnd, parent, rect);
+            // Win32 : un nouvel enfant passe derrière ses voisins (le premier
+            // créé reste devant). Les contrôles de fond (cadres de groupe,
+            // onglets), transparents sous Windows mais opaques en X11,
+            // restent tout au fond pour ne jamais masquer leur contenu.
+            b.lower_window(hwnd);
+            for sibling in gui::child_windows(parent) {
+                if sibling != hwnd && super::controls::is_backdrop(sibling) {
+                    b.lower_window(sibling);
+                }
+            }
+        } else {
+            b.create_window(hwnd, &title, rect);
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+                // Menu surgissant : ni cadre ni placement du gestionnaire.
+                b.set_popup(hwnd);
+            }
+        }
+    });
+
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
     let nc = crate::dlls::gui::call_wndproc(
@@ -251,34 +278,23 @@ unsafe fn create_window_common(
         return 0;
     }
 
-    // WM_CREATE a pu déplacer la fenêtre (SetWindowPos) : on crée la
-    // fenêtre X à sa place actuelle.
+    // WM_CREATE a pu déplacer la fenêtre ou la montrer (SetWindowPos,
+    // ShowWindow) : la fenêtre X suit sa place actuelle.
+    // (Certains contrôles changent leur taille sans SetWindowPos, comme la
+    // COMBOBOX fermée.)
+    let initial = rect;
     let rect = gui::window_rect(hwnd).unwrap_or(rect);
+    let shown = gui::is_window_visible(hwnd);
     let (w, h) = (rect.width(), rect.height());
     with_backend(|b| {
-        if child {
-            b.create_child_window(hwnd, parent, rect);
-            // Win32 : un nouvel enfant passe derrière ses voisins (le premier
-            // créé reste devant). Les contrôles de fond (cadres de groupe,
-            // onglets), transparents sous Windows mais opaques en X11,
-            // restent tout au fond pour ne jamais masquer leur contenu.
-            b.lower_window(hwnd);
-            for sibling in gui::child_windows(parent) {
-                if sibling != hwnd && super::controls::is_backdrop(sibling) {
-                    b.lower_window(sibling);
-                }
-            }
-        } else {
-            b.create_window(hwnd, &title, rect);
-            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
-                // Menu surgissant : ni cadre ni placement du gestionnaire.
-                b.set_popup(hwnd);
-            }
+        if rect != initial {
+            b.set_window_rect(hwnd, rect);
         }
-        if visible {
+        if shown {
             b.show_window(hwnd, true);
         }
     });
+    let visible = shown;
 
     // WM_SIZE puis, si visible, demande de peinture.
     gui::post_to_window(
@@ -1496,7 +1512,14 @@ pub extern "win64" fn get_parent(hwnd: usize) -> usize {
 }
 
 pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
-    gui::set_window_parent(hwnd, new_parent).unwrap_or(0)
+    let old = gui::set_window_parent(hwnd, new_parent).unwrap_or(0);
+    if new_parent != 0 && new_parent != old {
+        // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
+        // ReBar, panneaux déplacés d'une fenêtre à l'autre).
+        let rect = gui::window_rect(hwnd).unwrap_or_default();
+        with_backend(|b| b.reparent_window(hwnd, new_parent, rect));
+    }
+    old
 }
 
 // =====================================================================
