@@ -320,4 +320,11 @@ ok("def _screen_suffix" in lock and "0o1777" in lock,
 ok("Terminal libre" in (SCRIPTS / "winlux-sessions.sh").read_text(),
    "changer d'utilisateur : le second bureau évite le VT du premier")
 
+# ── xdg-open ~/Téléchargements ouvrait « e:///home/…/T%C3%A9l… » (introuvable) ──
+shell_app = SCRIPTS / "winlux-shell-app.sh"
+for uri, expected in (("file:///home/damien/T%C3%A9l%C3%A9chargements", "Z:\\home\\damien\\Téléchargements"),
+                      ("file:///tmp/Mes%20documents%20%231", "Z:\\tmp\\Mes documents #1")):
+    resolved = subprocess.run(["sh", str(shell_app), "--chemin", uri], capture_output=True).stdout
+    ok(resolved == expected.encode(), f"xdg-open sur un dossier : {uri} → {expected}")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
