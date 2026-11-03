@@ -22,7 +22,7 @@ The Winlux USB drive creator downloads the latest image, checks it and writes it
 The Winlux image is “hybrid”: any tool that copies a disk image to a USB drive will do, and Ventoy boots it too. On Linux, from the command line, replacing `/dev/sdX` with the drive (and certainly not with a disk):
 
 ```sh
-sudo dd if=winlux-live-v0.2.16.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.17.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 ## Boot the PC from the drive
