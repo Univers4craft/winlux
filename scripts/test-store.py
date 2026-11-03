@@ -11,6 +11,7 @@ import zipfile
 import os
 from pathlib import Path
 import struct
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,8 @@ esac
     mock(bindir, "apt-get", """printf 'apt-get %s\\n' "$*" >> "$LOG"
 for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac; done
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
+eval "echo 'pmstatus:abiword:90.0:Installed abiword (amd64)' >&$fd"
+printf 'LC_ALL=%s\\n' "$LC_ALL" >> "$LOG"
 """)
     mock(bindir, "id", "echo 0\n")
     # Élévation simulée : la CI a un sudo sans mot de passe dont le
@@ -355,4 +358,18 @@ esac
           "winlux-shell-app donne au Store un dossier propre au compte")
     ui = (project / "testexe/src/shell/store.rs").read_text()
     check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
+    # Messages d'apt traduits, jamais l'anglais brut d'APT::Status-Fd.
+    check("LC_ALL=C.UTF-8" in log.read_text(), "apt lancé en C.UTF-8 pour des messages prévisibles")
+    ns = runpy.run_path(str(store), run_name="store_test")
+    for lang, expected in (("fr", "abiword installé"), ("en", "abiword installed"),
+                           ("es", "abiword instalado"), ("de", "abiword installiert")):
+        ns["LANG"] = lang
+        apt_message = ns["apt_message"]
+        apt_message.__globals__["LANG"] = lang
+        check(apt_message("pmstatus", "Installed abiword (amd64)") == expected, f"message apt traduit ({lang})")
+        check(apt_message("pmstatus", "Unpacking abiword:amd64 (3.0.5-1)") != "Unpacking abiword:amd64 (3.0.5-1)",
+              f"décompression traduite ({lang})")
+        check(apt_message("dlstatus", "Retrieving file 1 of 3") == ns["T"][lang]["apt_download"], f"téléchargement ({lang})")
+        check(apt_message("pmstatus", "Quelque chose d'inconnu") == ns["T"][lang]["apt_working"], f"repli générique ({lang})")
+    check("Installed abiword" not in (run / "store-progress.txt").read_text(), "pas d'anglais brut dans le Store")
     print("Store : OK")
