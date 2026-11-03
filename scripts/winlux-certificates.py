@@ -27,6 +27,7 @@ ou un Wi-Fi d'entreprise pour une raison évitable.
   winlux-certificates remove NOM             (root) retire une autorité ajoutée
   winlux-certificates time auto on|off       (root) heure réglée automatiquement
   winlux-certificates time sync              (root) synchroniser maintenant
+  winlux-certificates time rtc               horloge matérielle (UTC) et écart avec le système
   winlux-certificates time-daemon            (root) réglage de l'heure en continu
   winlux-certificates check HÔTE             diagnostic d'une connexion sécurisée
   winlux-certificates sync-user              autorités ajoutées → navigateurs NSS du compte
@@ -326,6 +327,27 @@ def write_rtc(now=None):
         return False
     finally:
         os.close(descriptor)
+
+
+def read_rtc():
+    """Heure de l'horloge matérielle (RTC_RD_TIME), comme `hwclock --show`."""
+    import calendar
+    import fcntl
+    try:
+        descriptor = os.open(RTC_DEVICE, os.O_RDONLY)
+    except OSError as error:
+        return fail("no-rtc", str(error))
+    try:
+        data = fcntl.ioctl(descriptor, 0x80247009, bytes(36))   # _IOR('p', 0x09, struct rtc_time)
+    except OSError as error:
+        return fail("no-rtc", str(error))
+    finally:
+        os.close(descriptor)
+    sec, minute, hour, mday, mon, year = struct.unpack("9i", data)[:6]
+    epoch = calendar.timegm((year + 1900, mon + 1, mday, hour, minute, sec))
+    return done(rtc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch)),
+                system=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                difference=int(time.time() - epoch))
 
 
 def build_floor():
@@ -942,6 +964,8 @@ def main(argv):
         answer = set_time_auto(args[2] == "on")
     elif command == "time" and args[1:] == ["sync"]:
         answer = sync_once(apply=os.geteuid() == 0 and os.environ.get("WINLUX_CLOCK_NO_SET") != "1")
+    elif command == "time" and args[1:] == ["rtc"]:
+        answer = read_rtc()
     elif command == "time-daemon" and len(args) == 1:
         try: time_daemon()
         except KeyboardInterrupt: pass

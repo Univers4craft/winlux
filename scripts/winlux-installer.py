@@ -6170,6 +6170,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         if timezone:
             with open(f"{root_path}/etc/timezone", "w") as f:
                 f.write(timezone + "\n")
+            # Lisible par tous (Java, scripts, Paramètres) même sous umask 077.
+            os.chmod(f"{root_path}/etc/timezone", 0o644)
             if os.path.exists(f"{root_path}/usr/share/zoneinfo/{timezone}"):
                 localtime = f"{root_path}/etc/localtime"
                 if os.path.lexists(localtime):

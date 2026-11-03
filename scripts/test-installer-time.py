@@ -119,3 +119,11 @@ control = (ROOT / "scripts/winlux-control.sh").read_text(encoding="utf-8")
 line = next(line for line in control.splitlines() if "printf 'timezone=%s" in line)
 assert "Europe/Paris" not in line and "readlink /etc/localtime" in line and "UTC" in line, line
 print("winlux-control status : le fuseau réel (/etc/timezone, puis /etc/localtime, sinon UTC)")
+
+# /etc/timezone lisible par le compte (testeur VM : écrit en 0600 sous umask 077).
+assert 'os.chmod(f"{root_path}/etc/timezone", 0o644)' in source
+assert "chmod 644 /etc/timezone" in (ROOT / "scripts/winlux-first-boot.sh").read_text(encoding="utf-8")
+assert "chmod 644 /etc/timezone" in control
+assert "/bin/busybox chmod 644 /etc/timezone" in block.group(0)
+assert '"$root/etc/timezone"' in (ROOT / "scripts/winlux-network-perms.sh").read_text(encoding="utf-8")
+print("/etc/timezone toujours en 0644 (installateur, premier démarrage, Paramètres, init, réparation)")

@@ -323,6 +323,12 @@ request, data = calls[-1]
 moment = time.gmtime(1762196400)
 ok(request == 0x4024700a and struct.unpack("9i", data)[:6] == (moment.tm_sec, moment.tm_min, moment.tm_hour,
    moment.tm_mday, moment.tm_mon - 1, moment.tm_year - 1900), "RTC : RTC_SET_TIME, struct rtc_time en UTC")
+rtc_moment = time.gmtime(1420156800)       # 2015-01-02, la pile du portable
+fcntl.ioctl = lambda fd, request, data: struct.pack("9i", rtc_moment.tm_sec, rtc_moment.tm_min, rtc_moment.tm_hour,
+                                                     rtc_moment.tm_mday, rtc_moment.tm_mon - 1, rtc_moment.tm_year - 1900, 0, 0, 0)
+shown = tool["read_rtc"]()
+ok(shown.get("rtc") == "2015-01-02T00:00:00Z" and shown.get("difference", 0) > 10 * 365 * 86400,
+   f"time rtc : horloge matérielle lisible sans hwclock ({shown})")
 fcntl.ioctl = real_ioctl
 tool["write_rtc"].__globals__["RTC_DEVICE"] = str(work / "absente")
 ok(tool["write_rtc"]() is False, "RTC absente : pas d'erreur, juste « non »")

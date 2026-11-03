@@ -10,7 +10,8 @@
 #   absente ou illisible par polkitd : nmcli et le Wi-Fi répondaient
 #   « non autorisé ».
 # Ce script, lancé en root au démarrage puis par winlux-network-watch,
-# remet les deux en place. WINLUX_SYSTEM_ROOT sert aux tests.
+# remet les deux en place, ainsi que les droits de /etc/timezone,
+# /etc/hostname et /etc/default/locale. WINLUX_SYSTEM_ROOT sert aux tests.
 set -u
 root=${WINLUX_SYSTEM_ROOT:-}
 rule_source="$root/usr/share/winlux/native/network/50-winlux-network.rules"
@@ -27,6 +28,17 @@ if test -e "$resolv"; then
         *) chmod 644 "$target" 2>/dev/null && echo "resolv.conf rendu lisible : $target" ;;
     esac
 fi
+
+# Réglages système que le bureau lit sous le compte de l'utilisateur :
+# fuseau, nom de la machine, langue. Écrits en 0600 sous umask 077
+# (/etc/timezone illisible : Java, scripts et Paramètres voyaient UTC).
+for file in "$root/etc/timezone" "$root/etc/hostname" "$root/etc/default/locale"; do
+    test -f "$file" && ! test -L "$file" || continue
+    case "$(stat -c %a "$file" 2>/dev/null)" in
+        644|664|666|444) ;;
+        *) chmod 644 "$file" 2>/dev/null && echo "rendu lisible : $file" ;;
+    esac
+done
 
 # Règle polkit du réseau, posée et lisible par polkitd.
 if test -f "$rule_source"; then
