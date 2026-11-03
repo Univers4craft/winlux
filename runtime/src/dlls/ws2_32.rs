@@ -666,12 +666,14 @@ pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
     }
     let major = (requested & 0xff) as u8;
     let minor = (requested >> 8) as u8;
+    // Windows accepte toute version de 1.0 à 2.2 et répond la plus proche
+    // (OpenTTD demande 2.0) ; au-delà de 2.2, il propose 2.2.
     let version = if major > 2 || (major == 2 && minor >= 2) {
         0x0202
-    } else if major == 1 {
-        0x0101
+    } else if major >= 1 {
+        requested
     } else {
-        return 10092;
+        return 10092; // WSAVERNOTSUPPORTED
     };
     let mut out: WsaData = std::mem::zeroed();
     out.version = version;
@@ -3436,6 +3438,27 @@ mod tests {
             }
             assert_eq!(got, vec![(FD_CONNECT, 10061)]);
             libc::close(cli);
+        }
+    }
+
+    #[test]
+    fn winsock_startup_accepte_les_versions_1_0_a_2_2() {
+        let _wsa = serialise();
+        unsafe {
+            let mut data = [0u8; 408];
+            // OpenTTD : MAKEWORD(2, 0)
+            for (asked, got) in [
+                (0x0002u16, 0x0002u16),
+                (0x0102, 0x0102),
+                (0x0101, 0x0101),
+                (0x0303, 0x0202),
+            ] {
+                assert_eq!(wsa_startup(asked, data.as_mut_ptr()), 0, "{asked:#06x}");
+                let version = std::ptr::read_unaligned(data.as_ptr() as *const u16);
+                assert_eq!(version, got);
+                wsa_cleanup();
+            }
+            assert_eq!(wsa_startup(0x0000, data.as_mut_ptr()), 10092);
         }
     }
 

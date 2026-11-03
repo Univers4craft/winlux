@@ -23,6 +23,10 @@ extern "C" {
     fn SendMessageA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn GetParent(hwnd: Handle) -> Handle;
     fn IsWindowVisible(hwnd: Handle) -> i32;
+    fn SetWindowLongPtrA(hwnd: Handle, index: i32, value: isize) -> isize;
+    fn GetWindowLongPtrA(hwnd: Handle, index: i32) -> isize;
+    fn CallWindowProcA(proc_: isize, hwnd: Handle, msg: u32, wparam: usize, lparam: isize)
+        -> isize;
 }
 
 #[link(name = "kernel32", kind = "raw-dylib")]
@@ -72,6 +76,34 @@ static mut COMMANDS: u32 = 0;
 static mut HEIGHT_CHANGES: u32 = 0;
 static mut CREATE_OK: bool = false;
 static mut PANEL_CREATE_OK: bool = false;
+/// Sous-classement du champ de la barre d'adresse, comme CMyComboBoxEdit.
+static mut EDIT_ORIG: isize = 0;
+static mut EDIT_DEPTH: u32 = 0;
+static mut EDIT_MAX_DEPTH: u32 = 0;
+static mut END_EDITS: u32 = 0;
+static mut END_EDIT_TEXT: [u8; 64] = [0; 64];
+
+unsafe extern "win64" fn edit_subclass(
+    hwnd: Handle,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    EDIT_DEPTH += 1;
+    EDIT_MAX_DEPTH = EDIT_MAX_DEPTH.max(EDIT_DEPTH);
+    let orig = if GetWindowLongPtrA(hwnd, -21) == 0x7A {
+        EDIT_ORIG
+    } else {
+        0
+    };
+    let r = if orig == 0 || EDIT_DEPTH > 64 {
+        0
+    } else {
+        CallWindowProcA(orig, hwnd, msg, wparam, lparam)
+    };
+    EDIT_DEPTH -= 1;
+    r
+}
 
 #[repr(C)]
 struct TbButton {
@@ -222,6 +254,18 @@ unsafe extern "win64" fn panel_proc(hwnd: Handle, msg: u32, wparam: usize, lpara
             let ah = r.bottom - r.top;
             MoveWindow(ADDRESS, 0, 0, w, ah, 1);
             MoveWindow(LIST, 0, ah + 2, w, (h - ah - 2).max(1), 1);
+            0
+        }
+        WM_NOTIFY => {
+            let code = *((lparam as *const u8).add(16) as *const i32);
+            if code == -805 {
+                // CBEN_ENDEDITA : NMHDR, fChanged, iNewSelection, szText[260], iWhy
+                END_EDITS += 1;
+                let text = (lparam as *const u8).add(32);
+                for i in 0..63 {
+                    END_EDIT_TEXT[i] = *text.add(i);
+                }
+            }
             0
         }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
@@ -440,6 +484,42 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(
             &buf[..n] == b"C:\\Users\\Public",
             "CBEM_SETITEMA sur le champ"
+        );
+
+        // Champ de la barre d'adresse sous-classé comme dans 7-Zip, puis
+        // « \\ » tapé (AltGr+8 en AZERTY) et Entrée.
+        let edit = SendMessageA(ADDRESS, 0x0407, 0, 0) as Handle; // CBEM_GETEDITCONTROL
+        check!(!edit.is_null(), "CBEM_GETEDITCONTROL");
+        SetWindowLongPtrA(edit, -21, 0x7A);
+        EDIT_ORIG = SetWindowLongPtrA(edit, -4, edit_subclass as *const () as isize);
+        check!(EDIT_ORIG != 0, "sous-classement du champ");
+        SetFocus(edit);
+        SendMessageA(edit, 0x000C, 0, c"C:".as_ptr() as isize);
+        SendMessageA(edit, 0x0100, 0x23, 0); // VK_END
+        SendMessageA(edit, 0x0100, 0x11, 0); // WM_KEYDOWN VK_CONTROL
+        SendMessageA(edit, 0x0100, 0x12, 0x2000_0000); // VK_MENU
+        SendMessageA(edit, 0x0100, 0x38, 0x2000_0000); // '8'
+        SendMessageA(edit, 0x0102, b'\\' as usize, 0x2000_0000); // WM_CHAR
+        SendMessageA(edit, 0x0101, 0x38, 0); // WM_KEYUP
+        SendMessageA(edit, 0x0101, 0x12, 0);
+        SendMessageA(edit, 0x0101, 0x11, 0);
+        for c in b"Users" {
+            SendMessageA(edit, 0x0102, *c as usize, 0);
+        }
+        check!(
+            EDIT_MAX_DEPTH <= 4,
+            "pas de recursion dans le champ sous-classe"
+        );
+        let n = SendMessageA(edit, 0x000D, 64, buf.as_mut_ptr() as isize) as usize;
+        check!(
+            &buf[..n] == b"C:\\Users",
+            "texte tape dans la barre d'adresse"
+        );
+        SendMessageA(edit, 0x0100, 0x0D, 0); // VK_RETURN
+        SendMessageA(edit, 0x0102, 0x0D, 0);
+        check!(
+            END_EDITS == 1 && &END_EDIT_TEXT[..9] == b"C:\\Users\0",
+            "CBEN_ENDEDIT avec le chemin tape"
         );
 
         // CreateToolbarEx (barre d'en-tête d'un panneau de 7-Zip) : boutons

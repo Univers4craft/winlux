@@ -111,6 +111,9 @@ struct LvRow {
     texts: Vec<String>,
     param: isize,
     state: u32,
+    /// Bit k : le texte de la colonne k est fourni à la demande
+    /// (LPSTR_TEXTCALLBACK, ou liste virtuelle LVS_OWNERDATA).
+    callback: u64,
 }
 
 fn common() -> &'static Mutex<HashMap<usize, CommonState>> {
@@ -959,6 +962,12 @@ const LVIS_SELECTED: u32 = 0x2;
 const LVS_REPORT: u32 = 0x1;
 const LVS_SINGLESEL: u32 = 0x4;
 const LVS_NOCOLUMNHEADER: u32 = 0x4000;
+const LVS_OWNERDATA: u32 = 0x1000;
+const LPSTR_TEXTCALLBACK: usize = usize::MAX;
+const LVN_GETDISPINFOA: i32 = -150;
+const LVN_GETDISPINFOW: i32 = -177;
+/// Nombre de lignes maximal d'une liste virtuelle tenu en mémoire.
+const LV_VIRTUAL_MAX: usize = 1 << 20;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -999,6 +1008,64 @@ struct NmListView {
 
 fn report(hwnd: usize) -> bool {
     style(hwnd) & 0x3 == LVS_REPORT
+}
+
+fn callback_bit(sub: usize) -> u64 {
+    if sub < 64 {
+        1 << sub
+    } else {
+        0
+    }
+}
+
+/// Texte d'une cellule. Quand le programme a donné LPSTR_TEXTCALLBACK, ou
+/// pour une liste virtuelle (LVS_OWNERDATA), le texte est demandé au parent
+/// par `LVN_GETDISPINFO`, comme le fait comctl32.
+fn lv_cell_text(hwnd: usize, item: usize, sub: usize, row: &LvRow) -> String {
+    if row.callback & callback_bit(sub) == 0 {
+        return row.texts.get(sub).cloned().unwrap_or_default();
+    }
+    lv_dispinfo_text(hwnd, item, sub, row.param)
+}
+
+fn lv_dispinfo_text(hwnd: usize, item: usize, sub: usize, param: isize) -> String {
+    #[repr(C)]
+    struct DispInfo {
+        hdr: NmHdr,
+        item: LvItem,
+        // iIndent, iGroupId, cColumns, puColumns, piColFmt, iGroup
+        tail: [u8; 48],
+    }
+    let wide = snapshot(hwnd).is_none_or(|c| c.wide);
+    let mut buf = [0u16; 520];
+    let mut nm = DispInfo {
+        hdr: NmHdr {
+            hwnd_from: 0,
+            id_from: 0,
+            code: 0,
+        },
+        item: LvItem {
+            mask: LVIF_TEXT,
+            item: item as i32,
+            sub_item: sub as i32,
+            text: buf.as_mut_ptr() as usize,
+            text_max: if wide { 260 } else { 520 },
+            param,
+            ..Default::default()
+        },
+        tail: [0; 48],
+    };
+    let code = if wide {
+        LVN_GETDISPINFOW
+    } else {
+        LVN_GETDISPINFOA
+    };
+    notify_struct(hwnd, code, &mut nm);
+    if nm.item.mask & LVIF_TEXT == 0 {
+        return String::new();
+    }
+    // Le programme peut remplir notre tampon ou pointer vers le sien.
+    unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default()
 }
 
 fn header_h(hwnd: usize, c: &Ctl) -> i32 {
@@ -1081,7 +1148,8 @@ fn paint_listview(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         }
         let mut x = r.left;
         for (i, (_, w)) in columns.iter().enumerate() {
-            let text = row.texts.get(i).map(String::as_str).unwrap_or("");
+            let text = lv_cell_text(hwnd, k, i, row);
+            let text = text.as_str();
             let cell = Rect {
                 left: x + 10,
                 right: x + w - 6,
@@ -1195,11 +1263,15 @@ unsafe fn lv_set_item(hwnd: usize, lp: isize, wide: bool, insert: bool) -> isize
     } else {
         None
     };
+    let is_callback = it.mask & LVIF_TEXT != 0 && it.text == LPSTR_TEXTCALLBACK;
     let r = with_common(hwnd, |s| {
         if insert {
             let at = (it.item.max(0) as usize).min(s.rows.len());
             let mut row = LvRow::default();
             row.texts.push(text.clone().unwrap_or_default());
+            if is_callback {
+                row.callback = 1;
+            }
             if it.mask & LVIF_PARAM != 0 {
                 row.param = it.param;
             }
@@ -1219,12 +1291,15 @@ unsafe fn lv_set_item(hwnd: usize, lp: isize, wide: bool, insert: bool) -> isize
         else {
             return -1;
         };
-        if let Some(t) = text.clone() {
-            let k = it.sub_item.max(0) as usize;
+        let k = it.sub_item.max(0) as usize;
+        if is_callback {
+            row.callback |= callback_bit(k);
+        } else if let Some(t) = text.clone() {
             if row.texts.len() <= k {
                 row.texts.resize(k + 1, String::new());
             }
             row.texts[k] = t;
+            row.callback &= !callback_bit(k);
         }
         if it.mask & LVIF_PARAM != 0 && it.sub_item == 0 {
             row.param = it.param;
@@ -1248,12 +1323,13 @@ unsafe fn lv_get_item(hwnd: usize, lp: isize, wide: bool, text_only: Option<usiz
     let Some(row) = s.rows.get(idx) else {
         return 0;
     };
-    let text = row
-        .texts
-        .get(it.sub_item.max(0) as usize)
-        .cloned()
-        .unwrap_or_default();
-    if text_only.is_some() || it.mask & LVIF_TEXT != 0 {
+    let wants_text = text_only.is_some() || it.mask & LVIF_TEXT != 0;
+    let text = if wants_text {
+        lv_cell_text(hwnd, idx, it.sub_item.max(0) as usize, row)
+    } else {
+        String::new()
+    };
+    if wants_text {
         write_text_ptr(it.text, it.text_max, &text, wide);
         if text_only.is_some() {
             return text.chars().count() as isize;
@@ -1506,7 +1582,27 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
                 })
                 .map_or(-1, |(i, _)| i as isize)
         }
-        0x1036 | 0x1037 | 0x1003 | 0x1002 | 0x1001 | 0x1024 | 0x1026 | 0x102F | 0x1015 => 0,
+        0x102F => {
+            // SETITEMCOUNT : nombre de lignes d'une liste virtuelle, simple
+            // réservation sinon.
+            if style(hwnd) & LVS_OWNERDATA != 0 {
+                let n = wp.min(LV_VIRTUAL_MAX);
+                with_common(hwnd, |s| {
+                    s.rows.resize_with(n, || LvRow {
+                        callback: u64::MAX,
+                        ..Default::default()
+                    });
+                    let max_top = (n as i32 - 1).max(0);
+                    s.lv_top = s.lv_top.clamp(0, max_top);
+                    if s.lv_focus >= n as i32 {
+                        s.lv_focus = -1;
+                    }
+                });
+                invalidate(hwnd);
+            }
+            1
+        }
+        0x1036 | 0x1037 | 0x1003 | 0x1002 | 0x1001 | 0x1024 | 0x1026 | 0x1015 => 0,
         0x101F => 0, // GETHEADER : pas de contrôle séparé
         0x1027 => common_snapshot(hwnd).lv_top as isize, // GETTOPINDEX
         0x1028 => lv_rows_visible(hwnd) as isize, // GETCOUNTPERPAGE
