@@ -5,7 +5,7 @@ description: Holen Sie sich das Installationsabbild der neuesten Version und den
 
 {{download}}
 
-Die Dateien kommen direkt von der Seite der veröffentlichten Versionen des Projekts auf GitHub. Das Abbild heißt etwa `winlux-live-v0.2.17.iso`; es ist rund 1,2 GB groß.
+Die Dateien kommen direkt von der Seite der veröffentlichten Versionen des Projekts auf GitHub. Das Abbild heißt etwa `winlux-live-v0.2.18.iso`; es ist rund 1,3 GB groß.
 
 ## Was Sie brauchen
 
@@ -46,7 +46,7 @@ Starten Sie die virtuelle Maschine von der ISO-Datei und folgen Sie dann [der In
 Der USB-Stick-Ersteller prüft das Abbild selbst. Wenn Sie es anders verwenden, vergleichen Sie seine SHA-256-Prüfsumme mit der daneben veröffentlichten `.sha256`-Datei. Unter Linux:
 
 ```sh
-sha256sum -c winlux-live-v0.2.17.iso.sha256
+sha256sum -c winlux-live-v0.2.18.iso.sha256
 ```
 
 Die beiden Prüfsummen müssen übereinstimmen; andernfalls laden Sie das Abbild erneut herunter.
