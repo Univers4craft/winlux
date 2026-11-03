@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const ERROR_FILE_NOT_FOUND: u32 = 2;
+/// Fin d'une énumération : FindNextFile renvoie 0 avec ce code (std::filesystem
+/// le compare exactement, tout autre code est une erreur).
+const ERROR_NO_MORE_FILES: u32 = 18;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const ERROR_INVALID_PARAMETER: u32 = 87;
 #[cfg(test)]
@@ -344,7 +347,7 @@ pub unsafe extern "win64" fn find_next_file_a(handle: usize, data: *mut Win32Fin
         return 0;
     };
     let Some(entry) = search.entries.get(search.next).cloned() else {
-        error(ERROR_FILE_NOT_FOUND);
+        error(ERROR_NO_MORE_FILES);
         return 0;
     };
     search.next += 1;
@@ -362,7 +365,7 @@ pub unsafe extern "win64" fn find_next_file_w(handle: usize, data: *mut Win32Fin
         return 0;
     };
     let Some(entry) = search.entries.get(search.next).cloned() else {
-        error(ERROR_FILE_NOT_FOUND);
+        error(ERROR_NO_MORE_FILES);
         return 0;
     };
     search.next += 1;
