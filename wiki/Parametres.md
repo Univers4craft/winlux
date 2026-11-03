@@ -47,8 +47,8 @@
 | 33 | **Comptes** | Comptes locaux (ajout, mot de passe, rôle). Page native seulement. |
 | 34 | **Matériel et pilotes** | Diagnostic du matériel et pilotes recommandés. Page native seulement. |
 | 35 | **Wi-Fi** | Réseaux à portée (nom, signal, sécurité), clé de sécurité dans une boîte avec « Afficher les caractères » et clavier tactile intégré, bouton WPS de la box, réseau caché, réseaux enregistrés (oublier, reconnexion automatique au démarrage), mode avion. Les erreurs sont dites en clair (clé refusée, hors de portée, pas d’adresse…). Passe par `winlux-wifi` en root via le relais `winlux-root` ; masquée sans carte Wi-Fi. Page native seulement. |
-
 | 37 | **Appareils mobiles** | Téléphone connecté : téléphones Android associés avec l'application KDE Connect, interrupteur général, notifications, SMS et réception de fichiers par téléphone, Faire sonner, Dissocier ([docs/TELEPHONE.md](https://github.com/Univers4craft/winlux/blob/master/docs/TELEPHONE.md)). Masquée tant qu'aucun téléphone n'est associé. Page native seulement. |
+
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 
 ## Sous le capot
