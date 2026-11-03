@@ -177,14 +177,42 @@ struct ApiLog {
     written: u64,
 }
 
+/// Nom du programme Windows pour le fichier de journal (« claude »), et non
+/// celui de l'exécutable Winlux qui le porte.
+fn api_log_program() -> String {
+    let stem = |n: &str| {
+        let base = n.rsplit(['/', '\\']).next().unwrap_or(n);
+        let lower = base.to_ascii_lowercase();
+        lower
+            .strip_suffix(".exe")
+            .map(|_| base[..base.len() - 4].to_string())
+    };
+    let from_modules = crate::loader::MODULES
+        .try_lock()
+        .ok()
+        .and_then(|m| m.iter().find_map(|m| stem(&m.name)));
+    from_modules
+        .or_else(|| std::env::args().skip(1).find_map(|a| stem(&a)))
+        .filter(|n| !n.is_empty())
+        .map(|n| {
+            n.chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || "-_.".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| "winlux".into())
+}
+
 fn open_api_log() -> Option<ApiLog> {
     let dir = api_log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     prune_api_logs(&dir, API_LOG_DIR_MAX);
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "winlux".into());
+    let exe = api_log_program();
     let path = dir.join(format!("{exe}-{}.log", std::process::id()));
     let file = std::fs::File::create(&path).ok()?;
     eprintln!("winlux[api] journal des appels : {}", path.display());
