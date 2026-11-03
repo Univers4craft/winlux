@@ -23,3 +23,9 @@ for path in sorted((Path.home()/".config/autostart").glob("*.desktop")):
 if shutil.which("winlux-report"):
     try:Gio.Subprocess.new(["winlux-report","--system"],Gio.SubprocessFlags.NONE)
     except GLib.Error as error:print(f"winlux-report: {error}")
+
+# Certificats d'entreprise ou d'école ajoutés dans Paramètres : aussi dans la
+# base NSS du compte (Chrome, Edge, Brave…), Firefox les a par sa politique.
+if shutil.which("winlux-certificates"):
+    try:Gio.Subprocess.new(["winlux-certificates","sync-user"],Gio.SubprocessFlags.STDOUT_SILENCE)
+    except GLib.Error as error:print(f"winlux-certificates: {error}")

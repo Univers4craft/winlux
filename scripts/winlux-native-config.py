@@ -407,10 +407,22 @@ def migrate_openbox(openbox_config, default_rc):
                 if default_rc.is_file():
                     defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
                     if defaults is not None:
+                        # Tout raccourci livré que ce compte n'a encore jamais reçu est
+                        # ajouté (touches de luminosité…) ; un raccourci déjà proposé puis
+                        # supprimé par l'utilisateur ne revient pas.
+                        offered_file = openbox_config.with_name("winlux-raccourcis-proposes.txt")
+                        try: offered = set(offered_file.read_text().split())
+                        except OSError: offered = set()
                         for binding in defaults:
-                            if binding.get("key") in ADDED_KEYS and binding.get("key") not in keys:
+                            key = binding.get("key")
+                            if key and key not in keys and (key in ADDED_KEYS or key not in offered):
                                 keyboard.append(ET.fromstring(ET.tostring(binding)))
+                                keys.add(key)
                                 changed = True
+                        shipped_keys = {binding.get("key") for binding in defaults if binding.get("key")}
+                        if not shipped_keys <= offered:
+                            try: offered_file.write_text("\n".join(sorted(offered | shipped_keys)) + "\n")
+                            except OSError: pass
                         shipped = {binding.get("key"): binding for binding in defaults if binding.get("key") in REPLACED_KEYS}
                         for binding in list(keyboard):
                             actions = {action.get("name") for action in binding.findall(f"{{{namespace}}}action")}

@@ -22,7 +22,7 @@ Le créateur de clé USB de Winlux télécharge la dernière image, la vérifie 
 L'image de Winlux est « hybride » : n'importe quel outil qui copie une image disque sur une clé USB convient, et Ventoy la démarre aussi. Sur Linux, en ligne de commande, en remplaçant `/dev/sdX` par la clé (et surtout pas par un disque) :
 
 ```sh
-sudo dd if=winlux-live-v0.2.17.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.18.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 ## Démarrer le PC sur la clé

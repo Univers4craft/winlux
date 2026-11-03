@@ -299,7 +299,9 @@ def quick_hardware():
     """Tuiles et curseurs à proposer : jamais grisés, cachés sans matériel."""
     return {"wifi": _present("sys/class/ieee80211") or _present("sys/class/net", "*/wireless"),
             "bluetooth": _present("sys/class/bluetooth") and bool(shutil.which("bluetoothctl")),
-            "backlight": _present("sys/class/backlight") and bool(shutil.which("brightnessctl")),
+            # Luminosité : rétroéclairage, écran DDC/CI ou rampes gamma ;
+            # winlux-brightness dit lequel (method=none : curseur caché).
+            "backlight": brightness_tool() is not None,
             "battery": _present("sys/class/power_supply", "BAT*/capacity")}
 
 
@@ -332,14 +334,23 @@ def battery_icon(level, status):
         "battery-low-symbolic" if level >= 20 else "battery-caution-symbolic"
 
 
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if shutil.which("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return [sys.executable, str(script)] if script.is_file() else None
+
+
 def brightness():
-    """Luminosité en % (brightnessctl -m : nom,classe,actuel,pourcentage,max)."""
-    output = _run(["brightnessctl", "-m"]) or ""
-    fields = output.strip().splitlines()[0].split(",") if output.strip() else []
+    """Luminosité en %, None sans aucun contrôle (le curseur se cache)."""
+    tool = brightness_tool()
+    output = _run(tool + ["get"], timeout=10) if tool else ""
     try:
-        return max(0, min(100, int(fields[3].rstrip("%"))))
+        state = json.loads((output or "").strip().splitlines()[-1])
     except (IndexError, ValueError):
         return None
+    if state.get("method") in (None, "none") or state.get("percent") is None: return None
+    return max(0, min(100, int(state["percent"])))
 
 
 def quick_state(hardware, modes_module=None):
@@ -857,16 +868,20 @@ class Popup(Gtk.Application):
         self.tile_grid=Gtk.Grid(column_spacing=10,row_spacing=12,column_homogeneous=True)
         body.pack_start(self.tile_grid,False,False,0)
         self.tiles={};self.tile_layout=None;self.quick={};self.quick_busy=False;self.quick_stamp=0
-        # Luminosité : seulement avec un rétroéclairage pilotable (portable).
+        # Luminosité : seulement avec un contrôle réel (rétroéclairage, DDC/CI, gamma).
         self.light_row=Gtk.Box(spacing=8)
         self.light_row.pack_start(Gtk.Image.new_from_icon_name("display-brightness-symbolic",Gtk.IconSize.BUTTON),False,False,6)
-        self.light=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,1,100,1)
+        self.light=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,5,100,1)
         self.light.set_draw_value(False);self.light.set_hexpand(True)
         self.light.set_tooltip_text(_t("Luminosité"))
         self.light.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
         self.light.connect("value-changed",self.change_brightness)
         self.light_timer=0
         self.light_row.pack_start(self.light,True,True,0)
+        # Valeur affichée à droite, comme le volume.
+        self.light_value=self.label("",width_chars=4,xalign=1)
+        self.light_value.set_name("winlux-brightness-value")
+        self.light_row.pack_start(self.light_value,False,False,0)
         self.light_row.set_no_show_all(True)
         body.pack_start(self.light_row,False,False,4)
         # Volume : même réglage que le panneau Son, flèche vers le mélangeur.
@@ -1013,14 +1028,16 @@ class Popup(Gtk.Application):
             subprocess.Popen(["winlux-shell-app","settings","22"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def change_brightness(self,scale):
+        self.light_value.set_text(f"{round(scale.get_value())}")
         if self.updating:return
         if self.light_timer:GLib.source_remove(self.light_timer)
         self.light_timer=GLib.timeout_add(120,self.set_brightness)
 
     def set_brightness(self):
         self.light_timer=0
-        subprocess.Popen(["brightnessctl","-q","set",f"{round(self.light.get_value())}%"],
-                         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        tool=brightness_tool()
+        if tool:subprocess.Popen(tool+["set",str(round(self.light.get_value()))],
+                                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         return False
 
     def poll_quick(self,force=False):
@@ -1042,7 +1059,7 @@ class Popup(Gtk.Application):
         level=state.get("brightness")
         reveal(self.light_row,level is not None)
         if level is not None and not self.light_timer and not self.light.get_state_flags() & Gtk.StateFlags.ACTIVE:
-            self.updating=True;self.light.set_value(max(1,level));self.updating=False
+            self.updating=True;self.light.set_value(max(5,level));self.light_value.set_text(f"{max(5,level)}");self.updating=False
         return False
 
     def refresh_quick(self):

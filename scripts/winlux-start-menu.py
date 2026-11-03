@@ -73,6 +73,9 @@ _TR = {
     'Système et alimentation': ('System and power', 'Sistema y energía', 'System und Energie'),
     'Applications et démarrage': ('Apps and startup', 'Aplicaciones e inicio', 'Apps und Autostart'),
     'Réseau Wi-Fi': ('Wi-Fi network', 'Red Wi-Fi', 'WLAN-Netzwerk'),
+    'Luminosité écran': ('Screen brightness', 'Brillo de la pantalla', 'Bildschirmhelligkeit'),
+    'Certificats sécurité': ('Security certificates', 'Certificados de seguridad', 'Sicherheitszertifikate'),
+    'Date et heure': ('Date & time', 'Fecha y hora', 'Datum und Uhrzeit'),
     'Bluetooth et appareils': ('Bluetooth and devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Son': ('Sound', 'Sonido', 'Sound'),
     'Clavier tactile': ('Touch keyboard', 'Teclado táctil', 'Bildschirmtastatur'),
@@ -137,7 +140,8 @@ DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.d
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 35), (_t("Bluetooth et appareils"), 22),
             (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
             (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11), (_t("Boutiques de logiciels"), 1),
-            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29)]
+            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29),
+            (_t("Luminosité écran"), 8), (_t("Certificats sécurité"), 36), (_t("Date et heure"), 14)]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
 # les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
 # recherche trouve les pages ci-dessus).

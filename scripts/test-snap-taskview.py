@@ -89,6 +89,17 @@ with tempfile.TemporaryDirectory() as folder:
     before = user.read_bytes()
     namespace_globals["migrate_openbox"](user, shipped)
     assert user.read_bytes() == before, "deuxième passage sans changement"
+    # Compte créé avant les touches de luminosité : elles arrivent à la session suivante.
+    assert migrated.get("XF86MonBrightnessUp") == [("Execute", "winlux-brightness key up")] \
+        or bindings(user).get("XF86MonBrightnessUp") == [("Execute", "winlux-brightness key up")], "touches de luminosité ajoutées"
+    # Supprimé ensuite par l'utilisateur : ne revient pas.
+    tree = ET.parse(user)
+    keyboard = tree.getroot().find(f"{namespace}keyboard")
+    for binding in list(keyboard):
+        if binding.get("key") == "XF86MonBrightnessDown": keyboard.remove(binding)
+    tree.write(user)
+    namespace_globals["migrate_openbox"](user, shipped)
+    assert "XF86MonBrightnessDown" not in bindings(user), "raccourci supprimé par l'utilisateur rétabli"
 stage = (HERE / "stage-desktop-components.sh").read_text()
 assert "'winlux-snap.py:winlux-snap'" in stage and "'winlux-taskview.py:winlux-taskview'" in stage
 print("ancrage et vue des tâches : OK")

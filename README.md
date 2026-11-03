@@ -75,8 +75,8 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 | | |
 |---|---|
-| **Dernière version publiée** | [**v0.2.16**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.16) (3 novembre 2026) : démarrage UEFI 32 bits (tablettes Atom), clavier visuel pour les mots de passe, Store et boutiques par compte, Explorateur à la place de Thunar, 7-Zip et OpenTTD. |
-| **Version en préparation** | **v0.2.17** : page Wi-Fi avec saisie de la clé et WPS, firmwares du son et du Wi-Fi chargés sur les vrais PC, menu de démarrage utilisable au clavier, clavier tactile dans l'installateur, Claude pour Windows, matériel détaillé dans Performances et À propos. |
+| **Dernière version publiée** | [**v0.2.17**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.17) (3 novembre 2026) : page Wi-Fi avec saisie de la clé et WPS, firmwares du son et du Wi-Fi chargés sur les vrais PC, menu de démarrage utilisable au clavier, clavier tactile dans l'installateur, matériel détaillé dans Performances et À propos. |
+| **Version en préparation** | **v0.2.18** : Wi-Fi WPA2/WPA3 et Entreprise qui se connecte vraiment, réseau du compte réparé, 3 581 pilotes de plus pour les vrais PC, rotation des tablettes, clé live qui démarre toujours son live, redémarrage après installation jamais bloqué, su et sudo. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |

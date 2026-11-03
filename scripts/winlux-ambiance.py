@@ -24,7 +24,8 @@ Aube » le jour et « Winlux Nuit » le soir. Il passe par winlux-personalize.
                                       FROM HH:MM, TO HH:MM, STRENGTH 0-100,
                                       THEME_AUTO on|off, WALLPAPER fixed|slideshow|daynight,
                                       SLIDE_FOLDER DOSSIER, SLIDE_MINUTES 1|10|30|60|360|1440,
-                                      SLIDE_SHUFFLE on|off
+                                      SLIDE_SHUFFLE on|off,
+                                      DIM 10-100 (luminosité logicielle)
     winlux-ambiance next              image suivante du diaporama
     winlux-ambiance toggle            active ou coupe l'éclairage nocturne
     winlux-ambiance apply             applique tout de suite l'état voulu
@@ -47,7 +48,8 @@ import time
 DEFAULTS = {"NIGHTLIGHT": "off", "SCHEDULE": "off", "FROM": "21:00", "TO": "07:00",
             "STRENGTH": "50", "STAMP": "",
             "THEME_AUTO": "off", "THEME_STAMP": "", "WALLPAPER": "fixed", "WALL_STAMP": "",
-            "SLIDE_FOLDER": "", "SLIDE_MINUTES": "30", "SLIDE_SHUFFLE": "off", "SLIDE_INDEX": "-1", "SLIDE_NEXT": "0"}
+            "SLIDE_FOLDER": "", "SLIDE_MINUTES": "30", "SLIDE_SHUFFLE": "off", "SLIDE_INDEX": "-1", "SLIDE_NEXT": "0",
+            "DIM": "100"}
 # Clés tenues par le démon, pas par l'utilisateur.
 INTERNAL = {"STAMP", "THEME_STAMP", "WALL_STAMP", "SLIDE_INDEX", "SLIDE_NEXT"}
 SLIDE_MINUTES = ("1", "10", "30", "60", "360", "1440")
@@ -106,6 +108,12 @@ def validate(key, value):
         try: number = int(value)
         except ValueError: return None
         return str(min(100, max(0, number)))
+    if key == "DIM":
+        # Luminosité logicielle (winlux-brightness) : écran sans rétroéclairage
+        # pilotable. Jamais sous 10 %, l'écran resterait lisible.
+        try: number = int(value)
+        except ValueError: return None
+        return str(min(100, max(10, number)))
     if key in ("THEME_AUTO", "SLIDE_SHUFFLE"): return value if value in ("on", "off") else None
     if key == "WALLPAPER": return value if value in ("fixed", "slideshow", "daynight") else None
     if key == "SLIDE_MINUTES": return value if value in SLIDE_MINUTES else None
@@ -461,17 +469,24 @@ def status_lines(values, moment, output):
             f"sun_known={int(real)}", f"kelvin={target_kelvin(values)}",
             f"theme_auto={values['THEME_AUTO']}", f"wallpaper={values['WALLPAPER']}",
             f"slide_folder={values['SLIDE_FOLDER']}", f"slide_minutes={values['SLIDE_MINUTES']}",
-            f"slide_shuffle={values['SLIDE_SHUFFLE']}"]
+            f"slide_shuffle={values['SLIDE_SHUFFLE']}", f"dim={dim_percent(values)}"]
+
+
+def dim_percent(values):
+    try: return min(100, max(10, int(values.get("DIM", "100"))))
+    except ValueError: return 100
 
 
 def apply_now(values, output, previous=None, steps=1):
-    """Applique la couleur voulue, en fondu depuis `previous` (kelvins)."""
+    """Applique la couleur voulue, en fondu depuis `previous` (kelvins), et la
+    luminosité logicielle (DIM) par-dessus."""
     if output is None or not output.supported(): return None
     target = target_kelvin(values)
     start = previous if previous is not None else target
+    dim = dim_percent(values) / 100
     for step in range(1, max(1, steps) + 1):
         kelvin = start + (target - start) * step / max(1, steps)
-        output.apply(kelvin_rgb(kelvin))
+        output.apply(tuple(channel * dim for channel in kelvin_rgb(kelvin)))
         if step < steps: time.sleep(0.05)
     return target
 
@@ -479,6 +494,7 @@ def apply_now(values, output, previous=None, steps=1):
 def daemon():
     output = screens()
     current = None
+    dim = 100
     last_full = 0.0
     while True:
         values = load()
@@ -492,11 +508,15 @@ def daemon():
         if output is None:
             output = screens()
         target = target_kelvin(values)
-        # Rampe réécrite quand la couleur change, et chaque minute la nuit (écran
-        # rebranché). De jour, sans changement, les rampes de l'écran ne sont pas touchées.
-        if current is None and target == DAY_KELVIN:
+        wanted_dim = dim_percent(values)
+        # Rampe réécrite quand la couleur change, et chaque minute la nuit ou
+        # écran assombri (écran rebranché). De jour, à pleine luminosité et sans
+        # changement, les rampes de l'écran ne sont pas touchées.
+        if current is None and target == DAY_KELVIN and wanted_dim == 100:
             current = target
-        elif output is not None and (target != current or (target != DAY_KELVIN and time.monotonic() - last_full > 60)):
+        elif output is not None and (target != current or wanted_dim != dim or
+                                     ((target != DAY_KELVIN or wanted_dim != 100) and time.monotonic() - last_full > 60)):
+            dim = wanted_dim
             try:
                 current = apply_now(values, output, current, steps=20 if current not in (None, target) else 1)
             except OSError:

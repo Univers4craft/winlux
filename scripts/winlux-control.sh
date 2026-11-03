@@ -556,8 +556,11 @@ perform() {
             winlux --power set "${action#power-}" next ;;
         power-lid) winlux --power set lid next ;;
         power-button) winlux --power set button next ;;
-        power-brightness-up) winlux --power set brightness + ;;
-        power-brightness-down) winlux --power set brightness - ;;
+        # Même chemin que les réglages rapides et les touches (winlux-brightness).
+        power-brightness-up)
+            if have winlux-brightness; then winlux-brightness set +10 --osd >/dev/null; else winlux --power set brightness +; fi ;;
+        power-brightness-down)
+            if have winlux-brightness; then winlux-brightness set -10 --osd >/dev/null; else winlux --power set brightness -; fi ;;
         power-suspend) winlux --power suspend ;;
         power-hibernate) winlux --power hibernate ;;
         power-hibernate-setup) winlux --power hibernate-setup ;;
