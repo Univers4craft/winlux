@@ -311,15 +311,16 @@ unsafe extern "win64" fn K32GetPerformanceInfo(info: *mut u8, cb: u32) -> i32 {
         page as usize,                     // PageSize
     ];
     std::ptr::write_bytes(info, 0, 104);
-    *(info as *mut u32) = 104;
+    // Le tampon de l'appli n'est pas forcément aligné : écritures non alignées.
+    (info as *mut u32).write_unaligned(104);
     let p = info.add(8) as *mut usize;
     for (i, v) in vals.iter().enumerate() {
-        *p.add(i) = *v;
+        p.add(i).write_unaligned(*v);
     }
     let counts = info.add(88) as *mut u32;
-    *counts = 0; // HandleCount
-    *counts.add(1) = 1; // ProcessCount
-    *counts.add(2) = si.procs as u32; // ThreadCount
+    counts.write_unaligned(0); // HandleCount
+    counts.add(1).write_unaligned(1); // ProcessCount
+    counts.add(2).write_unaligned(si.procs as u32); // ThreadCount
     1
 }
 
@@ -1144,7 +1145,7 @@ mod tests {
         unsafe {
             let mut info = [0u8; 104];
             assert_eq!(K32GetPerformanceInfo(info.as_mut_ptr(), 104), 1);
-            let page = *(info.as_ptr().add(8 + 9 * 8) as *const usize);
+            let page = (info.as_ptr().add(8 + 9 * 8) as *const usize).read_unaligned();
             assert_eq!(page, 4096);
             let local = 7u64;
             let mut q = [&local as *const u64 as usize, 99usize];
