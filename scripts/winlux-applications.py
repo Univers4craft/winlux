@@ -734,6 +734,11 @@ def desktop_shortcuts(home=None):
     if lines != hidden:
         if lines: save(hidden_file, "\n".join(lines) + "\n")
         elif hidden_file.is_file(): hidden_file.unlink()
+        # A .lnk already on screen: a « changed » event makes xfdesktop query it
+        # again and drop it now that .hidden lists it.
+        for name in wanted - set(hidden):
+            try: os.utime(desk / name)
+            except OSError: pass
     STATE.mkdir(parents=True, exist_ok=True)
     save(ours_file, json.dumps(sorted(wanted)))
 

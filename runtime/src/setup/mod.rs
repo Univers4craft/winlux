@@ -473,6 +473,7 @@ impl Installer {
             return Ok(());
         }
         let bytes = crate::msi::shortcut_bytes(target, args, workdir, desc);
+        hide_desktop_link(link);
         self.write_file(link, &bytes)?;
         Ok(())
     }
@@ -787,6 +788,35 @@ fn refresh_launchers() {
             .stderr(std::process::Stdio::null())
             .status();
     }
+}
+
+/// Raccourci posé sur le Bureau : son nom est inscrit dans `.hidden` AVANT
+/// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
+/// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
+/// winlux-applications pose ensuite le lanceur « Claude » à sa place.
+fn hide_desktop_link(link: &str) {
+    let desktop = Folders::desktop();
+    let Some((dir, name)) = link.rsplit_once('\\') else {
+        return;
+    };
+    if !dir.eq_ignore_ascii_case(&desktop) || !name.to_ascii_lowercase().ends_with(".lnk") {
+        return;
+    }
+    let path = crate::paths::to_linux(&format!("{desktop}\\.hidden"));
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if current.lines().any(|l| l == name) {
+        return;
+    }
+    let mut text = current;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(name);
+    text.push('\n');
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, text);
 }
 
 /// Lit un argument chemin (Linux existant ou Windows).
