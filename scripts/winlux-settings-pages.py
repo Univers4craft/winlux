@@ -1939,8 +1939,20 @@ class ExtraPages:
         self.body.pack_start(self.programs_box, False, False, 0)
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
+        self.program_cards = {}
         for exe, name in programs:
             self.program_card(module, exe, name)
+        GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
+
+    def forget_uninstalled(self, programs_box):
+        """Un programme désinstallé (fenêtre « Applications installées ») disparaît
+        de la liste sans rouvrir la page."""
+        if programs_box is not self.programs_box or programs_box.get_parent() is None: return False
+        for exe, card in list(self.program_cards.items()):
+            if not exe.is_file():
+                card.destroy()
+                del self.program_cards[exe]
+        return True
 
     def program_card(self, module, exe, name, first=False):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1974,6 +1986,7 @@ class ExtraPages:
         self.switch(box, _t("Journal de diagnostic"), profile.get("trace") == "1",
                     lambda on: self.save_program(exe, trace="1" if on else "0"))
         self.programs_box.pack_start(box, False, False, 0)
+        if not first: self.program_cards[exe] = box
         if first: self.programs_box.reorder_child(box, 0)
         box.show_all()
 

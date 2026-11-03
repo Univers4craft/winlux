@@ -775,6 +775,20 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
     Ok(m)
 }
 
+/// Met à jour les lanceurs du menu et du Bureau (winlux-applications) après
+/// une désinstallation : un raccourci retiré ne laisse pas d'icône morte.
+fn refresh_launchers() {
+    let tool = std::path::Path::new("/usr/bin/winlux-applications");
+    if tool.is_file() {
+        let _ = std::process::Command::new(tool)
+            .arg("refresh")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
 /// Lit un argument chemin (Linux existant ou Windows).
 pub(crate) fn host_path(arg: &str) -> PathBuf {
     let p = Path::new(arg);
@@ -860,6 +874,9 @@ pub fn cli(args: &[String]) -> i32 {
                     return 2;
                 };
                 let (rc, msg) = programs::uninstall_key(k);
+                if rc == 0 {
+                    refresh_launchers();
+                }
                 match &out {
                     Some(o) => {
                         let mut text = format!("code={rc}\nmessage={msg}\n");

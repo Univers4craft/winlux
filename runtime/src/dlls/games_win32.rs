@@ -18,7 +18,7 @@ fn set_error(e: u32) {
     crate::process::set_last_error(e);
 }
 fn is_current_process(h: usize) -> bool {
-    h == usize::MAX || h == 0 || h == crate::dlls::kernel32::get_current_process()
+    h == usize::MAX || h == 0 || crate::dlls::kernel32::is_current_process_handle(h)
 }
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x7A10_0000);
 fn fake_handle() -> usize {

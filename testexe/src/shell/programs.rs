@@ -256,6 +256,9 @@ fn kind_text(kind: &[u8]) -> &'static [u8] {
         b"msi" => b"Windows Installer",
         b"nsis" => b"NSIS",
         b"inno" => b"Inno Setup",
+        b"squirrel" => b"Squirrel",
+        b"7z" => b"7-Zip",
+        b"msix" => b"MSIX",
         _ => tr4(&[b"Programme", b"Program", b"Programa", b"Programm"]),
     }
 }
@@ -362,12 +365,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         ]),
     );
     let mut count: Buf<60> = Buf::new();
-    count.num(APP_COUNT as u64).push(tr4(&[
-        b" applications Windows",
-        b" Windows apps",
-        b" aplicaciones de Windows",
-        b" Windows-Apps",
-    ]));
+    // Accord : « 1 application Windows », « 2 applications Windows ».
+    count.num(APP_COUNT as u64).push(if APP_COUNT == 1 {
+        tr4(&[
+            b" application Windows",
+            b" Windows app",
+            b" aplicaci\xF3n de Windows",
+            b" Windows-App",
+        ])
+    } else {
+        tr4(&[
+            b" applications Windows",
+            b" Windows apps",
+            b" aplicaciones de Windows",
+            b" Windows-Apps",
+        ])
+    });
     text(
         g.hdc,
         g.f.caption,

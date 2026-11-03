@@ -1062,7 +1062,7 @@ pub unsafe extern "win64" fn GetModuleHandleExA(
 }
 
 fn is_current_process(h: usize) -> bool {
-    h == usize::MAX || h == crate::dlls::kernel32::get_current_process()
+    h == usize::MAX || crate::dlls::kernel32::is_current_process_handle(h)
 }
 
 /// `K32EnumProcessModules` (processus courant) : base de chaque module.
