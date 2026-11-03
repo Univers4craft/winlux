@@ -544,6 +544,11 @@ def test_page(work, env):
     # revient pas tout de suite. La boîte se rouvre sans message d'échec, la clé
     # tapée est toujours là ; quand le réseau revient, « Se connecter » suffit.
     slow = {}
+    # Chaque message de la page est noté : le succès peut être remplacé par le
+    # rafraîchissement suivant avant que la boucle du test ne le voie.
+    said = []
+    plain_say = panel.say
+    panel.say = lambda text, error=False: (said.append(text), plain_say(text, error))[1]
 
     def set_gone(value):
         state = json.loads((work / "state.json").read_text())
@@ -584,10 +589,9 @@ def test_page(work, env):
     GLib.timeout_add(300, slow_typing)
     voisin.clicked()
     deadline = time.time() + 40
-    while time.time() < deadline and "message" not in slow:
+    while time.time() < deadline and "Connecté à « Voisin »." not in said:
         pump(Gtk, 0.05)
-        if panel.message.get_text() == "Connecté à « Voisin ».":
-            slow["message"] = panel.message.get_text()
+    slow["message"] = "Connecté à « Voisin »." in said
     ok("Se connecter" in slow.get("button", []), "boîte de la clé : bouton « Se connecter »")
     ok("momentanément introuvable" in slow.get("notice", "") and not slow.get("alarm", True),
        f"réseau disparu pendant la saisie : message calme, pas d'échec ({slow.get('notice')})")
@@ -629,10 +633,12 @@ def test_page(work, env):
     GLib.timeout_add(300, lost_again)
     voisin.clicked()
     deadline = time.time() + 40
+    del said[:]
     while time.time() < deadline and "message" not in alone:
         pump(Gtk, 0.05)
-        if "avec le mot de passe que vous aviez tapé" in panel.message.get_text():
-            alone["message"] = panel.message.get_text()
+        for text in said:
+            if "avec le mot de passe que vous aviez tapé" in text:
+                alone["message"] = text
     ok(alone.get("waiting") and alone.get("message") and dialog() is None,
        f"réseau revenu pendant l'attente : connexion seule, boîte fermée sur un succès ({alone})")
     if os.environ.get("WINLUX_WIFI_CAPTURE"):
