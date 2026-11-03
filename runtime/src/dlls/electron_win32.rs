@@ -751,6 +751,7 @@ unsafe extern "win64" fn BuildTrusteeWithName(trustee: *mut u8, name: usize) {
 
 pub fn advapi32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "MapGenericMask" => fn MapGenericMask,
         "BuildTrusteeWithSidW" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithSidA" => fn BuildTrusteeWithSid,
         "BuildTrusteeWithNameW" => fn BuildTrusteeWithName,
@@ -2057,6 +2058,144 @@ pub fn wintrust_exports() -> crate::dlls::Exports {
     }
 }
 
+// ============================================================
+//  shlwapi : PathMatchSpec ; advapi32 : MapGenericMask
+// ============================================================
+
+/// Motif MS-DOS (`*`, `?`) sur un texte, sans casse.
+fn dos_match(pattern: &[char], text: &[char]) -> bool {
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while t < text.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            p += 1;
+            mark = t;
+        } else if let Some(s) = star {
+            p = s + 1;
+            mark += 1;
+            t = mark;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// Un nom correspond-il à l'une des spécifications (« *.txt; *.md ») ?
+pub fn path_match_spec(file: &str, spec: &str, multiple: bool, strip: bool) -> bool {
+    let lower = |s: &str| {
+        s.chars()
+            .flat_map(char::to_lowercase)
+            .collect::<Vec<char>>()
+    };
+    let name = lower(file);
+    let one = |p: &str| {
+        let p = if strip { p.trim_start() } else { p };
+        // « *.* » accepte aussi les noms sans point, comme sous Windows.
+        p == "*.*" || dos_match(&lower(p), &name)
+    };
+    if multiple {
+        spec.split(';').any(one)
+    } else {
+        one(spec)
+    }
+}
+
+unsafe extern "win64" fn PathMatchSpecW(file: *const u16, spec: *const u16) -> i32 {
+    if file.is_null() || spec.is_null() {
+        return 0;
+    }
+    path_match_spec(
+        &crate::dlls::wstr(file),
+        &crate::dlls::wstr(spec),
+        true,
+        true,
+    ) as i32
+}
+
+unsafe extern "win64" fn PathMatchSpecA(file: *const u8, spec: *const u8) -> i32 {
+    if file.is_null() || spec.is_null() {
+        return 0;
+    }
+    path_match_spec(
+        &crate::dlls::cstr(file),
+        &crate::dlls::cstr(spec),
+        true,
+        true,
+    ) as i32
+}
+
+/// PathMatchSpecEx : S_OK si correspondance, S_FALSE sinon ;
+/// PMSF_MULTIPLE (1) pour une liste, PMSF_DONT_STRIP_SPACES (0x10000).
+unsafe extern "win64" fn PathMatchSpecExW(file: *const u16, spec: *const u16, flags: u32) -> u32 {
+    if file.is_null() || spec.is_null() {
+        return 0x8007_0057;
+    }
+    let ok = path_match_spec(
+        &crate::dlls::wstr(file),
+        &crate::dlls::wstr(spec),
+        flags & 1 != 0,
+        flags & 0x1_0000 == 0,
+    );
+    u32::from(!ok)
+}
+
+unsafe extern "win64" fn PathMatchSpecExA(file: *const u8, spec: *const u8, flags: u32) -> u32 {
+    if file.is_null() || spec.is_null() {
+        return 0x8007_0057;
+    }
+    let ok = path_match_spec(
+        &crate::dlls::cstr(file),
+        &crate::dlls::cstr(spec),
+        flags & 1 != 0,
+        flags & 0x1_0000 == 0,
+    );
+    u32::from(!ok)
+}
+
+pub fn shlwapi_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "PathMatchSpecW" => fn PathMatchSpecW,
+        "PathMatchSpecA" => fn PathMatchSpecA,
+        "PathMatchSpecExW" => fn PathMatchSpecExW,
+        "PathMatchSpecExA" => fn PathMatchSpecExA,
+    }
+}
+
+/// `MapGenericMask` : GENERIC_READ/WRITE/EXECUTE/ALL remplacés par les
+/// droits de la GENERIC_MAPPING, bits génériques effacés.
+pub fn map_generic_mask(mask: u32, mapping: [u32; 4]) -> u32 {
+    let mut m = mask;
+    for (bit, rights) in [
+        (0x8000_0000u32, mapping[0]),
+        (0x4000_0000, mapping[1]),
+        (0x2000_0000, mapping[2]),
+        (0x1000_0000, mapping[3]),
+    ] {
+        if mask & bit != 0 {
+            m |= rights;
+        }
+    }
+    m & !0xF000_0000
+}
+
+unsafe extern "win64" fn MapGenericMask(mask: *mut u32, mapping: *const u32) {
+    if mask.is_null() || mapping.is_null() {
+        return;
+    }
+    let map = [
+        mapping.read_unaligned(),
+        mapping.add(1).read_unaligned(),
+        mapping.add(2).read_unaligned(),
+        mapping.add(3).read_unaligned(),
+    ];
+    mask.write_unaligned(map_generic_mask(mask.read_unaligned(), map));
+}
+
 /// Toutes les tables, par DLL, pour `add_basics`.
 pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
     vec![
@@ -2069,6 +2208,7 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         ("user32", user32_exports()),
         ("ole32", ole32_exports()),
         ("wtsapi32", wtsapi32_exports()),
+        ("shlwapi", shlwapi_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -2511,6 +2651,33 @@ mod tests {
                 Some("S-1-16-4096")
             );
         }
+    }
+
+    #[test]
+    fn filtres_de_noms_et_droits_generiques() {
+        assert!(path_match_spec(
+            "C:\\Docs\\Rapport.TXT",
+            "*.txt",
+            true,
+            true
+        ));
+        assert!(path_match_spec("photo.jpeg", "*.png; *.JPEG", true, true));
+        assert!(!path_match_spec("photo.jpeg", "*.png; *.JPEG", false, true));
+        assert!(path_match_spec("LISEZMOI", "*.*", true, true));
+        assert!(path_match_spec("été.md", "?té.*", true, true));
+        assert!(!path_match_spec("a.txt", "*.md", true, true));
+        unsafe {
+            let f: Vec<u16> = "Notes.Log".encode_utf16().chain(Some(0)).collect();
+            let p: Vec<u16> = "*.txt;*.log".encode_utf16().chain(Some(0)).collect();
+            assert_eq!(PathMatchSpecW(f.as_ptr(), p.as_ptr()), 1);
+            assert_eq!(PathMatchSpecExW(f.as_ptr(), p.as_ptr(), 1), 0);
+            assert_eq!(PathMatchSpecExW(f.as_ptr(), p.as_ptr(), 0), 1);
+            let mut mask = 0x8000_0001u32; // GENERIC_READ | 1
+            let mapping = [0x10u32, 0x20, 0x40, 0x1FF];
+            MapGenericMask(&mut mask, mapping.as_ptr());
+            assert_eq!(mask, 0x11);
+        }
+        assert_eq!(map_generic_mask(0x1000_0000, [1, 2, 4, 0x1F]), 0x1F);
     }
 
     #[test]
