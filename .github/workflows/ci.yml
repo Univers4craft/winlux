@@ -201,6 +201,8 @@ jobs:
         run: python3 -B scripts/test-init-power.py
       - name: Vérifier qu'une coupure après l'installation n'abîme plus les comptes (écran noir)
         run: python3 -B scripts/test-accounts-repair.py
+      - name: Vérifier les pilotes de cet ordinateur ajoutés pendant l'installation (en ligne)
+        run: python3 -B scripts/test-installer-drivers.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
