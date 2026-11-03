@@ -76,7 +76,11 @@ fn user_master() -> Option<Vec<u8>> {
     let key = random(32)?;
     // Écriture atomique : un fichier temporaire, puis renommage. Si un autre
     // processus a gagné la course, sa clé est relue.
-    let tmp = dir.join(format!("master.key.{}", std::process::id()));
+    // Nom unique par appel : deux fils du même processus (tests en
+    // parallèle, programme multifil) ne se disputent pas le même fichier.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("master.key.{}.{seq}", std::process::id()));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
