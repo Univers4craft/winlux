@@ -47,8 +47,11 @@ c'est sa copie, faite sur sa machine.
 - **Liens web** : xdg-open (GIO et exo-open d'XFCE), la variable `BROWSER` et
   ShellExecute des `.exe` aboutissent tous à `winlux-browser`. Il ouvre le lien
   dans le navigateur par défaut s'il est installé, sinon dans un navigateur
-  installé du catalogue (ordre alphabétique), sinon dans un navigateur du
-  système. L'écran de choix ne s'ouvre que s'il n'y a aucun navigateur : le
+  installé (catalogue ou système). S'il y en a plusieurs et qu'aucun n'est
+  par défaut, une fenêtre (`winlux-browser-choice`) les propose dans l'ordre
+  alphabétique, sans présélection, rappelle qu'un navigateur par défaut évite
+  de choisir à chaque fois, et « Toujours utiliser ce navigateur » en fait le
+  navigateur par défaut. L'écran de choix ne s'ouvre que s'il n'y a aucun navigateur : le
   lien est alors gardé dans `/run/winlux/browser-pending-<uid>` et la session
   l'ouvre dès qu'un navigateur est installé (pendant une heure au plus).
 - **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`

@@ -8,9 +8,11 @@
 # s'il n'y en a vraiment aucun :
 #   1. WINLUX_BROWSER, s'il est défini ;
 #   2. le navigateur par défaut du catalogue, s'il est installé ;
-#   3. sinon un navigateur installé du catalogue (Chrome, Edge, Firefox,
-#      ordre alphabétique : aucun n'est favorisé) ;
-#   4. sinon un navigateur du système ;
+#   3. sinon le seul navigateur installé (catalogue ou système) ; s'il y en a
+#      plusieurs, une fenêtre demande lequel utiliser, rappelle qu'un
+#      navigateur par défaut évite de choisir à chaque fois, et permet d'en
+#      faire le navigateur par défaut (winlux-browser-choice) ;
+#   4. (sans affichage : le premier, par ordre alphabétique) ;
 #   5. sinon le choix s'ouvre (Paramètres > Navigateurs) et le lien est gardé :
 #      la session l'ouvre dès qu'un navigateur est installé (--pending).
 set -u
@@ -19,50 +21,70 @@ root=${WINLUX_BROWSER_ROOT:-}
 uid=$(id -u 2>/dev/null || /bin/busybox id -u 2>/dev/null || echo 1000)
 pending="$root/run/winlux/browser-pending-$uid"
 
-# Navigateur du catalogue à utiliser : le défaut s'il est installé (« open »),
-# sinon le premier installé (« launch »). Rien si aucun ne l'est.
-catalogue_browser() {
-    command -v winlux-browsers >/dev/null 2>&1 || return 1
-    state=$(winlux-browsers --status 2>/dev/null) || return 1
-    default=$(printf '%s\n' "$state" | sed -n 's/^browser_default=//p')
-    for id in ${default:-none} chrome edge firefox; do
-        if printf '%s\n' "$state" | grep -Eq "^browser_$id=(installed|update)$"; then
-            if [ "$id" = "${default:-none}" ]; then printf 'open %s\n' "$id"; else printf 'launch %s\n' "$id"; fi
-            return 0
-        fi
+# Navigateurs installés, un par ligne : « catalogue:<id> » (Chrome, Edge,
+# Firefox du catalogue, ordre alphabétique) puis « systeme:<commande> ».
+# « defaut » est le navigateur par défaut du catalogue s'il est installé.
+installed_browsers() {
+    default=none
+    if command -v winlux-browsers >/dev/null 2>&1 && state=$(winlux-browsers --status 2>/dev/null); then
+        default=$(printf '%s\n' "$state" | sed -n 's/^browser_default=//p')
+        for id in chrome edge firefox; do
+            if printf '%s\n' "$state" | grep -Eq "^browser_$id=(installed|update)$"; then
+                printf 'catalogue:%s\n' "$id"
+            fi
+        done
+    fi
+    for other in ${WINLUX_BROWSER_CANDIDATES-firefox chromium chromium-browser google-chrome-stable microsoft-edge-stable microsoft-edge}; do
+        if command -v "$other" >/dev/null 2>&1; then printf 'systeme:%s\n' "$other"; fi
     done
-    return 1
+    printf 'defaut:%s\n' "${default:-none}"
 }
 
-system_browser() {
-    for other in ${WINLUX_BROWSER_CANDIDATES-firefox chromium chromium-browser google-chrome-stable microsoft-edge-stable microsoft-edge}; do
-        if command -v "$other" >/dev/null 2>&1; then
-            printf '%s\n' "$other"
-            return 0
-        fi
-    done
-    return 1
+run_browser() {
+    choice=$1; shift
+    case "$choice" in
+        defaut:*) exec winlux-browsers --open "$@" ;;
+        catalogue:*) exec winlux-browsers --launch "${choice#catalogue:}" "$@" ;;
+    esac
+    other=${choice#systeme:}
+    # Chromium et ses dérivés refusent de tourner en root sans --no-sandbox.
+    case "$other" in
+        firefox) exec "$other" "$@" ;;
+        *) if [ "$uid" = 0 ]; then exec "$other" --no-sandbox "$@"; fi; exec "$other" "$@" ;;
+    esac
 }
 
 # Ouvre les arguments dans un navigateur présent ; code 3 s'il n'y en a aucun.
+# Sans navigateur par défaut et avec plusieurs navigateurs installés, une
+# fenêtre demande lequel utiliser (et propose d'en faire le navigateur par
+# défaut) ; Annuler n'ouvre rien.
 open_now() {
     if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
         exec "$WINLUX_BROWSER" "$@"
     fi
-    if choice=$(catalogue_browser); then
-        case "$choice" in
-            open\ *) exec winlux-browsers --open "$@" ;;
-            *) exec winlux-browsers --launch "${choice#launch }" "$@" ;;
-        esac
+    list=$(installed_browsers)
+    default=$(printf '%s\n' "$list" | sed -n 's/^defaut://p')
+    if printf '%s\n' "$list" | grep -qx "catalogue:$default"; then run_browser "defaut:$default" "$@"; fi
+    found=$(printf '%s\n' "$list" | grep -v '^defaut:' || true)
+    [ -n "$found" ] || return 3
+    count=$(printf '%s\n' "$found" | wc -l)
+    if [ "$count" -gt 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}${WINLUX_BROWSER_CHOICE:-}" ]; then
+        chooser=${WINLUX_BROWSER_CHOICE:-/usr/bin/winlux-browser-choice}
+        if [ -x "$chooser" ] || command -v "$chooser" >/dev/null 2>&1; then
+            # shellcheck disable=SC2086 # une entrée par ligne, sans espace
+            answer=$("$chooser" $found) || exit 0
+            case "$answer" in
+                toujours\ catalogue:*)
+                    answer=${answer#toujours }
+                    # Navigateur par défaut, comme Paramètres > Navigateurs (relais root).
+                    winlux-control "browser-default-${answer#catalogue:}" >/dev/null 2>&1 &
+                    ;;
+            esac
+            if printf '%s\n' "$found" | grep -qxF "$answer"; then run_browser "$answer" "$@"; fi
+            exit 0
+        fi
     fi
-    if other=$(system_browser); then
-        # Chromium et ses dérivés refusent de tourner en root sans --no-sandbox.
-        case "$other" in
-            firefox) exec "$other" "$@" ;;
-            *) if [ "$uid" = 0 ]; then exec "$other" --no-sandbox "$@"; fi; exec "$other" "$@" ;;
-        esac
-    fi
-    return 3
+    run_browser "$(printf '%s\n' "$found" | head -n 1)" "$@"
 }
 
 # Lien gardé pendant le choix du navigateur : la session appelle --pending
@@ -71,7 +93,7 @@ open_now() {
 if [ "${1:-}" = --pending ]; then
     [ -f "$pending" ] || exit 0
     if [ -n "$(find "$pending" -mmin +60 2>/dev/null)" ]; then rm -f "$pending"; exit 0; fi
-    catalogue_browser >/dev/null || system_browser >/dev/null || [ -n "${WINLUX_BROWSER:-}" ] || exit 0
+    [ -n "${WINLUX_BROWSER:-}" ] || installed_browsers | grep -q '^catalogue:\|^systeme:' || exit 0
     set --
     while IFS= read -r line; do set -- "$@" "$line"; done < "$pending"
     rm -f "$pending"
