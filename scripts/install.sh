@@ -230,9 +230,15 @@ set timeout=1
 set timeout_style=hidden
 set winlux_term=console
 $theme_block
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output \$winlux_term serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "\$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output \$winlux_term serial
+    fi
+fi
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
     linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 \$winlux_efi_args

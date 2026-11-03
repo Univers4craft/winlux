@@ -73,6 +73,7 @@ _TR = {
     'Réseau Wi-Fi': ('Wi-Fi network', 'Red Wi-Fi', 'WLAN-Netzwerk'),
     'Bluetooth et appareils': ('Bluetooth and devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Son': ('Sound', 'Sonido', 'Sound'),
+    'Clavier tactile': ('Touch keyboard', 'Teclado táctil', 'Bildschirmtastatur'),
     'Alimentation batterie veille': ('Power battery sleep', 'Energía batería suspensión', 'Energie Akku Standby'),
     'Clavier': ('Keyboard', 'Teclado', 'Tastatur'),
     'Souris': ('Mouse', 'Ratón', 'Maus'),
@@ -226,6 +227,23 @@ def on_click(button, callback):
     button.connect("clicked", clicked)
 
 
+def osk_module():
+    """Clavier tactile (/usr/bin/winlux-osk, ou le script voisin), ou None."""
+    import importlib.machinery
+    import importlib.util
+    for path in (Path("/usr/bin/winlux-osk"), Path(__file__).resolve().with_name("winlux-osk.py")):
+        if path.is_file():
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_osk", str(path))
+                spec = importlib.util.spec_from_loader("winlux_osk", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -262,23 +280,72 @@ class Start(Gtk.Application):
         self.all_apps = False
         self.search.set_text("")
         self.render()
-        monitor = self.window.get_display().get_primary_monitor()
-        if monitor is None: monitor = self.window.get_display().get_monitor(0)
-        area = monitor.get_workarea()
-        width, height = min(660, area.width - 24), min(650, area.height - 24)
-        self.window.set_default_size(width, height)
-        self.window.set_size_request(width, height)
+        # Tablette sans clavier : le clavier tactile du menu s'ouvre avec lui.
+        # Le clavier de la barre des tâches, fenêtre à part, fermait le menu au
+        # premier appui et se trouvait en partie dessous.
+        keyboard_shown = self.osk_widget is not None and self.osk_auto()
+        if keyboard_shown:
+            try: subprocess.Popen(["winlux-osk", "hide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError: pass
+        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
+        area = self.workarea()
         # Comme Windows 11 : barre alignée à gauche, le menu s'ouvre au-dessus
         # du bouton Démarrer ; barre centrée ou ouverture au clavier, il est
         # centré.
-        x = area.x + (area.width - width) // 2
-        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
-        if pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3:
-            x = area.x + 12
-        self.window.move(x, area.y + area.height - height - 10)
+        self.menu_left = pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3
+        self.place(keyboard_shown)
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+
+    def workarea(self):
+        display = self.window.get_display()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        return monitor.get_workarea()
+
+    def place(self, keyboard_shown):
+        """Taille et position du menu, avec ou sans son clavier tactile."""
+        area = self.workarea()
+        width, height = 660, 650
+        if self.osk_widget is not None:
+            self.osk_widget.set_visible(keyboard_shown)
+            if keyboard_shown:
+                self.osk_widget.show_all()
+                width = max(width, self.osk_widget.get_preferred_width()[1] + 24)
+                height += self.osk_height + 12
+        width, height = min(width, area.width - 24), min(height, area.height - 24)
+        self.window.set_default_size(width, height)
+        self.window.set_size_request(width, height)
+        self.window.resize(width, height)
+        x = area.x + 12 if getattr(self, "menu_left", False) else area.x + (area.width - width) // 2
+        self.window.move(x, area.y + area.height - height - 10)
+
+    # ── Clavier tactile intégré (tablette sans clavier) ──
+
+    def osk_auto(self):
+        try: return not self.osk.keyboards()
+        except Exception: return False
+
+    def osk_toggle(self):
+        if self.osk_widget is None: return
+        self.place(not self.osk_widget.get_visible())
+        self.search.grab_focus()
+
+    def osk_send(self, key, _modifiers=()):
+        """Touches du clavier intégré vers la recherche du menu."""
+        entry = self.search
+        position = entry.get_position()
+        if key == "BackSpace":
+            if position > 0: entry.delete_text(position - 1, position)
+        elif key == "Return":
+            self.first_result()
+        elif key == "Escape":
+            self.hide()
+        elif key in ("Left", "Right"):
+            entry.set_position(max(0, position + (1 if key == "Right" else -1)))
+        elif len(key) == 1:
+            entry.insert_text(key, position)
+            entry.set_position(position + 1)
 
     def build(self):
         self.window = Gtk.ApplicationWindow(application=self, title=_t("Démarrer Winlux"))
@@ -314,6 +381,24 @@ class Start(Gtk.Application):
         self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         body.pack_start(self.search, False, False, 0)
+        self.osk = osk_module()
+        self.osk_widget, self.osk_height = None, 0
+        if self.osk is not None:
+            try:
+                self.osk_widget = self.osk.keyboard_widget(send=self.osk_send, on_close=self.osk_toggle)
+            except Exception:
+                self.osk_widget = None
+        if self.osk_widget is not None:
+            self.osk_height = 220
+            self.osk_widget.set_size_request(-1, self.osk_height)
+            self.osk_widget.set_margin_start(12)
+            self.osk_widget.set_margin_end(12)
+            self.osk_widget.set_no_show_all(True)
+            # Icône du clavier dans la recherche : l'ouvre ou le ferme, avec ou
+            # sans clavier physique.
+            self.search.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "input-keyboard-symbolic")
+            self.search.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _t("Clavier tactile"))
+            self.search.connect("icon-press", lambda _e, position, _ev: position == Gtk.EntryIconPosition.SECONDARY and self.osk_toggle())
         header = Gtk.Box()
         self.heading = Gtk.Label(label=_t("Épinglé"), xalign=0)
         self.heading.get_style_context().add_class("heading")
@@ -336,6 +421,8 @@ class Start(Gtk.Application):
         on_click(power, lambda: self.power(power))
         footer.pack_end(power, False, False, 0)
         outer.pack_end(footer, False, False, 0)
+        if self.osk_widget is not None:
+            outer.pack_end(self.osk_widget, False, False, 0)
 
     def apply_theme(self):
         """Menu clair en thème clair, sombre en thème sombre, comme Windows 11.

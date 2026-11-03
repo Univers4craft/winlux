@@ -170,8 +170,10 @@ def long_date(day):
 # ── Son : sortie par défaut et flux des applications ────────────────────────
 
 def _run(args, timeout=2):
+    # pactl en locale C : en français son JSON écrit « 0,00 » (JSON invalide).
+    env = dict(os.environ, LC_ALL="C", LANG="C") if args and args[0] == "pactl" else None
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
         return result.stdout if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
         return None

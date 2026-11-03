@@ -465,7 +465,7 @@ PART_COLORS = {
     "linux-swap": (0.2, 0.6, 0.65, 1.0),
     "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
-    "winlux": (0.0, 0.62, 0.95, 1.0),
+    "winlux": (0.416, 0.239, 0.941, 1.0),  # partition Winlux : accent Prisme
     "bios": (0.45, 0.45, 0.55, 1.0),
 }
 
@@ -554,6 +554,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Note de performance",
         "summary_benchmark_none": "non mesurée",
         "summary_benchmark_running": "mesure en cours",
+        "summary_benchmark_limited": "{score} (limitée par : {part})",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -717,6 +718,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Performance score",
         "summary_benchmark_none": "not measured",
         "summary_benchmark_running": "measuring",
+        "summary_benchmark_limited": "{score} (limited by: {part})",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -880,6 +882,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Leistungsbewertung",
         "summary_benchmark_none": "nicht gemessen",
         "summary_benchmark_running": "Messung läuft",
+        "summary_benchmark_limited": "{score} (begrenzt durch: {part})",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -1043,6 +1046,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Puntuación de rendimiento",
         "summary_benchmark_none": "no medida",
         "summary_benchmark_running": "midiendo",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -1206,6 +1210,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Punteggio prestazioni",
         "summary_benchmark_none": "non misurato",
         "summary_benchmark_running": "misurazione in corso",
+        "summary_benchmark_limited": "{score} (limitato da: {part})",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1369,6 +1374,7 @@ TRANSLATIONS = {
         "summary_benchmark": "Nota de desempenho",
         "summary_benchmark_none": "não medida",
         "summary_benchmark_running": "a medir",
+        "summary_benchmark_limited": "{score} (limitada por: {part})",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -1486,6 +1492,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Mémoire",
         "bench_disk": "Disque",
         "bench_gpu": "Graphique",
+        "bench_limited_by": "La note globale est celle du composant le plus lent : {part}.",
         "bench_waiting": "en attente",
         "bench_tips": "Recommandations",
         "bench_running": "Test en cours… vous pouvez continuer, il se termine en arrière-plan.",
@@ -1574,6 +1581,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memory",
         "bench_disk": "Disk",
         "bench_gpu": "Graphics",
+        "bench_limited_by": "The overall score is that of the slowest component: {part}.",
         "bench_waiting": "waiting",
         "bench_tips": "Recommendations",
         "bench_running": "Test in progress… you can continue, it finishes in the background.",
@@ -1662,6 +1670,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Arbeitsspeicher",
         "bench_disk": "Datenträger",
         "bench_gpu": "Grafik",
+        "bench_limited_by": "Die Gesamtbewertung ist die der langsamsten Komponente: {part}.",
         "bench_waiting": "wartet",
         "bench_tips": "Empfehlungen",
         "bench_running": "Test läuft… Sie können fortfahren, er wird im Hintergrund beendet.",
@@ -1750,6 +1759,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "La puntuación global es la del componente más lento: {part}.",
         "bench_waiting": "en espera",
         "bench_tips": "Recomendaciones",
         "bench_running": "Prueba en curso… puede continuar, termina en segundo plano.",
@@ -1838,6 +1848,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memoria",
         "bench_disk": "Disco",
         "bench_gpu": "Grafica",
+        "bench_limited_by": "Il punteggio globale è quello del componente più lento: {part}.",
         "bench_waiting": "in attesa",
         "bench_tips": "Raccomandazioni",
         "bench_running": "Test in corso… puoi continuare, termina in background.",
@@ -1926,6 +1937,7 @@ EXTRA_TRANSLATIONS = {
         "bench_ram": "Memória",
         "bench_disk": "Disco",
         "bench_gpu": "Gráficos",
+        "bench_limited_by": "A nota geral é a do componente mais lento: {part}.",
         "bench_waiting": "aguardando",
         "bench_tips": "Recomendações",
         "bench_running": "Teste em andamento… você pode continuar, ele termina em segundo plano.",
@@ -4539,7 +4551,9 @@ class InstallerApp(Gtk.Application):
             self.benchmark = event["summary"]
             self.bench_state = "done"
             self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
-            self.bench_status.set_text(tr("bench_done"))
+            weakest = self.benchmark_weakest()
+            # « 2,0 » à côté d'un processeur à 8,7 : dire d'où vient la note.
+            self.bench_status.set_text(tr("bench_done") + ("\n" + tr("bench_limited_by", part=tr("bench_" + weakest)) if weakest else ""))
             tips = self.benchmark["recommendations"] or [tr("bench_no_tip")]
             self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
             self.bench_retry.set_sensitive(True)
@@ -4549,6 +4563,14 @@ class InstallerApp(Gtk.Application):
             if STEP_KEYS[self.current_step] == "summary":
                 self.refresh_summary()  # la mesure finit après l'arrivée sur le récapitulatif
         return False
+
+    def benchmark_weakest(self):
+        """Composant qui fixe la note globale (la plus basse), ou None si toutes sont égales."""
+        results = (self.benchmark or {}).get("results", {})
+        scores = [(r["score"], key) for key, r in results.items() if "score" in r]
+        if scores and min(scores)[0] < max(scores)[0]:
+            return min(scores)[1]
+        return None
 
     def benchmark_complete(self):
         """Vrai si la mesure est terminée, sans composant en échec."""
@@ -4883,6 +4905,12 @@ class InstallerApp(Gtk.Application):
         # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
         if self.benchmark_complete():
             score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+            # La note globale est la plus basse des notes (comme l'indice de
+            # performance) : nommer le composant qui la fixe, sinon « 2,0 »
+            # à côté d'un processeur à 8,7 ressemble à une mesure inachevée.
+            weakest = self.benchmark_weakest()
+            if weakest:
+                score = tr("summary_benchmark_limited", score=score, part=tr("bench_" + weakest))
         elif self.bench_state == "running":
             score = tr("summary_benchmark_running")
         else:
@@ -5031,19 +5059,31 @@ class InstallerApp(Gtk.Application):
             quiet("xset", "s", "off")
             quiet("xset", "-dpms")
             quiet("xscreensaver-command", "-deactivate")
+            if getattr(self, "awake_stop", None) is None:
+                # Fil à part, pas un minuteur GLib : le réveil continue même si
+                # la boucle de l'interface est occupée par la copie. En v0.2.16,
+                # l'économiseur « tuyaux 3D » démarrait encore après 10 min de
+                # copie. Trois signaux indépendants : la commande de
+                # XScreenSaver, le compteur d'inactivité du serveur X (DPMS,
+                # verrouillage Winlux) et un vrai mouvement de pointeur d'un
+                # pixel aller-retour, que tout détecteur d'activité voit.
+                stop = threading.Event()
+                self.awake_stop = stop
 
-            def poke():
-                if not getattr(self, "awake_timer", None):
-                    return False
-                quiet("xscreensaver-command", "-deactivate")
-                quiet("xset", "s", "reset")
-                return True
-            if not getattr(self, "awake_timer", None):
-                self.awake_timer = GLib.timeout_add_seconds(30, poke)
+                interval = getattr(self, "awake_interval", 30)
+
+                def poke():
+                    while not stop.wait(interval):
+                        quiet("xscreensaver-command", "-deactivate")
+                        quiet("xset", "s", "reset")
+                        quiet("xdotool", "mousemove_relative", "--", "1", "0",
+                              "mousemove_relative", "--", "-1", "0")
+                threading.Thread(target=poke, name="winlux-keep-awake", daemon=True).start()
         else:
-            if getattr(self, "awake_timer", None):
-                GLib.source_remove(self.awake_timer)
-                self.awake_timer = None
+            stop = getattr(self, "awake_stop", None)
+            if stop is not None:
+                stop.set()
+                self.awake_stop = None
             quiet("xset", "s", "default")
             quiet("xset", "+dpms")
 
@@ -5406,9 +5446,15 @@ if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
 fi
 set timeout={menu_timeout}
 set timeout_style={menu_style}
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output console serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output console serial
+    fi
+fi
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
     linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args

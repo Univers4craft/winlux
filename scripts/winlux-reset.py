@@ -952,9 +952,15 @@ if [ "${{grub_platform}}-${{grub_cpu}}" = "efi-i386" ]; then
 fi
 set timeout={timeout}
 set timeout_style={style}
-serial --unit=0 --speed=115200
-terminal_input console serial
-terminal_output console serial
+# Terminal série seulement en machine virtuelle : sur un vrai PC il ralentit le clavier du menu.
+set winlux_vendor=
+smbios --type 1 --get-string 4 --set winlux_vendor
+if [ "$winlux_vendor" = "QEMU" ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input console serial
+        terminal_output console serial
+    fi
+fi
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
     linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra} $winlux_efi_args
@@ -1156,8 +1162,10 @@ def key_grub_cfg(root_spec, extra, theme):
                   "    insmod png\n    set gfxmode=auto\n    if terminal_output gfxterm; then\n"
                   "        set theme=/boot/grub/themes/winlux/theme.txt\n        set winlux_term=gfxterm\n    fi\nfi\n")
     return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + EFI32_ARGS + themed +
-            "if serial --unit=0 --speed=115200; then\n    terminal_input serial console\n"
-            "    terminal_output serial $winlux_term\nfi\n" + "".join(entries))
+            "set winlux_vendor=\nsmbios --type 1 --get-string 4 --set winlux_vendor\n"
+            "if [ \"$winlux_vendor\" = \"QEMU\" ]; then\n"
+            "    if serial --unit=0 --speed=115200; then\n        terminal_input serial console\n"
+            "        terminal_output serial $winlux_term\n    fi\nfi\n" + "".join(entries))
 
 
 def copy_with_progress(source, target, digests, relative, done, total, start, end):

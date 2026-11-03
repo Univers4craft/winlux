@@ -135,6 +135,12 @@ jobs:
       - name: Vérifier les finitions de l'installateur (veille, accent, note de performance)
         run: python3 -B scripts/test-installer-finitions.py
 
+      - name: Vérifier le clavier dans le menu GRUB (terminal série réservé aux VM)
+        run: python3 -B scripts/test-grub-keyboard.py
+
+      - name: Vérifier la description du matériel (cœurs, modèles du processeur et de la carte graphique)
+        run: python3 -B scripts/test-benchmark-materiel.py
+
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
@@ -455,6 +461,9 @@ jobs:
           for kind in start quick; do
             xvfb-run -a -s '-screen 0 1920x1080x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-keyboard-nav.py "$kind"
           done
+
+      - name: Menu Démarrer sur tablette (clavier tactile intégré, appuis xdotool)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-osk.py
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
