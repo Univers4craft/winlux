@@ -139,15 +139,30 @@ diagnostic. L'outil liste :
 
 Le code de sortie vaut 1 s'il y a au moins un problème. Rien n'est modifié.
 
+## Rotation automatique de l'écran
+
+`winlux-rotation watch` est lancé par la session. Il s'arrête aussitôt sans
+accéléromètre ou si la machine n'est ni une tablette ni un convertible
+(châssis DMI 30, 31 ou 32). Il lit l'accéléromètre IIO et sa matrice de
+montage (propriété udev `ACCEL_MOUNT_MATRIX` de `60-sensor.hwdb`, sinon
+`in_accel_mount_matrix`). Il tourne l'écran interne avec xrandr après deux
+lectures concordantes, et recale l'écran tactile et le stylet sur l'écran
+tourné. Sur un convertible, l'écran ne tourne qu'en mode tablette.
+`winlux-rotation lock` et `winlux-rotation unlock` règlent le verrou
+(`~/.config/winlux/rotation.conf`).
+
 ## Reste à faire
 
-- **Rotation automatique de l'écran** : les capteurs sont maintenant là,
-  mais il manque le service qui tourne l'écran (iio-sensor-proxy ou lecture
-  directe de l'IIO).
+- **Verrou de rotation dans les Réglages rapides** : seule la commande existe
+  pour l'instant.
+
 - **Thunderbolt** : sans `boltd`, un dock sur un portable en niveau de
   sécurité « user » reste non autorisé (le diagnostic le signale).
 - **Webcams MIPI Intel (IPU6/IPU7)** : il faut les modules
   `linux-main-modules-ipu6/ipu7/vision`, libcamera et son greffon PipeWire.
-- **RAID logiciel** : les pilotes sont là ; `mdadm` doit encore rejoindre
-  l'image pour assembler les volumes.
+- **RAID logiciel** : les pilotes sont là, mais pas encore `mdadm`. Sa règle
+  udev assemblerait aussi les grappes Intel RST de Windows, et une grappe
+  IMSM écrite sans `mdmon` (un service systemd, absent de Winlux) risque
+  d'être marquée corrompue. Il faut d'abord un démarrage de `mdmon` par
+  Winlux, ou un assemblage en lecture seule.
 - **Microcode en session live** : il n'est chargé qu'après l'installation.

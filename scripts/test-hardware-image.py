@@ -177,6 +177,59 @@ with tempfile.TemporaryDirectory() as temporary:
     ok(all(len(row) == 4 and all(row) for row in tool["T"].values()), "chaque message existe en fr, en, es et de")
     del env["WINLUX_KERNEL_LOG"]
 
+print("Rotation automatique (winlux-rotation)")
+rotation = runpy.run_path(str(SCRIPTS / "winlux-rotation.py"), run_name="winlux_rotation")
+orient = rotation["orientation"]
+ok(orient(0, -9.8, 0) == "normal" and orient(0, 9.8, 0) == "bottom-up", "paysage droit et retourné")
+ok(orient(9.8, 0, 0) == "left-up" and orient(-9.8, 0, 0) == "right-up", "portrait gauche et droit")
+ok(orient(0.5, -0.5, 9.8, "left-up") == "left-up", "posée à plat : orientation gardée")
+ok(orient(6, -6, 0, "normal") == "normal", "en diagonale : orientation gardée")
+ok(rotation["parse_matrix"]("0, 1, 0; -1, 0, 0; 0, 0, 1") == [[0, 1, 0], [-1, 0, 0], [0, 0, 1]], "matrice de montage lue")
+with tempfile.TemporaryDirectory() as temporary:
+    base = Path(temporary)
+    hw = base / "hw"
+    accel = hw / "sys/bus/iio/devices/iio:device0"
+    for axis, value in zip("xyz", ("0", "900", "40")):
+        write(accel / f"in_accel_{axis}_raw", value)
+    write(accel / "name", "accel_3d")
+    write(hw / "sys/class/dmi/id/chassis_type", "32")
+    bindir = base / "bin"
+    calls = base / "calls.log"
+    write(bindir / "xrandr", f"""#!/bin/sh
+echo "xrandr $*" >>{calls}
+case "$1" in --query) echo 'Screen 0: minimum 8 x 8, current 800 x 1280'; echo 'eDP-1 connected primary 800x1280+0+0 (normal left inverted right) 135mm x 216mm'; echo 'HDMI-1 disconnected (normal left inverted right)';; esac
+""")
+    write(bindir / "xinput", f"""#!/bin/sh
+echo "xinput $*" >>{calls}
+case "$*" in "list --name-only") printf 'Virtual core pointer\nGoodix Capacitive TouchScreen\nSYNA3602:00 Touchpad\nAT Translated Set 2 keyboard\n' ;; esac
+""")
+    for tool in ("xrandr", "xinput"):
+        (bindir / tool).chmod(0o755)
+    renv = {"WINLUX_HW_ROOT": str(hw), "WINLUX_ROTATION_ONCE": "1", "XDG_CONFIG_HOME": str(base / "config"),
+            "PATH": f"{bindir}:/usr/bin:/bin"}
+    result = run(SCRIPTS / "winlux-rotation.py", "watch", env=renv)
+    log = calls.read_text() if calls.exists() else ""
+    ok(result.returncode == 0 and "xrandr --output eDP-1 --rotate inverted" in log, "tablette retournée : écran interne inversé")
+    ok("map-to-output Goodix Capacitive TouchScreen eDP-1" in log and "Touchpad eDP-1" not in log,
+       "écran tactile recalé sur l'écran tourné, pas le pavé tactile")
+    calls.write_text("")
+    write(accel / "in_accel_mount_matrix", "0, 1, 0; -1, 0, 0; 0, 0, 1")
+    run(SCRIPTS / "winlux-rotation.py", "watch", env=renv)
+    ok("--rotate left" in calls.read_text(), "matrice de montage appliquée (capteur monté de travers)")
+    calls.write_text("")
+    run(SCRIPTS / "winlux-rotation.py", "lock", env=renv)
+    run(SCRIPTS / "winlux-rotation.py", "watch", env=renv)
+    ok("--rotate" not in calls.read_text(), "rotation verrouillée : écran inchangé")
+    run(SCRIPTS / "winlux-rotation.py", "unlock", env=renv)
+    write(hw / "sys/class/dmi/id/chassis_type", "10")
+    result = run(SCRIPTS / "winlux-rotation.py", "watch", env=dict(renv, WINLUX_ROTATION_ONCE="0"))
+    ok(result.returncode == 0 and "--rotate" not in calls.read_text(), "portable classique : le service s'arrête aussitôt")
+    (accel / "in_accel_x_raw").unlink()
+    ok(run(SCRIPTS / "winlux-rotation.py", "watch", env=dict(renv, WINLUX_ROTATION_ONCE="0")).returncode == 0,
+       "sans accéléromètre : le service s'arrête aussitôt")
+session = (SCRIPTS / "winlux-user-session.sh").read_text()
+ok("start rotation.log /usr/bin/winlux-rotation watch" in session, "session : rotation suivie au démarrage")
+
 print("Listes réelles et intégration")
 dirs_list = (SCRIPTS / "hardware-module-dirs.list").read_text()
 essentials_list = (SCRIPTS / "hardware-essentials.list").read_text()
@@ -185,6 +238,7 @@ ok('stage-kernel-modules.py" "$stage" "$kernel_release" "$root/scripts/hardware-
    and build.index("stage-kernel-modules.py") < build.index('depmod -b "$stage"'), "build-live-iso.sh embarque les dossiers avant depmod")
 ok(build.index('python3 "$root/scripts/check-image-hardware.py" "$stage"') > build.index('python3 "$root/scripts/stage-apt-root.py"'), "contrôle sur la racine finale (après stage-apt-root.py)")
 ok('winlux-hardware-check.py" "$stage/usr/bin/winlux-hardware-check"' in build, "winlux-hardware-check dans l'image")
+ok('winlux-rotation.py" "$stage/usr/bin/winlux-rotation"' in build, "winlux-rotation dans l'image")
 for line in ("drivers/net/wireless", "net/mac80211", "net/netfilter"):
     ok(f"!{line}" in dirs_list or line not in dirs_list, f"{line} laissé au Wi-Fi / pare-feu (#398)")
 for name in ("pinctrl_sunrisepoint", "asix", "uhid", "binfmt_misc", "raid1", "wacom", "hid_sensor_accel_3d", "typec_displayport", "cdc_acm", "hv_vmbus"):

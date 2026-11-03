@@ -146,6 +146,7 @@ cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
 # Pilotes du matériel réel (cartes graphiques, NVIDIA, VA-API, microcode, fwupd).
 install -m 755 "$root/scripts/winlux-drivers.py" "$stage/usr/bin/winlux-drivers"
 install -m 755 "$root/scripts/winlux-hardware-check.py" "$stage/usr/bin/winlux-hardware-check"
+install -m 755 "$root/scripts/winlux-rotation.py" "$stage/usr/bin/winlux-rotation"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
