@@ -598,9 +598,12 @@ fi
 if test "$DISABLE_ROOT" = 1; then
     log 'Compte root désactivé (sudo recommandé)'
     passwd -l root 2>/dev/null || true
+    rm -f /etc/winlux/root-enabled
 else
     log 'Mot de passe root défini'
     printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
+    # « su » garde alors son sens habituel dans le terminal (winlux-su.sh).
+    mkdir -p /etc/winlux && : >/etc/winlux/root-enabled
 fi
 
 # --- Connexion automatique ---
