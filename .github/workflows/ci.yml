@@ -318,6 +318,8 @@ jobs:
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
+          sudo apt-get update -q
+          sudo sh scripts/test-store-apt-reel.sh
           python3 -B scripts/test-store-catalogs.py
           sh scripts/test-display.sh
           sh scripts/test-touchpad.sh
