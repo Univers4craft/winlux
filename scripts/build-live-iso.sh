@@ -145,6 +145,7 @@ cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
 cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
 # Pilotes du matériel réel (cartes graphiques, NVIDIA, VA-API, microcode, fwupd).
 install -m 755 "$root/scripts/winlux-drivers.py" "$stage/usr/bin/winlux-drivers"
+install -m 755 "$root/scripts/winlux-hardware-check.py" "$stage/usr/bin/winlux-hardware-check"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
@@ -357,6 +358,11 @@ for directory in sound drivers/soundwire; do
     done
 done
 sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
+# Matériel réel : dossiers entiers de pilotes (stockage, Ethernet, USB,
+# Bluetooth, pavés et écrans tactiles, capteurs, portables, webcams, systèmes
+# de fichiers, pare-feu…), dépendances comprises, compressés comme chez Ubuntu.
+# Politique et coût : docs/MATERIEL.md ; contrôle : check-image-hardware.py.
+python3 "$root/scripts/stage-kernel-modules.py" "$stage" "$kernel_release" "$root/scripts/hardware-module-dirs.list"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do
     if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
@@ -1217,6 +1223,9 @@ if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
 fi
 # Aucun logiciel d'éditeur tiers non redistribuable dans l'image publiée.
 sh "$root/scripts/check-image-redistributable.sh" "$stage"
+# Pilotes et firmwares essentiels des PC réels dans l'image finale : la
+# construction échoue si l'un d'eux disparaît (scripts/hardware-essentials.list).
+python3 "$root/scripts/check-image-hardware.py" "$stage" "$kernel_release"
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
 for unit in smbd nmbd samba samba-ad-dc wsdd; do

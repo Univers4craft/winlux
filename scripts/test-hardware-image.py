@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""Pilotes du matériel réel dans l'image et diagnostic winlux-hardware-check.
+
+- stage-kernel-modules.py embarque des dossiers entiers de pilotes, respecte
+  les exclusions et ramène les dépendances d'un module (modules.dep) même
+  hors des dossiers listés ;
+- check-image-hardware.py fait échouer la construction si un pilote ou un
+  firmware essentiel manque, ou si un module n'est pas dans modules.dep ;
+- winlux-hardware-check signale un appareil sans pilote, un firmware
+  manquant, un pavé tactile ou une batterie absents d'un portable, en
+  quatre langues ;
+- les listes réelles : chaque pilote essentiel est bien embarqué par l'un des
+  mécanismes de build-live-iso.sh (vérifié sur un vrai noyau quand la machine
+  en a un : WINLUX_HOST_MODULES ou /lib/modules/*-generic).
+Politique : docs/MATERIEL.md.
+"""
+import glob
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "scripts"
+RELEASE = "7.0.0-42-generic"
+checks = 0
+
+
+def ok(condition, label):
+    global checks
+    if not condition:
+        print(f"ÉCHEC : {label}", file=sys.stderr)
+        raise SystemExit(1)
+    checks += 1
+    print(f"  OK     {label}")
+
+
+def write(path, text=""):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def run(*args, env=None):
+    return subprocess.run([sys.executable, "-B", *map(str, args)], capture_output=True, text=True,
+                          env=dict(os.environ, **(env or {})), timeout=120)
+
+
+def fake_kernel(base):
+    """Noyau de construction factice : quelques modules et leur modules.dep."""
+    modules = base / "host" / RELEASE
+    files = {
+        "kernel/drivers/ata/ahci.ko.zst": "kernel/drivers/ata/libahci.ko.zst",
+        "kernel/drivers/ata/libahci.ko.zst": "",
+        "kernel/drivers/md/raid456.ko.zst": "kernel/crypto/async_tx/async_xor.ko.zst kernel/crypto/xor.ko.zst",
+        "kernel/drivers/md/dm-vdo/dm-vdo.ko.zst": "",
+        "kernel/crypto/async_tx/async_xor.ko.zst": "kernel/crypto/xor.ko.zst",
+        "kernel/crypto/xor.ko.zst": "",
+        "kernel/crypto/ccm.ko.zst": "",
+        "kernel/drivers/pinctrl/intel/pinctrl-sunrisepoint.ko.zst": "",
+        "kernel/drivers/hid/uhid.ko.zst": "",
+        "kernel/fs/binfmt_misc.ko.zst": "",
+    }
+    for name in files:
+        write(modules / name, "ZSTD " + name)
+    write(modules / "modules.dep", "".join(f"{name}: {deps}\n" for name, deps in files.items()))
+    write(modules / "modules.builtin", "kernel/drivers/ata/ata_piix.ko\n")
+    return base / "host"
+
+
+print("Dossiers entiers de pilotes (stage-kernel-modules.py)")
+with tempfile.TemporaryDirectory() as temporary:
+    base = Path(temporary)
+    host = fake_kernel(base)
+    stage = base / "stage"
+    image = stage / "lib/modules" / RELEASE
+    # Déjà embarqué décompressé par une autre boucle de build-live-iso.sh.
+    write(image / "kernel/drivers/ata/libahci.ko", "RAW")
+    listing = base / "dirs.list"
+    write(listing, "# commentaire\ndrivers/ata\ndrivers/md\n!drivers/md/dm-vdo\ndrivers/pinctrl\nfs/binfmt_misc.ko\n")
+    result = run(SCRIPTS / "stage-kernel-modules.py", stage, RELEASE, listing, "--modules", host)
+    ok(result.returncode == 0, "copie sans erreur : " + result.stdout.strip())
+    ok((image / "kernel/drivers/ata/ahci.ko.zst").read_text() == "ZSTD kernel/drivers/ata/ahci.ko.zst",
+       "module copié tel qu'Ubuntu le livre (.ko.zst)")
+    ok((image / "kernel/drivers/md/raid456.ko.zst").is_file() and (image / "kernel/drivers/pinctrl/intel/pinctrl-sunrisepoint.ko.zst").is_file(),
+       "sous-dossiers parcourus (RAID, broches Intel Skylake)")
+    ok(not (image / "kernel/drivers/md/dm-vdo/dm-vdo.ko.zst").exists(), "« ! » exclut un sous-dossier")
+    ok((image / "kernel/crypto/xor.ko.zst").is_file() and (image / "kernel/crypto/async_tx/async_xor.ko.zst").is_file(),
+       "dépendances ramenées hors des dossiers listés (raid456 → xor)")
+    ok(not (image / "kernel/crypto/ccm.ko.zst").exists(), "rien d'autre hors des dossiers listés")
+    ok((image / "kernel/fs/binfmt_misc.ko.zst").is_file(), "un fichier seul peut être listé (binfmt_misc)")
+    ok(not (image / "kernel/drivers/ata/libahci.ko.zst").exists() and (image / "kernel/drivers/ata/libahci.ko").read_text() == "RAW",
+       "module déjà présent décompressé : pas de doublon")
+    ok(run(SCRIPTS / "stage-kernel-modules.py", stage, RELEASE, listing, "--modules", host).returncode == 0,
+       "deuxième passage sans erreur")
+
+    print("Contrôle de l'image (check-image-hardware.py)")
+    essentials = base / "essentials.list"
+    write(essentials, "module ahci\nmodule ata_piix\nmodule pinctrl-sunrisepoint\nmodule nom_disparu\nfirmware i915/*_guc*\nfirmware intel/sof*/*\n")
+    write(stage / "usr/lib/firmware/i915/tgl_guc_70.bin.zst", "fw")
+    write(stage / "usr/lib/firmware/intel/sof-ipc4/tgl/sof-tgl.ri", "fw")
+    (stage / "lib/firmware").symlink_to("../usr/lib/firmware")
+    dep = "".join(f"{p.relative_to(image)}:\n" for p in sorted(image.rglob("*.ko*")))
+    write(image / "modules.dep", dep)
+
+    def check():
+        return run(SCRIPTS / "check-image-hardware.py", stage, RELEASE, "--essentials", essentials, "--modules", host)
+
+    result = check()
+    ok(result.returncode == 0, "image complète acceptée")
+    ok("nom_disparu" in result.stderr, "module inconnu du noyau signalé sans échec")
+    sunrise = image / "kernel/drivers/pinctrl/intel/pinctrl-sunrisepoint.ko.zst"
+    sunrise.rename(sunrise.with_suffix(".bak"))
+    result = check()
+    ok(result.returncode == 1 and "module pinctrl-sunrisepoint" in result.stderr, "pilote essentiel disparu : construction refusée")
+    sunrise.with_suffix(".bak").rename(sunrise)
+    write(image / "modules.dep", dep.replace("kernel/drivers/ata/ahci.ko.zst:\n", ""))
+    result = check()
+    ok(result.returncode == 1 and "modules.dep" in result.stderr and "ahci" in result.stderr, "module absent de modules.dep refusé")
+    write(image / "modules.dep", dep)
+    (stage / "usr/lib/firmware/i915/tgl_guc_70.bin.zst").unlink()
+    result = check()
+    ok(result.returncode == 1 and "firmware i915/*_guc*" in result.stderr, "firmware essentiel disparu : construction refusée")
+
+print("Diagnostic winlux-hardware-check")
+with tempfile.TemporaryDirectory() as temporary:
+    hw = Path(temporary) / "hw"
+    sysfs = hw / "sys"
+    modules = hw / "lib/modules" / RELEASE
+    write(modules / "modules.alias", "alias pci:v00008086d0000A0E8sv*sd*bc*sc*i* intel_lpss_pci\n")
+    drivers = sysfs / "bus/pci/drivers"
+
+    def pci(slot, cls, vendor, device, driver=None, modalias=""):
+        d = sysfs / "bus/pci/devices" / slot
+        write(d / "class", cls); write(d / "vendor", vendor); write(d / "device", device); write(d / "modalias", modalias)
+        if driver:
+            (drivers / driver).mkdir(parents=True, exist_ok=True)
+            (d / "driver").symlink_to(drivers / driver)
+
+    pci("0000:00:02.0", "0x030000", "0x8086", "0x9a49", "i915")
+    pci("0000:00:15.0", "0x0c8000", "0x8086", "0xa0e8", None, "pci:v00008086d0000A0E8sv00001028sd00000A20bc0Csc80i00")
+    pci("0000:02:00.0", "0x020000", "0x1969", "0xe0b1", None, "pci:v00001969d0000E0B1sv*")
+    pci("0000:00:00.0", "0x060000", "0x8086", "0x9a14")  # pont hôte : jamais signalé
+    write(sysfs / "bus/i2c/devices/i2c-ELAN0001:00/name", "ELAN0001:00")
+    write(sysfs / "class/dmi/id/chassis_type", "10")
+    write(sysfs / "class/dmi/id/sys_vendor", "Dell Inc.")
+    write(sysfs / "class/dmi/id/product_name", "Latitude 5420")
+    write(hw / "proc/asound/cards", " 0 [sofhdadsp      ]: sof-hda-dsp - sof-hda-dsp\n")
+    write(hw / "proc/bus/input/devices", 'I: Bus=0011\nN: Name="AT Translated Set 2 keyboard"\n\n')
+    (sysfs / "class/backlight/intel_backlight").mkdir(parents=True)
+    log = Path(temporary) / "dmesg.txt"
+    write(log, "[ 3.1] iwlwifi 0000:00:14.3: Direct firmware load for iwlwifi-so-a0-gf-a0-89.ucode failed with error -2\n")
+    env = {"WINLUX_HW_ROOT": str(hw), "WINLUX_KERNEL_LOG": str(log), "WINLUX_KERNEL_RELEASE": RELEASE,
+           "WINLUX_LANG": "fr", "PATH": "/nonexistent"}
+    result = run(SCRIPTS / "winlux-hardware-check.py", env=env)
+    out = result.stdout
+    ok(result.returncode == 1, "problèmes trouvés : code de sortie 1")
+    ok("Dell Inc. Latitude 5420" in out, "machine nommée (DMI)")
+    ok("[PCI 8086:a0e8]" in out and "intel_lpss_pci présent mais pas chargé" in out, "pilote présent mais pas chargé (modules.alias)")
+    ok("[PCI 1969:e0b1]" in out and "Installer les pilotes complets" in out, "aucun pilote : renvoi vers les pilotes complets")
+    ok("8086:9a14" not in out, "pont hôte sans pilote non signalé")
+    ok("[I2C ELAN0001]" in out, "pavé tactile I2C (ACPI) sans pilote signalé")
+    ok("iwlwifi-so-a0-gf-a0-89.ucode" in out, "firmware manquant lu dans le journal du noyau")
+    ok("Aucun pavé tactile détecté sur ce portable" in out and "Batterie non détectée" in out, "portable : pavé tactile et batterie absents signalés")
+    ok("Affichage accéléré" in out and "(i915)" in out and "Son : sof-hda-dsp" in out and "intel_backlight" in out,
+       "carte graphique, son et luminosité reconnus")
+    report = json.loads(run(SCRIPTS / "winlux-hardware-check.py", "--json", env=env).stdout)
+    ok(len(report["unsupported"]) == 3 and report["firmware"] == ["iwlwifi-so-a0-gf-a0-89.ucode"], "rapport JSON")
+    saved = Path(temporary) / "rapport.txt"
+    run(SCRIPTS / "winlux-hardware-check.py", "--save", saved, env=env)
+    ok(saved.read_text().startswith("Diagnostic du matériel Winlux"), "--save écrit le rapport")
+    for lang, title in (("en", "Winlux hardware check"), ("es", "Diagnóstico de hardware de Winlux"), ("de", "Winlux-Hardwarediagnose")):
+        ok(run(SCRIPTS / "winlux-hardware-check.py", env=dict(env, WINLUX_LANG=lang)).stdout.startswith(title), f"rapport en {lang}")
+    tool = runpy.run_path(str(SCRIPTS / "winlux-hardware-check.py"), run_name="winlux_hardware_check")
+    ok(all(len(row) == 4 and all(row) for row in tool["T"].values()), "chaque message existe en fr, en, es et de")
+    del env["WINLUX_KERNEL_LOG"]
+
+print("Listes réelles et intégration")
+dirs_list = (SCRIPTS / "hardware-module-dirs.list").read_text()
+essentials_list = (SCRIPTS / "hardware-essentials.list").read_text()
+build = (SCRIPTS / "build-live-iso.sh").read_text()
+ok('stage-kernel-modules.py" "$stage" "$kernel_release" "$root/scripts/hardware-module-dirs.list"' in build
+   and build.index("stage-kernel-modules.py") < build.index('depmod -b "$stage"'), "build-live-iso.sh embarque les dossiers avant depmod")
+ok(build.index('python3 "$root/scripts/check-image-hardware.py" "$stage"') > build.index('python3 "$root/scripts/stage-apt-root.py"'), "contrôle sur la racine finale (après stage-apt-root.py)")
+ok('winlux-hardware-check.py" "$stage/usr/bin/winlux-hardware-check"' in build, "winlux-hardware-check dans l'image")
+for line in ("drivers/net/wireless", "net/mac80211", "net/netfilter"):
+    ok(f"!{line}" in dirs_list or line not in dirs_list, f"{line} laissé au Wi-Fi / pare-feu (#398)")
+for name in ("pinctrl_sunrisepoint", "asix", "uhid", "binfmt_misc", "raid1", "wacom", "hid_sensor_accel_3d", "typec_displayport", "cdc_acm", "hv_vmbus"):
+    ok(f"module {name}\n" in essentials_list, f"essentiel : {name}")
+page = (SCRIPTS / "winlux-hardware-page.py").read_text()
+ok("def run_check" in page and '"Lancer le diagnostic": (' in page, "Paramètres > Matériel et pilotes : bouton Lancer le diagnostic (4 langues)")
+ok((ROOT / "docs/MATERIEL.md").is_file() and "hardware-essentials.list" in (ROOT / "docs/MATERIEL.md").read_text(), "docs/MATERIEL.md")
+
+host_modules = os.environ.get("WINLUX_HOST_MODULES")
+candidates = [Path(host_modules) / r for r in os.listdir(host_modules)] if host_modules and os.path.isdir(host_modules) else \
+    [Path(p) for p in sorted(glob.glob("/lib/modules/*-generic"))]
+kernel = next((p for p in candidates if (p / "modules.dep").is_file()), None)
+if kernel is None:
+    print("  —      pas de noyau Ubuntu complet sur cette machine : couverture réelle non vérifiée")
+else:
+    stager = runpy.run_path(str(SCRIPTS / "stage-kernel-modules.py"), run_name="stager")
+    include, exclude = stager["read_list"](SCRIPTS / "hardware-module-dirs.list")
+    chosen = set(stager["select"](kernel, include, exclude))
+    # Les autres mécanismes de build-live-iso.sh : son entier, Wi-Fi (#398),
+    # liste nommée hardware-modules.list (+ dépendances), outils de stockage.
+    deps = stager["dependencies"](kernel)
+    named = set(" ".join(l.split("#", 1)[0] for l in (SCRIPTS / "hardware-modules.list").read_text().splitlines()).split())
+    named |= {"loop", "nbd", "isofs", "udf", "hfsplus", "ntfs3", "exfat", "squashfs", "virtio_net", "e1000", "e1000e", "r8169",
+              "virtio_input", "hid_generic", "usbhid", "psmouse", "snd_hda_intel", "vfat", "usb_storage", "uas", "cifs", "nfs"}
+    norm = lambda path: os.path.basename(stager["bare"](path)).replace("-", "_")
+    by_name = {norm(m): m for m in deps}
+    for name in list(named):
+        module = by_name.get(name.replace("-", "_"))
+        if module:
+            chosen.add(module)
+            chosen.update(deps[module])
+    chosen |= {m for m in deps if m.startswith(("kernel/sound/", "kernel/drivers/soundwire/"))}
+    shipped = {norm(m) for m in chosen}
+    builtin = {norm(l) for l in (kernel / "modules.builtin").read_text().split()}
+    missing = []
+    for line in essentials_list.splitlines():
+        kind, _, value = line.split("#", 1)[0].strip().partition(" ")
+        if kind == "module":
+            name = value.replace("-", "_")
+            if name in by_name and name not in shipped and name not in builtin:
+                missing.append(name)
+    ok(not missing, f"noyau {kernel.name} : chaque pilote essentiel est embarqué ({', '.join(missing) or 'aucun oubli'})")
+
+print(f"Matériel dans l'image : {checks} vérifications.")
