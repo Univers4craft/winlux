@@ -4276,11 +4276,14 @@ pub unsafe extern "win64" fn initialize_critical_section_ex(
     spin: u32,
     flags: u32,
 ) -> i32 {
-    if flags & !0x0100_0000 != 0 {
+    // Drapeaux RTL_CRITICAL_SECTION_FLAG_* (octet haut : NO_DEBUG_INFO,
+    // DYNAMIC_SPIN, STATIC_INIT, RESOURCE_TYPE, FORCE_DEBUG_INFO…) : aucun
+    // ne change le comportement ici ; le reste est réservé.
+    if flags & !0xFF00_0000 != 0 {
         crate::process::set_last_error(87);
         return 0;
     }
-    initialize_critical_section_and_spin_count(cs, spin)
+    initialize_critical_section_and_spin_count(cs, spin & 0x00FF_FFFF)
 }
 pub unsafe extern "win64" fn enter_critical_section(cs: *mut c_void) {
     let Some(m) = critical_object(cs as usize) else {
@@ -5078,13 +5081,18 @@ pub unsafe extern "win64" fn create_process_w(
         info,
     )
 }
-pub unsafe extern "win64" fn open_process(_access: u32, _inherit: i32, pid: u32) -> usize {
+pub unsafe extern "win64" fn open_process(_access: u32, inherit: i32, pid: u32) -> usize {
     if pid == 0 || pid > i32::MAX as u32 {
         crate::process::set_last_error(87);
         return 0;
     }
     if pid == libc::getpid() as u32 {
-        return get_current_process();
+        // Vrai handle vers soi (jamais -1, qui vaut INVALID_HANDLE_VALUE) :
+        // crashpad ouvre ainsi son propre processus, héritable, et passe la
+        // valeur à son gestionnaire sur la ligne de commande.
+        let h = add_sync(foreign_process(pid as i32), None);
+        crate::dlls::inherit::set(h, inherit != 0);
+        return h;
     }
     // Les PID Windows sont les PID Linux : tout processus vivant s'ouvre, les
     // droits réels sont vérifiés par le noyau au moment d'agir (kill, nice).

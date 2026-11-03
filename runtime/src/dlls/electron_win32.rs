@@ -590,6 +590,99 @@ unsafe extern "win64" fn IsDarkModeAllowed(_hwnd: usize) -> i32 {
     1
 }
 
+// ============================================================
+//  user32 : stations de fenêtres et bureaux (bac à sable Chromium)
+// ============================================================
+//
+// Le bac à sable crée sa propre station et son bureau pour isoler les
+// processus enfants. Sous Winlux tout s'affiche sur le même écran X11 :
+// des handles stables suffisent, et GetUserObjectInformation (user32.rs)
+// répond pour eux.
+
+static NEXT_USER_OBJECT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0x5753_0100);
+
+fn new_user_object() -> usize {
+    NEXT_USER_OBJECT.fetch_add(4, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Bureau « Default » de la station WinSta0.
+const DEFAULT_DESKTOP: usize = 0x4445_0001;
+
+unsafe extern "win64" fn CreateWindowStation(
+    _name: usize,
+    _flags: u32,
+    _access: u32,
+    sa: usize,
+) -> usize {
+    let h = new_user_object();
+    crate::dlls::inherit::from_security_attributes(h, sa);
+    h
+}
+
+unsafe extern "win64" fn OpenWindowStation(_name: usize, _inherit: i32, _access: u32) -> usize {
+    new_user_object()
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn CreateDesktop(
+    _name: usize,
+    _device: usize,
+    _devmode: usize,
+    _flags: u32,
+    _access: u32,
+    sa: usize,
+    _heap_kb: u32,
+    _reserved: usize,
+) -> usize {
+    let h = new_user_object();
+    crate::dlls::inherit::from_security_attributes(h, sa);
+    h
+}
+
+unsafe extern "win64" fn OpenDesktop(
+    _name: usize,
+    _flags: u32,
+    _inherit: i32,
+    _access: u32,
+) -> usize {
+    DEFAULT_DESKTOP
+}
+
+unsafe extern "win64" fn OpenInputDesktop(_flags: u32, _inherit: i32, _access: u32) -> usize {
+    DEFAULT_DESKTOP
+}
+
+unsafe extern "win64" fn GetThreadDesktop(_tid: u32) -> usize {
+    DEFAULT_DESKTOP
+}
+
+unsafe extern "win64" fn UserObjectOk(_h: usize) -> i32 {
+    1
+}
+
+pub fn user32_exports() -> crate::dlls::Exports {
+    crate::exports! {
+        "CreateWindowStationW" => fn CreateWindowStation,
+        "CreateWindowStationA" => fn CreateWindowStation,
+        "OpenWindowStationW" => fn OpenWindowStation,
+        "OpenWindowStationA" => fn OpenWindowStation,
+        "CloseWindowStation" => fn UserObjectOk,
+        "SetProcessWindowStation" => fn UserObjectOk,
+        "CreateDesktopW" => fn CreateDesktop,
+        "CreateDesktopA" => fn CreateDesktop,
+        "CreateDesktopExW" => fn CreateDesktop,
+        "CreateDesktopExA" => fn CreateDesktop,
+        "OpenDesktopW" => fn OpenDesktop,
+        "OpenDesktopA" => fn OpenDesktop,
+        "OpenInputDesktop" => fn OpenInputDesktop,
+        "GetThreadDesktop" => fn GetThreadDesktop,
+        "SetThreadDesktop" => fn UserObjectOk,
+        "SwitchDesktop" => fn UserObjectOk,
+        "CloseDesktop" => fn UserObjectOk,
+    }
+}
+
 pub fn uxtheme_exports() -> crate::dlls::Exports {
     crate::exports! {
         "#104" => fn ThemeNoop,
@@ -1151,6 +1244,7 @@ pub fn all() -> Vec<(&'static str, crate::dlls::Exports)> {
         ("ntdll", ntdll_exports()),
         ("advapi32", advapi32_exports()),
         ("uxtheme", uxtheme_exports()),
+        ("user32", user32_exports()),
         ("iphlpapi", iphlpapi_exports()),
         ("ws2_32", ws2_32_exports()),
         ("dbghelp", dbghelp_exports()),
@@ -1225,6 +1319,52 @@ mod tests {
             assert_eq!(libc::waitpid(pid, &mut st, 0), pid);
             assert!(libc::WIFEXITED(st));
             assert_eq!(libc::WEXITSTATUS(st), 7);
+        }
+    }
+
+    #[test]
+    fn station_bureau_et_securite_crashpad() {
+        use crate::dlls::kernel32 as k;
+        unsafe {
+            let ws = CreateWindowStation(0, 0, 0, 0);
+            assert_ne!(ws, 0);
+            assert_ne!(CreateDesktop(0, 0, 0, 0, 0, 0, 0, 0), 0);
+            assert_eq!(GetThreadDesktop(1), DEFAULT_DESKTOP);
+            assert!(crate::dlls::lookup("user32", "CreateWindowStationW").is_some());
+            // OpenProcess sur soi : vrai handle héritable, jamais -1.
+            let me = k::open_process(0x1fffff, 1, std::process::id());
+            assert_ne!(me, usize::MAX);
+            assert_ne!(me, 0);
+            assert!(k::is_current_process_handle(me));
+            assert!(crate::dlls::inherit::is(me));
+            // InitializeCriticalSectionEx avec RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO.
+            let mut cs = [0u64; 5];
+            assert_eq!(
+                k::initialize_critical_section_ex(cs.as_mut_ptr().cast(), 0, 0x1000_0000),
+                1
+            );
+            assert_eq!(
+                k::initialize_critical_section_ex(cs.as_mut_ptr().cast(), 0, 0x1),
+                0
+            );
+            // BuildSecurityDescriptorW (crashpad, tube nommé).
+            let f = crate::dlls::lookup("advapi32", "BuildSecurityDescriptorW").unwrap();
+            type Build = unsafe extern "win64" fn(
+                usize,
+                usize,
+                u32,
+                usize,
+                u32,
+                usize,
+                usize,
+                *mut u32,
+                *mut usize,
+            ) -> u32;
+            let build: Build = std::mem::transmute(f);
+            let (mut size, mut sd) = (0u32, 0usize);
+            assert_eq!(build(0, 0, 0, 0, 0, 0, 0, &mut size, &mut sd), 0);
+            assert_eq!(size, 20);
+            assert_ne!(sd, 0);
         }
     }
 
