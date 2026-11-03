@@ -719,6 +719,9 @@ pub fn remove(m: &Manifest, log: &mut Logger) {
     }
     let _ = std::fs::remove_file(manifest_path(&m.id));
     log.log(&format!("{} est désinstallé.", m.name));
+    // Quel que soit le chemin (--remove, --uninstall, désinstalleur) : le
+    // lanceur « Nom » du Bureau part avec le raccourci.
+    refresh_launchers();
 }
 
 /// Informations sur un installateur.
@@ -905,6 +908,8 @@ pub fn cli(args: &[String]) -> i32 {
                 };
                 let (rc, msg) = programs::uninstall_key(k);
                 if rc == 0 {
+                    // msiexec et désinstalleurs externes ne passent pas par
+                    // la désinstallation intégrée : lanceurs remis à jour ici.
                     refresh_launchers();
                 }
                 match &out {
