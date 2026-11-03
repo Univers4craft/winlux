@@ -67,7 +67,11 @@ open_now() {
     if printf '%s\n' "$list" | grep -qx "catalogue:$default"; then run_browser "defaut:$default" "$@"; fi
     found=$(printf '%s\n' "$list" | grep -v '^defaut:' || true)
     [ -n "$found" ] || return 3
-    count=$(printf '%s\n' "$found" | wc -l)
+    # Sans wc ni head : le lanceur ne compte que sur sh, sed et grep.
+    first=${found%%"
+"*}
+    count=1
+    [ "$first" = "$found" ] || count=2
     if [ "$count" -gt 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}${WINLUX_BROWSER_CHOICE:-}" ]; then
         chooser=${WINLUX_BROWSER_CHOICE:-/usr/bin/winlux-browser-choice}
         if [ -x "$chooser" ] || command -v "$chooser" >/dev/null 2>&1; then
@@ -84,7 +88,7 @@ open_now() {
             exit 0
         fi
     fi
-    run_browser "$(printf '%s\n' "$found" | head -n 1)" "$@"
+    run_browser "$first" "$@"
 }
 
 # Lien gardé pendant le choix du navigateur : la session appelle --pending
