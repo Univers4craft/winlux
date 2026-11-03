@@ -46,6 +46,10 @@ import uuid
 
 SYS_ROOT = Path(os.environ.get("WINLUX_SYS_ROOT", "/"))
 CONNECTIONS = Path(os.environ.get("WINLUX_WIFI_CONNECTIONS", "/etc/NetworkManager/system-connections"))
+# Certificats choisis pour le Wi-Fi d'entreprise : copiés ici (root, 0600) pour
+# que le réseau se reconnecte même si le fichier d'origine est déplacé.
+KEPT_CERTS = Path(os.environ.get("WINLUX_WIFI_CERTS", "/etc/winlux/wifi-certificats"))
+CERT_MAX = 1 << 20
 RELAY_SOCKET = os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")
 AIRPLANE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/airplane-mode"
 SECURITIES = ("open", "wpa", "sae", "wep", "owe", "eap")
@@ -494,6 +498,55 @@ def remove_profile(ident, path=None):
     if path is not None:
         try: path.unlink()
         except OSError: pass
+    shutil.rmtree(KEPT_CERTS / ident, ignore_errors=True)
+
+
+def peer_can_read(path):
+    """Relayé depuis un compte, le service tourne en root : il ne prend un
+    fichier que si ce compte peut le lire lui-même (pas /etc/shadow)."""
+    user = os.environ.get("WINLUX_PEER_USER", "")
+    if os.geteuid() != 0 or not user or user == "root":
+        return os.access(path, os.R_OK)
+    import pwd
+    try: entry = pwd.getpwnam(user)
+    except KeyError: return False
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setgroups(os.getgrouplist(user, entry.pw_gid))
+            os.setgid(entry.pw_gid)
+            os.setuid(entry.pw_uid)
+            with open(path, "rb") as handle: handle.read(1)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status) == 0
+
+
+def keep_certificates(ident, eap):
+    """Copie les certificats choisis dans KEPT_CERTS/<profil>/ ; renvoie les options
+    qui pointent sur les copies. FileNotFoundError si un fichier manque ou n'est
+    pas lisible par le compte qui le demande."""
+    kept = dict(eap)
+    for name in ("ca", "client_cert", "private_key"):
+        value = kept.get(name, "")
+        if not value or (name == "ca" and value in ("system", "none")):
+            continue
+        source = Path(value)
+        if not source.is_absolute() or not source.is_file() or not peer_can_read(source) \
+                or source.stat().st_size > CERT_MAX:
+            raise FileNotFoundError(value)
+        folder = KEPT_CERTS / ident
+        folder.mkdir(parents=True, exist_ok=True)
+        os.chmod(folder, 0o700)
+        suffix = source.suffix.lower() if re.fullmatch(r"\.[a-z0-9]{1,5}", source.suffix.lower()) else ".pem"
+        target = folder / (name.replace("_", "-") + suffix)
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "wb") as out:
+            out.write(source.read_bytes())
+        kept[name] = str(target)
+    return kept
 
 
 def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True, **eap):
@@ -512,7 +565,14 @@ def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True,
     if problem:
         return fail(problem)
     previous = profiles_for(ssid)
-    text, ident = profile_text(ssid, security, key, identity, hidden, autoconnect,
+    ident = str(uuid.uuid4())
+    if security == "eap":
+        try:
+            eap = keep_certificates(ident, eap)
+        except OSError as error:
+            shutil.rmtree(KEPT_CERTS / ident, ignore_errors=True)
+            return fail("eap-file", str(error))
+    text, ident = profile_text(ssid, security, key, identity, hidden, autoconnect, ident=ident,
                                **(eap if security == "eap" else {}))
     try:
         path = write_profile(text, ident)
@@ -532,6 +592,7 @@ def connect(ssid, security, key="", identity="", hidden=False, autoconnect=True,
     for old in previous:
         if old["uuid"] != ident:
             nm(["connection", "delete", "uuid", old["uuid"]], timeout=10)
+            shutil.rmtree(KEPT_CERTS / old["uuid"], ignore_errors=True)
     return done(ssid=ssid)
 
 
@@ -547,6 +608,7 @@ def forget(ssid):
     known = profiles_for(ssid)
     for profile in known:
         nm(["connection", "delete", "uuid", profile["uuid"]], timeout=10)
+        shutil.rmtree(KEPT_CERTS / profile["uuid"], ignore_errors=True)
     return done(removed=len(known))
 
 

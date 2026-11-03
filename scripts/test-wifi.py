@@ -123,7 +123,8 @@ def setup():
     env = dict(os.environ, PATH=f"{work / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                FAKE_NM_STATE=str(work), WINLUX_WIFI_CONNECTIONS=str(work / "connections"),
                WINLUX_SYS_ROOT=str(sys_root), WINLUX_WIFI_DIRECT="1", WINLUX_LANG="fr",
-               XDG_CONFIG_HOME=str(work / "config"), WINLUX_AIRPLANE_MARK=str(work / "airplane-mark"))
+               XDG_CONFIG_HOME=str(work / "config"), WINLUX_AIRPLANE_MARK=str(work / "airplane-mark"),
+               WINLUX_WIFI_CERTS=str(work / "certificats-gardes"))
     return work, env
 
 
@@ -232,10 +233,19 @@ def test_backend():
     tls = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls",
                   "--ca", str(certs / "ca.pem"), "--client-cert", str(certs / "alice.p12"), "--key-stdin", key="code-p12")
     text = profile_of("Bureau")
-    ok(tls.get("ok") and "eap=tls;" in text and f"client-cert={certs / 'alice.p12'}" in text
-       and f"private-key={certs / 'alice.p12'}" in text and "private-key-password=code-p12" in text
-       and f"ca-cert={certs / 'ca.pem'}" in text and "password=" not in text.replace("private-key-password=", ""),
+    kept = Path(env["WINLUX_WIFI_CERTS"])
+    folders = [path for path in kept.iterdir()] if kept.is_dir() else []
+    ok(len(folders) == 1, f"certificats copiés à l'abri, un dossier par profil ({folders})")
+    copy = folders[0] if folders else kept
+    ok(tls.get("ok") and "eap=tls;" in text and f"client-cert={copy / 'client-cert.p12'}" in text
+       and f"private-key={copy / 'client-cert.p12'}" in text and "private-key-password=code-p12" in text
+       and f"ca-cert={copy / 'ca.pem'}" in text and "password=" not in text.replace("private-key-password=", ""),
        f"Entreprise TLS : certificat client .p12, autorité choisie ({tls})")
+    ok((copy / "client-cert.p12").read_bytes() == b"p12" and (copy / "client-cert.p12").stat().st_mode & 0o077 == 0,
+       "copie du certificat personnel en 0600")
+    (certs / "alice.p12").unlink()
+    ok((copy / "client-cert.p12").is_file(), "le profil garde son certificat si l'original disparaît")
+    (certs / "alice.p12").write_bytes(b"p12")
     no_cert = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls")
     ok(no_cert.get("error") == "eap-certificate", f"Entreprise TLS sans certificat : demandé en clair ({no_cert})")
     lost = backend(env, "connect", "Bureau", "--security", "eap", "--identity", "alice", "--eap", "tls",
@@ -318,7 +328,16 @@ def test_messages():
                            (["winlux-wifi", "connect", "Box", "--security", "rm"], None),
                            (["winlux-wifi", "connect", "--key-stdin"], None), (["winlux-wifi", "radio", "maybe"], None),
                            (["winlux-wifi", "connect", "Box", "--exec", "x"], None), (["winlux-wifi", "sh"], None),
-                           (["winlux-wifi", "list", "--rescan", "x"], None)):
+                           (["winlux-wifi", "list", "--rescan", "x"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--identity", "moi", "--eap", "peap",
+                             "--phase2", "mschapv2", "--ca", "system", "--domain", "radius.exemple.fr", "--key-stdin"], "user"),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--identity", "moi", "--eap", "tls",
+                             "--ca", "/home/moi/ca.pem", "--client-cert", "/home/moi/alice.p12",
+                             "--private-key", "/home/moi/alice.key", "--key-stdin"], "user"),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--eap", "md5"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--ca", "relatif.pem"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--client-cert", "x.p12"], None),
+                           (["winlux-wifi", "connect", "Box", "--security", "eap", "--domain", "a;b"], None)):
         ok(level(args) == expected, f"relais root : {' '.join(args)} → {expected or 'refusé'}")
 
 
@@ -355,7 +374,7 @@ def walk(widget, Gtk):
 
 
 def test_page(work, env):
-    for key in ("PATH", "FAKE_NM_STATE", "WINLUX_WIFI_CONNECTIONS", "WINLUX_SYS_ROOT", "WINLUX_WIFI_DIRECT", "XDG_CONFIG_HOME", "WINLUX_AIRPLANE_MARK"):
+    for key in ("PATH", "FAKE_NM_STATE", "WINLUX_WIFI_CONNECTIONS", "WINLUX_SYS_ROOT", "WINLUX_WIFI_DIRECT", "XDG_CONFIG_HOME", "WINLUX_AIRPLANE_MARK", "WINLUX_WIFI_CERTS"):
         os.environ[key] = env[key]
     for path in Path(env["WINLUX_WIFI_CONNECTIONS"]).glob("*"):
         path.unlink()
