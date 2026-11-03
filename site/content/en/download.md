@@ -5,7 +5,7 @@ description: Get the installation image of the latest version and the USB drive 
 
 {{download}}
 
-The files come straight from the project's releases page on GitHub. The image is named like `winlux-live-v0.2.18.iso`; it weighs about 1.3 GB.
+The files come straight from the project's releases page on GitHub. The image is named like `winlux-live-v0.2.19.iso`; it weighs about 1.3 GB.
 
 ## What you need
 
@@ -46,7 +46,7 @@ Boot the virtual machine from the ISO file, then follow [the installation](page:
 The USB drive creator checks the image by itself. If you use it another way, compare its SHA-256 checksum with the `.sha256` file published next to it. On Linux:
 
 ```sh
-sha256sum -c winlux-live-v0.2.18.iso.sha256
+sha256sum -c winlux-live-v0.2.19.iso.sha256
 ```
 
 The two checksums must match; otherwise, download the image again.
