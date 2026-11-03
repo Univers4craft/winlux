@@ -10,6 +10,7 @@ import shutil
 from string import Template
 import subprocess
 import threading
+import time
 import unicodedata
 import gi
 gi.require_version("Gtk", "3.0")
@@ -334,6 +335,10 @@ class Start(Gtk.Application):
 
     def osk_toggle(self):
         if self.osk_widget is None: return
+        # Le menu change de taille et de place : la perte de focus ou le clic
+        # vus pendant ce temps ne doivent pas le fermer (⌨ avec une recherche
+        # remplie fermait tout le menu).
+        self.resized_at = time.monotonic()
         self.place(not self.osk_widget.get_visible())
         self.search.grab_focus()
 
@@ -471,14 +476,18 @@ class Start(Gtk.Application):
                 return self.grab_attempts < 30
         return False
 
+    def settling(self):
+        return time.monotonic() - getattr(self, "resized_at", 0) < 0.8
+
     def outside_click(self, _, event):
+        if self.settling(): return False
         x,y=self.window.get_position();width,height=self.window.get_size()
         if not (x<=event.x_root<x+width and y<=event.y_root<y+height):return self.hide()
         return False
 
     def blur(self, *_):
         def later():
-            if not self.window.is_active() and not self.context: self.hide()
+            if not self.window.is_active() and not self.context and not self.settling(): self.hide()
             return False
         GLib.timeout_add(150, later)
         return False
@@ -497,11 +506,10 @@ class Start(Gtk.Application):
         self.render()
 
     def first_result(self, *_):
+        # Même ordre que la liste : applications, Paramètres, fichiers.
         query=fold(self.search.get_text().strip())
         found=settings_for(query) if query else []
-        app_best=rank(self.results[0].get_display_name(),query) if self.results else 9
-        if found and rank(found[0][0],query)<app_best:self.open_setting(found[0][1])
-        elif self.results:self.launch(self.results[0])
+        if self.results:self.launch(self.results[0])
         elif found:self.open_setting(found[0][1])
         elif self.file_results:self.open_file(self.file_results[0])
 
@@ -549,18 +557,26 @@ class Start(Gtk.Application):
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
         self.results = sorted((app for app in self.apps.values() if matches(app, query)),
                               key=lambda app: (rank(app.get_display_name(), query), app.get_display_name().casefold()))
-        settings_after = []
         if listing:
+            # Ordre des résultats : applications (le nom qui commence par la
+            # recherche d'abord), puis pages des Paramètres, puis fichiers. Avec
+            # « par », un Parallel.dll téléchargé passait avant l'application
+            # Paramètres et Entrée l'ouvrait.
+            previous = None
+            if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
+            for app in self.results:
+                group = category(app)
+                if not query and group != previous:
+                    heading = Gtk.Label(label=group, xalign=0, margin_top=10)
+                    heading.get_style_context().add_class("heading")
+                    self.content.pack_start(heading, False, False, 0)
+                    previous = group
+                self.content.pack_start(self.app_button(app), False, False, 0)
             if query:
-                # « par » : l'application Paramètres passe avant « Bluetooth et
-                # appareils » ; une page ne passe devant que si elle répond mieux.
-                found = settings_for(query)
-                apps_best = rank(self.results[0].get_display_name(), query) if self.results else 9
-                for label, page in found:
+                for label, page in settings_for(query):
                     button = Gtk.Button(label=_t("Paramètres · ") + label)
                     on_click(button, lambda target=page: self.open_setting(target))
-                    if rank(label, query) < apps_best: self.content.pack_start(button, False, False, 0)
-                    else: settings_after.append(button)
+                    self.content.pack_start(button, False, False, 0)
                 if query != self.file_query:
                     self.file_query = query
                     self.file_generation += 1
@@ -573,17 +589,6 @@ class Start(Gtk.Application):
                     self.content.pack_start(button, False, False, 0)
                 if len(self.file_results) == 30:
                     self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
-            previous = None
-            if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
-            for app in self.results:
-                group = category(app)
-                if not query and group != previous:
-                    heading = Gtk.Label(label=group, xalign=0, margin_top=10)
-                    heading.get_style_context().add_class("heading")
-                    self.content.pack_start(heading, False, False, 0)
-                    previous = group
-                self.content.pack_start(self.app_button(app), False, False, 0)
-            for button in settings_after: self.content.pack_start(button, False, False, 0)
             if not self.results and not (query and (self.file_results or any(query in fold(label) for label, _ in SETTINGS))):
                 self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
