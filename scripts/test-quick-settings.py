@@ -155,6 +155,24 @@ assert 'page == "quick" and shutil.which("winlux-popup")' in tools
 rc = (HERE.parent / "integration/native/config/openbox/rc.xml").read_text(encoding="utf-8")
 assert re.search(r'key="W-a".*winlux-(system-tools|popup) quick', rc)
 
+# 4 bis. Icône batterie : éclair et infobulle traduite quand le secteur est branché.
+def tray_battery(status, online, lang="fr"):
+    root = Path(tempfile.mkdtemp(dir=work))
+    (root / "BAT1").mkdir(); (root / "ADP1").mkdir()
+    (root / "BAT1/capacity").write_text("29\n"); (root / "BAT1/status").write_text(status + "\n")
+    (root / "ADP1/type").write_text("Mains\n"); (root / "ADP1/online").write_text(online + "\n")
+    result = subprocess.run([sys.executable, str(HERE / "winlux-tray.py"), "battery"], capture_output=True, text=True,
+                            env=dict(os.environ, WINLUX_POWER_SUPPLY=str(root), WINLUX_TRAY_DIR=str(root / "tray"), WINLUX_LANG=lang))
+    assert result.returncode == 0, result.stderr
+    icon = Path(re.search(r"<img>(.*?)</img>", result.stdout)[1])
+    return icon.name, "M13.5 5" in icon.read_text(), re.search(r"<tool>(.*?)</tool>", result.stdout)[1]
+assert tray_battery("Charging", "1") == ("battery-29-ac.svg", True, "Batterie : 29 % — en charge"), tray_battery("Charging", "1")
+assert tray_battery("Discharging", "0") == ("battery-29.svg", False, "Batterie : 29 %"), tray_battery("Discharging", "0")
+assert tray_battery("Not charging", "1") == ("battery-29-ac.svg", True, "Batterie : 29 % — branchée, pas en charge")
+assert tray_battery("Charging", "1", "en")[2] == "Battery: 29% — charging"
+tray_tr = re.search(r"_TR = \{(.*?)\n\}", tray, re.S)[1]
+assert tray_tr.count("{level}") >= 16, "infobulles batterie traduites dans les 4 langues"
+
 # 5. Saisie du pointeur avec owner_events=True (sinon aucun clic dans le panneau).
 source = (HERE / "winlux-popup.py").read_text(encoding="utf-8")
 assert "Gdk.SeatCapabilities.POINTER,True" in source and "POINTER,False" not in source

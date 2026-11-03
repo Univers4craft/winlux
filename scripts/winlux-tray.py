@@ -37,6 +37,10 @@ _TR = {
     'Ethernet : ': ('Ethernet: ', 'Ethernet: ', 'Ethernet: '),
     'Réseau déconnecté': ('Network disconnected', 'Red desconectada', 'Netzwerk getrennt'),
     'Centre de notifications': ('Notification center', 'Centro de notificaciones', 'Benachrichtigungscenter'),
+    'Batterie : {level} %': ('Battery: {level}%', 'Batería: {level} %', 'Akku: {level} %'),
+    'Batterie : {level} % — en charge': ('Battery: {level}% — charging', 'Batería: {level} % — cargando', 'Akku: {level} % — wird geladen'),
+    'Batterie : {level} % — chargée': ('Battery: {level}% — fully charged', 'Batería: {level} % — cargada', 'Akku: {level} % — vollständig geladen'),
+    'Batterie : {level} % — branchée, pas en charge': ('Battery: {level}% — plugged in, not charging', 'Batería: {level} % — conectada, sin cargar', 'Akku: {level} % — angeschlossen, wird nicht geladen'),
 }
 
 
@@ -47,11 +51,12 @@ def _t(text):
 
 
 kind = sys.argv[1]
-directory = Path("/run/winlux/tray")
+directory = Path(os.environ.get("WINLUX_TRAY_DIR", "/run/winlux/tray"))
 directory.mkdir(parents=True, exist_ok=True)
 color = "#e7ddf5"
 if kind == "battery":
-    batteries = list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
+    supplies = Path(os.environ.get("WINLUX_POWER_SUPPLY", "/sys/class/power_supply"))
+    batteries = sorted(supplies.glob("BAT*/capacity"))
     level = None
     if batteries:
         # Une batterie absente ou en défaut expose parfois un fichier vide ou illisible.
@@ -62,7 +67,27 @@ if kind == "battery":
             level = None
     if level is not None:
         body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
-        tooltip, identity = f"Batterie : {level}% — {status}", f"battery-{level}"
+        # Certains contrôleurs annoncent « Not charging » ou « Unknown » sur
+        # secteur (seuil de charge, batterie pleine) : l'adaptateur fait foi.
+        def _online(adapter):
+            try:
+                return ((adapter / "type").read_text().strip() in ("Mains", "USB", "USB_C", "USB_PD")
+                        and (adapter / "online").read_text().strip() == "1")
+            except OSError:
+                return False
+        plugged = status in ("Charging", "Full") or any(_online(path) for path in supplies.iterdir() if not path.name.startswith("BAT"))
+        if plugged:
+            body += f'<path d="M13.5 5 8 13h4l-1.5 7L16 12h-4z" fill="{color}" stroke="#1e1b26" stroke-width="1" stroke-linejoin="round"/>'
+        if status == "Charging":
+            state = "Batterie : {level} % — en charge"
+        elif plugged and (status == "Full" or level >= 99):
+            state = "Batterie : {level} % — chargée"
+        elif plugged:
+            state = "Batterie : {level} % — branchée, pas en charge"
+        else:
+            state = "Batterie : {level} %"
+        tooltip = _t(state).format(level=level)
+        identity = f"battery-{level}-ac" if plugged else f"battery-{level}"
     else:
         body = f'<path d="M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-6 6v4m0-4a6 6 0 0 1-6-6V8" fill="none" stroke="{color}" stroke-width="1.8"/>'
         tooltip, identity = _t("Alimentation secteur — aucune batterie exposée par la machine"), "power-ac"
