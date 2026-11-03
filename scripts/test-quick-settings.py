@@ -3,7 +3,7 @@
 
 À lancer sous Xvfb (xvfb-run -a /usr/bin/python3 -B scripts/test-quick-settings.py).
 Le matériel est simulé par WINLUX_SYS_ROOT (faux /sys et /proc) et les commandes
-(nmcli, bluetoothctl, brightnessctl, winlux-ambiance, ip) par de faux programmes
+(nmcli, bluetoothctl, winlux-brightness, winlux-ambiance, ip) par de faux programmes
 qui notent leurs arguments.
 """
 import os
@@ -23,7 +23,9 @@ log = work / "commands.log"
 fakes = {
     "nmcli": 'case "$*" in "-t -f WIFI radio") echo enabled;; *"connection show --active"*) echo "802-11-wireless:Maison\\:5G";; esac',
     "bluetoothctl": 'case "$1" in show) echo "Controller 00:11 (public)"; echo "	Powered: yes";; esac',
-    "brightnessctl": 'case "$1" in -m) echo "intel_backlight,backlight,384,40%,960";; esac',
+    # Luminosité : winlux-brightness (test-brightness.py teste l'outil lui-même).
+    "winlux-brightness": 'case "$1" in get) if [ -d "$WINLUX_SYS_ROOT/sys/class/backlight/intel_backlight" ]; then '
+                         'echo \'{"ok": true, "method": "backlight", "percent": 40}\'; else echo \'{"ok": true, "method": "none", "percent": null}\'; fi;; esac',
     "winlux-ambiance": 'case "$1" in status) printf "supported=1\\nnightlight=off\\n";; esac',
     "ip": 'echo "default via 10.0.2.2 dev eth0"',
 }
@@ -99,7 +101,7 @@ assert not vm.hardware["wifi"] and not vm.hardware["battery"] and vm.in_vm
 assert tile_keys(vm) == ["ethernet", "night", "accessibility"], tile_keys(vm)
 assert vm.tiles["ethernet"][2].get_text() == "Ethernet virtuel"
 assert vm.tiles["ethernet"][0].get_active(), "Ethernet connecté (route par défaut) = tuile allumée"
-assert not vm.light_row.get_visible(), "Pas de rétroéclairage : pas de curseur de luminosité"
+assert not vm.light_row.get_visible(), "Aucun contrôle de luminosité : pas de curseur inerte"
 vm.refresh_quick()
 assert not vm.battery_button.get_visible(), "Pas de batterie : pas d'indicateur de batterie"
 assert all(button.get_sensitive() for button, _, _ in vm.tiles.values()), "Aucune tuile grisée"
@@ -142,7 +144,7 @@ assert "winlux-ambiance toggle" in log.read_text()
 log.write_text("")
 laptop.light.set_value(65)
 pump(module)
-assert "brightnessctl -q set 65%" in log.read_text(), log.read_text()
+assert "winlux-brightness set 65" in log.read_text(), log.read_text()
 
 # 4. Entrées : Win+A, icônes réseau / son / batterie de la barre.
 tray = (HERE / "winlux-tray.py").read_text(encoding="utf-8")

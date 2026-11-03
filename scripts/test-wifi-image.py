@@ -49,7 +49,9 @@ for name, directory in NAMES.items():
     (host / release / "kernel" / directory / f"{name}.ko.zst").write_bytes(b"x")
 
 
-def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP TTLS MSCHAPV2 WPS", certs=True):
+def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP TTLS MSCHAPV2 WPS", certs=True,
+          roots=150, conf=True, hashed=True, tools=("usr/sbin/update-ca-certificates", "usr/bin/openssl", "usr/bin/certutil",
+                                       "usr/bin/winlux-certificates")):
     root = Path(tempfile.mkdtemp(dir=tmp))
     modules = root / "lib/modules" / release
     for name, directory in NAMES.items():
@@ -66,7 +68,17 @@ def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP
         (root / "usr/sbin/wpa_supplicant").write_bytes(b"\x7fELF\0" + supplicant)
     if certs:
         (root / "etc/ssl/certs").mkdir(parents=True)
-        (root / "etc/ssl/certs/ca-certificates.crt").write_text("-----BEGIN CERTIFICATE-----\n")
+        (root / "etc/ssl/certs/ca-certificates.crt").write_text("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n" * roots)
+        mozilla = root / "usr/share/ca-certificates/mozilla"
+        mozilla.mkdir(parents=True)
+        for index in range(roots): (mozilla / f"Racine_{index}.crt").write_text("x")
+        if hashed:
+            for index in range(roots): (root / f"etc/ssl/certs/{index:08x}.0").write_text("x")
+        if conf:
+            (root / "etc/ca-certificates.conf").write_text("".join(f"mozilla/Racine_{i}.crt\n" for i in range(roots)))
+    for binary in tools:
+        (root / binary).parent.mkdir(parents=True, exist_ok=True)
+        (root / binary).write_bytes(b"\x7fELF")
     (root / "usr/lib/firmware").mkdir(parents=True)
     os.symlink("../usr/lib/firmware", root / "lib/firmware")
     if regdb:
@@ -95,10 +107,22 @@ check(result.returncode != 0 and "wpa_supplicant" in result.stderr, f"wpa_suppli
 result = run(stage(supplicant=b"PEAP TTLS MSCHAPV2 WPS"))
 check(result.returncode != 0 and "SAE" in result.stderr, f"wpa_supplicant sans WPA3 (SAE) non détecté : {result.stderr!r}")
 result = run(stage(certs=False))
-check(result.returncode != 0 and "certificats" in result.stderr, f"certificats racine absents non détectés : {result.stderr!r}")
+check(result.returncode != 0 and "magasin racine absent" in result.stderr, f"certificats racine absents non détectés : {result.stderr!r}")
+result = run(stage(roots=12))
+check(result.returncode != 0 and "rachitique" in result.stderr, f"magasin rachitique (12 autorités) non détecté : {result.stderr!r}")
+result = run(stage(conf=False))
+check(result.returncode != 0 and "ca-certificates.conf" in result.stderr, f"ca-certificates.conf absent non détecté : {result.stderr!r}")
+result = run(stage(hashed=False))
+check(result.returncode != 0 and "empreinte" in result.stderr, f"/etc/ssl/certs sans liens par empreinte non détecté : {result.stderr!r}")
+result = run(stage(tools=("usr/sbin/update-ca-certificates", "usr/bin/openssl", "usr/bin/winlux-certificates")))
+check(result.returncode != 0 and "certutil" in result.stderr, f"certutil absent non détecté : {result.stderr!r}")
+stage_script = (HERE / "stage-desktop-components.sh").read_text()
+check("ca-certificates.conf" in stage_script, "l'image ne crée pas /etc/ca-certificates.conf")
+check("openssl rehash" in stage_script, "l'image ne crée pas les liens par empreinte de /etc/ssl/certs")
+check('"libnss3-tools"' in (HERE / "prepare-desktop-packages.py").read_text(), "certutil (libnss3-tools) absent des paquets")
 
 if failures:
     for failure in failures:
         print("ÉCHEC :", failure)
     raise SystemExit(1)
-print("OK : Wi-Fi dans l'image (WEP à WPA3, Entreprise, pilotes, regulatory.db, pare-feu, partage de connexion)")
+print("OK : Wi-Fi dans l'image (WEP à WPA3, Entreprise, pilotes, regulatory.db, pare-feu, partage de connexion) et certificats complets")

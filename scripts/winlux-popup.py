@@ -299,7 +299,9 @@ def quick_hardware():
     """Tuiles et curseurs à proposer : jamais grisés, cachés sans matériel."""
     return {"wifi": _present("sys/class/ieee80211") or _present("sys/class/net", "*/wireless"),
             "bluetooth": _present("sys/class/bluetooth") and bool(shutil.which("bluetoothctl")),
-            "backlight": _present("sys/class/backlight") and bool(shutil.which("brightnessctl")),
+            # Luminosité : rétroéclairage, écran DDC/CI ou rampes gamma ;
+            # winlux-brightness dit lequel (method=none : curseur caché).
+            "backlight": brightness_tool() is not None,
             "battery": _present("sys/class/power_supply", "BAT*/capacity")}
 
 
@@ -332,14 +334,23 @@ def battery_icon(level, status):
         "battery-low-symbolic" if level >= 20 else "battery-caution-symbolic"
 
 
+def brightness_tool():
+    """winlux-brightness installé, ou le script du dépôt à côté de celui-ci."""
+    if shutil.which("winlux-brightness"): return ["winlux-brightness"]
+    script = Path(__file__).resolve().with_name("winlux-brightness.py")
+    return [sys.executable, str(script)] if script.is_file() else None
+
+
 def brightness():
-    """Luminosité en % (brightnessctl -m : nom,classe,actuel,pourcentage,max)."""
-    output = _run(["brightnessctl", "-m"]) or ""
-    fields = output.strip().splitlines()[0].split(",") if output.strip() else []
+    """Luminosité en %, None sans aucun contrôle (le curseur se cache)."""
+    tool = brightness_tool()
+    output = _run(tool + ["get"], timeout=10) if tool else ""
     try:
-        return max(0, min(100, int(fields[3].rstrip("%"))))
+        state = json.loads((output or "").strip().splitlines()[-1])
     except (IndexError, ValueError):
         return None
+    if state.get("method") in (None, "none") or state.get("percent") is None: return None
+    return max(0, min(100, int(state["percent"])))
 
 
 def quick_state(hardware, modes_module=None):
@@ -857,10 +868,10 @@ class Popup(Gtk.Application):
         self.tile_grid=Gtk.Grid(column_spacing=10,row_spacing=12,column_homogeneous=True)
         body.pack_start(self.tile_grid,False,False,0)
         self.tiles={};self.tile_layout=None;self.quick={};self.quick_busy=False;self.quick_stamp=0
-        # Luminosité : seulement avec un rétroéclairage pilotable (portable).
+        # Luminosité : seulement avec un contrôle réel (rétroéclairage, DDC/CI, gamma).
         self.light_row=Gtk.Box(spacing=8)
         self.light_row.pack_start(Gtk.Image.new_from_icon_name("display-brightness-symbolic",Gtk.IconSize.BUTTON),False,False,6)
-        self.light=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,1,100,1)
+        self.light=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,5,100,1)
         self.light.set_draw_value(False);self.light.set_hexpand(True)
         self.light.set_tooltip_text(_t("Luminosité"))
         self.light.get_accessible().set_name(_t("Luminosité de l’écran, en pourcentage"))
@@ -1019,8 +1030,9 @@ class Popup(Gtk.Application):
 
     def set_brightness(self):
         self.light_timer=0
-        subprocess.Popen(["brightnessctl","-q","set",f"{round(self.light.get_value())}%"],
-                         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        tool=brightness_tool()
+        if tool:subprocess.Popen(tool+["set",str(round(self.light.get_value()))],
+                                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         return False
 
     def poll_quick(self,force=False):
