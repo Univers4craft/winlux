@@ -22,7 +22,7 @@ Der USB-Stick-Ersteller von Winlux lädt das neueste Abbild herunter, prüft es 
 Das Winlux-Abbild ist „hybrid“: Jedes Werkzeug, das ein Datenträgerabbild auf einen USB-Stick kopiert, ist geeignet, und auch Ventoy startet es. Unter Linux auf der Kommandozeile, wobei `/dev/sdX` durch den Stick ersetzt wird (und keinesfalls durch eine Festplatte):
 
 ```sh
-sudo dd if=winlux-live-v0.2.15.iso of=/dev/sdX bs=4M status=progress conv=fsync
+sudo dd if=winlux-live-v0.2.16.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
 ## Den PC vom Stick starten
