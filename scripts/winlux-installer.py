@@ -576,6 +576,7 @@ TRANSLATIONS = {
         "progress_account": "Configuration du compte utilisateur...",
         "progress_firstboot": "Configuration du premier démarrage...",
         "progress_sync": "Synchronisation et démontage...",
+        "err_unmount": "Le disque {path} n'a pas pu être libéré proprement. N'éteignez pas l'ordinateur : utilisez « Redémarrer maintenant ».",
         "progress_done": "Installation terminée avec succès !",
         "network_title": "Connexion réseau",
         "network_subtitle": "Connectez-vous à Internet pour télécharger les mises à jour pendant l'installation.",
@@ -740,6 +741,7 @@ TRANSLATIONS = {
         "progress_account": "Configuring user account...",
         "progress_firstboot": "Configuring first boot...",
         "progress_sync": "Syncing and unmounting...",
+        "err_unmount": "The disk {path} could not be released cleanly. Do not switch the computer off: use “Restart now”.",
         "progress_done": "Installation completed successfully!",
         "network_title": "Network connection",
         "network_subtitle": "Connect to the Internet to download updates during installation.",
@@ -904,6 +906,7 @@ TRANSLATIONS = {
         "progress_account": "Benutzerkonto wird konfiguriert...",
         "progress_firstboot": "Erster Start wird konfiguriert...",
         "progress_sync": "Synchronisierung und Aushängen...",
+        "err_unmount": "Das Laufwerk {path} konnte nicht sauber freigegeben werden. Schalten Sie den Computer nicht aus: verwenden Sie „Jetzt neu starten“.",
         "progress_done": "Installation erfolgreich abgeschlossen!",
         "network_title": "Netzwerkverbindung",
         "network_subtitle": "Verbinden Sie sich mit dem Internet, um während der Installation Updates herunterzuladen.",
@@ -1068,6 +1071,7 @@ TRANSLATIONS = {
         "progress_account": "Configurando cuenta de usuario...",
         "progress_firstboot": "Configurando primer arranque...",
         "progress_sync": "Sincronizando y desmontando...",
+        "err_unmount": "No se pudo liberar correctamente el disco {path}. No apague el equipo: use «Reiniciar ahora».",
         "progress_done": "¡Instalación completada con éxito!",
         "network_title": "Conexión de red",
         "network_subtitle": "Conéctese a Internet para descargar actualizaciones durante la instalación.",
@@ -1232,6 +1236,7 @@ TRANSLATIONS = {
         "progress_account": "Configurazione dell'account utente...",
         "progress_firstboot": "Configurazione del primo avvio...",
         "progress_sync": "Sincronizzazione e smontaggio...",
+        "err_unmount": "Impossibile liberare correttamente il disco {path}. Non spegnere il computer: usa «Riavvia ora».",
         "progress_done": "Installazione completata con successo!",
         "network_title": "Connessione di rete",
         "network_subtitle": "Connettiti a Internet per scaricare gli aggiornamenti durante l'installazione.",
@@ -1396,6 +1401,7 @@ TRANSLATIONS = {
         "progress_account": "Configurando conta de usuário...",
         "progress_firstboot": "Configurando primeira inicialização...",
         "progress_sync": "Sincronizando e desmontando...",
+        "err_unmount": "Não foi possível libertar corretamente o disco {path}. Não desligue o computador: use «Reiniciar agora».",
         "progress_done": "Instalação concluída com sucesso!",
         "network_title": "Conexão de rede",
         "network_subtitle": "Conecte-se à Internet para baixar atualizações durante a instalação.",
@@ -2914,6 +2920,33 @@ def detect_image_ext(path):
     if head.startswith(b"BM"):
         return ".bmp"
     return ".jpg"
+
+
+def write_account_file(path, lines, mode):
+    """Écrit un fichier de comptes et sa sauvegarde « path- » sans jamais
+    laisser de fichier à moitié écrit : temporaire, fsync, rename, fsync du
+    dossier. Propriétaire et droits de l'ancien fichier conservés."""
+    try:
+        info = os.stat(path)
+        mode, owner, group = info.st_mode & 0o7777, info.st_uid, info.st_gid
+    except OSError:
+        owner = group = 0
+    text = "\n".join(lines) + "\n"
+    directory = os.path.dirname(path)
+    for destination in (path, path + "-"):
+        temporary = os.path.join(directory, f".{os.path.basename(destination)}.winlux-install")
+        with open(temporary, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chown(temporary, owner, group)
+        os.chmod(temporary, mode)
+        os.rename(temporary, destination)
+    handle = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(handle)
+    finally:
+        os.close(handle)
 
 
 class InstallerApp(Gtk.Application):
@@ -5021,7 +5054,10 @@ class InstallerApp(Gtk.Application):
 
     def on_reboot(self, _btn):
         try:
-            subprocess.run(["sync"], timeout=10)
+            try:
+                subprocess.run(["sync"], timeout=10)
+            except subprocess.TimeoutExpired:
+                pass  # l'init synchronise de toute façon avant de redémarrer
             # En live, PID 1 est le script /init : « reboot » (systemctl)
             # ne faisait rien et le bouton fermait seulement l'installateur.
             # winlux-power sait redémarrer dans les deux cas.
@@ -5032,7 +5068,18 @@ class InstallerApp(Gtk.Application):
             # (mise à jour en cours…), pour afficher la raison.
             power = shutil.which("winlux-power")
             if power:
-                done = subprocess.run([power, "execute", "reboot"], timeout=30).returncode == 0
+                try:
+                    done = subprocess.run([power, "execute", "reboot"], timeout=60).returncode == 0
+                    refused = not done
+                except (OSError, subprocess.SubprocessError):
+                    # Écriture des disques encore longue juste après
+                    # l'installation : le délai expirait et le bouton
+                    # fermait l'installateur sans redémarrer.
+                    done = refused = False
+                if not done and not refused and os.geteuid() == 0:
+                    # Session live (root) : l'init redémarre sur SIGTERM.
+                    os.kill(1, signal.SIGTERM)
+                    done = True
                 if not done:
                     subprocess.Popen([power, "now", "reboot"], start_new_session=True)
             else:
@@ -5167,7 +5214,9 @@ class InstallerApp(Gtk.Application):
             self.write_manual_fstab(layout, target)
             self.run_migration(target)
             self.set_progress(0.95, tr("progress_sync"))
-            subprocess.run(["sync"], timeout=60)
+            # « Terminée » seulement une fois tout écrit et la cible démontée :
+            # couper juste après ne doit plus rien perdre (/etc/passwd…).
+            self.finalize_target()
         except subprocess.CalledProcessError as e:
             self.release_target()
             self.install_error(f"{tr('error_title')} : {' '.join(map(str, e.cmd[:2]))} ({e.returncode})")
@@ -5381,6 +5430,63 @@ class InstallerApp(Gtk.Application):
         with open(f"{target}/etc/fstab", "w") as f:
             f.write(plan.fstab(winlux_partitioner.blkid_uuid, root_luks=self.config["luks_enabled"]))
 
+    @staticmethod
+    def stop_processes_under(path):
+        """Arrête les programmes qui utilisent encore la cible (lancés dans le
+        chroot de préparation, par exemple) : sinon umount échoue « occupé »."""
+        prefix = os.path.realpath(path).rstrip("/") + "/"
+        found = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit() or int(entry) == os.getpid():
+                continue
+            for link in ("root", "cwd", "exe"):
+                try:
+                    where = os.readlink(f"/proc/{entry}/{link}")
+                except OSError:
+                    continue
+                if (where.rstrip("/") + "/").startswith(prefix):
+                    found.append(int(entry))
+                    break
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in found:
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+            if found:
+                time.sleep(1)
+        return found
+
+    def unmount_verified(self, mountpoint):
+        """Vrai quand le système de fichiers est démonté, ou au moins figé sur
+        le disque (lecture seule, ou fsfreeze qui écrit tout le journal)."""
+        for attempt in range(3):
+            if subprocess.run(["umount", mountpoint], timeout=120).returncode == 0:
+                return True
+            self.stop_processes_under(mountpoint)
+            subprocess.run(["sync"], timeout=300)
+        if subprocess.run(["mount", "-o", "remount,ro", mountpoint], timeout=120).returncode == 0:
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        if shutil.which("fsfreeze") and subprocess.run(["fsfreeze", "--freeze", mountpoint], timeout=300).returncode == 0:
+            subprocess.run(["fsfreeze", "--unfreeze", mountpoint], timeout=60)
+            subprocess.run(["umount", "-l", mountpoint], timeout=60)
+            return True
+        return False
+
+    def finalize_target(self):
+        """sync puis démontage vérifié de chaque point de montage de la cible
+        (ESP et /boot compris), du plus profond au plus haut."""
+        subprocess.run(["sync"], timeout=600)
+        for mountpoint in reversed(getattr(self, "_mounts", [])):
+            if not self.unmount_verified(mountpoint):
+                raise RuntimeError(tr("err_unmount", path=mountpoint))
+            self._mounts.remove(mountpoint)
+        if getattr(self, "_luks_open", False):
+            subprocess.run(["cryptsetup", "close", LUKS_NAME], timeout=60)
+            self._luks_open = False
+        subprocess.run(["sync"], timeout=600)
+
     def release_target(self):
         for mountpoint in reversed(getattr(self, "_mounts", [])):
             subprocess.run(["umount", mountpoint], timeout=60)
@@ -5526,37 +5632,35 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         passwd_line = f"{username}:x:{uid}:{gid}:{fullname}:/home/{username}:/bin/bash\n"
         groups_to_join = ["sudo", "audio", "video", "plugdev", "netdev", "bluetooth",
                           "input", "dialout", "cdrom", "floppy"]
-        if os.path.exists(passwd_path):
-            with open(passwd_path, "a") as f:
-                f.write(passwd_line)
-        else:
-            with open(passwd_path, "w") as f:
-                f.write("root:x:0:0:root:/root:/bin/bash\n")
-                f.write(passwd_line)
-        if not os.path.exists(group_path):
-            with open(group_path, "w") as f:
-                f.write(f"root:x:0:\n{username}:x:{gid}:\n")
-                for grp in groups_to_join:
-                    f.write(f"{grp}:x::{username}\n")
-        else:
-            with open(group_path, "r") as f:
-                lines = f.readlines()
-            with open(group_path, "w") as f:
-                user_group_found = False
-                for line in lines:
-                    parts = line.strip().split(":")
-                    if len(parts) >= 4 and parts[0] in groups_to_join:
-                        members = parts[3].split(",") if parts[3] else []
-                        if username not in members:
-                            members.append(username)
-                        parts[3] = ",".join(members)
-                        f.write(":".join(parts) + "\n")
-                    else:
-                        f.write(line)
-                        if len(parts) >= 1 and parts[0] == username:
-                            user_group_found = True
-                if not user_group_found:
-                    f.write(f"{username}:x:{gid}:\n")
+        # Comptes écrits par fichier temporaire + fsync + rename, avec leur
+        # copie de sauvegarde (passwd-…) : une coupure juste après
+        # l'installation laissait des octets nuls à la place du compte.
+        def read_lines(path):
+            try:
+                with open(path, encoding="utf-8", errors="surrogateescape") as f:
+                    return [line for line in f.read().split("\n") if line.strip()]
+            except OSError:
+                return []
+
+        passwd_lines = read_lines(passwd_path) or ["root:x:0:0:root:/root:/bin/bash"]
+        passwd_lines = [line for line in passwd_lines if line.split(":")[0] != username]
+        passwd_lines.append(passwd_line.rstrip("\n"))
+        group_lines = read_lines(group_path)
+        if not group_lines:
+            group_lines = ["root:x:0:"] + [f"{grp}:x::" for grp in groups_to_join]
+        user_group_found = False
+        for index, line in enumerate(group_lines):
+            parts = line.split(":")
+            if len(parts) >= 4 and parts[0] in groups_to_join:
+                members = [m for m in parts[3].split(",") if m]
+                if username not in members:
+                    members.append(username)
+                parts[3] = ",".join(members)
+                group_lines[index] = ":".join(parts)
+            elif parts[0] == username:
+                user_group_found = True
+        if not user_group_found:
+            group_lines.append(f"{username}:x:{gid}:")
         hashed = self.config.get("password_hash") or ""
         if password and not hashed:
             try:
@@ -5566,15 +5670,19 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 ).stdout.strip()
             except Exception:
                 hashed = "!"
+        write_account_file(passwd_path, passwd_lines, 0o644)
+        write_account_file(group_path, group_lines, 0o644)
         if hashed:
-            if os.path.exists(shadow_path):
-                with open(shadow_path, "a") as f:
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-            else:
-                with open(shadow_path, "w") as f:
-                    f.write(f"root:!:19000:0:99999:7:::\n")
-                    f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
-                os.chmod(shadow_path, 0o640)
+            shadow_lines = read_lines(shadow_path) or ["root:!:19000:0:99999:7:::"]
+            shadow_lines = [line for line in shadow_lines if line.split(":")[0] != username]
+            shadow_lines.append(f"{username}:{hashed}:19000:0:99999:7:::")
+            write_account_file(shadow_path, shadow_lines, 0o640)
+        gshadow_path = f"{etc}/gshadow"
+        if os.path.exists(gshadow_path):
+            gshadow_lines = read_lines(gshadow_path)
+            if not any(line.split(":")[0] == username for line in gshadow_lines):
+                gshadow_lines.append(f"{username}:!::")
+            write_account_file(gshadow_path, gshadow_lines, 0o640)
         for d in [".config", ".local/share", "Bureau", "Documents",
                   "Téléchargements", "Images", "Musique", "Vidéos"]:
             os.makedirs(f"{home}/{d}", exist_ok=True)
