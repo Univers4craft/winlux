@@ -261,6 +261,12 @@ pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
 }
 
 /// PID Linux d'un handle de processus (le processus courant ou un enfant).
+/// Vrai pour le pseudo-handle du processus courant ou un vrai handle vers
+/// lui (DuplicateHandle de GetCurrentProcess, OpenProcess sur son PID).
+pub(crate) fn is_current_process_handle(h: usize) -> bool {
+    h == get_current_process() || process_os_pid(h) == Some(std::process::id() as i32)
+}
+
 pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
     if h == get_current_process() {
         return Some(std::process::id() as i32);
@@ -3898,7 +3904,7 @@ pub unsafe extern "win64" fn virtual_query_ex(
     info: *mut MemoryBasicInformation,
     length: usize,
 ) -> usize {
-    if process != get_current_process() {
+    if !is_current_process_handle(process) {
         crate::process::set_last_error(6);
         return 0;
     }
@@ -5121,6 +5127,12 @@ pub unsafe extern "win64" fn get_exit_code_process(handle: usize, code: *mut u32
     1
 }
 pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 {
+    if is_current_process_handle(handle) {
+        // TerminateProcess(GetCurrentProcess()) : le processus s'arrête tout de
+        // suite, sans rendre la main ni lancer les destructeurs (Crashpad,
+        // Chromium et les CRT s'en servent comme d'un abort).
+        terminate_self(code);
+    }
     let Some(SyncHandle::Process(p)) = lookup_sync(handle) else {
         crate::process::set_last_error(6);
         return 0;
@@ -5242,6 +5254,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
+        return 1;
+    }
+    // Jeton d'accès (OpenProcessToken) : partagé, rien à libérer. Chromium
+    // (Electron) vérifie que sa fermeture réussit.
+    if handle == crate::dlls::security::TOKEN_HANDLE {
         return 1;
     }
     if handle == 1
@@ -6258,6 +6275,16 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
     }
     1
 }
+/// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
+/// atexit ni destructeurs, comme TerminateProcess sous Windows.
+pub fn terminate_self(code: u32) -> ! {
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    crate::dlls::console_input::restore();
+    // SAFETY: _exit termine le processus sans revenir.
+    unsafe { libc::_exit(code as i32) }
+}
+
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
@@ -8072,9 +8099,10 @@ pub unsafe extern "win64" fn duplicate_handle(
     // Pseudo-handles (processus et thread courants) : Windows rend un vrai
     // handle vers le même objet ; ici il reste utilisable tel quel.
     let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
-    let copy = if src_handle == get_current_process() && inherit != 0 {
-        // Handle héritable vers soi-même (crashpad le passe à son
-        // gestionnaire de plantage) : un vrai handle, désigné par le PID.
+    let copy = if src_handle == get_current_process() {
+        // Vrai handle vers soi-même, désigné par le PID : Chromium refuse le
+        // pseudo-handle (-1, égal à INVALID_HANDLE_VALUE) dans un ScopedHandle,
+        // et crashpad passe la copie héritable à son gestionnaire.
         let h = next_handle();
         insert_sync_at(h, foreign_process(std::process::id() as i32));
         Some(h)
@@ -8494,6 +8522,12 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// Fermer le jeton d'OpenProcessToken réussit (Chromium le vérifie).
+    #[test]
+    fn fermer_le_jeton_du_processus_reussit() {
+        assert_eq!(super::close_handle(crate::dlls::security::TOKEN_HANDLE), 1);
+    }
+
     #[test]
     fn open_process_ouvre_un_processus_etranger_et_le_termine() {
         let mut child = std::process::Command::new("sleep")

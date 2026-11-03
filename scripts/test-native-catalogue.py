@@ -132,6 +132,21 @@ with tempfile.TemporaryDirectory() as temporary:
     desktop_link.write_bytes(shortcut)
     target, arguments, workdir, icon, index = catalogue.lnk_resolve(desktop_link, home)
     assert (target, arguments, workdir, icon, index) == (exe, ["-x", "a b"], home / "Documents", exe, 0)
+    # On the desktop the shortcut is labelled « Programme », not « Programme.lnk ».
+    (home / "Bureau/.hidden").write_text("note.txt\n")
+    catalogue.desktop_shortcuts(home)
+    entries = list((home / "Bureau").glob("winlux-lnk-*.desktop"))
+    assert len(entries) == 1 and "Name=Programme\n" in entries[0].read_text(), entries
+    assert "winlux-open" in entries[0].read_text() and os.access(entries[0], os.X_OK)
+    assert (home / "Bureau/.hidden").read_text().splitlines() == ["note.txt", "Programme.lnk"]
+    catalogue.desktop_shortcuts(home)
+    assert (home / "Bureau/.hidden").read_text().splitlines() == ["note.txt", "Programme.lnk"]
+    moved = desktop_link.with_name("Ailleurs.bin")
+    desktop_link.rename(moved)
+    catalogue.desktop_shortcuts(home)
+    assert not list((home / "Bureau").glob("winlux-lnk-*.desktop")), "launcher of a removed shortcut kept"
+    assert (home / "Bureau/.hidden").read_text().splitlines() == ["note.txt"]
+    moved.rename(desktop_link)
     try:
         import gi  # noqa: F401
         gi.require_version("GdkPixbuf", "2.0")

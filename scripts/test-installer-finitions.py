@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Finitions de l'installateur relevées en VM sur la v0.2.15.
+
+- pas de veille d'écran pendant l'installation (xset -dpms, économiseur) ;
+- accent violet Prisme sur la barre des partitions et les boutons radio ;
+- la note de performance n'apparaît qu'une fois la mesure complète ;
+- Paramètres > Mises à jour ne parle plus de « VM ».
+"""
+import ast
+from pathlib import Path
+import types
+
+project = Path(__file__).resolve().parent.parent
+source = (project / "scripts/winlux-installer.py").read_text()
+tree = ast.parse(source)
+
+# Veille : coupée au début, rétablie à la fin (succès comme erreur).
+assert "self.keep_awake(True)" in source.split("def start_installation", 1)[1].split("def ", 1)[0]
+assert "self.keep_awake(False)" in source.split("def show_done", 1)[1].split("def ", 1)[0]
+assert "self.keep_awake(False)" in source.split("def install_error", 1)[1].split("\ndef ", 1)[0]
+for argv in ('"xset", "-dpms"', '"xset", "s", "off"', '"xscreensaver-command", "-deactivate"', '"xset", "+dpms"'):
+    assert argv in source, argv
+
+# Couleurs : plus de bleu Windows pour ext4, accent Prisme sur les contrôles.
+colors = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "PART_COLORS")
+colors = ast.literal_eval(colors)
+assert colors["ext4"][:3] == (0.416, 0.239, 0.941), colors["ext4"]
+assert all(rgb[:3] != (0.0, 0.47, 0.83) for rgb in colors.values())
+css = next(n.value.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "CSS")
+assert b"@define-color accent #6A3DF0;" in css and b"radio:checked" in css and b"check:checked" in css
+
+# Note de performance : seulement une mesure complète.
+cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and any(
+    isinstance(f, ast.FunctionDef) and f.name == "benchmark_complete" for f in n.body))
+func = next(f for f in cls.body if isinstance(f, ast.FunctionDef) and f.name == "benchmark_complete")
+namespace = {}
+exec(compile(ast.Module(body=[func], type_ignores=[]), "installer", "exec"), namespace)
+complete = namespace["benchmark_complete"]
+full = {"results": {"cpu": {"score": 6.1}, "ram": {"score": 5.0}, "gpu": {"score": 2.0}}, "base_score": 2.0}
+assert complete(types.SimpleNamespace(bench_state="done", benchmark=full))
+assert not complete(types.SimpleNamespace(bench_state="running", benchmark=full))
+assert not complete(types.SimpleNamespace(bench_state="done", benchmark=None))
+assert not complete(types.SimpleNamespace(bench_state="done", benchmark={"results": {"cpu": {"score": 2.0}}, "base_score": 2.0}))
+failed = {"results": {**full["results"], "gpu": {"score": 1.0, "error": "x"}}, "base_score": 1.0}
+assert not complete(types.SimpleNamespace(bench_state="done", benchmark=failed))
+assert source.count('"summary_benchmark_running":') == 6
+assert "self.benchmark_complete()" in source
+
+settings = (project / "scripts/winlux-settings.py").read_text()
+assert "Gardez la VM" not in settings and "Keep the VM running" not in settings
+print("test-installer-finitions : OK (veille, accent Prisme, note complète, texte des mises à jour)")

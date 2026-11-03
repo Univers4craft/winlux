@@ -132,6 +132,9 @@ jobs:
       - name: Vérifier les trois chemins d'amorçage (BIOS, UEFI 64 et 32 bits)
         run: python3 -B scripts/test-boot-paths.py
 
+      - name: Vérifier les finitions de l'installateur (veille, accent, note de performance)
+        run: python3 -B scripts/test-installer-finitions.py
+
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
@@ -157,6 +160,9 @@ jobs:
         run: |
           sudo apt-get install -y -q dbus libglib2.0-bin
           /usr/bin/python3 -B scripts/test-filemanager1.py
+
+      - name: Vérifier que l'Explorateur décode les URI file:// (xdg-open, accents, espaces)
+        run: /usr/bin/python3 -B scripts/test-shell-app-uri.py
 
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
@@ -187,6 +193,16 @@ jobs:
 
       - name: Vérifier l'application Claude Code (téléchargement vérifié, terminal)
         run: python3 -B scripts/test-claude-code.py
+
+      - name: Vérifier les régressions de la campagne de tests v0.2.13
+        run: python3 -B scripts/test-campaign.py
+
+      # Tests présents dans le dépôt mais lancés nulle part jusqu'ici.
+      - name: Vérifier l'icône du menu Démarrer, la progression des mises à jour et Bienvenue
+        run: |
+          python3 -B scripts/test-start-icon.py
+          python3 -B scripts/test-update-progress.py
+          xvfb-run -a python3 -B scripts/test-welcome.py
 
       - name: Vérifier l'éclairage nocturne (soleil, planning, couleurs, langues)
         run: python3 -B scripts/test-ambiance.py
@@ -225,11 +241,12 @@ jobs:
           python3 -B scripts/test-reset.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-reset-page.py
 
-      - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes)
+      - name: Vérifier les pilotes du matériel réel (NVIDIA, microcode, VA-API, page Matériel et pilotes, À propos > Votre PC)
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth python3-gi gir1.2-gtk-3.0
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-drivers.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-about-pc.py
 
       - name: Vérifier le clavier tactile et les réglages avancés de la souris
         run: |
@@ -238,6 +255,7 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py --clavier
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-licence.py
 
       - name: Vérifier les grandes images X11 en 1080p
         run: |
@@ -342,6 +360,9 @@ jobs:
 
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
+
+      - name: Installer une appli Squirrel (Claude pour Windows)
+        run: sh scripts/test-squirrel.sh
 
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh

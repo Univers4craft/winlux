@@ -124,6 +124,23 @@ icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/nul
 if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
+# Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
+# sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
+# absent est remplacé par Adwaita.
+gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+# Thème absent (défaut XFCE Greybird, « Adwaita-dark » d'anciennes versions) :
+# le thème Winlux du compte est créé d'après Personnalisation (clair ou
+# sombre), sinon Adwaita. Une installation neuve restait claire en mode sombre.
+case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
+    # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
+    if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
+        mode=dark
+        if grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then mode=light; fi
+        if ! { test -x /usr/bin/winlux-personalize && WINLUX_PERSONALIZE_NO_SYSTEM=1 /usr/bin/winlux-personalize theme "$mode" >/dev/null 2>&1; }; then
+            /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        fi
+    fi ;;
+esac
 for attempt in $(seq 1 50); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     kill -0 "$wm_pid" 2>/dev/null || { cat "$logs/window-manager.log" >&2; exit 1; }

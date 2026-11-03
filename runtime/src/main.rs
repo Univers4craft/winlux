@@ -246,6 +246,10 @@ fn main() {
         gamemode::register_current(name.as_deref().unwrap_or("jeu"));
         // Temps de jeu affiché par l'application Jeux.
         playtime::start(&exe);
+    } else if std::env::var_os("WINLUX_GAME").is_some_and(|v| v == "1") {
+        // Lancé depuis l'application Jeux : un jeu même sans import
+        // graphique visible (Unity, Direct3D chargé à la demande).
+        playtime::start(&exe);
     }
     dlls::kernel32::init();
     dlls::inherit::adopt();
@@ -308,6 +312,9 @@ fn is_real_pe(path: &std::path::Path) -> bool {
 /// Indique comment lancer un fichier sans l'exécuter : `console` ou `gui` sur
 /// la sortie standard, ou la raison du refus sur la sortie d'erreur. Utilisé
 /// par `winlux-open` pour décider d'ouvrir un terminal lors d'un double-clic.
+/// Les installateurs que Winlux déroule lui-même (WiX Burn, NSIS, Inno Setup)
+/// donnent `setup` et leurs désinstalleurs connus `uninstall` : souvent en
+/// 32 bits, ils s'installent quand même puisque leur code n'est pas exécuté.
 fn inspect(exe: &std::path::Path) -> i32 {
     let source = match std::fs::read(exe) {
         Ok(bytes) => bytes,
@@ -316,6 +323,14 @@ fn inspect(exe: &std::path::Path) -> i32 {
             return 1;
         }
     };
+    if setup::Manifest::of_uninstaller(exe).is_some() {
+        println!("uninstall");
+        return 0;
+    }
+    if setup::burn::find_section(&source).is_some() || setup::detect(&source).is_some() {
+        println!("setup");
+        return 0;
+    }
     if managed::managed_image(exe, &source).is_none() {
         match pe::PeImage::parse(&source) {
             Ok(image) if image.is_dll() => {

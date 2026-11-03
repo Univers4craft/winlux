@@ -86,6 +86,7 @@ CSS = b"""
 @define-color fg_secondary #b4b4cc;
 @define-color accent #6A3DF0;
 @define-color accent_hover #7C4DFF;
+@define-color accent_light #B69CFF;
 @define-color danger #e74856;
 
 window.installer-window {
@@ -231,6 +232,22 @@ window.installer-window {
     color: #2ecc71;
     font-size: 64px;
 }
+/* Licence non acceptee : la case est entouree de l accent et une phrase dit pourquoi
+   Suivant n avance pas (#B69CFF, lisible sur le fond sombre de l installateur). */
+.license-accept-box {
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+.license-accept-box.license-attention {
+    border-color: @accent_light;
+    background-color: alpha(@accent, 0.22);
+}
+.installer-content .license-hint {
+    color: @accent_light;
+    font-size: 13px;
+    font-weight: bold;
+}
 .license-text {
     color: @fg_secondary;
     font-size: 12px;
@@ -284,6 +301,31 @@ window.installer-window {
 .installer-content checkbutton label,
 .installer-content radiobutton label {
     color: @fg_primary;
+}
+/* Accent Prisme partout, pas le bleu du theme GTK. */
+radiobutton radio:checked,
+checkbutton check:checked,
+radio:checked,
+check:checked {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+    color: #ffffff;
+}
+switch:checked {
+    background-color: @accent;
+    border-color: @accent;
+}
+progressbar progress,
+scale highlight {
+    background-color: @accent;
+    background-image: none;
+    border-color: @accent;
+}
+*:selected,
+selection {
+    background-color: @accent;
+    color: #ffffff;
 }
 .status-ok {
     color: #2ecc71;
@@ -410,17 +452,17 @@ KEYBOARDS = [
 ]
 
 PART_COLORS = {
-    "ext4": (0.0, 0.47, 0.83, 1.0),
-    "ext3": (0.0, 0.47, 0.83, 0.8),
-    "ext2": (0.0, 0.47, 0.83, 0.6),
-    "btrfs": (0.0, 0.47, 0.83, 0.9),
-    "xfs": (0.15, 0.55, 0.85, 1.0),
+    "ext4": (0.416, 0.239, 0.941, 1.0),  # accent Prisme #6A3DF0
+    "ext3": (0.416, 0.239, 0.941, 0.8),
+    "ext2": (0.416, 0.239, 0.941, 0.6),
+    "btrfs": (0.416, 0.239, 0.941, 0.9),
+    "xfs": (0.486, 0.302, 1.0, 1.0),
     "ntfs": (0.9, 0.55, 0.1, 1.0),
     "vfat": (0.3, 0.75, 0.35, 1.0),
     "fat32": (0.3, 0.75, 0.35, 1.0),
     "fat16": (0.3, 0.75, 0.35, 1.0),
-    "swap": (0.55, 0.35, 0.75, 1.0),
-    "linux-swap": (0.55, 0.35, 0.75, 1.0),
+    "swap": (0.2, 0.6, 0.65, 1.0),
+    "linux-swap": (0.2, 0.6, 0.65, 1.0),
     "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
     "winlux": (0.0, 0.62, 0.95, 1.0),
@@ -439,6 +481,7 @@ TRANSLATIONS = {
         "license_title": "Contrat de licence",
         "license_subtitle": "Veuillez lire et accepter les termes de la licence.",
         "license_accept": "J'accepte les termes de la licence GPL v3",
+        "license_required": "Pour continuer, acceptez les termes de la licence en cochant la case ci-dessus.",
         "part_title": "Partitionnement",
         "part_subtitle": "Choisissez le disque et le mode de partitionnement.",
         "part_select_disk": "Sélectionnez un disque :",
@@ -510,6 +553,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applications recommandées",
         "summary_benchmark": "Note de performance",
         "summary_benchmark_none": "non mesurée",
+        "summary_benchmark_running": "mesure en cours",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -600,6 +644,7 @@ TRANSLATIONS = {
         "license_title": "License agreement",
         "license_subtitle": "Please read and accept the license terms.",
         "license_accept": "I accept the terms of the GPL v3 license",
+        "license_required": "To continue, accept the license terms by checking the box above.",
         "part_title": "Partitioning",
         "part_subtitle": "Choose the disk and partitioning mode.",
         "part_select_disk": "Select a disk:",
@@ -671,6 +716,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ recommended apps",
         "summary_benchmark": "Performance score",
         "summary_benchmark_none": "not measured",
+        "summary_benchmark_running": "measuring",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -761,6 +807,7 @@ TRANSLATIONS = {
         "license_title": "Lizenzvereinbarung",
         "license_subtitle": "Bitte lesen und akzeptieren Sie die Lizenzbedingungen.",
         "license_accept": "Ich akzeptiere die Bedingungen der GPL v3-Lizenz",
+        "license_required": "Um fortzufahren, akzeptieren Sie die Lizenzbedingungen mit dem Kästchen oben.",
         "part_title": "Partitionierung",
         "part_subtitle": "Wählen Sie die Festplatte und den Partitionierungsmodus.",
         "part_select_disk": "Wählen Sie eine Festplatte:",
@@ -832,6 +879,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ empfohlene Anwendungen",
         "summary_benchmark": "Leistungsbewertung",
         "summary_benchmark_none": "nicht gemessen",
+        "summary_benchmark_running": "Messung läuft",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -922,6 +970,7 @@ TRANSLATIONS = {
         "license_title": "Acuerdo de licencia",
         "license_subtitle": "Lea y acepte los términos de la licencia.",
         "license_accept": "Acepto los términos de la licencia GPL v3",
+        "license_required": "Para continuar, acepte los términos de la licencia marcando la casilla de arriba.",
         "part_title": "Particionamiento",
         "part_subtitle": "Elija el disco y el modo de particionamiento.",
         "part_select_disk": "Seleccione un disco:",
@@ -993,6 +1042,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicaciones recomendadas",
         "summary_benchmark": "Puntuación de rendimiento",
         "summary_benchmark_none": "no medida",
+        "summary_benchmark_running": "midiendo",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -1083,6 +1133,7 @@ TRANSLATIONS = {
         "license_title": "Contratto di licenza",
         "license_subtitle": "Leggere e accettare i termini della licenza.",
         "license_accept": "Accetto i termini della licenza GPL v3",
+        "license_required": "Per continuare, accetta i termini della licenza selezionando la casella qui sopra.",
         "part_title": "Partizionamento",
         "part_subtitle": "Scegli il disco e la modalità di partizionamento.",
         "part_select_disk": "Seleziona un disco:",
@@ -1154,6 +1205,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ applicazioni consigliate",
         "summary_benchmark": "Punteggio prestazioni",
         "summary_benchmark_none": "non misurato",
+        "summary_benchmark_running": "misurazione in corso",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1244,6 +1296,7 @@ TRANSLATIONS = {
         "license_title": "Acordo de licença",
         "license_subtitle": "Leia e aceite os termos da licença.",
         "license_accept": "Aceito os termos da licença GPL v3",
+        "license_required": "Para continuar, aceite os termos da licença marcando a caixa acima.",
         "part_title": "Particionamento",
         "part_subtitle": "Escolha o disco e o modo de particionamento.",
         "part_select_disk": "Selecione um disco:",
@@ -1315,6 +1368,7 @@ TRANSLATIONS = {
         "summary_profile_apps": "+ aplicativos recomendados",
         "summary_benchmark": "Nota de desempenho",
         "summary_benchmark_none": "não medida",
+        "summary_benchmark_running": "a medir",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -2957,22 +3011,49 @@ class InstallerApp(Gtk.Application):
         self.osk = osk_module()
         self.osk_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.osk_box.set_no_show_all(True)
+        # Les rangées de touches s'étirent (vexpand) : sans ce blocage, la boîte
+        # réclamerait une part de la hauteur libre et rognerait la page.
+        self.osk_box.set_vexpand(False)
         self.osk_widget = None
         self.osk_layout = None
         self.content_area.pack_end(self.osk_box, False, False, 0)
         if self.osk is None:
             return
         self.btn_osk = Gtk.Button(label=tr("btn_osk"))
+        # Le bouton ne prend pas le focus : le champ choisi avant de l'ouvrir le garde.
+        self.btn_osk.set_can_focus(False)
         self.btn_osk.get_style_context().add_class("btn-secondary")
         self.btn_osk.set_tooltip_text(tr("btn_osk"))
         self.btn_osk.connect("clicked", lambda _b: self.show_touch_keyboard(not self.osk_box.get_visible()))
         self.nav_box.pack_start(self.btn_osk, False, False, 0)
         try:
-            missing = not self.osk.keyboards()
+            self.osk_auto = not self.osk.keyboards()
         except Exception:
-            missing = False
-        if missing:
-            GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+            self.osk_auto = False
+        # Sans clavier physique, le clavier s'ouvre dès qu'un champ de saisie
+        # reçoit le focus, et à chaque étape qui en contient un (Compte local,
+        # Wi-Fi, chiffrement…) ; les autres étapes (Licence…) restent entières.
+        self.win.connect("set-focus", self.on_focus_for_keyboard)
+
+    def page_has_entry(self, widget=None):
+        widget = widget if widget is not None else self.pages.get_visible_child()
+        if widget is None or not widget.get_visible():
+            return False
+        if isinstance(widget, Gtk.Entry) and widget.get_editable() and widget.get_sensitive():
+            return True
+        if isinstance(widget, Gtk.Container):
+            return any(self.page_has_entry(child) for child in widget.get_children())
+        return False
+
+    def on_focus_for_keyboard(self, _win, widget):
+        if getattr(self, "osk_auto", False) and isinstance(widget, Gtk.Entry) and widget.get_editable():
+            if not self.osk_box.get_visible():
+                GLib.idle_add(lambda: self.show_touch_keyboard(True) and False)
+
+    def auto_touch_keyboard(self):
+        """Étape affichée : clavier ouvert s'il y a un champ à remplir (sans clavier physique)."""
+        if getattr(self, "osk_auto", False):
+            self.show_touch_keyboard(self.page_has_entry())
 
     def touch_keyboard_layout(self):
         code = str(getattr(self, "config", {}).get("keyboard") or "")[:2]
@@ -2994,7 +3075,17 @@ class InstallerApp(Gtk.Application):
                 send=self.touch_key, layout=layout,
                 on_close=lambda: self.show_touch_keyboard(False))
             self.osk_layout = wanted
+            # Hauteur fixe : la page garde l'essentiel de l'écran et défile.
+            screen = self.win.get_screen()
+            height = screen.get_height() if screen is not None else 768
+            self.osk_widget.set_size_request(-1, max(180, min(270, int(height * 0.32))))
+            self.osk_widget.set_margin_top(8)
             self.osk_box.pack_start(self.osk_widget, False, False, 0)
+        # Barre de défilement toujours visible tant que le clavier est ouvert :
+        # une tablette n'a pas de molette pour faire défiler la page.
+        for scroll in self.pages.get_children():
+            if isinstance(scroll, Gtk.ScrolledWindow):
+                scroll.set_overlay_scrolling(not visible)
         if visible:
             # set_no_show_all : show_all() ne toucherait pas la boîte elle-même.
             self.osk_widget.show_all()
@@ -3045,6 +3136,13 @@ class InstallerApp(Gtk.Application):
                 scroll = Gtk.ScrolledWindow()
                 scroll.add(child)
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            # Le champ qui reçoit le focus (clic, Tab du clavier tactile) défile
+            # dans la partie visible, même quand le clavier tactile prend le bas.
+            inner = scroll.get_child()
+            if isinstance(inner, Gtk.Viewport) and inner.get_child() is not None:
+                inner = inner.get_child()
+            if isinstance(inner, Gtk.Container):
+                inner.set_focus_vadjustment(scroll.get_vadjustment())
             scroll.show_all()
             self.pages.add_named(scroll, name)
 
@@ -3226,8 +3324,11 @@ class InstallerApp(Gtk.Application):
         if key == "summary":
             self.refresh_summary()
         self.pages.set_visible_child_name(page_name(key))
-        if getattr(self, "osk_box", None) is not None and self.osk_box.get_visible():
-            self.show_touch_keyboard(True)
+        if getattr(self, "osk_box", None) is not None:
+            if getattr(self, "osk_auto", False):
+                GLib.idle_add(lambda: self.auto_touch_keyboard() and False)
+            elif self.osk_box.get_visible():
+                self.show_touch_keyboard(True)
         if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
         if key == "benchmark" and self.bench_state == "idle":
@@ -3254,7 +3355,9 @@ class InstallerApp(Gtk.Application):
         ok = True
         key = STEP_KEYS[self.current_step]
         if key == "license":
-            ok = self.config["license_accepted"]
+            # « Suivant » reste cliquable : un clic sans avoir accepté montre pourquoi
+            # on ne peut pas continuer (show_license_required) au lieu de ne rien faire.
+            ok = True
         elif key == "network":
             ok = not self.config["proxy_enabled"] or self.proxy_settings() is not None
             self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
@@ -3291,6 +3394,9 @@ class InstallerApp(Gtk.Application):
 
     def on_next(self, _btn):
         key = STEP_KEYS[self.current_step]
+        if key == "license" and not self.config["license_accepted"]:
+            self.show_license_required()
+            return
         if key == "summary":
             if self.config["install_type"] == "manual" and not winlux_partition_ui.confirm_apply(
                     self.win, self.manual_editor.plan, tr, UI_SCALE):
@@ -3303,8 +3409,16 @@ class InstallerApp(Gtk.Application):
             if key == "network":
                 self.apply_live_proxy()
             if target > step_index("disk") and self.bench_device != (self.config["disk"] or {}).get("path"):
-                # Le benchmark lit le disque choisi : on le relance si le disque a changé.
+                # Le benchmark lit le disque choisi : on le relance si le disque a changé,
+                # et l'ancienne note ne vaut plus rien.
                 self.bench_state = "idle"
+                self.benchmark = None
+                if self.bench_proc and self.bench_proc.poll() is None:
+                    self.bench_proc.kill()
+                self.bench_proc = None
+                if step_index("benchmark") < target:
+                    # La page est déjà passée : la mesure tourne en arrière-plan.
+                    self.start_benchmark()
             if target == step_index("import"):
                 # Aussi quand le fichier de réponse a fait sauter la page des disques.
                 self.start_windows_detection()
@@ -3438,7 +3552,9 @@ class InstallerApp(Gtk.Application):
         box.pack_start(sub, False, False, 0)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_min_content_height(250)
+        # Petite hauteur minimale : la case et le message restent visibles en 1366x768
+        # même avec le clavier tactile ouvert ; le texte prend le reste de la place.
+        scroll.set_min_content_height(120)
         text_view = Gtk.TextView()
         text_view.set_editable(False)
         text_view.set_cursor_visible(False)
@@ -3449,13 +3565,73 @@ class InstallerApp(Gtk.Application):
         box.pack_start(scroll, True, True, 0)
         accept = Gtk.CheckButton(label=tr("license_accept"))
         accept.connect("toggled", self.on_license_toggle)
-        accept.set_margin_top(12)
-        box.pack_start(accept, False, False, 0)
+        self.license_accept = accept
+        self.license_accept_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.license_accept_box.get_style_context().add_class("license-accept-box")
+        self.license_accept_box.set_margin_top(12)
+        self.license_accept_box.pack_start(accept, False, False, 0)
+        self.license_hint = Gtk.Label(label=tr("license_required"), xalign=0)
+        self.license_hint.set_line_wrap(True)
+        self.license_hint.get_style_context().add_class("license-hint")
+        self.license_hint.set_no_show_all(True)
+        self.license_accept_box.pack_start(self.license_hint, False, False, 0)
+        self.license_pulse = 0
+        box.pack_start(self.license_accept_box, False, False, 0)
         self.pages.add_named(box, page_name("license"))
 
     def on_license_toggle(self, btn):
         self.config["license_accepted"] = btn.get_active()
+        if btn.get_active():
+            self.license_pulse = 0
+            self.license_accept_box.get_style_context().remove_class("license-attention")
+            self.license_hint.hide()
         self.validate_step()
+
+    def scroll_to_license_accept(self):
+        scroll = self.license_accept_box.get_ancestor(Gtk.ScrolledWindow)
+        page = scroll.get_child() if scroll is not None else None
+        if page is None:
+            return False
+        if isinstance(page, Gtk.Viewport):
+            page = page.get_child()
+        pos = self.license_accept_box.translate_coordinates(page, 0, 0)
+        if pos is None:
+            return False
+        adj = scroll.get_vadjustment()
+        top, bottom = pos[1], pos[1] + self.license_accept_box.get_allocated_height()
+        value = adj.get_value()
+        if bottom > value + adj.get_page_size():
+            value = bottom - adj.get_page_size()
+        adj.set_value(max(adj.get_lower(), min(value, top)))
+        return False
+
+    def show_license_required(self):
+        """« Suivant » sans avoir coché : la case clignote deux fois puis reste entourée,
+        avec une phrase qui dit qu'il faut accepter la licence pour continuer."""
+        self.license_hint.set_label(tr("license_required"))
+        self.license_hint.show()
+        self.license_accept.grab_focus()
+        ctx = self.license_accept_box.get_style_context()
+        ctx.add_class("license-attention")
+        # Petit écran ou clavier tactile ouvert : la page défile jusqu'à la case et
+        # au message, une fois le message mis en page.
+        GLib.idle_add(self.scroll_to_license_accept)
+        if self.license_pulse:
+            return
+        self.license_pulse = 4
+
+        def blink():
+            if not self.license_pulse or self.config["license_accepted"]:
+                self.license_pulse = 0
+                return False
+            self.license_pulse -= 1
+            if self.license_pulse % 2:
+                ctx.remove_class("license-attention")
+            else:
+                ctx.add_class("license-attention")
+            return self.license_pulse > 0
+
+        GLib.timeout_add(180, blink)
 
     # ── Page : Réseau ──────────────────────────────────────────
 
@@ -4370,7 +4546,16 @@ class InstallerApp(Gtk.Application):
             if not self.profile_chosen_by_user:
                 self.select_profile(self.benchmark["recommended_profile"])
             self.refresh_profile_badges()
+            if STEP_KEYS[self.current_step] == "summary":
+                self.refresh_summary()  # la mesure finit après l'arrivée sur le récapitulatif
         return False
+
+    def benchmark_complete(self):
+        """Vrai si la mesure est terminée, sans composant en échec."""
+        if self.bench_state != "done" or not self.benchmark:
+            return False
+        results = self.benchmark.get("results", {})
+        return all(key in results for key in ("cpu", "ram", "gpu")) and not any("error" in r for r in results.values())
 
     def on_benchmark_exit(self, proc):
         if proc is self.bench_proc and self.bench_state == "running":
@@ -4694,8 +4879,14 @@ class InstallerApp(Gtk.Application):
         if (browser or stores) and not has_default_route():
             # Pas une erreur : l'init les installe au premier démarrage connecté.
             lines.append(tr("summary_offline_later"))
-        score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
-                 else tr("summary_benchmark_none"))
+        # Seulement une mesure complète : une note partielle (page passée trop
+        # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
+        if self.benchmark_complete():
+            score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+        elif self.bench_state == "running":
+            score = tr("summary_benchmark_running")
+        else:
+            score = tr("summary_benchmark_none")
         lines.append(f"{tr('summary_benchmark')} : {score}")
         lines.append(f"{tr('summary_migration')} : {self.migration.describe()}")
         if self.config.get("timezone"):
@@ -4824,9 +5015,42 @@ class InstallerApp(Gtk.Application):
 
     # ── Installation ─────────────────────────────────────────────
 
+    def keep_awake(self, active):
+        """Pas de veille d'écran (DPMS, économiseur) pendant l'installation.
+
+        Une installation dure jusqu'à une vingtaine de minutes : l'écran noir
+        laissait croire à un plantage. Rétabli à la fin, réussie ou non.
+        """
+        def quiet(*argv):
+            if shutil.which(argv[0]):
+                try:
+                    subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        if active:
+            quiet("xset", "s", "off")
+            quiet("xset", "-dpms")
+            quiet("xscreensaver-command", "-deactivate")
+
+            def poke():
+                if not getattr(self, "awake_timer", None):
+                    return False
+                quiet("xscreensaver-command", "-deactivate")
+                quiet("xset", "s", "reset")
+                return True
+            if not getattr(self, "awake_timer", None):
+                self.awake_timer = GLib.timeout_add_seconds(30, poke)
+        else:
+            if getattr(self, "awake_timer", None):
+                GLib.source_remove(self.awake_timer)
+                self.awake_timer = None
+            quiet("xset", "s", "default")
+            quiet("xset", "+dpms")
+
     def start_installation(self):
         self.current_step = step_index("progress")
         self.update_step()
+        self.keep_awake(True)
         self.install_cancelled = False
         self.install_thread = threading.Thread(target=self.run_installation, daemon=True)
         self.install_thread.start()
@@ -5668,6 +5892,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
     def show_done(self):
+        self.keep_awake(False)
         self.current_step = step_index("done")
         self.update_step()
 
@@ -5675,6 +5900,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         self.cleanup_windows_import()
 
         def do():
+            self.keep_awake(False)
             self.done_title.set_text(tr("error_title"))
             self.done_sub.set_text(message)
             self.current_step = step_index("done")

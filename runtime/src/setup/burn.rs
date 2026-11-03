@@ -24,10 +24,16 @@ fn u32_at(d: &[u8], o: usize) -> Option<u32> {
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// En-tête `.wixburn` : taille du moteur et tailles des conteneurs.
+/// En-tête `.wixburn` : taille du moteur, signature d'origine et tailles
+/// des conteneurs.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Section {
     pub stub_size: usize,
+    /// Signature Authenticode du moteur (position et taille), 0 sans
+    /// signature. Dans un bundle signé (vc_redist.x64.exe), elle est
+    /// rangée juste après le conteneur 0 : les suivants viennent après elle.
+    pub signature_offset: usize,
+    pub signature_size: usize,
     pub containers: Vec<usize>,
 }
 
@@ -53,6 +59,8 @@ pub fn find_section(data: &[u8]) -> Option<Section> {
             return None;
         }
         let stub_size = u32_at(data, raw + 24)? as usize;
+        let signature_offset = u32_at(data, raw + 32)? as usize;
+        let signature_size = u32_at(data, raw + 36)? as usize;
         let count = u32_at(data, raw + 44)? as usize;
         if count > 64 {
             return None;
@@ -62,6 +70,8 @@ pub fn find_section(data: &[u8]) -> Option<Section> {
             .collect::<Option<Vec<_>>>()?;
         return Some(Section {
             stub_size,
+            signature_offset,
+            signature_size,
             containers,
         });
     }
@@ -70,7 +80,11 @@ pub fn find_section(data: &[u8]) -> Option<Section> {
 
 /// Données du conteneur `index` (0 : interface et manifeste).
 pub fn container<'a>(data: &'a [u8], s: &Section, index: usize) -> Option<&'a [u8]> {
-    let start = s.stub_size + s.containers.get(..index)?.iter().sum::<usize>();
+    let mut start = s.stub_size + s.containers.get(..index)?.iter().sum::<usize>();
+    let first_end = s.stub_size + *s.containers.first()?;
+    if index > 0 && s.signature_size > 0 && s.signature_offset >= first_end {
+        start += s.signature_offset + s.signature_size - first_end;
+    }
     data.get(start..start + *s.containers.get(index)?)
 }
 
@@ -164,6 +178,8 @@ pub struct Package {
     pub product_code: String,
     pub install_args: String,
     pub uninstall_args: String,
+    /// `InstallCondition` du paquet (vide : toujours installé).
+    pub condition: String,
     pub payloads: Vec<String>,
 }
 
@@ -181,6 +197,8 @@ pub struct Manifest {
     pub containers: HashMap<String, usize>,
     pub payloads: HashMap<String, Payload>,
     pub chain: Vec<Package>,
+    /// Variables remplies par une `RegistrySearch` → nom de la valeur lue.
+    pub registry_searches: HashMap<String, String>,
 }
 
 pub fn parse_manifest(xml: &str) -> Manifest {
@@ -200,6 +218,10 @@ pub fn parse_manifest(xml: &str) -> Manifest {
                 }
             }
             "Arp" => m.name = e.attr("DisplayName").to_string(),
+            "RegistrySearch" => {
+                m.registry_searches
+                    .insert(e.attr("Variable").to_string(), e.attr("Value").to_string());
+            }
             "Container" => {
                 if let Ok(i) = e.attr("AttachedIndex").parse() {
                     m.containers.insert(e.attr("Id").to_string(), i);
@@ -229,6 +251,7 @@ pub fn parse_manifest(xml: &str) -> Manifest {
                         product_code: e.attr("ProductCode").to_string(),
                         install_args: e.attr("InstallArguments").to_string(),
                         uninstall_args: e.attr("UninstallArguments").to_string(),
+                        condition: e.attr("InstallCondition").to_string(),
                         payloads: Vec::new(),
                     },
                 ));
@@ -245,6 +268,210 @@ pub fn parse_manifest(xml: &str) -> Manifest {
         m.chain.push(p);
     }
     m
+}
+
+// ---------- Conditions d'installation ----------
+//
+// Sous-ensemble de la syntaxe des conditions Burn : variables, chaînes
+// entre guillemets, versions `v10.0`, nombres, `= <> < > <= >=`, `NOT`,
+// `AND`, `OR` et parenthèses. Winlux se présente comme un Windows 10 64 bits
+// sur x64 : vc_redist n'installe ainsi ni ses paquets ARM64 ni ses mises à
+// jour pour Windows 7/8.
+
+#[derive(Debug, Clone, PartialEq)]
+enum Value {
+    Str(String),
+    Version(Vec<u64>),
+    Num(i64),
+    Empty,
+}
+
+impl Value {
+    fn truthy(&self) -> bool {
+        match self {
+            Value::Str(s) => !s.is_empty(),
+            Value::Version(v) => v.iter().any(|n| *n != 0),
+            Value::Num(n) => *n != 0,
+            Value::Empty => false,
+        }
+    }
+}
+
+fn parse_version(s: &str) -> Option<Vec<u64>> {
+    s.split('.').map(|p| p.parse().ok()).collect()
+}
+
+fn variable(m: &Manifest, name: &str) -> Value {
+    match name {
+        "VersionNT" | "VersionNT64" => Value::Version(vec![10, 0, 0, 0]),
+        "NativeMachine" => Value::Num(0x8664),
+        "ProcessorArchitecture" => Value::Num(9),
+        "Privileged" | "AdminUser" => Value::Num(1),
+        _ => match m.registry_searches.get(name).map(String::as_str) {
+            Some(v) if v.eq_ignore_ascii_case("PROCESSOR_ARCHITECTURE") => {
+                Value::Str("AMD64".into())
+            }
+            _ => Value::Empty,
+        },
+    }
+}
+
+fn tokens(s: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+        } else if c == '"' {
+            chars.next();
+            let mut t = String::from("\"");
+            loop {
+                match chars.next()? {
+                    '"' => break,
+                    ch => t.push(ch),
+                }
+            }
+            out.push(t);
+        } else if "()".contains(c) {
+            out.push(chars.next()?.to_string());
+        } else if "=<>~".contains(c) {
+            let mut t = String::new();
+            while let Some(&ch) = chars.peek() {
+                if !"=<>~".contains(ch) {
+                    break;
+                }
+                t.push(ch);
+                chars.next();
+            }
+            out.push(t);
+        } else {
+            let mut t = String::new();
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() || "()=<>~\"".contains(ch) {
+                    break;
+                }
+                t.push(ch);
+                chars.next();
+            }
+            out.push(t);
+        }
+    }
+    Some(out)
+}
+
+struct Eval<'a> {
+    m: &'a Manifest,
+    t: Vec<String>,
+    i: usize,
+}
+
+impl Eval<'_> {
+    fn peek_word(&self, w: &str) -> bool {
+        self.t
+            .get(self.i)
+            .is_some_and(|t| t.eq_ignore_ascii_case(w))
+    }
+    fn or(&mut self) -> Option<bool> {
+        let mut v = self.and()?;
+        while self.peek_word("OR") {
+            self.i += 1;
+            v |= self.and()?;
+        }
+        Some(v)
+    }
+    fn and(&mut self) -> Option<bool> {
+        let mut v = self.not()?;
+        while self.peek_word("AND") {
+            self.i += 1;
+            v &= self.not()?;
+        }
+        Some(v)
+    }
+    fn not(&mut self) -> Option<bool> {
+        if self.peek_word("NOT") {
+            self.i += 1;
+            return Some(!self.not()?);
+        }
+        self.comparison()
+    }
+    fn comparison(&mut self) -> Option<bool> {
+        if self.peek_word("(") {
+            self.i += 1;
+            let v = self.or()?;
+            if !self.peek_word(")") {
+                return None;
+            }
+            self.i += 1;
+            return Some(v);
+        }
+        let left = self.operand()?;
+        let op = match self.t.get(self.i).map(String::as_str) {
+            Some(o @ ("=" | "<>" | "<" | ">" | "<=" | ">=" | "~=" | "~<>")) => o.to_string(),
+            _ => return Some(left.truthy()),
+        };
+        self.i += 1;
+        let right = self.operand()?;
+        let ord = match (&left, &right) {
+            (Value::Version(a), Value::Version(b)) => {
+                let n = a.len().max(b.len());
+                let pad = |v: &Vec<u64>| {
+                    (0..n)
+                        .map(|k| v.get(k).copied().unwrap_or(0))
+                        .collect::<Vec<_>>()
+                };
+                pad(a).cmp(&pad(b))
+            }
+            (Value::Num(a), Value::Num(b)) => a.cmp(b),
+            (Value::Str(a), Value::Str(b)) if op.starts_with('~') => {
+                a.to_lowercase().cmp(&b.to_lowercase())
+            }
+            (Value::Str(a), Value::Str(b)) => a.cmp(b),
+            (Value::Empty, Value::Empty) => std::cmp::Ordering::Equal,
+            _ => return Some(op.ends_with("<>")),
+        };
+        use std::cmp::Ordering::*;
+        Some(match op.trim_start_matches('~') {
+            "=" => ord == Equal,
+            "<>" => ord != Equal,
+            "<" => ord == Less,
+            ">" => ord == Greater,
+            "<=" => ord != Greater,
+            _ => ord != Less,
+        })
+    }
+    fn operand(&mut self) -> Option<Value> {
+        let t = self.t.get(self.i)?.clone();
+        self.i += 1;
+        if let Some(s) = t.strip_prefix('"') {
+            return Some(Value::Str(s.to_string()));
+        }
+        if let Some(v) = t.strip_prefix(['v', 'V']).and_then(parse_version) {
+            return Some(Value::Version(v));
+        }
+        if let Ok(n) = t.parse() {
+            return Some(Value::Num(n));
+        }
+        if t.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Some(variable(self.m, &t));
+        }
+        None
+    }
+}
+
+/// Le paquet doit-il être installé ? Une condition illisible l'installe,
+/// comme avant la prise en charge des conditions.
+pub fn should_install(m: &Manifest, condition: &str) -> bool {
+    if condition.trim().is_empty() {
+        return true;
+    }
+    let Some(t) = tokens(condition) else {
+        return true;
+    };
+    let mut e = Eval { m, t, i: 0 };
+    match e.or() {
+        Some(v) if e.i == e.t.len() => v,
+        _ => true,
+    }
 }
 
 /// Bundle complet : manifeste et contenu de chaque fichier embarqué
@@ -366,6 +593,9 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool) -> i32 {
         bundle.manifest.chain.iter().collect()
     };
     for p in chain {
+        if !uninstall && !should_install(&bundle.manifest, &p.condition) {
+            continue;
+        }
         let dir = work.join(&p.id);
         match p.kind {
             PackageKind::Msi if uninstall => {
@@ -537,6 +767,43 @@ pub mod tests {
         );
         let _ = std::fs::remove_dir_all(dir);
         assert!(find_section(b"MZ pas un bundle").is_none());
+    }
+
+    /// Bundle signé (comme vc_redist.x64.exe) : la signature du moteur est
+    /// collée après le conteneur 0, avant les paquets.
+    #[test]
+    fn ouvre_un_bundle_signe() {
+        let mut data = build_bundle(&[("a0", b"MSI"), ("a1", b"CAB"), ("a2", b"MSU")]);
+        let s = find_section(&data).unwrap();
+        let after_ux = s.stub_size + s.containers[0];
+        let signature_offset = (after_ux + 7) & !7;
+        let mut signed = data[..after_ux].to_vec();
+        signed.resize(signature_offset, 0);
+        signed.extend_from_slice(&[0x30; 0x123]);
+        signed.extend_from_slice(&data[after_ux..]);
+        signed[0x300 + 32..0x300 + 36].copy_from_slice(&(signature_offset as u32).to_le_bytes());
+        signed[0x300 + 36..0x300 + 40].copy_from_slice(&0x123u32.to_le_bytes());
+        data = signed;
+        let b = open(&data).unwrap();
+        assert_eq!(b.files["a1"], b"CAB");
+        assert_eq!(b.manifest.chain.len(), 3);
+    }
+
+    #[test]
+    fn conditions_de_vc_redist() {
+        let m = parse_manifest(
+            r#"<BurnManifest><RegistrySearch Id="r" Variable="Arm64_Check" Root="HKLM" Key="k" Value="PROCESSOR_ARCHITECTURE" /></BurnManifest>"#,
+        );
+        assert!(should_install(
+            &m,
+            "(VersionNT64) AND NOT (Arm64_Check = \"ARM64\")"
+        ));
+        assert!(!should_install(&m, "Arm64_Check = \"ARM64\""));
+        assert!(!should_install(&m, "VersionNT = v6.1 AND VersionNT64"));
+        assert!(!should_install(&m, "VersionNT = v6.3 AND NOT VersionNT64"));
+        assert!(should_install(&m, "VersionNT >= v6.1"));
+        assert!(should_install(&m, "NOT Inconnue OR (Inconnue"));
+        assert!(should_install(&m, ""));
     }
 
     const REDIST_MANIFEST: &str = r#"<BurnManifest>

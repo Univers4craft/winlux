@@ -1252,7 +1252,7 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
-    EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
+    EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
     def extra_page(self, page):
         """Construit la page ; False si elle n’est pas gérée ici."""
@@ -1854,7 +1854,8 @@ class ExtraPages:
             # Retour au thème Winlux du compte (couleurs et accent compris).
             run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
             return
-        if theme is None: theme = "Adwaita-dark" if mode == "dark" else "Adwaita"
+        # « Adwaita-dark » n'est pas un thème GTK 3 installé (rendu clair).
+        if theme is None: theme = "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
 
     def set_pointer(self, size):
@@ -1910,8 +1911,20 @@ class ExtraPages:
         self.body.pack_start(self.programs_box, False, False, 0)
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
+        self.program_cards = {}
         for exe, name in programs:
             self.program_card(module, exe, name)
+        GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
+
+    def forget_uninstalled(self, programs_box):
+        """Un programme désinstallé (fenêtre « Applications installées ») disparaît
+        de la liste sans rouvrir la page."""
+        if programs_box is not self.programs_box or programs_box.get_parent() is None: return False
+        for exe, card in list(self.program_cards.items()):
+            if not exe.is_file():
+                card.destroy()
+                del self.program_cards[exe]
+        return True
 
     def program_card(self, module, exe, name, first=False):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1945,6 +1958,7 @@ class ExtraPages:
         self.switch(box, _t("Journal de diagnostic"), profile.get("trace") == "1",
                     lambda on: self.save_program(exe, trace="1" if on else "0"))
         self.programs_box.pack_start(box, False, False, 0)
+        if not first: self.program_cards[exe] = box
         if first: self.programs_box.reorder_child(box, 0)
         box.show_all()
 
@@ -2099,6 +2113,12 @@ class ExtraPages:
         hardware = hardware_page()
         if hardware is not None: hardware.cpu_section(self)
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── À propos : « Votre PC », sous la version et le noyau ──
+
+    def sections_about(self):
+        hardware = hardware_page()
+        if hardware is not None: hardware.pc_section(self, self.status)
 
     # ── Presse-papiers (Windows + V) ──
 

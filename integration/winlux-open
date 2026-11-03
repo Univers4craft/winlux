@@ -246,6 +246,13 @@ EOF_ARGS
         ;;
 esac
 
+# Nom de l'appli installée, lu dans le journal du runtime (« setup : Claude
+# est installé. ») ; à défaut, le nom du fichier de l'installateur.
+installed_name() {
+    name=$(sed -n 's/^\(setup : \)\{0,1\}\(.*\) est installé\.$/\2/p' "$log" 2>/dev/null | tail -n 1)
+    printf '%s' "${name:-$(basename -- "$exe")}"
+}
+
 # Paquet MSIX ou AppX : installé par le module setup du runtime (#272).
 case "$exe" in
     *.msix|*.MSIX|*.Msix|*.appx|*.APPX|*.Appx|*.msixbundle|*.MSIXBUNDLE|*.appxbundle|*.APPXBUNDLE)
@@ -266,7 +273,7 @@ case "$exe" in
         fi
         if [ "$status" -eq 0 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
-            show_message "« $(basename -- "$exe") » est installé." info
+            show_message "« $(installed_name) » est installé." info
         else
             show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
@@ -284,7 +291,7 @@ case "$exe" in
         status=$?
         if [ "$status" -eq 0 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
-            show_message "« $(basename -- "$exe") » est installé." info
+            show_message "« $(installed_name) » est installé." info
         else
             show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
 $(tail -n 5 "$log" 2>/dev/null)"
@@ -306,6 +313,30 @@ Ce fichier n’est pas un programme Windows que Winlux sait lancer." "${reason:-
     esac
     exit 1
 fi
+# Installateur (WiX Burn comme vc_redist, NSIS, Inno Setup) ou désinstalleur
+# connu : déroulé par le runtime sans exécuter son code, même en 32 bits.
+case "$kind" in
+    setup|uninstall)
+        cd "$(dirname -- "$exe")" 2>/dev/null || true
+        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        "$winlux" "$exe" "$@" >"$log" 2>&1
+        status=$?
+        if [ "$status" -eq 0 ] || [ "$status" -eq 3010 ]; then
+            command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
+            if [ "$kind" = uninstall ]; then
+                show_message "Le programme est désinstallé." info
+            else
+                show_message "« $(installed_name) » est installé." info
+            fi
+            exit 0
+        fi
+        if [ "$kind" = uninstall ]; then what="Désinstallation"; else what="Installation de « $(basename -- "$exe") »"; fi
+        show_error "$what impossible (code $status).
+$(tail -n 5 "$log" 2>/dev/null)"
+        exit "$status"
+        ;;
+esac
+
 if command -v winlux-applications >/dev/null 2>&1; then
     winlux-applications register "$exe" >/dev/null 2>&1 || true
 fi

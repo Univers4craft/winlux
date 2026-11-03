@@ -24,9 +24,38 @@ fn now_tick() -> u32 {
         .unwrap_or(0)
 }
 
+// ATOM de classe : chaque nom reçoit le sien (0xC000 et plus, comme les
+// atomes de chaînes de Windows). Chromium (Electron) passe ensuite
+// MAKEINTATOM(atome) à CreateWindowExW au lieu du nom.
+fn class_atoms() -> &'static std::sync::Mutex<Vec<String>> {
+    static ATOMS: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    ATOMS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn class_atom(name: &str) -> u16 {
+    let mut atoms = class_atoms().lock().unwrap_or_else(|e| e.into_inner());
+    let index = match atoms.iter().position(|n| n.eq_ignore_ascii_case(name)) {
+        Some(i) => i,
+        None => {
+            atoms.push(name.to_string());
+            atoms.len() - 1
+        }
+    };
+    0xC000u16.wrapping_add(index as u16)
+}
+
+fn class_name_of_atom(atom: usize) -> String {
+    let atoms = class_atoms().lock().unwrap_or_else(|e| e.into_inner());
+    atom.checked_sub(0xC000)
+        .and_then(|i| atoms.get(i).cloned())
+        .unwrap_or_else(|| format!("#{atom}"))
+}
+
 unsafe fn read_class_name_a(p: *const u8) -> String {
     if p.is_null() {
         String::new()
+    } else if (p as usize) < 0x1_0000 {
+        class_name_of_atom(p as usize)
     } else {
         crate::dlls::cstr(p)
     }
@@ -35,6 +64,8 @@ unsafe fn read_class_name_a(p: *const u8) -> String {
 unsafe fn read_class_name_w(p: *const u16) -> String {
     if p.is_null() {
         String::new()
+    } else if (p as usize) < 0x1_0000 {
+        class_name_of_atom(p as usize)
     } else {
         crate::dlls::wstr(p)
     }
@@ -52,20 +83,17 @@ unsafe fn register_class_common(
         crate::process::set_last_error(87);
         return 0;
     }
-    if gui::register_class(
+    // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
+    // classe ; on rend son atome.
+    gui::register_class(
         &name,
         ClassInfo {
             wnd_proc,
             background,
             instance,
         },
-    ) {
-        // ATOM : petit entier stable, jamais nul.
-        1
-    } else {
-        // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la classe.
-        1
-    }
+    );
+    class_atom(&name) as usize
 }
 
 pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
@@ -409,6 +437,22 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         };
         let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
+            // Fin de boucle headless : comme pour un vrai WM_QUIT, le MSG est
+            // renseigné (wParam 0). Sinon `ExitProcess(msg.wParam)` reprenait
+            // le wParam du dernier message, l'identifiant d'un minuteur par
+            // exemple, et le programme sortait au hasard avec le code 1.
+            write_msg(
+                out,
+                &gui::Msg {
+                    hwnd: 0,
+                    message: gui::WM_QUIT,
+                    wparam: 0,
+                    lparam: 0,
+                    time: 0,
+                    pt: Default::default(),
+                    l_private: 0,
+                },
+            );
             return 0;
         }
         // WM_TIMER est le message le moins prioritaire, comme sous Windows :
@@ -3009,6 +3053,52 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de
+    /// wParam 0, pas le wParam d'un message précédent (code de sortie au
+    /// hasard de voicerecorder.exe dans la VM de validation).
+    #[test]
+    fn fin_de_boucle_headless_renseigne_wm_quit() {
+        if gui::backend_is_interactive() {
+            return;
+        }
+        let (r, message, wparam) = std::thread::spawn(|| unsafe {
+            let mut m = gui::Msg {
+                hwnd: 0,
+                message: 0x0113,
+                wparam: 1,
+                lparam: 0,
+                time: 0,
+                pt: Default::default(),
+                l_private: 0,
+            };
+            let r = get_message_a(&mut m, 0, 0, 0);
+            (r, m.message, m.wparam)
+        })
+        .join()
+        .unwrap();
+        assert_eq!((r, message, wparam), (0, gui::WM_QUIT, 0));
+    }
+
+    /// Chromium (Electron) crée ses fenêtres avec MAKEINTATOM(atome rendu
+    /// par RegisterClassExW) : chaque classe a son atome, relu en nom.
+    #[test]
+    fn atome_de_classe_relu_comme_nom() {
+        let a = class_atom("Chrome_WidgetWin_0");
+        let b = class_atom("Chrome_MessageWindow");
+        assert!(a >= 0xC000 && b >= 0xC000 && a != b);
+        assert_eq!(class_atom("chrome_widgetwin_0"), a);
+        unsafe {
+            assert_eq!(
+                read_class_name_w(a as usize as *const u16),
+                "Chrome_WidgetWin_0"
+            );
+            assert_eq!(
+                read_class_name_a(b as usize as *const u8),
+                "Chrome_MessageWindow"
+            );
+        }
+    }
 
     #[test]
     fn peek_message_rend_wm_timer_comme_get_message() {

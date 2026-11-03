@@ -275,9 +275,13 @@ def pretty(name):
     return name[:1].upper() + name[1:] if name else name
 
 
-def best_exe(folder, limit=600):
-    """Le .exe principal d’un dossier de jeu : graphique, pas un outil, le moins profond puis le plus gros."""
-    found, seen = [], 0
+def best_exe(folder, limit=600, any_exe=False):
+    """Le .exe principal d’un dossier de jeu : graphique, pas un outil, le moins profond puis le plus gros.
+
+    any_exe : dossier déclaré comme dossier de jeux (C:\\Jeux…). Un jeu Unity
+    ou chargeant Direct3D à la demande n’importe aucune DLL graphique dans son
+    .exe : faute de mieux, le plus gros .exe hors outils est retenu."""
+    found, fallback, seen = [], [], 0
     folder = Path(folder)
     stack = [(folder, 0)]
     while stack:
@@ -297,8 +301,11 @@ def best_exe(folder, limit=600):
                     info = pe_info(entry)
                     if info and heavy(info[1]):
                         found.append((depth, -entry.stat().st_size, str(entry), info[0]))
+                    elif info and any_exe:
+                        fallback.append((depth, -entry.stat().st_size, str(entry), info[0]))
             except OSError:
                 continue
+    found = found or fallback
     if not found: return None
     found.sort()
     return Path(found[0][2]), found[0][3]
@@ -394,7 +401,7 @@ def scan(config=None):
             for exe, name in gog: add(exe, name, "gog")
             if gog: continue
             title = itch_title(child)
-            found = best_exe(child)
+            found = best_exe(child, any_exe=not program_files)
             if not found: continue
             if title: add(found[0], title, "itch", found[1])
             elif not program_files or (child / "goggame.dll").is_file():
@@ -484,7 +491,12 @@ def playtime(now=None):
         for path in files:
             try: parsed = parse_session(path.read_text(encoding="utf-8", errors="surrogateescape")[:8192])
             except OSError: continue
-            if parsed is not None and now - parsed[2] <= FINISHED_AFTER:
+            # « <pid>-<début>.session » : un jeu dont le processus est fini
+            # n'est plus « En cours » (le bouton Jouer restait grisé jusqu'au
+            # délai de garde, même après avoir quitté le jeu).
+            pid = path.name.split("-", 1)[0]
+            alive = not pid.isdigit() or Path("/proc", pid).exists()
+            if parsed is not None and alive and now - parsed[2] <= FINISHED_AFTER:
                 live.append(parsed)
                 continue
             if parsed is not None and "\t" not in parsed[0]:
@@ -523,7 +535,8 @@ def date_text(stamp):
 def summary(game, times):
     if not game.get("wide", True): return _t("Programme 32 bits : pas encore pris en charge par Winlux.")
     entry = times.get(game["exe"])
-    if not entry or entry["seconds"] <= 0 and not entry["running"]: return _t("Jamais lancé")
+    # Partie de moins de 30 s (avant le premier relevé) : lancée quand même.
+    if not entry or entry["seconds"] <= 0 and not entry["running"] and not entry["last"]: return _t("Jamais lancé")
     if entry["running"]: return _t("En cours") + " · " + duration_text(entry["seconds"])
     return duration_text(entry["seconds"]) + " · " + _t("Joué le {date}").format(date=date_text(entry["last"]))
 
@@ -536,7 +549,11 @@ def launch(game):
     opener = shutil.which("winlux-open") or "/usr/bin/winlux-open"
     if not Path(opener).is_file():
         opener = shutil.which("winlux") or "/usr/bin/winlux"
-    return subprocess.Popen([opener, str(exe)], cwd=str(exe.parent), start_new_session=True,
+    # Lancé depuis la bibliothèque : c'est un jeu, même si son .exe n'importe
+    # aucune DLL graphique (Unity, Direct3D chargé à la demande). Le runtime
+    # compte alors son temps de jeu ; sinon la carte restait « Jamais lancé ».
+    env = dict(os.environ, WINLUX_GAME="1")
+    return subprocess.Popen([opener, str(exe)], cwd=str(exe.parent), start_new_session=True, env=env,
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
