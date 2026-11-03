@@ -59,7 +59,14 @@ c'est sa copie, faite sur sa machine.
   vraiment les liens (le seul installé, ou « demandé à chaque lien »).
 - **Langue** : Firefox est installé avec les paquets de langue officiels de
   Mozilla (`firefox-l10n-fr`, `-de`, `-es`, même dépôt, SHA-256 de l'index)
-  et suit la langue du système. Chrome et Edge contiennent déjà leurs langues.
+  et suit la langue choisie dans Paramètres > Langue : `winlux-browsers`
+  donne `LANG`/`LANGUAGE` d'après `/etc/winlux/locale.conf` à tout
+  navigateur lancé (Chrome et Edge contiennent déjà leurs langues). Les
+  paquets sont posés dans `distribution/extensions` (profil neuf) et
+  `browser/extensions` (relu à chaque démarrage, pour un profil déjà créé).
+  `sh scripts/check-firefox-langue.sh`, sur le Winlux installé, vérifie la
+  langue réellement affichée (en-tête Accept-Language) sur un profil neuf
+  puis relancé.
 - **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`
   lance `/usr/lib/winlux/winlux-browser-fetch` (copie de
   `scripts/prepare-browser-packages.py`). Il lit l'index du dépôt officiel de

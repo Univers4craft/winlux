@@ -71,6 +71,22 @@ test -f "$extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo 'Firefox san
 test ! -e "$extensions/langpack-de@firefox.mozilla.org.xpi" || { echo 'Paquet de langue altéré installé' >&2; exit 1; }
 grep -q 'Paquet de langue altéré ignoré : de' "$work/langpacks.txt"
 grep -qx 'pref("intl.locale.requested", "");' "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/defaults/pref/winlux-langue.js"
+test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/browser/extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo "Paquet de langue absent pour un profil existant" >&2; exit 1; }
+grep -qx 'pref("extensions.autoDisableScopes", 11);' "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/defaults/pref/winlux-langue.js"
+# Langue de Winlux donnée au navigateur, même si la session a LANG=C ou fr_FR.
+ffbin="$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox"
+cp "$ffbin" "$work/firefox.saved"
+printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$LANG" "$LANGUAGE" "${LC_ALL:-}" > "%s"\n' "$work/langue" > "$ffbin"
+mkdir -p "$WINLUX_BROWSER_ROOT/etc/winlux"
+for pair in de:de_DE.UTF-8 es:es_ES.UTF-8 en:en_US.UTF-8 fr:fr_FR.UTF-8; do
+    printf 'LANG=%s\n' "${pair%%:*}" > "$WINLUX_BROWSER_ROOT/etc/winlux/locale.conf"
+    LANG=C.UTF-8 LC_ALL=C manager --launch firefox
+    test "$(cat "$work/langue")" = "${pair#*:} ${pair%%:*} " || { echo "Langue donnée à Firefox : $(cat "$work/langue") au lieu de ${pair#*:}" >&2; exit 1; }
+done
+rm -f "$WINLUX_BROWSER_ROOT/etc/winlux/locale.conf"
+LANG=C manager --launch firefox
+test "$(cat "$work/langue")" = "fr_FR.UTF-8 fr " || { echo "Langue par défaut : $(cat "$work/langue")" >&2; exit 1; }
+cp "$work/firefox.saved" "$ffbin"
 touch "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 manager --install firefox
 test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
