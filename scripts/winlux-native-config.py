@@ -459,6 +459,40 @@ def migrate_openbox(openbox_config, default_rc):
                     if item.get("button") == "Right":
                         maximize.append(ET.fromstring(ET.tostring(item)))
                         changed = True
+            # Croix et Alt+F4 : « … ne répond pas » si le programme reste ouvert
+            # (winlux-close-watch) ; clic droit sur la barre de titre : menu de
+            # fenêtre Winlux avec « Forcer la fermeture ».
+            if default_rc.is_file():
+                default_root = ET.parse(default_rc).getroot()
+                default_mouse = default_root.find(f"{{{namespace}}}mouse")
+                close = next((item for item in mouse if item.get("name") == "Close"), None) if mouse is not None else None
+                shipped_close = next((item for item in default_mouse if item.get("name") == "Close"), None) if default_mouse is not None else None
+                if close is not None and shipped_close is not None and "winlux-close-watch" not in ET.tostring(close, encoding="unicode") \
+                        and [action.get("name") for action in close.iter(f"{{{namespace}}}action")] == ["Close"]:
+                    mouse.insert(list(mouse).index(close), ET.fromstring(ET.tostring(shipped_close)))
+                    mouse.remove(close)
+                    changed = True
+                defaults = default_root.find(f"{{{namespace}}}keyboard")
+                shipped_f4 = next((item for item in defaults if item.get("key") == "A-F4"), None) if defaults is not None else None
+                for binding in list(keyboard) if keyboard is not None else []:
+                    if binding.get("key") == "A-F4" and shipped_f4 is not None \
+                            and [action.get("name") for action in binding.findall(f"{{{namespace}}}action")] == ["Close"]:
+                        keyboard.insert(list(keyboard).index(binding), ET.fromstring(ET.tostring(shipped_f4)))
+                        keyboard.remove(binding)
+                        changed = True
+                for menu_name in mouse.iter(f"{{{namespace}}}menu") if mouse is not None else []:
+                    if menu_name.text == "client-menu":
+                        menu_name.text = "winlux-window-menu"
+                        changed = True
+                menus = tree.getroot().find(f"{{{namespace}}}menu")
+                window_menu = "/usr/share/winlux/native/config/openbox/window-menu.xml"
+                if menus is not None and window_menu not in [item.text for item in menus.findall(f"{{{namespace}}}file")]:
+                    files = menus.findall(f"{{{namespace}}}file")
+                    position = list(menus).index(files[-1]) + 1 if files else 0
+                    element = ET.Element(f"{{{namespace}}}file")
+                    element.text = window_menu
+                    menus.insert(position, element)
+                    changed = True
             if changed:
                 temporary = openbox_config.with_suffix(".xml.tmp")
                 tree.write(temporary, encoding="utf-8", xml_declaration=True)
