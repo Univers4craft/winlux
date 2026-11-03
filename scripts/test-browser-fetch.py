@@ -86,9 +86,36 @@ with tempfile.TemporaryDirectory() as tmp:
     r = fetch()
     check(r.returncode != 0 and "checksum mismatch" in r.stderr, "empreinte fausse acceptée")
     check(not (out / "firefox.deb").exists() and not list(out.glob(".firefox-*.partial")), "paquet refusé gardé")
+    # Paquets de langue de Firefox (fr, de, es ; architecture « all ») : téléchargés
+    # avec lui, vérifiés ; un paquet absent ou altéré n'empêche pas l'installation.
+    langs = {}
+    for lang in ("fr", "de"):
+        lp = w / f"lp-{lang}"
+        (lp / "DEBIAN").mkdir(parents=True)
+        (lp / "usr/lib/firefox/distribution/extensions").mkdir(parents=True)
+        (lp / f"usr/lib/firefox/distribution/extensions/langpack-{lang}@firefox.mozilla.org.xpi").write_text(lang)
+        (lp / "DEBIAN/control").write_text(f"Package: firefox-l10n-{lang}\nVersion: 150.0\nArchitecture: all\n"
+                                           "Maintainer: Test <t@example.org>\nDescription: test\n")
+        lpdeb = mirror / f"pool/mozilla/firefox-l10n-{lang}_150.0_all.deb"
+        subprocess.run(["dpkg-deb", "--build", "-Zgzip", str(lp), str(lpdeb)], check=True, capture_output=True)
+        langs[lang] = (lpdeb, hashlib.sha256(lpdeb.read_bytes()).hexdigest())
+    write_index(digest)
+    with index.open("a") as stream:
+        for lang, (lpdeb, sha) in langs.items():
+            if lang == "de": sha = "0" * 64
+            stream.write(f"Package: firefox-l10n-{lang}\nVersion: 150.0\nArchitecture: all\n"
+                         f"Filename: pool/mozilla/{lpdeb.name}\nSHA256: {sha}\n\n")
+    r = fetch()
+    check(r.returncode == 0, f"paquet de langue altéré bloquant : {r.stderr}")
+    check((out / "firefox-l10n-fr.deb").read_bytes() == langs["fr"][0].read_bytes(), "paquet de langue fr absent")
+    check((out / "firefox-l10n-fr.sha256").read_text().strip() == langs["fr"][1], "empreinte fr absente")
+    check(not (out / "firefox-l10n-de.deb").exists() and "firefox-l10n-de: indisponible" in r.stderr, "paquet de langue altéré gardé")
+    check(not (out / "firefox-l10n-es.deb").exists(), "paquet de langue inventé")
+    check(not list(out.glob(".l10n-*.partial")), "paquet de langue partiel laissé")
+
     # Edge, Chrome et Firefox : les vrais dépôts des éditeurs, en HTTPS.
     source = FETCH.read_text()
     for url in ("https://packages.microsoft.com/repos/edge/", "https://dl.google.com/linux/chrome/deb/",
                 "https://packages.mozilla.org/apt/"):
         check(url in source, f"dépôt de l'éditeur absent : {url}")
-print("OK : téléchargement des navigateurs sans durée maximale, reprise, empreinte SHA-256")
+print("OK : téléchargement des navigateurs sans durée maximale, reprise, empreinte SHA-256, paquets de langue de Firefox")
