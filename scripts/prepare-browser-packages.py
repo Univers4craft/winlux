@@ -29,7 +29,9 @@ SOURCES = {
 # Langues de Winlux autres que l'anglais : paquets de langue officiels de
 # Firefox (firefox-l10n-<langue>, même dépôt Mozilla), installés avec lui pour
 # qu'il s'affiche dans la langue du système. Chrome et Edge les contiennent déjà.
-LANGPACKS = {"firefox": ("firefox-l10n-{lang}", ("fr", "de", "es"))}
+# Ils sont « Architecture: all » : le dépôt les liste dans binary-all/Packages,
+# pas dans l'index binary-amd64 du navigateur (v0.2.19 : aucun trouvé).
+LANGPACKS = {"firefox": ("firefox-l10n-{lang}", ("fr", "de", "es"), "dists/mozilla/main/binary-all/Packages")}
 
 # Miroir de test (file:///…) : jamais utilisé par Winlux lui-même.
 MIRROR = os.environ.get("WINLUX_BROWSER_MIRROR", "")
@@ -120,16 +122,25 @@ def main():
             (output / f"{browser}.version").write_text(fields["Version"] + "\n")
             (output / f"{browser}.source").write_text(urllib.parse.urljoin(base, fields["Filename"]) + "\n")
             print(f"{browser}: {fields['Version']} verified", flush=True)
-            fetch_langpacks(browser, base, work / "Packages.gz", output)
+            fetch_langpacks(browser, base, work, output)
 
 
-def fetch_langpacks(browser, base, index, output):
+def fetch_langpacks(browser, base, work, output):
     """Paquets de langue : facultatifs, un échec n'empêche pas l'installation."""
-    template, langs = LANGPACKS.get(browser, ("", ()))
+    if browser not in LANGPACKS:
+        return
+    template, langs, index_path = LANGPACKS[browser]
+    index = work / "Packages-all"
+    try:
+        fetch_index(base + index_path, index)
+        data = index.read_bytes()
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"{browser}-l10n: index des paquets de langue indisponible ({error})", file=sys.stderr, flush=True)
+        return
     for lang in langs:
         name = f"{browser}-l10n-{lang}"
         try:
-            fields = select(index.read_bytes(), template.format(lang=lang), ("all", "amd64"))
+            fields = select(data, template.format(lang=lang), ("all", "amd64"))
             destination = output / f"{name}.deb"
             if not destination.exists() or checksum(destination) != fields["SHA256"]:
                 partial = output / f".l10n-{name}.partial"

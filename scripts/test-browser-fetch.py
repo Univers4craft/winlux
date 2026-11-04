@@ -100,13 +100,19 @@ with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["dpkg-deb", "--build", "-Zgzip", str(lp), str(lpdeb)], check=True, capture_output=True)
         langs[lang] = (lpdeb, hashlib.sha256(lpdeb.read_bytes()).hexdigest())
     write_index(digest)
-    with index.open("a") as stream:
+    # Comme le dépôt de Mozilla : les paquets « all » sont dans binary-all/Packages,
+    # jamais dans l'index binary-amd64 du navigateur.
+    index_all = mirror / "dists/mozilla/main/binary-all/Packages"
+    index_all.parent.mkdir(parents=True, exist_ok=True)
+    with index_all.open("w") as stream:
         for lang, (lpdeb, sha) in langs.items():
             if lang == "de": sha = "0" * 64
             stream.write(f"Package: firefox-l10n-{lang}\nVersion: 150.0\nArchitecture: all\n"
                          f"Filename: pool/mozilla/{lpdeb.name}\nSHA256: {sha}\n\n")
+    check("firefox-l10n" not in index.read_text(), "le miroir de test doit ranger les paquets de langue comme Mozilla")
     r = fetch()
     check(r.returncode == 0, f"paquet de langue altéré bloquant : {r.stderr}")
+    check("binary-all/Packages" in log.read_text(), "index binary-all des paquets de langue jamais consulté")
     check((out / "firefox-l10n-fr.deb").read_bytes() == langs["fr"][0].read_bytes(), "paquet de langue fr absent")
     check((out / "firefox-l10n-fr.sha256").read_text().strip() == langs["fr"][1], "empreinte fr absente")
     check(not (out / "firefox-l10n-de.deb").exists() and "firefox-l10n-de: indisponible" in r.stderr, "paquet de langue altéré gardé")
