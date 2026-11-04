@@ -14,12 +14,17 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
+import tempfile
 import types
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 source = (ROOT / "scripts/winlux-installer.py").read_text(encoding="utf-8")
 tree = ast.parse(source)
 node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "efi_boot_entry")
+helpers = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name in ("mount_efivarfs", "efi_log"))
+           or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "EFIVARS" for t in n.targets))]
+assert len(helpers) == 3, "mount_efivarfs, efi_log ou EFIVARS introuvable"
 
 calls = []
 listing = "BootCurrent: 0001\nBoot0000* UiApp\tFvVol\nBoot0003* Winlux\tHD(2,GPT)\nBoot0004 Winlux\tHD(2,GPT)\nBoot0005* Winlux old\tx\n"
@@ -46,8 +51,12 @@ fake_os = types.SimpleNamespace(path=types.SimpleNamespace(
 writable = {"value": True}
 ns = {"os": fake_os, "re": re, "subprocess": subprocess, "open": fake_open,
       "shutil": types.SimpleNamespace(which=lambda name: "/usr/bin/efibootmgr"),
-      "efi_variables_writable": lambda: writable["value"]}
-exec(compile(ast.Module(body=[node], type_ignores=[]), "installer", "exec"), ns)
+      "efi_variables_writable": lambda: writable["value"], "sys": sys}
+exec(compile(ast.Module(body=[*helpers, node], type_ignores=[]), "installer", "exec"), ns)
+ns["os"] = fake_os
+ns["subprocess"] = subprocess
+logged = io.StringIO()
+real_stderr, sys.stderr = sys.stderr, logged
 
 assert ns["efi_boot_entry"]("/dev/nvme0n1p2", "\\EFI\\BOOT\\BOOTX64.EFI", run=fake_run) is True
 deleted = [c[c.index("--bootnum") + 1] for c in calls if "--delete-bootnum" in c]
@@ -60,7 +69,34 @@ print("entrée « Winlux » créée vers \\EFI\\BOOT\\BOOTX64.EFI (NVMe, partiti
 calls.clear()
 writable["value"] = False
 assert ns["efi_boot_entry"]("/dev/nvme0n1p2", "\\EFI\\BOOT\\BOOTIA32.EFI", run=fake_run) is False and not calls
-print("sans variables UEFI (efi=noruntime) : rien, le chemin de secours suffit")
+sys.stderr = real_stderr
+log = logged.getvalue()
+assert "Entrée UEFI : « Winlux » créée vers \\EFI\\BOOT\\BOOTX64.EFI (/dev/nvme0n1, partition 2)" in log, log
+assert "Entrée UEFI : non créée, variables UEFI indisponibles" in log and "efivarfs non monté" in log, log
+print("sans variables UEFI (efi=noruntime) : rien, le chemin de secours suffit ; la raison est tracée")
+
+# efivarfs absent (v0.2.19 : « EFI variables are not supported ») : monté par l'installateur.
+mount_ns = {"os": os, "subprocess": subprocess}
+exec(compile(ast.Module(body=[n for n in helpers if getattr(n, "name", "") != "efi_log"], type_ignores=[]),
+             "installer", "exec"), mount_ns)
+with tempfile.TemporaryDirectory() as efivars:
+    mounts = []
+
+    def fake_mount(command, **_):
+        mounts.append(command)
+        pathlib.Path(efivars, "BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c").write_bytes(b"x")
+        return types.SimpleNamespace(returncode=0)
+    assert mount_ns["mount_efivarfs"](efivars, run=fake_mount) is True
+    assert mounts == [["mount", "-t", "efivarfs", "efivarfs", efivars]], mounts
+    assert mount_ns["mount_efivarfs"](efivars, run=fake_mount) is True and len(mounts) == 1
+assert mount_ns["mount_efivarfs"]("/nonexistent/efivars", run=fake_mount) is False
+print("efivarfs non monté : l'installateur le monte avant efibootmgr, une seule fois")
+
+build = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
+init = build[build.index('cat >"$stage/init" <<'):]
+assert init.index("mount -t efivarfs efivarfs /sys/firmware/efi/efivars") > init.index("mount -t sysfs sysfs /sys")
+assert init.index("mount -t efivarfs") < init.index("winlux-accounts-repair")
+print("init : efivarfs monté juste après /sys (live et système installé)")
 
 grub = source[source.index("        if layout[\"esp\"]:\n            if layout[\"own_esp\"]:"):source.index("        if split_root:\n            with open(f\"{target}/boot/winlux-split-root\"")]
 assert '["--removable", "--no-nvram"]' in grub, "chemin de secours EFI/BOOT perdu"
@@ -69,4 +105,6 @@ assert "BOOTIA32.EFI" in grub and "BOOTX64.EFI" in grub
 assert '"--bootloader-id=winlux"' in grub, "ESP partagé avec Windows : entrée propre conservée"
 install = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
 assert install.index("install-esp") < install.index("efibootmgr --quiet --create --disk \"$device\" --part 2 --label Winlux")
+assert "mount -t efivarfs efivarfs /sys/firmware/efi/efivars" in install
+assert "variables UEFI indisponibles (efivarfs)" in install and "efibootmgr absent" in install
 print("installateur graphique et install.sh : EFI/BOOT gardé, entrée créée après la chaîne Secure Boot")

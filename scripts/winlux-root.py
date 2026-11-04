@@ -241,7 +241,7 @@ def exec_level(args):
             return "admin"
         if rest in (["time", "auto", "on"], ["time", "auto", "off"]):
             return "admin"
-        if rest == ["time", "sync"]:
+        if rest in (["time", "sync"], ["time", "rtc"]):
             return "user"
         return None
     if tool == "winlux-brightness":
