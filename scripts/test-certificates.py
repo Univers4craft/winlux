@@ -338,6 +338,8 @@ relayed = []
 g["call"] = lambda args, timeout=180: relayed.append(args) or {"ok": True, "rtc": "2026-11-03T22:00:00Z"}
 g["RELAY_SOCKET"] = os.devnull
 real_geteuid, os.geteuid = os.geteuid, lambda: 1000
+# Le reste du test force WINLUX_CERT_DIRECT=1 (pas de relais) : ici on teste justement le relais.
+real_direct = os.environ.pop("WINLUX_CERT_DIRECT", None)
 try:
     ok(tool["rtc_status"]().get("ok") and relayed == [["time", "rtc"]], "time rtc depuis le compte : relais root")
     g["RELAY_SOCKET"] = str(work / "pas-de-relais")
@@ -346,6 +348,8 @@ try:
        f"time rtc sans relais : « réservé à l’administrateur » ({refused.get('message')})")
 finally:
     os.geteuid = real_geteuid
+    if real_direct is not None:
+        os.environ["WINLUX_CERT_DIRECT"] = real_direct
 g["read_rtc"], g["call"], g["RELAY_SOCKET"] = real_read, real_call, real_socket
 root_tool = (HERE / "winlux-root.py").read_text(encoding="utf-8")
 ok('["time", "sync"], ["time", "rtc"]' in root_tool, "relais root : time rtc autorisé au compte (lecture seule)")
