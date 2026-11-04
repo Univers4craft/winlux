@@ -216,6 +216,15 @@ jobs:
           } > build-info.txt
           cat build-info.txt
           test "$(stat -c %s "winlux-live-$RELEASE_NAME.iso")" -gt 0
+          # Paquet et manifeste de mise à jour, pour tester Paramètres > Mises à
+          # jour avant publication (manifest= dans /etc/winlux/update.conf).
+          cd "$GITHUB_WORKSPACE"
+          if bash scripts/build-update-bundle.sh --system; then
+            asset=$(sed -n 's/^asset=//p' build/winlux-update-manifest.txt)
+            cp build/winlux-update-manifest.txt "build/$asset" build/iso-validation/
+          else
+            echo "::warning::Paquet de mise à jour non construit : l'artefact ne contient que l'ISO."
+          fi
 
       - name: Conserver l'ISO de validation (1 jour)
         if: success() && !startsWith(github.ref, 'refs/tags/') && env.SKIP_ISO == 'false'
