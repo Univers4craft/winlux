@@ -211,9 +211,43 @@ def manifest_from_release(release):
     checksum = digest[7:] if digest.startswith("sha256:") else ""
     return deb, tag, checksum
 
+def local_manifest():
+    """Manifeste local, pour tester une version avant de la publier.
+
+    WINLUX_UPDATE_MANIFEST (chemin absolu ou file://) quand l'outil est lancé
+    directement en root, ou « manifest=… » dans /etc/winlux/update.conf, que
+    seul root peut écrire, pour le chemin Paramètres > Mises à jour (le relais
+    root ne transmet pas l'environnement). Le paquet est cherché dans
+    WINLUX_UPDATE_ASSET_DIR, sinon à côté du manifeste. Taille et SHA-256 du
+    manifeste restent vérifiées comme pour GitHub.
+    """
+    value = os.environ.get("WINLUX_UPDATE_MANIFEST", "")
+    if not value:
+        value = next((line[9:] for line in read(CONFIG).splitlines() if line.startswith("manifest=")), "")
+    value = value.strip()
+    if not value: return None
+    if value.startswith("file://"): value = value[7:]
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file():
+        raise RuntimeError(f"Manifeste local introuvable : {value} (WINLUX_UPDATE_MANIFEST ou manifest= dans {CONFIG})")
+    return path
+
+def local_asset(manifest_path, asset):
+    directory = Path(os.environ.get("WINLUX_UPDATE_ASSET_DIR") or manifest_path.parent)
+    source = directory / asset
+    if not source.is_file(): raise RuntimeError(f"Paquet local introuvable : {source}")
+    return source
+
 def release_metadata(work):
     """Manifeste de la dernière release, ou repli sur l'API GitHub s'il n'a pas été publié."""
     metadata = work / "manifest"
+    local = local_manifest()
+    if local:
+        print(f"Manifeste local utilisé : {local}", flush=True)
+        text = local.read_text()
+        data = manifest(text)
+        metadata.write_text(text)
+        return data, text
     try:
         download(MANIFEST_URL, metadata)
         return manifest(metadata.read_text()), metadata.read_text()
@@ -518,8 +552,13 @@ def main():
                     if package.is_symlink() or (package.exists() and not package.is_file()):
                         raise ValueError("Cache de téléchargement invalide")
                     helper = "/usr/bin/winlux-update-progress"
-                    source = f"https://github.com/{REPOSITORY}/releases/download/{data['version']}/{data['asset']}"
-                    run(helper, "download", source, data["download_bytes"], str(package))
+                    local = local_manifest()
+                    if local:
+                        phase("downloading", -1, "Copie du paquet local")
+                        shutil.copyfile(local_asset(local, data["asset"]), package)
+                    else:
+                        source = f"https://github.com/{REPOSITORY}/releases/download/{data['version']}/{data['asset']}"
+                        run(helper, "download", source, data["download_bytes"], str(package))
                     if package.stat().st_size != int(data["download_bytes"]): raise ValueError("Taille du paquet incorrecte")
                     digest = subprocess.check_output([helper, "hash", str(package), "0"], text=True).strip()
                     if digest != data["sha256"]:
