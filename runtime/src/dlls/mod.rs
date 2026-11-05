@@ -132,6 +132,7 @@ pub mod spirv;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
+pub mod uiautomationcore;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -383,6 +384,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mscoree",
                 exports: mscoree::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "uiautomationcore",
+                exports: uiautomationcore::exports(),
                 handle: fake_module(),
             },
             Builtin {

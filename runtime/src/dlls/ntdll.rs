@@ -1253,6 +1253,17 @@ pub unsafe extern "win64" fn nt_open_file(
     )
 }
 
+/// `NtSetInformationProcess` : réglages du processus (DEP, priorité
+/// d'E/S, atténuations…) acceptés sans effet ; Linux en décide.
+pub unsafe extern "win64" fn nt_set_information_process(
+    _handle: usize,
+    _info_class: u32,
+    _info: *const c_void,
+    _length: u32,
+) -> u32 {
+    0
+}
+
 /// `NtQueryInformationProcess` : stub minimal.
 pub unsafe extern "win64" fn nt_query_information_process(
     _handle: usize,
@@ -1981,6 +1992,8 @@ pub fn exports() -> crate::dlls::Exports {
         "NtCreateFile" => fn nt_create_file,
         "NtOpenFile" => fn nt_open_file,
         "NtQueryInformationProcess" => fn nt_query_information_process,
+        "NtSetInformationProcess" => fn nt_set_information_process,
+        "ZwSetInformationProcess" => fn nt_set_information_process,
         "NtQueryInformationThread" => fn nt_query_information_thread,
         "NtSetInformationThread" => fn nt_set_information_thread,
         "NtQuerySystemInformation" => fn nt_query_system_information,

@@ -118,6 +118,31 @@ pub unsafe extern "win64" fn create_status_window_w(
 pub unsafe extern "win64" fn property_sheet_a(_psh: *const c_void) -> isize {
     0
 }
+/// CreatePropertySheetPageW/A : copie de la description de page
+/// (PROPSHEETPAGE, dwSize octets), rendue comme HPROPSHEETPAGE.
+pub unsafe extern "win64" fn create_property_sheet_page(psp: *const u32) -> usize {
+    if psp.is_null() {
+        return 0;
+    }
+    let size = (psp.read_unaligned() as usize).clamp(4, 0x1000);
+    let mut copy = vec![0u8; size].into_boxed_slice();
+    std::ptr::copy_nonoverlapping(psp as *const u8, copy.as_mut_ptr(), size);
+    Box::into_raw(copy) as *mut u8 as usize
+}
+
+/// DestroyPropertySheetPage : libère la copie.
+pub unsafe extern "win64" fn destroy_property_sheet_page(page: usize) -> i32 {
+    if page == 0 {
+        return 0;
+    }
+    let size = ((page as *const u32).read_unaligned() as usize).clamp(4, 0x1000);
+    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+        page as *mut u8,
+        size,
+    )));
+    1
+}
+
 pub unsafe extern "win64" fn property_sheet_w(_psh: *const c_void) -> isize {
     0
 }
@@ -251,6 +276,9 @@ pub fn exports() -> crate::dlls::Exports {
         "CreateStatusWindowW" => fn create_status_window_w,
         "PropertySheetA" => fn property_sheet_a,
         "PropertySheetW" => fn property_sheet_w,
+        "CreatePropertySheetPageW" => fn create_property_sheet_page,
+        "CreatePropertySheetPageA" => fn create_property_sheet_page,
+        "DestroyPropertySheetPage" => fn destroy_property_sheet_page,
         "CreateToolbarEx" => fn create_toolbar_ex,
         "CreateUpDownControl" => fn create_up_down_control,
         "FlatSB_EnableScrollBar" => fn flat_sb_enable_scroll_bar,
