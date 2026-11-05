@@ -1352,6 +1352,51 @@ fn set_bitmap_color(
     }
 }
 
+/// Écrit une ligne de pixels (COLORREF, alpha dans l'octet haut) dans une
+/// bitmap ; `y` est compté depuis le haut. Sert à SetDIBits.
+pub fn write_bitmap_row(handle: usize, y: usize, row: &[u32]) -> bool {
+    let mut objects = lock(objects());
+    let Some(GdiObject::Bitmap {
+        width,
+        height,
+        pixels,
+        dib_bits,
+        dib_bit_count,
+        dib_stride,
+        top_down,
+    }) = objects.get_mut(&handle)
+    else {
+        return false;
+    };
+    let (w, h, bits, stride, td) = (*width, *height, *dib_bit_count, *dib_stride, *top_down);
+    if y >= h || (dib_bits.is_some() && bits < 24) {
+        return false;
+    }
+    for (x, &c) in row.iter().take(w).enumerate() {
+        set_bitmap_color(
+            w,
+            h,
+            pixels,
+            dib_bits,
+            bits,
+            stride,
+            td,
+            x,
+            y,
+            c & 0x00FF_FFFF,
+        );
+        if bits == 32 {
+            if let Some(bytes) = dib_bits.as_mut() {
+                let r = if td { y } else { h - 1 - y };
+                if let Some(a) = bytes.get_mut(r * stride + x * 4 + 3) {
+                    *a = (c >> 24) as u8;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Pixels d'une bitmap, ligne du haut d'abord, en COLORREF avec l'alpha
 /// dans l'octet haut. Le booléen dit si la bitmap porte un canal alpha
 /// (DIB 32 bits) ; sinon l'octet haut est nul.
