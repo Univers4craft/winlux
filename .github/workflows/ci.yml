@@ -178,6 +178,9 @@ jobs:
       - name: Vérifier que l'Explorateur décode les URI file:// (xdg-open, accents, espaces)
         run: /usr/bin/python3 -B scripts/test-shell-app-uri.py
 
+      - name: Vérifier les correctifs de l'Explorateur (copie de fond, Corbeille, Bloc-notes, icônes des lignes)
+        run: python3 -B scripts/test-explorer-fixes.py
+
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
 
