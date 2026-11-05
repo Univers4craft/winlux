@@ -1110,3 +1110,32 @@ fn wm_print_peint_barre_d_etat_et_onglets_dessines_par_le_parent() {
     assert!(DRAWN.lock().unwrap().contains(&(101, 0, 0x77)), "ODT_TAB");
     gui::destroy_window(p);
 }
+
+/// DeferWindowPos applique les positions à EndDeferWindowPos, et une taille
+/// nulle est acceptée : wxWidgets place ainsi les contrôles de ses sizers.
+#[test]
+fn defer_window_pos_place_les_enfants() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let parent = parent_window();
+    let a = child(parent, "STATIC", "a", 0, 1, (0, 0, 10, 10));
+    let b = child(parent, "STATIC", "b", 0, 2, (0, 0, 10, 10));
+    let hdwp = user32::begin_defer_window_pos(2);
+    assert_ne!(hdwp, 0);
+    assert_eq!(
+        user32::defer_window_pos(hdwp, a, 0, 5, 6, 70, 12, 0x14),
+        hdwp
+    );
+    assert_eq!(
+        user32::defer_window_pos(hdwp, b, 0, 5, 30, 0, 0, 0x14),
+        hdwp
+    );
+    // Rien ne bouge avant EndDeferWindowPos.
+    assert_eq!(gui::window_rect(a).unwrap().width(), 10);
+    assert_eq!(user32::end_defer_window_pos(hdwp), 1);
+    let ra = gui::window_rect(a).unwrap();
+    assert_eq!((ra.left, ra.top, ra.width(), ra.height()), (5, 6, 70, 12));
+    let rb = gui::window_rect(b).unwrap();
+    assert_eq!((rb.top, rb.width(), rb.height()), (30, 0, 0));
+    assert_eq!(user32::end_defer_window_pos(hdwp), 0);
+    unsafe { user32::destroy_window(parent) };
+}
