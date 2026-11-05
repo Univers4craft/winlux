@@ -710,12 +710,19 @@ fn draw_item(
     );
 }
 
-fn paint(hwnd: usize) {
+/// Peint le contrôle. `target` : DC fourni par le programme (WM_PAINT avec
+/// wParam, WM_PRINTCLIENT) ; Notepad++ y fait peindre onglets et barre
+/// d'état dans un DC mémoire qu'il recopie ensuite à l'écran.
+fn paint(hwnd: usize, target: usize) {
     let Some(c) = snapshot(hwnd) else {
         return;
     };
     let mut ps: PaintStruct = unsafe { std::mem::zeroed() };
-    let hdc = unsafe { user32::begin_paint(hwnd, &mut ps) };
+    let hdc = if target != 0 {
+        target
+    } else {
+        unsafe { user32::begin_paint(hwnd, &mut ps) }
+    };
     if hdc == 0 {
         return;
     }
@@ -733,8 +740,10 @@ fn paint(hwnd: usize) {
         Kind::ScrollBar => paint_scrollbar(hwnd, &c, &p, r),
         kind => comctl::paint(kind, hwnd, &c, &p, r),
     }
-    unsafe {
-        user32::end_paint(hwnd, &ps);
+    if target == 0 {
+        unsafe {
+            user32::end_paint(hwnd, &ps);
+        }
     }
 }
 
@@ -3247,7 +3256,12 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
         }
         WM_DESTROY => return 0,
         WM_PAINT => {
-            paint(hwnd);
+            paint(hwnd, wp);
+            return 0;
+        }
+        // WM_PRINTCLIENT : même rendu, dans le DC du programme.
+        0x0318 => {
+            paint(hwnd, wp);
             return 0;
         }
         WM_ERASEBKGND => return 1,
