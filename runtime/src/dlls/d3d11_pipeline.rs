@@ -991,10 +991,7 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
         as_texture2d((*dsv).view_resource)
     };
     let (id, stencil) = match tex {
-        Some(t) => (
-            (*t).gl_texture,
-            (*t).desc.format == DXGI_FORMAT_D24_UNORM_S8_UINT,
-        ),
+        Some(t) => ((*t).gl_texture, super::dxgi_has_stencil((*t).desc.format)),
         None => (0, false),
     };
     (g.FramebufferTexture2D)(
@@ -1010,6 +1007,18 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
         GL_DEPTH_ATTACHMENT
     };
     (g.FramebufferTexture2D)(GL_FRAMEBUFFER, point, GL_TEXTURE_2D, id, 0);
+    // Cadre incomplet : plus rien ne se dessine. Signalé une fois par état.
+    static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let status = (g.CheckFramebufferStatus)(GL_FRAMEBUFFER);
+    if status != gl::GL_FRAMEBUFFER_COMPLETE
+        && LAST.swap(status, std::sync::atomic::Ordering::Relaxed) != status
+    {
+        let format = tex.map_or(0, |t| (*t).desc.format);
+        log_warn!(
+            "d3d11",
+            "cadre de rendu incomplet (0x{status:04X}), profondeur au format DXGI {format}"
+        );
+    }
 }
 
 /// Effacement à la manière de D3D : sans ciseaux. Les masques changés par

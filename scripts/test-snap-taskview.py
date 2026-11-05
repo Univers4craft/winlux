@@ -84,6 +84,9 @@ with tempfile.TemporaryDirectory() as folder:
     assert migrated["W-Right"] == [("Execute", "mon-script")], "raccourci personnel conservé"
     for added in ("W-Tab", "W-z", "W-v", "W-period", "W-C-d", "W-C-F4"):
         assert added in migrated, added
+    assert ET.parse(user).getroot().findtext(f"{namespace}mouse/{namespace}screenEdgeWarpTime") == "0", \
+        "glisser au bord : ancrage, pas changement de bureau (#460)"
+    assert ET.parse(shipped).getroot().findtext(f"{namespace}mouse/{namespace}screenEdgeWarpTime") == "0"
     maximize = [item.get("button") for item in ET.parse(user).getroot().iter(f"{namespace}mousebind")]
     assert maximize == ["Left", "Right"], maximize
     before = user.read_bytes()

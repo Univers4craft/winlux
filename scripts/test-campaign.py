@@ -398,6 +398,13 @@ ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in sett
 ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
    "Firefox installé avec ses paquets de langue fr, de, es")
 
+# ── Ancrage à la souris (#460) ─────────────────────────────────────────────
+shipped_rc = ET.parse(NATIVE / "config/openbox/rc.xml").getroot()
+ok(shipped_rc.findtext(f"{OB}mouse/{OB}screenEdgeWarpTime") == "0",
+   "glisser une fenêtre au bord l'ancre au lieu de changer de bureau virtuel")
+ok(all("winlux-snap watch" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
+   "ancrage à la souris lancé avec la session (compte et live)")
+
 # ── Bureaux virtuels dans la barre (#459) ────────────────────────────────
 with tempfile.TemporaryDirectory() as directory:
     home = Path(directory)

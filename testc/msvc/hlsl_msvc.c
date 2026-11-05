@@ -52,6 +52,7 @@ typedef void(__stdcall *SetRT)(void *, u32, void *const *, void *);
 typedef void(__stdcall *SetVP)(void *, u32, const void *);
 typedef void(__stdcall *Copy)(void *, void *, void *);
 typedef void(__stdcall *ClearRT)(void *, void *, const float *);
+typedef void(__stdcall *ClearDS)(void *, void *, u32, float, u8);
 
 typedef void *(__stdcall *BlobPtr)(void *);
 typedef u64(__stdcall *BlobSize)(void *);
@@ -152,8 +153,16 @@ void entry(void) {
     c[3] = 0.5f;
     CALL(ctx, 15, Unmap, cbuf, 0);
 
+    // Profondeur comme la crée ANGLE (#506) : R24G8_TYPELESS liée en
+    // profondeur et en lecture, vue D24_UNORM_S8_UINT.
+    TexDesc dd = {SIZE, SIZE, 1, 1, 44 /* R24G8_TYPELESS */, 1, 0, 0, 0x40 | 0x8, 0, 0};
+    void *depth = 0, *dsv = 0;
+    if (CALL(dev, 5, CreateTex, &dd, 0, &depth) < 0 || !depth) ExitProcess(27);
+    u32 dsvd[4] = {45 /* D24_UNORM_S8_UINT */, 3 /* TEXTURE2D */, 0, 0};
+    if (CALL(dev, 10, CreateView, depth, dsvd, &dsv) < 0 || !dsv) ExitProcess(28);
     static const float blue[4] = {0, 0, 1, 1};
-    CALL(ctx, 33, SetRT, 1, &rtv, 0);
+    CALL(ctx, 33, SetRT, 1, &rtv, dsv);
+    CALL(ctx, 53, ClearDS, dsv, 1 | 2, 1.0f, 0);
     CALL(ctx, 50, ClearRT, rtv, blue);
     Viewport vp = {0, 0, SIZE, SIZE, 0, 1};
     CALL(ctx, 44, SetVP, 1, &vp);
