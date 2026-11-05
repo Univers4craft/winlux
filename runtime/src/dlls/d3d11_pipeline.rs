@@ -1391,12 +1391,7 @@ enum Draw {
 unsafe fn draw(this: *mut DeviceContext, d: Draw) {
     let Some(g) = gl_here() else { return };
     let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    let fbo = if st.current_rtv.is_null() {
-        0
-    } else {
-        (*st.current_rtv).gl_id
-    };
-    (g.BindFramebuffer)(0x8D40 /* GL_FRAMEBUFFER */, fbo);
+    (g.BindFramebuffer)(0x8D40 /* GL_FRAMEBUFFER */, super::target_fbo(&st));
     if !prepare(g, &st.pipe) {
         return;
     }

@@ -1451,6 +1451,9 @@ static LAYOUT_STORE: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 struct DeviceContextState {
     current_rtv: *mut SimpleComObj,
     current_dsv: *mut SimpleComObj,
+    /// Cadre propre aux passes « profondeur seule » (OMSetRenderTargets sans
+    /// cible couleur, ex. cascades d'ombre), créé à la demande (#530).
+    depth_fbo: gl::GLuint,
     current_vs: gl::GLuint,
     current_ps: gl::GLuint,
     current_program: gl::GLuint,
@@ -1469,6 +1472,7 @@ impl Default for DeviceContextState {
         Self {
             current_rtv: std::ptr::null_mut(),
             current_dsv: std::ptr::null_mut(),
+            depth_fbo: 0,
             current_vs: 0,
             current_ps: 0,
             current_program: 0,
@@ -2406,14 +2410,32 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
         std::ptr::null_mut()
     };
     s.current_dsv = as_simple(dsv).unwrap_or(std::ptr::null_mut());
-    let fbo = if s.current_rtv.is_null() {
-        0
-    } else {
-        (*s.current_rtv).gl_id
-    };
+    if s.current_rtv.is_null() && !s.current_dsv.is_null() && s.depth_fbo == 0 {
+        let mut fbo = 0;
+        (g.GenFramebuffers)(1, &mut fbo);
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
+        // Aucun tampon couleur : seule la profondeur est écrite.
+        let none = 0u32;
+        (g.DrawBuffers)(1, &none);
+        s.depth_fbo = fbo;
+    }
+    let fbo = target_fbo(&s);
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
     if fbo != 0 {
         pipeline::attach_depth(g, s.current_dsv);
+    }
+}
+
+/// Cadre GL des cibles courantes : celui de la vue couleur, sinon le cadre
+/// « profondeur seule » quand seule une vue de profondeur est liée (une
+/// passe d'ombre partait dans la fenêtre, #530), sinon la fenêtre.
+unsafe fn target_fbo(s: &DeviceContextState) -> gl::GLuint {
+    if !s.current_rtv.is_null() {
+        (*s.current_rtv).gl_id
+    } else if !s.current_dsv.is_null() {
+        s.depth_fbo
+    } else {
+        0
     }
 }
 
@@ -2442,20 +2464,14 @@ unsafe extern "win64" fn ctx_clear_rtv(
     let Some(obj) = as_simple(view) else { return };
     let c = &*color;
     // Effacement entier : ni ciseaux ni masque d'écriture (règle D3D).
-    let current = (*this)
-        .state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .current_rtv;
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*obj).gl_id);
     pipeline::clear(g, || {
         (g.ColorMask)(1, 1, 1, 1);
         (g.ClearColor)(c[0], c[1], c[2], c[3]);
         (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
     });
-    if !current.is_null() {
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*current).gl_id);
-    }
+    let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
 }
 
 unsafe extern "win64" fn ctx_clear_dsv(
@@ -2497,7 +2513,8 @@ unsafe extern "win64" fn ctx_clear_dsv(
         (g.Clear)(mask);
     });
     if temp != 0 {
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+        let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
         (g.DeleteFramebuffers)(1, &temp);
     } else {
         let dsv = (*this)
