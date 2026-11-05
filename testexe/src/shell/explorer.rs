@@ -25,6 +25,8 @@ use winlux_testexe::*;
 
 #[path = "explorer_copy.rs"]
 mod copy;
+#[path = "explorer_props.rs"]
+mod props;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -2943,25 +2945,35 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
     n += label.len();
     let sc = sel_count(pn);
     if sc > 0 {
-        buf[n..n + 5].copy_from_slice(b"   |  "[..5].as_ref());
-        n += 5;
+        // Comme Windows 11 : « 1 élément sélectionné », « 3 éléments
+        // sélectionnés », puis la taille totale si ce ne sont que des fichiers.
+        buf[n..n + 4].copy_from_slice(b"    ");
+        n += 4;
         n = write_num(&mut buf, n, sc as u64);
         buf[n] = b' ';
         n += 1;
-        let l2 = tr(S_SELECTED);
+        let l2 = if sc == 1 {
+            tr4(&[b"\xE9l\xE9ment s\xE9lectionn\xE9", b"item selected", b"elemento seleccionado", b"Element ausgew\xE4hlt"])
+        } else {
+            tr4(&[b"\xE9l\xE9ments s\xE9lectionn\xE9s", b"items selected", b"elementos seleccionados", b"Elemente ausgew\xE4hlt"])
+        };
         buf[n..n + l2.len()].copy_from_slice(l2);
         n += l2.len();
-        if sc == 1 {
-            if let Some(i) = first_sel(pn) {
-                if !pn.entries[i].dir {
-                    buf[n..n + 4].copy_from_slice(b"  |  "[..4].as_ref());
-                    n += 4;
-                    let mut sb = [0u8; 24];
-                    let m = size_text(pn.entries[i].size, &mut sb);
-                    buf[n..n + m].copy_from_slice(&sb[..m]);
-                    n += m;
-                }
+        let mut total = 0u64;
+        let mut files_only = true;
+        for i in 0..pn.count {
+            if is_sel(pn, i) {
+                files_only &= !pn.entries[i].dir;
+                total = total.saturating_add(pn.entries[i].size);
             }
+        }
+        if files_only {
+            buf[n..n + 4].copy_from_slice(b"    ");
+            n += 4;
+            let mut sb = [0u8; 24];
+            let m = size_text(total, &mut sb);
+            buf[n..n + m].copy_from_slice(&sb[..m]);
+            n += m;
         }
     }
     if pn.truncated {
@@ -3032,6 +3044,7 @@ enum Item {
     Refresh,
     Terminal,
     CopyPath,
+    Properties,
     ExtractAll,
     ExtractHere,
     Mount,
@@ -3088,6 +3101,7 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Refresh => tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
         Item::Terminal => tr4(&[b"Ouvrir dans le terminal", b"Open in terminal", b"Abrir en el terminal", b"Im Terminal \xF6ffnen"]),
         Item::CopyPath => tr4(&[b"Copier le chemin d'acc\xE8s", b"Copy as path", b"Copiar como ruta de acceso", b"Als Pfad kopieren"]),
+        Item::Properties => tr4(&[b"Propri\xE9t\xE9s", b"Properties", b"Propiedades", b"Eigenschaften"]),
         Item::ExtractAll => t4([
             b"Extraire tout...",
             b"Extract all...",
@@ -3226,6 +3240,8 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z,
             Item::CompressTarGz,
             Item::CompressZipPw,
+            Item::Sep,
+            Item::Properties,
         ],
         Menu::Context { .. } => &[
             Item::EmptyTrash,
@@ -3271,6 +3287,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
             Item::Restore => p.loc.is(TRASH),
+            Item::Properties => sel_count(p) == 1 && !p.loc.is(TRASH),
             Item::EmptyTrash => p.loc.is(TRASH) && p.count > 0,
             // Plusieurs éléments d'un vrai dossier, et l'outil natif présent.
             Item::BulkRename => {
@@ -3334,12 +3351,16 @@ unsafe fn menu_box(geo: &Geo, f: &Frame) -> Rect {
     let mut items = [Item::Sep; MENU_MAX];
     let n = menu_items(&mut items);
     let h: i32 = items[..n].iter().map(|&i| menu_row_h(i)).sum::<i32>() + 8;
+    // Assez large pour le plus long libellé : « Compresser en ZIP avec mot
+    // de passe… » débordait du menu de 270 px.
+    let widest = items[..n].iter().map(|&i| text_width(item_label(i), 12)).max().unwrap_or(0);
+    let w = (widest + 60 + 28).max(MENU_W).min(f.client.right - f.client.left - 12);
     let (mut x, mut y) = menu_origin(geo);
-    x = x.min(f.client.right - MENU_W - 6);
+    x = x.min(f.client.right - w - 6);
     if y + h > f.client.bottom - 4 {
         y = (y - h).max(f.client.top + 4);
     }
-    rect(x, y, x + MENU_W, y + h)
+    rect(x, y, x + w, y + h)
 }
 
 unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
@@ -4846,6 +4867,11 @@ unsafe fn run_item(it: Item, geo: &Geo) {
         Item::EmptyTrash => copy::ask_empty_trash(),
         Item::Refresh => reload(p),
         Item::Terminal => open_terminal(),
+        Item::Properties => {
+            if let Some(i) = first_sel(p) {
+                props::open(p, i);
+            }
+        }
         Item::CopyPath => {
             if let Some(i) = first_sel(p) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
@@ -5972,6 +5998,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     draw_status(g, &geo);
     draw_menu(g, &geo, f);
     copy::draw(g, f);
+    props::draw(g, f);
     draw_password(g, f);
     crate::sharing::draw_dialog(g, f);
 }
@@ -6050,6 +6077,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_mouse(ev, x, y, f);
+    }
+    if props::mouse(ev, x, y, f) {
+        return true;
     }
     if copy::mouse(ev, x, y, f) {
         return true;
@@ -6517,6 +6547,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_key(vk, ch);
     }
+    if props::dialog_open() {
+        return props::key(vk, ch);
+    }
     if copy::dialog_open() {
         return copy::key(vk, ch);
     }
@@ -6526,6 +6559,16 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
     if ch == 27 && FOCUS == Focus::List && MENU == Menu::None && copy::cancel_latest() {
         return true;
+    }
+    // Alt+Entrée : Propriétés de l'élément sélectionné, comme Windows.
+    if vk == 0x0D && FOCUS == Focus::List && crate::gfx::key_state(0x12) as u16 & 0x8000 != 0 {
+        let p = pane();
+        if sel_count(p) == 1 && !p.loc.is(TRASH) {
+            if let Some(i) = first_sel(p) {
+                props::open(p, i);
+                return true;
+            }
+        }
     }
     // Les raccourcis de fenêtre fonctionnent aussi lorsqu'un champ est actif.
     if ch == 0 && window_shortcut(vk, ctrl()) {
@@ -7278,6 +7321,7 @@ pub unsafe fn regression_checks() {
     MENU = Menu::None;
     archive_regression(root);
     row_icon_checks();
+    props::regression(root);
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;

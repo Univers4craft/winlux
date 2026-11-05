@@ -75,6 +75,19 @@ ok("fn drive_space(" in explorer and "usage_bar(g, tx" in explorer and "usage_ba
    "Ce PC : barre d'occupation et espace libre en Mosaïques et en Détails (#456)")
 ok('b"Espace libre"' in explorer and 'b"Occupation"' in explorer, "Ce PC : colonnes Occupation et Espace libre")
 
+props = (ROOT / "testexe/src/shell/explorer_props.rs").read_text(encoding="utf-8")
+ok("let widest = items[..n].iter().map(|&i| text_width(item_label(i), 12))" in explorer,
+   "menu contextuel : largeur calée sur le libellé le plus long (plus de texte coupé)")
+ok('b"\\xE9l\\xE9ment s\\xE9lectionn\\xE9"' in explorer and "tr(S_SELECTED)" not in explorer,
+   "barre d'état : « 1 élément sélectionné » au lieu de « 1 sélectionné(s) »")
+ok("if files_only {" in explorer and "size_text(total, &mut sb)" in explorer, "barre d'état : taille totale des fichiers sélectionnés")
+ok("Item::Properties =>" in explorer and "props::open(p, i)" in explorer and "key_state(0x12)" in explorer,
+   "Propriétés : menu contextuel et Alt+Entrée")
+ok("fn key(vk: u32, _ch: u16)" in props and "0x0D => close(true)" in props,
+   "Propriétés : Entrée/Échap sur la touche virtuelle (le caractère d'Alt+Entrée ne referme pas la boîte)")
+ok("SetFileAttributesW" in props and "fn walk(" in props and "props::regression(root)" in explorer,
+   "Propriétés : lecture seule appliquée, taille de dossier, test de régression")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

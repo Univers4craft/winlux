@@ -625,7 +625,7 @@ fn eta_text(secs: u64, out: &mut [u8; 64]) -> usize {
     n
 }
 
-unsafe fn button(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool) {
+pub(super) unsafe fn button(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool) {
     let p = pal();
     let bg = if primary {
         p.accent
