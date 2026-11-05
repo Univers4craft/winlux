@@ -9959,6 +9959,7 @@ mod audit_tests {
                 dirs: vec![crate::pe::DataDir::default(); 16],
                 sections: vec![],
                 il_only32: false,
+                x86: false,
             },
             tls: None,
             initialized: true,

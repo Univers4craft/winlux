@@ -176,7 +176,12 @@ macro_rules! exports {
         $( m.insert($name, $crate::exports!(@addr $kind $val)); )*
         m
     }};
-    (@addr fn $f:expr) => { $f as *const () as usize };
+    (@addr fn $f:expr) => {{
+        let a = $f as *const () as usize;
+        // Signature relevée par build.rs, pour les programmes 32 bits (#232).
+        $crate::wow32::note_export(a, module_path!(), stringify!($f));
+        a
+    }};
     (@addr data $v:expr) => { std::ptr::addr_of!($v) as usize };
 }
 

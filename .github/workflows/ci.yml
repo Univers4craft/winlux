@@ -450,6 +450,9 @@ jobs:
           sh scripts/build-mingw-tests.sh
           sh scripts/test-mingw.sh
 
+      - name: Programmes Windows 32 bits (#232)
+        run: sh scripts/test-wow32.sh
+
       - name: Rapport des PE générés
         if: always()
         run: |
