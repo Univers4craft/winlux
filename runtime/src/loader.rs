@@ -421,7 +421,13 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         };
         match preferred {
             Some(b) => b,
-            None if relocs_stripped || !has_relocs => {
+            // Sans table de relocations mais sans IMAGE_FILE_RELOCS_STRIPPED,
+            // l'image n'a aucune adresse à corriger : Windows la place
+            // ailleurs (assemblies .NET générées, comme celles de Paint.NET).
+            None if !relocs_stripped && !has_relocs => {
+                map_aligned(size).ok_or("mémoire insuffisante pour l'image")?
+            }
+            None if relocs_stripped => {
                 return Err(format!(
                     "{} : impossible de placer l'image à son adresse fixe 0x{:x} et elle n'a pas de relocations",
                     path.display(),
