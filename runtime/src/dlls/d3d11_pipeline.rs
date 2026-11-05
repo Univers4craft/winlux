@@ -626,8 +626,10 @@ impl Default for State {
 }
 
 thread_local! {
-    /// Un VAO par thread : les VAO ne se partagent pas entre contextes GL.
-    static VAO: Cell<gl::GLuint> = const { Cell::new(0) };
+    /// Un VAO par contexte GL (ils ne se partagent pas) : (contexte, VAO).
+    /// Un thread peut changer de contexte, par exemple quand la chaîne
+    /// d'échange est créée après le premier tirage (#509).
+    static VAO: Cell<(usize, gl::GLuint)> = const { Cell::new((0, 0)) };
     /// Attributs activés au tirage précédent.
     static ENABLED: Cell<u32> = const { Cell::new(0) };
     /// Échantillonneur par défaut de ce contexte.
@@ -801,12 +803,17 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
 
     // Sommets.
     let vao = VAO.with(|v| {
-        if v.get() == 0 {
-            let mut id = 0;
-            (g.GenVertexArrays)(1, &mut id);
-            v.set(id);
+        let context = crate::dlls::dxgi::current_binding().context;
+        let (owner, id) = v.get();
+        if id != 0 && owner == context {
+            return id;
         }
-        v.get()
+        let mut id = 0;
+        (g.GenVertexArrays)(1, &mut id);
+        v.set((context, id));
+        // Nouveau VAO : aucun attribut n'y est encore activé.
+        ENABLED.with(|e| e.set(0));
+        id
     });
     (g.BindVertexArray)(vao);
     let inputs: Vec<SigElement> = match meta(vs.obj as *mut c_void).as_deref() {
