@@ -223,10 +223,10 @@ ok("Boutique" in entry["Keywords"] and all(entry.get(f"Keywords[{l}]") for l in 
 # Menu Démarrer : épingle par défaut, épinglé une fois pour un compte existant.
 source = (SCRIPTS / "winlux-start-menu.py").read_text(encoding="utf-8")
 tree = ast.parse(source)
-wanted = {"fold", "matches", "auto_pin"}
+wanted = {"fold", "words", "found_in", "matches", "auto_pin"}
 nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in wanted
          or isinstance(n, ast.Assign) and any(getattr(t, "id", "") in ("DEFAULTS", "_LIGATURES") for t in n.targets)]
-space = {"unicodedata": unicodedata}
+space = {"unicodedata": unicodedata, "re": re}
 exec(compile(ast.Module(body=nodes, type_ignores=[]), "winlux-start-menu.py", "exec"), space)
 ok("winlux-store.desktop" in space["DEFAULTS"], "Store épinglé au menu Démarrer d'un compte neuf")
 

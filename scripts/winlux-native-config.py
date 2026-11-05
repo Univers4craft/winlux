@@ -382,11 +382,12 @@ if panel_config.is_file() and not grouping_marker.exists():
         grouping_marker.touch()
     except (ET.ParseError, OSError):
         pass
-# Barre des tâches comme Windows 11 (#459) : bouton « Vue des tâches » juste
-# après Démarrer, et seulement les fenêtres du bureau virtuel en cours. Écrit
+# Barre des tâches comme Windows 11 (#459, #461) : boutons « Rechercher » et
+# « Vue des tâches » juste après Démarrer, et seulement les fenêtres du bureau virtuel en cours. Écrit
 # avant le lancement de la barre (un xfce4-panel lancé ne charge pas un greffon
 # ajouté ensuite) ; une seule fois, pour qu'un bouton retiré ne revienne pas.
-TASKBAR_BUTTONS = (("taskview", "/usr/share/applications/winlux-taskview.desktop"),)
+TASKBAR_BUTTONS = (("search", "/usr/share/applications/winlux-search.desktop"),
+                   ("taskview", "/usr/share/applications/winlux-taskview.desktop"))
 
 
 def add_taskbar_buttons(panel_config, marker_folder):
@@ -415,9 +416,12 @@ def add_taskbar_buttons(panel_config, marker_folder):
                 ET.SubElement(launcher, "property", {"name": "show-label", "type": "bool", "value": "false"})
                 values = [item.get("value") for item in ids]
                 position = values.index("1") + 1 if "1" in values else 0
-                # Après les boutons livrés déjà placés derrière Démarrer (Rechercher avant Vue des tâches).
-                while position < len(values) and values[position] != "2" and int(values[position] or 0) in range(14, 30):
-                    position += 1
+                # Dans l'ordre de Windows 11 : Démarrer, Rechercher, Vue des tâches.
+                earlier = [desktop for other, desktop in TASKBAR_BUTTONS[:[n for n, _ in TASKBAR_BUTTONS].index(name)]]
+                for index, value in enumerate(values):
+                    plugin = next((item for item in plugins if item.get("name") == f"plugin-{value}"), None)
+                    shown = [entry.get("value") for items in (plugin if plugin is not None else []) if items.get("name") == "items" for entry in items]
+                    if any(item in earlier for item in shown): position = max(position, index + 1)
                 ids.insert(position, ET.Element("value", {"type": "int", "value": str(number)}))
                 changed = True
             marker_folder.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Rechercher
+Name[en]=Search
+Name[es]=Buscar
+Name[de]=Suchen
+Comment=Applications, paramètres et fichiers (Windows + S)
+Comment[en]=Apps, settings and files (Windows + S)
+Comment[es]=Aplicaciones, configuración y archivos (Windows + S)
+Comment[de]=Apps, Einstellungen und Dateien (Windows + S)
+Exec=/usr/bin/winlux-start-menu
+Icon=/usr/share/winlux/native/search.svg
+NoDisplay=true
+Terminal=false
