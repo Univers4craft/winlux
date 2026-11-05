@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Vue des tâches
+Name[en]=Task view
+Name[es]=Vista de tareas
+Name[de]=Aktive Anwendungen
+Comment=Fenêtres ouvertes et bureaux virtuels (Windows + Tab)
+Comment[en]=Open windows and virtual desktops (Windows + Tab)
+Comment[es]=Ventanas abiertas y escritorios virtuales (Windows + Tab)
+Comment[de]=Geöffnete Fenster und virtuelle Desktops (Windows + Tab)
+Keywords=bureaux virtuels;bureau virtuel;vue des tâches;task view;virtual desktop;escritorio virtual;virtueller Desktop;
+Exec=/usr/bin/winlux-taskview
+Icon=/usr/share/winlux/native/taskview.svg
+NoDisplay=true
+Terminal=false

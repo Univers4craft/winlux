@@ -54,6 +54,9 @@
     <keybind key="W-C-F4"><action name="Execute"><command>winlux-taskview close</command></action></keybind>
     <keybind key="W-C-Left"><action name="GoToDesktop"><to>left</to><wrap>no</wrap></action></keybind>
     <keybind key="W-C-Right"><action name="GoToDesktop"><to>right</to><wrap>no</wrap></action></keybind>
+    <!-- Windows + Ctrl + Maj + flèche : la fenêtre active part sur le bureau voisin, et on la suit. -->
+    <keybind key="W-C-S-Left"><action name="SendToDesktop"><to>left</to><wrap>no</wrap><follow>yes</follow></action></keybind>
+    <keybind key="W-C-S-Right"><action name="SendToDesktop"><to>right</to><wrap>no</wrap><follow>yes</follow></action></keybind>
     <!-- Windows + Maj + flèche : fenêtre vers l'écran voisin. -->
     <keybind key="W-S-Left"><action name="MoveResizeTo"><monitor>prev</monitor></action></keybind>
     <keybind key="W-S-Right"><action name="MoveResizeTo"><monitor>next</monitor></action></keybind>

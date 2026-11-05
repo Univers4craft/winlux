@@ -398,4 +398,19 @@ ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in sett
 ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
    "Firefox installé avec ses paquets de langue fr, de, es")
 
+# ── Bureaux virtuels dans la barre (#459) ────────────────────────────────
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    panel = ET.parse(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
+    order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
+    button = panel.find(f".//property[@name='plugin-{order[order.index('1') + 1]}']/property[@name='items']/value")
+    ok(button is not None and button.get("value").endswith("winlux-taskview.desktop"),
+       "profil neuf : bouton Vue des tâches juste après Démarrer")
+    ok(panel.find(".//property[@name='all-workspaces']").get("value") == "false",
+       "profil neuf : la barre ne montre que les fenêtres du bureau en cours")
+    rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
+    ok(rc.find(f".//{OB}keybind[@key='W-C-S-Right']") is not None,
+       "Windows+Ctrl+Maj+→ emmène la fenêtre sur le bureau voisin")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
