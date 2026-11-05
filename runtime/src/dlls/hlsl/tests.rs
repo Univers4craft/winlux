@@ -482,3 +482,50 @@ float4 ps(V i) : SV_Target { return t.Sample(s, i.uv) * color; }
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+/// Shaders d'ANGLE vus dans Warzone 2100 (#517) : matrice par instance en
+/// entrée de VS (quatre sémantiques TEXCOORD consécutives, une colonne par
+/// registre) et PS de profondeur seule dont la structure de sortie est vide.
+#[test]
+fn matrix_inputs_and_empty_output() {
+    let vs_src = r#"
+float4x4 viewProj;
+struct VS_INPUT { float4 pos : TEXCOORD0; float4x4 model : TEXCOORD1; row_major float2x3 extra : TEXCOORD5; };
+struct VS_OUTPUT { float4 pos : SV_Position; float4x4 m : TEXCOORD0; };
+VS_OUTPUT main(VS_INPUT input) {
+    VS_OUTPUT o;
+    o.pos = mul(mul(input.pos, input.model), viewProj) + float4(input.extra[1], 0);
+    o.m = input.model;
+    return o;
+}
+"#;
+    let vs = build(vs_src, "main", "vs_5_0");
+    let names: Vec<(String, u32, u32)> = vs
+        .inputs
+        .iter()
+        .map(|e| (e.name.clone(), e.index, e.register))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("TEXCOORD".to_string(), 0, 0),
+            ("TEXCOORD".to_string(), 1, 1),
+            ("TEXCOORD".to_string(), 2, 2),
+            ("TEXCOORD".to_string(), 3, 3),
+            ("TEXCOORD".to_string(), 4, 4),
+            ("TEXCOORD".to_string(), 5, 5),
+            ("TEXCOORD".to_string(), 6, 6),
+        ]
+    );
+    // Registre 1 = colonne 0 de la matrice column_major.
+    assert!(vs.glsl.contains("[1][0] = c.y;"), "{}", vs.glsl);
+
+    let ps_src = r#"
+struct PS_INPUT { float4 pos : SV_Position; };
+struct PS_OUTPUT { };
+PS_OUTPUT generateOutput() { PS_OUTPUT output; return output; }
+PS_OUTPUT main(PS_INPUT input) { if (input.pos.x < 0) discard; return generateOutput(); }
+"#;
+    let ps = build(ps_src, "main", "ps_5_0");
+    assert!(ps.outputs.is_empty());
+}

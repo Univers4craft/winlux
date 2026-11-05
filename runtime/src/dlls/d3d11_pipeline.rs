@@ -566,6 +566,10 @@ unsafe fn program(g: &gl::GlFunctions, vs: u32, ps: u32, gs: u32) -> gl::GLuint 
             "édition de liens refusée : {}",
             String::from_utf8_lossy(&buf)
         );
+        // Mémorisé à 0 : les tirages avec ce trio sont sautés.
+        (g.DeleteProgram)(prog);
+        map.insert((vs, ps, gs), 0);
+        return 0;
     }
     map.insert((vs, ps, gs), prog);
     prog
@@ -829,13 +833,18 @@ unsafe fn apply_fixed_function(g: &gl::GlFunctions, s: &State) {
 }
 
 /// Lie programme, sommets, tampons de constantes, textures et états avant
-/// un tirage. Faux si aucun vertex shader traduit n'est en place.
+/// un tirage. Faux (tirage sauté) sans vertex shader traduit, quand un
+/// pixel ou geometry shader lié n'a pas pu être traduit, ou quand
+/// l'édition de liens échoue.
 pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
     let [vs, ps, gs] = s.shaders;
-    if vs.gl == 0 {
+    if vs.gl == 0 || (ps.obj != 0 && ps.gl == 0) || (gs.obj != 0 && gs.gl == 0) {
         return false;
     }
     let prog = program(g, vs.gl, ps.gl, gs.gl);
+    if prog == 0 {
+        return false;
+    }
     (g.UseProgram)(prog);
 
     // Sommets.

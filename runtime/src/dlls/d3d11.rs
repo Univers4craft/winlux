@@ -3,7 +3,7 @@
 //! types de ressources vers des appels OpenGL natifs.
 #![allow(non_snake_case, non_upper_case_globals, dead_code)]
 
-use crate::dlls::d3d_shader::{self, ShaderType};
+use crate::dlls::d3d_shader::ShaderType;
 use crate::dlls::dxbc;
 use crate::dlls::dxgi::{self, DxgiSwapChainDesc};
 use crate::dlls::gl_bindings as gl;
@@ -1128,7 +1128,7 @@ fn create_shader_object(
         &[]
     };
 
-    // Traduction DXBC → GLSL (#137) ; à défaut, l'ancien shader de passage.
+    // Traduction DXBC → GLSL (#137).
     let stage = match shader_type {
         ShaderType::Vertex => dxbc::Stage::Vertex,
         ShaderType::Pixel => dxbc::Stage::Pixel,
@@ -1136,7 +1136,7 @@ fn create_shader_object(
         _ => dxbc::Stage::Compute,
     };
     let translated = pipeline::translate(bytes, stage);
-    let mut shader = translated
+    let shader = translated
         .as_ref()
         .and_then(|t| compile_glsl(g, gl_type, &t.glsl));
     let meta = if shader.is_some() {
@@ -1148,15 +1148,16 @@ fn create_shader_object(
     } else {
         None
     };
+    // Traduction impossible : aucun shader GL. Les tirages qui l'utilisent
+    // sont sautés ; un shader « de passage » aux entrées et sorties
+    // différentes donnait des programmes invalides, et Mesa a planté dans
+    // glLinkProgram sur un pixel shader compilé en étage géométrique (#517).
     if shader.is_none() {
-        let legacy = d3d_shader::translate_dxbc(bytes);
-        let glsl = match (&legacy, shader_type) {
-            (Some(t), _) => Some(t.glsl_source.as_str()),
-            (None, ShaderType::Vertex) => Some(d3d_shader::passthrough_vertex_shader()),
-            (None, ShaderType::Pixel) => Some(d3d_shader::passthrough_pixel_shader()),
-            _ => None,
-        };
-        shader = glsl.and_then(|src| compile_glsl(g, gl_type, src));
+        log_warn!(
+            "d3d11",
+            "shader {:?} non traduit : les tirages qui l'utilisent sont sautés",
+            stage
+        );
     }
     let shader = shader.unwrap_or(0);
 

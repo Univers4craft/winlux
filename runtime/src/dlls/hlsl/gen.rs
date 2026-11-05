@@ -88,6 +88,9 @@ struct El {
     name: String,
     index: u32,
     flat: bool,
+    /// Colonne k d'une matrice column_major (un registre par colonne) :
+    /// `path` désigne alors la matrice entière.
+    col: Option<u32>,
 }
 
 pub(crate) struct Gen<'p> {
@@ -377,7 +380,7 @@ impl<'p> Gen<'p> {
             Ty::Struct(i) => {
                 let s = &self.p.structs[*i];
                 let v: R<Vec<String>> = s.members.iter().map(|m| self.zero(&m.ty)).collect();
-                format!("{}({})", self.struct_name(*i), v?.join(", "))
+                self.struct_ctor(*i, v?)
             }
             _ => return Err("valeur nulle d'une ressource".into()),
         })
@@ -583,7 +586,7 @@ impl<'p> Gen<'p> {
                         ..c.clone()
                     })?);
                 }
-                format!("{}({})", self.struct_name(*i), v.join(", "))
+                self.struct_ctor(*i, v)
             }
             t => return Err(format!("lecture de {} dans un tampon", self.show(t))),
         })
@@ -1231,7 +1234,7 @@ impl<'p> Gen<'p> {
                 for m in &self.p.structs[*i].members {
                     v.push(self.build(&m.ty, it)?);
                 }
-                format!("{}({})", self.struct_name(*i), v.join(", "))
+                self.struct_ctor(*i, v)
             }
             _ => return Err("liste d'initialisation d'une ressource".into()),
         })
@@ -2288,12 +2291,22 @@ impl<'p> Gen<'p> {
 
     // ---------- Point d'entrée ----------
 
+    /// Constructeur d'une structure (membre factice si elle est vide).
+    fn struct_ctor(&self, i: usize, v: Vec<String>) -> String {
+        if self.p.structs[i].members.is_empty() {
+            return format!("{}(0)", self.struct_name(i));
+        }
+        format!("{}({})", self.struct_name(i), v.join(", "))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn flatten_io(
         &self,
         t: &Ty,
         sem: Option<(String, u32)>,
         path: String,
         flat: bool,
+        row_major: bool,
         out: &mut Vec<El>,
     ) -> R<()> {
         match (t, sem) {
@@ -2304,6 +2317,7 @@ impl<'p> Gen<'p> {
                         m.semantic.as_deref().map(split_semantic),
                         format!("{path}.{}", mg("m_", &m.name)),
                         flat || m.interp.flat,
+                        m.row_major,
                         out,
                     )?;
                 }
@@ -2315,8 +2329,43 @@ impl<'p> Gen<'p> {
                         Some((name.clone(), idx + k)),
                         format!("{path}[{k}]"),
                         flat,
+                        row_major,
                         out,
                     )?;
+                }
+            }
+            // Matrice : un registre par ligne (row_major) ou par colonne
+            // (column_major, défaut), sémantiques consécutives (#517).
+            (Ty::Matrix(b, r, c), Some((name, idx))) => {
+                let vec = |n: u8| {
+                    if n == 1 {
+                        Ty::Scalar(*b)
+                    } else {
+                        Ty::Vector(*b, n)
+                    }
+                };
+                if row_major {
+                    for k in 0..*r as u32 {
+                        out.push(El {
+                            path: format!("{path}[{k}]"),
+                            ty: vec(*c),
+                            name: name.clone(),
+                            index: idx + k,
+                            flat,
+                            col: None,
+                        });
+                    }
+                } else {
+                    for k in 0..*c as u32 {
+                        out.push(El {
+                            path: path.clone(),
+                            ty: vec(*r),
+                            name: name.clone(),
+                            index: idx + k,
+                            flat,
+                            col: Some(k),
+                        });
+                    }
                 }
             }
             (_, Some((name, index))) => out.push(El {
@@ -2325,6 +2374,7 @@ impl<'p> Gen<'p> {
                 name,
                 index,
                 flat,
+                col: None,
             }),
             (_, None) => return Err(format!("{path} : sémantique manquante")),
         }
@@ -2392,18 +2442,26 @@ impl<'p> Gen<'p> {
                     sem.clone(),
                     n.clone(),
                     prm.interp.flat,
+                    false,
                     &mut in_els,
                 )?;
             }
             if prm.dir != Dir::In {
-                self.flatten_io(&prm.ty, sem, n.clone(), prm.interp.flat, &mut out_els)?;
+                self.flatten_io(
+                    &prm.ty,
+                    sem,
+                    n.clone(),
+                    prm.interp.flat,
+                    false,
+                    &mut out_els,
+                )?;
             }
         }
         let call = format!("{fname}({})", args.join(", "));
         if f.ret != Ty::Void {
             let tn = self.tyname(&f.ret)?;
             let sem = f.ret_semantic.as_deref().map(split_semantic);
-            self.flatten_io(&f.ret, sem, "ret".into(), false, &mut out_els)?;
+            self.flatten_io(&f.ret, sem, "ret".into(), false, false, &mut out_els)?;
             let _ = writeln!(post, "  {tn} ret = {call};");
         } else {
             let _ = writeln!(post, "  {call};");
@@ -2473,7 +2531,25 @@ impl<'p> Gen<'p> {
             };
             let val = self.conv(&src.0, &src.1, &e.ty.with_base(src.1.base().unwrap_or(b)))?;
             let val = self.conv(&val, &e.ty.with_base(src.1.base().unwrap_or(b)), &e.ty)?;
-            let _ = writeln!(pre, "  {} = {val};", e.path);
+            match e.col {
+                // Colonne de matrice : chaque composante dans sa ligne.
+                Some(k) => {
+                    let tn = self.tyname(&e.ty)?;
+                    let _ = writeln!(pre, "  {{ {tn} c = {val};");
+                    for row in 0..n {
+                        let c = if n == 1 {
+                            "c".to_string()
+                        } else {
+                            format!("c.{}", SW[row as usize])
+                        };
+                        let _ = writeln!(pre, "    {}[{row}][{k}] = {c};", e.path);
+                    }
+                    pre.push_str("  }\n");
+                }
+                None => {
+                    let _ = writeln!(pre, "  {} = {val};", e.path);
+                }
+            }
             inputs.push(SigElement {
                 name: e.name.clone(),
                 index: e.index,
@@ -2494,7 +2570,21 @@ impl<'p> Gen<'p> {
             let n =
                 e.ty.comps()
                     .ok_or_else(|| format!("{} : sortie matricielle", e.path))?;
-            let p = &e.path;
+            let col_expr;
+            let p = match e.col {
+                Some(k) => {
+                    let parts: Vec<String> = (0..n)
+                        .map(|row| format!("{}[{row}][{k}]", e.path))
+                        .collect();
+                    col_expr = if n == 1 {
+                        parts[0].clone()
+                    } else {
+                        format!("{}({})", self.tyname(&e.ty)?, parts.join(", "))
+                    };
+                    &col_expr
+                }
+                None => &e.path,
+            };
             let mut sv = 0;
             let mut r = reg;
             match (self.stage, e.name.as_str()) {
@@ -2710,10 +2800,15 @@ impl<'p> Gen<'p> {
             });
         }
         for (i, st) in p.structs.iter().enumerate() {
-            if st.members.is_empty() || st.members.iter().any(|m| m.ty.is_resource()) {
+            if st.members.iter().any(|m| m.ty.is_resource()) {
                 continue;
             }
             let _ = writeln!(s, "struct {} {{", self.struct_name(i));
+            // GLSL refuse une structure vide (PS_OUTPUT d'ANGLE pour un
+            // rendu de profondeur seule, #517) : membre factice.
+            if st.members.is_empty() {
+                s.push_str("  int m__vide;\n");
+            }
             for m in &st.members {
                 let _ = writeln!(s, "  {} {};", self.tyname(&m.ty)?, mg("m_", &m.name));
             }
