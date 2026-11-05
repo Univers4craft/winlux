@@ -69,3 +69,20 @@ if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
 else
     echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
 fi
+# Threads, TLS, DLL x86, LoadLibrary (#232, étape 4) : clang en cible
+# i686-w64-mingw32 (TLS statique natif) avec les bibliothèques de MinGW,
+# et g++ pour le C++.
+if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    i686-w64-mingw32-gcc -O1 "$src/thread32.c" -o "$out/thread32_gcc.exe"
+    mingw_clang="clang --target=i686-w64-mingw32 -O1 --sysroot=/usr -fuse-ld=lld"
+    $mingw_clang "$src/thread32.c" -o "$out/thread32.exe"
+    # Bibliothèque d'import à part : $tmp contient aussi kernel32.lib (sans
+    # CRT), que l'éditeur de liens prendrait avant celle de MinGW.
+    mkdir -p "$tmp/dll32"
+    $mingw_clang -shared "$src/dll32.c" -o "$out/dll32.dll" -Wl,--out-implib,"$tmp/dll32/libdll32.a"
+    cp "$out/dll32.dll" "$out/dll32b.dll"
+    $mingw_clang "$src/load32.c" -o "$out/load32.exe" -L"$tmp/dll32" -ldll32
+fi
+if command -v i686-w64-mingw32-g++ >/dev/null 2>&1; then
+    i686-w64-mingw32-g++ -O1 -static "$src/cpp32.cpp" -o "$out/cpp32.exe"
+fi

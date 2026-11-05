@@ -995,8 +995,66 @@ fn native(dll: &str, name64: &str, sig: &'static str, fix: Fix) -> Option<Overri
     })
 }
 
-/// Remplacement x86 d'un export de la CRT (`n` : nom normalisé de la DLL).
+// ---------------------------------------------------------------------
+// Tableaux de HANDLE (4 octets en x86, 8 en 64 bits)
+// ---------------------------------------------------------------------
+
+struct HandleArray {
+    target: usize,
+    nargs: usize,
+    count: usize,
+    array: usize,
+}
+
+extern "win64" fn handle_array_call(args: u32, aux: usize) -> u64 {
+    let s = unsafe { &*(aux as *const HandleArray) };
+    let mut slots: Vec<u64> = (0..s.nargs as u32).map(|i| ext(rd(args + i * 4))).collect();
+    let n = (slots[s.count] as u32).min(64);
+    let base = slots[s.array] as u32;
+    let wide: Vec<u64> = (0..n).map(|i| ext(rd(base + i * 4))).collect();
+    if base != 0 {
+        slots[s.array] = wide.as_ptr() as u64;
+    }
+    let nargs = slots.len();
+    while slots.len() < 4 {
+        slots.push(0);
+    }
+    let mut xmm0 = 0u64;
+    let r = unsafe { super::winlux_wow_call64(s.target, slots.as_ptr(), nargs, &mut xmm0) };
+    drop(wide);
+    r
+}
+
+/// (nom, nombre d'arguments, rang du nombre, rang du tableau)
+const HANDLE_ARRAYS: &[(&str, usize, usize, usize)] = &[
+    ("WaitForMultipleObjects", 4, 0, 1),
+    ("WaitForMultipleObjectsEx", 5, 0, 1),
+    ("MsgWaitForMultipleObjects", 5, 0, 1),
+    ("MsgWaitForMultipleObjectsEx", 5, 0, 1),
+];
+
+fn handle_array_override(n: &str, func: &str) -> Option<Override> {
+    let &(_, nargs, count, array) = HANDLE_ARRAYS.iter().find(|r| r.0 == func)?;
+    let target = crate::dlls::lookup(n, func)?;
+    let spec = Box::leak(Box::new(HandleArray {
+        target,
+        nargs,
+        count,
+        array,
+    }));
+    Some(Override::Raw {
+        target: handle_array_call as *const () as usize,
+        aux: spec as *const HandleArray as usize,
+        pop: Some((nargs * 4) as u16),
+    })
+}
+
+/// Remplacement x86 d'un export (`n` : nom normalisé de la DLL) : CRT,
+/// fonctions à tableaux de HANDLE.
 pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
+    if let Some(o) = handle_array_override(n, func) {
+        return Some(o);
+    }
     let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
     if n == "user32" && func.starts_with("w") {
         return fmt_override(n, func);

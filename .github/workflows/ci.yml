@@ -443,7 +443,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 clang lld llvm xvfb xauth libgl1-mesa-dri
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-i686 clang lld llvm xvfb xauth libgl1-mesa-dri
 
       - name: Compiler et exécuter les tests C MinGW
         run: |

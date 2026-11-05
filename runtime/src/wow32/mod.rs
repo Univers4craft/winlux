@@ -53,6 +53,10 @@ const TEB32_SELF: usize = 0x18;
 const TEB32_PID: usize = 0x20;
 const TEB32_TID: usize = 0x24;
 const TEB32_PEB: usize = 0x30;
+const TEB32_TLS_POINTER: usize = 0x2c;
+/// Tableau TLS statique 32 bits, dans la seconde page du TEB 32 bits.
+const TEB32_TLS_ARRAY: usize = 0x1800;
+const TLS32_ENTRIES: usize = 512;
 const PEB32_IMAGE_BASE: usize = 0x08;
 const PEB32_PROCESS_HEAP: usize = 0x18;
 const PEB32_NUMBER_OF_PROCESSORS: usize = 0x64;
@@ -61,6 +65,8 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static PEB32: AtomicU32 = AtomicU32::new(0);
 /// Prochaine entrée de LDT libre (une par thread, pour son TEB 32 bits).
 static NEXT_LDT: AtomicU32 = AtomicU32::new(1);
+/// Entrées de LDT rendues par les threads terminés.
+static FREE_LDT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 /// Limite haute de la mémoire visible : 2 Go, ou 4 Go si LARGEADDRESSAWARE.
 static LIMIT: AtomicUsize = AtomicUsize::new(0x8000_0000);
 
@@ -738,7 +744,11 @@ pub fn init_thread(teb64: usize) {
 
         // Entrée de LDT propre au thread, dont la base est le TEB 32 bits.
         // (set_thread_area n'existe pas en appel système 64 bits.)
-        let entry = NEXT_LDT.fetch_add(1, Ordering::Relaxed);
+        let entry = FREE_LDT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .unwrap_or_else(|| NEXT_LDT.fetch_add(1, Ordering::Relaxed));
         assert!(entry < 8192, "wow32 : plus d'entrée de LDT libre");
         let desc = UserDesc {
             entry_number: entry,
@@ -766,6 +776,16 @@ pub fn init_thread(teb64: usize) {
         *((teb64 + TEB64_FS_SELECTOR) as *mut usize) = selector as usize;
         *((teb64 + TEB64_TEB32) as *mut usize) = teb;
         TEB32_ADDR.with(|c| c.set(teb));
+        // TLS statique (__declspec(thread)) : fs:[0x2c] pointe sur un tableau
+        // de pointeurs 32 bits, copie de celui du TEB 64 bits.
+        let arr64 = *((teb64 + crate::process::TEB_TLS_POINTER) as *const usize);
+        if arr64 != 0 {
+            for i in 0..TLS32_ENTRIES {
+                let block = *((arr64 + i * 8) as *const usize);
+                *((teb + TEB32_TLS_ARRAY + i * 4) as *mut u32) = block as u32;
+            }
+        }
+        w(TEB32_TLS_POINTER, (teb + TEB32_TLS_ARRAY) as u32);
         *((teb64 + TEB64_RSP_CHAIN) as *mut usize) = 0;
     }
 }
@@ -807,6 +827,59 @@ pub fn errno_slot(dos: bool) -> Option<usize> {
     }
     let t = teb32_addr();
     (t != 0).then(|| t + TEB32_SCRATCH + if dos { crt::S_DOSERRNO } else { crt::S_ERRNO })
+}
+
+/// Nouveau bloc TLS statique d'une DLL x86 chargée par LoadLibrary, pour
+/// le thread dont le TEB 64 bits est `teb64`.
+pub fn mirror_tls_slot(teb64: usize, index: usize, block: usize) {
+    if !active() || index >= TLS32_ENTRIES {
+        return;
+    }
+    let teb = unsafe { *((teb64 + TEB64_TEB32) as *const usize) };
+    if teb != 0 {
+        unsafe { *((teb + TEB32_TLS_ARRAY + index * 4) as *mut u32) = block as u32 };
+    }
+}
+
+/// Fin d'un thread : son entrée de LDT redevient libre, son TEB 32 bits
+/// est rendu. À appeler sur le thread lui-même, avant de détacher GS.
+pub fn free_thread(teb64: usize) {
+    let teb = teb32_addr();
+    if !active() || teb == 0 {
+        return;
+    }
+    unsafe {
+        // FS : sélecteur nul, base de glibc (ARCH_SET_FS remet le sélecteur
+        // à zéro) avant d'effacer l'entrée qu'il désigne.
+        let mut base = 0usize;
+        libc::syscall(libc::SYS_arch_prctl, 0x1003, &mut base as *mut usize);
+        libc::syscall(libc::SYS_arch_prctl, 0x1002, base);
+        let selector = *((teb64 + TEB64_FS_SELECTOR) as *const usize) as u32;
+        let entry = selector >> 3;
+        let empty = UserDesc {
+            entry_number: entry,
+            base_addr: 0,
+            limit: 0,
+            // read_exec_only | seg_not_present : entrée vide.
+            flags: (1 << 3) | (1 << 5),
+        };
+        let rc = libc::syscall(
+            libc::SYS_modify_ldt,
+            1,
+            &empty as *const UserDesc,
+            std::mem::size_of::<UserDesc>(),
+        );
+        if rc == 0 && entry != 0 {
+            FREE_LDT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(entry);
+        }
+        *((teb64 + TEB64_TEB32) as *mut usize) = 0;
+        *((teb64 + TEB64_FS_SELECTOR) as *mut usize) = 0;
+        libc::munmap(teb as *mut libc::c_void, TEB32_SIZE);
+    }
+    TEB32_ADDR.with(|c| c.set(0));
 }
 
 /// Données de la CRT x86 (argv, environnement…), une fois le processus décrit.
@@ -879,6 +952,8 @@ struct Desc {
     fix: crt::Fix,
     /// `Some(aux)` : `target(args_x86, aux)` lit lui-même la pile x86.
     raw: Option<usize>,
+    /// Arguments qui sont des fonctions x86 à rappeler (bit n = argument n).
+    callbacks: u32,
 }
 
 include!(concat!(env!("OUT_DIR"), "/win64_sigs.rs"));
@@ -1046,7 +1121,13 @@ pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
         Some((a, r)) => (a.as_bytes().to_vec(), r.as_bytes()[0]),
         None => (b"?".to_vec(), b'?'),
     };
-    let supported = sig.is_some() && !args.contains(&b'?') && !args.contains(&b'c') && ret != b'?';
+    let supported = sig.is_some() && !args.contains(&b'?') && ret != b'?';
+    // Rappels typés `fn(…)` dans la signature Rust : passerelle 64 → 32.
+    let callbacks = args
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| **k == b'c')
+        .fold(callback_args(dll, func), |m, (i, _)| m | (1 << i.min(31)));
     if !supported {
         crate::trace!("wow32 : {label} pas encore disponible en 32 bits (signature {sig:?})");
     }
@@ -1064,6 +1145,7 @@ pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
             label,
             fix: crt::Fix::None,
             raw: None,
+            callbacks,
         },
         pop,
     )
@@ -1117,6 +1199,7 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
                         label,
                         fix: crt::Fix::None,
                         raw: Some(aux),
+                        callbacks: 0,
                     },
                     pop,
                 ))
@@ -1138,6 +1221,7 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
             label,
             fix,
             raw: None,
+            callbacks: 0,
         },
         pop,
     ))
@@ -1195,6 +1279,7 @@ pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
             label: format!("{}!{func}", dll.to_ascii_lowercase()),
             fix: crt::Fix::None,
             raw: None,
+            callbacks: 0,
         },
         None,
     )
@@ -1248,6 +1333,14 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
             }
         }
     }
+    if d.callbacks != 0 {
+        // Une case par argument, quel que soit son type : rang = argument.
+        for (i, s) in slots.iter_mut().enumerate().take(32) {
+            if d.callbacks & (1 << i) != 0 && *s != 0 {
+                *s = callback64(*s as u32) as u64;
+            }
+        }
+    }
     let n = slots.len();
     while slots.len() < 4 {
         slots.push(0);
@@ -1264,6 +1357,139 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         return r;
     }
     r
+}
+
+// ---------------------------------------------------------------------
+// Rappels : fonctions x86 appelées par le code 64 bits
+// ---------------------------------------------------------------------
+
+/// Arguments « fonction de rappel » des API qui en prennent (bit n =
+/// argument n). Le code 64 bits les appelle en convention win64 : chacune
+/// reçoit une petite passerelle 64 → 32 (`callback64`).
+fn callback_args(dll: &str, func: &str) -> u32 {
+    let n = crate::dlls::normalize(dll);
+    let bit = |i: u32| 1u32 << i;
+    let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
+    match func {
+        "_beginthreadex" if crt => bit(2),
+        "_beginthread" if crt => bit(0),
+        "CreateThread" | "CreateTimerQueueTimer" | "RegisterWaitForSingleObject" => bit(2),
+        "CreateRemoteThread" | "CreateRemoteThreadEx" => bit(3),
+        "QueueUserWorkItem"
+        | "FlsAlloc"
+        | "SetConsoleCtrlHandler"
+        | "QueueUserAPC"
+        | "TrySubmitThreadpoolCallback"
+        | "CreateThreadpoolWork"
+        | "CreateThreadpoolTimer"
+        | "CreateThreadpoolWait"
+        | "EnumSystemLocalesA"
+        | "EnumSystemLocalesW"
+        | "EnumSystemCodePagesA"
+        | "EnumSystemCodePagesW"
+        | "EnumUILanguagesA"
+        | "EnumUILanguagesW"
+        | "EnumWindows" => bit(0),
+        "InitOnceExecuteOnce"
+        | "CreateFiber"
+        | "CreateThreadpoolIo"
+        | "EnumResourceTypesA"
+        | "EnumResourceTypesW"
+        | "EnumChildWindows"
+        | "EnumThreadWindows"
+        | "EnumDesktopWindows" => bit(1),
+        "EnumResourceNamesA"
+        | "EnumResourceNamesW"
+        | "CreateFiberEx"
+        | "EnumDisplayMonitors"
+        | "EnumFontFamiliesA"
+        | "EnumFontFamiliesW"
+        | "EnumFontFamiliesExA"
+        | "EnumFontFamiliesExW"
+        | "EnumFontsA"
+        | "EnumFontsW" => bit(2),
+        "EnumResourceLanguagesA" | "EnumResourceLanguagesW" | "SetWaitableTimer" | "SetTimer" => {
+            bit(3)
+        }
+        "ReadFileEx" | "WriteFileEx" => bit(4),
+        _ => 0,
+    }
+}
+
+// Entrée commune des passerelles 64 → 32 : r10d = fonction x86. Recopie
+// rcx, rdx, r8, r9 et quatre cases de pile, puis appelle `callback_dispatch`.
+std::arch::global_asm!(
+    r#"
+    .text
+    .globl winlux_wow_cb64
+winlux_wow_cb64:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 96
+    mov qword ptr [rsp + 32], rcx
+    mov qword ptr [rsp + 40], rdx
+    mov qword ptr [rsp + 48], r8
+    mov qword ptr [rsp + 56], r9
+    mov rax, qword ptr [rbp + 48]
+    mov qword ptr [rsp + 64], rax
+    mov rax, qword ptr [rbp + 56]
+    mov qword ptr [rsp + 72], rax
+    mov rax, qword ptr [rbp + 64]
+    mov qword ptr [rsp + 80], rax
+    mov rax, qword ptr [rbp + 72]
+    mov qword ptr [rsp + 88], rax
+    mov ecx, r10d
+    lea rdx, [rsp + 32]
+    call {dispatch}
+    leave
+    ret
+"#,
+    dispatch = sym callback_dispatch,
+);
+
+extern "C" {
+    fn winlux_wow_cb64();
+}
+
+/// Passerelles 64 → 32 déjà créées : fonction x86 → passerelle, et l'inverse.
+static CALLBACKS: Mutex<Option<(HashMap<u32, usize>, HashMap<usize, u32>)>> = Mutex::new(None);
+
+/// Adresse appelable en win64 pour la fonction x86 `target` (une
+/// passerelle par fonction). Une passerelle déjà donnée reste telle quelle.
+pub fn callback64(target: u32) -> usize {
+    let mut g = CALLBACKS.lock().unwrap_or_else(|e| e.into_inner());
+    let (fwd, back) = g.get_or_insert_with(|| (HashMap::new(), HashMap::new()));
+    if back.contains_key(&(target as usize)) {
+        return target as usize;
+    }
+    if let Some(&t) = fwd.get(&target) {
+        return t;
+    }
+    let mut code = Vec::with_capacity(20);
+    code.extend_from_slice(&[0x41, 0xba]); // mov r10d, imm32
+    code.extend_from_slice(&target.to_le_bytes());
+    code.extend_from_slice(&[0x48, 0xb8]); // mov rax, imm64
+    code.extend_from_slice(&(winlux_wow_cb64 as *const () as usize as u64).to_le_bytes());
+    code.extend_from_slice(&[0xff, 0xe0]); // jmp rax
+    let at = alloc_code(&code) as usize;
+    fwd.insert(target, at);
+    back.insert(at, target);
+    at
+}
+
+extern "win64" fn callback_dispatch(target: u32, args: *const u64) -> u64 {
+    // Thread du runtime (minuterie, réserve de threads) sans TEB : il en
+    // reçoit un, avec son TEB 32 bits.
+    if teb32_addr() == 0 {
+        crate::process::init_thread();
+    }
+    let a: Vec<u32> = (0..8).map(|i| unsafe { *args.add(i) } as u32).collect();
+    let r = call32(target as usize, &a) as u32;
+    if r >= 0xffff_0000 {
+        r as i32 as i64 as u64
+    } else {
+        r as u64
+    }
 }
 
 // ---------------------------------------------------------------------
