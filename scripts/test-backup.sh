@@ -30,6 +30,7 @@ for rsync_mode in rsync portable; do
     if backup set alice FREQUENCY 7 2>/dev/null; then echo 'fréquence invalide acceptée' >&2; exit 1; fi
     if backup set alice DESTINATION /absent 2>/dev/null; then echo 'destination absente acceptée' >&2; exit 1; fi
     if backup status '../etc' 2>/dev/null; then echo 'utilisateur invalide accepté' >&2; exit 1; fi
+    if backup set alice DESTINATION /etc 2>/dev/null; then echo 'destination système acceptée' >&2; exit 1; fi
     backup set alice DESTINATION /media/usb
     backup set alice ENABLED 1
     backup set alice FREQUENCY 10
@@ -79,12 +80,59 @@ for rsync_mode in rsync portable; do
     if backup restore alice "$first" /etc/passwd 2>/dev/null; then echo 'restauration hors dossiers acceptée' >&2; exit 1; fi
     if backup browse alice "$first" /home/alice/../../etc 2>/dev/null; then echo 'chemin .. accepté' >&2; exit 1; fi
 
+    # Restauration « conserver les deux » de tout l'instantané (Paramètres) :
+    # le manquant revient, l'identique reste, le modifié depuis garde sa
+    # version actuelle et l'ancienne arrive à côté ; le nouveau n'est pas touché.
+    printf 'v3 modifié\n' > "$root/home/alice/Documents/rapport.txt"
+    rm -f "$root/home/alice/Documents/Projet/notes avec espace.txt"
+    printf 'neuf\n' > "$root/home/alice/Documents/créé après.txt"
+    backup restore alice "$second" / safe
+    test "$(cat "$root/home/alice/Documents/rapport.txt")" = 'v3 modifié'
+    test "$(cat "$root/home/alice/Documents/rapport (restauré $second).txt")" = v2
+    test "$(cat "$root/home/alice/Documents/Projet/notes avec espace.txt")" = stable
+    test "$(cat "$root/home/alice/Documents/créé après.txt")" = neuf
+    test ! -e "$root/home/alice/Documents/Projet/notes avec espace (restauré $second).txt"
+    # Date d'origine conservée.
+    test "$(stat -c %Y "$root/home/alice/Documents/Projet/notes avec espace.txt")" = "$(stat -c %Y "$history/$second/home/alice/Documents/Projet/notes avec espace.txt")"
+    # Relancée : rien de neuf (déjà identique).
+    before=$(ls "$root/home/alice/Documents" | wc -l)
+    backup restore alice "$second" / safe
+    test "$(ls "$root/home/alice/Documents" | wc -l)" -eq "$before"
+    # Vers un autre dossier : un sous-dossier par dossier sauvegardé.
+    mkdir -p "$root/home/alice/Restauration"
+    backup restore alice "$second" / /home/alice/Restauration
+    test "$(cat "$root/home/alice/Restauration/Documents/rapport.txt")" = v2
+    rm -f "$root/home/alice/Documents/rapport (restauré $second).txt" "$root/home/alice/Documents/créé après.txt"
+    rm -rf "$root/home/alice/Restauration"
+    printf 'v2\n' > "$root/home/alice/Documents/rapport.txt"
+    if backup restore alice "$second" / bidon 2>/dev/null; then echo 'mode inconnu accepté' >&2; exit 1; fi
+
+    # Un compte ne sauvegarde que ce qui est à lui.
+    if backup add alice /etc 2>/dev/null; then echo 'dossier système accepté' >&2; exit 1; fi
+    if backup add alice /home/bob 2>/dev/null; then echo "dossier d'un autre compte accepté" >&2; exit 1; fi
+    backup add alice /media/alice/Données
+    backup remove alice /media/alice/Données
+    # Requête : un lien symbolique n'est jamais suivi.
+    ln -s "$root/etc/passwd" "$root/run/winlux/backup/alice/request"
+    if backup request alice 2>/dev/null; then echo 'requête par lien symbolique acceptée' >&2; exit 1; fi
+    test ! -e "$root/run/winlux/backup/alice/request" && test ! -L "$root/run/winlux/backup/alice/request"
+
     # Ajout et retrait de dossiers protégés via requête (espaces et accents).
     printf 'add\n/home/alice/Mes Vidéos\n' > "$root/run/winlux/backup/alice/request"
     backup request alice
     check '^folder=0|/home/alice/Mes Vidéos$' "$status"
     backup remove alice "/home/alice/Mes Vidéos"
     if grep -q 'Mes Vidéos' "$status"; then echo 'dossier non retiré' >&2; exit 1; fi
+
+    # Un dossier devenu lien vers l'extérieur du compte est ignoré.
+    mkdir -p "$root/srv/secret" && printf 'x\n' > "$root/srv/secret/cle"
+    ln -s "$root/srv/secret" "$root/home/alice/Lien"
+    backup add alice /home/alice/Lien
+    backup run alice > "$work/run-lien.log"
+    grep -q 'hors du compte ignoré : /home/alice/Lien' "$work/run-lien.log"
+    test ! -e "$history/$(ls "$history" | tail -n 1)/home/alice/Lien/cle"
+    backup remove alice /home/alice/Lien
+    rm "$root/home/alice/Lien"
 
     # Planification : auto-run ne relance pas avant l'échéance.
     count=$(ls "$history" | wc -l)

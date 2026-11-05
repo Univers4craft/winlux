@@ -169,6 +169,11 @@ start_session() {
         if test -n "$runtime"; then export XDG_RUNTIME_DIR="/run/user/$uid"; fi
         if test -n "$uid" && have setpriv && have xhost; then
             xhost "+si:localuser:$user" >/dev/null 2>&1 || true
+            # Temps réel pour PipeWire sans RTKit (pas de systemd), comme le
+            # premier compte (/init) : priorité 20, nice jusqu'à -11.
+            if have prlimit; then
+                exec prlimit --rtprio=20 --nice=31 setpriv --reuid="$uid" --regid="$(id -g "$user")" --init-groups "$shell"
+            fi
             exec setpriv --reuid="$uid" --regid="$(id -g "$user")" --init-groups "$shell"
         fi
         exec "$shell"

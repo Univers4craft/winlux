@@ -908,10 +908,38 @@ def run_lock(start="clock"):
             if self.error.get_text() and self.failures < MAX_TRIES:
                 self.error.set_text("")
 
-        def on_click(self, *_):
+        def on_click(self, _widget, event=None):
             if self.view == "clock":
                 self.show_signin()
+                # Le clic qui réveille l'écran vaut aussi pour le compte visé :
+                # revenu à l'horloge (30 s sans saisie, propriétaire de nouveau
+                # sélectionné), un clic sur « Camille » en bas à gauche ne
+                # faisait qu'afficher la connexion, et le mot de passe tapé
+                # ensuite partait sur le mauvais compte (VM, 5 novembre).
+                if event is not None and len(self.account_names) > 1:
+                    where = (event.x_root, event.y_root)
+                    GLib.idle_add(lambda: self.select_account_at(*where) and False)
             return False
+
+        def account_at(self, x, y):
+            """Compte dont le bouton (en bas à gauche) est sous ce point de l'écran."""
+            for button, name in zip(self.accounts.get_children(), self.account_names):
+                toplevel = button.get_toplevel().get_window()
+                origin = button.translate_coordinates(button.get_toplevel(), 0, 0)
+                if toplevel is None or origin is None or not button.get_mapped():
+                    continue
+                left, top = toplevel.get_origin()[1:]
+                left, top = left + origin[0], top + origin[1]
+                box = button.get_allocation()
+                if left <= x < left + box.width and top <= y < top + box.height:
+                    return name
+            return None
+
+        def select_account_at(self, x, y):
+            name = self.account_at(x, y)
+            if name is not None and name != self.user:
+                self.select_account(name)
+            return name
 
         def on_key(self, _widget, event):
             self.last_typing = time.monotonic()

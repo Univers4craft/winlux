@@ -67,6 +67,32 @@ La signature combine le nom du programme, l'exception et l'emplacement fautif
 Pour un signalement libre, les issues ouvertes au titre semblable sont
 proposées. Le relais refait cette recherche de son côté.
 
+## Journaux de diagnostic (#458)
+
+Sous la description, des cases « Réseau et Wi-Fi », « Son », « Démarrage » et
+« Mises à jour » joignent les journaux correspondants, repliés en `<details>`
+(80 dernières lignes chacun, raccourcis si le rapport dépasse la taille
+d'une issue). Cochées d'office pour un signalement libre ou un arrêt du
+système, décochées pour le plantage d'un programme.
+
+- Réseau : `/run/winlux/network*.log`, `wpa-supplicant.log`,
+  `network-probe.json`, `time-sync.*`, plus `nmcli` (appareils, sans nom de
+  réseau), `rfkill list`, `ip -brief link`.
+- Son : `pipewire.log`, `wireplumber.log`, `pactl info` et listes courtes des
+  sorties et entrées (en `LC_ALL=C`), `aplay -l`.
+- Démarrage : `native-early.log`, `native-session.log`, `boot-splash.log`,
+  `system-services.log`, `hardware.log`, `/var/lib/winlux/native-boot-failure.log`,
+  erreurs du noyau (`dmesg`, si le compte peut le lire).
+- Mises à jour : `update.log`, `boot-update.log`, `sysupdate-auto.log`, listes
+  des mises à jour, journaux de premier démarrage et des pilotes.
+
+Un fichier absent n'apparaît pas ; un fichier vide est indiqué « vide » (cas
+de NetworkManager et wpa_supplicant sur un système installé tant qu'ils
+n'écrivent pas dans un fichier) ; un fichier réservé à root est indiqué
+« illisible depuis ce compte ». Les plantages encore en file (#438) sont
+listés. Le masquage est le même que pour le reste du rapport.
+`winlux-report --print --attach all` affiche le tout sans interface.
+
 ## Envoi automatique des plantages (#438)
 
 `winlux-report --background`, lancé par l'ouverture de session
