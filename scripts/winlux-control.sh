@@ -174,7 +174,8 @@ status() {
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
         # Verrouillage de l'ecran (delai, sortie de veille, compte protege).
         if have winlux-lock; then cached lock env WINLUX_LOCK_ROOT="$root" winlux-lock status; fi
-        # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
+        # Signaler un probleme : reglages lus par winlux-report (envoi automatique
+        # des plantages seulement si AUTO=on, ou jeton personnel avec AUTO=default).
         if have winlux-report; then cached report env WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
@@ -568,6 +569,12 @@ perform() {
         report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
         report-redact-on|report-redact-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "redact=${action#report-redact-}" ;;
         report-mode-auto|report-mode-browser|report-mode-file) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "mode=${action#report-mode-}" ;;
+        report-auto-on|report-auto-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "auto=${action#report-auto-}" ;;
+        # Jeton GitHub du système et rapports à envoyer : lus sur l'entrée
+        # standard (jamais en argument), traités par root seul.
+        report-token-set) winlux-report --set-token ;;
+        report-token-forget) winlux-report --forget-token ;;
+        report-send) winlux-report --send-stdin ;;
         report-open) (setsid winlux-report >/dev/null 2>&1 &) ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi

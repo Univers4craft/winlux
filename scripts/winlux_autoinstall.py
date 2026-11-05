@@ -20,7 +20,7 @@ KEYBOARDS = {"fr", "us", "gb", "de", "es", "it", "br", "ch", "be", "ca"}
 TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "license_accepted",
             "partitioning", "account", "packages", "browser", "store_catalogs", "reboot"}
 PARTITION_KEYS = {"disk", "mode"}
-ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin"}
+ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin", "crash_reports"}
 
 # Pages de l'installateur, dans l'ordre (identique à STEP_KEYS de winlux-installer.py).
 # Le type d'installation se choisit sur la page des disques.
@@ -225,6 +225,9 @@ def validate(data):
             settings["password_hash"] = hashed
         if "autologin" in account:
             settings["autologin"] = _bool(account["autologin"], "account.autologin")
+        if "crash_reports" in account:
+            # Envoi automatique des plantages (#438).
+            settings["crash_reports"] = _bool(account["crash_reports"], "account.crash_reports")
         if "username" in settings and ("password" in settings or "password_hash" in settings):
             steps.add(STEP_ACCOUNT)
     browser = data.get("browser")

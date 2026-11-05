@@ -615,6 +615,136 @@ fn glyph_of(k: Kind) -> Glyph {
     }
 }
 
+/// Icône 16 px des vues Détails, Petites icônes et Liste. Le glyphe commun
+/// tasse la page sur 11 px de large : illisible en 1366x768. Ici la page
+/// fait 12 px avec coin plié et contour, et chaque type a sa marque, comme
+/// les icônes de fichiers de Windows 11. Dossiers et lecteurs gardent leur
+/// glyphe.
+unsafe fn row_icon(g: &mut Gfx, k: Kind, x: i32, y: i32) {
+    let (h, b) = (g.hdc, &mut *g.b);
+    let page = rgb(0xF4, 0xF6, 0xF9);
+    let edge = rgb(0x8A, 0x93, 0xA0);
+    match k {
+        Kind::Exe => {
+            // Fenêtre d'application : barre de titre bleue, cadre gris.
+            fill(h, b, x + 1, y + 2, x + 15, y + 14, edge);
+            fill(h, b, x + 2, y + 3, x + 14, y + 13, page);
+            fill(h, b, x + 2, y + 3, x + 14, y + 6, rgb(0x2B, 0x7F, 0xDA));
+            fill(h, b, x + 4, y + 8, x + 12, y + 9, rgb(0xB4, 0xBB, 0xC4));
+            fill(h, b, x + 4, y + 10, x + 9, y + 11, rgb(0xB4, 0xBB, 0xC4));
+            return;
+        }
+        Kind::Text | Kind::Code | Kind::Pdf | Kind::Archive | Kind::Audio | Kind::Video | Kind::Image | Kind::File => {}
+        _ => {
+            glyph(h, b, g.f, glyph_of(k), x, y, 16);
+            return;
+        }
+    }
+    // Page : contour, corps clair, coin plié en haut à droite.
+    let (l, r) = (x + 2, x + 14);
+    fill(h, b, l, y, r - 4, y + 16, edge);
+    fill(h, b, l, y + 4, r, y + 16, edge);
+    fill(h, b, l + 1, y + 1, r - 4, y + 15, page);
+    fill(h, b, l + 1, y + 4, r - 1, y + 15, page);
+    for i in 0..4 {
+        fill(h, b, r - 4 + i, y + i, r - 3 + i, y + i + 1, edge);
+        fill(h, b, r - 4, y + i, r - 4 + i, y + i + 1, rgb(0xC8, 0xCD, 0xD4));
+    }
+    fill(h, b, r - 4, y + 3, r, y + 4, edge);
+    match k {
+        Kind::Text => {
+            for (i, w) in [8, 8, 8, 5].iter().enumerate() {
+                let ly = y + 6 + 2 * i as i32;
+                fill(h, b, l + 2, ly, l + 2 + w, ly + 1, rgb(0x7A, 0x84, 0x91));
+            }
+        }
+        Kind::Code => {
+            let c = rgb(0x1F, 0x6F, 0xC8);
+            line(h, b, l + 4, y + 7, l + 2, y + 10, 1, c);
+            line(h, b, l + 2, y + 10, l + 4, y + 13, 1, c);
+            line(h, b, l + 7, y + 7, l + 9, y + 10, 1, c);
+            line(h, b, l + 9, y + 10, l + 7, y + 13, 1, c);
+        }
+        Kind::Pdf => {
+            fill(h, b, l + 1, y + 8, r - 1, y + 13, rgb(0xD9, 0x3A, 0x2E));
+            fill(h, b, l + 3, y + 10, r - 3, y + 11, rgb(0xFF, 0xFF, 0xFF));
+        }
+        Kind::Archive => {
+            // Fermeture éclair et sa tirette.
+            for i in 0..5 {
+                let c = if i % 2 == 0 { rgb(0xE0, 0x9E, 0x2A) } else { rgb(0x8A, 0x5A, 0x10) };
+                fill(h, b, l + 4, y + 1 + 2 * i, l + 6, y + 3 + 2 * i, c);
+            }
+            fill(h, b, l + 3, y + 11, l + 7, y + 14, rgb(0x8A, 0x5A, 0x10));
+        }
+        Kind::Audio => {
+            let c = rgb(0xE8, 0x3E, 0x6C);
+            fill(h, b, l + 6, y + 6, l + 7, y + 12, c);
+            fill(h, b, l + 6, y + 6, l + 9, y + 8, c);
+            ellipse(h, b, l + 2, y + 10, l + 7, y + 14, c);
+        }
+        Kind::Video => {
+            fill(h, b, l + 1, y + 7, r - 1, y + 14, rgb(0x8E, 0x4E, 0xD8));
+            for i in 0..3 {
+                fill(h, b, l + 4 + i, y + 8 + i, l + 5 + i, y + 13 - i, rgb(0xFF, 0xFF, 0xFF));
+            }
+        }
+        Kind::Image => {
+            fill(h, b, l + 1, y + 6, r - 1, y + 14, rgb(0x3D, 0x9B, 0xF5));
+            fill(h, b, l + 7, y + 7, l + 9, y + 9, rgb(0xFF, 0xD6, 0x4A));
+            for i in 0..4 {
+                fill(h, b, l + 3 - i, y + 10 + i, l + 4 + i, y + 11 + i, rgb(0x34, 0xC7, 0x59));
+                fill(h, b, l + 8 - i, y + 11 + i, l + 9 + i.min(2), y + 12 + i, rgb(0x2E, 0xA0, 0x5A));
+            }
+            fill(h, b, l + 1, y + 13, r - 1, y + 14, rgb(0x2E, 0xA0, 0x5A));
+        }
+        _ => {}
+    }
+}
+
+/// Espace d'un lecteur de « Ce PC » : (libre pour l'utilisateur, total).
+unsafe fn drive_space(e: &Entry) -> Option<(u64, u64)> {
+    if !matches!(e.kind, Kind::Drive | Kind::LinuxDrive | Kind::Removable | Kind::Network) {
+        return None;
+    }
+    let letter = drive_letter_in(e.name())?;
+    let root = [letter as u16, b':' as u16, b'\\' as u16, 0];
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    if GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) == 0 || total == 0 {
+        return None;
+    }
+    Some((avail.min(total), total))
+}
+
+/// « 12,5 Go libres sur 476 Go ».
+fn space_text(free: u64, total: u64, out: &mut [u8; 64]) -> usize {
+    let mut a = [0u8; 24];
+    let mut t = [0u8; 24];
+    let (na, nt) = (size_text(free, &mut a), size_text(total, &mut t));
+    let free_word = tr4(&[b" libres", b" free", b" libres", b" frei"]);
+    let of = tr4(&[b" sur ", b" of ", b" de ", b" von "]);
+    let mut n = 0;
+    for part in [&a[..na], free_word, of, &t[..nt]] {
+        for &c in part {
+            if n < out.len() {
+                out[n] = c;
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Barre d'occupation d'un lecteur : couleur d'accent, rouge au-delà de 90 %.
+unsafe fn usage_bar(g: &mut Gfx, x: i32, y: i32, w: i32, free: u64, total: u64) {
+    let used = total.saturating_sub(free);
+    let fill_w = ((used as u128 * w as u128) / total.max(1) as u128) as i32;
+    let full = used.saturating_mul(10) >= total.saturating_mul(9);
+    fill(g.hdc, g.b, x, y, x + w, y + 6, pal().border);
+    let c = if full { rgb(0xD9, 0x3A, 0x2E) } else { ACCENT };
+    fill(g.hdc, g.b, x, y, x + fill_w.clamp(0, w), y + 6, c);
+}
+
 /// Nom du type pour la colonne « Type ».
 fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
@@ -637,7 +767,7 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
             b"Unidad de red",
             b"Netzlaufwerk",
         ]),
-        Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[b"Application Windows", b"Windows application", b"Aplicaci\xF3n de Windows", b"Windows-Anwendung"]),
+        Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[b"Application", b"Application", b"Aplicaci\xF3n", b"Anwendung"]),
         Kind::Exe => tr4(&[b"Programme", b"Program", b"Programa", b"Programm"]),
         _ => b"",
     };
@@ -2468,31 +2598,32 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             r.top + 4 + c.header,
         );
         let (nx, _, dx, tx, sx) = detail_cols(&hr);
+        // « Ce PC » : colonnes des lecteurs, comme Windows 11.
+        let drives = pn.loc.is(PC);
         let heads: [(&[u8], i32, SortKey); 4] = [
             (tr(S_NAME), nx - 28, SortKey::Name),
-            (tr(S_DATE), dx, SortKey::Date),
+            (
+                if drives { tr4(&[b"Occupation", b"Used space", b"Espacio usado", b"Belegt"]) } else { tr(S_DATE) },
+                dx,
+                SortKey::Date,
+            ),
             (tr(S_TYPE), tx, SortKey::Kind),
-            (tr(S_SIZE), sx, SortKey::Size),
+            (
+                if drives { tr4(&[b"Espace libre", b"Free space", b"Espacio libre", b"Freier Speicher"]) } else { tr(S_SIZE) },
+                sx,
+                SortKey::Size,
+            ),
         ];
         for (label, x, key) in heads {
             text(g.hdc, g.f.caption, p.text2, x, hr.top + 8, label);
             if SORT == key {
+                // Flèche du tri comme Windows 11 : « ˄ » croissant,
+                // « ˅ » décroissant (« › » se lisait comme un fil d'Ariane).
                 let ax = x + text_width(label, 12) + 8;
-                set_glyph_bg(Some(p.window));
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    if SORT_DESC {
-                        Glyph::ChevronDown
-                    } else {
-                        Glyph::Chevron
-                    },
-                    ax,
-                    hr.top + 10,
-                    9,
-                );
-                set_glyph_bg(None);
+                let (top, bottom) = (hr.top + 12, hr.top + 16);
+                let (from, to) = if SORT_DESC { (top, bottom) } else { (bottom, top) };
+                line(g.hdc, g.b, ax, from, ax + 4, to, 1, p.text2);
+                line(g.hdc, g.b, ax + 4, to, ax + 8, from, 1, p.text2);
             }
             if x > nx {
                 fill(
@@ -2576,15 +2707,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 }
             }
             View::Small | View::List => {
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    glyph_of(e.kind),
-                    ir.left + 8,
-                    ir.top + (c.ch - 16) / 2,
-                    16,
-                );
+                row_icon(g, e.kind, ir.left + 8, ir.top + (c.ch - 16) / 2);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(ir.left + 30, ty - 3, ir.right - 6, ty + 19));
@@ -2623,32 +2746,32 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                         ir.right - tx - 8,
                     );
                 }
-                text_fit(
-                    g.hdc,
-                    g.f.small,
-                    11,
-                    p.text3,
-                    tx,
-                    ty + 18,
-                    type_name(&e, &mut tbuf),
-                    ir.right - tx - 8,
-                );
-                if !e.dir {
-                    let n = size_text(e.size, &mut sbuf);
-                    text(g.hdc, g.f.small, p.text3, tx, ty + 32, &sbuf[..n]);
+                if let Some((free, total)) = drive_space(&e) {
+                    // Comme Windows 11 : barre puis « X libres sur Y ».
+                    usage_bar(g, tx, ty + 21, (ir.right - tx - 16).min(180), free, total);
+                    let mut buf = [0u8; 64];
+                    let n = space_text(free, total, &mut buf);
+                    text_fit(g.hdc, g.f.small, 11, p.text3, tx, ty + 32, &buf[..n], ir.right - tx - 8);
+                } else {
+                    text_fit(
+                        g.hdc,
+                        g.f.small,
+                        11,
+                        p.text3,
+                        tx,
+                        ty + 18,
+                        type_name(&e, &mut tbuf),
+                        ir.right - tx - 8,
+                    );
+                    if !e.dir {
+                        let n = size_text(e.size, &mut sbuf);
+                        text(g.hdc, g.f.small, p.text3, tx, ty + 32, &sbuf[..n]);
+                    }
                 }
             }
             View::Details => {
                 let (nx, nw, dx, tx, sx) = detail_cols(&ir);
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    glyph_of(e.kind),
-                    ir.left + 10,
-                    ir.top + (c.ch - 16) / 2,
-                    16,
-                );
+                row_icon(g, e.kind, ir.left + 10, ir.top + (c.ch - 16) / 2);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(nx - 4, ty - 3, ir.left + nw, ty + 19));
@@ -2656,8 +2779,13 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     text_fit(g.hdc, g.f.caption, 12, p.text, nx, ty, name, nw - 40);
                 }
                 let mut dbuf = [0u8; 24];
-                let dn = date_text(e.mtime, &mut dbuf);
-                text(g.hdc, g.f.caption, p.text2, dx, ty, &dbuf[..dn]);
+                let space = drive_space(&e);
+                if let Some((free, total)) = space {
+                    usage_bar(g, dx, ty + 5, (tx - dx - 24).min(120), free, total);
+                } else {
+                    let dn = date_text(e.mtime, &mut dbuf);
+                    text(g.hdc, g.f.caption, p.text2, dx, ty, &dbuf[..dn]);
+                }
                 text_fit(
                     g.hdc,
                     g.f.caption,
@@ -2668,7 +2796,12 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     type_name(&e, &mut tbuf),
                     sx - tx - 12,
                 );
-                if !e.dir {
+                if let Some((free, total)) = space {
+                    let _ = total;
+                    let n = size_text(free, &mut sbuf);
+                    let w = text_width(&sbuf[..n], 12);
+                    text(g.hdc, g.f.caption, p.text2, (ir.right - 16 - w).max(sx), ty, &sbuf[..n]);
+                } else if !e.dir {
                     let n = size_text(e.size, &mut sbuf);
                     let w = text_width(&sbuf[..n], 12);
                     text(
@@ -6826,6 +6959,91 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 /// Exécuté uniquement par le programme PE `explorer_regression.exe` ; le
 /// linker retire cette fonction inutilisée de l'exécutable du bureau.
 #[doc(hidden)]
+/// Icônes des lignes en vue Détails : dessinées dans un bitmap 32 bits,
+/// la page d'un fichier fait au moins 12 px de large (11 avant) et un
+/// .exe n'est plus un pavé sombre.
+#[doc(hidden)]
+unsafe fn row_icon_checks() {
+    const W: i32 = 24;
+    let info = BitmapInfoHeader {
+        size: 40,
+        width: W,
+        height: -W,
+        planes: 1,
+        bit_count: 32,
+        compression: 0,
+        size_image: 0,
+        x_pels_per_meter: 0,
+        y_pels_per_meter: 0,
+        colors_used: 0,
+        colors_important: 0,
+    };
+    let dc = CreateCompatibleDC(core::ptr::null_mut());
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let bmp = CreateDIBSection(dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
+    if dc.is_null() || bmp.is_null() || bits.is_null() {
+        check!(false, "Icones des lignes : bitmap de test");
+        return;
+    }
+    let old = SelectObject(dc, bmp);
+    let px = core::slice::from_raw_parts_mut(bits as *mut u32, (W * W) as usize);
+    let mut b = Brushes::new();
+    let f = Fonts::new();
+    // Pour chaque type : largeur dessinée (tout pixel non noir) et largeur
+    // de clair (corps de la page ou de la fenêtre) sur la ligne la plus large.
+    let mut measure = |k: Kind| -> (i32, i32) {
+        px.fill(0);
+        let mut g = Gfx { hdc: dc, b: &mut b, f: &f };
+        row_icon(&mut g, k, 4, 4);
+        let (mut drawn, mut light) = (0, 0);
+        for y in 0..W {
+            let row = &px[(y * W) as usize..((y + 1) * W) as usize];
+            let first = row.iter().position(|&c| c & 0xFF_FFFF != 0);
+            let last = row.iter().rposition(|&c| c & 0xFF_FFFF != 0);
+            if let (Some(a), Some(z)) = (first, last) {
+                drawn = drawn.max((z - a + 1) as i32);
+            }
+            let n = row.iter().filter(|&&c| (c & 0xFF) > 0xC0 && (c >> 8 & 0xFF) > 0xC0).count() as i32;
+            light = light.max(n);
+        }
+        (drawn, light)
+    };
+    let text = measure(Kind::Text);
+    let pdf = measure(Kind::Pdf);
+    let exe = measure(Kind::Exe);
+    check!(
+        text.0 >= 12 && pdf.0 >= 12,
+        "Icones des lignes : pages de fichiers de 12 px en vue Details (11 avant)"
+    );
+    check!(exe.1 >= 10, "Icones des lignes : un .exe est une fenetre claire, plus un pave sombre");
+    // « Ce PC » : espace du lecteur C: et texte « X libres sur Y ».
+    let mut drive = EMPTY_ENTRY;
+    let label = b"Dossier personnel (C:)";
+    drive.name[..label.len()].copy_from_slice(label);
+    drive.len = label.len() as u16;
+    drive.kind = Kind::Drive;
+    drive.dir = true;
+    let space = drive_space(&drive);
+    check!(
+        space.is_some_and(|(free, total)| total > 0 && free <= total),
+        "Ce PC : espace libre et taille du lecteur C: lus"
+    );
+    let mut buf = [0u8; 64];
+    let n = space_text(25 << 30, 251 << 30, &mut buf);
+    check!(
+        buf[..n].starts_with(b"25,0 Go") && buf[..n].ends_with(b"251 Go"),
+        "Ce PC : texte \"25,0 Go libres sur 251 Go\" sous la barre"
+    );
+    let mut folder = drive;
+    folder.kind = Kind::Folder;
+    check!(drive_space(&folder).is_none(), "Ce PC : pas de barre d'occupation sur un dossier");
+    b.release();
+    f.release();
+    SelectObject(dc, old);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+}
+
 pub unsafe fn regression_checks() {
     // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
     // pas « Ce dossier est introuvable ». Seulement si le test le demande.
@@ -7059,6 +7277,7 @@ pub unsafe fn regression_checks() {
     );
     MENU = Menu::None;
     archive_regression(root);
+    row_icon_checks();
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;
