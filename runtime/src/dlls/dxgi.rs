@@ -184,6 +184,45 @@ pub(crate) fn ensure_offscreen_context() {
     });
 }
 
+/// Contexte GLX courant du thread (0 si aucun).
+pub(crate) struct Binding {
+    pub display: usize,
+    pub drawable: u64,
+    pub context: usize,
+}
+
+pub(crate) fn current_binding() -> Binding {
+    type Getter = Option<unsafe extern "C" fn() -> usize>;
+    static GETTERS: std::sync::OnceLock<[Getter; 3]> = std::sync::OnceLock::new();
+    let getters = GETTERS.get_or_init(|| {
+        let mut out: [Getter; 3] = [None; 3];
+        let Some(glx) = gl::glx() else { return out };
+        if !glx.available {
+            return out;
+        }
+        let names = [
+            c"glXGetCurrentContext",
+            c"glXGetCurrentDrawable",
+            c"glXGetCurrentDisplay",
+        ];
+        for (slot, name) in out.iter_mut().zip(names) {
+            let f = unsafe { (glx.GetProcAddressARB)(name.as_ptr().cast()) };
+            if !f.is_null() {
+                *slot = Some(unsafe {
+                    std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> usize>(f)
+                });
+            }
+        }
+        out
+    });
+    let call = |i: usize| getters[i].map_or(0, |f| unsafe { f() });
+    Binding {
+        context: call(0),
+        drawable: call(1) as u64,
+        display: call(2),
+    }
+}
+
 pub(crate) fn ensure_thread_context() {
     let main = MAIN_CONTEXT.load(Ordering::Acquire);
     if main == 0 || WORKER_CONTEXT.with(|w| w.get()) {
@@ -252,6 +291,8 @@ pub(crate) struct GlContext {
     pub height: u32,
     pub back_texture: gl::GLuint,
     pub framebuffer: gl::GLuint,
+    /// Présentations faites : la première est décrite dans le journal.
+    presented: AtomicU32,
 }
 
 unsafe impl Send for GlContext {}
@@ -345,6 +386,7 @@ impl GlContext {
                 height: 720,
                 back_texture: 0,
                 framebuffer: 0,
+                presented: AtomicU32::new(0),
             };
             ctx.create_backbuffer(g);
             Some(ctx)
@@ -396,6 +438,26 @@ impl GlContext {
         let Some(glx) = gl::glx() else { return };
         let Some(g) = gl::gl() else { return };
         unsafe {
+            // Le contexte de la chaîne doit être courant sur SA fenêtre : un
+            // thread qui présente avec un autre contexte (hors écran, de
+            // travail) copierait l'image dans la fenêtre racine, et
+            // glXSwapBuffers montrerait un tampon jamais dessiné (#509).
+            let previous = current_binding();
+            let switched =
+                previous.context != self.context as usize || previous.drawable != self.drawable;
+            if switched && (glx.MakeCurrent)(self.display, self.drawable, self.context) == 0 {
+                if self.presented.fetch_add(1, Ordering::Relaxed) == 0 {
+                    log_warn!(
+                        "dxgi",
+                        "Present : contexte de la chaîne d'échange indisponible sur ce thread"
+                    );
+                }
+                return;
+            }
+            let first = self.presented.fetch_add(1, Ordering::Relaxed) == 0;
+            if first {
+                self.describe(g, &previous, switched);
+            }
             (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
             (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
             // Le rendu D3D11 garde la ligne 0 en haut (voir d3d11_pipeline.rs) :
@@ -414,7 +476,44 @@ impl GlContext {
             );
             (glx.SwapBuffers)(self.display, self.drawable);
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+            // Rendre au thread le contexte qu'il avait (le sien n'est pas
+            // lié ailleurs, la reprise réussit).
+            if switched && previous.context != 0 {
+                (glx.MakeCurrent)(
+                    previous.display as *mut _,
+                    previous.drawable,
+                    previous.context as gl::GLXContext,
+                );
+            }
         }
+    }
+
+    /// Décrit la première présentation : taille, fenêtre, contexte et un
+    /// pixel du tampon arrière, pour diagnostiquer une fenêtre noire.
+    unsafe fn describe(&self, g: &gl::GlFunctions, previous: &Binding, switched: bool) {
+        let mut px = [0u8; 4];
+        (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
+        (g.ReadPixels)(
+            (self.width / 2) as i32,
+            (self.height / 2) as i32,
+            1,
+            1,
+            gl::GL_RGBA,
+            gl::GL_UNSIGNED_BYTE,
+            px.as_mut_ptr().cast(),
+        );
+        (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, 0);
+        log_info!(
+            "dxgi",
+            "première présentation : {}x{} vers la fenêtre X 0x{:x}, contexte {} (thread : contexte 0x{:x}, surface 0x{:x}), pixel central {:?}",
+            self.width,
+            self.height,
+            self.drawable,
+            if switched { "rendu courant pour l'occasion" } else { "déjà courant" },
+            previous.context,
+            previous.drawable,
+            px
+        );
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -988,7 +1087,29 @@ pub(crate) fn create_swap_chain(
     device: *mut c_void,
 ) -> *mut DxgiSwapChain {
     let hwnd = desc.output_window;
-    let gl_ctx = GlContext::create_for_window(hwnd);
+    let mut gl_ctx = GlContext::create_for_window(hwnd);
+    let mut desc = *desc;
+    if let Some(ctx) = gl_ctx.as_mut() {
+        // Taille demandée, ou 0 = zone client de la fenêtre (règle DXGI).
+        // Le tampon arrière était toujours créé en 1280x720 (#509).
+        let client = crate::dlls::gui::window_rect(hwnd).map(|r| {
+            (
+                (r.right - r.left).max(0) as u32,
+                (r.bottom - r.top).max(0) as u32,
+            )
+        });
+        let pick = |asked: u32, window: Option<u32>| match asked {
+            0 => window.filter(|&v| v > 0).unwrap_or(0),
+            v => v.min(MAX_BACKBUFFER_DIM),
+        };
+        let w = pick(desc.buffer_desc.width, client.map(|c| c.0));
+        let h = pick(desc.buffer_desc.height, client.map(|c| c.1));
+        if w > 0 && h > 0 && (w, h) != (ctx.width, ctx.height) {
+            ctx.resize(w, h);
+        }
+        desc.buffer_desc.width = ctx.width;
+        desc.buffer_desc.height = ctx.height;
+    }
     if gl_ctx.is_none() {
         log_warn!(
             "dxgi",
@@ -999,7 +1120,7 @@ pub(crate) fn create_swap_chain(
     Box::into_raw(Box::new(DxgiSwapChain {
         vtable: &SWAP_CHAIN_VTABLE,
         ref_count: AtomicU32::new(1),
-        desc: *desc,
+        desc,
         gl_ctx: Mutex::new(gl_ctx),
         device,
         present_count: AtomicU32::new(0),

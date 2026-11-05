@@ -90,6 +90,44 @@ _TR = {
     'Boutiques de logiciels': ('Software stores', 'Tiendas de programas', 'Software-Stores'),
     'Partage de dossiers et transfert des réglages': ('Folder sharing and settings transfer', 'Compartir carpetas y transferir ajustes', 'Ordnerfreigabe und Übertragung der Einstellungen'),
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
+    'Système Linux': ('Linux system', 'Sistema Linux', 'Linux-System'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Réseau': ('Network', 'Red', 'Netzwerk'),
+    'Clavier et souris': ('Keyboard and mouse', 'Teclado y ratón', 'Tastatur und Maus'),
+    'Écran': ('Display', 'Pantalla', 'Bildschirm'),
+    'À propos': ('About', 'Acerca de', 'Info'),
+    'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
+    'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
+    'Effets visuels': ('Visual effects', 'Efectos visuales', 'Visuelle Effekte'),
+    'Heure et langue': ('Time and language', 'Hora e idioma', 'Zeit und Sprache'),
+    'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
+    'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemaktualisierungen'),
+    'Confidentialité et sécurité': ('Privacy and security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
+    'Processeur': ('Processor', 'Procesador', 'Prozessor'),
+    'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
+    'Fond d’écran et couleurs': ('Wallpaper and colours', 'Fondo y colores', 'Hintergrund und Farben'),
+    'Bluetooth': ('Bluetooth', 'Bluetooth', 'Bluetooth'),
+    'Alimentation et batterie': ('Power and battery', 'Energía y batería', 'Energie und Akku'),
+    'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
+    'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
+    'Imprimantes et scanners': ('Printers and scanners', 'Impresoras y escáneres', 'Drucker und Scanner'),
+    'Bureau à distance': ('Remote desktop', 'Escritorio remoto', 'Remotedesktop'),
+    'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
+    'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
+    'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
+    'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
+    'Wi-Fi': ('Wi-Fi', 'Wi-Fi', 'WLAN'),
+    'Certificats': ('Certificates', 'Certificados', 'Zertifikate'),
+    'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobilgeräte'),
+    'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'Meilleur résultat': ('Best match', 'Mejor coincidencia', 'Höchste Übereinstimmung'),
+    'Applications': ('Apps', 'Aplicaciones', 'Apps'),
+    'Documents': ('Documents', 'Documentos', 'Dokumente'),
+    'Ouvrir l’emplacement du fichier': ('Open file location', 'Abrir ubicación del archivo', 'Dateipfad öffnen'),
+    'Copier le chemin': ('Copy path', 'Copiar ruta', 'Pfad kopieren'),
+    'Rechercher': ('Search', 'Buscar', 'Suchen'),
     'Bureautique': ('Office', 'Oficina', 'Büro'),
     'Graphisme': ('Graphics', 'Gráficos', 'Grafik'),
     'Audio et vidéo': ('Audio and video', 'Audio y vídeo', 'Audio und Video'),
@@ -137,11 +175,49 @@ def _t(text):
 STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
-SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 35), (_t("Bluetooth et appareils"), 22),
-            (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
-            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11), (_t("Boutiques de logiciels"), 1),
-            (_t("Partage de dossiers et transfert des réglages"), 28), (_t("Jeux bibliothèque temps de jeu"), 29),
-            (_t("Luminosité écran"), 8), (_t("Certificats sécurité"), 36), (_t("Date et heure"), 14)]
+# Pages des Paramètres trouvées par la recherche (#461) : titre de la page et
+# mots-clés dans les quatre langues, quelle que soit la langue du bureau
+# (« wifi », « printer », « Drucker », « impresora »…). Pages 3, 5 et 6 :
+# fondues dans 16, 4 et 21.
+SETTINGS_INDEX = [
+    (0, "Système Linux", "systeme linux noyau kernel services system sistema núcleo Kernel Dienste"),
+    (1, "Applications installées", "applications apps installees programmes desinstaller demarrage boutiques logiciels installed uninstall startup stores software aplicaciones desinstalar inicio tiendas installierte deinstallieren Autostart"),
+    (2, "Réseau", "reseau ethernet cable proxy vpn ip dns internet network red Netzwerk Kabel"),
+    (4, "Clavier et souris", "clavier souris azerty qwerty disposition pave tactile touchpad pointeur keyboard mouse layout teclado raton Tastatur Maus Layout"),
+    (7, "Mises à jour", "mises a jour mise a jour update updates actualizaciones actualizar Aktualisierung Updates"),
+    (8, "Écran", "ecran affichage resolution luminosite echelle orientation projeter second ecran moniteur display brightness scale monitor project pantalla brillo escala Bildschirm Anzeige Helligkeit Auflosung Skalierung"),
+    (9, "À propos", "a propos version nom du pc informations systeme about pc name specifications acerca de version Info Version Gerätename"),
+    (10, "Programmes Windows", "programmes windows exe compatibilite windows programs compatibility programas Windows-Programme Kompatibilitat"),
+    (11, "Navigateurs", "navigateur navigateurs par defaut firefox chrome browser default navegador predeterminado Browser Standard"),
+    (12, "Accessibilité", "accessibilite loupe contraste narrateur taille du texte accessibility magnifier contrast narrator text size accesibilidad lupa contraste narrador Barrierefreiheit Lupe Kontrast Sprachausgabe"),
+    (13, "Effets visuels", "effets visuels animations transparence visual effects transparency efectos visuales animaciones transparencia visuelle Effekte Animationen Transparenz"),
+    (14, "Heure et langue", "langue region date heure fuseau horaire format clavier language time zone date idioma region fecha hora zona horaria Sprache Region Datum Uhrzeit Zeitzone"),
+    (15, "Gestionnaire de fichiers", "fichiers explorateur extensions fichiers caches dossiers file explorer hidden files folders archivos explorador ocultos Dateien Explorer versteckte"),
+    (16, "Son", "son volume haut parleurs micro microphone casque audio sound speakers headphones sonido volumen altavoces microfono auriculares Ton Lautstarke Lautsprecher Mikrofon Kopfhorer"),
+    (17, "Mises à jour système", "mises a jour systeme paquets noyau system updates packages actualizaciones del sistema paquetes Systemaktualisierungen Pakete"),
+    (18, "Confidentialité et sécurité", "confidentialite securite verrouillage mot de passe autorisations camera micro pare feu privacy security lock permissions firewall privacidad seguridad bloqueo permisos Datenschutz Sicherheit Sperre Berechtigungen Firewall"),
+    (19, "Processeur", "processeur cpu performances frequence processor performance procesador rendimiento Prozessor Leistung"),
+    (20, "Lecteurs réseau", "lecteurs reseau partage samba smb nas sftp ftp network drives share unidades de red Netzlaufwerke Freigabe"),
+    (21, "Fond d’écran et couleurs", "personnalisation fond d ecran theme sombre clair couleurs accent personalization wallpaper background dark light colors personalizacion fondo tema oscuro claro colores Personalisierung Hintergrund dunkel hell Farben"),
+    (22, "Bluetooth", "bluetooth appareils casque souris sans fil devices headset dispositivos auriculares Gerate Kopfhorer"),
+    (23, "Alimentation et batterie", "alimentation batterie veille economie d energie mode power battery sleep saver energia bateria suspension ahorro Energie Akku Standby Energiesparen"),
+    (24, "Graphismes", "graphismes carte graphique gpu nvidia amd intel hybride graphics card graficos tarjeta grafica Grafik Grafikkarte"),
+    (25, "Signaler un problème", "signaler un probleme bug plantage rapport diagnostic report problem crash informar problema error Problem melden Absturz Fehler"),
+    (26, "Imprimantes et scanners", "imprimantes imprimante scanner numeriser printers printer scan impresoras impresora escaner Drucker Scanner"),
+    (27, "Bureau à distance", "bureau a distance rdp vnc remote desktop escritorio remoto Remotedesktop"),
+    (28, "Partage et transfert", "partage transfert dossiers partages transfert des reglages sharing transfer shared folders compartir transferir carpetas compartidas Freigabe Ubertragung freigegebene Ordner"),
+    (29, "Jeux", "jeux bibliotheque manette temps de jeu games gaming gamepad library juegos mando biblioteca Spiele Controller Bibliothek"),
+    (30, "Assistant IA", "assistant ia intelligence artificielle claude chatgpt ai assistant asistente ia KI Assistent"),
+    (31, "Récupération", "recuperation reinitialiser restaurer recovery reset restore recuperacion restablecer restaurar Wiederherstellung zurucksetzen"),
+    (32, "Presse-papiers", "presse papiers historique copier coller clipboard history portapapeles historial Zwischenablage Verlauf"),
+    (33, "Comptes", "comptes compte utilisateur utilisateurs mot de passe connexion famille accounts account user password sign in cuentas cuenta usuario contrasena Konten Konto Benutzer Kennwort Anmeldung"),
+    (34, "Matériel et pilotes", "materiel pilotes peripheriques gestionnaire de peripheriques hardware drivers devices device manager controladores hardware administrador de dispositivos Treiber Hardware Gerate-Manager"),
+    (35, "Wi-Fi", "wifi wi fi sans fil reseau sans fil hotspot wireless wlan inalambrica red WLAN Drahtlos"),
+    (36, "Certificats", "certificats certificat securite ssl tls certificates certificate certificados certificado Zertifikate Zertifikat"),
+    (37, "Appareils mobiles", "appareils mobiles telephone smartphone android mobile devices phone dispositivos moviles telefono movil Mobilgerate Telefon Handy Smartphone"),
+    (38, "Sauvegarde", "sauvegarde sauvegarder documents copie de securite disque externe restaurer backup back up external drive restore copia de seguridad disco externo restaurar Sicherung sichern externe Festplatte wiederherstellen"),
+]
+SETTINGS = [(_t(label), page) for page, label, _ in SETTINGS_INDEX]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
 # les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
 # recherche trouve les pages ci-dessus).
@@ -568,6 +644,41 @@ class Start(Gtk.Application):
         button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app))
         return button
 
+    def result_button(self, title, icon, tooltip, subtitle=None):
+        """Ligne de résultat : icône, titre et, pour un fichier, son dossier en petit."""
+        button = Gtk.Button()
+        box = Gtk.Box(spacing=8)
+        image = Gtk.Image.new_from_gicon(icon if isinstance(icon, Gio.Icon) else Gio.ThemedIcon.new(icon), Gtk.IconSize.LARGE_TOOLBAR)
+        image.set_pixel_size(24)
+        box.pack_start(image, False, False, 0)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        label = Gtk.Label(label=title, xalign=0)
+        label.set_ellipsize(3)
+        label.get_style_context().add_class("app-name")
+        texts.pack_start(label, False, False, 0)
+        if subtitle:
+            detail = Gtk.Label(label=subtitle, xalign=0)
+            detail.set_ellipsize(1)
+            detail.get_style_context().add_class("dim-label")
+            texts.pack_start(detail, False, False, 0)
+        box.pack_start(texts, True, True, 0)
+        button.add(box)
+        button.set_tooltip_text(tooltip)
+        return button
+
+    def file_context(self, widget, event, path):
+        """Clic droit sur un fichier trouvé : ouvrir, ouvrir l'emplacement, copier le chemin."""
+        if event.button != 3: return False
+        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.open_file(path)),
+                                  (_t("Ouvrir l’emplacement du fichier"), lambda: self.open_location(path)),
+                                  (_t("Copier le chemin"), lambda: Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(str(path), -1))])
+        return True
+
+    def open_location(self, path):
+        self.hide()
+        try: subprocess.Popen(["winlux-shell-app", "explorer", str(path.parent)], start_new_session=True)
+        except OSError: pass
+
     def render(self):
         if not self.window or not hasattr(self, "apps"): return
         for widget in self.content.get_children(): widget.destroy()
@@ -584,32 +695,48 @@ class Start(Gtk.Application):
             # Paramètres et Entrée l'ouvrait.
             previous = None
             if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
-            for app in self.results:
-                group = category(app)
-                if not query and group != previous:
+            # Recherche : groupes comme Windows 11 (Meilleur résultat, Applications, Paramètres, Documents).
+            pages = settings_for(query) if query else []
+            if query and query != self.file_query:
+                self.file_query = query
+                self.file_generation += 1
+                self.file_results = []
+                if len(query) >= 2:
+                    threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+            for index, app in enumerate(self.results):
+                group = (_t("Meilleur résultat") if index == 0 else _t("Applications")) if query else category(app)
+                if group != previous:
                     heading = Gtk.Label(label=group, xalign=0, margin_top=10)
                     heading.get_style_context().add_class("heading")
                     self.content.pack_start(heading, False, False, 0)
                     previous = group
                 self.content.pack_start(self.app_button(app), False, False, 0)
-            if query:
-                for label, page in settings_for(query):
-                    button = Gtk.Button(label=_t("Paramètres · ") + label)
+            if pages:
+                heading = Gtk.Label(label=_t("Meilleur résultat") if not self.results else _t("Paramètres"), xalign=0, margin_top=10)
+                heading.get_style_context().add_class("heading")
+                self.content.pack_start(heading, False, False, 0)
+                for number, (label, page) in enumerate(pages):
+                    if number == 1 and not self.results:
+                        heading = Gtk.Label(label=_t("Paramètres"), xalign=0, margin_top=10)
+                        heading.get_style_context().add_class("heading")
+                        self.content.pack_start(heading, False, False, 0)
+                    button = self.result_button(label, "preferences-system", _t("Paramètres · ") + label)
                     on_click(button, lambda target=page: self.open_setting(target))
                     self.content.pack_start(button, False, False, 0)
-                if query != self.file_query:
-                    self.file_query = query
-                    self.file_generation += 1
-                    self.file_results = []
-                    if len(query) >= 2:
-                        threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
-                for path in self.file_results:
-                    button = Gtk.Button(label=_t("Fichier · ") + str(path.relative_to(Path.home())))
-                    on_click(button, lambda target=path: self.open_file(target))
-                    self.content.pack_start(button, False, False, 0)
-                if len(self.file_results) == 30:
-                    self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
-            if not self.results and not (query and (self.file_results or any(query in fold(label) for label, _ in SETTINGS))):
+            if self.file_results:
+                heading = Gtk.Label(label=_t("Documents"), xalign=0, margin_top=10)
+                heading.get_style_context().add_class("heading")
+                self.content.pack_start(heading, False, False, 0)
+            for path in self.file_results:
+                relative = str(path.relative_to(Path.home()))
+                folder = str(path.parent.relative_to(Path.home()))
+                button = self.result_button(path.name, file_icon(path), _t("Fichier · ") + relative, subtitle="~" if folder == "." else "~/" + folder)
+                on_click(button, lambda target=path: self.open_file(target))
+                button.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
+                self.content.pack_start(button, False, False, 0)
+            if len(self.file_results) == 30:
+                self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
+            if not self.results and not (query and (self.file_results or pages)):
                 self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
@@ -768,16 +895,51 @@ def rank(text, query):
     return 2
 
 
+def file_icon(path):
+    """Icône du type de fichier (dossier, image, document…)."""
+    try:
+        if path.is_dir(): return Gio.ThemedIcon.new("folder")
+        content_type, _ = Gio.content_type_guess(path.name, None)
+        return Gio.content_type_get_icon(content_type)
+    except (OSError, TypeError, GLib.Error):
+        return Gio.ThemedIcon.new("text-x-generic")
+
+
+def words(text):
+    """Texte replié (sans accents ni casse) en mots : « Wi-Fi » → « wi fi »."""
+    return re.sub(r"[^\w]+|_", " ", fold(text)).strip()
+
+
+def found_in(query, text):
+    """Chaque mot de la recherche commence un mot du texte, dans n'importe quel
+    ordre ; « wifi » trouve aussi « Wi-Fi » (mots voisins recollés)."""
+    query, tokens = words(query).split(), words(text).split()
+    if not query: return False
+    # Début de mot, comme Windows : « son » trouve Son, pas « personnalisation ».
+    if all(any(token.startswith(word) for token in tokens) for word in query): return True
+    joined = "".join(query)
+    return any("".join(tokens[index:index + 3]).startswith(joined) for index in range(len(tokens)))
+
+
 def settings_for(query):
-    """Pages des Paramètres trouvées, les mieux classées d'abord."""
-    return sorted(((label, page) for label, page in SETTINGS if query in fold(label)), key=lambda item: rank(item[0], query))
+    """Pages des Paramètres trouvées (titre traduit, titre français et mots-clés
+    des quatre langues), les mieux classées d'abord : titre puis mots-clés."""
+    found = []
+    for (label, page), (_, french, keywords) in zip(SETTINGS, SETTINGS_INDEX):
+        if found_in(query, label) or found_in(query, french):
+            found.append((rank(label, query), label, page))
+        elif found_in(query, keywords):
+            found.append((3, label, page))
+    return [(label, page) for _, label, page in sorted(found, key=lambda item: (item[0], fold(item[1])))]
 
 
 def matches(app, query):
-    """Nom affiché ou mot-clé du lanceur (« boutique » trouve le Store)."""
-    if query in fold(app.get_display_name()): return True
+    """Nom affiché, nom générique ou mot-clé du lanceur (« boutique » trouve le Store)."""
+    if not query: return True
+    if found_in(query, app.get_display_name()): return True
     keywords = app.get_keywords() if hasattr(app, "get_keywords") else []
-    return bool(query) and any(query in fold(word) for word in keywords or [])
+    generic = app.get_generic_name() if hasattr(app, "get_generic_name") else ""
+    return found_in(query, " ".join(list(keywords or []) + [generic or ""]))
 
 
 def auto_pin(state, apps):

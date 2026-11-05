@@ -90,6 +90,7 @@ const GL_LINE_STRIP_ADJACENCY: u32 = 0x000B;
 const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
 const GL_TEXTURE_MAX_LEVEL: u32 = 0x813D;
+const GL_TEXTURE_BASE_LEVEL: u32 = 0x813C;
 
 /// Étages suivis : VS, PS, GS.
 pub(super) const STAGES: [Stage; 3] = [Stage::Vertex, Stage::Pixel, Stage::Geometry];
@@ -565,6 +566,10 @@ unsafe fn program(g: &gl::GlFunctions, vs: u32, ps: u32, gs: u32) -> gl::GLuint 
             "édition de liens refusée : {}",
             String::from_utf8_lossy(&buf)
         );
+        // Mémorisé à 0 : les tirages avec ce trio sont sautés.
+        (g.DeleteProgram)(prog);
+        map.insert((vs, ps, gs), 0);
+        return 0;
     }
     map.insert((vs, ps, gs), prog);
     prog
@@ -590,7 +595,7 @@ pub(super) struct ConstantBuffer {
 pub(super) struct State {
     pub shaders: [BoundShader; 3],
     pub cbs: [[ConstantBuffer; MAX_CB]; 3],
-    pub srvs: [[gl::GLuint; MAX_SRV]; 3],
+    pub srvs: [[SrvBinding; MAX_SRV]; 3],
     pub samplers: [[usize; MAX_SAMPLER]; 3],
     pub vbs: [(gl::GLuint, u32, u32); MAX_VB],
     pub index_buffer: gl::GLuint,
@@ -609,7 +614,7 @@ impl Default for State {
         State {
             shaders: [BoundShader::default(); 3],
             cbs: [[ConstantBuffer::default(); MAX_CB]; 3],
-            srvs: [[0; MAX_SRV]; 3],
+            srvs: [[SrvBinding::default(); MAX_SRV]; 3],
             samplers: [[0; MAX_SAMPLER]; 3],
             vbs: [(0, 0, 0); MAX_VB],
             index_buffer: 0,
@@ -625,9 +630,62 @@ impl Default for State {
     }
 }
 
+/// Vue de ressource liée : texture et niveaux de mip visibles. ANGLE crée
+/// ses vues avec MipLevels=1 sur des textures à mips dont seul le niveau 0
+/// est rempli : sans cette limite, une texture réduite à l'écran lit un
+/// niveau vide et ne dessine rien (#516).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct SrvBinding {
+    pub tex: gl::GLuint,
+    /// Cible GL (2D, 2D_ARRAY, CUBE…), 0 = GL_TEXTURE_2D.
+    pub target: gl::GLenum,
+    /// Vue GL dédiée (glTextureView) : niveaux déjà délimités.
+    pub view: bool,
+    pub base: i32,
+    pub max: i32,
+}
+
+impl SrvBinding {
+    /// D'après le descripteur D3D11 de la vue (Texture2D, Texture2DArray,
+    /// TextureCube : MostDetailedMip puis MipLevels, -1 = jusqu'au bout).
+    pub(super) unsafe fn of_view(view: *mut SimpleComObj) -> Self {
+        let tex = (*view).resource_tex;
+        let d = (*view).view_desc;
+        let res = as_texture2d((*view).view_resource);
+        let levels = res.map_or(1, |t| (*t).desc.mip_levels.max(1));
+        // Vue GL dédiée : sa cible est celle de la vue D3D ; sinon la
+        // texture est liée avec sa propre cible.
+        let view_tex = res.is_some_and(|t| (*t).gl_texture != tex);
+        let target = match res {
+            Some(_) if view_tex => super::srv_target(d[1]),
+            Some(t) => (*t).gl_target,
+            None => GL_TEXTURE_2D,
+        };
+        let (base, count) = match d[1] {
+            4 | 5 | 9 | 10 => (d[2], d[3]),
+            _ => (0, u32::MAX),
+        };
+        let base = base.min(levels - 1);
+        let last = if count == u32::MAX || count == 0 {
+            levels - 1
+        } else {
+            (base + count - 1).min(levels - 1)
+        };
+        SrvBinding {
+            tex,
+            target,
+            view: view_tex,
+            base: base as i32,
+            max: last as i32,
+        }
+    }
+}
+
 thread_local! {
-    /// Un VAO par thread : les VAO ne se partagent pas entre contextes GL.
-    static VAO: Cell<gl::GLuint> = const { Cell::new(0) };
+    /// Un VAO par contexte GL (ils ne se partagent pas) : (contexte, VAO).
+    /// Un thread peut changer de contexte, par exemple quand la chaîne
+    /// d'échange est créée après le premier tirage (#509).
+    static VAO: Cell<(usize, gl::GLuint)> = const { Cell::new((0, 0)) };
     /// Attributs activés au tirage précédent.
     static ENABLED: Cell<u32> = const { Cell::new(0) };
     /// Échantillonneur par défaut de ce contexte.
@@ -790,23 +848,37 @@ unsafe fn apply_fixed_function(g: &gl::GlFunctions, s: &State) {
 }
 
 /// Lie programme, sommets, tampons de constantes, textures et états avant
-/// un tirage. Faux si aucun vertex shader traduit n'est en place.
+/// un tirage. Faux (tirage sauté) sans vertex shader traduit, quand un
+/// pixel ou geometry shader lié n'a pas pu être traduit, ou quand
+/// l'édition de liens échoue.
 pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
     let [vs, ps, gs] = s.shaders;
-    if vs.gl == 0 {
+    if vs.gl == 0 || (ps.obj != 0 && ps.gl == 0) || (gs.obj != 0 && gs.gl == 0) {
         return false;
     }
     let prog = program(g, vs.gl, ps.gl, gs.gl);
+    if prog == 0 {
+        return false;
+    }
     (g.UseProgram)(prog);
 
     // Sommets.
     let vao = VAO.with(|v| {
-        if v.get() == 0 {
-            let mut id = 0;
-            (g.GenVertexArrays)(1, &mut id);
-            v.set(id);
+        let context = crate::dlls::dxgi::current_binding().context;
+        let (owner, id) = v.get();
+        if id != 0 && owner == context {
+            return id;
         }
-        v.get()
+        let mut id = 0;
+        (g.GenVertexArrays)(1, &mut id);
+        v.set((context, id));
+        // Nouveau contexte : sommet provoquant en premier, comme Direct3D
+        // (attributs nointerpolation pris sur le premier sommet).
+        const GL_FIRST_VERTEX_CONVENTION: u32 = 0x8E4D;
+        (g.ProvokingVertex)(GL_FIRST_VERTEX_CONVENTION);
+        // Nouveau VAO : aucun attribut n'y est encore activé.
+        ENABLED.with(|e| e.set(0));
+        id
     });
     (g.BindVertexArray)(vao);
     let inputs: Vec<SigElement> = match meta(vs.obj as *mut c_void).as_deref() {
@@ -901,10 +973,19 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
             Some(Meta::Shader { pairs, .. }) => pairs.clone(),
             _ => Vec::new(),
         };
-        for (t, &tex) in s.srvs[i].iter().enumerate() {
+        for (t, srv) in s.srvs[i].iter().enumerate() {
             let unit = base + t as u32;
             (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
-            (g.BindTexture)(GL_TEXTURE_2D, tex);
+            let target = if srv.target == 0 {
+                GL_TEXTURE_2D
+            } else {
+                srv.target
+            };
+            (g.BindTexture)(target, srv.tex);
+            if srv.tex != 0 && !srv.view {
+                (g.TexParameteri)(target, GL_TEXTURE_BASE_LEVEL, srv.base);
+                (g.TexParameteri)(target, GL_TEXTURE_MAX_LEVEL, srv.max);
+            }
             let sampler_slot = pairs.iter().find(|p| p.0 == t as u32).map(|p| p.1 as usize);
             let sampler = sampler_slot
                 .and_then(|n| s.samplers[i].get(n).copied())
@@ -990,10 +1071,6 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
     } else {
         as_texture2d((*dsv).view_resource)
     };
-    let (id, stencil) = match tex {
-        Some(t) => ((*t).gl_texture, super::dxgi_has_stencil((*t).desc.format)),
-        None => (0, false),
-    };
     (g.FramebufferTexture2D)(
         GL_FRAMEBUFFER,
         GL_DEPTH_STENCIL_ATTACHMENT,
@@ -1001,12 +1078,23 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
         0,
         0,
     );
-    let point = if stencil {
-        GL_DEPTH_STENCIL_ATTACHMENT
-    } else {
-        GL_DEPTH_ATTACHMENT
-    };
-    (g.FramebufferTexture2D)(GL_FRAMEBUFFER, point, GL_TEXTURE_2D, id, 0);
+    if let Some(t) = tex {
+        let point = if super::dxgi_has_stencil((*t).desc.format) {
+            GL_DEPTH_STENCIL_ATTACHMENT
+        } else {
+            GL_DEPTH_ATTACHMENT
+        };
+        // D3D11_DEPTH_STENCIL_VIEW_DESC : Format, ViewDimension, Flags,
+        // MipSlice, puis FirstArraySlice pour un tableau (4) : une cascade
+        // d'ombre est une tranche (#519).
+        let d = (*dsv).view_desc;
+        let (mip, layer) = match d[1] {
+            3 => (d[3], 0),
+            4 => (d[3], d[4]),
+            _ => (0, 0),
+        };
+        super::attach_texture(g, point, &*t, mip, layer);
+    }
     // Cadre incomplet : plus rien ne se dessine. Signalé une fois par état.
     static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let status = (g.CheckFramebufferStatus)(GL_FRAMEBUFFER);
@@ -1080,7 +1168,8 @@ unsafe fn set_srvs(
             } else {
                 *views.add(i)
             };
-            s.srvs[stage][slot] = as_simple(v).map_or(0, |o| (*o).resource_tex);
+            s.srvs[stage][slot] =
+                as_simple(v).map_or(SrvBinding::default(), |o| SrvBinding::of_view(o));
         }
     });
 }

@@ -27,6 +27,12 @@
          répondait qu'un peu plus tard). -->
     <keybind key="C-A-t"><action name="Execute"><command>winlux-terminal</command></action></keybind>
     <keybind key="W-space"><action name="Execute"><command>winlux-start-menu</command></action></keybind>
+    <!-- Raccourcis courants de Windows (#474) : Paramètres, recherche, Exécuter, accès rapide, affichage. -->
+    <keybind key="W-i"><action name="Execute"><command>winlux-shell-app settings</command></action></keybind>
+    <keybind key="W-s"><action name="Execute"><command>winlux-start-menu</command></action></keybind>
+    <keybind key="W-r"><action name="Execute"><command>winlux-run</command></action></keybind>
+    <keybind key="W-x"><action name="ShowMenu"><menu>winlux-quick-link</menu></action></keybind>
+    <keybind key="W-p"><action name="Execute"><command>winlux-shell-app settings 8</command></action></keybind>
     <keybind key="C-S-Escape"><action name="Execute"><command>winlux-shell-app taskmgr</command></action></keybind>
     <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>
     <keybind key="W-n"><action name="Execute"><command>winlux-popup notifications</command></action></keybind>

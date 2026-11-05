@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     keys = shortcuts(home)
     ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil neuf : Windows+E ouvre l'Explorateur Winlux")
-    ok(keys.get("<Super>r") == "winlux-start-menu", "profil neuf : Windows+R ouvre le menu Démarrer")
+    ok(keys.get("<Super>r") == "winlux-run", "profil neuf : Windows+R ouvre la boîte Exécuter")
     ok(keys.get("<Super>p") == "winlux-shell-app settings 8", "profil neuf : Windows+P ouvre Paramètres > Écran")
     ok(keys.get("<Primary><Alt>l") == "winlux-lock now", "profil neuf : Ctrl+Alt+L verrouille")
     ok(keys.get("<Primary><Shift>Escape") == "winlux-system-tools tasks", "profil neuf : Ctrl+Maj+Échap ouvre le Gestionnaire des tâches")
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     keys = shortcuts(home)
     ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil existant : Windows+E migré vers l'Explorateur")
-    ok(keys.get("<Super>r") == "winlux-start-menu", "profil existant : Windows+R migré (option startup-notify retirée)")
+    ok(keys.get("<Super>r") == "winlux-run", "profil existant : Windows+R migré vers Exécuter (option startup-notify retirée)")
     ok(keys.get("<Super>p") == "mon-outil", "profil existant : un raccourci personnalisé est conservé")
     ok("Print" not in keys, "profil existant : Impr écran vers un programme absent retiré")
 
@@ -405,15 +405,19 @@ ok(shipped_rc.findtext(f"{OB}mouse/{OB}screenEdgeWarpTime") == "0",
 ok(all("winlux-snap watch" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "ancrage à la souris lancé avec la session (compte et live)")
 
+# ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
+for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
+    ok([p for _, p in menu["settings_for"](query)][:1] == [page], f"recherche « {query} » : page {page} des Paramètres")
+
 # ── Bureaux virtuels dans la barre (#459) ────────────────────────────────
 with tempfile.TemporaryDirectory() as directory:
     home = Path(directory)
     native_config(home)
     panel = ET.parse(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
     order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
-    button = panel.find(f".//property[@name='plugin-{order[order.index('1') + 1]}']/property[@name='items']/value")
-    ok(button is not None and button.get("value").endswith("winlux-taskview.desktop"),
-       "profil neuf : bouton Vue des tâches juste après Démarrer")
+    after = [panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value") for number in order[order.index('1') + 1:order.index('1') + 3]]
+    ok([item.get("value").rsplit("/", 1)[-1] if item is not None else None for item in after] == ["winlux-search.desktop", "winlux-taskview.desktop"],
+       "profil neuf : boutons Rechercher et Vue des tâches juste après Démarrer")
     ok(panel.find(".//property[@name='all-workspaces']").get("value") == "false",
        "profil neuf : la barre ne montre que les fenêtres du bureau en cours")
     rc = ET.parse(home / ".config/openbox/rc.xml").getroot()

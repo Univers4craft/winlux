@@ -97,9 +97,11 @@ lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/d3d11_msvc.
 # Rendu Direct3D 11 depuis du HLSL source (D3DCompile, #463).
 printf 'LIBRARY d3dcompiler_47.dll\nEXPORTS\nD3DCompile\n' >"$tmp/d3dcompiler.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/d3dcompiler.def" -l "$tmp/d3dcompiler.lib"
+printf 'LIBRARY dxgi.dll\nEXPORTS\nCreateDXGIFactory1\n' >"$tmp/dxgi.def"
+llvm-dlltool -m i386:x86-64 -d "$tmp/dxgi.def" -l "$tmp/dxgi.lib"
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hlsl_msvc.c" -o "$tmp/hlsl_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hlsl_msvc.obj" \
-    "$tmp/kernel32_d3d11.lib" "$tmp/d3d11.lib" "$tmp/d3dcompiler.lib" /out:"$out/hlsl_msvc.exe"
+    "$tmp/kernel32_d3d11.lib" "$tmp/d3d11.lib" "$tmp/d3dcompiler.lib" "$tmp/dxgi.lib" /out:"$out/hlsl_msvc.exe"
 # winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nGetLastError\nCreateFileW\nCloseHandle\n' >"$tmp/kernel32_winusb.def"
 printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupDiGetClassDevsW\nSetupDiEnumDeviceInterfaces\nSetupDiGetDeviceInterfaceDetailW\nSetupDiDestroyDeviceInfoList\n' >"$tmp/setupapi_winusb.def"

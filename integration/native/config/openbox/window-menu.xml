@@ -4,4 +4,6 @@
      dossier du compte : un menu.xml copié à la création du compte reste figé. -->
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
  <menu id="winlux-window-menu" label="Fenêtre" execute="/usr/bin/winlux-force-close menu"/>
+ <!-- Windows + X : menu d'accès rapide (winlux-run menu), traduit lui aussi. -->
+ <menu id="winlux-quick-link" label="Accès rapide" execute="/usr/bin/winlux-run menu"/>
 </openbox_menu>

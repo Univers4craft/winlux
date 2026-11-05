@@ -112,7 +112,9 @@ assert {"W-C-S-Left", "W-C-S-Right"} <= set(namespace_globals["ADDED_KEYS"])
 panel_file = HERE.parent / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
 panel_root = ET.parse(panel_file).getroot()
 order = [value.get("value") for value in panel_root.find(".//property[@name='plugin-ids']")]
-assert order[order.index("1") + 1] == "14", order
+assert order[order.index("1") + 1: order.index("1") + 3] == ["15", "14"], order  # Rechercher, Vue des tâches
+assert panel_root.find(".//property[@name='plugin-15']/property[@name='items']/value").get("value") \
+    == "/usr/share/applications/winlux-search.desktop"
 assert panel_root.find(".//property[@name='plugin-14']/property[@name='items']/value").get("value") \
     == "/usr/share/applications/winlux-taskview.desktop"
 assert panel_root.find(".//property[@name='plugin-2']/property[@name='all-workspaces']").get("value") == "false"
@@ -140,8 +142,9 @@ with tempfile.TemporaryDirectory() as folder:
     assert migration["add_taskbar_buttons"](panel_xml, markers)
     root = ET.parse(panel_xml).getroot()
     order = [value.get("value") for value in root.find(".//property[@name='plugin-ids']")]
-    assert order == ["3", "13", "1", "15", "2", "8", "14", "7"], order  # 14 déjà pris (assistant…) : 15
-    assert root.find(".//property[@name='plugin-15']/property[@name='items']/value").get("value").endswith("winlux-taskview.desktop")
+    assert order == ["3", "13", "1", "15", "16", "2", "8", "14", "7"], order  # 14 déjà pris (assistant…)
+    assert root.find(".//property[@name='plugin-15']/property[@name='items']/value").get("value").endswith("winlux-search.desktop")
+    assert root.find(".//property[@name='plugin-16']/property[@name='items']/value").get("value").endswith("winlux-taskview.desktop")
     assert root.find(".//property[@name='all-workspaces']").get("value") == "false"
     # Bouton retiré par l'utilisateur, barre remise sur tous les bureaux : rien ne revient.
     panel_xml.write_text(old_panel)

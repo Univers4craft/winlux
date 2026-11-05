@@ -10,6 +10,8 @@ pub(crate) struct Parser {
     prog: Program,
     typedefs: HashMap<String, Ty>,
     row_major_default: bool,
+    /// Dernier `[maxvertexcount(N)]` lu.
+    max_vertex_count: u32,
 }
 
 type R<T> = Result<T, String>;
@@ -57,6 +59,7 @@ pub(crate) fn parse(tokens: Vec<Token>, row_major: bool) -> R<Program> {
         prog: Program::default(),
         typedefs: HashMap::new(),
         row_major_default: row_major,
+        max_vertex_count: 0,
     };
     while p.p < p.t.len() {
         p.top()?;
@@ -165,9 +168,17 @@ impl Parser {
         }
     }
 
-    /// Saute un attribut `[...]` (numthreads, unroll, loop…).
+    /// Saute un attribut `[...]` (numthreads, unroll, loop…) ; retient
+    /// `[maxvertexcount(N)]` pour la fonction qui suit.
     fn skip_attributes(&mut self) {
         while self.is("[") {
+            if let (Some(Tok::Ident(a)), Some(Tok::Punct("(")), Some(Tok::Int(n, _))) =
+                (self.peek_at(1), self.peek_at(2), self.peek_at(3))
+            {
+                if a == "maxvertexcount" {
+                    self.max_vertex_count = *n as u32;
+                }
+            }
             let mut depth = 0;
             while let Some(t) = self.peek() {
                 match t {
@@ -262,6 +273,17 @@ impl Parser {
             "void" => Ok(Ty::Void),
             "SamplerState" | "sampler" | "sampler_state" => Ok(Ty::Sampler(false)),
             "SamplerComparisonState" => Ok(Ty::Sampler(true)),
+            "PointStream" | "LineStream" | "TriangleStream" => {
+                let kind = match name.as_str() {
+                    "PointStream" => 0,
+                    "LineStream" => 1,
+                    _ => 2,
+                };
+                self.expect("<")?;
+                let t = self.ty()?;
+                self.expect(">")?;
+                Ok(Ty::Stream(kind, Box::new(t)))
+            }
             "vector" => {
                 if self.eat("<") {
                     let b = self.ty()?.base().ok_or("vector<> : type de base attendu")?;
@@ -573,14 +595,20 @@ impl Parser {
                 self.p += 2;
             } else {
                 loop {
-                    let m = self.mods();
+                    let mut m = self.mods();
                     // Primitive de geometry shader : « triangle Vert v[3] ».
+                    let mut prim = None;
                     if let Some(Tok::Ident(s)) = self.peek() {
                         if matches!(
                             s.as_str(),
                             "point" | "line" | "triangle" | "lineadj" | "triangleadj"
                         ) {
+                            prim = Some(s.clone());
                             self.p += 1;
+                            let more = self.mods();
+                            m.dir_in |= more.dir_in;
+                            m.dir_out |= more.dir_out;
+                            m.flat |= more.flat;
                         }
                     }
                     let base = self.ty()?;
@@ -595,6 +623,7 @@ impl Parser {
                     };
                     let (i, o) = (m.dir_in || m2.dir_in, m.dir_out || m2.dir_out);
                     params.push(Param {
+                        prim,
                         name: pname,
                         ty,
                         dir: match (i, o) {
@@ -621,11 +650,13 @@ impl Parser {
         } else {
             Some(self.block()?)
         };
+        let max_vertex_count = std::mem::take(&mut self.max_vertex_count);
         self.prog.funcs.push(Func {
             name,
             ret,
             ret_semantic,
             params,
+            max_vertex_count,
             body,
             line,
         });
