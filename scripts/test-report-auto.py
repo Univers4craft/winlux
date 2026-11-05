@@ -23,6 +23,8 @@ os.environ.update({
     "WINLUX_BUILD_INFO": str(tmp / "BUILD-INFO"),
     "WINLUX_TIME_CONF": str(tmp / "time.conf"),
     "WINLUX_REPORT_DELAY": "0",
+    "WINLUX_REPORT_TOKEN": str(tmp / "etc/report-token"),
+    "WINLUX_REPORT_ROOT_STATE": str(tmp / "root-state"),
 })
 for name in ("journal", "run", "pstore"):
     (tmp / name).mkdir()
@@ -47,11 +49,16 @@ for bad in ("bonjour", "ghp_court", ""):
         ok(False, f"jeton invalide refusé : {bad!r}")
     except SystemExit:
         pass
-ok(not g["USER_TOKEN"].exists(), "jeton invalide : rien d'écrit")
-TOKEN = "ghp_" + "A" * 36
+ok(not g["SYSTEM_TOKEN"].exists(), "jeton invalide : rien d'écrit")
+TOKEN = "github_pat_" + "A" * 40
 r["set_token"](TOKEN + "\n")
-ok(g["USER_TOKEN"].stat().st_mode & 0o777 == 0o600, "jeton personnel gardé en 0600")
-ok(r["auto_enabled"]() and r["transport"]() == "token", "jeton présent : envoi actif, par l'API")
+ok(g["SYSTEM_TOKEN"].stat().st_mode & 0o777 == 0o600, "jeton du système gardé en 0600")
+ok(r["auto_enabled"]() and r["transport"]() == "system", "jeton présent : envoi actif, par le relais root")
+source = Path(__file__).with_name("winlux-report.py").read_text()
+ok('"/etc/winlux/report-token"' in source, "jeton par défaut hors des dossiers des comptes : /etc/winlux/report-token")
+root_tool = runpy.run_path(str(Path(__file__).with_name("winlux-root.py")), run_name="root_test")
+ok(root_tool["control_level"](["report-token-set"]) == "admin" and root_tool["control_level"](["report-send"]) == "user"
+   and root_tool["control_level"](["report-auto-off"]) == "user", "relais root : jeton réservé aux administrateurs")
 r["set_value"]("auto=off")
 ok(not r["auto_enabled"](), "interrupteur coupé dans Paramètres : rien ne part")
 r["set_value"]("auto=on")
@@ -102,6 +109,12 @@ class Fake(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         calls.append(("GET", self.path, self.headers.get("Authorization"), None))
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/steal")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.reply({"items": []})
 
     def do_POST(self):
@@ -116,30 +129,65 @@ class Fake(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# Le relais root est simulé dans le même processus (winlux-root control report-send).
+g["hand_to_root"] = lambda item: g["send_item"](json.loads(json.dumps(item)))
+
 # Réseau absent : la file attend.
-g["API"] = "http://127.0.0.1:9"
+g["SYSTEM_API"] = "http://127.0.0.1:9"
 ok(r["flush"]() is None and r["queue_size"]() == 2, "réseau absent : rien perdu, nouvel essai plus tard")
 
 server = http.server.HTTPServer(("127.0.0.1", 0), Fake)
 threading.Thread(target=server.serve_forever, daemon=True).start()
-g["API"] = f"http://127.0.0.1:{server.server_port}"
+g["SYSTEM_API"] = f"http://127.0.0.1:{server.server_port}"
 ok(r["flush"]() == 2 and r["queue_size"]() == 0, "réseau revenu : file vidée")
 posts = [c for c in calls if c[0] == "POST"]
 ok(len(posts) == 1 and posts[0][1].endswith("/issues") and posts[0][2] == f"Bearer {TOKEN}",
    "même plantage deux fois : une seule issue, avec le jeton")
 ok(any(c[0] == "GET" and "search/issues" in c[1] for c in calls), "recherche de l'issue existante par signature")
-sent = json.loads((g["AUTO_DIR"] / "sent.json").read_text())
+sent = json.loads((g["ROOT_STATE"] / "sent.json").read_text())
 sig = item["signature"]
 ok(sent[sig]["issue"] == 7 and sent[sig]["pending"] == 1, "seconde occurrence comptée, pas d'envoi en rafale")
 
 # Le lendemain : une nouvelle occurrence devient un commentaire sur #7.
 sent[sig]["last"] -= 2 * 86400
-(g["AUTO_DIR"] / "sent.json").write_text(json.dumps(sent))
+(g["ROOT_STATE"] / "sent.json").write_text(json.dumps(sent))
 (tmp / "journal/crash.log").write_text(LOG.replace("ts=100", "ts=300").replace("pid=42", "pid=44"))
 calls.clear()
 ok(r["collect"]() == 1 and r["flush"]() == 1, "nouvelle occurrence envoyée")
 ok(len(calls) == 1 and calls[0][1].endswith("/issues/7/comments")
    and "Occurrences depuis le dernier envoi : 2" in calls[0][3]["body"], "commentaire sur l'issue existante")
+
+# Le jeton ne part que vers GitHub et n'apparaît dans aucun fichier du compte.
+leaked = [p for p in (tmp / "state").rglob("*") if p.is_file() and TOKEN in p.read_text(errors="replace")]
+ok(not leaked, "jeton absent des journaux, de la file et des rapports")
+
+# Rapport fabriqué par un .exe : refusé ou neutralisé par root.
+good = json.loads(json.dumps(item))
+for forged, label in ((dict(good, title="Achetez maintenant"), "titre libre"),
+                      (dict(good, signature="wlx-zzz"), "signature invalide"),
+                      (dict(good, body="pas de signature"), "corps sans signature"),
+                      ("texte", "pas un rapport")):
+    ok(r["send_item"](forged) == 65, f"rapport fabriqué refusé : {label}")
+clean = r["check_item"](dict(good, labels=good["labels"] + ["admin", "wontfix"],
+                             body=good["body"] + f" @damien {TOKEN} password=secret1"), TOKEN)
+ok("admin" not in clean["labels"] and "@\u200bdamien" in clean["body"], "étiquettes inconnues retirées, mentions neutralisées")
+ok(TOKEN not in clean["body"] and "secret1" not in clean["body"], "jeton et mots de passe retirés par root")
+
+# Budget root : au plus 10 envois par démarrage, quel que soit le demandeur.
+budget = {"boot": r["read_text"]("/proc/sys/kernel/random/boot_id"), "count": g["ROOT_MAX_PER_BOOT"], "days": []}
+(g["ROOT_STATE"] / "budget.json").write_text(json.dumps(budget))
+ok(r["send_item"](dict(good, signature="wlx-" + "1" * 12, body=good["body"].replace(good["signature"], "wlx-" + "1" * 12),
+                       comment=good["comment"].replace(good["signature"], "wlx-" + "1" * 12))) == 75,
+   "budget de démarrage épuisé : envoi reporté")
+(g["ROOT_STATE"] / "budget.json").unlink()
+
+# Une redirection ne reçoit jamais le jeton.
+try:
+    r["http"]("GET", f"{g['SYSTEM_API']}/redirect", token=TOKEN)
+    ok(False, "redirection refusée")
+except Exception:
+    pass
+ok(not any(c[1] == "/steal" for c in calls), "redirection non suivie avec le jeton")
 
 # Limite par session.
 g["_sent_this_run"][0] = g["AUTO_MAX_SENDS"]

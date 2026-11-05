@@ -413,6 +413,9 @@ installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"crash_reports": True' in installer and "write_report_choice(etc" in installer
    and installer.count('"crash_reports":') >= 7,
    "installateur : case « envoyer les plantages » proposée cochée, traduite, écrite dans report.conf")
+ok("report-token-set) winlux-report --set-token" in (SCRIPTS / "winlux-control.sh").read_text()
+   and 'input=entry.get_text()' in (SCRIPTS / "winlux-settings-pages.py").read_text(),
+   "jeton GitHub : passé à root par l'entrée standard, jamais en argument ni dans le compte")
 ok("report-auto-on|report-auto-off" in (SCRIPTS / "winlux-control.sh").read_text()
    and "report-auto-on" in (SCRIPTS / "winlux-settings-pages.py").read_text(),
    "Paramètres > Signaler un problème : interrupteur de l'envoi automatique")

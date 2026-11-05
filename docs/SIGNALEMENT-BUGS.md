@@ -89,9 +89,8 @@ n'ouvre aucune fenêtre.
 - **Contenu** : toujours anonymisé, quel que soit le réglage « Masquer » ; en
   français ; étiquettes `bug`, `signalement-utilisateur`, `plantage`…, plus
   `urgence:2-confort` (`urgence:1-quotidien` pour un arrêt du système).
-- **Cible** : le relais si `RELAY=https://…`, sinon le jeton personnel collé
-  dans Paramètres > Signaler un problème > « Jeton GitHub… »
-  (`~/.config/winlux/report-token`, 0600, propre au compte). Sans l'un ni
+- **Cible** : le relais si `RELAY=https://…`, sinon le jeton GitHub du
+  système (Paramètres > Signaler un problème > « Jeton GitHub… »). Sans l'un ni
   l'autre, les rapports restent dans la file.
 - **Réglage** : `AUTO=on|off|default` dans `/etc/winlux/report.conf`. La case de
   l'installateur (cochée par défaut, `account.crash_reports` en installation
@@ -99,6 +98,32 @@ n'ouvre aucune fenêtre.
   actif seulement si un jeton personnel est présent.
 - **Suivi** : `winlux-report --auto-status`, journal
   `~/.local/state/winlux/auto-report/journal.log`.
+
+### Protection du jeton
+
+- Stocké dans `/etc/winlux/report-token`, propriétaire root, droits 0600 : ni le
+  compte ni les `.exe` qu'il lance ne peuvent le lire. Il n'est ni dans le
+  dossier du compte, ni dans le registre des programmes Windows, ni dans
+  l'image ISO.
+- Saisi dans Paramètres, il passe à root par l'entrée standard (jamais en
+  argument de commande, donc invisible dans la liste des processus) après
+  confirmation d'un administrateur (`report-token-set`, niveau admin du relais).
+- Les comptes remettent leurs rapports au relais root (`winlux-root control
+  report-send`, sur l'entrée standard). Root vérifie la forme (titre, signature
+  `wlx-…`, étiquettes connues, tailles), neutralise les `@mentions`, masque à
+  nouveau les données personnelles, retire le jeton s'il apparaissait, et
+  envoie au plus 10 rapports par démarrage et 30 par jour : un programme qui
+  fabriquerait de faux rapports ne peut ni lire le jeton ni inonder le dépôt.
+- Il ne part que vers `https://api.github.com` (adresse fixe côté root, sans
+  suivre de redirection) et n'est jamais écrit dans un journal.
+- Portée : jeton « fine-grained » limité au dépôt `Univers4craft/winlux`,
+  permission Issues seulement, avec une date d'expiration. S'il fuitait, il ne
+  permettrait que de créer, modifier ou fermer des issues de ce dépôt, et se
+  révoque en un clic sur GitHub.
+- Limite assumée : root peut toujours lire ce jeton. Le chiffrer sur la même
+  machine ne change rien face à root, qui lit aussi la clé (même scellée dans
+  le TPM, root peut demander à la desceller). Contre le vol de l'ordinateur,
+  la protection réelle est le chiffrement du disque proposé par l'installateur.
 
 ## Envoi sans compte GitHub : le choix
 

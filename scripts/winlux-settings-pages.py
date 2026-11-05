@@ -229,7 +229,9 @@ _TR = {
     'Jeton GitHub': ('GitHub token', 'Token de GitHub', 'GitHub-Token'),
     'Oublier le jeton': ('Forget the token', 'Olvidar el token', 'Token vergessen'),
     'Jeton « fine-grained » limité au dépôt Univers4craft/winlux, permission Issues en lecture et écriture.': ('Fine-grained token limited to the Univers4craft/winlux repository, Issues permission read and write.', 'Token «fine-grained» limitado al repositorio Univers4craft/winlux, permiso Issues de lectura y escritura.', '„Fine-grained“-Token, auf das Repository Univers4craft/winlux beschränkt, Berechtigung Issues Lesen und Schreiben.'),
-    'Ce jeton n’a pas la forme d’un jeton GitHub.': ('This does not look like a GitHub token.', 'Esto no parece un token de GitHub.', 'Das sieht nicht wie ein GitHub-Token aus.'),
+    'Jeton refusé : vérifiez qu’il commence par github_pat_ et que l’administrateur a confirmé.': ('Token refused: check that it starts with github_pat_ and that the administrator confirmed.', 'Token rechazado: compruebe que empieza por github_pat_ y que el administrador lo ha confirmado.', 'Token abgelehnt: Prüfen Sie, dass es mit github_pat_ beginnt und der Administrator bestätigt hat.'),
+    'Créer le jeton sur GitHub': ('Create the token on GitHub', 'Crear el token en GitHub', 'Token auf GitHub erstellen'),
+    'Seul le système le lit : ni votre compte ni les programmes Windows n’y ont accès.': ('Only the system reads it: neither your account nor Windows programs can access it.', 'Solo el sistema lo lee: ni su cuenta ni los programas de Windows tienen acceso.', 'Nur das System liest es: Weder Ihr Konto noch Windows-Programme haben Zugriff.'),
     'Envoi du rapport': ('Sending the report', 'Envío del informe', 'Senden des Berichts'),
     'Explorateur': ('File Explorer', 'Explorador', 'Explorer'),
     'Exporter mes réglages': ('Export my settings', 'Exportar mi configuración', 'Meine Einstellungen exportieren'),
@@ -768,7 +770,14 @@ OVERLAY_KEYS = (("shift-f12", "Maj + F12"), ("ctrl-shift-o", "Ctrl + Maj + O"), 
 OVERLAY_POSITIONS = (("top-left", "En haut à gauche"), ("top-right", "En haut à droite"),
                      ("bottom-left", "En bas à gauche"), ("bottom-right", "En bas à droite"))
 def report_token_file():
-    return Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/report-token"
+    return Path(os.environ.get("WINLUX_REPORT_TOKEN", "/etc/winlux/report-token"))
+
+
+# Création guidée du jeton : nom, description et permission préremplis ; le
+# dépôt Univers4craft/winlux reste à choisir (« Only select repositories »).
+REPORT_TOKEN_URL = ("https://github.com/settings/personal-access-tokens/new?name=winlux-plantages"
+                    "&description=Envoi%20automatique%20des%20plantages%20Winlux&target_name=Univers4craft"
+                    "&expires_in=365&issues=write")
 
 
 def report_queue_size():
@@ -2803,10 +2812,10 @@ class ExtraPages:
         self.combo(box, _t("Envoi du rapport"), [(k, _t(v)) for k, v in REPORT_MODES], mode,
                    lambda value: self.execute("report-mode-" + value))
         # Envoi automatique des plantages (#438) : AUTO=default = actif
-        # seulement avec un jeton personnel ; l'installateur règle on/off.
-        token = report_token_file()
+        # seulement avec le jeton du système ; l'installateur règle on/off.
+        token = status.get("report_token") == "1" or report_token_file().exists()
         setting = status.get("report_auto") or "default"
-        active = setting == "on" or (setting == "default" and token.is_file())
+        active = setting == "on" or (setting == "default" and token)
         self.section(_t("Envoi automatique des plantages"))
         box = self.card()
         self.switch(box, _t("Envoyer automatiquement les plantages"), active,
@@ -2816,15 +2825,15 @@ class ExtraPages:
         if waiting:
             self.row(box, _t("Rapports en attente d’envoi"), Gtk.Label(label=str(waiting)),
                      _t("Ils partiront au prochain démarrage connecté à Internet."))
-        if not token.is_file() and status.get("report_relay") != "1":
+        if not token and status.get("report_relay") != "1":
             self.hint(_t("Aucun service d’envoi n’est encore configuré : les rapports restent sur ce PC. Un développeur peut ajouter son jeton GitHub ci-dessous."), box)
         self.actions(box, [(_t("Jeton GitHub…"), self.report_token_dialog),
-                           (_t("Oublier le jeton"), lambda: (self.tool(["winlux-report", "--forget-token"])),
-                            token.is_file())])
+                           (_t("Oublier le jeton"), lambda: self.execute("report-token-forget"), token)])
 
     def report_token_dialog(self):
-        """Jeton GitHub personnel (droit Issues : lecture et écriture),
-        gardé dans le compte en 0600, jamais dans l’image."""
+        """Jeton GitHub du système (droit Issues : lecture et écriture) : passé
+        à root par l’entrée standard, gardé en 0600 root, jamais lisible par
+        un compte ni par un .exe."""
         dialog = Gtk.Dialog(title=_t("Jeton GitHub"), transient_for=self, modal=True)
         dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
         dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
@@ -2833,18 +2842,24 @@ class ExtraPages:
         area.set_spacing(8)
         area.set_border_width(16)
         self.hint(_t("Jeton « fine-grained » limité au dépôt Univers4craft/winlux, permission Issues en lecture et écriture."), area)
+        create = Gtk.Button(label=_t("Créer le jeton sur GitHub"))
+        create.connect("clicked", lambda *_: self.spawn(["xdg-open", REPORT_TOKEN_URL]))
+        create.set_halign(Gtk.Align.START)
+        area.pack_start(create, False, False, 0)
         entry = Gtk.Entry(visibility=False, activates_default=True)
         entry.get_accessible().set_name(_t("Jeton GitHub"))
         area.pack_start(entry, False, False, 0)
+        self.hint(_t("Seul le système le lit : ni votre compte ni les programmes Windows n’y ont accès."), area)
         error = Gtk.Label(xalign=0, wrap=True)
         area.pack_start(error, False, False, 0)
         dialog.show_all()
         while dialog.run() == Gtk.ResponseType.OK:
-            result = subprocess.run(["winlux-report", "--set-token"], input=entry.get_text(),
+            result = subprocess.run(["winlux-control", "report-token-set"], input=entry.get_text() + "\n",
                                     capture_output=True, text=True)
+            entry.set_text("")
             if result.returncode == 0:
                 break
-            error.set_text(_t("Ce jeton n’a pas la forme d’un jeton GitHub."))
+            error.set_text(_t("Jeton refusé : vérifiez qu’il commence par github_pat_ et que l’administrateur a confirmé."))
         dialog.destroy()
         self.extra_refresh()
 
