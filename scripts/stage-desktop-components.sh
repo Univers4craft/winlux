@@ -44,7 +44,7 @@ cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkM
 # comptes créés par Winlux) pilotent le réseau, comme sous Windows.
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-certificates winlux-force-close winlux-close-watch winlux-phone; do
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-certificates winlux-force-close winlux-close-watch winlux-phone winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -60,6 +60,9 @@ mkdir -p "$stage/usr/share/winlux/native"
 cp -a "$project/integration/native/." "$stage/usr/share/winlux/native/"
 mkdir -p "$stage/usr/share/dbus-1/services"
 cp "$project/integration/native/dbus/org.freedesktop.Notifications.service" "$stage/usr/share/dbus-1/services/"
+# Vidéo et jeux sans économiseur : xscreensaver-systemd s'arrête sans logind,
+# Winlux répond lui-même à org.freedesktop.ScreenSaver.Inhibit.
+cp "$project/integration/native/dbus/org.freedesktop.ScreenSaver.service" "$stage/usr/share/dbus-1/services/"
 # « Afficher dans le dossier » des navigateurs et des applications passe par
 # org.freedesktop.FileManager1 : c'est l'Explorateur Winlux, plus Thunar
 # (org.xfce.Thunar.FileManager1.service retiré, un seul fournisseur).

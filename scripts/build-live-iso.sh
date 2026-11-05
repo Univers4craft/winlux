@@ -994,6 +994,17 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     # permitted ») : le second Xorg trouvait alors l'affichage pris
     # (« drmSetMaster: Device or resource busy ») et l'écran restait noir.
     # Un petit parent chef de sa propre session lui permet de réussir.
+    # Bus D-Bus système avant Xorg : sinon « (EE) dbus-core: error connecting
+    # to system bus » à chaque démarrage. Quelques millisecondes ; si le compte
+    # messagebus manque encore (premier démarrage), winlux-system-services le
+    # lance plus tard comme avant.
+    if test -x /usr/bin/dbus-daemon && ! test -S /run/dbus/system_bus_socket && /bin/busybox grep -q '^messagebus:' /etc/passwd; then
+        /bin/busybox mkdir -p /run/dbus /var/lib/dbus
+        /bin/busybox chmod 755 /run/dbus
+        /usr/bin/dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null || true
+        /bin/busybox chmod 644 /etc/machine-id 2>/dev/null || true
+        /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1 || true
+    fi
     xorg_args=':0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log'
     if command -v setsid >/dev/null 2>&1; then
         # shellcheck disable=SC2016
@@ -1130,14 +1141,20 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         lock_at_start=0
         test "$desktop_autologin" = 1 || lock_at_start=1
         quick_exits=0
+        session_limits=
+        test -x /usr/bin/prlimit && session_limits='/usr/bin/prlimit --rtprio=20 --nice=31'
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             session_started=$(/bin/busybox date +%s)
             # setsid : la session a son groupe de processus, arrêté d'un bloc.
+            # prlimit : priorité temps réel (20) et nice jusqu'à -11 pour
+            # PipeWire, sans RTKit (pas de systemd) : le son ne grésille plus
+            # sous charge et « RTKit error » ne remplit plus les journaux.
             setsid /usr/bin/env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR -u MAIL \
                 HOME="$user_home" USER="$desktop_user" LOGNAME="$desktop_user" SHELL=/bin/bash \
                 XDG_RUNTIME_DIR="/run/user/$user_uid" WINLUX_SESSION_USER="$desktop_user" \
                 WINLUX_PRIMARY_SESSION=1 WINLUX_LOCK_AT_START="$lock_at_start" \
                 WINLUX_SESSION_LOGS="/run/winlux/session-$desktop_user" \
+                $session_limits \
                 /usr/bin/setpriv --reuid="$user_uid" --regid="$user_gid" --init-groups \
                 /usr/bin/winlux-user-session >>"/run/winlux/session-$desktop_user.log" 2>&1 &
             session_pid=$!
