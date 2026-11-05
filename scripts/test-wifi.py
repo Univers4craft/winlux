@@ -445,7 +445,7 @@ def test_wiring():
        "tuiles Wi-Fi et mode avion : par le relais root (plus de « non autorisé »)")
     ok('["winlux-shell-app", "settings", "35"]' in (HERE / "winlux-welcome.py").read_text(),
        "Bienvenue : « Configurer le réseau » ouvre la page Wi-Fi")
-    ok('(_t("Réseau Wi-Fi"), 35)' in (HERE / "winlux-start-menu.py").read_text(), "menu Démarrer : « Réseau Wi-Fi » → page Wi-Fi")
+    ok('(35, "Wi-Fi", "wifi ' in (HERE / "winlux-start-menu.py").read_text(), "menu Démarrer : « Wi-Fi » → page Wi-Fi (index de recherche)")
     tools = (HERE / "winlux-system-tools.py").read_text()
     ok("nm-connection-editor" not in tools and "Se connecter au réseau sélectionné\"" not in tools.split("_TR = {")[1].split("}\n", 1)[1]
        and 'open_settings("35")' in tools and 'open_settings("22")' in tools,
