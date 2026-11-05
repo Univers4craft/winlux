@@ -87,13 +87,26 @@ if usable:
         script = f'''
 {sys.executable} -B {ROOT / "scripts/winlux-screensaver-inhibit.py"} &
 for i in $(seq 1 50); do gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.freedesktop.ScreenSaver 2>/dev/null | grep -q true && break; sleep 0.1; done
-gdbus call --session -d org.freedesktop.ScreenSaver -o /org/freedesktop/ScreenSaver -m org.freedesktop.ScreenSaver.Inhibit test video
-ls {tmp / "inhibit"}; echo "env=$WINLUX_POWER_INHIBIT_DIR"
+{sys.executable} -B -c "$CLIENT"
+sleep 1
+echo "après départ du client : [$(ls {tmp / "inhibit"})]"
 '''
+        # Client resté sur le bus (comme un navigateur pendant la vidéo) : la
+        # demande tient ; il part : elle tombe d'elle-même.
+        env["CLIENT"] = f"""
+import os
+from gi.repository import Gio, GLib
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+reply = bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                      "Inhibit", GLib.Variant("(ss)", ("test", "video")), None, 0, 5000, None)
+print("cookie", reply.unpack()[0])
+print("pendant :", os.listdir({str(tmp / "inhibit")!r}))
+"""
         out = subprocess.run(["dbus-run-session", "--", "sh", "-c", script], env=env, capture_output=True, text=True, timeout=60)
-        assert "(uint32 1,)" in out.stdout, out.stdout + out.stderr
-        assert "-screensaver" in out.stdout, out.stdout + out.stderr
+        assert "cookie 1" in out.stdout, out.stdout + out.stderr
+        assert "-screensaver']" in out.stdout, out.stdout + out.stderr
+        assert "après départ du client : []" in out.stdout, out.stdout + out.stderr
         assert "xscreensaver-command -deactivate" in log.read_text()
-    print("A7 : service réel sur un bus de session : Inhibit → cookie, économiseur réveillé, demande d'éveil posée")
+    print("A7 : service réel sur un bus de session : Inhibit → cookie, économiseur réveillé, demande d'éveil posée puis retirée au départ du client")
 else:
     print("(pas de D-Bus ou de PyGObject ici : essai du service réel sauté)")
