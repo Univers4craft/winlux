@@ -16,10 +16,23 @@
 # Sans module chargeable, le test s'arrête avec le code 77 (« non vérifiable »).
 set -u
 work=$(mktemp -d)
+# Arrête la box et le PC du cas précédent (par leur fichier PID : la ligne de
+# commande « hostapd -B … » ne contient pas « hostapd $work »), et attend
+# qu'ils aient rendu l'interface, sinon le hostapd suivant plante (« Match
+# already configured »).
+stop() {
+    for pidfile in "$work/hostapd.pid" "$work/sta.pid"; do
+        test -s "$pidfile" || continue
+        pid=$(cat "$pidfile")
+        kill "$pid" 2>/dev/null
+        for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+        kill -9 "$pid" 2>/dev/null
+        rm -f "$pidfile"
+    done
+    rm -rf "$work/ctrl"
+}
 cleanup() {
-    pkill -f "hostapd $work" 2>/dev/null
-    pkill -f "wpa_supplicant .*$work" 2>/dev/null
-    sleep 0.5
+    stop
     rmmod mac80211_hwsim 2>/dev/null
     rm -rf "$work"
 }
@@ -41,7 +54,7 @@ echo "wpa_supplicant : $(wpa_supplicant -v 2>&1 | sed -n 1p)"
 # connect NOM CHIFFREMENT_BOX LIGNES_RESEAU_SUPPLICANT
 connect() {
     name=$1 cipher=$2 network=$3
-    pkill -f "hostapd $work" 2>/dev/null; pkill -f "wpa_supplicant .*$work" 2>/dev/null; sleep 0.5
+    stop
     cat >"$work/hostapd.conf" <<EOF
 interface=$ap
 driver=nl80211
@@ -70,7 +83,7 @@ network={
 $network
 }
 EOF
-    wpa_supplicant -B -i "$sta" -D nl80211 -c "$work/sta.conf" -f "$work/sta-$name.log" || return 2
+    wpa_supplicant -B -i "$sta" -D nl80211 -c "$work/sta.conf" -f "$work/sta-$name.log" -P "$work/sta.pid" || return 2
     for _ in $(seq 1 40); do
         if wpa_cli -p "$work/ctrl" -i "$sta" status 2>/dev/null | grep -q '^wpa_state=COMPLETED'; then
             wpa_cli -p "$work/ctrl" -i "$sta" status | grep -E '^(pairwise_cipher|group_cipher|key_mgmt)='
@@ -86,7 +99,12 @@ failed=0
 if connect ccmp CCMP ""; then echo "1. SAE + CCMP (comme NetworkManager) : connecté"; else echo "ÉCHEC 1. SAE + CCMP : pas de connexion (témoin)"; failed=1; fi
 if connect gcmp-explicite GCMP-256 "    pairwise=GCMP-256
     group=GCMP-256"; then echo "2. SAE + GCMP-256 demandé explicitement : connecté"; else echo "ÉCHEC 2. SAE + GCMP-256 explicite : pas de connexion"; failed=1; fi
-if connect gcmp-nm GCMP-256 ""; then result=connect; else result=refuse; fi
+connect gcmp-nm GCMP-256 ""
+case $? in
+    0) result=connect ;;
+    1) result=refuse ;;
+    *) echo "ÉCHEC 3. box ou PC simulés non démarrés"; result=erreur; failed=1 ;;
+esac
 echo "3. SAE + GCMP-256 décrit comme NetworkManager : $result"
 expected=${WINLUX_EXPECT_GCMP_NM:-}
 if test -n "$expected" && test "$expected" != "$result"; then
