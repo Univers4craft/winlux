@@ -627,6 +627,73 @@ _TR = {
     'En attente du réseau : ajoutée au prochain démarrage.': ('Waiting for the network: added at the next startup.', 'Esperando la red: se añadirá en el próximo arranque.', 'Wartet auf das Netzwerk: wird beim nächsten Start hinzugefügt.'),
     'Ouvrir le Store': ('Open the Store', 'Abrir la Tienda', 'Store öffnen'),
     'Désactivé, un assistant n’apparaît nulle part et rien ne tourne.': ('When off, an assistant appears nowhere and nothing runs.', 'Desactivado, un asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint ein Assistent nirgends und nichts läuft.'),
+    # Sauvegarde (page 38)
+    '1 an': ('1 year', '1 año', '1 Jahr'),
+    '1 mois': ('1 month', '1 mes', '1 Monat'),
+    '1 semaine': ('1 week', '1 semana', '1 Woche'),
+    '2 ans': ('2 years', '2 años', '2 Jahre'),
+    '3 mois': ('3 months', '3 meses', '3 Monate'),
+    '6 mois': ('6 months', '6 meses', '6 Monate'),
+    'Adresse attendue : smb://serveur/partage ou serveur:/chemin.': ('Expected address: smb://server/share or server:/path.', 'Dirección esperada: smb://servidor/recurso o servidor:/ruta.', 'Erwartete Adresse: smb://server/freigabe oder server:/pfad.'),
+    'Adresse du partage': ('Share address', 'Dirección del recurso compartido', 'Adresse der Freigabe'),
+    'Arrêter de sauvegarder sur cette destination ? Les sauvegardes déjà faites y restent.': ('Stop backing up to this destination? The backups already made stay there.', '¿Dejar de hacer copias en este destino? Las copias ya hechas se quedan allí.', 'Nicht mehr auf diesem Ziel sichern? Die bereits erstellten Sicherungen bleiben dort.'),
+    'Attention : cette destination est sur le même disque que vos fichiers ; elle ne les protège pas d’une panne de ce disque.': ('Warning: this destination is on the same disk as your files; it does not protect them if that disk fails.', 'Atención: este destino está en el mismo disco que sus archivos; no los protege de una avería de ese disco.', 'Achtung: Dieses Ziel liegt auf demselben Datenträger wie Ihre Dateien; es schützt sie nicht bei einem Ausfall dieses Datenträgers.'),
+    'Aucun disque externe détecté. Branchez un disque ou une clé USB : il apparaîtra ici.': ('No external drive detected. Plug in a drive or a USB stick: it will appear here.', 'No se ha detectado ningún disco externo. Conecte un disco o una memoria USB: aparecerá aquí.', 'Kein externes Laufwerk erkannt. Schließen Sie ein Laufwerk oder einen USB-Stick an: Es erscheint hier.'),
+    'Aucune sauvegarde pour l’instant': ('No backup yet', 'Todavía no hay ninguna copia de seguridad', 'Noch keine Sicherung'),
+    'Aucune sauvegarde sur cette destination pour l’instant.': ('No backup on this destination yet.', 'Todavía no hay ninguna copia de seguridad en este destino.', 'Noch keine Sicherung auf diesem Ziel.'),
+    'Compte (facultatif)': ('Account (optional)', 'Cuenta (opcional)', 'Konto (optional)'),
+    'Conserver les deux (recommandé)': ('Keep both (recommended)', 'Conservar ambos (recomendado)', 'Beide behalten (empfohlen)'),
+    'Conserver les sauvegardes': ('Keep backups', 'Conservar las copias de seguridad', 'Sicherungen aufbewahren'),
+    'Copie vos dossiers sur un disque externe ou un partage réseau. Chaque sauvegarde est complète, mais seuls les fichiers modifiés prennent de la place.': ('Copies your folders to an external drive or a network share. Each backup is complete, but only changed files take up space.', 'Copia sus carpetas en un disco externo o un recurso compartido de red. Cada copia está completa, pero solo los archivos modificados ocupan espacio.', 'Kopiert Ihre Ordner auf ein externes Laufwerk oder eine Netzwerkfreigabe. Jede Sicherung ist vollständig, aber nur geänderte Dateien belegen Platz.'),
+    'Dernière sauvegarde': ('Last backup', 'Última copia de seguridad', 'Letzte Sicherung'),
+    'Destination': ('Destination', 'Destino', 'Ziel'),
+    'Destination indisponible : branchez le disque ou vérifiez le partage.': ('Destination unavailable: plug in the drive or check the share.', 'Destino no disponible: conecte el disco o compruebe el recurso compartido.', 'Ziel nicht verfügbar: Schließen Sie das Laufwerk an oder prüfen Sie die Freigabe.'),
+    'Dossiers sauvegardés': ('Backed-up folders', 'Carpetas incluidas en la copia', 'Gesicherte Ordner'),
+    'Fichiers déjà présents :': ('Files already there:', 'Archivos ya presentes:', 'Bereits vorhandene Dateien:'),
+    'Fréquence': ('Frequency', 'Frecuencia', 'Häufigkeit'),
+    'Historique et restauration': ('History and restore', 'Historial y restauración', 'Verlauf und Wiederherstellung'),
+    'Jamais pendant une mise à jour ni pendant une partie (mode jeu).': ('Never during an update or a game (game mode).', 'Nunca durante una actualización ni durante una partida (modo juego).', 'Nie während eines Updates oder eines Spiels (Spielmodus).'),
+    'La sauvegarde la plus récente est toujours gardée.': ('The most recent backup is always kept.', 'La copia más reciente siempre se conserva.', 'Die neueste Sicherung wird immer behalten.'),
+    'Les points de restauration du système (Récupération) protègent Winlux lui-même ; la sauvegarde protège vos fichiers.': ('System restore points (Recovery) protect Winlux itself; backup protects your files.', 'Los puntos de restauración del sistema (Recuperación) protegen Winlux; la copia de seguridad protege sus archivos.', 'Systemwiederherstellungspunkte (Wiederherstellung) schützen Winlux selbst; die Sicherung schützt Ihre Dateien.'),
+    'Libre sur la destination : {size}': ('Free on the destination: {size}', 'Libre en el destino: {size}', 'Frei auf dem Ziel: {size}'),
+    'Ne plus utiliser cette destination': ('Stop using this destination', 'Dejar de usar este destino', 'Dieses Ziel nicht mehr verwenden'),
+    'Nom de compte invalide.': ('Invalid account name.', 'Nombre de cuenta no válido.', 'Ungültiger Kontoname.'),
+    'Partage Windows ou NAS : smb://serveur/partage. Partage NFS : serveur:/chemin. Le mot de passe est gardé par le système, lisible par root seul.': ('Windows share or NAS: smb://server/share. NFS share: server:/path. The password is kept by the system, readable by root only.', 'Recurso de Windows o NAS: smb://servidor/recurso. Recurso NFS: servidor:/ruta. La contraseña la guarda el sistema, legible solo por root.', 'Windows-Freigabe oder NAS: smb://server/freigabe. NFS-Freigabe: server:/pfad. Das Kennwort wird vom System gespeichert und ist nur für root lesbar.'),
+    'Partage réseau': ('Network share', 'Recurso compartido de red', 'Netzwerkfreigabe'),
+    'Partage réseau…': ('Network share…', 'Recurso compartido de red…', 'Netzwerkfreigabe…'),
+    'Place utilisée : {size}': ('Space used: {size}', 'Espacio usado: {size}', 'Belegter Platz: {size}'),
+    'Planification': ('Schedule', 'Programación', 'Zeitplan'),
+    'Que restaurer ?': ('What to restore?', '¿Qué restaurar?', 'Was wiederherstellen?'),
+    'Remplacer par la version sauvegardée': ('Replace with the backed-up version', 'Reemplazar por la versión guardada', 'Durch die gesicherte Version ersetzen'),
+    'Remplacer vos fichiers actuels par ceux de la sauvegarde ? Les fichiers modifiés depuis seront écrasés.': ('Replace your current files with those from the backup? Files changed since will be overwritten.', '¿Reemplazar sus archivos actuales por los de la copia? Los archivos modificados desde entonces se sobrescribirán.', 'Ihre aktuellen Dateien durch die der Sicherung ersetzen? Seitdem geänderte Dateien werden überschrieben.'),
+    'Restauration lancée': ('Restore started', 'Restauración iniciada', 'Wiederherstellung gestartet'),
+    'Restaurer': ('Restore', 'Restaurar', 'Wiederherstellen'),
+    'Restaurer dans un autre dossier…': ('Restore to another folder…', 'Restaurar en otra carpeta…', 'In einem anderen Ordner wiederherstellen…'),
+    'Restaurer la sauvegarde du {date}': ('Restore the backup of {date}', 'Restaurar la copia del {date}', 'Sicherung vom {date} wiederherstellen'),
+    'Restaurer ne supprime aucun fichier récent. Par défaut, un fichier modifié depuis garde sa version actuelle et la version sauvegardée est ajoutée à côté.': ('Restoring never deletes a recent file. By default, a file changed since keeps its current version and the backed-up version is added next to it.', 'Restaurar no elimina ningún archivo reciente. Por defecto, un archivo modificado desde entonces conserva su versión actual y la versión guardada se añade al lado.', 'Beim Wiederherstellen wird keine neuere Datei gelöscht. Standardmäßig behält eine seitdem geänderte Datei ihre aktuelle Version, und die gesicherte Version wird daneben abgelegt.'),
+    'Restaurer…': ('Restore…', 'Restaurar…', 'Wiederherstellen…'),
+    'Sauvegarde de mes fichiers': ('Back up my files', 'Copia de seguridad de mis archivos', 'Meine Dateien sichern'),
+    'Sauvegarde en cours…': ('Backup in progress…', 'Copia de seguridad en curso…', 'Sicherung läuft…'),
+    'Sauvegarder automatiquement': ('Back up automatically', 'Hacer copias automáticamente', 'Automatisch sichern'),
+    'Sauvegarder maintenant': ('Back up now', 'Hacer una copia ahora', 'Jetzt sichern'),
+    'Sauvegarder sur': ('Back up to', 'Guardar en', 'Sichern auf'),
+    'Tous les dossiers sauvegardés': ('All backed-up folders', 'Todas las carpetas incluidas', 'Alle gesicherten Ordner'),
+    'Toutes les 10 minutes': ('Every 10 minutes', 'Cada 10 minutos', 'Alle 10 Minuten'),
+    'Toutes les 12 heures': ('Every 12 hours', 'Cada 12 horas', 'Alle 12 Stunden'),
+    'Toutes les 15 minutes': ('Every 15 minutes', 'Cada 15 minutos', 'Alle 15 Minuten'),
+    'Toutes les 3 heures': ('Every 3 hours', 'Cada 3 horas', 'Alle 3 Stunden'),
+    'Toutes les 30 minutes': ('Every 30 minutes', 'Cada 30 minutos', 'Alle 30 Minuten'),
+    'Toutes les 6 heures': ('Every 6 hours', 'Cada 6 horas', 'Alle 6 Stunden'),
+    'Toutes les heures': ('Every hour', 'Cada hora', 'Stündlich'),
+    'Un dossier WinluxFileHistory y est créé ; rien d’autre n’est touché.': ('A WinluxFileHistory folder is created there; nothing else is touched.', 'Allí se crea una carpeta WinluxFileHistory; no se toca nada más.', 'Dort wird ein Ordner WinluxFileHistory angelegt; sonst wird nichts verändert.'),
+    'Une fois par jour': ('Once a day', 'Una vez al día', 'Einmal täglich'),
+    'Vos fichiers sont remis en place en arrière-plan. Les fichiers créés depuis la sauvegarde ne sont pas touchés.': ('Your files are being put back in the background. Files created since the backup are not touched.', 'Sus archivos se restauran en segundo plano. Los archivos creados después de la copia no se tocan.', 'Ihre Dateien werden im Hintergrund zurückgelegt. Nach der Sicherung erstellte Dateien bleiben unberührt.'),
+    '{count} fichiers': ('{count} files', '{count} archivos', '{count} Dateien'),
+    '{count} sauvegardes plus anciennes sont gardées sur la destination.': ('{count} older backups are kept on the destination.', 'Se conservan {count} copias más antiguas en el destino.', '{count} ältere Sicherungen werden auf dem Ziel aufbewahrt.'),
+    '{name} (non branché)': ('{name} (not plugged in)', '{name} (no conectado)', '{name} (nicht angeschlossen)'),
+    '{path} (dossier absent, ignoré)': ('{path} (folder missing, skipped)', '{path} (carpeta ausente, omitida)', '{path} (Ordner fehlt, übersprungen)'),
+    '{size} libres': ('{size} free', '{size} libres', '{size} frei'),
+    '« Conserver les deux » : un fichier modifié depuis la sauvegarde garde sa version actuelle, l’ancienne arrive à côté avec « (restauré …) » dans son nom.': ('“Keep both”: a file changed since the backup keeps its current version; the old one is placed next to it with “(restauré …)” in its name.', '«Conservar ambos»: un archivo modificado después de la copia conserva su versión actual; la antigua se coloca al lado con «(restauré …)» en su nombre.', '„Beide behalten“: Eine seit der Sicherung geänderte Datei behält ihre aktuelle Version; die alte wird mit „(restauré …)“ im Namen daneben abgelegt.'),
 }
 
 
@@ -656,6 +723,7 @@ PAGE_ACCOUNTS = 33
 PAGE_WIFI = 35
 PAGE_CERTS = 36
 PAGE_PHONE = 37
+PAGE_BACKUP = 38
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1186,10 +1254,72 @@ def page_available(page, status=None):
     if page == PAGE_CERTS:
         module = certificates_page()
         return module is not None and module.available()
+    if page == PAGE_BACKUP:
+        return have("winlux-backup") or BACKUP_RUN.is_dir()
     if page == PAGE_PHONE:
         # Rien d’associé : pas de page (l’application Téléphone connecté associe).
         return bool(phone_devices())
     return True
+
+
+# ── Sauvegarde (winlux-backup) ──────────────────────────────────────────────
+
+BACKUP_SHARE = re.compile(r"^(smb://[^\s/|]+/[^\n|]+|//[^\s/|]+/[^\n|]+|nfs://[^\s/|]+/[^\n|]*|[A-Za-z0-9._-]+:/(?!/)[^\n|]*)\Z")
+BACKUP_RUN = RUN / "backup"
+
+
+def backup_user():
+    if os.environ.get("WINLUX_BACKUP_USER"): return os.environ["WINLUX_BACKUP_USER"]
+    import pwd
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def backup_refresh(action, *args, timeout=8):
+    """Relevé synchrone (sans le relevé général de winlux-control, lent)."""
+    if not have("winlux-control"): return
+    run(["winlux-control", action, *args], timeout=timeout, env={**os.environ, "WINLUX_CONTROL_NO_STATUS": "1"})
+
+
+def backup_state(user):
+    backup_refresh("backup-status", user)
+    text = read(BACKUP_RUN / user / "status.txt")
+    return keyvals(text), text
+
+
+def backup_drives():
+    """Disques montés (clés et disques USB, autres disques) : (chemin, libre)."""
+    backup_refresh("backup-drives")
+    drives = []
+    for line in read(BACKUP_RUN / "drives.txt").splitlines():
+        if line.startswith("drive="):
+            path, _, free = line[6:].partition("|")
+            drives.append((path, free))
+    return drives
+
+
+def backup_drive_name(path):
+    return Path(path).name or path
+
+
+def backup_snapshots(user):
+    """Sauvegardes de la destination, de la plus récente à la plus ancienne."""
+    backup_refresh("backup-list", user, timeout=20)
+    found = []
+    for line in read(BACKUP_RUN / user / "snapshots.txt").splitlines():
+        parts = line.split("|")
+        if len(parts) >= 3 and re.fullmatch(r"[0-9]{8}-[0-9]{6}", parts[0]):
+            found.append((parts[0], parts[2] or "0"))
+    return sorted(found, reverse=True)
+
+
+def backup_snapshot_date(name):
+    """20261105-103118 → date lisible dans la langue de l’interface."""
+    match = re.fullmatch(r"([0-9]{4})([0-9]{2})([0-9]{2})-([0-9]{2})([0-9]{2})[0-9]{2}", name)
+    if not match: return name
+    year, month, day, hour, minute = match.groups()
+    if _LANG == "en": return f"{year}-{month}-{day} {hour}:{minute}"
+    if _LANG == "de": return f"{day}.{month}.{year} {hour}:{minute}"
+    return f"{day}/{month}/{year} {hour}:{minute}"
 
 
 GAMES_APP = Path(os.environ.get("WINLUX_GAMES_APP", "/usr/share/winlux/native/jeux/winlux-games.py"))
@@ -1402,7 +1532,8 @@ class ExtraPages:
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
-                   PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone"}
+                   PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
+                   PAGE_BACKUP: "page_backup"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -2951,6 +3082,203 @@ class ExtraPages:
         GLib.timeout_add(500, wait)
 
     # ── Partage et transfert ──
+
+    # ── Sauvegarde : mes dossiers vers un disque externe ou un partage (#N) ──
+
+    BACKUP_FREQUENCIES = ((10, "Toutes les 10 minutes"), (15, "Toutes les 15 minutes"), (30, "Toutes les 30 minutes"),
+                          (60, "Toutes les heures"), (180, "Toutes les 3 heures"), (360, "Toutes les 6 heures"),
+                          (720, "Toutes les 12 heures"), (1440, "Une fois par jour"))
+    BACKUP_KEEP = ((0, "Toujours"), (7, "1 semaine"), (30, "1 mois"), (90, "3 mois"), (180, "6 mois"),
+                   (365, "1 an"), (730, "2 ans"))
+
+    def backup_do(self, action, *args):
+        """Action winlux-backup pour ce compte (relais root sur le système installé)."""
+        self.execute(action, backup_user(), *args)
+
+    def page_backup(self):
+        user = backup_user()
+        info, text = backup_state(user)
+        if getattr(self, "backup_timer", None):
+            GLib.source_remove(self.backup_timer)
+            self.backup_timer = None
+        self.section(_t("Sauvegarde de mes fichiers"),
+                     _t("Copie vos dossiers sur un disque externe ou un partage réseau. Chaque sauvegarde est complète, mais seuls les fichiers modifiés prennent de la place."))
+        destination = info.get("destination", "")
+        running = info.get("running") == "1"
+        box = self.card()
+        if running:
+            last = _t("Sauvegarde en cours…")
+        elif info.get("last_run_text"):
+            last = info["last_run_text"]
+        else:
+            last = _t("Aucune sauvegarde pour l’instant")
+        detail = []
+        if info.get("last_result") == "unavailable":
+            detail.append(_t("Destination indisponible : branchez le disque ou vérifiez le partage."))
+        elif info.get("last_result") == "ok" and info.get("used"):
+            detail.append(_t("Place utilisée : {size}").format(size=info["used"]))
+        if info.get("free"): detail.append(_t("Libre sur la destination : {size}").format(size=info["free"]))
+        self.row(box, _t("Dernière sauvegarde"), None, last + ("\n" + " · ".join(detail) if detail else ""))
+        self.actions(box, [(_t("Sauvegarder maintenant"), lambda: self.backup_do("backup-run"),
+                            bool(destination) and not running)])
+        if running:
+            # Rafraîchie tant que la sauvegarde tourne, page ouverte.
+            page = self.page
+
+            def again():
+                self.backup_timer = None
+                if self.page == page: self.extra_refresh()
+                return False
+            self.backup_timer = GLib.timeout_add_seconds(3, again)
+
+        # Destination : disques réellement branchés, sinon le partage choisi.
+        self.section(_t("Destination"))
+        box = self.card()
+        drives = backup_drives()
+        items = [(path, f"{backup_drive_name(path)} · " + _t("{size} libres").format(size=free)) for path, free in drives]
+        network = info.get("network") == "1"
+        if destination and destination not in [path for path, _ in drives]:
+            label = destination if network else _t("{name} (non branché)").format(name=backup_drive_name(destination))
+            items.insert(0, (destination, label))
+        if items:
+            self.combo(box, _t("Sauvegarder sur"), items, destination or None,
+                       lambda path: path != destination and self.backup_do("backup-set", "DESTINATION", path),
+                       _t("Un dossier WinluxFileHistory y est créé ; rien d’autre n’est touché."))
+        else:
+            self.hint(_t("Aucun disque externe détecté. Branchez un disque ou une clé USB : il apparaîtra ici."), box)
+        if info.get("same_disk") == "1":
+            self.hint(_t("Attention : cette destination est sur le même disque que vos fichiers ; elle ne les protège pas d’une panne de ce disque."), box)
+        buttons = [(_t("Partage réseau…"), self.backup_share_dialog)]
+        if destination:
+            buttons.append((_t("Ne plus utiliser cette destination"),
+                            lambda: self.confirm(_t("Arrêter de sauvegarder sur cette destination ? Les sauvegardes déjà faites y restent.")) and self.backup_do("backup-set", "DESTINATION", "")))
+        self.actions(box, buttons)
+
+        if destination:
+            self.section(_t("Planification"))
+            box = self.card()
+            enabled = info.get("enabled") == "1"
+            self.switch(box, _t("Sauvegarder automatiquement"), enabled,
+                        lambda on: self.backup_do("backup-set", "ENABLED", "1" if on else "0"),
+                        _t("Jamais pendant une mise à jour ni pendant une partie (mode jeu)."))
+            if enabled:
+                self.combo(box, _t("Fréquence"), [(m, _t(t)) for m, t in self.BACKUP_FREQUENCIES], info.get("frequency") or "60",
+                           lambda value: self.backup_do("backup-set", "FREQUENCY", value))
+                self.combo(box, _t("Conserver les sauvegardes"), [(d, _t(t)) for d, t in self.BACKUP_KEEP], info.get("keep_days") or "0",
+                           lambda value: self.backup_do("backup-set", "KEEP_DAYS", value),
+                           _t("La sauvegarde la plus récente est toujours gardée."))
+
+        self.section(_t("Dossiers sauvegardés"))
+        box = self.card()
+        home = info.get("home", "")
+        for line in text.splitlines():
+            if not line.startswith("folder="): continue
+            present, _, path = line[7:].partition("|")
+            remove = Gtk.Button(label=_t("Retirer"))
+            remove.connect("clicked", lambda *_, p=path: self.backup_do("backup-remove", p))
+            name = path[len(home) + 1:] if home and path.startswith(home + "/") else path
+            self.row(box, name, remove, path if present == "1" else _t("{path} (dossier absent, ignoré)").format(path=path))
+
+        def pick():
+            dialog = Gtk.FileChooserNative.new(_t("Choisir un dossier"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                self.backup_do("backup-add", dialog.get_filename())
+            dialog.destroy()
+        self.actions(box, [(_t("Ajouter un dossier…"), pick)])
+
+        if destination and info.get("available") == "1":
+            snapshots = backup_snapshots(user)
+            self.section(_t("Historique et restauration"),
+                         _t("Restaurer ne supprime aucun fichier récent. Par défaut, un fichier modifié depuis garde sa version actuelle et la version sauvegardée est ajoutée à côté."))
+            box = self.card()
+            if not snapshots:
+                self.hint(_t("Aucune sauvegarde sur cette destination pour l’instant."), box)
+            for name, files in snapshots[:10]:
+                button = Gtk.Button(label=_t("Restaurer…"))
+                button.connect("clicked", lambda *_, n=name: self.backup_restore_dialog(n, text, home))
+                self.row(box, backup_snapshot_date(name), button, _t("{count} fichiers").format(count=files))
+            if len(snapshots) > 10:
+                self.hint(_t("{count} sauvegardes plus anciennes sont gardées sur la destination.").format(count=len(snapshots) - 10), box)
+        self.hint(_t("Les points de restauration du système (Récupération) protègent Winlux lui-même ; la sauvegarde protège vos fichiers."))
+
+    def backup_share_dialog(self):
+        dialog = Gtk.Dialog(title=_t("Partage réseau"), transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        fields = {}
+        for key, label, secret in (("url", _t("Adresse du partage"), False), ("account", _t("Compte (facultatif)"), False),
+                                   ("password", _t("Mot de passe"), True)):
+            area.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            widget = Gtk.Entry(visibility=not secret, activates_default=True)
+            widget.get_accessible().set_name(label)
+            area.pack_start(widget, False, False, 0)
+            fields[key] = widget
+        fields["url"].set_placeholder_text("smb://nas/sauvegardes")
+        self.hint(_t("Partage Windows ou NAS : smb://serveur/partage. Partage NFS : serveur:/chemin. Le mot de passe est gardé par le système, lisible par root seul."), area)
+        error = Gtk.Label(xalign=0, wrap=True)
+        area.pack_start(error, False, False, 0)
+        dialog.show_all()
+        values = None
+        while dialog.run() == Gtk.ResponseType.OK:
+            url, account = fields["url"].get_text().strip(), fields["account"].get_text().strip()
+            if not BACKUP_SHARE.match(url):
+                error.set_text(_t("Adresse attendue : smb://serveur/partage ou serveur:/chemin."))
+            elif "\n" in account or "|" in account:
+                error.set_text(_t("Nom de compte invalide."))
+            else:
+                values = (url, account, fields["password"].get_text())
+                break
+        dialog.destroy()
+        if values is None: return
+        url, account, password = values
+        args = ["backup-share", backup_user(), url] + ([account, "-"] if account else [])
+        self.account_action(args, password if account else None)
+
+    def backup_restore_dialog(self, snapshot, text, home):
+        dialog = Gtk.Dialog(title=_t("Restaurer la sauvegarde du {date}").format(date=backup_snapshot_date(snapshot)),
+                            transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Restaurer"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        area.pack_start(Gtk.Label(label=_t("Que restaurer ?"), xalign=0), False, False, 0)
+        what = Gtk.ComboBoxText()
+        what.append("/", _t("Tous les dossiers sauvegardés"))
+        for line in text.splitlines():
+            if not line.startswith("folder="): continue
+            path = line[7:].partition("|")[2]
+            what.append(path, path[len(home) + 1:] if home and path.startswith(home + "/") else path)
+        what.set_active(0)
+        area.pack_start(what, False, False, 0)
+        area.pack_start(Gtk.Label(label=_t("Fichiers déjà présents :"), xalign=0), False, False, 0)
+        safe = Gtk.RadioButton.new_with_label(None, _t("Conserver les deux (recommandé)"))
+        replace = Gtk.RadioButton.new_with_label_from_widget(safe, _t("Remplacer par la version sauvegardée"))
+        elsewhere = Gtk.RadioButton.new_with_label_from_widget(safe, _t("Restaurer dans un autre dossier…"))
+        for widget in (safe, replace, elsewhere): area.pack_start(widget, False, False, 0)
+        self.hint(_t("« Conserver les deux » : un fichier modifié depuis la sauvegarde garde sa version actuelle, l’ancienne arrive à côté avec « (restauré …) » dans son nom."), area)
+        dialog.show_all()
+        answer = dialog.run()
+        path = what.get_active_id() or "/"
+        mode = "replace" if replace.get_active() else "safe"
+        other = elsewhere.get_active()
+        dialog.destroy()
+        if answer != Gtk.ResponseType.OK: return
+        if other:
+            chooser = Gtk.FileChooserNative.new(_t("Choisir un dossier"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            target = chooser.get_filename() if chooser.run() == Gtk.ResponseType.ACCEPT else None
+            chooser.destroy()
+            if not target: return
+            mode = target
+        elif mode == "replace" and not self.confirm(_t("Remplacer vos fichiers actuels par ceux de la sauvegarde ? Les fichiers modifiés depuis seront écrasés.")):
+            return
+        self.backup_do("backup-restore", snapshot, path, mode)
+        self.show_info(_t("Restauration lancée"), _t("Vos fichiers sont remis en place en arrière-plan. Les fichiers créés depuis la sauvegarde ne sont pas touchés."))
 
     def page_sharing(self):
         if have("winlux-control"): run(["winlux-control", "share-status"], timeout=5)

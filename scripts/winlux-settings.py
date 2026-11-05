@@ -322,18 +322,19 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
-         _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles")]
+         _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
+         _t("Sauvegarde")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 37 n’existent que dans les Paramètres natifs.
+# Pages 29 à 38 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15, 30]),
-              (_t("Comptes"), [33]),
+              (_t("Comptes"), [33, 38]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
@@ -1208,6 +1209,7 @@ PAGE_NAMES = {
     "gaming": 29, "jeux": 29, "recovery": 31, "recuperation": 31, "clipboard": 32,
     "presse-papiers": 32, "accounts": 33, "yourinfo": 33, "otherusers": 33, "comptes": 33,
     "hardware": 34, "drivers": 34, "pilotes": 34,
+    "backup": 38, "sauvegarde": 38, "filehistory": 38,
 }
 
 

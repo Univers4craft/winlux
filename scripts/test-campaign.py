@@ -398,4 +398,27 @@ ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in sett
 ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
    "Firefox installé avec ses paquets de langue fr, de, es")
 
+# ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
+backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+   "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
+ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
+   "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
+ok("restore_file()" in backup_tool and "safe    :" in backup_tool and "setpriv --reuid" in backup_tool,
+   "restauration « conserver les deux », copiée sous le compte et jamais en root")
+ok("in_scope()" in backup_tool and "real_in_scope" in backup_tool,
+   "sauvegarde : un compte ne protège que ses propres dossiers (ni /etc ni un lien vers ailleurs)")
+with tempfile.TemporaryDirectory() as directory:
+    base = Path(directory)
+    (base / "etc").mkdir()
+    (base / "proc").mkdir()
+    (base / "proc/mounts").write_text("")
+    (base / "etc/passwd").write_text("eve:x:1001:1001::/home/eve:/bin/sh\n")
+    (base / "home/eve/Documents").mkdir(parents=True)
+    env = {**os.environ, "WINLUX_CONTROL_ROOT": str(base)}
+    refused = subprocess.run(["sh", str(SCRIPTS / "winlux-backup.sh"), "add", "eve", "/etc"], env=env, capture_output=True)
+    ok(refused.returncode != 0, "sauvegarde : /etc refusé comme dossier d'un compte")
+    refused = subprocess.run(["sh", str(SCRIPTS / "winlux-backup.sh"), "set", "eve", "DESTINATION", "/etc"], env=env, capture_output=True)
+    ok(refused.returncode != 0, "sauvegarde : /etc refusé comme destination")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

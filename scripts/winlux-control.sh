@@ -594,6 +594,15 @@ perform() {
         restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         backup-status|backup-request|backup-list|backup-prune) winlux-backup "${action#backup-}" "$2" ;;
         backup-drives) winlux-backup drives ;;
+        # Paramètres natifs › Sauvegarde : arguments directs (chemins avec
+        # espaces) ; le relais vérifie que le compte est celui qui demande.
+        backup-set|backup-add|backup-remove|backup-share|backup-browse|backup-versions)
+            shift; winlux-backup "${action#backup-}" "$@" ;;
+        backup-restore)
+            # La restauration peut être longue : détachée comme la sauvegarde.
+            shift
+            mkdir -p "$run/backup"
+            (winlux-backup restore "$@" >"$run/backup/$1.restore.log" 2>&1 &) ;;
         backup-run)
             # Une sauvegarde peut durer : elle ne bloque pas les autres réglages.
             winlux-backup status "$2"
