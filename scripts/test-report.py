@@ -179,4 +179,39 @@ assert "Network log (wpa_supplicant)" in english
 services = (Path(__file__).with_name("winlux-system-services.sh")).read_text(encoding="utf-8")
 assert "wpa_supplicant -u -t -f" in services and "wpa_supplicant -u -s" not in services, "wpa_supplicant sans journal"
 assert "NetworkManager --no-daemon --debug" in services, "NetworkManager sans journal"
+# Journaux de diagnostic joints (#458) : seulement s'ils existent, vides
+# signalés, masqués comme le reste, bornés en taille.
+diag = tmp / "diag"
+r["DIAG_DOMAINS"]  # présent
+g = r["diagnostics"].__globals__
+g["DIAG_COMMANDS"] = False
+os.environ["WINLUX_DIAG_ROOT"] = str(diag)
+(diag / "run/winlux").mkdir(parents=True)
+(diag / "run/winlux/network.log").write_text(
+    "connexion à LiveboxAlice psk=motdepasse1 depuis 192.168.1.20 (aa:bb:cc:dd:ee:ff)\n" * 3)
+(diag / "run/winlux/wpa-supplicant.log").write_text("")
+entries = r["diagnostics"]("network", "fr")
+names = [e[0] for e in entries]
+assert names == ["/run/winlux/network.log", "/run/winlux/wpa-supplicant.log"], names
+assert entries[1][1] is None and "vide" in entries[1][2], entries[1]
+assert r["diagnostics"]("sound", "fr") == []
+bare = r["Report"](None, language="fr")
+bare.attach = ["network", "sound"]
+text = r["redact"]("\n".join(r["diagnostics_markdown"](bare.attach, "fr")), home="/home/alice",
+                   values={"LiveboxAlice": "<réseau-wifi>"})
+assert "Réseau et Wi-Fi" in text and "aucun journal trouvé" in text, text
+assert "LiveboxAlice" not in text and "motdepasse1" not in text and "192.168.1.20" not in text \
+    and "aa:bb:cc:dd:ee:ff" not in text, text
+assert "wpa-supplicant.log` : vide" in text, text
+body = bare.body("", redacted=True)
+assert "motdepasse1" not in body and "Journaux de diagnostic — Réseau" in body
+bare.attach = []
+assert "Journaux de diagnostic" not in bare.body("", redacted=True)
+# Journal énorme : raccourci, la fin du rapport (pied de page) reste.
+(diag / "run/winlux/network.log").write_text(("x" * 290 + "\n") * 5000)
+bare.attach = ["network"]
+long_body = bare.body("", redacted=True)
+assert len(long_body) <= r["BODY_LIMIT"] and "Signaler un problème" in long_body.splitlines()[-1], long_body[-200:]
+for code in r["T"]:
+    assert all(k in r["T"][code] for k in ("attach", "d_network", "d_sound", "d_boot", "d_update", "h_diag")), code
 print("winlux-report : tests OK")

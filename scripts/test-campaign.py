@@ -413,6 +413,29 @@ with tempfile.TemporaryDirectory() as directory:
     ok(rc.find(f".//{OB}keybind[@key='W-C-S-Right']") is not None,
        "Windows+Ctrl+Maj+→ emmène la fenêtre sur le bureau voisin")
 
+# ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
+backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+   "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
+ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
+   "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
+ok("restore_file()" in backup_tool and "safe    :" in backup_tool and "setpriv --reuid" in backup_tool,
+   "restauration « conserver les deux », copiée sous le compte et jamais en root")
+ok("in_scope()" in backup_tool and "real_in_scope" in backup_tool,
+   "sauvegarde : un compte ne protège que ses propres dossiers (ni /etc ni un lien vers ailleurs)")
+with tempfile.TemporaryDirectory() as directory:
+    base = Path(directory)
+    (base / "etc").mkdir()
+    (base / "proc").mkdir()
+    (base / "proc/mounts").write_text("")
+    (base / "etc/passwd").write_text("eve:x:1001:1001::/home/eve:/bin/sh\n")
+    (base / "home/eve/Documents").mkdir(parents=True)
+    env = {**os.environ, "WINLUX_CONTROL_ROOT": str(base)}
+    refused = subprocess.run(["sh", str(SCRIPTS / "winlux-backup.sh"), "add", "eve", "/etc"], env=env, capture_output=True)
+    ok(refused.returncode != 0, "sauvegarde : /etc refusé comme dossier d'un compte")
+    refused = subprocess.run(["sh", str(SCRIPTS / "winlux-backup.sh"), "set", "eve", "DESTINATION", "/etc"], env=env, capture_output=True)
+    ok(refused.returncode != 0, "sauvegarde : /etc refusé comme destination")
+
 # ── Envoi automatique des plantages (#438) ───────────────────────────────
 # crash.log est en mémoire vive : un plantage non signalé disparaissait au
 # redémarrage. Il part maintenant au démarrage suivant, sans fenêtre.
@@ -438,5 +461,15 @@ for language, word in (("fr", "anonymisé"), ("en", "anonymised"), ("de", "anony
     privacy = (ROOT / f"site/content/{language}/privacy.md").read_text()
     ok(word in privacy and "Wi-Fi" in privacy.replace("WLAN", "Wi-Fi"),
        f"page confidentialité ({language}) : envoi automatique documenté")
+
+# ── « Signaler un problème » : journaux de diagnostic (#458) ───────────────
+# Pour le Wi-Fi (#377, #380, #398), le son (#383) ou l'heure (#419), il fallait
+# redemander les journaux à la main.
+report_tool = (SCRIPTS / "winlux-report.py").read_text()
+ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", "update"))
+   and "/run/winlux/wpa-supplicant.log" in report_tool and '"LC_ALL": "C"' in report_tool,
+   "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
+ok("d_empty" in report_tool and "queued_reports()" in report_tool,
+   "rapport : journal vide signalé comme tel, plantages en attente listés")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

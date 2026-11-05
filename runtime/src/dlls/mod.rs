@@ -17,6 +17,7 @@ pub mod comctl32;
 pub mod comdlg32;
 pub mod comdlg32_files;
 pub mod comdlg32_ui;
+pub mod common_apps;
 pub mod comobj;
 pub mod console_input;
 pub mod controls;
@@ -68,6 +69,7 @@ pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod hid;
+pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
 pub mod icons;
@@ -117,6 +119,7 @@ pub mod secur32;
 pub mod security;
 pub mod seh;
 pub mod seh_hw;
+pub mod sensapi;
 pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
@@ -592,6 +595,23 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "sensapi",
+                exports: sensapi::exports(),
+                handle: fake_module(),
+            },
+            // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
+            Builtin {
+                name: "msimg32",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            // Accessibilité (wxWidgets, Audacity), complétée par common_apps.
+            Builtin {
+                name: "oleacc",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "coremessaging",
                 exports: coremessaging::exports(),
                 handle: fake_module(),
@@ -750,7 +770,15 @@ fn add_basics(all: &mut [Builtin]) {
     ];
     // Imports de l'appli de bureau Claude (electron_win32), en complément.
     let electron = electron_win32::all();
-    for (dll, exports) in extra.into_iter().chain(games).chain(apps).chain(electron) {
+    // Fonctions communes à Notepad++, Audacity et Claude (common_apps).
+    let common = common_apps::all();
+    for (dll, exports) in extra
+        .into_iter()
+        .chain(games)
+        .chain(apps)
+        .chain(electron)
+        .chain(common)
+    {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
@@ -761,6 +789,15 @@ fn add_basics(all: &mut [Builtin]) {
     if let Some(b) = all.iter_mut().find(|b| b.name == "kernel32") {
         for (name, addr) in actctx::kernel32_exports() {
             b.exports.entry(name).or_insert(addr);
+        }
+    }
+    // comctl32 et shell32 importés par numéro d'ordre.
+    for &(dll, ord, name) in common_apps::ORDINALS {
+        if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
         }
     }
     // Winsock importé par numéro d'ordre.

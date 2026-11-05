@@ -144,7 +144,7 @@ pub(crate) fn parse_signature(data: &[u8], tag: &[u8; 4]) -> Vec<SigElement> {
 
 /// Location d'un varying pour une sémantique (même numéro dans tous les
 /// shaders du processus).
-fn varying_location(name: &str, index: u32) -> u32 {
+pub(crate) fn varying_location(name: &str, index: u32) -> u32 {
     static TABLE: Mutex<BTreeMap<(String, u32), u32>> = Mutex::new(BTreeMap::new());
     let mut t = TABLE.lock().unwrap_or_else(|e| e.into_inner());
     let next = t.len() as u32;
@@ -539,6 +539,10 @@ impl Gen {
 
 /// Traduit un blob DXBC. Err : instruction ou forme non prise en charge.
 pub(crate) fn translate(blob: &[u8]) -> Result<Shader, String> {
+    // Conteneur du compilateur HLSL maison : GLSL déjà produit.
+    if let Some(s) = crate::dlls::hlsl::from_container(blob) {
+        return Ok(s);
+    }
     let mut code = None;
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();

@@ -4,7 +4,23 @@ Trois services maison, sans Wine ni dépendance tierce de compatibilité.
 
 ## Historique des fichiers (`winlux-backup`)
 
-- Appli « Historique des fichiers » du shell (menu Démarrer).
+- Paramètres › Comptes › **Sauvegarde** (page 38, bureau natif,
+  `winlux-settings sauvegarde` ou `ms-settings:backup`) : disque branché ou
+  partage réseau, planification, dossiers, historique et restauration. Appli
+  « Historique des fichiers » du shell PE pour parcourir fichier par fichier.
+- Sur le système installé, le bureau tourne sous le compte : tout passe par
+  `winlux-control backup-*`, relayé en root par `winlux-root` pour le compte
+  lui-même seulement. Le dossier d'état `/run/winlux/backup/<compte>` est
+  root:groupe du compte en 0770, les résultats en 0640.
+- Un compte ne sauvegarde que son dossier personnel et ses disques
+  `/media/<compte>` (un lien vers ailleurs est ignoré). La destination est un
+  disque monté (`/media`, `/mnt`) ou son propre dossier.
+- Restauration (`restore COMPTE INSTANTANE CHEMIN MODE`, `/` = tout) :
+  `safe` (« Conserver les deux », par défaut dans Paramètres) remet ce qui
+  manque, laisse l'identique, et pose la version sauvegardée d'un fichier
+  modifié depuis à côté (`nom (restauré AAAAMMJJ-HHMMSS).ext`). `replace`
+  écrase, un dossier cible restaure ailleurs. Root lit la sauvegarde, mais les
+  écritures se font sous le compte (`setpriv`).
 - Réglages par utilisateur dans `/etc/winlux/backup/<compte>.conf` : dossiers,
   destination (disque monté ou partage `smb://`/NFS), fréquence, rétention.
 - Instantanés dans `DEST/WinluxFileHistory/<hôte>/<compte>/AAAAMMJJ-HHMMSS/`.
@@ -15,7 +31,7 @@ Trois services maison, sans Wine ni dépendance tierce de compatibilité.
   sauvegardé que selon sa fréquence. Rien ne tourne pendant une mise à jour.
 - La section « Restauration système » renvoie vers les points de restauration
   (`winlux-restore`), qui couvrent le système et non les documents.
-- Test : `sh scripts/test-backup.sh`.
+- Tests : `sh scripts/test-backup.sh`, `python3 scripts/test-backup-page.py` (sous Xvfb).
 
 ## Bureau sous le compte de l'utilisateur
 
