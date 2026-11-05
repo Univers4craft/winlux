@@ -96,6 +96,10 @@ fi
 if test -f "$dir/d3d11_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-d3d11-rendu.sh"
 fi
+# Rendu Direct3D 11 depuis du HLSL source compilé par D3DCompile (#463), bloquant.
+if test -f "$dir/hlsl_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-d3d11-rendu.sh" hlsl
+fi
 # winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271), bloquant.
 if test -f "$dir/winusb_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-winusb.sh"
