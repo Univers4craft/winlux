@@ -292,6 +292,7 @@ jobs:
           /usr/bin/python3 -B scripts/test-wifi-image.py
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-accounts.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py --clavier
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-licence.py
