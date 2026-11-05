@@ -2833,12 +2833,10 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
             return 0;
         }
         let symbol = crate::dlls::cstr(name);
-        // kernel32.dll lui-même n'exporte pas les fonctions propres à KernelBase.
-        let hidden = module != crate::dlls::kernelbase_handle()
-            && dll == "kernel32"
-            && crate::dlls::KERNELBASE_ONLY.contains(&symbol.as_str());
-        let found = if hidden {
-            None
+        // kernel32.dll n'exporte ni les fonctions propres à KernelBase, ni
+        // celles de psapi, advapi32 ou ntdll rangées dans sa table (#521).
+        let found = if dll == "kernel32" {
+            crate::dlls::kernel32_proc(&symbol, module == crate::dlls::kernelbase_handle())
         } else {
             crate::dlls::lookup(dll, &symbol)
         };
@@ -9959,6 +9957,7 @@ mod audit_tests {
                 dirs: vec![crate::pe::DataDir::default(); 16],
                 sections: vec![],
                 il_only32: false,
+                x86: false,
             },
             tls: None,
             initialized: true,

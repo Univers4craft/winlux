@@ -406,6 +406,17 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
 fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse_il_only(&file).map_err(|e| format!("{} : {e}", path.display()))?;
+    if !pe.il_only32 && pe.x86 != crate::wow32::active() {
+        return Err(format!(
+            "{} : {}",
+            path.display(),
+            if pe.x86 {
+                "DLL 32 bits, impossible à charger dans un programme 64 bits"
+            } else {
+                "DLL 64 bits, impossible à charger dans un programme 32 bits"
+            }
+        ));
+    }
     let size = round_up(pe.size_of_image as usize, PAGE);
     let relocs_stripped = pe.characteristics & 0x0001 != 0;
     let has_relocs = pe.dir(DIR_BASERELOC).size != 0;
@@ -414,6 +425,10 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         let preferred = if pe.il_only32 {
             // Assembly IL seul : n'importe où, comme le fait Windows 64 bits.
             Some(map_aligned(size).ok_or("mémoire insuffisante pour l'image")?)
+        } else if pe.x86 {
+            // Programme 32 bits : son adresse préférée (sous 2 Go en
+            // général) d'abord, sinon n'importe où sous la limite.
+            map_at(pe.image_base as usize, size, true)
         } else if force_reloc && has_relocs {
             None
         } else {
@@ -437,6 +452,14 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
             None => map_aligned(size).ok_or("mémoire insuffisante pour l'image")?,
         }
     };
+    if pe.x86 && base + size > crate::wow32::limit() {
+        libc_munmap(base, size);
+        return Err(format!(
+            "{} : pas de place sous 0x{:x} pour l'image 32 bits",
+            path.display(),
+            crate::wow32::limit()
+        ));
+    }
     trace!(
         "chargement de {} à 0x{base:x} (préférée 0x{:x}, {} octets)",
         path.display(),
@@ -497,10 +520,21 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         // ImageBase dans l'en-tête en mémoire reflète la vraie adresse, comme sous Windows.
         unsafe {
             let pe_off = *((base + 0x3c) as *const u32) as usize;
-            *((base + pe_off + 24 + 24) as *mut u64) = base as u64;
+            if m.pe.x86 {
+                *((base + pe_off + 24 + 28) as *mut u32) = base as u32;
+            } else {
+                *((base + pe_off + 24 + 24) as *mut u64) = base as u64;
+            }
         }
     }
-    m.tls = read_tls(&m);
+    if m.pe.x86 {
+        // TLS statique 32 bits : troisième étape de #232.
+        if m.pe.dir(DIR_TLS).rva != 0 {
+            trace!("{} : TLS 32 bits pas encore pris en charge", m.name);
+        }
+    } else {
+        m.tls = read_tls(&m);
+    }
 
     MODULES.lock().unwrap().push(m.clone());
     Ok(m)
@@ -581,17 +615,26 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
             // Les DLL intégrées exportent leurs ordinaux sous le nom « #n ».
             Want::Ordinal(o) => dlls::lookup(&ndll, &format!("#{o}")),
         };
+        let label = match want {
+            Want::Name(n) => n.clone(),
+            Want::Ordinal(o) => format!("#{o}"),
+        };
         return Ok(match found {
-            Some(a) => match want {
-                Want::Name(n) => thunks::api_trace(dll, n, a),
-                Want::Ordinal(o) => thunks::api_trace(dll, &format!("#{o}"), a),
-            },
+            Some(a) => {
+                let traced = thunks::api_trace(dll, &label, a);
+                if importer.pe.x86 {
+                    crate::wow32::import_stub(dll, &label, a, traced)
+                } else {
+                    traced
+                }
+            }
             None => {
-                let label = match want {
-                    Want::Name(n) => n.clone(),
-                    Want::Ordinal(o) => format!("#{o}"),
-                };
-                thunks::missing_stub(dll, &label)
+                let stub = thunks::missing_stub(dll, &label);
+                if importer.pe.x86 {
+                    crate::wow32::missing_stub(dll, &label, stub)
+                } else {
+                    stub
+                }
             }
         });
     }
@@ -604,19 +647,31 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
             load(&p, false)?
         }
     };
+    if module.pe.x86 != importer.pe.x86 {
+        return Err(format!(
+            "{dll} : DLL {} bits, importée par un module {} bits",
+            if module.pe.x86 { 32 } else { 64 },
+            if importer.pe.x86 { 32 } else { 64 }
+        ));
+    }
     let r = match want {
         Want::Name(n) => export_by_name(&module, n),
         Want::Ordinal(o) => export_by_ordinal(&module, *o as u32),
     };
     Ok(match r {
         Some(a) => a,
-        None => thunks::missing_stub(
-            dll,
-            &match want {
+        None => {
+            let label = match want {
                 Want::Name(n) => n.clone(),
                 Want::Ordinal(o) => format!("#{o}"),
-            },
-        ),
+            };
+            let stub = thunks::missing_stub(dll, &label);
+            if importer.pe.x86 {
+                crate::wow32::missing_stub(dll, &label, stub)
+            } else {
+                stub
+            }
+        }
     })
 }
 
@@ -739,19 +794,29 @@ fn resolve_imports(m: &Module) -> Result<(), String> {
                 attrs,
                 rd32(b, o + 24).ok_or("imports différés tronqués")?,
             )?;
+            let width = if m.pe.x86 { 4 } else { 8 };
+            let rd = |b: &[u8], o: usize| {
+                if m.pe.x86 {
+                    rd32(b, o).map(u64::from)
+                } else {
+                    rd64(b, o)
+                }
+            };
             let mut index = 0usize;
             loop {
-                let offset = index.checked_mul(8).ok_or("table différée trop grande")?;
+                let offset = index
+                    .checked_mul(width)
+                    .ok_or("table différée trop grande")?;
                 let source = int
                     .checked_add(offset)
                     .ok_or("table différée trop grande")?;
                 let target = iat
                     .checked_add(offset)
                     .ok_or("table différée trop grande")?;
-                let value = rd64(b, source).ok_or("INT différée tronquée")?;
-                rd64(b, target).ok_or("IAT différée tronquée")?;
+                let value = rd(b, source).ok_or("INT différée tronquée")?;
+                rd(b, target).ok_or("IAT différée tronquée")?;
                 for table in [bound, unload].into_iter().filter(|table| *table != 0) {
-                    rd64(
+                    rd(
                         b,
                         table
                             .checked_add(offset)
@@ -762,7 +827,7 @@ fn resolve_imports(m: &Module) -> Result<(), String> {
                 if value == 0 {
                     break;
                 }
-                if value & (1 << 63) == 0 {
+                if value & (1 << (width * 8 - 1)) == 0 {
                     let rva = u32::try_from(value)
                         .ok()
                         .and_then(|value| value.checked_add(2))
@@ -802,17 +867,28 @@ fn delay_rva(m: &Module, attrs: u32, value: u32) -> Result<usize, String> {
 
 fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Result<(), String> {
     let b = m.bytes();
+    // Entrées de 4 octets en PE32, ordinal signalé par le bit 31.
+    let (width, ordinal_flag) = if m.pe.x86 {
+        (4, 1u64 << 31)
+    } else {
+        (8, 1u64 << 63)
+    };
     let mut i: usize = 0;
     loop {
         let lo = i
-            .checked_mul(8)
+            .checked_mul(width)
             .and_then(|n| lookup_rva.checked_add(n))
             .ok_or("table d'importations trop grande")?;
-        let t = rd64(b, lo).ok_or("table d'imports tronquée")?;
+        let t = if m.pe.x86 {
+            rd32(b, lo).map(u64::from)
+        } else {
+            rd64(b, lo)
+        }
+        .ok_or("table d'imports tronquée")?;
         if t == 0 {
             break;
         }
-        let want = if t & (1 << 63) != 0 {
+        let want = if t & ordinal_flag != 0 {
             Want::Ordinal((t & 0xffff) as u16)
         } else {
             Want::Name(
@@ -822,13 +898,19 @@ fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Resu
         };
         let addr = resolve_one(dll, &want, m)?;
         let dst = i
-            .checked_mul(8)
+            .checked_mul(width)
             .and_then(|n| iat_rva.checked_add(n))
             .ok_or("IAT trop grande")?;
-        if dst.checked_add(8).is_none_or(|x| x > m.size) {
+        if dst.checked_add(width).is_none_or(|x| x > m.size) {
             return Err("IAT hors de l'image".into());
         }
-        unsafe { *((m.base + dst) as *mut usize) = addr };
+        unsafe {
+            if m.pe.x86 {
+                ((m.base + dst) as *mut u32).write_unaligned(addr as u32);
+            } else {
+                *((m.base + dst) as *mut usize) = addr;
+            }
+        }
         i += 1;
     }
     trace!("{dll} : {i} import(s) reliés");
@@ -1079,6 +1161,7 @@ mod tests {
                 dirs,
                 sections: vec![],
                 il_only32: false,
+                x86: false,
             },
             tls: None,
             initialized: false,
@@ -1110,6 +1193,7 @@ mod tests {
                 dirs: vec![DataDir::default(); 16],
                 sections: vec![],
                 il_only32: false,
+                x86: false,
             },
             tls: None,
             initialized: false,
@@ -1158,6 +1242,7 @@ mod tests {
                 dirs,
                 sections: vec![],
                 il_only32: false,
+                x86: false,
             },
             tls: None,
             initialized: false,
@@ -1166,5 +1251,11 @@ mod tests {
         resolve_imports(&m).unwrap();
         assert_eq!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, thunk);
         assert_eq!(unsafe { *(m.base as *const usize).add(0x1c0 / 8) }, 0);
+    }
+}
+
+fn libc_munmap(base: usize, size: usize) {
+    unsafe {
+        libc::munmap(base as *mut libc::c_void, size);
     }
 }

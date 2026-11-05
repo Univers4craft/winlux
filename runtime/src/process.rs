@@ -314,6 +314,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut command_line_w = cmd_w;
     command_line_w.push(0);
     PEB.store(peb, Ordering::Relaxed);
+    if crate::wow32::active() {
+        crate::wow32::init_peb32(exe.base);
+    }
     let _ = PROCESS.set(ProcessInfo {
         command_line_w,
         command_line_a: cmd_a,
@@ -345,6 +348,8 @@ pub fn init_thread() -> usize {
     }
     setup_static_tls(teb);
     install_signal_stack();
+    // Programme x86 : TEB 32 bits sur FS (#232).
+    crate::wow32::init_thread(teb);
     let mut threads = THREAD_TEBS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
@@ -647,8 +652,8 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     }
     run_tls_callbacks(m, DLL_PROCESS_ATTACH);
     if let Some(entry) = m.entry() {
-        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-            unsafe { std::mem::transmute(entry) };
+        let dllmain =
+            |base: usize, reason: u32, reserved: usize| call_dllmain(entry, base, reason, reserved);
         if dllmain(m.base, DLL_PROCESS_ATTACH, 0) == 0 {
             return false;
         }
@@ -690,8 +695,8 @@ pub fn thread_attach_current() {
     for m in mods.into_iter().skip(1) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-                unsafe { std::mem::transmute(e) };
+            let dllmain =
+                |base: usize, reason: u32, reserved: usize| call_dllmain(e, base, reason, reserved);
             let _ = dllmain(m.base, DLL_THREAD_ATTACH, 0);
         }
     }
@@ -707,8 +712,8 @@ pub fn thread_detach_current() {
     for m in mods.into_iter().skip(1).rev() {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
         if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-                unsafe { std::mem::transmute(e) };
+            let dllmain =
+                |base: usize, reason: u32, reserved: usize| call_dllmain(e, base, reason, reserved);
             let _ = dllmain(m.base, DLL_THREAD_DETACH, 0);
         }
     }
@@ -720,6 +725,7 @@ fn start(exe: Module) -> u32 {
     init_thread();
     crate::crash::install();
     crate::quality::init();
+    crate::wow32::wrap_fault_handlers();
     let mods = loader::MODULES.lock().unwrap().clone();
     // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
     for m in mods.iter().skip(1).rev() {
@@ -729,8 +735,8 @@ fn start(exe: Module) -> u32 {
         run_tls_callbacks(m, DLL_PROCESS_ATTACH);
         if let Some(e) = m.entry() {
             trace!("DllMain de {}", m.name);
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-                unsafe { std::mem::transmute(e) };
+            let dllmain =
+                |base: usize, reason: u32, reserved: usize| call_dllmain(e, base, reason, reserved);
             if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 {
                 eprintln!(
                     "winlux: l'initialisation de {} a échoué (LastError={})",
@@ -745,8 +751,20 @@ fn start(exe: Module) -> u32 {
     run_tls_callbacks(&exe, DLL_PROCESS_ATTACH);
     let entry = exe.entry().expect("le programme n'a pas de point d'entrée");
     trace!("saut vers le point d'entrée 0x{entry:x}");
+    if crate::wow32::active() {
+        return crate::wow32::call32(entry, &[]) as u32;
+    }
     let f: extern "win64" fn() -> u32 = unsafe { std::mem::transmute(entry) };
     f()
+}
+
+/// DllMain d'un module réel, x86 (wow32) ou x64.
+fn call_dllmain(entry: usize, base: usize, reason: u32, reserved: usize) -> i32 {
+    if crate::wow32::active() {
+        return crate::wow32::call32(entry, &[base as u32, reason, reserved as u32]) as i32;
+    }
+    let f: extern "win64" fn(usize, u32, usize) -> i32 = unsafe { std::mem::transmute(entry) };
+    f(base, reason, reserved)
 }
 
 pub fn run(exe: Module) -> ! {
