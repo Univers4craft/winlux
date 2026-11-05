@@ -616,6 +616,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "non mesurée",
         "summary_benchmark_running": "mesure en cours",
         "summary_benchmark_limited": "{score} (limitée par : {part})",
+        "summary_benchmark_scale": "{score} sur {top}",
+        "bench_level_1": "pour un usage léger : bureautique, Internet, vidéo",
+        "bench_level_2": "pour un usage courant, multitâche compris",
+        "bench_level_3": "confortable : création, jeux légers",
+        "bench_level_4": "très rapide : jeux et travaux lourds",
         "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
@@ -804,6 +809,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "not measured",
         "summary_benchmark_running": "measuring",
         "summary_benchmark_limited": "{score} (limited by: {part})",
+        "summary_benchmark_scale": "{score} out of {top}",
+        "bench_level_1": "for light use: office, web, video",
+        "bench_level_2": "for everyday use, multitasking included",
+        "bench_level_3": "comfortable: creative work, light games",
+        "bench_level_4": "very fast: games and heavy workloads",
         "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
@@ -992,6 +1002,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "nicht gemessen",
         "summary_benchmark_running": "Messung läuft",
         "summary_benchmark_limited": "{score} (begrenzt durch: {part})",
+        "summary_benchmark_scale": "{score} von {top}",
+        "bench_level_1": "für leichte Nutzung: Büro, Internet, Video",
+        "bench_level_2": "für den Alltag, Multitasking inklusive",
+        "bench_level_3": "komfortabel: Kreativarbeit, leichte Spiele",
+        "bench_level_4": "sehr schnell: Spiele und anspruchsvolle Arbeiten",
         "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
@@ -1180,6 +1195,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "no medida",
         "summary_benchmark_running": "midiendo",
         "summary_benchmark_limited": "{score} (limitada por: {part})",
+        "summary_benchmark_scale": "{score} sobre {top}",
+        "bench_level_1": "para un uso ligero: ofimática, Internet, vídeo",
+        "bench_level_2": "para un uso habitual, multitarea incluida",
+        "bench_level_3": "cómodo: creación, juegos ligeros",
+        "bench_level_4": "muy rápido: juegos y tareas exigentes",
         "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
@@ -1368,6 +1388,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "non misurato",
         "summary_benchmark_running": "misurazione in corso",
         "summary_benchmark_limited": "{score} (limitato da: {part})",
+        "summary_benchmark_scale": "{score} su {top}",
+        "bench_level_1": "per un uso leggero: ufficio, Internet, video",
+        "bench_level_2": "per l'uso quotidiano, multitasking compreso",
+        "bench_level_3": "comodo: creatività, giochi leggeri",
+        "bench_level_4": "molto veloce: giochi e lavori pesanti",
         "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
@@ -1556,6 +1581,11 @@ TRANSLATIONS = {
         "summary_benchmark_none": "não medida",
         "summary_benchmark_running": "a medir",
         "summary_benchmark_limited": "{score} (limitada por: {part})",
+        "summary_benchmark_scale": "{score} em {top}",
+        "bench_level_1": "para uso leve: escritório, Internet, vídeo",
+        "bench_level_2": "para uso diário, multitarefa incluída",
+        "bench_level_3": "confortável: criação, jogos leves",
+        "bench_level_4": "muito rápido: jogos e trabalhos pesados",
         "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
@@ -3267,6 +3297,18 @@ def write_account_file(path, lines, mode):
         os.fsync(handle)
     finally:
         os.close(handle)
+
+
+def benchmark_level(score):
+    """Ce que la note permet (1,0 à 9,9, comme l'indice de performance)."""
+    return "bench_level_1" if score < 3 else "bench_level_2" if score < 5 else "bench_level_3" if score < 7 else "bench_level_4"
+
+
+def benchmark_text(score):
+    """« 2,0 sur 9,9, pour un usage léger : bureautique, Internet, vidéo »."""
+    scale = tr("summary_benchmark_scale", score=winlux_benchmark.fr_number(score, 1),
+               top=winlux_benchmark.fr_number(9.9, 1))
+    return f"{scale}, {tr(benchmark_level(score))}"
 
 
 class InstallerApp(Gtk.Application):
@@ -5035,7 +5077,8 @@ class InstallerApp(Gtk.Application):
             self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
             weakest = self.benchmark_weakest()
             # « 2,0 » à côté d'un processeur à 8,7 : dire d'où vient la note.
-            self.bench_status.set_text(tr("bench_done") + ("\n" + tr("bench_limited_by", part=tr("bench_" + weakest)) if weakest else ""))
+            self.bench_status.set_text(tr("bench_done") + "\n" + benchmark_text(self.benchmark["base_score"])
+                                       + ("\n" + tr("bench_limited_by", part=tr("bench_" + weakest)) if weakest else ""))
             tips = self.benchmark["recommendations"] or [tr("bench_no_tip")]
             self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
             self.bench_retry.set_sensitive(True)
@@ -5386,7 +5429,9 @@ class InstallerApp(Gtk.Application):
         # Seulement une mesure complète : une note partielle (page passée trop
         # vite, mesure interrompue ou relancée) affichait par exemple 2,0.
         if self.benchmark_complete():
-            score = winlux_benchmark.fr_number(self.benchmark["base_score"], 1)
+            # « 2,0 » seul ne disait rien (testeur VM) : l'échelle et ce que la
+            # note permet, puis ce qui la limite.
+            score = benchmark_text(self.benchmark["base_score"])
             # La note globale est la plus basse des notes (comme l'indice de
             # performance) : nommer le composant qui la fixe, sinon « 2,0 »
             # à côté d'un processeur à 8,7 ressemble à une mesure inachevée.
