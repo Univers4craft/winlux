@@ -15,6 +15,7 @@ __declspec(dllimport) long __stdcall D3DCompile(const void *, u64, const char *,
                                                 const char *, u32, u32, void **, void **);
 __declspec(dllimport) int __stdcall D3D11CreateDevice(void *, u32, void *, u32, const u32 *, u32, u32, void **, u32 *,
                                                       void **);
+__declspec(dllimport) long __stdcall CreateDXGIFactory1(const void *, void **);
 
 void *memset(void *d, int c, u64 n) {
     u8 *o = d;
@@ -53,6 +54,13 @@ typedef void(__stdcall *SetVP)(void *, u32, const void *);
 typedef void(__stdcall *Copy)(void *, void *, void *);
 typedef void(__stdcall *ClearRT)(void *, void *, const float *);
 typedef void(__stdcall *ClearDS)(void *, void *, u32, float, u8);
+
+typedef void(__stdcall *UpdateSub)(void *, void *, u32, const void *, const void *, u32, u32);
+typedef void(__stdcall *CopySub)(void *, void *, u32, u32, u32, u32, void *, u32, const void *);
+typedef long(__stdcall *CreateSC)(void *, void *, const void *, void **);
+typedef long(__stdcall *GetBuffer)(void *, u32, const void *, void **);
+typedef void(__stdcall *GetDesc)(void *, void *);
+typedef long(__stdcall *Present)(void *, u32, u32);
 
 typedef void *(__stdcall *BlobPtr)(void *);
 typedef u64(__stdcall *BlobSize)(void *);
@@ -107,14 +115,51 @@ void entry(void) {
     sd.cpu = 0x20000; // CPU_ACCESS_READ
     if (CALL(dev, 5, CreateTex, &sd, 0, &staging) < 0) ExitProcess(3);
 
-    // Texture 2×2 : rangée du haut rouge, du bas verte.
-    static const u32 texels[4] = {0xFF0000FF, 0xFF0000FF, 0xFF00FF00, 0xFF00FF00};
-    TexDesc xd = {2, 2, 1, 1, 28, 1, 0, 0, 0x8, 0, 0};
-    Init xi = {texels, 8, 0};
-    void *tex = 0, *srv = 0, *smp = 0;
-    if (CALL(dev, 5, CreateTex, &xd, &xi, &tex) < 0) ExitProcess(4);
-    if (CALL(dev, 7, CreateView, tex, 0, &srv) < 0) ExitProcess(5);
-    u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0, 0x7F7FFFFF};
+    // Chaîne d'échange créée APRÈS la vue de rendu, comme ANGLE (#509) : son
+    // contexte GL devient courant, et la vue créée avant doit toujours viser
+    // sa texture, pas le tampon arrière de la chaîne.
+    static const u8 factory_iid[16] = {0x78, 0xae, 0x0a, 0x77, 0x6f, 0xf2, 0xba, 0x4d,
+                                       0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87};
+    void *factory = 0, *swap = 0;
+    if (CreateDXGIFactory1(factory_iid, &factory) < 0 || !factory) ExitProcess(40);
+    u32 scd[18] = {0};
+    scd[0] = SIZE;     // BufferDesc.Width
+    scd[1] = SIZE;     // BufferDesc.Height
+    scd[4] = 28;       // BufferDesc.Format
+    scd[7] = 1;        // SampleDesc.Count
+    scd[9] = 0x20;     // BufferUsage RENDER_TARGET_OUTPUT
+    scd[10] = 1;       // BufferCount ; OutputWindow (scd[12..14]) = 0
+    scd[14] = 1;       // Windowed
+    if (CALL(factory, 10, CreateSC, dev, scd, &swap) < 0 || !swap) ExitProcess(41);
+    // Le tampon arrière a la taille demandée (il était toujours en 1280x720).
+    void *back = 0;
+    static const u8 tex2d_iid[16] = {0xf2, 0xaa, 0x15, 0x6f, 0x08, 0xd2, 0x89, 0x4e,
+                                     0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c};
+    if (CALL(swap, 9, GetBuffer, 0, tex2d_iid, &back) < 0 || !back) ExitProcess(42);
+    TexDesc bd = {0};
+    CALL(back, 10, GetDesc, &bd);
+    if (bd.w != SIZE || bd.h != SIZE) ExitProcess(43);
+
+    // Texture 2×2 : rangée du haut rouge, du bas verte. Remplie comme le
+    // fait ANGLE (#514) : UpdateSubresource dans une texture intermédiaire
+    // (pas de ligne de 16 octets, puis une boîte pour la 2e rangée), puis
+    // CopySubresourceRegion vers la texture échantillonnée à 2 niveaux.
+    static const u32 padded[8] = {0xFF0000FF, 0xFF0000FF, 0, 0, 0xFFFF0000, 0xFFFF0000, 0, 0};
+    static const u32 green[2] = {0xFF00FF00, 0xFF00FF00};
+    TexDesc xd = {2, 2, 2, 1, 28, 1, 0, 0, 0x8, 0, 0};
+    TexDesc ud = {2, 2, 1, 1, 28, 1, 0, 0, 0, 0, 0};
+    void *tex = 0, *up = 0, *srv = 0, *smp = 0;
+    if (CALL(dev, 5, CreateTex, &xd, 0, &tex) < 0) ExitProcess(4);
+    if (CALL(dev, 5, CreateTex, &ud, 0, &up) < 0) ExitProcess(4);
+    CALL(ctx, 48, UpdateSub, up, 0, 0, padded, 16, 0);
+    u32 row1[6] = {0, 1, 0, 2, 2, 1};
+    CALL(ctx, 48, UpdateSub, up, 0, row1, green, 8, 0);
+    CALL(ctx, 46, CopySub, tex, 0, 0, 0, 0, up, 0, 0);
+    // Vue limitée au niveau 0 comme celles d'ANGLE (#516) ; MinLOD = 1
+    // force la réduction : sans la limite, le niveau 1 (vide) serait lu.
+    u32 srvd[4] = {28, 4 /* TEXTURE2D */, 0 /* MostDetailedMip */, 1 /* MipLevels */};
+    if (CALL(dev, 7, CreateView, tex, srvd, &srv) < 0) ExitProcess(5);
+    u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0x3F800000 /* MinLOD 1 */, 0x7F7FFFFF};
     if (CALL(dev, 23, CreateState, sdesc, &smp) < 0 || !smp) ExitProcess(6);
 
     // Moitié gauche de l'écran (sens horaire, face avant D3D), que la matrice
@@ -193,5 +238,8 @@ void entry(void) {
     // Bord du quad : la colonne 33 est dessinée, la 30 non.
     if (AT(33, 10)[2] > 5 || AT(30, 10)[2] < 250) ExitProcess(25);
     CALL(ctx, 15, Unmap, staging, 0);
+    // Image copiée dans le tampon arrière puis présentée.
+    CALL(ctx, 47, Copy, back, rt);
+    if (CALL(swap, 8, Present, 0, 0) < 0) ExitProcess(44);
     ExitProcess(0);
 }

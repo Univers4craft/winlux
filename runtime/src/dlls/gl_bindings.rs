@@ -389,6 +389,24 @@ pub(crate) struct GlFunctions {
     pub PolygonOffset: unsafe extern "C" fn(GLfloat, GLfloat),
     pub DrawBuffers: unsafe extern "C" fn(GLsizei, *const GLenum),
     pub GetTexImage: unsafe extern "C" fn(GLenum, GLint, GLenum, GLenum, *mut c_void),
+    pub CopyImageSubData: unsafe extern "C" fn(
+        GLuint,
+        GLenum,
+        GLint,
+        GLint,
+        GLint,
+        GLint,
+        GLuint,
+        GLenum,
+        GLint,
+        GLint,
+        GLint,
+        GLint,
+        GLsizei,
+        GLsizei,
+        GLsizei,
+    ),
+    pub CopyBufferSubData: unsafe extern "C" fn(GLenum, GLenum, isize, isize, isize),
     pub ClearDepth: unsafe extern "C" fn(f64),
     pub ClearStencil: unsafe extern "C" fn(GLint),
 }
@@ -831,6 +849,30 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
         GetTexImage: sym!(
             "glGetTexImage",
             unsafe extern "C" fn(GLenum, GLint, GLenum, GLenum, *mut c_void)
+        ),
+        CopyImageSubData: ext!(
+            "glCopyImageSubData",
+            unsafe extern "C" fn(
+                GLuint,
+                GLenum,
+                GLint,
+                GLint,
+                GLint,
+                GLint,
+                GLuint,
+                GLenum,
+                GLint,
+                GLint,
+                GLint,
+                GLint,
+                GLsizei,
+                GLsizei,
+                GLsizei,
+            )
+        ),
+        CopyBufferSubData: ext!(
+            "glCopyBufferSubData",
+            unsafe extern "C" fn(GLenum, GLenum, isize, isize, isize)
         ),
         ClearDepth: sym!("glClearDepth", unsafe extern "C" fn(f64)),
         ClearStencil: sym!("glClearStencil", unsafe extern "C" fn(GLint)),
