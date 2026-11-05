@@ -55,12 +55,15 @@ manager --status | grep -qx 'browser_default=chrome'
 test ! -e "$WINLUX_BROWSER_ROOT/run/winlux/browser-install.lock"
 cp "$work/firefox-valid.deb" "$cache/firefox.deb"
 # Paquets de langue de Firefox : installés avec lui (fr), un paquet altéré (de) ignoré.
-for lang in fr de; do
+# Espagnol : Mozilla le publie par pays (firefox-l10n-es-es), rangé sous « es » (#432).
+for lang in fr de es; do
     pack="$work/l10n-$lang"
+    name=$lang; xpi=$lang
+    test "$lang" != es || { name=es-es; xpi=es-ES; }
     mkdir -p "$pack/DEBIAN" "$pack/usr/lib/firefox/distribution/extensions"
     chmod -R 755 "$pack"
-    printf '%s' "$lang" > "$pack/usr/lib/firefox/distribution/extensions/langpack-$lang@firefox.mozilla.org.xpi"
-    printf 'Package: firefox-l10n-%s\nVersion: 1.0\nArchitecture: all\nMaintainer: test <test@example.invalid>\nDescription: langpack fixture\n' "$lang" > "$pack/DEBIAN/control"
+    printf '%s' "$lang" > "$pack/usr/lib/firefox/distribution/extensions/langpack-$xpi@firefox.mozilla.org.xpi"
+    printf 'Package: firefox-l10n-%s\nVersion: 1.0\nArchitecture: all\nMaintainer: test <test@example.invalid>\nDescription: langpack fixture\n' "$name" > "$pack/DEBIAN/control"
     dpkg-deb --build --root-owner-group "$pack" "$cache/firefox-l10n-$lang.deb" >/dev/null
     sha256sum "$cache/firefox-l10n-$lang.deb" | cut -d' ' -f1 > "$cache/firefox-l10n-$lang.sha256"
 done
@@ -69,6 +72,7 @@ manager --default firefox 2>"$work/langpacks.txt"
 extensions="$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/distribution/extensions"
 test -f "$extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo 'Firefox sans paquet de langue' >&2; exit 1; }
 test ! -e "$extensions/langpack-de@firefox.mozilla.org.xpi" || { echo 'Paquet de langue altéré installé' >&2; exit 1; }
+test -f "$extensions/langpack-es-ES@firefox.mozilla.org.xpi" || { echo 'Firefox sans espagnol (firefox-l10n-es-es refusé)' >&2; exit 1; }
 grep -q 'Paquet de langue altéré ignoré : de' "$work/langpacks.txt"
 grep -qx 'pref("intl.locale.requested", "");' "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/defaults/pref/winlux-langue.js"
 test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/browser/extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo "Paquet de langue absent pour un profil existant" >&2; exit 1; }
