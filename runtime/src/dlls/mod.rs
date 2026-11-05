@@ -62,6 +62,7 @@ pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_palette;
+pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
 pub mod gpu_caps;
@@ -377,6 +378,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mscoree",
                 exports: mscoree::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "gdiplus",
+                exports: gdiplus::exports(),
                 handle: fake_module(),
             },
             Builtin {
