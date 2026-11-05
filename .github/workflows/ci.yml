@@ -332,6 +332,7 @@ jobs:
           sh scripts/test-update-notes.sh
           python3 -B scripts/test-update-guard.py
           python3 -B scripts/test-apt-metadata.py
+          python3 -B scripts/test-update-first-boot.py
 
       - name: Clé de signature de Flathub inchangée
         # Réseau des runners : l'empreinte publiée par Flathub doit rester celle
