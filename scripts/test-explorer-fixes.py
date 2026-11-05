@@ -71,6 +71,10 @@ ok("Glyph::Chevron\n" not in explorer.split("heads: [(&[u8], i32, SortKey); 4]")
 ok('b"Application Windows"' not in explorer and '[b"Application", b"Application"' in explorer,
    "type d'un .exe : « Application » comme Windows 11 (plus tronqué en 1366x768)")
 
+ok("fn drive_space(" in explorer and "usage_bar(g, tx" in explorer and "usage_bar(g, dx" in explorer,
+   "Ce PC : barre d'occupation et espace libre en Mosaïques et en Détails (#456)")
+ok('b"Espace libre"' in explorer and 'b"Occupation"' in explorer, "Ce PC : colonnes Occupation et Espace libre")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

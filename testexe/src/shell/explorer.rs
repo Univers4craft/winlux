@@ -702,6 +702,49 @@ unsafe fn row_icon(g: &mut Gfx, k: Kind, x: i32, y: i32) {
     }
 }
 
+/// Espace d'un lecteur de « Ce PC » : (libre pour l'utilisateur, total).
+unsafe fn drive_space(e: &Entry) -> Option<(u64, u64)> {
+    if !matches!(e.kind, Kind::Drive | Kind::LinuxDrive | Kind::Removable | Kind::Network) {
+        return None;
+    }
+    let letter = drive_letter_in(e.name())?;
+    let root = [letter as u16, b':' as u16, b'\\' as u16, 0];
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    if GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) == 0 || total == 0 {
+        return None;
+    }
+    Some((avail.min(total), total))
+}
+
+/// « 12,5 Go libres sur 476 Go ».
+fn space_text(free: u64, total: u64, out: &mut [u8; 64]) -> usize {
+    let mut a = [0u8; 24];
+    let mut t = [0u8; 24];
+    let (na, nt) = (size_text(free, &mut a), size_text(total, &mut t));
+    let free_word = tr4(&[b" libres", b" free", b" libres", b" frei"]);
+    let of = tr4(&[b" sur ", b" of ", b" de ", b" von "]);
+    let mut n = 0;
+    for part in [&a[..na], free_word, of, &t[..nt]] {
+        for &c in part {
+            if n < out.len() {
+                out[n] = c;
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Barre d'occupation d'un lecteur : couleur d'accent, rouge au-delà de 90 %.
+unsafe fn usage_bar(g: &mut Gfx, x: i32, y: i32, w: i32, free: u64, total: u64) {
+    let used = total.saturating_sub(free);
+    let fill_w = ((used as u128 * w as u128) / total.max(1) as u128) as i32;
+    let full = used.saturating_mul(10) >= total.saturating_mul(9);
+    fill(g.hdc, g.b, x, y, x + w, y + 6, pal().border);
+    let c = if full { rgb(0xD9, 0x3A, 0x2E) } else { ACCENT };
+    fill(g.hdc, g.b, x, y, x + fill_w.clamp(0, w), y + 6, c);
+}
+
 /// Nom du type pour la colonne « Type ».
 fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
@@ -2555,11 +2598,21 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             r.top + 4 + c.header,
         );
         let (nx, _, dx, tx, sx) = detail_cols(&hr);
+        // « Ce PC » : colonnes des lecteurs, comme Windows 11.
+        let drives = pn.loc.is(PC);
         let heads: [(&[u8], i32, SortKey); 4] = [
             (tr(S_NAME), nx - 28, SortKey::Name),
-            (tr(S_DATE), dx, SortKey::Date),
+            (
+                if drives { tr4(&[b"Occupation", b"Used space", b"Espacio usado", b"Belegt"]) } else { tr(S_DATE) },
+                dx,
+                SortKey::Date,
+            ),
             (tr(S_TYPE), tx, SortKey::Kind),
-            (tr(S_SIZE), sx, SortKey::Size),
+            (
+                if drives { tr4(&[b"Espace libre", b"Free space", b"Espacio libre", b"Freier Speicher"]) } else { tr(S_SIZE) },
+                sx,
+                SortKey::Size,
+            ),
         ];
         for (label, x, key) in heads {
             text(g.hdc, g.f.caption, p.text2, x, hr.top + 8, label);
@@ -2693,19 +2746,27 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                         ir.right - tx - 8,
                     );
                 }
-                text_fit(
-                    g.hdc,
-                    g.f.small,
-                    11,
-                    p.text3,
-                    tx,
-                    ty + 18,
-                    type_name(&e, &mut tbuf),
-                    ir.right - tx - 8,
-                );
-                if !e.dir {
-                    let n = size_text(e.size, &mut sbuf);
-                    text(g.hdc, g.f.small, p.text3, tx, ty + 32, &sbuf[..n]);
+                if let Some((free, total)) = drive_space(&e) {
+                    // Comme Windows 11 : barre puis « X libres sur Y ».
+                    usage_bar(g, tx, ty + 21, (ir.right - tx - 16).min(180), free, total);
+                    let mut buf = [0u8; 64];
+                    let n = space_text(free, total, &mut buf);
+                    text_fit(g.hdc, g.f.small, 11, p.text3, tx, ty + 32, &buf[..n], ir.right - tx - 8);
+                } else {
+                    text_fit(
+                        g.hdc,
+                        g.f.small,
+                        11,
+                        p.text3,
+                        tx,
+                        ty + 18,
+                        type_name(&e, &mut tbuf),
+                        ir.right - tx - 8,
+                    );
+                    if !e.dir {
+                        let n = size_text(e.size, &mut sbuf);
+                        text(g.hdc, g.f.small, p.text3, tx, ty + 32, &sbuf[..n]);
+                    }
                 }
             }
             View::Details => {
@@ -2718,8 +2779,13 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     text_fit(g.hdc, g.f.caption, 12, p.text, nx, ty, name, nw - 40);
                 }
                 let mut dbuf = [0u8; 24];
-                let dn = date_text(e.mtime, &mut dbuf);
-                text(g.hdc, g.f.caption, p.text2, dx, ty, &dbuf[..dn]);
+                let space = drive_space(&e);
+                if let Some((free, total)) = space {
+                    usage_bar(g, dx, ty + 5, (tx - dx - 24).min(120), free, total);
+                } else {
+                    let dn = date_text(e.mtime, &mut dbuf);
+                    text(g.hdc, g.f.caption, p.text2, dx, ty, &dbuf[..dn]);
+                }
                 text_fit(
                     g.hdc,
                     g.f.caption,
@@ -2730,7 +2796,12 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     type_name(&e, &mut tbuf),
                     sx - tx - 12,
                 );
-                if !e.dir {
+                if let Some((free, total)) = space {
+                    let _ = total;
+                    let n = size_text(free, &mut sbuf);
+                    let w = text_width(&sbuf[..n], 12);
+                    text(g.hdc, g.f.caption, p.text2, (ir.right - 16 - w).max(sx), ty, &sbuf[..n]);
+                } else if !e.dir {
                     let n = size_text(e.size, &mut sbuf);
                     let w = text_width(&sbuf[..n], 12);
                     text(
@@ -6945,6 +7016,27 @@ unsafe fn row_icon_checks() {
         "Icones des lignes : pages de fichiers de 12 px en vue Details (11 avant)"
     );
     check!(exe.1 >= 10, "Icones des lignes : un .exe est une fenetre claire, plus un pave sombre");
+    // « Ce PC » : espace du lecteur C: et texte « X libres sur Y ».
+    let mut drive = EMPTY_ENTRY;
+    let label = b"Dossier personnel (C:)";
+    drive.name[..label.len()].copy_from_slice(label);
+    drive.len = label.len() as u16;
+    drive.kind = Kind::Drive;
+    drive.dir = true;
+    let space = drive_space(&drive);
+    check!(
+        space.is_some_and(|(free, total)| total > 0 && free <= total),
+        "Ce PC : espace libre et taille du lecteur C: lus"
+    );
+    let mut buf = [0u8; 64];
+    let n = space_text(25 << 30, 251 << 30, &mut buf);
+    check!(
+        buf[..n].starts_with(b"25,0 Go") && buf[..n].ends_with(b"251 Go"),
+        "Ce PC : texte \"25,0 Go libres sur 251 Go\" sous la barre"
+    );
+    let mut folder = drive;
+    folder.kind = Kind::Folder;
+    check!(drive_space(&folder).is_none(), "Ce PC : pas de barre d'occupation sur un dossier");
     b.release();
     f.release();
     SelectObject(dc, old);
