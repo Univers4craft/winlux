@@ -259,5 +259,5 @@ if failures:
 rank, settings_for = module["rank"], module["settings_for"]
 assert rank("Paramètres", "par") < rank("Bluetooth et appareils", "par"), "classement de la recherche"
 assert settings_for("son")[0][0] == "Son", settings_for("son")
-assert [label for label, _ in settings_for("par")][:1] == ["Partage de dossiers et transfert des réglages"], settings_for("par")
+assert [label for label, _ in settings_for("par")][:1] == ["Partage et transfert"], settings_for("par")
 print("OK: menu Démarrer, clavier tactile intégré (ouvert sans clavier, appuis dans la recherche, caché avec clavier)")
