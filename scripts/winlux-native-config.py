@@ -150,7 +150,7 @@ for path in (source / "config").rglob("*"):
 XFCE_SHORTCUTS = {
     "<Super>e": ("thunar", "winlux-shell-app explorer"),
     "<Primary><Alt>f": ("thunar", "winlux-shell-app explorer"),
-    "<Super>r": ("xfce4-appfinder -c", "winlux-start-menu"),
+    "<Super>r": ("xfce4-appfinder -c", "winlux-run"),
     "<Alt>F1": ("xfce4-popup-applicationsmenu", "winlux-start-menu"),
     "<Alt>F2": ("xfce4-appfinder --collapsed", "winlux-start-menu"),
     "<Alt>F3": ("xfce4-appfinder", "winlux-start-menu"),
@@ -166,6 +166,11 @@ XFCE_SHORTCUTS = {
     # Ctrl+Alt+T est tenu par openbox (actif dès l'apparition du bureau).
     "<Primary><Alt>t": ("exo-open --launch TerminalEmulator", None),
 }
+
+
+# Valeurs livrées par une version précédente de Winlux, remplacées elles aussi :
+# Windows + R ouvrait le menu Démarrer avant la boîte Exécuter (#474).
+PREVIOUS_SHORTCUTS = {"<Super>r": "winlux-start-menu"}
 
 
 def winlux_shortcuts(path):
@@ -198,7 +203,9 @@ def winlux_shortcuts(path):
     changed = not path.is_file()
     for key, (stock, command) in XFCE_SHORTCUTS.items():
         item = existing.get(key)
-        if item is None or item.get("value") != stock:
+        if item is None or item.get("value") not in (stock, PREVIOUS_SHORTCUTS.get(key)):
+            continue
+        if item.get("value") == command:
             continue
         if command is None:
             custom.remove(item)
@@ -441,7 +448,7 @@ openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
               "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
-              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right")
+              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right", "W-i", "W-s", "W-r", "W-x", "W-p")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.
