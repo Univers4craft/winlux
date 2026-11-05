@@ -88,7 +88,7 @@ print("textes de la date et de l'heure en 6 langues")
 # ── Init : fuseau des systèmes installés sans fuseau ────────────────────
 build = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 init = build[build.index('cat >"$stage/init" <<'):]
-block = re.search(r"^if test -s /etc/winlux/install-config.json && ! test -s /etc/timezone; then\n.*?^fi\n", init, re.S | re.M)
+block = re.search(r"^if test -e /etc/winlux/install-config.json && ! test -s /etc/timezone; then\n.*?^fi\n", init, re.S | re.M)
 assert block, "l'init ne règle pas le fuseau des systèmes installés sans fuseau"
 with tempfile.TemporaryDirectory() as tmp:
     tmp = pathlib.Path(tmp)
@@ -109,11 +109,23 @@ with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["sh", "-c", code], check=True)
         assert (tmp / "etc/timezone").read_text().strip() == expected, lang
         assert os.readlink(localtime).endswith(expected), os.readlink(localtime)
+    # install-config.json vide (#433) : le fuseau vient quand même de la langue.
+    (tmp / "etc/winlux/install-config.json").write_text("")
+    (tmp / "etc/default/locale").write_text("LANG=fr_FR.UTF-8\n")
+    (tmp / "etc/timezone").unlink(missing_ok=True)
+    subprocess.run(["sh", "-c", code], check=True)
+    assert (tmp / "etc/timezone").read_text().strip() == "Europe/Paris", "install-config.json vide : fuseau sauté"
+    # Live (pas d'install-config.json) : rien n'est touché.
+    (tmp / "etc/winlux/install-config.json").unlink()
+    (tmp / "etc/timezone").unlink()
+    subprocess.run(["sh", "-c", code], check=True)
+    assert not (tmp / "etc/timezone").exists(), "le live ne doit pas recevoir de fuseau"
+    (tmp / "etc/winlux/install-config.json").write_text("{}")
     # Un fuseau déjà choisi n'est jamais remplacé.
     (tmp / "etc/timezone").write_text("Asia/Tokyo\n")
     subprocess.run(["sh", "-c", code], check=True)
     assert (tmp / "etc/timezone").read_text().strip() == "Asia/Tokyo"
-print("init : système installé en UTC sans fuseau → fuseau de sa langue ; un choix existant est gardé")
+print("init : système installé en UTC sans fuseau → fuseau de sa langue, même avec install-config.json vide ; un choix existant est gardé")
 
 control = (ROOT / "scripts/winlux-control.sh").read_text(encoding="utf-8")
 line = next(line for line in control.splitlines() if "printf 'timezone=%s" in line)
