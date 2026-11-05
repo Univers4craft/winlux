@@ -7,11 +7,24 @@ static NOTES: StdMutex<Vec<(u16, u16)>> = StdMutex::new(Vec::new());
 static SERIAL: StdMutex<()> = StdMutex::new(());
 /// Codes WM_NOTIFY reçus par la fenêtre parente.
 static NOTIFY: StdMutex<Vec<i32>> = StdMutex::new(Vec::new());
+/// WM_DRAWITEM reçus par la fenêtre parente : (type de contrôle, élément, donnée).
+static DRAWN: StdMutex<Vec<(u32, u32, usize)>> = StdMutex::new(Vec::new());
 
 extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     if msg == WM_COMMAND {
         NOTES.lock().unwrap().push((wp as u16, (wp >> 16) as u16));
         return 0;
+    }
+    if msg == 0x002B && lp != 0 {
+        // WM_DRAWITEM : CtlType, CtlID, itemID… itemData en fin de structure.
+        unsafe {
+            let p = lp as *const u8;
+            let ctl_type = *(p as *const u32);
+            let item = *(p.add(8) as *const u32);
+            let data = *(p.add(56) as *const usize);
+            DRAWN.lock().unwrap().push((ctl_type, item, data));
+        }
+        return 1;
     }
     if msg == 0x004E && lp != 0 {
         let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
@@ -985,5 +998,115 @@ fn barre_de_menus_reduit_la_zone_client_et_place_les_titres() {
         user32::get_client_rect(p, &mut r);
     }
     assert_eq!(r.height(), 300);
+    gui::destroy_window(p);
+}
+
+/// Mémoire DC + image de `w`×`h` remplie de blanc.
+fn memory_dc(w: i32, h: i32) -> (usize, usize) {
+    let dc = crate::dlls::gdi32::create_compatible_dc(0);
+    let bmp = crate::dlls::gdi32::create_compatible_bitmap(dc, w, h);
+    crate::dlls::gdi32::select_object(dc, bmp);
+    gui::record(
+        dc,
+        gui::DrawCmd::FillRect {
+            rect: Rect::from_size(0, 0, w, h),
+            color: 0x00FF_FFFF,
+        },
+    );
+    (dc, bmp)
+}
+
+fn dark_pixels(bmp: usize) -> usize {
+    let (_, _, px, _) = gui::bitmap_pixels(bmp).unwrap();
+    px.iter().filter(|&&p| p & 0xFF < 0x80).count()
+}
+
+#[test]
+fn texte_dans_une_image_hors_ecran() {
+    let spec = gui::FontSpec {
+        height: -14,
+        face: "Segoe UI".into(),
+        ..gui::FontSpec::default()
+    };
+    if crate::dlls::usp10::spec_font(&spec).is_none() {
+        return; // aucune police TrueType sur cette machine
+    }
+    let (dc, bmp) = memory_dc(80, 24);
+    assert_eq!(dark_pixels(bmp), 0);
+    gui::record(
+        dc,
+        gui::DrawCmd::Text {
+            x: 2,
+            y: 2,
+            text: "Ln 1".into(),
+            color: 0,
+            bk: None,
+            font: spec,
+        },
+    );
+    assert!(dark_pixels(bmp) > 10, "glyphes posés dans l'image");
+}
+
+#[repr(C)]
+struct TestTcItem {
+    mask: u32,
+    state: u32,
+    state_mask: u32,
+    text: *const u16,
+    text_max: i32,
+    image: i32,
+    param: isize,
+}
+
+#[test]
+fn wm_print_peint_barre_d_etat_et_onglets_dessines_par_le_parent() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let status = child(p, "msctls_statusbar32", "", 0, 30, (0, 0, 0, 0));
+    let text = w("Ln : 1");
+    sendw(status, 0x040B, 0, text.as_ptr() as isize); // SB_SETTEXTW
+    sendw(status, 0x040B, 1 | 0x1000, 0x55); // SBT_OWNERDRAW
+    let parts = [100i32, -1];
+    sendw(status, 0x0404, 2, parts.as_ptr() as isize); // SB_SETPARTS
+    DRAWN.lock().unwrap().clear();
+    let (dc, bmp) = memory_dc(400, 26);
+    // WM_PRINT (PRF_CLIENT | PRF_ERASEBKGND) : rendu dans le DC fourni.
+    sendw(status, 0x0317, dc, 0xC);
+    let (_, _, px, _) = gui::bitmap_pixels(bmp).unwrap();
+    assert!(
+        px.iter().any(|&c| c & 0x00FF_FFFF != 0x00FF_FFFF),
+        "barre peinte"
+    );
+    assert!(
+        DRAWN.lock().unwrap().contains(&(0, 1, 0x55)),
+        "partie SBT_OWNERDRAW"
+    );
+
+    // Onglets TCS_OWNERDRAWFIXED : chaque onglet passe par WM_DRAWITEM.
+    let tab = child(p, "SysTabControl32", "", 0x2000, 31, (0, 0, 300, 200));
+    let label = w("new 1");
+    let item = TestTcItem {
+        mask: 0x9, // TCIF_TEXT | TCIF_PARAM
+        state: 0,
+        state_mask: 0,
+        text: label.as_ptr(),
+        text_max: 0,
+        image: -1,
+        param: 0x77,
+    };
+    assert_eq!(
+        sendw(tab, 0x133E, 0, &item as *const TestTcItem as isize),
+        0
+    );
+    assert_eq!(sendw(tab, 0x132C, 0, 0), 1, "TCM_GETROWCOUNT");
+    sendw(tab, 0x1329, 0, (22 << 16) | 44); // TCM_SETITEMSIZE
+    assert_eq!(sendw(tab, 0x1329, 0, (22 << 16) | 60), (22 << 16) | 44);
+    let mut r = Rect::from_size(0, 0, 300, 200);
+    sendw(tab, 0x1328, 0, &mut r as *mut Rect as isize); // TCM_ADJUSTRECT
+    assert_eq!(r.top, 22 + 2, "zone d'affichage sous la rangée d'onglets");
+    DRAWN.lock().unwrap().clear();
+    let (dc2, _) = memory_dc(300, 200);
+    sendw(tab, 0x0317, dc2, 0xC);
+    assert!(DRAWN.lock().unwrap().contains(&(101, 0, 0x77)), "ODT_TAB");
     gui::destroy_window(p);
 }

@@ -1679,6 +1679,12 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
 }
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
+    // Texte : glyphes préparés avant de prendre le verrou des objets GDI
+    // (la police se résout à partir des fichiers TrueType du système).
+    let glyphs = match cmd {
+        DrawCmd::Text { text, font, .. } => crate::dlls::usp10::layout_pixels(font, text),
+        _ => None,
+    };
     let mut map = lock(objects());
     let Some(GdiObject::Bitmap {
         width,
@@ -1889,7 +1895,67 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
-        DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
+        DrawCmd::Text {
+            x, y, color, bk, ..
+        } => {
+            // Texte dans une image hors écran (double tampon des programmes :
+            // onglets et barre d'état de Notepad++…), lissé sur le fond.
+            let Some((glyphs, advance, line_h)) = glyphs else {
+                return true;
+            };
+            if let Some(bk) = bk {
+                for py in (*y).max(0)..(y + line_h).min(bounds.bottom) {
+                    for px in (*x).max(0)..(x + advance).min(bounds.right) {
+                        put(px, py, *bk, RasterOp::Copy);
+                    }
+                }
+            }
+            for (gx, gy, r) in glyphs {
+                for row in 0..r.h {
+                    let py = y + gy + row as i32;
+                    if py < 0 || py >= bounds.bottom {
+                        continue;
+                    }
+                    for col in 0..r.w {
+                        let a = r.cov[row * r.w + col] as u32;
+                        let px = x + gx + col as i32;
+                        if a == 0 || px < 0 || px >= bounds.right {
+                            continue;
+                        }
+                        let (ux, uy) = (px as usize, py as usize);
+                        let old = bitmap_color_at(
+                            *width,
+                            *height,
+                            pixels,
+                            dib_bits.as_deref(),
+                            *dib_bit_count,
+                            *dib_stride,
+                            *top_down,
+                            ux,
+                            uy,
+                        );
+                        let mix = |shift: u32| {
+                            let o = (old >> shift) & 0xFF;
+                            let n = (color >> shift) & 0xFF;
+                            ((n * a + o * (255 - a)) / 255) << shift
+                        };
+                        set_bitmap_color(
+                            *width,
+                            *height,
+                            pixels,
+                            dib_bits,
+                            *dib_bit_count,
+                            *dib_stride,
+                            *top_down,
+                            ux,
+                            uy,
+                            mix(0) | mix(8) | mix(16),
+                        );
+                    }
+                }
+            }
+        }
+        DrawCmd::Blit { .. } => {}
     }
     true
 }
@@ -2822,6 +2888,22 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             0
         }
         WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        // WM_PRINT : la fenêtre se peint dans le DC fourni (fond puis zone
+        // client), comme le fait DefWindowProc ; Notepad++ peint ainsi ses
+        // onglets et sa barre d'état dans une image hors écran.
+        0x0317 => {
+            if wparam != 0 {
+                if lparam & 0x8 != 0 {
+                    unsafe { crate::dlls::user32::send_message_w(hwnd, WM_ERASEBKGND, wparam, 0) };
+                }
+                if lparam & 0x4 != 0 {
+                    unsafe {
+                        crate::dlls::user32::send_message_w(hwnd, 0x0318, wparam, lparam & 0x4)
+                    };
+                }
+            }
+            0
+        }
         // WM_NCLBUTTONDOWN sur HTMENU : clic dans la barre de menus.
         0x00A1 if wparam == 5 => {
             let x = lparam as u32 as u16 as i16 as i32;

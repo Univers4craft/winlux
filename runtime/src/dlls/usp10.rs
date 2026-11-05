@@ -76,6 +76,11 @@ fn em_for(height: i32, m: &sfnt::Metrics) -> f32 {
 /// Police du HFONT sélectionné dans le DC.
 pub fn dc_font(hdc: usize) -> Option<Arc<GdiFont>> {
     let spec = super::gui::font_spec(super::gui::dc_font(hdc)).unwrap_or_default();
+    spec_font(&spec)
+}
+
+/// Police TrueType d'une description GDI (face, hauteur, graisse…).
+pub fn spec_font(spec: &super::gui::FontSpec) -> Option<Arc<GdiFont>> {
     let key: Key = (
         spec.face.to_lowercase(),
         spec.height,
@@ -140,6 +145,50 @@ unsafe extern "win64" fn get_glyph_indices_w(
         };
     }
     count as u32
+}
+
+/// Glyphes d'un texte posés à partir du coin haut-gauche (x, y) : pour
+/// chacun, position du coin haut-gauche de son raster. Renvoie aussi la
+/// boîte occupée (largeur avancée, hauteur de ligne), pour le fond opaque.
+pub fn layout_pixels(
+    spec: &super::gui::FontSpec,
+    text: &str,
+) -> Option<(Vec<(i32, i32, Arc<Raster>)>, i32, i32)> {
+    let f = spec_font(spec)?;
+    let ascent = f.ascent();
+    let mut pen = 0;
+    let mut out = Vec::new();
+    for ch in text.chars() {
+        let gid = f.font.glyph_index(ch as u32);
+        let r = glyph_raster(&f, gid);
+        if !r.empty {
+            out.push((pen + r.origin.0, ascent - r.origin.1, r.clone()));
+        }
+        pen += r.advance;
+    }
+    Some((out, pen, ascent + f.descent()))
+}
+
+type GlyphKey = (usize, u32, u16);
+
+fn glyph_cache() -> &'static Mutex<HashMap<GlyphKey, Arc<Raster>>> {
+    static G: OnceLock<Mutex<HashMap<GlyphKey, Arc<Raster>>>> = OnceLock::new();
+    G.get_or_init(Default::default)
+}
+
+/// Raster d'un glyphe, gardé en cache par police et taille.
+fn glyph_raster(f: &Arc<GdiFont>, gid: u16) -> Arc<Raster> {
+    let key = (Arc::as_ptr(&f.font) as usize, f.em.to_bits(), gid);
+    if let Some(r) = super::lock(glyph_cache()).get(&key) {
+        return r.clone();
+    }
+    let r = Arc::new(rasterize(f, gid));
+    let mut cache = super::lock(glyph_cache());
+    if cache.len() > 8192 {
+        cache.clear();
+    }
+    cache.insert(key, r.clone());
+    r
 }
 
 /// Glyphe rendu en niveaux de couverture 0..=255, ligne par ligne.

@@ -85,8 +85,18 @@ pub(super) struct CommonState {
     // Onglets / barre d'état
     tabs: Vec<(String, isize)>,
     tab_sel: i32,
+    /// Taille fixée par TCM_SETITEMSIZE (onglets de largeur fixe ou dessinés
+    /// par le programme).
+    tab_size: (i32, i32),
+    /// TCM_SETPADDING (0 : valeur par défaut), TCM_SETMINTABWIDTH et
+    /// présence d'une liste d'images (TCM_SETIMAGELIST).
+    tab_pad: i32,
+    tab_min: i32,
+    tab_images: usize,
     parts: Vec<i32>,
     part_text: Vec<String>,
+    /// Parties SBT_OWNERDRAW : valeur passée au parent dans WM_DRAWITEM.
+    part_owner: Vec<Option<isize>>,
     simple: bool,
     // Progression / curseur / flèches
     lo: i32,
@@ -1817,19 +1827,37 @@ struct TcItem {
     param: isize,
 }
 
-fn tab_h(c: &Ctl) -> i32 {
-    line_height(font_of(c)) + 14
+fn tab_h(hwnd: usize, c: &Ctl) -> i32 {
+    let (_, h) = common_snapshot(hwnd).tab_size;
+    if h > 0 {
+        h
+    } else {
+        line_height(font_of(c)) + 14
+    }
 }
+
+const TCS_FIXEDWIDTH: u32 = 0x400;
+const TCS_OWNERDRAWFIXED: u32 = 0x2000;
 
 /// Rectangles des onglets (une seule rangée).
 fn tab_rects(hwnd: usize, c: &Ctl) -> Vec<Rect> {
     let s = common_snapshot(hwnd);
-    let h = tab_h(c);
+    let h = tab_h(hwnd, c);
+    let fixed = style(hwnd) & TCS_FIXEDWIDTH != 0 && s.tab_size.0 > 0;
     let mut x = 2;
     s.tabs
         .iter()
         .map(|(t, _)| {
-            let w = measure(font_of(c), t).0 + 24;
+            let w = if fixed {
+                s.tab_size.0
+            } else {
+                // Comme Windows : marge de chaque côté, et place de l'icône
+                // quand une liste d'images est posée (Notepad++ y dessine
+                // ses boutons épingler et fermer).
+                let pad = if s.tab_pad > 0 { s.tab_pad } else { 12 };
+                let icon = if s.tab_images != 0 { 16 + pad / 2 } else { 0 };
+                (measure(font_of(c), t).0 + pad * 2 + icon).max(s.tab_min)
+            };
             let r = Rect::from_size(x, 0, w, h);
             x += w + 2;
             r
@@ -1843,7 +1871,8 @@ fn paint_tabs(hwnd: usize, p: &Painter, r: Rect) {
     };
     background(hwnd, p.hdc, WM_CTLCOLORSTATIC, face_color(), p, r);
     let s = common_snapshot(hwnd);
-    let h = tab_h(&c);
+    let h = tab_h(hwnd, &c);
+    let owner_draw = style(hwnd) & TCS_OWNERDRAWFIXED != 0;
     let body = Rect {
         top: r.top + h,
         ..r
@@ -1867,6 +1896,11 @@ fn paint_tabs(hwnd: usize, p: &Painter, r: Rect) {
                 FIELD,
             );
             p.line(tr.left + 8, tr.top + 2, tr.right - 8, tr.top + 2, ACCENT, 2);
+        }
+        if owner_draw {
+            // TCS_OWNERDRAWFIXED : le parent dessine l'onglet (ODT_TAB).
+            super::draw_item(hwnd, p.hdc, 101, i as i32, selected as u32, tr, s.tabs[i].1);
+            continue;
         }
         let color = if enabled(hwnd) { TEXT } else { TEXT_DISABLED };
         p.text(tr, &s.tabs[i].0, color, 1);
@@ -1964,6 +1998,9 @@ unsafe fn tab_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize>
             }
         }
         0x1304 => common_snapshot(hwnd).tabs.len() as isize, // GETITEMCOUNT
+        // TCM_GETROWCOUNT : une seule rangée d'onglets (Notepad++ en déduit
+        // la hauteur de la bande d'onglets au-dessus de l'éditeur).
+        0x132C => 1,
         0x1308 => {
             let ok = with_common(hwnd, |s| {
                 if wp < s.tabs.len() {
@@ -2002,7 +2039,7 @@ unsafe fn tab_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize>
             // TCM_ADJUSTRECT : wp TRUE = zone d'affichage → fenêtre
             if lp != 0 {
                 let c = snapshot(hwnd)?;
-                let h = tab_h(&c);
+                let h = tab_h(hwnd, &c);
                 let r = &mut *(lp as *mut Rect);
                 if wp != 0 {
                     r.top -= h + 2;
@@ -2018,7 +2055,33 @@ unsafe fn tab_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize>
             }
             0
         }
-        0x1303 | 0x1329 | 0x132B | 0x1331 => 0, // images, taille, padding
+        0x1329 => {
+            // TCM_SETITEMSIZE : lParam = largeur | hauteur << 16 ; renvoie
+            // l'ancienne taille.
+            let (w, h) = ((lp & 0xFFFF) as i32, ((lp >> 16) & 0xFFFF) as i32);
+            let old = with_common(hwnd, |s| std::mem::replace(&mut s.tab_size, (w, h)));
+            invalidate(hwnd);
+            ((old.1 as isize & 0xFFFF) << 16) | (old.0 as isize & 0xFFFF)
+        }
+        0x1303 => {
+            // TCM_SETIMAGELIST : renvoie la liste précédente.
+            let old = with_common(hwnd, |s| std::mem::replace(&mut s.tab_images, lp as usize));
+            invalidate(hwnd);
+            old as isize
+        }
+        0x1302 => common_snapshot(hwnd).tab_images as isize, // TCM_GETIMAGELIST
+        0x132B => {
+            // TCM_SETPADDING : marge horizontale autour de l'icône et du texte.
+            with_common(hwnd, |s| s.tab_pad = (lp & 0xFFFF) as i32);
+            invalidate(hwnd);
+            0
+        }
+        0x1331 => {
+            // TCM_SETMINTABWIDTH : renvoie l'ancienne largeur minimale.
+            let old = with_common(hwnd, |s| std::mem::replace(&mut s.tab_min, lp as i32));
+            invalidate(hwnd);
+            old as isize
+        }
         WM_GETDLGCODE => DLGC_WANTARROWS,
         WM_LBUTTONDOWN => {
             let c = snapshot(hwnd)?;
@@ -2109,6 +2172,19 @@ fn paint_status(hwnd: usize, p: &Painter, r: Rect) {
     let mut x = r.left;
     for (i, &edge) in s.parts.iter().enumerate() {
         let right = if edge < 0 { r.right } else { edge.min(r.right) };
+        if let Some(Some(data)) = s.part_owner.get(i) {
+            let part = Rect {
+                left: x,
+                right,
+                ..r
+            };
+            super::draw_item(hwnd, p.hdc, 0, i as i32, 0, part, *data);
+            if edge >= 0 && right < r.right {
+                p.line(right, r.top + 6, right, r.bottom - 6, CONTROL_BORDER, 1);
+            }
+            x = right;
+            continue;
+        }
         let text = s.part_text.get(i).cloned().unwrap_or_default();
         p.text(
             Rect {
@@ -2132,12 +2208,22 @@ unsafe fn status_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isi
         0x0401 | 0x040B => {
             // SB_SETTEXTA/W : wp bas = partie (255 = mode simple)
             let part = wp & 0xFF;
-            let text = read_text_ptr(lp as usize, msg == 0x040B).unwrap_or_default();
+            // SBT_OWNERDRAW : lParam est une valeur pour le parent, pas un texte.
+            let owner = (wp & 0x1000 != 0).then_some(lp);
+            let text = if owner.is_some() {
+                String::new()
+            } else {
+                read_text_ptr(lp as usize, msg == 0x040B).unwrap_or_default()
+            };
             with_common(hwnd, |s| {
                 if s.part_text.len() <= part {
                     s.part_text.resize(part + 1, String::new());
                 }
+                if s.part_owner.len() <= part {
+                    s.part_owner.resize(part + 1, None);
+                }
                 s.part_text[part] = text;
+                s.part_owner[part] = owner;
             });
             invalidate(hwnd);
             1
