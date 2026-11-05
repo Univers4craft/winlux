@@ -61,7 +61,9 @@
     <keybind key="W-S-Left"><action name="MoveResizeTo"><monitor>prev</monitor></action></keybind>
     <keybind key="W-S-Right"><action name="MoveResizeTo"><monitor>next</monitor></action></keybind>
   </keyboard>
-  <mouse><dragThreshold>4</dragThreshold><doubleClickTime>450</doubleClickTime>
+  <!-- screenEdgeWarpTime 0 : une fenêtre glissée au bord de l'écran s'y ancre
+       (winlux-snap watch) au lieu de partir sur le bureau virtuel voisin. -->
+  <mouse><dragThreshold>4</dragThreshold><doubleClickTime>450</doubleClickTime><screenEdgeWarpTime>0</screenEdgeWarpTime>
     <context name="Titlebar">
       <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
       <mousebind button="Left" action="Drag"><action name="Move"/></mousebind>

@@ -18,11 +18,21 @@ colonnes, quatre quarts.
     winlux-snap place ZONE [FENÊTRE]     place la fenêtre active (ou FENÊTRE) dans ZONE
     winlux-snap zones                    zones connues (tests)
     winlux-snap ontop [FENÊTRE]          Windows + Ctrl + T : toujours au premier plan
+    winlux-snap watch                    ancrage à la souris (lancé avec la session)
+
+À la souris (winlux-snap watch) : une fenêtre glissée par sa barre de titre
+jusqu'au bord gauche ou droit prend la moitié de l'écran, jusqu'à un coin un
+quart, jusqu'en haut tout l'écran ; près du haut, au centre, la barre des
+dispositions descend et l'on y lâche la fenêtre dans une case. Une fenêtre
+ancrée qu'on décroche reprend sa taille d'avant. Laisser la souris sur le
+bouton Agrandir ouvre la grille des dispositions sous le bouton.
 
 Une zone est « disposition:case », par exemple half:left, third:2, quarter:tr.
 L'état d'ancrage et la taille d'avant sont gardés dans des propriétés X de la
 fenêtre (_WINLUX_SNAP, _WINLUX_RESTORE).
 """
+import ctypes
+import ctypes.util
 import os
 import re
 import shutil
@@ -351,11 +361,16 @@ CSS = b"""
 """
 
 
-def layouts_popup(window):
-    """Windows + Z : grilles de disposition, comme au survol du bouton Agrandir."""
+def layouts_popup(window, at=None):
+    """Windows + Z : grilles de disposition ; at=(x, y) : ouverte au survol du
+    bouton Agrandir, sous ce point, sans prendre le clavier, et refermée dès
+    que la souris s'en éloigne."""
     Gdk, GLib, Gtk = _gtk()
     if not window: return 1
     popup = Gtk.Window(title=_t("Dispositions d’ancrage"))
+    if at is not None:
+        popup.set_accept_focus(False)
+        popup.set_type_hint(Gdk.WindowTypeHint.UTILITY)
     popup.set_role("winlux-snap-layouts")
     popup.set_decorated(False)
     popup.set_keep_above(True)
@@ -388,13 +403,36 @@ def layouts_popup(window):
         flow.add(fixed)
     popup.connect("key-press-event", lambda _, event: event.keyval == Gdk.KEY_Escape and (Gtk.main_quit() or True))
     popup.connect("focus-out-event", lambda *_: GLib.timeout_add(200, lambda: popup.is_active() or Gtk.main_quit()) and False)
-    # En haut au centre de la fenêtre, là où Windows montre les dispositions.
+    # En haut à droite de la fenêtre, là où Windows montre les dispositions.
     geometry = window_geometry(window)
     popup.show_all()
-    if geometry:
+    scale = max(1, popup.get_scale_factor())
+    width, height = popup.get_size()
+    if at is not None:
+        # Sous le bouton Agrandir, sans sortir de l'écran (coordonnées X en pixels réels).
+        area = pick_area(work_areas(), at)
+        left = min(max(area[0], at[0] - width * scale // 2), area[0] + area[2] - width * scale)
+        popup.move(left // scale, (at[1] + 8) // scale)
+        anchor = (at[0] - 20, at[1] - 30, 40, 40)
+
+        def pointer_left():
+            _, px, py = popup.get_display().get_default_seat().get_pointer().get_position()
+            px, py = px * scale, py * scale
+            ox, oy = popup.get_position()
+            inside = ox * scale - 24 <= px <= (ox + width) * scale + 24 and oy * scale - 24 <= py <= (oy + height) * scale + 24
+            on_button = anchor[0] <= px <= anchor[0] + anchor[2] and anchor[1] <= py <= anchor[1] + anchor[3]
+            if inside or on_button:
+                state["away"] = 0
+            else:
+                state["away"] += 1
+                if state["away"] >= 3: Gtk.main_quit()
+            return True
+
+        state = {"away": 0}
+        GLib.timeout_add(150, pointer_left)
+    elif geometry:
         x, y, w, _ = geometry
-        width, _ = popup.get_size()
-        popup.move(max(0, x + w - width - 60), max(0, y + 30))
+        popup.move(max(0, x + w - width * scale - 60) // scale, max(0, y + 30) // scale)
     popup.present()
     Gtk.main()
     if "zone" not in chosen: return 0
@@ -459,6 +497,407 @@ def assist(window, free_zones):
     return 0
 
 
+# ── Ancrage à la souris (winlux-snap watch) ────────────────────────────────
+
+EDGE = 2              # pixels du bord de l'écran qui déclenchent l'ancrage
+CORNER = 0.2          # part de la hauteur de l'écran qui compte comme un coin
+DRAG_START = 8        # déplacement minimal (pixels) avant de parler de glisser
+BAR_REACH = 72        # distance du haut où la barre des dispositions descend
+HOVER_DELAY = 0.5     # secondes sur le bouton Agrandir avant la grille
+BAR_CELL = (64, 40)   # case d'une disposition dans la barre (pixels à l'échelle 1)
+BAR_GAP = 10
+
+
+def drag_zone(point, monitor):
+    """Zone visée en lâchant la fenêtre au point donné sur cet écran (bords
+    réels, barre des tâches comprise) : half:*, quarter:*, « maximize » ou None."""
+    px, py = point
+    mx, my, mw, mh = monitor
+    left, right = px <= mx + EDGE - 1, px >= mx + mw - EDGE
+    top, bottom = py <= my + EDGE - 1, py >= my + mh - EDGE
+    corner = max(EDGE, round(mh * CORNER))
+    if left or right:
+        side = "l" if left else "r"
+        if py < my + corner: return f"quarter:t{side}"
+        if py >= my + mh - corner: return f"quarter:b{side}"
+        return "half:left" if left else "half:right"
+    if top: return "maximize"
+    return None
+
+
+def snap_bar(monitor, scale=1):
+    """Barre des dispositions en haut au centre : (rectangle de la barre,
+    [(zone, rectangle de sa case)]), en pixels réels."""
+    cell_w, cell_h = BAR_CELL[0] * scale, BAR_CELL[1] * scale
+    gap = BAR_GAP * scale
+    width = len(LAYOUTS) * cell_w + (len(LAYOUTS) + 1) * gap
+    height = cell_h + 2 * gap
+    mx, my, mw, _ = monitor
+    bar = (mx + (mw - width) // 2, my + 8 * scale, width, height)
+    cells = []
+    for index, layout in enumerate(LAYOUTS):
+        cx, cy = bar[0] + gap + index * (cell_w + gap), bar[1] + gap
+        for zone in layout:
+            fx, fy, fw, fh = ZONES[zone]
+            x, y = cx + round(fx * cell_w), cy + round(fy * cell_h)
+            cells.append((zone, (x + 1, y + 1, round(fw * cell_w) - 2, round(fh * cell_h) - 2)))
+    return bar, cells
+
+
+def bar_wanted(point, monitor, shown):
+    """La barre descend quand la fenêtre approche du haut, au centre de l'écran,
+    et reste tant que la souris ne s'en éloigne pas."""
+    px, py = point
+    mx, my, mw, _ = monitor
+    reach = BAR_REACH * 2 if shown else BAR_REACH
+    return py < my + reach and mx + mw // 4 <= px < mx + mw - mw // 4
+
+
+def bar_zone(point, cells):
+    px, py = point
+    for zone, (x, y, w, h) in cells:
+        if x <= px < x + w and y <= py < y + h: return zone
+    return None
+
+
+def float_geometry(point, frame, saved):
+    """Fenêtre ancrée décrochée : sa taille d'avant, sous la souris au même endroit relatif."""
+    px, _ = point
+    x, y, w, _ = frame
+    _, _, sw, sh = saved
+    ratio = (px - x) / w if w else 0.5
+    return round(px - sw * min(max(ratio, 0), 1)), y, sw, sh
+
+
+def maximize_button_rank(layout):
+    """Rang du bouton Agrandir en partant de la droite de la barre de titre (titleLayout d'openbox)."""
+    right = layout.split("L", 1)[1] if "L" in layout else layout
+    return len(right) - 1 - right.index("M") if "M" in right else None
+
+
+def title_layout():
+    for path in (os.path.expanduser("~/.config/openbox/rc.xml"), "/usr/share/winlux/native/config/openbox/rc.xml"):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                match = re.search(r"<titleLayout>\s*([A-Z]+)\s*</titleLayout>", handle.read())
+        except OSError:
+            continue
+        if match: return match.group(1)
+    return "NLIMC"
+
+
+class _X:
+    """Requêtes X directes (XQueryPointer…) : assez légères pour suivre la souris."""
+
+    class Attributes(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_int), ("width", ctypes.c_int), ("height", ctypes.c_int),
+                    ("border_width", ctypes.c_int), ("depth", ctypes.c_int), ("visual", ctypes.c_void_p),
+                    ("root", ctypes.c_ulong), ("c_class", ctypes.c_int), ("bit_gravity", ctypes.c_int),
+                    ("win_gravity", ctypes.c_int), ("backing_store", ctypes.c_int), ("backing_planes", ctypes.c_ulong),
+                    ("backing_pixel", ctypes.c_ulong), ("save_under", ctypes.c_int), ("colormap", ctypes.c_ulong),
+                    ("map_installed", ctypes.c_int), ("map_state", ctypes.c_int), ("all_event_masks", ctypes.c_long),
+                    ("your_event_mask", ctypes.c_long), ("do_not_propagate_mask", ctypes.c_long),
+                    ("override_redirect", ctypes.c_int), ("screen", ctypes.c_void_p)]
+
+    def __init__(self):
+        lib = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        lib.XOpenDisplay.restype = ctypes.c_void_p
+        lib.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        lib.XDefaultRootWindow.restype = ctypes.c_ulong
+        lib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        window, integer, unsigned = ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_uint)
+        lib.XQueryPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong, window, window, integer, integer, integer, integer, unsigned]
+        lib.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, window, window,
+                                   ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)), unsigned]
+        lib.XGetWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(_X.Attributes)]
+        lib.XFree.argtypes = [ctypes.c_void_p]
+        lib.XSetErrorHandler.restype = ctypes.c_void_p
+        self.lib = lib
+        self.display = lib.XOpenDisplay(None)
+        if not self.display: raise OSError("pas d'affichage X")
+        # Une fenêtre fermée entre deux requêtes ne doit pas arrêter le suivi.
+        self._handler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)(lambda *_: 0)
+        lib.XSetErrorHandler(self._handler)
+        self.root = lib.XDefaultRootWindow(self.display)
+
+    def pointer(self, window=None):
+        """(x, y absolus, fenêtre fille sous la souris, x, y dans la fenêtre, masque)."""
+        root, child = ctypes.c_ulong(), ctypes.c_ulong()
+        rx, ry, wx, wy, mask = ctypes.c_int(), ctypes.c_int(), ctypes.c_int(), ctypes.c_int(), ctypes.c_uint()
+        self.lib.XQueryPointer(self.display, window or self.root, ctypes.byref(root), ctypes.byref(child), ctypes.byref(rx),
+                               ctypes.byref(ry), ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mask))
+        return rx.value, ry.value, child.value, wx.value, wy.value, mask.value
+
+    def attributes(self, window):
+        found = _X.Attributes()
+        if not self.lib.XGetWindowAttributes(self.display, window, ctypes.byref(found)): return None
+        return found
+
+    def children(self, window):
+        root, parent = ctypes.c_ulong(), ctypes.c_ulong()
+        items, count = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
+        if not self.lib.XQueryTree(self.display, window, ctypes.byref(root), ctypes.byref(parent), ctypes.byref(items), ctypes.byref(count)):
+            return []
+        found = [items[index] for index in range(count.value)]
+        if items: self.lib.XFree(items)
+        return found
+
+
+BUTTON1, ALT = 1 << 8, 1 << 3
+
+
+def hovered_maximize(x11, rank):
+    """(fenêtre du cadre, x, y du bas du bouton) quand la souris est sur un bouton Agrandir."""
+    if rank is None: return None
+    px, py, frame, *_ = x11.pointer()
+    if not frame: return None
+    _, _, title, *_ = x11.pointer(frame)
+    if not title: return None
+    _, _, button, *_ = x11.pointer(title)
+    if not button: return None
+    title_attributes = x11.attributes(title)
+    if title_attributes is None or title_attributes.height > 80: return None
+    buttons = []
+    for child in x11.children(title):
+        found = x11.attributes(child)
+        # Boutons d'openbox : carrés et visibles (l'étiquette du titre est large, les poignées étroites).
+        if found and found.map_state == 2 and found.width >= 8 and abs(found.width - found.height) <= 4:
+            buttons.append((found.x, child, found))
+    buttons.sort(key=lambda item: item[0], reverse=True)
+    if rank >= len(buttons) or buttons[rank][1] != button: return None
+    _, _, found = buttons[rank]
+    # Bas du bouton en coordonnées de l'écran : position de la souris moins sa position dans le bouton.
+    _, _, _, bx, by, _ = x11.pointer(button)
+    return frame, px - bx + found.width // 2, py - by + found.height
+
+
+def client_of(x11, frame):
+    """Fenêtre cliente (celle de _NET_CLIENT_LIST) dans un cadre openbox, en décimal."""
+    listed = _run(["xprop", "-root", "_NET_CLIENT_LIST"])
+    clients = {int(value, 16) for value in re.findall(r"0x[0-9a-f]+", listed.split("#", 1)[-1])}
+    pending = [(frame, 0)]
+    while pending:
+        window, depth = pending.pop(0)
+        if window in clients: return str(window)
+        if depth < 3: pending.extend((child, depth + 1) for child in x11.children(window))
+    return None
+
+
+def drop(window, zone, point=None):
+    """Fenêtre lâchée : ancrée (et l'Assistant d'ancrage pour l'autre moitié),
+    agrandie, ou reprise à sa taille d'avant si elle était ancrée."""
+    if zone == "maximize":
+        if not get_prop(window, "_WINLUX_SNAP") and not is_maximized(window):
+            geometry = window_geometry(window)
+            if geometry: set_prop(window, "_WINLUX_RESTORE", ",".join(map(str, geometry)))
+        _run(["wmctrl", "-i", "-r", window, "-b", "add,maximized_vert,maximized_horz"])
+        set_prop(window, "_WINLUX_SNAP", "")
+        return 0
+    if zone == "float":
+        saved = get_prop(window, "_WINLUX_RESTORE")
+        frame = window_geometry(window)
+        try: saved = tuple(int(part) for part in saved.split(","))
+        except ValueError: saved = None
+        if get_prop(window, "_WINLUX_SNAP") and saved and len(saved) == 4 and frame:
+            geometry = float_geometry(point or (frame[0] + frame[2] // 2, frame[1]), frame, saved)
+            x, y, w, h = client_geometry(geometry, frame_extents(window))
+            _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
+        set_prop(window, "_WINLUX_SNAP", "")
+        return 0
+    area = pick_area(work_areas(), point) if point else None
+    snap(window, zone, area)
+    _run(["wmctrl", "-i", "-a", window])
+    if zone in OPPOSITE and os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0":
+        return assist(window, [OPPOSITE[zone]])
+    return 0
+
+
+def watch():
+    """Suit la souris : ancrage en glissant une fenêtre, grille au survol d'Agrandir."""
+    import time
+    Gdk, GLib, Gtk = _gtk()
+    import cairo
+    try:
+        x11 = _X()
+    except OSError:
+        return 1
+    display = Gdk.Display.get_default()
+    rank = maximize_button_rank(title_layout())
+    composited = Gdk.Screen.get_default().is_composited()
+
+    def monitor_at(point):
+        """(écran entier, zone de travail, échelle) en pixels réels (GDK compte en pixels logiques)."""
+        found = []
+        for index in range(display.get_n_monitors()):
+            monitor = display.get_monitor(index)
+            scale = monitor.get_scale_factor()
+            full, work = monitor.get_geometry(), monitor.get_workarea()
+            found.append(((full.x * scale, full.y * scale, full.width * scale, full.height * scale),
+                          (work.x * scale, work.y * scale, work.width * scale, work.height * scale), scale))
+        for item in found:
+            x, y, w, h = item[0]
+            if x <= point[0] < x + w and y <= point[1] < y + h: return item
+        return found[0] if found else ((0, 0, 1920, 1080), (0, 0, 1920, 1080), 1)
+
+    # Aperçu de l'emplacement : voile translucide avec un compositeur, sinon un cadre.
+    def overlay():
+        window = Gtk.Window(type=Gtk.WindowType.POPUP)
+        window.set_app_paintable(True)
+        visual = window.get_screen().get_rgba_visual()
+        if composited and visual is not None: window.set_visual(visual)
+        return window
+
+    preview = overlay()
+    bar = overlay()
+    state = {"drag": None, "zone": None, "bar": None, "hover": None, "hover_since": 0.0, "armed": True,
+             "press": None, "bar_cells": [], "bar_zone": None}
+
+    def draw_preview(widget, context):
+        width, height = widget.get_allocated_width(), widget.get_allocated_height()
+        if composited:
+            context.set_operator(cairo.OPERATOR_SOURCE)
+            context.set_source_rgba(0, 0, 0, 0)
+            context.paint()
+            context.set_operator(cairo.OPERATOR_OVER)
+            context.set_source_rgba(0x6a / 255, 0x3d / 255, 0xf0 / 255, 0.28)
+            context.rectangle(6, 6, width - 12, height - 12)
+            context.fill()
+        context.set_source_rgba(0xb6 / 255, 0x9c / 255, 0xff / 255, 0.9)
+        context.set_line_width(3)
+        context.rectangle(7.5, 7.5, width - 15, height - 15)
+        context.stroke()
+        return True
+
+    def draw_bar(widget, context):
+        scale = max(1, widget.get_scale_factor())
+        ox, oy = state["bar"][0], state["bar"][1]
+        context.set_operator(cairo.OPERATOR_SOURCE)
+        context.set_source_rgba(0x20 / 255, 0x24 / 255, 0x30 / 255, 0.96 if composited else 1)
+        context.paint()
+        context.set_operator(cairo.OPERATOR_OVER)
+        for zone, (x, y, w, h) in state["bar_cells"]:
+            hot = zone == state["bar_zone"]
+            context.set_source_rgb(*((0x6a / 255, 0x3d / 255, 0xf0 / 255) if hot else (0x3a / 255, 0x42 / 255, 0x54 / 255)))
+            context.rectangle((x - ox) / scale, (y - oy) / scale, w / scale, h / scale)
+            context.fill()
+        return True
+
+    preview.connect("draw", draw_preview)
+    bar.connect("draw", draw_bar)
+    if not composited:
+        # Sans compositeur, un voile opaque cacherait l'écran : seul le cadre se voit.
+        def frame_shape(widget, allocation):
+            try:
+                region = cairo.Region(cairo.RectangleInt(0, 0, allocation.width, allocation.height))
+                region.subtract(cairo.RectangleInt(10, 10, max(1, allocation.width - 20), max(1, allocation.height - 20)))
+                widget.shape_combine_region(region)
+            except (TypeError, AttributeError):
+                pass
+        preview.connect("size-allocate", frame_shape)
+
+    def place(window, rect, scale):
+        x, y, w, h = rect
+        window.move(x // scale, y // scale)
+        window.resize(max(1, w // scale), max(1, h // scale))
+        window.show_all()
+        window.queue_draw()
+
+    def show_target(zone, area, monitor, scale):
+        if zone == state["zone"]: return
+        state["zone"] = zone
+        if zone is None:
+            preview.hide()
+            return
+        place(preview, zone_rect(zone, area) if zone in ZONES else area, scale)
+
+    def pressed_on_title(mask):
+        """Bouton pris sur la barre de titre d'un cadre openbox (ou n'importe où avec Alt) : la
+        fenêtre cliente sous la souris, sinon None. Vérifié à l'appui, avant tout déplacement."""
+        px, py, frame, *_ = x11.pointer()
+        if not frame: return None
+        if not mask & ALT:
+            _, _, title, *_ = x11.pointer(frame)
+            title_attributes = x11.attributes(title) if title else None
+            frame_attributes = x11.attributes(frame)
+            if title_attributes is None or frame_attributes is None: return None
+            if title_attributes.height > 80 or title_attributes.width < frame_attributes.width - 16: return None
+            _, _, _, _, title_y, _ = x11.pointer(title)
+            if title_y < 3: return None  # bord du haut : redimensionnement
+        window = client_of(x11, frame)
+        if not window: return None
+        kind = _run(["xprop", "-id", window, "_NET_WM_WINDOW_TYPE"])
+        if "_NET_WM_WINDOW_TYPE_NORMAL" not in kind and "_NET_WM_WINDOW_TYPE(ATOM)" in kind: return None
+        frame_geometry = window_geometry(window)
+        if frame_geometry is None: return None
+        return {"window": window, "snapped": bool(get_prop(window, "_WINLUX_SNAP")), "start": frame_geometry[:2]}
+
+    def finish_drag(point):
+        drag, zone = state["drag"], state["bar_zone"] or state["zone"]
+        preview.hide()
+        bar.hide()
+        state.update(drag=None, zone=None, bar=None, bar_zone=None, bar_cells=[])
+        if drag is None: return
+        frame = window_geometry(drag["window"])
+        moved = frame is not None and frame[:2] != drag["start"]
+        if zone is None and not (drag["snapped"] and moved): return
+        args = [sys.executable, os.path.abspath(__file__), "drop", drag["window"], zone or "float", str(point[0]), str(point[1])]
+        # Après la fin du déplacement par openbox (il applique la dernière position au relâchement).
+        GLib.timeout_add(60, lambda: subprocess.Popen(args, stdout=subprocess.DEVNULL, start_new_session=True) and False)
+
+    def tick():
+        px, py, _, _, _, mask = x11.pointer()
+        point = (px, py)
+        if mask & BUTTON1:
+            if state["press"] is None:
+                state["press"] = (px, py, pressed_on_title(mask))
+            press = state["press"]
+            if state["drag"] is None and press[2] and abs(px - press[0]) + abs(py - press[1]) >= DRAG_START:
+                state["drag"] = press[2]
+            if state["drag"]:
+                monitor, area, scale = monitor_at(point)
+                shown = state["bar"] is not None
+                if bar_wanted(point, monitor, shown):
+                    rect, cells = snap_bar(monitor, scale)
+                    if not shown:
+                        state["bar"], state["bar_cells"] = rect, cells
+                        place(bar, rect, scale)
+                    hot = bar_zone(point, state["bar_cells"])
+                    if hot != state["bar_zone"]:
+                        state["bar_zone"] = hot
+                        bar.queue_draw()
+                    show_target(hot or (drag_zone(point, monitor) if py <= monitor[1] + EDGE - 1 else None), area, monitor, scale)
+                else:
+                    if shown:
+                        bar.hide()
+                        state.update(bar=None, bar_zone=None, bar_cells=[])
+                    show_target(drag_zone(point, monitor), area, monitor, scale)
+            GLib.timeout_add(30, tick)
+            return False
+        if state["press"] is not None:
+            state["press"] = None
+            finish_drag(point)
+        # Survol du bouton Agrandir.
+        hovered = hovered_maximize(x11, rank)
+        now = time.monotonic()
+        if hovered is None:
+            state.update(hover=None, armed=True)
+        elif state["hover"] != hovered[0]:
+            state.update(hover=hovered[0], hover_since=now)
+        elif state["armed"] and now - state["hover_since"] >= HOVER_DELAY:
+            state["armed"] = False
+            client = client_of(x11, hovered[0])
+            allowed = _run(["xprop", "-id", client, "_NET_WM_ALLOWED_ACTIONS"]) if client else ""
+            if client and "MAXIMIZE" in allowed:
+                subprocess.Popen([sys.executable, os.path.abspath(__file__), "layouts", client,
+                                  str(hovered[1]), str(hovered[2])], stdout=subprocess.DEVNULL, start_new_session=True)
+        GLib.timeout_add(100, tick)
+        return False
+
+    GLib.timeout_add(100, tick)
+    Gtk.main()
+    return 0
+
+
 def key(direction):
     window = active_window()
     if not window: return 1
@@ -486,6 +925,12 @@ def main(argv):
         return key(argv[2])
     if len(argv) == 2 and argv[1] == "layouts":
         return layouts_popup(active_window())
+    if len(argv) == 5 and argv[1] == "layouts" and argv[3].isdigit() and argv[4].isdigit():
+        return layouts_popup(argv[2], (int(argv[3]), int(argv[4])))
+    if len(argv) == 2 and argv[1] == "watch":
+        return watch()
+    if len(argv) in (4, 6) and argv[1] == "drop" and (argv[3] in ZONES or argv[3] in ("maximize", "float")):
+        return drop(argv[2], argv[3], tuple(int(v) for v in argv[4:6]) if len(argv) == 6 else None)
     if len(argv) in (3, 4) and argv[1] == "place" and argv[2] in ZONES:
         window = argv[3] if len(argv) == 4 else active_window()
         if not window: return 1

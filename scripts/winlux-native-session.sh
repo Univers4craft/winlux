@@ -170,6 +170,7 @@ if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux
 if test -x /usr/bin/winlux-clipboard; then /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
 if test -x /usr/bin/winlux-alarms; then /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
 if test -x /usr/bin/winlux-ambiance; then /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
+if test -x /usr/bin/winlux-snap; then /usr/bin/winlux-snap watch >/run/winlux/snap-watch.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
