@@ -73,6 +73,16 @@ __declspec(noinline) int t_rethrow() {
     return 1;
 }
 
+// 7-Zip (#436) : `catch (...) { throw; }` imbriqué dans un autre `try` de
+// la même fonction ; la relance doit aller au `try` englobant.
+__declspec(noinline) int t_rethrow_same_frame() {
+    int r = 0;
+    try {
+        try { throw_int(3); } catch (...) { r += 1; throw; }
+    } catch (...) { r += 10; }
+    return r == 11 ? 0 : 1;
+}
+
 __declspec(noinline) int t_throw_from_catch() {
     try {
         try { throw_int(1); } catch (int) { throw_int(2); }
@@ -111,7 +121,7 @@ __declspec(noinline) int t_seh_finally() {
 
 extern "C" int entry() {
     int (*tests[])() = {t_destructors, t_select_type, t_base_by_ref, t_by_value_copy, t_catch_all,
-                        t_rethrow, t_throw_from_catch, t_nested_in_catch, t_seh_except, t_seh_finally};
+                        t_rethrow, t_rethrow_same_frame, t_throw_from_catch, t_nested_in_catch, t_seh_except, t_seh_finally};
     for (unsigned i = 0; i < sizeof tests / sizeof *tests; i++)
         if (tests[i]()) ExitProcess(i + 1);
     ExitProcess(0);

@@ -44,7 +44,6 @@ unsafe fn rdi(p: usize) -> i32 {
 #[derive(Clone, Copy, Debug)]
 struct FuncInfo {
     base: usize,
-    magic: u32,
     unwind_map: usize,
     try_count: u32,
     try_map: usize,
@@ -61,7 +60,6 @@ impl FuncInfo {
         }
         Some(FuncInfo {
             base,
-            magic,
             unwind_map: base + rd32(p + 8) as usize,
             try_count: rd32(p + 12),
             try_map: base + rd32(p + 16) as usize,
@@ -152,9 +150,10 @@ unsafe fn parent_frame(
     (frame, None)
 }
 
+/// Sur x64, `dispUnwindHelp` existe dès la version 0x19930520 : le
+/// prologue de la fonction y écrit -2 (7-Zip 25.01 l'utilise).
 unsafe fn help_slot(fi: &FuncInfo, frame: u64) -> Option<*mut i32> {
-    (fi.magic >= 0x1993_0521 && fi.unwind_help != 0)
-        .then(|| (frame as i64 + fi.unwind_help as i64) as *mut i32)
+    (fi.unwind_help != 0).then(|| (frame as i64 + fi.unwind_help as i64) as *mut i32)
 }
 
 /// Exécute les destructeurs des états de `from` jusqu'à `to` (exclu).
@@ -272,6 +271,36 @@ struct Active {
     /// Position de pile de l'appel du funclet : un déroulement qui remonte
     /// au-dessus abandonne ce `catch`.
     mark: u64,
+    /// Cadre parent du `catch` et état d'avant son `try` : tant que le
+    /// `catch` s'exécute, ce cadre est hors du `try` qui a capturé.
+    frame: u64,
+    state: i32,
+    /// `try` écrit dans un funclet de `catch`.
+    nested: bool,
+}
+
+/// État engagé du cadre parent `frame` par un `catch` en cours : un
+/// `throw;` qui remonte dans ce cadre ne doit plus retomber dans le `try`
+/// qui l'a capturé (#436), même sans case `UnwindHelp`.
+fn engaged_state(frame: u64) -> Option<i32> {
+    ACTIVE.with(|a| {
+        a.borrow()
+            .iter()
+            .filter(|e| e.frame == frame && !e.nested)
+            .map(|e| e.state)
+            .min()
+    })
+}
+
+/// Niveau d'état courant du cadre parent : l'état d'après l'adresse,
+/// borné par un `catch` engagé (case `UnwindHelp`, sinon liste des `catch`
+/// en cours).
+unsafe fn current_level(slot: Option<*mut i32>, frame: u64, ip_state: i32) -> i32 {
+    match slot {
+        Some(s) if *s != -2 => (*s).min(ip_state),
+        Some(_) => ip_state,
+        None => engaged_state(frame).map_or(ip_state, |e| e.min(ip_state)),
+    }
 }
 
 thread_local! {
@@ -380,6 +409,9 @@ unsafe extern "win64" fn call_catch(rec: *mut ExceptionRecord) -> u64 {
             rec: Box::new(orig),
             ctx: Box::new(octx),
             mark,
+            frame,
+            state: r.info[3] as i32,
+            nested: r.info[9] != 0,
         })
     });
     refresh_current();
@@ -435,10 +467,7 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
             local_unwind(&fi, orig_frame, ip_state, to);
             return CONTINUE_SEARCH;
         }
-        let cur = match slot {
-            Some(s) if *s != -2 => (*s).min(ip_state),
-            _ => ip_state,
-        };
+        let cur = current_level(slot, orig_frame, ip_state);
         let to = if target { r.info[3] as i32 } else { -1 };
         local_unwind(&fi, frame, cur, to);
         if let Some(s) = slot {
@@ -453,9 +482,10 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
     if fi.try_count == 0 {
         return CONTINUE_SEARCH;
     }
-    let level = match slot {
-        Some(s) if funclet.is_none() && *s != -2 => (*s).min(ip_state),
-        _ => ip_state,
+    let level = if funclet.is_none() {
+        current_level(slot, orig_frame, ip_state)
+    } else {
+        ip_state
     };
     for i in 0..fi.try_count {
         let t = fi.try_block(i);
@@ -610,5 +640,62 @@ pub fn exports() -> crate::dlls::Exports {
         "__uncaught_exception" => fn uncaught_exceptions,
         "__std_terminate" => fn std_terminate,
         "_is_exception_typeof" => fn is_exception_typeof,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engage(frame: u64, state: i32, nested: bool) {
+        ACTIVE.with(|a| {
+            a.borrow_mut().push(Active {
+                rec: Box::new(ExceptionRecord::new(CXX_EXCEPTION, 0, 0)),
+                ctx: Box::new(Context::zeroed()),
+                mark: 0,
+                frame,
+                state,
+                nested,
+            })
+        });
+    }
+
+    #[test]
+    fn relance_sans_case_unwind_help_sort_du_try_engage() {
+        // 7-Zip (#436) : try 1-105 { } catch (...) { throw; } dans try 0-106.
+        engage(0x5000, 0, false);
+        // Un `catch` d'un autre cadre ou d'un `try` interne au funclet ne
+        // compte pas.
+        engage(0x6000, -1, false);
+        engage(0x5000, -1, true);
+        unsafe {
+            assert_eq!(current_level(None, 0x5000, 42), 0);
+            assert_eq!(current_level(None, 0x7000, 42), 42);
+            let mut slot = -2i32;
+            assert_eq!(current_level(Some(&mut slot), 0x5000, 42), 42);
+            slot = 1;
+            assert_eq!(current_level(Some(&mut slot), 0x5000, 42), 1);
+        }
+        ACTIVE.with(|a| a.borrow_mut().clear());
+        unsafe { assert_eq!(current_level(None, 0x5000, 42), 42) };
+    }
+
+    #[test]
+    fn la_case_unwind_help_existe_des_la_version_0x19930520() {
+        let fi = FuncInfo {
+            base: 0,
+            unwind_map: 0,
+            try_count: 0,
+            try_map: 0,
+            ip_count: 0,
+            ip_map: 0,
+            unwind_help: 0x278,
+        };
+        assert_eq!(unsafe { help_slot(&fi, 0x1000) }, Some(0x1278 as *mut i32));
+        let none = FuncInfo {
+            unwind_help: 0,
+            ..fi
+        };
+        assert_eq!(unsafe { help_slot(&none, 0x1000) }, None);
     }
 }
