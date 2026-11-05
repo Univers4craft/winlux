@@ -94,4 +94,36 @@ with tempfile.TemporaryDirectory() as temp:
     assert sorted(windows) == ["0x03", "0x04"], windows
     assert windows["0x03"][1] == "Rapport.txt - Bloc-notes"
 
+# Autre session ouverte : l'arrêt avertit, comme Windows (VM, 5 novembre :
+# camille, compte standard, coupait la session de l'administrateur sans un mot).
+with tempfile.TemporaryDirectory() as temp:
+    temp = Path(temp)
+    (temp / "etc").mkdir()
+    (temp / "etc/passwd").write_text("testeur:x:1000:1000:Testeur Winlux,,,:/home/testeur:/bin/bash\n"
+                                     "camille:x:1001:1001:Camille Neuve:/home/camille:/bin/bash\n"
+                                     "paul:x:1002:1002::/home/paul:/bin/bash\n")
+    (temp / "run/winlux/sessions").mkdir(parents=True)
+    sockets = temp / "x11"
+    sockets.mkdir()
+    (sockets / "X0").touch()
+    (sockets / "X1").touch()
+    (temp / "run/winlux/sessions/testeur").write_text("display=:0\nvt=7\npid=10\n")
+    (temp / "run/winlux/sessions/camille").write_text("display=:1\nvt=8\npid=11\n")
+    # Session fermée sans désinscription : son écran X n'existe plus.
+    (temp / "run/winlux/sessions/paul").write_text("display=:2\nvt=9\npid=12\n")
+    (temp / "run/winlux/sessions/.testeur.123").write_text("display=:0\n")
+    os.environ.update(WINLUX_CONTROL_ROOT=str(temp), WINLUX_X11_SOCKETS=str(sockets))
+    power = runpy.run_path(str(script), run_name="power_sessions_test")
+    assert power["other_sessions"]("camille") == ["Testeur Winlux"], power["other_sessions"]("camille")
+    assert power["other_sessions"]("testeur") == ["Camille Neuve"]
+    (sockets / "X0").unlink()
+    assert power["other_sessions"]("camille") == [], "un écran X disparu n'est plus une session ouverte"
+    for key in [k for k in power["_TR"] if k.startswith("D’autres personnes")]:
+        assert "{names}" in key and all("{names}" in row for row in power["_TR"][key]) and len(power["_TR"][key]) == 3
+    source = script.read_text()
+    confirm = source[source.index("    def show_confirm(self):"):source.index("    def show_blocked(self")]
+    assert "other_sessions()" in confirm and '"dialog-warning-symbolic"' in confirm
+    assert '[(_t("Annuler"), self.cancel, True)' in confirm, "avec d'autres sessions, Annuler est le choix par défaut"
+
+print("OK: autre session ouverte : l'arrêt et le redémarrage avertissent")
 print("OK: arrêt et redémarrage signalent l'init, mise à jour bloquante, relais limité aux comptes connectés")
