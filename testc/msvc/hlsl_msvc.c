@@ -275,6 +275,15 @@ void entry(void) {
     zs.bind = 0;
     zs.cpu = 0x20000;
     if (CALL(dev, 5, CreateTex, &zs, 0, &zstaging) < 0 || !zstaging) ExitProcess(52);
+    // L'effacement a lieu pendant qu'une petite cible 16x16 est liée, comme
+    // chez ANGLE (ClearDSV avant OMSetRenderTargets) : il doit couvrir toute
+    // la vue de profondeur, pas l'intersection avec la cible (#537).
+    TexDesc pd = td;
+    pd.w = pd.h = 16;
+    void *small = 0, *small_rtv = 0;
+    if (CALL(dev, 5, CreateTex, &pd, 0, &small) < 0 || !small) ExitProcess(56);
+    if (CALL(dev, 9, CreateView, small, 0, &small_rtv) < 0 || !small_rtv) ExitProcess(57);
+    CALL(ctx, 33, SetRT, 1, &small_rtv, 0);
     CALL(ctx, 53, ClearDS, zdsv, 1, 1.0f, 0);
     CALL(ctx, 33, SetRT, 0, 0, zdsv);
     CALL(ctx, 12, DrawIndexed, 6, 0, 0);
@@ -284,7 +293,7 @@ void entry(void) {
     const float *zr = (const float *)((const u8 *)z.data + (SIZE / 2) * z.row);
     // Moitié droite : le quad (0.0) ; moitié gauche : l'effacement (1.0).
     if (zr[SIZE - 5] > 0.01f) ExitProcess(54);
-    if (zr[4] < 0.99f) ExitProcess(55);
+    if (zr[4] < 0.99f || zr[20] < 0.99f) ExitProcess(55);
     CALL(ctx, 15, Unmap, zstaging, 1);
     CALL(ctx, 33, SetRT, 1, &rtv, dsv);
 

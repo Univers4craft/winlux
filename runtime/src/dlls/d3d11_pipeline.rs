@@ -769,6 +769,13 @@ unsafe fn apply_fixed_function(g: &gl::GlFunctions, s: &State) {
     } else {
         (g.Disable)(GL_POLYGON_OFFSET_FILL);
     }
+    // DepthClipEnable = FALSE : profondeur bornée au lieu d'être découpée.
+    const GL_DEPTH_CLAMP: u32 = 0x864F;
+    if r.depth_clip == 0 {
+        (g.Enable)(GL_DEPTH_CLAMP);
+    } else {
+        (g.Disable)(GL_DEPTH_CLAMP);
+    }
     if r.scissor != 0 {
         (g.Enable)(GL_SCISSOR_TEST);
         if let Some(sc) = s.scissors.first() {
