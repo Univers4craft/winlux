@@ -71,4 +71,6 @@ DISPLAY=:0 WINLUX_TEST_VT=2 sessions register root
 WINLUX_TEST_VT=2 sessions switch bob
 if grep -qx 'chvt 2' "$work/log"; then fail "second bureau lancé sur le terminal du premier"; fi
 WINLUX_TEST_VT=3 sessions logoff bob
+# Second compte : temps réel pour PipeWire comme le premier (sans RTKit).
+grep -q 'exec prlimit --rtprio=20 --nice=31 setpriv --reuid=' "$(dirname "$0")/winlux-sessions.sh" || fail "second compte sans priorité temps réel"
 echo "Sessions simultanées : OK"
