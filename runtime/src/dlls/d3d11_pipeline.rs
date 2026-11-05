@@ -637,6 +637,10 @@ impl Default for State {
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct SrvBinding {
     pub tex: gl::GLuint,
+    /// Cible GL (2D, 2D_ARRAY, CUBE…), 0 = GL_TEXTURE_2D.
+    pub target: gl::GLenum,
+    /// Vue GL dédiée (glTextureView) : niveaux déjà délimités.
+    pub view: bool,
     pub base: i32,
     pub max: i32,
 }
@@ -647,7 +651,16 @@ impl SrvBinding {
     pub(super) unsafe fn of_view(view: *mut SimpleComObj) -> Self {
         let tex = (*view).resource_tex;
         let d = (*view).view_desc;
-        let levels = as_texture2d((*view).view_resource).map_or(1, |t| (*t).desc.mip_levels.max(1));
+        let res = as_texture2d((*view).view_resource);
+        let levels = res.map_or(1, |t| (*t).desc.mip_levels.max(1));
+        // Vue GL dédiée : sa cible est celle de la vue D3D ; sinon la
+        // texture est liée avec sa propre cible.
+        let view_tex = res.is_some_and(|t| (*t).gl_texture != tex);
+        let target = match res {
+            Some(_) if view_tex => super::srv_target(d[1]),
+            Some(t) => (*t).gl_target,
+            None => GL_TEXTURE_2D,
+        };
         let (base, count) = match d[1] {
             4 | 5 | 9 | 10 => (d[2], d[3]),
             _ => (0, u32::MAX),
@@ -660,6 +673,8 @@ impl SrvBinding {
         };
         SrvBinding {
             tex,
+            target,
+            view: view_tex,
             base: base as i32,
             max: last as i32,
         }
@@ -957,10 +972,15 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
         for (t, srv) in s.srvs[i].iter().enumerate() {
             let unit = base + t as u32;
             (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
-            (g.BindTexture)(GL_TEXTURE_2D, srv.tex);
-            if srv.tex != 0 {
-                (g.TexParameteri)(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, srv.base);
-                (g.TexParameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, srv.max);
+            let target = if srv.target == 0 {
+                GL_TEXTURE_2D
+            } else {
+                srv.target
+            };
+            (g.BindTexture)(target, srv.tex);
+            if srv.tex != 0 && !srv.view {
+                (g.TexParameteri)(target, GL_TEXTURE_BASE_LEVEL, srv.base);
+                (g.TexParameteri)(target, GL_TEXTURE_MAX_LEVEL, srv.max);
             }
             let sampler_slot = pairs.iter().find(|p| p.0 == t as u32).map(|p| p.1 as usize);
             let sampler = sampler_slot
@@ -1047,10 +1067,6 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
     } else {
         as_texture2d((*dsv).view_resource)
     };
-    let (id, stencil) = match tex {
-        Some(t) => ((*t).gl_texture, super::dxgi_has_stencil((*t).desc.format)),
-        None => (0, false),
-    };
     (g.FramebufferTexture2D)(
         GL_FRAMEBUFFER,
         GL_DEPTH_STENCIL_ATTACHMENT,
@@ -1058,12 +1074,23 @@ pub(super) unsafe fn attach_depth(g: &gl::GlFunctions, dsv: *mut SimpleComObj) {
         0,
         0,
     );
-    let point = if stencil {
-        GL_DEPTH_STENCIL_ATTACHMENT
-    } else {
-        GL_DEPTH_ATTACHMENT
-    };
-    (g.FramebufferTexture2D)(GL_FRAMEBUFFER, point, GL_TEXTURE_2D, id, 0);
+    if let Some(t) = tex {
+        let point = if super::dxgi_has_stencil((*t).desc.format) {
+            GL_DEPTH_STENCIL_ATTACHMENT
+        } else {
+            GL_DEPTH_ATTACHMENT
+        };
+        // D3D11_DEPTH_STENCIL_VIEW_DESC : Format, ViewDimension, Flags,
+        // MipSlice, puis FirstArraySlice pour un tableau (4) : une cascade
+        // d'ombre est une tranche (#519).
+        let d = (*dsv).view_desc;
+        let (mip, layer) = match d[1] {
+            3 => (d[3], 0),
+            4 => (d[3], d[4]),
+            _ => (0, 0),
+        };
+        super::attach_texture(g, point, &*t, mip, layer);
+    }
     // Cadre incomplet : plus rien ne se dessine. Signalé une fois par état.
     static LAST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let status = (g.CheckFramebufferStatus)(GL_FRAMEBUFFER);

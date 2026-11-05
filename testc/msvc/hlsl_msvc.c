@@ -78,8 +78,9 @@ static const char hlsl[] =
     "Texture2D tex : register(t0);\n"
     "SamplerState smp : register(s0);\n"
     "float4 teinte(float4 c) { return c * tint; }\n"
+    "Texture2DArray texa : register(t1);\n"
     "float4 ps_main(VSOut i) : SV_Target {\n"
-    "    return teinte(tex.Sample(smp, i.uv));\n"
+    "    return teinte(tex.Sample(smp, i.uv)) * texa.Sample(smp, float3(i.uv, 1));\n"
     "}\n";
 
 static void *compile(const char *entry, const char *target, int fail) {
@@ -159,6 +160,15 @@ void entry(void) {
     // force la réduction : sans la limite, le niveau 1 (vide) serait lu.
     u32 srvd[4] = {28, 4 /* TEXTURE2D */, 0 /* MostDetailedMip */, 1 /* MipLevels */};
     if (CALL(dev, 7, CreateView, tex, srvd, &srv) < 0) ExitProcess(5);
+    // Tableau de 2 tranches en BC1 (#519) : tranche 0 noire, tranche 1
+    // blanche ; le pixel shader lit la tranche 1. Sans tableau ni format
+    // compressé, la texture est incomplète et tout devient noir.
+    static const u16 bc_black[4] = {0x0000, 0x0000, 0, 0}, bc_white[4] = {0xFFFF, 0xFFFF, 0, 0};
+    TexDesc ad = {4, 4, 1, 2, 71 /* BC1_UNORM */, 1, 0, 0, 0x8, 0, 0};
+    Init ai[2] = {{bc_black, 8, 0}, {bc_white, 8, 0}};
+    void *texa = 0, *srva = 0;
+    if (CALL(dev, 5, CreateTex, &ad, ai, &texa) < 0 || !texa) ExitProcess(45);
+    if (CALL(dev, 7, CreateView, texa, 0, &srva) < 0 || !srva) ExitProcess(46);
     u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0x3F800000 /* MinLOD 1 */, 0x7F7FFFFF};
     if (CALL(dev, 23, CreateState, sdesc, &smp) < 0 || !smp) ExitProcess(6);
 
@@ -220,7 +230,8 @@ void entry(void) {
     CALL(ctx, 9, SetShader, ps, 0, 0);
     CALL(ctx, 7, SetArray, 0, 1, &mbuf);  // VSSetConstantBuffers b0
     CALL(ctx, 16, SetArray, 1, 1, &cbuf); // PSSetConstantBuffers b1
-    CALL(ctx, 8, SetArray, 0, 1, &srv);
+    void *srvs[2] = {srv, srva};
+    CALL(ctx, 8, SetArray, 0, 2, srvs);
     CALL(ctx, 10, SetArray, 0, 1, &smp);
     CALL(ctx, 12, DrawIndexed, 6, 0, 0);
 

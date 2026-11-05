@@ -229,6 +229,8 @@ pub(crate) struct Texture2D {
     ref_count: AtomicU32,
     pub desc: D3D11Texture2DDesc,
     pub gl_texture: gl::GLuint,
+    /// GL_TEXTURE_2D, ou GL_TEXTURE_2D_ARRAY pour un tableau ou un cube.
+    pub gl_target: gl::GLenum,
     owns_texture: bool,
     /// Sous-ressource ouverte par Map : son contenu côté processeur.
     staging_buf: Mutex<MappedTexture>,
@@ -238,6 +240,7 @@ pub(crate) struct Texture2D {
 #[derive(Default)]
 struct MappedTexture {
     level: u32,
+    slice: u32,
     map_type: u32,
     data: Vec<u8>,
 }
@@ -347,6 +350,7 @@ pub(crate) fn create_backbuffer_texture(gl_tex: gl::GLuint, w: u32, h: u32) -> *
             ..Default::default()
         },
         gl_texture: gl_tex,
+        gl_target: gl::GL_TEXTURE_2D,
         owns_texture: false,
         staging_buf: Mutex::new(MappedTexture::default()),
     }))
@@ -361,66 +365,82 @@ fn create_texture2d(
         None => return std::ptr::null_mut(),
     };
 
-    let (gl_internal, gl_format, gl_type) = dxgi_format_to_gl_bind(desc.format, desc.bind_flags);
-    // Toute la chaîne de mips est allouée (0 = chaîne complète) : une copie
-    // ou un téléversement vers le niveau N doit trouver ce niveau (#514).
+    let (gl_internal, _, _) = dxgi_format_to_gl_bind(desc.format, desc.bind_flags);
+    // Toute la chaîne de mips est allouée (0 = chaîne complète), et les
+    // tableaux (ou cubes) sont des GL_TEXTURE_2D_ARRAY (#519). Le stockage
+    // est immuable : les vues de ressource en sont des glTextureView.
     let mut desc = *desc;
     desc.mip_levels = mip_count(&desc);
+    desc.array_size = desc.array_size.max(1);
+    let target = if is_array_texture(&desc) {
+        GL_TEXTURE_2D_ARRAY
+    } else {
+        gl::GL_TEXTURE_2D
+    };
 
     let mut tex = 0u32;
     unsafe {
         (g.GenTextures)(1, &mut tex);
-        (g.BindTexture)(gl::GL_TEXTURE_2D, tex);
-        for level in 0..desc.mip_levels {
-            let (w, h) = level_size(&desc, level);
-            // Données initiales : une entrée par sous-ressource, tranche 0
-            // d'abord (niveaux 0..N).
-            let init = if initial.is_null() {
-                None
-            } else {
-                let d = &*initial.add(level as usize);
-                (!d.sys_mem.is_null()).then_some(d)
-            };
-            let data = init.map_or(std::ptr::null(), |d| d.sys_mem);
-            let pitch = init.map_or(0, |d| d.sys_mem_pitch);
-            with_unpack_pitch(g, desc.format, pitch, || {
-                (g.TexImage2D)(
-                    gl::GL_TEXTURE_2D,
-                    level as i32,
-                    gl_internal as gl::GLint,
-                    w as i32,
-                    h as i32,
-                    0,
-                    gl_format,
-                    gl_type,
-                    data,
-                )
-            });
+        (g.BindTexture)(target, tex);
+        if target == GL_TEXTURE_2D_ARRAY {
+            (g.TexStorage3D)(
+                target,
+                desc.mip_levels as i32,
+                gl_internal,
+                desc.width as i32,
+                desc.height as i32,
+                desc.array_size as i32,
+            );
+        } else {
+            (g.TexStorage2D)(
+                target,
+                desc.mip_levels as i32,
+                gl_internal,
+                desc.width as i32,
+                desc.height as i32,
+            );
         }
-        (g.TexParameteri)(gl::GL_TEXTURE_2D, gl::GL_TEXTURE_MIN_FILTER, gl::GL_LINEAR);
-        (g.TexParameteri)(gl::GL_TEXTURE_2D, gl::GL_TEXTURE_MAG_FILTER, gl::GL_LINEAR);
-        (g.TexParameteri)(
-            gl::GL_TEXTURE_2D,
-            gl::GL_TEXTURE_WRAP_S,
-            gl::GL_CLAMP_TO_EDGE,
-        );
-        (g.TexParameteri)(
-            gl::GL_TEXTURE_2D,
-            gl::GL_TEXTURE_WRAP_T,
-            gl::GL_CLAMP_TO_EDGE,
-        );
-        (g.BindTexture)(gl::GL_TEXTURE_2D, 0);
-        pipeline::set_max_level(g, tex, desc.mip_levels as i32 - 1);
+        (g.TexParameteri)(target, gl::GL_TEXTURE_MIN_FILTER, gl::GL_LINEAR);
+        (g.TexParameteri)(target, gl::GL_TEXTURE_MAG_FILTER, gl::GL_LINEAR);
+        (g.TexParameteri)(target, gl::GL_TEXTURE_WRAP_S, gl::GL_CLAMP_TO_EDGE);
+        (g.TexParameteri)(target, gl::GL_TEXTURE_WRAP_T, gl::GL_CLAMP_TO_EDGE);
+        (g.BindTexture)(target, 0);
     }
 
-    Box::into_raw(Box::new(Texture2D {
+    let t = Box::into_raw(Box::new(Texture2D {
         vtable: &TEXTURE2D_VTABLE,
         ref_count: AtomicU32::new(1),
         desc,
         gl_texture: tex,
+        gl_target: target,
         owns_texture: true,
         staging_buf: Mutex::new(MappedTexture::default()),
-    }))
+    }));
+    // Données initiales : une entrée par sous-ressource, tranche par
+    // tranche, niveau par niveau (indice = tranche × niveaux + niveau).
+    if !initial.is_null() {
+        for slice in 0..desc.array_size {
+            for level in 0..desc.mip_levels {
+                let d = unsafe { &*initial.add((slice * desc.mip_levels + level) as usize) };
+                if d.sys_mem.is_null() {
+                    continue;
+                }
+                let (w, h) = level_size(&desc, level);
+                unsafe {
+                    upload_region(
+                        g,
+                        &*t,
+                        level,
+                        slice,
+                        [0, 0, w, h],
+                        d.sys_mem_pitch,
+                        d.sys_mem,
+                    )
+                };
+            }
+        }
+    }
+    t
 }
 
 /// Format DXGI → (format interne, format, type) OpenGL.
@@ -435,7 +455,31 @@ fn dxgi_format_to_gl(format: u32) -> (gl::GLenum, gl::GLenum, gl::GLenum) {
 /// D3D11_BIND_DEPTH_STENCIL.
 const BIND_DEPTH_STENCIL: u32 = 0x40;
 
+/// Formats compressés BC1–BC7 : (format interne GL, octets par bloc 4x4).
+fn bc_format(format: u32) -> Option<(gl::GLenum, u32)> {
+    Some(match format {
+        70 | 71 => (0x83F1, 8),  // BC1 → DXT1 RGBA
+        72 => (0x8C4D, 8),       // BC1 sRGB
+        73 | 74 => (0x83F2, 16), // BC2 → DXT3
+        75 => (0x8C4E, 16),
+        76 | 77 => (0x83F3, 16), // BC3 → DXT5
+        78 => (0x8C4F, 16),
+        79 | 80 => (0x8DBB, 8), // BC4 → RGTC1
+        81 => (0x8DBC, 8),
+        82 | 83 => (0x8DBD, 16), // BC5 → RGTC2
+        84 => (0x8DBE, 16),
+        94 | 95 => (0x8E8F, 16), // BC6H → BPTC flottant
+        96 => (0x8E8E, 16),
+        97 | 98 => (0x8E8C, 16), // BC7 → BPTC
+        99 => (0x8E8D, 16),
+        _ => return None,
+    })
+}
+
 fn dxgi_format_to_gl_bind(format: u32, bind: u32) -> (gl::GLenum, gl::GLenum, gl::GLenum) {
+    if let Some((internal, _)) = bc_format(format) {
+        return (internal, 0, 0);
+    }
     const RGBA: u32 = 0x1908;
     const RGB: u32 = 0x1907;
     const RG: u32 = 0x8227;
@@ -511,6 +555,9 @@ fn dxgi_format_to_gl_bind(format: u32, bind: u32) -> (gl::GLenum, gl::GLenum, gl
         60 | 61 | 65 => (0x8229, RED, UBYTE),
         62 => (0x8232, RED_INT, UBYTE),
         // B8G8R8A8 / B8G8R8X8
+        // B5G6R5, B5G5R5A1 (bleu dans les bits de poids faible).
+        85 => (0x8D62, RGB, 0x8363),
+        86 => (0x8057, BGRA, 0x8366),
         87 | 88 | 90 | 92 => (gl::GL_RGBA8, BGRA, UBYTE),
         91 | 93 => (0x8C43, BGRA, UBYTE),
         _ => (gl::GL_RGBA8, RGBA, UBYTE),
@@ -528,7 +575,7 @@ fn dxgi_format_element_size(format: u32) -> u32 {
         5..=8 => 12,
         9..=22 => 8,
         60..=65 => 1,
-        48..=59 => 2,
+        48..=59 | 85 | 86 => 2,
         _ => 4,
     }
 }
@@ -868,8 +915,24 @@ unsafe fn attach_view(
             // D3D11_RTV_DIMENSION_TEXTURE2D = 4, MipSlice 0.
             ViewKind::RenderTarget => d[1] = 4,
             // D3D11_SRV_DIMENSION_TEXTURE2D = 4, MostDetailedMip 0, MipLevels.
+            // Tableau : TEXTURE2DARRAY (5) sur toutes les tranches ; cube :
+            // TEXTURECUBE (9) ou TEXTURECUBEARRAY (10).
             ViewKind::ShaderResource => {
-                d[1] = if tex.is_some() { 4 } else { 1 };
+                d[1] = match tex {
+                    None => 1,
+                    Some(t) if t.misc_flags & MISC_TEXTURECUBE != 0 && t.array_size > 6 => {
+                        d[4] = 0;
+                        d[5] = t.array_size / 6;
+                        10
+                    }
+                    Some(t) if t.misc_flags & MISC_TEXTURECUBE != 0 => 9,
+                    Some(t) if t.array_size > 1 => {
+                        d[4] = 0;
+                        d[5] = t.array_size;
+                        5
+                    }
+                    Some(_) => 4,
+                };
                 d[3] = tex.map_or(0, |t| t.mip_levels.max(1));
             }
             // D3D11_DSV_DIMENSION_TEXTURE2D = 3, Flags 0, MipSlice 0.
@@ -911,6 +974,17 @@ impl SimpleComObj {
         if prev == 1 {
             pipeline::forget(this.cast(), (*this).gl_id);
             let obj = Box::from_raw(this);
+            // Vue de ressource : sa glTextureView lui appartient.
+            if let Some(t) = as_texture2d(obj.view_resource) {
+                if obj.view_desc_len == 24
+                    && obj.resource_tex != 0
+                    && obj.resource_tex != (*t).gl_texture
+                {
+                    if let Some(g) = gl_here() {
+                        (g.DeleteTextures)(1, &obj.resource_tex);
+                    }
+                }
+            }
             if !obj.view_resource.is_null() {
                 com_release(obj.view_resource);
             }
@@ -1014,17 +1088,46 @@ fn level_size(desc: &D3D11Texture2DDesc, level: u32) -> (u32, u32) {
     )
 }
 
-/// Sous-ressource D3D → niveau de mip (seule la tranche 0 est gardée).
-fn subresource_level(desc: &D3D11Texture2DDesc, sub: u32) -> u32 {
-    sub % mip_count(desc).max(1)
+/// GL_TEXTURE_2D_ARRAY, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP_ARRAY.
+pub(super) const GL_TEXTURE_2D_ARRAY: gl::GLenum = 0x8C1A;
+const GL_TEXTURE_CUBE_MAP: gl::GLenum = 0x8513;
+const GL_TEXTURE_CUBE_MAP_ARRAY: gl::GLenum = 0x9009;
+/// D3D11_RESOURCE_MISC_TEXTURECUBE.
+const MISC_TEXTURECUBE: u32 = 0x4;
+
+/// Tableau ou cube : stocké en GL_TEXTURE_2D_ARRAY.
+fn is_array_texture(desc: &D3D11Texture2DDesc) -> bool {
+    desc.array_size > 1 || desc.misc_flags & MISC_TEXTURECUBE != 0
 }
 
-/// Octets d'un niveau de mip.
+/// Sous-ressource D3D → (niveau de mip, tranche).
+fn subresource(desc: &D3D11Texture2DDesc, sub: u32) -> (u32, u32) {
+    let levels = mip_count(desc).max(1);
+    (sub % levels, (sub / levels).min(desc.array_size.max(1) - 1))
+}
+
+/// Pas d'une ligne (octets) : rangée de blocs 4x4 pour un format BC.
+fn row_pitch(format: u32, width: u32) -> u32 {
+    match bc_format(format) {
+        Some((_, block)) => width.div_ceil(4) * block,
+        None => width * dxgi_format_element_size(format),
+    }
+}
+
+/// Lignes stockées (rangées de blocs pour un format BC).
+fn row_count(format: u32, height: u32) -> u32 {
+    if bc_format(format).is_some() {
+        height.div_ceil(4)
+    } else {
+        height
+    }
+}
+
+/// Octets d'un niveau de mip (une tranche).
 fn level_bytes(desc: &D3D11Texture2DDesc, level: u32) -> Option<usize> {
     let (w, h) = level_size(desc, level);
-    (w as usize)
-        .checked_mul(h as usize)?
-        .checked_mul(dxgi_format_element_size(desc.format) as usize)
+    (row_pitch(desc.format, w) as usize)
+        .checked_mul(row_count(desc.format, h) as usize)
         .filter(|&n| n <= 1 << 30)
 }
 
@@ -1058,29 +1161,35 @@ struct D3D11Box {
     back: u32,
 }
 
-fn create_render_target_view(resource: *mut c_void) -> *mut SimpleComObj {
+fn create_render_target_view(resource: *mut c_void, desc: *const c_void) -> *mut SimpleComObj {
     let g = match gl_here() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
 
-    let tex_gl = match unsafe { as_texture2d(resource) } {
-        Some(t) => unsafe { (*t).gl_texture },
-        None => 0,
+    let tex = unsafe { as_texture2d(resource) };
+    let tex_gl = tex.map_or(0, |t| unsafe { (*t).gl_texture });
+    // D3D11_RENDER_TARGET_VIEW_DESC : Format, ViewDimension, puis MipSlice
+    // et, pour un tableau (5), FirstArraySlice.
+    let (mip, layer) = if desc.is_null() {
+        (0, 0)
+    } else {
+        let d = desc as *const u32;
+        unsafe {
+            match *d.add(1) {
+                4 => (*d.add(2), 0),
+                5 => (*d.add(2), *d.add(3)),
+                _ => (0, 0),
+            }
+        }
     };
 
     let mut fbo = 0u32;
     unsafe {
         (g.GenFramebuffers)(1, &mut fbo);
         (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
-        if tex_gl != 0 {
-            (g.FramebufferTexture2D)(
-                gl::GL_FRAMEBUFFER,
-                gl::GL_COLOR_ATTACHMENT0,
-                gl::GL_TEXTURE_2D,
-                tex_gl,
-                0,
-            );
+        if let Some(t) = tex {
+            attach_texture(g, gl::GL_COLOR_ATTACHMENT0, &*t, mip, layer);
         }
         (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
     }
@@ -1094,6 +1203,91 @@ fn create_render_target_view(resource: *mut c_void) -> *mut SimpleComObj {
         view_desc: [0; 6],
         view_desc_len: 0,
     }))
+}
+
+/// Rattache un niveau (et une tranche pour un tableau) d'une texture au
+/// cadre lié.
+pub(super) unsafe fn attach_texture(
+    g: &gl::GlFunctions,
+    point: gl::GLenum,
+    tex: &Texture2D,
+    mip: u32,
+    layer: u32,
+) {
+    if tex.gl_target == GL_TEXTURE_2D_ARRAY {
+        (g.FramebufferTextureLayer)(
+            gl::GL_FRAMEBUFFER,
+            point,
+            tex.gl_texture,
+            mip as i32,
+            layer as i32,
+        );
+    } else {
+        (g.FramebufferTexture2D)(
+            gl::GL_FRAMEBUFFER,
+            point,
+            gl::GL_TEXTURE_2D,
+            tex.gl_texture,
+            mip as i32,
+        );
+    }
+}
+
+/// Cible GL d'une vue de ressource selon sa dimension D3D11.
+pub(super) fn srv_target(dim: u32) -> gl::GLenum {
+    match dim {
+        5 => GL_TEXTURE_2D_ARRAY,
+        9 => GL_TEXTURE_CUBE_MAP,
+        10 => GL_TEXTURE_CUBE_MAP_ARRAY,
+        _ => gl::GL_TEXTURE_2D,
+    }
+}
+
+/// Vue GL (glTextureView) d'une vue de ressource : cible, niveaux et
+/// tranches qu'elle désigne. 0 si la vue ne peut être créée (texture de
+/// stockage modifiable, comme le tampon arrière) : la texture est alors
+/// liée telle quelle.
+unsafe fn create_texture_view(g: &gl::GlFunctions, tex: &Texture2D, d: &[u32; 6]) -> gl::GLuint {
+    if !tex.owns_texture || tex.gl_texture == 0 {
+        return 0;
+    }
+    let levels = tex.desc.mip_levels.max(1);
+    let layers = tex.desc.array_size.max(1);
+    let (first_mip, mips) = (d[2].min(levels - 1), d[3]);
+    let mips = if mips == 0 || mips == u32::MAX {
+        levels - first_mip
+    } else {
+        mips.min(levels - first_mip)
+    };
+    let (first_layer, count) = match d[1] {
+        5 => (d[4], d[5].max(1)),
+        9 => (0, 6),
+        10 => (d[4], d[5].max(1) * 6),
+        _ => (0, 1),
+    };
+    if first_layer + count > layers {
+        return 0;
+    }
+    let target = srv_target(d[1]);
+    let (internal, _, _) = dxgi_format_to_gl_bind(tex.desc.format, tex.desc.bind_flags);
+    let mut view = 0;
+    (g.GenTextures)(1, &mut view);
+    while (g.GetError)() != 0 {}
+    (g.TextureView)(
+        view,
+        target,
+        tex.gl_texture,
+        internal,
+        first_mip,
+        mips,
+        first_layer,
+        count,
+    );
+    if (g.GetError)() != 0 {
+        (g.DeleteTextures)(1, &view);
+        return 0;
+    }
+    view
 }
 
 // ────────────────────── Shader objects ──────────────────────
@@ -1999,22 +2193,23 @@ unsafe extern "win64" fn ctx_map(
         // Texture : la sous-ressource est copiée côté processeur (relue
         // sauf WRITE_DISCARD), puis téléversée au Unmap si elle est écrite.
         let desc = (*tex).desc;
-        let level = subresource_level(&desc, sub);
+        let (level, slice) = subresource(&desc, sub);
         let Some(bytes) = level_bytes(&desc, level) else {
             return E_INVALIDARG;
         };
         let mut guard = (*tex).staging_buf.lock().unwrap_or_else(|e| e.into_inner());
         guard.level = level;
+        guard.slice = slice;
         guard.map_type = map_type;
         guard.data.resize(bytes, 0);
         if map_type != MAP_WRITE_DISCARD && (*tex).gl_texture != 0 {
             if let Some(g) = gl_here() {
-                read_level(g, &*tex, level, &mut guard.data);
+                read_level(g, &*tex, level, slice, &mut guard.data);
             }
         }
         let (w, _) = level_size(&desc, level);
         (*mapped).data = guard.data.as_mut_ptr() as *mut c_void;
-        (*mapped).row_pitch = w * dxgi_format_element_size(desc.format);
+        (*mapped).row_pitch = row_pitch(desc.format, w);
         (*mapped).depth_pitch = bytes as u32;
         return S_OK;
     }
@@ -2039,63 +2234,161 @@ unsafe extern "win64" fn ctx_unmap(_this: *mut DeviceContext, resource: *mut c_v
         (g.BindBuffer)(target, 0);
     } else if let Some(tex) = as_texture2d(resource) {
         let guard = (*tex).staging_buf.lock().unwrap_or_else(|e| e.into_inner());
-        let level = guard.level;
+        let (level, slice) = (guard.level, guard.slice);
         if guard.map_type != MAP_READ
             && (*tex).gl_texture != 0
             && level_bytes(&(*tex).desc, level) == Some(guard.data.len())
         {
             let (w, h) = level_size(&(*tex).desc, level);
-            upload_region(g, &*tex, level, [0, 0, w, h], 0, guard.data.as_ptr().cast());
+            upload_region(
+                g,
+                &*tex,
+                level,
+                slice,
+                [0, 0, w, h],
+                0,
+                guard.data.as_ptr().cast(),
+            );
         }
     }
 }
 
-/// Téléverse un rectangle [x, y, largeur, hauteur] d'un niveau de mip ;
-/// `pitch` = octets par ligne de la source (0 = lignes jointives).
+/// Téléverse un rectangle [x, y, largeur, hauteur] d'un niveau de mip et
+/// d'une tranche ; `pitch` = octets par ligne de la source (rangée de blocs
+/// pour un format BC ; 0 = lignes jointives).
 unsafe fn upload_region(
     g: &gl::GlFunctions,
     tex: &Texture2D,
     level: u32,
+    slice: u32,
     rect: [u32; 4],
     pitch: u32,
     data: *const c_void,
 ) {
-    let (_, gl_format, gl_type) = dxgi_format_to_gl_bind(tex.desc.format, tex.desc.bind_flags);
-    (g.BindTexture)(gl::GL_TEXTURE_2D, tex.gl_texture);
-    with_unpack_pitch(g, tex.desc.format, pitch, || {
-        (g.TexSubImage2D)(
-            gl::GL_TEXTURE_2D,
-            level as i32,
-            rect[0] as i32,
-            rect[1] as i32,
-            rect[2] as i32,
-            rect[3] as i32,
-            gl_format,
-            gl_type,
-            data,
-        )
-    });
-    (g.BindTexture)(gl::GL_TEXTURE_2D, 0);
+    let target = tex.gl_target;
+    let array = target == GL_TEXTURE_2D_ARRAY;
+    let format = tex.desc.format;
+    (g.BindTexture)(target, tex.gl_texture);
+    if let Some((internal, _)) = bc_format(format) {
+        // Blocs 4x4 : les lignes de blocs sont recopiées jointives si
+        // l'appelant en donne un pas plus grand.
+        let tight = row_pitch(format, rect[2]) as usize;
+        let rows = row_count(format, rect[3]) as usize;
+        let pitch = if pitch == 0 { tight } else { pitch as usize };
+        let packed: Vec<u8>;
+        let src = if pitch == tight {
+            data
+        } else {
+            let mut v = Vec::with_capacity(tight * rows);
+            for r in 0..rows {
+                let line = std::slice::from_raw_parts((data as *const u8).add(r * pitch), tight);
+                v.extend_from_slice(line);
+            }
+            packed = v;
+            packed.as_ptr().cast()
+        };
+        let size = (tight * rows) as i32;
+        if array {
+            (g.CompressedTexSubImage3D)(
+                target,
+                level as i32,
+                rect[0] as i32,
+                rect[1] as i32,
+                slice as i32,
+                rect[2] as i32,
+                rect[3] as i32,
+                1,
+                internal,
+                size,
+                src,
+            );
+        } else {
+            (g.CompressedTexSubImage2D)(
+                target,
+                level as i32,
+                rect[0] as i32,
+                rect[1] as i32,
+                rect[2] as i32,
+                rect[3] as i32,
+                internal,
+                size,
+                src,
+            );
+        }
+    } else {
+        let (_, gl_format, gl_type) = dxgi_format_to_gl_bind(format, tex.desc.bind_flags);
+        with_unpack_pitch(g, format, pitch, || {
+            if array {
+                (g.TexSubImage3D)(
+                    target,
+                    level as i32,
+                    rect[0] as i32,
+                    rect[1] as i32,
+                    slice as i32,
+                    rect[2] as i32,
+                    rect[3] as i32,
+                    1,
+                    gl_format,
+                    gl_type,
+                    data,
+                )
+            } else {
+                (g.TexSubImage2D)(
+                    target,
+                    level as i32,
+                    rect[0] as i32,
+                    rect[1] as i32,
+                    rect[2] as i32,
+                    rect[3] as i32,
+                    gl_format,
+                    gl_type,
+                    data,
+                )
+            }
+        });
+    }
+    (g.BindTexture)(target, 0);
 }
 
-/// Relit un niveau de mip entier dans `out` (lignes jointives).
-unsafe fn read_level(g: &gl::GlFunctions, tex: &Texture2D, level: u32, out: &mut [u8]) {
+/// Relit un niveau de mip d'une tranche dans `out` (lignes jointives).
+unsafe fn read_level(g: &gl::GlFunctions, tex: &Texture2D, level: u32, slice: u32, out: &mut [u8]) {
     const PACK_ALIGNMENT: u32 = 0x0D05;
     if level_bytes(&tex.desc, level) != Some(out.len()) {
         return;
     }
+    let (w, h) = level_size(&tex.desc, level);
+    if bc_format(tex.desc.format).is_some() {
+        (g.GetCompressedTextureSubImage)(
+            tex.gl_texture,
+            level as i32,
+            0,
+            0,
+            slice as i32,
+            w as i32,
+            h as i32,
+            1,
+            out.len() as i32,
+            out.as_mut_ptr().cast(),
+        );
+        return;
+    }
     let (_, gl_format, gl_type) = dxgi_format_to_gl_bind(tex.desc.format, tex.desc.bind_flags);
-    (g.BindTexture)(gl::GL_TEXTURE_2D, tex.gl_texture);
     (g.PixelStorei)(PACK_ALIGNMENT, 1);
-    (g.GetTexImage)(
-        gl::GL_TEXTURE_2D,
+    (g.GetTextureSubImage)(
+        tex.gl_texture,
         level as i32,
+        0,
+        0,
+        slice as i32,
+        w as i32,
+        h as i32,
+        1,
         gl_format,
         gl_type,
+        out.len() as i32,
         out.as_mut_ptr().cast(),
     );
     (g.PixelStorei)(PACK_ALIGNMENT, 4);
-    (g.BindTexture)(gl::GL_TEXTURE_2D, 0);
 }
 
 unsafe extern "win64" fn ctx_om_set_render_targets(
@@ -2252,8 +2545,8 @@ unsafe extern "win64" fn ctx_copy_subresource(
     // ANGLE téléverse dans une texture intermédiaire puis la copie ici dans
     // la texture échantillonnée : sans cette copie tout reste noir (#514).
     if let (Some(d), Some(s)) = (as_texture2d(dst), as_texture2d(src)) {
-        let src_level = subresource_level(&(*s).desc, src_sub);
-        let dst_level = subresource_level(&(*d).desc, dst_sub);
+        let (src_level, src_slice) = subresource(&(*s).desc, src_sub);
+        let (dst_level, dst_slice) = subresource(&(*d).desc, dst_sub);
         let (sw, sh) = level_size(&(*s).desc, src_level);
         let (dw, dh) = level_size(&(*d).desc, dst_level);
         let (left, top, right, bottom) = if box_.is_null() {
@@ -2267,7 +2560,14 @@ unsafe extern "win64" fn ctx_copy_subresource(
         }
         let w = (right - left).min(dw - x);
         let h = (bottom - top).min(dh - y);
-        copy_texture_region(g, &*s, src_level, left, top, &*d, dst_level, x, y, w, h);
+        copy_texture_region(
+            g,
+            &*s,
+            [src_level, left, top, src_slice],
+            &*d,
+            [dst_level, x, y, dst_slice],
+            [w, h, 1],
+        );
     } else if let (Some(d), Some(s)) = (as_buffer(dst), as_buffer(src)) {
         let size = (*s).desc.byte_width;
         let (left, right) = if box_.is_null() {
@@ -2283,40 +2583,36 @@ unsafe extern "win64" fn ctx_copy_subresource(
     }
 }
 
-/// Copie GPU d'un rectangle entre deux textures (glCopyImageSubData).
-#[allow(clippy::too_many_arguments)]
+/// Copie GPU entre deux textures (glCopyImageSubData) : source et
+/// destination en [niveau, x, y, tranche], taille en [largeur, hauteur,
+/// tranches].
 unsafe fn copy_texture_region(
     g: &gl::GlFunctions,
     s: &Texture2D,
-    src_level: u32,
-    sx: u32,
-    sy: u32,
+    from: [u32; 4],
     d: &Texture2D,
-    dst_level: u32,
-    dx: u32,
-    dy: u32,
-    w: u32,
-    h: u32,
+    to: [u32; 4],
+    size: [u32; 3],
 ) {
     if s.gl_texture == 0 || d.gl_texture == 0 {
         return;
     }
     (g.CopyImageSubData)(
         s.gl_texture,
-        gl::GL_TEXTURE_2D,
-        src_level as i32,
-        sx as i32,
-        sy as i32,
-        0,
+        s.gl_target,
+        from[0] as i32,
+        from[1] as i32,
+        from[2] as i32,
+        from[3] as i32,
         d.gl_texture,
-        gl::GL_TEXTURE_2D,
-        dst_level as i32,
-        dx as i32,
-        dy as i32,
-        0,
-        w as i32,
-        h as i32,
-        1,
+        d.gl_target,
+        to[0] as i32,
+        to[1] as i32,
+        to[2] as i32,
+        to[3] as i32,
+        size[0] as i32,
+        size[1] as i32,
+        size[2] as i32,
     );
 }
 
@@ -2370,9 +2666,30 @@ unsafe extern "win64" fn ctx_copy_resource(
             return;
         }
         let levels = mip_count(&(*s).desc).min(mip_count(&(*d).desc));
+        let layers = (*s).desc.array_size.min((*d).desc.array_size).max(1);
         for level in 0..levels {
             let (w, h) = level_size(&(*s).desc, level);
-            copy_texture_region(g, &*s, level, 0, 0, &*d, level, 0, 0, w, h);
+            if (*s).gl_target == (*d).gl_target {
+                copy_texture_region(
+                    g,
+                    &*s,
+                    [level, 0, 0, 0],
+                    &*d,
+                    [level, 0, 0, 0],
+                    [w, h, layers],
+                );
+            } else {
+                for slice in 0..layers {
+                    copy_texture_region(
+                        g,
+                        &*s,
+                        [level, 0, 0, slice],
+                        &*d,
+                        [level, 0, 0, slice],
+                        [w, h, 1],
+                    );
+                }
+            }
         }
     } else if let (Some(d), Some(s)) = (as_buffer(dst), as_buffer(src)) {
         let len = (*s).desc.byte_width.min((*d).desc.byte_width);
@@ -2421,7 +2738,7 @@ unsafe extern "win64" fn ctx_update_subresource(
         }
     } else if let Some(tex) = as_texture2d(resource) {
         // Boîte et pas de ligne de l'appelant : seule la zone visée change.
-        let level = subresource_level(&(*tex).desc, sub);
+        let (level, slice) = subresource(&(*tex).desc, sub);
         let (w, h) = level_size(&(*tex).desc, level);
         let rect = if box_.is_null() {
             [0, 0, w, h]
@@ -2434,19 +2751,20 @@ unsafe extern "win64" fn ctx_update_subresource(
             [b.left, b.top, r - b.left, bt - b.top]
         };
         if (*tex).gl_texture != 0 {
-            upload_region(g, &*tex, level, rect, row_pitch, data);
+            upload_region(g, &*tex, level, slice, rect, row_pitch, data);
         }
     }
 }
 
 unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_void) {
     let Some(g) = gl_here() else { return };
-    if let Some(obj) = as_simple(srv) {
-        let obj = &*obj;
-        if obj.resource_tex != 0 {
-            pipeline::set_max_level(g, obj.resource_tex, 1000);
-            (g.BindTexture)(gl::GL_TEXTURE_2D, obj.resource_tex);
-            (g.GenerateMipmap)(gl::GL_TEXTURE_2D);
+    let Some(obj) = as_simple(srv) else { return };
+    // Sur la texture elle-même (toute sa chaîne), avec sa cible.
+    if let Some(t) = as_texture2d((*obj).view_resource) {
+        if (*t).gl_texture != 0 {
+            (g.BindTexture)((*t).gl_target, (*t).gl_texture);
+            (g.GenerateMipmap)((*t).gl_target);
+            (g.BindTexture)((*t).gl_target, 0);
         }
     }
 }
@@ -3133,26 +3451,32 @@ unsafe extern "win64" fn dev_create_stub(
 unsafe extern "win64" fn dev_create_srv(
     _this: *mut Device,
     resource: *mut c_void,
-    _desc: *const c_void,
+    desc: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let tex_gl = match as_texture2d(resource) {
-        Some(t) => (*t).gl_texture,
-        None => 0,
-    };
     let view = Box::into_raw(Box::new(SimpleComObj {
         vtable: &SIMPLE_COM_VTABLE,
         ref_count: AtomicU32::new(1),
         gl_id: 0,
-        resource_tex: tex_gl,
+        resource_tex: 0,
         view_resource: std::ptr::null_mut(),
         view_desc: [0; 6],
         view_desc_len: 0,
     }));
-    attach_view(view, ViewKind::ShaderResource, resource, _desc);
+    attach_view(view, ViewKind::ShaderResource, resource, desc);
+    // Texture vue par la vue : glTextureView (bonne cible, niveaux et
+    // tranches), sinon la texture elle-même.
+    if let Some(t) = as_texture2d(resource) {
+        let gl_view = gl_here().map_or(0, |g| create_texture_view(g, &*t, &(*view).view_desc));
+        (*view).resource_tex = if gl_view != 0 {
+            gl_view
+        } else {
+            (*t).gl_texture
+        };
+    }
     *out = view.cast();
     S_OK
 }
@@ -3178,7 +3502,7 @@ unsafe extern "win64" fn dev_create_rtv(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let rtv = create_render_target_view(resource);
+    let rtv = create_render_target_view(resource, _desc);
     if rtv.is_null() {
         return E_FAIL;
     }
