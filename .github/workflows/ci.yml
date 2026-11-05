@@ -111,6 +111,9 @@ jobs:
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
+      - name: Figer la surface d'exports de kernel32 (#521)
+        run: python3 -B scripts/test-kernel32-exports.py
+
       - name: Vérifier les navigateurs hors ligne
         run: |
           sh scripts/test-browsers.sh
