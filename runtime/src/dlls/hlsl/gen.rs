@@ -2723,7 +2723,7 @@ impl<'p> Gen<'p> {
             let regs = self.cbs[c].size.div_ceil(4).max(1);
             let _ = writeln!(
                 s,
-                "layout(std140, binding = {}) uniform cb{c}_{tag} {{ vec4 cb{c}[{regs}]; }};",
+                "layout(std140, binding = {}) uniform cb{c}_{tag} {{ vec4 cb{c}_{tag}_r[{regs}]; }};\n#define cb{c} cb{c}_{tag}_r",
                 base + slot
             );
         }

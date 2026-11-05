@@ -420,14 +420,24 @@ perform() {
                 # Icône du clavier tactile (winlux-osk panel), avant le réseau.
                 keyboard=
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-12 2>/dev/null)" = genmon; then keyboard=12; fi
+                # Boutons Rechercher et Vue des tâches (#459), juste après
+                # Démarrer comme dans Windows 11 : numéros libres de 14 à 29.
+                search= taskview=
+                for number in $(seq 14 29); do
+                    case "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$number/items" 2>/dev/null)" in
+                        *winlux-search.desktop*) search=$number ;;
+                        *winlux-taskview.desktop*) taskview=$number ;;
+                    esac
+                done
+                buttons="${search:+$search }${taskview:+$taskview }"
                 # Greffon 13 : contrepoids de largeur égale au bloc de droite
                 # (winlux-tray balance), sans quoi le groupe centré tombe trop
                 # à gauche de la moitié de ce bloc. Barre à gauche : il reste
                 # au bout, d'un pixel, pour ne pas relancer la barre.
                 if test "$alignment" = center; then
-                    ids="${widgets:+11 }3 13 1 2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
+                    ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
                 else
-                    ids="3 1 2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7 13"
+                    ids="3 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7 13"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 if test "$current" != "$ids "; then

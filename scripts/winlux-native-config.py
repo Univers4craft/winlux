@@ -375,13 +375,73 @@ if panel_config.is_file() and not grouping_marker.exists():
         grouping_marker.touch()
     except (ET.ParseError, OSError):
         pass
+# Barre des tâches comme Windows 11 (#459) : bouton « Vue des tâches » juste
+# après Démarrer, et seulement les fenêtres du bureau virtuel en cours. Écrit
+# avant le lancement de la barre (un xfce4-panel lancé ne charge pas un greffon
+# ajouté ensuite) ; une seule fois, pour qu'un bouton retiré ne revienne pas.
+TASKBAR_BUTTONS = (("taskview", "/usr/share/applications/winlux-taskview.desktop"),)
+
+
+def add_taskbar_buttons(panel_config, marker_folder):
+    """Ajoute les boutons livrés après Démarrer (greffon 1) ; numéros libres de 14 à 29."""
+    if not panel_config.is_file(): return False
+    try:
+        tree = ET.parse(panel_config)
+        root = tree.getroot()
+        plugins = next((item for item in root if item.get("name") == "plugins"), None)
+        panel = next((item for top in root if top.get("name") == "panels" for item in top if item.get("name") == "panel-1"), None)
+        ids = next((item for item in panel if item.get("name") == "plugin-ids"), None) if panel is not None else None
+        if plugins is None or ids is None: return False
+        changed = False
+        for name, desktop in TASKBAR_BUTTONS:
+            marker = marker_folder / f"taskbar-{name}-added"
+            if marker.exists(): continue
+            present = any(value.get("value") == desktop for plugin in plugins for items in plugin
+                          if items.get("name") == "items" for value in items)
+            if not present:
+                used = {item.get("name") for item in plugins}
+                number = next((n for n in range(14, 30) if f"plugin-{n}" not in used), None)
+                if number is None: continue
+                launcher = ET.SubElement(plugins, "property", {"name": f"plugin-{number}", "type": "string", "value": "launcher"})
+                items = ET.SubElement(launcher, "property", {"name": "items", "type": "array"})
+                ET.SubElement(items, "value", {"type": "string", "value": desktop})
+                ET.SubElement(launcher, "property", {"name": "show-label", "type": "bool", "value": "false"})
+                values = [item.get("value") for item in ids]
+                position = values.index("1") + 1 if "1" in values else 0
+                # Après les boutons livrés déjà placés derrière Démarrer (Rechercher avant Vue des tâches).
+                while position < len(values) and values[position] != "2" and int(values[position] or 0) in range(14, 30):
+                    position += 1
+                ids.insert(position, ET.Element("value", {"type": "int", "value": str(number)}))
+                changed = True
+            marker_folder.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        workspaces_marker = marker_folder / "taskbar-current-desktop"
+        if not workspaces_marker.exists():
+            for plugin in plugins:
+                if plugin.get("value") != "tasklist": continue
+                for child in plugin:
+                    if child.get("name") == "all-workspaces" and child.get("value") == "true":
+                        child.set("value", "false")
+                        changed = True
+            marker_folder.mkdir(parents=True, exist_ok=True)
+            workspaces_marker.touch()
+        if changed:
+            temporary = panel_config.with_name(panel_config.name + ".tmp")
+            tree.write(temporary, encoding="UTF-8", xml_declaration=True)
+            temporary.replace(panel_config)
+        return changed
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        return False
+
+
+add_taskbar_buttons(panel_config, home / ".config/winlux")
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
               "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
-              "W-C-t", "W-S-c", "W-S-t")
+              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.

@@ -266,6 +266,21 @@ del data["/plugins/plugin-11"]
 data["/panels/panel-1/plugin-ids"].remove(11)
 store.write_text(json.dumps(data))
 
+# Bouton Vue des tâches (#459, numéro libre de 14 à 29) : juste après Démarrer.
+data = json.loads(store.read_text())
+data["/plugins/plugin-15"] = "launcher"
+data["/plugins/plugin-15/items"] = ["/usr/share/applications/winlux-taskview.desktop"]
+store.write_text(json.dumps(data))
+for alignment, expected in (("align-left", [3, 1, 15, 2, 8, 30, 10, 4, 5, 6, 9, 7, 13]),
+                            ("align-center", [3, 13, 1, 15, 2, 8, 30, 10, 4, 5, 6, 9, 7])):
+    subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
+                   stdout=subprocess.DEVNULL)
+    assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == expected, alignment
+data = json.loads(store.read_text())
+del data["/plugins/plugin-15"], data["/plugins/plugin-15/items"]
+data["/panels/panel-1/plugin-ids"].remove(15)
+store.write_text(json.dumps(data))
+
 assistant.disable()
 data = json.loads(store.read_text())
 assert data["/panels/panel-1/plugin-ids"] == [3, 13, 1, 2, 8, 10, 4, 5, 6, 9, 7]

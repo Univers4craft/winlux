@@ -79,6 +79,14 @@ _TR = {
     "Le service d’alimentation ne répond pas.": ("The power service isn’t responding.", "El servicio de energía no responde.",
                                                   "Der Energiedienst antwortet nicht."),
     "OK": ("OK", "Aceptar", "OK"),
+    "D’autres personnes sont connectées à ce PC : {names}. Si vous l’arrêtez maintenant, leurs travaux non enregistrés seront perdus.": (
+        "Other people are signed in to this PC: {names}. If you shut it down now, they could lose unsaved work.",
+        "Hay otras personas con sesión iniciada en este equipo: {names}. Si lo apaga ahora, podrían perder el trabajo no guardado.",
+        "Andere Personen sind an diesem PC angemeldet: {names}. Wenn Sie ihn jetzt herunterfahren, kann nicht gespeicherte Arbeit verloren gehen."),
+    "D’autres personnes sont connectées à ce PC : {names}. Si vous le redémarrez maintenant, leurs travaux non enregistrés seront perdus.": (
+        "Other people are signed in to this PC: {names}. If you restart it now, they could lose unsaved work.",
+        "Hay otras personas con sesión iniciada en este equipo: {names}. Si lo reinicia ahora, podrían perder el trabajo no guardado.",
+        "Andere Personen sind an diesem PC angemeldet: {names}. Wenn Sie ihn jetzt neu starten, kann nicht gespeicherte Arbeit verloren gehen."),
 }
 
 
@@ -186,6 +194,43 @@ def session_users():
         return set(os.listdir(SESSIONS))
     except OSError:
         return set()
+
+
+def other_sessions(me=None):
+    """Noms affichés des autres comptes dont la session est ouverte (registre
+    de winlux-sessions, écran X toujours là), comme l'avertissement de Windows
+    « D'autres personnes utilisent ce PC »."""
+    if me is None:
+        try:
+            import pwd
+            me = pwd.getpwuid(os.getuid()).pw_name
+        except (KeyError, ImportError):
+            me = ""
+    sockets = os.environ.get("WINLUX_X11_SOCKETS", "/tmp/.X11-unix")
+    full = {}
+    try:
+        for line in open(ROOT + "/etc/passwd", encoding="utf-8", errors="replace"):
+            parts = line.split(":")
+            if len(parts) >= 5:
+                full[parts[0]] = parts[4].split(",")[0].strip()
+    except OSError:
+        pass
+    names = []
+    for user in sorted(session_users()):
+        if user == me or user.startswith("."):
+            continue
+        display = ""
+        try:
+            for line in open(os.path.join(SESSIONS, user), encoding="utf-8", errors="replace"):
+                if line.startswith("display="):
+                    display = line.strip()[8:]
+        except OSError:
+            continue
+        number = display.rpartition(":")[2].split(".")[0]
+        if not number.isdigit() or not os.path.exists(os.path.join(sockets, "X" + number)):
+            continue
+        names.append(full.get(user) or user)
+    return names
 
 
 def peer_allowed(uid):
@@ -446,6 +491,20 @@ class PowerUI:
     def show_confirm(self):
         shutdown = self.action == "poweroff"
         self.mode = "confirm"
+        others = other_sessions()
+        if others:
+            # Une autre session (un administrateur, par exemple) serait coupée
+            # sans prévenir : avertissement, et « Annuler » par défaut.
+            body = _t("D’autres personnes sont connectées à ce PC : {names}. Si vous l’arrêtez maintenant, leurs travaux non enregistrés seront perdus."
+                      if shutdown else
+                      "D’autres personnes sont connectées à ce PC : {names}. Si vous le redémarrez maintenant, leurs travaux non enregistrés seront perdus.")
+            self.set_card(self.make_card(
+                "dialog-warning-symbolic",
+                _t("Arrêter le PC ?") if shutdown else _t("Redémarrer le PC ?"),
+                body.format(names=", ".join(others)),
+                [(_t("Annuler"), self.cancel, True),
+                 (_t("Arrêter quand même") if shutdown else _t("Redémarrer quand même"), self.start_shutdown, False)]))
+            return
         self.set_card(self.make_card(
             "system-shutdown-symbolic" if shutdown else "view-refresh-symbolic",
             _t("Arrêter le PC ?") if shutdown else _t("Redémarrer le PC ?"),
