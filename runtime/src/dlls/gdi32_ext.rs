@@ -1260,16 +1260,61 @@ pub extern "win64" fn gdi_set_batch_limit(_limit: u32) -> u32 {
     1
 }
 
-// ── CreateBitmap (stub) ────────────────────────────────────────────
+// ── CreateBitmap ───────────────────────────────────────────────────
 
+/// CreateBitmap : bitmap dépendante du périphérique, remplie avec `bits`
+/// s'il est fourni. Les lignes partent du haut et sont alignées sur 16 bits.
+/// Les masques monochromes (1 bit) donnent du blanc pour 1 et du noir pour
+/// 0 : wxWidgets les passe ensuite à MaskBlt.
 pub unsafe extern "win64" fn create_bitmap(
     width: i32,
     height: i32,
-    _planes: u32,
-    _bpp: u32,
-    _bits: *const c_void,
+    planes: u32,
+    bpp: u32,
+    bits: *const c_void,
 ) -> usize {
-    gui::create_compatible_bitmap(width, height).unwrap_or(0)
+    let Some(handle) = gui::create_compatible_bitmap(width, height) else {
+        return 0;
+    };
+    let depth = planes.max(1) * bpp;
+    if !bits.is_null() {
+        let (w, h) = (width as usize, height as usize);
+        let stride = (w * depth as usize).div_ceil(16) * 2;
+        let data = std::slice::from_raw_parts(bits as *const u8, stride * h);
+        for (y, line) in data.chunks(stride).enumerate() {
+            if let Some(row) = ddb_row(line, w, depth) {
+                gui::write_bitmap_row(handle, y, &row);
+            }
+        }
+    }
+    handle
+}
+
+/// Une ligne de bitmap brute (1, 24 ou 32 bits par pixel) en COLORREF.
+fn ddb_row(line: &[u8], width: usize, depth: u32) -> Option<Vec<u32>> {
+    let bgr = |b: u8, g: u8, r: u8| r as u32 | (g as u32) << 8 | (b as u32) << 16;
+    Some(match depth {
+        1 => (0..width)
+            .map(|x| {
+                if line[x / 8] & (0x80 >> (x % 8)) != 0 {
+                    0x00FF_FFFF
+                } else {
+                    0
+                }
+            })
+            .collect(),
+        24 => line
+            .chunks(3)
+            .take(width)
+            .map(|p| bgr(p[0], p[1], p[2]))
+            .collect(),
+        32 => line
+            .chunks(4)
+            .take(width)
+            .map(|p| bgr(p[0], p[1], p[2]))
+            .collect(),
+        _ => return None,
+    })
 }
 
 pub fn exports() -> crate::dlls::Exports {
