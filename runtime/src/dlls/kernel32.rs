@@ -2833,7 +2833,16 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
             return 0;
         }
         let symbol = crate::dlls::cstr(name);
-        return match crate::dlls::lookup(dll, &symbol) {
+        // kernel32.dll lui-même n'exporte pas les fonctions propres à KernelBase.
+        let hidden = module != crate::dlls::kernelbase_handle()
+            && dll == "kernel32"
+            && crate::dlls::KERNELBASE_ONLY.contains(&symbol.as_str());
+        let found = if hidden {
+            None
+        } else {
+            crate::dlls::lookup(dll, &symbol)
+        };
+        return match found {
             Some(a) => crate::thunks::api_trace(dll, &symbol, a),
             None => {
                 crate::trace!("GetProcAddress: {dll}!{symbol} non disponible");
@@ -8568,6 +8577,38 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// WaitOnAddress n'est pas dans kernel32.dll sous Windows, seulement dans
+    /// KernelBase et api-ms-win-core-synch-l1-2-0 (VLC choisit sa branche
+    /// selon ce GetProcAddress, #495).
+    #[test]
+    fn wait_on_address_absente_de_kernel32_seul() {
+        let k32 = crate::dlls::module_handle("KERNEL32.dll").unwrap();
+        let kb = crate::dlls::module_handle("kernelbase.dll").unwrap();
+        let synch = crate::dlls::module_handle("api-ms-win-core-synch-l1-2-0.dll").unwrap();
+        assert_ne!(k32, kb);
+        assert_eq!(kb, synch);
+        unsafe {
+            for f in [
+                c"WaitOnAddress",
+                c"WakeByAddressAll",
+                c"WakeByAddressSingle",
+            ] {
+                let n = f.as_ptr() as *const u8;
+                assert_eq!(super::get_proc_address(k32, n), 0);
+                assert_ne!(super::get_proc_address(kb, n), 0);
+                assert_ne!(super::get_proc_address(synch, n), 0);
+            }
+            assert_ne!(
+                super::get_proc_address(k32, c"Sleep".as_ptr() as *const u8),
+                0
+            );
+            assert_ne!(
+                super::get_proc_address(kb, c"Sleep".as_ptr() as *const u8),
+                0
+            );
+        }
+    }
+
     /// Fermer le jeton d'OpenProcessToken réussit (Chromium le vérifie).
     #[test]
     fn fermer_le_jeton_du_processus_reussit() {
