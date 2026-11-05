@@ -75,6 +75,7 @@ pub mod hostssl;
 pub mod icons;
 pub mod imm32;
 pub mod inherit;
+pub mod inifile;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
@@ -828,6 +829,13 @@ fn add_basics(all: &mut [Builtin]) {
             .into_iter()
             .chain(gdi32_palette::gdi32_overrides())
         {
+            b.exports.insert(name, addr);
+        }
+    }
+    // Fichiers .ini : de vraies lectures et écritures remplacent les
+    // anciennes versions qui rendaient toujours la valeur par défaut.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "kernel32") {
+        for (name, addr) in inifile::kernel32_overrides() {
             b.exports.insert(name, addr);
         }
     }
