@@ -426,9 +426,16 @@ thread_local! {
 }
 
 pub extern "win64" fn errno() -> *mut i32 {
+    // Programme x86 : case basse du thread, lisible par son code (#232).
+    if let Some(p) = crate::wow32::errno_slot(false) {
+        return p as *mut i32;
+    }
     ERRNO.with(|e| e.as_ptr())
 }
 pub extern "win64" fn doserrno() -> *mut u32 {
+    if let Some(p) = crate::wow32::errno_slot(true) {
+        return p as *mut u32;
+    }
     DOSERRNO.with(|e| e.as_ptr())
 }
 pub unsafe extern "win64" fn get_errno(out: *mut i32) -> i32 {
@@ -976,6 +983,25 @@ pub unsafe extern "win64" fn mkgmtime64(t: *mut Tm) -> i64 {
 }
 pub extern "win64" fn difftime64(a: i64, b: i64) -> f64 {
     (a - b) as f64
+}
+/// Variantes à `time_t` de 32 bits (msvcrt.dll des programmes x86).
+pub unsafe extern "win64" fn mktime32(t: *mut Tm) -> i32 {
+    let r = mktime64(t);
+    if r > i32::MAX as i64 {
+        -1
+    } else {
+        r as i32
+    }
+}
+pub extern "win64" fn difftime32(a: i32, b: i32) -> f64 {
+    (a as i64 - b as i64) as f64
+}
+pub unsafe extern "win64" fn ctime32(t: *const i32) -> *const u8 {
+    if t.is_null() {
+        return std::ptr::null();
+    }
+    let wide = *t as i64;
+    ctime64(&wide)
 }
 /// `clock` : temps écoulé depuis le démarrage du processus, en millisecondes
 /// (CLOCKS_PER_SEC vaut 1000 sous Windows).
@@ -1712,7 +1738,8 @@ pub fn exports() -> crate::dlls::Exports {
         "gmtime" => fn gmtime64, "_gmtime64" => fn gmtime64, "_gmtime32" => fn gmtime32,
         "_localtime64_s" => fn localtime64_s, "_gmtime64_s" => fn gmtime64_s,
         "mktime" => fn mktime64, "_mktime64" => fn mktime64, "_mkgmtime64" => fn mkgmtime64, "_mkgmtime" => fn mkgmtime64,
-        "difftime" => fn difftime64, "_difftime64" => fn difftime64, "clock" => fn clock, "strftime" => fn strftime,
+        "difftime" => fn difftime64, "_difftime64" => fn difftime64,
+        "_mktime32" => fn mktime32, "_difftime32" => fn difftime32, "_ctime32" => fn ctime32, "clock" => fn clock, "strftime" => fn strftime,
         "asctime" => fn asctime, "ctime" => fn ctime64, "_ctime64" => fn ctime64,
         "srand" => fn srand, "rand" => fn rand, "rand_s" => fn rand_s,
         "strerror" => fn strerror, "strerror_s" => fn strerror_s, "perror" => fn perror,

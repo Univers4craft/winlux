@@ -3070,9 +3070,8 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
         }
     };
     if let Some((entry, base)) = detach {
-        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-            unsafe { std::mem::transmute(entry) };
-        let _ = dllmain(base, 0, 0);
+        // DllMain x86 ou x64 (#232).
+        let _ = crate::process::call_dllmain(entry, base, 0, 0);
         // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
         // on laisse la DLL chargée mais le compteur est à zéro.
     }

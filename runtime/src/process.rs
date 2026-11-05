@@ -323,6 +323,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     });
     // Variables _acmdln/_wcmdln de la CRT, lues directement par les programmes.
     crate::dlls::crt_extra::process_started();
+    crate::wow32::fill_crt_data();
 }
 
 /// Crée le TEB du thread courant et fait pointer GS dessus.
@@ -450,6 +451,8 @@ fn free_current_teb() {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         threads.retain(|&x| x != t);
     }
+    // Programme x86 : TEB 32 bits et entrée de LDT du thread (#232).
+    crate::wow32::free_thread(t);
     unsafe {
         // GS d'abord : un gestionnaire de signal ne doit pas lire un TEB libéré.
         libc::syscall(libc::SYS_arch_prctl, 0x1001, 0usize);
@@ -580,6 +583,16 @@ fn run_tls_callbacks(m: &Module, reason: u32) {
     if t.callbacks_addr == 0 {
         return;
     }
+    if m.pe.x86 {
+        let mut p = t.callbacks_addr as u32;
+        while crate::wow32::rd(p) != 0 {
+            let cb = crate::wow32::rd(p);
+            trace!("rappel TLS x86 0x{cb:x} de {}", m.name);
+            crate::wow32::call32(cb as usize, &[m.base as u32, reason, 0]);
+            p += 4;
+        }
+        return;
+    }
     let mut p = t.callbacks_addr as *const usize;
     unsafe {
         while *p != 0 {
@@ -642,6 +655,7 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
             unsafe {
                 let block = alloc_tls_block(&tls);
                 *((array + index * 8) as *mut usize) = block;
+                crate::wow32::mirror_tls_slot(*t, index, block);
             }
         }
         if tls.index_addr != 0 {
@@ -759,7 +773,7 @@ fn start(exe: Module) -> u32 {
 }
 
 /// DllMain d'un module réel, x86 (wow32) ou x64.
-fn call_dllmain(entry: usize, base: usize, reason: u32, reserved: usize) -> i32 {
+pub fn call_dllmain(entry: usize, base: usize, reason: u32, reserved: usize) -> i32 {
     if crate::wow32::active() {
         return crate::wow32::call32(entry, &[base as u32, reason, reserved as u32]) as i32;
     }
