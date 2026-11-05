@@ -76,7 +76,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 | | |
 |---|---|
 | **Dernière version publiée** | [**v0.2.19**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.19) (4 novembre 2026) : heure juste dès l'installation et à chaque démarrage, Edge et Chrome qui s'installent même sur une connexion lente, liens ouverts dans le navigateur installé, barre des tâches vraiment centrée, éclair de charge sur la batterie, Téléphone connecté, `su` qui passe par `sudo`. |
-| **Version en préparation** | **v0.2.20** : en cours. |
+| **Version en préparation** | **v0.2.20** : vraies barres de menus des logiciels Windows classiques, 7-Zip plus complet, Warzone 2100 en Direct3D 11 grâce au compilateur HLSL maison, envoi automatique des plantages, sauvegarde de mes fichiers, journaux Wi-Fi joints au signalement, Explorateur lisible en 1366x768, premier démarrage après mise à jour sans attente. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
 | **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
