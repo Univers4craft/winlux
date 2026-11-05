@@ -236,6 +236,7 @@ GetFileSize
 GetFileSizeEx
 GetFileTime
 GetFileType
+GetFinalPathNameByHandleA
 GetFinalPathNameByHandleW
 GetFullPathNameA
 GetFullPathNameW
