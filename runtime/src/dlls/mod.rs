@@ -66,6 +66,7 @@ pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod hid;
+pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
 pub mod icons;
