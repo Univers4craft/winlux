@@ -440,3 +440,45 @@ float4 PS(V2P i) : SV_TARGET {
         ps.pairs
     );
 }
+
+/// Vertex et pixel shaders liés ensemble (glslangValidator -l) : leurs
+/// tampons de même numéro, de tailles différentes, ne doivent pas se
+/// confondre dans le programme (Warzone 2100 en ANGLE, passage 13).
+#[test]
+fn stages_link_together() {
+    let src = r#"
+float4x4 posMatrix;
+float4 color;
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V vs(float4 p : POSITION, float2 uv : TEXCOORD0) { V o; o.pos = mul(p, posMatrix); o.uv = uv; return o; }
+Texture2D t; SamplerState s;
+float4 ps(V i) : SV_Target { return t.Sample(s, i.uv) * color; }
+"#;
+    let vs = build(&src.replace("float4 color;", ""), "vs", "vs_5_0");
+    let ps = build(&src.replace("float4x4 posMatrix;", ""), "ps", "ps_5_0");
+    let Some(tool) = std::env::var_os("PATH").and_then(|p| {
+        std::env::split_paths(&p)
+            .map(|d| d.join("glslangValidator"))
+            .find(|f| f.is_file())
+    }) else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("winlux-hlsl-lien-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("s.vert"), &vs.glsl).unwrap();
+    std::fs::write(dir.join("s.frag"), &ps.glsl).unwrap();
+    let out = std::process::Command::new(&tool)
+        .arg("-l")
+        .arg(dir.join("s.vert"))
+        .arg(dir.join("s.frag"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "{}\n{}\n{}",
+        vs.glsl,
+        ps.glsl,
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

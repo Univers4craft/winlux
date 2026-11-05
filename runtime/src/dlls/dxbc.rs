@@ -1251,7 +1251,10 @@ fn finish(g: Gen) -> Shader {
     for (&n, &size) in &g.d.cbs {
         let _ = writeln!(
             s,
-            "layout(std140, binding = {}) uniform cb{n}_{tag} {{ vec4 cb{n}[{}]; }};",
+            // Membre propre à l'étage : les blocs sans nom d'instance mettent
+            // leurs membres en commun dans le programme, et le cb0 du vertex
+            // shader n'est pas celui du pixel shader (taille différente).
+            "layout(std140, binding = {}) uniform cb{n}_{tag} {{ vec4 cb{n}_{tag}_r[{}]; }};\n#define cb{n} cb{n}_{tag}_r",
             base + n,
             size.min(4096)
         );
@@ -1671,7 +1674,7 @@ pub(crate) mod tests {
         assert_eq!(s.stage, Stage::Vertex);
         let g = &s.glsl;
         assert!(
-            g.contains("layout(std140, binding = 0) uniform cb0_vs { vec4 cb0[4]; };"),
+            g.contains("layout(std140, binding = 0) uniform cb0_vs { vec4 cb0_vs_r[4]; };"),
             "{g}"
         );
         assert!(g.contains("layout(location = 0) in vec4 a0;"), "{g}");
