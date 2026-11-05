@@ -22,6 +22,7 @@ Usage :
   winlux-report --open-saved         ouvre le dossier des rapports enregistrés
   winlux-report --component NOM      problème d'un composant Winlux
   winlux-report --print [--crash]    affiche le rapport (sans interface)
+        [--attach network,sound,boot,update|all]  avec les journaux de diagnostic
   winlux-report --status             réglages, format clé=valeur
   winlux-report --set CLÉ=VALEUR     offer=on|off redact=on|off mode=auto|browser|file
                                      auto=on|off|default
@@ -64,6 +65,11 @@ BODY_LIMIT = 60000
 
 T = {
  "fr": {
+  "attach": "Joindre les journaux de diagnostic :",
+  "d_network": "Réseau et Wi-Fi", "d_sound": "Son", "d_boot": "Démarrage", "d_update": "Mises à jour",
+  "h_diag": "Journaux de diagnostic", "d_empty": "vide (rien n'est encore écrit dans ce journal)",
+  "d_unreadable": "illisible depuis ce compte", "d_none": "aucun journal trouvé pour ce domaine",
+  "h_queue": "Rapports de plantage en attente d'envoi",
   "auto_desc": "Rapport envoyé automatiquement par Winlux au démarrage suivant, données personnelles masquées.",
   "auto_count": "Occurrences depuis le dernier envoi : {count}.",
   "window": "Signaler un problème", "crashed": "« {exe} » a cessé de fonctionner.",
@@ -141,6 +147,11 @@ T = {
   "nothing_system": "Aucun arrêt anormal du système à signaler.",
  },
  "en": {
+  "attach": "Attach diagnostic logs:",
+  "d_network": "Network and Wi-Fi", "d_sound": "Sound", "d_boot": "Startup", "d_update": "Updates",
+  "h_diag": "Diagnostic logs", "d_empty": "empty (nothing written to this log yet)",
+  "d_unreadable": "not readable from this account", "d_none": "no log found for this area",
+  "h_queue": "Crash reports waiting to be sent",
   "auto_desc": "Report sent automatically by Winlux at the next startup, personal data hidden.",
   "auto_count": "Occurrences since the last report: {count}.",
   "window": "Report a problem", "crashed": "\"{exe}\" stopped working.",
@@ -218,6 +229,11 @@ T = {
   "nothing_system": "No abnormal system stop to report.",
  },
  "es": {
+  "attach": "Adjuntar los registros de diagnóstico:",
+  "d_network": "Red y Wi-Fi", "d_sound": "Sonido", "d_boot": "Arranque", "d_update": "Actualizaciones",
+  "h_diag": "Registros de diagnóstico", "d_empty": "vacío (aún no se ha escrito nada en este registro)",
+  "d_unreadable": "ilegible desde esta cuenta", "d_none": "no se encontró ningún registro para este ámbito",
+  "h_queue": "Informes de bloqueo pendientes de envío",
   "auto_desc": "Informe enviado automáticamente por Winlux en el siguiente arranque, datos personales ocultos.",
   "auto_count": "Apariciones desde el último envío: {count}.",
   "window": "Informar de un problema", "crashed": "«{exe}» ha dejado de funcionar.",
@@ -295,6 +311,11 @@ T = {
   "nothing_system": "No hay ninguna parada anómala del sistema que informar.",
  },
  "de": {
+  "attach": "Diagnoseprotokolle anhängen:",
+  "d_network": "Netzwerk und WLAN", "d_sound": "Ton", "d_boot": "Start", "d_update": "Updates",
+  "h_diag": "Diagnoseprotokolle", "d_empty": "leer (in dieses Protokoll wurde noch nichts geschrieben)",
+  "d_unreadable": "von diesem Konto aus nicht lesbar", "d_none": "kein Protokoll für diesen Bereich gefunden",
+  "h_queue": "Noch nicht gesendete Absturzberichte",
   "auto_desc": "Bericht automatisch von Winlux beim nächsten Start gesendet, persönliche Daten ausgeblendet.",
   "auto_count": "Vorkommen seit dem letzten Bericht: {count}.",
   "window": "Problem melden", "crashed": "„{exe}“ funktioniert nicht mehr.",
@@ -1142,6 +1163,99 @@ def redact(text, keep_names=(), home=None, values=None, keep_strings=()):
     return text
 
 
+# ── Journaux de diagnostic joints (#458) ─────────────────────────────────
+#
+# Joints seulement s'ils existent ; un fichier vide est signalé comme tel (sur
+# un système installé, NetworkManager et wpa_supplicant n'écrivaient rien).
+# Commandes en LC_ALL=C (pactl traduit ses en-têtes). Tout passe ensuite par
+# le même masquage que le reste du rapport.
+
+def _p(path):
+    return Path(os.environ.get("WINLUX_DIAG_ROOT", "") + path)
+
+
+DIAG_DOMAINS = {
+    "network": {"files": ["/run/winlux/network.log", "/run/winlux/network-manager.log",
+                          "/run/winlux/network-agent.log", "/run/winlux/network-fallback.log",
+                          "/run/winlux/wpa-supplicant.log", "/run/winlux/network-probe.json",
+                          "/run/winlux/time-sync.log", "/run/winlux/time-sync.json"],
+                "commands": [["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"], ["rfkill", "list"],
+                             ["ip", "-brief", "link"]]},
+    "sound": {"files": ["/run/winlux/pipewire.log", "/run/winlux/wireplumber.log"],
+              "commands": [["pactl", "info"], ["pactl", "list", "short", "sinks"],
+                           ["pactl", "list", "short", "sources"], ["aplay", "-l"]]},
+    "boot": {"files": ["/run/winlux/native-early.log", "/run/winlux/native-session.log",
+                       "/run/winlux/boot-splash.log", "/run/winlux/system-services.log",
+                       "/var/lib/winlux/native-boot-failure.log", "/run/winlux/hardware.log"],
+             "commands": [["dmesg", "--level=emerg,alert,crit,err"]]},
+    "update": {"files": ["/run/winlux/update.log", "/run/winlux/boot-update.log", "/run/winlux/sysupdate-auto.log",
+                         "/run/winlux/updates.txt", "/run/winlux/sysupdates.txt",
+                         "/var/log/winlux-first-boot-packages.log", "/var/log/winlux-drivers.log"],
+               "commands": []},
+}
+DIAG_LINES = 80
+DIAG_COMMANDS = os.environ.get("WINLUX_DIAG_COMMANDS", "1") == "1"
+
+
+def diag_command(cmd):
+    if not DIAG_COMMANDS or not shutil.which(cmd[0]):
+        return None
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5,
+                             env={**os.environ, "LC_ALL": "C", "LANG": "C"})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (out.stdout or "").strip()
+    return text.splitlines()[-DIAG_LINES:] if text else None
+
+
+def diagnostics(domain, language=None):
+    """[(nom, lignes ou None, état)] pour un domaine : fichiers puis commandes."""
+    found = []
+    for name in DIAG_DOMAINS[domain]["files"]:
+        path = _p(name)
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            found.append((name, None, tr("d_unreadable", language)))
+            continue
+        lines = [SSID_TEXT.sub(r"\1\2<réseau-wifi>\2", l) for l in text.splitlines() if l.strip()][-DIAG_LINES:]
+        found.append((name, lines or None, "" if lines else tr("d_empty", language)))
+    for cmd in DIAG_DOMAINS[domain]["commands"]:
+        lines = diag_command(cmd)
+        if lines:
+            found.append(("$ " + " ".join(cmd), lines, ""))
+    return found
+
+
+def queued_reports():
+    titles = []
+    for path in sorted(QUEUE.glob("*.json")) if QUEUE.exists() else []:
+        item = load_json(path, {})
+        if item.get("title"):
+            titles.append(f"{item['title']} — `{item.get('signature', '')}`")
+    return titles
+
+
+def diagnostics_markdown(domains, language=None):
+    fence = "`" * 3
+    out = []
+    for domain in domains:
+        entries = diagnostics(domain, language)
+        out += [f"<details><summary>{tr('h_diag', language)} — {tr('d_' + domain, language)}</summary>", ""]
+        if not entries:
+            out += [f"_{tr('d_none', language)}_", ""]
+        for name, lines, note in entries:
+            if lines is None:
+                out += [f"- `{name}` : {note}"]
+                continue
+            out += [f"`{name}`", "", fence] + [l[:300].replace(fence, "'" * 3) for l in lines] + [fence, ""]
+        out += ["", "</details>", ""]
+    return out
+
+
 # ── Construction du rapport ──────────────────────────────────────────────
 
 class Report:
@@ -1168,6 +1282,7 @@ class Report:
             reason = tr("r_panic" if system["reason"] == "panic" else "r_critical", self.language)
             self.checks.insert(0, (False, tr("k_prev", self.language, reason=reason)))
         self.signature = signature(crash) or system_signature(system)
+        self.attach = []
         path = (crash or {}).get("path", "")
         self.exe_name = (crash or {}).get("exe", "") or component or ""
         self.exe = pe_version(path) if path.lower().endswith((".exe", ".dll", ".com", ".scr")) else {}
@@ -1293,10 +1408,25 @@ class Report:
             for title, lines in network_tail():
                 out += [f"<details><summary>{tr('h_network', L)} ({title})</summary>", "", "```"]
                 out += [l[:300].replace("```", "'''") for l in lines] + ["```", "", "</details>", ""]
+        if self.attach and not comment:
+            out += diagnostics_markdown(self.attach, L)
+        waiting = queued_reports() if not comment else []
+        if waiting:
+            out += [f"<details><summary>{tr('h_queue', L)}</summary>", ""] + [f"- {t}" for t in waiting]
+            out += ["", "</details>", ""]
         out += ["---", "_" + tr("footer", L, redact=tr("yes" if redacted else "no", L)) + "_"]
         text = "\n".join(out)
         if redacted:
             text = redact(text, keep_names=[self.exe_name], keep_strings=self.safe_strings())
+        if len(text) > BODY_LIMIT and self.attach:
+            # Trop long avec les journaux : on les raccourcit plutôt que de couper la fin.
+            global DIAG_LINES
+            if DIAG_LINES > 10:
+                saved, DIAG_LINES = DIAG_LINES, max(10, DIAG_LINES // 2)
+                try:
+                    return self.body(description, redacted, comment)
+                finally:
+                    DIAG_LINES = saved
         return text[:BODY_LIMIT]
 
 
@@ -1906,6 +2036,18 @@ def gui(report, conf):
     mask.set_active(conf["REDACT"] == "on")
     box.pack_start(mask, False, False, 0)
 
+    attach_row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE)
+    attach_row.add(Gtk.Label(label=tr("attach", L), xalign=0))
+    attach_checks = {}
+    for domain in DIAG_DOMAINS:
+        check = Gtk.CheckButton(label=tr("d_" + domain, L))
+        # Problème du système ou libre : journaux joints d'office (décochables).
+        check.set_active(report.crash is None)
+        attach_checks[domain] = check
+        attach_row.add(check)
+    box.pack_start(attach_row, False, False, 0)
+    report.attach = [d for d, c in attach_checks.items() if c.get_active()]
+
     expander = Gtk.Expander(label=tr("preview", L))
     preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     title_entry = Gtk.Entry()
@@ -1982,6 +2124,13 @@ def gui(report, conf):
     desc_view.get_buffer().connect("changed", on_inputs_changed)
     summary.connect("changed", on_inputs_changed)
     mask.connect("toggled", lambda *_: regenerate() if not state["edited"] else on_masked_edit())
+
+    def on_attach(*_):
+        report.attach = [d for d, c in attach_checks.items() if c.get_active()]
+        if not state["edited"]:
+            regenerate()
+    for check in attach_checks.values():
+        check.connect("toggled", on_attach)
     regen.connect("clicked", regenerate)
 
     def on_masked_edit():
@@ -2193,6 +2342,9 @@ def main(argv):
             if not mark_offered(crash):
                 return 0
     report = Report(crash, option("--component"), system=system)
+    if "--attach" in args:
+        wanted = (option("--attach", "") or "").split(",")
+        report.attach = [d for d in DIAG_DOMAINS if d in wanted or "all" in wanted]
     if "--print" in args:
         redacted = conf["REDACT"] == "on" and "--no-redact" not in args
         print(report.title())
