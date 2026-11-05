@@ -436,7 +436,7 @@ fn line_height(font: usize) -> i32 {
 }
 
 /// Retire les marques de raccourci (« &Fichier » → « Fichier », « && » → « & »).
-fn strip_prefix(s: &str) -> String {
+pub(crate) fn strip_prefix(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {

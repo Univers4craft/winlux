@@ -73,6 +73,65 @@ unsafe fn read_class_name_w(p: *const u16) -> String {
 
 // ---------- Enregistrement de classes ----------
 
+/// Menu de classe (lpszMenuName) : numéro de ressource ou nom UTF-16.
+enum ClassMenu {
+    Id(usize),
+    Name(Vec<u16>),
+}
+
+fn class_menus() -> &'static Mutex<HashMap<String, (usize, ClassMenu)>> {
+    static M: OnceLock<Mutex<HashMap<String, (usize, ClassMenu)>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Retient le menu d'une classe ; `wide` : nom en UTF-16.
+unsafe fn remember_class_menu(class: &str, instance: usize, name: *const u8, wide: bool) {
+    let key = class.to_ascii_lowercase();
+    let entry = if name.is_null() {
+        None
+    } else if (name as usize) >> 16 == 0 {
+        Some(ClassMenu::Id(name as usize))
+    } else if wide {
+        Some(ClassMenu::Name(
+            crate::dlls::wstr(name as *const u16)
+                .encode_utf16()
+                .chain([0])
+                .collect(),
+        ))
+    } else {
+        Some(ClassMenu::Name(
+            crate::dlls::cstr(name).encode_utf16().chain([0]).collect(),
+        ))
+    };
+    let mut map = lock(class_menus());
+    match entry {
+        Some(m) => {
+            map.insert(key, (instance, m));
+        }
+        None => {
+            map.remove(&key);
+        }
+    }
+}
+
+/// Charge le menu de la classe d'une fenêtre de premier niveau.
+unsafe fn load_class_menu(class: &str) -> usize {
+    let map = lock(class_menus());
+    let Some((inst, m)) = map.get(&class.to_ascii_lowercase()) else {
+        return 0;
+    };
+    let name = match m {
+        ClassMenu::Id(id) => *id,
+        ClassMenu::Name(v) => v.as_ptr() as usize,
+    };
+    let inst = *inst;
+    let Some(load) = crate::dlls::lookup("user32", "LoadMenuW") else {
+        return 0;
+    };
+    let f: unsafe extern "win64" fn(usize, usize) -> usize = std::mem::transmute(load);
+    f(inst, name)
+}
+
 unsafe fn register_class_common(
     name: String,
     wnd_proc: usize,
@@ -103,6 +162,7 @@ pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
     }
     let c = &*wc;
     let name = read_class_name_a(c.class_name);
+    remember_class_menu(&name, c.instance, c.menu_name, false);
     register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
 }
 
@@ -114,6 +174,7 @@ pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
     }
     let c = &*wc;
     let name = read_class_name_w(c.class_name as *const u16);
+    remember_class_menu(&name, c.instance, c.menu_name, true);
     register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
 }
 
@@ -124,6 +185,7 @@ pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16
     }
     let c = &*wcx;
     let name = read_class_name_a(c.class_name);
+    remember_class_menu(&name, c.instance, c.menu_name, false);
     register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
 }
 
@@ -134,6 +196,7 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
     }
     let c = &*wcx;
     let name = read_class_name_w(c.class_name as *const u16);
+    remember_class_menu(&name, c.instance, c.menu_name, true);
     register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
 }
 
@@ -228,6 +291,7 @@ unsafe fn create_window_common(
             style,
             ex_style,
             pending: Vec::new(),
+            menu_bar: 0,
         },
     );
 
@@ -257,6 +321,22 @@ unsafe fn create_window_common(
             }
         }
     });
+
+    // Barre de menus d'une fenêtre de premier niveau : hMenu, sinon le
+    // menu de la classe (Notepad++ le déclare dans WNDCLASSEX).
+    if !child {
+        let bar = if menu != 0 {
+            menu
+        } else {
+            load_class_menu(&class)
+        };
+        if bar != 0 {
+            if let Some(f) = crate::dlls::lookup("user32", "SetMenu") {
+                let set: unsafe extern "win64" fn(usize, usize) -> i32 = std::mem::transmute(f);
+                set(hwnd, bar);
+            }
+        }
+    }
 
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
@@ -291,7 +371,11 @@ unsafe fn create_window_common(
     let initial = rect;
     let rect = gui::window_rect(hwnd).unwrap_or(rect);
     let shown = gui::is_window_visible(hwnd);
-    let (w, h) = (rect.width(), rect.height());
+    // WM_SIZE donne la zone client : la barre de menus en est retirée.
+    let (w, h) = (
+        rect.width(),
+        (rect.height() - gui::menu_bar_height(hwnd)).max(0),
+    );
     with_backend(|b| {
         if rect != initial {
             b.set_window_rect(hwnd, rect);
@@ -883,7 +967,12 @@ pub unsafe extern "win64" fn set_window_pos(
         if resized {
             gui::post_to_window(
                 hwnd,
-                Msg::new(hwnd, gui::WM_SIZE, 0, pack_i16_pair(width, height)),
+                Msg::new(
+                    hwnd,
+                    gui::WM_SIZE,
+                    0,
+                    pack_i16_pair(width, (height - gui::menu_bar_height(hwnd)).max(0)),
+                ),
             );
         }
         if moved {

@@ -590,13 +590,155 @@ extern "win64" fn get_menu(hwnd: usize) -> usize {
     lock(menus()).window_menu.get(&hwnd).copied().unwrap_or(0)
 }
 extern "win64" fn set_menu(hwnd: usize, menu: usize) -> i32 {
-    let mut m = lock(menus());
-    if menu == 0 {
-        m.window_menu.remove(&hwnd);
-    } else {
-        m.window_menu.insert(hwnd, menu);
+    {
+        let mut m = lock(menus());
+        if menu == 0 {
+            m.window_menu.remove(&hwnd);
+        } else {
+            m.window_menu.insert(hwnd, menu);
+        }
     }
+    sync_bar(hwnd, None);
     1
+}
+/// DrawMenuBar : la barre suit les menus ajoutés, renommés ou grisés.
+extern "win64" fn draw_menu_bar(hwnd: usize) -> i32 {
+    if !crate::dlls::gui::is_window(hwnd) {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    sync_bar(hwnd, None);
+    1
+}
+
+// ---------- Barre de menus d'une fenêtre ----------
+
+/// Hauteur de la barre de menus (SM_CYMENU à 96 ppp).
+pub const BAR_HEIGHT: i32 = 20;
+/// Marge de part et d'autre d'un libellé de la barre.
+const BAR_PAD: i32 = 7;
+const WS_CHILD: u32 = 0x4000_0000;
+const WM_INITMENU: u32 = 0x0116;
+
+fn bars() -> &'static Mutex<HashMap<usize, Vec<crate::dlls::gui::MenuBarItem>>> {
+    static B: OnceLock<Mutex<HashMap<usize, Vec<crate::dlls::gui::MenuBarItem>>>> = OnceLock::new();
+    B.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Police de la barre : celle des menus surgissants (DEFAULT_GUI_FONT).
+pub fn bar_font() -> crate::dlls::gui::FontSpec {
+    crate::dlls::gui::font_spec(crate::dlls::gdi32::get_stock_object(17)).unwrap_or_default()
+}
+
+/// Place les libellés du menu de premier niveau de gauche à droite.
+fn layout_bar(menu: usize) -> Vec<crate::dlls::gui::MenuBarItem> {
+    let font = bar_font();
+    let mut x = 0;
+    items(menu)
+        .unwrap_or_default()
+        .iter()
+        .filter(|it| it.flags & MF_SEPARATOR == 0)
+        .map(|it| {
+            let label =
+                crate::dlls::controls::strip_prefix(it.text.split('\t').next().unwrap_or(""));
+            let (w, _) = crate::dlls::gui::measure_text(&font, &label);
+            let item = crate::dlls::gui::MenuBarItem {
+                label,
+                left: x,
+                right: x + w + BAR_PAD * 2,
+                enabled: it.flags & (MF_GRAYED | MF_DISABLED) == 0,
+            };
+            x = item.right;
+            item
+        })
+        .collect()
+}
+
+/// Recalcule la barre d'une fenêtre de premier niveau et la transmet à
+/// l'affichage ; `hot` surligne le menu ouvert. La zone client commence
+/// sous la barre (GetClientRect, WM_SIZE, coordonnées des enfants).
+pub fn sync_bar(hwnd: usize, hot: Option<usize>) {
+    use crate::dlls::gui;
+    let child = gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0)
+        && gui::window_parent(hwnd).is_some_and(|p| p != 0);
+    let menu = lock(menus()).window_menu.get(&hwnd).copied().unwrap_or(0);
+    let (list, height) = if menu != 0 && !child {
+        (layout_bar(menu), BAR_HEIGHT)
+    } else {
+        (Vec::new(), 0)
+    };
+    let Some(old) = gui::set_menu_bar_height(hwnd, height) else {
+        return;
+    };
+    if list.is_empty() {
+        lock(bars()).remove(&hwnd);
+    } else {
+        lock(bars()).insert(hwnd, list.clone());
+    }
+    gui::with_backend_public(|b| b.set_menu_bar(hwnd, &list, height, hot));
+    if old != height {
+        if let Some(c) = gui::window_client_rect(hwnd) {
+            let lparam = ((c.height() as u16 as isize) << 16) | (c.width() as u16 as isize);
+            gui::post_to_window(hwnd, gui::Msg::new(hwnd, gui::WM_SIZE, 0, lparam));
+        }
+    }
+}
+
+/// Menu de la barre sous un point écran, par position (None hors barre).
+pub fn bar_hit(hwnd: usize, screen_x: i32, screen_y: i32) -> Option<usize> {
+    use crate::dlls::gui;
+    let r = gui::screen_rect(hwnd)?;
+    let (x, y) = (screen_x - r.left, screen_y - r.top);
+    if y < 0 || y >= gui::menu_bar_height(hwnd) {
+        return None;
+    }
+    lock(bars())
+        .get(&hwnd)?
+        .iter()
+        .position(|it| x >= it.left && x < it.right)
+}
+
+/// Clic dans la barre (WM_NCLBUTTONDOWN, HTMENU) : ouvre le sous-menu sous
+/// son titre ; le choix arrive en WM_COMMAND comme sous Windows.
+pub fn open_bar_menu(hwnd: usize, index: usize) {
+    use crate::dlls::gui;
+    let menu = lock(menus()).window_menu.get(&hwnd).copied().unwrap_or(0);
+    let entries: Vec<Item> = items(menu)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|it| it.flags & MF_SEPARATOR == 0)
+        .collect();
+    let Some(entry) = entries.get(index).cloned() else {
+        return;
+    };
+    if entry.flags & (MF_GRAYED | MF_DISABLED) != 0 {
+        return;
+    }
+    let Some(slot) = lock(bars()).get(&hwnd).and_then(|b| b.get(index).cloned()) else {
+        return;
+    };
+    let Some(r) = gui::screen_rect(hwnd) else {
+        return;
+    };
+    unsafe {
+        crate::dlls::user32::send_message_w(hwnd, WM_INITMENU, menu, 0);
+    }
+    if entry.flags & MF_POPUP == 0 {
+        // Commande directement dans la barre (« Aide » sans sous-menu).
+        gui::post_to_window(hwnd, gui::Msg::new(hwnd, 0x0111, entry.id as usize, 0));
+        return;
+    }
+    sync_bar(hwnd, Some(index));
+    unsafe {
+        crate::dlls::controls::popup::track(
+            entry.submenu,
+            0,
+            r.left + slot.left,
+            r.top + gui::menu_bar_height(hwnd),
+            hwnd,
+        );
+    }
+    sync_bar(hwnd, None);
 }
 /// Menu système d'une fenêtre (Restaurer, Déplacer… Fermer), créé à la
 /// demande ; les programmes y ajoutent leurs propres commandes.
@@ -685,6 +827,7 @@ pub fn user32_overrides() -> Exports {
         "GetMenuItemInfoW" => fn get_menu_item_info_w,
         "GetMenu" => fn get_menu,
         "SetMenu" => fn set_menu,
+        "DrawMenuBar" => fn draw_menu_bar,
         "GetSystemMenu" => fn get_system_menu,
         "GetMenuDefaultItem" => fn get_menu_default_item,
         "SetMenuDefaultItem" => fn set_menu_default_item,
