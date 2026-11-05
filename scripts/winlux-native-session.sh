@@ -9,6 +9,9 @@ export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
+# Liens web des programmes qui lisent $BROWSER (outils en ligne de commande,
+# Python webbrowser) : le navigateur installé, comme xdg-open et les .exe.
+export BROWSER="${BROWSER:-/usr/bin/winlux-browser}"
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 # Winlux uses its own init, so start hardware daemons directly instead of
@@ -172,6 +175,8 @@ if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlu
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
 if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
+# Téléphone connecté : seulement si un téléphone est associé à ce compte.
+if test -x /usr/bin/winlux-phone; then /usr/bin/winlux-phone serve --if-paired >/run/winlux/phone.log 2>&1 & fi
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 # Réglages restaurés sans le rapport d'état complet de winlux-control
 # (l'init le rafraîchit toutes les 3 s) : 18 s de gagnées en VM émulée.
@@ -210,6 +215,8 @@ if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk
             rm -f /run/winlux/browser-chooser
             /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
         fi
+        # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
+        if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
         sleep 5
     done
 ) </dev/null >/run/winlux/catalogue.log 2>&1 &

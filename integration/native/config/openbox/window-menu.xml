@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Menu de fenêtre de Winlux (clic droit sur la barre de titre, Alt+Espace),
+     généré dans la langue du système par winlux-force-close. Livré hors du
+     dossier du compte : un menu.xml copié à la création du compte reste figé. -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+ <menu id="winlux-window-menu" label="Fenêtre" execute="/usr/bin/winlux-force-close menu"/>
+</openbox_menu>

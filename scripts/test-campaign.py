@@ -176,9 +176,9 @@ with tempfile.TemporaryDirectory() as directory:
         ok(gesture in arguments, f"terminal : {label} utilise le presse-papiers (CLIPBOARD)")
 
 # ── su sous root verrouillé (signalé par damien sur la v0.2.17) ────────────
-ok("--rcfile" in (ROOT / "integration/winlux-terminal").read_text()
-   and (ROOT / "integration/native/shell/winlux-su.sh").is_file(),
-   "terminal : « su » passe par sudo quand root est verrouillé")
+ok((ROOT / "integration/native/shell/su").is_file()
+   and "install_su_wrapper()" in (ROOT / "scripts/winlux-update-apt.py").read_text(),
+   "/usr/bin/su passe par sudo quand root est verrouillé (pas seulement dans le terminal)")
 ok('("usr/bin/passwd", "root", "root", 0o4755)' in (ROOT / "scripts/winlux-update-apt.py").read_text(),
    "droits setuid de la base Ubuntu rétablis au démarrage (passwd, unix_chkpwd, shadow)")
 
@@ -372,5 +372,30 @@ ok("module pinctrl_sunrisepoint" in essentials and "module uhid" in essentials a
 drivers_tool = (SCRIPTS / "winlux-drivers.py").read_text()
 ok("def module_packages" in drivers_tool and "if apt_available(p)" in drivers_tool,
    "« Installer les pilotes complets » : linux-modules-extra n'est plus exigé (noyau 7.0)")
+
+# ── Liens web sur le portable réel (v0.2.18, 2026-11-03) ───────────────────
+# La connexion d'une application ouvrait les Paramètres > Navigateurs alors
+# qu'un navigateur était installé (installé sans être « par défaut »).
+with tempfile.TemporaryDirectory() as directory:
+    base = Path(directory)
+    firefox = base / "system/opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox"
+    firefox.parent.mkdir(parents=True)
+    fake_tool(firefox.parent, "firefox", f'printf "%s\\n" "$@" > "{base}/ouvert"')
+    fake_tool(base, "winlux-browsers", f'exec sh "{SCRIPTS}/winlux-browsers.sh" "$@"')
+    env = {**os.environ, "WINLUX_BROWSER_ROOT": str(base / "system"), "WINLUX_BROWSER_CANDIDATES": "",
+           "PATH": f"{base}:{os.environ['PATH']}"}
+    env.pop("WINLUX_BROWSER", None)
+    url = "https://example.invalid/oauth?code=1"
+    subprocess.run(["sh", str(ROOT / "integration/winlux-browser"), url], env=env, check=True)
+    ok((base / "ouvert").read_text().split() == [url] and not (base / "system/run/winlux/browser-chooser").exists(),
+       "lien d'une application : ouvert dans le navigateur installé, sans renvoyer aux Paramètres")
+
+# Retour du testeur sur #418 : lien gardé jamais ouvert après l'installation
+# depuis Paramètres, Firefox en anglais sur un système en français.
+settings = (SCRIPTS / "winlux-settings.py").read_text()
+ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in settings,
+   "Paramètres ouvre le lien gardé dès le navigateur installé ; bouton « Définir … par défaut »")
+ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
+   "Firefox installé avec ses paquets de langue fr, de, es")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

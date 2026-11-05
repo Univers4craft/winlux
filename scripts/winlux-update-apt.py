@@ -32,7 +32,8 @@ RESTORE_KEEP = 3
 # et seuls les fichiers réinstallés ensuite par APT (su, mount, sudo)
 # figuraient dans apt-base-permissions.json. Version 2 du marqueur : un
 # système déjà installé les reçoit aussi au démarrage qui suit la mise à jour.
-BASE_MODES_VERSION = "2"
+# Version 3 : « su » vers root passe par sudo (install_su_wrapper).
+BASE_MODES_VERSION = "3"
 BASE_MODES = (
     ("etc/shadow", "root", "shadow", 0o640),
     ("etc/gshadow", "root", "shadow", 0o640),
@@ -46,6 +47,7 @@ BASE_MODES = (
     ("usr/bin/passwd", "root", "root", 0o4755),
     ("usr/bin/newgrp", "root", "root", 0o4755),
     ("usr/bin/su", "root", "root", 0o4755),
+    ("usr/bin/su.util-linux", "root", "root", 0o4755),
     ("usr/bin/mount", "root", "root", 0o4755),
     ("usr/bin/umount", "root", "root", 0o4755),
     ("usr/bin/sudo.ws", "root", "root", 0o4755),
@@ -80,6 +82,8 @@ def restore_base_modes(root=Path("/")):
     for relative, user, group, mode in BASE_MODES:
         path = root / relative
         if path.is_symlink() or not path.exists() or user not in users or group not in groups: continue
+        # Le su de Winlux est un script : jamais de setuid sur un script.
+        if path.is_file() and path.read_bytes()[:2] == b"#!": continue
         info = path.stat()
         if (info.st_uid, info.st_gid, info.st_mode & 0o7777) == (users[user], groups[group], mode): continue
         os.chown(path, users[user], groups[group], follow_symlinks=False)
@@ -87,6 +91,32 @@ def restore_base_modes(root=Path("/")):
         path.chmod(mode)
         fixed.append(relative)
     return fixed
+
+SU_WRAPPER = "usr/share/winlux/native/shell/su"
+REAL_SU = "usr/bin/su.util-linux"
+
+def divert_su():
+    """Détourne le su d'util-linux (survit aux mises à jour du paquet)."""
+    run("dpkg-divert", "--quiet", "--local", "--rename", "--divert", "/" + REAL_SU, "--add", "/usr/bin/su")
+
+def install_su_wrapper(root=Path("/"), divert=divert_su):
+    """Root est verrouillé : /usr/bin/su devient la bascule vers sudo de
+    Winlux, le vrai su reste en /usr/bin/su.util-linux (setuid conservé par
+    le renommage). Renvoie True si /usr/bin/su a changé."""
+    wrapper, su, real = root / SU_WRAPPER, root / "usr/bin/su", root / REAL_SU
+    if not wrapper.is_file(): return False
+    content = wrapper.read_bytes()
+    if not real.exists():
+        if not su.is_file() or su.is_symlink() or su.read_bytes()[:2] == b"#!": return False
+        divert()
+        if not real.exists(): return False
+    if su.is_file() and not su.is_symlink() and su.read_bytes() == content and (su.stat().st_mode & 0o7777) == 0o755:
+        return False
+    temporary = su.with_name(".su.winlux")
+    temporary.write_bytes(content)
+    temporary.chmod(0o755)
+    os.replace(temporary, su)
+    return True
 
 def manifest(text):
     fields = {}
@@ -181,9 +211,43 @@ def manifest_from_release(release):
     checksum = digest[7:] if digest.startswith("sha256:") else ""
     return deb, tag, checksum
 
+def local_manifest():
+    """Manifeste local, pour tester une version avant de la publier.
+
+    WINLUX_UPDATE_MANIFEST (chemin absolu ou file://) quand l'outil est lancé
+    directement en root, ou « manifest=… » dans /etc/winlux/update.conf, que
+    seul root peut écrire, pour le chemin Paramètres > Mises à jour (le relais
+    root ne transmet pas l'environnement). Le paquet est cherché dans
+    WINLUX_UPDATE_ASSET_DIR, sinon à côté du manifeste. Taille et SHA-256 du
+    manifeste restent vérifiées comme pour GitHub.
+    """
+    value = os.environ.get("WINLUX_UPDATE_MANIFEST", "")
+    if not value:
+        value = next((line[9:] for line in read(CONFIG).splitlines() if line.startswith("manifest=")), "")
+    value = value.strip()
+    if not value: return None
+    if value.startswith("file://"): value = value[7:]
+    path = Path(value)
+    if not path.is_absolute() or not path.is_file():
+        raise RuntimeError(f"Manifeste local introuvable : {value} (WINLUX_UPDATE_MANIFEST ou manifest= dans {CONFIG})")
+    return path
+
+def local_asset(manifest_path, asset):
+    directory = Path(os.environ.get("WINLUX_UPDATE_ASSET_DIR") or manifest_path.parent)
+    source = directory / asset
+    if not source.is_file(): raise RuntimeError(f"Paquet local introuvable : {source}")
+    return source
+
 def release_metadata(work):
     """Manifeste de la dernière release, ou repli sur l'API GitHub s'il n'a pas été publié."""
     metadata = work / "manifest"
+    local = local_manifest()
+    if local:
+        print(f"Manifeste local utilisé : {local}", flush=True)
+        text = local.read_text()
+        data = manifest(text)
+        metadata.write_text(text)
+        return data, text
     try:
         download(MANIFEST_URL, metadata)
         return manifest(metadata.read_text()), metadata.read_text()
@@ -431,9 +495,10 @@ def main():
                 # Jamais bloquant : un bureau sans sudo vaut mieux que pas de bureau.
                 try:
                     restore_base_modes()
+                    install_su_wrapper()
                     restored.write_text(BASE_MODES_VERSION + "\n")
-                except OSError as error:
-                    print(f"Droits de la base Ubuntu non rétablis : {error}", file=sys.stderr)
+                except (OSError, subprocess.CalledProcessError) as error:
+                    print(f"Droits de la base Ubuntu ou su non rétablis : {error}", file=sys.stderr)
             # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
             # une installation inachevée se termine ici, sans bloquer le démarrage.
             audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
@@ -487,8 +552,13 @@ def main():
                     if package.is_symlink() or (package.exists() and not package.is_file()):
                         raise ValueError("Cache de téléchargement invalide")
                     helper = "/usr/bin/winlux-update-progress"
-                    source = f"https://github.com/{REPOSITORY}/releases/download/{data['version']}/{data['asset']}"
-                    run(helper, "download", source, data["download_bytes"], str(package))
+                    local = local_manifest()
+                    if local:
+                        phase("downloading", -1, "Copie du paquet local")
+                        shutil.copyfile(local_asset(local, data["asset"]), package)
+                    else:
+                        source = f"https://github.com/{REPOSITORY}/releases/download/{data['version']}/{data['asset']}"
+                        run(helper, "download", source, data["download_bytes"], str(package))
                     if package.stat().st_size != int(data["download_bytes"]): raise ValueError("Taille du paquet incorrecte")
                     digest = subprocess.check_output([helper, "hash", str(package), "0"], text=True).strip()
                     if digest != data["sha256"]:

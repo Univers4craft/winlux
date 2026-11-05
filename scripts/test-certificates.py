@@ -309,6 +309,73 @@ if os.environ.get("DISPLAY"):
        "Heure et langue : « Régler l’heure automatiquement » proposé et actif")
     window.destroy()
 
+# ── Horloge matérielle, date plancher, nouvel essai rapide ─────────────────
+# Portable de damien : pile vide (RTC au 2015-01-02), heure jamais recopiée
+# dans la RTC, premier essai réussi après ~4 min → navigateurs refusés.
+tool = runpy.run_path(str(TOOL), run_name="winlux_certificates")
+import fcntl
+calls = []
+real_ioctl, real_open = fcntl.ioctl, os.open
+fcntl.ioctl = lambda fd, request, data: calls.append((request, data))
+tool["write_rtc"].__globals__["RTC_DEVICE"] = os.devnull
+ok(tool["write_rtc"](1762196400) is True, "RTC : heure recopiée dans l'horloge matérielle")
+request, data = calls[-1]
+moment = time.gmtime(1762196400)
+ok(request == 0x4024700a and struct.unpack("9i", data)[:6] == (moment.tm_sec, moment.tm_min, moment.tm_hour,
+   moment.tm_mday, moment.tm_mon - 1, moment.tm_year - 1900), "RTC : RTC_SET_TIME, struct rtc_time en UTC")
+rtc_moment = time.gmtime(1420156800)       # 2015-01-02, la pile du portable
+fcntl.ioctl = lambda fd, request, data: struct.pack("9i", rtc_moment.tm_sec, rtc_moment.tm_min, rtc_moment.tm_hour,
+                                                     rtc_moment.tm_mday, rtc_moment.tm_mon - 1, rtc_moment.tm_year - 1900, 0, 0, 0)
+shown = tool["read_rtc"]()
+ok(shown.get("rtc") == "2015-01-02T00:00:00Z" and shown.get("difference", 0) > 10 * 365 * 86400,
+   f"time rtc : horloge matérielle lisible sans hwclock ({shown})")
+fcntl.ioctl = real_ioctl
+# Depuis le compte, /dev/rtc0 est réservé à root : lecture par le relais, sinon refus clair.
+g = tool["rtc_status"].__globals__
+real_read, real_call, real_socket = g["read_rtc"], g["call"], g["RELAY_SOCKET"]
+g["read_rtc"] = lambda: {"ok": False, "error": "no-rtc", "detail": "[Errno 13] Permission denied: '/dev/rtc0'"}
+relayed = []
+g["call"] = lambda args, timeout=180: relayed.append(args) or {"ok": True, "rtc": "2026-11-03T22:00:00Z"}
+g["RELAY_SOCKET"] = os.devnull
+real_geteuid, os.geteuid = os.geteuid, lambda: 1000
+# Le reste du test force WINLUX_CERT_DIRECT=1 (pas de relais) : ici on teste justement le relais.
+real_direct = os.environ.pop("WINLUX_CERT_DIRECT", None)
+try:
+    ok(tool["rtc_status"]().get("ok") and relayed == [["time", "rtc"]], "time rtc depuis le compte : relais root")
+    g["RELAY_SOCKET"] = str(work / "pas-de-relais")
+    refused = tool["rtc_status"]()
+    ok(refused.get("error") == "admin-only" and "administrateur" in refused.get("message", ""),
+       f"time rtc sans relais : « réservé à l’administrateur » ({refused.get('message')})")
+finally:
+    os.geteuid = real_geteuid
+    if real_direct is not None:
+        os.environ["WINLUX_CERT_DIRECT"] = real_direct
+g["read_rtc"], g["call"], g["RELAY_SOCKET"] = real_read, real_call, real_socket
+root_tool = (HERE / "winlux-root.py").read_text(encoding="utf-8")
+ok('["time", "sync"], ["time", "rtc"]' in root_tool, "relais root : time rtc autorisé au compte (lecture seule)")
+tool["write_rtc"].__globals__["RTC_DEVICE"] = str(work / "absente")
+ok(tool["write_rtc"]() is False, "RTC absente : pas d'erreur, juste « non »")
+info = work / "BUILD-INFO"
+info.write_text("version=0.2.18\nbuilt_at_utc=2026-11-03T17:00:00Z\n")
+tool["build_floor"].__globals__["BUILD_INFO"] = info
+ok(tool["build_floor"]() == 1793725200, "date plancher : date de construction (UTC)")
+settings = []
+real_settime = time.clock_settime
+glob = tool["apply_floor"].__globals__
+import types
+fake_time = types.SimpleNamespace(**{name: getattr(time, name) for name in dir(time) if not name.startswith("_")})
+fake_time.time = lambda: 1420156800.0       # 2015-01-02, comme la RTC du portable
+fake_time.clock_settime = lambda clock, value: settings.append(value)
+glob["time"] = fake_time
+ok(tool["apply_floor"]() is True and settings == [1793725200], "horloge en 2015 : calée sur la date de construction")
+glob["time"] = time
+source = TOOL.read_text(encoding="utf-8")
+daemon = source[source.index("def time_daemon"):source.index("# ── Certificats")]
+ok("apply_floor()" in daemon and "300 if synced else 30" in daemon,
+   "démon : date plancher au lancement, essai toutes les 30 s tant que rien n'a réussi")
+sync = source[source.index("def sync_once"):source.index("RTC_DEVICE =")]
+ok('state["rtc"] = write_rtc()' in sync, "synchro root réussie : RTC mise à jour (clé rtc)")
+
 if failures:
     print(f"\n{len(failures)} échec(s)")
     sys.exit(1)

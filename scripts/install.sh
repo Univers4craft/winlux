@@ -273,6 +273,23 @@ fi
 if test -f /usr/lib/shim/shimx64.efi.signed; then
     sh "$root/scripts/winlux-secureboot.sh" install-esp "$work/target/boot/efi" "$fsuuid"
 fi
+# Entrée UEFI « Winlux » vers le chemin de secours, pour les micrologiciels qui
+# ne le tentent pas d'eux-mêmes ; sans variables UEFI, EFI/BOOT suffit.
+if test -d /sys/firmware/efi/efivars && test -z "$(ls /sys/firmware/efi/efivars 2>/dev/null)"; then
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+fi
+if ! command -v efibootmgr >/dev/null 2>&1; then
+    echo 'Entrée UEFI non créée : efibootmgr absent, démarrage par le chemin de secours EFI/BOOT' >&2
+elif test -z "$(ls /sys/firmware/efi/efivars 2>/dev/null)"; then
+    test -d /sys/firmware/efi && echo 'Entrée UEFI non créée : variables UEFI indisponibles (efivarfs), démarrage par le chemin de secours EFI/BOOT' >&2
+else
+    loader='\EFI\BOOT\BOOTX64.EFI'
+    test "$(cat /sys/firmware/efi/fw_platform_size 2>/dev/null)" = 32 && loader='\EFI\BOOT\BOOTIA32.EFI'
+    efibootmgr | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} *Winlux\([[:space:]].*\)\{0,1\}$/\1/p' |
+        while read -r number; do efibootmgr --quiet --bootnum "$number" --delete-bootnum || true; done
+    efibootmgr --quiet --create --disk "$device" --part 2 --label Winlux --loader "$loader" ||
+        echo 'Entrée UEFI non créée : démarrage par le chemin de secours EFI/BOOT' >&2
+fi
 sync
 umount "$work/target/boot/efi"
 esp_mounted=0

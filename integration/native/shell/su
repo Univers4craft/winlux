@@ -1,0 +1,53 @@
+#!/bin/sh
+# Winlux : /usr/bin/su quand le compte root est verrouillé (réglage par défaut).
+# Le vrai su d'util-linux est détourné en /usr/bin/su.util-linux (dpkg-divert,
+# posé au démarrage par winlux-update-apt). Root n'a pas de mot de passe, donc
+# « su » vers root ne peut pas réussir : pour un administrateur, il passe par
+# sudo, qui demande son propre mot de passe ; pour les autres, un message dit
+# pourquoi. Tout le reste (autre compte, options rares, root déjà, mot de
+# passe root défini) va directement au vrai su.
+real=${WINLUX_REAL_SU:-/usr/bin/su.util-linux}
+root_enabled=${WINLUX_ROOT_ENABLED_FILE:-/etc/winlux/root-enabled}
+
+message() {
+    case "${LANGUAGE:-${LC_ALL:-${LC_MESSAGES:-${LANG:-fr}}}}" in
+        en*) set -- 'The root account is locked on Winlux: sudo takes over, type your own password.' \
+                    'The root account is locked on Winlux: ask an administrator account to use sudo.' ;;
+        es*) set -- 'La cuenta root está bloqueada en Winlux: sudo toma el relevo, escriba su propia contraseña.' \
+                    'La cuenta root está bloqueada en Winlux: pida a una cuenta de administrador que use sudo.' ;;
+        de*) set -- 'Das root-Konto ist unter Winlux gesperrt: sudo übernimmt, geben Sie Ihr eigenes Passwort ein.' \
+                    'Das root-Konto ist unter Winlux gesperrt: ein Administratorkonto kann sudo verwenden.' ;;
+        *) set -- 'Le compte root est verrouillé sous Winlux : sudo prend le relais, tapez votre propre mot de passe.' \
+                  'Le compte root est verrouillé sous Winlux : un compte administrateur peut utiliser sudo.' ;;
+    esac
+    if test "$kind" = admin; then printf '%s\n' "$1" >&2; else printf '%s\n' "$2" >&2; fi
+}
+
+if test "$(id -u)" = 0 || test -e "$root_enabled"; then exec "$real" "$@"; fi
+
+login=0 have_command=0 command= user=root seen_user=0
+for argument; do
+    if test "$have_command" = pending; then command=$argument; have_command=1; continue; fi
+    case "$argument" in
+        -|-l|--login) login=1 ;;
+        -c|--command) have_command=pending ;;
+        --command=*) command=${argument#--command=}; have_command=1 ;;
+        -c*) command=${argument#-c}; have_command=1 ;;
+        -*) exec "$real" "$@" ;;
+        *) test "$seen_user" = 0 || exec "$real" "$@"
+           user=$argument; seen_user=1 ;;
+    esac
+done
+test "$have_command" != pending || exec "$real" "$@"
+test "$user" = root || exec "$real" "$@"
+
+kind=user
+case " $(id -Gn 2>/dev/null) " in
+    *' sudo '*|*' admin '*|*' wheel '*) command -v sudo >/dev/null 2>&1 && kind=admin ;;
+esac
+message
+if test "$kind" != admin; then exec "$real" "$@"; fi
+if test "$have_command" = 1; then
+    if test "$login" = 1; then exec sudo -i sh -c "$command"; else exec sudo sh -c "$command"; fi
+fi
+if test "$login" = 1; then exec sudo -i; else exec sudo -s; fi

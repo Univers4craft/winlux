@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Téléphone connecté
+Name[en]=Connected phone
+Name[de]=Verbundenes Telefon
+Name[es]=Teléfono conectado
+Comment=Notifications, SMS et fichiers de votre téléphone Android sur ce PC
+Comment[en]=Your Android phone's notifications, texts and files on this PC
+Comment[de]=Benachrichtigungen, SMS und Dateien Ihres Android-Telefons auf diesem PC
+Comment[es]=Notificaciones, SMS y archivos de su teléfono Android en este PC
+Keywords=téléphone;android;sms;kde connect;phone;mobile;telefon;teléfono;
+Exec=/usr/bin/winlux-phone gui
+Icon=phone
+Terminal=false
+StartupNotify=true
+Categories=Utility;Network;

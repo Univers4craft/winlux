@@ -37,6 +37,10 @@ _TR = {
     'Ethernet : ': ('Ethernet: ', 'Ethernet: ', 'Ethernet: '),
     'Réseau déconnecté': ('Network disconnected', 'Red desconectada', 'Netzwerk getrennt'),
     'Centre de notifications': ('Notification center', 'Centro de notificaciones', 'Benachrichtigungscenter'),
+    'Batterie : {level} %': ('Battery: {level}%', 'Batería: {level} %', 'Akku: {level} %'),
+    'Batterie : {level} % — en charge': ('Battery: {level}% — charging', 'Batería: {level} % — cargando', 'Akku: {level} % — wird geladen'),
+    'Batterie : {level} % — chargée': ('Battery: {level}% — fully charged', 'Batería: {level} % — cargada', 'Akku: {level} % — vollständig geladen'),
+    'Batterie : {level} % — branchée, pas en charge': ('Battery: {level}% — plugged in, not charging', 'Batería: {level} % — conectada, sin cargar', 'Akku: {level} % — angeschlossen, wird nicht geladen'),
 }
 
 
@@ -46,12 +50,88 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def balance_width(screen_width, children, right_ids, left_ids=()):
+    """Largeur du contrepoids placé juste après le séparateur 3 (barre centrée).
+
+    xfce4-panel 4.20 n'a pas de zone centrale : les deux séparateurs extensibles
+    se partagent l'espace libre, donc le groupe Démarrer + fenêtres se centre
+    entre le bloc de gauche (L) et le bloc de droite (R), trop à gauche de R/2
+    sans contrepoids. Avec un contrepoids de largeur R - L, le centre du groupe
+    tombe au milieu de l'écran. children : (id du greffon, x relatif à la
+    barre, largeur) ; id None pour une fenêtre sans greffon connu.
+
+    R est la LARGEUR du bloc de droite (du premier au dernier greffon), jamais
+    sa position : un contrepoids trop large repousse ce bloc vers la gauche, et
+    « écran − x du bloc » se confirmait alors tout seul (3760 px en 4K, toute la
+    barre collée à gauche). La marge au bord droit ne compte que si le bloc y
+    est collé ; décollé, le calcul suivant le recolle puis retrouve la valeur exacte.
+    """
+    right = [(x, width) for plugin, x, width in children if plugin in right_ids and width > 1]
+    if not right:
+        return 0
+    start = min(x for x, _ in right)
+    end = max(x + width for x, width in right)
+    margin = screen_width - end
+    block = end - start + (margin if 0 <= margin <= 16 else 0)
+    left = [(x, width) for plugin, x, width in children if plugin in left_ids and width > 1]
+    occupied = max(x + width for x, width in left) - min(x for x, _ in left) if left else 0
+    return max(0, min(block - occupied, screen_width // 2))
+
+
+def _panel_children():
+    """Fenêtres X des greffons de la barre du bas : (id, x relatif, largeur), largeur de la barre."""
+    try:
+        tree = subprocess.run(["xwininfo", "-root", "-tree"], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [], 0
+    pattern = re.compile(r'^(\s*)(0x[0-9a-f]+) (?:"[^"]*"|\(has no name\)):?\s*(\((?:"([^"]*)")?.*?\))?\s+(\d+)x(\d+)\+-?\d+\+-?\d+\s+\+(-?\d+)\+(-?\d+)')
+    panel, depth, found = None, 0, []
+    for line in tree.splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        indent, window, _, wm_class, width, height, x, y = match.groups()
+        width, height, x, y = int(width), int(height), int(x), int(y)
+        if panel is None:
+            if wm_class == "xfce4-panel" and width > 4 * height and width >= 640:
+                panel, depth = (x, width), len(indent)
+            continue
+        if len(indent) <= depth:
+            if wm_class == "xfce4-panel" and width > 4 * height and width >= 640:
+                panel, depth = (x, width), len(indent)
+                continue
+            break
+        found.append((window, x - panel[0], width))
+    if panel is None:
+        return [], 0
+    panel_pid = None
+    children = []
+    for window, x, width in found:
+        try:
+            output = subprocess.run(["xprop", "-id", window, "_NET_WM_PID"], capture_output=True, text=True, timeout=2).stdout
+            pid = int(output.rsplit("=", 1)[1])
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+            continue
+        name = Path(arguments[0].decode(errors="replace")).name
+        if name.startswith("wrapper-"):
+            plugin = next((int(item) for item in arguments[1:4] if item.isdigit()), None)
+        elif name == "xfce4-panel":
+            continue
+        else:
+            # Icône d'un programme dans la zone de notification (greffon interne 10).
+            plugin = 10
+        children.append((plugin, x, width))
+    return children, panel[1]
+
+
 kind = sys.argv[1]
-directory = Path("/run/winlux/tray")
+directory = Path(os.environ.get("WINLUX_TRAY_DIR", "/run/winlux/tray"))
 directory.mkdir(parents=True, exist_ok=True)
 color = "#e7ddf5"
 if kind == "battery":
-    batteries = list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
+    supplies = Path(os.environ.get("WINLUX_POWER_SUPPLY", "/sys/class/power_supply"))
+    batteries = sorted(supplies.glob("BAT*/capacity"))
     level = None
     if batteries:
         # Une batterie absente ou en défaut expose parfois un fichier vide ou illisible.
@@ -62,7 +142,27 @@ if kind == "battery":
             level = None
     if level is not None:
         body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
-        tooltip, identity = f"Batterie : {level}% — {status}", f"battery-{level}"
+        # Certains contrôleurs annoncent « Not charging » ou « Unknown » sur
+        # secteur (seuil de charge, batterie pleine) : l'adaptateur fait foi.
+        def _online(adapter):
+            try:
+                return ((adapter / "type").read_text().strip() in ("Mains", "USB", "USB_C", "USB_PD")
+                        and (adapter / "online").read_text().strip() == "1")
+            except OSError:
+                return False
+        plugged = status in ("Charging", "Full") or any(_online(path) for path in supplies.iterdir() if not path.name.startswith("BAT"))
+        if plugged:
+            body += f'<path d="M13.5 5 8 13h4l-1.5 7L16 12h-4z" fill="{color}" stroke="#1e1b26" stroke-width="1" stroke-linejoin="round"/>'
+        if status == "Charging":
+            state = "Batterie : {level} % — en charge"
+        elif plugged and (status == "Full" or level >= 99):
+            state = "Batterie : {level} % — chargée"
+        elif plugged:
+            state = "Batterie : {level} % — branchée, pas en charge"
+        else:
+            state = "Batterie : {level} %"
+        tooltip = _t(state).format(level=level)
+        identity = f"battery-{level}-ac" if plugged else f"battery-{level}"
     else:
         body = f'<path d="M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-6 6v4m0-4a6 6 0 0 1-6-6V8" fill="none" stroke="{color}" stroke-width="1.8"/>'
         tooltip, identity = _t("Alimentation secteur — aucune batterie exposée par la machine"), "power-ac"
@@ -112,6 +212,28 @@ elif kind == "network":
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
     tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
     identity, page = f"network-{int(bool(active))}-{int(wireless)}", 2
+elif kind == "balance":
+    # Contrepoids de la barre centrée (greffon 13, juste après le séparateur 3).
+    width = 0
+    try:
+        listing = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids"],
+                                 capture_output=True, text=True, timeout=2).stdout
+        # Une ligne par id ; la première annonce le nombre d'éléments, traduite
+        # (« La valeur est un tableau de 12 éléments : ») : son nombre n'est pas un id.
+        ids = [int(line.strip()) for line in listing.splitlines() if line.strip().isdigit()]
+    except (OSError, subprocess.SubprocessError):
+        ids = []
+    if 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
+        children, screen = _panel_children()
+        if screen:
+            right = set(ids[ids.index(8) + 1:])
+            width = balance_width(screen, children, right, set(ids[:ids.index(3)]))
+    body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
+    icon = directory / f"spacer-{width}.svg"
+    if not icon.exists():
+        icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{max(1, width)}" height="1" viewBox="0 0 {max(1, width)} 1">{body}</svg>')
+    print(f"<img>{icon}</img>")
+    raise SystemExit(0)
 elif kind == "notifications":
     body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
     tooltip, identity, page = _t("Centre de notifications"), "notifications", 0

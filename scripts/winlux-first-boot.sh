@@ -510,6 +510,7 @@ else
     ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime 2>/dev/null || true
 fi
 printf '%s\n' "$TIMEZONE" >/etc/timezone 2>/dev/null || true
+chmod 644 /etc/timezone 2>/dev/null || true
 
 # --- Nom de la machine ---
 log "Hostname : $HOSTNAME_CHOICE"
@@ -602,7 +603,7 @@ if test "$DISABLE_ROOT" = 1; then
 else
     log 'Mot de passe root défini'
     printf 'root:%s\n' "$ROOT_PASSWORD" | chpasswd
-    # « su » garde alors son sens habituel dans le terminal (winlux-su.sh).
+    # « su » garde alors son sens habituel (bascule /usr/bin/su de Winlux).
     mkdir -p /etc/winlux && : >/etc/winlux/root-enabled
 fi
 

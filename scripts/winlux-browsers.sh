@@ -77,6 +77,56 @@ offline() {
     echo "Pas de connexion Internet : $1 sera téléchargé chez son éditeur et installé automatiquement au prochain démarrage connecté." >&2
     return 75
 }
+# Heure : synchronisée avant un téléchargement tant qu'aucune synchro n'a
+# réussi depuis le démarrage (« force » : même après une synchro).
+clock_first() {
+    grep -q '^AUTO=0' "$root/etc/winlux/time.conf" 2>/dev/null && return 0
+    if test "${1:-}" != force && grep -q '"last"' "$run/time-sync.json" 2>/dev/null; then return 0; fi
+    command -v winlux-certificates >/dev/null 2>&1 || return 0
+    timeout 30 winlux-certificates time sync >/dev/null 2>&1 || true
+}
+# Dernier échec dû à la date (certificat « pas encore valide » ou expiré).
+clock_wrong() {
+    grep -qiE 'certificate is not yet valid|certificate has expired' "$run/browser-fetch.last" 2>/dev/null
+}
+fetch_logged() {
+    status=0
+    "$fetch" --only "$1" "$downloads" 2>"$run/browser-fetch.last" || status=$?
+    cat "$run/browser-fetch.last" >>"$run/browser-fetch.log" 2>/dev/null || true
+    return "$status"
+}
+# Firefox dans la langue du système (fr, de, es ; l'anglais est intégré) :
+# paquets de langue officiels de Mozilla, vérifiés comme le navigateur.
+# Facultatifs : un paquet absent ou altéré est ignoré, Firefox reste en anglais.
+# Chaque langpack-*.xpi est placé à deux endroits : distribution/extensions
+# (installé dans un profil neuf) et browser/extensions (relu à chaque
+# démarrage : un profil déjà créé en anglais le reçoit aussi).
+add_langpacks() {
+    firefox_dir="$1/usr/lib/firefox"
+    for lang in fr de es; do
+        pack="$cache/firefox-l10n-$lang"
+        if ! test -r "$pack.deb" || ! test -r "$pack.sha256"; then
+            # Trace pour le diagnostic : sans lui, Firefox reste en anglais dans cette langue.
+            echo "Paquet de langue de Firefox absent : $lang" >&2
+            continue
+        fi
+        printf '%s  %s\n' "$(cat "$pack.sha256")" "$pack.deb" | sha256sum -c - >/dev/null 2>&1 || { echo "Paquet de langue altéré ignoré : $lang" >&2; continue; }
+        test "$(/usr/bin/dpkg-deb -f "$pack.deb" Package)" = "firefox-l10n-$lang" || continue
+        /usr/bin/dpkg-deb -x "$pack.deb" "$1"
+    done
+    mkdir -p "$firefox_dir/distribution/extensions" "$firefox_dir/browser/extensions" "$firefox_dir/defaults/pref"
+    find "$1" -name 'langpack-*.xpi' -type f | while IFS= read -r xpi; do
+        for target in distribution/extensions browser/extensions; do
+            test "$xpi" -ef "$firefox_dir/$target/${xpi##*/}" || cp "$xpi" "$firefox_dir/$target/"
+        done
+    done
+    # Préférence vide = langue du système (LANG, que winlux-browsers donne au
+    # lancement) ; les paquets de langue du dossier de l'application (portée 4)
+    # sont activés sans demande, comme ceux d'une distribution.
+    printf '%s\n' 'pref("intl.locale.requested", "");' 'pref("extensions.autoDisableScopes", 11);' \
+        > "$firefox_dir/defaults/pref/winlux-langue.js"
+    chmod -R a+rX "$firefox_dir"
+}
 install_browser() {
     id=$1
     if ! test -r "$cache/$id.deb"; then
@@ -87,11 +137,19 @@ install_browser() {
                 network_up || { offline "$id"; return 75; }
                 mkdir -p "$downloads" "$run"
                 chmod 755 "$downloads"
+                # Horloge jamais synchronisée depuis le démarrage (pile de la
+                # carte mère vide : 2015) : tous les certificats seraient
+                # « pas encore valides ». Synchronisée d'abord.
+                clock_first
                 echo "Téléchargement de $id depuis le site de son éditeur…"
                 # Détails techniques (erreurs Python, HTTP) dans un journal, pas à l'écran.
-                if ! "$fetch" --only "$id" "$downloads" 2>>"$run/browser-fetch.log"; then
+                if ! fetch_logged "$id" && ! { clock_wrong && clock_first force && fetch_logged "$id"; }; then
                     network_up || { offline "$id"; return 75; }
-                    echo "Le site de l'éditeur de $id ne répond pas. Réessayez plus tard (détails : /run/winlux/browser-fetch.log)." >&2
+                    if clock_wrong; then
+                        echo "La date de ce PC est fausse ($(date +%d/%m/%Y)) : les sites sécurisés refusent la connexion. Activez « Régler l'heure automatiquement » dans Paramètres > Heure et langue, puis réessayez." >&2
+                    else
+                        echo "Le site de l'éditeur de $id ne répond pas. Réessayez plus tard (détails : /run/winlux/browser-fetch.log)." >&2
+                    fi
                     return 1
                 fi
                 cache=$downloads
@@ -127,6 +185,7 @@ install_browser() {
     test -x "$work/$relative" || { echo 'Programme navigateur absent du paquet' >&2; return 1; }
     /usr/bin/dpkg-deb -f "$work/package.deb" Version > "$work/version"
     rm "$work/package.deb"
+    if test "$id" = firefox; then add_langpacks "$work/root"; fi
     # Refuse replacement while any process still has the previous browser mapped.
     if test -d "$installed/$id"; then
         for mapping in /proc/[0-9]*/maps; do
@@ -143,8 +202,26 @@ install_browser() {
     echo "Navigateur installé : $id"
     if command -v winlux-applications >/dev/null 2>&1; then winlux-applications refresh >/dev/null 2>&1 || true; fi
 }
+# Langue de l'interface Winlux (Paramètres > Langue : fr, en, de, es), donnée
+# au navigateur : Firefox (avec son paquet de langue), Chrome et Edge suivent
+# LANG/LANGUAGE. La session met LANG=fr_FR.UTF-8 quelle que soit la langue
+# choisie, et un LANG absent ou « C » laissait Firefox en anglais.
+browser_locale() {
+    code=$(sed -n 's/^LANG=//p' "$root/etc/winlux/locale.conf" 2>/dev/null | head -n 1 | cut -c1-2)
+    test -n "$code" || code=$(printf '%s' "${LANG:-fr}" | cut -c1-2)
+    case "$code" in
+        en) printf 'en_US.UTF-8\n' ;;
+        de) printf 'de_DE.UTF-8\n' ;;
+        es) printf 'es_ES.UTF-8\n' ;;
+        *) printf 'fr_FR.UTF-8\n' ;;
+    esac
+}
 launch() {
     id=$1; shift
+    locale=$(browser_locale)
+    LANG=$locale; LANGUAGE=${locale%%_*}; LC_MESSAGES=$locale
+    export LANG LANGUAGE LC_MESSAGES
+    unset LC_ALL
     program=$(binary "$id")
     if ! test -x "$program"; then
         mkdir -p "$run"
@@ -181,7 +258,7 @@ launch() {
             test ! -f "${downloads%/*}/session-bus.conf" || bus_config="--config-file=${downloads%/*}/session-bus.conf"
         fi
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
-            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" \
+            env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" LANG="$LANG" LANGUAGE="$LANGUAGE" LC_MESSAGES="$LC_MESSAGES" \
             /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
@@ -194,7 +271,9 @@ case "${1:---status}" in
     --status) status ;;
     --install) install_browser "$browser" ;;
     --default)
-        install_browser "$browser"
+        # Déjà installé (choix fait depuis une fenêtre « Ouvrir avec ») : pas de
+        # nouveau téléchargement, seul le choix change.
+        test -x "$(binary "$browser")" || install_browser "$browser"
         mkdir -p "${config%/*}"; printf 'default=%s\n' "$browser" > "$config.new"; mv "$config.new" "$config" ;;
     --launch) shift 2; launch "$browser" "$@" ;;
     --open) shift; launch "$(default_browser)" "$@" ;;

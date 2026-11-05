@@ -65,6 +65,10 @@ elif joined == "-t -f DEVICE,TYPE,STATE device": print("wlan0:wifi:disconnected\
 elif joined == "-t -f WIFI radio": print(state["radio"])
 elif args[:2] == ["radio", "wifi"]: state["radio"] = "enabled" if args[2] == "on" else "disabled"; save()
 elif args[:2] == ["radio", "all"]: state["radio"] = "enabled" if args[2] == "on" else "disabled"; save()
+elif joined.startswith("-t -f SSID,WPA-FLAGS,RSN-FLAGS device wifi list"):
+    for ssid, signal, security in NETWORKS:
+        rsn = "group_ccmp sae" if ssid in state.get("gcmp_only", []) else ("pair_ccmp group_ccmp psk" if security else "(none)")
+        print(":".join([esc(ssid), "(none)", rsn]))
 elif "device wifi list" in joined:
     # « gone » : réseaux sortis de la liste pour encore N balayages (box au bord
     # de la portée, liste expirée pendant la saisie de la clé).
@@ -94,7 +98,7 @@ elif "connection up uuid" in joined:
     for _, values in profiles():
         if values["connection.uuid"] != target: continue
         ssid = ssid_of(values)
-        if ssid == "Hors portée" or ssid in state.get("gone", {}):
+        if ssid == "Hors portée" or ssid in state.get("gone", {}) or ssid in state.get("gcmp_only", []):
             print(f"Error: Connection activation failed: No network with SSID '{ssid}' found.", file=sys.stderr); sys.exit(10)
         if ssid in state.get("vanish_on_up", []):
             # La box disparaît pendant la poignée de main : NetworkManager dit
@@ -248,6 +252,18 @@ def test_backend():
     (work / "state.json").write_text(json.dumps(state))
     refused = backend(env, "connect", "Voisin", "--security", "sae", "--key-stdin", key="mauvaise-cle")
     ok(refused.get("error") == "bad-key", f"box visible qui refuse la clé : « mot de passe refusé » ({refused})")
+    # Box en GCMP-256 seul (Wi-Fi 7 en WPA3 strict) : NetworkManager ne la
+    # trouve jamais ; on le dit tout de suite au lieu de « introuvable ».
+    state = json.loads((work / "state.json").read_text())
+    state.update(gcmp_only=["Voisin"], rescans=0)
+    (work / "state.json").write_text(json.dumps(state))
+    gcmp = backend(env, "connect", "Voisin", "--security", "sae", "--key-stdin", key=GOOD_KEY)
+    state = json.loads((work / "state.json").read_text())
+    ok(gcmp.get("error") == "cipher" and state.get("rescans", 0) == 0
+       and not [p for p in connections.glob("*.nmconnection") if "id=Voisin" in p.read_text()],
+       f"box en GCMP-256 seul : message clair tout de suite, sans profil ni attente ({gcmp})")
+    state["gcmp_only"] = []
+    (work / "state.json").write_text(json.dumps(state))
     # Un profil qui a déjà marché n'est jamais remplacé par une clé non vérifiée.
     state = json.loads((work / "state.json").read_text())
     state["gone"] = {"Maison:5G": 99}
@@ -368,6 +384,16 @@ def test_messages():
     ok(module.classify("Error: Connection activation failed: No suitable device found for this connection (device wlan0 "
                        "not available because profile is not compatible with device (no compatible access point found)).")
        == "out-of-range", "« no compatible access point » : réseau introuvable, pas « aucune carte Wi-Fi »")
+    def element(kind, body): return bytes([kind, len(body)]) + body
+    def attribute(kind, value): return kind.to_bytes(2, "big") + len(value).to_bytes(2, "big") + value
+    wps_ie = b"\x00\x50\xf2\x04" + attribute(0x104A, b"\x10") + attribute(0x1044, b"\x02")
+    ssid_ie = element(0, b"Box")
+    ok(module.wps_configured(ssid_ie + element(221, wps_ie)), "WPS « Configured » reconnu sans appui sur le bouton de la box")
+    ok(not module.wps_configured(ssid_ie + element(221, wps_ie[:-1] + b"\x01")), "WPS « non configuré » ignoré")
+    split = element(221, wps_ie[:10]) + element(221, b"\x00\x50\xf2\x04" + wps_ie[10:])
+    ok(module.wps_configured(ssid_ie + split), "élément WPS découpé en deux : recollé")
+    ok(not module.wps_configured(ssid_ie + element(221, b"\x00\x50\xf2\x02\x01\x01")) and not module.wps_configured(b""),
+       "sans élément WPS : pas de bouton WPS")
     lost = module.error_text({"error": "lost", "waiting": True}, "Box")
     refused = module.error_text({"error": "bad-key"}, "Box")
     ok("momentanément introuvable" in lost and "gardé" in lost and "tout seul" in lost and refused.startswith("Mot de passe refusé")

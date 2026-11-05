@@ -98,6 +98,7 @@ CONTROL_POLICY = (
     (r"share-(status|list|state|ensure)", "user"),
     (r"share-[a-z-]+", "admin"),
     (r"transfer-[a-z-]+", "user"),
+    (r"phone-firewall-(on|off)", "user"),
     (r"report-(offer|redact|mode)-[a-z]+", "user"),
     (r"account-(add|password|role|remove)", "admin"),
 )
@@ -240,7 +241,7 @@ def exec_level(args):
             return "admin"
         if rest in (["time", "auto", "on"], ["time", "auto", "off"]):
             return "admin"
-        if rest == ["time", "sync"]:
+        if rest in (["time", "sync"], ["time", "rtc"]):
             return "user"
         return None
     if tool == "winlux-brightness":

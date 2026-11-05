@@ -23,6 +23,9 @@ fi
 chmod 700 "$XDG_RUNTIME_DIR"
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
+# Liens web des programmes qui lisent $BROWSER (outils en ligne de commande,
+# Python webbrowser) : le navigateur installé, comme xdg-open et les .exe.
+export BROWSER="${BROWSER:-/usr/bin/winlux-browser}"
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 export WINLUX_NATIVE_SHELL=1
@@ -252,6 +255,8 @@ wait_desktop() {
     # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
     if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
     if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
+    # Téléphone connecté : seulement si un téléphone est associé à ce compte.
+    if test -x /usr/bin/winlux-phone; then start phone.log /usr/bin/winlux-phone serve --if-paired; fi
     # Programmes « au démarrage » : lancés une fois le bureau affiché.
     if test -x /usr/bin/winlux-session-startup; then (/usr/bin/winlux-session-startup </dev/null >"$logs/startup-apps.log" 2>&1 &); fi
     # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
@@ -283,6 +288,8 @@ wait_desktop() {
                 rm -f /run/winlux/browser-chooser
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
             fi
+            # Lien demandé sans navigateur : ouvert dès qu'un navigateur est installé.
+            if test -f "/run/winlux/browser-pending-$(id -u)"; then /usr/bin/winlux-browser --pending >/dev/null 2>&1 & fi
             sleep 5
         done
     ) </dev/null >/dev/null 2>&1 &

@@ -54,7 +54,39 @@ if manager --default firefox >/dev/null 2>&1; then echo 'Corrupt browser accepte
 manager --status | grep -qx 'browser_default=chrome'
 test ! -e "$WINLUX_BROWSER_ROOT/run/winlux/browser-install.lock"
 cp "$work/firefox-valid.deb" "$cache/firefox.deb"
-manager --default firefox
+# Paquets de langue de Firefox : installés avec lui (fr), un paquet altéré (de) ignoré.
+for lang in fr de; do
+    pack="$work/l10n-$lang"
+    mkdir -p "$pack/DEBIAN" "$pack/usr/lib/firefox/distribution/extensions"
+    chmod -R 755 "$pack"
+    printf '%s' "$lang" > "$pack/usr/lib/firefox/distribution/extensions/langpack-$lang@firefox.mozilla.org.xpi"
+    printf 'Package: firefox-l10n-%s\nVersion: 1.0\nArchitecture: all\nMaintainer: test <test@example.invalid>\nDescription: langpack fixture\n' "$lang" > "$pack/DEBIAN/control"
+    dpkg-deb --build --root-owner-group "$pack" "$cache/firefox-l10n-$lang.deb" >/dev/null
+    sha256sum "$cache/firefox-l10n-$lang.deb" | cut -d' ' -f1 > "$cache/firefox-l10n-$lang.sha256"
+done
+printf '%064d\n' 0 > "$cache/firefox-l10n-de.sha256"
+manager --default firefox 2>"$work/langpacks.txt"
+extensions="$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/distribution/extensions"
+test -f "$extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo 'Firefox sans paquet de langue' >&2; exit 1; }
+test ! -e "$extensions/langpack-de@firefox.mozilla.org.xpi" || { echo 'Paquet de langue altéré installé' >&2; exit 1; }
+grep -q 'Paquet de langue altéré ignoré : de' "$work/langpacks.txt"
+grep -qx 'pref("intl.locale.requested", "");' "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/defaults/pref/winlux-langue.js"
+test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/browser/extensions/langpack-fr@firefox.mozilla.org.xpi" || { echo "Paquet de langue absent pour un profil existant" >&2; exit 1; }
+grep -qx 'pref("extensions.autoDisableScopes", 11);' "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/defaults/pref/winlux-langue.js"
+# Langue de Winlux donnée au navigateur, même si la session a LANG=C ou fr_FR.
+ffbin="$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/root/usr/lib/firefox/firefox"
+cp "$ffbin" "$work/firefox.saved"
+printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$LANG" "$LANGUAGE" "${LC_ALL:-}" > "%s"\n' "$work/langue" > "$ffbin"
+mkdir -p "$WINLUX_BROWSER_ROOT/etc/winlux"
+for pair in de:de_DE.UTF-8 es:es_ES.UTF-8 en:en_US.UTF-8 fr:fr_FR.UTF-8; do
+    printf 'LANG=%s\n' "${pair%%:*}" > "$WINLUX_BROWSER_ROOT/etc/winlux/locale.conf"
+    LANG=C.UTF-8 LC_ALL=C manager --launch firefox
+    test "$(cat "$work/langue")" = "${pair#*:} ${pair%%:*} " || { echo "Langue donnée à Firefox : $(cat "$work/langue") au lieu de ${pair#*:}" >&2; exit 1; }
+done
+rm -f "$WINLUX_BROWSER_ROOT/etc/winlux/locale.conf"
+LANG=C manager --launch firefox
+test "$(cat "$work/langue")" = "fr_FR.UTF-8 fr " || { echo "Langue par défaut : $(cat "$work/langue")" >&2; exit 1; }
+cp "$work/firefox.saved" "$ffbin"
 touch "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 manager --install firefox
 test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
@@ -103,6 +135,13 @@ code=0; manager --install edge 2>"$work/failed.txt" || code=$?
 test "$code" = 1
 if grep -q Traceback "$work/failed.txt"; then echo 'Trace technique affichée' >&2; exit 1; fi
 grep -q Traceback "$WINLUX_BROWSER_ROOT/run/winlux/browser-fetch.log"
+# Horloge fausse (pile vide, 2015) : le vrai motif, pas « ne répond pas ».
+printf '#!/bin/sh\necho "curl: (60) SSL certificate problem: certificate is not yet valid" >&2\nexit 1\n' > "$work/fetch"
+code=0; manager --install edge 2>"$work/clock.txt" || code=$?
+test "$code" = 1
+grep -q "La date de ce PC est fausse" "$work/clock.txt"
+grep -q "Paramètres > Heure et langue" "$work/clock.txt"
+if grep -q "ne répond pas" "$work/clock.txt"; then echo 'Date fausse annoncée comme site muet' >&2; exit 1; fi
 # Retour du réseau : installé, plus rien en attente.
 sed 's/chrome/edge/g' > "$work/fetch" <<FETCH
 #!/bin/sh
@@ -123,22 +162,35 @@ python3 -B - "$project/scripts/winlux-settings.py" "$work/status.txt" <<'PY'
 import ast, sys
 tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
 keep = [n for n in tree.body if (isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "BROWSER_NAMES" for t in n.targets))
-        or (isinstance(n, ast.FunctionDef) and n.name == "browser_buttons_shown")]
-scope = {}
+        or (isinstance(n, ast.FunctionDef) and n.name in ("browser_buttons_shown", "browser_default_text"))]
+scope = {"_t": lambda text: text}
 exec(compile(ast.Module(body=keep, type_ignores=[]), "settings", "exec"), scope)
 names, shown = scope["BROWSER_NAMES"], scope["browser_buttons_shown"]
 assert names == {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}, names
 status = dict(l.split("=", 1) for l in open(sys.argv[2]).read().split() if "=" in l)
 def visible(status):
     return sorted(f"{v}-{i}" for i in names for v in ("install", "default", "launch") if shown(status, f"browser-{v}-{i}"))
-# État réel ici : les trois sont installés.
-assert visible(status) == [f"{v}-{i}" for v in ("default", "launch") for i in names], (status, visible(status))
+# État réel ici : les trois sont installés, Edge par défaut (pas de
+# « Définir par défaut » pour lui : c'est déjà le cas).
+assert status["browser_default"] == "edge", status
+assert visible(status) == ["default-chrome", "default-firefox"] + [f"launch-{i}" for i in names], (status, visible(status))
+text = scope["browser_default_text"]
+assert text(status) == "Microsoft Edge"
+assert text({"browser_default": "none"}) == "Aucun : choisissez-en un ci-dessous"
+# Un seul navigateur installé, aucun défaut : c'est lui qui ouvre les liens.
+assert text({"browser_default": "none", "browser_firefox": "installed"}) == "Mozilla Firefox (seul navigateur installé)"
+assert text({"browser_default": "none", "browser_firefox": "installed", "browser_chrome": "update"}).startswith("Aucun : le navigateur vous sera demandé")
+status["browser_default"] = "none"
 status.update(browser_chrome="downloadable", browser_firefox="update")
 assert visible(status) == ["default-edge", "default-firefox", "install-chrome", "install-firefox",
                            "launch-edge", "launch-firefox"], visible(status)
 assert visible({}) == [f"install-{i}" for i in names]
 source = open(sys.argv[1], encoding="utf-8").read()
 assert 'format(name=BROWSER_NAMES[ident])' in source and 'for name in ("chrome", "edge", "firefox")' not in source
+# Bouton d'action, pas d'état ; lien gardé ouvert dès l'installation finie.
+assert '("Définir {name} par défaut", "default")' in source and '"Par défaut : {name}"' not in source
+assert 'action.startswith(("browser-install-", "browser-default-")):' in source and "open_pending_link()" in source
+assert '["/usr/bin/winlux-browser", "--pending"]' in source
 PY
 if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
 python3 -B "$project/scripts/test-browser-downloads.py"

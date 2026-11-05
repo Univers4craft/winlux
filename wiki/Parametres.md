@@ -7,7 +7,7 @@
 1. **Masqué plutôt que grisé.** Une page ou une section qui ne correspond à rien sur la machine n'apparaît pas : pas de page Bluetooth sans adaptateur ni périphérique, pas de page Son sans carte son, pas de Lecteurs réseau sans outil de montage, pas de réglage CPU que le matériel ne permet pas. La détection est faite au démarrage par `winlux-hardware`.
 2. **Les réglages matériels avancés vivent ici, et seulement ici** (processeur, GPU, alimentation), après détection réelle du matériel.
 
-## Les 36 pages
+## Les 37 pages
 
 | # | Page | Ce qu'on y règle |
 |---|---|---|
@@ -47,6 +47,7 @@
 | 33 | **Comptes** | Comptes locaux (ajout, mot de passe, rôle). Page native seulement. |
 | 34 | **Matériel et pilotes** | Diagnostic du matériel et pilotes recommandés. Page native seulement. |
 | 35 | **Wi-Fi** | Réseaux à portée (nom, signal, sécurité), clé de sécurité dans une boîte avec « Afficher les caractères » et clavier tactile intégré, bouton WPS de la box, réseau caché, réseaux enregistrés (oublier, reconnexion automatique au démarrage), mode avion. Les erreurs sont dites en clair (clé refusée, hors de portée, pas d’adresse…). Passe par `winlux-wifi` en root via le relais `winlux-root` ; masquée sans carte Wi-Fi. Page native seulement. |
+| 37 | **Appareils mobiles** | Téléphone connecté : téléphones Android associés avec l'application KDE Connect, interrupteur général, notifications, SMS et réception de fichiers par téléphone, Faire sonner, Dissocier ([docs/TELEPHONE.md](https://github.com/Univers4craft/winlux/blob/master/docs/TELEPHONE.md)). Masquée tant qu'aucun téléphone n'est associé. Page native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

@@ -197,6 +197,46 @@ jobs:
             WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$RELEASE_NAME.iso"
           fi
 
+      # ISO de validation (PR et lancement manuel) en artefact : le fil de test
+      # ne peut pas construire d'ISO sur son hôte (base noble) et la récupère
+      # avec « gh run download <run> -n winlux-iso-validation-<commit> ».
+      - name: Préparer l'ISO de validation pour le fil de test
+        if: success() && !startsWith(github.ref, 'refs/tags/') && env.SKIP_ISO == 'false'
+        run: |
+          mkdir -p build/iso-validation
+          mv "build/winlux-live-$RELEASE_NAME.iso" build/iso-validation/
+          cd build/iso-validation
+          sha256sum "winlux-live-$RELEASE_NAME.iso" > "winlux-live-$RELEASE_NAME.iso.sha256"
+          {
+            echo "version=$(cat "$GITHUB_WORKSPACE/VERSION")"
+            echo "commit=$GITHUB_SHA"
+            echo "ref=$GITHUB_REF"
+            echo "run=$GITHUB_RUN_ID"
+            echo "taille=$(stat -c %s "winlux-live-$RELEASE_NAME.iso")"
+          } > build-info.txt
+          cat build-info.txt
+          test "$(stat -c %s "winlux-live-$RELEASE_NAME.iso")" -gt 0
+          # Paquet et manifeste de mise à jour, pour tester Paramètres > Mises à
+          # jour avant publication (manifest= dans /etc/winlux/update.conf).
+          cd "$GITHUB_WORKSPACE"
+          if bash scripts/build-update-bundle.sh --system; then
+            asset=$(sed -n 's/^asset=//p' build/winlux-update-manifest.txt)
+            cp build/winlux-update-manifest.txt "build/$asset" build/iso-validation/
+          else
+            echo "::warning::Paquet de mise à jour non construit : l'artefact ne contient que l'ISO."
+          fi
+
+      - name: Conserver l'ISO de validation (1 jour)
+        if: success() && !startsWith(github.ref, 'refs/tags/') && env.SKIP_ISO == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: winlux-iso-validation-${{ github.sha }}
+          path: build/iso-validation/
+          retention-days: 1
+          # L'ISO est déjà compressée (squashfs xz) : zip ne gagnerait rien.
+          compression-level: 0
+          if-no-files-found: error
+
       - name: Conserver les journaux de validation
         if: failure()
         uses: actions/upload-artifact@v4

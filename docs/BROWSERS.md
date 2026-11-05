@@ -43,7 +43,30 @@ c'est sa copie, faite sur sa machine.
   Edge et Mozilla Firefox dans l'ordre alphabétique, sans mise en avant, avec
   pour chacun « Installer », « Par défaut » (qui l'installe au besoin) et
   « Ouvrir ». Aucun navigateur par défaut tant que l'utilisateur n'en a pas
-  choisi un. Ouvrir un lien sans navigateur ouvre cet écran.
+  choisi un.
+- **Liens web** : xdg-open (GIO et exo-open d'XFCE), la variable `BROWSER` et
+  ShellExecute des `.exe` aboutissent tous à `winlux-browser`. Il ouvre le lien
+  dans le navigateur par défaut s'il est installé, sinon dans un navigateur
+  installé (catalogue ou système). S'il y en a plusieurs et qu'aucun n'est
+  par défaut, une fenêtre (`winlux-browser-choice`) les propose dans l'ordre
+  alphabétique, sans présélection, rappelle qu'un navigateur par défaut évite
+  de choisir à chaque fois, et « Toujours utiliser ce navigateur » en fait le
+  navigateur par défaut. L'écran de choix ne s'ouvre que s'il n'y a aucun navigateur : le
+  lien est alors gardé dans `/run/winlux/browser-pending-<uid>` et la session
+  l'ouvre dès qu'un navigateur est installé (pendant une heure au plus) :
+  Paramètres l'ouvre à la fin de l'installation, et la session le reprend
+  sinon. L'en-tête « Navigateur par défaut » indique le navigateur qui ouvre
+  vraiment les liens (le seul installé, ou « demandé à chaque lien »).
+- **Langue** : Firefox est installé avec les paquets de langue officiels de
+  Mozilla (`firefox-l10n-fr`, `-de`, `-es`, même dépôt, SHA-256 de l'index)
+  et suit la langue choisie dans Paramètres > Langue : `winlux-browsers`
+  donne `LANG`/`LANGUAGE` d'après `/etc/winlux/locale.conf` à tout
+  navigateur lancé (Chrome et Edge contiennent déjà leurs langues). Les
+  paquets sont posés dans `distribution/extensions` (profil neuf) et
+  `browser/extensions` (relu à chaque démarrage, pour un profil déjà créé).
+  `sh scripts/check-firefox-langue.sh`, sur le Winlux installé, vérifie la
+  langue réellement affichée (en-tête Accept-Language) sur un profil neuf
+  puis relancé.
 - **Téléchargement automatique** : `winlux-browsers --install chrome|edge|firefox`
   lance `/usr/lib/winlux/winlux-browser-fetch` (copie de
   `scripts/prepare-browser-packages.py`). Il lit l'index du dépôt officiel de
@@ -68,6 +91,9 @@ c'est sa copie, faite sur sa machine.
 - `sh scripts/test-browsers.sh` : aucun navigateur par défaut, écran de choix,
   téléchargement à la demande (faux éditeur), échec du téléchargement sans
   installation partielle, refus des archives altérées.
+- `sh scripts/test-browser-links.sh` : lien ouvert dans le navigateur
+  installé même non choisi par défaut, écran de choix seulement sans
+  navigateur, lien gardé puis ouvert après le choix.
 - VM de validation (`test-browsers-vm.sh`, `test-native-session-vm.sh`) : aucun
   `.deb` de navigateur dans l'image, les trois proposés au téléchargement, et
   un lien ouvert sans navigateur mène à l'écran de choix.

@@ -112,7 +112,12 @@ jobs:
         run: cargo test -p winlux
 
       - name: Vérifier les navigateurs hors ligne
-        run: sh scripts/test-browsers.sh
+        run: |
+          sh scripts/test-browsers.sh
+          python3 -B scripts/test-browser-fetch.py
+
+      - name: Vérifier que les liens web s'ouvrent dans le navigateur installé
+        run: sh scripts/test-browser-links.sh
 
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
@@ -191,6 +196,8 @@ jobs:
 
       - name: Vérifier les autorisations des applications Windows
         run: python3 -B scripts/test-permission.py
+      - name: Vérifier Téléphone connecté (faux téléphone Android, protocole KDE Connect)
+        run: /usr/bin/python3 -B scripts/test-phone.py
       - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
@@ -203,6 +210,10 @@ jobs:
         run: python3 -B scripts/test-accounts-repair.py
       - name: Vérifier les pilotes de cet ordinateur ajoutés pendant l'installation (en ligne)
         run: python3 -B scripts/test-installer-drivers.py
+      - name: Vérifier la date, l'heure et le fuseau dès l'installation
+        run: python3 -B scripts/test-installer-time.py
+      - name: Vérifier l'entrée de démarrage UEFI « Winlux » (NVRAM) en plus du chemin de secours
+        run: python3 -B scripts/test-efi-boot-entry.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
@@ -453,7 +464,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
             gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
-            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool
+            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool x11-utils
 
       - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
@@ -466,6 +477,9 @@ jobs:
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
       - name: Fenêtre Jeux (cartes, tri, recherche)
         run: |

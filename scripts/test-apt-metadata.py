@@ -91,3 +91,33 @@ with tempfile.TemporaryDirectory(prefix="apt-suffix-check.") as temporary:
     finally: scope["subprocess"].run = real_run
     assert seen and download.is_file() and not Path(seen[0]).exists(), seen
 print("OK: downloaded update handed to APT under a .deb name")
+
+# Manifeste local (WINLUX_UPDATE_MANIFEST ou manifest= dans update.conf) : la
+# mise à jour se teste avant publication, sans réseau.
+import os
+with tempfile.TemporaryDirectory(prefix="apt-local-check.") as temporary:
+    root = Path(temporary); work = root / "work"; work.mkdir()
+    assets = root / "assets"; assets.mkdir()
+    (assets / "winlux-update-manifest.txt").write_text(valid)
+    (assets / "winlux-desktop-v0.3.0.deb").write_bytes(b"x" * 123)
+    def offline(*args, **kwargs): raise AssertionError("réseau utilisé malgré le manifeste local")
+    scope["download"] = offline
+    scope["CONFIG"] = root / "update.conf"
+    os.environ["WINLUX_UPDATE_MANIFEST"] = "file://" + str(assets / "winlux-update-manifest.txt")
+    assert scope["release_metadata"](work)[0]["version"] == "v0.3.0"
+    assert (work / "manifest").read_text() == valid
+    assert scope["local_asset"](scope["local_manifest"](), "winlux-desktop-v0.3.0.deb").read_bytes() == b"x" * 123
+    del os.environ["WINLUX_UPDATE_MANIFEST"]
+    # Chemin Paramètres : le relais root ne transmet pas l'environnement.
+    scope["CONFIG"].write_text("auto=disabled\nmanifest=" + str(assets / "winlux-update-manifest.txt") + "\n")
+    assert scope["release_metadata"](work)[0]["asset"] == "winlux-desktop-v0.3.0.deb"
+    scope["CONFIG"].write_text("manifest=relatif.txt\n")
+    try: scope["release_metadata"](work)
+    except RuntimeError as error: assert "Manifeste local introuvable" in str(error)
+    else: raise AssertionError("manifeste relatif accepté")
+    scope["CONFIG"].write_text("auto=enabled\n")
+    assert scope["local_manifest"]() is None
+    try: scope["local_asset"](assets / "winlux-update-manifest.txt", "absent.deb")
+    except RuntimeError as error: assert "Paquet local introuvable" in str(error)
+    else: raise AssertionError("paquet absent accepté")
+print("OK: local update manifest (environment and update.conf) without network")
