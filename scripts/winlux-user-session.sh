@@ -200,6 +200,16 @@ if test -x /usr/bin/winlux-notifications; then
 fi
 # Préférences de l'utilisateur : alignement de la barre, souris, processeur,
 # restaurées en arrière-plan pendant que le bureau s'affiche.
+# Alignement de la barre : dans CHAQUE session, y compris celle d'un compte
+# ouvert par « Changer d'utilisateur ». Sans cela, ce compte gardait la copie
+# figée de xfce4-panel.xml (séparateur 3 étiré, contrepoids 13 au bout) : le
+# bouton Démarrer tombait vers x≈838, ni à gauche ni au milieu.
+if test "$primary" != 1 && test -x /usr/bin/winlux-control; then (
+    export WINLUX_CONTROL_NO_STATUS=1
+    alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
+    case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
+    ) </dev/null >"$logs/session-settings.log" 2>&1 &
+fi
 if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
     # L'état est publié par la boucle de la session : pas de sondes ici.
     export WINLUX_CONTROL_NO_STATUS=1
