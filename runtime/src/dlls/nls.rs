@@ -491,7 +491,7 @@ const fn neutral(l: Locale, name: &'static str, lcid: u32) -> Locale {
     }
 }
 
-static LOCALES: [Locale; 9] = [
+static BASE_LOCALES: [Locale; 9] = [
     INVARIANT,
     EN_US,
     FR_FR,
@@ -503,7 +503,535 @@ static LOCALES: [Locale; 9] = [
     neutral(DE_DE, "de", 0x07),
 ];
 
+/// Autres langues d'interface courantes (listes de traduction des
+/// programmes, comme celle de Paint.NET). Formats de date et nombres
+/// génériques, noms et identifiants exacts.
+/// (nom, LCID, nom neutre, LCID neutre, parent, ISO 639-1, ISO 639-2,
+/// pays ISO 2, pays ISO 3, langue en anglais, langue native, pays, GEOID)
+#[allow(clippy::type_complexity)]
+const MORE_LOCALES: &[(
+    &str,
+    u32,
+    &str,
+    u32,
+    &str,
+    &str,
+    &str,
+    &str,
+    &str,
+    &str,
+    &str,
+    &str,
+    u32,
+)] = &[
+    (
+        "ja-JP",
+        0x0411,
+        "ja",
+        0x0011,
+        "ja",
+        "ja",
+        "jpn",
+        "JP",
+        "JPN",
+        "Japanese",
+        "日本語",
+        "Japan",
+        122,
+    ),
+    (
+        "ko-KR",
+        0x0412,
+        "ko",
+        0x0012,
+        "ko",
+        "ko",
+        "kor",
+        "KR",
+        "KOR",
+        "Korean",
+        "한국어",
+        "Korea",
+        134,
+    ),
+    (
+        "pt-BR",
+        0x0416,
+        "pt",
+        0x0016,
+        "pt",
+        "pt",
+        "por",
+        "BR",
+        "BRA",
+        "Portuguese",
+        "português",
+        "Brazil",
+        32,
+    ),
+    (
+        "pt-PT",
+        0x0816,
+        "",
+        0x0000,
+        "pt",
+        "pt",
+        "por",
+        "PT",
+        "PRT",
+        "Portuguese",
+        "português",
+        "Portugal",
+        193,
+    ),
+    (
+        "ru-RU",
+        0x0419,
+        "ru",
+        0x0019,
+        "ru",
+        "ru",
+        "rus",
+        "RU",
+        "RUS",
+        "Russian",
+        "русский",
+        "Russia",
+        203,
+    ),
+    (
+        "zh-CN", 0x0804, "zh-Hans", 0x0004, "zh-Hans", "zh", "zho", "CN", "CHN", "Chinese", "中文",
+        "China", 45,
+    ),
+    (
+        "zh-TW", 0x0404, "zh-Hant", 0x7c04, "zh-Hant", "zh", "zho", "TW", "TWN", "Chinese", "中文",
+        "Taiwan", 237,
+    ),
+    (
+        "be-BY",
+        0x0423,
+        "be",
+        0x0023,
+        "be",
+        "be",
+        "bel",
+        "BY",
+        "BLR",
+        "Belarusian",
+        "беларуская",
+        "Belarus",
+        29,
+    ),
+    (
+        "bg-BG",
+        0x0402,
+        "bg",
+        0x0002,
+        "bg",
+        "bg",
+        "bul",
+        "BG",
+        "BGR",
+        "Bulgarian",
+        "български",
+        "Bulgaria",
+        35,
+    ),
+    (
+        "ca-ES", 0x0403, "ca", 0x0003, "ca", "ca", "cat", "ES", "ESP", "Catalan", "català",
+        "Spain", 217,
+    ),
+    (
+        "co-FR", 0x0483, "co", 0x0083, "co", "co", "cos", "FR", "FRA", "Corsican", "corsu",
+        "France", 84,
+    ),
+    (
+        "cs-CZ",
+        0x0405,
+        "cs",
+        0x0005,
+        "cs",
+        "cs",
+        "ces",
+        "CZ",
+        "CZE",
+        "Czech",
+        "čeština",
+        "Czechia",
+        75,
+    ),
+    (
+        "da-DK", 0x0406, "da", 0x0006, "da", "da", "dan", "DK", "DNK", "Danish", "dansk",
+        "Denmark", 61,
+    ),
+    (
+        "el-GR",
+        0x0408,
+        "el",
+        0x0008,
+        "el",
+        "el",
+        "ell",
+        "GR",
+        "GRC",
+        "Greek",
+        "Ελληνικά",
+        "Greece",
+        98,
+    ),
+    (
+        "fa-IR",
+        0x0429,
+        "fa",
+        0x0029,
+        "fa",
+        "fa",
+        "fas",
+        "IR",
+        "IRN",
+        "Persian",
+        "فارسی",
+        "Iran",
+        116,
+    ),
+    (
+        "fi-FI", 0x040b, "fi", 0x000b, "fi", "fi", "fin", "FI", "FIN", "Finnish", "suomi",
+        "Finland", 77,
+    ),
+    (
+        "he-IL",
+        0x040d,
+        "he",
+        0x000d,
+        "he",
+        "he",
+        "heb",
+        "IL",
+        "ISR",
+        "Hebrew",
+        "עברית",
+        "Israel",
+        117,
+    ),
+    (
+        "hi-IN",
+        0x0439,
+        "hi",
+        0x0039,
+        "hi",
+        "hi",
+        "hin",
+        "IN",
+        "IND",
+        "Hindi",
+        "हिन्दी",
+        "India",
+        113,
+    ),
+    (
+        "hu-HU",
+        0x040e,
+        "hu",
+        0x000e,
+        "hu",
+        "hu",
+        "hun",
+        "HU",
+        "HUN",
+        "Hungarian",
+        "magyar",
+        "Hungary",
+        109,
+    ),
+    (
+        "it-IT", 0x0410, "it", 0x0010, "it", "it", "ita", "IT", "ITA", "Italian", "italiano",
+        "Italy", 118,
+    ),
+    (
+        "kk-KZ",
+        0x043f,
+        "kk",
+        0x003f,
+        "kk",
+        "kk",
+        "kaz",
+        "KZ",
+        "KAZ",
+        "Kazakh",
+        "қазақ тілі",
+        "Kazakhstan",
+        137,
+    ),
+    (
+        "lt-LT",
+        0x0427,
+        "lt",
+        0x0027,
+        "lt",
+        "lt",
+        "lit",
+        "LT",
+        "LTU",
+        "Lithuanian",
+        "lietuvių",
+        "Lithuania",
+        141,
+    ),
+    (
+        "lv-LV",
+        0x0426,
+        "lv",
+        0x0026,
+        "lv",
+        "lv",
+        "lav",
+        "LV",
+        "LVA",
+        "Latvian",
+        "latviešu",
+        "Latvia",
+        140,
+    ),
+    (
+        "nl-NL",
+        0x0413,
+        "nl",
+        0x0013,
+        "nl",
+        "nl",
+        "nld",
+        "NL",
+        "NLD",
+        "Dutch",
+        "Nederlands",
+        "Netherlands",
+        176,
+    ),
+    (
+        "nb-NO",
+        0x0414,
+        "no",
+        0x0014,
+        "no",
+        "nb",
+        "nob",
+        "NO",
+        "NOR",
+        "Norwegian Bokmål",
+        "norsk bokmål",
+        "Norway",
+        177,
+    ),
+    (
+        "pl-PL", 0x0415, "pl", 0x0015, "pl", "pl", "pol", "PL", "POL", "Polish", "polski",
+        "Poland", 191,
+    ),
+    (
+        "ro-RO", 0x0418, "ro", 0x0018, "ro", "ro", "ron", "RO", "ROU", "Romanian", "română",
+        "Romania", 200,
+    ),
+    (
+        "sk-SK",
+        0x041b,
+        "sk",
+        0x001b,
+        "sk",
+        "sk",
+        "slk",
+        "SK",
+        "SVK",
+        "Slovak",
+        "slovenčina",
+        "Slovakia",
+        143,
+    ),
+    (
+        "sl-SI",
+        0x0424,
+        "sl",
+        0x0024,
+        "sl",
+        "sl",
+        "slv",
+        "SI",
+        "SVN",
+        "Slovenian",
+        "slovenščina",
+        "Slovenia",
+        212,
+    ),
+    (
+        "sv-SE", 0x041d, "sv", 0x001d, "sv", "sv", "swe", "SE", "SWE", "Swedish", "svenska",
+        "Sweden", 221,
+    ),
+    (
+        "th-TH",
+        0x041e,
+        "th",
+        0x001e,
+        "th",
+        "th",
+        "tha",
+        "TH",
+        "THA",
+        "Thai",
+        "ไทย",
+        "Thailand",
+        227,
+    ),
+    (
+        "tr-TR", 0x041f, "tr", 0x001f, "tr", "tr", "tur", "TR", "TUR", "Turkish", "Türkçe",
+        "Türkiye", 235,
+    ),
+    (
+        "uk-UA",
+        0x0422,
+        "uk",
+        0x0022,
+        "uk",
+        "uk",
+        "ukr",
+        "UA",
+        "UKR",
+        "Ukrainian",
+        "українська",
+        "Ukraine",
+        241,
+    ),
+    (
+        "ar-SA",
+        0x0401,
+        "ar",
+        0x0001,
+        "ar",
+        "ar",
+        "ara",
+        "SA",
+        "SAU",
+        "Arabic",
+        "العربية",
+        "Saudi Arabia",
+        205,
+    ),
+    (
+        "id-ID",
+        0x0421,
+        "id",
+        0x0021,
+        "id",
+        "id",
+        "ind",
+        "ID",
+        "IDN",
+        "Indonesian",
+        "Indonesia",
+        "Indonesia",
+        111,
+    ),
+    (
+        "vi-VN",
+        0x042a,
+        "vi",
+        0x002a,
+        "vi",
+        "vi",
+        "vie",
+        "VN",
+        "VNM",
+        "Vietnamese",
+        "Tiếng Việt",
+        "Vietnam",
+        251,
+    ),
+    (
+        "en-GB",
+        0x0809,
+        "",
+        0x0000,
+        "en",
+        "en",
+        "eng",
+        "GB",
+        "GBR",
+        "English",
+        "English",
+        "United Kingdom",
+        242,
+    ),
+    (
+        "fr-CA",
+        0x0c0c,
+        "",
+        0x0000,
+        "fr",
+        "fr",
+        "fra",
+        "CA",
+        "CAN",
+        "French",
+        "français",
+        "Canada",
+        39,
+    ),
+    (
+        "es-MX", 0x080a, "", 0x0000, "es", "es", "spa", "MX", "MEX", "Spanish", "español",
+        "Mexico", 166,
+    ),
+];
+
+/// Toutes les locales connues : les quatre langues de Winlux, détaillées,
+/// puis les autres, construites sur un modèle métrique générique.
+fn all_locales() -> &'static [Locale] {
+    static ALL: std::sync::OnceLock<Vec<Locale>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut v: Vec<Locale> = BASE_LOCALES.iter().map(Locale::copy).collect();
+        for &(name, lcid, neu, nlcid, parent, l2, l3, c2, c3, el, nat, ec, geo) in MORE_LOCALES {
+            if v.iter().any(|l| l.name.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            let specific = Locale {
+                name,
+                lcid,
+                specific: name,
+                parent,
+                lang2: l2,
+                lang3: l3,
+                ctry2: c2,
+                ctry3: c3,
+                eng_lang: el,
+                eng_ctry: ec,
+                nat_lang: nat,
+                nat_ctry: ec,
+                measure: 0,
+                paper: 9,
+                first_day: 0,
+                geo,
+                sort_name: name,
+                ..Locale::copy(&EN_US)
+            };
+            if !neu.is_empty() && !v.iter().any(|l| l.name.eq_ignore_ascii_case(neu)) {
+                v.push(Locale {
+                    name: neu,
+                    lcid: nlcid,
+                    specific: name,
+                    parent: "",
+                    ctry2: "",
+                    ctry3: "",
+                    sort_name: neu,
+                    ..Locale::copy(&specific)
+                });
+            }
+            v.push(specific);
+        }
+        v
+    })
+}
+
 impl Locale {
+    /// Copie champ à champ (les champs sont tous des références ou des nombres).
+    fn copy(&self) -> Locale {
+        Locale { ..*self }
+    }
     fn is_neutral(&self) -> bool {
         !self.name.is_empty() && !self.name.contains('-')
     }
@@ -530,7 +1058,9 @@ pub fn by_name(name: Option<&str>) -> Option<&'static Locale> {
         Some(n) if n.eq_ignore_ascii_case("!x-sys-default-locale") => USER_LOCALE.to_string(),
         Some(n) => n.replace('_', "-"),
     };
-    LOCALES.iter().find(|l| l.name.eq_ignore_ascii_case(&n))
+    all_locales()
+        .iter()
+        .find(|l| l.name.eq_ignore_ascii_case(&n))
 }
 
 /// Locale désignée par un LCID ; LOCALE_USER_DEFAULT (0x400),
@@ -540,7 +1070,7 @@ pub fn by_lcid(lcid: u32) -> Option<&'static Locale> {
         0 | 0x0400 | 0x0800 => USER_LCID,
         x => x,
     };
-    LOCALES.iter().find(|l| l.lcid == lcid)
+    all_locales().iter().find(|l| l.lcid == lcid)
 }
 
 fn set_last_error(e: u32) {
@@ -872,7 +1402,7 @@ pub unsafe extern "win64" fn enum_system_locales_ex(
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    for l in LOCALES.iter().filter(|l| !l.name.is_empty()) {
+    for l in all_locales().iter().filter(|l| !l.name.is_empty()) {
         let kind = if l.is_neutral() { 0x10 } else { 0x20 };
         if flags & 0x30 != 0 && flags & kind == 0 {
             continue;
@@ -894,7 +1424,7 @@ pub unsafe extern "win64" fn enum_system_locales_w(
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    for l in LOCALES
+    for l in all_locales()
         .iter()
         .filter(|l| !l.name.is_empty() && !l.is_neutral())
     {
@@ -971,7 +1501,10 @@ pub unsafe extern "win64" fn get_geo_info_w(
     size: i32,
     _lang: u16,
 ) -> i32 {
-    let Some(l) = LOCALES.iter().find(|l| !l.name.is_empty() && l.geo == geo) else {
+    let Some(l) = all_locales()
+        .iter()
+        .find(|l| !l.name.is_empty() && l.geo == geo)
+    else {
         set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
@@ -1535,12 +2068,17 @@ mod tests {
             );
             assert_eq!(String::from_utf16_lossy(&buf[..5]), "fr-FR");
             assert_eq!(
-                resolve_locale_name(w("en-GB").as_ptr(), buf.as_mut_ptr(), 16),
+                resolve_locale_name(w("en-AU").as_ptr(), buf.as_mut_ptr(), 16),
                 6
             );
             assert_eq!(String::from_utf16_lossy(&buf[..5]), "en-US");
             assert_eq!(
-                resolve_locale_name(w("ja-JP").as_ptr(), buf.as_mut_ptr(), 16),
+                resolve_locale_name(w("ja").as_ptr(), buf.as_mut_ptr(), 16),
+                6
+            );
+            assert_eq!(String::from_utf16_lossy(&buf[..5]), "ja-JP");
+            assert_eq!(
+                resolve_locale_name(w("xx-YY").as_ptr(), buf.as_mut_ptr(), 16),
                 0
             );
             assert_eq!(is_valid_locale_name(w("es").as_ptr()), 1);
@@ -1561,7 +2099,7 @@ mod tests {
                 ),
                 1
             );
-            assert_eq!(all.len(), 4);
+            assert!(all.len() >= 4);
             assert!(all.iter().all(|(n, f)| n.contains('-') && f & 0x20 != 0));
         }
     }

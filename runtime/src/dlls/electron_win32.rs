@@ -1306,7 +1306,11 @@ unsafe fn hstring_alloc(src: *const u16, len: u32) -> usize {
     p as usize
 }
 
-unsafe extern "win64" fn WindowsCreateString(src: *const u16, len: u32, out: *mut usize) -> i32 {
+pub(crate) unsafe extern "win64" fn WindowsCreateString(
+    src: *const u16,
+    len: u32,
+    out: *mut usize,
+) -> i32 {
     if out.is_null() {
         return E_INVALIDARG;
     }
