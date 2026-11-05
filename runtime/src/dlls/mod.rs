@@ -3,6 +3,7 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod a11y;
+pub mod actctx;
 pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
@@ -19,6 +20,7 @@ pub mod comdlg32_ui;
 pub mod comobj;
 pub mod console_input;
 pub mod controls;
+pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
@@ -591,6 +593,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "coremessaging",
+                exports: coremessaging::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "dwmapi",
                 exports: dwmapi::exports(),
                 handle: fake_module(),
@@ -749,6 +756,12 @@ fn add_basics(all: &mut [Builtin]) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
             }
+        }
+    }
+    // Contextes d'activation (WinForms, styles visuels).
+    if let Some(b) = all.iter_mut().find(|b| b.name == "kernel32") {
+        for (name, addr) in actctx::kernel32_exports() {
+            b.exports.entry(name).or_insert(addr);
         }
     }
     // Winsock importé par numéro d'ordre.

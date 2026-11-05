@@ -527,6 +527,7 @@ impl DxgiAdapter {
             *out = this as *mut c_void;
             return S_OK;
         }
+        crate::dlls::comobj::log_no_interface("dxgi", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -804,6 +805,7 @@ impl DxgiSwapChain {
             *out = this as *mut c_void;
             return S_OK;
         }
+        crate::dlls::comobj::log_no_interface("dxgi", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1104,6 +1106,7 @@ impl DxgiFactory {
             *out = this as *mut c_void;
             return S_OK;
         }
+        crate::dlls::comobj::log_no_interface("dxgi", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }

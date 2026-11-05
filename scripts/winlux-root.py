@@ -99,7 +99,11 @@ CONTROL_POLICY = (
     (r"share-[a-z-]+", "admin"),
     (r"transfer-[a-z-]+", "user"),
     (r"phone-firewall-(on|off)", "user"),
-    (r"report-(offer|redact|mode)-[a-z]+", "user"),
+    (r"report-(offer|redact|mode|auto)-[a-z]+", "user"),
+    # Envoi automatique des plantages (#438) : le rapport arrive sur l'entrée
+    # standard et root le vérifie ; le jeton (lu sur l'entrée) exige un admin.
+    (r"report-send", "user"),
+    (r"report-token-(set|forget)", "admin"),
     (r"account-(add|password|role|remove)", "admin"),
 )
 

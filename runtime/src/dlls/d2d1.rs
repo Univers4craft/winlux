@@ -177,6 +177,7 @@ pub(super) unsafe fn qi_list<T>(
         Com::add_ref(this);
         return put(out, this);
     }
+    super::comobj::log_no_interface("d2d1/dwrite", riid);
     E_NOINTERFACE
 }
 

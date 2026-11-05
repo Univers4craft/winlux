@@ -251,6 +251,7 @@ impl Texture2D {
             *out = this as *mut c_void;
             return S_OK;
         }
+        crate::dlls::comobj::log_no_interface("d3d11", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -492,6 +493,7 @@ impl Buffer {
             *out = this as *mut c_void;
             return S_OK;
         }
+        crate::dlls::comobj::log_no_interface("d3d11", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1378,6 +1380,7 @@ unsafe extern "win64" fn ctx_qi(
         *out = this as *mut c_void;
         return S_OK;
     }
+    crate::dlls::comobj::log_no_interface("d3d11", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
@@ -2699,6 +2702,7 @@ unsafe extern "win64" fn dev_qi(
         *out = std::ptr::addr_of_mut!((*this).dxgi).cast();
         return S_OK;
     }
+    crate::dlls::comobj::log_no_interface("d3d11", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
