@@ -510,6 +510,13 @@ def migrate_openbox(openbox_config, default_rc):
                 for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
                     mouse.insert(position, ET.fromstring(ET.tostring(context)))
                 changed = True
+            # Fenêtre glissée au bord : ancrée par winlux-snap (#460), pas envoyée
+            # sur le bureau virtuel voisin (défaut d'openbox : 400 ms).
+            if mouse is not None and mouse.find(f"{{{namespace}}}screenEdgeWarpTime") is None:
+                warp = ET.Element(f"{{{namespace}}}screenEdgeWarpTime")
+                warp.text = "0"
+                mouse.insert(0, warp)
+                changed = True
             # Clic droit sur le bouton Agrandir : dispositions d'ancrage (Windows + Z).
             maximize = next((item for item in mouse if item.get("name") == "Maximize"), None) if mouse is not None else None
             if maximize is not None and default_rc.is_file() and not any(item.get("button") == "Right" for item in maximize):
