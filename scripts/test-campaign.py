@@ -424,4 +424,14 @@ for language, word in (("fr", "anonymisé"), ("en", "anonymised"), ("de", "anony
     ok(word in privacy and "Wi-Fi" in privacy.replace("WLAN", "Wi-Fi"),
        f"page confidentialité ({language}) : envoi automatique documenté")
 
+# ── « Signaler un problème » : journaux de diagnostic (#458) ───────────────
+# Pour le Wi-Fi (#377, #380, #398), le son (#383) ou l'heure (#419), il fallait
+# redemander les journaux à la main.
+report_tool = (SCRIPTS / "winlux-report.py").read_text()
+ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", "update"))
+   and "/run/winlux/wpa-supplicant.log" in report_tool and '"LC_ALL": "C"' in report_tool,
+   "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
+ok("d_empty" in report_tool and "queued_reports()" in report_tool,
+   "rapport : journal vide signalé comme tel, plantages en attente listés")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
