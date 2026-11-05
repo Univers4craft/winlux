@@ -503,7 +503,48 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
                 1,
             );
         }
-        if b.text.is_empty() {
+        // Image de la liste (désactivée si elle existe et que le bouton l'est).
+        let use_disabled = !enabled
+            && s.disabled_list != 0
+            && crate::dlls::icons::list_image(s.disabled_list, b.image).is_some();
+        let list = if use_disabled {
+            s.disabled_list
+        } else {
+            s.image_list
+        };
+        let size = (list != 0 && b.image >= 0)
+            .then(|| crate::dlls::icons::list_size(list))
+            .flatten();
+        if let Some((iw, ih)) = size {
+            let x = if b.text.is_empty() {
+                (tr.left + tr.right - iw) / 2
+            } else {
+                tr.left
+            };
+            let y = if b.text.is_empty() {
+                (tr.top + tr.bottom - ih) / 2
+            } else {
+                tr.top + 3
+            };
+            let bg = (!down && !checked).then(face_color);
+            if !enabled && !use_disabled {
+                // Pas d'image grisée fournie : l'image normale, estompée.
+                if let Some(mut img) = crate::dlls::icons::list_image(list, b.image) {
+                    for px in &mut img.px {
+                        let a = (*px >> 24) * 2 / 5;
+                        let g = ((*px & 0xFF) + ((*px >> 8) & 0xFF) + ((*px >> 16) & 0xFF)) / 3;
+                        *px = (a << 24) | (g << 16) | (g << 8) | g;
+                    }
+                    crate::dlls::icons::draw(p.hdc, x, y, iw, ih, &img, bg);
+                }
+            } else {
+                crate::dlls::icons::draw_list_image(list, b.image, p.hdc, x, y, bg);
+            }
+            if !b.text.is_empty() {
+                let below = Rect { top: y + ih, ..tr };
+                p.text(below, &b.text, color, 1);
+            }
+        } else if b.text.is_empty() {
             // Pas d'image affichable : petit repère pour que le bouton se voie.
             let cx = (tr.left + tr.right) / 2;
             let cy = (tr.top + tr.bottom) / 2;
@@ -522,6 +563,38 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             );
         }
     }
+}
+
+/// Image d'un TBADDBITMAP : HBITMAP (hInst nul) ou ressource bitmap. La
+/// couleur du coin haut-gauche sert de fond transparent, comme les bandes
+/// classiques des barres d'outils.
+fn tb_bitmap_image(inst: usize, id: usize) -> Option<crate::dlls::icons::Image> {
+    const HINST_COMMCTRL: usize = usize::MAX;
+    if inst == HINST_COMMCTRL {
+        return None;
+    }
+    let mut img = if inst == 0 {
+        let (w, h, px, alpha) = gui::bitmap_pixels(id)?;
+        let px = if alpha {
+            px
+        } else {
+            px.iter().map(|p| p | 0xFF00_0000).collect()
+        };
+        crate::dlls::icons::Image { w, h, px }
+    } else {
+        crate::dlls::icons::load_bitmap_resource(inst, id)?
+    };
+    let has_alpha = img.px.iter().any(|p| p >> 24 != 0xFF);
+    if !has_alpha {
+        if let Some(&key) = img.px.first() {
+            for p in &mut img.px {
+                if *p == key {
+                    *p = 0;
+                }
+            }
+        }
+    }
+    Some(img)
 }
 
 fn hit_button(hwnd: usize, s: &BarState, x: i32, y: i32) -> Option<usize> {
@@ -772,12 +845,35 @@ unsafe fn toolbar_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
             index_of(&s, wp as i32).map_or(-1, |i| s.buttons[i].state as isize)
         }
         0x0413 => {
-            // TB_ADDBITMAP : index de la première image ajoutée
-            with(hwnd, |s| {
+            // TB_ADDBITMAP : index de la première image ajoutée. Les
+            // images vont dans une liste interne (cases de TB_SETBITMAPSIZE).
+            let strip = if lp != 0 {
+                let p = lp as *const usize;
+                tb_bitmap_image(*p, *p.add(1))
+            } else {
+                None
+            };
+            let (first, list, size) = with(hwnd, |s| {
                 let first = s.images;
                 s.images += wp as i32;
-                first as isize
-            })
+                if s.image_list == 0 && strip.is_some() {
+                    let (w, h) = s.bitmap;
+                    s.image_list = crate::dlls::icons::create_list(w as usize, h as usize, 0x21);
+                }
+                (first, s.image_list, s.bitmap)
+            });
+            if let (Some(img), true) = (strip, list != 0) {
+                let have = crate::dlls::icons::image_list_get_image_count(list);
+                // Garde les index alignés si des images manquaient avant.
+                for _ in have..first {
+                    crate::dlls::icons::list_add(
+                        list,
+                        crate::dlls::icons::Image::blank(size.0 as usize, size.1 as usize),
+                    );
+                }
+                crate::dlls::icons::list_add_strip(list, &img);
+            }
+            first as isize
         }
         0x0414 | 0x0444 | 0x0415 | 0x0443 => {
             // TB_ADDBUTTONSA/W (nombre, tableau), TB_INSERTBUTTONA/W (index, bouton)

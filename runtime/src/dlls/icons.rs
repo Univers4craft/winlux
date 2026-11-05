@@ -25,7 +25,7 @@ pub struct Image {
 }
 
 impl Image {
-    fn blank(w: usize, h: usize) -> Image {
+    pub fn blank(w: usize, h: usize) -> Image {
         Image {
             w,
             h,

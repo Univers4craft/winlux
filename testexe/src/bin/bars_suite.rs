@@ -30,6 +30,7 @@ extern "C" {
     fn GetWindowLongPtrA(hwnd: Handle, index: i32) -> isize;
     fn CallWindowProcA(proc_: isize, hwnd: Handle, msg: u32, wparam: usize, lparam: isize)
         -> isize;
+    fn GetAncestor(hwnd: Handle, flags: u32) -> Handle;
 }
 
 #[link(name = "kernel32", kind = "raw-dylib")]
@@ -44,6 +45,9 @@ extern "C" {
     fn ImageList_AddIcon(himl: Handle, icon: Handle) -> i32;
     fn ImageList_GetImageCount(himl: Handle) -> i32;
     fn ImageList_GetIcon(himl: Handle, i: i32, flags: u32) -> Handle;
+    fn SetWindowSubclass(hwnd: Handle, proc_: SubclassProc, id: usize, data: usize) -> i32;
+    fn RemoveWindowSubclass(hwnd: Handle, proc_: SubclassProc, id: usize) -> i32;
+    fn DefSubclassProc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn CreateToolbarEx(
         parent: Handle,
         style: u32,
@@ -83,6 +87,24 @@ static mut COMMANDS: u32 = 0;
 static mut HEIGHT_CHANGES: u32 = 0;
 static mut CREATE_OK: bool = false;
 static mut PANEL_CREATE_OK: bool = false;
+
+type SubclassProc = unsafe extern "system" fn(Handle, u32, usize, isize, usize, usize) -> isize;
+
+/// Sous-classe de test : répond 42 + données au message privé 0x8001,
+/// le reste passe à la procédure d'origine.
+unsafe extern "system" fn sub_proc(
+    hwnd: Handle,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+    _id: usize,
+    data: usize,
+) -> isize {
+    if msg == 0x8001 {
+        return 42 + data as isize;
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
+}
 /// Sous-classement du champ de la barre d'adresse, comme CMyComboBoxEdit.
 static mut EDIT_ORIG: isize = 0;
 static mut EDIT_DEPTH: u32 = 0;
@@ -550,6 +572,35 @@ pub extern "C" fn mainCRTStartup() -> ! {
             SendMessageA(LIST, 0x1003, 1, himl as isize) == 0
                 && SendMessageA(LIST, 0x1002, 1, 0) as Handle == himl,
             "LVM_SETIMAGELIST / LVM_GETIMAGELIST"
+        );
+
+        // Sous-classement comctl32 (Notepad++) et GetAncestor (Claude).
+        check!(
+            SetWindowSubclass(TOOLBAR, sub_proc, 7, 1) != 0
+                && SendMessageA(TOOLBAR, 0x8001, 0, 0) == 43,
+            "SetWindowSubclass"
+        );
+        check!(
+            SendMessageA(TOOLBAR, 0x0418, 0, 0) >= 0,
+            "DefSubclassProc rend la main au contrôle"
+        );
+        check!(
+            RemoveWindowSubclass(TOOLBAR, sub_proc, 7) != 0
+                && SendMessageA(TOOLBAR, 0x8001, 0, 0) != 43,
+            "RemoveWindowSubclass"
+        );
+        check!(
+            GetAncestor(TOOLBAR, 1) == GetParent(TOOLBAR) && !GetAncestor(TOOLBAR, 2).is_null(),
+            "GetAncestor"
+        );
+        // TB_ADDBITMAP avec une HBITMAP : la barre garde une liste d'images.
+        let mut ii = [0usize; 4];
+        GetIconInfo(icon, &mut ii);
+        let added = [0usize, ii[3]];
+        let first = SendMessageA(TOOLBAR, 0x0413, 1, added.as_ptr() as isize);
+        check!(
+            first >= 0 && !(SendMessageA(TOOLBAR, 0x0431, 0, 0) as Handle).is_null(),
+            "TB_ADDBITMAP garde l'image"
         );
 
         // CreateToolbarEx (barre d'en-tête d'un panneau de 7-Zip) : boutons
