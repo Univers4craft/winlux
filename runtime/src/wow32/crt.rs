@@ -1113,7 +1113,7 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "__pwctype_func" => raw(ret_deref, d + D_PWCTYPE_PTR),
         "_get_initial_narrow_environment" => raw(ret_deref, d + D_ENVIRON),
         "_get_initial_wide_environment" => raw(ret_deref, d + D_WENVIRON),
-        "__iob_func" => raw(ret_aux, d + D_IOB),
+        "__iob_func" | "__p__iob" => raw(ret_aux, d + D_IOB),
         "__acrt_iob_func" => raw(iob_at, 0),
         "localeconv" => raw(ret_aux, d + D_LCONV),
         "__getmainargs" => raw(getmainargs, 0),
