@@ -28,10 +28,10 @@ fn validate(c: &Compiled) {
         N.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join(if c.stage == Stage::Vertex {
-        "s.vert"
-    } else {
-        "s.frag"
+    let file = dir.join(match c.stage {
+        Stage::Vertex => "s.vert",
+        Stage::Geometry => "s.geom",
+        _ => "s.frag",
     });
     std::fs::write(&file, &c.glsl).unwrap();
     let out = std::process::Command::new(&tool)
@@ -478,6 +478,129 @@ float4 ps(V i) : SV_Target { return t.Sample(s, i.uv) * color; }
         out.status.success(),
         "{}\n{}\n{}",
         vs.glsl,
+        ps.glsl,
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// Shaders d'ANGLE vus dans Warzone 2100 (#517) : matrice par instance en
+/// entrée de VS (quatre sémantiques TEXCOORD consécutives, une colonne par
+/// registre) et PS de profondeur seule dont la structure de sortie est vide.
+#[test]
+fn matrix_inputs_and_empty_output() {
+    let vs_src = r#"
+float4x4 viewProj;
+struct VS_INPUT { float4 pos : TEXCOORD0; float4x4 model : TEXCOORD1; row_major float2x3 extra : TEXCOORD5; };
+struct VS_OUTPUT { float4 pos : SV_Position; float4x4 m : TEXCOORD0; };
+VS_OUTPUT main(VS_INPUT input) {
+    VS_OUTPUT o;
+    o.pos = mul(mul(input.pos, input.model), viewProj) + float4(input.extra[1], 0);
+    o.m = input.model;
+    return o;
+}
+"#;
+    let vs = build(vs_src, "main", "vs_5_0");
+    let names: Vec<(String, u32, u32)> = vs
+        .inputs
+        .iter()
+        .map(|e| (e.name.clone(), e.index, e.register))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("TEXCOORD".to_string(), 0, 0),
+            ("TEXCOORD".to_string(), 1, 1),
+            ("TEXCOORD".to_string(), 2, 2),
+            ("TEXCOORD".to_string(), 3, 3),
+            ("TEXCOORD".to_string(), 4, 4),
+            ("TEXCOORD".to_string(), 5, 5),
+            ("TEXCOORD".to_string(), 6, 6),
+        ]
+    );
+    // Registre 1 = colonne 0 de la matrice column_major.
+    assert!(vs.glsl.contains("[1][0] = c.y;"), "{}", vs.glsl);
+
+    let ps_src = r#"
+struct PS_INPUT { float4 pos : SV_Position; };
+struct PS_OUTPUT { };
+PS_OUTPUT generateOutput() { PS_OUTPUT output; return output; }
+PS_OUTPUT main(PS_INPUT input) { if (input.pos.x < 0) discard; return generateOutput(); }
+"#;
+    let ps = build(ps_src, "main", "ps_5_0");
+    assert!(ps.outputs.is_empty());
+}
+
+/// Geometry shader d'ANGLE (#520) : sommet provoquant en dernier pour les
+/// varyings nointerpolation, flux TriangleStream. Les trois étages doivent
+/// se lier.
+#[test]
+fn angle_geometry_shader() {
+    let io = r#"
+struct VS_OUTPUT { float4 dx_Position : SV_Position; float4 gl_Position : TEXCOORD2; nointerpolation uint4 v0 : TEXCOORD0; nointerpolation int v1 : TEXCOORD1; float2 uv : TEXCOORD3; };
+"#;
+    let vs_src = format!(
+        "{io}VS_OUTPUT main(float3 p : TEXCOORD0, uint4 t : TEXCOORD1) {{ VS_OUTPUT o = (VS_OUTPUT)0; o.dx_Position = float4(p, 1); o.gl_Position = o.dx_Position; o.v0 = t; o.v1 = (int)t.x; o.uv = p.xy; return o; }}"
+    );
+    let gs_src = r#"
+struct GS_INPUT { float4 dx_Position : SV_Position; float4 gl_Position : TEXCOORD2; nointerpolation uint4 v0 : TEXCOORD0; nointerpolation int v1 : TEXCOORD1; float2 uv : TEXCOORD3; };
+typedef GS_INPUT GS_OUTPUT;
+void copyVertex(inout GS_OUTPUT output, GS_INPUT input, GS_INPUT flatinput)
+{
+    output.gl_Position = input.gl_Position;
+    output.v0 = flatinput.v0;
+    output.v1 = flatinput.v1;
+    output.uv = input.uv;
+    output.dx_Position = input.dx_Position;
+}
+[maxvertexcount(3)]
+void main(triangle GS_INPUT input[3], inout TriangleStream<GS_OUTPUT> outStream)
+{
+    GS_OUTPUT output = (GS_OUTPUT)0;
+    int lastVertexIndex = 2;
+    for (int i = 0; i < 3; ++i)
+    {
+        copyVertex(output, input[i], input[lastVertexIndex]);
+        outStream.Append(output);
+    }
+    outStream.RestartStrip();
+}
+"#;
+    let ps_src = format!(
+        "{io}float4 main(VS_OUTPUT i) : SV_Target {{ return float4(i.v0) / 255.0 + float4(i.uv, i.v1, 1); }}"
+    );
+    let vs = build(&vs_src, "main", "vs_5_0");
+    let gs = build(gs_src, "main", "gs_5_0");
+    let ps = build(&ps_src, "main", "ps_5_0");
+    assert_eq!(gs.stage, Stage::Geometry);
+    assert!(gs.glsl.contains("layout(triangles) in;"), "{}", gs.glsl);
+    assert!(gs.glsl.contains("max_vertices = 3"), "{}", gs.glsl);
+    assert!(gs.glsl.contains("EmitVertex()"), "{}", gs.glsl);
+    assert!(gs.glsl.contains("EndPrimitive()"), "{}", gs.glsl);
+    let Some(tool) = std::env::var_os("PATH").and_then(|p| {
+        std::env::split_paths(&p)
+            .map(|d| d.join("glslangValidator"))
+            .find(|f| f.is_file())
+    }) else {
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("winlux-hlsl-gs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("s.vert"), &vs.glsl).unwrap();
+    std::fs::write(dir.join("s.geom"), &gs.glsl).unwrap();
+    std::fs::write(dir.join("s.frag"), &ps.glsl).unwrap();
+    let out = std::process::Command::new(&tool)
+        .arg("-l")
+        .arg(dir.join("s.vert"))
+        .arg(dir.join("s.geom"))
+        .arg(dir.join("s.frag"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "{}\n{}\n{}\n{}",
+        vs.glsl,
+        gs.glsl,
         ps.glsl,
         String::from_utf8_lossy(&out.stdout)
     );

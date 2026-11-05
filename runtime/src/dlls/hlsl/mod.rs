@@ -1,4 +1,4 @@
-//! Compilateur HLSL maison (modèles 4 et 5, vertex et pixel shaders) :
+//! Compilateur HLSL maison (modèles 4 et 5, vertex, geometry et pixel shaders) :
 //! préprocesseur, analyse, puis génération de GLSL 4.30 aux conventions de
 //! la traduction DXBC (`dxbc.rs`). `D3DCompile` range le résultat dans un
 //! conteneur DXBC (chunks `SHEX`, `ISGN`, `OSGN`, `WLGL` pour le GLSL et
@@ -31,6 +31,7 @@ pub(crate) fn stage_of(target: &str) -> Result<Stage, String> {
     match target.get(..3) {
         Some("vs_") => Ok(Stage::Vertex),
         Some("ps_") => Ok(Stage::Pixel),
+        Some("gs_") => Ok(Stage::Geometry),
         _ => Err(format!("cible « {target} » non prise en charge")),
     }
 }

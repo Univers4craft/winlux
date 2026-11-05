@@ -78,8 +78,14 @@ static const char hlsl[] =
     "Texture2D tex : register(t0);\n"
     "SamplerState smp : register(s0);\n"
     "float4 teinte(float4 c) { return c * tint; }\n"
+    "[maxvertexcount(3)]\n"
+    "void gs_main(triangle VSOut v[3], inout TriangleStream<VSOut> st) {\n"
+    "    for (int k = 0; k < 3; k++) st.Append(v[k]);\n"
+    "    st.RestartStrip();\n"
+    "}\n"
+    "Texture2DArray texa : register(t1);\n"
     "float4 ps_main(VSOut i) : SV_Target {\n"
-    "    return teinte(tex.Sample(smp, i.uv));\n"
+    "    return teinte(tex.Sample(smp, i.uv)) * texa.Sample(smp, float3(i.uv, 1));\n"
     "}\n";
 
 static void *compile(const char *entry, const char *target, int fail) {
@@ -159,6 +165,15 @@ void entry(void) {
     // force la réduction : sans la limite, le niveau 1 (vide) serait lu.
     u32 srvd[4] = {28, 4 /* TEXTURE2D */, 0 /* MostDetailedMip */, 1 /* MipLevels */};
     if (CALL(dev, 7, CreateView, tex, srvd, &srv) < 0) ExitProcess(5);
+    // Tableau de 2 tranches en BC1 (#519) : tranche 0 noire, tranche 1
+    // blanche ; le pixel shader lit la tranche 1. Sans tableau ni format
+    // compressé, la texture est incomplète et tout devient noir.
+    static const u16 bc_black[4] = {0x0000, 0x0000, 0, 0}, bc_white[4] = {0xFFFF, 0xFFFF, 0, 0};
+    TexDesc ad = {4, 4, 1, 2, 71 /* BC1_UNORM */, 1, 0, 0, 0x8, 0, 0};
+    Init ai[2] = {{bc_black, 8, 0}, {bc_white, 8, 0}};
+    void *texa = 0, *srva = 0;
+    if (CALL(dev, 5, CreateTex, &ad, ai, &texa) < 0 || !texa) ExitProcess(45);
+    if (CALL(dev, 7, CreateView, texa, 0, &srva) < 0 || !srva) ExitProcess(46);
     u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0x3F800000 /* MinLOD 1 */, 0x7F7FFFFF};
     if (CALL(dev, 23, CreateState, sdesc, &smp) < 0 || !smp) ExitProcess(6);
 
@@ -187,6 +202,11 @@ void entry(void) {
     void *vs = 0, *ps = 0, *il = 0;
     if (CALL(dev, 12, CreateShader, vs_blob, vs_len, 0, &vs) < 0) ExitProcess(10);
     if (CALL(dev, 15, CreateShader, ps_blob, ps_len, 0, &ps) < 0) ExitProcess(11);
+    // Geometry shader HLSL de passage (#520) : le quad doit être identique.
+    void *gsb = compile("gs_main", "gs_5_0", 32), *gs = 0;
+    void *gs_blob = ((BlobPtr)VT(gsb, 3))(gsb);
+    u64 gs_len = ((BlobSize)VT(gsb, 4))(gsb);
+    if (CALL(dev, 13, CreateShader, gs_blob, gs_len, 0, &gs) < 0 || !gs) ExitProcess(33);
     InputElem le[] = {{"POSITION", 0, 16 /* R32G32_FLOAT */, 0, 0, 0, 0}, {"TEXCOORD", 0, 16, 0, 0xFFFFFFFF, 0, 0}};
     if (CALL(dev, 11, CreateIL, le, 2, vs_blob, vs_len, &il) < 0) ExitProcess(12);
 
@@ -218,9 +238,11 @@ void entry(void) {
     CALL(ctx, 24, SetU32, 4 /* TRIANGLELIST */);
     CALL(ctx, 11, SetShader, vs, 0, 0);
     CALL(ctx, 9, SetShader, ps, 0, 0);
+    CALL(ctx, 23, SetShader, gs, 0, 0);
     CALL(ctx, 7, SetArray, 0, 1, &mbuf);  // VSSetConstantBuffers b0
     CALL(ctx, 16, SetArray, 1, 1, &cbuf); // PSSetConstantBuffers b1
-    CALL(ctx, 8, SetArray, 0, 1, &srv);
+    void *srvs[2] = {srv, srva};
+    CALL(ctx, 8, SetArray, 0, 2, srvs);
     CALL(ctx, 10, SetArray, 0, 1, &smp);
     CALL(ctx, 12, DrawIndexed, 6, 0, 0);
 
