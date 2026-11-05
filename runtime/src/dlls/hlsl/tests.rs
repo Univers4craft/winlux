@@ -605,3 +605,36 @@ void main(triangle GS_INPUT input[3], inout TriangleStream<GS_OUTPUT> outStream)
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+/// SampleCmp sur une texture lue seulement par comparaison : sampler
+/// « shadow », la carte applique la ComparisonFunc (#523). Lue aussi
+/// normalement : comparaison à la main.
+#[test]
+fn sample_cmp_uses_shadow_samplers() {
+    let src = r#"
+Texture2DArray<float> cascades : register(t0);
+Texture2D<float> mixed : register(t1);
+Texture2D<float> plain : register(t2);
+SamplerComparisonState cmp : register(s0);
+SamplerState lin : register(s1);
+float4 main(float4 p : SV_Position, float3 uv : TEXCOORD0) : SV_Target {
+    uint w, h, n;
+    cascades.GetDimensions(w, h, n);
+    float a = cascades.SampleCmp(cmp, uv, 0.5);
+    float b = cascades.SampleCmpLevelZero(cmp, uv, 0.25) / w;
+    float c = mixed.SampleCmp(cmp, uv.xy, 0.5) + mixed.Sample(lin, uv.xy);
+    float d = plain.SampleCmpLevelZero(cmp, uv.xy, 0.5);
+    return float4(a, b, c, d);
+}
+"#;
+    let ps = build(src, "main", "ps_5_0");
+    assert!(
+        ps.glsl.contains("sampler2DArrayShadow t_cascades"),
+        "{}",
+        ps.glsl
+    );
+    assert!(ps.glsl.contains("sampler2D t_mixed"), "{}", ps.glsl);
+    assert!(ps.glsl.contains("sampler2DShadow t_plain"), "{}", ps.glsl);
+    assert!(ps.glsl.contains("textureGrad(t_cascades"), "{}", ps.glsl);
+    assert!(!ps.glsl.contains("w_cmp"), "{}", ps.glsl);
+}

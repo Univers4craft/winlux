@@ -113,6 +113,11 @@ pub(crate) struct Gen<'p> {
     nfunc: u32,
     /// Geometry shader : flux de sortie (genre, type des sommets).
     gs_stream: Option<(u8, Ty)>,
+    /// Textures lues autrement que par SampleCmp / GetDimensions.
+    plain_use: BTreeSet<usize>,
+    /// Textures lues par SampleCmp : (texture, repère, forme « shadow »,
+    /// forme comparée à la main). La forme est choisie à l'assemblage.
+    cmp_exprs: Vec<(usize, String, String, String)>,
 }
 
 /// Nom GLSL d'un identifiant HLSL : préfixe, et pas de « __ » (réservé).
@@ -214,6 +219,8 @@ impl<'p> Gen<'p> {
             helpers: BTreeSet::new(),
             funcs_done: HashMap::new(),
             gs_stream: None,
+            plain_use: BTreeSet::new(),
+            cmp_exprs: Vec::new(),
             protos: Vec::new(),
             defs: Vec::new(),
             body: String::new(),
@@ -1844,7 +1851,19 @@ impl<'p> Gen<'p> {
 
     // ---------- Textures ----------
 
+    /// Texture déclarée en sampler « shadow » : lue seulement par SampleCmp.
+    fn is_shadow(&self, g: usize) -> bool {
+        !self.plain_use.contains(&g) && self.cmp_exprs.iter().any(|c| c.0 == g)
+    }
+
     fn res_glsl(&mut self, r: &ResRef) -> String {
+        self.plain_use.insert(r.g);
+        self.res_name(r)
+    }
+
+    /// Nom GLSL d'une texture, sans la marquer comme lue « ordinairement »
+    /// (SampleCmp et GetDimensions marchent aussi sur un sampler shadow).
+    fn res_name(&mut self, r: &ResRef) -> String {
         self.used_res.insert(r.g);
         let n = mg("t_", &self.globals[r.g].d.name);
         match &r.idx {
@@ -2025,18 +2044,41 @@ impl<'p> Gen<'p> {
                     return Err(format!("{m} : arguments manquants"));
                 }
                 self.sampler_arg(&r, &args[0])?;
-                let t = self.res_glsl(&r);
+                let t = self.res_name(&r);
                 let uv = self.fvec(&args[1], c)?;
                 let z = self.fvec(&args[2], 1)?;
-                let fetch = if m == "SampleCmp" {
-                    format!("texture({t}, {uv})")
-                } else {
-                    format!("textureLod({t}, {uv}, 0.0)")
+                // Sampler « shadow » : la carte applique la ComparisonFunc
+                // de l'échantillonneur (#523). Si la texture sert aussi à
+                // des lectures ordinaires, comparaison à la main.
+                let lz = m != "SampleCmp";
+                let shadow = match k {
+                    TexKind::CubeArray => format!("texture({t}, {uv}, {z})"),
+                    _ => {
+                        let p = format!("vec{}({uv}, {z})", c + 1);
+                        match (lz, k) {
+                            (false, _) => format!("texture({t}, {p})"),
+                            (true, TexKind::T2D | TexKind::T1D) => {
+                                format!("textureLod({t}, {p}, 0.0)")
+                            }
+                            (true, TexKind::Cube) => {
+                                format!("textureGrad({t}, {p}, vec3(0.0), vec3(0.0))")
+                            }
+                            (true, TexKind::T1DArray) => {
+                                format!("textureGrad({t}, {p}, 0.0, 0.0)")
+                            }
+                            (true, _) => format!("textureGrad({t}, {p}, vec2(0.0), vec2(0.0))"),
+                        }
+                    }
                 };
-                Ok((
-                    format!("(({z}) <= {fetch}.x ? 1.0 : 0.0)"),
-                    Ty::Scalar(Base::Float),
-                ))
+                let fetch = if lz {
+                    format!("textureLod({t}, {uv}, 0.0)")
+                } else {
+                    format!("texture({t}, {uv})")
+                };
+                let manual = format!("(({z}) <= {fetch}.x ? 1.0 : 0.0)");
+                let marker = format!("w_cmp{}_", self.cmp_exprs.len());
+                self.cmp_exprs.push((r.g, marker.clone(), shadow, manual));
+                Ok((format!("({marker})"), Ty::Scalar(Base::Float)))
             }
             "Load" => {
                 let a = args.first().ok_or("Load : coordonnées")?;
@@ -2082,7 +2124,7 @@ impl<'p> Gen<'p> {
                 ))
             }
             "GetDimensions" => {
-                let t = self.res_glsl(&r);
+                let t = self.res_name(&r);
                 let dims: u8 = match k {
                     TexKind::Buffer | TexKind::T1D => 1,
                     TexKind::T1DArray | TexKind::T2D | TexKind::Cube => 2,
@@ -2992,9 +3034,10 @@ impl<'p> Gen<'p> {
             if let Ty::Texture(k, elem) = t {
                 let pre = vec_prefix(elem.base().unwrap_or(Base::Float));
                 let pre = if pre == "b" { "u" } else { pre };
+                let shadow = if self.is_shadow(gi) { "Shadow" } else { "" };
                 let _ = writeln!(
                     s,
-                    "layout(binding = {}) uniform {pre}sampler{} {}{arr};",
+                    "layout(binding = {}) uniform {pre}sampler{}{shadow} {}{arr};",
                     base + r,
                     k.glsl(),
                     mg("t_", &d.name)
@@ -3012,6 +3055,10 @@ impl<'p> Gen<'p> {
             s.push_str(x);
         }
         let _ = write!(s, "void main() {{\n{init}{pre}{post}}}\n");
+        for (g, marker, shadow, manual) in &self.cmp_exprs {
+            let e = if self.is_shadow(*g) { shadow } else { manual };
+            s = s.replace(marker.as_str(), e);
+        }
         Ok(Output {
             stage: self.stage,
             glsl: s,
