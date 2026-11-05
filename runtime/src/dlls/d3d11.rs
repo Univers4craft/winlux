@@ -352,7 +352,7 @@ fn create_texture2d(
         None => return std::ptr::null_mut(),
     };
 
-    let (gl_internal, gl_format, gl_type) = dxgi_format_to_gl(desc.format);
+    let (gl_internal, gl_format, gl_type) = dxgi_format_to_gl_bind(desc.format, desc.bind_flags);
 
     let mut tex = 0u32;
     unsafe {
@@ -402,36 +402,112 @@ fn create_texture2d(
     }))
 }
 
+/// Format DXGI → (format interne, format, type) OpenGL.
+///
+/// Les formats « TYPELESS » prennent le format typé de leur famille ; ceux
+/// des tampons de profondeur (R24G8, R32G8X24) restent des formats de
+/// profondeur, sinon le cadre de rendu est incomplet et rien ne se dessine.
 fn dxgi_format_to_gl(format: u32) -> (gl::GLenum, gl::GLenum, gl::GLenum) {
+    dxgi_format_to_gl_bind(format, 0)
+}
+
+/// D3D11_BIND_DEPTH_STENCIL.
+const BIND_DEPTH_STENCIL: u32 = 0x40;
+
+fn dxgi_format_to_gl_bind(format: u32, bind: u32) -> (gl::GLenum, gl::GLenum, gl::GLenum) {
+    const RGBA: u32 = 0x1908;
+    const RGB: u32 = 0x1907;
+    const RG: u32 = 0x8227;
+    const RED: u32 = 0x1903;
+    const BGRA: u32 = 0x80E1;
+    const RGBA_INT: u32 = 0x8D99;
+    const RG_INT: u32 = 0x8228;
+    const RED_INT: u32 = 0x8D94;
+    const DEPTH: u32 = 0x1902;
+    const DEPTH_STENCIL: u32 = 0x84F9;
+    const UBYTE: u32 = 0x1401;
+    const BYTE: u32 = 0x1400;
+    const USHORT: u32 = 0x1403;
+    const SHORT: u32 = 0x1402;
+    const UINT: u32 = 0x1405;
+    const INT: u32 = 0x1404;
+    const FLOAT: u32 = 0x1406;
+    const HALF: u32 = 0x140B;
+    let depth = bind & BIND_DEPTH_STENCIL != 0;
     match format {
-        DXGI_FORMAT_R8G8B8A8_UNORM => (gl::GL_RGBA8, gl::GL_RGBA, gl::GL_UNSIGNED_BYTE),
-        DXGI_FORMAT_B8G8R8A8_UNORM => (gl::GL_RGBA8, gl::GL_BGRA, gl::GL_UNSIGNED_BYTE),
-        DXGI_FORMAT_R32G32B32A32_FLOAT => (gl::GL_RGBA32F, gl::GL_RGBA, gl::GL_FLOAT),
-        DXGI_FORMAT_R32G32B32_FLOAT => (gl::GL_RGB32F, gl::GL_RGB, gl::GL_FLOAT),
-        DXGI_FORMAT_R32G32_FLOAT => (gl::GL_RG32F, gl::GL_RG, gl::GL_FLOAT),
-        DXGI_FORMAT_R32_FLOAT => (gl::GL_R32F, gl::GL_RED, gl::GL_FLOAT),
-        DXGI_FORMAT_D24_UNORM_S8_UINT => (
-            gl::GL_DEPTH24_STENCIL8,
-            gl::GL_DEPTH_STENCIL,
-            gl::GL_UNSIGNED_INT_24_8,
-        ),
-        DXGI_FORMAT_D32_FLOAT => (
-            gl::GL_DEPTH_COMPONENT32F,
-            gl::GL_DEPTH_COMPONENT,
-            gl::GL_FLOAT,
-        ),
-        _ => (gl::GL_RGBA8, gl::GL_RGBA, gl::GL_UNSIGNED_BYTE),
+        // R32G32B32A32
+        1 | 2 => (0x8814, RGBA, FLOAT),
+        3 => (0x8D70, RGBA_INT, UINT),
+        4 => (0x8D82, RGBA_INT, INT),
+        // R32G32B32
+        5 | 6 => (0x8815, RGB, FLOAT),
+        7 => (0x8D71, 0x8D98, UINT),
+        8 => (0x8D83, 0x8D98, INT),
+        // R16G16B16A16
+        9 | 10 => (0x881A, RGBA, HALF),
+        11 => (0x805B, RGBA, USHORT),
+        12 => (0x8D76, RGBA_INT, USHORT),
+        13 => (0x8F9B, RGBA, SHORT),
+        14 => (0x8D88, RGBA_INT, SHORT),
+        // R32G32
+        15 | 16 => (0x8230, RG, FLOAT),
+        17 => (0x823C, RG_INT, UINT),
+        18 => (0x823B, RG_INT, INT),
+        // R32G8X24 : profondeur 32 bits flottante + gabarit.
+        19..=22 => (0x8CAD, DEPTH_STENCIL, 0x8DAD),
+        // R10G10B10A2, R11G11B10
+        23 | 24 => (0x8059, RGBA, 0x8368),
+        25 => (0x906F, RGBA_INT, 0x8368),
+        26 => (0x8C3A, RGB, 0x8C3B),
+        // R8G8B8A8
+        27 | 28 => (gl::GL_RGBA8, RGBA, UBYTE),
+        29 => (0x8C43, RGBA, UBYTE),
+        30 => (0x8D7C, RGBA_INT, UBYTE),
+        31 => (0x8F97, RGBA, BYTE),
+        32 => (0x8D8E, RGBA_INT, BYTE),
+        // R16G16
+        33 | 34 => (0x822F, RG, HALF),
+        35 => (0x822C, RG, USHORT),
+        36 => (0x823A, RG_INT, USHORT),
+        // R32 (profondeur 32 bits flottante si liée comme telle)
+        39 if depth => (gl::GL_DEPTH_COMPONENT32F, DEPTH, FLOAT),
+        40 => (gl::GL_DEPTH_COMPONENT32F, DEPTH, FLOAT),
+        39 | 41 => (0x822E, RED, FLOAT),
+        42 => (0x8236, RED_INT, UINT),
+        43 => (0x8235, RED_INT, INT),
+        // R24G8 : profondeur 24 bits + gabarit.
+        44..=47 => (gl::GL_DEPTH24_STENCIL8, DEPTH_STENCIL, 0x84FA),
+        // R8G8
+        48 | 49 => (0x822B, RG, UBYTE),
+        50 => (0x8238, RG_INT, UBYTE),
+        // R16 (profondeur 16 bits si liée comme telle)
+        53 if depth => (0x81A5, DEPTH, USHORT),
+        55 => (0x81A5, DEPTH, USHORT),
+        53 | 54 => (0x822D, RED, HALF),
+        56 => (0x822A, RED, USHORT),
+        57 => (0x8234, RED_INT, USHORT),
+        // R8, A8
+        60 | 61 | 65 => (0x8229, RED, UBYTE),
+        62 => (0x8232, RED_INT, UBYTE),
+        // B8G8R8A8 / B8G8R8X8
+        87 | 88 | 90 | 92 => (gl::GL_RGBA8, BGRA, UBYTE),
+        91 | 93 => (0x8C43, BGRA, UBYTE),
+        _ => (gl::GL_RGBA8, RGBA, UBYTE),
     }
+}
+
+/// Format de profondeur avec gabarit (point d'attache DEPTH_STENCIL).
+pub(super) fn dxgi_has_stencil(format: u32) -> bool {
+    matches!(format, 19..=22 | 44..=47)
 }
 
 fn dxgi_format_element_size(format: u32) -> u32 {
     match format {
-        DXGI_FORMAT_R32G32B32A32_FLOAT => 16,
-        DXGI_FORMAT_R32G32B32_FLOAT => 12,
-        DXGI_FORMAT_R32G32_FLOAT => 8,
-        DXGI_FORMAT_R32_FLOAT | DXGI_FORMAT_R32_UINT => 4,
-        DXGI_FORMAT_R16_UINT => 2,
-        DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM => 4,
+        1..=4 => 16,
+        5..=8 => 12,
+        9..=22 => 8,
+        60..=65 => 1,
+        48..=59 => 2,
         _ => 4,
     }
 }
