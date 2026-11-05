@@ -92,7 +92,7 @@ CONTROL_POLICY = (
     (r"journal-(clear|rotate)", "admin"),
     (r"restore-(list|status)", "user"),
     (r"restore-(create|restore|delete)", "admin"),
-    (r"backup-(status|request|list|prune|drives|run)", "user"),
+    (r"backup-(status|request|list|prune|drives|run|set|add|remove|share|browse|versions|restore)", "user"),
     (r"session-(register|unregister|switch|logoff|list|display)", "user"),
     (r"remote-[a-z-]+", "admin"),
     (r"share-(status|list|state|ensure)", "user"),
