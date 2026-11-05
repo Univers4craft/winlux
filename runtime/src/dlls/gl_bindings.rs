@@ -407,6 +407,7 @@ pub(crate) struct GlFunctions {
         GLsizei,
     ),
     pub CopyBufferSubData: unsafe extern "C" fn(GLenum, GLenum, isize, isize, isize),
+    pub GetBufferSubData: unsafe extern "C" fn(GLenum, isize, isize, *mut c_void),
     pub TexStorage2D: unsafe extern "C" fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei),
     pub TexStorage3D: unsafe extern "C" fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei),
     pub TexSubImage3D: unsafe extern "C" fn(
@@ -942,6 +943,10 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
         CopyBufferSubData: ext!(
             "glCopyBufferSubData",
             unsafe extern "C" fn(GLenum, GLenum, isize, isize, isize)
+        ),
+        GetBufferSubData: ext!(
+            "glGetBufferSubData",
+            unsafe extern "C" fn(GLenum, isize, isize, *mut c_void)
         ),
         TexStorage2D: ext!(
             "glTexStorage2D",

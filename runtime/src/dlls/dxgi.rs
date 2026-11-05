@@ -454,6 +454,7 @@ impl GlContext {
                 }
                 return;
             }
+            crate::dlls::d3d11::FRAMES.fetch_add(1, Ordering::Relaxed);
             let first = self.presented.fetch_add(1, Ordering::Relaxed) == 0;
             if first {
                 self.describe(g, &previous, switched);
