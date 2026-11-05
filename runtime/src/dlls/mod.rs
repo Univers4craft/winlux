@@ -25,6 +25,7 @@ pub mod coremessaging;
 pub mod credentials;
 pub mod crt;
 pub mod crt_extra;
+pub mod crt_more;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -41,6 +42,7 @@ pub mod d3d_shader;
 pub mod d3dcompiler;
 pub mod dataobject;
 pub mod dbghelp;
+pub mod ddeml;
 pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
@@ -61,6 +63,7 @@ pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
+pub mod gdi32_more;
 pub mod gdi32_palette;
 pub mod gdiplus;
 pub mod gl_bindings;
@@ -115,6 +118,7 @@ pub mod quartz;
 pub mod rawinput;
 pub mod resource;
 pub mod rpcrt4;
+pub mod rtti;
 pub mod sandbox_dlls;
 pub mod schannel;
 pub mod sechost;
@@ -136,6 +140,7 @@ pub mod threadpool;
 pub mod uiautomationcore;
 pub mod user32;
 pub mod user32_ext;
+pub mod user32_more;
 pub mod userenv;
 pub mod usp10;
 pub mod uxtheme;
@@ -213,6 +218,8 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_runtime::exports());
             e.extend(crt_ucrt::exports());
             e.extend(cxx_eh::exports());
+            e.extend(rtti::exports());
+            e.extend(crt_more::exports());
             e.extend(crate::intl::api::crt_exports());
             e.extend(crt_extra::exports());
             e
@@ -225,6 +232,8 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_runtime::exports());
         ucrt.extend(crt_ucrt::exports());
         ucrt.extend(cxx_eh::exports());
+        ucrt.extend(rtti::exports());
+        ucrt.extend(crt_more::exports());
         ucrt.extend(crate::intl::api::crt_exports());
         ucrt.extend(crt_extra::exports());
         let mut all = vec![
@@ -307,6 +316,10 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(clipboard::exports());
                     e.extend(rawinput::exports());
                     e.extend(displaymode::user32_exports());
+                    e.extend(ddeml::exports());
+                    for (name, addr) in user32_more::exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e.extend(crate::intl::api::user32_exports());
                     for (name, addr) in chromium_win32::user32_exports() {
                         e.entry(name).or_insert(addr);
@@ -413,6 +426,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
+                    e.extend(gdi32_more::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
                     e.extend(displaymode::gdi32_exports());

@@ -976,6 +976,37 @@ unsafe extern "win64" fn wsopen_s(
         0
     }
 }
+/// `_wsopen_dispatch` / `_sopen_dispatch` (UCRT) : `_wsopen_s` avec le
+/// drapeau « sécurisé » en plus.
+unsafe extern "win64" fn wsopen_dispatch(
+    path: *const u16,
+    flags: i32,
+    share: i32,
+    mode: u32,
+    fd: *mut i32,
+    _secure: i32,
+) -> i32 {
+    wsopen_s(fd, path, flags, share, mode)
+}
+unsafe extern "win64" fn sopen_dispatch(
+    path: *const u8,
+    flags: i32,
+    share: i32,
+    mode: u32,
+    fd: *mut i32,
+    _secure: i32,
+) -> i32 {
+    if fd.is_null() {
+        return 22;
+    }
+    *fd = crate::dlls::crt_runtime::sopen(path, flags, share, mode);
+    if *fd < 0 {
+        *errno()
+    } else {
+        0
+    }
+}
+
 unsafe extern "win64" fn wsopen(path: *const u16, flags: i32, _share: i32, mode: u32) -> i32 {
     crate::dlls::crt_runtime::wopen(path, flags, mode)
 }
@@ -1483,6 +1514,10 @@ pub fn exports() -> crate::dlls::Exports {
         "_set_thread_local_invalid_parameter_handler" => fn set_invalid_parameter_handler,
         "_get_invalid_parameter_handler" => fn get_invalid_parameter_handler,
         "__stdio_common_vsprintf_p" => fn stdio_common_vsprintf_p,
+        // Formes « _p » (arguments positionnels %1$s) : le moteur les gère.
+        "__stdio_common_vswprintf_p" => fn crate::dlls::crt_ucrt::stdio_common_vswprintf,
+        "__stdio_common_vfprintf_p" => fn crate::dlls::crt_ucrt::stdio_common_vfprintf,
+        "__stdio_common_vfwprintf_p" => fn crate::dlls::crt_ucrt::stdio_common_vfwprintf,
         "__sys_nerr" => fn p_sys_nerr, "__sys_errlist" => fn p_sys_errlist,
         "_sys_nerr" => data SYS_NERR_DATA, "_sys_errlist" => data SYS_ERRLIST,
         "_acmdln" => data ACMDLN, "_wcmdln" => data WCMDLN, "__p__acmdln" => fn p_acmdln, "__p__wcmdln" => fn p_wcmdln,
@@ -1491,6 +1526,7 @@ pub fn exports() -> crate::dlls::Exports {
         "_timezone" => data TZ_TIMEZONE, "_daylight" => data TZ_DAYLIGHT, "_dstbias" => data TZ_DSTBIAS, "_tzname" => data TZ_NAMES,
         "_filelength" => fn filelength, "_filelengthi64" => fn filelengthi64, "_pipe" => fn pipe,
         "_wsopen_s" => fn wsopen_s, "_wsopen" => fn wsopen,
+        "_wsopen_dispatch" => fn wsopen_dispatch, "_sopen_dispatch" => fn sopen_dispatch,
         "_stat64" => fn stat64, "_wstat64" => fn wstat64, "_fstat64" => fn fstat64,
         "_stat64i32" => fn stat64i32, "_wstat64i32" => fn wstat64i32, "_fstat64i32" => fn fstat64i32,
         "_stat32i64" => fn stat32i64, "_wstat32i64" => fn wstat32i64, "_fstat32i64" => fn fstat32i64,

@@ -276,6 +276,102 @@ pub unsafe extern "win64" fn stdio_common_vsscanf(
     )
 }
 
+/// Format de scanf large → format étroit du moteur : %s, %c et %[ sans
+/// taille écrivent des wchar_t (on ajoute « l ») ; %S et %C, des char.
+pub(crate) fn wide_scan_format(fmt: &[u16]) -> Vec<u8> {
+    let b: Vec<u8> = fmt
+        .iter()
+        .map(|&c| if c < 256 { c as u8 } else { b'?' })
+        .collect();
+    let mut out = Vec::with_capacity(b.len() + 8);
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        out.push(c);
+        i += 1;
+        if c != b'%' {
+            continue;
+        }
+        if b.get(i) == Some(&b'%') {
+            out.push(b'%');
+            i += 1;
+            continue;
+        }
+        let mut sized = false;
+        while let Some(&m) = b.get(i) {
+            if m == b'*' || m.is_ascii_digit() {
+                out.push(m);
+                i += 1;
+            } else if matches!(
+                m,
+                b'h' | b'l' | b'L' | b'j' | b'z' | b't' | b'I' | b'6' | b'4'
+            ) {
+                sized = true;
+                out.push(m);
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        match b.get(i) {
+            Some(&conv @ (b's' | b'c' | b'[')) => {
+                if !sized {
+                    out.push(b'l');
+                }
+                out.push(conv);
+                i += 1;
+            }
+            Some(&b'S') => {
+                if !sized {
+                    out.push(b'h');
+                }
+                out.push(b's');
+                i += 1;
+            }
+            Some(&b'C') => {
+                if !sized {
+                    out.push(b'h');
+                }
+                out.push(b'c');
+                i += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// __stdio_common_vswscanf : le texte large passe au moteur octet par
+/// octet (Latin-1 ; au-delà, « ? »).
+pub unsafe extern "win64" fn stdio_common_vswscanf(
+    _options: u64,
+    buf: *const u16,
+    len: usize,
+    fmt: *const u16,
+    _locale: usize,
+    va: *const u64,
+) -> i32 {
+    if buf.is_null() || fmt.is_null() {
+        set_errno(EINVAL);
+        return -1;
+    }
+    let n = if len == usize::MAX {
+        crate::printf::wide_len(buf)
+    } else {
+        (0..len).position(|i| *buf.add(i) == 0).unwrap_or(len)
+    };
+    let input: Vec<u8> = std::slice::from_raw_parts(buf, n)
+        .iter()
+        .map(|&c| if c < 256 { c as u8 } else { b'?' })
+        .collect();
+    let f = wide_scan_format(std::slice::from_raw_parts(
+        fmt,
+        crate::printf::wide_len(fmt),
+    ));
+    let mut v = crate::thunks::VaList::new(va);
+    crate::dlls::crt_scan::scan(&input, &f, &mut v)
+}
+
 // ---------- Flux ----------
 
 pub unsafe extern "win64" fn wfsopen(
@@ -779,6 +875,105 @@ pub extern "win64" fn ilogbf(x: f32) -> i32 {
     }
 }
 
+// --- Noms de jours et de mois (std::time_get / time_put de msvcp140) -------------------
+
+const DAYS: [(&str, &str); 7] = [
+    ("Sun", "Sunday"),
+    ("Mon", "Monday"),
+    ("Tue", "Tuesday"),
+    ("Wed", "Wednesday"),
+    ("Thu", "Thursday"),
+    ("Fri", "Friday"),
+    ("Sat", "Saturday"),
+];
+const MONTHS: [(&str, &str); 12] = [
+    ("Jan", "January"),
+    ("Feb", "February"),
+    ("Mar", "March"),
+    ("Apr", "April"),
+    ("May", "May"),
+    ("Jun", "June"),
+    ("Jul", "July"),
+    ("Aug", "August"),
+    ("Sep", "September"),
+    ("Oct", "October"),
+    ("Nov", "November"),
+    ("Dec", "December"),
+];
+
+/// « :abrégé:complet » pour chaque nom, comme le locale « C ».
+pub(crate) fn time_names(list: &[(&str, &str)]) -> String {
+    list.iter().map(|(a, f)| format!(":{a}:{f}")).collect()
+}
+
+unsafe fn malloc_narrow(s: &str) -> *mut u8 {
+    let p = libc::malloc(s.len() + 1) as *mut u8;
+    if !p.is_null() {
+        std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
+        *p.add(s.len()) = 0;
+    }
+    p
+}
+
+unsafe fn malloc_wide(s: &str) -> *mut u16 {
+    let w: Vec<u16> = s.encode_utf16().chain([0]).collect();
+    let p = libc::malloc(w.len() * 2) as *mut u16;
+    if !p.is_null() {
+        std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+    }
+    p
+}
+
+unsafe extern "win64" fn get_days() -> *mut u8 {
+    malloc_narrow(&time_names(&DAYS))
+}
+unsafe extern "win64" fn get_months() -> *mut u8 {
+    malloc_narrow(&time_names(&MONTHS))
+}
+unsafe extern "win64" fn w_get_days() -> *mut u16 {
+    malloc_wide(&time_names(&DAYS))
+}
+unsafe extern "win64" fn w_get_months() -> *mut u16 {
+    malloc_wide(&time_names(&MONTHS))
+}
+
+/// Chaîne vide, à la fois étroite et large.
+static EMPTY: [u64; 8] = [0; 8];
+
+/// _Gettnames : bloc de données horaires opaque, libéré par free(). Seuls
+/// _Strftime et _Wcsftime le reçoivent ; chaque case pointe une chaîne vide
+/// pour qu'une lecture directe reste sans danger.
+unsafe extern "win64" fn get_tnames() -> *mut u8 {
+    const SLOTS: usize = 128;
+    let p = libc::malloc(SLOTS * 8) as *mut usize;
+    if !p.is_null() {
+        for i in 0..SLOTS {
+            *p.add(i) = EMPTY.as_ptr() as usize;
+        }
+    }
+    p as *mut u8
+}
+
+unsafe extern "win64" fn strftime_l_data(
+    buf: *mut u8,
+    max: usize,
+    fmt: *const u8,
+    t: *const crate::dlls::crt_runtime::Tm,
+    _data: usize,
+) -> usize {
+    crate::dlls::crt_runtime::strftime(buf, max, fmt, t)
+}
+
+unsafe extern "win64" fn wcsftime_l_data(
+    buf: *mut u16,
+    max: usize,
+    fmt: *const u16,
+    t: *const crate::dlls::crt_runtime::Tm,
+    _data: usize,
+) -> usize {
+    wcsftime(buf, max, fmt, t)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "__stdio_common_vsprintf" => fn stdio_common_vsprintf,
@@ -790,6 +985,7 @@ pub fn exports() -> crate::dlls::Exports {
         "__stdio_common_vfprintf" => fn stdio_common_vfprintf,
         "__stdio_common_vfwprintf" => fn stdio_common_vfwprintf,
         "__stdio_common_vsscanf" => fn stdio_common_vsscanf,
+        "__stdio_common_vswscanf" => fn stdio_common_vswscanf,
         "_wfsopen" => fn wfsopen, "_lock_file" => fn lock_file, "_unlock_file" => fn lock_file,
         "fputwc" => fn fputwc, "_flushall" => fn flushall,
         "_get_stream_buffer_pointers" => fn get_stream_buffer_pointers,
@@ -802,6 +998,9 @@ pub fn exports() -> crate::dlls::Exports {
         "wcstoul" => fn wcstoul, "_wcstoui64" => fn wcstoui64, "wcstol" => fn wcstol,
         "_wtoi" => fn wtoi, "_wtol" => fn wtoi, "_ltow_s" => fn ltow_s,
         "_wcserror_s" => fn wcserror_s, "wcsftime" => fn wcsftime,
+        "_Getdays" => fn get_days, "_Getmonths" => fn get_months, "_Gettnames" => fn get_tnames,
+        "_W_Getdays" => fn w_get_days, "_W_Getmonths" => fn w_get_months, "_W_Gettnames" => fn get_tnames,
+        "_Strftime" => fn strftime_l_data, "_Wcsftime" => fn wcsftime_l_data,
         "_seh_filter_exe" => fn seh_filter, "_seh_filter_dll" => fn seh_filter,
         "terminate" => fn terminate, "_invoke_watson" => fn invoke_watson,
         "_invalid_parameter_noinfo" => fn invalid_parameter_noinfo,
@@ -987,5 +1186,29 @@ mod tests {
             controlfp_s(&mut cw, initial, 0xFFFF_FFFF);
             assert_eq!(cw, initial);
         }
+    }
+}
+
+#[cfg(test)]
+mod time_names_tests {
+    #[test]
+    fn noms_des_jours_au_format_du_crt() {
+        let d = super::time_names(&super::DAYS);
+        assert!(d.starts_with(":Sun:Sunday:Mon:Monday"));
+        assert!(d.ends_with(":Sat:Saturday"));
+        assert_eq!(super::time_names(&super::MONTHS).matches(':').count(), 24);
+    }
+
+    #[test]
+    fn format_de_scanf_large() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            super::wide_scan_format(&w("%d %s %5c %[a-z]")),
+            b"%d %ls %5lc %l[a-z]"
+        );
+        assert_eq!(
+            super::wide_scan_format(&w("%S %hs %ls %%s")),
+            b"%hs %hs %ls %%s"
+        );
     }
 }

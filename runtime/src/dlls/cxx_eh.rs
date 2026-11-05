@@ -994,8 +994,20 @@ pub unsafe extern "win64" fn is_exception_typeof(
     0
 }
 
+thread_local! {
+    static SE_TRANSLATOR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `_set_se_translator` : traducteur des exceptions SEH en exceptions C++,
+/// propre au thread ; rend le précédent. Winlux le retient mais ne l'appelle
+/// pas encore : les exceptions matérielles restent des exceptions SEH.
+unsafe extern "win64" fn set_se_translator(f: usize) -> usize {
+    SE_TRANSLATOR.with(|t| t.replace(f))
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "_set_se_translator" => fn set_se_translator,
         "_CxxThrowException" => fn cxx_throw_exception,
         "__CxxFrameHandler3" => fn cxx_frame_handler3,
         "__CxxFrameHandler" => fn cxx_frame_handler3,
