@@ -71,8 +71,8 @@ class Inhibitors:
                 self.inhibit_file.write_text("0x80000003\n")   # ES_CONTINUOUS | SYSTEM | DISPLAY
             else:
                 self.inhibit_file.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as error:
+            print(f"Demande d'éveil non posée ({self.inhibit_file}) : {error}", file=sys.stderr, flush=True)
 
 
 def wake_screen():

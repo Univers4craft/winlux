@@ -88,11 +88,11 @@ if usable:
 {sys.executable} -B {ROOT / "scripts/winlux-screensaver-inhibit.py"} &
 for i in $(seq 1 50); do gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.freedesktop.ScreenSaver 2>/dev/null | grep -q true && break; sleep 0.1; done
 gdbus call --session -d org.freedesktop.ScreenSaver -o /org/freedesktop/ScreenSaver -m org.freedesktop.ScreenSaver.Inhibit test video
-ls {tmp / "inhibit"}
+ls {tmp / "inhibit"}; echo "env=$WINLUX_POWER_INHIBIT_DIR"
 '''
         out = subprocess.run(["dbus-run-session", "--", "sh", "-c", script], env=env, capture_output=True, text=True, timeout=60)
         assert "(uint32 1,)" in out.stdout, out.stdout + out.stderr
-        assert "screensaver" in out.stdout, out.stdout
+        assert "-screensaver" in out.stdout, out.stdout + out.stderr
         assert "xscreensaver-command -deactivate" in log.read_text()
     print("A7 : service réel sur un bus de session : Inhibit → cookie, économiseur réveillé, demande d'éveil posée")
 else:
