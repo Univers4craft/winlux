@@ -371,6 +371,24 @@ jobs:
           sudo systemctl stop smbd nmbd wsdd 2>/dev/null || true
           sudo sh scripts/test-share-clients.sh
 
+  # Wi-Fi sur radios simulées (mac80211_hwsim) avec le wpa_supplicant d'Ubuntu
+  # 26.04, celui de l'image : WPA3 en GCMP-256 tranché sans matériel.
+  wifi-hwsim:
+    name: Wi-Fi simulé (WPA3, GCMP-256)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Radios simulées, box hostapd, PC wpa_supplicant
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q hostapd wpasupplicant iw "linux-modules-extra-$(uname -r)" || sudo apt-get install -y -q hostapd wpasupplicant iw
+          sudo systemctl stop wpa_supplicant NetworkManager 2>/dev/null || true
+          set +e
+          sudo bash scripts/test-wifi-hwsim-ciphers.sh
+          code=$?
+          if test "$code" = 77; then echo "::warning::mac80211_hwsim indisponible sur ce runner : Wi-Fi simulé non vérifié"; exit 0; fi
+          exit "$code"
+
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
     name: Tests runtime (PE)
