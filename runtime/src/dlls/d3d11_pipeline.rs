@@ -872,6 +872,10 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
         let mut id = 0;
         (g.GenVertexArrays)(1, &mut id);
         v.set((context, id));
+        // Nouveau contexte : sommet provoquant en premier, comme Direct3D
+        // (attributs nointerpolation pris sur le premier sommet).
+        const GL_FIRST_VERTEX_CONVENTION: u32 = 0x8E4D;
+        (g.ProvokingVertex)(GL_FIRST_VERTEX_CONVENTION);
         // Nouveau VAO : aucun attribut n'y est encore activé.
         ENABLED.with(|e| e.set(0));
         id

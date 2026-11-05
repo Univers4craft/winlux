@@ -1354,7 +1354,10 @@ fn finish(g: Gen) -> Shader {
                         );
                     }
                     (Stage::Geometry, 1) => {
-                        let _ = writeln!(prologue, "  for (int i = 0; i < gl_in.length(); i++) {v}.{dst} = gl_in[i].gl_Position.{dst};");
+                        // Position remise dans la convention D3D (le vertex
+                        // shader l'a retournée pour OpenGL, et la sortie du
+                        // geometry shader la retourne à nouveau).
+                        let _ = writeln!(prologue, "  for (int i = 0; i < gl_in.length(); i++) {v}.{dst} = vec4(gl_in[i].gl_Position.x, -gl_in[i].gl_Position.y, (gl_in[i].gl_Position.z + gl_in[i].gl_Position.w) * 0.5, gl_in[i].gl_Position.w).{dst};");
                     }
                     _ => {
                         let loc = varying_location(&e.name, e.index);

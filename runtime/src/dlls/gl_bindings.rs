@@ -475,6 +475,7 @@ pub(crate) struct GlFunctions {
         *mut c_void,
     ),
     pub FramebufferTextureLayer: unsafe extern "C" fn(GLenum, GLenum, GLuint, GLint, GLint),
+    pub ProvokingVertex: unsafe extern "C" fn(GLenum),
     pub ClearDepth: unsafe extern "C" fn(f64),
     pub ClearStencil: unsafe extern "C" fn(GLint),
 }
@@ -1036,6 +1037,7 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
             "glFramebufferTextureLayer",
             unsafe extern "C" fn(GLenum, GLenum, GLuint, GLint, GLint)
         ),
+        ProvokingVertex: ext!("glProvokingVertex", unsafe extern "C" fn(GLenum)),
         ClearDepth: sym!("glClearDepth", unsafe extern "C" fn(f64)),
         ClearStencil: sym!("glClearStencil", unsafe extern "C" fn(GLint)),
     }

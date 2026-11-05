@@ -111,6 +111,8 @@ pub(crate) struct Gen<'p> {
     depth: usize,
     cur_ret: Ty,
     nfunc: u32,
+    /// Geometry shader : flux de sortie (genre, type des sommets).
+    gs_stream: Option<(u8, Ty)>,
 }
 
 /// Nom GLSL d'un identifiant HLSL : préfixe, et pas de « __ » (réservé).
@@ -211,6 +213,7 @@ impl<'p> Gen<'p> {
             pairs: Vec::new(),
             helpers: BTreeSet::new(),
             funcs_done: HashMap::new(),
+            gs_stream: None,
             protos: Vec::new(),
             defs: Vec::new(),
             body: String::new(),
@@ -351,6 +354,9 @@ impl<'p> Gen<'p> {
                 format!("{}{dims}", self.tyname(t)?)
             }
             Ty::Struct(i) => self.struct_name(*i),
+            // Le flux d'un geometry shader n'a pas de valeur : un entier
+            // factice le représente, Append appelle w_append.
+            Ty::Stream(..) => "int".into(),
             Ty::Texture(..) | Ty::Sampler(_) => {
                 return Err("ressource utilisée comme valeur".into());
             }
@@ -364,6 +370,7 @@ impl<'p> Gen<'p> {
 
     fn zero(&self, t: &Ty) -> R<String> {
         Ok(match t {
+            Ty::Stream(..) => "0".into(),
             Ty::Scalar(b) => match b {
                 Base::Bool => "false".into(),
                 Base::Int => "0".into(),
@@ -461,6 +468,11 @@ impl<'p> Gen<'p> {
                 .map_or("struct".into(), |s| s.name.clone()),
             Ty::Texture(k, _) => format!("Texture{}", k.glsl()),
             Ty::Sampler(_) => "SamplerState".into(),
+            Ty::Stream(k, t) => format!(
+                "{}<{}>",
+                ["PointStream", "LineStream", "TriangleStream"][(*k).min(2) as usize],
+                self.show(t)
+            ),
         }
     }
 
@@ -1938,6 +1950,19 @@ impl<'p> Gen<'p> {
     }
 
     fn method(&mut self, v: V, m: &str, args: &[Expr]) -> R<(String, Ty)> {
+        // Flux d'un geometry shader : Append et RestartStrip (#520).
+        if let V::E(_, Ty::Stream(_, t)) = &v {
+            return match m {
+                "Append" => {
+                    let a = args.first().ok_or("Append : sommet manquant")?;
+                    let (x, xt) = self.rv(a)?;
+                    let x = self.conv(&x, &xt, t)?;
+                    Ok((format!("w_append({x})"), Ty::Void))
+                }
+                "RestartStrip" => Ok(("EndPrimitive()".into(), Ty::Void)),
+                _ => Err(format!("méthode « {m} » d'un flux inconnue")),
+            };
+        }
         let V::Res(r) = v else {
             return Err(format!("méthode « {m} » sur une valeur"));
         };
@@ -2389,6 +2414,13 @@ impl<'p> Gen<'p> {
             .position(|f| f.name == entry && f.body.is_some())
             .ok_or_else(|| format!("point d'entrée « {entry} » introuvable"))?;
         let f = &p.funcs[fi];
+        let gs = self.stage == Stage::Geometry;
+        if gs {
+            self.gs_stream = f.params.iter().find_map(|prm| match &prm.ty {
+                Ty::Stream(k, t) => Some((*k, (**t).clone())),
+                _ => None,
+            });
+        }
         let key = format!("{fi}");
         let (fname, _) = self.gen_func(fi, &key, &[])?;
 
@@ -2430,12 +2462,37 @@ impl<'p> Gen<'p> {
         let mut args = Vec::new();
         let mut in_els = Vec::new();
         let mut out_els = Vec::new();
+        // Geometry shader : primitive d'entrée et sommets reçus.
+        let mut gs_prim: Option<String> = None;
+        let mut gs_vertices: Vec<Vec<El>> = Vec::new();
         for (k, prm) in f.params.iter().enumerate() {
             let n = format!("p{k}");
             let tn = self.tyname(&prm.ty)?;
             let _ = writeln!(pre, "  {tn} {n};");
             args.push(n.clone());
             let sem = prm.semantic.as_deref().map(split_semantic);
+            if gs {
+                if let Ty::Stream(..) = prm.ty {
+                    let _ = writeln!(pre, "  {n} = 0;");
+                    continue;
+                }
+                if let (Some(pr), Ty::Array(e, count)) = (&prm.prim, &prm.ty) {
+                    gs_prim = Some(pr.clone());
+                    for i in 0..*count {
+                        let mut v = Vec::new();
+                        self.flatten_io(
+                            e,
+                            sem.clone(),
+                            format!("{n}[{i}]"),
+                            prm.interp.flat,
+                            false,
+                            &mut v,
+                        )?;
+                        gs_vertices.push(v);
+                    }
+                    continue;
+                }
+            }
             if prm.dir != Dir::Out {
                 self.flatten_io(
                     &prm.ty,
@@ -2560,6 +2617,68 @@ impl<'p> Gen<'p> {
             });
         }
 
+        // Sommets d'entrée d'un geometry shader : gl_in[i] pour la
+        // position (remise dans la convention D3D), varyings en tableaux.
+        let mut gs_declared = BTreeSet::new();
+        for (i, els) in gs_vertices.iter().enumerate() {
+            for (j, e) in els.iter().enumerate() {
+                let b =
+                    e.ty.base()
+                        .ok_or_else(|| format!("{} : entrée non numérique", e.path))?;
+                let n =
+                    e.ty.comps()
+                        .ok_or_else(|| format!("{} : entrée matricielle", e.path))?;
+                let mut sv = 0;
+                let src: (String, Ty) = if e.name == "SV_POSITION" {
+                    sv = 1;
+                    let q = format!("gl_in[{i}].gl_Position");
+                    (
+                        format!("vec4({q}.x, -{q}.y, ({q}.z + {q}.w) * 0.5, {q}.w)"),
+                        Ty::Vector(Base::Float, 4),
+                    )
+                } else {
+                    let loc = varying_location(&e.name, e.index);
+                    let flat = e.flat || b != Base::Float;
+                    if gs_declared.insert(loc) {
+                        let _ = writeln!(
+                            io,
+                            "layout(location = {loc}) {}in vec4 varyin{loc}[];",
+                            if flat { "flat " } else { "" }
+                        );
+                    }
+                    let v = format!("varyin{loc}[{i}]");
+                    match b {
+                        Base::Float => (v, Ty::Vector(Base::Float, 4)),
+                        Base::Int => (format!("floatBitsToInt({v})"), Ty::Vector(Base::Int, 4)),
+                        _ => (format!("floatBitsToUint({v})"), Ty::Vector(Base::Uint, 4)),
+                    }
+                };
+                let val = self.conv(&src.0, &src.1, &e.ty.with_base(src.1.base().unwrap_or(b)))?;
+                let val = self.conv(&val, &e.ty.with_base(src.1.base().unwrap_or(b)), &e.ty)?;
+                let _ = writeln!(pre, "  {} = {val};", e.path);
+                if i == 0 {
+                    inputs.push(SigElement {
+                        name: e.name.clone(),
+                        index: e.index,
+                        system_value: sv,
+                        component_type: ct_of(b),
+                        register: j as u32,
+                        mask: ((1u32 << n) - 1) as u8,
+                    });
+                }
+            }
+        }
+
+        // Geometry shader : les sorties sont celles des sommets du flux,
+        // écrites par w_append(sommet) puis EmitVertex().
+        let mut call_post = None;
+        if gs {
+            if let Some((_, t)) = self.gs_stream.clone() {
+                call_post = Some(std::mem::take(&mut post));
+                self.flatten_io(&t, None, "a".into(), false, false, &mut out_els)?;
+            }
+        }
+
         // Sorties.
         let mut reg = 0u32;
         let mut clip = 0u32;
@@ -2588,7 +2707,7 @@ impl<'p> Gen<'p> {
             let mut sv = 0;
             let mut r = reg;
             match (self.stage, e.name.as_str()) {
-                (Stage::Vertex, "SV_POSITION") => {
+                (Stage::Vertex | Stage::Geometry, "SV_POSITION") => {
                     sv = 1;
                     let v = self
                         .conv(p, &e.ty, &Ty::Vector(Base::Float, 4))
@@ -2599,7 +2718,7 @@ impl<'p> Gen<'p> {
                         "  gl_Position = vec4(pos.x, -pos.y, pos.z * 2.0 - pos.w, pos.w);"
                     );
                 }
-                (Stage::Vertex, "SV_CLIPDISTANCE") => {
+                (Stage::Vertex | Stage::Geometry, "SV_CLIPDISTANCE") => {
                     sv = 2;
                     for k in 0..n {
                         let c = if n == 1 {
@@ -2611,8 +2730,18 @@ impl<'p> Gen<'p> {
                         clip += 1;
                     }
                 }
-                (Stage::Vertex, "SV_CULLDISTANCE") => sv = 3,
-                (Stage::Vertex, _) => {
+                (Stage::Vertex | Stage::Geometry, "SV_CULLDISTANCE") => sv = 3,
+                (Stage::Geometry, "SV_RENDERTARGETARRAYINDEX") => {
+                    sv = 4;
+                    let v = self.conv(p, &e.ty, &Ty::Scalar(Base::Int))?;
+                    let _ = writeln!(post, "  gl_Layer = {v};");
+                }
+                (Stage::Geometry, "SV_VIEWPORTARRAYINDEX") => {
+                    sv = 5;
+                    let v = self.conv(p, &e.ty, &Ty::Scalar(Base::Int))?;
+                    let _ = writeln!(post, "  gl_ViewportIndex = {v};");
+                }
+                (Stage::Vertex | Stage::Geometry, _) => {
                     let loc = varying_location(&e.name, e.index);
                     let flat = e.flat || b != Base::Float;
                     let _ = writeln!(
@@ -2673,6 +2802,18 @@ impl<'p> Gen<'p> {
             });
             if r == reg {
                 reg += 1;
+            }
+        }
+
+        let mut append_def = String::new();
+        if let Some(cp) = call_post {
+            let body = std::mem::replace(&mut post, cp);
+            if let Some((_, t)) = &self.gs_stream {
+                let _ = write!(
+                    append_def,
+                    "void w_append({} a) {{\n{body}  EmitVertex();\n}}\n",
+                    self.tyname(t)?
+                );
             }
         }
 
@@ -2773,12 +2914,32 @@ impl<'p> Gen<'p> {
 
         // Assemblage.
         let base = self.stage.binding_base();
-        let tag = if self.stage == Stage::Vertex {
-            "vs"
-        } else {
-            "ps"
+        let tag = match self.stage {
+            Stage::Vertex => "vs",
+            Stage::Geometry => "gs",
+            _ => "ps",
         };
         let mut s = String::from("#version 430 core\n");
+        if gs {
+            let input = match gs_prim.as_deref() {
+                Some("point") => "points",
+                Some("line") => "lines",
+                Some("lineadj") => "lines_adjacency",
+                Some("triangleadj") => "triangles_adjacency",
+                _ => "triangles",
+            };
+            let output = match self.gs_stream.as_ref().map(|s| s.0) {
+                Some(0) => "points",
+                Some(1) => "line_strip",
+                _ => "triangle_strip",
+            };
+            let _ = writeln!(s, "layout({input}) in;");
+            let _ = writeln!(
+                s,
+                "layout({output}, max_vertices = {}) out;",
+                f.max_vertex_count.max(1)
+            );
+        }
         for h in &self.helpers {
             s.push_str(match *h {
                 "mod" => {
@@ -2842,6 +3003,7 @@ impl<'p> Gen<'p> {
         }
         s.push_str(&io);
         s.push_str(&decls);
+        s.push_str(&append_def);
         for x in &self.protos {
             s.push_str(x);
             s.push('\n');

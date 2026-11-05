@@ -78,6 +78,11 @@ static const char hlsl[] =
     "Texture2D tex : register(t0);\n"
     "SamplerState smp : register(s0);\n"
     "float4 teinte(float4 c) { return c * tint; }\n"
+    "[maxvertexcount(3)]\n"
+    "void gs_main(triangle VSOut v[3], inout TriangleStream<VSOut> st) {\n"
+    "    for (int k = 0; k < 3; k++) st.Append(v[k]);\n"
+    "    st.RestartStrip();\n"
+    "}\n"
     "Texture2DArray texa : register(t1);\n"
     "float4 ps_main(VSOut i) : SV_Target {\n"
     "    return teinte(tex.Sample(smp, i.uv)) * texa.Sample(smp, float3(i.uv, 1));\n"
@@ -197,6 +202,11 @@ void entry(void) {
     void *vs = 0, *ps = 0, *il = 0;
     if (CALL(dev, 12, CreateShader, vs_blob, vs_len, 0, &vs) < 0) ExitProcess(10);
     if (CALL(dev, 15, CreateShader, ps_blob, ps_len, 0, &ps) < 0) ExitProcess(11);
+    // Geometry shader HLSL de passage (#520) : le quad doit être identique.
+    void *gsb = compile("gs_main", "gs_5_0", 32), *gs = 0;
+    void *gs_blob = ((BlobPtr)VT(gsb, 3))(gsb);
+    u64 gs_len = ((BlobSize)VT(gsb, 4))(gsb);
+    if (CALL(dev, 13, CreateShader, gs_blob, gs_len, 0, &gs) < 0 || !gs) ExitProcess(33);
     InputElem le[] = {{"POSITION", 0, 16 /* R32G32_FLOAT */, 0, 0, 0, 0}, {"TEXCOORD", 0, 16, 0, 0xFFFFFFFF, 0, 0}};
     if (CALL(dev, 11, CreateIL, le, 2, vs_blob, vs_len, &il) < 0) ExitProcess(12);
 
@@ -228,6 +238,7 @@ void entry(void) {
     CALL(ctx, 24, SetU32, 4 /* TRIANGLELIST */);
     CALL(ctx, 11, SetShader, vs, 0, 0);
     CALL(ctx, 9, SetShader, ps, 0, 0);
+    CALL(ctx, 23, SetShader, gs, 0, 0);
     CALL(ctx, 7, SetArray, 0, 1, &mbuf);  // VSSetConstantBuffers b0
     CALL(ctx, 16, SetArray, 1, 1, &cbuf); // PSSetConstantBuffers b1
     void *srvs[2] = {srv, srva};
