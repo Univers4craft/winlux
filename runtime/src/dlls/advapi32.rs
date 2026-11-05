@@ -1449,7 +1449,7 @@ pub fn exports() -> crate::dlls::Exports {
      "RegCreateKeyA"=>fn reg_create_key_a,"RegCreateKeyW"=>fn reg_create_key_w,
      "RegOpenCurrentUser"=>fn reg_open_current_user,"RegOpenUserClassesRoot"=>fn reg_open_user_classes_root,
      "RegCloseKey"=>fn reg_close_key,"RegFlushKey"=>fn reg_flush_key,
-     "RegDisablePredefinedCache"=>fn reg_success_stub,"RegDisablePredefinedCacheEx"=>fn reg_success_stub,
+     "RegDisablePredefinedCache"=>fn reg_success_stub,"RegSetKeySecurity"=>fn reg_success_stub,"RegDisablePredefinedCacheEx"=>fn reg_success_stub,
      "RegSetValueExA"=>fn reg_set_value_ex_a,"RegSetValueExW"=>fn reg_set_value_ex_w,
      "RegSetValueA"=>fn reg_set_value_a,"RegSetValueW"=>fn reg_set_value_w,
      "RegSetKeyValueA"=>fn reg_set_key_value_a,"RegSetKeyValueW"=>fn reg_set_key_value_w,

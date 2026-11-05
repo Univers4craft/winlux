@@ -965,8 +965,14 @@ pub unsafe extern "win64" fn get_final_path_name_by_handle_w(
     wide.len() as u32
 }
 
+/// SetProcessDEPPolicy : la DEP est toujours active sous Linux (NX).
+pub extern "win64" fn set_process_dep_policy(_flags: u32) -> i32 {
+    1
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "SetProcessDEPPolicy" => fn set_process_dep_policy,
         "GetErrorMode" => fn get_error_mode, "SetErrorMode" => fn set_error_mode,
         "GetThreadErrorMode" => fn get_thread_error_mode, "SetThreadErrorMode" => fn set_thread_error_mode,
         "WerGetFlags" => fn wer_get_flags, "WerSetFlags" => fn wer_set_flags,

@@ -128,4 +128,14 @@ if test -f "$dir/display_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-display-mode.sh"
 fi
 
+# GDI+ en API plate : dessin, texte, LockBits, PNG, HBITMAP (#493), bloquant.
+if test -f "$dir/gdiplus_suite.exe"; then
+    set +e
+    WINLUX_GUI=headless "$runtime" "$dir/gdiplus_suite.exe" >"$work/gdiplus.txt" 2>&1
+    gdiplus_status=$?
+    set -e
+    cat "$work/gdiplus.txt"
+    test "$gdiplus_status" -eq 0 || { echo "gdiplus_suite.exe : le test n° $gdiplus_status a échoué" >&2; exit 1; }
+fi
+
 echo "Tests MinGW réussis."

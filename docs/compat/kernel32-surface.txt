@@ -544,6 +544,7 @@ RegQueryInfoKeyA
 RegQueryInfoKeyW
 RegQueryValueExA
 RegQueryValueExW
+RegSetKeySecurity
 RegSetValueExA
 RegSetValueExW
 RegisterApplicationRestart
@@ -617,6 +618,7 @@ SetLocalTime
 SetNamedPipeHandleState
 SetPriorityClass
 SetProcessAffinityMask
+SetProcessDEPPolicy
 SetProcessInformation
 SetProcessMitigationPolicy
 SetProcessPriorityBoost

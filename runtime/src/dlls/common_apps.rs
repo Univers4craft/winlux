@@ -693,6 +693,13 @@ unsafe extern "win64" fn alpha_blend(
         }
     }
     let img = img.scaled(wd as usize, hd as usize);
+    blend_image(dst, xd, yd, &img) as i32
+}
+
+/// Fond une image (COLORREF + alpha non prémultiplié) dans un DC : dans la
+/// bitmap mémoire sélectionnée, ou à l'écran.
+pub(crate) fn blend_image(dst: usize, xd: i32, yd: i32, img: &Image) -> bool {
+    let (wd, hd) = (img.w as i32, img.h as i32);
     if gui::dc_bitmap(dst) != 0 {
         let rect = Rect {
             left: xd,
@@ -714,10 +721,10 @@ unsafe extern "win64" fn alpha_blend(
                     pixels,
                     rop: gui::RasterOp::Copy,
                 },
-            ) as i32;
+            );
         }
     }
-    icons::draw(dst, xd, yd, wd, hd, &img, None) as i32
+    icons::draw(dst, xd, yd, wd, hd, img, None)
 }
 
 fn mix(s: u32, d: u32, a: u32) -> u32 {

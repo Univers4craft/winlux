@@ -38,6 +38,14 @@ pub unsafe extern "win64" fn GetThemeColor(
 pub unsafe extern "win64" fn GetThemeSysColor(_theme: usize, _id: i32) -> u32 {
     0
 }
+/// Les fonds de thème de Winlux sont opaques.
+pub unsafe extern "win64" fn IsThemeBackgroundPartiallyTransparent(
+    _theme: usize,
+    _part: i32,
+    _state: i32,
+) -> i32 {
+    0
+}
 pub unsafe extern "win64" fn IsThemePartDefined(_theme: usize, _part: i32, _state: i32) -> i32 {
     0
 }
@@ -119,6 +127,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetThemeSysColor" => fn GetThemeSysColor,
         "GetThemeSysFont" => fn GetThemeSysFont,
         "IsThemePartDefined" => fn IsThemePartDefined,
+        "IsThemeBackgroundPartiallyTransparent" => fn IsThemeBackgroundPartiallyTransparent,
         "SetWindowTheme" => fn SetWindowTheme,
         "GetThemePartSize" => fn GetThemePartSize,
         "DrawThemeText" => fn DrawThemeText,

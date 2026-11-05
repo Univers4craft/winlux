@@ -62,6 +62,7 @@ pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_palette;
+pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
 pub mod gpu_caps;
@@ -131,6 +132,7 @@ pub mod spirv;
 pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
+pub mod uiautomationcore;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -382,6 +384,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mscoree",
                 exports: mscoree::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "uiautomationcore",
+                exports: uiautomationcore::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "gdiplus",
+                exports: gdiplus::exports(),
                 handle: fake_module(),
             },
             Builtin {

@@ -65,6 +65,13 @@ pub unsafe extern "win64" fn MiniDumpWriteDump(
 pub unsafe extern "win64" fn ImageNtHeader(_base: usize) -> usize {
     0
 }
+/// Chemin de recherche des symboles : Winlux ne charge pas de .pdb.
+pub unsafe extern "win64" fn SymSetSearchPath(_proc: usize, _path: *const u8) -> i32 {
+    1
+}
+pub unsafe extern "win64" fn SymRefreshModuleList(_proc: usize) -> i32 {
+    1
+}
 pub unsafe extern "win64" fn SymInitializeW(_proc: usize, _path: *const u16, _invade: i32) -> i32 {
     1
 }
@@ -145,6 +152,8 @@ pub fn exports() -> crate::dlls::Exports {
         "SymInitialize" => fn SymInitialize,
         "SymInitializeW" => fn SymInitializeW,
         "SymCleanup" => fn SymCleanup,
+        "SymSetSearchPath" => fn SymSetSearchPath,
+        "SymRefreshModuleList" => fn SymRefreshModuleList,
         "SymGetOptions" => fn SymGetOptions,
         "SymSetOptions" => fn SymSetOptions,
         "StackWalk64" => fn StackWalk64,
