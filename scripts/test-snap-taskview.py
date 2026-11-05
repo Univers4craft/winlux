@@ -100,6 +100,50 @@ with tempfile.TemporaryDirectory() as folder:
     tree.write(user)
     namespace_globals["migrate_openbox"](user, shipped)
     assert "XF86MonBrightnessDown" not in bindings(user), "raccourci supprimé par l'utilisateur rétabli"
+# Bureaux virtuels (#459) : fenêtre emmenée sur le bureau voisin, bouton
+# Vue des tâches après Démarrer, barre limitée au bureau en cours.
+assert keys["W-C-S-Left"] == [("SendToDesktop", None)] and keys["W-C-S-Right"] == [("SendToDesktop", None)]
+right = ET.parse(shipped).getroot().find(f".//{namespace}keybind[@key='W-C-S-Right']")
+assert right.findtext(f".//{namespace}follow") == "yes" and right.findtext(f".//{namespace}to") == "right"
+assert {"W-C-S-Left", "W-C-S-Right"} <= set(namespace_globals["ADDED_KEYS"])
+panel_file = HERE.parent / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+panel_root = ET.parse(panel_file).getroot()
+order = [value.get("value") for value in panel_root.find(".//property[@name='plugin-ids']")]
+assert order[order.index("1") + 1] == "14", order
+assert panel_root.find(".//property[@name='plugin-14']/property[@name='items']/value").get("value") \
+    == "/usr/share/applications/winlux-taskview.desktop"
+assert panel_root.find(".//property[@name='plugin-2']/property[@name='all-workspaces']").get("value") == "false"
+desktop_file = (HERE.parent / "integration/native/applications/winlux-taskview.desktop").read_text(encoding="utf-8")
+for language in ("en", "es", "de"):
+    assert f"Name[{language}]=" in desktop_file and f"Comment[{language}]=" in desktop_file, language
+assert "Exec=/usr/bin/winlux-taskview\n" in desktop_file and (HERE.parent / "integration/native/taskview.svg").is_file()
+migration = {"ET": ET}
+for node in ast.parse(source).body:
+    if (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "TASKBAR_BUTTONS" for t in node.targets)) \
+            or (isinstance(node, ast.FunctionDef) and node.name == "add_taskbar_buttons"):
+        exec(compile(ast.Module([node], []), "winlux-native-config", "exec"), migration)
+old_panel = """<?xml version="1.0" encoding="UTF-8"?><channel name="xfce4-panel" version="1.0">
+<property name="panels" type="array"><value type="int" value="1"/><property name="panel-1" type="empty">
+<property name="plugin-ids" type="array"><value type="int" value="3"/><value type="int" value="13"/><value type="int" value="1"/>
+<value type="int" value="2"/><value type="int" value="8"/><value type="int" value="14"/><value type="int" value="7"/></property></property></property>
+<property name="plugins" type="empty"><property name="plugin-1" type="string" value="launcher"/>
+<property name="plugin-2" type="string" value="tasklist"><property name="all-workspaces" type="bool" value="true"/></property>
+<property name="plugin-14" type="string" value="launcher"/><property name="plugin-13" type="string" value="genmon"/>
+<property name="plugin-3" type="string" value="separator"/><property name="plugin-8" type="string" value="separator"/>
+<property name="plugin-7" type="string" value="genmon"/></property></channel>"""
+with tempfile.TemporaryDirectory() as folder:
+    panel_xml, markers = Path(folder) / "xfce4-panel.xml", Path(folder) / "winlux"
+    panel_xml.write_text(old_panel)
+    assert migration["add_taskbar_buttons"](panel_xml, markers)
+    root = ET.parse(panel_xml).getroot()
+    order = [value.get("value") for value in root.find(".//property[@name='plugin-ids']")]
+    assert order == ["3", "13", "1", "15", "2", "8", "14", "7"], order  # 14 déjà pris (assistant…) : 15
+    assert root.find(".//property[@name='plugin-15']/property[@name='items']/value").get("value").endswith("winlux-taskview.desktop")
+    assert root.find(".//property[@name='all-workspaces']").get("value") == "false"
+    # Bouton retiré par l'utilisateur, barre remise sur tous les bureaux : rien ne revient.
+    panel_xml.write_text(old_panel)
+    assert not migration["add_taskbar_buttons"](panel_xml, markers)
+    assert panel_xml.read_text() == old_panel
 stage = (HERE / "stage-desktop-components.sh").read_text()
 assert "'winlux-snap.py:winlux-snap'" in stage and "'winlux-taskview.py:winlux-taskview'" in stage
 print("ancrage et vue des tâches : OK")
