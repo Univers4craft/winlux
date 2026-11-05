@@ -260,6 +260,34 @@ void entry(void) {
     // Bord du quad : la colonne 33 est dessinée, la 30 non.
     if (AT(33, 10)[2] > 5 || AT(30, 10)[2] < 250) ExitProcess(25);
     CALL(ctx, 15, Unmap, staging, 0);
+
+    // Passe « profondeur seule » comme les cascades d'ombre d'ANGLE (#530) :
+    // aucune vue couleur, une vue de profondeur sur la tranche 1 d'un
+    // tableau D32_FLOAT. Le quad (profondeur 0) doit y être écrit ; il
+    // partait dans la fenêtre et la tranche restait à 1.0.
+    TexDesc zd = {SIZE, SIZE, 1, 2, 40 /* D32_FLOAT */, 1, 0, 0, 0x40, 0, 0};
+    void *zarr = 0, *zdsv = 0, *zstaging = 0;
+    if (CALL(dev, 5, CreateTex, &zd, 0, &zarr) < 0 || !zarr) ExitProcess(50);
+    u32 zdsvd[6] = {40, 4 /* TEXTURE2DARRAY */, 0 /* Flags */, 0 /* MipSlice */, 1 /* First */, 1 /* Size */};
+    if (CALL(dev, 10, CreateView, zarr, zdsvd, &zdsv) < 0 || !zdsv) ExitProcess(51);
+    TexDesc zs = zd;
+    zs.usage = 3;
+    zs.bind = 0;
+    zs.cpu = 0x20000;
+    if (CALL(dev, 5, CreateTex, &zs, 0, &zstaging) < 0 || !zstaging) ExitProcess(52);
+    CALL(ctx, 53, ClearDS, zdsv, 1, 1.0f, 0);
+    CALL(ctx, 33, SetRT, 0, 0, zdsv);
+    CALL(ctx, 12, DrawIndexed, 6, 0, 0);
+    CALL(ctx, 47, Copy, zstaging, zarr);
+    Mapped z = {0};
+    if (CALL(ctx, 14, Map, zstaging, 1 /* tranche 1 */, 1, 0, &z) < 0 || !z.data) ExitProcess(53);
+    const float *zr = (const float *)((const u8 *)z.data + (SIZE / 2) * z.row);
+    // Moitié droite : le quad (0.0) ; moitié gauche : l'effacement (1.0).
+    if (zr[SIZE - 5] > 0.01f) ExitProcess(54);
+    if (zr[4] < 0.99f) ExitProcess(55);
+    CALL(ctx, 15, Unmap, zstaging, 1);
+    CALL(ctx, 33, SetRT, 1, &rtv, dsv);
+
     // Image copiée dans le tampon arrière puis présentée.
     CALL(ctx, 47, Copy, back, rt);
     if (CALL(swap, 8, Present, 0, 0) < 0) ExitProcess(44);
