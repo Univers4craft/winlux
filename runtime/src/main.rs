@@ -76,6 +76,14 @@ fn main() {
         }
         return;
     }
+    if exe == "--exports-kernel32" {
+        // Ce que GetProcAddress(kernel32, …) résout : la surface figée par
+        // scripts/test-kernel32-exports.py (#521).
+        for name in dlls::kernel32_surface() {
+            println!("{name}");
+        }
+        return;
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
