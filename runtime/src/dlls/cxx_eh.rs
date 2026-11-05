@@ -271,28 +271,26 @@ struct Active {
     /// Position de pile de l'appel du funclet : un déroulement qui remonte
     /// au-dessus abandonne ce `catch`.
     mark: u64,
-    /// Cadre parent du `catch` et état d'avant son `try` : tant que le
-    /// `catch` s'exécute, ce cadre est hors du `try` qui a capturé.
+    /// Cadre (établi) du `try` qui a capturé, et état d'avant ce `try` :
+    /// tant que le `catch` s'exécute, ce cadre est hors du `try`.
     frame: u64,
     state: i32,
-    /// `try` écrit dans un funclet de `catch`.
-    nested: bool,
 }
 
-/// État engagé du cadre parent `frame` par un `catch` en cours : un
-/// `throw;` qui remonte dans ce cadre ne doit plus retomber dans le `try`
-/// qui l'a capturé (#436), même sans case `UnwindHelp`.
+/// État engagé du cadre `frame` par un `catch` en cours : un `throw;` qui
+/// remonte dans ce cadre ne doit plus retomber dans le `try` qui l'a
+/// capturé (#436), même sans case `UnwindHelp` (FH4 n'en a pas).
 fn engaged_state(frame: u64) -> Option<i32> {
     ACTIVE.with(|a| {
         a.borrow()
             .iter()
-            .filter(|e| e.frame == frame && !e.nested)
+            .filter(|e| e.frame == frame)
             .map(|e| e.state)
             .min()
     })
 }
 
-/// Niveau d'état courant du cadre parent : l'état d'après l'adresse,
+/// Niveau d'état courant du cadre `frame` : l'état d'après l'adresse,
 /// borné par un `catch` engagé (case `UnwindHelp`, sinon liste des `catch`
 /// en cours).
 unsafe fn current_level(slot: Option<*mut i32>, frame: u64, ip_state: i32) -> i32 {
@@ -393,7 +391,9 @@ pub unsafe extern "win64" fn cxx_throw_exception(_obj: usize, _ti: usize) {
 /// Rappel de consolidation : exécute le `catch`, renvoie l'adresse de reprise.
 /// info : [1] cadre parent, [2] funclet, [3] état cible, [4] record d'origine,
 /// [5] CONTEXT d'origine, [6] type capturable, [7] FuncInfo (adresse),
-/// [8] base de l'image, [9] 1 si le `try` est dans un funclet de `catch`.
+/// [8] base de l'image, [9] 1 si le `try` est dans un funclet de `catch`,
+/// [10] cadre établi du `try`, [11] nombre d'adresses de reprise FH4 et
+/// [12..15] ces adresses (le funclet renvoie alors un indice).
 unsafe extern "win64" fn call_catch(rec: *mut ExceptionRecord) -> u64 {
     let r = &*rec;
     let frame = r.info[1] as u64;
@@ -409,13 +409,15 @@ unsafe extern "win64" fn call_catch(rec: *mut ExceptionRecord) -> u64 {
             rec: Box::new(orig),
             ctx: Box::new(octx),
             mark,
-            frame,
+            frame: r.info[10] as u64,
             state: r.info[3] as i32,
-            nested: r.info[9] != 0,
         })
     });
     refresh_current();
-    let cont = seh::call_funclet(funclet, frame, target);
+    let ret = seh::call_funclet(funclet, frame, target);
+    // FH4 : le funclet renvoie l'indice de l'adresse de reprise.
+    let conts = &r.info[12..12 + r.info[11].min(3)];
+    let cont = conts.get(ret as usize).map_or(ret, |&c| c as u64);
     // Fin normale du `catch` : l'objet n'est plus utilisé.
     let done = ACTIVE.with(|a| a.borrow_mut().pop());
     refresh_current();
@@ -429,7 +431,12 @@ unsafe extern "win64" fn call_catch(rec: *mut ExceptionRecord) -> u64 {
     }
     // Un `catch` du cadre parent (pas d'un `try` imbriqué dans un `catch`)
     // est terminé : le cadre retrouve son état d'après l'adresse.
-    if let (Some(fi), 0) = (FuncInfo::read(r.info[8], r.info[7]), r.info[9]) {
+    let fi = if r.info[7] != 0 {
+        FuncInfo::read(r.info[8], r.info[7])
+    } else {
+        None
+    };
+    if let (Some(fi), 0) = (fi, r.info[9]) {
         if let Some(slot) = help_slot(&fi, frame) {
             *slot = -2;
         }
@@ -464,10 +471,11 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
         if let Some((high, _)) = funclet {
             // Funclet de `catch` : objets locaux du corps du `catch`.
             let to = if target { r.info[3] as i32 } else { high };
-            local_unwind(&fi, orig_frame, ip_state, to);
+            let from = current_level(None, frame, ip_state);
+            local_unwind(&fi, orig_frame, from, to);
             return CONTINUE_SEARCH;
         }
-        let cur = current_level(slot, orig_frame, ip_state);
+        let cur = current_level(slot, frame, ip_state);
         let to = if target { r.info[3] as i32 } else { -1 };
         local_unwind(&fi, frame, cur, to);
         if let Some(s) = slot {
@@ -482,11 +490,7 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
     if fi.try_count == 0 {
         return CONTINUE_SEARCH;
     }
-    let level = if funclet.is_none() {
-        current_level(slot, orig_frame, ip_state)
-    } else {
-        ip_state
-    };
+    let level = current_level(if funclet.is_none() { slot } else { None }, frame, ip_state);
     for i in 0..fi.try_count {
         let t = fi.try_block(i);
         if level < t.low || level > t.high {
@@ -513,7 +517,7 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
             abandon_below(frame, obj);
             let mut cr =
                 ExceptionRecord::new(STATUS_UNWIND_CONSOLIDATE, EXCEPTION_NONCONTINUABLE, 0);
-            cr.nparams = 10;
+            cr.nparams = 12;
             cr.info[0] = call_catch as *const () as usize;
             cr.info[1] = orig_frame as usize;
             cr.info[2] = h.funclet;
@@ -524,8 +528,370 @@ pub unsafe extern "win64" fn cxx_frame_handler3(
             cr.info[7] = base + rd32(d.handler_data as usize) as usize;
             cr.info[8] = base;
             cr.info[9] = funclet.is_some() as usize;
+            cr.info[10] = frame as usize;
             // Le cadre cible est celui qui capture (un funclet pour un `try`
             // imbriqué dans un `catch`) ; le funclet reçoit le cadre parent.
+            seh::unwind_from(frame, d.control_pc, &mut cr, 0, ctx);
+        }
+    }
+    CONTINUE_SEARCH
+}
+
+// --- __CxxFrameHandler4 ------------------------------------------------------------
+//
+// Tables compactes des compilateurs MSVC récents (/d2FH4, par défaut depuis
+// 2019). Sources : l'article public de l'équipe C++ de Microsoft « Making
+// C++ Exception Handling Smaller On x64 » (en-tête d'un octet, entiers à
+// longueur variable, tables sans compteur dans l'en-tête, funclets de
+// `catch` avec leurs propres tables) et l'observation des tables placées
+// dans des programmes tiers testés (Audacity, wxWidgets) :
+//
+// - entier compressé : les bits bas du premier octet donnent la longueur
+//   (x0 : 1 octet, 01 : 2, 011 : 3, 0111 : 4, 1111 : 4 octets qui suivent),
+//   la valeur est le reste, petit-boutiste ;
+// - en-tête : 0x01 funclet de `catch` (suivi du déplacement vers le cadre
+//   parent), 0x02 code séparé, 0x04 drapeaux BBT, 0x08 table des états,
+//   0x10 table des `try`, puis les RVA (32 bits) des tables présentes et
+//   celle de la table adresse → état ;
+// - table des états : compteur puis, par état, `(retour << 2) | genre`, où
+//   `retour` remonte en octets jusqu'à l'entrée de l'état suivant (avant la
+//   première entrée : -1) ; genre 1 : destructeur(cadre + déplacement),
+//   2 : destructeur(*(cadre + déplacement)), 3 : funclet de déroulement ;
+// - adresse → état : compteur puis couples (écart d'adresse cumulé depuis
+//   le début de la fonction, état + 1) ;
+// - `try` : bas, haut, haut des `catch`, RVA des gestionnaires ; chaque
+//   gestionnaire a un octet de drapeaux (0x01 adjectifs, 0x02 type,
+//   0x04 objet capturé, 0x08 reprises en RVA, bits 4-5 nombre de reprises),
+//   puis le funclet. Le funclet renvoie l'indice de la reprise.
+
+const FH4_IS_CATCH: u8 = 0x01;
+const FH4_SEPARATED: u8 = 0x02;
+const FH4_BBT: u8 = 0x04;
+const FH4_UNWIND_MAP: u8 = 0x08;
+const FH4_TRY_MAP: u8 = 0x10;
+
+struct Reader(usize);
+
+impl Reader {
+    unsafe fn byte(&mut self) -> u8 {
+        let b = *(self.0 as *const u8);
+        self.0 += 1;
+        b
+    }
+
+    unsafe fn i32(&mut self) -> i32 {
+        let v = rdi(self.0);
+        self.0 += 4;
+        v
+    }
+
+    /// Entier compressé (voir plus haut).
+    unsafe fn uint(&mut self) -> u32 {
+        let b = *(self.0 as *const u8);
+        let (len, shift) = match b {
+            _ if b & 1 == 0 => (1, 1),
+            _ if b & 3 == 1 => (2, 2),
+            _ if b & 7 == 3 => (3, 3),
+            _ if b & 15 == 7 => (4, 4),
+            _ => {
+                let v = rd32(self.0 + 1);
+                self.0 += 5;
+                return v;
+            }
+        };
+        let mut raw = 0u32;
+        for i in 0..len {
+            raw |= (*((self.0 + i) as *const u8) as u32) << (8 * i);
+        }
+        self.0 += len;
+        raw >> shift
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Unwind4 {
+    next: i32,
+    kind: u8,
+    action: usize,
+    offset: u32,
+}
+
+#[derive(Clone, Debug)]
+struct Handler4 {
+    h: Handler,
+    conts: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct Try4 {
+    low: i32,
+    high: i32,
+    handlers: Vec<Handler4>,
+}
+
+#[derive(Clone, Debug)]
+struct FuncInfo4 {
+    begin: usize,
+    disp_frame: Option<u32>,
+    unwind: Vec<Unwind4>,
+    tries: Vec<Try4>,
+    ips: Vec<(u32, i32)>,
+}
+
+/// Bornes de lecture : une table abîmée ne doit pas faire lire sans fin.
+const FH4_MAX_ENTRIES: u32 = 1 << 16;
+
+impl FuncInfo4 {
+    /// `begin` : adresse de début de la fonction (ou du funclet).
+    unsafe fn read(base: usize, p: usize, begin: usize) -> Option<FuncInfo4> {
+        let mut r = Reader(p);
+        let hdr = r.byte();
+        if hdr & FH4_SEPARATED != 0 {
+            crate::log_warn!("cxx", "FH4 : code séparé non pris en charge ({begin:#x})");
+            return None;
+        }
+        if hdr & FH4_BBT != 0 {
+            r.uint();
+        }
+        let um = (hdr & FH4_UNWIND_MAP != 0).then(|| r.i32());
+        let tm = (hdr & FH4_TRY_MAP != 0).then(|| r.i32());
+        let ip = r.i32();
+        let disp_frame = (hdr & FH4_IS_CATCH != 0).then(|| r.uint());
+        let unwind = match um {
+            Some(rva) => read_unwind4(base, base + rva as usize)?,
+            None => Vec::new(),
+        };
+        let tries = match tm {
+            Some(rva) => read_tries4(base, base + rva as usize, begin)?,
+            None => Vec::new(),
+        };
+        let mut r = Reader(base + ip as usize);
+        let n = r.uint();
+        if n > FH4_MAX_ENTRIES {
+            return None;
+        }
+        let mut ips = Vec::with_capacity(n as usize);
+        let mut at = 0u32;
+        for _ in 0..n {
+            at = at.wrapping_add(r.uint());
+            ips.push((at, r.uint() as i32 - 1));
+        }
+        Some(FuncInfo4 {
+            begin,
+            disp_frame,
+            unwind,
+            tries,
+            ips,
+        })
+    }
+
+    fn state_at(&self, pc: u64) -> i32 {
+        let off = (pc as usize).wrapping_sub(self.begin) as u32;
+        let mut state = -1;
+        for &(at, s) in &self.ips {
+            if at > off {
+                break;
+            }
+            state = s;
+        }
+        state
+    }
+}
+
+unsafe fn read_unwind4(base: usize, map: usize) -> Option<Vec<Unwind4>> {
+    let mut r = Reader(map);
+    let n = r.uint();
+    if n > FH4_MAX_ENTRIES {
+        return None;
+    }
+    let mut starts = Vec::with_capacity(n as usize);
+    let mut back = Vec::with_capacity(n as usize);
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        starts.push(r.0 - map);
+        let x = r.uint();
+        let kind = (x & 3) as u8;
+        let action = if kind != 0 {
+            base.wrapping_add(r.i32() as usize)
+        } else {
+            0
+        };
+        let offset = if kind == 1 || kind == 2 { r.uint() } else { 0 };
+        back.push((x >> 2) as usize);
+        out.push(Unwind4 {
+            next: -1,
+            kind,
+            action,
+            offset,
+        });
+    }
+    for i in 0..out.len() {
+        let target = starts[i].checked_sub(back[i]);
+        out[i].next = match target {
+            Some(t) if t >= starts[0] => starts[..i].iter().position(|&s| s == t)? as i32,
+            _ => -1,
+        };
+    }
+    Some(out)
+}
+
+unsafe fn read_tries4(base: usize, map: usize, begin: usize) -> Option<Vec<Try4>> {
+    let mut r = Reader(map);
+    let n = r.uint();
+    if n > FH4_MAX_ENTRIES {
+        return None;
+    }
+    let mut tries = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let low = r.uint() as i32;
+        let high = r.uint() as i32;
+        let _catch_high = r.uint();
+        let mut hr = Reader(base + r.i32() as usize);
+        let hn = hr.uint();
+        if hn > FH4_MAX_ENTRIES {
+            return None;
+        }
+        let mut handlers = Vec::with_capacity(hn as usize);
+        for _ in 0..hn {
+            let flags = hr.byte();
+            let adjectives = if flags & 1 != 0 { hr.uint() } else { 0 };
+            let ty = if flags & 2 != 0 { hr.i32() } else { 0 };
+            let catch_obj = if flags & 4 != 0 { hr.uint() as i32 } else { 0 };
+            let funclet = base.wrapping_add(hr.i32() as usize);
+            let conts = (0..(flags >> 4) & 3)
+                .map(|_| {
+                    if flags & 8 != 0 {
+                        base.wrapping_add(hr.i32() as usize)
+                    } else {
+                        begin + hr.uint() as usize
+                    }
+                })
+                .collect();
+            handlers.push(Handler4 {
+                h: Handler {
+                    adjectives,
+                    type_desc: if ty == 0 {
+                        0
+                    } else {
+                        base.wrapping_add(ty as usize)
+                    },
+                    catch_obj,
+                    funclet,
+                    frame_disp: 0,
+                },
+                conts,
+            });
+        }
+        tries.push(Try4 {
+            low,
+            high,
+            handlers,
+        });
+    }
+    Some(tries)
+}
+
+/// Exécute les destructeurs des états de `from` jusqu'à `to` (exclu).
+unsafe fn local_unwind4(fi: &FuncInfo4, frame: u64, from: i32, to: i32) {
+    let mut s = from;
+    while s > to && s >= 0 {
+        let Some(e) = fi.unwind.get(s as usize) else {
+            break;
+        };
+        let at = (frame as i64 + e.offset as i64) as usize;
+        match e.kind {
+            1 => {
+                let f: unsafe extern "win64" fn(usize) = std::mem::transmute(e.action);
+                f(at);
+            }
+            2 => {
+                let f: unsafe extern "win64" fn(usize) = std::mem::transmute(e.action);
+                f((at as *const usize).read_unaligned());
+            }
+            3 => {
+                let f: unsafe extern "win64" fn(u64, u64) = std::mem::transmute(e.action);
+                f(0, frame);
+            }
+            _ => {}
+        }
+        if e.next >= s {
+            break;
+        }
+        s = e.next;
+    }
+}
+
+pub unsafe extern "win64" fn cxx_frame_handler4(
+    rec: *mut ExceptionRecord,
+    frame: u64,
+    ctx: *mut u8,
+    dc: *mut DispatcherContext,
+) -> i32 {
+    let (Some(r), Some(d)) = (rec.as_mut(), dc.as_mut()) else {
+        return CONTINUE_SEARCH;
+    };
+    if d.handler_data.is_null() || d.function_entry.is_null() {
+        return CONTINUE_SEARCH;
+    }
+    let base = d.image_base as usize;
+    let info = base + rd32(d.handler_data as usize) as usize;
+    let begin = base + rd32(d.function_entry as usize) as usize;
+    let Some(fi) = FuncInfo4::read(base, info, begin) else {
+        return CONTINUE_SEARCH;
+    };
+    // Un funclet de `catch` travaille dans le cadre de sa fonction parente.
+    let orig_frame = match fi.disp_frame {
+        Some(disp) => ((frame + disp as u64) as *const u64).read_unaligned(),
+        None => frame,
+    };
+    let ip_state = fi.state_at(d.control_pc);
+    let level = current_level(None, frame, ip_state);
+
+    if r.flags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND) != 0 {
+        let target = r.flags & EXCEPTION_TARGET_UNWIND != 0
+            && r.code == STATUS_UNWIND_CONSOLIDATE
+            && r.info[0] == call_catch as *const () as usize;
+        let to = if target { r.info[3] as i32 } else { -1 };
+        local_unwind4(&fi, orig_frame, level, to);
+        return CONTINUE_SEARCH;
+    }
+    let Some((obj, ti, tbase)) = cxx_params(r) else {
+        return CONTINUE_SEARCH;
+    };
+    for t in &fi.tries {
+        if level < t.low || level > t.high {
+            continue;
+        }
+        for h4 in &t.handlers {
+            let h = &h4.h;
+            let ct = if h.type_desc == 0 || h.adjectives & HT_ALL != 0 {
+                Some(0)
+            } else {
+                find_catchable(ti, tbase, h)
+            };
+            let Some(ct) = ct else { continue };
+            if ct != 0 {
+                copy_object(obj, ct, tbase, h, orig_frame);
+            }
+            abandon_below(frame, obj);
+            let mut cr =
+                ExceptionRecord::new(STATUS_UNWIND_CONSOLIDATE, EXCEPTION_NONCONTINUABLE, 0);
+            cr.nparams = 15;
+            cr.info[0] = call_catch as *const () as usize;
+            cr.info[1] = orig_frame as usize;
+            cr.info[2] = h.funclet;
+            cr.info[3] = (t.low - 1) as usize;
+            cr.info[4] = rec as usize;
+            cr.info[5] = ctx as usize;
+            cr.info[6] = ct;
+            cr.info[7] = 0;
+            cr.info[8] = base;
+            cr.info[9] = fi.disp_frame.is_some() as usize;
+            cr.info[10] = frame as usize;
+            cr.info[11] = h4.conts.len().min(3);
+            for (i, &c) in h4.conts.iter().take(3).enumerate() {
+                cr.info[12 + i] = c;
+            }
             seh::unwind_from(frame, d.control_pc, &mut cr, 0, ctx);
         }
     }
@@ -633,6 +999,7 @@ pub fn exports() -> crate::dlls::Exports {
         "_CxxThrowException" => fn cxx_throw_exception,
         "__CxxFrameHandler3" => fn cxx_frame_handler3,
         "__CxxFrameHandler" => fn cxx_frame_handler3,
+        "__CxxFrameHandler4" => fn cxx_frame_handler4,
         "__C_specific_handler" => fn c_specific_handler,
         "__current_exception" => fn current_exception,
         "__current_exception_context" => fn current_exception_context,
@@ -647,7 +1014,7 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
 
-    fn engage(frame: u64, state: i32, nested: bool) {
+    fn engage(frame: u64, state: i32) {
         ACTIVE.with(|a| {
             a.borrow_mut().push(Active {
                 rec: Box::new(ExceptionRecord::new(CXX_EXCEPTION, 0, 0)),
@@ -655,7 +1022,6 @@ mod tests {
                 mark: 0,
                 frame,
                 state,
-                nested,
             })
         });
     }
@@ -663,11 +1029,9 @@ mod tests {
     #[test]
     fn relance_sans_case_unwind_help_sort_du_try_engage() {
         // 7-Zip (#436) : try 1-105 { } catch (...) { throw; } dans try 0-106.
-        engage(0x5000, 0, false);
-        // Un `catch` d'un autre cadre ou d'un `try` interne au funclet ne
-        // compte pas.
-        engage(0x6000, -1, false);
-        engage(0x5000, -1, true);
+        engage(0x5000, 0);
+        // Un `catch` d'un autre cadre ne compte pas.
+        engage(0x6000, -1);
         unsafe {
             assert_eq!(current_level(None, 0x5000, 42), 0);
             assert_eq!(current_level(None, 0x7000, 42), 42);
@@ -697,5 +1061,105 @@ mod tests {
             ..fi
         };
         assert_eq!(unsafe { help_slot(&none, 0x1000) }, None);
+    }
+
+    #[test]
+    fn fh4_entiers_compresses() {
+        let buf: Vec<u8> = vec![
+            0x32, // 1 octet : 0x19
+            0x4d, 0x02, // 2 octets : 0x93
+            0x0b, 0x00, 0x01, // 3 octets : 0x2001
+            0x17, 0x00, 0x00, 0x10, // 4 octets : 0x0100_0001
+            0x0f, 0x78, 0x56, 0x34, 0x12, // 5 octets : 0x1234_5678
+        ];
+        let mut r = Reader(buf.as_ptr() as usize);
+        unsafe {
+            assert_eq!(r.uint(), 0x19);
+            assert_eq!(r.uint(), 0x93);
+            assert_eq!(r.uint(), 0x2001);
+            assert_eq!(r.uint(), 0x0100_0001);
+            assert_eq!(r.uint(), 0x1234_5678);
+        }
+        assert_eq!(r.0, buf.as_ptr() as usize + buf.len());
+    }
+
+    #[test]
+    fn fh4_table_des_etats_et_retours_en_octets() {
+        // Relevé dans une bibliothèque tierce : 7 états, funclets de
+        // déroulement (genre 3) ; les états 4 à 6 reviennent à -1.
+        let map: Vec<u8> = vec![
+            0x0e, 0x0e, 0x20, 0x13, 0x48, 0x00, 0x2e, 0x40, 0x13, 0x48, 0x00, 0x2e, 0x60, 0x13,
+            0x48, 0x00, 0x2e, 0x80, 0x13, 0x48, 0x00, 0xae, 0x10, 0x13, 0x48, 0x00, 0xd6, 0x00,
+            0x13, 0x48, 0x00, 0xfe, 0xf0, 0x12, 0x48, 0x00,
+        ];
+        let u = unsafe { read_unwind4(0x1000, map.as_ptr() as usize) }.unwrap();
+        let next: Vec<i32> = u.iter().map(|e| e.next).collect();
+        assert_eq!(next, [-1, 0, 1, 2, -1, -1, -1]);
+        assert!(u.iter().all(|e| e.kind == 3));
+        assert_eq!(u[0].action, 0x1000 + 0x0048_1320);
+        // Genres 1 et 2 : destructeur et déplacement dans le cadre.
+        let map: Vec<u8> = vec![
+            0x04, 0x0a, 0xdb, 0x11, 0, 0, 0xb0, 0x34, 0x1c, 0x2b, 0, 0, 0x81, 0x03,
+        ];
+        let u = unsafe { read_unwind4(0, map.as_ptr() as usize) }.unwrap();
+        assert_eq!(
+            u,
+            [
+                Unwind4 {
+                    next: -1,
+                    kind: 1,
+                    action: 0x11db,
+                    offset: 0x58
+                },
+                Unwind4 {
+                    next: 0,
+                    kind: 2,
+                    action: 0x2b1c,
+                    offset: 0xe0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn fh4_funclet_de_catch_avec_try_et_reprises() {
+        // En-tête, tables et gestionnaires construits dans un tampon qui
+        // tient lieu d'image (RVA = position dans le tampon).
+        let mut img = vec![0u8; 0x100];
+        let put = |img: &mut Vec<u8>, at: usize, b: &[u8]| img[at..at + b.len()].copy_from_slice(b);
+        // FuncInfo4 : funclet de `catch` + états + try ; déplacement 0x38.
+        put(
+            &mut img,
+            0x00,
+            &[0x39, 0x40, 0, 0, 0, 0x50, 0, 0, 0, 0x70, 0, 0, 0, 0x70],
+        );
+        // États : 0 (-1), 1 (0), 2 (0), sans action.
+        put(&mut img, 0x40, &[0x06, 0x08, 0x08, 0x10]);
+        // try 1-1, catch jusqu'à 2, gestionnaires en 0x60.
+        put(&mut img, 0x50, &[0x02, 0x02, 0x02, 0x04, 0x60, 0, 0, 0]);
+        // catch (...) : adjectifs 0x40, funclet 0x90, deux reprises.
+        put(
+            &mut img,
+            0x60,
+            &[0x02, 0x21, 0x80, 0x90, 0, 0, 0, 0x66, 0x7a],
+        );
+        // Adresse → état : (0x1c, 1), (0x3d, 0).
+        put(&mut img, 0x70, &[0x04, 0x38, 0x04, 0x42, 0x02]);
+        let base = img.as_ptr() as usize;
+        let fi = unsafe { FuncInfo4::read(base, base, base + 0x20) }.unwrap();
+        assert_eq!(fi.disp_frame, Some(0x38));
+        let next: Vec<i32> = fi.unwind.iter().map(|e| e.next).collect();
+        assert_eq!(next, [-1, 0, 0]);
+        assert_eq!(fi.tries.len(), 1);
+        let t = &fi.tries[0];
+        assert_eq!((t.low, t.high), (1, 1));
+        let h = &t.handlers[0];
+        assert_eq!(h.h.adjectives, HT_ALL);
+        assert_eq!(h.h.funclet, base + 0x90);
+        assert_eq!(h.conts, [base + 0x20 + 0x33, base + 0x20 + 0x3d]);
+        assert_eq!(fi.ips, [(0x1c, 1), (0x3d, 0)]);
+        assert_eq!(fi.state_at((base + 0x20 + 0x10) as u64), -1);
+        assert_eq!(fi.state_at((base + 0x20 + 0x30) as u64), 1);
+        assert_eq!(fi.state_at((base + 0x20 + 0x40) as u64), 0);
     }
 }
