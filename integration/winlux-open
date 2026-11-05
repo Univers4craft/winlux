@@ -306,7 +306,7 @@ if [ -z "$kind" ]; then
     case "$reason" in
         *"32 bits"*)
             show_error "« $(basename -- "$exe") » est un programme Windows 32 bits.
-Winlux ne lance pour l’instant que les programmes 64 bits. Beaucoup d’installateurs restent en 32 bits même pour un logiciel 64 bits : la version « portable » 64 bits de l’éditeur (archive .zip), si elle existe, peut fonctionner. Rien n’a été modifié sur votre ordinateur." "$reason" ;;
+Winlux lance déjà les programmes 32 bits simples, mais celui-ci est d’une forme qu’il ne sait pas encore lancer. La version 64 bits de l’éditeur (souvent une archive .zip « portable »), si elle existe, peut fonctionner. Rien n’a été modifié sur votre ordinateur." "$reason" ;;
         *)
             show_error "Impossible d’ouvrir « $(basename -- "$exe") ».
 Ce fichier n’est pas un programme Windows que Winlux sait lancer." "${reason:-format inconnu}" ;;
