@@ -12,6 +12,7 @@ os.environ["WINLUX_REPORT_CONF"] = str(tmp / "report.conf")
 os.environ["WINLUX_REPORT_DEFAULTS"] = str(tmp / "defaults.conf")
 os.environ["WINLUX_JOURNAL_DIR"] = str(tmp / "journal")
 os.environ["WINLUX_RUN_DIR"] = str(tmp / "run")
+os.environ["WINLUX_NETWORK_LOG_DIR"] = str(tmp / "netlog")
 os.environ["XDG_STATE_HOME"] = str(tmp / "state")
 os.environ["WINLUX_PSTORE"] = str(tmp / "pstore")
 (tmp / "journal").mkdir()
@@ -158,4 +159,24 @@ for bad in ({"title": "spam", "body": "x" * 100}, {"title": "[x] titre ok", "bod
         pass
 assert all(relay["allow"]("1.2.3.4", now=1000 + i) for i in range(relay["PER_IP_HOUR"]))
 assert not relay["allow"]("1.2.3.4", now=1100) and relay["allow"]("1.2.3.4", now=1000 + 3601 + 10)
+# Journaux du réseau (#457) : joints aux signalements manuels, réseaux et
+# adresses masqués, absents d'un rapport de plantage d'un .exe.
+(tmp / "netlog").mkdir()
+(tmp / "netlog/network-manager.log").write_text(
+    "<info>  [1730800000.1] device (wlp2s0): state change: config -> need-auth\n"
+    "<warn>  [1730800001.2] device (wlp2s0): Activation: (wifi) association took too long\n")
+(tmp / "netlog/wpa-supplicant.log").write_text(
+    "1730800000.5: wlp2s0: Trying to associate with SSID 'Livebox-Voisin'\n"
+    "1730800001.0: wlp2s0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"Livebox-Voisin\" auth_failures=1 reason=WRONG_KEY\n"
+    "1730800001.1: wlp2s0: CTRL-EVENT-DISCONNECTED bssid=a4:3e:51:0c:22:9f reason=15\n")
+manual = r["Report"](None, language="fr").body("Le Wi-Fi refuse mon mot de passe", redacted=True)
+assert "Journal du réseau (NetworkManager)" in manual and "Journal du réseau (wpa_supplicant)" in manual, manual
+assert "association took too long" in manual and "reason=WRONG_KEY" in manual
+assert "Livebox-Voisin" not in manual and "a4:3e:51" not in manual, manual
+assert "Journal du réseau" not in report.body("", redacted=True), "journal du réseau joint à un plantage de .exe"
+english = r["Report"](None, language="en").body("", redacted=True)
+assert "Network log (wpa_supplicant)" in english
+services = (Path(__file__).with_name("winlux-system-services.sh")).read_text(encoding="utf-8")
+assert "wpa_supplicant -u -t -f" in services and "wpa_supplicant -u -s" not in services, "wpa_supplicant sans journal"
+assert "NetworkManager --no-daemon --debug" in services, "NetworkManager sans journal"
 print("winlux-report : tests OK")

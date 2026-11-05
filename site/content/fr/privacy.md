@@ -17,6 +17,7 @@ Le système n'envoie aucune statistique d'utilisation et ne contient aucune tél
 | Applications et paquets | dépôts Ubuntu et éditeurs des applications | adresse IP, paquets demandés | quand vous installez ou mettez à jour une application |
 | Météo des widgets | service wttr.in | adresse IP, lieu choisi | seulement après votre accord, désactivée par défaut |
 | Signaler un problème | GitHub (issue publique) | le rapport, que vous relisez avant l'envoi | seulement quand vous l'envoyez |
+| Envoi automatique des plantages | GitHub (issue publique) | programme en cause, type d'erreur, pile d'appels, extrait du journal, processeur, carte graphique, mémoire, versions ; anonymisé : ni nom d'utilisateur ou de machine, ni noms de fichiers personnels, ni mots de passe, jetons, nom de réseau Wi-Fi, adresses IP, MAC ou e-mail, ni numéros de série | au démarrage suivant le plantage, en arrière-plan ; proposé (coché) à l'installation, désactivable dans Paramètres > Signaler un problème |
 | Assistants d'IA en ligne | l'éditeur de l'assistant choisi, avec votre propre compte | vos questions et ce que vous choisissez de montrer | seulement si vous activez un assistant, désactivés par défaut |
 | IA locale | personne | rien ne quitte le PC | — |
 | Lien avec le téléphone | votre téléphone, sur le réseau local | les données échangées | seulement si vous l'associez |

@@ -37,6 +37,7 @@ Le fichier est aussi couvert par la vérification d'intégrité du média.
 | `account.password_hash` | empreinte `openssl passwd -6` (recommandé) | — |
 | `account.password` | mot de passe en clair (à éviter) | — |
 | `account.autologin` | `true` / `false` | — |
+| `account.crash_reports` | `true` / `false` : envoi automatique des plantages anonymisés (#438), `true` par défaut | — |
 | `packages` | liste de paquets APT | — |
 
 `unattended: true` exige `language`, `license_accepted: true`,

@@ -178,6 +178,9 @@ jobs:
       - name: Vérifier que l'Explorateur décode les URI file:// (xdg-open, accents, espaces)
         run: /usr/bin/python3 -B scripts/test-shell-app-uri.py
 
+      - name: Vérifier les correctifs de l'Explorateur (copie de fond, Corbeille, Bloc-notes, icônes des lignes)
+        run: python3 -B scripts/test-explorer-fixes.py
+
       - name: Vérifier la page Alimentation selon le matériel, les textes publics et le chemin de l'Explorateur
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-power-page.py
 
@@ -190,6 +193,9 @@ jobs:
 
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
+
+      - name: Vérifier l'envoi automatique des plantages (file, anonymisation, dédoublonnage)
+        run: python3 -B scripts/test-report-auto.py
 
       - name: Vérifier l'écran de verrouillage (mot de passe, inactivité, réveil)
         run: python3 -B scripts/test-lock.py
@@ -326,6 +332,7 @@ jobs:
           sh scripts/test-update-notes.sh
           python3 -B scripts/test-update-guard.py
           python3 -B scripts/test-apt-metadata.py
+          python3 -B scripts/test-update-first-boot.py
 
       - name: Clé de signature de Flathub inchangée
         # Réseau des runners : l'empreinte publiée par Flathub doit rester celle
