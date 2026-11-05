@@ -93,7 +93,7 @@ T = {
   "attach": "Ajouter à #{number}", "new": "Créer un nouveau signalement", "view": "Voir le signalement",
   "close": "Fermer", "nothing": "Aucun plantage récent à signaler.",
   "h_desc": "Description", "h_tech": "Détails techniques", "h_cause": "Cause probable", "h_machine": "Machine",
-  "h_program": "Programme", "h_stack": "Pile d'appels", "h_journal": "Dernières lignes du journal",
+  "h_program": "Programme", "h_stack": "Pile d'appels", "h_journal": "Dernières lignes du journal", "h_network": "Journal du réseau",
   "h_comment": "Nouvelle occurrence", "no_desc": "(aucune description)",
   "footer": "Rapport créé avec « Signaler un problème » de Winlux. Données personnelles masquées : {redact}.",
   "yes": "oui", "no": "non",
@@ -170,7 +170,7 @@ T = {
   "attach": "Add to #{number}", "new": "Create a new report", "view": "View the report",
   "close": "Close", "nothing": "No recent crash to report.",
   "h_desc": "Description", "h_tech": "Technical details", "h_cause": "Probable cause", "h_machine": "Machine",
-  "h_program": "Program", "h_stack": "Call stack", "h_journal": "Last log lines",
+  "h_program": "Program", "h_stack": "Call stack", "h_journal": "Last log lines", "h_network": "Network log",
   "h_comment": "New occurrence", "no_desc": "(no description)",
   "footer": "Report created with Winlux \"Report a problem\". Personal data hidden: {redact}.",
   "yes": "yes", "no": "no",
@@ -247,7 +247,7 @@ T = {
   "attach": "Añadir a #{number}", "new": "Crear un informe nuevo", "view": "Ver el informe",
   "close": "Cerrar", "nothing": "No hay ningún fallo reciente que informar.",
   "h_desc": "Descripción", "h_tech": "Detalles técnicos", "h_cause": "Causa probable", "h_machine": "Equipo",
-  "h_program": "Programa", "h_stack": "Pila de llamadas", "h_journal": "Últimas líneas del registro",
+  "h_program": "Programa", "h_stack": "Pila de llamadas", "h_journal": "Últimas líneas del registro", "h_network": "Registro de red",
   "h_comment": "Nueva aparición", "no_desc": "(sin descripción)",
   "footer": "Informe creado con «Informar de un problema» de Winlux. Datos personales ocultos: {redact}.",
   "yes": "sí", "no": "no",
@@ -324,7 +324,7 @@ T = {
   "attach": "Zu #{number} hinzufügen", "new": "Neue Meldung erstellen", "view": "Meldung ansehen",
   "close": "Schließen", "nothing": "Kein aktueller Absturz zu melden.",
   "h_desc": "Beschreibung", "h_tech": "Technische Details", "h_cause": "Wahrscheinliche Ursache", "h_machine": "Rechner",
-  "h_program": "Programm", "h_stack": "Aufrufliste", "h_journal": "Letzte Protokollzeilen",
+  "h_program": "Programm", "h_stack": "Aufrufliste", "h_journal": "Letzte Protokollzeilen", "h_network": "Netzwerkprotokoll",
   "h_comment": "Erneutes Auftreten", "no_desc": "(keine Beschreibung)",
   "footer": "Bericht erstellt mit „Problem melden“ von Winlux. Persönliche Daten ausgeblendet: {redact}.",
   "yes": "ja", "no": "nein",
@@ -541,6 +541,28 @@ def journal_tail(limit=30):
         except OSError:
             pass
     return [l for l in lines if l.strip()][-limit:]
+
+
+NETWORK_LOGS = Path(os.environ.get("WINLUX_NETWORK_LOG_DIR", "/var/log/winlux"))
+SSID_TEXT = re.compile(r"""(\b(?:SSID|ssid)\b\s*[=:]?\s*)(['"]).*?\2""")
+
+
+def network_tail(limit=40):
+    """Dernières lignes des journaux NetworkManager et wpa_supplicant (#457).
+
+    Sans eux, un Wi-Fi qui refuse de se connecter ne laissait aucune trace.
+    Le nom des réseaux cités est masqué ici ; adresses MAC et IP, et réseaux
+    enregistrés, le sont ensuite par redact()."""
+    sections = []
+    for name, title in (("network-manager", "NetworkManager"), ("wpa-supplicant", "wpa_supplicant")):
+        try:
+            lines = (NETWORK_LOGS / f"{name}.log").read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        lines = [SSID_TEXT.sub(r"\1\2<réseau-wifi>\2", line) for line in lines if line.strip()][-limit:]
+        if lines:
+            sections.append((title, lines))
+    return sections
 
 
 MISSING = re.compile(r"(\w[\w.]*![\w@?$]+)")
@@ -1267,6 +1289,10 @@ class Report:
         if self.journal:
             out += [f"<details><summary>{tr('h_journal', L)}</summary>", "", "```"]
             out += [l[:300].replace("```", "'''") for l in self.journal] + ["```", "", "</details>", ""]
+        if self.kind() in ("manual", "system"):
+            for title, lines in network_tail():
+                out += [f"<details><summary>{tr('h_network', L)} ({title})</summary>", "", "```"]
+                out += [l[:300].replace("```", "'''") for l in lines] + ["```", "", "</details>", ""]
         out += ["---", "_" + tr("footer", L, redact=tr("yes" if redacted else "no", L)) + "_"]
         text = "\n".join(out)
         if redacted:
