@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     keys = shortcuts(home)
     ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil neuf : Windows+E ouvre l'Explorateur Winlux")
-    ok(keys.get("<Super>r") == "winlux-start-menu", "profil neuf : Windows+R ouvre le menu Démarrer")
+    ok(keys.get("<Super>r") == "winlux-run", "profil neuf : Windows+R ouvre la boîte Exécuter")
     ok(keys.get("<Super>p") == "winlux-shell-app settings 8", "profil neuf : Windows+P ouvre Paramètres > Écran")
     ok(keys.get("<Primary><Alt>l") == "winlux-lock now", "profil neuf : Ctrl+Alt+L verrouille")
     ok(keys.get("<Primary><Shift>Escape") == "winlux-system-tools tasks", "profil neuf : Ctrl+Maj+Échap ouvre le Gestionnaire des tâches")
@@ -83,7 +83,7 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     keys = shortcuts(home)
     ok(keys.get("<Super>e") == "winlux-shell-app explorer", "profil existant : Windows+E migré vers l'Explorateur")
-    ok(keys.get("<Super>r") == "winlux-start-menu", "profil existant : Windows+R migré (option startup-notify retirée)")
+    ok(keys.get("<Super>r") == "winlux-run", "profil existant : Windows+R migré vers Exécuter (option startup-notify retirée)")
     ok(keys.get("<Super>p") == "mon-outil", "profil existant : un raccourci personnalisé est conservé")
     ok("Print" not in keys, "profil existant : Impr écran vers un programme absent retiré")
 
