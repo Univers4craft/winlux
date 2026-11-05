@@ -63,6 +63,18 @@ ok("d.crlf" in notepad, "fins de ligne Windows conservées à l'enregistrement")
 ok("dots[n]" not in explorer and "fn masked(" in explorer, "mot de passe d'archive : plus d'écriture hors tableau au 64e caractère")
 ok("fn copy_as_path(" in explorer and "cliphist::set_text" in explorer, "Copier le chemin d'accès va dans le presse-papiers")
 
+# ── Finition de l'Explorateur en 1366x768 ───────────────────────────────────
+ok("unsafe fn row_icon(" in explorer and explorer.count("row_icon(g, e.kind") == 2,
+   "vues Détails et Liste : icônes de fichiers de 12 px (row_icon)")
+ok("Glyph::Chevron\n" not in explorer.split("heads: [(&[u8], i32, SortKey); 4]")[1][:1500],
+   "en-tête de colonne : le tri croissant n'est plus dessiné « › »")
+ok('b"Application Windows"' not in explorer and '[b"Application", b"Application"' in explorer,
+   "type d'un .exe : « Application » comme Windows 11 (plus tronqué en 1366x768)")
+
+ok("fn drive_space(" in explorer and "usage_bar(g, tx" in explorer and "usage_bar(g, dx" in explorer,
+   "Ce PC : barre d'occupation et espace libre en Mosaïques et en Détails (#456)")
+ok('b"Espace libre"' in explorer and 'b"Occupation"' in explorer, "Ce PC : colonnes Occupation et Espace libre")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]
