@@ -16,6 +16,9 @@ use std::sync::Mutex;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
 
+/// Images présentées (toutes chaînes d'échange), pour WINLUX_D3D11_TRACE.
+pub(crate) static FRAMES: AtomicU32 = AtomicU32::new(0);
+
 const S_OK: i32 = 0;
 const S_FALSE: i32 = 1;
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;

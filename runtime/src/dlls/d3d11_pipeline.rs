@@ -1402,6 +1402,9 @@ unsafe fn draw(this: *mut DeviceContext, d: Draw) {
     if !prepare(g, &st.pipe) {
         return;
     }
+    if trace_draws() {
+        trace_draw(g, &st, &d);
+    }
     let mode = topology(st.topology);
     match d {
         Draw::Arrays {
@@ -1435,6 +1438,89 @@ unsafe fn draw(this: *mut DeviceContext, d: Draw) {
                 base_instance,
             )
         }
+    }
+}
+
+/// WINLUX_D3D11_TRACE=draws : une ligne par tirage (image, cadre,
+/// programme, nombre d'instances, tampons de sommets, et octets de la
+/// première instance de chaque attribut par instance). Sert à comparer deux
+/// images sans débogueur (#541).
+fn trace_draws() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("WINLUX_D3D11_TRACE")
+            .map(|v| v.split(',').any(|p| p == "draws"))
+            .unwrap_or(false)
+    })
+}
+
+unsafe fn trace_draw(g: &gl::GlFunctions, st: &super::DeviceContextState, d: &Draw) {
+    const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+    let (count, instances, base_instance) = match *d {
+        Draw::Arrays {
+            count,
+            instances,
+            base_instance,
+            ..
+        } => (count, instances, base_instance),
+        Draw::Indexed {
+            count,
+            instances,
+            base_instance,
+            ..
+        } => (count, instances, base_instance),
+    };
+    let mut prog = 0i32;
+    const GL_CURRENT_PROGRAM: u32 = 0x8B8D;
+    (g.GetIntegerv)(GL_CURRENT_PROGRAM, &mut prog);
+    let mut line = format!(
+        "tirage image={} cadre={} prog={} n={} inst={} base={}",
+        super::FRAMES.load(std::sync::atomic::Ordering::Relaxed),
+        super::target_fbo(st),
+        prog,
+        count,
+        instances,
+        base_instance
+    );
+    let layout: Vec<LayoutElement> = match meta(st.pipe.layout as *mut c_void).as_deref() {
+        Some(Meta::Layout(l)) => l.clone(),
+        _ => Vec::new(),
+    };
+    for (slot, (buf, stride, offset)) in st.pipe.vbs.iter().enumerate() {
+        if *buf != 0 && layout.iter().any(|e| e.slot as usize == slot) {
+            line.push_str(&format!(" vb{slot}={buf}/{stride}/{offset}"));
+        }
+    }
+    for e in layout.iter().filter(|e| e.per_instance) {
+        let (buf, stride, offset) = st.pipe.vbs[e.slot as usize];
+        if buf == 0 {
+            continue;
+        }
+        let size = (e.format.components.max(1) as usize * type_size(e.format.gl_type)).min(16);
+        let mut bytes = [0u8; 16];
+        let at = offset as usize + e.offset as usize + base_instance as usize * stride as usize;
+        (g.BindBuffer)(GL_COPY_READ_BUFFER, buf);
+        (g.GetBufferSubData)(
+            GL_COPY_READ_BUFFER,
+            at as isize,
+            size as isize,
+            bytes.as_mut_ptr().cast(),
+        );
+        (g.BindBuffer)(GL_COPY_READ_BUFFER, 0);
+        line.push_str(&format!(" {}{}=", e.name, e.index));
+        for b in &bytes[..size] {
+            line.push_str(&format!("{b:02x}"));
+        }
+    }
+    // Demandée explicitement : émise même au niveau de journal par défaut.
+    log_warn!("d3d11", "{line}");
+}
+
+fn type_size(t: u32) -> usize {
+    match t {
+        0x1400 | 0x1401 => 1,          // BYTE, UNSIGNED_BYTE
+        0x1402 | 0x1403 | 0x140B => 2, // SHORT, UNSIGNED_SHORT, HALF_FLOAT
+        _ => 4,
     }
 }
 
