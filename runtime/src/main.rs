@@ -42,6 +42,7 @@ mod tasks;
 mod thunks;
 mod uac;
 mod volumes;
+mod wow32;
 
 use std::path::PathBuf;
 
@@ -73,6 +74,14 @@ fn main() {
             for name in names {
                 println!("{dll}\t{name}");
             }
+        }
+        return;
+    }
+    if exe == "--exports-kernel32" {
+        // Ce que GetProcAddress(kernel32, …) résout : la surface figée par
+        // scripts/test-kernel32-exports.py (#521).
+        for name in dlls::kernel32_surface() {
+            println!("{name}");
         }
         return;
     }
@@ -194,6 +203,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Programme x86 : relancé tout de suite si la mémoire haute n'a pas
+    // été réservée avant le premier malloc (#232).
+    if pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86) {
+        wow32::reexec_if_needed();
+    }
     registry::backup();
     paths::install_windows_env();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
@@ -211,6 +225,13 @@ fn main() {
         cpu::apply_launch(&cpu_settings, &[]);
         let code = clr::execute_assembly(&assembly);
         dlls::kernel32::flush_and_exit(code);
+    }
+    // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),
+    // avant tout chargement.
+    if let Ok(pe) = pe::PeImage::parse(&source) {
+        if pe.x86 {
+            wow32::init(pe.characteristics & 0x0020 != 0);
+        }
     }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,

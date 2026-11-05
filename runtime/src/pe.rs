@@ -1,4 +1,4 @@
-//! Lecture du format PE32+ (exécutables Windows 64 bits).
+//! Lecture du format PE32+ (exécutables Windows 64 bits) et PE32 (x86, 32 bits).
 //!
 //! Écrit à partir de la spécification publique « PE Format » de Microsoft.
 //! On ne lit que ce dont le chargeur a besoin ; tout est validé avant usage.
@@ -6,6 +6,7 @@
 use std::fmt;
 
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
+pub const IMAGE_FILE_MACHINE_I386: u16 = 0x14c;
 pub const IMAGE_FILE_DLL: u16 = 0x2000;
 pub const PE32PLUS_MAGIC: u16 = 0x20b;
 pub const PE32_MAGIC: u16 = 0x10b;
@@ -39,7 +40,7 @@ impl fmt::Display for PeError {
             PeError::TooSmall => write!(f, "fichier trop petit pour être un exécutable Windows"),
             PeError::NotMz => write!(f, "pas d'en-tête MZ : ce n'est pas un exécutable Windows"),
             PeError::NotPe => write!(f, "signature PE absente (programme DOS 16 bits ?)"),
-            PeError::Pe32(machine) => write!(f, "programme Windows 32 bits (machine 0x{machine:04x}) : seul le 64 bits est pris en charge pour l'instant"),
+            PeError::Pe32(machine) => write!(f, "programme Windows 32 bits (machine 0x{machine:04x}) de ce type non pris en charge : seuls le code x86 natif et les assemblies .NET IL seul le sont"),
             PeError::Machine(m) => write!(f, "processeur cible non pris en charge (machine 0x{m:04x}, attendu x86-64)"),
             PeError::Bad(s) => write!(f, "en-tête PE invalide : {s}"),
         }
@@ -80,6 +81,9 @@ pub struct PeImage {
     /// Windows 64 bits, elle se charge en tant qu'image mais sans imports,
     /// relocations ni point d'entrée ; c'est le CLR qui la lit.
     pub il_only32: bool,
+    /// Code natif x86 32 bits (machine 0x14c), exécuté en mode
+    /// compatibilité par `wow32` (#232).
+    pub x86: bool,
 }
 
 pub fn rd16(b: &[u8], o: usize) -> Option<u16> {
@@ -156,7 +160,20 @@ impl PeImage {
         let g64 = |o: usize| rd64(file, opt + o).ok_or(PeError::Bad("en-tête optionnel tronqué"));
         let g16 = |o: usize| rd16(file, opt + o).ok_or(PeError::Bad("en-tête optionnel tronqué"));
         let pe32 = magic == PE32_MAGIC;
-        if pe32 && !il_only32 {
+        let ilonly_cor = |d: usize| -> bool {
+            // Répertoire COM_DESCRIPTOR (n° 14) d'une image PE32, lu
+            // directement : une assembly IL seul n'est pas du code x86.
+            let at = 92 + 4 + d * 8;
+            let (Ok(n), Ok(rva)) = (g32(92), g32(at)) else {
+                return false;
+            };
+            n as usize > d && rva != 0
+        };
+        // Code natif x86 : exécuté par la couche 32 bits (wow32), sauf en
+        // lecture de ressources seule (aucun code n'est lancé).
+        let x86 =
+            pe32 && machine == IMAGE_FILE_MACHINE_I386 && !data && !ilonly_cor(DIR_COM_DESCRIPTOR);
+        if pe32 && !il_only32 && !x86 {
             return Err(PeError::Pe32(machine));
         }
         if !pe32 && magic != PE32PLUS_MAGIC {
@@ -173,7 +190,7 @@ impl PeImage {
             d.rva = g32(dirs_at + 4 + i * 8)?;
             d.size = g32(dirs_at + 8 + i * 8)?;
         }
-        if pe32 && !data {
+        if pe32 && !data && !x86 {
             let cor = dirs[DIR_COM_DESCRIPTOR];
             if cor.rva == 0 {
                 return Err(PeError::Pe32(machine));
@@ -195,7 +212,8 @@ impl PeImage {
                 g64(72 + wide)?
             },
             dirs,
-            il_only32: pe32,
+            il_only32: pe32 && !x86,
+            x86,
             sections: {
                 let mut v = Vec::with_capacity(nsections);
                 let mut s = opt + opt_size;
@@ -352,6 +370,20 @@ mod tests {
             PeImage::parse_il_only(&il_only_image(0)),
             Err(PeError::Pe32(0x14c))
         ));
+    }
+
+    #[test]
+    fn accepte_un_programme_x86_natif() {
+        let mut b = il_only_image(0);
+        // Sans en-tête CLR : du vrai code x86, exécuté par wow32 (#232).
+        let opt = 0x84 + 20;
+        b[opt + 96 + 14 * 8..opt + 104 + 14 * 8].fill(0);
+        let img = PeImage::parse(&b).unwrap();
+        assert!(img.x86);
+        assert!(!img.il_only32);
+        assert_eq!(img.image_base, 0x40_0000);
+        // En lecture de ressources, aucun code ne sera lancé.
+        assert!(!PeImage::parse_resources(&b).unwrap().x86);
     }
 
     #[test]
