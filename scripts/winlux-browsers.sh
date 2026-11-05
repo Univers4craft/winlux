@@ -111,7 +111,11 @@ add_langpacks() {
             continue
         fi
         printf '%s  %s\n' "$(cat "$pack.sha256")" "$pack.deb" | sha256sum -c - >/dev/null 2>&1 || { echo "Paquet de langue altéré ignoré : $lang" >&2; continue; }
-        test "$(/usr/bin/dpkg-deb -f "$pack.deb" Package)" = "firefox-l10n-$lang" || continue
+        # Espagnol : paquet par pays chez Mozilla (firefox-l10n-es-es, -es-ar…, #432).
+        case "$(/usr/bin/dpkg-deb -f "$pack.deb" Package)" in
+            "firefox-l10n-$lang"|"firefox-l10n-$lang"-[a-z][a-z]) ;;
+            *) echo "Paquet de langue inattendu ignoré : $lang" >&2; continue ;;
+        esac
         /usr/bin/dpkg-deb -x "$pack.deb" "$1"
     done
     mkdir -p "$firefox_dir/distribution/extensions" "$firefox_dir/browser/extensions" "$firefox_dir/defaults/pref"

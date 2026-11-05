@@ -33,6 +33,22 @@ SOURCES = {
 # pas dans l'index binary-amd64 du navigateur (v0.2.19 : aucun trouvé).
 LANGPACKS = {"firefox": ("firefox-l10n-{lang}", ("fr", "de", "es"), "dists/mozilla/main/binary-all/Packages")}
 
+# Mozilla n'a pas de « firefox-l10n-es » : l'espagnol existe par pays
+# (es-es, es-ar, es-cl, es-mx). Le pays vient de la langue du système
+# (es_AR.UTF-8 → es-ar), l'Espagne sinon (#432).
+SPANISH_REGIONS = {"es": "es-es", "ar": "es-ar", "cl": "es-cl", "mx": "es-mx"}
+
+
+def langpack_names(lang):
+    """Noms possibles du paquet de langue, du plus adapté au repli."""
+    if lang != "es":
+        return [lang]
+    locale = os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or ""
+    region = locale.split(".")[0].partition("_")[2].lower()
+    names = [SPANISH_REGIONS[region]] if locale.lower().startswith("es") and region in SPANISH_REGIONS else []
+    return names + [n for n in ("es-es", "es") if n not in names]
+
+
 # Miroir de test (file:///…) : jamais utilisé par Winlux lui-même.
 MIRROR = os.environ.get("WINLUX_BROWSER_MIRROR", "")
 
@@ -140,7 +156,16 @@ def fetch_langpacks(browser, base, work, output):
     for lang in langs:
         name = f"{browser}-l10n-{lang}"
         try:
-            fields = select(data, template.format(lang=lang), ("all", "amd64"))
+            fields = None
+            for variant in langpack_names(lang):
+                try:
+                    fields = select(data, template.format(lang=variant), ("all", "amd64"))
+                    break
+                except ValueError as missing:
+                    if "package not found" not in str(missing):
+                        raise
+            if fields is None:
+                raise ValueError(f"package not found: {template.format(lang=lang)}")
             destination = output / f"{name}.deb"
             if not destination.exists() or checksum(destination) != fields["SHA256"]:
                 partial = output / f".l10n-{name}.partial"
@@ -151,9 +176,11 @@ def fetch_langpacks(browser, base, work, output):
                     raise ValueError("checksum mismatch")
                 partial.replace(destination)
             (output / f"{name}.sha256").write_text(fields["SHA256"] + "\n")
-            print(f"{name}: {fields['Version']} verified", flush=True)
+            # Nom réel du paquet (firefox-l10n-es-es) : winlux-browsers le contrôle.
+            (output / f"{name}.package").write_text(fields["Package"] + "\n")
+            print(f"{name}: {fields['Package']} {fields['Version']} verified", flush=True)
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
-            for stale in (output / f"{name}.deb", output / f"{name}.sha256"):
+            for stale in (output / f"{name}.deb", output / f"{name}.sha256", output / f"{name}.package"):
                 stale.unlink(missing_ok=True)
             print(f"{name}: indisponible ({error})", file=sys.stderr, flush=True)
 

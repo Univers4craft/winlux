@@ -17,6 +17,7 @@ El sistema no envía estadísticas de uso y no contiene telemetría. Solo se con
 | Aplicaciones y paquetes | repositorios de Ubuntu y editores de las aplicaciones | dirección IP, paquetes pedidos | cuando instala o actualiza una aplicación |
 | Tiempo de los widgets | el servicio wttr.in | dirección IP, lugar elegido | solo tras su consentimiento, desactivado de forma predeterminada |
 | Informar de un problema | GitHub (incidencia pública) | el informe, que usted revisa antes del envío | solo cuando lo envía |
+| Envío automático de bloqueos | GitHub (incidencia pública) | programa afectado, tipo de error, pila de llamadas, extracto del registro, procesador, tarjeta gráfica, memoria, versiones; anónimo: sin nombre de usuario ni de equipo, nombres de archivos personales, contraseñas, tokens, nombre de red Wi-Fi, direcciones IP, MAC o de correo, ni números de serie | en el arranque siguiente al bloqueo, en segundo plano; propuesto (marcado) durante la instalación, desactivable en Configuración > Informar de un problema |
 | Asistentes de IA en línea | el editor del asistente elegido, con su propia cuenta | sus preguntas y lo que decide mostrar | solo si activa un asistente, todos desactivados de forma predeterminada |
 | IA local | nadie | nada sale del PC | — |
 | Vínculo con el teléfono | su teléfono, en la red local | los datos intercambiados | solo si lo empareja |

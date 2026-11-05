@@ -89,7 +89,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # Paquets de langue de Firefox (fr, de, es ; architecture « all ») : téléchargés
     # avec lui, vérifiés ; un paquet absent ou altéré n'empêche pas l'installation.
     langs = {}
-    for lang in ("fr", "de"):
+    # Espagnol : Mozilla ne publie que firefox-l10n-es-es, -es-ar, -es-cl, -es-mx (#432).
+    for lang in ("fr", "de", "es-es", "es-ar"):
         lp = w / f"lp-{lang}"
         (lp / "DEBIAN").mkdir(parents=True)
         (lp / "usr/lib/firefox/distribution/extensions").mkdir(parents=True)
@@ -116,7 +117,18 @@ with tempfile.TemporaryDirectory() as tmp:
     check((out / "firefox-l10n-fr.deb").read_bytes() == langs["fr"][0].read_bytes(), "paquet de langue fr absent")
     check((out / "firefox-l10n-fr.sha256").read_text().strip() == langs["fr"][1], "empreinte fr absente")
     check(not (out / "firefox-l10n-de.deb").exists() and "firefox-l10n-de: indisponible" in r.stderr, "paquet de langue altéré gardé")
-    check(not (out / "firefox-l10n-es.deb").exists(), "paquet de langue inventé")
+    # Winlux en espagnol d'Espagne (langue du système par défaut ici : LANG du test).
+    check((out / "firefox-l10n-es.deb").read_bytes() == langs["es-es"][0].read_bytes(), "espagnol absent (firefox-l10n-es-es)")
+    check((out / "firefox-l10n-es.package").read_text().strip() == "firefox-l10n-es-es", "nom réel du paquet espagnol")
+    check((out / "firefox-l10n-es.sha256").read_text().strip() == langs["es-es"][1], "empreinte espagnole absente")
+    # Système en espagnol d'Argentine : le paquet du pays ; pays inconnu ou autre langue : l'Espagne.
+    for locale, expected in (("es_AR.UTF-8", "es-ar"), ("es_PE.UTF-8", "es-es"), ("fr_FR.UTF-8", "es-es")):
+        env_locale = {**env, "LANG": locale, "LC_ALL": "", "LC_MESSAGES": ""}
+        r = subprocess.run([sys.executable, "-I", "-B", str(FETCH), "--only", "firefox", str(out)],
+                           env=env_locale, capture_output=True, text=True)
+        check(r.returncode == 0, f"téléchargement en {locale} : {r.stderr}")
+        check((out / "firefox-l10n-es.deb").read_bytes() == langs[expected][0].read_bytes(),
+              f"paquet espagnol en {locale} : firefox-l10n-{expected} attendu")
     check(not list(out.glob(".l10n-*.partial")), "paquet de langue partiel laissé")
 
     # Edge, Chrome et Firefox : les vrais dépôts des éditeurs, en HTTPS.

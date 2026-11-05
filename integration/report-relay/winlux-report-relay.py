@@ -29,7 +29,8 @@ import urllib.request
 REPO = os.environ.get("WINLUX_RELAY_REPO", "Univers4craft/winlux")
 API = "https://api.github.com"
 ALLOWED_LABELS = {"bug", "signalement-utilisateur", "plantage", "fonction-manquante", "à-trier",
-                  "compatibilité-windows", "runtime", "bureau"}
+                  "compatibilité-windows", "runtime", "bureau", "urgence:1-quotidien",
+                  "urgence:2-confort"}
 REQUIRED_LABEL = "signalement-utilisateur"
 PER_IP_HOUR = int(os.environ.get("WINLUX_RELAY_PER_IP", "5"))
 GLOBAL_HOUR = int(os.environ.get("WINLUX_RELAY_GLOBAL", "60"))

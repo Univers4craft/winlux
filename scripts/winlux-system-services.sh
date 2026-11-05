@@ -70,10 +70,37 @@ if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "
 if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
 if test -x /usr/sbin/NetworkManager; then
     mkdir -p /etc/netplan /etc/NetworkManager/system-connections
+    # Journaux du réseau (#457) : sans journald ni syslog, « wpa_supplicant -s »
+    # et le journal par défaut de NetworkManager partaient dans le vide, et un
+    # échec Wi-Fi ne laissait aucune trace. Fichiers dans /var/log/winlux,
+    # gardés d'un démarrage à l'autre (.1 = démarrage précédent), lus par
+    # « Signaler un problème » ; /run/winlux garde les anciens noms.
+    netlog=/var/log/winlux
+    mkdir -p "$netlog"
+    chmod 755 "$netlog"
+    for name in network-manager wpa-supplicant; do
+        if test -s "$netlog/$name.log"; then mv -f "$netlog/$name.log" "$netlog/$name.1.log"; fi
+        : >"$netlog/$name.log"
+        chmod 644 "$netlog/$name.log"
+        ln -sf "$netlog/$name.log" "/run/winlux/$name.log"
+    done
     if test -x /usr/sbin/wpa_supplicant; then
-        /usr/sbin/wpa_supplicant -u -s >/run/winlux/wpa-supplicant.log 2>&1 &
+        /usr/sbin/wpa_supplicant -u -t -f "$netlog/wpa-supplicant.log" >>"$netlog/wpa-supplicant.log" 2>&1 &
     fi
-    /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
+    # --debug : messages sur la sortie d'erreur (niveau INFO, inchangé).
+    /usr/sbin/NetworkManager --no-daemon --debug >>"$netlog/network-manager.log" 2>&1 &
+    # Taille bornée : au-delà de 4 Mio, copie en .1 puis remise à zéro (les deux
+    # programmes écrivent en ajout, la remise à zéro est sûre).
+    (
+        while sleep 300; do
+            for name in network-manager wpa-supplicant; do
+                size=$(wc -c <"$netlog/$name.log" 2>/dev/null || echo 0)
+                if test "$size" -gt 4194304; then
+                    cp -f "$netlog/$name.log" "$netlog/$name.1.log" && : >"$netlog/$name.log"
+                fi
+            done
+        done
+    ) >/dev/null 2>&1 &
     network_pid=$!
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &

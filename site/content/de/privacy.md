@@ -17,6 +17,7 @@ Das System sendet keine Nutzungsstatistiken und enthält keine Telemetrie. Es ve
 | Anwendungen und Pakete | Ubuntu-Archive und Herausgeber der Anwendungen | IP-Adresse, angeforderte Pakete | wenn Sie eine Anwendung installieren oder aktualisieren |
 | Wetter der Widgets | der Dienst wttr.in | IP-Adresse, gewählter Ort | nur nach Ihrer Zustimmung, standardmäßig aus |
 | Problem melden | GitHub (öffentliches Issue) | der Bericht, den Sie vor dem Senden lesen | nur wenn Sie ihn senden |
+| Automatisches Senden von Abstürzen | GitHub (öffentliches Issue) | betroffenes Programm, Fehlerart, Aufrufstapel, Protokollauszug, Prozessor, Grafikkarte, Speicher, Versionen; anonymisiert: kein Benutzer- oder Computername, keine persönlichen Dateinamen, Passwörter, Token, WLAN-Namen, IP-, MAC- oder E-Mail-Adressen und keine Seriennummern | beim Start nach dem Absturz, im Hintergrund; bei der Installation angeboten (angehakt), abschaltbar unter Einstellungen > Problem melden |
 | Online-KI-Assistenten | der Herausgeber des gewählten Assistenten, mit Ihrem eigenen Konto | Ihre Fragen und was Sie zeigen möchten | nur wenn Sie einen Assistenten aktivieren, standardmäßig alle aus |
 | Lokale KI | niemand | nichts verlässt den PC | — |
 | Smartphone-Verbindung | Ihr Telefon, im lokalen Netzwerk | die ausgetauschten Daten | nur wenn Sie es koppeln |
