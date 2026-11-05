@@ -582,6 +582,7 @@ TRANSLATIONS = {
         "field_password": "Mot de passe :",
         "field_password_confirm": "Confirmer le mot de passe :",
         "autologin": "Connexion automatique (sans mot de passe au démarrage)",
+        "crash_reports": "Envoyer automatiquement les rapports de plantage anonymisés aux développeurs de Winlux (modifiable dans Paramètres)",
         "password_mismatch": "Les mots de passe ne correspondent pas.",
         "username_invalid": "Nom d'utilisateur : minuscules, chiffres, - ou _ uniquement.",
         "summary_title": "Résumé de l'installation",
@@ -770,6 +771,7 @@ TRANSLATIONS = {
         "field_password": "Password:",
         "field_password_confirm": "Confirm password:",
         "autologin": "Automatic login (no password at startup)",
+        "crash_reports": "Automatically send anonymised crash reports to the Winlux developers (can be changed in Settings)",
         "password_mismatch": "Passwords do not match.",
         "username_invalid": "Username: lowercase letters, digits, - or _ only.",
         "summary_title": "Installation summary",
@@ -958,6 +960,7 @@ TRANSLATIONS = {
         "field_password": "Passwort:",
         "field_password_confirm": "Passwort bestätigen:",
         "autologin": "Automatische Anmeldung (kein Passwort beim Start)",
+        "crash_reports": "Anonymisierte Absturzberichte automatisch an die Winlux-Entwickler senden (in den Einstellungen änderbar)",
         "password_mismatch": "Passwörter stimmen nicht überein.",
         "username_invalid": "Benutzername: nur Kleinbuchstaben, Ziffern, - oder _.",
         "summary_title": "Installationszusammenfassung",
@@ -1146,6 +1149,7 @@ TRANSLATIONS = {
         "field_password": "Contraseña:",
         "field_password_confirm": "Confirmar contraseña:",
         "autologin": "Inicio de sesión automático (sin contraseña al arrancar)",
+        "crash_reports": "Enviar automáticamente informes de bloqueo anónimos a los desarrolladores de Winlux (modificable en Configuración)",
         "password_mismatch": "Las contraseñas no coinciden.",
         "username_invalid": "Nombre de usuario: solo minúsculas, dígitos, - o _.",
         "summary_title": "Resumen de la instalación",
@@ -1334,6 +1338,7 @@ TRANSLATIONS = {
         "field_password": "Password:",
         "field_password_confirm": "Conferma password:",
         "autologin": "Accesso automatico (senza password all'avvio)",
+        "crash_reports": "Invia automaticamente rapporti anonimi sugli arresti anomali agli sviluppatori di Winlux (modificabile nelle Impostazioni)",
         "password_mismatch": "Le password non corrispondono.",
         "username_invalid": "Nome utente: solo lettere minuscole, cifre, - o _.",
         "summary_title": "Riepilogo dell'installazione",
@@ -1522,6 +1527,7 @@ TRANSLATIONS = {
         "field_password": "Senha:",
         "field_password_confirm": "Confirmar senha:",
         "autologin": "Login automático (sem senha na inicialização)",
+        "crash_reports": "Enviar automaticamente relatórios de falha anônimos aos desenvolvedores do Winlux (alterável nas Configurações)",
         "password_mismatch": "As senhas não coincidem.",
         "username_invalid": "Nome de usuário: apenas letras minúsculas, dígitos, - ou _.",
         "summary_title": "Resumo da instalação",
@@ -2321,6 +2327,21 @@ STEP_KEYS = ["language", "keyboard", "license", "network", "disk", "import", "en
 
 def step_index(key):
     return STEP_KEYS.index(key)
+
+
+def write_report_choice(etc, enabled):
+    """Choix « envoyer les plantages » de l'installateur (#438) : réglage AUTO
+    de /etc/winlux/report.conf, lu par winlux-report et Paramètres."""
+    path = os.path.join(etc, "report.conf")
+    try:
+        with open(path) as f:
+            lines = [l.rstrip("\n") for l in f if not l.startswith("AUTO=")]
+    except OSError:
+        lines = []
+    lines.append("AUTO=" + ("on" if enabled else "off"))
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o644)
 
 
 def page_name(key):
@@ -3286,6 +3307,8 @@ class InstallerApp(Gtk.Application):
             "fullname": "",
             "password": "",
             "autologin": True,
+            # Envoi automatique des plantages (#438) : proposé coché.
+            "crash_reports": True,
             "password_hash": "",
             "timezone": None,
             "packages": [],
@@ -3635,7 +3658,7 @@ class InstallerApp(Gtk.Application):
             return
         self.answer_settings = settings
         for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
-                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages", "browser", "store_catalogs"):
+                    "username", "fullname", "password", "password_hash", "autologin", "crash_reports", "timezone", "packages", "browser", "store_catalogs"):
             if key in settings:
                 self.config[key] = settings[key]
         self.skip_steps = set(steps)
@@ -5266,6 +5289,11 @@ class InstallerApp(Gtk.Application):
         autologin.connect("toggled", lambda b: self.config.update({"autologin": b.get_active()}))
         autologin.set_margin_top(8)
         box.pack_start(autologin, False, False, 0)
+        crash_reports = Gtk.CheckButton(label=tr("crash_reports"))
+        crash_reports.set_active(bool(self.config.get("crash_reports", True)))
+        crash_reports.get_child().set_line_wrap(True)
+        crash_reports.connect("toggled", lambda b: self.config.update({"crash_reports": b.get_active()}))
+        box.pack_start(crash_reports, False, False, 0)
         self.pages.add_named(box, page_name("account"))
 
     def on_account_changed(self, entry, key):
@@ -6219,6 +6247,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "username": self.config["username"],
             "fullname": self.config["fullname"],
             "autologin": self.config["autologin"],
+            "crash_reports": bool(self.config.get("crash_reports", True)),
             "timezone": self.config.get("timezone"),
             "packages": self.config.get("packages", []),
             "browser": self.config.get("browser"),
@@ -6233,6 +6262,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         winlux_profiles.write_config(root_path, profile, self.benchmark)
         with open(f"{etc}/install-config.json", "w") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
+        write_report_choice(etc, config["crash_reports"])
         timezone = self.config.get("timezone")
         if timezone:
             with open(f"{root_path}/etc/timezone", "w") as f:

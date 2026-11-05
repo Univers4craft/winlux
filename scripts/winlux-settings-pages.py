@@ -219,6 +219,17 @@ _TR = {
     'En haut à droite': ('Top right', 'Arriba a la derecha', 'Oben rechts'),
     'En haut à gauche': ('Top left', 'Arriba a la izquierda', 'Oben links'),
     'Enregistrer un fichier': ('Save a file', 'Guardar un archivo', 'Datei speichern'),
+    'Envoi automatique des plantages': ('Automatic crash reports', 'Envío automático de bloqueos', 'Automatisches Senden von Abstürzen'),
+    'Envoyer automatiquement les plantages': ('Send crashes automatically', 'Enviar los bloqueos automáticamente', 'Abstürze automatisch senden'),
+    'Au démarrage suivant, en arrière-plan et sans fenêtre : rapport anonymisé (pas de noms de fichiers personnels, de mots de passe, de nom de réseau Wi-Fi ni d’adresses).': ('At the next startup, in the background and without any window: anonymised report (no personal file names, passwords, Wi-Fi network names or addresses).', 'En el siguiente arranque, en segundo plano y sin ventanas: informe anónimo (sin nombres de archivos personales, contraseñas, nombres de red Wi-Fi ni direcciones).', 'Beim nächsten Start, im Hintergrund und ohne Fenster: anonymisierter Bericht (keine persönlichen Dateinamen, Passwörter, WLAN-Namen oder Adressen).'),
+    'Rapports en attente d’envoi': ('Reports waiting to be sent', 'Informes pendientes de envío', 'Noch nicht gesendete Berichte'),
+    'Ils partiront au prochain démarrage connecté à Internet.': ('They will be sent at the next startup with an Internet connection.', 'Se enviarán en el próximo arranque con conexión a Internet.', 'Sie werden beim nächsten Start mit Internetverbindung gesendet.'),
+    'Aucun service d’envoi n’est encore configuré : les rapports restent sur ce PC. Un développeur peut ajouter son jeton GitHub ci-dessous.': ('No sending service is configured yet: reports stay on this PC. A developer can add their GitHub token below.', 'Aún no hay ningún servicio de envío configurado: los informes se quedan en este PC. Un desarrollador puede añadir su token de GitHub abajo.', 'Noch kein Sendedienst eingerichtet: Die Berichte bleiben auf diesem PC. Ein Entwickler kann unten sein GitHub-Token hinzufügen.'),
+    'Jeton GitHub…': ('GitHub token…', 'Token de GitHub…', 'GitHub-Token…'),
+    'Jeton GitHub': ('GitHub token', 'Token de GitHub', 'GitHub-Token'),
+    'Oublier le jeton': ('Forget the token', 'Olvidar el token', 'Token vergessen'),
+    'Jeton « fine-grained » limité au dépôt Univers4craft/winlux, permission Issues en lecture et écriture.': ('Fine-grained token limited to the Univers4craft/winlux repository, Issues permission read and write.', 'Token «fine-grained» limitado al repositorio Univers4craft/winlux, permiso Issues de lectura y escritura.', '„Fine-grained“-Token, auf das Repository Univers4craft/winlux beschränkt, Berechtigung Issues Lesen und Schreiben.'),
+    'Ce jeton n’a pas la forme d’un jeton GitHub.': ('This does not look like a GitHub token.', 'Esto no parece un token de GitHub.', 'Das sieht nicht wie ein GitHub-Token aus.'),
     'Envoi du rapport': ('Sending the report', 'Envío del informe', 'Senden des Berichts'),
     'Explorateur': ('File Explorer', 'Explorador', 'Explorer'),
     'Exporter mes réglages': ('Export my settings', 'Exportar mi configuración', 'Meine Einstellungen exportieren'),
@@ -756,6 +767,18 @@ CPU_FANS = (("auto", "Automatique"), ("quiet", "Silencieux"), ("balanced", "Équ
 OVERLAY_KEYS = (("shift-f12", "Maj + F12"), ("ctrl-shift-o", "Ctrl + Maj + O"), ("alt-f12", "Alt + F12"))
 OVERLAY_POSITIONS = (("top-left", "En haut à gauche"), ("top-right", "En haut à droite"),
                      ("bottom-left", "En bas à gauche"), ("bottom-right", "En bas à droite"))
+def report_token_file():
+    return Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/report-token"
+
+
+def report_queue_size():
+    state = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
+    try:
+        return len(list((state / "winlux/auto-report/queue").glob("*.json")))
+    except OSError:
+        return 0
+
+
 REPORT_MODES = (("auto", "Automatique"), ("browser", "Par le navigateur"), ("file", "Enregistrer un fichier"))
 EXE_PRIORITIES = (("auto", "Automatique"), ("low", "Basse"), ("normal", "Normale"), ("high", "Haute"), ("realtime", "Temps réel"))
 EXE_CORES = (("auto", "Automatique"), ("performance", "Cœurs performants (P)"), ("efficiency", "Cœurs économes (E)"))
@@ -2779,6 +2802,51 @@ class ExtraPages:
         mode = status.get("report_mode") if status.get("report_mode") in ("browser", "file") else "auto"
         self.combo(box, _t("Envoi du rapport"), [(k, _t(v)) for k, v in REPORT_MODES], mode,
                    lambda value: self.execute("report-mode-" + value))
+        # Envoi automatique des plantages (#438) : AUTO=default = actif
+        # seulement avec un jeton personnel ; l'installateur règle on/off.
+        token = report_token_file()
+        setting = status.get("report_auto") or "default"
+        active = setting == "on" or (setting == "default" and token.is_file())
+        self.section(_t("Envoi automatique des plantages"))
+        box = self.card()
+        self.switch(box, _t("Envoyer automatiquement les plantages"), active,
+                    lambda on: self.execute("report-auto-on" if on else "report-auto-off"),
+                    _t("Au démarrage suivant, en arrière-plan et sans fenêtre : rapport anonymisé (pas de noms de fichiers personnels, de mots de passe, de nom de réseau Wi-Fi ni d’adresses)."))
+        waiting = report_queue_size()
+        if waiting:
+            self.row(box, _t("Rapports en attente d’envoi"), Gtk.Label(label=str(waiting)),
+                     _t("Ils partiront au prochain démarrage connecté à Internet."))
+        if not token.is_file() and status.get("report_relay") != "1":
+            self.hint(_t("Aucun service d’envoi n’est encore configuré : les rapports restent sur ce PC. Un développeur peut ajouter son jeton GitHub ci-dessous."), box)
+        self.actions(box, [(_t("Jeton GitHub…"), self.report_token_dialog),
+                           (_t("Oublier le jeton"), lambda: (self.tool(["winlux-report", "--forget-token"])),
+                            token.is_file())])
+
+    def report_token_dialog(self):
+        """Jeton GitHub personnel (droit Issues : lecture et écriture),
+        gardé dans le compte en 0600, jamais dans l’image."""
+        dialog = Gtk.Dialog(title=_t("Jeton GitHub"), transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        self.hint(_t("Jeton « fine-grained » limité au dépôt Univers4craft/winlux, permission Issues en lecture et écriture."), area)
+        entry = Gtk.Entry(visibility=False, activates_default=True)
+        entry.get_accessible().set_name(_t("Jeton GitHub"))
+        area.pack_start(entry, False, False, 0)
+        error = Gtk.Label(xalign=0, wrap=True)
+        area.pack_start(error, False, False, 0)
+        dialog.show_all()
+        while dialog.run() == Gtk.ResponseType.OK:
+            result = subprocess.run(["winlux-report", "--set-token"], input=entry.get_text(),
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                break
+            error.set_text(_t("Ce jeton n’a pas la forme d’un jeton GitHub."))
+        dialog.destroy()
+        self.extra_refresh()
 
     # ── Imprimantes et scanners (CUPS) ──
 

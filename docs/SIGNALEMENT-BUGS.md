@@ -2,8 +2,9 @@
 
 Winlux propose à l'utilisateur de signaler un bug sur
 [les issues GitHub du projet](https://github.com/Univers4craft/winlux/issues),
-avec tout ce qu'il faut pour le diagnostiquer. Rien ne part sans action
-volontaire : pas de télémétrie, pas d'envoi silencieux, aucun compte imposé.
+avec tout ce qu'il faut pour le diagnostiquer. Pas de télémétrie, aucun
+compte imposé. Seule exception, choisie à l'installation et réversible dans
+Paramètres : l'envoi automatique des plantages (ci-dessous).
 
 ## Où l'utilisateur le trouve
 
@@ -65,6 +66,39 @@ La signature combine le nom du programme, l'exception et l'emplacement fautif
 « Ajouter à #N » : le rapport devient un commentaire « Nouvelle occurrence ».
 Pour un signalement libre, les issues ouvertes au titre semblable sont
 proposées. Le relais refait cette recherche de son côté.
+
+## Envoi automatique des plantages (#438)
+
+`winlux-report --background`, lancé par l'ouverture de session
+(`winlux-session-startup`), attend 2 minutes, passe en priorité minimale et
+n'ouvre aucune fenêtre.
+
+- **Collecte** : `crash.log` est en mémoire vive et disparaît à l'arrêt. Chaque
+  plantage entre donc dans une file persistante
+  (`~/.local/state/winlux/auto-report/queue/`) dès qu'il se produit
+  (`winlux-report --crash` lance `--collect`), puis toutes les 5 minutes, et
+  l'arrêt anormal précédent (pstore) au démarrage. Au plus 50 rapports en file.
+- **Envoi** : seulement si l'horloge est plausible (jamais avant la date de
+  construction ; avec l'heure automatique, après la première synchro SNTP ou
+  15 minutes), sinon `certificate is not yet valid`. Réseau absent ou refus :
+  la file attend le démarrage connecté suivant. Au plus 5 envois par session.
+- **Déduplication** : une issue par signature `wlx-…` (`wlx-sys-…` pour un arrêt
+  du système) ; si une issue ouverte la porte, un commentaire « Nouvelle
+  occurrence », au plus un par jour et par signature (les suivants sont comptés
+  dans le commentaire d'après). Issue fermée : nouvelle issue qui la cite.
+- **Contenu** : toujours anonymisé, quel que soit le réglage « Masquer » ; en
+  français ; étiquettes `bug`, `signalement-utilisateur`, `plantage`…, plus
+  `urgence:2-confort` (`urgence:1-quotidien` pour un arrêt du système).
+- **Cible** : le relais si `RELAY=https://…`, sinon le jeton personnel collé
+  dans Paramètres > Signaler un problème > « Jeton GitHub… »
+  (`~/.config/winlux/report-token`, 0600, propre au compte). Sans l'un ni
+  l'autre, les rapports restent dans la file.
+- **Réglage** : `AUTO=on|off|default` dans `/etc/winlux/report.conf`. La case de
+  l'installateur (cochée par défaut, `account.crash_reports` en installation
+  automatique) écrit `on` ou `off`. `default` (système installé avant #438) =
+  actif seulement si un jeton personnel est présent.
+- **Suivi** : `winlux-report --auto-status`, journal
+  `~/.local/state/winlux/auto-report/journal.log`.
 
 ## Envoi sans compte GitHub : le choix
 

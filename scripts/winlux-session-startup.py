@@ -24,6 +24,13 @@ if shutil.which("winlux-report"):
     try:Gio.Subprocess.new(["winlux-report","--system"],Gio.SubprocessFlags.NONE)
     except GLib.Error as error:print(f"winlux-report: {error}")
 
+# Envoi automatique des plantages (#438) : attend 2 minutes, priorité
+# minimale, aucune fenêtre ; ne fait rien si l'envoi est coupé dans Paramètres.
+if shutil.which("winlux-report"):
+    try:Gio.Subprocess.new(["winlux-report","--background"],
+                           Gio.SubprocessFlags.STDOUT_SILENCE|Gio.SubprocessFlags.STDERR_SILENCE)
+    except GLib.Error as error:print(f"winlux-report: {error}")
+
 # Certificats d'entreprise ou d'école ajoutés dans Paramètres : aussi dans la
 # base NSS du compte (Chrome, Edge, Brave…), Firefox les a par sa politique.
 if shutil.which("winlux-certificates"):

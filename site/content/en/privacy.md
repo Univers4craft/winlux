@@ -17,6 +17,7 @@ The system sends no usage statistics and contains no telemetry. It only connects
 | Applications and packages | Ubuntu archives and application publishers | IP address, requested packages | when you install or update an application |
 | Widget weather | the wttr.in service | IP address, chosen place | only after you agree, off by default |
 | Report a problem | GitHub (public issue) | the report, which you review before sending | only when you send it |
+| Automatic crash reports | GitHub (public issue) | program involved, error type, call stack, log excerpt, processor, graphics card, memory, versions; anonymised: no user or computer name, personal file names, passwords, tokens, Wi-Fi network name, IP, MAC or e-mail addresses, or serial numbers | at the startup after the crash, in the background; offered (ticked) during installation, can be turned off in Settings > Report a problem |
 | Online AI assistants | the publisher of the chosen assistant, with your own account | your questions and what you choose to show | only if you turn an assistant on, all off by default |
 | Local AI | nobody | nothing leaves the PC | — |
 | Phone link | your phone, on the local network | the data you exchange | only if you pair it |
