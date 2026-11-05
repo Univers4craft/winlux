@@ -2,8 +2,9 @@
 
 Winlux propose à l'utilisateur de signaler un bug sur
 [les issues GitHub du projet](https://github.com/Univers4craft/winlux/issues),
-avec tout ce qu'il faut pour le diagnostiquer. Rien ne part sans action
-volontaire : pas de télémétrie, pas d'envoi silencieux, aucun compte imposé.
+avec tout ce qu'il faut pour le diagnostiquer. Pas de télémétrie, aucun
+compte imposé. Seule exception, choisie à l'installation et réversible dans
+Paramètres : l'envoi automatique des plantages (ci-dessous).
 
 ## Où l'utilisateur le trouve
 
@@ -65,6 +66,64 @@ La signature combine le nom du programme, l'exception et l'emplacement fautif
 « Ajouter à #N » : le rapport devient un commentaire « Nouvelle occurrence ».
 Pour un signalement libre, les issues ouvertes au titre semblable sont
 proposées. Le relais refait cette recherche de son côté.
+
+## Envoi automatique des plantages (#438)
+
+`winlux-report --background`, lancé par l'ouverture de session
+(`winlux-session-startup`), attend 2 minutes, passe en priorité minimale et
+n'ouvre aucune fenêtre.
+
+- **Collecte** : `crash.log` est en mémoire vive et disparaît à l'arrêt. Chaque
+  plantage entre donc dans une file persistante
+  (`~/.local/state/winlux/auto-report/queue/`) dès qu'il se produit
+  (`winlux-report --crash` lance `--collect`), puis toutes les 5 minutes, et
+  l'arrêt anormal précédent (pstore) au démarrage. Au plus 50 rapports en file.
+- **Envoi** : seulement si l'horloge est plausible (jamais avant la date de
+  construction ; avec l'heure automatique, après la première synchro SNTP ou
+  15 minutes), sinon `certificate is not yet valid`. Réseau absent ou refus :
+  la file attend le démarrage connecté suivant. Au plus 5 envois par session.
+- **Déduplication** : une issue par signature `wlx-…` (`wlx-sys-…` pour un arrêt
+  du système) ; si une issue ouverte la porte, un commentaire « Nouvelle
+  occurrence », au plus un par jour et par signature (les suivants sont comptés
+  dans le commentaire d'après). Issue fermée : nouvelle issue qui la cite.
+- **Contenu** : toujours anonymisé, quel que soit le réglage « Masquer » ; en
+  français ; étiquettes `bug`, `signalement-utilisateur`, `plantage`…, plus
+  `urgence:2-confort` (`urgence:1-quotidien` pour un arrêt du système).
+- **Cible** : le relais si `RELAY=https://…`, sinon le jeton GitHub du
+  système (Paramètres > Signaler un problème > « Jeton GitHub… »). Sans l'un ni
+  l'autre, les rapports restent dans la file.
+- **Réglage** : `AUTO=on|off|default` dans `/etc/winlux/report.conf`. La case de
+  l'installateur (cochée par défaut, `account.crash_reports` en installation
+  automatique) écrit `on` ou `off`. `default` (système installé avant #438) =
+  actif seulement si un jeton personnel est présent.
+- **Suivi** : `winlux-report --auto-status`, journal
+  `~/.local/state/winlux/auto-report/journal.log`.
+
+### Protection du jeton
+
+- Stocké dans `/etc/winlux/report-token`, propriétaire root, droits 0600 : ni le
+  compte ni les `.exe` qu'il lance ne peuvent le lire. Il n'est ni dans le
+  dossier du compte, ni dans le registre des programmes Windows, ni dans
+  l'image ISO.
+- Saisi dans Paramètres, il passe à root par l'entrée standard (jamais en
+  argument de commande, donc invisible dans la liste des processus) après
+  confirmation d'un administrateur (`report-token-set`, niveau admin du relais).
+- Les comptes remettent leurs rapports au relais root (`winlux-root control
+  report-send`, sur l'entrée standard). Root vérifie la forme (titre, signature
+  `wlx-…`, étiquettes connues, tailles), neutralise les `@mentions`, masque à
+  nouveau les données personnelles, retire le jeton s'il apparaissait, et
+  envoie au plus 10 rapports par démarrage et 30 par jour : un programme qui
+  fabriquerait de faux rapports ne peut ni lire le jeton ni inonder le dépôt.
+- Il ne part que vers `https://api.github.com` (adresse fixe côté root, sans
+  suivre de redirection) et n'est jamais écrit dans un journal.
+- Portée : jeton « fine-grained » limité au dépôt `Univers4craft/winlux`,
+  permission Issues seulement, avec une date d'expiration. S'il fuitait, il ne
+  permettrait que de créer, modifier ou fermer des issues de ce dépôt, et se
+  révoque en un clic sur GitHub.
+- Limite assumée : root peut toujours lire ce jeton. Le chiffrer sur la même
+  machine ne change rien face à root, qui lit aussi la clé (même scellée dans
+  le TPM, root peut demander à la desceller). Contre le vol de l'ordinateur,
+  la protection réelle est le chiffrement du disque proposé par l'installateur.
 
 ## Envoi sans compte GitHub : le choix
 

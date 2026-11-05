@@ -3,7 +3,8 @@
 
 Rien ne part sans action de l'utilisateur : le rapport complet, modifiable,
 est affiché avant l'envoi, et les données personnelles sont masquées par
-défaut. Aucun envoi automatique, aucune télémétrie.
+défaut. Seule exception, à activer dans Paramètres (#438) : l'envoi
+automatique des plantages, en arrière-plan, toujours anonymisé.
 
 Chemins d'envoi, du plus simple au plus contraignant pour l'utilisateur :
   1. relais Winlux (RELAY=https://…) : aucun compte requis ; le relais détient
@@ -23,6 +24,13 @@ Usage :
   winlux-report --print [--crash]    affiche le rapport (sans interface)
   winlux-report --status             réglages, format clé=valeur
   winlux-report --set CLÉ=VALEUR     offer=on|off redact=on|off mode=auto|browser|file
+                                     auto=on|off|default
+  winlux-report --background [--once] envoi automatique différé (session)
+  winlux-report --collect            met les plantages en file (sans réseau)
+  winlux-report --set-token          jeton GitHub du système lu sur l'entrée (root)
+  winlux-report --forget-token       oublie ce jeton (root)
+  winlux-report --send-stdin         envoie un rapport de la file (root)
+  winlux-report --auto-status        état de l'envoi automatique du compte
 """
 import calendar
 import functools
@@ -42,8 +50,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPO = "Univers4craft/winlux"
-API = "https://api.github.com"
+REPO = os.environ.get("WINLUX_REPORT_REPO", "Univers4craft/winlux")
+API = os.environ.get("WINLUX_GITHUB_API", "https://api.github.com")
 JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 CONF = Path(os.environ.get("WINLUX_REPORT_CONF", "/etc/winlux/report.conf"))
@@ -56,6 +64,8 @@ BODY_LIMIT = 60000
 
 T = {
  "fr": {
+  "auto_desc": "Rapport envoyé automatiquement par Winlux au démarrage suivant, données personnelles masquées.",
+  "auto_count": "Occurrences depuis le dernier envoi : {count}.",
   "window": "Signaler un problème", "crashed": "« {exe} » a cessé de fonctionner.",
   "component_failed": "Le composant Winlux « {exe} » a rencontré une erreur.",
   "manual": "Décrivez le problème : le rapport complet s'affiche ci-dessous et rien n'est envoyé sans votre accord.",
@@ -131,6 +141,8 @@ T = {
   "nothing_system": "Aucun arrêt anormal du système à signaler.",
  },
  "en": {
+  "auto_desc": "Report sent automatically by Winlux at the next startup, personal data hidden.",
+  "auto_count": "Occurrences since the last report: {count}.",
   "window": "Report a problem", "crashed": "\"{exe}\" stopped working.",
   "component_failed": "The Winlux component \"{exe}\" ran into an error.",
   "manual": "Describe the problem: the full report is shown below and nothing is sent without your consent.",
@@ -206,6 +218,8 @@ T = {
   "nothing_system": "No abnormal system stop to report.",
  },
  "es": {
+  "auto_desc": "Informe enviado automáticamente por Winlux en el siguiente arranque, datos personales ocultos.",
+  "auto_count": "Apariciones desde el último envío: {count}.",
   "window": "Informar de un problema", "crashed": "«{exe}» ha dejado de funcionar.",
   "component_failed": "El componente de Winlux «{exe}» ha sufrido un error.",
   "manual": "Describa el problema: el informe completo se muestra abajo y no se envía nada sin su permiso.",
@@ -281,6 +295,8 @@ T = {
   "nothing_system": "No hay ninguna parada anómala del sistema que informar.",
  },
  "de": {
+  "auto_desc": "Bericht automatisch von Winlux beim nächsten Start gesendet, persönliche Daten ausgeblendet.",
+  "auto_count": "Vorkommen seit dem letzten Bericht: {count}.",
   "window": "Problem melden", "crashed": "„{exe}“ funktioniert nicht mehr.",
   "component_failed": "Die Winlux-Komponente „{exe}“ hat einen Fehler festgestellt.",
   "manual": "Beschreiben Sie das Problem: Der vollständige Bericht wird unten angezeigt, nichts wird ohne Ihre Zustimmung gesendet.",
@@ -380,7 +396,10 @@ def tr(key, language=None, **values):
 
 SETTINGS = {"offer": ("OFFER", "on", ("on", "off")),
             "redact": ("REDACT", "on", ("on", "off")),
-            "mode": ("MODE", "auto", ("auto", "browser", "file"))}
+            "mode": ("MODE", "auto", ("auto", "browser", "file")),
+            # Envoi automatique des plantages : « default » = actif seulement
+            # sur une machine qui a un jeton personnel (désactivé ailleurs).
+            "auto": ("AUTO", "default", ("on", "off", "default"))}
 
 
 def read_conf(path):
@@ -429,10 +448,38 @@ def transport(conf=None):
     if conf["MODE"] == "auto":
         if conf.get("RELAY", "").startswith("https://"):
             return "relay"
-        token = conf.get("TOKEN_FILE", "")
-        if token and os.access(token, os.R_OK):
+        if token_path(conf):
             return "token"
+        if SYSTEM_TOKEN.exists():
+            return "system"
     return "browser"
+
+
+# Jeton du système : root seul le lit (0600). Les comptes et les .exe qu'ils
+# lancent ne le voient jamais ; ils remettent leurs rapports au relais root
+# (winlux-root control report-send), qui les vérifie puis les envoie.
+SYSTEM_TOKEN = Path(os.environ.get("WINLUX_REPORT_TOKEN", "/etc/winlux/report-token"))
+SYSTEM_API = "https://api.github.com"
+ROOT_STATE = Path(os.environ.get("WINLUX_REPORT_ROOT_STATE", "/var/lib/winlux/auto-report"))
+ROOT_TOOL = os.environ.get("WINLUX_ROOT_TOOL", "winlux-root")
+ROOT_MAX_PER_BOOT = 10
+ROOT_MAX_PER_DAY = 30
+
+
+def token_path(conf):
+    """TOKEN_FILE du réglage (machine de développement, lisible par le
+    compte). Le jeton normal est SYSTEM_TOKEN, réservé à root."""
+    path = conf.get("TOKEN_FILE", "")
+    if path and os.access(path, os.R_OK) and Path(path).stat().st_size > 0:
+        return path
+    return ""
+
+
+def auto_enabled(conf=None):
+    conf = conf or config()
+    if conf["AUTO"] == "default":
+        return bool(token_path(conf)) or SYSTEM_TOKEN.exists()
+    return conf["AUTO"] == "on"
 
 
 def status():
@@ -440,8 +487,12 @@ def status():
     print(f"report_offer={conf['OFFER']}")
     print(f"report_redact={conf['REDACT']}")
     print(f"report_mode={conf['MODE']}")
-    print(f"report_transport={transport(conf)}")
+    manual = transport(conf)
+    # Transport d'un rapport manuel : le jeton du système ne sert qu'aux envois automatiques.
+    print(f"report_transport={'browser' if manual == 'system' else manual}")
     print(f"report_relay={1 if conf.get('RELAY', '').startswith('https://') else 0}")
+    print(f"report_auto={conf['AUTO']}")
+    print(f"report_token={1 if SYSTEM_TOKEN.exists() else 0}")
 
 
 # ── Lecture des plantages ────────────────────────────────────────────────
@@ -791,6 +842,18 @@ def previous_boot_problem():
     return {"reason": reason, "lines": lines, "key": key}
 
 
+def system_signature(problem):
+    """Empreinte d'un arrêt anormal : première ligne d'erreur sans dates,
+    nombres ni adresses, pour retrouver le même défaut d'un démarrage à l'autre."""
+    if not problem:
+        return ""
+    lines = problem.get("lines") or [""]
+    first = next((l for l in lines if re.search(r"panic|bug|error|fault|oops", l, re.I)), lines[0])
+    first = re.sub(r"^\S+ \S+ ", "", first.strip()).lower()
+    first = re.sub(r"0x[0-9a-f]+|\b[0-9a-f]{6,}\b|\d+", "#", first)
+    return "wlx-sys-" + hashlib.sha256(first.encode(errors="replace")).hexdigest()[:12]
+
+
 def mark_system_offered(problem):
     """Une seule proposition par arrêt anormal, même au démarrage suivant."""
     marker = STATE / "system-crash-offered"
@@ -1006,6 +1069,8 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b")
 IPV4 = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|[A-Za-z0-9_-]{40,})")
+SECRET = re.compile(r"(?i)\b(pass(?:word|wd|phrase)?|pwd|mot[ _-]de[ _-]passe|psk|wpa[_-]?psk|secret|"
+                    r"api[_-]?key|token|authorization|bearer)(\s*[=:]\s*|\s+)(\"[^\"]*\"|'[^']*'|\S+)")
 HOME_PATH = re.compile(r"(?:/home/[^/\s`]+|/root|/media/[^/\s`]+/[^/\s`]+|/run/media/[^/\s`]+/[^/\s`]+|"
                        r"[A-Za-z]:\\\\?(?:[Uu]sers|home)\\\\?[^\\\s`]+)((?:[/\\][^\s\"'`<>|]*"
                        r"(?:\s(?=[^\s\"'`<>|/\\]*\.\w{1,6}\b)[^\s\"'`<>|]*)*)?)")
@@ -1043,6 +1108,7 @@ def redact(text, keep_names=(), home=None, values=None, keep_strings=()):
     if home and home not in ("/", "/root"):
         text = text.replace(home, "/home/<utilisateur>")
     text = HOME_PATH.sub(path, text)
+    text = SECRET.sub(lambda m: m.group(1) + m.group(2) + "<secret>", text)
     text = TOKEN.sub("<jeton>", text)
     text = EMAIL.sub("<e-mail>", text)
     text = MAC.sub("<adresse-mac>", text)
@@ -1079,7 +1145,7 @@ class Report:
         if system:
             reason = tr("r_panic" if system["reason"] == "panic" else "r_critical", self.language)
             self.checks.insert(0, (False, tr("k_prev", self.language, reason=reason)))
-        self.signature = signature(crash)
+        self.signature = signature(crash) or system_signature(system)
         path = (crash or {}).get("path", "")
         self.exe_name = (crash or {}).get("exe", "") or component or ""
         self.exe = pe_version(path) if path.lower().endswith((".exe", ".dll", ".com", ".scr")) else {}
@@ -1181,8 +1247,8 @@ class Report:
             out += [l[:300].replace("```", "'''") for l in self.system["lines"]] + ["```", "", "</details>", ""]
         if self.crash:
             out += [f"### {tr('h_tech', L)}", "", "| | |", "|---|---|"] + self.technical() + [""]
-            if self.signature:
-                out += [f"Signature : `{self.signature}`", ""]
+        if self.signature:
+            out += [f"Signature : `{self.signature}`", ""]
         if self.exe_name and self.crash:
             names = {"size": "Taille / Size", "sha256": "SHA-256 (16)", "version": "Version",
                      "machine": "Architecture", "kind": "Type", "ProductName": "Produit / Product",
@@ -1210,6 +1276,12 @@ class Report:
 
 # ── GitHub ───────────────────────────────────────────────────────────────
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Un jeton ne suit jamais une redirection vers un autre serveur."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def http(method, url, payload=None, token=None, timeout=20):
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -1217,9 +1289,11 @@ def http(method, url, payload=None, token=None, timeout=20):
     req.add_header("User-Agent", "winlux-report")
     if data is not None:
         req.add_header("Content-Type", "application/json")
+    opener = urllib.request.build_opener()
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+        opener = urllib.request.build_opener(NoRedirect)
+    with opener.open(req, timeout=timeout) as response:
         return json.loads(response.read().decode() or "{}")
 
 
@@ -1314,6 +1388,422 @@ def mark_offered(crash):
     except OSError:
         pass
     return True
+
+
+# ── Envoi automatique des plantages (#438) ──────────────────────────────
+#
+# Lancé par l'ouverture de session, sans fenêtre : chaque plantage du journal
+# (en mémoire vive, perdu à l'arrêt) entre dans une file persistante, puis part
+# quand le réseau et l'horloge le permettent ; sinon il attend le démarrage
+# connecté suivant. Toujours anonymisé, rédigé en français (règle du dépôt).
+
+AUTO_DIR = STATE / "auto-report"
+QUEUE = AUTO_DIR / "queue"
+AUTO_MAX_QUEUE = 50
+AUTO_MAX_SENDS = int(os.environ.get("WINLUX_REPORT_MAX_SENDS", "5"))
+AUTO_COMMENT_GAP = 24 * 3600
+BUILD_INFO = Path(os.environ.get("WINLUX_BUILD_INFO", "/usr/share/winlux/BUILD-INFO"))
+TIME_CONF = Path(os.environ.get("WINLUX_TIME_CONF", "/etc/winlux/time.conf"))
+_sent_this_run = [0]
+
+
+def auto_log(message):
+    try:
+        AUTO_DIR.mkdir(parents=True, exist_ok=True)
+        log = AUTO_DIR / "journal.log"
+        lines = log.read_text(errors="replace").splitlines()[-199:] if log.exists() else []
+        lines.append(time.strftime("%Y-%m-%dT%H:%M:%S ") + message)
+        log.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def load_json(path, default):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}")
+    tmp.write_text(json.dumps(value, ensure_ascii=False))
+    tmp.chmod(0o600)
+    tmp.replace(path)
+
+
+class Lock:
+    """Verrou de fichier : une seule collecte ou un seul envoi à la fois."""
+    def __init__(self, name, wait=True):
+        import fcntl
+        AUTO_DIR.mkdir(parents=True, exist_ok=True)
+        self.file = open(AUTO_DIR / name, "a")
+        try:
+            fcntl.flock(self.file, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            self.held = True
+        except OSError:
+            self.held = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.file.close()
+
+
+def enqueue(report, key):
+    QUEUE.mkdir(parents=True, exist_ok=True)
+    entries = sorted(QUEUE.glob("*.json"))
+    if len(entries) >= AUTO_MAX_QUEUE:
+        # File pleine (longtemps hors ligne) : on garde les plus récents.
+        for old in entries[: len(entries) - AUTO_MAX_QUEUE + 1]:
+            old.unlink(missing_ok=True)
+    description = tr("auto_desc", "fr")
+    item = {"key": key, "signature": report.signature, "kind": report.kind(), "created": int(time.time()),
+            "title": report.title(), "labels": report.labels() + [auto_urgency(report)],
+            "body": report.body(description, redacted=True),
+            "comment": report.body(description, redacted=True, comment=True)}
+    name = time.strftime("%Y%m%d-%H%M%S-") + hashlib.sha256(key.encode()).hexdigest()[:8] + ".json"
+    save_json(QUEUE / name, item)
+    auto_log(f"en file : {report.signature or key} ({item['kind']})")
+
+
+def auto_urgency(report):
+    return "urgence:1-quotidien" if report.kind() == "system" else "urgence:2-confort"
+
+
+def collect():
+    """Met en file les plantages pas encore vus ; aucun accès réseau."""
+    with Lock("collect.lock"):
+        seen = load_json(AUTO_DIR / "seen.json", [])
+        known = set(seen)
+        added = 0
+        for crash in crashes():
+            key = f"crash-{crash.get('ts')}-{crash.get('pid')}-{crash.get('exe', '')}"
+            if key in known:
+                continue
+            try:
+                enqueue(Report(crash, language="fr"), key)
+                added += 1
+            except Exception as error:  # un rapport illisible ne bloque pas les autres
+                auto_log(f"rapport impossible ({key}) : {error}")
+            seen.append(key)
+            known.add(key)
+        system = previous_boot_problem()
+        if system and f"system-{system['key']}" not in known:
+            key = f"system-{system['key']}"
+            try:
+                enqueue(Report(system=system, language="fr"), key)
+                added += 1
+            except Exception as error:
+                auto_log(f"rapport impossible ({key}) : {error}")
+            seen.append(key)
+        save_json(AUTO_DIR / "seen.json", seen[-500:])
+        return added
+
+
+def clock_ready(now=None):
+    """Pas d'HTTPS avec une horloge fausse (« certificate is not yet valid ») :
+    jamais avant la date de construction, et, si l'heure automatique est
+    active, pas avant la première synchronisation (sauf après 15 minutes)."""
+    now = now if now is not None else time.time()
+    floor = int(os.environ.get("WINLUX_CLOCK_FLOOR", "0") or 0)
+    try:
+        for line in BUILD_INFO.read_text().splitlines():
+            if line.startswith("built_at_utc="):
+                floor = max(floor, calendar.timegm(time.strptime(line.split("=", 1)[1].strip(), "%Y-%m-%dT%H:%M:%SZ")))
+    except (OSError, ValueError):
+        pass
+    if now < max(floor, 1767225600):  # 2026-01-01
+        return False
+    if load_json(RUN / "time-sync.json", {}).get("last"):
+        return True
+    if read_conf(TIME_CONF).get("AUTO", "on").lower() in ("off", "0", "false", "no"):
+        return True
+    try:
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        uptime = 0
+    return uptime > 900
+
+
+def search_signature(sig, token=None, api=None):
+    query = urllib.parse.quote(f'repo:{REPO} is:issue "{sig}"')
+    items = http("GET", f"{api or API}/search/issues?per_page=5&q={query}", token=token).get("items", [])
+    issues = [i for i in items if "pull_request" not in i]
+    issues.sort(key=lambda i: (i.get("state") != "open", i["number"]))
+    return issues[0] if issues else None
+
+
+def deliver(conf, item, sent, token=None, api=None):
+    """Envoie un élément de la file ; vrai si GitHub l'a reçu (ou s'il est
+    volontairement fondu dans un envoi récent)."""
+    sig = item.get("signature") or item["key"]
+    record = sent.get(sig, {})
+    now = int(time.time())
+    if record.get("issue") and now - record.get("last", 0) < AUTO_COMMENT_GAP:
+        record["pending"] = record.get("pending", 0) + 1
+        sent[sig] = record
+        auto_log(f"déjà envoyé aujourd'hui : {sig} (#{record['issue']})")
+        return True
+    count = record.get("pending", 0) + 1
+    comment = item["comment"]
+    if count > 1:
+        comment = tr("auto_count", "fr", count=count) + "\n\n" + comment
+    kind = "token" if token else transport(conf)
+    api = api or API
+    if kind == "relay":
+        payload = {"title": item["title"], "body": item["body"], "labels": item["labels"],
+                   "issue": record.get("issue")}
+        if record.get("issue"):
+            payload["body"] = comment
+        answer = http("POST", conf["RELAY"].rstrip("/") + "/report", payload)
+        number = answer.get("issue") or record.get("issue")
+    else:
+        token = token or Path(token_path(conf)).read_text().strip()
+        number = record.get("issue")
+        if not number and item.get("signature"):
+            found = search_signature(item["signature"], token, api)
+            if found and found.get("state") == "open":
+                number = found["number"]
+            elif found:
+                item["body"] += f"\n\nDéjà signalé dans #{found['number']} (fermée) : le défaut revient."
+        if number:
+            http("POST", f"{api}/repos/{REPO}/issues/{number}/comments", {"body": comment}, token)
+        else:
+            number = http("POST", f"{api}/repos/{REPO}/issues",
+                          {"title": item["title"], "body": item["body"], "labels": item["labels"]}, token)["number"]
+    sent[sig] = {"issue": number, "last": now, "pending": 0, "total": record.get("total", 0) + count}
+    auto_log(f"envoyé : {sig} -> #{number}")
+    return True
+
+
+def flush(conf=None):
+    """Vide la file vers GitHub. Rend le nombre d'envois, ou None si le
+    réseau, l'horloge ou la cible manquent (la file attend)."""
+    conf = conf or config()
+    kind = transport(conf)
+    if kind not in ("relay", "token", "system"):
+        return None
+    if not clock_ready():
+        auto_log("horloge pas encore à l'heure : envoi reporté")
+        return None
+    lock = Lock("send.lock", wait=False)
+    if not lock.held:
+        return None
+    with lock:
+        sent = load_json(AUTO_DIR / "sent.json", {})
+        done = 0
+        try:
+            for path in sorted(QUEUE.glob("*.json")):
+                if _sent_this_run[0] >= AUTO_MAX_SENDS:
+                    auto_log("limite d'envois atteinte : la suite partira au prochain démarrage")
+                    break
+                item = load_json(path, None)
+                if not item or "title" not in item:
+                    path.unlink(missing_ok=True)
+                    continue
+                try:
+                    if kind == "system":
+                        code = hand_to_root(item)
+                        if code == 65:  # refusé par la vérification root : inutile de réessayer
+                            auto_log("rapport refusé par le service système")
+                            path.unlink(missing_ok=True)
+                            continue
+                        if code != 0:
+                            auto_log(f"service système : envoi reporté ({code})")
+                            return done or None
+                    else:
+                        deliver(conf, item, sent)
+                except urllib.error.HTTPError as error:
+                    auto_log(f"refus de GitHub ({error.code}) : envoi reporté")
+                    if error.code == 422:  # rapport invalide : inutile de réessayer
+                        path.unlink(missing_ok=True)
+                        continue
+                    return done or None
+                except (OSError, ValueError, KeyError) as error:
+                    auto_log(f"réseau indisponible ({error}) : envoi reporté")
+                    return done or None
+                path.unlink(missing_ok=True)
+                _sent_this_run[0] += 1
+                done += 1
+        finally:
+            save_json(AUTO_DIR / "sent.json", sent)
+        return done
+
+
+def background(once=False):
+    """Ouverture de session : attend, puis collecte et envoie en tâche de fond
+    de priorité minimale, sans fenêtre ni notification."""
+    try:
+        os.nice(19)
+    except OSError:
+        pass
+    lock = Lock("background.lock", wait=False)
+    if not lock.held:
+        return 0
+    with lock:
+        time.sleep(float(os.environ.get("WINLUX_REPORT_DELAY", "120")))
+        interval = float(os.environ.get("WINLUX_REPORT_INTERVAL", "300"))
+        while True:
+            conf = config()
+            if auto_enabled(conf):
+                try:
+                    collect()
+                    flush(conf)
+                except Exception as error:  # jamais d'erreur visible
+                    auto_log(f"erreur : {error}")
+            if once:
+                return 0
+            time.sleep(interval)
+
+
+def queue_size():
+    try:
+        return len(list(QUEUE.glob("*.json")))
+    except OSError:
+        return 0
+
+
+def auto_status():
+    conf = config()
+    sent = load_json(AUTO_DIR / "sent.json", {})
+    print(f"auto_setting={conf['AUTO']}")
+    print(f"auto_enabled={1 if auto_enabled(conf) else 0}")
+    print(f"auto_token={1 if (token_path(conf) or SYSTEM_TOKEN.exists()) else 0}")
+    print(f"auto_transport={transport(conf)}")
+    print(f"auto_queue={queue_size()}")
+    print(f"auto_sent={sum(r.get('total', 0) for r in sent.values())}")
+
+
+def set_token(text):
+    """Jeton du système, écrit par root seul (Paramètres passe par le
+    relais root avec confirmation administrateur) ; jamais sur la ligne de
+    commande, jamais dans un journal."""
+    token = text.strip()
+    if not re.fullmatch(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})", token):
+        raise SystemExit("winlux-report: jeton GitHub invalide")
+    if os.geteuid() != 0 and not os.environ.get("WINLUX_REPORT_TOKEN"):
+        raise SystemExit("winlux-report: droits administrateur requis")
+    SYSTEM_TOKEN.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SYSTEM_TOKEN.with_name(SYSTEM_TOKEN.name + f".{os.getpid()}")
+    old = os.umask(0o077)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(token + "\n")
+        os.chmod(tmp, 0o600)
+        tmp.replace(SYSTEM_TOKEN)
+    finally:
+        os.umask(old)
+
+
+def hand_to_root(item):
+    """Remet un rapport au relais root par l'entrée standard. Codes : 0 envoyé,
+    65 refusé, 75 à réessayer plus tard."""
+    if os.geteuid() == 0:
+        return send_item(item)
+    try:
+        result = subprocess.run([ROOT_TOOL, "control", "report-send"], input=json.dumps(item),
+                                capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return 75
+    return result.returncode
+
+
+AUTO_TITLES = ("[Plantage] ", "[Fonction manquante] ", "[Erreur interne] ", "[Arrêt du système] ")
+AUTO_LABELS = {"bug", "signalement-utilisateur", "plantage", "fonction-manquante", "compatibilité-windows",
+               "runtime", "bureau", "urgence:1-quotidien", "urgence:2-confort"}
+
+
+def check_item(item, token=""):
+    """Vérification côté root d'un rapport remis par un compte (un .exe
+    pourrait en fabriquer) : forme d'un rapport automatique, étiquettes
+    connues, tailles bornées, mentions neutralisées, données masquées."""
+    if not isinstance(item, dict):
+        raise ValueError("rapport")
+    sig, title = item.get("signature"), item.get("title")
+    if not isinstance(sig, str) or not re.fullmatch(r"wlx-(?:sys-)?[0-9a-f]{12}", sig):
+        raise ValueError("signature")
+    if not isinstance(title, str) or not title.startswith(AUTO_TITLES) or len(title) > 256:
+        raise ValueError("titre")
+    clean = {"signature": sig, "key": str(item.get("key", sig))[:200]}
+    for field in ("title", "body", "comment"):
+        text = item.get(field)
+        if not isinstance(text, str) or len(text) > BODY_LIMIT or (field != "title" and f"`{sig}`" not in text):
+            raise ValueError(field)
+        text = re.sub(r"@(?=[\w-])", "@​", text)
+        if token:
+            text = text.replace(token, "<jeton>")
+        clean[field] = redact(text, keep_strings=re.findall(r"\b\d+(?:\.\d+){3}\b", text))
+    labels = item.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("étiquettes")
+    clean["labels"] = [l for l in labels if isinstance(l, str) and l in AUTO_LABELS][:8]
+    return clean
+
+
+def root_budget():
+    """Au plus ROOT_MAX_PER_BOOT envois par démarrage et ROOT_MAX_PER_DAY par
+    jour, quel que soit le compte ou le programme qui les demande."""
+    state = load_json(ROOT_STATE / "budget.json", {})
+    boot = read_text("/proc/sys/kernel/random/boot_id")
+    now = int(time.time())
+    if state.get("boot") != boot:
+        state = {"boot": boot, "count": 0, "days": state.get("days", [])}
+    state["days"] = [t for t in state.get("days", []) if now - t < 86400]
+    if state["count"] >= ROOT_MAX_PER_BOOT or len(state["days"]) >= ROOT_MAX_PER_DAY:
+        return None
+    return state
+
+
+def send_item(item):
+    """Côté root : vérifie et envoie un rapport avec le jeton du système."""
+    try:
+        token = SYSTEM_TOKEN.read_text().strip()
+    except OSError:
+        return 75
+    try:
+        item = check_item(item, token)
+    except ValueError:
+        return 65
+    if not clock_ready():
+        return 75
+    ROOT_STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with Lock_at(ROOT_STATE / "send.lock"):
+        budget = root_budget()
+        if budget is None:
+            return 75
+        sent = load_json(ROOT_STATE / "sent.json", {})
+        try:
+            deliver({}, item, sent, token=token, api=SYSTEM_API)
+        except urllib.error.HTTPError as error:
+            return 65 if error.code == 422 else 75
+        except (OSError, ValueError, KeyError):
+            return 75
+        budget["count"] += 1
+        budget["days"].append(int(time.time()))
+        save_json(ROOT_STATE / "budget.json", budget)
+        save_json(ROOT_STATE / "sent.json", sent)
+    return 0
+
+
+def send_stdin():
+    try:
+        item = json.loads(sys.stdin.read(BODY_LIMIT * 3 + 4096))
+    except ValueError:
+        return 65
+    return send_item(item)
+
+
+class Lock_at(Lock):
+    def __init__(self, path):
+        import fcntl
+        self.file = open(path, "a")
+        fcntl.flock(self.file, fcntl.LOCK_EX)
+        self.held = True
 
 
 # ── Interface ────────────────────────────────────────────────────────────
@@ -1411,6 +1901,10 @@ def gui(report, conf):
     box.pack_start(expander, True, True, 0)
 
     kind = transport(conf)
+    if kind == "system":
+        # Le jeton du système ne sert qu'aux rapports automatiques vérifiés par
+        # root : un rapport libre passe par le navigateur.
+        kind = "browser"
     via = Gtk.Label(label=tr("via_" + kind, L), xalign=0, wrap=True)
     box.pack_start(via, False, False, 0)
     notice = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
@@ -1610,6 +2104,23 @@ def main(argv):
     if "--set" in args:
         set_value(option("--set", ""))
         return 0
+    if "--background" in args:
+        return background("--once" in args)
+    if "--collect" in args:
+        if auto_enabled():
+            collect()
+        return 0
+    if "--auto-status" in args:
+        auto_status()
+        return 0
+    if "--set-token" in args:
+        set_token(sys.stdin.read())
+        return 0
+    if "--forget-token" in args:
+        SYSTEM_TOKEN.unlink(missing_ok=True)
+        return 0
+    if "--send-stdin" in args:
+        return send_stdin()
     if "--open-saved" in args:
         directory = STATE / "reports"
         directory.mkdir(parents=True, exist_ok=True)
@@ -1624,6 +2135,9 @@ def main(argv):
                 print(tr("nothing_system"))
             return 3
         if "--print" not in args and "--force" not in args:
+            # Envoi automatique actif : l'arrêt part en arrière-plan, sans fenêtre.
+            if auto_enabled(conf) and transport(conf) in ("relay", "token", "system"):
+                return 0
             if conf["OFFER"] == "off":
                 return 4
             if not mark_system_offered(system):
@@ -1638,6 +2152,13 @@ def main(argv):
             if "--print" in args:
                 print(tr("nothing"))
             return 3
+        if "--print" not in args and auto_enabled(conf):
+            # Gardé tout de suite : crash.log est perdu à l'arrêt.
+            try:
+                subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0]), "--collect"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError:
+                pass
         if "--print" not in args and "--force" not in args:
             # 4 : proposition désactivée dans Paramètres, le lanceur affiche
             # alors son simple message d'erreur.

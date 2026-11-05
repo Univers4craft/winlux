@@ -194,6 +194,9 @@ jobs:
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
 
+      - name: Vérifier l'envoi automatique des plantages (file, anonymisation, dédoublonnage)
+        run: python3 -B scripts/test-report-auto.py
+
       - name: Vérifier l'écran de verrouillage (mot de passe, inactivité, réveil)
         run: python3 -B scripts/test-lock.py
 

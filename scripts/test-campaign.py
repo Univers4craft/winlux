@@ -398,4 +398,30 @@ ok("open_pending_link()" in settings and '"Définir {name} par défaut"' in sett
 ok("add_langpacks" in (SCRIPTS / "winlux-browsers.sh").read_text() and "firefox-l10n-{lang}" in (SCRIPTS / "prepare-browser-packages.py").read_text(),
    "Firefox installé avec ses paquets de langue fr, de, es")
 
+# ── Envoi automatique des plantages (#438) ───────────────────────────────
+# crash.log est en mémoire vive : un plantage non signalé disparaissait au
+# redémarrage. Il part maintenant au démarrage suivant, sans fenêtre.
+startup = (SCRIPTS / "winlux-session-startup.py").read_text()
+ok('"winlux-report","--background"' in startup and "STDERR_SILENCE" in startup,
+   "ouverture de session : envoi des plantages en arrière-plan, sans sortie visible")
+report_tool = (SCRIPTS / "winlux-report.py").read_text()
+ok("def clock_ready" in report_tool and "time-sync.json" in report_tool,
+   "envoi automatique : attend une horloge juste (piège TLS « not yet valid »)")
+ok('"--collect"' in report_tool and "auto-report" in report_tool,
+   "plantage gardé dans une file persistante dès qu'il se produit")
+installer = (SCRIPTS / "winlux-installer.py").read_text()
+ok('"crash_reports": True' in installer and "write_report_choice(etc" in installer
+   and installer.count('"crash_reports":') >= 7,
+   "installateur : case « envoyer les plantages » proposée cochée, traduite, écrite dans report.conf")
+ok("report-token-set) winlux-report --set-token" in (SCRIPTS / "winlux-control.sh").read_text()
+   and 'input=entry.get_text()' in (SCRIPTS / "winlux-settings-pages.py").read_text(),
+   "jeton GitHub : passé à root par l'entrée standard, jamais en argument ni dans le compte")
+ok("report-auto-on|report-auto-off" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "report-auto-on" in (SCRIPTS / "winlux-settings-pages.py").read_text(),
+   "Paramètres > Signaler un problème : interrupteur de l'envoi automatique")
+for language, word in (("fr", "anonymisé"), ("en", "anonymised"), ("de", "anonymisiert"), ("es", "anónimo")):
+    privacy = (ROOT / f"site/content/{language}/privacy.md").read_text()
+    ok(word in privacy and "Wi-Fi" in privacy.replace("WLAN", "Wi-Fi"),
+       f"page confidentialité ({language}) : envoi automatique documenté")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
