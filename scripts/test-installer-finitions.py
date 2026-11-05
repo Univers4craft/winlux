@@ -105,3 +105,22 @@ assert namespace["benchmark_weakest"](types.SimpleNamespace(benchmark=None)) is 
 settings = (project / "scripts/winlux-settings.py").read_text()
 assert "Gardez la VM" not in settings and "Keep the VM running" not in settings
 print("test-installer-finitions : OK (veille, accent Prisme, note complète, texte des mises à jour)")
+
+# « Note de performance : 2,0 » sans explication (testeur VM) : échelle et sens.
+import winlux_benchmark  # noqa: E402
+helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("benchmark_level", "benchmark_text")] \
+    if "tree" in dir() else [n for n in ast.parse(source).body
+                             if isinstance(n, ast.FunctionDef) and n.name in ("benchmark_level", "benchmark_text")]
+assert len(helpers) == 2, "benchmark_level / benchmark_text introuvables"
+texts = {"summary_benchmark_scale": "{score} sur {top}", "bench_level_1": "usage léger", "bench_level_2": "courant",
+         "bench_level_3": "confortable", "bench_level_4": "très rapide"}
+scope = {"tr": lambda key, **kw: texts[key].format(**kw), "winlux_benchmark": winlux_benchmark}
+exec(compile(ast.Module(body=helpers, type_ignores=[]), "installer", "exec"), scope)
+assert scope["benchmark_text"](2.0) == "2,0 sur 9,9, usage léger", scope["benchmark_text"](2.0)
+assert scope["benchmark_level"](4.9) == "bench_level_2" and scope["benchmark_level"](5.0) == "bench_level_3"
+assert scope["benchmark_level"](8.7) == "bench_level_4"
+for key in texts:
+    assert source.count(f'"{key}":') == 6, f"{key} : pas en 6 langues"
+assert 'score = benchmark_text(self.benchmark["base_score"])' in source
+assert 'tr("bench_done") + "\\n" + benchmark_text(self.benchmark["base_score"])' in source
+print("note de performance : « 2,0 sur 9,9, pour un usage léger… » et ce qui la limite, en 6 langues")

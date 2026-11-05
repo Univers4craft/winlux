@@ -968,6 +968,16 @@ fn resolve_icon_path(request: &str) -> Option<PathBuf> {
     pixmap.is_file().then_some(pixmap)
 }
 
+/// Icône du thème Linux (nom freedesktop) en image avec alpha.
+pub(crate) fn theme_icon(name: &str) -> Option<super::icons::Image> {
+    let (w, h, rgba) = decode_png(&resolve_icon_path(name)?)?;
+    let px = rgba
+        .iter()
+        .map(|p| ((p[3] as u32) << 24) | ((p[2] as u32) << 16) | ((p[1] as u32) << 8) | p[0] as u32)
+        .collect();
+    Some(super::icons::Image { w, h, px })
+}
+
 fn decode_png(path: &Path) -> Option<(usize, usize, Vec<[u8; 4]>)> {
     let file = File::open(path).ok()?;
     let mut decoder = png::Decoder::new(BufReader::new(file));

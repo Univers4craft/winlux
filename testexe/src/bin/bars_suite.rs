@@ -22,6 +22,9 @@ use winlux_testexe::*;
 extern "C" {
     fn SendMessageA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn GetParent(hwnd: Handle) -> Handle;
+    fn LoadIconA(inst: Handle, name: usize) -> Handle;
+    fn GetIconInfo(icon: Handle, info: *mut [usize; 4]) -> i32;
+    fn DestroyIcon(icon: Handle) -> i32;
     fn IsWindowVisible(hwnd: Handle) -> i32;
     fn SetWindowLongPtrA(hwnd: Handle, index: i32, value: isize) -> isize;
     fn GetWindowLongPtrA(hwnd: Handle, index: i32) -> isize;
@@ -37,6 +40,10 @@ extern "C" {
 #[link(name = "comctl32", kind = "raw-dylib")]
 extern "C" {
     fn InitCommonControlsEx(icc: *const [u32; 2]) -> i32;
+    fn ImageList_Create(cx: i32, cy: i32, flags: u32, initial: i32, grow: i32) -> Handle;
+    fn ImageList_AddIcon(himl: Handle, icon: Handle) -> i32;
+    fn ImageList_GetImageCount(himl: Handle) -> i32;
+    fn ImageList_GetIcon(himl: Handle, i: i32, flags: u32) -> Handle;
     fn CreateToolbarEx(
         parent: Handle,
         style: u32,
@@ -520,6 +527,29 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(
             END_EDITS == 1 && &END_EDIT_TEXT[..9] == b"C:\\Users\0",
             "CBEN_ENDEDIT avec le chemin tape"
+        );
+
+        // Icônes et listes d'images (#437).
+        let icon = LoadIconA(core::ptr::null_mut(), 32512); // IDI_APPLICATION
+        check!(!icon.is_null(), "LoadIcon(IDI_APPLICATION)");
+        let mut info = [0usize; 4];
+        check!(
+            GetIconInfo(icon, &mut info) != 0 && info[3] != 0,
+            "GetIconInfo donne une bitmap couleur"
+        );
+        let himl = ImageList_Create(16, 16, 0x21, 1, 4); // ILC_COLOR32 | ILC_MASK
+        check!(ImageList_AddIcon(himl, icon) == 0, "ImageList_AddIcon");
+        check!(
+            ImageList_GetImageCount(himl) == 1,
+            "ImageList_GetImageCount"
+        );
+        let back = ImageList_GetIcon(himl, 0, 0);
+        check!(!back.is_null(), "ImageList_GetIcon");
+        DestroyIcon(back);
+        check!(
+            SendMessageA(LIST, 0x1003, 1, himl as isize) == 0
+                && SendMessageA(LIST, 0x1002, 1, 0) as Handle == himl,
+            "LVM_SETIMAGELIST / LVM_GETIMAGELIST"
         );
 
         // CreateToolbarEx (barre d'en-tête d'un panneau de 7-Zip) : boutons
