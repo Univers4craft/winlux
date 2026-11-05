@@ -934,6 +934,27 @@ pub unsafe extern "win64" fn lc_map_string_ex(
 
 /// GetFinalPathNameByHandleW : chemin Windows du fichier ouvert, au format
 /// `\\?\C:\…` par défaut ou sans préfixe avec VOLUME_NAME_NONE (4).
+/// Version ANSI : même chemin, converti dans la page de codes du système.
+pub unsafe extern "win64" fn get_final_path_name_by_handle_a(
+    handle: usize,
+    buf: *mut u8,
+    len: u32,
+    flags: u32,
+) -> u32 {
+    let mut wide = vec![0u16; 32768];
+    let n = get_final_path_name_by_handle_w(handle, wide.as_mut_ptr(), wide.len() as u32, flags);
+    if n == 0 {
+        return 0;
+    }
+    let bytes = crate::dlls::encode_ansi(&String::from_utf16_lossy(&wide[..n as usize]));
+    if buf.is_null() || (len as usize) <= bytes.len() {
+        return bytes.len() as u32 + 1;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    *buf.add(bytes.len()) = 0;
+    bytes.len() as u32
+}
+
 pub unsafe extern "win64" fn get_final_path_name_by_handle_w(
     handle: usize,
     buf: *mut u16,
@@ -1005,6 +1026,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCurrentPackagePath" => fn get_current_package_path,
         "IsWow64Process" => fn is_wow64_process, "LCMapStringEx" => fn lc_map_string_ex,
         "GetFinalPathNameByHandleW" => fn get_final_path_name_by_handle_w,
+        "GetFinalPathNameByHandleA" => fn get_final_path_name_by_handle_a,
     }
 }
 

@@ -658,6 +658,32 @@ pub unsafe extern "win64" fn CertEnumCertificatesInStore(h: usize, prev: usize) 
     }
 }
 
+/// CertDeleteCertificateFromStore : retire le certificat de son magasin
+/// et libère toujours le contexte passé.
+pub unsafe extern "win64" fn CertDeleteCertificateFromStore(ctx: usize) -> i32 {
+    let Some(c) = cert(ctx) else {
+        set_last_error(E_INVALIDARG);
+        return 0;
+    };
+    let h = c.ctx.store;
+    if let Some(s) = store(h) {
+        let mut certs = super::lock(&s.certs);
+        if let Some(i) = certs.iter().position(|&x| x == ctx) {
+            certs.remove(i);
+            drop(certs);
+            release(ctx);
+        }
+    }
+    release(ctx);
+    1
+}
+
+/// CertEnumCRLsInStore : Winlux ne tient pas de listes de révocation.
+pub extern "win64" fn CertEnumCRLsInStore(_h: usize, _prev: usize) -> usize {
+    set_last_error(CRYPT_E_NOT_FOUND);
+    0
+}
+
 pub extern "win64" fn CertFreeCertificateContext(ctx: usize) -> i32 {
     release(ctx);
     1
@@ -2269,6 +2295,8 @@ pub fn exports() -> crate::dlls::Exports {
         "CertAddStoreToCollection" => fn CertAddStoreToCollection,
         "CertEnumCertificatesInStore" => fn CertEnumCertificatesInStore,
         "CertFreeCertificateContext" => fn CertFreeCertificateContext,
+        "CertDeleteCertificateFromStore" => fn CertDeleteCertificateFromStore,
+        "CertEnumCRLsInStore" => fn CertEnumCRLsInStore,
         "CertDuplicateCertificateContext" => fn CertDuplicateCertificateContext,
         "CertCreateCertificateContext" => fn CertCreateCertificateContext,
         "CertAddEncodedCertificateToStore" => fn CertAddEncodedCertificateToStore,

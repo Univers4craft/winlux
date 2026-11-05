@@ -100,6 +100,7 @@ pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
 pub mod named_pipes;
+pub mod ncrypt;
 pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
@@ -384,6 +385,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "mscoree",
                 exports: mscoree::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ncrypt",
+                exports: ncrypt::exports(),
                 handle: fake_module(),
             },
             Builtin {

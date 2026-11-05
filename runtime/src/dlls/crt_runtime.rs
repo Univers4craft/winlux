@@ -1533,6 +1533,42 @@ pub unsafe extern "win64" fn getcwd(buf: *mut u8, size: i32) -> *mut u8 {
     std::ptr::copy_nonoverlapping(b.as_ptr(), buf, b.len());
     buf
 }
+/// _open_osfhandle : descripteur CRT d'un handle de fichier Windows. Les
+/// descripteurs CRT de Winlux sont ceux de Linux : on duplique le fd du
+/// handle (les deux se ferment séparément).
+pub unsafe extern "win64" fn open_osfhandle(handle: isize, _flags: i32) -> i32 {
+    let fd = crate::dlls::kernel32::handle_to_fd(handle as usize);
+    if fd < 0 {
+        *errno() = 9; // EBADF
+        return -1;
+    }
+    if fd <= 2 {
+        return fd;
+    }
+    let d = libc::dup(fd);
+    if d < 0 {
+        set_errno_from_os();
+    }
+    d
+}
+
+static MAX_STDIO: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(512);
+
+/// _getmaxstdio / _setmaxstdio : nombre de FILE* ouvrables (20 à 8192).
+pub extern "win64" fn getmaxstdio() -> i32 {
+    MAX_STDIO.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub extern "win64" fn setmaxstdio(n: i32) -> i32 {
+    if !(20..=8192).contains(&n) {
+        unsafe {
+            *errno() = 22;
+        }
+        return -1;
+    }
+    MAX_STDIO.store(n, std::sync::atomic::Ordering::Relaxed);
+    n
+}
+
 pub extern "win64" fn get_osfhandle(fd: i32) -> isize {
     match fd {
         0 => -10,
@@ -1689,6 +1725,7 @@ pub fn exports() -> crate::dlls::Exports {
         "_isatty" => fn isatty, "_dup" => fn dup, "_dup2" => fn dup2, "_setmode" => fn setmode, "_access" => fn access,
         "_unlink" => fn unlink, "_mkdir" => fn mkdir, "_rmdir" => fn rmdir, "_chdir" => fn chdir, "_getcwd" => fn getcwd,
         "_get_osfhandle" => fn get_osfhandle, "_getpid" => fn getpid,
+        "_open_osfhandle" => fn open_osfhandle, "_getmaxstdio" => fn getmaxstdio, "_setmaxstdio" => fn setmaxstdio,
         "_beginthreadex" => fn beginthreadex, "_beginthread" => fn beginthread,
         "_set_new_mode" => fn set_new_mode, "_query_new_mode" => fn query_new_mode,
         "_get_wide_winmain_command_line" => fn get_wide_winmain_command_line,
