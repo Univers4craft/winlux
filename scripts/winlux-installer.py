@@ -5560,10 +5560,28 @@ class InstallerApp(Gtk.Application):
                     subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                 except (OSError, subprocess.SubprocessError):
                     pass
+        inhibit = os.path.join(getattr(self, "inhibit_dir", "/run/winlux/power-inhibit"), f"{os.getpid()}-installer")
         if active:
             quiet("xset", "s", "off")
             quiet("xset", "-dpms")
             quiet("xscreensaver-command", "-deactivate")
+            # Testeur VM, v0.2.19 : l'économiseur s'allumait encore pendant la
+            # copie. Arrêté pour toute l'installation (relancé à la fin), et
+            # demande d'éveil au démon d'alimentation Winlux (écran et veille,
+            # comme SetThreadExecutionState).
+            if not getattr(self, "saver_stopped", False) and shutil.which("xscreensaver-command"):
+                try:
+                    stopped = subprocess.run(["xscreensaver-command", "-exit"], stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL, timeout=5).returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    stopped = False
+                self.saver_stopped = stopped
+            try:
+                os.makedirs(os.path.dirname(inhibit), exist_ok=True)
+                with open(inhibit, "w") as handle:
+                    handle.write("0x80000003\n")   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+            except OSError:
+                pass
             if getattr(self, "awake_stop", None) is None:
                 # Fil à part, pas un minuteur GLib : le réveil continue même si
                 # la boucle de l'interface est occupée par la copie. En v0.2.16,
@@ -5591,6 +5609,20 @@ class InstallerApp(Gtk.Application):
                 self.awake_stop = None
             quiet("xset", "s", "default")
             quiet("xset", "+dpms")
+            try:
+                os.unlink(inhibit)
+            except OSError:
+                pass
+            if getattr(self, "saver_stopped", False):
+                self.saver_stopped = False
+                saver = shutil.which("xscreensaver")
+                if saver:
+                    try:
+                        with open(getattr(self, "saver_log", "/run/winlux/screensaver.log"), "ab") as log:
+                            subprocess.Popen([saver, "-no-splash"], stdin=subprocess.DEVNULL, stdout=log,
+                                             stderr=log, start_new_session=True)
+                    except OSError:
+                        pass
 
     def start_installation(self):
         self.current_step = step_index("progress")

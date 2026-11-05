@@ -27,31 +27,40 @@ import os, shutil, subprocess, tempfile, threading, time  # noqa: E401,E402
 cls_k = next(n for n in tree.body if isinstance(n, ast.ClassDef) and any(
     isinstance(f, ast.FunctionDef) and f.name == "keep_awake" for f in n.body))
 keep = next(f for f in cls_k.body if isinstance(f, ast.FunctionDef) and f.name == "keep_awake")
-ns = {"shutil": shutil, "subprocess": subprocess, "threading": threading}
+ns = {"shutil": shutil, "subprocess": subprocess, "threading": threading, "os": os}
 exec(compile(ast.Module(body=[keep], type_ignores=[]), "installer", "exec"), ns)
 with tempfile.TemporaryDirectory() as bindir:
     log = Path(bindir) / "log"
-    for tool in ("xset", "xscreensaver-command", "xdotool"):
+    for tool in ("xset", "xscreensaver-command", "xdotool", "xscreensaver"):
         script = Path(bindir) / tool
         script.write_text(f'#!/bin/sh\necho "{tool} $*" >>"{log}"\n')
         script.chmod(0o755)
     old_path = os.environ["PATH"]
     os.environ["PATH"] = bindir + os.pathsep + old_path
     try:
-        app = types.SimpleNamespace(awake_interval=0.2)
+        inhibit_dir = Path(bindir) / "power-inhibit"
+        app = types.SimpleNamespace(awake_interval=0.2, inhibit_dir=str(inhibit_dir), saver_log=str(Path(bindir) / "saver.log"))
         ns["keep_awake"](app, True)
         ns["keep_awake"](app, True)  # un seul fil même si appelé deux fois
+        inhibit = inhibit_dir / f"{os.getpid()}-installer"
+        assert inhibit.read_text().strip() == "0x80000003", "pas de demande d'éveil au démon d'alimentation"
         time.sleep(1.0)
         ns["keep_awake"](app, False)
+        assert not inhibit.exists(), "demande d'éveil laissée après l'installation"
+        time.sleep(0.3)
         calls = log.read_text().splitlines()
         time.sleep(0.5)
         assert log.read_text().splitlines() == calls, "le fil continue après la fin"
     finally:
         os.environ["PATH"] = old_path
-    assert calls[:3] == ["xset s off", "xset -dpms", "xscreensaver-command -deactivate"], calls
+    assert calls[:4] == ["xset s off", "xset -dpms", "xscreensaver-command -deactivate", "xscreensaver-command -exit"], calls
+    assert calls.count("xscreensaver-command -exit") == 1, calls
+    assert calls[-1] == "xscreensaver -no-splash", "économiseur non relancé après l'installation"
+    calls = calls[:-1]
     pokes = [c for c in calls if c.startswith("xdotool mousemove_relative -- 1 0")]
     assert 3 <= len(pokes) <= 7, calls
     assert calls.count("xset s reset") == len(pokes) and calls[-2:] == ["xset s default", "xset +dpms"], calls
+    print("installation : économiseur arrêté puis relancé, demande d'éveil au démon d'alimentation")
 
 # Couleurs : plus de bleu Windows pour ext4, accent Prisme sur les contrôles.
 colors = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "PART_COLORS")
