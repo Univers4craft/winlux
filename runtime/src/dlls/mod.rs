@@ -1065,7 +1065,31 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
 }
 
 /// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
+/// Fonctions que Windows place dans KernelBase.dll (et ses API-sets) mais
+/// pas dans kernel32.dll : GetProcAddress(kernel32, …) doit y échouer,
+/// sinon une appli prend un chemin que Windows ne lui fait jamais prendre
+/// (VLC appelait un pointeur resté nul, #495).
+pub const KERNELBASE_ONLY: &[&str] = &["WaitOnAddress", "WakeByAddressAll", "WakeByAddressSingle"];
+
+/// HMODULE distinct de KernelBase.dll et des API-sets api-ms-win-core-* :
+/// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`.
+pub fn kernelbase_handle() -> usize {
+    static H: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *H.get_or_init(fake_module)
+}
+
+/// Le nom désigne-t-il KernelBase ou un API-set du noyau (et non kernel32) ?
+fn is_kernelbase_name(dll: &str) -> bool {
+    let l = dll.to_ascii_lowercase();
+    let l = l.rsplit(['\\', '/']).next().unwrap_or(&l).to_string();
+    let base = l.strip_suffix(".dll").unwrap_or(&l);
+    (base == "kernelbase" || base.starts_with("api-ms-win-core-")) && normalize(dll) == "kernel32"
+}
+
 pub fn module_handle(dll: &str) -> Option<usize> {
+    if is_kernelbase_name(dll) {
+        return Some(kernelbase_handle());
+    }
     let n = normalize(dll);
     if prefers_real_file(&n) {
         if let Some(m) = crate::loader::find_module_by_name(dll) {
@@ -1095,6 +1119,9 @@ pub fn builtin_exports() -> Vec<(&'static str, Vec<&'static str>)> {
 
 /// Si `h` est le HMODULE d'une DLL intégrée, renvoie son nom normalisé.
 pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
+    if h == kernelbase_handle() {
+        return Some("kernel32");
+    }
     builtins().iter().find(|b| b.handle == h).map(|b| b.name)
 }
 
