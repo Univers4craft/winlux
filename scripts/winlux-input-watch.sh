@@ -9,6 +9,11 @@
 # disposition choisie (XKB_LAYOUT de /etc/winlux/input.conf) et les réglages
 # du pavé tactile et de la souris sont réappliqués.
 #
+# La liste comparée est celle du noyau ET celle du serveur X (xinput) : le
+# noyau voit le clavier avant que X ne l'ajoute (pilote, udev), parfois plus
+# d'une seconde avant. Réappliquer sur le seul changement du noyau laissait le
+# clavier arrivé ensuite dans X avec la disposition par défaut (QWERTY).
+#
 #   winlux-input-watch           surveille (session graphique, $DISPLAY)
 #   winlux-input-watch --once    réapplique une fois
 # WINLUX_INPUT_ROOT déplace /proc et /etc (tests) ; WINLUX_INPUT_INTERVAL.
@@ -27,7 +32,10 @@ apply() {
 
 devices() {
     # Noms et gestionnaires seulement : les compteurs ne changent pas la liste.
-    grep -E '^(N|H):' "$root/proc/bus/input/devices" 2>/dev/null | cksum
+    {
+        grep -E '^(N|H):' "$root/proc/bus/input/devices" 2>/dev/null
+        xinput list --id-only 2>/dev/null
+    } | cksum
 }
 
 if test "${1:-}" = --once; then

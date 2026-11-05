@@ -181,6 +181,10 @@ watch_bin.mkdir()
 xkb_log = tmp / "setxkbmap.log"
 (watch_bin / "setxkbmap").write_text(f"#!/bin/sh\necho \"$*\" >>{xkb_log}\n")
 (watch_bin / "setxkbmap").chmod(0o755)
+# Faux xinput : la liste des périphériques du serveur X, lue dans un fichier.
+(watch_bin / "xinput").write_text(f"#!/bin/sh\ncat {watch_bin / 'xinput-ids'} 2>/dev/null\n")
+(watch_bin / "xinput").chmod(0o755)
+(watch_bin / "xinput-ids").write_text("2\n3\n4\n")
 watch_env = dict(os.environ, PATH=f"{watch_bin}:{os.environ['PATH']}", WINLUX_INPUT_ROOT=str(watch_root),
                  WINLUX_INPUT_INTERVAL="0.2", XDG_RUNTIME_DIR=str(tmp), DISPLAY=":98")
 watcher = subprocess.Popen(["sh", str(HERE / "winlux-input-watch.sh")], env=watch_env)
@@ -196,6 +200,20 @@ try:
         time.sleep(0.1)
     check(xkb_log.exists() and xkb_log.read_text().split() == ["fr"],
           f"clavier branché à chaud : setxkbmap {xkb_log.read_text() if xkb_log.exists() else 'jamais appelé'}")
+    # Le serveur X ajoute le clavier après le noyau (plus d'une seconde parfois) :
+    # la disposition doit être réappliquée quand X l'ajoute, pas seulement au
+    # changement de /proc (sinon le clavier arrivé dans X restait en QWERTY).
+    time.sleep(1.5)
+    xkb_log.unlink()
+    time.sleep(1.5)
+    check(not xkb_log.exists(), "disposition réappliquée sans changement")
+    (watch_bin / "xinput-ids").write_text("2\n3\n4\n12\n")
+    for _ in range(40):
+        if xkb_log.exists():
+            break
+        time.sleep(0.1)
+    check(xkb_log.exists() and xkb_log.read_text().split() == ["fr"],
+          "clavier ajouté par X après le noyau : disposition non réappliquée")
 finally:
     watcher.terminate()
     watcher.wait(timeout=5)
