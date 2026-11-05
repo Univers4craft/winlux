@@ -90,6 +90,7 @@ const GL_LINE_STRIP_ADJACENCY: u32 = 0x000B;
 const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
 const GL_TEXTURE_MAX_LEVEL: u32 = 0x813D;
+const GL_TEXTURE_BASE_LEVEL: u32 = 0x813C;
 
 /// Étages suivis : VS, PS, GS.
 pub(super) const STAGES: [Stage; 3] = [Stage::Vertex, Stage::Pixel, Stage::Geometry];
@@ -590,7 +591,7 @@ pub(super) struct ConstantBuffer {
 pub(super) struct State {
     pub shaders: [BoundShader; 3],
     pub cbs: [[ConstantBuffer; MAX_CB]; 3],
-    pub srvs: [[gl::GLuint; MAX_SRV]; 3],
+    pub srvs: [[SrvBinding; MAX_SRV]; 3],
     pub samplers: [[usize; MAX_SAMPLER]; 3],
     pub vbs: [(gl::GLuint, u32, u32); MAX_VB],
     pub index_buffer: gl::GLuint,
@@ -609,7 +610,7 @@ impl Default for State {
         State {
             shaders: [BoundShader::default(); 3],
             cbs: [[ConstantBuffer::default(); MAX_CB]; 3],
-            srvs: [[0; MAX_SRV]; 3],
+            srvs: [[SrvBinding::default(); MAX_SRV]; 3],
             samplers: [[0; MAX_SAMPLER]; 3],
             vbs: [(0, 0, 0); MAX_VB],
             index_buffer: 0,
@@ -621,6 +622,42 @@ impl Default for State {
             depth: 0,
             stencil_ref: 0,
             scissors: Vec::new(),
+        }
+    }
+}
+
+/// Vue de ressource liée : texture et niveaux de mip visibles. ANGLE crée
+/// ses vues avec MipLevels=1 sur des textures à mips dont seul le niveau 0
+/// est rempli : sans cette limite, une texture réduite à l'écran lit un
+/// niveau vide et ne dessine rien (#516).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct SrvBinding {
+    pub tex: gl::GLuint,
+    pub base: i32,
+    pub max: i32,
+}
+
+impl SrvBinding {
+    /// D'après le descripteur D3D11 de la vue (Texture2D, Texture2DArray,
+    /// TextureCube : MostDetailedMip puis MipLevels, -1 = jusqu'au bout).
+    pub(super) unsafe fn of_view(view: *mut SimpleComObj) -> Self {
+        let tex = (*view).resource_tex;
+        let d = (*view).view_desc;
+        let levels = as_texture2d((*view).view_resource).map_or(1, |t| (*t).desc.mip_levels.max(1));
+        let (base, count) = match d[1] {
+            4 | 5 | 9 | 10 => (d[2], d[3]),
+            _ => (0, u32::MAX),
+        };
+        let base = base.min(levels - 1);
+        let last = if count == u32::MAX || count == 0 {
+            levels - 1
+        } else {
+            (base + count - 1).min(levels - 1)
+        };
+        SrvBinding {
+            tex,
+            base: base as i32,
+            max: last as i32,
         }
     }
 }
@@ -908,10 +945,14 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
             Some(Meta::Shader { pairs, .. }) => pairs.clone(),
             _ => Vec::new(),
         };
-        for (t, &tex) in s.srvs[i].iter().enumerate() {
+        for (t, srv) in s.srvs[i].iter().enumerate() {
             let unit = base + t as u32;
             (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
-            (g.BindTexture)(GL_TEXTURE_2D, tex);
+            (g.BindTexture)(GL_TEXTURE_2D, srv.tex);
+            if srv.tex != 0 {
+                (g.TexParameteri)(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, srv.base);
+                (g.TexParameteri)(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, srv.max);
+            }
             let sampler_slot = pairs.iter().find(|p| p.0 == t as u32).map(|p| p.1 as usize);
             let sampler = sampler_slot
                 .and_then(|n| s.samplers[i].get(n).copied())
@@ -1087,7 +1128,8 @@ unsafe fn set_srvs(
             } else {
                 *views.add(i)
             };
-            s.srvs[stage][slot] = as_simple(v).map_or(0, |o| (*o).resource_tex);
+            s.srvs[stage][slot] =
+                as_simple(v).map_or(SrvBinding::default(), |o| SrvBinding::of_view(o));
         }
     });
 }

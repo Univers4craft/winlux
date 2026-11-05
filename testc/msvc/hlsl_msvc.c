@@ -155,8 +155,11 @@ void entry(void) {
     u32 row1[6] = {0, 1, 0, 2, 2, 1};
     CALL(ctx, 48, UpdateSub, up, 0, row1, green, 8, 0);
     CALL(ctx, 46, CopySub, tex, 0, 0, 0, 0, up, 0, 0);
-    if (CALL(dev, 7, CreateView, tex, 0, &srv) < 0) ExitProcess(5);
-    u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0, 0x7F7FFFFF};
+    // Vue limitée au niveau 0 comme celles d'ANGLE (#516) ; MinLOD = 1
+    // force la réduction : sans la limite, le niveau 1 (vide) serait lu.
+    u32 srvd[4] = {28, 4 /* TEXTURE2D */, 0 /* MostDetailedMip */, 1 /* MipLevels */};
+    if (CALL(dev, 7, CreateView, tex, srvd, &srv) < 0) ExitProcess(5);
+    u32 sdesc[13] = {0 /* MIN_MAG_MIP_POINT */, 3, 3, 3, 0, 1, 1, 0, 0, 0, 0, 0x3F800000 /* MinLOD 1 */, 0x7F7FFFFF};
     if (CALL(dev, 23, CreateState, sdesc, &smp) < 0 || !smp) ExitProcess(6);
 
     // Moitié gauche de l'écran (sens horaire, face avant D3D), que la matrice
