@@ -68,6 +68,7 @@ pub mod gui_x11;
 pub mod hid;
 pub mod hostcall;
 pub mod hostssl;
+pub mod icons;
 pub mod imm32;
 pub mod inherit;
 pub mod iphlpapi;
@@ -780,6 +781,11 @@ fn add_basics(all: &mut [Builtin]) {
             b.exports.insert(name, addr);
         }
     }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "comctl32") {
+        for (name, addr) in icons::comctl32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
     if let Some(b) = all.iter_mut().find(|b| b.name == "advapi32") {
         for (name, addr) in apps_win32::advapi32_overrides() {
             b.exports.insert(name, addr);
@@ -788,6 +794,7 @@ fn add_basics(all: &mut [Builtin]) {
     if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
+            .chain(icons::user32_overrides())
             .chain(dialogs::user32_overrides())
             .chain(menus::user32_overrides())
         {
