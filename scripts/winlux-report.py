@@ -487,7 +487,9 @@ def status():
     print(f"report_offer={conf['OFFER']}")
     print(f"report_redact={conf['REDACT']}")
     print(f"report_mode={conf['MODE']}")
-    print(f"report_transport={transport(conf)}")
+    manual = transport(conf)
+    # Transport d'un rapport manuel : le jeton du système ne sert qu'aux envois automatiques.
+    print(f"report_transport={'browser' if manual == 'system' else manual}")
     print(f"report_relay={1 if conf.get('RELAY', '').startswith('https://') else 0}")
     print(f"report_auto={conf['AUTO']}")
     print(f"report_token={1 if SYSTEM_TOKEN.exists() else 0}")
@@ -1899,6 +1901,10 @@ def gui(report, conf):
     box.pack_start(expander, True, True, 0)
 
     kind = transport(conf)
+    if kind == "system":
+        # Le jeton du système ne sert qu'aux rapports automatiques vérifiés par
+        # root : un rapport libre passe par le navigateur.
+        kind = "browser"
     via = Gtk.Label(label=tr("via_" + kind, L), xalign=0, wrap=True)
     box.pack_start(via, False, False, 0)
     notice = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
