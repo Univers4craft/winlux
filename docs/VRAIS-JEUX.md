@@ -121,7 +121,7 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
-| Traduction du HLSL compilé à la volée (`D3DCompile`) vers GLSL ; le DXBC précompilé est traduit depuis #354 | Warzone 2100 en ANGLE (Direct3D 11, OpenGL ES) | image noire : utiliser OpenGL ou Vulkan | #137 |
+| Vérifier en jeu le compilateur HLSL maison (`D3DCompile` → GLSL, vertex et pixel shaders, #463) ; geometry et compute shaders encore emballés tels quels | Warzone 2100 en ANGLE (Direct3D 11, OpenGL ES) | à essayer : `WINLUX_HLSL_DUMP=dossier` garde chaque shader et son GLSL | #463 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)
@@ -140,6 +140,11 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
   `_wfullpath`, `_fdopen`, `freopen`, `PostThreadMessageW`, entrée brute,
   `HidD_GetHidGuid`, `DnsQuery_W`, hachage CryptoAPI, `WinHttpCrackUrl`.
   Les deux `.exe` sont copiés dans l'ISO (`/opt/winlux/tests`).
+- `testc/msvc/hlsl_msvc.c` (`scripts/test-d3d11-rendu.sh hlsl`, dans
+  `scripts/test-mingw.sh`) : quad texturé dessiné depuis du HLSL source
+  compilé par `D3DCompile` (#463), pixels relus ; tests unitaires du
+  compilateur dans `runtime/src/dlls/hlsl/tests.rs` (GLSL validé par
+  `glslangValidator` quand il est installé).
 - `scripts/test-games-imports.py` (dans `scripts/test-all.sh`, test
   `jeux-imports`) : chaque import système des deux jeux
   (`docs/jeux/imports-jeux.tsv`, 1 593 lignes) doit être fourni par
