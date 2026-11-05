@@ -34,6 +34,7 @@ def winlux_path(relative):
             or relative == "usr/share/mime/packages/winlux.xml"
             or relative == "usr/share/thumbnailers/winlux-windows.thumbnailer"
             or relative == "usr/share/dbus-1/services/org.freedesktop.Notifications.service"
+            or relative == "usr/share/dbus-1/services/org.freedesktop.ScreenSaver.service"
             or relative == "usr/lib/NetworkManager/conf.d/90-winlux.conf"
             or relative == "usr/bin/systemctl"
             or relative == "usr/libexec/xscreensaver/xscreensaver-gfx"
