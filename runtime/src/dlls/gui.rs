@@ -1352,6 +1352,79 @@ fn set_bitmap_color(
     }
 }
 
+/// Pixels d'une bitmap, ligne du haut d'abord, en COLORREF avec l'alpha
+/// dans l'octet haut. Le booléen dit si la bitmap porte un canal alpha
+/// (DIB 32 bits) ; sinon l'octet haut est nul.
+pub fn bitmap_pixels(handle: usize) -> Option<(usize, usize, Vec<u32>, bool)> {
+    let objects = lock(objects());
+    let Some(GdiObject::Bitmap {
+        width,
+        height,
+        pixels,
+        dib_bits,
+        dib_bit_count,
+        dib_stride,
+        top_down,
+    }) = objects.get(&handle)
+    else {
+        return None;
+    };
+    let (w, h) = (*width, *height);
+    let alpha = dib_bits.is_some() && *dib_bit_count == 32;
+    let mut out = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let mut c = bitmap_color_at(
+                w,
+                h,
+                pixels,
+                dib_bits.as_deref(),
+                *dib_bit_count,
+                *dib_stride,
+                *top_down,
+                x,
+                y,
+            ) & 0x00FF_FFFF;
+            if alpha {
+                let bytes = dib_bits.as_deref().unwrap_or(&[]);
+                let row = if *top_down { y } else { h - 1 - y };
+                let a = bytes
+                    .get(row * dib_stride + x * 4 + 3)
+                    .copied()
+                    .unwrap_or(0);
+                c |= (a as u32) << 24;
+            }
+            out.push(c);
+        }
+    }
+    Some((w, h, out, alpha))
+}
+
+/// Crée une DIB section 32 bits haut-bas à partir de pixels COLORREF dont
+/// l'octet haut est l'alpha.
+pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
+    if pixels.len() < width * height {
+        return None;
+    }
+    let (handle, _) = create_dib_section(width as i32, height as i32, 32, true)?;
+    let mut objects = lock(objects());
+    if let Some(GdiObject::Bitmap {
+        pixels: store,
+        dib_bits: Some(bytes),
+        ..
+    }) = objects.get_mut(&handle)
+    {
+        for (i, &c) in pixels[..width * height].iter().enumerate() {
+            bytes[i * 4] = (c >> 16) as u8;
+            bytes[i * 4 + 1] = (c >> 8) as u8;
+            bytes[i * 4 + 2] = c as u8;
+            bytes[i * 4 + 3] = (c >> 24) as u8;
+            store[i] = c & 0x00FF_FFFF;
+        }
+    }
+    Some(handle)
+}
+
 /// Copie une zone de la bitmap sélectionnée dans un DC mémoire. Les pixels
 /// hors limites sont noirs, comme une surface nouvellement créée.
 pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {

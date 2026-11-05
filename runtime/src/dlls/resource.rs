@@ -166,6 +166,23 @@ pub fn manifest(base: usize) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
+/// Données d'une ressource d'un module : `name` et `ty` sont un entier
+/// (MAKEINTRESOURCE) ou un pointeur vers une chaîne UTF-16.
+pub fn resource_bytes(hmod: usize, name: usize, ty: usize) -> Option<&'static [u8]> {
+    let base = if hmod == 0 {
+        loader::main_module().map(|m| m.base).unwrap_or(0)
+    } else {
+        hmod & !loader::DATA_HANDLE_BITS
+    };
+    if base == 0 {
+        return None;
+    }
+    let (rva, size) =
+        find_resource_data(base, ty, name, !is_int_resource(ty), !is_int_resource(name))?;
+    // SAFETY: find_resource_data a vérifié que la ressource est dans l'image.
+    Some(unsafe { std::slice::from_raw_parts((base + rva as usize) as *const u8, size as usize) })
+}
+
 // ── Fonctions exportées ─────────────────────────────────────────────
 
 fn is_int_resource(p: usize) -> bool {

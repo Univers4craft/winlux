@@ -806,31 +806,14 @@ pub fn type_name(name: &str, dir: bool) -> String {
     }
 }
 
-/// Liste d'images système (une par taille), créée à la première demande.
-unsafe fn system_image_list(small: bool) -> usize {
-    static LISTS: std::sync::Mutex<[usize; 2]> = std::sync::Mutex::new([0, 0]);
-    let mut l = LISTS.lock().unwrap_or_else(|e| e.into_inner());
-    let i = small as usize;
-    if l[i] == 0 {
-        let px = if small { 16 } else { 32 };
-        l[i] = api!(
-            "comctl32",
-            "ImageList_Create",
-            fn(i32, i32, u32, i32, i32) -> usize,
-            px,
-            px,
-            0x20, /* ILC_COLOR32 */
-            0,
-            16
-        )
-        .unwrap_or(0);
-    }
-    l[i]
+/// Liste d'images système (une par taille), avec les icônes du thème.
+fn system_image_list(small: bool) -> usize {
+    super::icons::system_list(small)
 }
 
-/// SHGetFileInfoW : nom affiché, nom de type, attributs Shell et liste
-/// d'images système. Les icônes elles-mêmes ne sont pas encore extraites
-/// (index 0, HICON nul).
+/// SHGetFileInfoW : nom affiché, nom de type, attributs Shell, index et
+/// icône de la liste d'images système (icônes génériques du thème : dossier,
+/// fichier, archive, programme…).
 unsafe extern "win64" fn sh_get_file_info_w(
     path: *const u16,
     attrs: u32,
@@ -879,7 +862,14 @@ unsafe extern "win64" fn sh_get_file_info_w(
             }
             std::ptr::write_unaligned(info.add(12) as *mut u32, a);
         }
-        let _ = SHGFI_ICON; // HICON laissé nul
+        let index = super::icons::system_index(&base, dir);
+        std::ptr::write_unaligned(info.add(8) as *mut i32, index);
+        if flags & SHGFI_ICON != 0 {
+            let small = flags & SHGFI_SMALLICON != 0;
+            let icon = super::icons::list_image(system_image_list(small), index)
+                .map_or(0, super::icons::new_icon);
+            std::ptr::write_unaligned(info as *mut usize, icon);
+        }
     }
     if flags & SHGFI_SYSICONINDEX != 0 {
         return system_image_list(flags & SHGFI_SMALLICON != 0);

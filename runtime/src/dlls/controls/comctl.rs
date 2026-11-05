@@ -80,6 +80,8 @@ pub(super) struct CommonState {
     rows: Vec<LvRow>,
     lv_focus: i32,
     lv_top: i32,
+    /// Listes d'images : normale (LVSIL_NORMAL) et petite (LVSIL_SMALL).
+    lv_images: [usize; 2],
     // Onglets / barre d'état
     tabs: Vec<(String, isize)>,
     tab_sel: i32,
@@ -114,6 +116,8 @@ struct LvRow {
     /// Bit k : le texte de la colonne k est fourni à la demande
     /// (LPSTR_TEXTCALLBACK, ou liste virtuelle LVS_OWNERDATA).
     callback: u64,
+    /// Index dans la liste d'images (LVIF_IMAGE), -1 = demandé au parent.
+    image: i32,
 }
 
 fn common() -> &'static Mutex<HashMap<usize, CommonState>> {
@@ -955,6 +959,8 @@ unsafe fn tree_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize
 // =====================================================================
 
 const LVIF_TEXT: u32 = 0x1;
+const LVIF_IMAGE: u32 = 0x2;
+const I_IMAGECALLBACK: i32 = -1;
 const LVIF_PARAM: u32 = 0x4;
 const LVIF_STATE: u32 = 0x8;
 const LVIS_FOCUSED: u32 = 0x1;
@@ -1025,10 +1031,19 @@ fn lv_cell_text(hwnd: usize, item: usize, sub: usize, row: &LvRow) -> String {
     if row.callback & callback_bit(sub) == 0 {
         return row.texts.get(sub).cloned().unwrap_or_default();
     }
-    lv_dispinfo_text(hwnd, item, sub, row.param)
+    lv_dispinfo(hwnd, item, sub, row.param, LVIF_TEXT).0
 }
 
-fn lv_dispinfo_text(hwnd: usize, item: usize, sub: usize, param: isize) -> String {
+/// Image de la ligne (colonne 0) : I_IMAGECALLBACK la demande au parent.
+fn lv_row_image(hwnd: usize, item: usize, row: &LvRow) -> i32 {
+    if row.image == I_IMAGECALLBACK {
+        lv_dispinfo(hwnd, item, 0, row.param, LVIF_IMAGE).1
+    } else {
+        row.image
+    }
+}
+
+fn lv_dispinfo(hwnd: usize, item: usize, sub: usize, param: isize, mask: u32) -> (String, i32) {
     #[repr(C)]
     struct DispInfo {
         hdr: NmHdr,
@@ -1045,7 +1060,7 @@ fn lv_dispinfo_text(hwnd: usize, item: usize, sub: usize, param: isize) -> Strin
             code: 0,
         },
         item: LvItem {
-            mask: LVIF_TEXT,
+            mask,
             item: item as i32,
             sub_item: sub as i32,
             text: buf.as_mut_ptr() as usize,
@@ -1061,11 +1076,17 @@ fn lv_dispinfo_text(hwnd: usize, item: usize, sub: usize, param: isize) -> Strin
         LVN_GETDISPINFOA
     };
     notify_struct(hwnd, code, &mut nm);
-    if nm.item.mask & LVIF_TEXT == 0 {
-        return String::new();
+    let image = if mask & LVIF_IMAGE != 0 {
+        nm.item.image
+    } else {
+        -2
+    };
+    if mask & LVIF_TEXT == 0 || nm.item.mask & LVIF_TEXT == 0 {
+        return (String::new(), image);
     }
     // Le programme peut remplir notre tampon ou pointer vers le sien.
-    unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default()
+    let text = unsafe { read_text_ptr(nm.item.text, wide) }.unwrap_or_default();
+    (text, image)
 }
 
 fn header_h(hwnd: usize, c: &Ctl) -> i32 {
@@ -1127,6 +1148,14 @@ fn paint_listview(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         );
     }
     let top = s.lv_top.max(0) as usize;
+    // Vue icônes : liste normale si elle seule existe ; sinon la petite.
+    let images = if style(hwnd) & 0x3 == 0 && s.lv_images[0] != 0 {
+        s.lv_images[0]
+    } else if s.lv_images[1] != 0 {
+        s.lv_images[1]
+    } else {
+        s.lv_images[0]
+    };
     for (k, row) in s.rows.iter().enumerate().skip(top) {
         let y = r.top + hh + 2 + (k - top) as i32 * rh;
         if y > r.bottom {
@@ -1150,11 +1179,30 @@ fn paint_listview(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         for (i, (_, w)) in columns.iter().enumerate() {
             let text = lv_cell_text(hwnd, k, i, row);
             let text = text.as_str();
-            let cell = Rect {
+            let mut cell = Rect {
                 left: x + 10,
                 right: x + w - 6,
                 ..line
             };
+            if i == 0 && images != 0 {
+                let image = lv_row_image(hwnd, k, row);
+                if let Some((iw, ih)) = crate::dlls::icons::list_size(images) {
+                    let bg = if row.state & LVIS_SELECTED != 0 {
+                        None
+                    } else {
+                        Some(FIELD)
+                    };
+                    crate::dlls::icons::draw_list_image(
+                        images,
+                        image,
+                        p.hdc,
+                        cell.left - 4,
+                        line.top + (rh - ih) / 2,
+                        bg,
+                    );
+                    cell.left += iw + 2;
+                }
+            }
             p.text(
                 cell,
                 text,
@@ -1272,6 +1320,9 @@ unsafe fn lv_set_item(hwnd: usize, lp: isize, wide: bool, insert: bool) -> isize
             if is_callback {
                 row.callback = 1;
             }
+            if it.mask & LVIF_IMAGE != 0 {
+                row.image = it.image;
+            }
             if it.mask & LVIF_PARAM != 0 {
                 row.param = it.param;
             }
@@ -1303,6 +1354,9 @@ unsafe fn lv_set_item(hwnd: usize, lp: isize, wide: bool, insert: bool) -> isize
         }
         if it.mask & LVIF_PARAM != 0 && it.sub_item == 0 {
             row.param = it.param;
+        }
+        if it.mask & LVIF_IMAGE != 0 && it.sub_item == 0 {
+            row.image = it.image;
         }
         1
     });
@@ -1337,6 +1391,9 @@ unsafe fn lv_get_item(hwnd: usize, lp: isize, wide: bool, text_only: Option<usiz
     }
     if it.mask & LVIF_PARAM != 0 {
         it.param = row.param;
+    }
+    if it.mask & LVIF_IMAGE != 0 {
+        it.image = row.image;
     }
     if it.mask & LVIF_STATE != 0 {
         it.state = row.state & it.state_mask;
@@ -1590,6 +1647,7 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
                 with_common(hwnd, |s| {
                     s.rows.resize_with(n, || LvRow {
                         callback: u64::MAX,
+                        image: I_IMAGECALLBACK,
                         ..Default::default()
                     });
                     let max_top = (n as i32 - 1).max(0);
@@ -1602,7 +1660,25 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             }
             1
         }
-        0x1036 | 0x1037 | 0x1003 | 0x1002 | 0x1001 | 0x1024 | 0x1026 | 0x1015 => 0,
+        0x1003 => {
+            // SETIMAGELIST : wp = LVSIL_NORMAL (0), LVSIL_SMALL (1)
+            let k = (wp == 1) as usize;
+            if wp > 1 {
+                return Some(0);
+            }
+            let old = with_common(hwnd, |s| {
+                std::mem::replace(&mut s.lv_images[k], lp as usize)
+            });
+            invalidate(hwnd);
+            old as isize
+        }
+        0x1002 => {
+            if wp > 1 {
+                return Some(0);
+            }
+            common_snapshot(hwnd).lv_images[(wp == 1) as usize] as isize
+        }
+        0x1036 | 0x1037 | 0x1001 | 0x1024 | 0x1026 | 0x1015 => 0,
         0x101F => 0, // GETHEADER : pas de contrôle séparé
         0x1027 => common_snapshot(hwnd).lv_top as isize, // GETTOPINDEX
         0x1028 => lv_rows_visible(hwnd) as isize, // GETCOUNTPERPAGE
