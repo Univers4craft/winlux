@@ -41,3 +41,22 @@ lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /saf
 # le programme est déplacé (relocations HIGHLOW).
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     /base:0x90000000 "$tmp/hello32.obj" "$tmp/kernel32.lib" /out:"$out/hello32_reloc.exe"
+# Exceptions (#232, étape 2) : __try/__except/__finally de clang, gérés par
+# msvcrt!_except_handler3 ; RaiseException et SetUnhandledExceptionFilter.
+cat >"$tmp/kernel32_seh.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+RaiseException@16
+ExitProcess@4
+GetStdHandle@4
+WriteFile@20
+GetCommandLineA@0
+SetUnhandledExceptionFilter@4
+DEF
+printf 'LIBRARY msvcrt.dll\nEXPORTS\n_except_handler3\n' >"$tmp/msvcrt_seh.def"
+llvm-dlltool -m i386 -k -d "$tmp/kernel32_seh.def" -l "$tmp/kernel32_seh.lib"
+llvm-dlltool -m i386 -d "$tmp/msvcrt_seh.def" -l "$tmp/msvcrt_seh.lib"
+clang --target=i686-pc-windows-msvc -O1 -fms-extensions -fasync-exceptions -fno-builtin -fno-stack-protector \
+    -c "$src/seh32.c" -o "$tmp/seh32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/seh32.obj" "$tmp/kernel32_seh.lib" "$tmp/msvcrt_seh.lib" /out:"$out/seh32.exe"

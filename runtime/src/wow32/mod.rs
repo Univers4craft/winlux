@@ -22,6 +22,9 @@
 //! - **Pile.** Le code 32 bits et les API 64 bits partagent la pile du
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
+mod seh;
+
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -32,10 +35,10 @@ pub const CS64: u16 = 0x33;
 
 /// Cases du TEB 64 bits (champ WOW32Reserved et suivants de Windows,
 /// inutilisés ailleurs dans Winlux) lues par le code de transition via GS.
-const TEB64_FS_GLIBC: usize = 0x100;
-const TEB64_FS_SELECTOR: usize = 0x108;
-const TEB64_TEB32: usize = 0x110;
-const TEB64_RSP_CHAIN: usize = 0x118;
+pub(crate) const TEB64_FS_GLIBC: usize = 0x100;
+pub(crate) const TEB64_FS_SELECTOR: usize = 0x108;
+pub(crate) const TEB64_TEB32: usize = 0x110;
+pub(crate) const TEB64_RSP_CHAIN: usize = 0x118;
 
 /// Champs du TEB et du PEB 32 bits.
 pub const TEB32_SIZE: usize = 0x2000;
@@ -215,6 +218,23 @@ winlux_wow_enter32:
     cld
     jmp eax
 
+// Appel d'un filtre ou d'un bloc __finally avec l'ebp de sa fonction
+// (cdecl : code, ebp).
+    .globl winlux_wow_call_ebp
+winlux_wow_call_ebp:
+    push ebp
+    push ebx
+    push esi
+    push edi
+    mov eax, dword ptr [esp + 20]
+    mov ebp, dword ptr [esp + 24]
+    call eax
+    pop edi
+    pop esi
+    pop ebx
+    pop ebp
+    ret
+
 // Adresse de retour donnée au code x86 : retour en 64 bits.
     .globl winlux_wow_ret32
 winlux_wow_ret32:
@@ -315,6 +335,7 @@ extern "C" {
     static winlux_wow_dispatch_ptr: u8;
     static winlux_wow_enter32_far: u8;
     static winlux_wow_has_fsgsbase: u8;
+    static winlux_wow_call_ebp: u8;
 }
 
 extern "win64" {
@@ -325,6 +346,7 @@ extern "win64" {
 struct Blob {
     entry64: u32,
     call32: usize,
+    call_ebp: usize,
 }
 
 static BLOB: OnceLock<Blob> = OnceLock::new();
@@ -352,6 +374,7 @@ fn blob() -> &'static Blob {
         Blob {
             entry64: at(std::ptr::addr_of!(winlux_wow_entry64)) as u32,
             call32: at(std::ptr::addr_of!(winlux_wow_call32)),
+            call_ebp: at(std::ptr::addr_of!(winlux_wow_call_ebp)),
         }
     })
 }
@@ -754,6 +777,55 @@ pub fn call32(target: usize, args: &[u32]) -> u64 {
     f(target, args.as_ptr(), args.len())
 }
 
+/// Assistant x86 « appel avec ebp » (filtres et blocs __finally).
+fn call_ebp_helper() -> usize {
+    blob().call_ebp
+}
+
+/// Lecture et écriture d'un mot dans la mémoire du programme x86.
+pub(crate) fn rd(addr: u32) -> u32 {
+    unsafe { (addr as usize as *const u32).read_unaligned() }
+}
+
+pub(crate) fn wr(addr: u32, v: u32) {
+    unsafe { (addr as usize as *mut u32).write_unaligned(v) }
+}
+
+thread_local! {
+    /// Arguments x86 de l'appel d'API en cours (voir `caller_regs`).
+    static CURRENT_ARGS: Cell<u32> = const { Cell::new(0) };
+    /// EIP d'une faute à ne pas répartir une seconde fois (rapport).
+    static REFIRE: Cell<u32> = const { Cell::new(0) };
+}
+
+fn set_refire(eip: u32) {
+    REFIRE.with(|r| r.set(eip));
+}
+
+/// Registres x86 de l'appelant de l'API en cours, relus dans la trame de
+/// `winlux_wow_entry64` (rdi, rsi, rbx, rbp empilés juste sous l'EIP de
+/// retour de lcall).
+pub(crate) struct CallerRegs {
+    pub eip: u32,
+    pub esp: u32,
+    pub ebp: u32,
+    pub ebx: u32,
+    pub esi: u32,
+    pub edi: u32,
+}
+
+pub(crate) fn caller_regs() -> CallerRegs {
+    let args = CURRENT_ARGS.with(Cell::get);
+    CallerRegs {
+        eip: rd(args - 4),
+        esp: args,
+        ebp: rd(args - 24),
+        ebx: rd(args - 32),
+        esi: rd(args - 40),
+        edi: rd(args - 48),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Appels 32 → 64 : passerelles d'import
 // ---------------------------------------------------------------------
@@ -955,6 +1027,52 @@ pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
     )
 }
 
+/// Fonctions dont la version 64 bits ne convient pas aux programmes x86
+/// (exceptions par chaîne de cadres…) : signature écrite ici.
+fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
+    let n = crate::dlls::normalize(dll);
+    let kernel = n == "kernel32" || n == "ntdll";
+    let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
+    Some(match func {
+        "RaiseException" if kernel => (seh::raise_exception as *const () as usize, "iiii>v"),
+        "RtlUnwind" if kernel => (seh::rtl_unwind as *const () as usize, "iiii>i"),
+        "SetUnhandledExceptionFilter" if kernel => (
+            seh::set_unhandled_exception_filter as *const () as usize,
+            "i>i",
+        ),
+        "UnhandledExceptionFilter" if kernel => {
+            (seh::unhandled_exception_filter as *const () as usize, "i>i")
+        }
+        "_except_handler3" if crt => (seh::except_handler3 as *const () as usize, "iiii>i"),
+        "_except_handler4_common" if crt => (
+            seh::except_handler4_common as *const () as usize,
+            "iiiiii>i",
+        ),
+        "_local_unwind2" if crt => (seh::local_unwind2 as *const () as usize, "ii>v"),
+        "_global_unwind2" if crt => (seh::global_unwind2 as *const () as usize, "i>v"),
+        "_local_unwind4" if crt => (seh::local_unwind4 as *const () as usize, "iii>v"),
+        _ => return None,
+    })
+}
+
+/// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en a une.
+pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
+    let (target, sig) = override_for(dll, func)?;
+    let (args, ret) = sig.split_once('>')?;
+    let slots = args.len();
+    let pop = (!is_cdecl(dll, func)).then_some((slots * 4) as u16);
+    Some(make_stub(
+        Desc {
+            ret: ret.as_bytes()[0],
+            supported: true,
+            target,
+            kinds: args.as_bytes().to_vec(),
+            label: format!("{}!{func}", dll.to_ascii_lowercase()),
+        },
+        pop,
+    ))
+}
+
 /// Passerelle x86 vers le bouchon 64 bits d'une fonction absente.
 pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
     make_stub(
@@ -984,6 +1102,7 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         );
         crate::dlls::kernel32::flush_and_exit(0xC000_0139u32 as i32)
     }
+    CURRENT_ARGS.with(|c| c.set(args));
     let mut slots: Vec<u64> = Vec::with_capacity(d.kinds.len().max(4));
     let mut p = args as usize;
     let rd = |p: usize| unsafe { (p as *const u32).read_unaligned() };
@@ -1071,9 +1190,73 @@ extern "C" {
 /// fs:[0]) viendra avec la deuxième étape de #232.
 extern "C" fn fault32(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        if !info.is_null()
+            && !ctx.is_null()
+            && redirect_fault(sig, info, ctx as *mut libc::ucontext_t)
+        {
+            return;
+        }
         let code = crate::crash::report(sig, info, ctx);
         libc::_exit(code as i32);
     }
+}
+
+/// Pose EXCEPTION_RECORD et CONTEXT x86 sous la pile du programme et fait
+/// revenir le signal dans `seh::hw_dispatch`, en 64 bits sur la même pile.
+unsafe fn redirect_fault(sig: i32, info: *mut libc::siginfo_t, uc: *mut libc::ucontext_t) -> bool {
+    if !crate::dlls::seh_hw::enabled() {
+        return false;
+    }
+    let g = &mut (*uc).uc_mcontext.gregs;
+    let eip = g[libc::REG_RIP as usize] as u32;
+    // Faute rejouée après une exception non traitée (int3 : EIP est déjà
+    // après l'instruction).
+    let refire = REFIRE.with(|r| r.replace(0));
+    if refire != 0 && (refire == eip || refire.wrapping_add(1) == eip) {
+        return false;
+    }
+    let Some(fault) = crate::dlls::seh_hw::classify(sig, info, uc) else {
+        return false;
+    };
+    let esp = g[libc::REG_RSP as usize] as u32;
+    let teb = *((crate::process::teb() + TEB64_TEB32) as *const usize) as u32;
+    let limit = rd(teb + 8);
+    let size = std::mem::size_of::<seh::HwFrame>() as u32;
+    // Assez de place pour la trame et la répartition (gestionnaires x86 et
+    // code Rust) ; sinon, rapport de plantage.
+    let Some(frame) = esp.checked_sub(256 + size).map(|f| f & !63) else {
+        return false;
+    };
+    if fault.overflow || frame < limit || frame - limit < 64 * 1024 {
+        return false;
+    }
+    let f = &mut *(frame as usize as *mut seh::HwFrame);
+    seh::context_from_ucontext(uc, &mut f.ctx, &mut f.fx);
+    let mut ctx_eip = fault.ctx_rip as u32;
+    if ctx_eip == 0 {
+        ctx_eip = eip;
+    }
+    f.ctx[seh::CTX_EIP..seh::CTX_EIP + 4].copy_from_slice(&ctx_eip.to_le_bytes());
+    f.orig = f.ctx;
+    let params: Vec<u32> = fault.params[..(fault.nparams as usize).min(2)]
+        .iter()
+        .map(|&p| p as u32)
+        .collect();
+    f.rec.fill(0);
+    f.rec[0..4].copy_from_slice(&fault.code.to_le_bytes());
+    f.rec[12..16].copy_from_slice(&(fault.address as u32).to_le_bytes());
+    f.rec[16..20].copy_from_slice(&fault.nparams.to_le_bytes());
+    for (i, p) in params.iter().enumerate() {
+        f.rec[20 + i * 4..24 + i * 4].copy_from_slice(&p.to_le_bytes());
+    }
+    // Retour du signal en 64 bits (CS 0x33), FS laissé à glibc.
+    let csgsfs = g[libc::REG_CSGSFS as usize] as u64;
+    g[libc::REG_CSGSFS as usize] = ((csgsfs & !0xffff) | CS64 as u64) as i64;
+    g[libc::REG_RSP as usize] = frame as i64;
+    g[libc::REG_RDI as usize] = frame as i64;
+    g[libc::REG_RIP as usize] = seh::winlux_wow_fault64 as *const () as usize as i64;
+    g[libc::REG_EFL as usize] &= !(0x400 | 0x100);
+    true
 }
 
 /// Faute du code 64 bits : gestionnaire installé avant nous.

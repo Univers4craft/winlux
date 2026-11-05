@@ -247,18 +247,18 @@ unsafe fn is_privileged(rip: usize) -> bool {
     }
 }
 
-struct Fault {
-    code: u32,
-    address: usize,
-    params: [usize; 2],
-    nparams: u32,
+pub(crate) struct Fault {
+    pub code: u32,
+    pub address: usize,
+    pub params: [usize; 2],
+    pub nparams: u32,
     /// RIP à placer dans le CONTEXT (int3 : l'instruction elle-même).
-    ctx_rip: usize,
+    pub ctx_rip: usize,
     /// Pile épuisée : répartir sur la pile de secours.
-    overflow: bool,
+    pub overflow: bool,
 }
 
-unsafe fn classify(
+pub(crate) unsafe fn classify(
     sig: i32,
     info: *const libc::siginfo_t,
     uc: *const libc::ucontext_t,
@@ -397,6 +397,11 @@ unsafe fn emergency_stack() -> Option<usize> {
 ///
 /// # Safety
 /// Contexte de signal (SA_SIGINFO), `info` et `ctx` fournis par le noyau.
+/// Répartition SEH des fautes matérielles active (WINLUX_SEH_HW).
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 pub unsafe fn on_fault(sig: i32, info: *mut libc::siginfo_t, ctx: *mut c_void) -> bool {
     if !ENABLED.load(Ordering::Relaxed) || info.is_null() || ctx.is_null() {
         return false;

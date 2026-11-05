@@ -610,6 +610,13 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
     let real_first = dlls::prefers_real_file(&ndll)
         && (find_module_by_name(dll).is_some() || find_dll_file(dll, &importer.path).is_some());
     if dlls::is_builtin(&ndll) && !real_first {
+        if importer.pe.x86 {
+            if let Want::Name(n) = want {
+                if let Some(stub) = crate::wow32::override_stub(dll, n) {
+                    return Ok(stub);
+                }
+            }
+        }
         let found = match want {
             Want::Name(n) => dlls::lookup(&ndll, n),
             // Les DLL intégrées exportent leurs ordinaux sous le nom « #n ».
