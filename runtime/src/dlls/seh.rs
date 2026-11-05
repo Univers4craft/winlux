@@ -387,6 +387,32 @@ fn push_frame(kind: FrameKind, resume: Context) -> usize {
         f.len() - 1
     })
 }
+/// Rappels de consolidation imbriqués au plus (deux par `catch` en cours :
+/// le rappel et son funclet) : au-delà, une relance qui reboucle épuiserait
+/// la pile de l'invité (1 Mio par défaut) ; on s'arrête avec un message
+/// clair au lieu d'un débordement de pile (#436).
+pub(crate) const MAX_NESTED_CONSOLIDATIONS: usize = 32;
+/// Cadres parcourus au plus par un déroulement.
+const MAX_UNWIND_FRAMES: usize = 100_000;
+
+fn nested_consolidations() -> usize {
+    FRAMES.with(|f| {
+        f.borrow()
+            .iter()
+            .filter(|e| e.kind == FrameKind::Consolidate)
+            .count()
+    })
+}
+
+fn unwind_overflow(why: &str) -> ! {
+    crate::log_error!("seh", "déroulement interrompu : {why}");
+    eprintln!(
+        "winlux: gestion d'exception sans fin ({why}) ; le programme est arrêté \
+         pour éviter un débordement de pile."
+    );
+    crate::dlls::kernel32::flush_and_exit(0xC000_00FD_u32 as i32)
+}
+
 fn pop_frames_from(index: usize) {
     FRAMES.with(|f| f.borrow_mut().truncate(index));
 }
@@ -1485,7 +1511,16 @@ unsafe fn unwind_ex(
     let mut new_context = *start;
     let mut dc = DispatcherContext::new(context.ptr());
     dc.target_ip = target_ip;
+    let nested = nested_consolidations();
+    if nested >= MAX_NESTED_CONSOLIDATIONS {
+        unwind_overflow(&format!("{nested} catch ou finally imbriqués"));
+    }
+    let mut walked = 0usize;
     loop {
+        walked += 1;
+        if walked > MAX_UNWIND_FRAMES {
+            unwind_overflow(&format!("plus de {MAX_UNWIND_FRAMES} cadres"));
+        }
         dc.context_record = context.ptr();
         if !step(UNW_FLAG_UHANDLER, &mut dc, &mut new_context) || dc.establisher_frame == 0 {
             break;

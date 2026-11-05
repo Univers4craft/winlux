@@ -52,6 +52,24 @@ if test -f "$dir/eh_msvc.exe"; then
     cat "$work/msvc.txt"
     test "$msvc_status" -eq 0 || { echo "eh_msvc.exe : le test n° $msvc_status a échoué" >&2; exit 1; }
     echo "eh_msvc : exceptions C++ et __try au format MSVC OK"
+    # Sans case UnwindHelp (dispUnwindHelp = 0), comme certaines fonctions
+    # MSVC : la relance « throw; » ne doit pas reboucler (#436).
+    python3 -I - "$dir/eh_msvc.exe" "$work/eh_nohelp.exe" <<'PY'
+import struct, sys
+data = bytearray(open(sys.argv[1], "rb").read())
+magic = struct.pack("<I", 0x19930522)
+i = data.find(magic)
+while i >= 0:
+    struct.pack_into("<i", data, i + 28, 0)
+    i = data.find(magic, i + 4)
+open(sys.argv[2], "wb").write(data)
+PY
+    set +e
+    WINLUX_GUI=headless "$runtime" "$work/eh_nohelp.exe" >"$work/msvc-nohelp.txt" 2>&1
+    nohelp_status=$?
+    set -e
+    test "$nohelp_status" -eq 0 || { cat "$work/msvc-nohelp.txt"; echo "eh_msvc sans UnwindHelp : le test n° $nohelp_status a échoué" >&2; exit 1; }
+    echo "eh_msvc sans UnwindHelp : relances OK"
 fi
 
 # Fautes matérielles en exceptions SEH (#269), bloquant.
