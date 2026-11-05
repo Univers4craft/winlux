@@ -22,6 +22,7 @@
 //! - **Pile.** Le code 32 bits et les API 64 bits partagent la pile du
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
+mod crt;
 mod seh;
 
 use std::cell::Cell;
@@ -42,6 +43,9 @@ pub(crate) const TEB64_RSP_CHAIN: usize = 0x118;
 
 /// Champs du TEB et du PEB 32 bits.
 pub const TEB32_SIZE: usize = 0x2000;
+/// Après le TEB 32 bits (0xFFC octets sous Windows) : cases par thread de
+/// la CRT x86 (errno, struct tm de localtime…), voir `crt`.
+const TEB32_SCRATCH: usize = 0x1000;
 const TEB32_EXCEPTION_LIST: usize = 0x00;
 const TEB32_STACK_BASE: usize = 0x04;
 const TEB32_STACK_LIMIT: usize = 0x08;
@@ -761,6 +765,7 @@ pub fn init_thread(teb64: usize) {
         *((teb64 + TEB64_FS_GLIBC) as *mut usize) = fs_base;
         *((teb64 + TEB64_FS_SELECTOR) as *mut usize) = selector as usize;
         *((teb64 + TEB64_TEB32) as *mut usize) = teb;
+        TEB32_ADDR.with(|c| c.set(teb));
         *((teb64 + TEB64_RSP_CHAIN) as *mut usize) = 0;
     }
 }
@@ -782,6 +787,35 @@ fn call_ebp_helper() -> usize {
     blob().call_ebp
 }
 
+/// TEB 32 bits du thread courant (0 hors programme x86).
+pub(crate) fn teb32_addr() -> usize {
+    TEB32_ADDR.with(Cell::get)
+}
+
+/// Cases par thread de la CRT x86, sous 4 Go.
+fn scratch() -> usize {
+    let t = teb32_addr();
+    assert!(t != 0, "wow32 : thread sans TEB 32 bits");
+    t + TEB32_SCRATCH
+}
+
+/// `errno` (ou `_doserrno`) du thread, lisible par le code x86 ; `None`
+/// hors programme x86 ou dans un thread du runtime.
+pub fn errno_slot(dos: bool) -> Option<usize> {
+    if !active() {
+        return None;
+    }
+    let t = teb32_addr();
+    (t != 0).then(|| t + TEB32_SCRATCH + if dos { crt::S_DOSERRNO } else { crt::S_ERRNO })
+}
+
+/// Données de la CRT x86 (argv, environnement…), une fois le processus décrit.
+pub fn fill_crt_data() {
+    if active() {
+        crt::fill_process_data();
+    }
+}
+
 /// Lecture et écriture d'un mot dans la mémoire du programme x86.
 pub(crate) fn rd(addr: u32) -> u32 {
     unsafe { (addr as usize as *const u32).read_unaligned() }
@@ -792,6 +826,8 @@ pub(crate) fn wr(addr: u32, v: u32) {
 }
 
 thread_local! {
+    /// TEB 32 bits du thread (0 si le thread n'en a pas).
+    static TEB32_ADDR: Cell<usize> = const { Cell::new(0) };
     /// Arguments x86 de l'appel d'API en cours (voir `caller_regs`).
     static CURRENT_ARGS: Cell<u32> = const { Cell::new(0) };
     /// EIP d'une faute à ne pas répartir une seconde fois (rapport).
@@ -839,6 +875,10 @@ struct Desc {
     target: usize,
     kinds: Vec<u8>,
     label: String,
+    /// Correction du pointeur rendu (copie sous 4 Go).
+    fix: crt::Fix,
+    /// `Some(aux)` : `target(args_x86, aux)` lit lui-même la pile x86.
+    raw: Option<usize>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/win64_sigs.rs"));
@@ -1022,6 +1062,8 @@ pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
             target,
             kinds: args,
             label,
+            fix: crt::Fix::None,
+            raw: None,
         },
         pop,
     )
@@ -1043,6 +1085,7 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
         "UnhandledExceptionFilter" if kernel => {
             (seh::unhandled_exception_filter as *const () as usize, "i>i")
         }
+        "GetProcAddress" if kernel => (get_proc_address32 as *const () as usize, "ii>i"),
         "_except_handler3" if crt => (seh::except_handler3 as *const () as usize, "iiii>i"),
         "_except_handler4_common" if crt => (
             seh::except_handler4_common as *const () as usize,
@@ -1055,11 +1098,36 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
     })
 }
 
-/// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en a une.
+/// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en
+/// a une ; pour une donnée exportée, son adresse sous 4 Go.
 pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
-    let (target, sig) = override_for(dll, func)?;
+    let label = format!("{}!{func}", dll.to_ascii_lowercase());
+    let (target, sig, fix) = match override_for(dll, func) {
+        Some((target, sig)) => (target, sig, crt::Fix::None),
+        None => match crt::override_for(&crate::dlls::normalize(dll), func)? {
+            crt::Override::Data(addr) => return Some(addr),
+            crt::Override::Native { target, sig, fix } => (target, sig, fix),
+            crt::Override::Raw { target, aux, pop } => {
+                return Some(make_stub(
+                    Desc {
+                        ret: b'i',
+                        supported: true,
+                        target,
+                        kinds: Vec::new(),
+                        label,
+                        fix: crt::Fix::None,
+                        raw: Some(aux),
+                    },
+                    pop,
+                ))
+            }
+        },
+    };
     let (args, ret) = sig.split_once('>')?;
-    let slots = args.len();
+    let slots: usize = args
+        .bytes()
+        .map(|k| if matches!(k, b'q' | b'd') { 2 } else { 1 })
+        .sum();
     let pop = (!is_cdecl(dll, func)).then_some((slots * 4) as u16);
     Some(make_stub(
         Desc {
@@ -1067,10 +1135,53 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
             supported: true,
             target,
             kinds: args.as_bytes().to_vec(),
-            label: format!("{}!{func}", dll.to_ascii_lowercase()),
+            label,
+            fix,
+            raw: None,
         },
         pop,
     ))
+}
+
+/// `GetProcAddress` d'un programme x86 : pour une DLL intégrée, la
+/// passerelle x86 de la fonction (une par fonction), jamais son adresse 64 bits.
+extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
+    let found = unsafe {
+        crate::dlls::kernel32::get_proc_address(module as usize, name as usize as *const u8)
+    };
+    if found == 0 {
+        return 0;
+    }
+    let Some(dll) = crate::dlls::builtin_by_handle(module as usize) else {
+        // Image x86 chargée : ses exports sont déjà du code x86.
+        return found as u32;
+    };
+    let symbol = if name <= 0xffff {
+        format!("#{name}")
+    } else {
+        unsafe { crate::dlls::cstr(name as usize as *const u8) }
+    };
+    static STUBS: Mutex<Option<HashMap<(String, String), usize>>> = Mutex::new(None);
+    let key = (dll.to_string(), symbol.clone());
+    if let Some(&s) = STUBS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .get(&key)
+    {
+        return s as u32;
+    }
+    let file = format!("{dll}.dll");
+    let stub = override_stub(&file, &symbol).unwrap_or_else(|| {
+        let orig = crate::dlls::lookup(dll, &symbol).unwrap_or(found);
+        import_stub(&file, &symbol, orig, found)
+    });
+    STUBS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(key, stub);
+    stub as u32
 }
 
 /// Passerelle x86 vers le bouchon 64 bits d'une fonction absente.
@@ -1082,6 +1193,8 @@ pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
             target: stub64,
             kinds: Vec::new(),
             label: format!("{}!{func}", dll.to_ascii_lowercase()),
+            fix: crt::Fix::None,
+            raw: None,
         },
         None,
     )
@@ -1103,6 +1216,10 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         crate::dlls::kernel32::flush_and_exit(0xC000_0139u32 as i32)
     }
     CURRENT_ARGS.with(|c| c.set(args));
+    if let Some(aux) = d.raw {
+        let f: extern "win64" fn(u32, usize) -> u64 = unsafe { std::mem::transmute(d.target) };
+        return f(args, aux);
+    }
     let mut slots: Vec<u64> = Vec::with_capacity(d.kinds.len().max(4));
     let mut p = args as usize;
     let rd = |p: usize| unsafe { (p as *const u32).read_unaligned() };
@@ -1135,7 +1252,18 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     while slots.len() < 4 {
         slots.push(0);
     }
-    unsafe { winlux_wow_call64(d.target, slots.as_ptr(), n, xmm0) }
+    let r = unsafe { winlux_wow_call64(d.target, slots.as_ptr(), n, xmm0) };
+    if d.ret == b'i' {
+        let r = crt::apply_fix(d.fix, r);
+        if (r >> 32) != 0 && (r >> 32) != 0xffff_ffff && r as usize >= limit() {
+            crate::trace!(
+                "wow32 : {} a rendu 0x{r:x}, au-dessus de 4 Go (pointeur tronqué ?)",
+                d.label
+            );
+        }
+        return r;
+    }
+    r
 }
 
 // ---------------------------------------------------------------------

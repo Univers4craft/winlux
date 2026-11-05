@@ -323,6 +323,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     });
     // Variables _acmdln/_wcmdln de la CRT, lues directement par les programmes.
     crate::dlls::crt_extra::process_started();
+    crate::wow32::fill_crt_data();
 }
 
 /// Crée le TEB du thread courant et fait pointer GS dessus.

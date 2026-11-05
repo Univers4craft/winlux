@@ -11,6 +11,9 @@
 # seh32.exe (étape 2) : blocs __try/__except/__finally de clang, fautes
 # matérielles, RaiseException, exception non rattrapée et filtre de dernier
 # recours.
+# crt32.exe et crt32_msvcrt.exe (étape 3) : vrais programmes MinGW i686 liés
+# à msvcrt.dll (argv, printf/sscanf, qsort, setjmp, fichiers, atexit,
+# signal, localtime…), sautés sans i686-w64-mingw32-gcc.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -20,7 +23,9 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-for name in hello32 seh32; do
+names="hello32 seh32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32"
+for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
         stale=1
@@ -87,3 +92,21 @@ expect 66 "0xE0000042 non gérée" nonrattrapee
 echo "seh32 : exception non rattrapée -> message et code 0xE0000042"
 expect 77 "filtre de dernier recours appele" filtre
 echo "seh32 : filtre SetUnhandledExceptionFilter appelé"
+
+if test -f "$out/crt32.exe"; then
+    for name in crt32 crt32_msvcrt; do
+        set +e
+        WINLUX_GUI=headless WINLUX_WOW32_TEST=ok timeout 60 "$runtime" "$out/$name.exe" argument-de-test >"$work/crt.txt" 2>&1
+        status=$?
+        set -e
+        if test "$status" -ne 0 || ! grep -q 'CRT 32 bits : tout est correct' "$work/crt.txt" \
+            || ! grep -q 'atexit appele' "$work/crt.txt" || ! grep -q 'sur stderr 3' "$work/crt.txt"; then
+            cat "$work/crt.txt"
+            echo "$name.exe : code $status, vérification n° $status en échec" >&2
+            exit 1
+        fi
+    done
+    echo "crt32 : CRT msvcrt 32 bits, 20 vérifications (printf de MinGW et de msvcrt)"
+else
+    echo "crt32 : i686-w64-mingw32-gcc absent, test sauté"
+fi

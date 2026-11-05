@@ -112,6 +112,25 @@ pub unsafe extern "win64" fn iob_func() -> *mut c_void {
     std_stream(0)
 }
 
+/// Programmes x86 (#232) : leurs `FILE` standard (`_iob` de 32 octets par
+/// flux) sont d'autres adresses pour les trois mêmes flux.
+pub fn register_std_aliases(base: usize, stride: usize) {
+    std_stream(0);
+    let mut reg = registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for i in 0..3 {
+        let s = reg.get(&(std_stream_addr(i))).cloned();
+        if let Some(s) = s {
+            reg.insert(base + i * stride, s);
+        }
+    }
+}
+
+fn std_stream_addr(i: usize) -> usize {
+    std::ptr::addr_of_mut!(IOB) as usize + i * MSVCRT_FILE_SIZE
+}
+
 fn parse_mode(mode: &str) -> Option<(bool, OpenOptions)> {
     let m = mode.as_bytes();
     let base = *m.first()?;

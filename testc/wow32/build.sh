@@ -60,3 +60,12 @@ clang --target=i686-pc-windows-msvc -O1 -fms-extensions -fasync-exceptions -fno-
     -c "$src/seh32.c" -o "$tmp/seh32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/seh32.obj" "$tmp/kernel32_seh.lib" "$tmp/msvcrt_seh.lib" /out:"$out/seh32.exe"
+# CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
+# avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
+# i686-w64-mingw32-gcc, le test le saute.
+if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    i686-w64-mingw32-gcc -O1 "$src/crt32.c" -o "$out/crt32.exe"
+    i686-w64-mingw32-gcc -O1 -D__USE_MINGW_ANSI_STDIO=0 "$src/crt32.c" -o "$out/crt32_msvcrt.exe"
+else
+    echo "wow32 : i686-w64-mingw32-gcc absent, crt32.exe non construit" >&2
+fi
