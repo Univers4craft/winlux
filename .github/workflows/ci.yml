@@ -373,6 +373,8 @@ jobs:
 
   # Wi-Fi sur radios simulées (mac80211_hwsim) avec le wpa_supplicant d'Ubuntu
   # 26.04, celui de l'image : WPA3 en GCMP-256 tranché sans matériel.
+  # Box en GCMP-256 seul : joignable si GCMP-256 est demandé, refusée sans
+  # (ce que fait NetworkManager) ; winlux-wifi le dit depuis #416.
   wifi-hwsim:
     name: Wi-Fi simulé (WPA3, GCMP-256)
     runs-on: ubuntu-26.04
@@ -384,7 +386,7 @@ jobs:
           sudo apt-get install -y -q hostapd wpasupplicant iw "linux-modules-extra-$(uname -r)" || sudo apt-get install -y -q hostapd wpasupplicant iw
           sudo systemctl stop wpa_supplicant NetworkManager 2>/dev/null || true
           set +e
-          sudo bash scripts/test-wifi-hwsim-ciphers.sh
+          sudo WINLUX_EXPECT_GCMP_NM=refuse bash scripts/test-wifi-hwsim-ciphers.sh
           code=$?
           if test "$code" = 77; then echo "::warning::mac80211_hwsim indisponible sur ce runner : Wi-Fi simulé non vérifié"; exit 0; fi
           exit "$code"
