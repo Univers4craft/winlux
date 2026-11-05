@@ -2464,13 +2464,19 @@ unsafe extern "win64" fn ctx_clear_rtv(
     let Some(obj) = as_simple(view) else { return };
     let c = &*color;
     // Effacement entier : ni ciseaux ni masque d'écriture (règle D3D).
+    // La profondeur rattachée au cadre de la vue réduirait l'effacement à
+    // l'intersection des tailles : elle est détachée le temps de l'effacer.
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*obj).gl_id);
+    pipeline::attach_depth(g, std::ptr::null_mut());
     pipeline::clear(g, || {
         (g.ColorMask)(1, 1, 1, 1);
         (g.ClearColor)(c[0], c[1], c[2], c[3]);
         (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
     });
     let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    if st.current_rtv == obj {
+        pipeline::attach_depth(g, st.current_dsv);
+    }
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
 }
 
@@ -2483,20 +2489,14 @@ unsafe extern "win64" fn ctx_clear_dsv(
 ) {
     let Some(g) = gl_here() else { return };
     let Some(view) = as_simple(view) else { return };
-    let current = (*this)
-        .state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .current_rtv;
-    // La vue de profondeur est effacée dans le cadre de la cible courante,
-    // où elle est rattachée ; sans cible, par un cadre temporaire.
+    // Toujours dans un cadre temporaire sans couleur : dans celui de la cible
+    // courante, l'effacement était limité à sa taille (cascade d'ombre
+    // 2048x2048 effacée sur 1024x768 seulement, #537).
     let mut temp = 0;
-    if current.is_null() {
-        (g.GenFramebuffers)(1, &mut temp);
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, temp);
-    } else {
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*current).gl_id);
-    }
+    (g.GenFramebuffers)(1, &mut temp);
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, temp);
+    let none = 0u32;
+    (g.DrawBuffers)(1, &none);
     pipeline::attach_depth(g, view);
     let mut mask = 0u32;
     if flags & 1 != 0 {
@@ -2512,18 +2512,9 @@ unsafe extern "win64" fn ctx_clear_dsv(
         (g.ClearStencil)(stencil as i32);
         (g.Clear)(mask);
     });
-    if temp != 0 {
-        let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-        (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
-        (g.DeleteFramebuffers)(1, &temp);
-    } else {
-        let dsv = (*this)
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .current_dsv;
-        pipeline::attach_depth(g, dsv);
-    }
+    let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
+    (g.DeleteFramebuffers)(1, &temp);
 }
 
 unsafe extern "win64" fn ctx_rs_set_viewports(
