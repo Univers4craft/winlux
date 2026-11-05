@@ -395,6 +395,42 @@ def skipped_automatically(version):
     """Une version écartée (échec ou retour manuel) ne se réinstalle pas toute seule."""
     return read(BLOCKED) == version
 
+def readable_cache(cache=CACHE):
+    """Paquets conservés lisibles par le compte (anciens fichiers en 0600)."""
+    if not cache.is_dir(): return
+    cache.chmod(0o755)
+    for name in ("installed.deb", "previous.deb"):
+        package = cache / name
+        if package.is_file() and not package.is_symlink() and package.stat().st_mode & 0o777 != 0o644:
+            package.chmod(0o644)
+
+DESKTOP_CACHES = 'update-desktop-database /usr/share/applications; update-mime-database /usr/share/mime && printf "%s\\n" "$1" >"$2"'
+
+def refresh_desktop_caches_later(version, marker, log=RUN / "desktop-caches.log"):
+    """Caches MIME et applications après une mise à jour, en arrière-plan.
+
+    update-mime-database prenait ~30 s au premier démarrage après la mise à
+    jour v0.2.18 → v0.2.19, logo seul à l'écran. APT les a déjà refaits
+    (déclencheurs dpkg) : ceci n'est qu'une vérification, qui ne doit pas
+    retarder le bureau. Le repère n'est écrit qu'à la fin ; interrompu, le
+    travail est refait au démarrage suivant."""
+    command = ["sh", "-c", DESKTOP_CACHES, "winlux-desktop-caches", version, str(marker)]
+    if shutil.which("ionice"): command = ["ionice", "-c", "3"] + command
+    if shutil.which("nice"): command = ["nice", "-n", "19"] + command
+    try:
+        with open(log, "ab") as output:
+            subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                             start_new_session=True)
+        return True
+    except OSError as error:
+        print(f"Caches du bureau non relancés : {error}", file=sys.stderr)
+        return False
+
+def timed(label, started):
+    """Durée de chaque étape dans boot-update.log (temps de démarrage)."""
+    print(f"{label} : {time.monotonic() - started:.1f} s", file=sys.stderr, flush=True)
+    return time.monotonic()
+
 def boot_guard():
     """Compte les démarrages d'une version à l'essai ; revient en arrière si le bureau n'arrive jamais."""
     trial = fields(read(TRIAL))
@@ -442,6 +478,9 @@ def cache_copy(source, destination):
         temporary = Path(handle.name)
     try:
         shutil.copyfile(source, temporary)
+        # Paquet public : lisible par le compte (`--list` lit sa version avec
+        # dpkg-deb) ; mkstemp le créait en 0600.
+        temporary.chmod(0o644)
         with temporary.open("rb") as handle: os.fsync(handle.fileno())
         temporary.replace(destination)
     finally: temporary.unlink(missing_ok=True)
@@ -476,7 +515,9 @@ def main():
         if args == ["--confirm-boot"]: confirm_boot(); return 0
         if args == ["--boot-failed"]: return 0 if session_failed() else 1
         if args == ["--boot"]:
+            step = time.monotonic()
             boot_guard()
+            step = timed("Version à l'essai", step)
             restored = STATE / "apt-base-permissions-restored"
             if not restored.exists():
                 permissions = json.loads(Path("/usr/share/winlux/apt-base-permissions.json").read_text())
@@ -499,6 +540,9 @@ def main():
                     restored.write_text(BASE_MODES_VERSION + "\n")
                 except (OSError, subprocess.CalledProcessError) as error:
                     print(f"Droits de la base Ubuntu ou su non rétablis : {error}", file=sys.stderr)
+            try: readable_cache()
+            except OSError as error: print(f"Paquets conservés non rendus lisibles : {error}", file=sys.stderr)
+            step = timed("Droits de la base et su", step)
             # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
             # une installation inachevée se termine ici, sans bloquer le démarrage.
             audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
@@ -506,11 +550,11 @@ def main():
                 subprocess.run(["dpkg", "--configure", "-a"])
                 audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
             if audit: print("Installation APT inachevée. Exécutez dpkg --configure -a.\n" + audit, file=sys.stderr)
+            step = timed("Vérification dpkg", step)
             version = read("/usr/share/winlux/version")
             if read(STATE / "apt-desktop-cache-version") != version:
-                run("update-desktop-database", "/usr/share/applications")
-                run("update-mime-database", "/usr/share/mime")
-                (STATE / "apt-desktop-cache-version").write_text(version)
+                refresh_desktop_caches_later(version, STATE / "apt-desktop-cache-version")
+                timed("Caches du bureau (lancés en arrière-plan)", step)
             (RUN / "update-action").unlink(missing_ok=True)
             return 0
         if busy(): raise RuntimeError("Une installation APT est déjà en cours")

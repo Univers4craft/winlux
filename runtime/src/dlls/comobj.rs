@@ -23,6 +23,28 @@ pub const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
 pub const E_POINTER: i32 = 0x8000_4003u32 as i32;
 pub const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 
+/// GUID sous sa forme lisible {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.
+pub fn guid_str(g: &Guid) -> String {
+    let d1 = u32::from_le_bytes([g[0], g[1], g[2], g[3]]);
+    let d2 = u16::from_le_bytes([g[4], g[5]]);
+    let d3 = u16::from_le_bytes([g[6], g[7]]);
+    format!(
+        "{{{d1:08X}-{d2:04X}-{d3:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]
+    )
+}
+
+/// Journalise une interface demandée mais non fournie (pour savoir laquelle
+/// écrire ensuite).
+pub fn log_no_interface<T>(object: &str, iid: *const T) {
+    if iid.is_null() {
+        return;
+    }
+    // SAFETY: un IID pointe toujours sur 16 octets.
+    let g = unsafe { std::ptr::read_unaligned(iid as *const Guid) };
+    crate::log_warn!("com", "{object} : QueryInterface {} refusée", guid_str(&g));
+}
+
 /// Lit un GUID passé par pointeur (`REFGUID`) ; `None` si nul.
 ///
 /// # Safety

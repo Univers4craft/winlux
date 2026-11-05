@@ -653,7 +653,9 @@ if test -s /etc/winlux/install-config.json && test -x /usr/bin/winlux-accounts-r
 fi
 # Fuseau jamais choisi (installateur ≤ v0.2.18 : « timezone » vide, système
 # resté en UTC, une heure de retard à Paris) : celui de la langue installée.
-if test -s /etc/winlux/install-config.json && ! test -s /etc/timezone; then
+# Système installé (install-config.json présent, même vide : #433) sans
+# fuseau : celui de sa langue, d'après /etc/default/locale.
+if test -e /etc/winlux/install-config.json && ! test -s /etc/timezone; then
     tz_locale=$(/bin/busybox sed -n 's/^LANG=\([a-zA-Z_]*\).*/\1/p' /etc/default/locale 2>/dev/null | /bin/busybox head -n 1)
     case "$tz_locale" in
         fr_BE) tz=Europe/Brussels ;; fr_CH|de_CH) tz=Europe/Zurich ;; fr_CA|en_CA) tz=America/Toronto ;;
