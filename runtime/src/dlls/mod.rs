@@ -725,8 +725,62 @@ fn builtins() -> &'static Vec<Builtin> {
             },
         ];
         add_basics(&mut all);
+        add_psapi(&mut all);
         all
     })
+}
+
+/// Noms publics de psapi.dll. Depuis Windows 7, psapi.dll les fait suivre
+/// vers les fonctions « K32… » de kernel32 ; kernel32 n'exporte, lui, que
+/// les noms préfixés (#521).
+const PSAPI_NAMES: &[&str] = &[
+    "EmptyWorkingSet",
+    "EnumDeviceDrivers",
+    "EnumPageFilesA",
+    "EnumPageFilesW",
+    "EnumProcessModules",
+    "EnumProcessModulesEx",
+    "EnumProcesses",
+    "GetDeviceDriverBaseNameA",
+    "GetDeviceDriverBaseNameW",
+    "GetDeviceDriverFileNameA",
+    "GetDeviceDriverFileNameW",
+    "GetMappedFileNameA",
+    "GetMappedFileNameW",
+    "GetModuleBaseNameA",
+    "GetModuleBaseNameW",
+    "GetModuleFileNameExA",
+    "GetModuleFileNameExW",
+    "GetModuleInformation",
+    "GetPerformanceInfo",
+    "GetProcessImageFileNameA",
+    "GetProcessImageFileNameW",
+    "GetProcessMemoryInfo",
+    "GetWsChanges",
+    "GetWsChangesEx",
+    "InitializeProcessForWsWatch",
+    "QueryWorkingSet",
+    "QueryWorkingSetEx",
+];
+
+/// psapi.dll : chaque nom reprend la fonction « K32… » de kernel32 (ou, à
+/// défaut, la version sans préfixe qu'un module rangeait dans kernel32).
+fn add_psapi(all: &mut Vec<Builtin>) {
+    let Some(k32) = all.iter().find(|b| b.name == "kernel32") else {
+        return;
+    };
+    let mut exports = Exports::new();
+    for &name in PSAPI_NAMES {
+        let prefixed = format!("K32{name}");
+        if let Some(&a) = k32.exports.get(prefixed.as_str()).or(k32.exports.get(name)) {
+            exports.insert(name, a);
+        }
+    }
+    all.push(Builtin {
+        name: "psapi",
+        exports,
+        handle: fake_module(),
+    });
 }
 
 /// Fonctions de base (win32_basics) : elles complètent chaque DLL sans
@@ -1069,12 +1123,153 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     })
 }
 
-/// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
 /// Fonctions que Windows place dans KernelBase.dll (et ses API-sets) mais
 /// pas dans kernel32.dll : GetProcAddress(kernel32, …) doit y échouer,
 /// sinon une appli prend un chemin que Windows ne lui fait jamais prendre
 /// (VLC appelait un pointeur resté nul, #495).
-pub const KERNELBASE_ONLY: &[&str] = &["WaitOnAddress", "WakeByAddressAll", "WakeByAddressSingle"];
+pub const KERNELBASE_ONLY: &[&str] = &[
+    "WaitOnAddress",
+    "WakeByAddressAll",
+    "WakeByAddressSingle",
+    // Douteux (#521) : user32 les exporte ; on les laisse visibles par
+    // KernelBase et les API-sets, jamais par kernel32.
+    "LoadStringA",
+    "LoadStringW",
+];
+
+/// Fonctions rangées dans la table kernel32 de Winlux pour servir des
+/// imports (ou par commodité), mais que Windows exporte ailleurs :
+/// GetProcAddress sur kernel32 ou KernelBase les refuse, comme Windows (#521).
+pub const KERNEL32_FOREIGN: &[(&str, &str)] = &[
+    ("EnumProcessModules", "psapi"),
+    ("EnumProcessModulesEx", "psapi"),
+    ("GetModuleInformation", "psapi"),
+    ("GetPerformanceInfo", "psapi"),
+    ("GetProcessMemoryInfo", "psapi"),
+    ("QueryWorkingSetEx", "psapi"),
+    ("GetUserNameA", "advapi32"),
+    ("GetUserNameW", "advapi32"),
+    ("RtlAddGrowableFunctionTable", "ntdll"),
+    ("RtlDeleteGrowableFunctionTable", "ntdll"),
+    ("RtlGrowFunctionTable", "ntdll"),
+    ("RtlAddVectoredExceptionHandler", "ntdll"),
+    ("RtlRemoveVectoredExceptionHandler", "ntdll"),
+    ("RtlAddVectoredContinueHandler", "ntdll"),
+    ("RtlRemoveVectoredContinueHandler", "ntdll"),
+];
+
+/// Les seules fonctions de ntdll que kernel32.dll fait suivre sous leur nom
+/// Rtl* (liste de référence docs/compat/kernel32-reference.txt).
+pub const KERNEL32_FROM_NTDLL: &[&str] = &[
+    "RtlAddFunctionTable",
+    "RtlCaptureContext",
+    "RtlCaptureStackBackTrace",
+    "RtlCompareMemory",
+    "RtlCopyMemory",
+    "RtlDeleteFunctionTable",
+    "RtlFillMemory",
+    "RtlInstallFunctionTableCallback",
+    "RtlLookupFunctionEntry",
+    "RtlMoveMemory",
+    "RtlPcToFileHeader",
+    "RtlRaiseException",
+    "RtlRestoreContext",
+    "RtlSecureZeroMemory",
+    "RtlUnwind",
+    "RtlUnwindEx",
+    "RtlVirtualUnwind",
+    "RtlZeroMemory",
+];
+
+/// Fonctions du registre (contrat api-ms-win-core-registry-l1-1-0) que
+/// kernel32.dll réexporte depuis Windows 7 ; les autres Reg* (RegOpenKeyA,
+/// RegQueryValueA…) ne sont que dans advapi32.
+pub const KERNEL32_REGISTRY: &[&str] = &[
+    "RegCloseKey",
+    "RegCopyTreeW",
+    "RegCreateKeyExA",
+    "RegCreateKeyExW",
+    "RegDeleteKeyExA",
+    "RegDeleteKeyExW",
+    "RegDeleteTreeA",
+    "RegDeleteTreeW",
+    "RegDeleteValueA",
+    "RegDeleteValueW",
+    "RegDisablePredefinedCacheEx",
+    "RegEnumKeyExA",
+    "RegEnumKeyExW",
+    "RegEnumValueA",
+    "RegEnumValueW",
+    "RegFlushKey",
+    "RegGetKeySecurity",
+    "RegGetValueA",
+    "RegGetValueW",
+    "RegLoadKeyA",
+    "RegLoadKeyW",
+    "RegLoadMUIStringA",
+    "RegLoadMUIStringW",
+    "RegNotifyChangeKeyValue",
+    "RegOpenCurrentUser",
+    "RegOpenKeyExA",
+    "RegOpenKeyExW",
+    "RegOpenUserClassesRoot",
+    "RegQueryInfoKeyA",
+    "RegQueryInfoKeyW",
+    "RegQueryValueExA",
+    "RegQueryValueExW",
+    "RegRestoreKeyA",
+    "RegRestoreKeyW",
+    "RegSaveKeyExA",
+    "RegSaveKeyExW",
+    "RegSetKeySecurity",
+    "RegSetValueExA",
+    "RegSetValueExW",
+    "RegUnLoadKeyA",
+    "RegUnLoadKeyW",
+];
+
+/// Ce que GetProcAddress rend sur le HMODULE de kernel32.dll (ou de
+/// KernelBase et des API-sets si `kernelbase`). Les imports statiques
+/// gardent `lookup`, plus tolérant ; GetProcAddress, lui, sert aux applis
+/// à choisir un chemin de code et doit coller à Windows (#495, #521).
+pub fn kernel32_proc(symbol: &str, kernelbase: bool) -> Option<usize> {
+    if KERNEL32_FOREIGN.iter().any(|&(n, _)| n == symbol) {
+        return None;
+    }
+    if !kernelbase && KERNELBASE_ONLY.contains(&symbol) {
+        return None;
+    }
+    if kernelbase {
+        return lookup("kernel32", symbol);
+    }
+    let b = builtins().iter().find(|b| b.name == "kernel32")?;
+    if let Some(&a) = b.exports.get(symbol) {
+        return Some(a);
+    }
+    if KERNEL32_FROM_NTDLL.contains(&symbol) {
+        return lookup("ntdll", symbol);
+    }
+    if KERNEL32_REGISTRY.contains(&symbol) {
+        return lookup("advapi32", symbol);
+    }
+    None
+}
+
+/// Noms que GetProcAddress(kernel32, …) résout, triés : la surface figée
+/// par scripts/test-kernel32-exports.py (`winlux --exports-kernel32`).
+pub fn kernel32_surface() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = builtins()
+        .iter()
+        .find(|b| b.name == "kernel32")
+        .map(|b| b.exports.keys().copied().collect())
+        .unwrap_or_default();
+    names.extend(KERNEL32_FROM_NTDLL.iter().copied());
+    names.extend(KERNEL32_REGISTRY.iter().copied());
+    names.retain(|n| !n.starts_with('#') && kernel32_proc(n, false).is_some());
+    names.sort_unstable();
+    names.dedup();
+    names
+}
 
 /// HMODULE distinct de KernelBase.dll et des API-sets api-ms-win-core-* :
 /// mêmes fonctions que kernel32, plus celles de `KERNELBASE_ONLY`.
@@ -1224,6 +1419,43 @@ pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{lookup, normalize, put_text_a, put_text_w};
+
+    #[test]
+    fn get_proc_address_kernel32_colle_a_windows() {
+        use super::kernel32_proc;
+        // Propres à KernelBase (#495) : visibles par KernelBase seulement.
+        assert!(kernel32_proc("WaitOnAddress", false).is_none());
+        assert!(kernel32_proc("WaitOnAddress", true).is_some());
+        // Rangées ailleurs par Windows (#521).
+        for name in [
+            "GetProcessMemoryInfo",
+            "GetUserNameW",
+            "LoadStringW",
+            "RtlAddVectoredExceptionHandler",
+        ] {
+            assert!(kernel32_proc(name, false).is_none(), "{name}");
+        }
+        assert!(lookup("psapi", "GetProcessMemoryInfo").is_some());
+        assert!(lookup("psapi", "GetModuleBaseNameW").is_some());
+        assert!(lookup("advapi32", "GetUserNameW").is_some());
+        assert!(lookup("user32", "LoadStringW").is_some());
+        // Pas de repli large vers ntdll, msvcrt ou advapi32.
+        for name in ["NtQueryInformationProcess", "memcpy", "RegOpenKeyA"] {
+            assert!(kernel32_proc(name, false).is_none(), "{name}");
+        }
+        // Mais les vrais exports de kernel32 restent là.
+        for name in [
+            "K32GetProcessMemoryInfo",
+            "AddVectoredExceptionHandler",
+            "RtlCaptureContext",
+            "RegOpenKeyExW",
+            "CreateFileW",
+        ] {
+            assert!(kernel32_proc(name, false).is_some(), "{name}");
+        }
+        // Les imports statiques gardent la table complète.
+        assert!(lookup("kernel32", "GetUserNameW").is_some());
+    }
 
     #[test]
     fn put_text_tronque_et_termine_toujours_par_nul() {
