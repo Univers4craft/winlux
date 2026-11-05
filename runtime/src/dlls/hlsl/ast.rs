@@ -71,6 +71,9 @@ pub(crate) enum Ty {
     Texture(TexKind, Box<Ty>),
     /// Vrai pour SamplerComparisonState.
     Sampler(bool),
+    /// Flux de sortie d'un geometry shader : 0 PointStream, 1 LineStream,
+    /// 2 TriangleStream, et type des sommets.
+    Stream(u8, Box<Ty>),
 }
 
 impl Ty {
@@ -172,6 +175,8 @@ pub(crate) enum Dir {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Param {
+    /// Primitive d'entrée d'un geometry shader (point, line, triangle…).
+    pub prim: Option<String>,
     pub name: String,
     pub ty: Ty,
     pub dir: Dir,
@@ -186,6 +191,8 @@ pub(crate) struct Func {
     pub ret: Ty,
     pub ret_semantic: Option<String>,
     pub params: Vec<Param>,
+    /// `[maxvertexcount(N)]` d'un geometry shader (0 sinon).
+    pub max_vertex_count: u32,
     pub body: Option<Vec<Stmt>>,
     pub line: u32,
 }

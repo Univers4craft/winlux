@@ -88,6 +88,9 @@ struct El {
     name: String,
     index: u32,
     flat: bool,
+    /// Colonne k d'une matrice column_major (un registre par colonne) :
+    /// `path` désigne alors la matrice entière.
+    col: Option<u32>,
 }
 
 pub(crate) struct Gen<'p> {
@@ -108,6 +111,13 @@ pub(crate) struct Gen<'p> {
     depth: usize,
     cur_ret: Ty,
     nfunc: u32,
+    /// Geometry shader : flux de sortie (genre, type des sommets).
+    gs_stream: Option<(u8, Ty)>,
+    /// Textures lues autrement que par SampleCmp / GetDimensions.
+    plain_use: BTreeSet<usize>,
+    /// Textures lues par SampleCmp : (texture, repère, forme « shadow »,
+    /// forme comparée à la main). La forme est choisie à l'assemblage.
+    cmp_exprs: Vec<(usize, String, String, String)>,
 }
 
 /// Nom GLSL d'un identifiant HLSL : préfixe, et pas de « __ » (réservé).
@@ -208,6 +218,9 @@ impl<'p> Gen<'p> {
             pairs: Vec::new(),
             helpers: BTreeSet::new(),
             funcs_done: HashMap::new(),
+            gs_stream: None,
+            plain_use: BTreeSet::new(),
+            cmp_exprs: Vec::new(),
             protos: Vec::new(),
             defs: Vec::new(),
             body: String::new(),
@@ -348,6 +361,9 @@ impl<'p> Gen<'p> {
                 format!("{}{dims}", self.tyname(t)?)
             }
             Ty::Struct(i) => self.struct_name(*i),
+            // Le flux d'un geometry shader n'a pas de valeur : un entier
+            // factice le représente, Append appelle w_append.
+            Ty::Stream(..) => "int".into(),
             Ty::Texture(..) | Ty::Sampler(_) => {
                 return Err("ressource utilisée comme valeur".into());
             }
@@ -361,6 +377,7 @@ impl<'p> Gen<'p> {
 
     fn zero(&self, t: &Ty) -> R<String> {
         Ok(match t {
+            Ty::Stream(..) => "0".into(),
             Ty::Scalar(b) => match b {
                 Base::Bool => "false".into(),
                 Base::Int => "0".into(),
@@ -377,7 +394,7 @@ impl<'p> Gen<'p> {
             Ty::Struct(i) => {
                 let s = &self.p.structs[*i];
                 let v: R<Vec<String>> = s.members.iter().map(|m| self.zero(&m.ty)).collect();
-                format!("{}({})", self.struct_name(*i), v?.join(", "))
+                self.struct_ctor(*i, v?)
             }
             _ => return Err("valeur nulle d'une ressource".into()),
         })
@@ -458,6 +475,11 @@ impl<'p> Gen<'p> {
                 .map_or("struct".into(), |s| s.name.clone()),
             Ty::Texture(k, _) => format!("Texture{}", k.glsl()),
             Ty::Sampler(_) => "SamplerState".into(),
+            Ty::Stream(k, t) => format!(
+                "{}<{}>",
+                ["PointStream", "LineStream", "TriangleStream"][(*k).min(2) as usize],
+                self.show(t)
+            ),
         }
     }
 
@@ -583,7 +605,7 @@ impl<'p> Gen<'p> {
                         ..c.clone()
                     })?);
                 }
-                format!("{}({})", self.struct_name(*i), v.join(", "))
+                self.struct_ctor(*i, v)
             }
             t => return Err(format!("lecture de {} dans un tampon", self.show(t))),
         })
@@ -1231,7 +1253,7 @@ impl<'p> Gen<'p> {
                 for m in &self.p.structs[*i].members {
                     v.push(self.build(&m.ty, it)?);
                 }
-                format!("{}({})", self.struct_name(*i), v.join(", "))
+                self.struct_ctor(*i, v)
             }
             _ => return Err("liste d'initialisation d'une ressource".into()),
         })
@@ -1829,7 +1851,19 @@ impl<'p> Gen<'p> {
 
     // ---------- Textures ----------
 
+    /// Texture déclarée en sampler « shadow » : lue seulement par SampleCmp.
+    fn is_shadow(&self, g: usize) -> bool {
+        !self.plain_use.contains(&g) && self.cmp_exprs.iter().any(|c| c.0 == g)
+    }
+
     fn res_glsl(&mut self, r: &ResRef) -> String {
+        self.plain_use.insert(r.g);
+        self.res_name(r)
+    }
+
+    /// Nom GLSL d'une texture, sans la marquer comme lue « ordinairement »
+    /// (SampleCmp et GetDimensions marchent aussi sur un sampler shadow).
+    fn res_name(&mut self, r: &ResRef) -> String {
         self.used_res.insert(r.g);
         let n = mg("t_", &self.globals[r.g].d.name);
         match &r.idx {
@@ -1935,6 +1969,19 @@ impl<'p> Gen<'p> {
     }
 
     fn method(&mut self, v: V, m: &str, args: &[Expr]) -> R<(String, Ty)> {
+        // Flux d'un geometry shader : Append et RestartStrip (#520).
+        if let V::E(_, Ty::Stream(_, t)) = &v {
+            return match m {
+                "Append" => {
+                    let a = args.first().ok_or("Append : sommet manquant")?;
+                    let (x, xt) = self.rv(a)?;
+                    let x = self.conv(&x, &xt, t)?;
+                    Ok((format!("w_append({x})"), Ty::Void))
+                }
+                "RestartStrip" => Ok(("EndPrimitive()".into(), Ty::Void)),
+                _ => Err(format!("méthode « {m} » d'un flux inconnue")),
+            };
+        }
         let V::Res(r) = v else {
             return Err(format!("méthode « {m} » sur une valeur"));
         };
@@ -1997,18 +2044,41 @@ impl<'p> Gen<'p> {
                     return Err(format!("{m} : arguments manquants"));
                 }
                 self.sampler_arg(&r, &args[0])?;
-                let t = self.res_glsl(&r);
+                let t = self.res_name(&r);
                 let uv = self.fvec(&args[1], c)?;
                 let z = self.fvec(&args[2], 1)?;
-                let fetch = if m == "SampleCmp" {
-                    format!("texture({t}, {uv})")
-                } else {
-                    format!("textureLod({t}, {uv}, 0.0)")
+                // Sampler « shadow » : la carte applique la ComparisonFunc
+                // de l'échantillonneur (#523). Si la texture sert aussi à
+                // des lectures ordinaires, comparaison à la main.
+                let lz = m != "SampleCmp";
+                let shadow = match k {
+                    TexKind::CubeArray => format!("texture({t}, {uv}, {z})"),
+                    _ => {
+                        let p = format!("vec{}({uv}, {z})", c + 1);
+                        match (lz, k) {
+                            (false, _) => format!("texture({t}, {p})"),
+                            (true, TexKind::T2D | TexKind::T1D) => {
+                                format!("textureLod({t}, {p}, 0.0)")
+                            }
+                            (true, TexKind::Cube) => {
+                                format!("textureGrad({t}, {p}, vec3(0.0), vec3(0.0))")
+                            }
+                            (true, TexKind::T1DArray) => {
+                                format!("textureGrad({t}, {p}, 0.0, 0.0)")
+                            }
+                            (true, _) => format!("textureGrad({t}, {p}, vec2(0.0), vec2(0.0))"),
+                        }
+                    }
                 };
-                Ok((
-                    format!("(({z}) <= {fetch}.x ? 1.0 : 0.0)"),
-                    Ty::Scalar(Base::Float),
-                ))
+                let fetch = if lz {
+                    format!("textureLod({t}, {uv}, 0.0)")
+                } else {
+                    format!("texture({t}, {uv})")
+                };
+                let manual = format!("(({z}) <= {fetch}.x ? 1.0 : 0.0)");
+                let marker = format!("w_cmp{}_", self.cmp_exprs.len());
+                self.cmp_exprs.push((r.g, marker.clone(), shadow, manual));
+                Ok((format!("({marker})"), Ty::Scalar(Base::Float)))
             }
             "Load" => {
                 let a = args.first().ok_or("Load : coordonnées")?;
@@ -2054,7 +2124,7 @@ impl<'p> Gen<'p> {
                 ))
             }
             "GetDimensions" => {
-                let t = self.res_glsl(&r);
+                let t = self.res_name(&r);
                 let dims: u8 = match k {
                     TexKind::Buffer | TexKind::T1D => 1,
                     TexKind::T1DArray | TexKind::T2D | TexKind::Cube => 2,
@@ -2288,12 +2358,22 @@ impl<'p> Gen<'p> {
 
     // ---------- Point d'entrée ----------
 
+    /// Constructeur d'une structure (membre factice si elle est vide).
+    fn struct_ctor(&self, i: usize, v: Vec<String>) -> String {
+        if self.p.structs[i].members.is_empty() {
+            return format!("{}(0)", self.struct_name(i));
+        }
+        format!("{}({})", self.struct_name(i), v.join(", "))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn flatten_io(
         &self,
         t: &Ty,
         sem: Option<(String, u32)>,
         path: String,
         flat: bool,
+        row_major: bool,
         out: &mut Vec<El>,
     ) -> R<()> {
         match (t, sem) {
@@ -2304,6 +2384,7 @@ impl<'p> Gen<'p> {
                         m.semantic.as_deref().map(split_semantic),
                         format!("{path}.{}", mg("m_", &m.name)),
                         flat || m.interp.flat,
+                        m.row_major,
                         out,
                     )?;
                 }
@@ -2315,8 +2396,43 @@ impl<'p> Gen<'p> {
                         Some((name.clone(), idx + k)),
                         format!("{path}[{k}]"),
                         flat,
+                        row_major,
                         out,
                     )?;
+                }
+            }
+            // Matrice : un registre par ligne (row_major) ou par colonne
+            // (column_major, défaut), sémantiques consécutives (#517).
+            (Ty::Matrix(b, r, c), Some((name, idx))) => {
+                let vec = |n: u8| {
+                    if n == 1 {
+                        Ty::Scalar(*b)
+                    } else {
+                        Ty::Vector(*b, n)
+                    }
+                };
+                if row_major {
+                    for k in 0..*r as u32 {
+                        out.push(El {
+                            path: format!("{path}[{k}]"),
+                            ty: vec(*c),
+                            name: name.clone(),
+                            index: idx + k,
+                            flat,
+                            col: None,
+                        });
+                    }
+                } else {
+                    for k in 0..*c as u32 {
+                        out.push(El {
+                            path: path.clone(),
+                            ty: vec(*r),
+                            name: name.clone(),
+                            index: idx + k,
+                            flat,
+                            col: Some(k),
+                        });
+                    }
                 }
             }
             (_, Some((name, index))) => out.push(El {
@@ -2325,6 +2441,7 @@ impl<'p> Gen<'p> {
                 name,
                 index,
                 flat,
+                col: None,
             }),
             (_, None) => return Err(format!("{path} : sémantique manquante")),
         }
@@ -2339,6 +2456,13 @@ impl<'p> Gen<'p> {
             .position(|f| f.name == entry && f.body.is_some())
             .ok_or_else(|| format!("point d'entrée « {entry} » introuvable"))?;
         let f = &p.funcs[fi];
+        let gs = self.stage == Stage::Geometry;
+        if gs {
+            self.gs_stream = f.params.iter().find_map(|prm| match &prm.ty {
+                Ty::Stream(k, t) => Some((*k, (**t).clone())),
+                _ => None,
+            });
+        }
         let key = format!("{fi}");
         let (fname, _) = self.gen_func(fi, &key, &[])?;
 
@@ -2380,30 +2504,63 @@ impl<'p> Gen<'p> {
         let mut args = Vec::new();
         let mut in_els = Vec::new();
         let mut out_els = Vec::new();
+        // Geometry shader : primitive d'entrée et sommets reçus.
+        let mut gs_prim: Option<String> = None;
+        let mut gs_vertices: Vec<Vec<El>> = Vec::new();
         for (k, prm) in f.params.iter().enumerate() {
             let n = format!("p{k}");
             let tn = self.tyname(&prm.ty)?;
             let _ = writeln!(pre, "  {tn} {n};");
             args.push(n.clone());
             let sem = prm.semantic.as_deref().map(split_semantic);
+            if gs {
+                if let Ty::Stream(..) = prm.ty {
+                    let _ = writeln!(pre, "  {n} = 0;");
+                    continue;
+                }
+                if let (Some(pr), Ty::Array(e, count)) = (&prm.prim, &prm.ty) {
+                    gs_prim = Some(pr.clone());
+                    for i in 0..*count {
+                        let mut v = Vec::new();
+                        self.flatten_io(
+                            e,
+                            sem.clone(),
+                            format!("{n}[{i}]"),
+                            prm.interp.flat,
+                            false,
+                            &mut v,
+                        )?;
+                        gs_vertices.push(v);
+                    }
+                    continue;
+                }
+            }
             if prm.dir != Dir::Out {
                 self.flatten_io(
                     &prm.ty,
                     sem.clone(),
                     n.clone(),
                     prm.interp.flat,
+                    false,
                     &mut in_els,
                 )?;
             }
             if prm.dir != Dir::In {
-                self.flatten_io(&prm.ty, sem, n.clone(), prm.interp.flat, &mut out_els)?;
+                self.flatten_io(
+                    &prm.ty,
+                    sem,
+                    n.clone(),
+                    prm.interp.flat,
+                    false,
+                    &mut out_els,
+                )?;
             }
         }
         let call = format!("{fname}({})", args.join(", "));
         if f.ret != Ty::Void {
             let tn = self.tyname(&f.ret)?;
             let sem = f.ret_semantic.as_deref().map(split_semantic);
-            self.flatten_io(&f.ret, sem, "ret".into(), false, &mut out_els)?;
+            self.flatten_io(&f.ret, sem, "ret".into(), false, false, &mut out_els)?;
             let _ = writeln!(post, "  {tn} ret = {call};");
         } else {
             let _ = writeln!(post, "  {call};");
@@ -2473,7 +2630,25 @@ impl<'p> Gen<'p> {
             };
             let val = self.conv(&src.0, &src.1, &e.ty.with_base(src.1.base().unwrap_or(b)))?;
             let val = self.conv(&val, &e.ty.with_base(src.1.base().unwrap_or(b)), &e.ty)?;
-            let _ = writeln!(pre, "  {} = {val};", e.path);
+            match e.col {
+                // Colonne de matrice : chaque composante dans sa ligne.
+                Some(k) => {
+                    let tn = self.tyname(&e.ty)?;
+                    let _ = writeln!(pre, "  {{ {tn} c = {val};");
+                    for row in 0..n {
+                        let c = if n == 1 {
+                            "c".to_string()
+                        } else {
+                            format!("c.{}", SW[row as usize])
+                        };
+                        let _ = writeln!(pre, "    {}[{row}][{k}] = {c};", e.path);
+                    }
+                    pre.push_str("  }\n");
+                }
+                None => {
+                    let _ = writeln!(pre, "  {} = {val};", e.path);
+                }
+            }
             inputs.push(SigElement {
                 name: e.name.clone(),
                 index: e.index,
@@ -2482,6 +2657,68 @@ impl<'p> Gen<'p> {
                 register: reg,
                 mask: ((1u32 << n) - 1) as u8,
             });
+        }
+
+        // Sommets d'entrée d'un geometry shader : gl_in[i] pour la
+        // position (remise dans la convention D3D), varyings en tableaux.
+        let mut gs_declared = BTreeSet::new();
+        for (i, els) in gs_vertices.iter().enumerate() {
+            for (j, e) in els.iter().enumerate() {
+                let b =
+                    e.ty.base()
+                        .ok_or_else(|| format!("{} : entrée non numérique", e.path))?;
+                let n =
+                    e.ty.comps()
+                        .ok_or_else(|| format!("{} : entrée matricielle", e.path))?;
+                let mut sv = 0;
+                let src: (String, Ty) = if e.name == "SV_POSITION" {
+                    sv = 1;
+                    let q = format!("gl_in[{i}].gl_Position");
+                    (
+                        format!("vec4({q}.x, -{q}.y, ({q}.z + {q}.w) * 0.5, {q}.w)"),
+                        Ty::Vector(Base::Float, 4),
+                    )
+                } else {
+                    let loc = varying_location(&e.name, e.index);
+                    let flat = e.flat || b != Base::Float;
+                    if gs_declared.insert(loc) {
+                        let _ = writeln!(
+                            io,
+                            "layout(location = {loc}) {}in vec4 varyin{loc}[];",
+                            if flat { "flat " } else { "" }
+                        );
+                    }
+                    let v = format!("varyin{loc}[{i}]");
+                    match b {
+                        Base::Float => (v, Ty::Vector(Base::Float, 4)),
+                        Base::Int => (format!("floatBitsToInt({v})"), Ty::Vector(Base::Int, 4)),
+                        _ => (format!("floatBitsToUint({v})"), Ty::Vector(Base::Uint, 4)),
+                    }
+                };
+                let val = self.conv(&src.0, &src.1, &e.ty.with_base(src.1.base().unwrap_or(b)))?;
+                let val = self.conv(&val, &e.ty.with_base(src.1.base().unwrap_or(b)), &e.ty)?;
+                let _ = writeln!(pre, "  {} = {val};", e.path);
+                if i == 0 {
+                    inputs.push(SigElement {
+                        name: e.name.clone(),
+                        index: e.index,
+                        system_value: sv,
+                        component_type: ct_of(b),
+                        register: j as u32,
+                        mask: ((1u32 << n) - 1) as u8,
+                    });
+                }
+            }
+        }
+
+        // Geometry shader : les sorties sont celles des sommets du flux,
+        // écrites par w_append(sommet) puis EmitVertex().
+        let mut call_post = None;
+        if gs {
+            if let Some((_, t)) = self.gs_stream.clone() {
+                call_post = Some(std::mem::take(&mut post));
+                self.flatten_io(&t, None, "a".into(), false, false, &mut out_els)?;
+            }
         }
 
         // Sorties.
@@ -2494,11 +2731,25 @@ impl<'p> Gen<'p> {
             let n =
                 e.ty.comps()
                     .ok_or_else(|| format!("{} : sortie matricielle", e.path))?;
-            let p = &e.path;
+            let col_expr;
+            let p = match e.col {
+                Some(k) => {
+                    let parts: Vec<String> = (0..n)
+                        .map(|row| format!("{}[{row}][{k}]", e.path))
+                        .collect();
+                    col_expr = if n == 1 {
+                        parts[0].clone()
+                    } else {
+                        format!("{}({})", self.tyname(&e.ty)?, parts.join(", "))
+                    };
+                    &col_expr
+                }
+                None => &e.path,
+            };
             let mut sv = 0;
             let mut r = reg;
             match (self.stage, e.name.as_str()) {
-                (Stage::Vertex, "SV_POSITION") => {
+                (Stage::Vertex | Stage::Geometry, "SV_POSITION") => {
                     sv = 1;
                     let v = self
                         .conv(p, &e.ty, &Ty::Vector(Base::Float, 4))
@@ -2509,7 +2760,7 @@ impl<'p> Gen<'p> {
                         "  gl_Position = vec4(pos.x, -pos.y, pos.z * 2.0 - pos.w, pos.w);"
                     );
                 }
-                (Stage::Vertex, "SV_CLIPDISTANCE") => {
+                (Stage::Vertex | Stage::Geometry, "SV_CLIPDISTANCE") => {
                     sv = 2;
                     for k in 0..n {
                         let c = if n == 1 {
@@ -2521,8 +2772,18 @@ impl<'p> Gen<'p> {
                         clip += 1;
                     }
                 }
-                (Stage::Vertex, "SV_CULLDISTANCE") => sv = 3,
-                (Stage::Vertex, _) => {
+                (Stage::Vertex | Stage::Geometry, "SV_CULLDISTANCE") => sv = 3,
+                (Stage::Geometry, "SV_RENDERTARGETARRAYINDEX") => {
+                    sv = 4;
+                    let v = self.conv(p, &e.ty, &Ty::Scalar(Base::Int))?;
+                    let _ = writeln!(post, "  gl_Layer = {v};");
+                }
+                (Stage::Geometry, "SV_VIEWPORTARRAYINDEX") => {
+                    sv = 5;
+                    let v = self.conv(p, &e.ty, &Ty::Scalar(Base::Int))?;
+                    let _ = writeln!(post, "  gl_ViewportIndex = {v};");
+                }
+                (Stage::Vertex | Stage::Geometry, _) => {
                     let loc = varying_location(&e.name, e.index);
                     let flat = e.flat || b != Base::Float;
                     let _ = writeln!(
@@ -2583,6 +2844,18 @@ impl<'p> Gen<'p> {
             });
             if r == reg {
                 reg += 1;
+            }
+        }
+
+        let mut append_def = String::new();
+        if let Some(cp) = call_post {
+            let body = std::mem::replace(&mut post, cp);
+            if let Some((_, t)) = &self.gs_stream {
+                let _ = write!(
+                    append_def,
+                    "void w_append({} a) {{\n{body}  EmitVertex();\n}}\n",
+                    self.tyname(t)?
+                );
             }
         }
 
@@ -2683,12 +2956,32 @@ impl<'p> Gen<'p> {
 
         // Assemblage.
         let base = self.stage.binding_base();
-        let tag = if self.stage == Stage::Vertex {
-            "vs"
-        } else {
-            "ps"
+        let tag = match self.stage {
+            Stage::Vertex => "vs",
+            Stage::Geometry => "gs",
+            _ => "ps",
         };
         let mut s = String::from("#version 430 core\n");
+        if gs {
+            let input = match gs_prim.as_deref() {
+                Some("point") => "points",
+                Some("line") => "lines",
+                Some("lineadj") => "lines_adjacency",
+                Some("triangleadj") => "triangles_adjacency",
+                _ => "triangles",
+            };
+            let output = match self.gs_stream.as_ref().map(|s| s.0) {
+                Some(0) => "points",
+                Some(1) => "line_strip",
+                _ => "triangle_strip",
+            };
+            let _ = writeln!(s, "layout({input}) in;");
+            let _ = writeln!(
+                s,
+                "layout({output}, max_vertices = {}) out;",
+                f.max_vertex_count.max(1)
+            );
+        }
         for h in &self.helpers {
             s.push_str(match *h {
                 "mod" => {
@@ -2710,10 +3003,15 @@ impl<'p> Gen<'p> {
             });
         }
         for (i, st) in p.structs.iter().enumerate() {
-            if st.members.is_empty() || st.members.iter().any(|m| m.ty.is_resource()) {
+            if st.members.iter().any(|m| m.ty.is_resource()) {
                 continue;
             }
             let _ = writeln!(s, "struct {} {{", self.struct_name(i));
+            // GLSL refuse une structure vide (PS_OUTPUT d'ANGLE pour un
+            // rendu de profondeur seule, #517) : membre factice.
+            if st.members.is_empty() {
+                s.push_str("  int m__vide;\n");
+            }
             for m in &st.members {
                 let _ = writeln!(s, "  {} {};", self.tyname(&m.ty)?, mg("m_", &m.name));
             }
@@ -2736,9 +3034,10 @@ impl<'p> Gen<'p> {
             if let Ty::Texture(k, elem) = t {
                 let pre = vec_prefix(elem.base().unwrap_or(Base::Float));
                 let pre = if pre == "b" { "u" } else { pre };
+                let shadow = if self.is_shadow(gi) { "Shadow" } else { "" };
                 let _ = writeln!(
                     s,
-                    "layout(binding = {}) uniform {pre}sampler{} {}{arr};",
+                    "layout(binding = {}) uniform {pre}sampler{}{shadow} {}{arr};",
                     base + r,
                     k.glsl(),
                     mg("t_", &d.name)
@@ -2747,6 +3046,7 @@ impl<'p> Gen<'p> {
         }
         s.push_str(&io);
         s.push_str(&decls);
+        s.push_str(&append_def);
         for x in &self.protos {
             s.push_str(x);
             s.push('\n');
@@ -2755,6 +3055,10 @@ impl<'p> Gen<'p> {
             s.push_str(x);
         }
         let _ = write!(s, "void main() {{\n{init}{pre}{post}}}\n");
+        for (g, marker, shadow, manual) in &self.cmp_exprs {
+            let e = if self.is_shadow(*g) { shadow } else { manual };
+            s = s.replace(marker.as_str(), e);
+        }
         Ok(Output {
             stage: self.stage,
             glsl: s,

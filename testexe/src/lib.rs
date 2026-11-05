@@ -523,6 +523,7 @@ extern "system" {
     pub fn SetEndOfFile(h: Handle) -> i32;
     pub fn GetFileAttributesA(path: *const c_char) -> u32;
     pub fn GetFileAttributesW(path: *const u16) -> u32;
+    pub fn SetFileAttributesW(path: *const u16, attributes: u32) -> i32;
     pub fn GetDiskFreeSpaceExW(path: *const u16, available: *mut u64, total: *mut u64, free: *mut u64) -> i32;
     pub fn GetFileAttributesExA(
         path: *const c_char,
