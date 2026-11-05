@@ -30,6 +30,12 @@ struct XWin {
     /// Sous-fenêtre X d'un contrôle `WS_CHILD` : coordonnées relatives au
     /// parent, ni décorations ni propriétés de gestionnaire de fenêtres.
     child: bool,
+    /// Fenêtre de premier niveau avec barre de menus : `frame` est la
+    /// fenêtre X gérée par le gestionnaire (titre, taille totale) qui porte
+    /// la barre sur `bar` pixels ; `window` est alors la zone client, placée
+    /// dessous. 0 sans barre.
+    frame: Window,
+    bar: u16,
 }
 
 /// Dégradé de fond déjà calculé, invalidé quand le contraste change.
@@ -748,6 +754,8 @@ pub struct X11Backend {
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
     back: HashMap<usize, (u32, u16, u16)>,
+    /// Barre de menus de chaque fenêtre qui en a une, et menu ouvert.
+    menu_bars: HashMap<usize, (Vec<gui::MenuBarItem>, Option<usize>)>,
     /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
     x11_dirty: Cell<bool>,
     /// Glyphes Xft pas encore confirmés par le serveur.
@@ -828,6 +836,7 @@ impl X11Backend {
             keyboard: unsafe { XkbKeyboard::connect() },
             dead_keys: Default::default(),
             back: HashMap::new(),
+            menu_bars: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
@@ -2149,6 +2158,12 @@ impl X11Backend {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if self.is_frame(hwnd, e.window) {
+                    if e.count == 0 {
+                        self.paint_menu_bar(hwnd);
+                    }
+                    return None;
+                }
                 let buffered = self.windows.get(&hwnd).copied().and_then(|w| {
                     let &(pixmap, width, height) = self.back.get(&hwnd)?;
                     (width == w.width && height == w.height).then_some((w, pixmap))
@@ -2206,6 +2221,22 @@ impl X11Backend {
                 crate::power::note_activity();
                 gui::raw_mouse_button(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
+                if self.is_frame(hwnd, e.event) {
+                    // Clic dans la barre de menus : WM_NCLBUTTONDOWN sur
+                    // HTMENU, en coordonnées écran, que DefWindowProc ouvre.
+                    if e.detail != 1 {
+                        return None;
+                    }
+                    return Some(PendingEvent {
+                        hwnd,
+                        message: 0x00A1,
+                        wparam: 5,
+                        lparam: pack_i16_pair(
+                            self.logical(e.root_x as i32),
+                            self.logical(e.root_y as i32),
+                        ),
+                    });
+                }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
@@ -2261,6 +2292,9 @@ impl X11Backend {
             Event::ButtonRelease(e) => {
                 gui::raw_mouse_button(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
+                if self.is_frame(hwnd, e.event) {
+                    return None;
+                }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 if wheel_message(e.detail).is_some() {
@@ -2279,6 +2313,9 @@ impl X11Backend {
                 crate::power::note_activity();
                 gui::raw_mouse_motion(e.root_x as i32, e.root_y as i32);
                 let hwnd = *self.by_xwin.get(&e.event)?;
+                if self.is_frame(hwnd, e.event) {
+                    return None;
+                }
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
@@ -2296,8 +2333,13 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
-                crate::dlls::rawinput::set_app_focus(true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
+                if self.is_frame(hwnd, e.event)
+                    && e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
+                {
+                    return None;
+                }
+                crate::dlls::rawinput::set_app_focus(true);
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_SETFOCUS,
@@ -2309,9 +2351,15 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                // Le focus passe du cadre à sa zone client : même fenêtre Win32.
+                if self.is_frame(hwnd, e.event)
+                    && e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
+                {
+                    return None;
+                }
                 // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
                 crate::dlls::rawinput::set_app_focus(false);
-                let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KILLFOCUS,
@@ -2430,9 +2478,176 @@ impl X11Backend {
         }
     }
 
+    /// Vrai si `xwin` est le cadre (barre de menus) de `hwnd`.
+    fn is_frame(&self, hwnd: usize, xwin: Window) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|w| w.frame != 0 && w.frame == xwin)
+    }
+
+    /// Fenêtre X qui porte le titre et la taille totale (gestionnaire).
+    fn top_xwin(w: &XWin) -> Window {
+        if w.frame != 0 {
+            w.frame
+        } else {
+            w.window
+        }
+    }
+
+    /// Dessine la barre de menus sur la fenêtre cadre (au-dessus de la zone client).
+    fn paint_menu_bar(&mut self, hwnd: usize) {
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        if w.frame == 0 || w.bar == 0 {
+            return;
+        }
+        let Some((items, hot)) = self.menu_bars.get(&hwnd).cloned() else {
+            return;
+        };
+        let target = XWin {
+            window: w.frame,
+            height: w.bar,
+            ..w
+        };
+        self.before_x11();
+        let full = Rect {
+            left: 0,
+            top: 0,
+            right: w.width as i32,
+            bottom: w.bar as i32,
+        };
+        self.paint_fill(&target, &full, theme::BG_SURFACE);
+        let font = self.scaled_font(&crate::dlls::menus::bar_font());
+        let bar = w.bar as i32;
+        for (i, item) in items.iter().enumerate() {
+            let left = self.scaled(item.left);
+            let right = self.scaled(item.right);
+            if hot == Some(i) {
+                self.before_x11();
+                let r = Rect {
+                    left: left + 1,
+                    top: 1,
+                    right: right - 1,
+                    bottom: bar - 1,
+                };
+                self.paint_fill(&target, &r, theme::HOVER);
+            }
+            let color = if item.enabled {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            let (_, th) = self
+                .xft
+                .as_mut()
+                .and_then(|x| x.measure(&font, item.label.as_bytes()))
+                .map(|(w, h, _)| (w, h))
+                .unwrap_or((0, font.height.abs()));
+            let x = left + self.scaled(7);
+            let y = ((bar - th) / 2).max(0);
+            self.paint_text(&target, x, y, &item.label, color, None, &font);
+        }
+        self.before_x11();
+        let _ = self.conn.flush();
+    }
+
+    /// Crée, déplace ou retire la zone client placée sous la barre de menus.
+    fn layout_menu_frame(&mut self, hwnd: usize, bar: u16) {
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        if w.child {
+            return;
+        }
+        if w.frame == 0 {
+            if bar == 0 {
+                return;
+            }
+            // La fenêtre existante devient le cadre ; une sous-fenêtre client
+            // la recouvre sous la barre et reçoit dessin, souris et enfants.
+            let frame = w.window;
+            let Ok(client) = self.conn.generate_id() else {
+                return;
+            };
+            let visual = self.conn.setup().roots[self.screen].root_visual;
+            let bg = self.alloc_color(theme::BG_DEEP);
+            let height = w.height.saturating_sub(bar).max(1);
+            let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+                x11rb::protocol::xproto::EventMask::EXPOSURE
+                    | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
+                    | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
+                    | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
+                    | x11rb::protocol::xproto::EventMask::POINTER_MOTION
+                    | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
+                    | x11rb::protocol::xproto::EventMask::KEY_PRESS
+                    | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
+            );
+            if self
+                .conn
+                .create_window(
+                    0,
+                    client,
+                    frame,
+                    0,
+                    bar as i16,
+                    w.width.max(1),
+                    height,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    visual,
+                    &aux,
+                )
+                .is_err()
+            {
+                return;
+            }
+            // Les enfants déjà créés passent dans la zone client.
+            if let Ok(Ok(tree)) = self.conn.query_tree(frame).map(|c| c.reply()) {
+                for sub in tree.children {
+                    if sub == client {
+                        continue;
+                    }
+                    let pos = self
+                        .by_xwin
+                        .get(&sub)
+                        .and_then(|h| self.windows.get(h))
+                        .map(|c| (c.x as i16, c.y as i16))
+                        .unwrap_or((0, 0));
+                    let _ = self.conn.reparent_window(sub, client, pos.0, pos.1);
+                }
+            }
+            let _ = self.conn.map_window(client);
+            if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
+                let _ = self.conn.free_pixmap(pixmap);
+            }
+            self.by_xwin.insert(client, hwnd);
+            if let Some(x) = self.windows.get_mut(&hwnd) {
+                x.frame = frame;
+                x.window = client;
+                x.bar = bar;
+                x.height = height;
+            }
+            let _ = self.conn.flush();
+            return;
+        }
+        if w.bar == bar {
+            return;
+        }
+        let total = w.height as u32 + w.bar as u32;
+        let height = (total.saturating_sub(bar as u32)).max(1);
+        let aux = ConfigureWindowAux::new().y(bar as i32).height(height);
+        let _ = self.conn.configure_window(w.window, &aux);
+        if let Some(x) = self.windows.get_mut(&hwnd) {
+            x.bar = bar;
+            x.height = height.min(u16::MAX as u32) as u16;
+        }
+        let _ = self.conn.flush();
+    }
+
     fn on_configure(&mut self, e: ConfigureNotifyEvent) -> Option<PendingEvent> {
         let hwnd = *self.by_xwin.get(&e.window)?;
-        let (old_x, old_y, old_w, old_h, window, root, child) = {
+        let (old_x, old_y, old_w, old_h, window, root, child, frame, bar) = {
             let w = self.windows.get(&hwnd)?;
             (
                 w.x,
@@ -2442,7 +2657,29 @@ impl X11Backend {
                 w.window,
                 self.conn.setup().roots[self.screen].root,
                 w.child,
+                w.frame,
+                w.bar,
             )
+        };
+        if frame != 0 && e.window != frame {
+            // Zone client sous la barre : suivie à partir du cadre.
+            return None;
+        }
+        let window = if frame != 0 { frame } else { window };
+        // Avec une barre de menus, la zone client prend la hauteur restante.
+        let client_h = e.height.saturating_sub(bar).max(1);
+        if frame != 0 && (e.width != old_w || client_h != old_h) {
+            let aux = ConfigureWindowAux::new()
+                .width(e.width.max(1) as u32)
+                .height(client_h as u32);
+            let _ = self
+                .conn
+                .configure_window(self.windows.get(&hwnd)?.window, &aux);
+            let _ = self.conn.flush();
+        }
+        let e = ConfigureNotifyEvent {
+            height: if frame != 0 { client_h } else { e.height },
+            ..e
         };
         // ConfigureNotify.x/y sont relatifs au parent; traduire l'origine vers
         // la racine couvre les fenêtres reparentées par un gestionnaire X11.
@@ -3002,6 +3239,8 @@ mod tests {
             width: 64,
             height: 64,
             child: false,
+            frame: 0,
+            bar: 0,
         };
         backend.paint_cmds(
             &window,
@@ -3114,6 +3353,8 @@ mod tests {
             width: 1920,
             height: 1080,
             child: false,
+            frame: 0,
+            bar: 0,
         };
         let rect = Rect {
             left: 0,
@@ -3554,6 +3795,8 @@ impl gui::GuiBackend for X11Backend {
                 width: w,
                 height: h,
                 child: false,
+                frame: 0,
+                bar: 0,
             },
         );
         self.by_xwin.insert(win, hwnd);
@@ -3631,6 +3874,8 @@ impl gui::GuiBackend for X11Backend {
                 width: w,
                 height: h,
                 child: true,
+                frame: 0,
+                bar: 0,
             },
         );
         self.by_xwin.insert(win, hwnd);
@@ -3661,26 +3906,52 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn set_menu_bar(
+        &mut self,
+        hwnd: usize,
+        items: &[gui::MenuBarItem],
+        height: i32,
+        hot: Option<usize>,
+    ) {
+        let bar = if height > 0 && !items.is_empty() {
+            self.scaled(height).clamp(1, u16::MAX as i32) as u16
+        } else {
+            0
+        };
+        if bar == 0 {
+            self.menu_bars.remove(&hwnd);
+        } else {
+            self.menu_bars.insert(hwnd, (items.to_vec(), hot));
+        }
+        self.layout_menu_frame(hwnd, bar);
+        self.paint_menu_bar(hwnd);
+    }
+
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
+        self.menu_bars.remove(&hwnd);
         self.overlay.forget(hwnd);
         if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
             let _ = self.conn.free_pixmap(pixmap);
         }
         if let Some(w) = self.windows.remove(&hwnd) {
             self.by_xwin.remove(&w.window);
+            if w.frame != 0 {
+                self.by_xwin.remove(&w.frame);
+            }
             let _ = self.conn.free_gc(w.gc);
-            let _ = self.conn.destroy_window(w.window);
+            let _ = self.conn.destroy_window(Self::top_xwin(&w));
             let _ = self.conn.flush();
         }
     }
 
     fn show_window(&mut self, hwnd: usize, show: bool) {
         if let Some(w) = self.windows.get(&hwnd) {
+            let top = Self::top_xwin(w);
             if show {
-                let _ = self.conn.map_window(w.window);
+                let _ = self.conn.map_window(top);
             } else {
-                let _ = self.conn.unmap_window(w.window);
+                let _ = self.conn.unmap_window(top);
             }
             let _ = self.conn.flush();
         }
@@ -3688,10 +3959,11 @@ impl gui::GuiBackend for X11Backend {
 
     fn set_title(&mut self, hwnd: usize, title: &str) {
         if let Some(w) = self.windows.get(&hwnd) {
+            let top = Self::top_xwin(w);
             let title_bytes = crate::dlls::encode_ansi(title);
             let _ = self.conn.change_property8(
                 x11rb::protocol::xproto::PropMode::REPLACE,
-                w.window,
+                top,
                 AtomEnum::WM_NAME,
                 AtomEnum::STRING,
                 &title_bytes,
@@ -3703,7 +3975,7 @@ impl gui::GuiBackend for X11Backend {
                 if let (Ok(name), Ok(utf8)) = (name.reply(), utf8.reply()) {
                     let _ = self.conn.change_property8(
                         x11rb::protocol::xproto::PropMode::REPLACE,
-                        w.window,
+                        top,
                         name.atom,
                         utf8.atom,
                         title.as_bytes(),
@@ -3723,13 +3995,13 @@ impl gui::GuiBackend for X11Backend {
             .clamp(i16::MIN as i32, i16::MAX as i32);
         let width = self.scaled(rect.width()).max(1).min(u16::MAX as i32) as u16;
         let height = self.scaled(rect.height()).max(1).min(u16::MAX as i32) as u16;
-        let window = match self.windows.get_mut(&hwnd) {
+        let (window, frame, bar) = match self.windows.get_mut(&hwnd) {
             Some(w) => {
                 w.x = x;
                 w.y = y;
                 w.width = width;
-                w.height = height;
-                w.window
+                w.height = height.saturating_sub(w.bar).max(1);
+                (w.window, w.frame, w.bar)
             }
             None => return,
         };
@@ -3738,7 +4010,15 @@ impl gui::GuiBackend for X11Backend {
             .y(y)
             .width(width as u32)
             .height(height as u32);
-        let _ = self.conn.configure_window(window, &aux);
+        if frame != 0 {
+            let _ = self.conn.configure_window(frame, &aux);
+            let client = ConfigureWindowAux::new()
+                .width(width as u32)
+                .height(height.saturating_sub(bar).max(1) as u32);
+            let _ = self.conn.configure_window(window, &client);
+        } else {
+            let _ = self.conn.configure_window(window, &aux);
+        }
         let _ = self.conn.flush();
     }
 
@@ -3770,7 +4050,7 @@ impl gui::GuiBackend for X11Backend {
     fn set_popup(&mut self, hwnd: usize) {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux = ChangeWindowAttributesAux::new().override_redirect(1);
-            let _ = self.conn.change_window_attributes(w.window, &aux);
+            let _ = self.conn.change_window_attributes(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }
     }
@@ -3803,7 +4083,7 @@ impl gui::GuiBackend for X11Backend {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
                 ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::BELOW);
-            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }
     }
@@ -3812,7 +4092,7 @@ impl gui::GuiBackend for X11Backend {
         if let Some(w) = self.windows.get(&hwnd) {
             let aux =
                 ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
-            let _ = self.conn.configure_window(w.window, &aux);
+            let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }
     }

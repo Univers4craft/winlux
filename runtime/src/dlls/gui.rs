@@ -300,12 +300,20 @@ pub struct Window {
     pub paint_queued: bool,
     /// Commandes GDI accumulées depuis le dernier `EndPaint`.
     pub pending: Vec<DrawCmd>,
+    /// Hauteur de la barre de menus (0 sans menu) : elle est au-dessus de
+    /// la zone client, dans le rectangle de la fenêtre.
+    pub menu_bar: i32,
 }
 
 impl Window {
     /// Rectangle client : la zone intérieure, sans décorations.
     pub fn client_rect(&self) -> Rect {
-        Rect::from_size(0, 0, self.rect.width(), self.rect.height())
+        Rect::from_size(
+            0,
+            0,
+            self.rect.width(),
+            (self.rect.height() - self.menu_bar).max(0),
+        )
     }
 }
 
@@ -1994,6 +2002,16 @@ pub struct PendingEvent {
     pub lparam: isize,
 }
 
+/// Titre d'un menu de la barre : libellé sans « & » et étendue horizontale
+/// en coordonnées fenêtre logiques.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuBarItem {
+    pub label: String,
+    pub left: i32,
+    pub right: i32,
+    pub enabled: bool,
+}
+
 /// Rendu et événements hôte. `headless` n'affiche rien ; X11 traduit les
 /// événements du serveur en messages Win32.
 pub trait GuiBackend: Send {
@@ -2012,6 +2030,16 @@ pub trait GuiBackend: Send {
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
     fn set_focus(&mut self, _hwnd: usize) {}
+    /// Barre de menus d'une fenêtre de premier niveau : libellés des menus
+    /// et hauteur (0 : pas de barre). La zone client commence sous la barre.
+    fn set_menu_bar(
+        &mut self,
+        _hwnd: usize,
+        _items: &[MenuBarItem],
+        _height: i32,
+        _hot: Option<usize>,
+    ) {
+    }
     /// Passe une fenêtre devant ses voisines (liste déroulante ouverte).
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
@@ -2485,7 +2513,10 @@ pub fn get_window_style(hwnd: usize) -> u32 {
 /// Renvoie l'origine (left, top) de la fenêtre en coordonnées écran.
 /// Origine de la zone client en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
-    screen_rect(hwnd).map(|r| (r.left, r.top)).unwrap_or((0, 0))
+    let bar = menu_bar_height(hwnd);
+    screen_rect(hwnd)
+        .map(|r| (r.left, r.top + bar))
+        .unwrap_or((0, 0))
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
@@ -2512,8 +2543,8 @@ pub fn screen_rect(hwnd: usize) -> Option<Rect> {
         };
         rect.left += parent.rect.left;
         rect.right += parent.rect.left;
-        rect.top += parent.rect.top;
-        rect.bottom += parent.rect.top;
+        rect.top += parent.rect.top + parent.menu_bar;
+        rect.bottom += parent.rect.top + parent.menu_bar;
         cur = parent;
         depth += 1;
     }
@@ -2532,11 +2563,29 @@ pub fn set_window_rect(hwnd: usize, rect: Rect) -> Option<Rect> {
 }
 
 /// Met à jour la taille client après un `ConfigureNotify` X11 externe.
+/// WM_SIZE du backend : taille de la zone client ; la fenêtre ajoute sa
+/// barre de menus.
 fn update_window_size(hwnd: usize, width: i32, height: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
         window.rect.right = window.rect.left.saturating_add(width);
-        window.rect.bottom = window.rect.top.saturating_add(height);
+        window.rect.bottom = window
+            .rect
+            .top
+            .saturating_add(height)
+            .saturating_add(window.menu_bar);
     }
+}
+
+/// Hauteur de la barre de menus d'une fenêtre (0 sans menu).
+pub fn menu_bar_height(hwnd: usize) -> i32 {
+    lock(windows()).get(&hwnd).map_or(0, |w| w.menu_bar)
+}
+
+/// Fixe la hauteur de la barre de menus ; renvoie l'ancienne.
+pub fn set_menu_bar_height(hwnd: usize, height: i32) -> Option<i32> {
+    let mut map = lock(windows());
+    let w = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut w.menu_bar, height.max(0)))
 }
 
 fn update_window_position(hwnd: usize, x: i32, y: i32) {
@@ -2773,6 +2822,15 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             0
         }
         WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        // WM_NCLBUTTONDOWN sur HTMENU : clic dans la barre de menus.
+        0x00A1 if wparam == 5 => {
+            let x = lparam as u32 as u16 as i16 as i32;
+            let y = (lparam as u32 >> 16) as u16 as i16 as i32;
+            if let Some(index) = crate::dlls::menus::bar_hit(hwnd, x, y) {
+                crate::dlls::menus::open_bar_menu(hwnd, index);
+            }
+            0
+        }
         // WM_NCCREATE : accepter la création (FALSE l'annulerait).
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
@@ -3193,6 +3251,7 @@ mod tests {
                     style,
                     ex_style: 0,
                     pending: Vec::new(),
+                    menu_bar: 0,
                 },
             );
             h
@@ -3359,6 +3418,7 @@ mod tests {
                 style: 0,
                 ex_style: 0,
                 pending: Vec::new(),
+                menu_bar: 0,
             },
         );
         hwnd
@@ -3664,6 +3724,7 @@ mod tests {
                     style: 0,
                     ex_style: 0,
                     pending: Vec::new(),
+                    menu_bar: 0,
                 },
             );
             h

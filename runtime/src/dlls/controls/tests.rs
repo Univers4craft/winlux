@@ -1,4 +1,5 @@
 use super::*;
+use crate::dlls::menus;
 use std::sync::Mutex as StdMutex;
 
 /// Notifications WM_COMMAND reçues par la fenêtre parente : (id, code).
@@ -917,5 +918,72 @@ fn barre_d_outils_bandes_et_liste_etendue() {
     notify_codes();
     sendw(combo, WM_KEYDOWN, VK_RETURN, 0);
     assert!(notify_codes().contains(&-806), "CBEN_ENDEDITW");
+    gui::destroy_window(p);
+}
+
+#[test]
+fn barre_de_menus_reduit_la_zone_client_et_place_les_titres() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gui::register_class(
+        "WinluxTestMenuBar",
+        gui::ClassInfo {
+            wnd_proc: parent_proc as *const () as usize,
+            background: 0,
+            instance: 0,
+        },
+    );
+    let bar = menus::create();
+    let file = menus::create();
+    menus::append(file, 0, 101, Some("&Ouvrir\tCtrl+O".into()));
+    menus::append(bar, 0x10, file, Some("&Fichier".into())); // MF_POPUP
+    menus::append(bar, 0, 102, Some("&Aide".into()));
+    let class = w("WinluxTestMenuBar");
+    let title = w("Menus");
+    let p = unsafe {
+        user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            0x00CF_0000,
+            100,
+            100,
+            400,
+            300,
+            0,
+            bar,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    assert!(p != 0);
+    assert_eq!(gui::menu_bar_height(p), menus::BAR_HEIGHT);
+    let mut r = Rect::default();
+    unsafe { user32::get_client_rect(p, &mut r) };
+    assert_eq!((r.width(), r.height()), (400, 300 - menus::BAR_HEIGHT));
+    // Les enfants se placent sous la barre.
+    let c = child(p, "STATIC", "x", 0, 7, (0, 0, 50, 20));
+    let cr = gui::screen_rect(c).unwrap();
+    assert_eq!((cr.left, cr.top), (100, 100 + menus::BAR_HEIGHT));
+    // Titres de gauche à droite, rien sous la barre.
+    assert_eq!(menus::bar_hit(p, 102, 105), Some(0));
+    let second = (1..400).find(|&x| menus::bar_hit(p, 100 + x, 105) == Some(1));
+    assert!(second.is_some(), "« Aide » placé après « Fichier »");
+    assert_eq!(menus::bar_hit(p, 102, 100 + menus::BAR_HEIGHT + 1), None);
+    // Commande directe dans la barre : WM_COMMAND.
+    notes();
+    menus::open_bar_menu(p, 1);
+    let mut m: gui::Msg = unsafe { std::mem::zeroed() };
+    while unsafe { user32::peek_message_w(&mut m, p, 0, 0, 1) } != 0 {
+        unsafe { user32::dispatch_message_w(&m) };
+    }
+    assert!(notes().contains(&(102, 0)));
+    // Sans menu, la zone client reprend toute la fenêtre.
+    unsafe {
+        let set: extern "win64" fn(usize, usize) -> i32 =
+            std::mem::transmute(crate::dlls::lookup("user32", "SetMenu").unwrap());
+        set(p, 0);
+        user32::get_client_rect(p, &mut r);
+    }
+    assert_eq!(r.height(), 300);
     gui::destroy_window(p);
 }
