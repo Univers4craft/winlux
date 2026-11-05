@@ -4793,18 +4793,22 @@ unsafe fn create_process_common(
             .extension()
             .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
             || (host_path.is_file() && crate::launch::is_windows_program(&host_path)));
-    // Gestionnaire de plantage crashpad (Chromium, Sentry, Warzone 2100…) :
-    // il reçoit des handles hérités et un tube nommé du parent, que Winlux ne
-    // partage pas encore entre processus. Le refuser proprement laisse le
-    // programme continuer sans rapport de plantage, comme s'il était absent.
+    // Gestionnaire de plantage crashpad (Sentry, Warzone 2100, Audacity…) : il
+    // reçoit des handles hérités et un tube nommé du parent, que Winlux ne
+    // partage pas encore entre processus. On lance à sa place un processus
+    // qui se termine aussitôt : le client crashpad démarre normalement (pas
+    // de boîte « Cannot start crashpad handler »), et un plantage éventuel
+    // ne produit simplement pas de rapport crashpad.
+    let mut is_pe = is_pe;
     if is_pe && is_crash_handler(&host_path) {
         crate::log_warn!(
             "process",
-            "{} : gestionnaire de plantage non lancé (handles hérités non pris en charge)",
+            "{} : gestionnaire de plantage remplacé par un processus vide (handles hérités non pris en charge)",
             host_path.display()
         );
-        crate::process::set_last_error(2);
-        return 0;
+        host_path = std::path::PathBuf::from("/bin/true");
+        args.clear();
+        is_pe = false;
     }
     let suspended = creation_flags & 4 != 0;
     let mut target = Vec::<std::ffi::OsString>::new();

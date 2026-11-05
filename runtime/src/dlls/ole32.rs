@@ -1194,6 +1194,109 @@ pub unsafe extern "win64" fn prop_variant_clear(v: *mut c_void) -> i32 {
     crate::dlls::oleaut32::variant_clear(v)
 }
 
+// --- Verrous d'objets et marshalling dans le même processus ----------------------------
+
+unsafe extern "win64" fn ole_s_ok(_a: usize, _b: usize, _c: usize) -> u32 {
+    0
+}
+
+/// Flux de marshalling factice : il porte l'interface (AddRef faite) d'un
+/// thread à l'autre du même processus ; c'est un vrai objet COM minimal.
+#[repr(C)]
+struct MarshalStream {
+    vtbl: &'static MarshalVtbl,
+    refs: std::sync::atomic::AtomicU32,
+    punk: usize,
+}
+
+#[repr(C)]
+struct MarshalVtbl {
+    qi: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> u32,
+    add_ref: unsafe extern "win64" fn(usize) -> u32,
+    release: unsafe extern "win64" fn(usize) -> u32,
+}
+
+unsafe extern "win64" fn ms_qi(_this: usize, _iid: *const u8, out: *mut usize) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    0x8000_4002 // E_NOINTERFACE
+}
+
+unsafe extern "win64" fn ms_add_ref(this: usize) -> u32 {
+    (*(this as *const MarshalStream))
+        .refs
+        .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+        + 1
+}
+
+unsafe extern "win64" fn ms_release(this: usize) -> u32 {
+    let s = this as *mut MarshalStream;
+    let n = (*s).refs.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) - 1;
+    if n == 0 {
+        let b = Box::from_raw(s);
+        if b.punk != 0 {
+            com_release(b.punk);
+        }
+    }
+    n
+}
+
+static MARSHAL_VTBL: MarshalVtbl = MarshalVtbl {
+    qi: ms_qi,
+    add_ref: ms_add_ref,
+    release: ms_release,
+};
+
+unsafe fn com_call(obj: usize, slot: usize) -> usize {
+    *((*(obj as *const usize)) as *const usize).add(slot)
+}
+
+unsafe fn com_release(obj: usize) {
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(com_call(obj, 2));
+    f(obj);
+}
+
+unsafe extern "win64" fn co_marshal_inter_thread_interface_in_stream(
+    _iid: *const u8,
+    punk: usize,
+    stream: *mut usize,
+) -> u32 {
+    if punk == 0 || stream.is_null() {
+        return 0x8007_0057; // E_INVALIDARG
+    }
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(com_call(punk, 1));
+    f(punk);
+    let s = Box::new(MarshalStream {
+        vtbl: &MARSHAL_VTBL,
+        refs: std::sync::atomic::AtomicU32::new(1),
+        punk,
+    });
+    *stream = Box::into_raw(s) as usize;
+    0
+}
+
+unsafe extern "win64" fn co_get_interface_and_release_stream(
+    stream: usize,
+    iid: *const u8,
+    out: *mut usize,
+) -> u32 {
+    if stream == 0 || out.is_null() {
+        return 0x8007_0057;
+    }
+    let s = stream as *const MarshalStream;
+    if !std::ptr::eq((*s).vtbl, &MARSHAL_VTBL) {
+        *out = 0;
+        return 0x8000_4002;
+    }
+    let punk = (*s).punk;
+    let qi: unsafe extern "win64" fn(usize, *const u8, *mut usize) -> u32 =
+        std::mem::transmute(com_call(punk, 0));
+    let hr = qi(punk, iid, out);
+    ms_release(stream);
+    hr
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "CoInitialize"=>fn co_initialize,"CoInitializeEx"=>fn co_initialize_ex,"CoUninitialize"=>fn co_uninitialize,
@@ -1208,6 +1311,10 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
         "ProgIDFromCLSID"=>fn prog_id_from_clsid,"CLSIDFromProgID"=>fn clsid_from_prog_id,
         "CoGetMalloc"=>fn co_get_malloc,
+        "CoLockObjectExternal"=>fn ole_s_ok,"OleLockRunning"=>fn ole_s_ok,"OleRun"=>fn ole_s_ok,
+        "OleSetContainedObject"=>fn ole_s_ok,
+        "CoMarshalInterThreadInterfaceInStream"=>fn co_marshal_inter_thread_interface_in_stream,
+        "CoGetInterfaceAndReleaseStream"=>fn co_get_interface_and_release_stream,
         "OleSetClipboard"=>fn ole_set_clipboard,"OleGetClipboard"=>fn ole_get_clipboard,"OleFlushClipboard"=>fn ole_flush_clipboard,
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
         "PropVariantClear"=>fn prop_variant_clear,
