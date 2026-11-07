@@ -3,6 +3,7 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod a11y;
+pub mod absent_devices;
 pub mod actctx;
 pub mod advapi32;
 pub mod advapi32_crypto;
@@ -112,6 +113,7 @@ pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
 pub mod opengl32;
+pub mod pdh;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -637,6 +639,31 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "pdh",
+                exports: pdh::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winscard",
+                exports: absent_devices::winscard_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "bthprops.cpl",
+                exports: absent_devices::bthprops_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dcomp",
+                exports: absent_devices::dcomp_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "fontsub",
+                exports: absent_devices::fontsub_exports(),
                 handle: fake_module(),
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
