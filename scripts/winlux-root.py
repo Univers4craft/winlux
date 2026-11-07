@@ -577,11 +577,20 @@ def serve():
         pass
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Le socket n'apparaît sous son vrai nom qu'une fois à l'écoute (#693) :
+    # un client qui le voyait entre bind() et listen() recevait « connexion
+    # refusée » (CI de test-accounts.py, bascule au démarrage de session).
+    pending = SOCKET + ".new"
+    try:
+        os.unlink(pending)
+    except FileNotFoundError:
+        pass
     old = os.umask(0o111)
-    server.bind(SOCKET)
+    server.bind(pending)
     os.umask(old)
-    os.chmod(SOCKET, 0o666)
+    os.chmod(pending, 0o666)
     server.listen(16)
+    os.replace(pending, SOCKET)
     while True:
         try:
             connection, _ = server.accept()
