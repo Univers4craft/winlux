@@ -2062,6 +2062,9 @@ unsafe fn cbex_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize
         0x0409 => s.ex_style as isize,
         0x040A => 0, // CBEM_HASEDITCHANGED
         0x200B => 0, // CBEM_SETWINDOWTHEME
+        // Texte de la ComboBoxEx = texte de son champ (barre d'adresse de
+        // 7-Zip : SetWindowText sur la ComboBoxEx).
+        0x000C..=0x000E if combo != 0 => send(combo, msg, wp, lp),
         // Messages CB_* : la liste déroulante répond.
         0x0140..=0x0165 => send(combo, msg, wp, lp),
         WM_COMMAND if lp as usize == combo => {
