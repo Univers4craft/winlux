@@ -139,6 +139,7 @@ _TR = {
     'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
     'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
     'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Lancer sans isolation (Chromium, Electron)': ('Start without isolation (Chromium, Electron)', 'Iniciar sin aislamiento (Chromium, Electron)', 'Ohne Isolierung starten (Chromium, Electron)'),
     'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
@@ -373,9 +374,10 @@ def lock_delay_text(seconds):
     return _t("{n} minutes").format(n=seconds // 60)
 
 
-PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network")
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox")
 PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
-                    "screen": "Capture de l’écran", "network": "Réseau et Internet"}
+                    "screen": "Capture de l’écran", "network": "Réseau et Internet",
+                    "sandbox": "Lancer sans isolation (Chromium, Electron)"}
 
 
 def permission_tool():
