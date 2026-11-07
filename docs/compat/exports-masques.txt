@@ -4,10 +4,12 @@
 # Régénérer : cd runtime && WINLUX_EXPORTS_MASQUES=ecrire cargo test exports_masques
 AdjustWindowRect  user32_ext  ←  user32
 AdjustWindowRectEx  user32_ext  ←  user32
+AngleArc  gdi32_more  ←  gdi32_path
 AppendMenuA  user32  ←  menus
 AppendMenuA  user32_ext  ←  menus
 AppendMenuW  user32  ←  menus
 AppendMenuW  user32_ext  ←  menus
+ArcTo  gdi32_more  ←  gdi32_path
 BringWindowToTop  user32_ext  ←  user32
 CM_Get_Child  games_win32  ←  devnodes
 CM_Get_DevNode_Status  games_win32  ←  devnodes
@@ -92,6 +94,7 @@ DrawMenuBar  user32  ←  menus
 DrawMenuBar  user32_ext  ←  menus
 DrawTextA  user32_ext  ←  gdi32, user32
 DrawTextW  user32_ext  ←  gdi32, user32
+Ellipse  gdi32  ←  gdi32_path
 EnableMenuItem  user32  ←  menus
 EnableMenuItem  user32_ext  ←  menus
 EnableScrollBar  user32_ext  ←  user32
@@ -140,6 +143,7 @@ GetDIBits  gdi32  ←  gdi32_ext
 GetDeviceGammaRamp  games_win32  ←  displaymode
 GetDlgItem  user32_ext  ←  user32
 GetDlgItemTextA  user32_ext  ←  user32
+GetFontData  usp10  ←  gdi32_path
 GetLocaleInfoA  intl::api  ←  nls
 GetLocaleInfoEx  intl::api  ←  nls
 GetLocaleInfoW  intl::api  ←  nls
@@ -159,6 +163,7 @@ GetObjectType  gdi32  ←  gdi32_palette
 GetObjectW  gdi32  ←  gdi32_palette
 GetOutlineTextMetricsW  win32_basics  ←  usp10
 GetParent  user32_ext  ←  user32
+GetPath  win32_basics  ←  hors exports!
 GetPrivateProfileStringA  kernel32  ←  inifile
 GetPrivateProfileStringW  electron_win32  ←  inifile
 GetPropA  user32_ext  ←  user32
@@ -220,7 +225,8 @@ IsValidLocaleName  intl::api  ←  nls
 IsWindowEnabled  user32_ext  ←  user32
 IsWindowVisible  user32_ext  ←  user32
 LCIDToLocaleName  intl::api  ←  nls
-LineTo  gdi32  ←  gdi32_ext
+LineTo  gdi32  ←  gdi32_path
+LineTo  gdi32_ext  ←  gdi32_path
 LoadAcceleratorsA  user32  ←  accel
 LoadAcceleratorsA  user32_ext  ←  accel
 LoadAcceleratorsW  user32  ←  accel
@@ -244,7 +250,8 @@ MapVirtualKeyW  user32_ext  ←  user32
 MapWindowPoints  user32_ext  ←  user32
 MessageBoxA  user32  ←  dialogs
 MessageBoxW  user32  ←  dialogs
-MoveToEx  gdi32  ←  gdi32_ext
+MoveToEx  gdi32  ←  gdi32_path
+MoveToEx  gdi32_ext  ←  gdi32_path
 MsgWaitForMultipleObjects  user32_ext  ←  user32
 MsgWaitForMultipleObjectsEx  user32_ext  ←  user32
 OleFlushClipboard  ole32  ←  dataobject
@@ -252,11 +259,17 @@ OleGetClipboard  ole32  ←  dataobject
 OleSetClipboard  ole32  ←  dataobject
 OpenFileMappingA  win32_basics  ←  mmap
 OpenFileMappingW  win32_basics  ←  mmap
-Polygon  gdi32  ←  gdi32_ext
-Polyline  gdi32  ←  gdi32_ext
+PolyBezier  gdi32  ←  gdi32_path
+PolyBezierTo  gdi32  ←  gdi32_path
+Polygon  gdi32  ←  gdi32_path
+Polygon  gdi32_ext  ←  gdi32_path
+Polyline  gdi32  ←  gdi32_path
+Polyline  gdi32_ext  ←  gdi32_path
+PolylineTo  gdi32  ←  gdi32_path
 QueryDosDeviceW  kernel32_node  ←  serial
 RealizePalette  gdi32  ←  gdi32_palette
 RealizePalette  gdi32_ext  ←  gdi32_palette
+Rectangle  gdi32  ←  gdi32_path
 RedrawWindow  user32_ext  ←  user32
 RegisterDragDrop  ole32  ←  dataobject
 RegisterEventSourceA  advapi32  ←  apps_win32

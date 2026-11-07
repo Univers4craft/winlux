@@ -248,7 +248,7 @@ pub fn shadowed_exports() -> Vec<String> {
                 m.trim_start_matches("winlux::")
                     .trim_start_matches("dlls::")
             })
-            .unwrap_or("?")
+            .unwrap_or("hors exports!")
     };
     let mut lines = BTreeSet::new();
     for &(name, addr, module) in &definitions {
