@@ -708,6 +708,11 @@ _TR = {
     '{name} (non branché)': ('{name} (not plugged in)', '{name} (no conectado)', '{name} (nicht angeschlossen)'),
     '{path} (dossier absent, ignoré)': ('{path} (folder missing, skipped)', '{path} (carpeta ausente, omitida)', '{path} (Ordner fehlt, übersprungen)'),
     '{size} libres': ('{size} free', '{size} libres', '{size} frei'),
+    # Menu Démarrer à deux volets (#685).
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Afficher le volet « Pour vous »': ('Show the “For you” pane', 'Mostrar el panel «Para ti»', 'Bereich „Für Sie“ anzeigen'),
+    'Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré.': ('Recent files, apps you usually open at this time and small to-dos, worked out on this PC without sending anything. When off, the menu has a single centred pane.', 'Archivos recientes, aplicaciones habituales a esta hora y pequeñas tareas, calculados en este PC sin enviar nada. Desactivado, el menú tiene un solo panel centrado.', 'Zuletzt verwendete Dateien, um diese Uhrzeit übliche Apps und kleine Aufgaben, auf diesem PC berechnet, ohne etwas zu senden. Ausgeschaltet hat das Menü nur noch einen zentrierten Bereich.'),
+    'Effacer l’historique d’utilisation': ('Clear usage history', 'Borrar el historial de uso', 'Nutzungsverlauf löschen'),
     '« Conserver les deux » : un fichier modifié depuis la sauvegarde garde sa version actuelle, l’ancienne arrive à côté avec « (restauré …) » dans son nom.': ('“Keep both”: a file changed since the backup keeps its current version; the old one is placed next to it with “(restauré …)” in its name.', '«Conservar ambos»: un archivo modificado después de la copia conserva su versión actual; la antigua se coloca al lado con «(restauré …)» en su nombre.', '„Beide behalten“: Eine seit der Sicherung geänderte Datei behält ihre aktuelle Version; die alte wird mit „(restauré …)“ im Namen daneben abgelegt.'),
 }
 
@@ -718,6 +723,25 @@ def _t(text):
 
 
 HOME = Path.home()
+START_STATE = HOME / ".config/winlux/start.json"
+
+
+def start_menu_state():
+    try:
+        state = json.loads(START_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def update_start_menu_state(**changes):
+    """Change quelques clés de start.json sans toucher aux épingles."""
+    state = start_menu_state()
+    state.update(changes)
+    START_STATE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = START_STATE.with_suffix(".settings.tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(START_STATE)
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 
 
@@ -1864,6 +1888,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.start_menu_settings()
         self.theme_files()
         if have("winlux-widgets"):
             self.widget_settings()
@@ -1886,6 +1911,17 @@ class ExtraPages:
             # « Aligner les icônes sur la grille » de Windows : seul le
             # rangement automatique est proposé.
             self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
+
+    def start_menu_settings(self):
+        """Menu Démarrer (#685) : volet « Pour vous » et historique local.
+        Réglage propre au compte, dans ~/.config/winlux/start.json, relu par le
+        menu à chaque ouverture ; proposé ici seulement, pas à l'installation."""
+        self.section(_t("Menu Démarrer"))
+        box = self.card()
+        self.switch(box, _t("Afficher le volet « Pour vous »"), start_menu_state().get("for_you", True) is not False,
+                    lambda on: update_start_menu_state(for_you=bool(on)),
+                    _t("Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré."))
+        self.actions(box, [(_t("Effacer l’historique d’utilisation"), lambda: update_start_menu_state(usage=[], recent=[], dismissed=[]))])
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
