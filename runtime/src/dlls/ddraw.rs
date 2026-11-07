@@ -337,7 +337,7 @@ impl Fmt {
 
     /// 0xAARRGGBB → valeur brute (`inv` : couleur → index pour P8).
     #[inline]
-    fn from_argb(self, c: u32, inv: &mut Inverse) -> u32 {
+    fn encode_argb(self, c: u32, inv: &mut Inverse) -> u32 {
         let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
         match self {
             Fmt::P8 => inv.index(c & 0xFF_FFFF) as u32,
@@ -1330,7 +1330,7 @@ unsafe extern "win64" fn dd_enum_display_modes(
     }
     let v2 = face(this).ver >= 4;
     let f = (filter != 0).then(|| read_desc(filter));
-    let buf = vec![0u8; 160];
+    let buf = [0u8; 160];
     let p = buf.as_ptr() as usize;
     for (w, h) in mode_list() {
         for bpp in [8u32, 16, 24, 32] {
@@ -1415,10 +1415,11 @@ unsafe fn fill_caps(p: usize) {
         0x40 | 0x0400_0000
             | 0x200
             | 0x40_0000
+            | 0x8000
             | 0x8000_0000
-            | 0x8000_0000u32 >> 0
             | 0x1000_0000
-            | 0x2000_0000,
+            | 0x2000_0000
+            | 0x4000_0000,
     );
     set(8, 0x8_0000 | 0x2_0000); // DDCAPS2_WIDESURFACES | DDCAPS2_NOPAGELOCKREQUIRED
     set(12, 0x200 | 0x2); // DDCKEYCAPS_SRCBLT | DDCKEYCAPS_DESTBLT
@@ -2028,7 +2029,7 @@ fn draw(d: &mut SurfData, dst_rect: Rect, clip: Rect, src: &SrcCopy, o: &BltOpts
             let v = if same {
                 sv
             } else {
-                d.fmt.from_argb(src.fmt.to_argb(sv, &src.pal), &mut inv)
+                d.fmt.encode_argb(src.fmt.to_argb(sv, &src.pal), &mut inv)
             };
             d.fmt.write(&mut d.mem[at..], v);
         }
@@ -2225,7 +2226,7 @@ unsafe extern "win64" fn s_enum_attached(this: usize, ctx: usize, cb: usize) -> 
         l.extend(d.attached.iter().copied());
         (l, ver >= 4)
     };
-    let desc = vec![0u8; 160];
+    let desc = [0u8; 160];
     for o in list {
         let os = &*(o as *const Surface);
         os.refs.fetch_add(1, Ordering::AcqRel);
@@ -2447,7 +2448,7 @@ unsafe extern "win64" fn s_release_dc(this: usize, hdc: usize) -> i32 {
             for y in 0..h {
                 for x in 0..w {
                     let c = *px.add(y * w + x) | 0xFF00_0000;
-                    let v = fmt.from_argb(c, &mut inv);
+                    let v = fmt.encode_argb(c, &mut inv);
                     fmt.write(&mut d.mem[y * pitch + x * bpp..], v);
                 }
             }
@@ -3155,8 +3156,8 @@ mod tests {
         assert_eq!(Fmt::Rgb565.to_argb(0x07E0, &pal), 0xFF00_FF00);
         assert_eq!(Fmt::Rgb555.to_argb(0x001F, &pal), 0xFF00_00FF);
         let mut inv = Inverse::new(&pal);
-        assert_eq!(Fmt::Rgb565.from_argb(0xFFFF_FFFF, &mut inv), 0xFFFF);
-        assert_eq!(Fmt::P8.from_argb(0x0080_8080, &mut inv), 0x80);
+        assert_eq!(Fmt::Rgb565.encode_argb(0xFFFF_FFFF, &mut inv), 0xFFFF);
+        assert_eq!(Fmt::P8.encode_argb(0x0080_8080, &mut inv), 0x80);
     }
 
     #[test]

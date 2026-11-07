@@ -211,10 +211,10 @@ Limites honnêtes de la mesure :
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
 | .NET | CLR maison (interpréteur CIL) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) |
-| Direct3D | D3D9 (shaders SM1–3 traduits), D3D11/12 sur GL/Vulkan, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, D3D8, DirectDraw, `d3dcompiler_47` |
+| Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, `d3dx8`/`d3dx9`, `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
-| Son | waveOut, DirectSound, WASAPI, XAudio2 sur un mixeur PipeWire/Pulse/ALSA | MIDI (`midiOut*`, `midiIn*`), `msacm32` |
+| Son | waveOut, DirectSound, WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison) sur un mixeur PipeWire/Pulse/ALSA | entrée MIDI (`midiIn*`), `msacm32` |
 | Vidéo | MP3/AAC décodés, DXVA2 H.264 | chaîne Media Foundation (#23), DirectShow, `avicap32`, `evr` |
 | Réseau | Winsock TCP/UDP de base, WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
 | Sécurité et crypto | bcrypt, une partie de crypt32, jetons simplifiés | CryptoAPI ancienne (`CryptAcquireContext`…), `ncrypt`, magasins de certificats, ACL réelles |
@@ -571,10 +571,21 @@ Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
-DirectDraw, Direct3D 8, `d3dx9_*`, DirectPlay, DirectShow (aujourd'hui
-`quartz` ne fait que renvoyer des erreurs), la chaîne Media Foundation de
-lecture (#23), MIDI, `msacm32`. Ce sont les jeux et lecteurs des années
-2000–2015, presque toujours en 32 bits (point 3).
+`d3dx8`/`d3dx9_*`, DirectPlay, DirectShow (aujourd'hui `quartz` ne fait que
+renvoyer des erreurs), la chaîne Media Foundation de lecture (#23), l'entrée
+MIDI, `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
+toujours en 32 bits (point 3).
+
+Fait (#237) : `ddraw.dll` maison (DirectDraw 1, 2, 4 et 7 : surfaces 8, 16,
+24 et 32 bits, palettes, clés de couleur, `Blt`/`BltFast`, chaînes de `Flip`
+calées sur 60 Hz, `GetDC`, découpeur, vrai changement de définition en plein
+écran) ; `d3d8.dll` traduit Direct3D 8 sur Direct3D 9 (appareil complet,
+textures, tampons, blocs d'états, déclarations et shaders vs.1.1 / ps.1.x) ;
+`midiOut*` et `midiStream*` jouent sur un synthétiseur General MIDI maison
+(128 instruments par familles, percussions sur le canal 10, 64 voix). Ces
+objets lisent eux-mêmes la disposition x86 de leurs structures : ils servent
+les jeux 32 bits comme les 64 bits. Test : `scripts/test-wow32.sh`
+(`jeux32.exe` et `jeux64.exe`).
 
 Ampleur : **L**. Suivi : #237, et #23 pour la vidéo.
 

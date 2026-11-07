@@ -3,6 +3,8 @@
  * (i686-pc-windows-msvc, jeux32.exe) et en x64 (jeux64.exe), pour vérifier
  * les deux dispositions des structures (DDSURFACEDESC, DDBLTFX, MIDIHDR,
  * WAVEHDR) et les rappels x86.
+ * Direct3D 8 (vérifications 80 à 105) passe par la traduction vers
+ * Direct3D 9.
  * Rend 0 et écrit « Jeux anciens : tout est correct » si tout va bien,
  * sinon le numéro de la vérification qui a échoué. */
 typedef unsigned int DWORD, UINT;
@@ -117,6 +119,12 @@ typedef HRESULT(WINAPI *M5)(void *, void *, void *, void *, void *, void *);
 #define CALL5(o, i, a, b, c, d, e)                                                    \
     ((M5)VT(o)[i])(o, (void *)(UINT_PTR)(a), (void *)(UINT_PTR)(b), (void *)(UINT_PTR)(c), \
                    (void *)(UINT_PTR)(d), (void *)(UINT_PTR)(e))
+typedef HRESULT(WINAPI *M6)(void *, void *, void *, void *, void *, void *, void *);
+typedef HRESULT(WINAPI *M7)(void *, void *, void *, void *, void *, void *, void *, void *);
+#define P(a) (void *)(UINT_PTR)(a)
+#define CALL6(o, i, a, b, c, d, e, f) ((M6)VT(o)[i])(o, P(a), P(b), P(c), P(d), P(e), P(f))
+#define CALL7(o, i, a, b, c, d, e, f, g) \
+    ((M7)VT(o)[i])(o, P(a), P(b), P(c), P(d), P(e), P(f), P(g))
 /* Indices des méthodes (IUnknown = 0..2). */
 enum {
     DD_CREATECLIPPER = 4, DD_CREATEPALETTE = 5, DD_CREATESURFACE = 6, DD_ENUMDISPLAYMODES = 8,
@@ -173,6 +181,7 @@ IMP BOOL WINAPI DeleteObject(HGDIOBJ);
 IMP HRESULT WINAPI DirectDrawCreate(GUID *, void **, void *);
 IMP HRESULT WINAPI DirectDrawCreateEx(GUID *, void **, const GUID *, void *);
 IMP HRESULT WINAPI DirectDrawEnumerateA(void *, void *);
+IMP void *WINAPI Direct3DCreate8(UINT);
 IMP UINT WINAPI midiOutGetNumDevs(void);
 IMP UINT WINAPI midiOutGetDevCapsA(UINT_PTR, MIDIOUTCAPSA *, UINT);
 IMP UINT WINAPI midiOutOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
@@ -195,6 +204,8 @@ IMP UINT WINAPI waveOutUnprepareHeader(HANDLE, WAVEHDR *, UINT);
 IMP UINT WINAPI waveOutWrite(HANDLE, WAVEHDR *, UINT);
 IMP UINT WINAPI waveOutClose(HANDLE);
 
+int _fltused = 0x9875;
+
 static void out(const char *s) {
     DWORD n = 0, len = 0;
     while (s[len]) len++;
@@ -202,9 +213,10 @@ static void out(const char *s) {
 }
 
 static void fail(int n) {
-    char msg[] = "echec : verification n. 00\n";
-    msg[24] = (char)('0' + n / 10);
-    msg[25] = (char)('0' + n % 10);
+    char msg[] = "echec : verification n. 000\n";
+    msg[24] = (char)('0' + n / 100);
+    msg[25] = (char)('0' + n / 10 % 10);
+    msg[26] = (char)('0' + n % 10);
     out(msg);
     ExitProcess((DWORD)n);
 }
@@ -518,6 +530,113 @@ static int timer_wave_tests(void) {
     return 0;
 }
 
+/* d3d8.h (extraits publics) : Direct3D 8 traduit sur Direct3D 9. */
+typedef struct {
+    UINT BackBufferWidth, BackBufferHeight, BackBufferFormat, BackBufferCount, MultiSampleType,
+        SwapEffect;
+    HWND hDeviceWindow;
+    BOOL Windowed, EnableAutoDepthStencil;
+    UINT AutoDepthStencilFormat, Flags, FullScreen_RefreshRateInHz,
+        FullScreen_PresentationInterval;
+} D3DPRESENT_PARAMETERS8;
+typedef struct { UINT Width, Height, RefreshRate, Format; } D3DDISPLAYMODE;
+typedef struct { int Pitch; void *pBits; } D3DLOCKED_RECT;
+typedef HRESULT(WINAPI *CLEAR8)(void *, DWORD, const void *, DWORD, DWORD, float, DWORD);
+enum {
+    D8_GETADAPTERCOUNT = 4, D8_GETADAPTERIDENTIFIER = 5, D8_GETADAPTERMODECOUNT = 6,
+    D8_ENUMADAPTERMODES = 7, D8_GETADAPTERDISPLAYMODE = 8, D8_GETDEVICECAPS = 13,
+    D8_CREATEDEVICE = 15,
+    DV_PRESENT = 15, DV_CREATETEXTURE = 20, DV_CREATEVERTEXBUFFER = 23, DV_BEGINSCENE = 34,
+    DV_ENDSCENE = 35, DV_CLEAR = 36, DV_SETRENDERSTATE = 50, DV_GETRENDERSTATE = 51,
+    DV_GETTEXTURESTAGESTATE = 62, DV_SETTEXTURESTAGESTATE = 63, DV_SETTEXTURE = 61,
+    DV_DRAWPRIMITIVE = 70, DV_CREATEVERTEXSHADER = 75, DV_SETVERTEXSHADER = 76,
+    DV_DELETEVERTEXSHADER = 78, DV_SETSTREAMSOURCE = 83, DV_CREATEPIXELSHADER = 87,
+    DV_DELETEPIXELSHADER = 90,
+    TX_GETLEVELCOUNT = 13, TX_GETSURFACELEVEL = 15, TX_LOCKRECT = 16, TX_UNLOCKRECT = 17,
+    SF_LOCKRECT = 9, SF_UNLOCKRECT = 10, VB_LOCK = 11, VB_UNLOCK = 12
+};
+
+static int d3d8_tests(HWND hwnd) {
+    static char ident[1068];
+    static DWORD caps[53];
+    D3DDISPLAYMODE mode;
+    D3DPRESENT_PARAMETERS8 pp;
+    D3DLOCKED_RECT lr;
+    void *d3d, *dev = 0, *tex = 0, *surf = 0, *vb = 0;
+    BYTE *vdata = 0;
+    DWORD v = 0, vsh = 0, psh = 0;
+    static const DWORD decl[] = {0x20000000, 0x40020000, 0xFFFFFFFF};
+    static const DWORD ps11[] = {0xFFFF0101, 0x00000042, 0xB00F0000, 0x00000001,
+                                 0x800F0000, 0xB0E40000, 0x0000FFFF};
+
+    d3d = Direct3DCreate8(220);
+    CHECK(80, d3d != 0);
+    CHECK(81, CALL0(d3d, D8_GETADAPTERCOUNT) >= 1);
+    CHECK(82, CALL3(d3d, D8_GETADAPTERIDENTIFIER, 0, 0, ident) == 0 && ident[512] != 0);
+    zero(&mode, sizeof mode);
+    CHECK(83, CALL1(d3d, D8_GETADAPTERMODECOUNT, 0) > 0 &&
+                  CALL3(d3d, D8_ENUMADAPTERMODES, 0, 0, &mode) == 0 && mode.Width > 0);
+    CHECK(84, CALL3(d3d, D8_GETDEVICECAPS, 0, 1, caps) == 0 && caps[49] == 0xFFFE0101 &&
+                  caps[51] == 0xFFFF0104);
+    CHECK(85, CALL2(d3d, D8_GETADAPTERDISPLAYMODE, 0, &mode) == 0 && mode.Format != 0);
+    zero(&pp, sizeof pp);
+    pp.Windowed = 1;
+    pp.SwapEffect = 1; /* D3DSWAPEFFECT_DISCARD */
+    pp.BackBufferFormat = mode.Format;
+    pp.hDeviceWindow = hwnd;
+    CHECK(86, CALL6(d3d, D8_CREATEDEVICE, 0, 1, hwnd, 0x20, &pp, &dev) == 0 && dev);
+
+    /* Texture : LockRect au format D3DLOCKED_RECT de l'ABI, relecture par la surface. */
+    CHECK(87, CALL7(dev, DV_CREATETEXTURE, 16, 16, 1, 0, 21, 1, &tex) == 0 && tex);
+    CHECK(88, CALL0(tex, TX_GETLEVELCOUNT) == 1);
+    zero(&lr, sizeof lr);
+    CHECK(89, CALL4(tex, TX_LOCKRECT, 0, &lr, 0, 0) == 0 && lr.pBits && lr.Pitch >= 64);
+    ((DWORD *)lr.pBits)[0] = 0xFF336699;
+    CHECK(90, CALL1(tex, TX_UNLOCKRECT, 0) == 0);
+    CHECK(91, CALL2(tex, TX_GETSURFACELEVEL, 0, &surf) == 0 && surf);
+    zero(&lr, sizeof lr);
+    CHECK(92, CALL3(surf, SF_LOCKRECT, &lr, 0, 0x10) == 0 && lr.pBits &&
+                  ((DWORD *)lr.pBits)[0] == 0xFF336699);
+    CALL0(surf, SF_UNLOCKRECT);
+    CALL0(surf, 2);
+
+    /* Tampon de sommets FVF XYZRHW|DIFFUSE, verrouillé par BYTE**. */
+    CHECK(93, CALL5(dev, DV_CREATEVERTEXBUFFER, 60, 0, 0x44, 1, &vb) == 0 && vb);
+    CHECK(94, CALL4(vb, VB_LOCK, 0, 0, &vdata, 0) == 0 && vdata);
+    for (int i = 0; i < 60; i++) vdata[i] = 0;
+    CHECK(95, CALL0(vb, VB_UNLOCK) == 0);
+
+    /* États : D3DRS_ZBIAS (47) et états d'étage de texture devenus états d'échantillonneur. */
+    CHECK(96, CALL2(dev, DV_SETRENDERSTATE, 47, 3) == 0 &&
+                  CALL2(dev, DV_GETRENDERSTATE, 47, &v) == 0 && v == 3);
+    CHECK(97, CALL3(dev, DV_SETTEXTURESTAGESTATE, 0, 16, 2) == 0 &&
+                  CALL3(dev, DV_GETTEXTURESTAGESTATE, 0, 16, &v) == 0 && v == 2);
+
+    /* Une image : Clear (flottant), scène, dessin, Present. */
+    CHECK(98, ((CLEAR8)VT(dev)[DV_CLEAR])(dev, 0, 0, 1, 0xFF203040, 1.0f, 0) == 0);
+    CHECK(99, CALL1(dev, DV_SETVERTEXSHADER, 0x44) == 0 &&
+                  CALL3(dev, DV_SETSTREAMSOURCE, 0, vb, 20) == 0 &&
+                  CALL2(dev, DV_SETTEXTURE, 0, tex) == 0);
+    CHECK(100, CALL0(dev, DV_BEGINSCENE) == 0 && CALL3(dev, DV_DRAWPRIMITIVE, 4, 0, 1) == 0 &&
+                   CALL0(dev, DV_ENDSCENE) == 0);
+    CHECK(101, CALL4(dev, DV_PRESENT, 0, 0, 0, 0) == 0);
+
+    /* Shaders : déclaration D3D8 sans fonction, pixel shader ps.1.1. */
+    CHECK(102, CALL4(dev, DV_CREATEVERTEXSHADER, decl, 0, &vsh, 0) == 0 && vsh != 0);
+    CHECK(103, CALL1(dev, DV_SETVERTEXSHADER, vsh) == 0 &&
+                   CALL1(dev, DV_DELETEVERTEXSHADER, vsh) == 0);
+    CHECK(104, CALL2(dev, DV_CREATEPIXELSHADER, ps11, &psh) == 0 && psh != 0 &&
+                   CALL1(dev, DV_DELETEPIXELSHADER, psh) == 0);
+
+    CALL2(dev, DV_SETTEXTURE, 0, 0);
+    CALL3(dev, DV_SETSTREAMSOURCE, 0, 0, 0);
+    CALL0(vb, 2);
+    CALL0(tex, 2);
+    CHECK(105, CALL0(dev, 2) == 0);
+    CALL0(d3d, 2);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -532,6 +651,8 @@ void entry(void) {
     CHECK(70, hwnd != 0);
     ddraw_tests(hwnd);
     out("DirectDraw : 36 verifications passees\n");
+    d3d8_tests(hwnd);
+    out("Direct3D 8 : 26 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

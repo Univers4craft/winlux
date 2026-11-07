@@ -751,7 +751,7 @@ mod tests {
     fn sustain_garde_la_note() {
         let mut s = Synth::new(48_000);
         s.short(0x7F_40_B0); // sustain enfoncé
-        s.short(0x7F_30_90 | 0x0000_0000);
+        s.short(0x7F_30_90);
         s.short(0x00_30_80);
         energy(&mut s, 9600);
         assert_eq!(s.active_voices(), 1, "note tenue par la pédale");

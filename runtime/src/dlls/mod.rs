@@ -37,6 +37,7 @@ pub mod d2d1;
 pub mod d2d_raster;
 pub mod d3d11;
 pub mod d3d12;
+pub mod d3d8;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
@@ -564,6 +565,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "ddraw",
                 exports: ddraw::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d8",
+                exports: d3d8::exports(),
                 handle: fake_module(),
             },
             Builtin {
