@@ -278,7 +278,7 @@ def result_window(image_path, temporary=False):
     Gdk, GLib, Gtk = _gtk()
     window = Gtk.Window(title=_t("Copier le texte"))
     window.set_role("winlux-ocr")
-    window.set_icon_name("edit-copy")
+    window.set_icon_name("winlux-ocr")
     window.set_default_size(560, 360)
     window.set_keep_above(True)
     window.set_position(Gtk.WindowPosition.CENTER)

@@ -184,6 +184,10 @@ def message(parent, text):
 class Tools(Gtk.Window):
     def __init__(self, page):
         super().__init__(title=_t("Outils Winlux"))
+        # Même icône que l'entrée du menu Démarrer qui ouvre cette page.
+        self.set_icon_name({"quick": "preferences-system", "notifications": "preferences-system-notifications",
+            "tasks": "utilities-system-monitor", "appearance": "preferences-desktop-theme", "apps": "system-software-install",
+            "files": "system-file-manager", "recovery": "preferences-system"}.get(page, "preferences-system"))
         self.set_default_size(850, 650)
         self.connect("destroy", Gtk.main_quit)
         self.page = page

@@ -10,6 +10,6 @@ Comment[es]=Tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizad
 Comment[de]=Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer (Windows + W)
 Keywords=météo;meteo;agenda;minuteur;pense-bête;weather;timer;notes;tiempo;Wetter;
 Exec=/usr/bin/winlux-widgets
-Icon=weather-few-clouds
+Icon=winlux-widgets
 Categories=Utility;
 Terminal=false

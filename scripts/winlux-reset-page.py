@@ -600,6 +600,7 @@ class StandaloneWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(title=_t("Récupération"))
+        self.set_icon_name("preferences-system")
         self.set_default_size(980, 720)
         css = Gtk.CssProvider()
         css.load_from_data(CSS)

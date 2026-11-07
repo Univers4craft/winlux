@@ -10,6 +10,6 @@ Comment[es]=Alarmas, temporizadores, cronómetro, reloj mundial y sesiones de co
 Comment[de]=Wecker, Timer, Stoppuhr, Weltuhr und Fokussitzungen
 Keywords=horloge;alarme;réveil;reveil;minuteur;chronomètre;chronometre;concentration;clock;alarm;timer;stopwatch;focus;reloj;alarma;temporizador;Uhr;Wecker;Timer;Stoppuhr;
 Exec=/usr/bin/winlux-alarms
-Icon=preferences-system-time
+Icon=winlux-alarms
 Categories=Utility;Clock;
 Terminal=false

@@ -389,7 +389,7 @@ def run_app():
     class Clock(Gtk.ApplicationWindow):
         def __init__(self, app):
             super().__init__(application=app, title=_t("Horloge"))
-            self.set_icon_name("preferences-system-time")
+            self.set_icon_name("winlux-alarms")
             self.set_default_size(760, 560)
             css = Gtk.CssProvider()
             css.load_from_data(b"""
