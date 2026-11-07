@@ -41,20 +41,38 @@ trust_desktop() {
     chmod 755 "$1" || return
     if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
 }
-message() { printf '%s\n' "$*" > "$run/action.txt.tmp.$$"; mv "$run/action.txt.tmp.$$" "$run/action.txt"; }
+# Messages, journal et verrou des actions : propres à chaque compte.
+# /run/winlux est collant (1777) : un second compte (« Changer
+# d'utilisateur ») ne pouvait ni remplacer action.txt du premier (mv :
+# « Opération non permise ») ni écrire son action.log, et winlux-control
+# s'arrêtait avant d'agir (barre jamais centrée chez lui).
+if { test -z "$root" || test "${WINLUX_CONTROL_PER_ACCOUNT:-0}" = 1; } && test "$(id -u)" != 0; then
+    mine="$run/control-$(id -u)"
+    mkdir -p "$mine"
+    chmod 755 "$mine" 2>/dev/null || true
+else
+    mine=$run
+fi
+message() {
+    printf '%s\n' "$*" > "$mine/action.txt.tmp.$$" && mv "$mine/action.txt.tmp.$$" "$mine/action.txt" && return 0
+    rm -f "$mine/action.txt.tmp.$$" 2>/dev/null || true
+}
+# Fichier d'état partagé (relevé de l'init, en root) : un compte qui ne peut
+# pas le remplacer laisse la version de l'init, sans faire échouer l'action.
+publish() { mv "$1" "$2" 2>/dev/null || { rm -f "$1" 2>/dev/null; true; }; }
 # Relevé périodique (boucle de l'init, toutes les 3 s) : les sondes lentes
 # dont la réponse change rarement (deux sont en Python) sont reprises du
 # relevé de moins d'une minute. Toute action de winlux-control, dont chaque
 # réglage changé dans Paramètres, refait un relevé complet.
 cached() {
     key=$1; shift
-    file="$run/status-cache/$key"
+    file="$mine/status-cache/$key"
     if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1 && test -f "$file" && test -n "$(find "$file" -mmin -1 2>/dev/null)"; then
         cat "$file"; return 0
     fi
     # Session du compte : /run/winlux peut ne pas lui être inscriptible,
     # la valeur est alors calculée à chaque relevé, sans cache.
-    if mkdir -p "$run/status-cache" 2>/dev/null && "$@" >"$file.tmp.$$" 2>/dev/null; then
+    if mkdir -p "$mine/status-cache" 2>/dev/null && "$@" >"$file.tmp.$$" 2>/dev/null; then
         mv "$file.tmp.$$" "$file" && cat "$file" && return 0
     fi
     rm -f "$file.tmp.$$" 2>/dev/null || true
@@ -183,7 +201,7 @@ status() {
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
-    mv "$run/control.txt.tmp.$$" "$run/control.txt"
+    publish "$run/control.txt.tmp.$$" "$run/control.txt"
     cpu_status
     drivers_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
@@ -191,7 +209,7 @@ status() {
     # d'etat comptent : un fichier supprime change leur date).
     if have winlux-update && ! updates_current; then
         if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
-            mv "$run/updates.txt.tmp.$$" "$run/updates.txt"
+            publish "$run/updates.txt.tmp.$$" "$run/updates.txt"
         else rm -f "$run/updates.txt.tmp.$$"; fi
     fi
 }
@@ -215,7 +233,7 @@ cpu_status() {
         winlux --boot-time "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
         # Mode jeu : réglage, capacités réelles et partie en cours.
         winlux --gamemode status "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
-        mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
+        publish "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
     else rm -f "$run/cpu.txt.tmp.$$"; fi
 }
 # Pilotes du matériel réel (Paramètres > Matériel et pilotes, Graphismes,
@@ -223,7 +241,7 @@ cpu_status() {
 drivers_status() {
     have winlux-drivers || { rm -f "$run/drivers.txt"; return 0; }
     if cached drivers env WINLUX_DRIVERS_ROOT="${root:-/}" winlux-drivers status > "$run/drivers.txt.tmp.$$" 2>/dev/null; then
-        mv "$run/drivers.txt.tmp.$$" "$run/drivers.txt"
+        publish "$run/drivers.txt.tmp.$$" "$run/drivers.txt"
     else rm -f "$run/drivers.txt.tmp.$$"; fi
 }
 fan_daemon() {
@@ -253,8 +271,8 @@ if test "${WINLUX_CONTROL_RELAYED:-}" = 1 && test "$(id -u)" = 0; then relayed=1
 if test "$relayed" = 0; then
 # Une seule action a la fois. Le bureau reste reactif pendant les appels
 # reseau et voit le journal quand la commande detachee se termine.
-if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une opération est déjà en cours. Consultez le journal.'; exit 1; fi
-trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
+if ! mkdir "$mine/control.lock" 2>/dev/null; then message 'Une opération est déjà en cours. Consultez le journal.'; exit 1; fi
+trap 'rmdir "$mine/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
 fi
 action=$1
 # Alias accepte par les menus XFCE (whiskermenu) : « shutdown » = poweroff.
@@ -456,6 +474,9 @@ perform() {
                     xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
                 fi
             fi
+            # Windows + X s'ouvre au-dessus du bouton Démarrer, pas sous le
+            # pointeur : position réécrite dans le rc.xml du compte.
+            if have winlux-run; then winlux-run place-menu "$alignment" >/dev/null 2>&1 || true; fi
             save "$config/preferences.conf" TASKBAR_ALIGN "$alignment" ;;
         desktop-icon-recycle)
             mkdir -p "$HOME/Bureau"
@@ -651,8 +672,8 @@ fi
 if relayed_session && ! local_action; then
     perform() { "${WINLUX_ROOT_TOOL:-winlux-root}" control "$@"; }
 fi
-log="$run/action.log"
-case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
+log="$mine/action.log"
+case "$action" in update-*) log="$mine/update.log" ;; sysupdate-*) log="$mine/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
 if perform "$@" > "$log" 2>&1; then
     message 'Opération terminée.'

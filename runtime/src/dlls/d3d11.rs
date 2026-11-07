@@ -885,6 +885,7 @@ enum ViewKind {
     RenderTarget,
     ShaderResource,
     DepthStencil,
+    UnorderedAccess,
 }
 
 /// Rattache une vue à sa ressource (AddRef) et retient son descripteur :
@@ -901,7 +902,9 @@ unsafe fn attach_view(
             com_addref(resource);
             (*view).view_resource = resource;
         }
-        let len = if matches!(kind, ViewKind::RenderTarget) {
+        // D3D11_RENDER_TARGET_VIEW_DESC et D3D11_UNORDERED_ACCESS_VIEW_DESC
+        // font 20 octets, les autres 24.
+        let len = if matches!(kind, ViewKind::RenderTarget | ViewKind::UnorderedAccess) {
             20
         } else {
             24
@@ -940,6 +943,17 @@ unsafe fn attach_view(
             }
             // D3D11_DSV_DIMENSION_TEXTURE2D = 3, Flags 0, MipSlice 0.
             ViewKind::DepthStencil => d[1] = 3,
+            // Tampon entier (1), Texture2D (4) ou toutes les tranches (5).
+            ViewKind::UnorderedAccess => {
+                d[1] = match tex {
+                    None => 1,
+                    Some(t) if t.array_size > 1 => {
+                        d[4] = t.array_size;
+                        5
+                    }
+                    Some(_) => 4,
+                };
+            }
         }
     }
 }
@@ -1316,7 +1330,7 @@ fn create_shader_object(
         ShaderType::Vertex => gl::GL_VERTEX_SHADER,
         ShaderType::Pixel => gl::GL_FRAGMENT_SHADER,
         ShaderType::Geometry => gl::GL_GEOMETRY_SHADER,
-        _ => gl::GL_VERTEX_SHADER,
+        ShaderType::Compute => 0x91B9, // GL_COMPUTE_SHADER
     };
 
     let bytes = if !bytecode.is_null() && size > 0 {
@@ -2018,17 +2032,104 @@ unsafe extern "win64" fn ctx_noop_copy_struct(
     _: *mut c_void,
 ) {
 }
-unsafe extern "win64" fn ctx_noop_clear_uav_u(
-    _: *mut DeviceContext,
-    _: *mut c_void,
-    _: *const [u32; 4],
-) {
+/// ClearUnorderedAccessView* : tampon rempli mot par mot (valeur 0 de
+/// D3D), texture effacée au niveau de la vue.
+unsafe fn clear_uav(view: *mut c_void, words: [u32; 4], float: bool) {
+    let Some(g) = gl_here() else { return };
+    let Some(v) = as_simple(view) else { return };
+    let b = pipeline::UavBinding::of_view(v);
+    if b.buf != 0 {
+        const GL_COPY_WRITE_BUFFER: u32 = 0x8F37;
+        const GL_R32UI: u32 = 0x8236;
+        const GL_RED_INTEGER: u32 = 0x8D94;
+        (g.BindBuffer)(GL_COPY_WRITE_BUFFER, b.buf);
+        (g.ClearBufferSubData)(
+            GL_COPY_WRITE_BUFFER,
+            GL_R32UI,
+            b.off,
+            b.len,
+            GL_RED_INTEGER,
+            gl::GL_UNSIGNED_INT,
+            words.as_ptr().cast(),
+        );
+        (g.BindBuffer)(GL_COPY_WRITE_BUFFER, 0);
+        if let Some(buf) = as_buffer((*v).view_resource) {
+            // Copie processeur tenue à jour (Map en lecture la relit aussi).
+            let mut data = (*buf)
+                .staging_data
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let (off, len) = (b.off as usize, b.len as usize);
+            if off + len <= data.len() {
+                for w in data[off..off + len].chunks_mut(4) {
+                    let bytes = words[0].to_le_bytes();
+                    w.copy_from_slice(&bytes[..w.len()]);
+                }
+            }
+        }
+    } else if b.tex != 0 {
+        let integer = matches!(
+            b.format,
+            0x8D70
+                | 0x8D82
+                | 0x8D71
+                | 0x8D83
+                | 0x8D76
+                | 0x8D88
+                | 0x906F
+                | 0x8D7C
+                | 0x8D8E
+                | 0x823C
+                | 0x823B
+                | 0x823A
+                | 0x8238
+                | 0x8236
+                | 0x8235
+                | 0x8234
+                | 0x8232
+                | 0x8239
+                | 0x8231
+                | 0x8233
+                | 0x8237
+        );
+        const GL_RGBA_INTEGER: u32 = 0x8D99;
+        if float || !integer {
+            let f: [f32; 4] = if float {
+                words.map(f32::from_bits)
+            } else {
+                words.map(|w| w as f32)
+            };
+            (g.ClearTexImage)(b.tex, b.level, gl::GL_RGBA, gl::GL_FLOAT, f.as_ptr().cast());
+        } else {
+            (g.ClearTexImage)(
+                b.tex,
+                b.level,
+                GL_RGBA_INTEGER,
+                gl::GL_UNSIGNED_INT,
+                words.as_ptr().cast(),
+            );
+        }
+    }
 }
-unsafe extern "win64" fn ctx_noop_clear_uav_f(
+
+unsafe extern "win64" fn ctx_clear_uav_uint(
     _: *mut DeviceContext,
-    _: *mut c_void,
-    _: *const [f32; 4],
+    view: *mut c_void,
+    values: *const [u32; 4],
 ) {
+    if !values.is_null() {
+        clear_uav(view, *values, false);
+    }
+}
+
+unsafe extern "win64" fn ctx_clear_uav_float(
+    _: *mut DeviceContext,
+    view: *mut c_void,
+    values: *const [f32; 4],
+) {
+    if !values.is_null() {
+        clear_uav(view, (*values).map(f32::to_bits), true);
+    }
 }
 unsafe extern "win64" fn ctx_noop_draw_indirect(_: *mut DeviceContext, _: *mut c_void, _: u32) {}
 
@@ -2190,6 +2291,21 @@ unsafe extern "win64" fn ctx_map(
             .staging_data
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // Lecture (READ, READ_WRITE) : un compute shader ou une copie GPU a
+        // pu écrire le tampon depuis ; la copie processeur est relue.
+        if matches!(map_type, 1 | 3) && (*buf).gl_buffer != 0 {
+            if let Some(g) = gl_here() {
+                const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+                (g.BindBuffer)(GL_COPY_READ_BUFFER, (*buf).gl_buffer);
+                (g.GetBufferSubData)(
+                    GL_COPY_READ_BUFFER,
+                    0,
+                    guard.len() as isize,
+                    guard.as_mut_ptr().cast(),
+                );
+                (g.BindBuffer)(GL_COPY_READ_BUFFER, 0);
+            }
+        }
         let ptr = guard.as_mut_ptr();
         (*mapped).data = ptr as *mut c_void;
         (*mapped).row_pitch = (*buf).desc.byte_width;
@@ -2794,8 +2910,6 @@ unsafe extern "win64" fn ctx_flush(_this: *mut DeviceContext) {
     }
 }
 
-unsafe extern "win64" fn ctx_dispatch(_: *mut DeviceContext, _x: u32, _y: u32, _z: u32) {}
-
 fn update_program(s: &mut DeviceContextState) {
     let Some(g) = gl_here() else { return };
 
@@ -2888,8 +3002,8 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     draw_auto: ctx_noop_void,
     draw_indexed_instanced_indirect: ctx_noop_draw_indirect,
     draw_instanced_indirect: ctx_noop_draw_indirect,
-    dispatch: ctx_dispatch,
-    dispatch_indirect: ctx_noop_draw_indirect,
+    dispatch: pipeline::ctx_dispatch,
+    dispatch_indirect: pipeline::ctx_dispatch_indirect,
     rs_set_state: pipeline::rs_set_state,
     rs_set_viewports: pipeline::rs_set_viewports,
     rs_set_scissor_rects: pipeline::rs_set_scissor_rects,
@@ -2898,8 +3012,8 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     update_subresource: ctx_update_subresource,
     copy_structure_count: ctx_noop_copy_struct,
     clear_render_target_view: ctx_clear_rtv,
-    clear_unordered_access_view_uint: ctx_noop_clear_uav_u,
-    clear_unordered_access_view_float: ctx_noop_clear_uav_f,
+    clear_unordered_access_view_uint: ctx_clear_uav_uint,
+    clear_unordered_access_view_float: ctx_clear_uav_float,
     clear_depth_stencil_view: ctx_clear_dsv,
     generate_mips: ctx_generate_mips,
     set_resource_min_lod: ctx_noop_rminlod,
@@ -2914,11 +3028,11 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     ds_set_shader: ctx_noop_set_shader,
     ds_set_samplers: ctx_noop_3ptr,
     ds_set_constant_buffers: ctx_noop_3ptr,
-    cs_set_shader_resources: ctx_noop_3ptr,
-    cs_set_unordered_access_views: ctx_noop_uav,
-    cs_set_shader: ctx_noop_set_shader,
-    cs_set_samplers: ctx_noop_3ptr,
-    cs_set_constant_buffers: ctx_noop_3ptr,
+    cs_set_shader_resources: pipeline::cs_set_srvs,
+    cs_set_unordered_access_views: pipeline::cs_set_uavs,
+    cs_set_shader: pipeline::cs_set_shader,
+    cs_set_samplers: pipeline::cs_set_samplers,
+    cs_set_constant_buffers: pipeline::cs_set_cbs,
     vs_get_constant_buffers: ctx_get_array,
     ps_get_shader_resources: ctx_get_array,
     ps_get_shader: ctx_get_shader,
@@ -3494,14 +3608,30 @@ unsafe extern "win64" fn dev_create_srv(
 
 unsafe extern "win64" fn dev_create_uav(
     _: *mut Device,
-    _: *mut c_void,
-    _: *const c_void,
+    resource: *mut c_void,
+    desc: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
+    if out.is_null() {
+        return E_INVALIDARG;
     }
-    E_NOTIMPL
+    if as_buffer(resource).is_none() && as_texture2d(resource).is_none() {
+        *out = std::ptr::null_mut();
+        return E_INVALIDARG;
+    }
+    let tex = as_texture2d(resource).map_or(0, |t| (*t).gl_texture);
+    let view = Box::into_raw(Box::new(SimpleComObj {
+        vtable: &SIMPLE_COM_VTABLE,
+        ref_count: AtomicU32::new(1),
+        gl_id: 0,
+        resource_tex: tex,
+        view_resource: std::ptr::null_mut(),
+        view_desc: [0; 6],
+        view_desc_len: 0,
+    }));
+    attach_view(view, ViewKind::UnorderedAccess, resource, desc);
+    *out = view.cast();
+    S_OK
 }
 
 unsafe extern "win64" fn dev_create_rtv(
@@ -3659,15 +3789,20 @@ unsafe extern "win64" fn dev_create_ds(
 }
 unsafe extern "win64" fn dev_create_cs(
     _: *mut Device,
-    _: *const c_void,
-    _: usize,
+    bytecode: *const c_void,
+    size: usize,
     _: *mut c_void,
     out: *mut *mut c_void,
 ) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
+    if out.is_null() {
+        return E_INVALIDARG;
     }
-    E_NOTIMPL
+    let s = create_shader_object(bytecode, size, ShaderType::Compute);
+    if s.is_null() {
+        return E_FAIL;
+    }
+    *out = s as *mut c_void;
+    S_OK
 }
 unsafe extern "win64" fn dev_create_cl(_: *mut Device, out: *mut *mut c_void) -> i32 {
     if !out.is_null() {

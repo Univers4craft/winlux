@@ -23,6 +23,7 @@
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
 mod crt;
+mod cxx;
 mod kernel;
 mod seh;
 mod wow64;
@@ -430,7 +431,7 @@ fn alloc_low(size: usize, exec: bool) -> usize {
 }
 
 /// Petits morceaux de code x86 (passerelles), sous 2 Go.
-fn alloc_code(code: &[u8]) -> u32 {
+pub(super) fn alloc_code(code: &[u8]) -> u32 {
     let mut p = CODE_POOL.lock().unwrap_or_else(|e| e.into_inner());
     let need = (code.len() + 15) & !15;
     if p.cur + need > p.end {
@@ -1219,6 +1220,25 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
             kernel::create_process_w as *const () as usize,
             "iiiiiiiiii>i",
         ),
+        // Fonctions Interlocked* : exportées par le kernel32 x86 seulement
+        // (intrinsèques en 64 bits).
+        "InterlockedIncrement" if kernel => {
+            (kernel::interlocked_increment as *const () as usize, "i>i")
+        }
+        "InterlockedDecrement" if kernel => {
+            (kernel::interlocked_decrement as *const () as usize, "i>i")
+        }
+        "InterlockedExchange" if kernel => {
+            (kernel::interlocked_exchange as *const () as usize, "ii>i")
+        }
+        "InterlockedExchangeAdd" if kernel => (
+            kernel::interlocked_exchange_add as *const () as usize,
+            "ii>i",
+        ),
+        "InterlockedCompareExchange" if kernel => (
+            kernel::interlocked_compare_exchange as *const () as usize,
+            "iii>i",
+        ),
         "IsWow64Process" if kernel => (kernel::is_wow64_process as *const () as usize, "ii>i"),
         "IsWow64Process2" if kernel => (kernel::is_wow64_process2 as *const () as usize, "iii>i"),
         "_except_handler3" if crt => (seh::except_handler3 as *const () as usize, "iiii>i"),
@@ -1226,6 +1246,10 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
             seh::except_handler4_common as *const () as usize,
             "iiiiii>i",
         ),
+        "_CxxThrowException" if crt => (cxx::cxx_throw_exception as *const () as usize, "ii>v"),
+        "?terminate@@YAXXZ" if crt => (cxx::terminate as *const () as usize, ">v"),
+        "_XcptFilter" if crt => (cxx::xcpt_filter as *const () as usize, "ii>i"),
+        "__setusermatherr" if crt => (cxx::set_user_matherr as *const () as usize, "i>v"),
         "_local_unwind2" if crt => (seh::local_unwind2 as *const () as usize, "ii>v"),
         "_global_unwind2" if crt => (seh::global_unwind2 as *const () as usize, "i>v"),
         "_local_unwind4" if crt => (seh::local_unwind4 as *const () as usize, "iii>v"),
@@ -1319,6 +1343,24 @@ extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
         .get_or_insert_with(HashMap::new)
         .insert(key, stub);
     stub as u32
+}
+
+/// Passerelle x86 cdecl vers une fonction win64 de signature `sig`.
+pub(super) fn native_stub(target: usize, sig: &str, label: &str) -> usize {
+    let (args, ret) = sig.split_once('>').unwrap_or(("", "i"));
+    make_stub(
+        Desc {
+            ret: ret.as_bytes()[0],
+            supported: true,
+            target,
+            kinds: args.as_bytes().to_vec(),
+            label: label.to_string(),
+            fix: crt::Fix::None,
+            raw: None,
+            callbacks: 0,
+        },
+        None,
+    )
 }
 
 /// Passerelle x86 vers le bouchon 64 bits d'une fonction absente.

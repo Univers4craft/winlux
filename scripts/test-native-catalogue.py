@@ -158,6 +158,33 @@ with tempfile.TemporaryDirectory() as temporary:
         catalogue.thumbnail(desktop_link, png, 128)
         assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
+    # Resident catalogue (#214): refresh() only when a watched input changes.
+    catalogue.HOME = home
+    before = catalogue.watched_inputs()
+    assert catalogue.watched_inputs() == before
+    sub = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Nouveau dossier"
+    sub.mkdir(parents=True, exist_ok=True)
+    after = catalogue.watched_inputs()
+    assert after != before, "un dossier ajouté au menu Démarrer doit relancer le catalogue"
+    (sub / "Programme.lnk").write_bytes(b"x")
+    assert catalogue.watched_inputs() != after, "un raccourci ajouté dans un sous-dossier doit relancer le catalogue"
+    calls = {"refresh": 0, "icons": 0, "ticks": 0}
+    saved = catalogue.refresh, catalogue.window_icons, catalogue.time.sleep
+    class Stop(Exception): pass
+    def tick(_seconds):
+        calls["ticks"] += 1
+        if calls["ticks"] == 2: (home / ".local/share/winlux").mkdir(parents=True, exist_ok=True); (home / ".local/share/winlux/launchers.json").write_text("[]")
+        if calls["ticks"] >= 4: raise Stop
+    catalogue.refresh = lambda: calls.__setitem__("refresh", calls["refresh"] + 1)
+    catalogue.window_icons = lambda: calls.__setitem__("icons", calls["icons"] + 1)
+    catalogue.time.sleep = tick
+    try: catalogue.watch(full_pass=3600)
+    except Stop: pass
+    finally: catalogue.refresh, catalogue.window_icons, catalogue.time.sleep = saved
+    assert calls["icons"] == 4, calls
+    assert calls["refresh"] == 2, f"refresh au démarrage puis une fois après le changement, pas à chaque tour : {calls}"
+    (sub / "Programme.lnk").unlink(); sub.rmdir()
+
     # GLib itself parses the Desktop Entry Exec: no shell expansion is involved.
     if shutil.which("gio"):
         output = home / "arguments.json"
@@ -179,4 +206,4 @@ with tempfile.TemporaryDirectory() as temporary:
     assert not list(catalogue.APPS.glob("winlux-assoc-*.desktop"))
     # Uninstalled: the previous choice (here the editor picked by the user) applies again.
     assert catalogue.default_of(catalogue.read_mimeapps(), "application/x-winlux-wxdoc") == "org.xfce.mousepad.desktop"
-print("OK: PE icon, registered programs, Windows shortcuts, file associations, defaults, quoting and stale entries")
+print("OK: PE icon, registered programs, Windows shortcuts, file associations, defaults, quoting, stale entries and resident catalogue")
