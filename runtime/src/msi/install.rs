@@ -5,7 +5,9 @@
 use super::cab::Cabinet;
 use super::cond::Context;
 use super::db::Database;
-use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
+use crate::dlls::advapi32::{
+    apply_registry_edits, registry_key_exists, registry_key_is_empty, RegEdit,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -1005,8 +1007,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             "{}\\{}",
             hive(r.int("Root").unwrap_or(-1), all_users),
             ctx.format(&r.str("Key")).trim_matches('\\')
-        )
-        .to_lowercase();
+        );
+        // Casse conservée (`SimonTatham\PuTTY64`) : le registre compare les
+        // noms sans tenir compte de la casse mais les affiche tels qu'écrits.
         let name = ctx.format(&r.str("Name"));
         let value = r.get("Value");
         if matches!(name.as_str(), "+" | "-" | "*") && value.is_null() {
@@ -1188,6 +1191,25 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             dword("SystemComponent", 1);
         }
     }
+    // Clés parentes créées par l'installation (`Software\SimonTatham` pour
+    // `Software\SimonTatham\PuTTY64\…`) : retirées à la désinstallation si
+    // elles sont restées vides, comme le fait Windows Installer.
+    let mut created = Vec::new();
+    for key in &manifest.keys {
+        let mut k = key.as_str();
+        while let Some((parent, _)) = k.rsplit_once('\\') {
+            if !parent.contains('\\') || registry_key_exists(parent) {
+                break;
+            }
+            created.push(parent.to_string());
+            k = parent;
+        }
+    }
+    for k in created {
+        if !manifest.keys.iter().any(|m| m.eq_ignore_ascii_case(&k)) {
+            manifest.keys.push(k);
+        }
+    }
     if !apply_registry_edits(&edits) {
         return Err("écriture du registre impossible".into());
     }
@@ -1237,13 +1259,12 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
     let mut keys = m.keys.clone();
     keys.sort_by_key(|k| std::cmp::Reverse(k.matches('\\').count()));
     keys.dedup();
-    let empty: Vec<RegEdit> = keys
-        .into_iter()
-        .filter(|k| registry_key_is_empty(k))
-        .map(RegEdit::DeleteTree)
-        .collect();
-    if !empty.is_empty() {
-        apply_registry_edits(&empty);
+    // Des plus profondes aux plus hautes, une à une : une clé parente ne
+    // devient vide qu'une fois ses sous-clés retirées.
+    for k in keys {
+        if registry_key_is_empty(&k) {
+            apply_registry_edits(&[RegEdit::DeleteTree(k)]);
+        }
     }
     let _ = std::fs::remove_file(manifest_path(&m.product));
     log.log(&format!("{} est désinstallé.", m.name));
