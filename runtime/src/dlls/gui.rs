@@ -3800,6 +3800,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                painting: false,
             },
         );
         let q = current_queue();
@@ -4031,6 +4032,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                painting: false,
             },
         );
         let dc = create_dc(0);
