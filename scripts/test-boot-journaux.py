@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory() as tmp:
     hold.start(); hold.reassert(); hold.start()
     assert calls == [("q",), ("-dpms",), ("-dpms",), ("-dpms",)], calls
     hold.stop()
-    assert calls[-1] == ("+dpms",) and not (Path(tmp) / "dpms").exists()
+    assert ("+dpms",) in calls and calls[-1] == ("q",) and not (Path(tmp) / "dpms").exists(), calls
     calls.clear()
     off = tool["DisplayHold"](xset=lambda *args: fake_xset(*args, enabled=False), marker=Path(tmp) / "dpms")
     off.start(); off.stop()
@@ -94,8 +94,9 @@ with tempfile.TemporaryDirectory() as tmp:
     calls.clear()
     killed = tool["DisplayHold"](xset=fake_xset, marker=Path(tmp) / "dpms")
     killed.start()
+    (Path(tmp) / "dpms").write_text("999999999\n")   # service tué : son numéro n'existe plus
     tool["DisplayHold"](xset=fake_xset, marker=Path(tmp) / "dpms").recover()
-    assert calls[-1] == ("+dpms",) and not (Path(tmp) / "dpms").exists(), calls
+    assert ("+dpms",) in calls and not (Path(tmp) / "dpms").exists(), calls
 # #634 : mise à jour en cours (automatique, Paramètres fermé) : demande tenue puis rendue.
 events, state = [], {"busy": False}
 watch = tool["UpdateWatch"](lambda: state["busy"], lambda: events.append("inhibit") or 4, lambda cookie: events.append(("un", cookie)))

@@ -85,7 +85,10 @@ have "$ctl" || { echo 'BlueZ (bluetoothctl) non installe' >&2; exit 1; }
 rc=0
 case "$action" in
     on)
-        if have rfkill; then rfkill unblock bluetooth 2>/dev/null || true; fi
+        # rfkill est dans /usr/sbin, absent du PATH de certains comptes.
+        for tool in rfkill /usr/sbin/rfkill; do
+            if have "$tool"; then "$tool" unblock bluetooth 2>/dev/null || true; break; fi
+        done
         "$ctl" power on || rc=$? ;;
     off) "$ctl" power off || rc=$? ;;
     scan)

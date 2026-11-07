@@ -88,6 +88,20 @@ fn main() {
         }
         return;
     }
+    if exe == "--linux-path" {
+        // Chemin Windows → chemin Linux, avec les mêmes règles que les .exe
+        // (lecteurs, profil, dossiers connus) : Paramètres > « Réglages de
+        // l'exécutable » ouvert depuis l'Explorateur (#739).
+        let Some(win) = args.next() else {
+            std::process::exit(2);
+        };
+        let linux = paths::to_linux(&win.to_string_lossy());
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(linux.as_os_str().as_encoded_bytes());
+        let _ = out.write_all(b"\n");
+        return;
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;

@@ -66,6 +66,13 @@ if test -x /usr/libexec/udisks2/udisksd; then
     /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
     udisks_pid=$!
 fi
+# Batterie et secteur pour les applications Linux (#631) : Edge, Chromium,
+# GTK et les lecteurs vidéo lisent UPower (DisplayDevice) ; sans systemd,
+# personne ne l'activait.
+if test -x /usr/libexec/upowerd; then
+    mkdir -p /var/lib/upower
+    /usr/libexec/upowerd >/run/winlux/upower.log 2>&1 &
+fi
 if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
 if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
 if test -x /usr/sbin/NetworkManager; then
@@ -105,6 +112,11 @@ if test -x /usr/sbin/NetworkManager; then
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
+# Imprimantes (#622) : les administrateurs dans lpadmin, que CUPS exige pour
+# « Rechercher » et « Ajouter » (lpinfo, lpadmin) faute de logind.
+if test -x /usr/sbin/cupsd && test -x /usr/bin/winlux-accounts; then
+    /usr/bin/winlux-accounts sync-printing >>/run/winlux/cups.log 2>&1 || true
+fi
 # Découverte réseau (#623) : sans avahi-daemon, aucune annonce mDNS n'est vue,
 # les backends dnssd/driverless de CUPS ne trouvent aucune imprimante Wi-Fi
 # (IPP Everywhere, AirPrint) et le partage annoncé par winlux-share reste
@@ -121,7 +133,7 @@ fi
 # Printing (#111): there is no systemd to socket-activate CUPS, start it here.
 if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
     mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
-    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+    /usr/sbin/cupsd -f >>/run/winlux/cups.log 2>&1 &
 fi
 # cups-browsed (s'il est livré) ajoute les imprimantes découvertes en mDNS.
 if test -x /usr/sbin/cups-browsed && ! pgrep -x cups-browsed >/dev/null 2>&1; then

@@ -204,6 +204,25 @@ pub unsafe fn native_settings(page: usize) -> bool {
     SetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), core::ptr::null());
     true
 }
+/// « Compatibilité » d'un .exe (Explorateur, volet Détails ou menu) dans la
+/// session native : Paramètres > Programmes Windows, sur la carte de ce
+/// programme (`WINLUX_SETTINGS_EXE`, chemin Windows) — #739.
+pub unsafe fn native_exe_settings(path: &[u16]) -> bool {
+    if !(native_session() || unified_settings()) || NATIVE_APP == APP_SETTINGS {
+        return false;
+    }
+    let name: [u16; 20] = {
+        let mut n = [0u16; 20];
+        for (i, &c) in b"WINLUX_SETTINGS_EXE".iter().enumerate() {
+            n[i] = c as u16;
+        }
+        n
+    };
+    SetEnvironmentVariableW(name.as_ptr(), path.as_ptr());
+    let shown = native_settings(10);
+    SetEnvironmentVariableW(name.as_ptr(), core::ptr::null());
+    shown
+}
 pub unsafe fn native_explorer(path: &[u8]) -> bool {
     if !native_session() || NATIVE_APP == APP_EXPLORER {
         return false;

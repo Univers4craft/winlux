@@ -350,6 +350,13 @@ ok("nm-connection-editor" not in (SCRIPTS / "winlux-system-tools.py").read_text(
 ok((ROOT / "integration/native/network/50-winlux-network.rules").is_file(),
    "polkit : les comptes du groupe netdev pilotent NetworkManager")
 
+# ── PC de damien, v0.2.19 (07/11/2026) : Bluetooth, OpenGL, accessibilité ──
+ok('GROUP="netdev"' in (ROOT / "integration/native/udev/60-winlux-rfkill.rules").read_text(),
+   "Bluetooth : /dev/rfkill ouvert au groupe netdev, blueman-applet reste l'agent d'appairage (#604)")
+desktop_packages = (SCRIPTS / "prepare-desktop-packages.py").read_text()
+ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"at-spi2-core"' in desktop_packages,
+   "image : rfkill (#604), glxinfo pour la ligne OpenGL du rapport (#610), bus org.a11y.Bus (#615)")
+
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
 hardware_page = (SCRIPTS / "winlux-hardware-page.py").read_text()
@@ -562,5 +569,16 @@ iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
    and "journal-$journal_uid" in iso_init,
    "journal : un dossier 0700 par compte, protected_regular=2")
+
+# #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
+# économiseur ; la veille de l'écran ne revenait plus de la session.
+with tempfile.TemporaryDirectory() as directory:
+    fresh, old = Path(directory) / "neuf", Path(directory) / "ancien"
+    fresh.mkdir(); old.mkdir()
+    (old / ".xscreensaver").write_text("timeout:        0:10:00\nmode:           one\n")
+    native_config(fresh); native_config(old)
+    ok(all("dpmsEnabled:    True" in (home / ".xscreensaver").read_text() for home in (fresh, old))
+       and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
+       "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
