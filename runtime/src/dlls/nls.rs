@@ -1691,6 +1691,57 @@ pub unsafe extern "win64" fn enum_calendar_info_ex_ex(
     1
 }
 
+type CalEnumProcW = unsafe extern "win64" fn(*const u16) -> i32;
+type CalEnumProcExW = unsafe extern "win64" fn(*const u16, u32) -> i32;
+
+/// Valeurs de calendrier d'un LCID (grégorien seulement, comme ExEx).
+fn calendar_for_lcid(lcid: u32, calendar: u32, cal_type: u32) -> Option<Vec<String>> {
+    let l = by_lcid(lcid)?;
+    if calendar != CAL_GREGORIAN && calendar != ENUM_ALL_CALENDARS {
+        return Some(Vec::new());
+    }
+    Some(calendar_values(l, cal_type))
+}
+
+/// EnumCalendarInfoW (WinSCP, VCL de Delphi) : forme LCID.
+pub unsafe extern "win64" fn enum_calendar_info_w(
+    proc_: Option<CalEnumProcW>,
+    lcid: u32,
+    calendar: u32,
+    cal_type: u32,
+) -> i32 {
+    let (Some(f), Some(values)) = (proc_, calendar_for_lcid(lcid, calendar, cal_type)) else {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    for v in values {
+        let w: Vec<u16> = v.encode_utf16().chain(Some(0)).collect();
+        if f(w.as_ptr()) == 0 {
+            break;
+        }
+    }
+    1
+}
+
+pub unsafe extern "win64" fn enum_calendar_info_ex_w(
+    proc_: Option<CalEnumProcExW>,
+    lcid: u32,
+    calendar: u32,
+    cal_type: u32,
+) -> i32 {
+    let (Some(f), Some(values)) = (proc_, calendar_for_lcid(lcid, calendar, cal_type)) else {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    for v in values {
+        let w: Vec<u16> = v.encode_utf16().chain(Some(0)).collect();
+        if f(w.as_ptr(), CAL_GREGORIAN) == 0 {
+            break;
+        }
+    }
+    1
+}
+
 type DateEnumProcExEx = unsafe extern "win64" fn(*const u16, u32, isize) -> i32;
 
 /// EnumDateFormatsExEx : DATE_SHORTDATE (1), DATE_LONGDATE (2),
@@ -1969,6 +2020,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCalendarInfoEx" => fn get_calendar_info_ex,
         "GetCalendarInfoW" => fn get_calendar_info_w,
         "EnumCalendarInfoExEx" => fn enum_calendar_info_ex_ex,
+        "EnumCalendarInfoW" => fn enum_calendar_info_w,
+        "EnumCalendarInfoExW" => fn enum_calendar_info_ex_w,
         "EnumDateFormatsExEx" => fn enum_date_formats_ex_ex,
         "EnumTimeFormatsEx" => fn enum_time_formats_ex,
         "CompareStringEx" => fn compare_string_ex,

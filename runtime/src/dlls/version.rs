@@ -66,8 +66,118 @@ fn version_resource(file: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn read_version(path: &str) -> Result<Vec<u8>, u32> {
-    let file = std::fs::read(crate::paths::to_linux(path)).map_err(|_| ERROR_FILE_NOT_FOUND)?;
-    version_resource(&file).ok_or(ERROR_RESOURCE_TYPE_NOT_FOUND)
+    match std::fs::read(crate::paths::to_linux(path)) {
+        Ok(file) => version_resource(&file).ok_or(ERROR_RESOURCE_TYPE_NOT_FOUND),
+        Err(_) => builtin_version(path).ok_or(ERROR_FILE_NOT_FOUND),
+    }
+}
+
+/// Nœud VS_VERSIONINFO : longueur, taille de la valeur, type, clé, valeur,
+/// puis enfants, chacun aligné sur 4 octets.
+fn version_node(
+    key: &str,
+    value: &[u8],
+    value_len: u16,
+    text: bool,
+    children: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut b = vec![0u8; 6];
+    for c in key.encode_utf16().chain(Some(0)) {
+        b.extend_from_slice(&c.to_le_bytes());
+    }
+    while !b.len().is_multiple_of(4) {
+        b.push(0);
+    }
+    b.extend_from_slice(value);
+    for c in children {
+        while !b.len().is_multiple_of(4) {
+            b.push(0);
+        }
+        b.extend_from_slice(c);
+    }
+    let len = b.len() as u16;
+    b[0..2].copy_from_slice(&len.to_le_bytes());
+    b[2..4].copy_from_slice(&value_len.to_le_bytes());
+    b[4..6].copy_from_slice(&u16::from(text).to_le_bytes());
+    b
+}
+
+fn text_node(key: &str, text: &str) -> Vec<u8> {
+    let units: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
+    version_node(key, &bytes, units.len() as u16, true, &[])
+}
+
+/// Version des DLL système de Winlux (Windows 10 22H2, 10.0.19045).
+pub const SYSTEM_VERSION: (u16, u16, u16, u16) = (10, 0, 19045, 1);
+
+/// DLL système intégrée (kernel32.dll, kernelbase.dll…), sans fichier sur
+/// disque : Windows y trouve une ressource de version, que Chromium exige
+/// (base::win::OSInfo lit celle de kernelbase.dll, puis de kernel32.dll,
+/// et s'arrête sur un CHECK si les deux manquent).
+fn builtin_version(path: &str) -> Option<Vec<u8>> {
+    let file = path.rsplit(['\\', '/']).next()?;
+    let lower = file.to_ascii_lowercase();
+    if !(lower.ends_with(".dll") || lower.ends_with(".drv") || !lower.contains('.')) {
+        return None;
+    }
+    let dir = path[..path.len() - file.len()]
+        .to_ascii_lowercase()
+        .replace('/', "\\");
+    let system_dir = dir.is_empty()
+        || dir.ends_with("\\windows\\system32\\")
+        || dir.ends_with("\\windows\\syswow64\\")
+        || dir.ends_with("\\windows\\");
+    if !system_dir || !crate::dlls::is_builtin(&crate::dlls::normalize(file)) {
+        return None;
+    }
+    let (a, b, c, d) = SYSTEM_VERSION;
+    let ms = (u32::from(a) << 16) | u32::from(b);
+    let ls = (u32::from(c) << 16) | u32::from(d);
+    let mut fixed = Vec::with_capacity(52);
+    for v in [
+        0xFEEF_04BDu32, // signature
+        0x0001_0000,    // version de la structure
+        ms,
+        ls,
+        ms,
+        ls,
+        0x3F,                                        // masque des indicateurs
+        0,                                           // indicateurs
+        0x0004_0004,                                 // VOS_NT_WINDOWS32
+        if lower.ends_with(".drv") { 3 } else { 2 }, // VFT_DRV / VFT_DLL
+        0,
+        0,
+        0,
+    ] {
+        fixed.extend_from_slice(&v.to_le_bytes());
+    }
+    let version = format!("{a}.{b}.{c}.{d}");
+    let table = version_node(
+        "040904B0",
+        &[],
+        0,
+        true,
+        &[
+            text_node("CompanyName", "Winlux"),
+            text_node("FileDescription", file),
+            text_node("FileVersion", &version),
+            text_node("InternalName", file),
+            text_node("OriginalFilename", file),
+            text_node("ProductName", "Winlux"),
+            text_node("ProductVersion", &version),
+        ],
+    );
+    let strings = version_node("StringFileInfo", &[], 0, true, &[table]);
+    let translation = version_node("Translation", &[0x09, 0x04, 0xB0, 0x04], 4, false, &[]);
+    let vars = version_node("VarFileInfo", &[], 0, true, &[translation]);
+    Some(version_node(
+        "VS_VERSION_INFO",
+        &fixed,
+        52,
+        false,
+        &[strings, vars],
+    ))
 }
 
 unsafe fn size_of(path: String, handle: *mut u32) -> u32 {
@@ -329,6 +439,60 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_des_dll_systeme() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            for name in [
+                "C:\\Windows\\System32\\kernelbase.dll",
+                "kernel32.dll",
+                "c:/windows/system32/USER32.DLL",
+            ] {
+                let path = wide(name);
+                let mut h = 7u32;
+                let size = get_file_version_info_size_w(path.as_ptr(), &mut h);
+                assert!(size > 52, "{name}");
+                assert_eq!(h, 0);
+                let mut buf = vec![0u8; size as usize];
+                assert_eq!(
+                    get_file_version_info_w(path.as_ptr(), 0, size, buf.as_mut_ptr()),
+                    1
+                );
+                let mut p: *mut u8 = std::ptr::null_mut();
+                let mut n = 0u32;
+                let root = wide("\\");
+                assert_eq!(
+                    ver_query_value_w(buf.as_ptr(), root.as_ptr(), &mut p, &mut n),
+                    1
+                );
+                assert_eq!(n, 52);
+                let fixed = std::slice::from_raw_parts(p as *const u32, 13);
+                assert_eq!(fixed[0], 0xFEEF_04BD);
+                assert_eq!(fixed[2], 10 << 16);
+                assert_eq!(fixed[3] >> 16, 19045);
+                let key = wide("\\StringFileInfo\\040904B0\\FileVersion");
+                assert_eq!(
+                    ver_query_value_w(buf.as_ptr(), key.as_ptr(), &mut p, &mut n),
+                    1
+                );
+                let text: Vec<u16> =
+                    std::slice::from_raw_parts(p as *const u16, n as usize - 1).to_vec();
+                assert_eq!(String::from_utf16_lossy(&text), "10.0.19045.1");
+            }
+            // Ni une DLL inconnue, ni une DLL intégrée hors du dossier système.
+            let other = wide("C:\\Program Files\\x\\kernel32.dll");
+            assert_eq!(
+                get_file_version_info_size_w(other.as_ptr(), std::ptr::null_mut()),
+                0
+            );
+            let unknown = wide("C:\\Windows\\System32\\pas-une-dll-winlux.dll");
+            assert_eq!(
+                get_file_version_info_size_w(unknown.as_ptr(), std::ptr::null_mut()),
+                0
+            );
+        }
+    }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()

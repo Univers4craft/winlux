@@ -2795,12 +2795,65 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
 
 // ---------- Scroll bar stubs ----------
 
+/// Barres de défilement d'une fenêtre (SB_HORZ 0, SB_VERT 1) : min, max,
+/// page, position. Elles ne sont pas encore dessinées, mais un programme
+/// relit ce qu'il a posé (#711).
+#[derive(Clone, Copy, Default)]
+struct WindowBar {
+    min: i32,
+    max: i32,
+    page: u32,
+    pos: i32,
+}
+
+fn window_bars() -> &'static Mutex<HashMap<(usize, i32), WindowBar>> {
+    static S: OnceLock<Mutex<HashMap<(usize, i32), WindowBar>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn with_bar<R>(hwnd: usize, bar: i32, f: impl FnOnce(&mut WindowBar) -> R) -> Option<R> {
+    if !(0..=1).contains(&bar) || hwnd == 0 {
+        return None;
+    }
+    let mut m = window_bars().lock().unwrap_or_else(|e| e.into_inner());
+    Some(f(m.entry((hwnd, bar)).or_default()))
+}
+
+impl WindowBar {
+    fn clamp(&mut self) {
+        let top = (self.max - (self.page as i32 - 1).max(0)).max(self.min);
+        self.pos = self.pos.clamp(self.min, top);
+    }
+}
+
+/// SCROLLINFO : cbSize, fMask, nMin, nMax, nPage, nPos, nTrackPos.
 pub unsafe extern "win64" fn get_scroll_info(hwnd: usize, bar: i32, info: *mut c_void) -> i32 {
     if bar == 2 {
         // SB_CTL : le contrôle SCROLLBAR lui-même.
         return super::controls::scroll_info(hwnd, info.cast(), false, false).unwrap_or(0);
     }
-    0
+    if info.is_null() {
+        return 0;
+    }
+    let si = info as *mut i32;
+    let mask = *si.add(1) as u32;
+    with_bar(hwnd, bar, |b| {
+        if mask & 0x1 != 0 {
+            *si.add(2) = b.min;
+            *si.add(3) = b.max;
+        }
+        if mask & 0x2 != 0 {
+            *si.add(4) = b.page as i32;
+        }
+        if mask & 0x4 != 0 {
+            *si.add(5) = b.pos;
+        }
+        if mask & 0x10 != 0 {
+            *si.add(6) = b.pos;
+        }
+        1
+    })
+    .unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn set_scroll_info(
@@ -2812,25 +2865,75 @@ pub unsafe extern "win64" fn set_scroll_info(
     if bar == 2 {
         return super::controls::scroll_info(hwnd, info as *mut _, true, redraw != 0).unwrap_or(0);
     }
-    0
+    if info.is_null() {
+        return 0;
+    }
+    let si = info as *const i32;
+    let mask = *si.add(1) as u32;
+    with_bar(hwnd, bar, |b| {
+        if mask & 0x1 != 0 {
+            b.min = *si.add(2);
+            b.max = *si.add(3);
+        }
+        if mask & 0x2 != 0 {
+            b.page = *si.add(4) as u32;
+        }
+        if mask & 0x4 != 0 {
+            b.pos = *si.add(5);
+        }
+        b.clamp();
+        b.pos
+    })
+    .unwrap_or(0)
 }
 
-pub extern "win64" fn get_scroll_pos(_hwnd: usize, _bar: i32) -> i32 {
-    0
+pub unsafe extern "win64" fn get_scroll_pos(hwnd: usize, bar: i32) -> i32 {
+    if bar == 2 {
+        let mut si = [28i32, 0x4, 0, 0, 0, 0, 0];
+        return match super::controls::scroll_info(hwnd, si.as_mut_ptr().cast(), false, false) {
+            Some(_) => si[5],
+            None => 0,
+        };
+    }
+    with_bar(hwnd, bar, |b| b.pos).unwrap_or(0)
 }
 
-pub extern "win64" fn set_scroll_pos(_hwnd: usize, _bar: i32, _pos: i32, _redraw: i32) -> i32 {
-    0
+/// Rend l'ancienne position.
+pub unsafe extern "win64" fn set_scroll_pos(hwnd: usize, bar: i32, pos: i32, redraw: i32) -> i32 {
+    if bar == 2 {
+        let old = get_scroll_pos(hwnd, bar);
+        let mut si = [28i32, 0x4, 0, 0, 0, pos, 0];
+        super::controls::scroll_info(hwnd, si.as_mut_ptr().cast(), true, redraw != 0);
+        return old;
+    }
+    with_bar(hwnd, bar, |b| {
+        let old = b.pos;
+        b.pos = pos;
+        b.clamp();
+        old
+    })
+    .unwrap_or(0)
 }
 
-pub extern "win64" fn set_scroll_range(
-    _hwnd: usize,
-    _bar: i32,
-    _min: i32,
-    _max: i32,
-    _redraw: i32,
+pub unsafe extern "win64" fn set_scroll_range(
+    hwnd: usize,
+    bar: i32,
+    min: i32,
+    max: i32,
+    redraw: i32,
 ) -> i32 {
-    1
+    if bar == 2 {
+        let mut si = [28i32, 0x1, min, max, 0, 0, 0];
+        return super::controls::scroll_info(hwnd, si.as_mut_ptr().cast(), true, redraw != 0)
+            .map_or(0, |_| 1);
+    }
+    with_bar(hwnd, bar, |b| {
+        b.min = min;
+        b.max = max;
+        b.clamp();
+        1
+    })
+    .unwrap_or(0)
 }
 
 pub extern "win64" fn show_scroll_bar(_hwnd: usize, _bar: i32, _show: i32) -> i32 {

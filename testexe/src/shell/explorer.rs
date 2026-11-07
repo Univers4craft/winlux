@@ -31,6 +31,8 @@ mod props;
 mod icons;
 #[path = "explorer_pick.rs"]
 mod pick;
+#[path = "explorer_home.rs"]
+mod home;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -1084,6 +1086,8 @@ unsafe fn reload(p: &mut Pane) {
             add_entry(p, place_label(i), true, false, 0, 0, Some(Kind::Folder));
             let _ = pp;
         }
+        // Accueil « Prisme » (#689) : lecteurs puis fichiers récents.
+        home::fill_home(p);
     } else if loc.is(PC) {
         add_entry(
             p,
@@ -1150,8 +1154,16 @@ unsafe fn rebuild_view(p: &mut Pane) {
         if !p.deep && !filter.is_empty() && !contains_ci(e.name(), filter) {
             continue;
         }
+        if p.loc.is(HOME) && !home::passes(e) {
+            continue;
+        }
         p.view[p.nview] = i as u16;
         p.nview += 1;
+    }
+    // Accueil : ordre fixe (dossiers, lecteurs, récents du plus récent).
+    if p.loc.is(HOME) {
+        p.scroll = p.scroll.max(0);
+        return;
     }
     // O(n log n), without allocation. Original indices preserve equal-key order.
     let entries = &p.entries;
@@ -1244,6 +1256,16 @@ unsafe fn go_up() {
 /// Chemin Windows complet de l'élément `index` (indice dans `entries`).
 unsafe fn item_path(p: &Pane, index: usize, out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
     let e = &p.entries[index];
+    if p.loc.is(HOME) && home::is_recent(e) {
+        // Fichier récent : le nom est déjà le chemin Windows complet.
+        let n = e.name().len();
+        out[..n].copy_from_slice(e.name());
+        out[n] = 0;
+        return n;
+    }
+    if p.loc.is(HOME) && matches!(e.kind, Kind::Drive | Kind::LinuxDrive | Kind::Removable | Kind::Network) {
+        return drive_root(e, out);
+    }
     if p.loc.is(HOME) {
         // Les entrées d'Accueil portent le libellé traduit (place_label),
         // pas le nom français de PLACES : on compare au libellé affiché.
@@ -1254,21 +1276,26 @@ unsafe fn item_path(p: &Pane, index: usize, out: &mut [u8; PATH_LEN + NAME_LEN +
         return pp.len as usize;
     }
     if p.loc.is(PC) {
-        if let (Kind::Removable | Kind::Network, Some(l)) = (e.kind, drive_letter_in(e.name())) {
-            out[..3].copy_from_slice(&[l, b':', b'\\']);
-            out[3] = 0;
-            return 3;
-        }
-        let s: &[u8] = if e.kind == Kind::LinuxDrive {
-            b"Z:\\"
-        } else {
-            b"C:\\"
-        };
-        out[..3].copy_from_slice(s);
+        return drive_root(e, out);
+    }
+    join(out, p.loc.get(), e.name())
+}
+
+/// Racine « X:\\ » d'une entrée lecteur (Ce PC, Accueil).
+fn drive_root(e: &Entry, out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
+    if let (Kind::Removable | Kind::Network, Some(l)) = (e.kind, drive_letter_in(e.name())) {
+        out[..3].copy_from_slice(&[l, b':', b'\\']);
         out[3] = 0;
         return 3;
     }
-    join(out, p.loc.get(), e.name())
+    let s: &[u8] = if e.kind == Kind::LinuxDrive {
+        b"Z:\\"
+    } else {
+        b"C:\\"
+    };
+    out[..3].copy_from_slice(s);
+    out[3] = 0;
+    3
 }
 
 unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
@@ -1713,6 +1740,8 @@ struct Geo {
     body: Rect,
     status: Rect,
     panes: [Rect; 2],
+    /// Volet Détails à droite (#689), s'il est affiché et a la place.
+    details: Option<Rect>,
 }
 
 unsafe fn geo(f: &Frame) -> Geo {
@@ -1727,7 +1756,11 @@ unsafe fn geo(f: &Frame) -> Geo {
         0
     };
     let nav = rect(c.left, command.bottom, c.left + nav_w, status.top);
-    let body = rect(nav.right, command.bottom, c.right, status.top);
+    let mut body = rect(nav.right, command.bottom, c.right, status.top);
+    let details = home::details_rect(&body);
+    if let Some(d) = details {
+        body.right = d.left;
+    }
     let mut panes = [body, body];
     if tab().dual {
         let mid = (body.left + body.right) / 2;
@@ -1741,6 +1774,7 @@ unsafe fn geo(f: &Frame) -> Geo {
         body,
         status,
         panes,
+        details,
     }
 }
 
@@ -1785,13 +1819,16 @@ unsafe fn cells(r: &Rect) -> Cells {
     }
 }
 
-unsafe fn content_height(p: &Pane, c: &Cells) -> i32 {
+unsafe fn content_height(p: &Pane, r: &Rect, c: &Cells) -> i32 {
+    if home::cards(p) {
+        return home::height(p, r);
+    }
     ((p.nview as i32 + c.cols - 1) / c.cols) * c.ch + c.header + 16
 }
 
 unsafe fn clamp_scroll(p: &mut Pane, r: &Rect) {
     let c = cells(r);
-    let max = (content_height(p, &c) - (r.bottom - r.top)).max(0);
+    let max = (content_height(p, r, &c) - (r.bottom - r.top)).max(0);
     p.scroll = p.scroll.clamp(0, max);
     p.scroll_target = p.scroll_target.clamp(0, max);
 }
@@ -1809,6 +1846,9 @@ unsafe fn item_rect(r: &Rect, c: &Cells, v: usize, scroll: i32) -> Rect {
 }
 
 unsafe fn item_at(p: &Pane, r: &Rect, x: i32, y: i32) -> Option<usize> {
+    if home::cards(p) {
+        return home::item_at(p, r, x, y);
+    }
     if !inside(r, x, y) || y < r.top + 8 + cells(r).header {
         return None;
     }
@@ -2125,7 +2165,18 @@ unsafe fn extract_rect(g: &Geo) -> Option<Rect> {
         archive_of(loc)?;
     }
     let w = 30 + text_width(extract_label(), 13);
-    Some(rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39))
+    let right = details_button(g).left - 6;
+    Some(rect(right - w, g.command.top + 7, right, g.command.top + 39))
+}
+
+/// Bouton « Détails » tout à droite de la barre de commandes (#689).
+fn details_button(g: &Geo) -> Rect {
+    let w = 44 + text_width(details_label(), 12);
+    rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39)
+}
+
+fn details_label() -> &'static [u8] {
+    tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"])
 }
 
 fn extract_label() -> &'static [u8] {
@@ -2302,7 +2353,25 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     let has_sel = sel_count(pn) > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC);
     let rects = command_rects(geo);
     let extract = extract_rect(geo);
-    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
+    let db = details_button(geo);
+    let limit = extract.map_or(db.left - 8, |e| e.left - 8);
+    {
+        let on = home::SHOW_DETAILS;
+        let bg = if on {
+            p.selected
+        } else if hovered(&db) {
+            p.hover
+        } else {
+            p.window
+        };
+        if bg != p.window {
+            round_rect(g.hdc, g.b, db.left, db.top, db.right, db.bottom, 4, bg);
+        }
+        set_glyph_bg(Some(bg));
+        glyph(g.hdc, g.b, g.f, Glyph::Details, db.left + 10, db.top + 8, 16);
+        set_glyph_bg(None);
+        text(g.hdc, g.f.caption, p.text, db.left + 34, db.top + 9, details_label());
+    }
     if let Some(r) = extract {
         if hovered(&r) {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.hover);
@@ -2336,7 +2405,11 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
             icon_button(g, &r, *gl, enabled, on);
             continue;
         }
-        let bg = if on {
+        // « Nouveau » est l'action principale : bouton plein à l'accent (#689).
+        let prim = *cmd == Cmd::New && enabled;
+        let bg = if prim {
+            if hovered(&r) { mix(p.accent, p.text, 1, 8) } else { p.accent }
+        } else if on {
             p.selected
         } else if hovered(&r) && enabled {
             p.hover
@@ -2347,12 +2420,15 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, bg);
         }
         set_glyph_bg(Some(bg));
+        if prim {
+            set_glyph_fg(Some(p.on_accent));
+        }
         glyph(g.hdc, g.b, g.f, *gl, r.left + 10, r.top + 8, 16);
         set_glyph_bg(None);
         text(
             g.hdc,
-            g.f.caption,
-            if enabled { p.text } else { p.text3 },
+            if prim { g.f.semibold } else { g.f.caption },
+            if prim { p.on_accent } else if enabled { p.text } else { p.text3 },
             r.left + 34,
             r.top + 9,
             label,
@@ -2370,6 +2446,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
             );
             set_glyph_bg(None);
         }
+        set_glyph_fg(None);
     }
     fill(
         g.hdc,
@@ -2531,6 +2608,8 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         return;
     }
     let p = pal();
+    // Volet teinté de l'accent, comme le menu Démarrer en deux volets (#689).
+    let tint = mix(p.window, p.accent, 1, 14);
     fill(
         g.hdc,
         g.b,
@@ -2538,7 +2617,7 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         geo.nav.top,
         geo.nav.right,
         geo.nav.bottom,
-        p.window,
+        tint,
     );
     fill(
         g.hdc,
@@ -2564,9 +2643,9 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         } else if hovered(&r) {
             p.hover
         } else {
-            p.window
+            tint
         };
-        if bg != p.window {
+        if bg != tint {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, bg);
         }
         if current {
@@ -2685,7 +2764,12 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         return;
     }
 
-    if VIEW == View::Details {
+    // Accueil « Prisme » : cartes au lieu de la grille de fichiers.
+    let home_cards = home::cards(pn);
+    if home_cards {
+        home::draw(g, pn, r, which, focused);
+    }
+    if VIEW == View::Details && !home_cards {
         let sx_off = pn.scroll_x;
         let hr = rect(
             r.left + 8 - sx_off,
@@ -2747,7 +2831,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     let first_row = (pn.scroll - c.header).max(0) / c.ch;
     let rows_visible = (r.bottom - r.top) / c.ch + 2;
     let start = (first_row * c.cols) as usize;
-    let end = (((first_row + rows_visible) * c.cols) as usize).min(pn.nview);
+    let end = if home_cards { start } else { (((first_row + rows_visible) * c.cols) as usize).min(pn.nview) };
     let mut tbuf = [0u8; 48];
     let mut sbuf = [0u8; 24];
     for v in start..end {
@@ -2774,7 +2858,12 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         } else {
             p.window
         };
-        if bg != p.window {
+        // Grandes icônes et mosaïques en cartes (#689).
+        let carded = matches!(VIEW, View::XLarge | View::Large | View::Tiles);
+        let bg = if carded && bg == p.window { p.surface } else { bg };
+        if carded {
+            home::card(g, &ir, bg, if selected { p.accent } else { p.border });
+        } else if bg != p.window {
             round_rect(g.hdc, g.b, ir.left, ir.top, ir.right, ir.bottom, 4, bg);
         }
         let name = display_name(&e);
@@ -2799,6 +2888,9 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     entry_icon(g, gx, ir.top + 8, s);
                     format_badge(g, &e, gx, ir.top + 8, s);
                 }
+                if !e.dir && e.kind == Kind::Exe && carded {
+                    home::badge(g, ir.right - home::badge_width() - 6, ir.top + 6, bg);
+                }
                 let ty = ir.top + 14 + s;
                 if renaming {
                     draw_rename(g, rect(ir.left + 4, ty - 3, ir.right - 4, ty + 19));
@@ -2819,16 +2911,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 if renaming {
                     draw_rename(g, rect(ir.left + 30, ty - 3, ir.right - 6, ty + 19));
                 } else {
-                    text_fit(
-                        g.hdc,
-                        g.f.caption,
-                        12,
-                        p.text,
-                        ir.left + 32,
-                        ty,
-                        name,
-                        ir.right - ir.left - 40,
-                    );
+                    home::name_badge(g, &e, ir.left + 32, ty, name, ir.right - ir.left - 40, p.text, bg);
                 }
             }
             View::Tiles => {
@@ -2842,16 +2925,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 if renaming {
                     draw_rename(g, rect(tx - 4, ty - 3, ir.right - 6, ty + 19));
                 } else {
-                    text_fit(
-                        g.hdc,
-                        g.f.caption,
-                        12,
-                        p.text,
-                        tx,
-                        ty,
-                        name,
-                        ir.right - tx - 8,
-                    );
+                    home::name_badge(g, &e, tx, ty, name, ir.right - tx - 8, p.text, bg);
                 }
                 if let Some((free, total)) = drive_space(&e) {
                     // Comme Windows 11 : barre puis « X libres sur Y ».
@@ -2883,7 +2957,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 if renaming {
                     draw_rename(g, rect(nx - 4, ty - 3, ir.left + nw, ty + 19));
                 } else {
-                    text_fit(g.hdc, g.f.caption, 12, p.text, nx, ty, name, nw - 40);
+                    home::name_badge(g, &e, nx, ty, name, nw - 40, p.text, bg);
                 }
                 let mut dbuf = [0u8; 24];
                 let space = drive_space(&e);
@@ -2925,7 +2999,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         set_glyph_bg(None);
     }
     // Barre de défilement fine, comme sous Windows 11.
-    let total = content_height(pn, &c);
+    let total = content_height(pn, r, &c);
     let view_h = r.bottom - r.top;
     if total > view_h {
         let track = rect(r.right - SCROLL_W, r.top + 4, r.right - 3, r.bottom - 4);
@@ -6123,6 +6197,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         );
         draw_pane(g, &geo.panes[1], 1);
     }
+    if let Some(d) = geo.details {
+        home::draw_details(g, &d);
+    }
     if pick::active() {
         pick::draw(g, &geo.status);
     } else {
@@ -6258,7 +6335,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let r = pane_rect_inner(&geo, which);
                 let pn = &mut t.panes[which];
                 let c = cells(&r);
-                let total = content_height(pn, &c);
+                let total = content_height(pn, &r, &c);
                 let view_h = r.bottom - r.top;
                 let track_h = view_h - 8;
                 let th = ((view_h * track_h) / total.max(1)).max(30);
@@ -6275,7 +6352,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let c = cells(&r);
                 let (l, tp, rr, b) = (x0.min(x), y0.min(y), x0.max(x), y0.max(y));
                 for v in 0..pn.nview {
-                    let ir = item_rect(&r, &c, v, pn.scroll);
+                    let ir = if home::cards(pn) { home::item_rect(pn, &r, v) } else { item_rect(&r, &c, v, pn.scroll) };
                     let hit = ir.left < rr && ir.right > l && ir.top < b && ir.bottom > tp;
                     let idx = pn.view[v] as usize;
                     set_sel(pn, idx, hit);
@@ -6367,7 +6444,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         let step = cells(&r).ch.max(40);
                         pn.scroll_target -= delta / 120 * step;
                         let c = cells(&r);
-                        let max = (content_height(pn, &c) - (r.bottom - r.top)).max(0);
+                        let max = (content_height(pn, &r, &c) - (r.bottom - r.top)).max(0);
                         pn.scroll_target = pn.scroll_target.clamp(0, max);
                     }
                     update_hover(&geo, x, y);
@@ -6462,7 +6539,11 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         }
         return true;
     }
-    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
+    if inside(&details_button(geo), x, y) {
+        home::SHOW_DETAILS = !home::SHOW_DETAILS;
+        return true;
+    }
+    let limit = extract.map_or(details_button(geo).left - 8, |e| e.left - 8);
     for (i, r) in rects.iter().enumerate() {
         if inside(r, x, y) && r.right <= limit {
             run_cmd(COMMANDS[i].0, geo);
@@ -6499,6 +6580,26 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         }
         return false;
     }
+    // Volet Détails : boutons d'action.
+    if let Some(d) = geo.details {
+        if inside(&d, x, y) {
+            if ev == Mouse::Down {
+                if let Some(a) = home::details_hit(&d, x, y) {
+                    let p = pane();
+                    match a {
+                        home::Action::Open => {
+                            if let Some(i) = first_sel(p) {
+                                open_item(p, i, false);
+                            }
+                        }
+                        home::Action::ExeSettings => run_item(Item::ExeSettings, geo),
+                        home::Action::Properties => run_item(Item::Properties, geo),
+                    }
+                }
+            }
+            return true;
+        }
+    }
     // Volets de fichiers.
     let t = tab();
     for which in 0..if t.dual { 2 } else { 1 } {
@@ -6511,7 +6612,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         // Barre de défilement.
         if x >= r.right - SCROLL_W - 4 && ev == Mouse::Down {
             let c = cells(&r);
-            let total = content_height(pn, &c);
+            let total = content_height(pn, &r, &c);
             let view_h = r.bottom - r.top;
             if total > view_h {
                 let track_h = view_h - 8;
@@ -6527,7 +6628,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
             }
         }
         // En-têtes de la vue Détails : tri.
-        if VIEW == View::Details && y < r.top + 4 + cells(&r).header && ev == Mouse::Down {
+        if VIEW == View::Details && !home::cards(pn) && y < r.top + 4 + cells(&r).header && ev == Mouse::Down {
             let hr = rect(r.left + 8, r.top + 4, r.right - SCROLL_W - 8, r.top + 36);
             let (_, _, dx, tx, sx) = detail_cols(&hr);
             let key = if x >= sx - 8 {
@@ -6546,6 +6647,9 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                 SORT_DESC = false;
             }
             resort_all();
+            return true;
+        }
+        if ev == Mouse::Down && home::click_chip(pn, &r, x, y) {
             return true;
         }
         match item_at(pn, &r, x, y) {
@@ -7241,13 +7345,16 @@ unsafe fn places_and_hover_checks() {
         let p = pane();
         p.loc.set(HOME);
         reload(p);
-        for i in 0..p.count {
+        // Les lecteurs et les récents de l'Accueil « Prisme » (#689) suivent.
+        let mut places = 0;
+        for i in (0..p.count).filter(|&i| home::is_place(&p.entries[i])) {
             let k = (0..PLACES.len()).find(|&k| place_label(k) == p.entries[i].name()).unwrap_or(usize::MAX);
             let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
             let n = item_path(p, i, &mut out);
             all &= k < PLACES.len() && &out[..n] == place_path(k).get();
+            places += 1;
         }
-        all &= p.count == PLACES.len();
+        all &= places == PLACES.len();
     }
     crate::locale::CURRENT_LANG = saved;
     pane().loc = old_loc;
@@ -7535,6 +7642,7 @@ pub unsafe fn regression_checks() {
     places_and_hover_checks();
     props::regression(root);
     icons::regression();
+    home::regression();
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;

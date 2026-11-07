@@ -137,6 +137,19 @@ ok("if app == APP_TERMINAL {" in launch[:400] and "native_terminal(None)" in lau
 ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer,
    "Explorateur : Terminal ouvre winlux-terminal dans le dossier affiché")
 
+# ── #699 : la boîte COM de Vista (IFileOpenDialog) passe par l'Explorateur ──
+com_rs = (ROOT / "runtime/src/dlls/filedialog_com.rs").read_text(encoding="utf-8")
+ole_rs = (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+apps_rs = (ROOT / "runtime/src/dlls/common_apps.rs").read_text(encoding="utf-8")
+ok("filedialog_com::create_builtin(&guid, &iid, out)" in ole_rs,
+   "CoCreateInstance(CLSID_FileOpenDialog / CLSID_FileSaveDialog) ne rend plus REGDB_E_CLASSNOTREG")
+ok("files::file_dialog(" in com_rs and "pick_folder(" in com_rs,
+   "IFileDialog::Show ouvre l'Explorateur Winlux, comme GetOpenFileNameW")
+ok("filedialog_com::sh_create_item_from_parsing_name" in apps_rs and "E_NOTIMPL" not in apps_rs.split("SHCreateItemFromParsingName")[0][-200:],
+   "SHCreateItemFromParsingName rend un vrai IShellItem")
+ok('b"folder"' in pick_rs and "fn accept_folder(" in pick_rs,
+   "FOS_PICKFOLDERS : l'Explorateur sait choisir un dossier")
+
 # ── #674 : Explorateur étroit, colonnes dans l'ordre, masquées par la droite ─
 ok("while shown > 0 && NAME_MIN" in explorer and "sx.min(ir.right) - tx - 12" in explorer,
    "vue Détails étroite : Type et Taille disparaissent au lieu de « … » ou d'être inversées")
@@ -165,5 +178,19 @@ with tempfile.TemporaryDirectory() as tmp:
     (proc / "winlux").write_text("enabled\n")
     subprocess.run(["sh", "-eu", "-c", script], check=True)
     ok((proc / "register").read_text() == "", "init Live : une règle déjà enregistrée n'est pas réécrite")
+
+# ── #689 : direction « Prisme » (Accueil en cartes, volet Détails) ─────────
+home = (SHELL / "explorer_home.rs").read_text(encoding="utf-8")
+ok('#[path = "explorer_home.rs"]' in explorer and "home::fill_home(p)" in explorer,
+   "Accueil : lecteurs et récents ajoutés après les dossiers personnels")
+ok("home::draw(g, pn, r, which, focused)" in explorer and "home::item_at(p, r, x, y)" in explorer,
+   "Accueil : cartes dessinées et cliquables avec la même mise en page")
+ok("home::draw_details(g, &d)" in explorer and "details_button(geo)" in explorer,
+   "Volet Détails : bouton « Détails » dans la barre de commandes et volet à droite")
+ok(explorer.count("home::name_badge(") >= 3, "Pastille « Windows » dans les vues Détails, Liste et Mosaïques")
+ok("home::regression();" in explorer and "pub(super) unsafe fn regression()" in home,
+   "Accueil et volet Détails vérifiés par explorer_regression")
+ok(all(w in home for w in ('b"Lecteurs"', 'b"Drives"', 'b"Unidades"', 'b"Laufwerke"')),
+   "Accueil : titres de section dans les quatre langues")
 
 print(f"test-explorer-fixes : {checks} vérifications OK")

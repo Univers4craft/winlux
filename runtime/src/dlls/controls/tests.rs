@@ -542,6 +542,23 @@ fn liste_a_colonnes_lignes_textes_et_selection() {
             i as isize
         );
     }
+    // LVM_GETCOLUMNW : titre et largeur relus.
+    let mut buf = [0u16; 16];
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 0,
+        text: buf.as_mut_ptr(),
+        text_max: 16,
+        sub_item: 0,
+    };
+    assert_eq!(sendw(lv, 0x105F, 1, &mut col as *mut LvColumnW as isize), 1);
+    assert_eq!(col.cx, 120);
+    assert_eq!(
+        &buf[..5],
+        &[b'P' as u16, b'o' as u16, b'r' as u16, b't' as u16, 0]
+    );
+    assert_eq!(sendw(lv, 0x105F, 9, &mut col as *mut LvColumnW as isize), 0);
     for (i, (host, port)) in [("serveur", "22"), ("routeur", "23")].iter().enumerate() {
         let t = w(host);
         let mut it = LvItemW {

@@ -919,14 +919,16 @@ mod ofn {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PickRequest {
-    save: bool,
-    flags: u32,
-    title: String,
-    filters: Vec<(String, String)>,
-    filter: usize,
-    dir: String,
-    name: String,
-    def_ext: Option<String>,
+    pub save: bool,
+    /// Choix d'un dossier (IFileDialog, FOS_PICKFOLDERS).
+    pub folder: bool,
+    pub flags: u32,
+    pub title: String,
+    pub filters: Vec<(String, String)>,
+    pub filter: usize,
+    pub dir: String,
+    pub name: String,
+    pub def_ext: Option<String>,
 }
 
 /// Variables d'environnement passées à l'Explorateur.
@@ -941,7 +943,14 @@ pub(crate) fn pick_env(r: &PickRequest, result: &str) -> Vec<(&'static str, Stri
     vec![
         (
             "WINLUX_PICK",
-            if r.save { "save" } else { "open" }.to_string(),
+            if r.folder {
+                "folder"
+            } else if r.save {
+                "save"
+            } else {
+                "open"
+            }
+            .to_string(),
         ),
         ("WINLUX_PICK_TITLE", clean(&r.title)),
         ("WINLUX_PICK_FILTERS", filters),
@@ -973,7 +982,7 @@ pub(crate) fn parse_pick_result(bytes: &[u8], filters: usize) -> Option<(Vec<Str
     ))
 }
 
-fn explorer_app() -> Option<PathBuf> {
+pub(crate) fn explorer_app() -> Option<PathBuf> {
     if std::env::var_os("WINLUX_FILEDLG").is_some()
         || std::env::var("WINLUX_FILEDLG_BUILTIN").is_ok_and(|v| v == "1")
         || !gui::backend_is_interactive()
@@ -988,7 +997,7 @@ fn explorer_app() -> Option<PathBuf> {
 
 /// `None` : Explorateur indisponible, la boîte intégrée prend le relais.
 /// `Some(None)` : annulé. `Some(Some(..))` : choix validé.
-unsafe fn pick_with_explorer(
+pub(crate) unsafe fn pick_with_explorer(
     owner: usize,
     request: &PickRequest,
     app: &Path,
@@ -1045,7 +1054,7 @@ unsafe fn pick_with_explorer(
     Some(parse_pick_result(&bytes, request.filters.len()))
 }
 
-unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
+pub(crate) unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
     set_error(0);
     if ofn_ptr.is_null() {
         set_error(CDERR_INITIALIZATION);
@@ -1116,6 +1125,7 @@ unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
 
     let request = PickRequest {
         save,
+        folder: false,
         flags,
         title: title.clone(),
         filters: filters.clone(),
@@ -1300,6 +1310,7 @@ mod tests {
     fn explorateur_comme_boite_ouvrir_enregistrer() {
         let r = PickRequest {
             save: true,
+            folder: false,
             flags: OFN_OVERWRITEPROMPT,
             title: "Enregistrer sous".into(),
             filters: vec![
@@ -1365,6 +1376,7 @@ mod tests {
         std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut r = PickRequest {
             save: true,
+            folder: false,
             flags: 0,
             title: "Enregistrer sous".into(),
             filters: vec![("A".into(), "*.a".into()), ("Texte".into(), "*.txt".into())],

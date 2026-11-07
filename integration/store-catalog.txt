@@ -1,52 +1,321 @@
-# Catalogue du Store Winlux : une application par ligne.
-# id|catégorie|nom|paquet apt|éditeur|description
-# Catégories : navigateurs, bureautique, multimedia, developpement, jeux, utilitaires
-featured=vlc,gimp,writer,supertuxkart,keepassxc,obs,inkscape,git
-epiphany|navigateurs|GNOME Web|epiphany-browser|GNOME|Navigateur web simple et rapide, intégré au bureau.
-falkon|navigateurs|Falkon|falkon|KDE|Navigateur léger basé sur QtWebEngine, avec bloqueur de publicités.
-konqueror|navigateurs|Konqueror|konqueror|KDE|Navigateur web et gestionnaire de fichiers polyvalent.
-lynx|navigateurs|Lynx|lynx|Lynx|Navigateur en mode texte pour le terminal.
-writer|bureautique|LibreOffice Writer|libreoffice-writer|The Document Foundation|Traitement de texte compatible avec les fichiers Word (.docx).
-calc|bureautique|LibreOffice Calc|libreoffice-calc|The Document Foundation|Tableur compatible avec les classeurs Excel (.xlsx).
-impress|bureautique|LibreOffice Impress|libreoffice-impress|The Document Foundation|Présentations compatibles avec PowerPoint (.pptx).
-abiword|bureautique|AbiWord|abiword|AbiSource|Traitement de texte léger et rapide.
-gnumeric|bureautique|Gnumeric|gnumeric|GNOME|Tableur léger, précis pour les calculs.
-okular|bureautique|Okular|okular|KDE|Lecteur de documents PDF, EPUB et images avec annotations.
-xournalpp|bureautique|Xournal++|xournalpp|Xournal++|Prise de notes manuscrites et annotation de PDF.
-vlc|multimedia|VLC|vlc|VideoLAN|Lecteur multimédia qui lit presque tous les formats audio et vidéo.
-mpv|multimedia|mpv|mpv|mpv|Lecteur vidéo minimaliste et performant.
-audacity|multimedia|Audacity|audacity|Audacity Team|Enregistrement et montage audio.
-gimp|multimedia|GIMP|gimp|GIMP Team|Retouche photo et création graphique avancée.
-inkscape|multimedia|Inkscape|inkscape|Inkscape Project|Dessin vectoriel (SVG), logos et illustrations.
-krita|multimedia|Krita|krita|KDE|Peinture numérique et illustration.
-obs|multimedia|OBS Studio|obs-studio|OBS Project|Enregistrement d'écran et diffusion en direct.
-kdenlive|multimedia|Kdenlive|kdenlive|KDE|Montage vidéo non linéaire.
-rhythmbox|multimedia|Rhythmbox|rhythmbox|GNOME|Bibliothèque musicale et radio en ligne.
-git|developpement|Git|git|Git|Gestion de versions distribuée.
-geany|developpement|Geany|geany|Geany|Éditeur de code léger avec coloration et compilation.
-kate|developpement|Kate|kate|KDE|Éditeur de texte avancé pour développeurs.
-build|developpement|Outils de compilation|build-essential|Ubuntu|Compilateurs GCC/G++, make et bibliothèques de base.
-mingw|developpement|MinGW-w64|gcc-mingw-w64-x86-64|MinGW-w64|Compilateur C/C++ pour créer des .exe Windows.
-cmake|developpement|CMake|cmake|Kitware|Générateur de projets de compilation multiplateforme.
-python|developpement|Python 3|python3-full|Python Software Foundation|Langage Python complet avec venv et pip.
-nodejs|developpement|Node.js|nodejs|OpenJS Foundation|Environnement JavaScript côté serveur.
-jdk|developpement|Java (OpenJDK)|default-jdk|OpenJDK|Kit de développement Java.
-sqlite|developpement|DB Browser for SQLite|sqlitebrowser|sqlitebrowser|Création et édition de bases SQLite.
-meld|developpement|Meld|meld|GNOME|Comparaison et fusion de fichiers et dossiers.
-supertuxkart|jeux|SuperTuxKart|supertuxkart|SuperTuxKart Team|Course de karts en 3D.
-0ad|jeux|0 A.D.|0ad|Wildfire Games|Stratégie en temps réel historique.
-aisleriot|jeux|Solitaire AisleRiot|aisleriot|GNOME|Plus de 80 jeux de patience.
-mines|jeux|Démineur|gnome-mines|GNOME|Le classique du déminage.
-sudoku|jeux|Sudoku|gnome-sudoku|GNOME|Grilles de sudoku de tous niveaux.
-minetest|jeux|Minetest|minetest|Minetest Team|Jeu de construction en monde ouvert de blocs.
-supertux|jeux|SuperTux|supertux|SuperTux Team|Jeu de plateforme en 2D.
-frozenbubble|jeux|Frozen Bubble|frozen-bubble|Frozen Bubble|Tirez des bulles et alignez les couleurs.
-htop|utilitaires|htop|htop|htop|Moniteur de processus interactif.
-gparted|utilitaires|GParted|gparted|GNOME|Éditeur de partitions.
-7zip|utilitaires|7-Zip|7zip|Igor Pavlov|Archives 7z, zip, rar et beaucoup d'autres formats.
-keepassxc|utilitaires|KeePassXC|keepassxc|KeePassXC Team|Gestionnaire de mots de passe hors ligne.
-filezilla|utilitaires|FileZilla|filezilla|FileZilla Project|Client FTP, FTPS et SFTP.
-qbittorrent|utilitaires|qBittorrent|qbittorrent|qBittorrent Project|Client BitTorrent léger.
-bleachbit|utilitaires|BleachBit|bleachbit|BleachBit|Libère de l'espace disque et efface les traces.
-disks|utilitaires|Disques|gnome-disk-utility|GNOME|Gestion des disques, images ISO et tests SMART.
-flameshot|utilitaires|Flameshot|flameshot|Flameshot|Captures d'écran annotées.
+# Catalogue du Store Winlux : une application par ligne, choisie par l'équipe.
+# id|catégorie|nom|paquet apt|éditeur|description fr|description en|description es|description de
+# Les trois dernières descriptions sont facultatives (le français sert à défaut).
+# Catégories : internet, bureautique, multimedia, graphisme, developpement, jeux,
+# education, sciences, utilitaires, systeme, accessibilite. Un paquet absent des
+# dépôts configurés est simplement masqué. Les navigateurs restent sans préférence
+# (ordre alphabétique, jamais en vedette : docs/BROWSERS.md).
+featured=writer,vlc,gimp,thunderbird,keepassxc,obs,krita,kdenlive,supertuxkart,0ad,inkscape,audacity
+# --- Internet ---
+epiphany|internet|GNOME Web|epiphany-browser|GNOME|Navigateur web simple et rapide, intégré au bureau.|Simple, fast web browser integrated with the desktop.|Navegador web sencillo y rápido, integrado en el escritorio.|Einfacher, schneller Webbrowser, in den Desktop integriert.
+falkon|internet|Falkon|falkon|KDE|Navigateur léger avec bloqueur de publicités.|Lightweight browser with an ad blocker.|Navegador ligero con bloqueador de anuncios.|Leichter Browser mit Werbeblocker.
+konqueror|internet|Konqueror|konqueror|KDE|Navigateur web et gestionnaire de fichiers.|Web browser and file manager.|Navegador web y gestor de archivos.|Webbrowser und Dateimanager.
+lynx|internet|Lynx|lynx|Lynx|Navigateur en mode texte pour le terminal.|Text-mode browser for the terminal.|Navegador en modo texto para el terminal.|Textbrowser für das Terminal.
+thunderbird|internet|Thunderbird|thunderbird|Mozilla|Courriel, agenda et contacts.|Email, calendar and contacts.|Correo, calendario y contactos.|E-Mail, Kalender und Kontakte.
+evolution|internet|Evolution|evolution|GNOME|Courriel et agenda de groupe.|Email and groupware calendar.|Correo y calendario de grupo.|E-Mail und Gruppenkalender.
+geary|internet|Geary|geary|GNOME|Courriel simple et moderne.|Simple, modern email client.|Correo sencillo y moderno.|Einfaches, modernes E-Mail-Programm.
+claws|internet|Claws Mail|claws-mail|Claws Mail|Courriel léger et rapide.|Lightweight, fast email client.|Correo ligero y rápido.|Leichtes, schnelles E-Mail-Programm.
+kmail|internet|KMail|kmail|KDE|Courriel complet avec chiffrement.|Full-featured email with encryption.|Correo completo con cifrado.|Vollständiges E-Mail-Programm mit Verschlüsselung.
+filezilla|internet|FileZilla|filezilla|FileZilla Project|Client FTP, FTPS et SFTP.|FTP, FTPS and SFTP client.|Cliente FTP, FTPS y SFTP.|FTP-, FTPS- und SFTP-Client.
+qbittorrent|internet|qBittorrent|qbittorrent|qBittorrent Project|Client BitTorrent léger.|Lightweight BitTorrent client.|Cliente BitTorrent ligero.|Leichter BitTorrent-Client.
+transmission|internet|Transmission|transmission-gtk|Transmission|Client BitTorrent minimaliste.|Minimal BitTorrent client.|Cliente BitTorrent minimalista.|Minimalistischer BitTorrent-Client.
+deluge|internet|Deluge|deluge|Deluge Team|Client BitTorrent extensible.|Extensible BitTorrent client.|Cliente BitTorrent ampliable.|Erweiterbarer BitTorrent-Client.
+remmina|internet|Remmina|remmina|Remmina|Bureau à distance RDP, VNC et SSH.|Remote desktop over RDP, VNC and SSH.|Escritorio remoto RDP, VNC y SSH.|Fernzugriff per RDP, VNC und SSH.
+krdc|internet|KRDC|krdc|KDE|Connexion à un bureau distant.|Connect to a remote desktop.|Conexión a un escritorio remoto.|Verbindung zu einem entfernten Desktop.
+putty|internet|PuTTY|putty|Simon Tatham|Client SSH et Telnet.|SSH and Telnet client.|Cliente SSH y Telnet.|SSH- und Telnet-Client.
+pidgin|internet|Pidgin|pidgin|Pidgin|Messagerie instantanée multi-comptes.|Multi-account instant messaging.|Mensajería instantánea multicuenta.|Sofortnachrichten für mehrere Konten.
+hexchat|internet|HexChat|hexchat|HexChat|Discussions IRC.|IRC chat client.|Chat IRC.|IRC-Chat-Programm.
+polari|internet|Polari|polari|GNOME|Discussions IRC simples.|Simple IRC chat.|Chat IRC sencillo.|Einfacher IRC-Chat.
+gajim|internet|Gajim|gajim|Gajim|Messagerie XMPP chiffrée.|Encrypted XMPP messaging.|Mensajería XMPP cifrada.|Verschlüsselte XMPP-Nachrichten.
+mumble|internet|Mumble|mumble|Mumble|Discussions vocales à faible latence.|Low-latency voice chat.|Chat de voz de baja latencia.|Sprachchat mit geringer Latenz.
+linphone|internet|Linphone|linphone-desktop|Belledonne|Appels audio et vidéo SIP.|SIP audio and video calls.|Llamadas de audio y vídeo SIP.|SIP-Audio- und Videoanrufe.
+nextcloud|internet|Nextcloud|nextcloud-desktop|Nextcloud|Synchroniser ses fichiers avec Nextcloud.|Sync your files with Nextcloud.|Sincroniza tus archivos con Nextcloud.|Dateien mit Nextcloud abgleichen.
+syncthing|internet|Syncthing|syncthing-gtk|Syncthing|Synchronisation entre appareils, sans serveur.|Device-to-device sync, no server.|Sincronización entre dispositivos, sin servidor.|Abgleich zwischen Geräten, ohne Server.
+liferea|internet|Liferea|liferea|Liferea|Lecteur de flux RSS.|RSS feed reader.|Lector de fuentes RSS.|RSS-Feedreader.
+akregator|internet|Akregator|akregator|KDE|Actualités par flux RSS.|News from RSS feeds.|Noticias por fuentes RSS.|Nachrichten aus RSS-Feeds.
+newsflash|internet|NewsFlash|newsflash|NewsFlash|Lecteur de flux moderne.|Modern feed reader.|Lector de fuentes moderno.|Moderner Feedreader.
+uget|internet|uGet|uget|uGet|Gestionnaire de téléchargements.|Download manager.|Gestor de descargas.|Download-Manager.
+kdeconnect|internet|KDE Connect|kdeconnect|KDE|Relier son téléphone à l'ordinateur.|Connect your phone to your computer.|Conecta tu teléfono al ordenador.|Telefon mit dem Computer verbinden.
+wireshark|internet|Wireshark|wireshark|Wireshark|Analyser le trafic réseau.|Analyse network traffic.|Analiza el tráfico de red.|Netzwerkverkehr analysieren.
+# --- Bureautique ---
+writer|bureautique|LibreOffice Writer|libreoffice-writer|The Document Foundation|Traitement de texte compatible avec les fichiers Word (.docx).|Word processor compatible with .docx files.|Procesador de textos compatible con archivos .docx.|Textverarbeitung, kompatibel mit .docx-Dateien.
+calc|bureautique|LibreOffice Calc|libreoffice-calc|The Document Foundation|Tableur compatible avec les classeurs Excel (.xlsx).|Spreadsheet compatible with .xlsx workbooks.|Hoja de cálculo compatible con libros .xlsx.|Tabellenkalkulation, kompatibel mit .xlsx.
+impress|bureautique|LibreOffice Impress|libreoffice-impress|The Document Foundation|Présentations compatibles avec PowerPoint (.pptx).|Presentations compatible with .pptx.|Presentaciones compatibles con .pptx.|Präsentationen, kompatibel mit .pptx.
+draw|bureautique|LibreOffice Draw|libreoffice-draw|The Document Foundation|Diagrammes, affiches et retouche de PDF.|Diagrams, posters and PDF editing.|Diagramas, carteles y edición de PDF.|Diagramme, Plakate und PDF-Bearbeitung.
+base|bureautique|LibreOffice Base|libreoffice-base|The Document Foundation|Bases de données et formulaires.|Databases and forms.|Bases de datos y formularios.|Datenbanken und Formulare.
+math|bureautique|LibreOffice Math|libreoffice-math|The Document Foundation|Éditeur de formules mathématiques.|Mathematical formula editor.|Editor de fórmulas matemáticas.|Formeleditor für Mathematik.
+abiword|bureautique|AbiWord|abiword|AbiSource|Traitement de texte léger et rapide.|Lightweight, fast word processor.|Procesador de textos ligero y rápido.|Leichte, schnelle Textverarbeitung.
+gnumeric|bureautique|Gnumeric|gnumeric|GNOME|Tableur léger, précis pour les calculs.|Lightweight, accurate spreadsheet.|Hoja de cálculo ligera y precisa.|Leichte, genaue Tabellenkalkulation.
+calligra|bureautique|Calligra Words|calligrawords|KDE|Traitement de texte de la suite Calligra.|Word processor from the Calligra suite.|Procesador de textos de la suite Calligra.|Textverarbeitung der Calligra-Suite.
+okular|bureautique|Okular|okular|KDE|Lecteur de PDF, EPUB et images avec annotations.|PDF, EPUB and image viewer with annotations.|Lector de PDF, EPUB e imágenes con anotaciones.|PDF-, EPUB- und Bildbetrachter mit Anmerkungen.
+evince|bureautique|Visionneuse de documents|evince|GNOME|Lire les PDF simplement.|Read PDFs simply.|Lee PDF de forma sencilla.|PDFs einfach lesen.
+xournalpp|bureautique|Xournal++|xournalpp|Xournal++|Prise de notes manuscrites et annotation de PDF.|Handwritten notes and PDF annotation.|Notas manuscritas y anotación de PDF.|Handschriftliche Notizen und PDF-Anmerkungen.
+pdfarranger|bureautique|PDF Arranger|pdfarranger|PDF Arranger|Fusionner, découper et réordonner des PDF.|Merge, split and reorder PDFs.|Une, divide y reordena PDF.|PDFs zusammenfügen, teilen und ordnen.
+scribus|bureautique|Scribus|scribus|Scribus Team|Mise en page de magazines et d'affiches.|Desktop publishing for magazines and posters.|Maquetación de revistas y carteles.|Satz für Zeitschriften und Plakate.
+calibre|bureautique|Calibre|calibre|Kovid Goyal|Bibliothèque et conversion de livres numériques.|E-book library and conversion.|Biblioteca y conversión de libros electrónicos.|E-Book-Bibliothek und Umwandlung.
+foliate|bureautique|Foliate|foliate|Foliate|Lire des livres numériques confortablement.|Read e-books comfortably.|Lee libros electrónicos cómodamente.|E-Books bequem lesen.
+gnucash|bureautique|GnuCash|gnucash|GnuCash|Comptabilité personnelle et de petite entreprise.|Personal and small-business accounting.|Contabilidad personal y de pequeña empresa.|Buchhaltung für Privat und Kleinbetrieb.
+kmymoney|bureautique|KMyMoney|kmymoney|KDE|Budget et comptes bancaires.|Budget and bank accounts.|Presupuesto y cuentas bancarias.|Budget und Bankkonten.
+homebank|bureautique|HomeBank|homebank|HomeBank|Suivre ses dépenses facilement.|Track your spending easily.|Controla tus gastos fácilmente.|Ausgaben einfach verfolgen.
+planner|bureautique|Planner|planner|GNOME|Planification de projets.|Project planning.|Planificación de proyectos.|Projektplanung.
+projectlibre|bureautique|ProjectLibre|projectlibre|ProjectLibre|Gestion de projet avec diagrammes de Gantt.|Project management with Gantt charts.|Gestión de proyectos con diagramas de Gantt.|Projektmanagement mit Gantt-Diagrammen.
+zim|bureautique|Zim|zim|Zim|Carnet de notes en wiki personnel.|Desktop wiki notebook.|Cuaderno de notas tipo wiki.|Notizbuch als persönliches Wiki.
+cherrytree|bureautique|CherryTree|cherrytree|CherryTree|Notes hiérarchiques riches.|Hierarchical rich-text notes.|Notas jerárquicas enriquecidas.|Hierarchische Notizen mit Formatierung.
+gnotes|bureautique|Notes rapides|gnote|GNOME|Pense-bêtes reliés entre eux.|Linked sticky notes.|Notas rápidas enlazadas.|Verknüpfte Notizzettel.
+gnomecalendar|bureautique|Agenda|gnome-calendar|GNOME|Agenda simple pour tous vos rendez-vous.|Simple calendar for all your events.|Calendario sencillo para tus citas.|Einfacher Kalender für alle Termine.
+gnomecontacts|bureautique|Contacts|gnome-contacts|GNOME|Carnet d'adresses.|Address book.|Libreta de direcciones.|Adressbuch.
+korganizer|bureautique|KOrganizer|korganizer|KDE|Agenda et tâches.|Calendar and tasks.|Calendario y tareas.|Kalender und Aufgaben.
+dia|bureautique|Dia|dia|GNOME|Diagrammes et organigrammes.|Diagrams and flowcharts.|Diagramas y organigramas.|Diagramme und Flussdiagramme.
+ghostwriter|bureautique|Ghostwriter|ghostwriter|KDE|Écrire en Markdown sans distraction.|Distraction-free Markdown writing.|Escribe en Markdown sin distracciones.|Ablenkungsfrei in Markdown schreiben.
+manuskript|bureautique|Manuskript|manuskript|Manuskript|Organiser l'écriture d'un roman.|Organise the writing of a novel.|Organiza la escritura de una novela.|Das Schreiben eines Romans planen.
+# --- Audio et vidéo ---
+vlc|multimedia|VLC|vlc|VideoLAN|Lit presque tous les formats audio et vidéo.|Plays almost every audio and video format.|Reproduce casi todos los formatos de audio y vídeo.|Spielt fast alle Audio- und Videoformate ab.
+mpv|multimedia|mpv|mpv|mpv|Lecteur vidéo minimaliste et performant.|Minimal, efficient video player.|Reproductor de vídeo minimalista y eficaz.|Minimalistischer, schneller Videoplayer.
+celluloid|multimedia|Celluloid|celluloid|Celluloid|Lecteur vidéo simple.|Simple video player.|Reproductor de vídeo sencillo.|Einfacher Videoplayer.
+smplayer|multimedia|SMPlayer|smplayer|SMPlayer|Lecteur vidéo qui reprend où vous vous êtes arrêté.|Video player that resumes where you stopped.|Reproductor que sigue donde lo dejaste.|Videoplayer, der dort weitermacht, wo Sie aufgehört haben.
+totem|multimedia|Vidéos|totem|GNOME|Lecteur vidéo du bureau GNOME.|GNOME desktop video player.|Reproductor de vídeo de GNOME.|Videoplayer des GNOME-Desktops.
+haruna|multimedia|Haruna|haruna|KDE|Lecteur vidéo moderne.|Modern video player.|Reproductor de vídeo moderno.|Moderner Videoplayer.
+audacity|multimedia|Audacity|audacity|Audacity Team|Enregistrement et montage audio.|Audio recording and editing.|Grabación y edición de audio.|Audioaufnahme und -bearbeitung.
+kdenlive|multimedia|Kdenlive|kdenlive|KDE|Montage vidéo non linéaire.|Non-linear video editing.|Edición de vídeo no lineal.|Nichtlinearer Videoschnitt.
+shotcut|multimedia|Shotcut|shotcut|Meltytech|Montage vidéo simple et complet.|Simple yet complete video editor.|Editor de vídeo sencillo y completo.|Einfacher, vollständiger Videoeditor.
+openshot|multimedia|OpenShot|openshot-qt|OpenShot Studios|Montage vidéo facile à prendre en main.|Easy-to-learn video editor.|Editor de vídeo fácil de aprender.|Leicht erlernbarer Videoeditor.
+pitivi|multimedia|Pitivi|pitivi|GNOME|Montage vidéo épuré.|Clean video editor.|Editor de vídeo depurado.|Aufgeräumter Videoeditor.
+obs|multimedia|OBS Studio|obs-studio|OBS Project|Enregistrement d'écran et diffusion en direct.|Screen recording and live streaming.|Grabación de pantalla y emisión en directo.|Bildschirmaufnahme und Livestreaming.
+simplescreenrecorder|multimedia|SimpleScreenRecorder|simplescreenrecorder|Maarten Baert|Filmer son écran simplement.|Record your screen simply.|Graba tu pantalla de forma sencilla.|Bildschirm einfach aufnehmen.
+kazam|multimedia|Kazam|kazam|Kazam|Capture vidéo de l'écran.|Screen video capture.|Captura de vídeo de la pantalla.|Bildschirmvideo aufnehmen.
+handbrake|multimedia|HandBrake|handbrake|HandBrake Team|Convertir et compresser des vidéos.|Convert and compress videos.|Convierte y comprime vídeos.|Videos umwandeln und komprimieren.
+soundconverter|multimedia|SoundConverter|soundconverter|SoundConverter|Convertir des fichiers audio.|Convert audio files.|Convierte archivos de audio.|Audiodateien umwandeln.
+ardour|multimedia|Ardour|ardour|Ardour|Studio d'enregistrement multipiste.|Multitrack recording studio.|Estudio de grabación multipista.|Mehrspur-Aufnahmestudio.
+lmms|multimedia|LMMS|lmms|LMMS|Composer de la musique électronique.|Make electronic music.|Compón música electrónica.|Elektronische Musik komponieren.
+musescore|multimedia|MuseScore|musescore3|MuseScore|Écrire et jouer des partitions.|Write and play sheet music.|Escribe y toca partituras.|Noten schreiben und abspielen.
+hydrogen|multimedia|Hydrogen|hydrogen|Hydrogen|Boîte à rythmes.|Drum machine.|Caja de ritmos.|Drumcomputer.
+rosegarden|multimedia|Rosegarden|rosegarden|Rosegarden|Séquenceur MIDI et partitions.|MIDI sequencer and notation.|Secuenciador MIDI y partituras.|MIDI-Sequenzer und Notensatz.
+mixxx|multimedia|Mixxx|mixxx|Mixxx|Logiciel de DJ.|DJ software.|Programa para DJ.|DJ-Software.
+rhythmbox|multimedia|Rhythmbox|rhythmbox|GNOME|Bibliothèque musicale et radio en ligne.|Music library and online radio.|Biblioteca musical y radio en línea.|Musikbibliothek und Internetradio.
+strawberry|multimedia|Strawberry|strawberry|Jonas Kvinge|Bibliothèque musicale pour collectionneurs.|Music library for collectors.|Biblioteca musical para coleccionistas.|Musikbibliothek für Sammler.
+elisa|multimedia|Elisa|elisa|KDE|Lecteur de musique simple.|Simple music player.|Reproductor de música sencillo.|Einfacher Musikplayer.
+audacious|multimedia|Audacious|audacious|Audacious|Lecteur audio léger.|Lightweight audio player.|Reproductor de audio ligero.|Leichter Audioplayer.
+clementine|multimedia|Clementine|clementine|Clementine|Musique, radios et podcasts.|Music, radio and podcasts.|Música, radio y podcasts.|Musik, Radio und Podcasts.
+gpodder|multimedia|gPodder|gpodder|gPodder|Abonnements aux podcasts.|Podcast subscriptions.|Suscripciones a podcasts.|Podcast-Abonnements.
+shortwave|multimedia|Shortwave|shortwave|GNOME|Écouter des radios du monde entier.|Listen to radio stations worldwide.|Escucha radios de todo el mundo.|Radiosender aus aller Welt hören.
+easytag|multimedia|EasyTAG|easytag|GNOME|Renommer et étiqueter sa musique.|Tag and rename your music.|Etiqueta y renombra tu música.|Musik taggen und umbenennen.
+kid3|multimedia|Kid3|kid3|KDE|Éditer les étiquettes audio.|Edit audio tags.|Edita etiquetas de audio.|Audio-Tags bearbeiten.
+asunder|multimedia|Asunder|asunder|Asunder|Copier un CD audio en fichiers.|Rip audio CDs to files.|Copia CD de audio a archivos.|Audio-CDs in Dateien umwandeln.
+brasero|multimedia|Brasero|brasero|GNOME|Graver des CD et DVD.|Burn CDs and DVDs.|Graba CD y DVD.|CDs und DVDs brennen.
+k3b|multimedia|K3b|k3b|KDE|Gravure complète de disques.|Full-featured disc burning.|Grabación completa de discos.|Umfassendes Brennprogramm.
+subtitleeditor|multimedia|Subtitle Editor|subtitleeditor|Subtitle Editor|Créer et caler des sous-titres.|Create and time subtitles.|Crea y sincroniza subtítulos.|Untertitel erstellen und anpassen.
+gaupol|multimedia|Gaupol|gaupol|Gaupol|Éditeur de sous-titres.|Subtitle editor.|Editor de subtítulos.|Untertitel-Editor.
+cheese|multimedia|Cheese|cheese|GNOME|Photos et vidéos avec la webcam.|Photos and videos with your webcam.|Fotos y vídeos con la cámara web.|Fotos und Videos mit der Webcam.
+guvcview|multimedia|guvcview|guvcview|guvcview|Réglages et capture de webcam.|Webcam settings and capture.|Ajustes y captura de cámara web.|Webcam-Einstellungen und Aufnahme.
+# --- Photo et graphisme ---
+gimp|graphisme|GIMP|gimp|GIMP Team|Retouche photo et création graphique avancée.|Advanced photo editing and graphics.|Retoque fotográfico y diseño avanzado.|Fortgeschrittene Bildbearbeitung und Grafik.
+krita|graphisme|Krita|krita|KDE|Peinture numérique et illustration.|Digital painting and illustration.|Pintura digital e ilustración.|Digitale Malerei und Illustration.
+inkscape|graphisme|Inkscape|inkscape|Inkscape Project|Dessin vectoriel (SVG), logos et illustrations.|Vector drawing (SVG), logos and illustrations.|Dibujo vectorial (SVG), logotipos e ilustraciones.|Vektorgrafik (SVG), Logos und Illustrationen.
+darktable|graphisme|darktable|darktable|darktable|Développement de photos RAW.|RAW photo development.|Revelado de fotos RAW.|RAW-Fotoentwicklung.
+rawtherapee|graphisme|RawTherapee|rawtherapee|RawTherapee|Traitement des photos RAW.|RAW photo processing.|Procesado de fotos RAW.|RAW-Fotobearbeitung.
+digikam|graphisme|digiKam|digikam|KDE|Gérer une grande photothèque.|Manage a large photo library.|Gestiona una gran fototeca.|Große Fotosammlungen verwalten.
+shotwell|graphisme|Shotwell|shotwell|GNOME|Ranger et retoucher ses photos.|Organise and touch up your photos.|Organiza y retoca tus fotos.|Fotos ordnen und nachbearbeiten.
+gthumb|graphisme|gThumb|gthumb|GNOME|Visionneuse et organisateur d'images.|Image viewer and organiser.|Visor y organizador de imágenes.|Bildbetrachter und -verwaltung.
+gwenview|graphisme|Gwenview|gwenview|KDE|Visionneuse d'images rapide.|Fast image viewer.|Visor de imágenes rápido.|Schneller Bildbetrachter.
+nomacs|graphisme|nomacs|nomacs|nomacs|Visionneuse d'images légère.|Lightweight image viewer.|Visor de imágenes ligero.|Leichter Bildbetrachter.
+pinta|graphisme|Pinta|pinta|Pinta|Dessin et retouche simples, façon Paint.|Simple drawing and editing, Paint-style.|Dibujo y retoque sencillos, estilo Paint.|Einfaches Zeichnen und Bearbeiten wie in Paint.
+kolourpaint|graphisme|KolourPaint|kolourpaint|KDE|Dessin simple pour tous.|Simple drawing for everyone.|Dibujo sencillo para todos.|Einfaches Zeichnen für alle.
+mypaint|graphisme|MyPaint|mypaint|MyPaint|Peinture numérique sur toile infinie.|Digital painting on an infinite canvas.|Pintura digital en lienzo infinito.|Digitales Malen auf unendlicher Leinwand.
+blender|graphisme|Blender|blender|Blender Foundation|3D, animation, rendu et montage.|3D, animation, rendering and editing.|3D, animación, renderizado y edición.|3D, Animation, Rendering und Schnitt.
+freecad|graphisme|FreeCAD|freecad|FreeCAD|Modélisation 3D paramétrique.|Parametric 3D modelling.|Modelado 3D paramétrico.|Parametrische 3D-Modellierung.
+librecad|graphisme|LibreCAD|librecad|LibreCAD|Dessin technique 2D.|2D technical drawing.|Dibujo técnico 2D.|Technisches 2D-Zeichnen.
+openscad|graphisme|OpenSCAD|openscad|OpenSCAD|Modélisation 3D par script.|Script-based 3D modelling.|Modelado 3D mediante scripts.|3D-Modellierung per Skript.
+sweethome|graphisme|Sweet Home 3D|sweethome3d|eTeks|Aménager son intérieur en 3D.|Plan your home in 3D.|Diseña tu casa en 3D.|Die eigene Wohnung in 3D einrichten.
+synfig|graphisme|Synfig Studio|synfigstudio|Synfig|Animation 2D vectorielle.|2D vector animation.|Animación vectorial 2D.|2D-Vektoranimation.
+hugin|graphisme|Hugin|hugin|Hugin|Assembler des panoramas.|Stitch panoramas.|Une panorámicas.|Panoramen zusammensetzen.
+fontforge|graphisme|FontForge|fontforge|FontForge|Créer et modifier des polices.|Create and edit fonts.|Crea y edita fuentes.|Schriften erstellen und bearbeiten.
+gcolor3|graphisme|Gcolor3|gcolor3|Gcolor3|Pipette et nuancier.|Colour picker and palette.|Selector de color y paleta.|Farbwähler und Palette.
+converseen|graphisme|Converseen|converseen|Converseen|Convertir et redimensionner des images par lots.|Batch-convert and resize images.|Convierte y redimensiona imágenes por lotes.|Bilder stapelweise umwandeln und skalieren.
+simplescan|graphisme|Numériseur|simple-scan|GNOME|Numériser des documents et des photos.|Scan documents and photos.|Escanea documentos y fotos.|Dokumente und Fotos scannen.
+skanlite|graphisme|Skanlite|skanlite|KDE|Numérisation simple.|Simple scanning.|Escaneo sencillo.|Einfaches Scannen.
+# --- Développement ---
+git|developpement|Git|git|Git|Gestion de versions distribuée.|Distributed version control.|Control de versiones distribuido.|Verteilte Versionsverwaltung.
+gitg|developpement|gitg|gitg|GNOME|Explorer un dépôt Git.|Browse a Git repository.|Explora un repositorio Git.|Ein Git-Repository durchsuchen.
+gitcola|developpement|Git Cola|git-cola|Git Cola|Interface graphique pour Git.|Graphical interface for Git.|Interfaz gráfica para Git.|Grafische Oberfläche für Git.
+geany|developpement|Geany|geany|Geany|Éditeur de code léger avec coloration et compilation.|Lightweight code editor with highlighting and build.|Editor de código ligero con resaltado y compilación.|Leichter Code-Editor mit Hervorhebung und Build.
+kate|developpement|Kate|kate|KDE|Éditeur de texte avancé pour développeurs.|Advanced text editor for developers.|Editor de texto avanzado para desarrolladores.|Fortgeschrittener Texteditor für Entwickler.
+gedit|developpement|gedit|gedit|GNOME|Éditeur de texte simple.|Simple text editor.|Editor de texto sencillo.|Einfacher Texteditor.
+mousepad|developpement|Mousepad|mousepad|Xfce|Bloc-notes léger.|Lightweight text editor.|Editor de texto ligero.|Leichter Texteditor.
+vim|developpement|Vim|vim-gtk3|Vim|Éditeur modal pour le terminal et le bureau.|Modal editor for terminal and desktop.|Editor modal para terminal y escritorio.|Modaler Editor für Terminal und Desktop.
+emacs|developpement|GNU Emacs|emacs|GNU|Éditeur extensible.|Extensible editor.|Editor ampliable.|Erweiterbarer Editor.
+neovim|developpement|Neovim|neovim|Neovim|Vim modernisé.|Modernised Vim.|Vim modernizado.|Modernisiertes Vim.
+codeblocks|developpement|Code::Blocks|codeblocks|Code::Blocks|Environnement C et C++.|C and C++ IDE.|Entorno para C y C++.|Entwicklungsumgebung für C und C++.
+qtcreator|developpement|Qt Creator|qtcreator|Qt|Environnement C++ et Qt.|C++ and Qt IDE.|Entorno para C++ y Qt.|Entwicklungsumgebung für C++ und Qt.
+kdevelop|developpement|KDevelop|kdevelop|KDE|Environnement de développement complet.|Full-featured IDE.|Entorno de desarrollo completo.|Vollständige Entwicklungsumgebung.
+builder|developpement|GNOME Builder|gnome-builder|GNOME|Créer des applications pour le bureau.|Build desktop applications.|Crea aplicaciones de escritorio.|Desktop-Anwendungen entwickeln.
+lazarus|developpement|Lazarus|lazarus|Lazarus|Pascal visuel, façon Delphi.|Visual Pascal, Delphi-style.|Pascal visual, estilo Delphi.|Visuelles Pascal im Delphi-Stil.
+thonny|developpement|Thonny|thonny|Thonny|Apprendre la programmation en Python.|Learn programming with Python.|Aprende a programar con Python.|Programmieren lernen mit Python.
+spyder|developpement|Spyder|spyder|Spyder|Python scientifique.|Scientific Python.|Python científico.|Wissenschaftliches Python.
+jupyter|developpement|Jupyter Notebook|jupyter-notebook|Project Jupyter|Carnets de calcul interactifs.|Interactive computing notebooks.|Cuadernos de cálculo interactivos.|Interaktive Rechen-Notizbücher.
+python|developpement|Python 3|python3-full|Python Software Foundation|Langage Python complet avec venv et pip.|Full Python with venv and pip.|Python completo con venv y pip.|Vollständiges Python mit venv und pip.
+nodejs|developpement|Node.js|nodejs|OpenJS Foundation|Environnement JavaScript côté serveur.|Server-side JavaScript runtime.|Entorno JavaScript del lado del servidor.|Serverseitige JavaScript-Umgebung.
+jdk|developpement|Java (OpenJDK)|default-jdk|OpenJDK|Kit de développement Java.|Java development kit.|Kit de desarrollo Java.|Java-Entwicklungskit.
+golang|developpement|Go|golang|Go|Langage Go.|The Go language.|El lenguaje Go.|Die Sprache Go.
+rustc|developpement|Rust|rustc|Rust|Compilateur Rust et Cargo.|Rust compiler and Cargo.|Compilador de Rust y Cargo.|Rust-Compiler und Cargo.
+build|developpement|Outils de compilation|build-essential|Ubuntu|Compilateurs GCC/G++, make et bibliothèques de base.|GCC/G++ compilers, make and base libraries.|Compiladores GCC/G++, make y bibliotecas base.|GCC/G++-Compiler, make und Basisbibliotheken.
+mingw|developpement|MinGW-w64|gcc-mingw-w64-x86-64|MinGW-w64|Compilateur C/C++ pour créer des .exe Windows.|C/C++ compiler that builds Windows .exe files.|Compilador C/C++ para crear .exe de Windows.|C/C++-Compiler für Windows-.exe-Dateien.
+cmake|developpement|CMake|cmake|Kitware|Générateur de projets de compilation multiplateforme.|Cross-platform build generator.|Generador de compilación multiplataforma.|Plattformübergreifender Build-Generator.
+sqlite|developpement|DB Browser for SQLite|sqlitebrowser|sqlitebrowser|Création et édition de bases SQLite.|Create and edit SQLite databases.|Crea y edita bases SQLite.|SQLite-Datenbanken erstellen und bearbeiten.
+meld|developpement|Meld|meld|GNOME|Comparaison et fusion de fichiers et dossiers.|Compare and merge files and folders.|Compara y fusiona archivos y carpetas.|Dateien und Ordner vergleichen und zusammenführen.
+kompare|developpement|Kompare|kompare|KDE|Comparer deux fichiers.|Compare two files.|Compara dos archivos.|Zwei Dateien vergleichen.
+ghex|developpement|GHex|ghex|GNOME|Éditeur hexadécimal.|Hex editor.|Editor hexadecimal.|Hex-Editor.
+okteta|developpement|Okteta|okteta|KDE|Éditeur de données binaires.|Binary data editor.|Editor de datos binarios.|Editor für Binärdaten.
+glade|developpement|Glade|glade|GNOME|Dessiner des interfaces GTK.|Design GTK interfaces.|Diseña interfaces GTK.|GTK-Oberflächen entwerfen.
+umbrello|developpement|Umbrello|umbrello|KDE|Diagrammes UML.|UML diagrams.|Diagramas UML.|UML-Diagramme.
+docker|developpement|Docker|docker.io|Docker|Conteneurs d'applications.|Application containers.|Contenedores de aplicaciones.|Anwendungscontainer.
+virtmanager|developpement|Virtual Machine Manager|virt-manager|Red Hat|Machines virtuelles QEMU/KVM.|QEMU/KVM virtual machines.|Máquinas virtuales QEMU/KVM.|Virtuelle QEMU/KVM-Maschinen.
+gnomeboxes|developpement|Boxes|gnome-boxes|GNOME|Machines virtuelles simples.|Simple virtual machines.|Máquinas virtuales sencillas.|Einfache virtuelle Maschinen.
+godot|developpement|Godot|godot3|Godot Engine|Créer des jeux 2D et 3D.|Make 2D and 3D games.|Crea juegos 2D y 3D.|2D- und 3D-Spiele entwickeln.
+arduino|developpement|Arduino IDE|arduino|Arduino|Programmer des cartes Arduino.|Program Arduino boards.|Programa placas Arduino.|Arduino-Boards programmieren.
+sqlitestudio|developpement|Sqlitestudio|sqlitestudio|SQLiteStudio|Gestion de bases SQLite.|SQLite database manager.|Gestor de bases SQLite.|SQLite-Datenbankverwaltung.
+# --- Jeux ---
+supertuxkart|jeux|SuperTuxKart|supertuxkart|SuperTuxKart Team|Course de karts en 3D.|3D kart racing.|Carreras de karts en 3D.|3D-Kartrennen.
+0ad|jeux|0 A.D.|0ad|Wildfire Games|Stratégie en temps réel historique.|Historical real-time strategy.|Estrategia en tiempo real histórica.|Historische Echtzeitstrategie.
+wesnoth|jeux|Battle for Wesnoth|wesnoth|Wesnoth|Stratégie au tour par tour.|Turn-based strategy.|Estrategia por turnos.|Rundenbasierte Strategie.
+openttd|jeux|OpenTTD|openttd|OpenTTD|Bâtir un empire du transport.|Build a transport empire.|Construye un imperio del transporte.|Ein Transportimperium aufbauen.
+warzone|jeux|Warzone 2100|warzone2100|Warzone 2100 Project|Stratégie en temps réel.|Real-time strategy.|Estrategia en tiempo real.|Echtzeitstrategie.
+freeciv|jeux|Freeciv|freeciv-client-gtk3|Freeciv|Bâtir une civilisation.|Build a civilisation.|Construye una civilización.|Eine Zivilisation aufbauen.
+megaglest|jeux|MegaGlest|megaglest|MegaGlest|Stratégie fantastique en 3D.|3D fantasy strategy.|Estrategia fantástica en 3D.|3D-Fantasy-Strategie.
+minetest|jeux|Minetest|minetest|Minetest Team|Construction en monde ouvert de blocs.|Open-world block building.|Construcción en mundo abierto de bloques.|Bauen in einer offenen Blockwelt.
+xonotic|jeux|Xonotic|xonotic|Xonotic|Tir rapide en arène.|Fast arena shooter.|Disparos rápidos en arena.|Schneller Arena-Shooter.
+redeclipse|jeux|Red Eclipse|redeclipse|Red Eclipse|Tir acrobatique en arène.|Acrobatic arena shooter.|Disparos acrobáticos en arena.|Akrobatischer Arena-Shooter.
+assaultcube|jeux|AssaultCube|assaultcube|AssaultCube|Tir en équipe léger.|Lightweight team shooter.|Disparos en equipo ligero.|Leichter Team-Shooter.
+supertux|jeux|SuperTux|supertux|SuperTux Team|Jeu de plateforme en 2D.|2D platformer.|Juego de plataformas 2D.|2D-Jump-'n'-Run.
+extremetuxracer|jeux|Extreme Tux Racer|extremetuxracer|Extreme Tux Racer|Descente à toute vitesse.|High-speed downhill race.|Descenso a toda velocidad.|Abfahrt in hohem Tempo.
+speeddreams|jeux|Speed Dreams|speed-dreams|Speed Dreams|Simulation de course automobile.|Motorsport simulation.|Simulación de carreras de coches.|Motorsport-Simulation.
+frozenbubble|jeux|Frozen Bubble|frozen-bubble|Frozen Bubble|Tirez des bulles et alignez les couleurs.|Shoot bubbles and match colours.|Dispara burbujas y une colores.|Blasen schießen und Farben verbinden.
+neverball|jeux|Neverball|neverball|Neverball|Guider une bille à travers des niveaux.|Guide a ball through levels.|Guía una bola por los niveles.|Eine Kugel durch Level steuern.
+pingus|jeux|Pingus|pingus|Pingus|Sauver des manchots casse-cou.|Rescue reckless penguins.|Rescata pingüinos temerarios.|Waghalsige Pinguine retten.
+hedgewars|jeux|Hedgewars|hedgewars|Hedgewars|Batailles de hérissons au tour par tour.|Turn-based hedgehog battles.|Batallas de erizos por turnos.|Rundenbasierte Igelschlachten.
+teeworlds|jeux|Teeworlds|teeworlds|Teeworlds|Action en 2D en ligne.|Online 2D action.|Acción 2D en línea.|Online-2D-Action.
+openarena|jeux|OpenArena|openarena|OpenArena|Tir en arène à l'ancienne.|Old-school arena shooter.|Disparos en arena de la vieja escuela.|Arena-Shooter alter Schule.
+openclonk|jeux|OpenClonk|openclonk|OpenClonk|Action et construction en 2D.|2D action and building.|Acción y construcción en 2D.|2D-Action und Bauen.
+widelands|jeux|Widelands|widelands|Widelands|Bâtir une économie médiévale.|Build a medieval economy.|Construye una economía medieval.|Eine mittelalterliche Wirtschaft aufbauen.
+lincity|jeux|LinCity-NG|lincity-ng|LinCity|Bâtir une ville.|Build a city.|Construye una ciudad.|Eine Stadt bauen.
+simutrans|jeux|Simutrans|simutrans|Simutrans|Simulation de transports.|Transport simulation.|Simulación de transportes.|Transportsimulation.
+flare|jeux|Flare|flare-game|Flare|Jeu de rôle et d'action.|Action role-playing game.|Juego de rol y acción.|Action-Rollenspiel.
+astromenace|jeux|AstroMenace|astromenace|AstroMenace|Tir spatial.|Space shooter.|Disparos espaciales.|Weltraum-Shooter.
+chromium-bsu|jeux|Chromium B.S.U.|chromium-bsu|Chromium B.S.U.|Tir vertical rapide.|Fast vertical shooter.|Disparos verticales rápidos.|Schneller vertikaler Shooter.
+kapman|jeux|Kapman|kapman|KDE|Croquer des pastilles dans un labyrinthe.|Eat dots in a maze.|Come puntos en un laberinto.|Punkte in einem Labyrinth fressen.
+aisleriot|jeux|Solitaire AisleRiot|aisleriot|GNOME|Plus de 80 jeux de patience.|More than 80 solitaire games.|Más de 80 solitarios.|Über 80 Patiencen.
+kpat|jeux|KPatience|kpat|KDE|Jeux de cartes en solitaire.|Solitaire card games.|Juegos de cartas en solitario.|Kartenpatiencen.
+mines|jeux|Démineur|gnome-mines|GNOME|Le classique du déminage.|The minesweeping classic.|El clásico buscaminas.|Der Minensuch-Klassiker.
+sudoku|jeux|Sudoku|gnome-sudoku|GNOME|Grilles de sudoku de tous niveaux.|Sudoku puzzles for every level.|Sudokus de todos los niveles.|Sudokus für jedes Niveau.
+mahjongg|jeux|Mahjongg|gnome-mahjongg|GNOME|Associer des tuiles par paires.|Match tiles in pairs.|Empareja fichas.|Steine paarweise zuordnen.
+chess|jeux|Échecs|gnome-chess|GNOME|Jouer aux échecs.|Play chess.|Juega al ajedrez.|Schach spielen.
+knights|jeux|Knights|knights|KDE|Échecs avec plusieurs moteurs.|Chess with several engines.|Ajedrez con varios motores.|Schach mit mehreren Engines.
+quadrapassel|jeux|Quadrapassel|quadrapassel|GNOME|Empiler des blocs qui tombent.|Stack falling blocks.|Apila bloques que caen.|Fallende Blöcke stapeln.
+tetris|jeux|KBlocks|kblocks|KDE|Blocs qui tombent, version KDE.|Falling blocks, KDE edition.|Bloques que caen, versión KDE.|Fallende Blöcke, KDE-Version.
+gnome2048|jeux|2048|gnome-2048|GNOME|Fusionner des tuiles jusqu'à 2048.|Merge tiles up to 2048.|Une fichas hasta 2048.|Kacheln bis 2048 zusammenführen.
+fourinarow|jeux|Puissance 4|four-in-a-row|GNOME|Aligner quatre jetons.|Line up four tokens.|Alinea cuatro fichas.|Vier Steine in eine Reihe bringen.
+tali|jeux|Tali|tali|GNOME|Jeu de dés.|Dice game.|Juego de dados.|Würfelspiel.
+gnomerobots|jeux|Robots|gnome-robots|GNOME|Échapper aux robots.|Escape the robots.|Escapa de los robots.|Den Robotern entkommen.
+lightsoff|jeux|Lights Off|lights-off|GNOME|Éteindre toutes les lumières.|Turn off all the lights.|Apaga todas las luces.|Alle Lichter ausschalten.
+kbreakout|jeux|KBreakOut|kbreakout|KDE|Casser des briques.|Break bricks.|Rompe ladrillos.|Steine zerschlagen.
+ksudoku|jeux|KSudoku|ksudoku|KDE|Sudoku et variantes.|Sudoku and variants.|Sudoku y variantes.|Sudoku und Varianten.
+kmahjongg|jeux|KMahjongg|kmahjongg|KDE|Mahjongg en solitaire.|Mahjongg solitaire.|Mahjongg en solitario.|Mahjongg-Solitär.
+kigo|jeux|Kigo|kigo|KDE|Jeu de go.|The game of Go.|Juego de go.|Go-Spiel.
+pychess|jeux|PyChess|pychess|PyChess|Échecs avec analyse.|Chess with analysis.|Ajedrez con análisis.|Schach mit Analyse.
+scummvm|jeux|ScummVM|scummvm|ScummVM|Rejouer aux jeux d'aventure classiques.|Replay classic adventure games.|Vuelve a jugar aventuras clásicas.|Klassische Adventures erneut spielen.
+dosbox|jeux|DOSBox|dosbox|DOSBox|Lancer de vieux jeux DOS.|Run old DOS games.|Ejecuta juegos DOS antiguos.|Alte DOS-Spiele starten.
+retroarch|jeux|RetroArch|retroarch|Libretro|Émulateur de consoles rétro.|Retro console emulator.|Emulador de consolas retro.|Emulator für Retro-Konsolen.
+# --- Éducation ---
+gcompris|education|GCompris|gcompris-qt|KDE|Plus de 100 activités pour les 2 à 10 ans.|Over 100 activities for ages 2 to 10.|Más de 100 actividades para niños de 2 a 10 años.|Über 100 Aktivitäten für 2- bis 10-Jährige.
+tuxpaint|education|Tux Paint|tuxpaint|Tux Paint|Dessin pour les enfants.|Drawing for children.|Dibujo para niños.|Malen für Kinder.
+tuxmath|education|Tux Math|tuxmath|Tux4Kids|Calcul mental en jouant.|Mental arithmetic through play.|Cálculo mental jugando.|Kopfrechnen spielerisch.
+tuxtype|education|Tux Typing|tuxtype|Tux4Kids|Apprendre à taper au clavier.|Learn to type.|Aprende mecanografía.|Tippen lernen.
+klavaro|education|Klavaro|klavaro|Klavaro|Cours de dactylographie.|Touch-typing tutor.|Curso de mecanografía.|Tipptrainer.
+ktouch|education|KTouch|ktouch|KDE|Entraînement à la frappe.|Typing trainer.|Entrenador de mecanografía.|Schreibtrainer.
+anki|education|Anki|anki|Anki|Cartes de révision à répétition espacée.|Spaced-repetition flashcards.|Tarjetas de repaso con repetición espaciada.|Lernkarten mit verteilter Wiederholung.
+parley|education|Parley|parley|KDE|Apprendre du vocabulaire.|Learn vocabulary.|Aprende vocabulario.|Vokabeln lernen.
+kwordquiz|education|KWordQuiz|kwordquiz|KDE|Quiz de vocabulaire.|Vocabulary quiz.|Cuestionario de vocabulario.|Vokabelquiz.
+geogebra|education|GeoGebra|geogebra|GeoGebra|Géométrie et algèbre dynamiques.|Dynamic geometry and algebra.|Geometría y álgebra dinámicas.|Dynamische Geometrie und Algebra.
+kalzium|education|Kalzium|kalzium|KDE|Tableau périodique des éléments.|Periodic table of the elements.|Tabla periódica de los elementos.|Periodensystem der Elemente.
+marble|education|Marble|marble|KDE|Globe et atlas virtuels.|Virtual globe and atlas.|Globo y atlas virtuales.|Virtueller Globus und Atlas.
+kgeography|education|KGeography|kgeography|KDE|Apprendre la géographie.|Learn geography.|Aprende geografía.|Geografie lernen.
+kturtle|education|KTurtle|kturtle|KDE|Premiers pas en programmation.|First steps in programming.|Primeros pasos en programación.|Erste Schritte beim Programmieren.
+scratch|education|Scratch|scratch|MIT|Programmer en assemblant des blocs.|Program by snapping blocks.|Programa uniendo bloques.|Programmieren mit Bausteinen.
+gbrainy|education|gbrainy|gbrainy|gbrainy|Casse-têtes et entraînement cérébral.|Brain teasers and training.|Acertijos y entrenamiento mental.|Denksportaufgaben und Gehirntraining.
+lenmus|education|LenMus|lenmus|LenMus|Apprendre le solfège.|Learn music theory.|Aprende solfeo.|Musiktheorie lernen.
+minuet|education|Minuet|minuet|KDE|Éducation musicale de l'oreille.|Ear training for music.|Educación auditiva musical.|Gehörbildung für Musik.
+kanagram|education|Kanagram|kanagram|KDE|Jeu d'anagrammes.|Anagram game.|Juego de anagramas.|Anagrammspiel.
+# --- Sciences ---
+stellarium|sciences|Stellarium|stellarium|Stellarium|Planétarium réaliste.|Realistic planetarium.|Planetario realista.|Realistisches Planetarium.
+kstars|sciences|KStars|kstars|KDE|Carte du ciel et astronomie.|Sky chart and astronomy.|Mapa del cielo y astronomía.|Himmelskarte und Astronomie.
+celestia|sciences|Celestia|celestia-gnome|Celestia|Voyager dans le système solaire en 3D.|Travel the solar system in 3D.|Viaja por el sistema solar en 3D.|Durch das Sonnensystem in 3D reisen.
+qgis|sciences|QGIS|qgis|QGIS|Système d'information géographique.|Geographic information system.|Sistema de información geográfica.|Geoinformationssystem.
+octave|sciences|GNU Octave|octave|GNU|Calcul numérique compatible MATLAB.|MATLAB-compatible numerical computing.|Cálculo numérico compatible con MATLAB.|MATLAB-kompatible numerische Berechnung.
+scilab|sciences|Scilab|scilab|Scilab|Calcul scientifique.|Scientific computing.|Cálculo científico.|Wissenschaftliches Rechnen.
+maxima|sciences|wxMaxima|wxmaxima|Maxima|Calcul formel.|Computer algebra.|Cálculo simbólico.|Computeralgebra.
+labplot|sciences|LabPlot|labplot|KDE|Graphiques et analyse de données.|Plotting and data analysis.|Gráficos y análisis de datos.|Diagramme und Datenanalyse.
+gnuplot|sciences|gnuplot|gnuplot|gnuplot|Tracer des courbes.|Plot curves.|Traza curvas.|Kurven zeichnen.
+rbase|sciences|R|r-base|R Foundation|Statistiques avec le langage R.|Statistics with the R language.|Estadística con el lenguaje R.|Statistik mit der Sprache R.
+avogadro|sciences|Avogadro|avogadro|Avogadro|Modéliser des molécules.|Model molecules.|Modela moléculas.|Moleküle modellieren.
+pymol|sciences|PyMOL|pymol|Schrödinger|Visualiser des protéines.|Visualise proteins.|Visualiza proteínas.|Proteine darstellen.
+gpredict|sciences|Gpredict|gpredict|Gpredict|Suivi de satellites.|Satellite tracking.|Seguimiento de satélites.|Satellitenverfolgung.
+kicad|sciences|KiCad|kicad|KiCad|Concevoir des circuits électroniques.|Design electronic circuits.|Diseña circuitos electrónicos.|Elektronische Schaltungen entwerfen.
+fritzing|sciences|Fritzing|fritzing|Fritzing|Prototypes électroniques.|Electronics prototyping.|Prototipos electrónicos.|Elektronik-Prototypen.
+logisim|sciences|Logisim|logisim|Logisim|Simuler des circuits logiques.|Simulate logic circuits.|Simula circuitos lógicos.|Logikschaltungen simulieren.
+gramps|sciences|Gramps|gramps|Gramps|Généalogie et arbre familial.|Genealogy and family tree.|Genealogía y árbol familiar.|Ahnenforschung und Stammbaum.
+gnomemaps|sciences|Cartes|gnome-maps|GNOME|Cartes et itinéraires.|Maps and directions.|Mapas e itinerarios.|Karten und Routen.
+# --- Utilitaires ---
+keepassxc|utilitaires|KeePassXC|keepassxc|KeePassXC Team|Gestionnaire de mots de passe hors ligne.|Offline password manager.|Gestor de contraseñas sin conexión.|Offline-Passwortmanager.
+7zip|utilitaires|7-Zip|7zip|Igor Pavlov|Archives 7z, zip, rar et beaucoup d'autres formats.|7z, zip, rar archives and many more.|Archivos 7z, zip, rar y muchos más.|7z-, zip-, rar-Archive und viele mehr.
+fileroller|utilitaires|Gestionnaire d'archives|file-roller|GNOME|Ouvrir et créer des archives.|Open and create archives.|Abre y crea archivos comprimidos.|Archive öffnen und erstellen.
+ark|utilitaires|Ark|ark|KDE|Archives zip, tar et 7z.|Zip, tar and 7z archives.|Archivos zip, tar y 7z.|Zip-, tar- und 7z-Archive.
+xarchiver|utilitaires|Xarchiver|xarchiver|Xfce|Gestionnaire d'archives léger.|Lightweight archive manager.|Gestor de archivos comprimidos ligero.|Leichter Archivmanager.
+flameshot|utilitaires|Flameshot|flameshot|Flameshot|Captures d'écran annotées.|Annotated screenshots.|Capturas de pantalla anotadas.|Bildschirmfotos mit Anmerkungen.
+ksnip|utilitaires|ksnip|ksnip|ksnip|Captures d'écran et annotations.|Screenshots and annotations.|Capturas y anotaciones.|Bildschirmfotos und Anmerkungen.
+bleachbit|utilitaires|BleachBit|bleachbit|BleachBit|Libère de l'espace disque et efface les traces.|Frees disk space and clears traces.|Libera espacio y borra rastros.|Gibt Speicher frei und löscht Spuren.
+dejadup|utilitaires|Déjà Dup|deja-dup|GNOME|Sauvegardes simples et chiffrées.|Simple, encrypted backups.|Copias de seguridad sencillas y cifradas.|Einfache, verschlüsselte Sicherungen.
+backintime|utilitaires|Back In Time|backintime-qt|Back In Time|Instantanés de vos dossiers.|Snapshots of your folders.|Instantáneas de tus carpetas.|Schnappschüsse Ihrer Ordner.
+grsync|utilitaires|Grsync|grsync|Grsync|Synchroniser des dossiers.|Synchronise folders.|Sincroniza carpetas.|Ordner abgleichen.
+unison|utilitaires|Unison|unison-gtk|Unison|Synchronisation dans les deux sens.|Two-way file synchronisation.|Sincronización en ambos sentidos.|Zweiwege-Dateiabgleich.
+catfish|utilitaires|Catfish|catfish|Xfce|Retrouver un fichier très vite.|Find files fast.|Encuentra archivos rápidamente.|Dateien schnell finden.
+gnomecalculator|utilitaires|Calculatrice GNOME|gnome-calculator|GNOME|Calculatrice scientifique.|Scientific calculator.|Calculadora científica.|Wissenschaftlicher Taschenrechner.
+qalculate|utilitaires|Qalculate!|qalculate-gtk|Qalculate!|Calculatrice puissante avec unités.|Powerful calculator with units.|Calculadora potente con unidades.|Leistungsfähiger Rechner mit Einheiten.
+gnomeclocks|utilitaires|Horloges|gnome-clocks|GNOME|Fuseaux horaires, alarmes et minuteur.|Time zones, alarms and timer.|Husos horarios, alarmas y temporizador.|Zeitzonen, Wecker und Timer.
+gnomeweather|utilitaires|Météo|gnome-weather|GNOME|Prévisions météo.|Weather forecast.|Previsión meteorológica.|Wettervorhersage.
+gnomecharmap|utilitaires|Caractères|gnome-characters|GNOME|Trouver un caractère ou un emoji.|Find a character or emoji.|Busca un carácter o emoji.|Zeichen oder Emoji finden.
+fontmanager|utilitaires|Font Manager|font-manager|Font Manager|Gérer ses polices.|Manage your fonts.|Gestiona tus fuentes.|Schriften verwalten.
+seahorse|utilitaires|Mots de passe et clés|seahorse|GNOME|Clés de chiffrement et mots de passe.|Encryption keys and passwords.|Claves de cifrado y contraseñas.|Schlüssel und Passwörter.
+kleopatra|utilitaires|Kleopatra|kleopatra|KDE|Certificats et chiffrement OpenPGP.|Certificates and OpenPGP encryption.|Certificados y cifrado OpenPGP.|Zertifikate und OpenPGP-Verschlüsselung.
+zulucrypt|utilitaires|zuluCrypt|zulucrypt-gui|zuluCrypt|Volumes chiffrés.|Encrypted volumes.|Volúmenes cifrados.|Verschlüsselte Laufwerke.
+copyq|utilitaires|CopyQ|copyq|CopyQ|Historique du presse-papiers.|Clipboard history.|Historial del portapapeles.|Zwischenablage-Verlauf.
+redshift|utilitaires|Redshift|redshift-gtk|Redshift|Lumière plus chaude le soir.|Warmer light in the evening.|Luz más cálida por la noche.|Wärmeres Licht am Abend.
+cpux|utilitaires|CPU-X|cpu-x|CPU-X|Informations sur le matériel.|Hardware information.|Información del hardware.|Hardware-Informationen.
+hardinfo|utilitaires|HardInfo|hardinfo|HardInfo|Rapport et tests du matériel.|Hardware report and benchmarks.|Informe y pruebas del hardware.|Hardwarebericht und Leistungstests.
+ocrfeeder|utilitaires|OCRFeeder|ocrfeeder|GNOME|Reconnaître le texte d'un document numérisé.|Recognise text in scanned documents.|Reconoce texto en documentos escaneados.|Text in gescannten Dokumenten erkennen.
+# --- Système ---
+htop|systeme|htop|htop|htop|Moniteur de processus interactif.|Interactive process monitor.|Monitor de procesos interactivo.|Interaktiver Prozessmonitor.
+btop|systeme|btop|btop|btop|Moniteur système en couleurs.|Colourful system monitor.|Monitor del sistema en colores.|Farbiger Systemmonitor.
+gparted|systeme|GParted|gparted|GNOME|Éditeur de partitions.|Partition editor.|Editor de particiones.|Partitionseditor.
+disks|systeme|Disques|gnome-disk-utility|GNOME|Gestion des disques, images ISO et tests SMART.|Disks, ISO images and SMART tests.|Discos, imágenes ISO y pruebas SMART.|Laufwerke, ISO-Abbilder und SMART-Tests.
+baobab|systeme|Analyseur d'utilisation des disques|baobab|GNOME|Voir ce qui remplit le disque.|See what fills your disk.|Mira qué llena tu disco.|Sehen, was die Festplatte füllt.
+filelight|systeme|Filelight|filelight|KDE|Carte de l'espace disque.|Disk usage map.|Mapa del espacio en disco.|Karte der Festplattenbelegung.
+gsmartcontrol|systeme|GSmartControl|gsmartcontrol|GSmartControl|Santé des disques (SMART).|Disk health (SMART).|Salud de los discos (SMART).|Laufwerksgesundheit (SMART).
+stacer|systeme|Stacer|stacer|Stacer|Nettoyage et surveillance du système.|System cleaning and monitoring.|Limpieza y vigilancia del sistema.|Systembereinigung und -überwachung.
+timeshift|systeme|Timeshift|timeshift|Linux Mint|Instantanés du système.|System snapshots.|Instantáneas del sistema.|System-Schnappschüsse.
+synaptic|systeme|Synaptic|synaptic|Debian|Gestionnaire de paquets avancé.|Advanced package manager.|Gestor de paquetes avanzado.|Fortgeschrittene Paketverwaltung.
+gufw|systeme|Gufw|gufw|Gufw|Pare-feu simple.|Simple firewall.|Cortafuegos sencillo.|Einfache Firewall.
+terminator|systeme|Terminator|terminator|Terminator|Terminal à volets multiples.|Terminal with split panes.|Terminal con paneles divididos.|Terminal mit geteilten Bereichen.
+tilix|systeme|Tilix|tilix|Tilix|Terminal en mosaïque.|Tiling terminal.|Terminal en mosaico.|Kachel-Terminal.
+guake|systeme|Guake|guake|Guake|Terminal déroulant.|Drop-down terminal.|Terminal desplegable.|Ausklapp-Terminal.
+konsole|systeme|Konsole|konsole|KDE|Terminal complet.|Full-featured terminal.|Terminal completo.|Vollständiges Terminal.
+mc|systeme|Midnight Commander|mc|GNU|Gestionnaire de fichiers en terminal.|Terminal file manager.|Gestor de archivos en terminal.|Dateimanager im Terminal.
+doublecmd|systeme|Double Commander|doublecmd-gtk|Double Commander|Gestionnaire de fichiers à deux volets.|Dual-pane file manager.|Gestor de archivos de dos paneles.|Zweispaltiger Dateimanager.
+krusader|systeme|Krusader|krusader|KDE|Gestionnaire de fichiers avancé.|Advanced file manager.|Gestor de archivos avanzado.|Fortgeschrittener Dateimanager.
+usbcreator|systeme|Créateur de disque de démarrage|usb-creator-gtk|Ubuntu|Copier une image ISO sur une clé USB.|Write an ISO image to a USB stick.|Copia una imagen ISO a una memoria USB.|ISO-Abbild auf einen USB-Stick schreiben.
+hplip|systeme|HPLIP|hplip-gui|HP|Imprimantes et scanners HP.|HP printers and scanners.|Impresoras y escáneres HP.|HP-Drucker und -Scanner.
+# --- Accessibilité ---
+orca|accessibilite|Orca|orca|GNOME|Lecteur d'écran.|Screen reader.|Lector de pantalla.|Bildschirmleser.
+onboardkb|accessibilite|Onboard|onboard|Onboard|Clavier visuel.|On-screen keyboard.|Teclado en pantalla.|Bildschirmtastatur.
+kmag|accessibilite|KMag|kmag|KDE|Loupe d'écran.|Screen magnifier.|Lupa de pantalla.|Bildschirmlupe.
+kmouth|accessibilite|KMouth|kmouth|KDE|Faire parler l'ordinateur à votre place.|Let the computer speak for you.|Deja que el ordenador hable por ti.|Den Computer für Sie sprechen lassen.
+espeak|accessibilite|eSpeak NG|espeak-ng|eSpeak NG|Synthèse vocale dans de nombreuses langues.|Speech synthesis in many languages.|Síntesis de voz en muchos idiomas.|Sprachausgabe in vielen Sprachen.
+dasher|accessibilite|Dasher|dasher|Dasher|Écrire sans clavier, au pointeur.|Write without a keyboard, by pointer.|Escribe sin teclado, con el puntero.|Ohne Tastatur mit dem Zeiger schreiben.

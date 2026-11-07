@@ -1459,8 +1459,86 @@ pub unsafe extern "win64" fn event_log_stub(_args: *const c_void) -> i32 {
     1
 }
 
+const ERROR_BAD_NETPATH: i32 = 53;
+const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+
+/// Nom de machine désignant le poste local (vide, « . », localhost ou le
+/// nom d'hôte), avec ou sans « \\ » devant.
+fn is_local_machine(name: &str) -> bool {
+    let n = name.trim_start_matches('\\').to_ascii_lowercase();
+    if n.is_empty() || n == "." || n == "localhost" || n == "127.0.0.1" {
+        return true;
+    }
+    let mut buf = [0u8; 256];
+    let host = unsafe {
+        if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0 {
+            let end = buf.iter().position(|b| *b == 0).unwrap_or(0);
+            String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase()
+        } else {
+            String::new()
+        }
+    };
+    !host.is_empty() && (n == host || host.split('.').next() == Some(n.as_str()))
+}
+
+/// RegConnectRegistry : le registre local seulement (HKLM, HKU, HKCR…) ;
+/// un poste distant répond ERROR_BAD_NETPATH (pas de registre distant).
+unsafe fn connect_registry(machine: Option<String>, key: usize, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if !machine.as_deref().is_none_or(is_local_machine) {
+        return ERROR_BAD_NETPATH;
+    }
+    if reg::predefined(key).is_none() {
+        return ERROR_INVALID_HANDLE;
+    }
+    *out = key;
+    ERROR_SUCCESS
+}
+
+pub unsafe extern "win64" fn reg_connect_registry_w(
+    m: *const u16,
+    key: usize,
+    out: *mut usize,
+) -> i32 {
+    connect_registry((!m.is_null()).then(|| text_w(m)), key, out)
+}
+
+pub unsafe extern "win64" fn reg_connect_registry_a(
+    m: *const u8,
+    key: usize,
+    out: *mut usize,
+) -> i32 {
+    connect_registry((!m.is_null()).then(|| text_a(m)), key, out)
+}
+
+/// RegSaveKey, RegRestoreKey, RegLoadKey, RegUnLoadKey, RegReplaceKey :
+/// sous Windows, il faut les privilèges de sauvegarde ou de restauration,
+/// que le compte n'a pas activés ; même réponse ici. Une version par
+/// nombre d'arguments : un programme x86 (stdcall) attend qu'on dépile les
+/// siens.
+pub extern "win64" fn reg_privileged_2(_key: usize, _a: usize) -> i32 {
+    ERROR_PRIVILEGE_NOT_HELD
+}
+
+pub extern "win64" fn reg_privileged_3(_key: usize, _a: usize, _b: usize) -> i32 {
+    ERROR_PRIVILEGE_NOT_HELD
+}
+
+pub extern "win64" fn reg_privileged_4(_key: usize, _a: usize, _b: usize, _c: u32) -> i32 {
+    ERROR_PRIVILEGE_NOT_HELD
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+     "RegConnectRegistryA"=>fn reg_connect_registry_a,"RegConnectRegistryW"=>fn reg_connect_registry_w,
+     "RegSaveKeyA"=>fn reg_privileged_3,"RegSaveKeyW"=>fn reg_privileged_3,
+     "RegSaveKeyExA"=>fn reg_privileged_4,"RegSaveKeyExW"=>fn reg_privileged_4,
+     "RegRestoreKeyA"=>fn reg_privileged_3,"RegRestoreKeyW"=>fn reg_privileged_3,
+     "RegLoadKeyA"=>fn reg_privileged_3,"RegLoadKeyW"=>fn reg_privileged_3,
+     "RegUnLoadKeyA"=>fn reg_privileged_2,"RegUnLoadKeyW"=>fn reg_privileged_2,
+     "RegReplaceKeyA"=>fn reg_privileged_4,"RegReplaceKeyW"=>fn reg_privileged_4,
      "RegOpenKeyExA"=>fn reg_open_key_ex_a,"RegOpenKeyExW"=>fn reg_open_key_ex_w,
      "RegOpenKeyA"=>fn reg_open_key_a,"RegOpenKeyW"=>fn reg_open_key_w,
      "RegCreateKeyExA"=>fn reg_create_key_ex_a,"RegCreateKeyExW"=>fn reg_create_key_ex_w,

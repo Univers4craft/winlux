@@ -349,8 +349,8 @@ pub unsafe fn progress_bar(g: &mut Gfx, x: i32, y: i32, w: i32, pct: i32) {
 
 // ---------- Données relues depuis le service ----------
 
-const INDEX_CAP: usize = 1 << 20;
-const MAX_APPS: usize = 1600;
+const INDEX_CAP: usize = 2 << 20;
+const MAX_APPS: usize = 6000;
 const MAX_WIN: usize = 32;
 const F_KEY: usize = 0;
 const F_CAT: usize = 1;
@@ -625,7 +625,9 @@ unsafe fn poll_progress() -> bool {
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Home,
+    /// Applications d'une catégorie (`ALL` : toutes sauf les jeux).
     Category(u8),
+    Windows,
     Library,
     Detail,
 }
@@ -647,6 +649,7 @@ enum Action {
     Search,
     ClearSearch,
     Hero(i8),
+    HeroPick(u8),
     Refresh,
     Homepage,
     DetailInstall,
@@ -677,27 +680,39 @@ static mut FILES: [[u8; 96]; 24] = [[0; 96]; 24];
 static mut FILE_LENS: [usize; 24] = [0; 24];
 static mut FILE_COUNT: usize = 0;
 
-/// Catégories : clé du catalogue, libellés (fr, en, es, de), icône.
-const CATS: [(&[u8], [&[u8]; 4], Glyph); 6] = [
-    (
-        b"navigateurs",
-        [b"Navigateurs", b"Browsers", b"Navegadores", b"Browser"],
-        Glyph::Browser,
-    ),
+/// Catégories : clé du catalogue, libellés (fr, en, es, de), icône. Même
+/// ordre que `CATEGORY_RULES` de winlux-store (#716) ; `JEUX` a sa propre
+/// entrée dans la barre de gauche.
+const CATS: [(&[u8], [&[u8]; 4], Glyph); 11] = [
     (
         b"bureautique",
         [b"Bureautique", b"Productivity", b"Ofim\xE1tica", b"B\xFCro"],
         Glyph::Text,
     ),
     (
+        b"internet",
+        [b"Internet", b"Internet", b"Internet", b"Internet"],
+        Glyph::Browser,
+    ),
+    (
         b"multimedia",
         [
-            b"Multim\xE9dia",
-            b"Multimedia",
-            b"Multimedia",
-            b"Multimedia",
+            b"Audio et vid\xE9o",
+            b"Audio and video",
+            b"Audio y v\xEDdeo",
+            b"Audio und Video",
         ],
         Glyph::Video,
+    ),
+    (
+        b"graphisme",
+        [
+            b"Photo et graphisme",
+            b"Photo and design",
+            b"Foto y dise\xF1o",
+            b"Foto und Grafik",
+        ],
+        Glyph::Image,
     ),
     (
         b"developpement",
@@ -715,6 +730,16 @@ const CATS: [(&[u8], [&[u8]; 4], Glyph); 6] = [
         Glyph::Star,
     ),
     (
+        b"education",
+        [b"\xC9ducation", b"Education", b"Educaci\xF3n", b"Bildung"],
+        Glyph::Notes,
+    ),
+    (
+        b"sciences",
+        [b"Sciences", b"Science", b"Ciencia", b"Wissenschaft"],
+        Glyph::Calc,
+    ),
+    (
         b"utilitaires",
         [
             b"Utilitaires",
@@ -724,14 +749,38 @@ const CATS: [(&[u8], [&[u8]; 4], Glyph); 6] = [
         ],
         Glyph::Tools,
     ),
+    (
+        b"systeme",
+        [b"Syst\xE8me", b"System", b"Sistema", b"System"],
+        Glyph::Computer,
+    ),
+    (
+        b"accessibilite",
+        [
+            b"Accessibilit\xE9",
+            b"Accessibility",
+            b"Accesibilidad",
+            b"Barrierefreiheit",
+        ],
+        Glyph::Settings,
+    ),
 ];
+const JEUX: usize = 5;
+const UTILITAIRES: usize = 8;
+/// Vue « Applications » sans filtre de catégorie.
+const ALL: u8 = 255;
 
 fn cat_label(i: usize) -> &'static [u8] {
     CATS[i].1[lang()]
 }
 unsafe fn cat_of(i: usize) -> usize {
     let c = app_field(i, F_CAT);
-    CATS.iter().position(|x| x.0 == c).unwrap_or(5)
+    // Ancienne clé (catalogue local d'avant la refonte).
+    let c: &[u8] = if c == b"navigateurs" { b"internet" } else { c };
+    CATS.iter().position(|x| x.0 == c).unwrap_or(UTILITAIRES)
+}
+unsafe fn is_windows(i: usize) -> bool {
+    app_field(i, F_KEY).starts_with(b"windows:")
 }
 
 unsafe fn hit(r: Rect, a: Action) {
@@ -895,13 +944,8 @@ pub unsafe fn open() {
 
 // ---------- Dessin ----------
 
-fn nav_w(f: &Frame) -> i32 {
-    if f.client.right - f.client.left < 760 {
-        64
-    } else {
-        210
-    }
-}
+/// Largeur de la barre d'icônes de gauche (icône et libellé dessous).
+const RAIL_W: i32 = 88;
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     HIT_COUNT = 0;
@@ -909,8 +953,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let c = f.client;
     fill(g.hdc, g.b, c.left, c.top, c.right, c.bottom, p.mica);
     set_glyph_bg(Some(p.mica));
-    draw_nav(g, f);
-    let area = rect(c.left + nav_w(f), c.top, c.right, c.bottom);
+    draw_rail(g, f);
+    let area = rect(c.left + RAIL_W, c.top, c.right, c.bottom);
     fill(
         g.hdc,
         g.b,
@@ -921,6 +965,17 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.window,
     );
     set_glyph_bg(Some(p.window));
+    // Nom de la boutique (ou « Store ») à gauche de la recherche, s'il tient.
+    if area.right - area.left > 900 {
+        text(
+            g.hdc,
+            g.f.title,
+            p.text,
+            area.left + 24,
+            area.top + 20,
+            store_title(),
+        );
+    }
     // Barre de recherche.
     let sw = (area.right - area.left - 48).min(480);
     let sx = area.left + (area.right - area.left - sw) / 2;
@@ -937,7 +992,17 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         if SEARCH_FOCUS { p.accent } else { p.border },
     );
     set_glyph_bg(Some(if SEARCH_FOCUS { p.surface } else { p.surface2 }));
-    glyph(g.hdc, g.b, g.f, Glyph::Search, sr.left + 10, sr.top + 9, 16);
+    // Loupe aux couleurs du thème (Glyph::Search est clair sur sombre et
+    // disparaissait en thème clair).
+    {
+        let bg = if SEARCH_FOCUS { p.surface } else { p.surface2 };
+        let (x, y) = (sr.left + 11, sr.top + 9);
+        ellipse(g.hdc, g.b, x, y, x + 12, y + 12, p.text2);
+        ellipse(g.hdc, g.b, x + 2, y + 2, x + 10, y + 10, bg);
+        for k in 0..5 {
+            fill(g.hdc, g.b, x + 9 + k, y + 9 + k, x + 12 + k, y + 12 + k, p.text2);
+        }
+    }
     if SEARCH.n == 0 {
         text(
             g.hdc,
@@ -994,7 +1059,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     } else {
         match VIEW {
             View::Home => draw_home(g, &body),
-            View::Category(k) => draw_category(g, &body, k as usize),
+            View::Category(k) => draw_category(g, &body, k),
+            View::Windows => draw_windows(g, &body),
             View::Library => draw_library(g, &body),
             View::Detail => draw_detail(g, &body),
         }
@@ -1036,149 +1102,133 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     set_glyph_bg(None);
 }
 
-unsafe fn draw_nav(g: &mut Gfx, f: &Frame) {
+/// Barre d'icônes de gauche : Accueil, Applications, Jeux, Programmes
+/// Windows ; Bibliothèque et Actualiser en bas.
+unsafe fn draw_rail(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let c = f.client;
-    let narrow = nav_w(f) < 100;
-    let mut y = c.top + 14;
-    if !narrow {
-        glyph(g.hdc, g.b, g.f, Glyph::Store, c.left + 18, y + 2, 20);
-        text(g.hdc, g.f.title, p.text, c.left + 48, y + 3, store_title());
-    }
-    y += 44;
-    let items = 8u8;
-    for i in 0..items {
-        if i == 1 || i == 7 {
-            fill(
-                g.hdc,
-                g.b,
-                c.left + 16,
-                y + 3,
-                c.left + nav_w(f) - 16,
-                y + 4,
-                p.border,
-            );
-            y += 10;
-        }
-        let (label, gl): (&[u8], Glyph) = match i {
-            0 => (t(b"Accueil", b"Home"), Glyph::Home),
-            7 => (t(b"Biblioth\xE8que", b"Library"), Glyph::Grid),
-            k => (cat_label(k as usize - 1), CATS[k as usize - 1].2),
+    let item = |g: &mut Gfx, k: u8, y: i32, gl: Glyph, label: &[u8], active: bool, badge: bool, a: Action| {
+        let r = rect(c.left + 6, y, c.left + RAIL_W - 6, y + 58);
+        let h = hot(&r);
+        let bg = if active {
+            p.selected
+        } else if h {
+            p.hover
+        } else {
+            p.mica
         };
-        let r = rect(c.left + 8, y, c.left + nav_w(f) - 8, y + 36);
-        let active = match VIEW {
-            View::Home => i == 0,
-            View::Category(k) => i == k + 1,
-            View::Library => i == 7,
-            View::Detail => false,
-        } && SEARCH.n == 0;
-        if active || hot(&r) {
-            round_rect(
-                g.hdc,
-                g.b,
-                r.left,
-                r.top,
-                r.right,
-                r.bottom,
-                5,
-                if active { p.selected } else { p.hover },
-            );
+        if active || h {
+            round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, bg);
         }
         if active {
             round_rect(
                 g.hdc,
                 g.b,
                 r.left,
-                r.top + 10,
+                r.top + 18,
                 r.left + 3,
-                r.bottom - 10,
+                r.bottom - 18,
                 2,
                 p.accent,
             );
         }
-        set_glyph_bg(Some(if active {
-            p.selected
-        } else if hot(&r) {
-            p.hover
-        } else {
-            p.mica
-        }));
-        glyph(g.hdc, g.b, g.f, gl, r.left + 14, r.top + 9, 18);
-        if !narrow {
-            text(g.hdc, g.f.body, p.text, r.left + 44, r.top + 10, label);
-            if i == 7 && UPDATES > 0 {
-                let mut n: Buf<8> = Buf::new();
-                n.num(UPDATES);
-                let bw = text_width(n.get(), 11) + 12;
-                round_rect(
-                    g.hdc,
-                    g.b,
-                    r.right - bw - 8,
-                    r.top + 9,
-                    r.right - 8,
-                    r.top + 27,
-                    9,
-                    p.accent,
-                );
-                text(
-                    g.hdc,
-                    g.f.small,
-                    p.on_accent,
-                    r.right - bw - 2,
-                    r.top + 11,
-                    n.get(),
-                );
-            }
+        set_glyph_bg(Some(bg));
+        if active {
+            set_glyph_fg(Some(p.accent));
         }
-        hit(r, Action::Nav(i));
-        y += 40;
-    }
-    set_glyph_bg(Some(p.mica));
-    if !narrow {
-        let r = rect(
-            c.left + 8,
-            c.bottom - 74,
-            c.left + nav_w(f) - 8,
-            c.bottom - 42,
-        );
-        if hot(&r) {
-            round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 5, p.hover);
-            set_glyph_bg(Some(p.hover));
+        glyph(g.hdc, g.b, g.f, gl, (r.left + r.right) / 2 - 10, r.top + 9, 20);
+        set_glyph_fg(None);
+        if badge {
+            ellipse(
+                g.hdc,
+                g.b,
+                r.right - 22,
+                r.top + 8,
+                r.right - 13,
+                r.top + 17,
+                p.accent,
+            );
         }
-        glyph(g.hdc, g.b, g.f, Glyph::Refresh, r.left + 14, r.top + 8, 16);
-        text(
-            g.hdc,
-            g.f.caption,
-            p.text2,
-            r.left + 44,
-            r.top + 9,
-            if REFRESHING {
-                t(b"Actualisation...", b"Refreshing...")
-            } else {
-                t(b"Actualiser", b"Refresh")
-            },
-        );
-        hit(r, Action::Refresh);
-        set_glyph_bg(Some(p.mica));
-        let mut s: Buf<120> = Buf::new();
-        s.push(t(b"Sources : ", b"Sources: "));
-        s.push(if SOURCES.n > 0 { SOURCES.get() } else { b"-" });
+        let w = text_width(label, 11).min(RAIL_W - 16);
         text_fit(
             g.hdc,
             g.f.small,
             11,
-            p.text3,
-            c.left + 18,
-            c.bottom - 30,
-            s.get(),
-            nav_w(f) - 30,
+            if active { p.text } else { p.text2 },
+            (r.left + r.right) / 2 - w / 2,
+            r.top + 36,
+            label,
+            RAIL_W - 16,
         );
+        hit(r, a);
+        let _ = k;
+    };
+    let searching = SEARCH.n > 0;
+    let view = if VIEW == View::Detail { PREV_VIEW } else { VIEW };
+    let mut y = c.top + 10;
+    let entries: [(Glyph, &[u8], bool); 4] = [
+        (Glyph::Home, t(b"Accueil", b"Home"), view == View::Home),
+        (
+            Glyph::Grid,
+            t(b"Applis", b"Apps"),
+            matches!(view, View::Category(k) if k as usize != JEUX),
+        ),
+        (
+            Glyph::Star,
+            t(b"Jeux", b"Games"),
+            view == View::Category(JEUX as u8),
+        ),
+        (Glyph::Exe, b"Windows", view == View::Windows),
+    ];
+    for (k, (gl, label, active)) in entries.into_iter().enumerate() {
+        item(g, k as u8, y, gl, label, active && !searching, false, Action::Nav(k as u8));
+        y += 62;
+    }
+    let lib = view == View::Library && !searching;
+    item(
+        g,
+        4,
+        c.bottom - 132,
+        Glyph::Download,
+        t(b"Biblioth\xE8que", b"Library"),
+        lib,
+        UPDATES > 0,
+        Action::Nav(4),
+    );
+    item(
+        g,
+        5,
+        c.bottom - 68,
+        Glyph::Refresh,
+        if REFRESHING {
+            t(b"Actualisation...", b"Refreshing...")
+        } else {
+            t(b"Actualiser", b"Refresh")
+        },
+        false,
+        false,
+        Action::Refresh,
+    );
+    set_glyph_bg(Some(p.mica));
+}
+
+/// Libellé du bouton d'une carte selon l'état de l'application.
+unsafe fn state_action(i: usize) -> (&'static [u8], bool, Action) {
+    match app_field(i, F_STATE) {
+        b"i" => (t(b"Voir", b"View"), false, Action::Open(i as u16)),
+        b"u" => (
+            t(b"Mettre \xE0 jour", b"Update"),
+            true,
+            Action::Update(i as u16),
+        ),
+        _ => (t(b"Installer", b"Install"), true, Action::Install(i as u16)),
     }
 }
 
-/// Carte d'application (grille) ; renvoie vrai si dessinée.
+/// Carte carrée (icône, nom, éditeur, bouton) ; renvoie vrai si dessinée.
 unsafe fn card(g: &mut Gfx, i: usize, r: &Rect, body: &Rect) -> bool {
-    if r.top < body.top || r.bottom > body.bottom {
+    // Coupée en bas (la fenêtre la rogne), jamais sous la barre de recherche.
+    if r.top < body.top || r.top >= body.bottom {
         return false;
     }
     let p = pal();
@@ -1187,29 +1237,35 @@ unsafe fn card(g: &mut Gfx, i: usize, r: &Rect, body: &Rect) -> bool {
     panel(
         g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, bg, p.border,
     );
+    set_glyph_bg(Some(bg));
+    hit(*r, Action::Open(i as u16));
     app_icon(
         g,
         app_field(i, F_ICON),
         app_field(i, F_NAME),
-        r.left + 14,
+        r.left + 16,
         r.top + 16,
-        48,
+        64,
         bg,
     );
-    let tx = r.left + 76;
-    let tw = r.right - tx - 12;
+    let tw = r.right - r.left - 32;
     text_fit(
         g.hdc,
         g.f.semibold,
         13,
         p.text,
-        tx,
-        r.top + 14,
+        r.left + 16,
+        r.top + 92,
         app_field(i, F_NAME),
         tw,
     );
+    let publisher = app_field(i, F_PUB);
     let mut sub: Buf<120> = Buf::new();
-    sub.push(cat_label(cat_of(i)));
+    sub.push(if publisher.is_empty() {
+        cat_label(cat_of(i))
+    } else {
+        publisher
+    });
     if !app_field(i, F_BADGE).is_empty() {
         sub.push(b" \x95 ").push(app_field(i, F_BADGE));
     }
@@ -1218,45 +1274,62 @@ unsafe fn card(g: &mut Gfx, i: usize, r: &Rect, body: &Rect) -> bool {
         g.f.caption,
         12,
         p.text2,
-        tx,
-        r.top + 34,
+        r.left + 16,
+        r.top + 112,
         sub.get(),
         tw,
     );
-    let (label, color): (&[u8], u32) = match app_field(i, F_STATE) {
-        b"i" => (t(b"Install\xE9", b"Installed"), p.text3),
-        b"u" => (t(b"Mise \xE0 jour", b"Update"), p.accent),
-        _ => (t(b"Obtenir", b"Get"), p.accent),
-    };
+    let by = r.bottom - 46;
     if OP_ACTIVE && OP_TARGET.get() == app_field(i, F_KEY) {
-        progress_bar(g, tx, r.top + 62, tw, OP_PERCENT);
+        progress_bar(g, r.left + 16, by + 14, tw, OP_PERCENT);
     } else {
-        text(g.hdc, g.f.semibold, color, tx, r.top + 56, label);
+        let (label, primary, action) = state_action(i);
+        let bw = text_width(label, 13) * 108 / 100 + 28;
+        let bx = r.right - 14 - bw;
+        if bx > r.left + 16 + text_width(t(b"Gratuit", b"Free"), 12) + 8 {
+            text(
+                g.hdc,
+                g.f.caption,
+                p.text2,
+                r.left + 16,
+                by + 8,
+                if app_field(i, F_STATE) == b"i" {
+                    t(b"Install\xE9", b"Installed")
+                } else {
+                    t(b"Gratuit", b"Free")
+                },
+            );
+        }
+        let probe = rect(bx, by, bx + bw, by + 32);
+        let br = button(g, bx.max(r.left + 14), by, label, primary, hot(&probe));
+        hit(br, action);
     }
-    hit(*r, Action::Open(i as u16));
     true
 }
 
-const CARD_W: i32 = 250;
-const CARD_H: i32 = 84;
+const CARD_W: i32 = 184;
+const CARD_H: i32 = 196;
+const GAP: i32 = 12;
+
+fn columns(body: &Rect) -> (i32, i32) {
+    let cols = ((body.right - body.left + GAP) / (CARD_W + GAP)).max(1);
+    let w = (body.right - body.left - (cols - 1) * GAP) / cols;
+    (cols, w)
+}
 
 unsafe fn grid(g: &mut Gfx, body: &Rect, y0: i32, mut pick: impl FnMut(usize) -> bool) -> i32 {
-    let cols = ((body.right - body.left + 12) / (CARD_W + 12)).max(1);
-    let w = (body.right - body.left - (cols - 1) * 12) / cols;
+    let (cols, w) = columns(body);
     let mut n = 0;
     for i in 0..APP_COUNT {
         if !pick(i) {
             continue;
         }
-        let col = n % cols;
-        let row = n / cols;
-        let x = body.left + col * (w + 12);
-        let y = y0 + row * (CARD_H + 12);
+        let x = body.left + (n % cols) * (w + GAP);
+        let y = y0 + (n / cols) * (CARD_H + GAP);
         card(g, i, &rect(x, y, x + w, y + CARD_H), body);
         n += 1;
     }
-    let rows = (n + cols - 1) / cols;
-    y0 + rows * (CARD_H + 12)
+    y0 + (n + cols - 1) / cols * (CARD_H + GAP)
 }
 
 unsafe fn heading(g: &mut Gfx, x: i32, y: i32, s: &[u8], body: &Rect) {
@@ -1265,10 +1338,188 @@ unsafe fn heading(g: &mut Gfx, x: i32, y: i32, s: &[u8], body: &Rect) {
     }
 }
 
+/// Titre de rangée avec la flèche « Tout afficher » à droite.
+unsafe fn row_heading(g: &mut Gfx, body: &Rect, y: i32, s: &[u8], a: Action) {
+    heading(g, body.left, y, s, body);
+    let ar = rect(body.right - 32, y - 2, body.right, y + 30);
+    if ar.top >= body.top && ar.bottom <= body.bottom {
+        let p = pal();
+        if hot(&ar) {
+            round_rect(g.hdc, g.b, ar.left, ar.top, ar.right, ar.bottom, 5, p.hover);
+        }
+        set_glyph_bg(Some(if hot(&ar) { p.hover } else { p.window }));
+        glyph(g.hdc, g.b, g.f, Glyph::Forward, ar.left + 8, ar.top + 8, 16);
+        set_glyph_bg(Some(p.window));
+        hit(ar, a);
+        // Le titre lui-même mène aussi à la liste complète.
+        let tw = text_width(s, 22) + 8;
+        hit(rect(body.left, y, body.left + tw, y + 28), a);
+    }
+}
+
+/// Une rangée de cartes : les premières applications retenues par `pick`
+/// dans l'ordre de l'index (sélection Winlux d'abord). Renvoie le nombre
+/// de cartes dessinées.
+unsafe fn card_row(g: &mut Gfx, body: &Rect, y: i32, mut pick: impl FnMut(usize) -> bool) -> i32 {
+    let (cols, w) = columns(body);
+    let mut n = 0;
+    for i in 0..APP_COUNT {
+        if n >= cols {
+            break;
+        }
+        if pick(i) {
+            let x = body.left + n * (w + GAP);
+            card(g, i, &rect(x, y, x + w, y + CARD_H), body);
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Grand bandeau : application mise en avant à gauche, grande icône et
+/// vignettes des autres sélections à droite (dégradé vers l'accent).
+unsafe fn draw_hero(g: &mut Gfx, body: &Rect, y: i32, featured: &[usize]) -> i32 {
+    let p = pal();
+    let nf = featured.len();
+    let h = ((body.bottom - body.top) * 45 / 100).clamp(230, 320);
+    let hr = rect(body.left, y, body.right, y + h);
+    if hr.top < body.top || nf == 0 {
+        return h;
+    }
+    let i = featured[HERO % nf];
+    let w = hr.right - hr.left;
+    let shade = |x: i32| -> u32 {
+        // Neutre sur les 40 % de gauche (texte), puis montée vers l'accent.
+        let k = ((x - hr.left) * 1000 / w.max(1) - 400).max(0) * 340 / 600;
+        mix(p.surface, p.accent, k + 30, 1000)
+    };
+    round_rect(g.hdc, g.b, hr.left, hr.top, hr.right, hr.bottom, 12, shade(hr.left));
+    round_rect(
+        g.hdc,
+        g.b,
+        hr.right - 28,
+        hr.top,
+        hr.right,
+        hr.bottom,
+        12,
+        shade(hr.right),
+    );
+    let mut x = hr.left + 12;
+    while x < hr.right - 12 {
+        let x2 = (x + 8).min(hr.right - 12);
+        fill(g.hdc, g.b, x, hr.top, x2, hr.bottom, shade(x));
+        x = x2;
+    }
+    let left_bg = shade(hr.left);
+    set_glyph_bg(Some(left_bg));
+    let tx = hr.left + 40;
+    let text_w = (w * 45 / 100).max(220);
+    text(
+        g.hdc,
+        g.f.caption,
+        p.text2,
+        tx,
+        hr.bottom - 176,
+        t(b"S\xC9LECTION WINLUX", b"WINLUX PICKS"),
+    );
+    text_fit(
+        g.hdc,
+        g.f.display,
+        28,
+        p.text,
+        tx,
+        hr.bottom - 152,
+        app_field(i, F_NAME),
+        text_w,
+    );
+    wrap(
+        g,
+        g.f.body,
+        13,
+        p.text2,
+        tx,
+        hr.bottom - 110,
+        text_w,
+        app_field(i, F_SUMMARY),
+        2,
+        hr.bottom,
+    );
+    let (label, _, action) = state_action(i);
+    let probe = rect(tx, hr.bottom - 62, tx + 160, hr.bottom - 30);
+    let br = button(g, tx, hr.bottom - 62, label, true, hot(&probe));
+    let mut info: Buf<80> = Buf::new();
+    info.push(t(b"Gratuit", b"Free"))
+        .push(b" \x95 ")
+        .push(cat_label(cat_of(i)));
+    text(
+        g.hdc,
+        g.f.caption,
+        p.text2,
+        br.right + 14,
+        br.top + 9,
+        info.get(),
+    );
+    hit(hr, Action::Open(i as u16));
+    hit(br, action);
+    // Côté droit : grande icône, puis vignettes des autres sélections.
+    if w > 640 {
+        let big = 112;
+        let ix = hr.right - 80 - big - (w - 640).min(260) / 2;
+        // Aplat uni sous l'icône : le dégradé ne se voit pas à travers.
+        let tile = shade(ix + big / 2);
+        round_rect(
+            g.hdc,
+            g.b,
+            ix - 14,
+            hr.top + 20,
+            ix + big + 14,
+            hr.top + 48 + big,
+            18,
+            tile,
+        );
+        app_icon(
+            g,
+            app_field(i, F_ICON),
+            app_field(i, F_NAME),
+            ix,
+            hr.top + 34,
+            big,
+            tile,
+        );
+        let shown = nf.min(((w - 560) / 72).clamp(1, 6) as usize);
+        let first = (HERO % nf) / shown * shown;
+        let mut vx = hr.right - 28 - shown as i32 * 72;
+        for k in 0..shown {
+            let idx = (first + k) % nf;
+            let vr = rect(vx, hr.bottom - 84, vx + 60, hr.bottom - 24);
+            let bg = shade(vx + 30);
+            round_rect(g.hdc, g.b, vr.left, vr.top, vr.right, vr.bottom, 10, bg);
+            if idx == HERO % nf {
+                round_rect(g.hdc, g.b, vr.left - 3, vr.top - 3, vr.right + 3, vr.bottom + 3, 12, p.text);
+                round_rect(g.hdc, g.b, vr.left - 1, vr.top - 1, vr.right + 1, vr.bottom + 1, 11, bg);
+            } else if hot(&vr) {
+                round_rect(g.hdc, g.b, vr.left - 2, vr.top - 2, vr.right + 2, vr.bottom + 2, 11, p.hover);
+            }
+            app_icon(
+                g,
+                app_field(featured[idx], F_ICON),
+                app_field(featured[idx], F_NAME),
+                vr.left + 6,
+                vr.top + 6,
+                48,
+                bg,
+            );
+            hit(vr, Action::HeroPick(idx as u8));
+            vx += 72;
+        }
+    }
+    set_glyph_bg(Some(p.window));
+    h
+}
+
 unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
     let p = pal();
     let mut y = body.top - SCROLL;
-    // Sélection mise en avant (bandeau tournant).
     let mut featured = [0usize; 12];
     let mut nf = 0;
     for i in 0..APP_COUNT {
@@ -1278,124 +1529,23 @@ unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
         }
     }
     if nf > 0 {
-        let i = featured[HERO % nf];
-        let hr = rect(body.left, y, body.right, y + 200);
-        if hr.top >= body.top {
-            let base = mix(p.accent, p.window, 6, 10);
-            round_rect(g.hdc, g.b, hr.left, hr.top, hr.right, hr.bottom, 10, base);
-
-            text(
-                g.hdc,
-                g.f.caption,
-                p.text2,
-                hr.left + 32,
-                hr.top + 24,
-                t(b"S\xC9LECTION WINLUX", b"WINLUX PICKS"),
-            );
-            app_icon(
-                g,
-                app_field(i, F_ICON),
-                app_field(i, F_NAME),
-                hr.left + 32,
-                hr.top + 56,
-                96,
-                base,
-            );
-            text_fit(
-                g.hdc,
-                g.f.display,
-                28,
-                p.text,
-                hr.left + 148,
-                hr.top + 56,
-                app_field(i, F_NAME),
-                hr.right - hr.left - 260,
-            );
-            text_fit(
-                g.hdc,
-                g.f.body,
-                13,
-                p.text2,
-                hr.left + 148,
-                hr.top + 98,
-                app_field(i, F_SUMMARY),
-                hr.right - hr.left - 260,
-            );
-            let label = match app_field(i, F_STATE) {
-                b"i" => t(b"Voir", b"View"),
-                b"u" => t(b"Mettre \xE0 jour", b"Update"),
-                _ => t(b"Obtenir", b"Get"),
-            };
-            let probe = rect(hr.left + 148, hr.top + 130, hr.left + 300, hr.top + 162);
-            let br = button(g, hr.left + 148, hr.top + 130, label, true, hot(&probe));
-            hit(br, Action::Open(i as u16));
-            // Flèches et points.
-            for (dir, x) in [(-1i8, hr.right - 84), (1, hr.right - 44)] {
-                let ar = rect(x, hr.bottom - 44, x + 32, hr.bottom - 12);
-                round_rect(
-                    g.hdc,
-                    g.b,
-                    ar.left,
-                    ar.top,
-                    ar.right,
-                    ar.bottom,
-                    16,
-                    if hot(&ar) { p.hover } else { p.surface },
-                );
-                set_glyph_bg(Some(if hot(&ar) { p.hover } else { p.surface }));
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    if dir < 0 { Glyph::Back } else { Glyph::Forward },
-                    ar.left + 8,
-                    ar.top + 8,
-                    16,
-                );
-                hit(ar, Action::Hero(dir));
-            }
-            set_glyph_bg(Some(p.window));
-            for k in 0..nf {
-                let dx = hr.left + 32 + k as i32 * 14;
-                let col = if k == HERO % nf { p.accent } else { p.border };
-                ellipse(g.hdc, g.b, dx, hr.bottom - 24, dx + 7, hr.bottom - 17, col);
-            }
-            hit(hr, Action::Open(i as u16));
-        }
-        y += 224;
+        y += draw_hero(g, body, y, &featured[..nf]) + 28;
     }
-    // Rangées par catégorie.
-    let cols = ((body.right - body.left + 12) / (CARD_W + 12)).max(1);
-    let w = (body.right - body.left - (cols - 1) * 12) / cols;
-    for (k, _) in CATS.iter().enumerate() {
-        heading(g, body.left, y, cat_label(k), body);
-        let more = t(b"Tout afficher", b"See all");
-        let mw = text_width(more, 13);
-        let mr = rect(body.right - mw - 4, y + 4, body.right, y + 26);
-        if mr.top >= body.top && mr.bottom <= body.bottom {
-            text(
-                g.hdc,
-                g.f.body,
-                if hot(&mr) { p.text } else { p.accent },
-                mr.left,
-                mr.top + 2,
-                more,
-            );
-            hit(mr, Action::SeeAll(k as u8));
-        }
-        y += 36;
-        let mut n = 0;
-        for i in 0..APP_COUNT {
-            if n >= cols {
-                break;
-            }
-            if cat_of(i) == k {
-                let x = body.left + n * (w + 12);
-                card(g, i, &rect(x, y, x + w, y + CARD_H), body);
-                n += 1;
-            }
-        }
-        if n == 0 && y >= body.top && y + 20 <= body.bottom {
+    // Essentiels (hors jeux), jeux, programmes Windows, puis une rangée par
+    // catégorie qui a des logiciels.
+    row_heading(
+        g,
+        body,
+        y,
+        t(b"Applications essentielles", b"Essential apps"),
+        Action::Nav(1),
+    );
+    let n = card_row(g, body, y + 40, |i| cat_of(i) != JEUX && !is_windows(i));
+    if n > 0 {
+        y += 40 + CARD_H + 32;
+    } else {
+        y += 40;
+        if y >= body.top && y + 20 <= body.bottom {
             text(
                 g.hdc,
                 g.f.body,
@@ -1403,21 +1553,205 @@ unsafe fn draw_home(g: &mut Gfx, body: &Rect) {
                 body.left,
                 y,
                 t(
-                    b"Aucun logiciel dans cette cat\xE9gorie pour l'instant.",
-                    b"No software in this category yet.",
+                    b"Aucun logiciel pour l'instant : actualisez la biblioth\xE8que.",
+                    b"No software yet: refresh the library.",
                 ),
             );
         }
-        y += CARD_H + 28;
+        y += 40;
+    }
+    let mut sections = [(0usize, false); CATS.len() + 1];
+    sections[0] = (JEUX, false);
+    sections[1] = (0, true);
+    let mut k = 2;
+    for c in 0..CATS.len() {
+        if c != JEUX {
+            sections[k] = (c, false);
+            k += 1;
+        }
+    }
+    for (c, windows) in sections {
+        let (label, action): (&[u8], Action) = if windows {
+            (
+                t(b"Programmes Windows", b"Windows programs"),
+                Action::Nav(3),
+            )
+        } else {
+            (cat_label(c), Action::SeeAll(c as u8))
+        };
+        // Une rangée vide n'est pas affichée (ni son titre).
+        let any = (0..APP_COUNT).any(|i| {
+            if windows {
+                is_windows(i)
+            } else {
+                cat_of(i) == c && (c == JEUX || !is_windows(i))
+            }
+        });
+        if !any {
+            continue;
+        }
+        row_heading(g, body, y, label, action);
+        card_row(g, body, y + 40, |i| {
+            if windows {
+                is_windows(i)
+            } else {
+                cat_of(i) == c && (c == JEUX || !is_windows(i))
+            }
+        });
+        y += 40 + CARD_H + 32;
     }
     CONTENT_H = y + SCROLL - body.top;
 }
 
-unsafe fn draw_category(g: &mut Gfx, body: &Rect, k: usize) {
-    let y = body.top - SCROLL;
-    heading(g, body.left, y, cat_label(k), body);
-    let end = grid(g, body, y + 44, |i| cat_of(i) == k);
+/// Puce de filtre ; renvoie sa largeur.
+unsafe fn chip(g: &mut Gfx, x: i32, y: i32, label: &[u8], count: usize, on: bool, a: Action, body: &Rect) -> i32 {
+    let p = pal();
+    let mut s: Buf<64> = Buf::new();
+    s.push(label).push(b"  ").num(count as u64);
+    let w = text_width(s.get(), 13) + 28;
+    let r = rect(x, y, x + w, y + 32);
+    if r.top >= body.top && r.bottom <= body.bottom {
+        let bg = if on {
+            p.selected
+        } else if hot(&r) {
+            p.hover
+        } else {
+            p.surface
+        };
+        panel(
+            g.hdc,
+            g.b,
+            r.left,
+            r.top,
+            r.right,
+            r.bottom,
+            16,
+            bg,
+            if on { p.accent } else { p.border },
+        );
+        text(
+            g.hdc,
+            if on { g.f.semibold } else { g.f.body },
+            p.text,
+            x + 14,
+            y + 8,
+            label,
+        );
+        let lw = text_width(label, 13) + if on { 2 } else { 0 };
+        let mut n: Buf<12> = Buf::new();
+        n.num(count as u64);
+        text(g.hdc, g.f.caption, p.text2, x + 14 + lw + 8, y + 9, n.get());
+        hit(r, a);
+    }
+    w
+}
+
+unsafe fn draw_category(g: &mut Gfx, body: &Rect, k: u8) {
+    let mut y = body.top - SCROLL;
+    let games = k as usize == JEUX;
+    let title: &[u8] = if games {
+        cat_label(JEUX)
+    } else if k == ALL {
+        t(b"Applications", b"Apps")
+    } else {
+        cat_label(k as usize)
+    };
+    heading(g, body.left, y, title, body);
+    y += 44;
+    if !games {
+        // Puces : toutes, puis chaque catégorie qui a des logiciels.
+        let mut counts = [0usize; CATS.len()];
+        let mut all = 0;
+        for i in 0..APP_COUNT {
+            if !is_windows(i) {
+                counts[cat_of(i)] += 1;
+            }
+        }
+        for (c, n) in counts.iter().enumerate() {
+            if c != JEUX {
+                all += n;
+            }
+        }
+        let mut x = body.left;
+        let w = chip(g, x, y, t(b"Toutes", b"All"), all, k == ALL, Action::SeeAll(ALL), body);
+        x += w + 8;
+        for c in 0..CATS.len() {
+            if c == JEUX || counts[c] == 0 {
+                continue;
+            }
+            let mut s: Buf<64> = Buf::new();
+            s.push(cat_label(c)).push(b"  ").num(counts[c] as u64);
+            let cw = text_width(s.get(), 13) + 28;
+            if x + cw > body.right {
+                x = body.left;
+                y += 40;
+            }
+            x += chip(g, x, y, cat_label(c), counts[c], k as usize == c, Action::SeeAll(c as u8), body) + 8;
+        }
+        y += 52;
+    }
+    let end = grid(g, body, y, |i| {
+        let c = cat_of(i);
+        if games {
+            c == JEUX
+        } else if is_windows(i) {
+            false
+        } else if k == ALL {
+            c != JEUX
+        } else {
+            c == k as usize
+        }
+    });
     CONTENT_H = end + SCROLL - body.top;
+}
+
+/// Programmes Windows des catalogues ajoutés (Scoop…), ou comment en avoir.
+unsafe fn draw_windows(g: &mut Gfx, body: &Rect) {
+    let p = pal();
+    let mut y = body.top - SCROLL;
+    heading(
+        g,
+        body.left,
+        y,
+        t(b"Programmes Windows", b"Windows programs"),
+        body,
+    );
+    y += 40;
+    let count = (0..APP_COUNT).filter(|&i| is_windows(i)).count();
+    let note: &[u8] = if count > 0 {
+        t(
+            b"Programmes .exe ex\xE9cut\xE9s directement par Winlux. Chaque fichier est v\xE9rifi\xE9 par son empreinte avant l'installation.",
+            b"Programs (.exe) run directly by Winlux. Every file is checked against its hash before installation.",
+        )
+    } else {
+        t(
+            b"Aucun catalogue de programmes Windows n'est ajout\xE9. Vous pouvez en activer un dans Param\xE8tres > Applications > Boutiques de logiciels, ou installer un fichier .exe ou .msi depuis la Biblioth\xE8que.",
+            b"No Windows program catalog has been added. You can turn one on in Settings > Apps > Software stores, or install an .exe or .msi file from the Library.",
+        )
+    };
+    if y >= body.top {
+        wrap(
+            g,
+            g.f.body,
+            13,
+            p.text2,
+            body.left,
+            y,
+            (body.right - body.left).min(760),
+            note,
+            3,
+            body.bottom,
+        );
+    }
+    y += 64;
+    let end = grid(g, body, y, |i| is_windows(i));
+    if count == 0 && y >= body.top && y + 32 <= body.bottom {
+        let label = t(b"Ouvrir la Biblioth\xE8que", b"Open the Library");
+        let probe = rect(body.left, y, body.left + 200, y + 32);
+        let br = button(g, body.left, y, label, true, hot(&probe));
+        hit(br, Action::Nav(4));
+    }
+    CONTENT_H = end + SCROLL - body.top + 40;
 }
 
 unsafe fn draw_search(g: &mut Gfx, body: &Rect) {
@@ -1706,6 +2040,24 @@ unsafe fn draw_library(g: &mut Gfx, body: &Rect) {
         }
         y += 52;
     }
+    // Sources actives (autrefois au bas du volet de navigation).
+    y += 12;
+    if y >= body.top && y + 16 <= body.bottom {
+        let mut s: Buf<120> = Buf::new();
+        s.push(t(b"Sources : ", b"Sources: "));
+        s.push(if SOURCES.n > 0 { SOURCES.get() } else { b"-" });
+        text_fit(
+            g.hdc,
+            g.f.caption,
+            12,
+            p.text3,
+            body.left,
+            y,
+            s.get(),
+            body.right - body.left,
+        );
+    }
+    y += 24;
     CONTENT_H = y + SCROLL - body.top;
 }
 
@@ -2075,12 +2427,14 @@ unsafe fn act(a: Action) -> bool {
             SEARCH.clear();
             SEARCH_FOCUS = false;
             VIEW = match i {
-                0 => View::Home,
-                7 => {
+                1 => View::Category(ALL),
+                2 => View::Category(JEUX as u8),
+                3 => View::Windows,
+                4 => {
                     scan_downloads();
                     View::Library
                 }
-                k => View::Category(k - 1),
+                _ => View::Home,
             };
             SCROLL = 0;
         }
@@ -2133,6 +2487,10 @@ unsafe fn act(a: Action) -> bool {
         }
         Action::Hero(d) => {
             HERO = HERO.wrapping_add_signed(d as isize + 12) % 12;
+            HERO_TICK = GetTickCount();
+        }
+        Action::HeroPick(k) => {
+            HERO = k as usize;
             HERO_TICK = GetTickCount();
         }
         Action::Alt(k) => {
@@ -2286,6 +2644,66 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 /// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
 /// français/anglais passé à `t` (aussi pour fonts.rs).
 const STORE_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"Applis",
+        b"Apps",
+        b"Apps",
+        b"Apps",
+    ),
+    (
+        b"Jeux",
+        b"Games",
+        b"Juegos",
+        b"Spiele",
+    ),
+    (
+        b"Gratuit",
+        b"Free",
+        b"Gratis",
+        b"Kostenlos",
+    ),
+    (
+        b"Applications essentielles",
+        b"Essential apps",
+        b"Aplicaciones esenciales",
+        b"Wichtige Apps",
+    ),
+    (
+        b"Applications",
+        b"Apps",
+        b"Aplicaciones",
+        b"Apps",
+    ),
+    (
+        b"Toutes",
+        b"All",
+        b"Todas",
+        b"Alle",
+    ),
+    (
+        b"Ouvrir la Biblioth\xE8que",
+        b"Open the Library",
+        b"Abrir la biblioteca",
+        b"Bibliothek \xF6ffnen",
+    ),
+    (
+        b"Aucun logiciel pour l\'instant : actualisez la biblioth\xE8que.",
+        b"No software yet: refresh the library.",
+        b"Todav\xEDa no hay programas: actualiza la biblioteca.",
+        b"Noch keine Software: Bibliothek aktualisieren.",
+    ),
+    (
+        b"Programmes .exe ex\xE9cut\xE9s directement par Winlux. Chaque fichier est v\xE9rifi\xE9 par son empreinte avant l\'installation.",
+        b"Programs (.exe) run directly by Winlux. Every file is checked against its hash before installation.",
+        b"Programas .exe ejecutados directamente por Winlux. Cada archivo se comprueba con su huella antes de instalarlo.",
+        b"Von Winlux direkt ausgef\xFChrte .exe-Programme. Jede Datei wird vor der Installation anhand ihrer Pr\xFCfsumme kontrolliert.",
+    ),
+    (
+        b"Aucun catalogue de programmes Windows n\'est ajout\xE9. Vous pouvez en activer un dans Param\xE8tres > Applications > Boutiques de logiciels, ou installer un fichier .exe ou .msi depuis la Biblioth\xE8que.",
+        b"No Windows program catalog has been added. You can turn one on in Settings > Apps > Software stores, or install an .exe or .msi file from the Library.",
+        b"No se ha a\xF1adido ning\xFAn cat\xE1logo de programas de Windows. Puedes activar uno en Configuraci\xF3n > Aplicaciones > Tiendas de programas, o instalar un archivo .exe o .msi desde la Biblioteca.",
+        b"Es wurde kein Katalog mit Windows-Programmen hinzugef\xFCgt. Sie k\xF6nnen einen unter Einstellungen > Apps > Software-Stores aktivieren oder eine .exe- oder .msi-Datei aus der Bibliothek installieren.",
+    ),
     (
         b"Une installation est d\xE9j\xE0 en cours.",
         b"An installation is already running.",

@@ -19,7 +19,7 @@ const WSA_INVALID_PARAMETER: i32 = 10022;
 const WSAENOTSOCK: i32 = 10038;
 const WSAEFAULT: i32 = 10014;
 const WSAEINVAL: i32 = 10022;
-const _WSAENOBUFS: i32 = 10055;
+const WSAENOBUFS: i32 = 10055;
 const WSAEOPNOTSUPP: i32 = 10045;
 const WSAEWOULDBLOCK: i32 = 10035;
 const WSAENOPROTOOPT: i32 = 10042;
@@ -519,25 +519,131 @@ pub(crate) struct WinTimeval {
     usec: i32,
 }
 
-// hostent for gethostbyname/gethostbyaddr
-#[repr(C)]
+// hostent pour gethostbyname/gethostbyaddr et WSAAsyncGetHostBy*.
+/// Type opaque : le HOSTENT est écrit octet par octet par `pack_hostent`,
+/// à la disposition du programme (16 octets en x86, 32 en x64).
 pub(crate) struct WinHostent {
-    h_name: *mut c_char,
-    h_aliases: *mut *mut c_char,
-    h_addrtype: i16,
-    h_length: i16,
-    h_addr_list: *mut *mut c_char,
+    _opaque: u8,
 }
 
-static HOSTENT_BUF: OnceLock<Mutex<HostentBuf>> = OnceLock::new();
-struct HostentBuf {
-    hostent: WinHostent,
-    name: Vec<u8>,
-    aliases_ptr: Vec<*mut c_char>,
-    addrs: Vec<[u8; 4]>,
-    addr_ptrs: Vec<*mut c_char>,
+/// HOSTENT emballé à `base` : struct, h_aliases (vide), h_addr_list, les
+/// adresses puis le nom. Rend la taille nécessaire ; n'écrit rien si
+/// `out` est trop petit.
+fn pack_hostent(out: &mut [u8], base: usize, name: &[u8], addrs: &[[u8; 4]], ps: usize) -> usize {
+    let head = if ps == 4 { 16 } else { 32 };
+    let aliases = head;
+    let list = aliases + ps;
+    let data = list + ps * (addrs.len() + 1);
+    let name_at = data + 4 * addrs.len();
+    let mut name = name.to_vec();
+    if name.last() != Some(&0) {
+        name.push(0);
+    }
+    let total = name_at + name.len();
+    if out.len() < total {
+        return total;
+    }
+    out[..total].fill(0);
+    let mut put = |at: usize, v: usize| {
+        out[at..at + ps].copy_from_slice(&v.to_le_bytes()[..ps]);
+    };
+    put(0, base + name_at);
+    put(ps, base + aliases);
+    put(head - ps, base + list);
+    for i in 0..addrs.len() {
+        put(list + ps * i, base + data + 4 * i);
+    }
+    out[2 * ps..2 * ps + 2].copy_from_slice(&(libc::AF_INET as i16).to_le_bytes());
+    out[2 * ps + 2..2 * ps + 4].copy_from_slice(&4i16.to_le_bytes());
+    for (i, a) in addrs.iter().enumerate() {
+        out[data + 4 * i..data + 4 * i + 4].copy_from_slice(a);
+    }
+    out[name_at..total].copy_from_slice(&name);
+    total
 }
-unsafe impl Send for HostentBuf {}
+
+thread_local! {
+    /// Tampon par thread de gethostbyname/gethostbyaddr, comme Windows.
+    static HOSTENT_TLS: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Publie un HOSTENT dans le tampon du thread.
+fn publish_hostent(name: &[u8], addrs: &[[u8; 4]]) -> *const WinHostent {
+    let ps = crate::wow32::pointer_size();
+    HOSTENT_TLS.with(|b| {
+        let mut b = b.borrow_mut();
+        let need = pack_hostent(&mut [], 0, name, addrs, ps);
+        if b.len() < need {
+            *b = vec![0; need.max(1024)];
+        }
+        let base = b.as_ptr() as usize;
+        pack_hostent(&mut b, base, name, addrs, ps);
+        base as *const WinHostent
+    })
+}
+
+/// Résolution IPv4 d'un nom : (nom canonique, adresses) ou code WSA.
+unsafe fn resolve_v4(text: &str) -> Result<(Vec<u8>, Vec<[u8; 4]>), i32> {
+    let c = CString::new(text).map_err(|_| WSAHOST_NOT_FOUND)?;
+    let mut hints: libc::addrinfo = std::mem::zeroed();
+    hints.ai_family = libc::AF_INET;
+    hints.ai_socktype = libc::SOCK_STREAM;
+    hints.ai_flags = libc::AI_CANONNAME;
+    let mut raw = std::ptr::null_mut();
+    let rc = libc::getaddrinfo(c.as_ptr(), std::ptr::null(), &hints, &mut raw);
+    if rc != 0 {
+        return Err(gai_error(rc));
+    }
+    let mut addrs: Vec<[u8; 4]> = Vec::new();
+    let mut hostname = Vec::new();
+    let mut cur = raw;
+    while !cur.is_null() {
+        let ai = &*cur;
+        if ai.ai_family == libc::AF_INET && ai.ai_addrlen >= 16 {
+            let sin = &*(ai.ai_addr as *const libc::sockaddr_in);
+            let a = sin.sin_addr.s_addr.to_ne_bytes();
+            if !addrs.contains(&a) {
+                addrs.push(a);
+            }
+        }
+        if hostname.is_empty() && !ai.ai_canonname.is_null() {
+            hostname = std::ffi::CStr::from_ptr(ai.ai_canonname)
+                .to_bytes()
+                .to_vec();
+        }
+        cur = ai.ai_next;
+    }
+    libc::freeaddrinfo(raw);
+    if addrs.is_empty() {
+        return Err(WSAHOST_NOT_FOUND);
+    }
+    if hostname.is_empty() {
+        hostname = text.as_bytes().to_vec();
+    }
+    Ok((hostname, addrs))
+}
+
+/// Résolution inverse d'une adresse IPv4 (nom numérique si pas de PTR).
+unsafe fn reverse_v4(ip: [u8; 4]) -> Vec<u8> {
+    let mut sin: libc::sockaddr_in = std::mem::zeroed();
+    sin.sin_family = libc::AF_INET as libc::sa_family_t;
+    sin.sin_addr.s_addr = u32::from_ne_bytes(ip);
+    let mut host = [0 as c_char; 256];
+    let ni = libc::getnameinfo(
+        &sin as *const libc::sockaddr_in as *const libc::sockaddr,
+        std::mem::size_of::<libc::sockaddr_in>() as u32,
+        host.as_mut_ptr(),
+        256,
+        std::ptr::null_mut(),
+        0,
+        0,
+    );
+    if ni == 0 {
+        std::ffi::CStr::from_ptr(host.as_ptr()).to_bytes().to_vec()
+    } else {
+        std::net::Ipv4Addr::from(ip).to_string().into_bytes()
+    }
+}
 
 static INET_NTOA_BUF: OnceLock<Mutex<[u8; 16]>> = OnceLock::new();
 
@@ -2113,75 +2219,13 @@ pub unsafe extern "win64" fn gethostbyname(name: *const u8) -> *const WinHostent
         set_error(WSAEFAULT);
         return std::ptr::null();
     }
-    let text = crate::dlls::cstr(name);
-    let c = match CString::new(text) {
-        Ok(c) => c,
-        Err(_) => {
-            set_error(WSAHOST_NOT_FOUND);
-            return std::ptr::null();
+    match resolve_v4(&crate::dlls::cstr(name)) {
+        Ok((host, addrs)) => publish_hostent(&host, &addrs),
+        Err(e) => {
+            set_error(e);
+            std::ptr::null()
         }
-    };
-
-    let mut hints: libc::addrinfo = std::mem::zeroed();
-    hints.ai_family = libc::AF_INET;
-    hints.ai_socktype = libc::SOCK_STREAM;
-    let mut raw = std::ptr::null_mut();
-    let rc = libc::getaddrinfo(c.as_ptr(), std::ptr::null(), &hints, &mut raw);
-    if rc != 0 {
-        set_error(gai_error(rc));
-        return std::ptr::null();
     }
-
-    let mut addrs: Vec<[u8; 4]> = Vec::new();
-    let mut hostname = Vec::new();
-    let mut cur = raw;
-    while !cur.is_null() {
-        let ai = &*cur;
-        if ai.ai_family == libc::AF_INET && ai.ai_addrlen >= 16 {
-            let sin = &*(ai.ai_addr as *const libc::sockaddr_in);
-            addrs.push(sin.sin_addr.s_addr.to_ne_bytes());
-        }
-        if hostname.is_empty() && !ai.ai_canonname.is_null() {
-            let cn = std::ffi::CStr::from_ptr(ai.ai_canonname);
-            hostname = cn.to_bytes().to_vec();
-            hostname.push(0);
-        }
-        cur = ai.ai_next;
-    }
-    libc::freeaddrinfo(raw);
-    if addrs.is_empty() {
-        set_error(WSAHOST_NOT_FOUND);
-        return std::ptr::null();
-    }
-    if hostname.is_empty() {
-        hostname = c.as_bytes_with_nul().to_vec();
-    }
-
-    let buf = HOSTENT_BUF.get_or_init(|| {
-        Mutex::new(HostentBuf {
-            hostent: std::mem::zeroed(),
-            name: Vec::new(),
-            aliases_ptr: Vec::new(),
-            addrs: Vec::new(),
-            addr_ptrs: Vec::new(),
-        })
-    });
-    let mut g = lock(buf);
-    g.name = hostname;
-    g.addrs = addrs;
-    g.aliases_ptr = vec![std::ptr::null_mut()];
-    g.addr_ptrs = g
-        .addrs
-        .iter_mut()
-        .map(|a| a.as_mut_ptr() as *mut c_char)
-        .collect();
-    g.addr_ptrs.push(std::ptr::null_mut());
-    g.hostent.h_name = g.name.as_mut_ptr() as *mut c_char;
-    g.hostent.h_aliases = g.aliases_ptr.as_mut_ptr();
-    g.hostent.h_addrtype = libc::AF_INET as i16;
-    g.hostent.h_length = 4;
-    g.hostent.h_addr_list = g.addr_ptrs.as_mut_ptr();
-    &g.hostent as *const WinHostent
 }
 
 pub unsafe extern "win64" fn gethostbyaddr(
@@ -2197,74 +2241,104 @@ pub unsafe extern "win64" fn gethostbyaddr(
         set_error(WSAEFAULT);
         return std::ptr::null();
     }
-    let ip_bytes: [u8; 4] = [*addr, *addr.add(1), *addr.add(2), *addr.add(3)];
-    let ip = std::net::Ipv4Addr::from(ip_bytes);
-    let text = format!("{}", ip);
-    let c = match CString::new(text) {
-        Ok(c) => c,
-        Err(_) => {
-            set_error(WSAHOST_NOT_FOUND);
-            return std::ptr::null();
+    let ip: [u8; 4] = [*addr, *addr.add(1), *addr.add(2), *addr.add(3)];
+    publish_hostent(&reverse_v4(ip), &[ip])
+}
+
+// ── WSAAsyncGetHostByName / WSAAsyncGetHostByAddr ───────────────────────
+
+fn async_requests() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static R: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    R.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Lance la résolution dans un thread ; à la fin, le HOSTENT est écrit
+/// dans `buf` et `msg` est posté à `hwnd` (wParam = poignée, lParam =
+/// WSAMAKEASYNCREPLY(taille, erreur)), sauf si la demande a été annulée.
+fn start_async(
+    hwnd: usize,
+    msg: u32,
+    buf: usize,
+    buflen: usize,
+    job: impl FnOnce() -> Result<(Vec<u8>, Vec<[u8; 4]>), i32> + Send + 'static,
+) -> usize {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    let handle = NEXT.fetch_add(1, Ordering::Relaxed);
+    let ps = crate::wow32::pointer_size();
+    lock(async_requests()).insert(handle);
+    std::thread::spawn(move || {
+        let (size, err) = match job() {
+            Ok((host, addrs)) => {
+                let out = unsafe { std::slice::from_raw_parts_mut(buf as *mut u8, buflen) };
+                let need = pack_hostent(out, buf, &host, &addrs, ps);
+                (need, if need > buflen { WSAENOBUFS } else { 0 })
+            }
+            Err(e) => (0, e),
+        };
+        if lock(async_requests()).remove(&handle) {
+            let lp = (((err as u32) << 16) | (size as u32 & 0xFFFF)) as isize;
+            crate::dlls::gui::post_to_window(
+                hwnd,
+                crate::dlls::gui::Msg::new(hwnd, msg, handle, lp),
+            );
         }
-    };
-
-    let mut hints: libc::addrinfo = std::mem::zeroed();
-    hints.ai_family = libc::AF_INET;
-    hints.ai_flags = libc::AI_NUMERICHOST;
-    let mut raw = std::ptr::null_mut();
-    let rc = libc::getaddrinfo(c.as_ptr(), std::ptr::null(), &hints, &mut raw);
-    if rc != 0 {
-        set_error(gai_error(rc));
-        return std::ptr::null();
-    }
-
-    let mut hostname = c.as_bytes_with_nul().to_vec();
-
-    // Try reverse DNS
-    if !raw.is_null() && !(*raw).ai_addr.is_null() {
-        let mut host = [0i8; 256];
-        let ni = libc::getnameinfo(
-            (*raw).ai_addr,
-            (*raw).ai_addrlen as u32,
-            host.as_mut_ptr(),
-            256,
-            std::ptr::null_mut(),
-            0,
-            0,
-        );
-        if ni == 0 {
-            let hn = std::ffi::CStr::from_ptr(host.as_ptr());
-            hostname = hn.to_bytes().to_vec();
-            hostname.push(0);
-        }
-    }
-    libc::freeaddrinfo(raw);
-
-    let buf = HOSTENT_BUF.get_or_init(|| {
-        Mutex::new(HostentBuf {
-            hostent: std::mem::zeroed(),
-            name: Vec::new(),
-            aliases_ptr: Vec::new(),
-            addrs: Vec::new(),
-            addr_ptrs: Vec::new(),
-        })
     });
-    let mut g = lock(buf);
-    g.name = hostname;
-    g.addrs = vec![ip_bytes];
-    g.aliases_ptr = vec![std::ptr::null_mut()];
-    g.addr_ptrs = g
-        .addrs
-        .iter_mut()
-        .map(|a| a.as_mut_ptr() as *mut c_char)
-        .collect();
-    g.addr_ptrs.push(std::ptr::null_mut());
-    g.hostent.h_name = g.name.as_mut_ptr() as *mut c_char;
-    g.hostent.h_aliases = g.aliases_ptr.as_mut_ptr();
-    g.hostent.h_addrtype = libc::AF_INET as i16;
-    g.hostent.h_length = 4;
-    g.hostent.h_addr_list = g.addr_ptrs.as_mut_ptr();
-    &g.hostent as *const WinHostent
+    handle
+}
+
+pub unsafe extern "win64" fn wsa_async_get_host_by_name(
+    hwnd: usize,
+    msg: u32,
+    name: *const u8,
+    buf: *mut u8,
+    buflen: i32,
+) -> usize {
+    if STARTUPS.load(Ordering::Acquire) == 0 {
+        set_error(WSA_NOT_INITIALISED);
+        return 0;
+    }
+    if name.is_null() || buf.is_null() || buflen <= 0 {
+        set_error(WSAEFAULT);
+        return 0;
+    }
+    let text = crate::dlls::cstr(name).to_string();
+    start_async(hwnd, msg, buf as usize, buflen as usize, move || unsafe {
+        resolve_v4(&text)
+    })
+}
+
+pub unsafe extern "win64" fn wsa_async_get_host_by_addr(
+    hwnd: usize,
+    msg: u32,
+    addr: *const u8,
+    len: i32,
+    addrtype: i32,
+    buf: *mut u8,
+    buflen: i32,
+) -> usize {
+    if STARTUPS.load(Ordering::Acquire) == 0 {
+        set_error(WSA_NOT_INITIALISED);
+        return 0;
+    }
+    if addr.is_null() || len < 4 || addrtype != libc::AF_INET || buf.is_null() || buflen <= 0 {
+        set_error(WSAEFAULT);
+        return 0;
+    }
+    let ip: [u8; 4] = [*addr, *addr.add(1), *addr.add(2), *addr.add(3)];
+    start_async(hwnd, msg, buf as usize, buflen as usize, move || unsafe {
+        Ok((reverse_v4(ip), vec![ip]))
+    })
+}
+
+/// WSACancelAsyncRequest : la réponse ne sera pas postée ; WSAEINVAL si la
+/// demande est déjà terminée (ou inconnue).
+pub extern "win64" fn wsa_cancel_async_request(handle: usize) -> i32 {
+    if lock(async_requests()).remove(&handle) {
+        0
+    } else {
+        set_error(WSAEINVAL);
+        SOCKET_ERROR
+    }
 }
 
 // ── getservbyname / getservbyport ───────────────────────────────────────
@@ -3251,6 +3325,9 @@ fn named_exports() -> crate::dlls::Exports {
      // DNS / host resolution
      "gethostname"=>fn get_host_name,"GetHostNameW"=>fn get_host_name_w,
      "gethostbyname"=>fn gethostbyname,"gethostbyaddr"=>fn gethostbyaddr,
+     "WSAAsyncGetHostByName"=>fn wsa_async_get_host_by_name,
+     "WSAAsyncGetHostByAddr"=>fn wsa_async_get_host_by_addr,
+     "WSACancelAsyncRequest"=>fn wsa_cancel_async_request,
      "getservbyname"=>fn getservbyname,"getservbyport"=>fn getservbyport,
      "getaddrinfo"=>fn get_addr_info_a,
      "GetAddrInfoA"=>fn get_addr_info_a,"GetAddrInfoW"=>fn get_addr_info_w,
@@ -3281,6 +3358,49 @@ fn named_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostent_aux_deux_dispositions() {
+        let addrs = [[10, 0, 0, 1], [192, 168, 1, 2]];
+        for ps in [4usize, 8] {
+            let need = pack_hostent(&mut [], 0, b"hote.local", &addrs, ps);
+            let mut buf = vec![0u8; need];
+            let base = 0x1000;
+            assert_eq!(
+                pack_hostent(&mut buf, base, b"hote.local", &addrs, ps),
+                need
+            );
+            let rd = |at: usize| {
+                let mut v = [0u8; 8];
+                v[..ps].copy_from_slice(&buf[at..at + ps]);
+                usize::from_le_bytes(v)
+            };
+            let head = if ps == 4 { 16 } else { 32 };
+            let name = rd(0) - base;
+            assert_eq!(&buf[name..name + 11], b"hote.local\0");
+            assert_eq!(rd(rd(ps) - base), 0, "h_aliases vide");
+            assert_eq!(i16::from_le_bytes([buf[2 * ps], buf[2 * ps + 1]]), 2);
+            assert_eq!(i16::from_le_bytes([buf[2 * ps + 2], buf[2 * ps + 3]]), 4);
+            let list = rd(head - ps) - base;
+            for (i, a) in addrs.iter().enumerate() {
+                let p = rd(list + ps * i) - base;
+                assert_eq!(&buf[p..p + 4], a);
+            }
+            assert_eq!(rd(list + ps * 2), 0);
+            // Tampon trop petit : rien d'écrit, taille rendue.
+            let mut small = vec![0xAAu8; need - 1];
+            assert_eq!(
+                pack_hostent(&mut small, base, b"hote.local", &addrs, ps),
+                need
+            );
+            assert!(small.iter().all(|b| *b == 0xAA));
+        }
+    }
+
+    #[test]
+    fn annulation_de_demande_inconnue() {
+        assert_eq!(wsa_cancel_async_request(usize::MAX), SOCKET_ERROR);
+    }
     /// Les tests partagent le compteur global WSAStartup/WSACleanup : un
     /// test qui vide ce compteur pendant qu'un autre utilise ses sockets le
     /// faisait échouer au hasard. Ils passent donc l'un après l'autre.

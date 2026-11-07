@@ -846,6 +846,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
             return hr;
         }
+        // Boîtes Ouvrir/Enregistrer de Vista (IFileOpenDialog/IFileSaveDialog).
+        if let Some(hr) = super::filedialog_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
@@ -1297,6 +1301,74 @@ unsafe extern "win64" fn co_get_interface_and_release_stream(
     hr
 }
 
+// ---------- Fonctions OLE sans objet derrière ----------
+
+/// IsEqualGUID (exportée par ole32, en plus de la macro de objbase.h).
+pub unsafe extern "win64" fn is_equal_guid(a: *const Guid, b: *const Guid) -> i32 {
+    match (
+        super::comobj::read_guid(a as *const u8),
+        super::comobj::read_guid(b as *const u8),
+    ) {
+        (Some(a), Some(b)) => (a == b) as i32,
+        _ => 0,
+    }
+}
+
+/// CoDisconnectObject : pas de mandataire hors processus, rien à couper.
+pub extern "win64" fn co_disconnect_object(_unk: usize, _reserved: u32) -> i32 {
+    S_OK
+}
+
+/// CoFreeUnusedLibraries : les serveurs COM sont intégrés au runtime.
+pub extern "win64" fn co_free_unused_libraries() {}
+
+/// CreateBindCtx : les monikers ne sont pas encore pris en charge.
+pub unsafe extern "win64" fn create_bind_ctx(_reserved: u32, out: *mut usize) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = 0;
+    super::comobj::E_NOTIMPL
+}
+
+/// IsAccelerator : la table d'accélérateurs OLE n'est jamais consultée
+/// (pas d'objets OLE incorporés en place) : FALSE.
+pub unsafe extern "win64" fn is_accelerator(
+    _accel: usize,
+    _count: i32,
+    _msg: usize,
+    cmd: *mut u16,
+) -> i32 {
+    if !cmd.is_null() {
+        *cmd = 0;
+    }
+    0
+}
+
+/// OleDraw : pas d'objet incorporé à dessiner (OLE_E_BLANK).
+pub extern "win64" fn ole_draw(_unk: usize, _aspect: u32, _hdc: usize, _rect: usize) -> i32 {
+    0x8004_0007u32 as i32
+}
+
+/// OleRegEnumVerbs : aucun verbe OLE enregistré (OLEOBJ_E_NOVERBS).
+pub unsafe extern "win64" fn ole_reg_enum_verbs(_clsid: *const Guid, out: *mut usize) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    0x8004_0180u32 as i32
+}
+
+/// OleSetMenuDescriptor : la fusion de menus OLE en place n'a pas lieu.
+pub extern "win64" fn ole_set_menu_descriptor(
+    _holemenu: usize,
+    _frame: usize,
+    _active: usize,
+    _frame_cb: usize,
+    _active_obj: usize,
+) -> i32 {
+    S_OK
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "CoInitialize"=>fn co_initialize,"CoInitializeEx"=>fn co_initialize_ex,"CoUninitialize"=>fn co_uninitialize,
@@ -1320,6 +1392,15 @@ pub fn exports() -> crate::dlls::Exports {
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
+        // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
+        // (MinGW les importe d'ole32).
+    "IsEqualGUID"=>fn is_equal_guid,"CoDisconnectObject"=>fn co_disconnect_object,
+        "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CreateBindCtx"=>fn create_bind_ctx,
+        "IsAccelerator"=>fn is_accelerator,"OleDraw"=>fn ole_draw,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
+        "OleSetMenuDescriptor"=>fn ole_set_menu_descriptor,
+        "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
+        "GetErrorInfo"=>fn super::errorinfo::get_error_info,
+        "SetErrorInfo"=>fn super::errorinfo::set_error_info,
         "RoInitialize"=>fn ro_initialize,"RoUninitialize"=>fn ro_uninitialize
     }
 }
