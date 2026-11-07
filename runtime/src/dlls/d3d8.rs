@@ -29,14 +29,9 @@ const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
 const D3DERR_INVALIDCALL: i32 = 0x8876_086Cu32 as i32;
 const D3DERR_NOTAVAILABLE: i32 = 0x8876_086Au32 as i32;
 
-/// Appelle la méthode `idx` d'un objet Direct3D 9 (table win64).
+/// Appelle la méthode `idx` d'un objet Direct3D 9 (table win64 ou x86).
 macro_rules! c9 {
-    ($obj:expr, $idx:expr, fn($($t:ty),*) -> $r:ty $(, $a:expr)* $(,)?) => {{
-        let o: usize = $obj;
-        let vt = *(o as *const *const usize);
-        let f: unsafe extern "win64" fn(usize $(, $t)*) -> $r = std::mem::transmute(*vt.add($idx));
-        f(o $(, $a)*)
-    }};
+    ($($t:tt)*) => { $crate::com_call!($($t)*) };
 }
 
 const IID_IUNKNOWN: Guid = guid(0, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
@@ -672,9 +667,11 @@ unsafe fn get_desc(obj9: usize, idx: usize, level: Option<u32>, out: usize) -> i
 }
 
 /// D3DLOCKED_RECT { INT Pitch; void* pBits } à la disposition du programme.
+/// `lr` est rempli par Direct3D 9, lui aussi à la disposition du programme.
 unsafe fn write_locked(out: usize, lr: &[u64; 2]) {
-    wr32(out, lr[0] as u32);
-    put_ptr(out + super::legacy_com::ptr_size(), lr[1] as usize);
+    let (pitch, bits) = super::legacy_com::locked_rect(lr.as_ptr() as usize);
+    wr32(out, pitch as u32);
+    put_ptr(out + super::legacy_com::ptr_size(), bits);
 }
 
 // --- Surface8 ---
@@ -1415,10 +1412,12 @@ unsafe extern "win64" fn d_copy_rects(
                 0
             ) >= 0;
         if ok_s && ok_t && sd[0] == td[0] {
+            let (sp, sb) = super::legacy_com::locked_rect(sl.as_ptr() as usize);
+            let (tp, tb) = super::legacy_com::locked_rect(tl.as_ptr() as usize);
             for y in 0..h as usize {
                 std::ptr::copy(
-                    (sl[1] as usize + y * sl[0] as i32 as usize) as *const u8,
-                    (tl[1] as usize + y * tl[0] as i32 as usize) as *mut u8,
+                    (sb + y * sp as usize) as *const u8,
+                    (tb + y * tp as usize) as *mut u8,
                     w as usize * bpp,
                 );
             }

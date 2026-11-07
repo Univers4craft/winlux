@@ -46,7 +46,6 @@ pub unsafe fn put_ptr(at: usize, v: usize) {
 ///
 /// # Safety
 /// `at` est une case de pointeur valide.
-#[allow(dead_code)]
 pub unsafe fn get_ptr(at: usize) -> usize {
     if x86() {
         (at as *const u32).read_unaligned() as usize
@@ -93,13 +92,86 @@ pub fn vtable(name: &'static str, methods: &[(usize, u8)]) -> usize {
         return v;
     }
     let v = if x {
-        crate::wow32::x86_vtable(name, methods) as usize
+        let v = crate::wow32::x86_vtable(name, methods) as usize;
+        let mut t = X86_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+        t.get_or_insert_with(HashMap::new)
+            .insert(v, methods.iter().map(|m| m.0).collect());
+        v
     } else {
         let t: Vec<usize> = methods.iter().map(|m| m.0).collect();
         Box::leak(t.into_boxed_slice()).as_ptr() as usize
     };
     map.insert((name, x), v);
     v
+}
+
+/// Table x86 de passerelles pour une table win64 existante. `methods[i]`
+/// = (fonction appelée par la passerelle, fonction win64 native de la
+/// méthode, signature : voir `wow32::x86_vtable_sig`). La passerelle peut
+/// viser une variante qui convertit une structure x86 ; `method` rend la
+/// fonction native, appelée par le runtime avec ses propres structures.
+/// Construite une fois par nom.
+pub fn x86_table(name: &'static str, methods: &[(usize, usize, &str)]) -> usize {
+    static CACHE: Mutex<Option<HashMap<&'static str, usize>>> = Mutex::new(None);
+    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(HashMap::new);
+    if let Some(&v) = map.get(name) {
+        return v;
+    }
+    let stubs: Vec<(usize, &str)> = methods.iter().map(|m| (m.0, m.2)).collect();
+    let v = crate::wow32::x86_vtable_sig(name, &stubs) as usize;
+    let mut t = X86_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    t.get_or_insert_with(HashMap::new)
+        .insert(v, methods.iter().map(|m| m.1).collect());
+    map.insert(name, v);
+    v
+}
+
+/// Tables x86 construites par `vtable` → leurs fonctions win64.
+static X86_TABLES: Mutex<Option<HashMap<usize, Vec<usize>>>> = Mutex::new(None);
+
+/// Fonction win64 de la méthode `idx` d'un objet COM du runtime, quelle que
+/// soit l'ABI de sa table : une table x86 de passerelles (`vtable` dans un
+/// programme 32 bits) est retrouvée par son adresse, une table win64 est lue
+/// telle quelle. Sert aux couches qui en appellent d'autres (D3DX et
+/// Direct3D 8 sur Direct3D 9).
+///
+/// # Safety
+/// `obj` est un objet COM valide créé par le runtime.
+pub unsafe fn method(obj: usize, idx: usize) -> usize {
+    if x86() {
+        let vt = rd32(obj) as usize;
+        let t = X86_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(f) = t.as_ref().and_then(|m| m.get(&vt)).and_then(|m| m.get(idx)) {
+            return *f;
+        }
+    }
+    let vt = (obj as *const usize).read_unaligned();
+    *(vt as *const usize).add(idx)
+}
+
+/// Appelle la méthode `idx` d'un objet COM du runtime (voir `method`).
+#[macro_export]
+macro_rules! com_call {
+    ($obj:expr, $idx:expr, fn($($t:ty),*) -> $r:ty $(, $a:expr)* $(,)?) => {{
+        let o: usize = $obj;
+        let f: unsafe extern "win64" fn(usize $(, $t)*) -> $r =
+            std::mem::transmute($crate::dlls::legacy_com::method(o, $idx));
+        f(o $(, $a)*)
+    }};
+}
+
+/// Lit un D3DLOCKED_RECT { INT Pitch; void *pBits; } rempli par une
+/// méthode native du runtime (obtenue par `method`, disposition 64 bits
+/// quel que soit le programme) : (pas, adresse).
+///
+/// # Safety
+/// `at` pointe une telle structure remplie.
+pub unsafe fn locked_rect(at: usize) -> (i32, usize) {
+    (
+        rd32(at) as i32,
+        (at as *const usize).add(1).read_unaligned(),
+    )
 }
 
 /// Écrit une chaîne ANSI terminée par 0 dans un tampon de `cap` octets.

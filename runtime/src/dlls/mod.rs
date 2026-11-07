@@ -42,6 +42,8 @@ pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod d3dcompiler;
+pub mod d3dx9;
+pub mod d3dx9_draw;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
@@ -568,6 +570,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "d3dx9",
+                exports: d3dx9::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "d3d8",
                 exports: d3d8::exports(),
                 handle: fake_module(),
@@ -1006,6 +1013,10 @@ pub fn normalize(dll: &str) -> String {
     // Compilateur HLSL : toutes les versions servies par le même d3dcompiler_47.
     if base.starts_with("d3dcompiler_") {
         return "d3dcompiler_47".into();
+    }
+    // D3DX9 (#834) : d3dx9_24 … d3dx9_43 servies par la même bibliothèque.
+    if base.starts_with("d3dx9_") {
+        return "d3dx9".into();
     }
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {

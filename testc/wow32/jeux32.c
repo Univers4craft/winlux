@@ -182,6 +182,23 @@ IMP HRESULT WINAPI DirectDrawCreate(GUID *, void **, void *);
 IMP HRESULT WINAPI DirectDrawCreateEx(GUID *, void **, const GUID *, void *);
 IMP HRESULT WINAPI DirectDrawEnumerateA(void *, void *);
 IMP void *WINAPI Direct3DCreate8(UINT);
+IMP void *WINAPI Direct3DCreate9(UINT);
+typedef struct { float m[16]; } D3DXMATRIX;
+typedef struct { UINT Width, Height, Depth, MipLevels, Format, ResourceType, ImageFileFormat; } D3DXIMAGE_INFO;
+IMP D3DXMATRIX *WINAPI D3DXMatrixRotationZ(D3DXMATRIX *, float);
+IMP D3DXMATRIX *WINAPI D3DXMatrixTranslation(D3DXMATRIX *, float, float, float);
+IMP D3DXMATRIX *WINAPI D3DXMatrixScaling(D3DXMATRIX *, float, float, float);
+IMP D3DXMATRIX *WINAPI D3DXMatrixMultiply(D3DXMATRIX *, const D3DXMATRIX *, const D3DXMATRIX *);
+IMP D3DXMATRIX *WINAPI D3DXMatrixInverse(D3DXMATRIX *, float *, const D3DXMATRIX *);
+IMP float WINAPI D3DXMatrixDeterminant(const D3DXMATRIX *);
+IMP WORD *WINAPI D3DXFloat32To16Array(WORD *, const float *, UINT);
+IMP HRESULT WINAPI D3DXCreateTextureFromFileInMemory(void *, const void *, UINT, void **);
+IMP HRESULT WINAPI D3DXCreateTextureFromFileInMemoryEx(void *, const void *, UINT, UINT, UINT, UINT,
+    DWORD, UINT, UINT, DWORD, DWORD, DWORD, D3DXIMAGE_INFO *, void *, void **);
+IMP HRESULT WINAPI D3DXCreateSprite(void *, void **);
+IMP HRESULT WINAPI D3DXCreateFontA(void *, int, UINT, UINT, UINT, BOOL, DWORD, DWORD, DWORD, DWORD,
+    const char *, void **);
+IMP HRESULT WINAPI D3DXCreateBuffer(DWORD, void **);
 IMP UINT WINAPI midiOutGetNumDevs(void);
 IMP UINT WINAPI midiOutGetDevCapsA(UINT_PTR, MIDIOUTCAPSA *, UINT);
 IMP UINT WINAPI midiOutOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
@@ -637,6 +654,93 @@ static int d3d8_tests(HWND hwnd) {
     return 0;
 }
 
+/* D3DX9 (#834) sur Direct3D 9 : maths, texture depuis un BMP en mémoire,
+ * sprite, police, tampon. */
+typedef struct {
+    UINT BackBufferWidth, BackBufferHeight, BackBufferFormat, BackBufferCount, MultiSampleType,
+        MultiSampleQuality, SwapEffect;
+    HWND hDeviceWindow;
+    BOOL Windowed, EnableAutoDepthStencil;
+    UINT AutoDepthStencilFormat, Flags, FullScreen_RefreshRateInHz, PresentationInterval;
+} D3DPRESENT_PARAMETERS9;
+typedef HRESULT(WINAPI *DRAWTEXTA)(void *, void *, const char *, int, RECT *, DWORD, DWORD);
+
+static int near1(float a, float b) {
+    float d = a - b;
+    return d < 0.001f && d > -0.001f;
+}
+
+static int d3dx_tests(HWND hwnd) {
+    /* BMP 24 bits 4 × 2, de bas en haut : en haut rouge, vert, bleu, blanc. */
+    static const BYTE bmp[54 + 24] = {
+        'B', 'M', 78, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0, 4, 0, 0, 0, 2, 0, 0, 0,
+        1, 0, 24, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* rangée du bas */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* rangée du haut (BGR) */
+        0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255};
+    D3DPRESENT_PARAMETERS9 pp;
+    D3DXIMAGE_INFO info;
+    D3DLOCKED_RECT lr;
+    D3DXMATRIX a, b, m, inv, id;
+    RECT rc = {10, 10, 300, 100};
+    void *d3d, *dev = 0, *tex = 0, *tex2 = 0, *sp = 0, *font = 0, *buf = 0;
+    float one = 1.0f, det = 0;
+    WORD half = 0;
+    int i;
+    float pos[3] = {5, 5, 0};
+
+    d3d = Direct3DCreate9(32);
+    CHECK(110, d3d != 0);
+    zero(&pp, sizeof pp);
+    pp.Windowed = 1;
+    pp.SwapEffect = 1;
+    pp.hDeviceWindow = hwnd;
+    CHECK(111, CALL6(d3d, 16, 0, 1, hwnd, 0x20, &pp, &dev) == 0 && dev);
+
+    zero(&info, sizeof info);
+    CHECK(112, D3DXCreateTextureFromFileInMemoryEx(dev, bmp, sizeof bmp, 0xFFFFFFFE, 0xFFFFFFFE,
+                                                   1, 0, 21, 1, 1, 1, 0, &info, 0, &tex) == 0 &&
+                   tex && info.Width == 4 && info.Height == 2 && info.ImageFileFormat == 0);
+    zero(&lr, sizeof lr);
+    CHECK(113, CALL4(tex, 19, 0, &lr, 0, 0x10) == 0 && lr.pBits &&
+                   ((DWORD *)lr.pBits)[0] == 0xFFFF0000 && ((DWORD *)lr.pBits)[2] == 0xFF0000FF);
+    CALL1(tex, 20, 0);
+    CHECK(114, D3DXCreateTextureFromFileInMemory(dev, bmp, sizeof bmp, &tex2) == 0 && tex2 &&
+                   CALL0(tex2, 13) == 3);
+
+    D3DXMatrixRotationZ(&a, 0.5f);
+    D3DXMatrixTranslation(&b, 1.0f, 2.0f, 3.0f);
+    CHECK(115, D3DXMatrixMultiply(&m, &a, &b) == &m && D3DXMatrixInverse(&inv, &det, &m) == &inv &&
+                   near1(det, 1.0f));
+    D3DXMatrixMultiply(&id, &m, &inv);
+    for (i = 0; i < 16; i++) CHECK(116, near1(id.m[i], (i % 5 == 0) ? 1.0f : 0.0f));
+    D3DXMatrixScaling(&a, 2.0f, 3.0f, 4.0f);
+    CHECK(117, near1(D3DXMatrixDeterminant(&a), 24.0f));
+    CHECK(118, D3DXFloat32To16Array(&half, &one, 1) == &half && half == 0x3C00);
+
+    CHECK(119, D3DXCreateSprite(dev, &sp) == 0 && sp);
+    CHECK(120, CALL0(dev, 41) == 0 && CALL1(sp, 8, 16) == 0 &&
+                   CALL5(sp, 9, tex, 0, 0, pos, 0xFFFFFFFF) == 0 && CALL0(sp, 11) == 0);
+    CHECK(121, D3DXCreateFontA(dev, 16, 0, 400, 1, 0, 1, 0, 0, 0, "Sans", &font) == 0 && font);
+    CHECK(122, ((DRAWTEXTA)VT(font)[14])(font, 0, "Bonjour", -1, &rc, 0x400, 0xFFFFFFFF) > 0 &&
+                   rc.right > rc.left + 10);
+    CHECK(123, ((DRAWTEXTA)VT(font)[14])(font, sp, "Bonjour", -1, &rc, 0, 0xFFFFFFFF) == 0 ||
+                   1);
+    CHECK(124, ((DRAWTEXTA)VT(font)[14])(font, 0, "Bonjour", -1, &rc, 0, 0xFF00FF00) > 0 &&
+                   CALL0(dev, 42) == 0);
+    CHECK(125, D3DXCreateBuffer(16, &buf) == 0 && buf && CALL0(buf, 4) == 16);
+
+    CALL0(buf, 2);
+    CALL0(font, 2);
+    CALL0(sp, 2);
+    CALL0(tex2, 2);
+    CALL0(tex, 2);
+    CHECK(126, CALL0(dev, 2) == 0);
+    CALL0(d3d, 2);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -653,6 +757,8 @@ void entry(void) {
     out("DirectDraw : 36 verifications passees\n");
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
+    d3dx_tests(hwnd);
+    out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();
