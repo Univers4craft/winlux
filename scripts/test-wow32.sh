@@ -16,6 +16,9 @@
 # signal, localtime…), sautés sans i686-w64-mingw32-gcc.
 # thread32.exe, load32.exe, cpp32.exe (étape 4) : threads x86, TLS statique,
 # DLL x86 importée et chargée par LoadLibrary, C++ avec exceptions.
+# wow64.exe (étape 7) : personnalité WOW64 (IsWow64Process, registre
+# Wow6432Node, System32 → SysWOW64, variables) et structures kernel32 à la
+# taille x86 (CRITICAL_SECTION, SRWLOCK, SLIST, SYSTEM_INFO, STARTUPINFO…).
 # gui32.exe (étape 5) : fenêtre x86 (classe, CREATESTRUCT, boucle de
 # messages, WM_PAINT et GDI, clavier, souris, minuteurs, sous-classement,
 # WINDOWPOS recopiée, DIB section, GetObject, boîte de dialogue), sans écran
@@ -29,7 +32,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 gui32"
+names="hello32 seh32 wow64 gui32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -142,6 +145,28 @@ if test -f "$out/cpp32.exe"; then
     check cpp32 'C++ 32 bits : tout est correct'
     echo "cpp32 : C++ MinGW 32 bits (exceptions, iostream)"
 fi
+
+# Personnalité WOW64 : lecteur C: et registre isolés dans le dossier de test.
+mkdir -p "$work/c/Windows/System32" "$work/c/Windows/SysWOW64"
+set +e
+WINLUX_GUI=headless WINLUX_DRIVE_C="$work/c" WINLUX_REGISTRY_PATH="$work/wow64-reg.tsv" \
+    timeout 120 "$runtime" "$out/wow64.exe" >"$work/wow64.txt" 2>&1
+status=$?
+set -e
+if test "$status" -ne 0 || ! grep -q 'Tout est correct : personnalite WOW64' "$work/wow64.txt"; then
+    cat "$work/wow64.txt"
+    echo "wow64.exe : code $status, vérification n° $status en échec" >&2
+    exit 1
+fi
+for f in SysWOW64/winlux-wow64-redirige.txt System32/winlux-wow64-direct.txt \
+    System32/winlux-wow64-sysnative.txt; do
+    test -f "$work/c/Windows/$f" || { echo "wow64.exe : $f absent (redirection System32)" >&2; exit 1; }
+done
+if test -e "$work/c/Windows/System32/winlux-wow64-redirige.txt"; then
+    echo "wow64.exe : fichier écrit dans System32 malgré la redirection" >&2
+    exit 1
+fi
+echo "wow64 : IsWow64Process, structures x86 (CS, SRW, SLIST, SYSTEM_INFO…), Wow6432Node, SysWOW64, CreateProcess"
 
 gui() {
     set +e

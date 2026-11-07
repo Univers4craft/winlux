@@ -936,10 +936,9 @@ pub unsafe extern "win64" fn set_window_pos(
     } else {
         cy
     };
-    if width <= 0 || height <= 0 {
-        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
-        return 0;
-    }
+    // Windows accepte une taille nulle et ramène une taille négative à 0 :
+    // wxWidgets remet ainsi ses contrôles à 0×0 avant de les placer.
+    let (width, height) = (width.max(0), height.max(0));
     let Some(right) = left.checked_add(width) else {
         crate::process::set_last_error(87);
         return 0;
@@ -2910,24 +2909,65 @@ pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize
     gui::create_dc(_hwnd)
 }
 
-pub extern "win64" fn begin_defer_window_pos(_count: i32) -> usize {
-    1 // Handle factice
+/// Positions en attente de chaque BeginDeferWindowPos, appliquées ensemble
+/// par EndDeferWindowPos. wxWidgets place ainsi tous les enfants d'un
+/// panneau quand ses sizers le redimensionnent : sans cela, ils restaient
+/// empilés en (0,0).
+type Deferred = Vec<(usize, usize, i32, i32, i32, i32, u32)>;
+
+fn deferred() -> &'static Mutex<HashMap<usize, Deferred>> {
+    static D: OnceLock<Mutex<HashMap<usize, Deferred>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+pub extern "win64" fn begin_defer_window_pos(count: i32) -> usize {
+    if count < 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00D0_0001);
+    let handle = NEXT.fetch_add(4, std::sync::atomic::Ordering::Relaxed);
+    deferred()
+        .lock()
+        .unwrap()
+        .insert(handle, Vec::with_capacity(count as usize));
+    handle
+}
+
+#[allow(clippy::too_many_arguments)]
 pub extern "win64" fn defer_window_pos(
     hdwp: usize,
-    _hwnd: usize,
-    _after: usize,
-    _x: i32,
-    _y: i32,
-    _cx: i32,
-    _cy: i32,
-    _flags: u32,
+    hwnd: usize,
+    after: usize,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
 ) -> usize {
+    if gui::window_rect(hwnd).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    let mut all = deferred().lock().unwrap();
+    let Some(list) = all.get_mut(&hdwp) else {
+        crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
+        return 0;
+    };
+    // Une seconde demande pour la même fenêtre remplace la première.
+    list.retain(|e| e.0 != hwnd);
+    list.push((hwnd, after, x, y, cx, cy, flags));
     hdwp
 }
 
-pub extern "win64" fn end_defer_window_pos(_hdwp: usize) -> i32 {
+pub extern "win64" fn end_defer_window_pos(hdwp: usize) -> i32 {
+    let Some(list) = deferred().lock().unwrap().remove(&hdwp) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    for (hwnd, after, x, y, cx, cy, flags) in list {
+        unsafe { set_window_pos(hwnd, after, x, y, cx, cy, flags) };
+    }
     1
 }
 

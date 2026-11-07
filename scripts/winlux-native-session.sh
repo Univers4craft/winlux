@@ -207,11 +207,14 @@ if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk
 # Catalogue des programmes Windows (menu Démarrer) : son premier passage se
 # fait en parallèle de la barre des tâches au lieu de la retarder ; les
 # raccourcis de la session précédente restent affichés entre-temps.
+# Un seul processus résident, en basse priorité : il refait le catalogue
+# quand un raccourci, le registre ou un navigateur change, au lieu de tout
+# relire toutes les 5 s (#214). Son journal est borné par lui-même.
+nice -n 10 /usr/bin/winlux-applications watch </dev/null >>/run/winlux/applications.log 2>&1 &
+echo $! > /run/winlux/catalogue.pid
+# Demandes ponctuelles des navigateurs : deux tests de fichier, pas de Python.
 (
     while :; do
-        # Basse priorité : le catalogue ne ralentit ni le bureau ni les applications.
-        nice -n 10 /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true
-        nice -n 10 /usr/bin/winlux-applications window-icons >>/run/winlux/applications.log 2>&1 || true
         if test -f /run/winlux/browser-chooser; then
             rm -f /run/winlux/browser-chooser
             /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
@@ -221,7 +224,6 @@ if test -x /usr/bin/winlux-osk; then WINLUX_OSK_NO_RESTART=1 /usr/bin/winlux-osk
         sleep 5
     done
 ) </dev/null >/run/winlux/catalogue.log 2>&1 &
-echo $! > /run/winlux/catalogue.pid
 for attempt in $(seq 1 30); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     sleep 0.1

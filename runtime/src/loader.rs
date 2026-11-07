@@ -722,6 +722,14 @@ pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
         if let Some(d) = importer.parent() {
             dirs.push(d.to_path_buf());
         }
+        // Windows cherche les dépendances dans le dossier du .exe, pas dans
+        // celui de la DLL qui les importe : les modules d'Audacity rangés
+        // dans modules\ trouvent ainsi ogg.dll posée à côté d'Audacity.exe.
+        if let Some(d) = main_module().and_then(|m| m.path.parent().map(Path::to_path_buf)) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
         // Ordre de Windows : dossier de l'appli, puis System32 (où les
         // installeurs déposent les redistribuables), puis le dossier courant.
         dirs.push(system32_dir());

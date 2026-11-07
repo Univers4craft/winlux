@@ -213,5 +213,17 @@ bare.attach = ["network"]
 long_body = bare.body("", redacted=True)
 assert len(long_body) <= r["BODY_LIMIT"] and "Signaler un problème" in long_body.splitlines()[-1], long_body[-200:]
 for code in r["T"]:
-    assert all(k in r["T"][code] for k in ("attach", "d_network", "d_sound", "d_boot", "d_update", "h_diag")), code
+    assert all(k in r["T"][code] for k in ("attach_logs", "d_network", "d_sound", "d_boot", "d_update", "h_diag")), code
+# Une clé de traduction définie deux fois dans une langue : la seconde écrase
+# la première sans erreur (#558, « Ajouter à #{number} » au lieu du libellé).
+import ast
+source = (Path(__file__).with_name("winlux-report.py")).read_text()
+table = next(n.value for n in ast.parse(source).body
+             if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "T")
+for language in table.values:
+    keys = [k.value for k in language.keys]
+    doubles = {k for k in keys if keys.count(k) > 1}
+    assert not doubles, f"clés de traduction en double : {doubles}"
+assert r["tr"]("attach_logs", "fr") == "Joindre les journaux de diagnostic :"
+assert r["tr"]("attach", "fr", number=12) == "Ajouter à #12"
 print("winlux-report : tests OK")

@@ -1345,6 +1345,12 @@ done
 if test -f "$stage/usr/sbin/policy-rc.d" && test "$(cat "$stage/usr/sbin/policy-rc.d")" = "$(printf '#!/bin/sh\nexit 101')"; then
     rm -f "$stage/usr/sbin/policy-rc.d"
 fi
+# Le résolveur de QEMU (10.0.2.3) ne sert qu'à la VM de prepare-apt-base :
+# figé dans l'image, il était faux sur tout vrai réseau (#214).
+if grep -qs '10\.0\.2\.3' "$stage/etc/resolv.conf"; then
+    echo "resolv.conf de l'image figé sur le résolveur de QEMU : refaites la base APT." >&2
+    exit 1
+fi
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"

@@ -205,11 +205,14 @@ fn main() {
     };
     // Programme x86 : relancé tout de suite si la mémoire haute n'a pas
     // été réservée avant le premier malloc (#232).
-    if pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86) {
+    let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
+    if x86 {
         wow32::reexec_if_needed();
     }
     registry::backup();
     paths::install_windows_env();
+    // PROCESSOR_ARCHITECTURE, ProgramFiles… d'un processus 32 ou 64 bits.
+    wow32::apply_env(x86);
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
