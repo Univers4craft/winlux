@@ -312,6 +312,49 @@ fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
     }
 }
 
+/// Programme fenêtré installé par le paquet et lancé par une action
+/// personnalisée de type 18 (exécutable tiré de la table File) à
+/// l'installation : c'est lui qui, sous Windows, finit l'installation et
+/// pose les raccourcis. Winlux ne le lance pas, mais s'en sert de cible.
+fn self_setup_exe(db: &Database, ctx: &Context) -> Option<String> {
+    let actions: HashMap<String, (i32, String)> = db
+        .rows("CustomAction")
+        .map(|r| {
+            (
+                r.str("Action"),
+                (r.int("Type").unwrap_or(0), r.str("Source")),
+            )
+        })
+        .collect();
+    let mut seq: Vec<(i32, String, String)> = db
+        .rows("InstallExecuteSequence")
+        .map(|r| {
+            (
+                r.int("Sequence").unwrap_or(0),
+                r.str("Action"),
+                r.str("Condition"),
+            )
+        })
+        .collect();
+    seq.sort();
+    seq.iter().find_map(|(_, action, cond)| {
+        let (kind, source) = actions.get(action)?;
+        if kind & 0x3F != 18 || !ctx.eval(cond) {
+            return None;
+        }
+        let exe = ctx.files.get(source)?;
+        if !exe.to_ascii_lowercase().ends_with(".exe") {
+            return None;
+        }
+        let mut head = vec![0u8; 4096];
+        let n = std::fs::File::open(crate::paths::to_linux(exe))
+            .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+            .ok()?;
+        head.truncate(n);
+        (crate::pe::peek_subsystem(&head) == Some(2)).then(|| exe.clone())
+    })
+}
+
 fn selected_components(db: &Database, ctx: &Context) -> HashSet<String> {
     let install_level: i32 = ctx.get("INSTALLLEVEL").parse().unwrap_or(1);
     let addlocal = ctx.get("ADDLOCAL");
@@ -1008,6 +1051,35 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         );
         std::fs::write(&file, bytes).map_err(|e| format!("{} : {e}", file.display()))?;
         manifest.files.push(file);
+    }
+    // Aucun raccourci dans le paquet : sous Windows, c'est le programme
+    // installé qui les crée, lancé par une action personnalisée que Winlux
+    // n'exécute pas (Paint.NET : « paintdotnet.exe /setupActions /install »).
+    // Sans ce relais, l'appli serait installée mais absente du menu Démarrer.
+    if main_exe.is_empty() {
+        if let Some(exe) = self_setup_exe(db, &ctx) {
+            let label: String = name
+                .chars()
+                .map(|c| if "\\/:*?\"<>|".contains(c) { ' ' } else { c })
+                .collect();
+            let file = crate::paths::to_linux(&format!(
+                "{}{}.lnk",
+                ctx.get("ProgramMenuFolder"),
+                label.trim()
+            ));
+            if let Some(parent) = file.parent() {
+                mkdirs(parent, &mut manifest.dirs).map_err(|e| e.to_string())?;
+            }
+            let workdir = exe
+                .rsplit_once('\\')
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_default();
+            let bytes = shortcut_bytes(&exe, "", &workdir, &name);
+            std::fs::write(&file, bytes).map_err(|e| format!("{} : {e}", file.display()))?;
+            manifest.files.push(file);
+            log.log(&format!("Raccourci du menu Démarrer : {label}"));
+            main_exe = exe;
+        }
     }
     super::extra::remove_registry(db, &ctx, &comps, all_users, &mut edits);
     super::extra::environment(db, &ctx, &comps, &mut edits, &mut manifest);

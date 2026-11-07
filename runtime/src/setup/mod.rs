@@ -1026,8 +1026,18 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     if let Some(code) = burn::launch(exe, args) {
         return Some(code);
     }
-    if !(msix::is_package_name(exe) && msix::is_package(exe)) {
-        detect_file(exe)?;
+    let kind = if msix::is_package_name(exe) && msix::is_package(exe) {
+        Kind::Msix
+    } else {
+        detect_file(exe)?
+    };
+    // Auto-extractible qui lance son propre installateur autour d'un paquet
+    // MSI (Paint.NET) : le MSI est installé directement.
+    let msi = (kind == Kind::SevenZip)
+        .then(|| sevenz::launch_msi(exe, args))
+        .flatten();
+    if let Some(code) = msi {
+        return Some(code);
     }
     let mut cli_args: Vec<String> = args.to_vec();
     cli_args.push(exe.to_string_lossy().into_owned());

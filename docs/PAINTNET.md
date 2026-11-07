@@ -37,6 +37,16 @@ Suivi d'ensemble : #138.
   `d5ae7043f2fb9d365b48dfe243a2aca1c74924de99b04b6445916c95354aefa3`.
 - Une fois décompressé, le dossier pèse 307 Mo et contient 415 fichiers.
 - Pour essayer : `winlux paintdotnet.exe` depuis le dossier décompressé.
+- L'installeur officiel (`paint.net.5.1.12.install.x64.zip`) s'installe
+  depuis #733 : c'est un auto-extractible 7-Zip qui lance `SetupShim.exe`,
+  puis une interface d'installation .NET, autour de `PaintDotNet_x64.msi`.
+  Winlux installe directement ce paquet MSI dans
+  `C:\Program Files\Paint.NET`, pose le raccourci « Paint.NET » du menu
+  Démarrer (que crée sous Windows `paintdotnet.exe /setupActions /install`)
+  et l'inscrit dans « Applications installées ». La désinstallation retire
+  tout.
+- Mesure du 07/11/2026 : le programme installé s'arrête au même endroit que
+  la version portable (#561), sans ouvrir de fenêtre.
 
 ## Ce que l'appli exige
 
