@@ -97,7 +97,7 @@ expect() {
     fi
 }
 expect 0 "SEH 32 bits : tout est correct"
-echo "seh32 : 9 cas __try/__except/__finally (NULL, division, RaiseException, déroulement, ud2, reprise)"
+echo "seh32 : 11 cas __try/__except/__finally (NULL, division, RaiseException, déroulement, ud2, reprise, rappel 64 bits rattrapé par saut direct)"
 WINLUX_WOW32_NO_FSGSBASE=1 expect 0 "SEH 32 bits : tout est correct"
 echo "seh32 : idem sans FSGSBASE"
 expect 66 "0xE0000042 non gérée" nonrattrapee
