@@ -41,9 +41,11 @@ Suivi d'ensemble : #138.
   depuis #733 : c'est un auto-extractible 7-Zip qui lance `SetupShim.exe`,
   puis une interface d'installation .NET, autour de `PaintDotNet_x64.msi`.
   Winlux installe directement ce paquet MSI dans
-  `C:\Program Files\Paint.NET`, pose le raccourci « Paint.NET » du menu
-  Démarrer (que crée sous Windows `paintdotnet.exe /setupActions /install`)
-  et l'inscrit dans « Applications installées ». La désinstallation retire
+  `C:\Program Files\Paint.NET`, pose les raccourcis « Paint.NET » du menu
+  Démarrer et du Bureau (que crée sous Windows
+  `paintdotnet.exe /setupActions /install`, le Bureau selon la propriété
+  `DESKTOPSHORTCUT`, cochée par défaut) et l'inscrit dans « Applications
+  installées ». L'icône affichée est celle de `paintdotnet.exe`. La désinstallation retire
   tout.
 - Mesure du 07/11/2026 : le programme installé s'arrête au même endroit que
   la version portable (#561), sans ouvrir de fenêtre.

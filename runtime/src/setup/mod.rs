@@ -797,7 +797,7 @@ fn refresh_launchers() {
 /// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
 /// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
 /// winlux-applications pose ensuite le lanceur « Claude » à sa place.
-fn hide_desktop_link(link: &str) {
+pub(crate) fn hide_desktop_link(link: &str) {
     let desktop = Folders::desktop();
     let Some((dir, name)) = link.rsplit_once('\\') else {
         return;
