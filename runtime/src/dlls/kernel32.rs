@@ -7684,6 +7684,24 @@ fn change_notifications() -> &'static Mutex<HashMap<usize, Arc<std::sync::atomic
     CHANGE_NOTIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Code Windows d'un échec de FindFirstChangeNotification : dossier refusé
+/// à l'application (ERROR_ACCESS_DENIED), absent (ERROR_PATH_NOT_FOUND),
+/// ou fichier qui n'est pas un dossier (ERROR_DIRECTORY). 7-Zip affiche ce
+/// code quand il ne peut pas ouvrir un dossier (#483).
+fn change_notification_error(linux: &std::path::Path, e: &std::io::Error) -> u32 {
+    if crate::permissions::is_denied_path(linux) {
+        5
+    } else if e.raw_os_error() == Some(libc::ENOTDIR) {
+        if linux.exists() {
+            267
+        } else {
+            3
+        }
+    } else {
+        io_error_code(e)
+    }
+}
+
 fn find_first_change_notification(path: &str, subtree: bool, filter: u32) -> usize {
     if filter == 0 || filter & !crate::dlls::dirwatch::FILTER_ALL != 0 {
         crate::process::set_last_error(87);
@@ -7693,11 +7711,7 @@ fn find_first_change_notification(path: &str, subtree: bool, filter: u32) -> usi
     let mut watcher = match crate::dlls::dirwatch::Watcher::new(&linux, subtree, filter) {
         Ok(w) => w,
         Err(e) => {
-            crate::process::set_last_error(if e.raw_os_error() == Some(libc::ENOTDIR) {
-                267
-            } else {
-                io_error_code(&e)
-            });
+            crate::process::set_last_error(change_notification_error(&linux, &e));
             return usize::MAX;
         }
     };

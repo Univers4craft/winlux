@@ -429,14 +429,21 @@ pub fn path_allowed(path: &Path) -> bool {
     allowed(Capability::Files)
 }
 
+const DENIED_ROOT: &str = "/proc/winlux-permission-denied";
+
 /// Chemin inexistant renvoyé à la place d'un fichier refusé : l'application
 /// reçoit « fichier introuvable » et ne peut rien y créer.
 pub fn denied_path(path: &Path) -> PathBuf {
-    let mut p = PathBuf::from("/proc/winlux-permission-denied");
+    let mut p = PathBuf::from(DENIED_ROOT);
     if let Some(name) = path.file_name() {
         p.push(name);
     }
     p
+}
+
+/// Chemin produit par `denied_path` : l'accès a été refusé à l'application.
+pub fn is_denied_path(path: &Path) -> bool {
+    path.starts_with(DENIED_ROOT)
 }
 
 /// Adresse d'une socket locale (boucle locale, socket Unix) : jamais demandée.
