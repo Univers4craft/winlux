@@ -527,14 +527,11 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
             }
         }
     }
-    if m.pe.x86 {
-        // TLS statique 32 bits : troisième étape de #232.
-        if m.pe.dir(DIR_TLS).rva != 0 {
-            trace!("{} : TLS 32 bits pas encore pris en charge", m.name);
-        }
+    m.tls = if m.pe.x86 {
+        read_tls32(&m)
     } else {
-        m.tls = read_tls(&m);
-    }
+        read_tls(&m)
+    };
 
     MODULES.lock().unwrap().push(m.clone());
     Ok(m)
@@ -594,6 +591,23 @@ fn read_tls(m: &Module) -> Option<TlsInfo> {
         index_addr: rd64(b, o + 16)? as usize,
         callbacks_addr: rd64(b, o + 24)? as usize,
         zero_fill: rd32(b, o + 32)? as usize,
+    })
+}
+
+/// Répertoire TLS d'une image x86 : mêmes champs sur 4 octets.
+fn read_tls32(m: &Module) -> Option<TlsInfo> {
+    let d = m.pe.dir(DIR_TLS);
+    if d.rva == 0 {
+        return None;
+    }
+    let b = m.bytes();
+    let o = d.rva as usize;
+    Some(TlsInfo {
+        raw_start: rd32(b, o)? as usize,
+        raw_end: rd32(b, o + 4)? as usize,
+        index_addr: rd32(b, o + 8)? as usize,
+        callbacks_addr: rd32(b, o + 12)? as usize,
+        zero_fill: rd32(b, o + 16)? as usize,
     })
 }
 

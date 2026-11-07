@@ -893,11 +893,11 @@ extern "win64" fn p_sys_errlist() -> *mut usize {
     init_tables();
     std::ptr::addr_of_mut!(SYS_ERRLIST) as *mut usize
 }
-extern "win64" fn p_acmdln() -> *mut usize {
+pub(crate) extern "win64" fn p_acmdln() -> *mut usize {
     cmdline();
     std::ptr::addr_of_mut!(ACMDLN)
 }
-extern "win64" fn p_wcmdln() -> *mut usize {
+pub(crate) extern "win64" fn p_wcmdln() -> *mut usize {
     cmdline();
     std::ptr::addr_of_mut!(WCMDLN)
 }

@@ -440,7 +440,12 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
             }
             b'p' => {
                 let v = arg_u64(va, arg_pos);
-                let body = format!("{v:016X}");
+                // Programme x86 (#232) : pointeurs de 8 chiffres.
+                let body = if crate::wow32::active() {
+                    format!("{:08X}", v as u32)
+                } else {
+                    format!("{v:016X}")
+                };
                 pad(&mut out, body.as_bytes(), &Spec { zero: false, ..s }, 0);
             }
             b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => {

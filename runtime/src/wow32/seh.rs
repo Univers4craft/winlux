@@ -125,7 +125,7 @@ extern "C" {
     pub fn winlux_wow_fault64();
 }
 
-fn chain_now() -> u64 {
+pub(super) fn chain_now() -> u64 {
     let v: u64;
     unsafe {
         std::arch::asm!("mov {}, qword ptr gs:[{off}]", out(reg) v, off = const super::TEB64_RSP_CHAIN);
@@ -400,6 +400,40 @@ fn unwind_to(target: u32, record: u32) {
         frame = rd(frame);
         wr(teb, frame);
     }
+}
+
+/// Déroule les cadres posés au-dessus de `frame` (longjmp).
+pub(super) fn unwind_to_frame(frame: u32) {
+    unwind_to(frame, 0);
+}
+
+/// Registres entiers d'une reprise x86 (longjmp).
+pub(super) struct Regs32 {
+    pub eip: u32,
+    pub esp: u32,
+    pub ebp: u32,
+    pub ebx: u32,
+    pub edi: u32,
+    pub esi: u32,
+    pub eax: u32,
+}
+
+/// Reprend le code x86 avec ces registres et la chaîne des appels 64 → 32
+/// `chain`.
+pub(super) fn resume_regs(r: &Regs32, chain: u64) -> ! {
+    let mut ctx = [0u8; CONTEXT32_SIZE];
+    put(&mut ctx, CTX_FLAGS, CONTEXT_FULL);
+    put(&mut ctx, CTX_EIP, r.eip);
+    put(&mut ctx, CTX_ESP, r.esp);
+    put(&mut ctx, CTX_EBP, r.ebp);
+    put(&mut ctx, CTX_EBX, r.ebx);
+    put(&mut ctx, CTX_ESI, r.esi);
+    put(&mut ctx, CTX_EDI, r.edi);
+    put(&mut ctx, CTX_EAX, r.eax);
+    put(&mut ctx, CTX_SEGCS, super::CS32 as u32);
+    put(&mut ctx, CTX_SEGSS, 0x2b);
+    put(&mut ctx, CTX_EFLAGS, 0x202);
+    resume(ctx.as_ptr() as usize as u32, chain, None)
 }
 
 /// `SetUnhandledExceptionFilter(filter)` : rend le précédent.
