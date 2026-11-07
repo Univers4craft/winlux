@@ -28,11 +28,12 @@ assert kept() == "", "ancien installateur sans sauvegarde"
 source = (HERE / "winlux-settings-pages.py").read_text(encoding="utf-8")
 recovery = source[source.index("    def sections_recovery(self):"):]
 recovery = recovery[:recovery.index("\n    # ──")]
-assert "saved = previous_version_kept()" in recovery and "is_file()" not in recovery
+assert "recovery_text(previous_version_kept())" in recovery and "is_file()" not in recovery
+assert "self.recovery_label" in recovery, "ligne relue à chaque rafraîchissement (test-settings-native.py le vérifie en vrai)"
 settings = (HERE / "winlux-settings.py").read_text(encoding="utf-8")
 assert settings.count("set_visible(bool(EXTRA.previous_version_kept()))") == 2 and "set_visible(Path(PREVIOUS_PACKAGE)" not in settings, \
     "bouton Restaurer : même avis que l'encadré"
-print("#636 : encadré, bouton Restaurer et « Secours et restauration » disent la même chose")
+print("#636 : encadré, bouton Restaurer et « Secours et restauration » disent la même chose, relus ensemble")
 
 # ── #635 ─────────────────────────────────────────────────────────────────────
 build = (HERE / "build-live-iso.sh").read_text(encoding="utf-8")

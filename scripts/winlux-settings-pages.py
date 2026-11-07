@@ -872,6 +872,10 @@ EXE_GPUS = (("auto", "Automatique"), ("integrated", "GPU économie d’énergie"
 PREVIOUS_LINE = "Version précédente conservée : "
 
 
+def recovery_text(saved):
+    return _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée.")
+
+
 def previous_version_kept(updates=None):
     """Version précédente conservée (« v0.2.19 »), « ? » si conservée sans
     numéro lisible, "" sinon. Un seul avis pour l'encadré du haut de Mises à
@@ -2930,13 +2934,21 @@ class ExtraPages:
     def sections_recovery(self):
         self.section(_t("Secours et restauration"))
         box = self.card()
-        saved = previous_version_kept()
-        self.row(box, _t("Version précédente"), None,
-                 _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
+        line = self.row(box, _t("Version précédente"), None, recovery_text(previous_version_kept()))
+        # Relue à chaque rafraîchissement de la page (#636) : après une mise à
+        # jour, l'encadré du haut changeait et cette ligne restait à l'état
+        # d'ouverture de la page (« Aucune version précédente conservée »).
+        self.recovery_label = line.get_children()[0].get_children()[1]
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
         if page_available(PAGE_RECOVERY):
             self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    def refresh_recovery(self):
+        label = getattr(self, "recovery_label", None)
+        if label is None: return
+        text = recovery_text(previous_version_kept())
+        if label.get_text() != text: label.set_text(text)
 
     # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
 

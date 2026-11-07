@@ -847,6 +847,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.page_opened = time.time()
         self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
+        self.recovery_label = None
         category = category_of(self.current)
         if len(self.shown_pages(category)) > 1:
             self.label(CATEGORIES[category][0] + "  ›", "subtitle")
@@ -1061,7 +1062,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.rollback_button is not None:
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
             self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
-        if self.page == 7: text = localize_update_text(text)
+        if self.page == 7:
+            text = localize_update_text(text)
+            # « Secours et restauration » relu avec l'encadré : un seul avis (#636).
+            self.refresh_recovery()
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
             self.show_browser_buttons(status)

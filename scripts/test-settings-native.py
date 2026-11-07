@@ -127,6 +127,21 @@ def check():
             assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
             if not Path(module["PREVIOUS_PACKAGE"]).is_file():
                 assert not window.rollback_button.get_parent().get_visible(), "Restore shown without a previous version"
+            # #636 : une mise à jour termine pendant que la page est ouverte ;
+            # « Secours et restauration » suit l'encadré sans rouvrir la page.
+            kept = module["EXTRA"].previous_version_kept
+            kept_globals = kept.__globals__
+            original_pages_read = kept_globals["read"]
+            listing = "Version installée : v0.2.20\nWinlux est à jour.\nVersion précédente conservée : v0.2.19\n"
+            try:
+                kept_globals["read"] = lambda path: {"/usr/share/winlux/update-backend": "apt\n", "/run/winlux/updates.txt": listing}.get(path, original_pages_read(path))
+                namespace["read"] = lambda path: listing if path == "/run/winlux/updates.txt" else original_read(path)
+                assert window.recovery_label is not None, "Secours et restauration absent de la page 7"
+                window.poll()
+                assert window.recovery_label.get_text() == "Conservée : le bouton Restaurer ci-dessus y revient.", window.recovery_label.get_text()
+                assert window.rollback_button.get_parent().get_visible(), "Restaurer caché alors qu'une version est conservée"
+            finally:
+                kept_globals["read"] = original_pages_read
         finally:
             namespace["read"] = original_read
         window.show_update_error("update-apply", 1)
