@@ -134,12 +134,15 @@ printf 'LIBRARY oleaut32.dll\nEXPORTS\nSysAllocString@4\nSysStringLen@4\nVariant
 llvm-dlltool -m i386 -k -d "$tmp/oleaut32_wow64.def" -l "$tmp/oleaut32_wow64.lib"
 printf 'LIBRARY ws2_32.dll\nEXPORTS\nWSAStartup@8\ngethostbyname@4\n' >"$tmp/ws2_32_wow64.def"
 llvm-dlltool -m i386 -k -d "$tmp/ws2_32_wow64.def" -l "$tmp/ws2_32_wow64.lib"
-printf 'LIBRARY user32.dll\nEXPORTS\nLoadIconW@8\nGetIconInfo@8\n' >"$tmp/user32_wow64.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nLoadIconW@8\nGetIconInfo@8\nCreatePopupMenu@0\nInsertMenuItemW@16\nGetMenuItemInfoW@16\n' >"$tmp/user32_wow64.def"
+printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC@4\nCreateCompatibleBitmap@12\nSelectObject@8\n' >"$tmp/gdi32_wow64.def"
+llvm-dlltool -m i386 -k -d "$tmp/gdi32_wow64.def" -l "$tmp/gdi32_wow64.lib"
 llvm-dlltool -m i386 -k -d "$tmp/user32_wow64.def" -l "$tmp/user32_wow64.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wow64.c" -o "$tmp/wow64.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" "$tmp/msvcrt_wow64.lib" \
-    "$tmp/oleaut32_wow64.lib" "$tmp/ws2_32_wow64.lib" "$tmp/user32_wow64.lib" /out:"$out/wow64.exe"
+    "$tmp/oleaut32_wow64.lib" "$tmp/ws2_32_wow64.lib" "$tmp/user32_wow64.lib" \
+    "$tmp/gdi32_wow64.lib" /out:"$out/wow64.exe"
 # Exceptions C++ MSVC x86 (#232, étape 7) : tables de clang en cible
 # i686-pc-windows-msvc, msvcrt!__CxxFrameHandler3 et _CxxThrowException.
 cat >"$tmp/kernel32_cxx.def" <<'DEF'
