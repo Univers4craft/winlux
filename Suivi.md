@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **294**
+- Réalisé : **302**
 - À faire ou en cours : **46**
-- Total : **340**
-- Progression : **86.5%**
-- Dernière mise à jour : 02/11/2026 (14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
+- Total : **348**
+- Progression : **86.8%**
+- Dernière mise à jour : 07/11/2026 (tri des issues GitHub sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées comme livrées, #498 doublon de #521 ; PR #564 pour #209, #214, #14, #26, #575, #590, #591, #592 ; 14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
 
@@ -20,7 +20,7 @@
 - [x] **Installateur multilingue** : Choix de la langue et du clavier lors de l'installation sur disque vierge.
 - [x] **Session multilingue** : xsession-winlux lit locale.conf et exporte WINLUX_LANG au démarrage.
 - [x] **Gestion fuseau horaire** : timedatectl/ln -sf dans winlux-control.sh, 12 fuseaux courants dans l'interface.
-- [ ] **Corbeille fonctionnelle** (#10) : Supprimer → Corbeille et Restaurer livrés (#252), Suppr dans la Corbeille confirmé ; reste « Vider la corbeille » dans l'Explorateur.
+- [ ] **Corbeille fonctionnelle** (#10) : Supprimer → Corbeille et Restaurer livrés (#252), Suppr dans la Corbeille confirmé, « Vider la corbeille » livré (#315) ; reste la taille maximale et la purge automatique quand le disque est plein (fil Explorateur).
 - [ ] **Copie avec progression + pause/annuler** (#11) : aujourd'hui une copie bloque la fenêtre de l'Explorateur jusqu'à la fin (`copy_tree` sur le fil de la fenêtre) ; à passer en tâche de fond avec progression, vitesse, temps restant, Pause, Annuler et choix en cas de conflit.
 - [ ] **Centre de réglages rapides plus complet** (#12) : réseau, volume, batterie, luminosité et « Ethernet virtuel » livrés ; reste un vrai panneau Windows 11 (tuiles et curseurs, Windows+A) à la place de la liste de boutons.
 
@@ -134,6 +134,17 @@ Au 02/11/2026 : #262 (v0.2.14 : version, notes, README, wiki), #263 (campagne de
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
+
+### Tri des issues GitHub (07/11/2026, PR #564)
+
+- [x] Issues vérifiées une à une sur master 14d19b7 : #29, #30, #233, #266, #267, #270, #272 fermées (livrées sans avoir été closes), #498 fermée comme doublon de #521 ; #23, #28, #179, #183 commentées (partielles).
+- [x] Fond d'écran (#590, urgence 1) : `Fond ecran.png` montrait une fenêtre à quatre carreaux proche du logo Windows ; retiré, `wallpaper.bmp` vient de « Winlux Nuit », la CI refuse tout fond qui ne sort pas de `render-brand.py`.
+- [x] Types de fichiers traduits (#591) : 80 types courants en fr (et de/es manquants) dans `winlux.xml` (« Dossier », « Document texte », « Script shell », « Programme Windows »…). Test : `scripts/test-mime-translations.py`.
+- [x] Icône des .exe (#592) : `application-vnd.microsoft.portable-executable`, `x-dosexec`, `x-ms-ne-executable` dans le thème Winlux.
+- [x] gdi32 (#14, #575) : chemins complets (BeginPath … StrokePath, FillPath, PathToRegion, SelectClipPath, GetPath), ArcTo, AngleArc, PolyDraw, GetFontData ; Polygon remplit l'intérieur, PolylineTo et PolyBezier(To) tracent.
+- [x] DLL intégrées (#26) : `pdh` (vrais compteurs : processeur, mémoire, processus, temps de fonctionnement), `winscard`, `bthprops.cpl`, `dcomp`, `fontsub`.
+- [x] Shell PE (#209) : Calculatrice ± et %, résultats négatifs justes (`calc.exe --selftest`) ; fenêtre Utilitaires remplie.
+- [x] Comptes (#214) : `winlux-native-config` ajoute un compte sous `/etc/.pwd.lock`, fsync du dossier ; reste de la liste « à revérifier » contrôlé.
 
 ### Livré par pull requests (fin octobre 2026)
 
