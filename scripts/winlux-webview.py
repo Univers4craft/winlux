@@ -12,6 +12,8 @@ la fenêtre de l'application. Le dialogue passe par des lignes JSON :
     {"op": "stop"}   {"op": "back"}   {"op": "forward"}
     {"op": "script_doc", "js"}   {"op": "exec", "id", "js"}
     {"op": "post", "json"}   {"op": "settings", ...}   {"op": "close"}
+    {"op": "map", "host", "folder"}   {"op": "unmap", "host"}   (hôtes virtuels)
+    {"op": "reparent", "parent"}   {"op": "background", "a", "r", "g", "b"}
 
   moteur → runtime (sortie standard)
     {"ev": "ready", "xid"}   {"ev": "nav_starting", "uri", "nav"}
@@ -32,6 +34,10 @@ import os
 import subprocess
 import sys
 import threading
+import warnings
+
+# run_javascript reste la seule API commune aux WebKitGTK 4.1 des distributions.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 ENGINE_PACKAGE = "gir1.2-webkit2-4.1"
 
@@ -213,12 +219,33 @@ BRIDGE = r"""
 """
 
 
+LOCAL_SCHEME = "winlux-local"
+
+
 class View:
-    def __init__(self, Gtk, Gdk, GdkX11, GLib, WebKit2):
-        self.Gtk, self.Gdk, self.GdkX11, self.GLib, self.WebKit2 = Gtk, Gdk, GdkX11, GLib, WebKit2
+    def __init__(self, Gtk, Gdk, GdkX11, GLib, Gio, WebKit2):
+        self.Gtk, self.Gdk, self.GdkX11, self.GLib, self.Gio, self.WebKit2 = Gtk, Gdk, GdkX11, GLib, Gio, WebKit2
         self.window = None
         self.view = None
         self.nav = 0
+        self.menus = True
+        # Hôtes virtuels (SetVirtualHostNameToFolderMapping) : https://hôte/…
+        # est servi depuis un dossier, sous le schéma winlux-local://.
+        self.hosts = {}
+        data = os.environ.get("WINLUX_WEBVIEW_DATA")
+        if data:
+            manager = WebKit2.WebsiteDataManager(base_data_directory=os.path.join(data, "donnees"),
+                                                 base_cache_directory=os.path.join(data, "cache"))
+            self.context = WebKit2.WebContext.new_with_website_data_manager(manager)
+        else:
+            self.context = WebKit2.WebContext.get_default()
+        self.context.register_uri_scheme(LOCAL_SCHEME, self.serve_local)
+        security = self.context.get_security_manager()
+        security.register_uri_scheme_as_secure(LOCAL_SCHEME)
+        security.register_uri_scheme_as_cors_enabled(LOCAL_SCHEME)
+        language = os.environ.get("WINLUX_WEBVIEW_LANG")
+        if language:
+            self.context.set_preferred_languages([language])
         self.manager = WebKit2.UserContentManager()
         self.manager.register_script_message_handler("winlux")
         self.manager.connect("script-message-received::winlux", self.on_message)
@@ -232,7 +259,8 @@ class View:
 
     def create(self, cmd):
         Gtk, WebKit2 = self.Gtk, self.WebKit2
-        self.view = WebKit2.WebView.new_with_user_content_manager(self.manager)
+        self.view = WebKit2.WebView(web_context=self.context, user_content_manager=self.manager)
+        self.view.connect("context-menu", lambda *_: not self.menus)
         settings = self.view.get_settings()
         settings.set_enable_developer_extras(True)
         settings.set_javascript_can_access_clipboard(True)
@@ -261,6 +289,49 @@ class View:
             self.window.hide()
         emit(ev="ready", xid=gdk_window.get_xid())
 
+    def reparent(self, parent):
+        gdk_window = self.window.get_window() if self.window else None
+        if gdk_window is None or not parent:
+            return
+        foreign = self.GdkX11.X11Window.foreign_new_for_display(self.Gdk.Display.get_default(), parent)
+        if foreign is not None:
+            gdk_window.reparent(foreign, 0, 0)
+
+    # ── Hôtes virtuels ──
+    def local_uri(self, uri):
+        """https://hôte/chemin d'un hôte virtuel → winlux-local://hôte/chemin."""
+        for scheme in ("https://", "http://"):
+            if uri.lower().startswith(scheme):
+                rest = uri[len(scheme):]
+                host = rest.split("/", 1)[0].split(":", 1)[0].lower()
+                if host in self.hosts:
+                    return LOCAL_SCHEME + "://" + rest
+        return None
+
+    def serve_local(self, request):
+        from urllib.parse import unquote, urlsplit
+        parts = urlsplit(request.get_uri())
+        folder = self.hosts.get((parts.hostname or "").lower())
+        path = unquote(parts.path or "/")
+        if folder is None:
+            request.finish_error(self.GLib.Error.new_literal(self.Gio.io_error_quark(), "hôte inconnu",
+                                                             int(self.Gio.IOErrorEnum.NOT_FOUND)))
+            return
+        root = os.path.realpath(folder)
+        target = os.path.realpath(os.path.join(root, path.lstrip("/")))
+        if os.path.isdir(target):
+            target = os.path.join(target, "index.html")
+        if not (target == root or target.startswith(root + os.sep)) or not os.path.isfile(target):
+            request.finish_error(self.GLib.Error.new_literal(self.Gio.io_error_quark(), "introuvable",
+                                                             int(self.Gio.IOErrorEnum.NOT_FOUND)))
+            return
+        import mimetypes
+        mime = mimetypes.guess_type(target)[0] or "application/octet-stream"
+        with open(target, "rb") as f:
+            data = f.read()
+        stream = self.Gio.MemoryInputStream.new_from_bytes(self.GLib.Bytes.new(data))
+        request.finish(stream, len(data), mime)
+
     def bounds(self, cmd):
         if self.window is None:
             return
@@ -273,6 +344,11 @@ class View:
     def on_policy(self, view, decision, kind):
         if kind == self.WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
             uri = decision.get_navigation_action().get_request().get_uri()
+            local = self.local_uri(uri)
+            if local is not None:
+                decision.ignore()
+                self.view.load_uri(local)
+                return True
             self.nav += 1
             emit(ev="nav_starting", uri=uri, nav=self.nav)
         return False
@@ -324,13 +400,27 @@ class View:
         elif self.view is None:
             if op == "script_doc":
                 self.add_script(cmd.get("js", ""))
+            elif op == "close":
+                return False
             return True
         elif op == "bounds":
             self.bounds(cmd)
         elif op == "visible":
             (self.window.show_all if cmd.get("on") else self.window.hide)()
         elif op == "navigate":
-            self.view.load_uri(cmd.get("uri", "about:blank"))
+            uri = cmd.get("uri", "about:blank")
+            self.view.load_uri(self.local_uri(uri) or uri)
+        elif op == "map":
+            self.hosts[cmd.get("host", "").lower()] = cmd.get("folder", "")
+        elif op == "unmap":
+            self.hosts.pop(cmd.get("host", "").lower(), None)
+        elif op == "reparent":
+            self.reparent(cmd.get("parent") or 0)
+        elif op == "background":
+            rgba = self.Gdk.RGBA()
+            rgba.red, rgba.green, rgba.blue = (cmd.get(k, 255) / 255 for k in ("r", "g", "b"))
+            rgba.alpha = cmd.get("a", 255) / 255
+            self.view.set_background_color(rgba)
         elif op == "html":
             self.view.load_html(cmd.get("html", ""), "about:blank")
         elif op == "reload":
@@ -354,6 +444,8 @@ class View:
             settings = self.view.get_settings()
             if "script" in cmd:
                 settings.set_enable_javascript(bool(cmd["script"]))
+            if "menus" in cmd:
+                self.menus = bool(cmd["menus"])
             if "devtools" in cmd:
                 settings.set_enable_developer_extras(bool(cmd["devtools"]))
             if "zoom" in cmd:
@@ -376,8 +468,8 @@ def main():
     gi.require_version("Gdk", "3.0")
     gi.require_version("GdkX11", "3.0")
     gi.require_version("WebKit2", "4.1")
-    from gi.repository import Gtk, Gdk, GdkX11, GLib, WebKit2
-    view = View(Gtk, Gdk, GdkX11, GLib, WebKit2)
+    from gi.repository import Gtk, Gdk, GdkX11, GLib, Gio, WebKit2
+    view = View(Gtk, Gdk, GdkX11, GLib, Gio, WebKit2)
 
     def reader():
         for line in sys.stdin:

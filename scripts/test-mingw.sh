@@ -110,6 +110,10 @@ fi
 if test -f "$dir/dupx_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-duplication.sh"
 fi
+# WebView2 maison sur WebKitGTK (#236), bloquant (sauté sans WebKitGTK).
+if test -f "$dir/webview2_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-webview2.sh"
+fi
 # Fonctions vérifiées au démarrage par Chromium et Electron (#236), bloquant.
 if test -f "$dir/chromium_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-chromium-api.sh"

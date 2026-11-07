@@ -442,9 +442,71 @@ pub fn path_allowed(path: &Path) -> bool {
     allowed(Capability::Files)
 }
 
+/// Texte du message « accès aux fichiers refusé », dans la langue de
+/// l'interface (fr, en, es, de).
+pub fn denied_notice(app: &str, lang: &str) -> String {
+    let t = match lang.get(..2) {
+        Some("en") => "“{app}” cannot access your personal files. If the app does not work, allow it in Settings > Privacy & security.",
+        Some("es") => "«{app}» no tiene acceso a sus archivos personales. Si la aplicación no funciona, permítalo en Configuración > Privacidad y seguridad.",
+        Some("de") => "„{app}“ hat keinen Zugriff auf Ihre persönlichen Dateien. Wenn die App nicht funktioniert, erlauben Sie es unter Einstellungen > Datenschutz und Sicherheit.",
+        _ => "« {app} » n’a pas accès à vos fichiers personnels. Si l’application ne fonctionne pas, autorisez-la dans Paramètres > Confidentialité et sécurité.",
+    };
+    t.replace("{app}", app)
+}
+
+fn interface_lang() -> String {
+    if let Ok(l) = std::env::var("WINLUX_LANG") {
+        if !l.is_empty() {
+            return l;
+        }
+    }
+    std::fs::read_to_string("/etc/winlux/locale.conf")
+        .ok()
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("LANG=").map(str::to_string))
+        })
+        .or_else(|| std::env::var("LANG").ok())
+        .unwrap_or_else(|| "fr".into())
+}
+
+/// Premier accès refusé de cette exécution : l'utilisateur est prévenu
+/// (une application Electron à qui l'on refuse ses dossiers peut s'arrêter
+/// au démarrage sans rien dire). Les enfants de Chromium (`--type=`) se
+/// taisent : leur navigateur a déjà prévenu.
+fn tell_denied_once() {
+    static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if TOLD.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Some(app) = APP.get() else {
+        return;
+    };
+    if std::env::args().any(|a| a.starts_with("--type="))
+        || std::env::var("WINLUX_COMMAND_LINE").is_ok_and(|l| l.contains(" --type="))
+        || std::env::var_os("DISPLAY").is_none()
+    {
+        return;
+    }
+    let text = denied_notice(&app.name, &interface_lang());
+    crate::log_warn!("permissions", "{text}");
+    if let Ok(mut child) = std::process::Command::new("notify-send")
+        .args(["-i", "folder-documents", "Winlux", &text])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
 /// Chemin inexistant renvoyé à la place d'un fichier refusé : l'application
 /// reçoit « fichier introuvable » et ne peut rien y créer.
 pub fn denied_path(path: &Path) -> PathBuf {
+    tell_denied_once();
     let mut p = PathBuf::from("/proc/winlux-permission-denied");
     if let Some(name) = path.file_name() {
         p.push(name);
@@ -480,6 +542,15 @@ pub unsafe fn sockaddr_is_local(name: *const u8, len: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn refus_explique_en_quatre_langues() {
+        for lang in ["fr_FR.UTF-8", "en", "es_ES", "de_DE"] {
+            let t = super::denied_notice("Claude", lang);
+            assert!(t.contains("Claude") && t.contains('>'), "{lang}: {t}");
+        }
+        assert!(super::denied_notice("X", "de").contains("Einstellungen"));
+    }
+
     #[test]
     fn programme_installe() {
         use super::is_installed_program as installed;

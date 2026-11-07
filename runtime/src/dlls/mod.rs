@@ -157,6 +157,8 @@ pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
+pub mod webview2;
+pub mod webview2_iids;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
@@ -576,6 +578,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "webview2loader",
+                exports: webview2::exports(),
                 handle: fake_module(),
             },
             Builtin {
