@@ -245,6 +245,13 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
     if len == 0 || len >= EXE_PATH.len() {
         return;
     }
+    // Session native : la seule application Paramètres est celle de la
+    // session, ouverte sur ce programme (et non sur la page Écran).
+    let mut z = [0u16; 2048];
+    z[..len].copy_from_slice(&path[..len]);
+    if crate::wm::native_exe_settings(&z) {
+        return;
+    }
     EXE_PATH.fill(0);
     EXE_PATH[..len].copy_from_slice(&path[..len]);
     EXE_LEN = len;

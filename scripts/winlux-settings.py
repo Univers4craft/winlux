@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Native settings: nonblocking control actions and live Linux status."""
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -1216,6 +1217,23 @@ def browsers_waiting():
     return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
 
 
+def exe_from_windows(value):
+    """Chemin Linux d'un .exe donné en chemin Windows (C:\\…, Z:\\…), avec
+    les règles du runtime (lecteurs, profil, dossiers connus) ; None sinon."""
+    value = value.strip()
+    if not value: return None
+    if value.startswith("/"): path = Path(value)
+    else:
+        winlux = shutil.which("winlux") or "/usr/bin/winlux"
+        try:
+            result = subprocess.run([winlux, "--linux-path", value], capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0: return None
+        path = Path(os.fsdecode(result.stdout.rstrip(b"\n")))
+    return path if path.suffix.lower() == ".exe" and path.is_file() else None
+
+
 class SettingsApp(Gtk.Application):
     """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement
     (menu Démarrer, raccourci, autre page) la ramène devant et ouvre la page
@@ -1226,11 +1244,17 @@ class SettingsApp(Gtk.Application):
 
     def do_command_line(self, line):
         page = line.getenv("WINLUX_SETTINGS_PAGE") or ""
+        # « Compatibilité » d'un .exe dans l'Explorateur : Programmes Windows,
+        # sur la carte de ce programme (chemin Windows converti par winlux).
+        exe = exe_from_windows(line.getenv("WINLUX_SETTINGS_EXE") or "")
+        if exe: page = str(EXTRA.PAGE_PROGRAMS)
         if self.window is None:
             if page: os.environ["WINLUX_SETTINGS_PAGE"] = page
+            EXTRA.ExtraPages.pending_exe = exe
             self.window = Settings()
             self.add_window(self.window)
         elif page.isdigit():
+            self.window.pending_exe = exe
             self.window.open_page(int(page))
         self.window.present()
         return 0
