@@ -156,7 +156,11 @@ def apply(kind,value):
         targets=[p for p in props if p.endswith("/last-image")]
         if not targets: raise ValueError(_t("Le service de fond d’écran n’est pas initialisé"))
         for prop in targets: query("xfce4-desktop",prop,value,"string")
-    elif kind=="panel-size": query("xfce4-panel","/panels/panel-1/size",value,"uint")
+    elif kind=="panel-size":
+        query("xfce4-panel","/panels/panel-1/size",value,"uint")
+        # Menu Windows + X posé juste au-dessus de la barre redimensionnée.
+        try: subprocess.run(["winlux-run","place-menu","",value],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+        except (OSError,subprocess.SubprocessError): pass
     state[kind]=value
     PREF.parent.mkdir(parents=True,exist_ok=True)
     temp=PREF.with_suffix(".tmp");temp.write_text(json.dumps(state));temp.replace(PREF)
