@@ -200,7 +200,7 @@ unsafe fn fill_polys(hdc: usize, figures: &[Vec<[i32; 2]>]) {
             }
         }
         xs.sort_by(|a, b| a.total_cmp(b));
-        for pair in xs.chunks_exact(2) {
+        for pair in xs.as_chunks::<2>().0 {
             let (left, right) = ((pair[0] - 0.5).ceil() as i32, (pair[1] - 0.5).ceil() as i32);
             if right > left {
                 let rect = super::gui::Rect {
@@ -288,7 +288,7 @@ unsafe extern "win64" fn polyline_to(hdc: usize, pts: *const [i32; 2], n: u32) -
 
 fn record_beziers(p: &mut Path, start: [i32; 2], list: &[[i32; 2]]) {
     let mut from = start;
-    for c in list.chunks_exact(3) {
+    for c in list.as_chunks::<3>().0 {
         for q in bezier(from, c[0], c[1], c[2]) {
             p.line_to(q);
         }
@@ -314,7 +314,7 @@ unsafe extern "win64" fn poly_bezier(hdc: usize, pts: *const [i32; 2], n: u32) -
     if let Some((&first, rest)) = list.split_first() {
         let mut flat = vec![first];
         let mut from = first;
-        for c in rest.chunks_exact(3) {
+        for c in rest.as_chunks::<3>().0 {
             flat.extend(bezier(from, c[0], c[1], c[2]));
             from = c[2];
         }
@@ -336,7 +336,7 @@ unsafe extern "win64" fn poly_bezier_to(hdc: usize, pts: *const [i32; 2], n: u32
         hdc,
         &mut from
     );
-    for c in list.chunks_exact(3) {
+    for c in list.as_chunks::<3>().0 {
         for q in bezier(from, c[0], c[1], c[2]) {
             line_to(hdc, q[0], q[1]);
         }
