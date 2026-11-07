@@ -34,7 +34,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
 names="hello32 seh32 wow64 cxx32 gui32"
-command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
@@ -139,6 +139,8 @@ if test -f "$out/thread32.exe"; then
     echo "thread32 : threads x86, TLS statique et émulé, 300 threads, rappel, GetProcAddress"
     check load32 'DLL 32 bits : tout est correct'
     echo "load32 : DLL x86 importée (DllMain, TLS, donnée) et chargée par LoadLibrary"
+    check fiber32 'Fibres 32 bits : tout est correct'
+    echo "fiber32 : fibres x86 (SwitchToFiber aller-retour, pile propre, fin de routine = fin du thread)"
 else
     echo "thread32 : i686-w64-mingw32-gcc absent, test sauté"
 fi

@@ -152,7 +152,11 @@ impl Drop for Temp {
 }
 
 fn temp_file(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("winlux-squirrel-{}-{tag}", std::process::id()))
+    // Compteur : deux ouvertures dans le même processus (fil d'installation
+    // et lecture des informations) ne partagent pas leurs copies.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("winlux-squirrel-{}-{n}-{tag}", std::process::id()))
 }
 
 /// Ouvre le ZIP porté par le `Setup.exe` et le paquet complet qu'il contient.
@@ -218,11 +222,23 @@ fn display_name(spec: &Nuspec) -> String {
     }
 }
 
-/// Dossier Squirrel : `%LocalAppData%\<Id>`.
+/// Dossier Squirrel : `%LocalAppData%\<Id>`, sous le profil du compte
+/// (`C:\Users\<nom>\AppData\Local\<Id>`), comme le voit l'application.
+fn default_root(spec: &Nuspec) -> String {
+    crate::paths::profile_path(&format!("AppData\\Local\\{}", spec.id))
+}
+
 fn root_dir(spec: &Nuspec, opts: &super::Options) -> String {
-    opts.dir
-        .clone()
-        .unwrap_or_else(|| format!("C:\\AppData\\Local\\{}", spec.id))
+    opts.dir.clone().unwrap_or_else(|| default_root(spec))
+}
+
+/// Programme graphique Windows de l'architecture de Winlux (x64, ARM64) ou
+/// 32 bits x86, que WOW64 fait tourner (paquets Squirrel « -x86 »).
+fn is_gui_program(head: &[u8]) -> bool {
+    let Some((x64, gui)) = super::sevenz::is_gui_pe64(head) else {
+        return false;
+    };
+    gui && (x64 || super::sevenz::pe_machine(head) == Some(0x14c))
 }
 
 pub fn info(data: &[u8]) -> Result<super::Info, String> {
@@ -232,12 +248,12 @@ pub fn info(data: &[u8]) -> Result<super::Info, String> {
         name: display_name(&o.spec),
         version: o.spec.version.clone(),
         publisher: o.spec.authors.clone(),
-        default_dir: format!("C:\\AppData\\Local\\{}", o.spec.id),
+        default_dir: default_root(&o.spec),
     })
 }
 
 /// Programme principal : celui qui porte le nom de l'application, sinon le
-/// plus gros programme graphique 64 bits à la racine (les relais de
+/// plus gros programme graphique (64 ou 32 bits) à la racine (les relais de
 /// Squirrel exclus).
 fn main_program(candidates: &[(String, u64)], spec: &Nuspec) -> Option<String> {
     let wanted = [display_name(spec).to_lowercase(), spec.id.to_lowercase()];
@@ -304,7 +320,7 @@ pub fn install(
         std::io::copy(&mut r, &mut out).map_err(|er| format!("{win} : {er}"))?;
         if !rel.contains('/')
             && rel.to_lowercase().ends_with(".exe")
-            && super::sevenz::is_gui_pe64(&head[..got]).is_some_and(|(x64, gui)| x64 && gui)
+            && is_gui_program(&head[..got])
         {
             programs.push((rel.to_string(), e.usize));
         }
@@ -325,7 +341,7 @@ pub fn install(
     }
 
     let exe = main_program(&programs, &o.spec)
-        .ok_or_else(|| bad("aucun programme graphique 64 bits dans le paquet"))?;
+        .ok_or_else(|| bad("aucun programme graphique Windows dans le paquet"))?;
     let target = format!("{app}\\{exe}");
     let menu = super::Folders::programs();
     let company = o
@@ -518,5 +534,30 @@ pub mod tests {
             ("Update.exe".to_string(), 99),
         ];
         assert_eq!(main_program(&progs, &o.spec).as_deref(), Some("big.exe"));
+    }
+
+    #[test]
+    fn programme_graphique_32_bits_accepte() {
+        let gui64 = gui64();
+        assert!(is_gui_program(&gui64));
+        let mut gui32 = gui64.clone();
+        gui32[0x84..0x86].copy_from_slice(&0x14cu16.to_le_bytes());
+        assert!(is_gui_program(&gui32), "Discord x86 : programme 32 bits");
+        let mut console = gui32.clone();
+        console[0x80 + 24 + 68] = 3;
+        assert!(!is_gui_program(&console));
+        let mut ia64 = gui64.clone();
+        ia64[0x84..0x86].copy_from_slice(&0x200u16.to_le_bytes());
+        assert!(!is_gui_program(&ia64));
+        assert!(!is_gui_program(b"MZ"));
+    }
+
+    #[test]
+    fn dossier_sous_le_profil() {
+        let o = open(&sample_setup()).unwrap();
+        let root = default_root(&o.spec);
+        assert!(root.starts_with("C:\\Users\\"), "{root}");
+        assert!(root.ends_with("\\AppData\\Local\\DemoApp"), "{root}");
+        assert_eq!(info(&sample_setup()).unwrap().default_dir, root);
     }
 }

@@ -552,7 +552,7 @@ fn split_args(s: &str) -> Vec<String> {
 }
 
 /// Installe (ou, avec `uninstall`, désinstalle) la chaîne d'un bundle.
-pub fn run(path: &Path, uninstall: bool, quiet: bool) -> i32 {
+pub fn run(path: &Path, uninstall: bool, quiet: bool, log_file: Option<&Path>) -> i32 {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(e) => {
@@ -567,7 +567,13 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool) -> i32 {
             return 1;
         }
     };
-    let mut log = crate::msi::install::Logger { file: None, quiet };
+    let file = log_file.and_then(|f| {
+        if let Some(parent) = f.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::File::create(f).ok()
+    });
+    let mut log = crate::msi::install::Logger { file, quiet };
     let name = if bundle.manifest.name.is_empty() {
         path.file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -594,6 +600,11 @@ pub fn run(path: &Path, uninstall: bool, quiet: bool) -> i32 {
     };
     for p in chain {
         if !uninstall && !should_install(&bundle.manifest, &p.condition) {
+            log.log(&format!(
+                "{} : condition « {} » fausse, paquet ignoré",
+                p.id,
+                p.condition.trim()
+            ));
             continue;
         }
         let dir = work.join(&p.id);
@@ -679,7 +690,33 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
             .any(|a| a.trim_start_matches(['/', '-']).eq_ignore_ascii_case(w))
     };
     let quiet = has("quiet") || has("q") || has("passive") || has("silent");
-    Some(run(exe, has("uninstall"), quiet))
+    let log = log_path(exe, args, quiet);
+    Some(run(exe, has("uninstall"), quiet, log.as_deref()))
+}
+
+/// Journal de l'installation : `/log <fichier>` (ou `/l`), comme Burn ;
+/// en mode silencieux sans `/log`, `%TEMP%\<programme>_<date>.log`, pour
+/// qu'une installation sans fenêtre laisse quand même une trace.
+fn log_path(exe: &Path, args: &[String], quiet: bool) -> Option<PathBuf> {
+    let at = args.iter().position(|a| {
+        let w = a.trim_start_matches(['/', '-']);
+        w.eq_ignore_ascii_case("log") || w.eq_ignore_ascii_case("l")
+    });
+    if let Some(f) = at.and_then(|i| args.get(i + 1)) {
+        return Some(crate::paths::to_linux(f));
+    }
+    if !quiet {
+        return None;
+    }
+    let stem = exe
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "burn".into());
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some(crate::paths::to_linux("C:\\AppData\\Local\\Temp").join(format!("{stem}_{secs}.log")))
 }
 
 #[cfg(test)]
@@ -804,6 +841,22 @@ pub mod tests {
         assert!(should_install(&m, "VersionNT >= v6.1"));
         assert!(should_install(&m, "NOT Inconnue OR (Inconnue"));
         assert!(should_install(&m, ""));
+    }
+
+    #[test]
+    fn journal_silencieux_et_option_log() {
+        let exe = Path::new("/x/vc_redist.x86.exe");
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(log_path(exe, &a(&["/install"]), false).is_none());
+        let q = log_path(exe, &a(&["/install", "/quiet"]), true).unwrap();
+        let name = q.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("vc_redist.x86_") && name.ends_with(".log"),
+            "{name}"
+        );
+        assert!(q.to_string_lossy().contains("Temp"), "{}", q.display());
+        let l = log_path(exe, &a(&["/quiet", "/log", "/tmp/r.log"]), true).unwrap();
+        assert!(l.ends_with("r.log"), "{}", l.display());
     }
 
     const REDIST_MANIFEST: &str = r#"<BurnManifest>
