@@ -27,7 +27,7 @@ When an installer asks for administrator rights, Winlux opens a confirmation win
 
 | Message | What it means |
 |---|---|
-| “32-bit Windows program” | Only 64-bit programs are supported today. Look for the 64-bit version of the software. |
+| “32-bit Windows program” | Support for 32-bit programs is still partial and this kind is not accepted yet. Look for the 64-bit version of the software. |
 | “Missing function” | The program uses a Windows function that Winlux does not provide yet. Report it: that is what tells us what to write next. |
 | The program closes without a word | Open Event Viewer from the Start menu: the cause is recorded there. |
 
