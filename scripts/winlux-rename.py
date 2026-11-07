@@ -248,7 +248,7 @@ def window(paths):
     from gi.repository import GLib, Gtk
     win = Gtk.Window(title=_t("Renommer plusieurs fichiers"))
     win.set_role("winlux-rename")
-    win.set_icon_name("edit-rename")
+    win.set_icon_name("system-file-manager")
     win.set_default_size(820, 560)
     win.set_position(Gtk.WindowPosition.CENTER)
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=14)

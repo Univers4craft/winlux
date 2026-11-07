@@ -384,6 +384,12 @@ class Start(Gtk.Application):
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+        # Comme Windows 11, chaque ouverture repart du haut de la liste : la
+        # fenêtre cachée gardait le défilement de la fois précédente, qu'il
+        # fallait remonter à la main (#673). Remis à zéro aussi une fois la
+        # liste dessinée, GTK recalant la position à la nouvelle hauteur.
+        self.scroll_top()
+        GLib.idle_add(self.scroll_top)
 
     def workarea(self):
         display = self.window.get_display()
@@ -523,7 +529,7 @@ class Start(Gtk.Application):
         on_click(self.toggle, self.toggle_list)
         header.pack_end(self.toggle, False, False, 0)
         body.pack_start(header, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
+        scroll = self.scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         scroll.add(self.content)
@@ -547,6 +553,10 @@ class Start(Gtk.Application):
         sinon le thème GTK impose la sienne (Adwaita clair : texte gris foncé des
         boutons et des champs) sur le fond du menu et le texte disparaît."""
         self.css.load_from_data(MENU_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
+
+    def scroll_top(self):
+        self.scroll.get_vadjustment().set_value(0)
+        return False
 
     def hide(self):
         if self.window.has_grab():self.window.grab_remove()
@@ -601,6 +611,8 @@ class Start(Gtk.Application):
         else:
             self.all_apps = not self.all_apps
         self.render()
+        # Changement de vue (Épinglé ↔ Toutes les applications) : en haut.
+        self.scroll_top()
 
     def first_result(self, *_):
         # Même ordre que la liste : applications, Paramètres, fichiers.
@@ -773,15 +785,21 @@ class Start(Gtk.Application):
     def find_files(self, query, generation):
         # Bounded name search in visible personal directories. Never follows
         # directory symlinks or scans the system disks from the UI thread.
+        # Début de mot comme Windows (#607) : « son » trouve « Son.wav », pas
+        # « application-json.png » ni « Personnalisation ». Jusqu'à 300
+        # candidats, puis les 30 meilleurs : nom qui commence par la recherche,
+        # puis un de ses mots, les plus récents d'abord (os.walk seul remplissait
+        # la liste avec le premier dossier parcouru).
         matches, visited = [], 0
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             for name in folders + files:
                 visited += 1
-                if not name.startswith(".") and query in fold(name): matches.append(Path(directory, name))
-                if len(matches) >= 30 or visited >= 30000: break
-            if len(matches) >= 30 or visited >= 30000: break
+                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if len(matches) >= 300 or visited >= 30000: break
+            if len(matches) >= 300 or visited >= 30000: break
+        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
         def deliver():
             if generation == self.file_generation:
                 self.file_results = matches
@@ -894,6 +912,12 @@ def rank(text, query):
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
+
+
+def modified(path):
+    """Date de modification (0 si le fichier a disparu entre-temps)."""
+    try: return path.stat().st_mtime
+    except OSError: return 0
 
 
 def file_icon(path):

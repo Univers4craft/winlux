@@ -238,6 +238,16 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
     done
 fi
 
+# Programmes Windows 32 bits de test (#232) : construits par clang sans
+# CRT, quand clang, lld-link et llvm-dlltool sont là.
+if command -v clang >/dev/null 2>&1 && command -v lld-link >/dev/null 2>&1 \
+    && command -v llvm-dlltool >/dev/null 2>&1; then
+    sh "$root/testc/wow32/build.sh" "$root/target/mingw"
+    for name in hello32 seh32 gui32; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
+
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
 for folder in Bureau Documents Images Musique "Téléchargements" "Vidéos"; do
@@ -511,7 +521,11 @@ cp "$root/integration/winlux.desktop" "$stage/usr/share/applications/winlux.desk
 cp "$root/integration/winlux-browser.desktop" "$stage/usr/share/applications/winlux-browser.desktop"
 # Xsession et .desktop pour les display managers (installation sur disque).
 cp "$root/scripts/xsession-winlux" "$stage/usr/share/winlux/xsession-winlux"
-cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/applications/winlux-session.desktop"
+# Session pour un gestionnaire de connexion : dans xsessions, jamais dans les
+# applications (Démarrer montait un lanceur « Winlux Desktop » cassé, #635).
+mkdir -p "$stage/usr/share/xsessions"
+cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/xsessions/winlux.desktop"
+rm -f "$stage/usr/share/applications/winlux-session.desktop"
 chmod 755 "$stage/usr/share/winlux/xsession-winlux"
 # Thème : polices DejaVu déjà copiées ; on s'assure que fontconfig est à jour
 # et qu'aucune dépendance propriétaire n'est requise (pas de Segoe UI, pas de

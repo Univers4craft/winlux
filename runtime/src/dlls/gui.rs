@@ -1009,7 +1009,7 @@ pub fn create_dc(hwnd: usize) -> usize {
             text_color: 0x0000_0000,
             bk_color: 0x00FF_FFFF,
             bk_mode: 2,
-            brush: 5, // BLACK_BRUSH stock
+            brush: 1, // WHITE_BRUSH stock, comme Windows
             pen: 8,   // BLACK_PEN stock
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
@@ -3619,7 +3619,7 @@ mod tests {
         let pen = create_pen(0, 2, 0x00AA_BBCC);
         let brush = create_solid_brush(0x0011_2233);
         assert_eq!(select_object(hdc, pen), 8); // BLACK_PEN stock initial
-        assert_eq!(select_object(hdc, brush), 5); // BLACK_BRUSH stock initial
+        assert_eq!(select_object(hdc, brush), 1); // WHITE_BRUSH stock initial
         assert_eq!(dc_brush(hdc), brush);
 
         free_dc(hdc);

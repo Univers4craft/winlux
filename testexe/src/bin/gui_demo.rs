@@ -1024,7 +1024,18 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let title = if desktop {
             c"Winlux Desktop"
         } else if wm::native_app() == Some(wm::APP_EXPLORER) {
-            c"Explorer Winlux"
+            // Boîte Ouvrir / Enregistrer d'un programme : son titre.
+            static mut PICK_TITLE: [u8; 160] = [0; 160];
+            let t = explorer::window_title();
+            if explorer::picking() && !t.contains(&0) {
+                let buf = &mut *core::ptr::addr_of_mut!(PICK_TITLE);
+                let n = t.len().min(buf.len() - 1);
+                buf[..n].copy_from_slice(&t[..n]);
+                buf[n] = 0;
+                core::ffi::CStr::from_bytes_until_nul(&buf[..]).unwrap_or(c"Explorer Winlux")
+            } else {
+                c"Explorer Winlux"
+            }
         } else if let Some(app) = wm::native_app() {
             // Titre de l'application ouverte (barre des tâches, Alt+Tab), pas
             // « Parametres Winlux » pour la Boutique ou le Gestionnaire des tâches.
