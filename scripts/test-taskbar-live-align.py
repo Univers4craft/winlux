@@ -9,6 +9,10 @@ tâches, et enfin `align-left`. Dans les deux cas, Rechercher (genmon 15) et Vue
 des tâches (lanceur 14) restent juste après Démarrer : `winlux-tray` garde son
 nom de commande, auquel winlux-control reconnaît le bouton Rechercher.
 
+Enfin, `align-center` alors que la barre relancée abandonne (« There is
+already a running instance », l'ancienne encore sur le bus) : winlux-control
+doit en relancer une, sans quoi la barre disparaissait (#848).
+
 Avant le correctif (#651), la barre déjà lancée ne déplaçait pas le contrepoids
 13 du bout de la barre vers la gauche de Démarrer : la zone de notification
 restait décalée d'environ 240 px (vide à droite), et le groupe Démarrer
@@ -133,8 +137,16 @@ def main():
                    WINLUX_CONTROL_NO_STATUS="1", WINLUX_CONTROL_TEST_LOG=str(Path(temp) / "journal"))
         # winlux-control doit joindre le même xfconfd que la barre : il est lancé
         # dans la même session D-Bus, à la demande, par la file « commandes ».
+        # « perdue-ACTION » : xfce4-panel -r arrête la barre sans la relancer,
+        # comme une relance qui abandonne face à l'ancienne instance (#848).
+        lost = Path(temp) / "relance-perdue"
+        lost.mkdir()
+        (lost / "xfce4-panel").write_text('#!/bin/sh\nif test "$1" = -r; then exec /usr/bin/xfce4-panel -q; fi\n'
+                                          'exec /usr/bin/xfce4-panel "$@"\n', encoding="utf-8")
+        (lost / "xfce4-panel").chmod(0o755)
         script = (f"openbox & sleep 1; xfce4-panel --disable-wm-check & "
-                  f"while read action < '{fifo}'; do sh '{directory}/winlux-control.sh' \"$action\" >/dev/null 2>&1; "
+                  f"while read action < '{fifo}'; do path=$PATH; case $action in perdue-*) path='{lost}':$PATH ;; esac; "
+                  f"PATH=$path sh '{directory}/winlux-control.sh' \"${{action#perdue-}}\" >/dev/null 2>&1; "
                   f"xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids > \"{temp}/ordre-$action\"; done")
         process = subprocess.Popen(["dbus-run-session", "--", "sh", "-c", script], env=env, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, start_new_session=True)
@@ -143,7 +155,7 @@ def main():
             width, height = root.get_width(), root.get_height()
             start, last = settle(Gdk, root, width, height)
             print(f"barre livrée : Démarrer x={start}, bord droit x={last}")
-            for action in ("align-center", "align-left"):
+            for action in ("align-center", "align-left", "perdue-align-center"):
                 with open(fifo, "w") as pipe:
                     pipe.write(action + "\n")
                 start, last = settle(Gdk, root, width, height)
@@ -162,7 +174,7 @@ def main():
                     problems.append(f"{action} en direct : Rechercher et Vue des tâches absents après Démarrer ({ids})")
                 if last is None or last < width - 30:
                     problems.append(f"{action} en direct : zone de notification décalée, bord droit à x={last} sur {width}")
-                if action == "align-center" and not (start is not None and width // 2 - 160 < start < width // 2):
+                if action.endswith("align-center") and not (start is not None and width // 2 - 160 < start < width // 2):
                     problems.append(f"{action} en direct : Démarrer à x={start}, pas au milieu de l'écran")
                 if action == "align-left" and not (start is not None and start < 20):
                     problems.append(f"{action} en direct : Démarrer à x={start}, pas à gauche")
