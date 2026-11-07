@@ -2,6 +2,8 @@
 """Persist appearance choices and apply them to GTK, Openbox and XFCE.
 
     winlux-personalize theme|accent|wallpaper|panel-size|start-icon VALEUR
+    winlux-personalize taskbar-style classic|floating   barre des tâches (#703)
+    winlux-personalize search box|icon|hidden           recherche de la barre
     winlux-personalize reset default
     winlux-personalize export FICHIER.wlxtheme   thème complet en un fichier
     winlux-personalize import FICHIER.wlxtheme   applique un thème partagé
@@ -79,13 +81,74 @@ def palette(dark):
     """(fond, texte, surface) des fenêtres et de la barre de titre."""
     return ("#181b24","#ecedf5","#242a38") if dark else ("#f3f5fa","#202430","#ffffff")
 
-def appearance_css(dark,accent):
+TASKBAR=HOME/".config/winlux/taskbar.conf"
+TASKBAR_STYLES=("classic","floating")
+SEARCH_MODES=("box","icon","hidden")
+FLOAT_RADIUS=14  # coins de la barre flottante
+
+def taskbar_preferences():
+    """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre du compte."""
+    values={"STYLE":"classic","SEARCH":"box"}
+    try:
+        for line in TASKBAR.read_text(encoding="utf-8").splitlines():
+            key,_,value=line.partition("=")
+            if key=="STYLE" and value in TASKBAR_STYLES: values[key]=value
+            if key=="SEARCH" and value in SEARCH_MODES: values[key]=value
+    except (OSError,UnicodeDecodeError): pass
+    return values
+
+def save_taskbar_preferences(values):
+    TASKBAR.parent.mkdir(parents=True,exist_ok=True)
+    temp=TASKBAR.with_suffix(".tmp")
+    temp.write_text("".join(f"{key}={values[key]}\n" for key in ("STYLE","SEARCH")),encoding="utf-8")
+    temp.replace(TASKBAR)
+
+def mix(color,other,amount):
+    """color mélangée à other (0 = color, 1 = other)."""
+    a=[int(color[i:i+2],16) for i in (1,3,5)];b=[int(other[i:i+2],16) for i in (1,3,5)]
+    return "#"+"".join(f"{round(x+(y-x)*amount):02x}" for x,y in zip(a,b))
+
+def panel_css(dark,accent,floating=False):
+    """Barre des tâches (#703) : suit le thème clair/sombre et l'accent.
+
+    Dans le thème GTK du compte, rechargé par la barre dès que xsettings
+    change de nom : le passage clair/sombre et le style flottant s'appliquent
+    sans relancer xfce4-panel. Le bloc « Winlux panel » de ~/.config/gtk-3.0/
+    gtk.css ne garde que la forme (priorité utilisateur, sans couleur).
+    Repères sous les fenêtres : point gris = ouverte, trait d'accent = active."""
+    if dark: bar,fg,hover,active,dot,line=("#1c1a26","#f3f0fa","rgba(255,255,255,0.08)","rgba(255,255,255,0.12)","#9a93ad","rgba(255,255,255,0.09)")
+    else: bar,fg,hover,active,dot,line=("#f3f0f9","#1d1a24","rgba(0,0,0,0.05)","rgba(255,255,255,0.95)","#8c8698","rgba(0,0,0,0.10)")
+    mark=mix(accent,"#ffffff",0.45) if dark else accent
+    css=(f".xfce4-panel {{background-color:{bar}; background-image:none; color:{fg}; border-top:1px solid {line};}} "
+         f".xfce4-panel label, .xfce4-panel button, .xfce4-panel button label {{color:{fg}; text-shadow:none;}} "
+         f".xfce4-panel box, .xfce4-panel button {{background-color:transparent;}} "
+         f".xfce4-panel button:hover {{background-color:{hover};}} "
+         f".xfce4-panel button:checked, .xfce4-panel button:active {{background-color:{active};}} "
+         f".xfce4-panel .tasklist button {{background-image:linear-gradient({dot},{dot}); background-size:6px 3px; "
+         f"background-position:50% 100%; background-repeat:no-repeat;}} "
+         f".xfce4-panel .tasklist button:checked {{background-color:{active}; background-image:linear-gradient({mark},{mark}); background-size:16px 3px;}} "
+         )
+    if floating:
+        # Barre flottante (#703) : une capsule centrée, à la largeur de son
+        # contenu, coins arrondis en haut ; picom rend transparent ce qui
+        # l'entoure. Elle reste collée au bord : un vide dessous ferait passer
+        # les fenêtres agrandies sous la barre (pas de réservation d'écran).
+        # Les greffons externes (genmon) ont leur propre fenêtre : sans arrondi.
+        css+=(f"#XfcePanelWindow.xfce4-panel {{background-color:{bar}; border:1px solid {line}; border-bottom:none; "
+              f"border-radius:{FLOAT_RADIUS}px {FLOAT_RADIUS}px 0 0;}} "
+              f"#XfcePanelWindowWrapper.xfce4-panel {{background-color:{bar}; border:none; border-radius:0;}} ")
+    else:
+        css+="#XfcePanelWindowWrapper.xfce4-panel {border:none;} "
+    return css
+
+def appearance_css(dark,accent,floating=None):
     """gtk.css commun à toutes les applications GTK (priorité « utilisateur »)."""
     bg,fg,surface=palette(dark)
+    if floating is None: floating=taskbar_preferences()["STYLE"]=="floating"
     # Pas de « window box » : les fenêtres qui ont leurs propres couleurs (UAC,
     # autorisations, signalement) gardaient des boîtes repeintes sous leur texte.
     on_accent=text_on(accent)
-    return f"window, list, viewport {{background-color:{bg}; color:{fg};}} #sidebar, #sidebar list {{background-color:{surface}; color:{fg};}} #sidebar row:selected, #sidebar row:selected label, selection {{background-color:{accent}; color:{on_accent};}} button {{background:{surface}; color:{fg}; border-color:{accent};}} entry {{background:{surface}; color:{fg};}} .card {{background:{surface};color:{fg};}}"
+    return f"window, list, viewport {{background-color:{bg}; color:{fg};}} #sidebar, #sidebar list {{background-color:{surface}; color:{fg};}} #sidebar row:selected, #sidebar row:selected label, selection {{background-color:{accent}; color:{on_accent};}} button {{background:{surface}; color:{fg}; border-color:{accent};}} entry {{background:{surface}; color:{fg};}} .card {{background:{surface};color:{fg};}} "+panel_css(dark,accent,floating)
 
 THEMES=HOME/".local/share/themes"
 MARKER="/* Winlux appearance */"
@@ -132,7 +195,9 @@ def apply(kind,value):
         if not GdkPixbuf.Pixbuf.get_file_info(str(path)): raise ValueError(_t("Format d’image non reconnu"))
         value=str(path)
     if kind=="panel-size" and value not in ("32","40","48","56","64"): raise ValueError(_t("Taille invalide"))
-    if kind not in ("theme","accent","wallpaper","panel-size","start-icon"): raise ValueError(_t("Réglage inconnu"))
+    if kind=="taskbar-style" and value not in TASKBAR_STYLES: raise ValueError(_t("Réglage inconnu"))
+    if kind=="search" and value not in SEARCH_MODES: raise ValueError(_t("Réglage inconnu"))
+    if kind not in ("theme","accent","wallpaper","panel-size","start-icon","taskbar-style","search"): raise ValueError(_t("Réglage inconnu"))
     def query(channel,prop,value,typ):
         args=["xfconf-query","-c",channel,"-p",prop]
         exists=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
@@ -156,6 +221,32 @@ def apply(kind,value):
         targets=[p for p in props if p.endswith("/last-image")]
         if not targets: raise ValueError(_t("Le service de fond d’écran n’est pas initialisé"))
         for prop in targets: query("xfce4-desktop",prop,value,"string")
+    elif kind in ("taskbar-style","search"):
+        # Barre des tâches (#703) : réglage du compte dans taskbar.conf, lu par
+        # winlux-tray (recherche) et winlux-control align-* (ordre, séparateurs).
+        values=taskbar_preferences()
+        before=dict(values)
+        values["STYLE" if kind=="taskbar-style" else "SEARCH"]=value
+        save_taskbar_preferences(values)
+        if kind=="taskbar-style":
+            # Flottante : la barre épouse son contenu et se centre d'elle-même.
+            floating=value=="floating"
+            query("xfce4-panel","/panels/panel-1/length","1" if floating else "100","uint")
+            query("xfce4-panel","/panels/panel-1/length-adjust","true" if floating else "false","bool")
+        if kind=="taskbar-style" or "hidden" in (before["SEARCH"],values["SEARCH"]):
+            # Séparateurs extensibles et présence de la recherche : winlux-control
+            # remet l'ordre en place (et relance la barre seulement s'il change).
+            align="center"
+            try:
+                for line in Path("/etc/winlux/preferences.conf").read_text().splitlines():
+                    if line.startswith("TASKBAR_ALIGN=") and line[14:] in ("left","center"): align=line[14:]
+            except OSError: pass
+            try: subprocess.run(["winlux-control","align-"+align],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,
+                                env=dict(os.environ,WINLUX_CONTROL_NO_STATUS="1"))
+            except (OSError,subprocess.SubprocessError): pass
+        if kind=="search":
+            print(_t("Préférence appliquée."))
+            return
     elif kind=="panel-size":
         query("xfce4-panel","/panels/panel-1/size",value,"uint")
         # Menu Windows + X posé juste au-dessus de la barre redimensionnée.
@@ -301,7 +392,7 @@ if __name__=="__main__":
     try:
         if len(sys.argv)!=3: raise ValueError(_t("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR"))
         if sys.argv[1] == "reset" and sys.argv[2] == "default":
-            for kind, value in (("theme", "dark"), ("accent", "#6a3df0"), ("panel-size", "40"),
+            for kind, value in (("taskbar-style", "classic"), ("search", "box"), ("theme", "dark"), ("accent", "#6a3df0"), ("panel-size", "40"),
                                 ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpaper.bmp")):
                 apply(kind, value)
         else: apply(sys.argv[1],sys.argv[2])

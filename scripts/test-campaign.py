@@ -428,9 +428,17 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     panel = ET.parse(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
     order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
-    after = [panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value") for number in order[order.index('1') + 1:order.index('1') + 3]]
-    ok([item.get("value").rsplit("/", 1)[-1] if item is not None else None for item in after] == ["winlux-search.desktop", "winlux-taskview.desktop"],
-       "profil neuf : boutons Rechercher et Vue des tâches juste après Démarrer")
+    def button(number):
+        """Lanceur (fichier .desktop) ou genmon (commande) d'un greffon."""
+        item = panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value")
+        command = panel.find(f".//property[@name='plugin-{number}']/property[@name='command']")
+        return item.get("value").rsplit("/", 1)[-1] if item is not None else command.get("value") if command is not None else None
+    ok([button(number) for number in order[order.index('1') + 1:order.index('1') + 3]] == ["/usr/bin/winlux-tray search", "winlux-taskview.desktop"],
+       "profil neuf : zone Rechercher (#703) et Vue des tâches juste après Démarrer")
+    # Barre redessinée (#703) : réseau, son et batterie en un bouton, l'heure avant la cloche.
+    ok([button(number) for number in order[order.index('10') + 1:order.index('10') + 4]]
+       == ["/usr/bin/winlux-tray status", "/usr/bin/winlux-clock", "/usr/bin/winlux-tray notifications"],
+       "profil neuf : état groupé, heure puis cloche (#703)")
     ok(panel.find(".//property[@name='all-workspaces']").get("value") == "false",
        "profil neuf : la barre ne montre que les fenêtres du bureau en cours")
     rc = ET.parse(home / ".config/openbox/rc.xml").getroot()

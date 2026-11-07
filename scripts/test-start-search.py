@@ -165,5 +165,9 @@ assert (ROOT / "integration/native/search.svg").is_file()
 panel = ET.parse(ROOT / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
 order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
 search = order[order.index("1") + 1]
-assert panel.find(f".//property[@name='plugin-{search}']/property[@name='items']/value").get("value").endswith("winlux-search.desktop")
+# Depuis #703 : genmon `winlux-tray search` (zone « Rechercher » ou loupe), même commande au clic.
+assert panel.find(f".//property[@name='plugin-{search}']").get("value") == "genmon"
+rc = ROOT / f"integration/native/config/xfce4/panel/genmon-{search}.rc"
+assert "Command=/usr/bin/winlux-tray search" in rc.read_text(encoding="utf-8")
+assert "<click>/usr/bin/winlux-start-menu</click>" in (ROOT / "scripts/winlux-tray.py").read_text(encoding="utf-8")
 print("OK: recherche du menu Démarrer (pages des Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)")

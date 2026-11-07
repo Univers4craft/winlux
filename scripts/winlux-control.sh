@@ -452,22 +452,41 @@ perform() {
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-12 2>/dev/null)" = genmon; then keyboard=12; fi
                 # Boutons Rechercher et Vue des tâches (#459), juste après
                 # Démarrer comme dans Windows 11 : numéros libres de 14 à 29.
+                # La recherche est un genmon `winlux-tray search` depuis #703
+                # (zone « Rechercher » ou loupe), un lanceur avant.
                 search= taskview=
                 for number in $(seq 14 29); do
                     case "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$number/items" 2>/dev/null)" in
                         *winlux-search.desktop*) search=$number ;;
                         *winlux-taskview.desktop*) taskview=$number ;;
                     esac
+                    case "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$number/command" 2>/dev/null)" in
+                        *'winlux-tray search'*) search=$number ;;
+                    esac
                 done
+                # Personnalisation > Barre des tâches (#703) : recherche masquée,
+                # barre classique ou flottante.
+                taskbar_conf=${XDG_CONFIG_HOME:-$HOME/.config}/winlux/taskbar.conf
+                if test "$(sed -n 's/^SEARCH=//p' "$taskbar_conf" 2>/dev/null | head -n 1)" = hidden; then search=; fi
+                floating=0
+                if test "$(sed -n 's/^STYLE=//p' "$taskbar_conf" 2>/dev/null | head -n 1)" = floating; then floating=1; fi
                 buttons="${search:+$search }${taskview:+$taskview }"
+                # Bloc de droite (#703) : réseau, son et batterie réunis dans le
+                # genmon 4 ; 5 et 6 ne restent que sur un compte pas encore
+                # migré. L'heure puis la cloche, comme Windows 11.
+                status=4
+                for number in 5 6; do
+                    if test "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$number" 2>/dev/null)" = genmon; then status="$status $number"; fi
+                done
+                right="$status 7 9"
                 # Greffon 13 : contrepoids de largeur égale au bloc de droite
                 # (winlux-tray balance), sans quoi le groupe centré tombe trop
                 # à gauche de la moitié de ce bloc. Barre à gauche : il reste
                 # au bout, d'un pixel, pour ne pas relancer la barre.
                 if test "$alignment" = center; then
-                    ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7"
+                    ids="${widgets:+11 }3 13 1 ${buttons}2 8 ${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right"
                 else
-                    ids="3 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }4 5 6 9 7 13"
+                    ids="3 1 ${buttons}2 8 ${widgets:+11 }${assistant:+$assistant }${tray:+10 }${keyboard:+12 }$right 13"
                 fi
                 current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
                 if test "$current" != "$ids "; then
@@ -485,8 +504,15 @@ perform() {
                     fi
                 fi
                 expand=false; test "$alignment" != center || expand=true
+                # Barre flottante : elle épouse son contenu (aucun séparateur
+                # extensible) et se centre d'elle-même.
+                spread=true
+                if test "$floating" = 1; then expand=false; spread=false; fi
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then
                     xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+                fi
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-8/expand 2>/dev/null || true)" != "$spread"; then
+                    xfconf-query -c xfce4-panel -p /plugins/plugin-8/expand -s "$spread" || return
                 fi
             fi
             # Windows + X s'ouvre au-dessus du bouton Démarrer, pas sous le
