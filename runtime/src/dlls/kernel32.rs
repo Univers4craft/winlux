@@ -4773,6 +4773,14 @@ unsafe fn create_process_common(
     };
     let mut host_path = crate::launch::find_program(&exe, app_dir.as_deref())
         .unwrap_or_else(|| crate::paths::to_linux(&exe));
+    if !host_path.exists() && crate::dlls::shell32::is_explorer(&exe) {
+        // `explorer.exe [/select,]CHEMIN` : l'Explorateur Winlux de la session,
+        // comme par ShellExecute (une seule version de l'Explorateur).
+        if let Some(Ok((opener, argv))) = crate::dlls::shell32::explorer(&args.join(" ")) {
+            host_path = opener;
+            args = argv;
+        }
+    }
     if !host_path.exists() && crate::msi::is_msiexec(&host_path) {
         // msiexec.exe est intégré au runtime : `winlux msiexec.exe …`.
         host_path = std::path::PathBuf::from("msiexec.exe");

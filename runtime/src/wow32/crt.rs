@@ -78,6 +78,8 @@ const D_ACMDLN: usize = 0x28;
 const D_WCMDLN: usize = 0x2c;
 const D_PCTYPE_PTR: usize = 0x30;
 const D_PWCTYPE_PTR: usize = 0x34;
+/// `_adjust_fdiv` : 0, aucun Pentium à FDIV défectueux.
+const D_ADJUST_FDIV: usize = 0x38;
 /// Trois `FILE` de msvcrt x86 (32 octets chacun) : stdin, stdout, stderr.
 const D_IOB: usize = 0x40;
 const FILE32_SIZE: usize = 32;
@@ -1049,6 +1051,34 @@ fn handle_array_override(n: &str, func: &str) -> Option<Override> {
     })
 }
 
+/// `_ftol` : ST0 → entier 64 bits dans edx:eax, par troncature (arrondi
+/// vers zéro le temps de `fistp`, puis mot de contrôle rétabli).
+fn ftol_code() -> usize {
+    static CODE: OnceLock<usize> = OnceLock::new();
+    *CODE.get_or_init(|| {
+        super::alloc_code(&[
+            0x83, 0xEC, 0x0C, // sub esp, 12
+            0xD9, 0x3C, 0x24, // fnstcw [esp]
+            0x0F, 0xB7, 0x04, 0x24, // movzx eax, word [esp]
+            0x80, 0xCC, 0x0C, // or ah, 0x0C (arrondi vers zéro)
+            0x66, 0x89, 0x44, 0x24, 0x02, // mov [esp+2], ax
+            0xD9, 0x6C, 0x24, 0x02, // fldcw [esp+2]
+            0xDF, 0x7C, 0x24, 0x04, // fistp qword [esp+4]
+            0xD9, 0x2C, 0x24, // fldcw [esp]
+            0x8B, 0x44, 0x24, 0x04, // mov eax, [esp+4]
+            0x8B, 0x54, 0x24, 0x08, // mov edx, [esp+8]
+            0x83, 0xC4, 0x0C, // add esp, 12
+            0xC3, // ret
+        ]) as usize
+    })
+}
+
+/// Fonction x86 vide (`ret`).
+fn ret_code() -> usize {
+    static CODE: OnceLock<usize> = OnceLock::new();
+    *CODE.get_or_init(|| super::alloc_code(&[0xC3]) as usize)
+}
+
 /// Remplacement x86 d'un export (`n` : nom normalisé de la DLL) : CRT,
 /// fonctions à tableaux de HANDLE.
 pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
@@ -1090,6 +1120,16 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "_acmdln" => Override::Data(d + D_ACMDLN),
         "_wcmdln" => Override::Data(d + D_WCMDLN),
         "_iob" => Override::Data(d + D_IOB),
+        "_adjust_fdiv" => Override::Data(d + D_ADJUST_FDIV),
+        // Aides du compilateur MSVC x86 : code x86 direct (valeur dans ST0).
+        "_ftol" | "_ftol2" | "_ftol2_sse" => Override::Data(ftol_code()),
+        // type_info::~type_info (thiscall, sans argument sur la pile) : le
+        // nom décoré mis en cache n'est jamais alloué ici, rien à libérer.
+        "??1type_info@@UAE@XZ" => Override::Data(ret_code()),
+        // FuncInfo dans eax : petit code d'entrée propre (voir `cxx`).
+        "__CxxFrameHandler" | "__CxxFrameHandler2" | "__CxxFrameHandler3" => {
+            Override::Data(super::cxx::frame_handler_code())
+        }
         "_pctype" => Override::Data(d + D_PCTYPE_PTR),
         "_pwctype" => Override::Data(d + D_PWCTYPE_PTR),
         "_timezone" | "_daylight" | "_dstbias" | "_sys_nerr" => {

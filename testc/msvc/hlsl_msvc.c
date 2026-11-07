@@ -53,6 +53,8 @@ typedef void(__stdcall *SetRT)(void *, u32, void *const *, void *);
 typedef void(__stdcall *SetVP)(void *, u32, const void *);
 typedef void(__stdcall *Copy)(void *, void *, void *);
 typedef void(__stdcall *ClearRT)(void *, void *, const float *);
+typedef void(__stdcall *Dispatch)(void *, u32, u32, u32);
+typedef void(__stdcall *SetUAV)(void *, u32, u32, void *const *, const u32 *);
 typedef void(__stdcall *ClearDS)(void *, void *, u32, float, u8);
 
 typedef void(__stdcall *UpdateSub)(void *, void *, u32, const void *, const void *, u32, u32);
@@ -87,6 +89,31 @@ static const char hlsl[] =
     "float4 ps_main(VSOut i) : SV_Target {\n"
     "    return teinte(tex.Sample(smp, i.uv)) * texa.Sample(smp, float3(i.uv, 1));\n"
     "}\n";
+
+// Compute shader (#580) : image RWTexture2D, tampons structurés en
+// lecture et en écriture, mémoire partagée de groupe, barrière et atomique.
+static const char hlsl_cs[] =
+    "RWTexture2D<unorm float4> img : register(u0);\n"
+    "RWStructuredBuffer<uint> sortie : register(u1);\n"
+    "RWByteAddressBuffer compteur : register(u2);\n"
+    "StructuredBuffer<uint> entree : register(t0);\n"
+    "cbuffer Params : register(b0) { uint mult; uint3 pad; };\n"
+    "groupshared uint partage[64];\n"
+    "[numthreads(8, 8, 1)]\n"
+    "void cs_main(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex) {\n"
+    "    partage[gi] = gi;\n"
+    "    GroupMemoryBarrierWithGroupSync();\n"
+    "    img[id.xy] = float4(id.x < 32 ? 1.0 : 0.0, 0.0, id.y < 32 ? 1.0 : 0.0, 1.0);\n"
+    "    if (id.y == 0 && id.x < 16) sortie[id.x] = entree[id.x] * mult + partage[63 - gi];\n"
+    "    uint ancien;\n"
+    "    compteur.InterlockedAdd(0, 1, ancien);\n"
+    "}\n";
+
+static void *compile_src(const char *src, u64 len, const char *entry, const char *target, int fail) {
+    void *code = 0, *errors = 0;
+    if (D3DCompile(src, len, "cs.hlsl", 0, 0, entry, target, 0, 0, &code, &errors) < 0 || !code) ExitProcess(fail);
+    return code;
+}
 
 static void *compile(const char *entry, const char *target, int fail) {
     void *code = 0, *errors = 0;
@@ -296,6 +323,75 @@ void entry(void) {
     if (zr[4] < 0.99f || zr[20] < 0.99f) ExitProcess(55);
     CALL(ctx, 15, Unmap, zstaging, 1);
     CALL(ctx, 33, SetRT, 1, &rtv, dsv);
+
+    // Calcul (#580) : grille 64x64 en groupes 8x8. Image : rouge à
+    // gauche, bleu en haut ; sortie[i] = entree[i] * 3 + (63 - i % 8) ;
+    // compteur = 4096 invocations.
+    {
+        TexDesc ud = td;
+        ud.bind = 0x80 | 0x8; // UNORDERED_ACCESS | SHADER_RESOURCE
+        void *utex = 0, *uview = 0, *ustaging = 0;
+        if (CALL(dev, 5, CreateTex, &ud, 0, &utex) < 0 || !utex) ExitProcess(60);
+        if (CALL(dev, 8, CreateView, utex, 0, &uview) < 0 || !uview) ExitProcess(61);
+        if (CALL(dev, 5, CreateTex, &sd, 0, &ustaging) < 0 || !ustaging) ExitProcess(62);
+        u32 init[16];
+        for (u32 k = 0; k < 16; k++) init[k] = k + 1;
+        BufferDesc inb = {sizeof init, 0, 0x8, 0, 0x40 /* STRUCTURED */, 4};
+        BufferDesc outb = {sizeof init, 0, 0x80, 0, 0x40, 4};
+        BufferDesc rawb = {16, 0, 0x80, 0, 0x20 /* ALLOW_RAW_VIEWS */, 0};
+        BufferDesc readb = {sizeof init, 3, 0, 0x20000, 0, 0};
+        Init ini = {init, 0, 0};
+        void *inbuf = 0, *outbuf = 0, *rawbuf = 0, *readbuf = 0, *readraw = 0;
+        if (CALL(dev, 3, CreateBuffer, &inb, &ini, &inbuf) < 0) ExitProcess(63);
+        if (CALL(dev, 3, CreateBuffer, &outb, 0, &outbuf) < 0) ExitProcess(64);
+        if (CALL(dev, 3, CreateBuffer, &rawb, 0, &rawbuf) < 0) ExitProcess(65);
+        if (CALL(dev, 3, CreateBuffer, &readb, 0, &readbuf) < 0) ExitProcess(66);
+        readb.width = 16;
+        if (CALL(dev, 3, CreateBuffer, &readb, 0, &readraw) < 0) ExitProcess(66);
+        u32 srvd[4] = {0, 1 /* BUFFER */, 0, 16}, uavd[5] = {0, 1, 0, 16, 0};
+        u32 rawd[5] = {39 /* R32_TYPELESS */, 1, 0, 4, 1 /* RAW */};
+        void *insrv = 0, *outuav = 0, *rawuav = 0;
+        if (CALL(dev, 7, CreateView, inbuf, srvd, &insrv) < 0 || !insrv) ExitProcess(67);
+        if (CALL(dev, 8, CreateView, outbuf, uavd, &outuav) < 0 || !outuav) ExitProcess(68);
+        if (CALL(dev, 8, CreateView, rawbuf, rawd, &rawuav) < 0 || !rawuav) ExitProcess(69);
+        static const u32 params[4] = {3, 0, 0, 0};
+        BufferDesc pb = {16, 0, 4, 0, 0, 0};
+        Init pi = {params, 0, 0};
+        void *pbuf = 0;
+        if (CALL(dev, 3, CreateBuffer, &pb, &pi, &pbuf) < 0) ExitProcess(70);
+        void *csb = compile_src(hlsl_cs, sizeof hlsl_cs - 1, "cs_main", "cs_5_0", 71), *cs = 0;
+        void *cs_blob = ((BlobPtr)VT(csb, 3))(csb);
+        u64 cs_len = ((BlobSize)VT(csb, 4))(csb);
+        if (CALL(dev, 18, CreateShader, cs_blob, cs_len, 0, &cs) < 0 || !cs) ExitProcess(72);
+        static const u32 zero[4] = {0, 0, 0, 0};
+        typedef void(__stdcall * ClearU)(void *, void *, const u32 *);
+        CALL(ctx, 51, ClearU, rawuav, zero);
+        void *uavs[3] = {uview, outuav, rawuav};
+        CALL(ctx, 69, SetShader, cs, 0, 0);
+        CALL(ctx, 68, SetUAV, 0, 3, uavs, 0);
+        CALL(ctx, 67, SetArray, 0, 1, &insrv);
+        CALL(ctx, 71, SetArray, 0, 1, &pbuf);
+        CALL(ctx, 41, Dispatch, SIZE / 8, SIZE / 8, 1);
+        CALL(ctx, 47, Copy, ustaging, utex);
+        CALL(ctx, 47, Copy, readbuf, outbuf);
+        CALL(ctx, 47, Copy, readraw, rawbuf);
+        Mapped u = {0};
+        if (CALL(ctx, 14, Map, ustaging, 0, 1, 0, &u) < 0 || !u.data) ExitProcess(73);
+        const u8 *a = (const u8 *)u.data + 4 * u.row + 4 * 4, *b = (const u8 *)u.data + 60 * u.row + 60 * 4;
+        if (a[0] < 250 || a[1] > 5 || a[2] < 250 || a[3] < 250) ExitProcess(74);
+        if (b[0] > 5 || b[2] > 5 || b[3] < 250) ExitProcess(75);
+        CALL(ctx, 15, Unmap, ustaging, 0);
+        Mapped o = {0};
+        if (CALL(ctx, 14, Map, readbuf, 0, 1, 0, &o) < 0 || !o.data) ExitProcess(76);
+        const u32 *ov = o.data;
+        for (u32 k = 0; k < 16; k++)
+            if (ov[k] != (k + 1) * 3 + (63 - k % 8)) ExitProcess(78);
+        CALL(ctx, 15, Unmap, readbuf, 0);
+        if (CALL(ctx, 14, Map, readraw, 0, 1, 0, &o) < 0 || !o.data) ExitProcess(79);
+        if (*(const u32 *)o.data != SIZE * SIZE) ExitProcess(80);
+        CALL(ctx, 15, Unmap, readraw, 0);
+        CALL(ctx, 69, SetShader, 0, 0, 0);
+    }
 
     // Image copiée dans le tampon arrière puis présentée.
     CALL(ctx, 47, Copy, back, rt);

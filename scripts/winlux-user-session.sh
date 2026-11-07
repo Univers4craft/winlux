@@ -179,6 +179,9 @@ fi
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
     compositor_pid=$!
+    # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
+    # openbox, seul lu par les règles de picom (#582).
+    if test -x /usr/bin/winlux-maximized-watch; then start maximized-watch.log /usr/bin/winlux-maximized-watch; fi
 fi
 # Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
 # de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
@@ -292,10 +295,12 @@ wait_desktop() {
     # relevé d'état en basse priorité : ils ne passent jamais devant le bureau.
     status_nice=
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
+    # Catalogue résident : refait seulement quand un raccourci, le registre ou
+    # un navigateur change, au lieu de relancer Python toutes les 5 s (#214).
+    $status_nice /usr/bin/winlux-applications watch </dev/null >>"$logs/catalogue.log" 2>&1 &
+    pids="$pids $!"
     (
         while :; do
-            $status_nice /usr/bin/winlux-applications refresh >"$logs/catalogue.log" 2>&1 || true
-            $status_nice /usr/bin/winlux-applications window-icons >>"$logs/catalogue.log" 2>&1 || true
             if test "$primary" = 1 && test -O /run/winlux/browser-chooser; then
                 rm -f /run/winlux/browser-chooser
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &

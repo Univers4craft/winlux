@@ -67,6 +67,22 @@ __declspec(dllimport) long WINAPI RegOpenKeyExA(HKEY, const char *, DWORD, DWORD
 __declspec(dllimport) long WINAPI RegSetValueExA(HKEY, const char *, DWORD, DWORD, const void *, DWORD);
 __declspec(dllimport) long WINAPI RegCloseKey(HKEY);
 __declspec(dllimport) long WINAPI RegDeleteKeyA(HKEY, const char *);
+__declspec(dllimport) long WINAPI InterlockedIncrement(long volatile *);
+__declspec(dllimport) long WINAPI InterlockedDecrement(long volatile *);
+__declspec(dllimport) long WINAPI InterlockedExchange(long volatile *, long);
+__declspec(dllimport) long WINAPI InterlockedCompareExchange(long volatile *, long, long);
+__declspec(dllimport) WORD WINAPI GlobalAddAtomA(const char *);
+__declspec(dllimport) WORD WINAPI GlobalFindAtomA(const char *);
+__declspec(dllimport) WORD WINAPI GlobalDeleteAtom(WORD);
+__declspec(dllimport) DWORD WINAPI SetHandleCount(DWORD);
+__declspec(dllimport) HANDLE WINAPI LoadLibraryA(const char *);
+__declspec(dllimport) void *WINAPI GetProcAddress(HANDLE, const char *);
+/* msvcrt x86 : aides du compilateur et données. */
+__declspec(dllimport) extern int _adjust_fdiv;
+__declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
+long long __cdecl _ftol(void);
+/* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
+int _fltused = 0;
 
 #define HKLM ((HKEY)0x80000002)
 #define KEY_ALL_ACCESS 0xF003F
@@ -310,6 +326,42 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!GetExitCodeProcess((HANDLE)pi[0], &code) || code != 42) fail(45, code);
         CloseHandle((HANDLE)pi[0]);
         CloseHandle((HANDLE)pi[1]);
+    }
+
+    /* 46-49 : Interlocked* (exportées par le kernel32 x86 seulement). */
+    {
+        volatile long v = 5;
+        if (InterlockedIncrement(&v) != 6 || v != 6) fail(46, v);
+        if (InterlockedDecrement(&v) != 5) fail(47, v);
+        if (InterlockedExchange(&v, 9) != 5 || v != 9) fail(48, v);
+        if (InterlockedCompareExchange(&v, 1, 9) != 9 || v != 1) fail(49, v);
+    }
+
+    /* 50-52 : atomes globaux, SetHandleCount. */
+    {
+        WORD a = GlobalAddAtomA("WinluxAtome32");
+        if (a < 0xC000 || GlobalFindAtomA("winluxatome32") != a) fail(50, a);
+        if (GlobalDeleteAtom(a) != 0 || GlobalFindAtomA("WinluxAtome32") != 0) fail(51, a);
+        if (SetHandleCount(64) != 64) fail(52, 0);
+    }
+
+    /* 53-55 : msvcrt x86 : _ftol (valeur dans ST0, edx:eax), _adjust_fdiv, _controlfp. */
+    {
+        double d = -1234567.75;
+        long long q;
+        __asm__ volatile("fldl %1\n\tcall *%2" : "=A"(q) : "m"(d), "r"(&_ftol) : "memory", "ecx", "st");
+        if (q != -1234567) fail(53, (DWORD)q);
+        if (_adjust_fdiv != 0) fail(54, _adjust_fdiv);
+        if ((_controlfp(0, 0) & 0x1F) != 0x1F) fail(55, _controlfp(0, 0));
+    }
+
+    /* 56-58 : DLL système importées par WinSCP et 7-Zip. */
+    {
+        HANDLE mpr = LoadLibraryA("mpr.dll"), msi = LoadLibraryA("msi.dll");
+        HANDLE shf = LoadLibraryA("shfolder.dll");
+        if (!mpr || !GetProcAddress(mpr, "WNetGetConnectionW")) fail(56, 0);
+        if (!msi || !GetProcAddress(msi, (const char *)205)) fail(57, 0);
+        if (!shf || !GetProcAddress(shf, "SHGetFolderPathW")) fail(58, 0);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

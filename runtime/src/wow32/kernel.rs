@@ -326,3 +326,36 @@ pub extern "win64" fn is_wow64_process2(process: u32, machine: u32, native: u32)
     }
     1
 }
+
+fn atomic(p: u32) -> &'static std::sync::atomic::AtomicI32 {
+    unsafe { &*(p as usize as *const std::sync::atomic::AtomicI32) }
+}
+
+/// `InterlockedIncrement` : rend la nouvelle valeur.
+pub extern "win64" fn interlocked_increment(p: u32) -> i32 {
+    atomic(p)
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        .wrapping_add(1)
+}
+pub extern "win64" fn interlocked_decrement(p: u32) -> i32 {
+    atomic(p)
+        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+        .wrapping_sub(1)
+}
+/// `InterlockedExchange` : rend l'ancienne valeur.
+pub extern "win64" fn interlocked_exchange(p: u32, v: i32) -> i32 {
+    atomic(p).swap(v, std::sync::atomic::Ordering::SeqCst)
+}
+pub extern "win64" fn interlocked_exchange_add(p: u32, v: i32) -> i32 {
+    atomic(p).fetch_add(v, std::sync::atomic::Ordering::SeqCst)
+}
+pub extern "win64" fn interlocked_compare_exchange(p: u32, xchg: i32, cmp: i32) -> i32 {
+    match atomic(p).compare_exchange(
+        cmp,
+        xchg,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    ) {
+        Ok(v) | Err(v) => v,
+    }
+}
