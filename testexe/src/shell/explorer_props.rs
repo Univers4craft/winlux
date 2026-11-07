@@ -58,7 +58,7 @@ fn ft(t: FileTime) -> u64 {
 }
 
 /// Taille et nombre d'éléments d'un dossier, borné (50 000 éléments).
-unsafe fn walk(path: &[u8], depth: u32, size: &mut u64, files: &mut u32, dirs: &mut u32, partial: &mut bool) {
+pub(super) unsafe fn walk(path: &[u8], depth: u32, size: &mut u64, files: &mut u32, dirs: &mut u32, partial: &mut bool) {
     if depth > MAX_DEPTH || *files + *dirs >= MAX_WALK {
         *partial = true;
         return;

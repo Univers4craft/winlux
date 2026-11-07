@@ -88,6 +88,18 @@ ok("fn key(vk: u32, _ch: u16)" in props and "0x0D => close(true)" in props,
 ok("SetFileAttributesW" in props and "fn walk(" in props and "props::regression(root)" in explorer,
    "Propriétés : lecture seule appliquée, taille de dossier, test de régression")
 
+# ── #209 / #10 : Suppr hors dossier, chemins d'Accueil, survol, taille de la Corbeille ──
+ok("Les lecteurs et les dossiers d'Accueil ne peuvent pas" in explorer,
+   "Suppr dans Ce PC ou Accueil : un message au lieu du silence")
+ok(".position(|pl| pl.name == e.name())" not in explorer and "place_label(i) == e.name()" in explorer,
+   "item_path d'Accueil compare le libellé traduit, pas le nom français")
+ok("|| inside(&geo.toolbar, x, y)" not in explorer and "hot_changed(from, (x, y))" in explorer,
+   "Mouse::Move ne repeint que si une zone survolée change")
+ok("wm::MOUSE_X" not in explorer.replace("inside(r, wm::MOUSE_X, wm::MOUSE_Y)", ""),
+   "tous les survols de l'Explorateur passent par hovered()")
+ok("fn enforce_trash_limit(" in copy and "copy::enforce_trash_limit(since)" in explorer and "taille-max-mo=" in copy,
+   "Corbeille : taille maximale (5 % du disque ou taille-max-mo) et purge des plus anciens")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]
