@@ -300,6 +300,27 @@ for label in ("Classique, sur toute la largeur", "Flottante, au centre", "Zone d
     row = re.search(r'\n    "' + re.escape(label) + r'": \(("[^"]+"), ("[^"]+"), ("[^"]+")\)', pages)
     ok(row is not None, f"traduit en anglais, espagnol et allemand : « {label} »")
 
+# ── 8. Menu Démarrer au-dessus de la barre (#732) ───────────────────────────
+import ast as _ast
+menu_source = (HERE / "winlux-start-menu.py").read_text(encoding="utf-8")
+menu_tree = _ast.parse(menu_source)
+helper = next(node for node in menu_tree.body if isinstance(node, _ast.FunctionDef) and node.name == "taskbar_on_left")
+space = {"os": os, "Path": Path}
+exec(compile(_ast.Module(body=[helper], type_ignores=[]), "winlux-start-menu.py", "exec"), space)
+menu_home = Path(tempfile.mkdtemp())
+preferences = menu_home / "preferences.conf"
+os.environ["WINLUX_PREFERENCES"] = str(preferences)
+os.environ["XDG_CONFIG_HOME"] = str(menu_home / "config")
+(menu_home / "config/winlux").mkdir(parents=True)
+for align, style, expected in (("left", "classic", True), ("center", "classic", False),
+                               ("left", "floating", False), ("center", "floating", False)):
+    preferences.write_text(f"THEME=dark\nTASKBAR_ALIGN={align}\n")
+    (menu_home / "config/winlux/taskbar.conf").write_text(f"STYLE={style}\nSEARCH=box\n")
+    ok(space["taskbar_on_left"]() is expected,
+       f"menu Démarrer : barre {align}/{style} → {'à gauche' if expected else 'centré'}")
+ok("self.menu_left = taskbar_on_left()" in menu_source and "pointer_x" not in menu_source,
+   "menu Démarrer : placement selon l'alignement de la barre, plus selon le pointeur (clic ou touche Windows)")
+
 if failures:
     print(f"{len(failures)} échec(s)")
     raise SystemExit(1)
