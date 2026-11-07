@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 from string import Template
 import subprocess
+import sys
 import threading
 import time
 import unicodedata
@@ -406,6 +407,10 @@ class Start(Gtk.Application):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.window = None
         self.context = None
+        # Préchargé à l'ouverture de session (--preload) : la fenêtre est
+        # construite cachée, le premier appui sur Windows ne démarre plus
+        # Python et GTK à froid.
+        self.preloading = False
         self.all_apps = False
         self.file_generation = 0
         self.file_query = ""
@@ -427,6 +432,11 @@ class Start(Gtk.Application):
         temporary.replace(STATE)
 
     def do_activate(self):
+        if self.preloading:
+            self.preloading = False
+            if not self.window: self.build()
+            self.hold()
+            return
         if self.window and self.window.get_visible():
             self.hide()
             return
@@ -1739,5 +1749,17 @@ def power_menu_has_switch():
     return len(names) >= 2
 
 
+def preload(app):
+    """Construit le menu caché, sans l'afficher. Rien à faire si un menu
+    tourne déjà pour cette session : l'activer l'ouvrirait."""
+    app.register(None)
+    if app.get_is_remote():
+        return 0
+    app.preloading = True
+    return app.run([sys.argv[0]])
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--preload"]:
+        raise SystemExit(preload(Start()))
     raise SystemExit(Start().run())
