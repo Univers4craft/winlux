@@ -62,6 +62,9 @@ assert snap["group_members"]("d", props) == [], "un groupe d'une seule fenêtre 
 buttons = [(7, (100, 728, 150, 40)), (8, (250, 728, 150, 40))]
 assert snap["button_under"]((260, 740), buttons) == 8 and snap["button_under"]((50, 740), buttons) is None
 assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768)) == (25, 520), "au-dessus d'un bouton du bas"
+clear = snap["TOOLTIP_CLEARANCE"]
+assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768), clear)[1] + 200 <= 728 - 40, \
+    "place laissée à l'infobulle du bouton (#675)"
 assert snap["popup_origin"]((0, 0, 150, 27), (300, 200), (0, 0, 1366, 768)) == (0, 35), "en dessous d'un bouton du haut"
 assert snap["popup_origin"]((1300, 728, 60, 40), (300, 200), (0, 0, 1366, 768))[0] == 1066, "sans sortir de l'écran"
 print("assistant d'ancrage (logique) : OK")
@@ -219,7 +222,7 @@ try:
     card = wait(group_window)
     assert card, "survol du bouton d'une fenêtre groupée : vignette du groupe attendue"
     left_, top_, width_, height_ = frame(card)
-    assert top_ + height_ <= 720, f"vignette au-dessus du bouton, {frame(card)}"
+    assert top_ + height_ <= 720 - 40, f"vignette au-dessus du bouton et de son infobulle, {frame(card)}"
     x("xdotool", "mousemove", str(left_ + width_ // 4), str(top_ + height_ // 2))
     time.sleep(0.3)
     x("xdotool", "click", "1")
