@@ -1077,13 +1077,15 @@ pub unsafe extern "win64" fn K32EnumProcessModules(
         return 0;
     }
     let list = crate::loader::list_modules();
-    let size = std::mem::size_of::<usize>();
+    // HMODULE de 4 octets pour un programme x86 : une case de 8 octets
+    // donnait au programme la liste « base, 0, base, 0… » (#763, WinSCP).
+    let size = crate::wow32::pointer_size();
     if !needed.is_null() {
         *needed = (list.len() * size) as u32;
     }
     if !modules.is_null() {
         for (i, m) in list.iter().take(cb as usize / size).enumerate() {
-            *modules.add(i) = m.base;
+            crate::wow32::write_ptr(modules as usize + i * size, m.base);
         }
     }
     1
