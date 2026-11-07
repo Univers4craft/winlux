@@ -386,6 +386,8 @@ static mut CURRENT: usize = 0;
 // Lecture.
 static mut SESSION: usize = 0;
 static mut PLAYING: bool = false;
+/// Demande d'éveil posée par SetThreadExecutionState (0 : aucune).
+static mut AWAKE: u32 = 0;
 /// Session lancée seulement pour afficher une image (pause après recherche).
 static mut STILL: bool = false;
 static mut POSITION: u32 = 0;
@@ -834,9 +836,27 @@ unsafe fn next(delta: i32) {
 }
 
 /// Appelé ~60 fois par seconde ; vrai s'il faut repeindre.
+/// Pendant la lecture, l'écran (vidéo) ou le système (audio) reste éveillé,
+/// comme le demande un lecteur Windows ; la demande tombe à la pause.
+unsafe fn keep_awake() {
+    const ES_CONTINUOUS: u32 = 0x8000_0000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x1;
+    const ES_DISPLAY_REQUIRED: u32 = 0x2;
+    let want = if PLAYING && SESSION != 0 {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | if HAS_VIDEO { ES_DISPLAY_REQUIRED } else { 0 }
+    } else {
+        0
+    };
+    if want != AWAKE {
+        AWAKE = want;
+        SetThreadExecutionState(if want == 0 { ES_CONTINUOUS } else { want });
+    }
+}
+
 pub unsafe fn tick() -> bool {
     let now = GetTickCount();
     let mut dirty = false;
+    keep_awake();
     if LAST_PREFS == 0 || now.wrapping_sub(LAST_PREFS) > 2000 {
         LAST_PREFS = now;
         read_prefs();
@@ -1502,6 +1522,8 @@ unsafe fn toggle_fullscreen() {
 pub unsafe fn on_close() {
     save_resume();
     stop_session();
+    PLAYING = false;
+    keep_awake();
 }
 
 // ---------------------------------------------------------------------------
