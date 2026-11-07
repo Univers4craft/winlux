@@ -13,7 +13,8 @@ El escritorio de Winlux usa los atajos de teclado habituales, con la tecla Windo
 | Windows + Z | Diseños de acoplamiento (también con clic derecho en el botón Maximizar) |
 | Windows + Tab | Vista de tareas: todas las ventanas y los escritorios virtuales |
 | Windows + Ctrl + D / F4 | Nuevo escritorio virtual, cerrar el escritorio virtual |
-| Windows + H / Windows + Ctrl + L | Dictado por voz en el cuadro de texto activo, subtítulos en directo del audio del PC (reconocimiento en este PC, no se envía nada) |
+| Windows + H | Dictado por voz en el cuadro de texto activo (reconocimiento en este PC, no se envía nada) |
+| Windows + Ctrl + L | Subtítulos en directo de lo que sale por los altavoces |
 | Windows + V | Historial del portapapeles |
 | Windows + . | Emojis, kaomojis y símbolos |
 | Windows + Mayús + C | Selector de colores: copiar el código de un color de la pantalla |

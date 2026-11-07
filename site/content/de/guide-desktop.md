@@ -13,7 +13,8 @@ Der Winlux-Desktop nutzt die gängigen Tastenkombinationen mit der Windows-Taste
 | Windows + Z | Andocklayouts (auch per Rechtsklick auf die Schaltfläche Maximieren) |
 | Windows + Tab | Aktive Anwendungen: alle Fenster und virtuellen Desktops |
 | Windows + Strg + D / F4 | Neuer virtueller Desktop, virtuellen Desktop schließen |
-| Windows + H / Windows + Strg + L | Spracheingabe in das aktive Textfeld, Liveuntertitel des PC-Tons (Erkennung auf diesem PC, nichts wird gesendet) |
+| Windows + H | Spracheingabe in das aktive Textfeld (Erkennung auf diesem PC, nichts wird gesendet) |
+| Windows + Strg + L | Liveuntertitel dessen, was aus den Lautsprechern kommt |
 | Windows + V | Zwischenablageverlauf |
 | Windows + . | Emojis, Kaomojis und Symbole |
 | Windows + Umschalt + C | Farbwähler: den Code einer Bildschirmfarbe kopieren |

@@ -13,7 +13,8 @@ Le bureau de Winlux utilise les raccourcis clavier courants, avec la touche Wind
 | Windows + Z | Dispositions d'ancrage (aussi au clic droit sur le bouton Agrandir) |
 | Windows + Tab | Vue des tâches : toutes les fenêtres et les bureaux virtuels |
 | Windows + Ctrl + D / F4 | Nouveau bureau virtuel, fermer le bureau virtuel |
-| Windows + H / Windows + Ctrl + L | Dictée vocale dans la zone de texte active, sous-titres en direct du son du PC (reconnaissance sur ce PC, rien n'est envoyé) |
+| Windows + H | Dictée vocale dans la zone de texte active (reconnaissance sur ce PC, rien n'est envoyé) |
+| Windows + Ctrl + L | Sous-titres en direct de ce qui sort des haut-parleurs |
 | Windows + V | Historique du presse-papiers |
 | Windows + . | Emojis, kaomojis et symboles |
 | Windows + Maj + C | Pipette : copier le code d'une couleur de l'écran |
