@@ -650,6 +650,27 @@ if openbox_menu.is_file():
     except (OSError, UnicodeDecodeError):
         pass
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
+# #735 : sans « dpmsEnabled », XScreenSaver vaut False et coupe le DPMS du
+# serveur X à son premier affichage : l'écran ne se mettait plus jamais en
+# veille. Ajouté aux fichiers déjà copiés qui ne le précisent pas ; un choix
+# fait dans les réglages de l'économiseur (clé présente) est gardé.
+def migrate_xscreensaver(path, template):
+    try:
+        text = path.read_text(encoding="utf-8")
+        wanted = [line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("dpms")]
+    except (OSError, UnicodeDecodeError):
+        return
+    if any(line.split(":", 1)[0].strip() == "dpmsEnabled" for line in text.splitlines()): return
+    present = {line.split(":", 1)[0].strip() for line in text.splitlines() if ":" in line}
+    added = [line for line in wanted if line.split(":", 1)[0].strip() not in present]
+    if not added: return
+    try:
+        temporary = path.with_name(".xscreensaver.tmp")
+        temporary.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(added) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        pass
+migrate_xscreensaver(home / ".xscreensaver", source / "xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
     user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\nXDG_PICTURES_DIR="$HOME/Images"\nXDG_MUSIC_DIR="$HOME/Musique"\nXDG_VIDEOS_DIR="$HOME/Vidéos"\n')

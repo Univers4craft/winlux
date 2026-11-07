@@ -573,6 +573,7 @@ jobs:
           /usr/bin/python3 -B scripts/test-brightness.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-certificates.py
           /usr/bin/python3 -B scripts/test-boot-journaux.py
+          /usr/bin/python3 -B scripts/test-ecran-veille-retour.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
