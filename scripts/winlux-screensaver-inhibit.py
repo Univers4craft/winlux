@@ -15,8 +15,9 @@ L'écran s'éteignait quand même (#634) : XScreenSaver n'est pas seul, le
 serveur X coupe l'écran par DPMS à son propre délai (Standby/Suspend/Off à
 600 s). Tant qu'une demande est là, le DPMS est donc suspendu (`xset -dpms`,
 réaffirmé à chaque réveil au cas où XScreenSaver le remettrait) puis rétabli
-s'il était actif ; une marque dans $XDG_RUNTIME_DIR le rétablit aussi après un
-arrêt brutal du service.
+s'il était actif, dès que la dernière demande tombe, y compris quand le service
+est arrêté par un signal ; une marque dans $XDG_RUNTIME_DIR le rétablit aussi
+après un arrêt brutal (#735).
 
   winlux-screensaver-inhibit                  service D-Bus (activé à la demande)
   winlux-screensaver-inhibit watch-updates    lancé avec la session : pendant
@@ -101,7 +102,14 @@ def _xset(*args):
 
 
 class DisplayHold:
-    """DPMS du serveur X suspendu tant qu'une demande est posée."""
+    """DPMS du serveur X suspendu tant qu'une demande est posée.
+
+    #735 : le retour du DPMS ne dépendait que de la marque sur disque. Marque
+    perdue (effacée par une autre instance, dossier nettoyé) : plus de
+    `xset +dpms` à la libération, l'écran ne s'éteignait plus de la session.
+    Ce que ce service a coupé est donc retenu en mémoire, la marque porte le
+    numéro du service qui l'a posée (une autre instance n'y touche pas tant
+    qu'il vit) et le retour est vérifié par `xset q`."""
 
     def __init__(self, xset=_xset, marker=None):
         self.xset = xset
@@ -109,31 +117,50 @@ class DisplayHold:
         display = "".join(c if c.isalnum() else "_" for c in os.environ.get("DISPLAY", "none"))
         self.marker = Path(marker) if marker else Path(runtime) / f"winlux-dpms-suspendu-{display}"
         self.active = False
+        self.suspended = False   # ce service a coupé le DPMS : à lui de le rendre
+        self.pid = os.getpid()
+
+    def owner(self):
+        """Numéro du service qui a posé la marque (None : ancienne marque ou illisible)."""
+        try: text = self.marker.read_text().strip()
+        except OSError: return None
+        return int(text) if text.isdigit() and int(text) > 1 else None
 
     def recover(self):
-        """Service arrêté brutalement pendant une demande : DPMS rétabli."""
-        if self.marker.exists() and not self.active:
-            self.xset("+dpms")
-            self.marker.unlink(missing_ok=True)
+        """Service arrêté brutalement pendant une demande : DPMS rétabli. Une
+        marque posée par un service encore vivant reste à lui."""
+        if self.active or not self.marker.exists(): return
+        owner = self.owner()
+        if owner and owner != self.pid and os.path.isdir(f"/proc/{owner}"): return
+        self.restore()
 
     def start(self):
         if not self.active:
             self.active = True
             if "DPMS is Enabled" in self.xset("q"):
-                try: self.marker.write_text("1\n")
+                self.suspended = True
+                try: self.marker.write_text(f"{self.pid}\n")
                 except OSError: pass
         self.reassert()
 
     def reassert(self):
-        if self.active and self.marker.exists():
+        if self.active and self.suspended:
             self.xset("-dpms")
 
     def stop(self):
         if not self.active: return
         self.active = False
-        if self.marker.exists():
+        if self.suspended or (self.marker.exists() and self.owner() == self.pid):
+            self.suspended = False
+            self.restore()
+
+    def restore(self):
+        """`xset +dpms`, vérifié (un second essai si le serveur ne l'a pas pris)."""
+        for _ in range(2):
             self.xset("+dpms")
-            self.marker.unlink(missing_ok=True)
+            if "DPMS is Disabled" not in self.xset("q"): break
+        try: self.marker.unlink(missing_ok=True)
+        except OSError: pass
 
 
 def wake_screen():
@@ -204,6 +231,7 @@ def watch_updates(interval=None):
 
 def main():
     if sys.argv[1:] == ["watch-updates"]: return watch_updates()
+    import signal
     from gi.repository import Gio, GLib
     inhibitors = Inhibitors()
     inhibitors.hold.recover()
@@ -257,6 +285,10 @@ def main():
                      Gio.BusNameOwnerFlags.ALLOW_REPLACEMENT | Gio.BusNameOwnerFlags.REPLACE,
                      acquired, None, lambda *_: loop.quit())
     GLib.timeout_add_seconds(POKE_SECONDS, tick)
+    # Arrêt par signal (bus de session fermé, kill) : on sort par la fin de
+    # boucle, qui rend le DPMS, au lieu de le laisser coupé (#735).
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signum, lambda *_: loop.quit() or False)
     loop.run()
     inhibitors.items.clear()
     inhibitors.sync()

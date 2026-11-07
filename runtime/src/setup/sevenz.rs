@@ -818,7 +818,7 @@ pub fn sfx_config(data: &[u8], archive_at: usize) -> Option<Vec<(String, String)
     let head = &data[..archive_at];
     let start = head.windows(18).rposition(|w| w == b";!@Install@!UTF-8!")?;
     let body = &head[start + 18..];
-    let end = body.windows(16).position(|w| w == b";!@InstallEnd@!")?;
+    let end = body.windows(15).position(|w| w == b";!@InstallEnd@!")?;
     let text = String::from_utf8_lossy(&body[..end]);
     Some(
         text.lines()
@@ -888,6 +888,103 @@ pub fn info(data: &[u8], path: &Path) -> Result<super::Info, String> {
     })
 }
 
+/// Programme que le module SFX lance après extraction (`RunProgram` ou
+/// `ExecuteFile`), s'il y en a un.
+fn runs_own_setup(data: &[u8], at: usize) -> bool {
+    sfx_config(data, at).is_some_and(|c| {
+        c.iter()
+            .any(|(k, _)| k == "RunProgram" || k == "ExecuteFile")
+    })
+}
+
+/// Paquet MSI porté par un auto-extractible qui lance son propre
+/// programme d'installation : Paint.NET (SetupShim.exe, puis une interface
+/// .NET, puis `PaintDotNet_x64.msi`). Winlux ne suit pas ce programme ; il
+/// installe le paquet MSI lui-même, comme le ferait ce programme. Un seul
+/// MSI par architecture est retenu : le x64 s'il y en a plusieurs.
+pub fn embedded_msi(entries: &[Entry]) -> Option<&Entry> {
+    let msis: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| !e.dir && e.name.to_ascii_lowercase().ends_with(".msi"))
+        .collect();
+    match msis.len() {
+        0 => None,
+        1 => Some(msis[0]),
+        _ => {
+            let x64: Vec<&Entry> = msis
+                .iter()
+                .copied()
+                .filter(|e| {
+                    let n = e.name.to_ascii_lowercase();
+                    n.contains("x64") || n.contains("amd64")
+                })
+                .collect();
+            (x64.len() == 1).then(|| x64[0])
+        }
+    }
+}
+
+/// Lancement d'un auto-extractible 7z qui porte un paquet MSI (voir
+/// [`embedded_msi`]). `None` : ce n'est pas ce cas, la suite habituelle
+/// s'applique. Le contenu est extrait dans un dossier temporaire (un MSI
+/// peut lire ses .cab à côté de lui), le paquet est installé par le
+/// msiexec de Winlux, puis le dossier est effacé.
+pub fn launch_msi(exe: &Path, args: &[String]) -> Option<i32> {
+    let data = std::fs::read(exe).ok()?;
+    let at = find_archive(&data)?;
+    if !runs_own_setup(&data, at) {
+        return None;
+    }
+    let entries = match read_all(&data[at..]) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("setup : {} : {e}", exe.display());
+            return Some(1);
+        }
+    };
+    let msi = embedded_msi(&entries)?;
+    let quiet = args.iter().any(|a| {
+        let w = a.trim_start_matches(['/', '-']).to_ascii_lowercase();
+        matches!(
+            w.as_str(),
+            "s" | "q" | "qn" | "quiet" | "silent" | "verysilent"
+        )
+    });
+    let work = std::env::temp_dir().join(format!("winlux-sfx-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    let mut msi_path = None;
+    for e in &entries {
+        let rel: std::path::PathBuf = e.name.split('\\').collect();
+        let path = work.join(rel);
+        let written = if e.dir {
+            std::fs::create_dir_all(&path)
+        } else {
+            path.parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, &e.data))
+        };
+        if let Err(err) = written {
+            eprintln!("setup : {} : {err}", path.display());
+            let _ = std::fs::remove_dir_all(&work);
+            return Some(1);
+        }
+        if std::ptr::eq(e, msi) {
+            msi_path = Some(path);
+        }
+    }
+    drop(entries);
+    let msi_path = msi_path?;
+    let mut log = crate::msi::install::Logger { file: None, quiet };
+    let opts = crate::msi::install::Options {
+        props: Vec::new(),
+        quiet,
+        admin: false,
+    };
+    let rc = crate::msi::install::install(&msi_path, &opts, &mut log);
+    let _ = std::fs::remove_dir_all(&work);
+    Some(rc)
+}
+
 /// Installe : les fichiers vont dans Program Files\<produit>, un
 /// raccourci du menu Démarrer pointe sur le programme principal.
 pub fn install(
@@ -897,10 +994,7 @@ pub fn install(
     inst: &mut Installer,
 ) -> Result<(), String> {
     let at = find_archive(data).ok_or_else(|| bad("absente"))?;
-    if sfx_config(data, at).is_some_and(|c| {
-        c.iter()
-            .any(|(k, _)| k == "RunProgram" || k == "ExecuteFile")
-    }) {
+    if runs_own_setup(data, at) {
         return Err(
             "cet auto-extractible lance son propre programme d'installation ; Winlux ne sait pas encore le suivre"
                 .into(),
@@ -1119,5 +1213,39 @@ pub mod tests {
         pe.extend(build_copy_archive(&[("a.txt", b"a"), ("b.txt", b"b")], "d"));
         assert_eq!(find_archive(&pe), Some(at));
         assert_eq!(read_all(&pe[at..]).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn sfx_qui_lance_son_installateur_est_reconnu() {
+        // Bloc de configuration tel que l'écrit le module SFX de 7-Zip
+        // (Paint.NET) : la balise de fin fait 15 octets.
+        let mut d = b"MZ....".to_vec();
+        d.extend(b";!@Install@!UTF-8!\r\nTitle=\"Paint.NET Setup\"\r\n");
+        d.extend(b"ExecuteFile=\"SetupShim.exe\"\r\n;!@InstallEnd@!");
+        let at = d.len();
+        d.extend(SIGNATURE);
+        let c = sfx_config(&d, at).unwrap();
+        assert!(c.contains(&("ExecuteFile".into(), "SetupShim.exe".into())));
+        assert!(c.contains(&("Title".into(), "Paint.NET Setup".into())));
+        assert!(runs_own_setup(&d, at));
+        // Sans bloc : une archive simple (7-Zip lui-même).
+        let plain = [b"MZ....".as_slice(), SIGNATURE].concat();
+        assert!(!runs_own_setup(&plain, 6));
+    }
+
+    #[test]
+    fn msi_porte_par_l_auto_extractible() {
+        let e = |name: &str| Entry {
+            name: name.into(),
+            dir: false,
+            data: Vec::new(),
+        };
+        let one = [e("SetupShim.exe"), e("x64\\PaintDotNet_x64.msi")];
+        assert_eq!(embedded_msi(&one).unwrap().name, "x64\\PaintDotNet_x64.msi");
+        let two = [e("x86\\App_x86.msi"), e("x64\\App_x64.msi")];
+        assert_eq!(embedded_msi(&two).unwrap().name, "x64\\App_x64.msi");
+        assert!(embedded_msi(&[e("setup.exe")]).is_none());
+        let ambigu = [e("a.msi"), e("b.msi")];
+        assert!(embedded_msi(&ambigu).is_none());
     }
 }

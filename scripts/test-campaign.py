@@ -428,9 +428,17 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     panel = ET.parse(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
     order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
-    after = [panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value") for number in order[order.index('1') + 1:order.index('1') + 3]]
-    ok([item.get("value").rsplit("/", 1)[-1] if item is not None else None for item in after] == ["winlux-search.desktop", "winlux-taskview.desktop"],
-       "profil neuf : boutons Rechercher et Vue des tâches juste après Démarrer")
+    def button(number):
+        """Lanceur (fichier .desktop) ou genmon (commande) d'un greffon."""
+        item = panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value")
+        command = panel.find(f".//property[@name='plugin-{number}']/property[@name='command']")
+        return item.get("value").rsplit("/", 1)[-1] if item is not None else command.get("value") if command is not None else None
+    ok([button(number) for number in order[order.index('1') + 1:order.index('1') + 3]] == ["/usr/bin/winlux-tray search", "winlux-taskview.desktop"],
+       "profil neuf : zone Rechercher (#703) et Vue des tâches juste après Démarrer")
+    # Barre redessinée (#703) : réseau, son et batterie en un bouton, l'heure avant la cloche.
+    ok([button(number) for number in order[order.index('10') + 1:order.index('10') + 4]]
+       == ["/usr/bin/winlux-tray status", "/usr/bin/winlux-clock", "/usr/bin/winlux-tray notifications"],
+       "profil neuf : état groupé, heure puis cloche (#703)")
     ok(panel.find(".//property[@name='all-workspaces']").get("value") == "false",
        "profil neuf : la barre ne montre que les fenêtres du bureau en cours")
     rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
@@ -554,5 +562,16 @@ iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
    and "journal-$journal_uid" in iso_init,
    "journal : un dossier 0700 par compte, protected_regular=2")
+
+# #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
+# économiseur ; la veille de l'écran ne revenait plus de la session.
+with tempfile.TemporaryDirectory() as directory:
+    fresh, old = Path(directory) / "neuf", Path(directory) / "ancien"
+    fresh.mkdir(); old.mkdir()
+    (old / ".xscreensaver").write_text("timeout:        0:10:00\nmode:           one\n")
+    native_config(fresh); native_config(old)
+    ok(all("dpmsEnabled:    True" in (home / ".xscreensaver").read_text() for home in (fresh, old))
+       and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
+       "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

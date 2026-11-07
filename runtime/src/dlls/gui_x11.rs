@@ -69,6 +69,17 @@ fn compute_theme_bands(
         .collect()
 }
 
+/// FocusIn/FocusOut qui ne concerne pas la fenêtre elle-même : reçu par un
+/// ancêtre de celle qui prend ou perd le focus (NotifyVirtual,
+/// NotifyNonlinearVirtual), ou par celle qui contient le pointeur quand le
+/// focus suit le pointeur (NotifyPointer).
+fn is_virtual_focus(detail: x11rb::protocol::xproto::NotifyDetail) -> bool {
+    use x11rb::protocol::xproto::NotifyDetail;
+    detail == NotifyDetail::VIRTUAL
+        || detail == NotifyDetail::NONLINEAR_VIRTUAL
+        || detail == NotifyDetail::POINTER
+}
+
 /// Vrai pour un FocusIn/FocusOut dû à un grab (menu, glisser) : le focus
 /// réel de la fenêtre n'a pas changé.
 fn focus_is_grab(mode: x11rb::protocol::xproto::NotifyMode) -> bool {
@@ -2294,7 +2305,7 @@ impl X11Backend {
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
-                    eprintln!("Winlux X11 button {} at {x},{y}", e.detail);
+                    eprintln!("Winlux X11 button {} at {x},{y} hwnd {hwnd:#x}", e.detail);
                 }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 if let Some((message, delta)) = wheel_message(e.detail) {
@@ -2411,6 +2422,13 @@ impl X11Backend {
                 {
                     return None;
                 }
+                // Virtual / NonlinearVirtual : le focus va à une fenêtre
+                // descendante (un contrôle), qui reçoit son propre FocusIn.
+                // Le traiter rendait le focus au dialogue, qui le redonnait
+                // au contrôle, et le bouton cliqué perdait son appui (#709).
+                if is_virtual_focus(e.detail) {
+                    return None;
+                }
                 crate::dlls::rawinput::set_app_focus(true);
                 Some(PendingEvent {
                     hwnd,
@@ -2428,6 +2446,10 @@ impl X11Backend {
                 if self.is_frame(hwnd, e.event)
                     && e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
                 {
+                    return None;
+                }
+                // Le focus quittait un descendant : celui-ci a son FocusOut.
+                if is_virtual_focus(e.detail) {
                     return None;
                 }
                 // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
@@ -4091,16 +4113,37 @@ impl gui::GuiBackend for X11Backend {
             .clamp(i16::MIN as i32, i16::MAX as i32);
         let width = self.scaled(rect.width()).max(1).min(u16::MAX as i32) as u16;
         let height = self.scaled(rect.height()).max(1).min(u16::MAX as i32) as u16;
-        let (window, frame, bar) = match self.windows.get_mut(&hwnd) {
+        let (window, frame, bar, child) = match self.windows.get_mut(&hwnd) {
             Some(w) => {
                 w.x = x;
                 w.y = y;
                 w.width = width;
                 w.height = height.saturating_sub(w.bar).max(1);
-                (w.window, w.frame, w.bar)
+                (w.window, w.frame, w.bar, w.child)
             }
             None => return,
         };
+        if !child {
+            // Position voulue par le programme (WM_NORMAL_HINTS, USPosition |
+            // USSize | PPosition | PSize | PWinGravity, StaticGravity comme
+            // nos coordonnées, qui sont celles de la zone X) : sans
+            // elle, openbox place la fenêtre à sa guise au moment de
+            // l'afficher (« À propos » de Notepad++ en bas à gauche, #706).
+            let mut hints = [0u32; 18];
+            hints[0] = 1 | 2 | 4 | 8 | 0x200;
+            hints[1] = x as u32;
+            hints[2] = y as u32;
+            hints[3] = width as u32;
+            hints[4] = height as u32;
+            hints[17] = 10;
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                if frame != 0 { frame } else { window },
+                AtomEnum::WM_NORMAL_HINTS,
+                AtomEnum::WM_SIZE_HINTS,
+                &hints,
+            );
+        }
         let aux = ConfigureWindowAux::new()
             .x(x)
             .y(y)
@@ -4149,6 +4192,34 @@ impl gui::GuiBackend for X11Backend {
             let _ = self.conn.change_window_attributes(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }
+    }
+
+    fn set_decorations(&mut self, hwnd: usize, level: u8) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        let top = Self::top_xwin(w);
+        let Ok(Ok(atom)) = self
+            .conn
+            .intern_atom(false, b"_MOTIF_WM_HINTS")
+            .map(|c| c.reply())
+        else {
+            return;
+        };
+        // MWM_HINTS_DECORATIONS ; MWM_DECOR_ALL (1) ou MWM_DECOR_BORDER (2).
+        let decorations = match level {
+            0 => 0,
+            1 => 2,
+            _ => 1,
+        };
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            top,
+            atom.atom,
+            atom.atom,
+            &[2, 0, decorations, 0, 0],
+        );
+        let _ = self.conn.flush();
     }
 
     fn grab_pointer(&mut self, hwnd: usize, grab: bool) {

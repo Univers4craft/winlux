@@ -295,6 +295,20 @@ _TR = {
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
+    'Compte GitHub': ('GitHub account', 'Cuenta de GitHub', 'GitHub-Konto'),
+    'Connecté en tant que': ('Signed in as', 'Conectado como', 'Angemeldet als'),
+    'Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer ».':
+        ('Your reports go straight to GitHub, under your name, when you click "Send".',
+         'Sus informes van directamente a GitHub, con su nombre, cuando pulsa «Enviar».',
+         'Ihre Berichte gehen direkt unter Ihrem Namen an GitHub, wenn Sie auf „Senden“ klicken.'),
+    'Connectez votre compte GitHub pour envoyer vos rapports directement depuis Winlux. Sans compte, chaque rapport s’ouvre, prérempli, sur le site GitHub.':
+        ('Connect your GitHub account to send your reports straight from Winlux. Without one, each report opens, prefilled, on the GitHub website.',
+         'Conecte su cuenta de GitHub para enviar sus informes directamente desde Winlux. Sin cuenta, cada informe se abre, ya rellenado, en el sitio de GitHub.',
+         'Verbinden Sie Ihr GitHub-Konto, um Berichte direkt aus Winlux zu senden. Ohne Konto öffnet sich jeder Bericht vorausgefüllt auf der GitHub-Website.'),
+    'Se connecter avec GitHub': ('Sign in with GitHub', 'Iniciar sesión con GitHub', 'Mit GitHub anmelden'),
+    'Changer de compte': ('Switch account', 'Cambiar de cuenta', 'Konto wechseln'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
+    'Créer un compte GitHub gratuitement': ('Create a free GitHub account', 'Crear una cuenta de GitHub gratis', 'Kostenloses GitHub-Konto erstellen'),
     'Silencieux': ('Quiet', 'Silencioso', 'Leise'),
     'Sinon, appui dans le coin inférieur droit.': ('Otherwise, press the bottom-right corner.', 'Si no, pulse la esquina inferior derecha.', 'Sonst unten rechts drücken.'),
     'Sinon, défilement sur le bord du pavé.': ('Otherwise, scroll along the edge of the pad.', 'Si no, desplazamiento por el borde del panel.', 'Sonst Scrollen am Rand des Touchpads.'),
@@ -386,6 +400,15 @@ _TR = {
     "Très grande": ("Extra large", "Muy grande", "Sehr groß"),
     "Alignement": ("Alignment", "Alineación", "Ausrichtung"),
     "Centré": ("Center", "Centrado", "Zentriert"),
+    "Style": ("Style", "Estilo", "Stil"),
+    "Classique, sur toute la largeur": ("Classic, full width", "Clásica, a lo ancho", "Klassisch, volle Breite"),
+    "Flottante, au centre": ("Floating, centered", "Flotante, en el centro", "Schwebend, mittig"),
+    "Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.": ("Floating: the taskbar is as wide as its buttons, centered, with rounded corners.", "Flotante: la barra ocupa el ancho de sus botones, en el centro, con esquinas redondeadas.", "Schwebend: Die Taskleiste ist so breit wie ihre Schaltflächen, mittig, mit abgerundeten Ecken."),
+    "Recherche": ("Search", "Búsqueda", "Suche"),
+    "Zone de recherche": ("Search box", "Cuadro de búsqueda", "Suchfeld"),
+    "Icône seule": ("Icon only", "Solo icono", "Nur Symbol"),
+    "Masquée": ("Hidden", "Oculta", "Ausgeblendet"),
+    "Windows + S ouvre toujours la recherche, même masquée.": ("Windows + S always opens search, even when hidden.", "Windows + S siempre abre la búsqueda, aunque esté oculta.", "Windows + S öffnet die Suche immer, auch wenn sie ausgeblendet ist."),
     "À gauche": ("Left", "A la izquierda", "Links"),
     "Icône du menu Démarrer": ("Start menu icon", "Icono del menú Inicio", "Startmenü-Symbol"),
     "Choisir une image…": ("Choose an image…", "Elegir una imagen…", "Bild auswählen…"),
@@ -726,6 +749,20 @@ HOME = Path.home()
 START_STATE = HOME / ".config/winlux/start.json"
 
 
+def taskbar_preferences():
+    """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre (#703)."""
+    values = {"STYLE": "classic", "SEARCH": "box"}
+    path = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "winlux/taskbar.conf"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if (key, value) in (("STYLE", "classic"), ("STYLE", "floating"), ("SEARCH", "box"), ("SEARCH", "icon"), ("SEARCH", "hidden")):
+                values[key] = value
+    except (OSError, UnicodeDecodeError):
+        pass
+    return values
+
+
 def start_menu_state():
     try:
         state = json.loads(START_STATE.read_text(encoding="utf-8"))
@@ -879,6 +916,20 @@ def report_token_file():
 REPORT_TOKEN_URL = ("https://github.com/settings/personal-access-tokens/new?name=winlux-plantages"
                     "&description=Envoi%20automatique%20des%20plantages%20Winlux&target_name=Univers4craft"
                     "&expires_in=365&issues=write")
+
+
+GITHUB_SIGNUP_URL = "https://github.com/signup"
+
+
+def report_account():
+    """Nom du compte GitHub connecté pour les rapports (#725), ou « »."""
+    path = Path(os.environ.get("WINLUX_REPORT_ACCOUNT")
+                or Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/github-account.json")
+    try:
+        login = json.loads(path.read_text()).get("login", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return login if isinstance(login, str) and re.fullmatch(r"[A-Za-z0-9-]{1,39}", login) else ""
 
 
 def report_queue_size():
@@ -1911,8 +1962,16 @@ class ExtraPages:
         sizes = [("32", _t("Petite")), ("40", _t("Moyenne")), ("48", _t("Grande")), ("56", _t("Très grande"))]
         size = xfconf_get("xfce4-panel", "/panels/panel-1/size") or prefs.get("panel-size", "40")
         self.combo(box, _t("Taille"), sizes, size, lambda value: self.tool(["winlux-personalize", "panel-size", value]))
+        # Style et recherche de la barre (#703), réglage propre au compte.
+        taskbar = taskbar_preferences()
+        self.combo(box, _t("Style"), [("classic", _t("Classique, sur toute la largeur")), ("floating", _t("Flottante, au centre"))],
+                   taskbar["STYLE"], lambda value: self.tool(["winlux-personalize", "taskbar-style", value]),
+                   _t("Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.") if taskbar["STYLE"] == "floating" else None)
         self.combo(box, _t("Alignement"), [("center", _t("Centré")), ("left", _t("À gauche"))],
                    self.status.get("align") or "center", lambda value: self.execute("align-" + value))
+        self.combo(box, _t("Recherche"), [("box", _t("Zone de recherche")), ("icon", _t("Icône seule")), ("hidden", _t("Masquée"))],
+                   taskbar["SEARCH"], lambda value: self.tool(["winlux-personalize", "search", value]),
+                   _t("Windows + S ouvre toujours la recherche, même masquée."))
         self.row(box, _t("Icône du menu Démarrer"), self.browse_button(
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
@@ -2390,7 +2449,14 @@ class ExtraPages:
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
         self.program_cards = {}
+        # Ouvert depuis « Compatibilité » de l'Explorateur : ce programme en
+        # premier, même s'il n'est pas dans la liste des programmes installés.
+        wanted, self.pending_exe = getattr(self, "pending_exe", None), None
+        if wanted is not None:
+            name = next((n for e, n in programs if e == wanted), wanted.stem)
+            self.program_card(module, wanted, name, first=True)
         for exe, name in programs:
+            if exe == wanted: continue
             self.program_card(module, exe, name)
         GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
 
@@ -3036,6 +3102,20 @@ class ExtraPages:
         self.actions(box, [(_t("Signaler un problème"), lambda: self.spawn(["winlux-report"])),
                            (_t("Dernier plantage"), lambda: self.spawn(["winlux-report", "--crash", "--force"])),
                            (_t("Rapports enregistrés"), lambda: self.spawn(["winlux-report", "--open-saved"]))])
+        # Compte GitHub de l'utilisateur (#725) : connexion dans la fenêtre de
+        # winlux-report, qui garde le jeton dans le compte (0600).
+        self.section(_t("Compte GitHub"))
+        box = self.card()
+        login = report_account()
+        if login:
+            self.row(box, _t("Connecté en tant que"), Gtk.Label(label="@" + login),
+                     _t("Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer »."))
+            self.actions(box, [(_t("Changer de compte"), lambda: self.tool(["winlux-report", "--account-connect"])),
+                               (_t("Se déconnecter"), lambda: self.tool(["winlux-report", "--account-forget"]))])
+        else:
+            self.hint(_t("Connectez votre compte GitHub pour envoyer vos rapports directement depuis Winlux. Sans compte, chaque rapport s’ouvre, prérempli, sur le site GitHub."), box)
+            self.actions(box, [(_t("Se connecter avec GitHub"), lambda: self.tool(["winlux-report", "--account-connect"])),
+                               (_t("Créer un compte GitHub gratuitement"), lambda: self.spawn(["xdg-open", GITHUB_SIGNUP_URL]))])
         self.section(_t("Préférences"))
         box = self.card()
         self.switch(box, _t("Proposer un rapport après un plantage"), status.get("report_offer") != "off",

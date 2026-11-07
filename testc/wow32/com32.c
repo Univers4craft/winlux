@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <oleauto.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -250,6 +251,40 @@ int main(void)
     IErrorInfo_Release(got);
     IErrorInfo_Release(ei);
     ICreateErrorInfo_Release(cei);
+
+    /* Fonctions demandées par WinSCP 6.7 x86. */
+    LONG target = 7;
+    VARIANT ref, val;
+    VariantInit(&ref);
+    VariantInit(&val);
+    V_VT(&ref) = VT_I4 | VT_BYREF;
+    V_I4REF(&ref) = &target;
+    CHECK(VariantCopyInd(&val, &ref) == S_OK && V_VT(&val) == VT_I4 && V_I4(&val) == 7, "VariantCopyInd");
+    SAFEARRAYBOUND sab = { 4, 0 };
+    SAFEARRAY *sa = SafeArrayCreate(VT_I4, 1, &sab);
+    CHECK(sa != NULL, "SafeArrayCreate");
+    sab.cElements = 8;
+    CHECK(SafeArrayRedim(sa, &sab) == S_OK, "SafeArrayRedim");
+    LONG idx = 6;
+    LONG *slot = NULL;
+    CHECK(SafeArrayPtrOfIndex(sa, &idx, (void **)&slot) == S_OK && slot != NULL, "SafeArrayPtrOfIndex");
+    *slot = 99;
+    LONG elem = 0;
+    CHECK(SafeArrayGetElement(sa, &idx, &elem) == S_OK && elem == 99, "élément 6 après Redim");
+    SafeArrayDestroy(sa);
+    IUnknown *active = (IUnknown *)1;
+    CHECK(GetActiveObject(&IID_ITest, NULL, &active) == MK_E_UNAVAILABLE && active == NULL, "GetActiveObject");
+    IBindCtx *bc = (IBindCtx *)1;
+    hr = CreateBindCtx(0, &bc);
+    CHECK(hr == S_OK ? bc != NULL : bc == NULL, "CreateBindCtx");
+    CHECK(CoDisconnectObject((IUnknown *)&the_test, 0) == S_OK, "CoDisconnectObject");
+    CoFreeUnusedLibraries();
+    IMalloc *sm = NULL;
+    CHECK(SHGetMalloc(&sm) == S_OK && sm != NULL, "SHGetMalloc");
+    void *sblk = IMalloc_Alloc(sm, 64);
+    CHECK(sblk != NULL && (UINT_PTR)sblk < 0x100000000ull, "IMalloc_Alloc depuis SHGetMalloc");
+    IMalloc_Free(sm, sblk);
+    IMalloc_Release(sm);
 
     CoUninitialize();
     printf("com32 : COM 32 bits, %d vérifications passées. Tout est correct\n", step);

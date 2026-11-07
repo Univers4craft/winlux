@@ -36,6 +36,9 @@ pub struct GdiFont {
     pub italic: bool,
     pub underline: bool,
     pub strikeout: bool,
+    /// Fichier de la police et rang dans une collection (GetFontData).
+    pub path: std::path::PathBuf,
+    pub index: u32,
 }
 
 impl GdiFont {
@@ -113,6 +116,8 @@ pub fn spec_font(spec: &super::gui::FontSpec) -> Option<Arc<GdiFont>> {
         italic: spec.italic,
         underline: spec.underline,
         strikeout: spec.strikeout,
+        path: info.path.clone(),
+        index: info.index,
     });
     super::lock(fonts()).insert(key, f.clone());
     Some(f)
@@ -880,8 +885,188 @@ pub fn usp10_exports() -> crate::dlls::Exports {
     }
 }
 
+/// Étiquette « ttcf » : toute la collection, depuis le début du fichier.
+const TTCF: u32 = u32::from_le_bytes(*b"ttcf");
+
+/// Octets que GetFontData lit dans le fichier `data` d'une police (face
+/// `index` d'une collection) : la table d'étiquette `table` (octets dans
+/// l'ordre du fichier, « cmap » = 0x70616D63), ou le fichier entier si
+/// `table` vaut 0, à partir de `offset`.
+fn font_data(data: &[u8], index: u32, table: u32, offset: usize) -> Option<&[u8]> {
+    let be32 = |p: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(data.get(p..p + 4)?.try_into().ok()?))
+    };
+    let collection = data.get(0..4) == Some(b"ttcf");
+    let whole = if table == TTCF || (table == 0 && !collection) {
+        data
+    } else {
+        // Répertoire des tables de la face : début du fichier, ou entrée
+        // `index` de l'en-tête de la collection.
+        let dir = if collection {
+            be32(12 + 4 * index as usize)? as usize
+        } else {
+            0
+        };
+        if table == 0 {
+            data.get(dir..)?
+        } else {
+            let n = u16::from_be_bytes(data.get(dir + 4..dir + 6)?.try_into().ok()?) as usize;
+            let tag = table.to_le_bytes();
+            let rec = (0..n)
+                .map(|i| dir + 12 + 16 * i)
+                .find(|&r| data.get(r..r + 4) == Some(&tag[..]))?;
+            let (start, len) = (be32(rec + 8)? as usize, be32(rec + 12)? as usize);
+            data.get(start..start.checked_add(len)?)?
+        }
+    };
+    whole.get(offset..)
+}
+
+/// GetFontData : tables brutes de la police TrueType sélectionnée dans le
+/// DC (VLC et Qt y lisent « cmap », « name », « OS/2 »…). `buf` nul ou
+/// `size` 0 : renvoie la taille disponible.
+unsafe extern "win64" fn get_font_data(
+    hdc: usize,
+    table: u32,
+    offset: u32,
+    buf: *mut u8,
+    size: u32,
+) -> u32 {
+    let Some(f) = dc_font(hdc) else {
+        return GDI_ERROR;
+    };
+    let Ok(bytes) = std::fs::read(&f.path) else {
+        return GDI_ERROR;
+    };
+    let Some(part) = font_data(&bytes, f.index, table, offset as usize) else {
+        return GDI_ERROR;
+    };
+    if buf.is_null() || size == 0 {
+        return part.len() as u32;
+    }
+    let n = part.len().min(size as usize);
+    std::ptr::copy_nonoverlapping(part.as_ptr(), buf, n);
+    n as u32
+}
+
+/// Largeurs ABC d'un glyphe en pixels : approche gauche, largeur dessinée,
+/// approche droite (A + B + C = avance).
+fn abc_of(f: &GdiFont, gid: u16) -> [i32; 3] {
+    let r = rasterize(f, gid);
+    let adv = f.advance_px(gid);
+    if r.empty || r.w == 0 {
+        return [0, adv.max(0), 0];
+    }
+    let (a, b) = (r.origin.0, r.w as i32);
+    [a, b, adv - a - b]
+}
+
+unsafe fn write_abc(f: &GdiFont, gids: impl Iterator<Item = u16>, out: *mut i32) {
+    for (i, g) in gids.enumerate() {
+        let v = abc_of(f, g);
+        // ABC : abcA (int), abcB (UINT), abcC (int).
+        std::ptr::copy_nonoverlapping(v.as_ptr(), out.add(i * 3), 3);
+    }
+}
+
+/// GetCharABCWidthsW : largeurs ABC des caractères `first..=last`.
+unsafe extern "win64" fn get_char_abc_widths_w(
+    hdc: usize,
+    first: u32,
+    last: u32,
+    abc: *mut i32,
+) -> i32 {
+    let Some(f) = dc_font(hdc) else { return 0 };
+    if abc.is_null() || last < first {
+        return 0;
+    }
+    write_abc(&f, (first..=last).map(|c| f.font.glyph_index(c)), abc);
+    1
+}
+
+/// Glyphes `gids[..n]`, ou `first..first + n` si `gids` est nul.
+unsafe fn glyph_list(first: u32, n: u32, gids: *const u16) -> impl Iterator<Item = u16> {
+    (0..n as usize).map(move |i| {
+        if gids.is_null() {
+            (first as usize + i) as u16
+        } else {
+            *gids.add(i)
+        }
+    })
+}
+
+/// GetCharABCWidthsI : largeurs ABC par numéros de glyphes.
+unsafe extern "win64" fn get_char_abc_widths_i(
+    hdc: usize,
+    first: u32,
+    n: u32,
+    gids: *const u16,
+    abc: *mut i32,
+) -> i32 {
+    let Some(f) = dc_font(hdc) else { return 0 };
+    if abc.is_null() {
+        return 0;
+    }
+    write_abc(&f, glyph_list(first, n, gids), abc);
+    1
+}
+
+/// GetCharWidthI : avances des glyphes en pixels.
+unsafe extern "win64" fn get_char_width_i(
+    hdc: usize,
+    first: u32,
+    n: u32,
+    gids: *const u16,
+    widths: *mut i32,
+) -> i32 {
+    let Some(f) = dc_font(hdc) else { return 0 };
+    if widths.is_null() {
+        return 0;
+    }
+    for (i, g) in glyph_list(first, n, gids).enumerate() {
+        *widths.add(i) = f.advance_px(g);
+    }
+    1
+}
+
+/// GetTextExtentPointI : largeur d'une suite de glyphes, hauteur de ligne.
+unsafe extern "win64" fn get_text_extent_point_i(
+    hdc: usize,
+    gids: *const u16,
+    n: i32,
+    size: *mut i32,
+) -> i32 {
+    let Some(f) = dc_font(hdc) else { return 0 };
+    if size.is_null() || (gids.is_null() && n > 0) {
+        return 0;
+    }
+    let w: i32 = glyph_list(0, n.max(0) as u32, gids)
+        .map(|g| f.advance_px(g))
+        .sum();
+    *size = w;
+    *size.add(1) = f.ascent() + f.descent();
+    1
+}
+
+/// GetKerningPairsW : aucune paire (la table « kern » n'est pas lue).
+extern "win64" fn get_kerning_pairs_w(_hdc: usize, _n: u32, _pairs: *mut u8) -> u32 {
+    0
+}
+
+/// GetFontLanguageInfo : ni ligatures ni réordonnancement à signaler.
+extern "win64" fn get_font_language_info(_hdc: usize) -> u32 {
+    0
+}
+
 pub fn gdi32_exports() -> crate::dlls::Exports {
     crate::exports! {
+        "GetFontData" => fn get_font_data,
+        "GetCharABCWidthsI" => fn get_char_abc_widths_i,
+        "GetCharWidthI" => fn get_char_width_i,
+        "GetTextExtentPointI" => fn get_text_extent_point_i,
+        "GetKerningPairsW" => fn get_kerning_pairs_w,
+        "GetKerningPairs" => fn get_kerning_pairs_w,
+        "GetFontLanguageInfo" => fn get_font_language_info,
         "GetGlyphIndicesW" => fn get_glyph_indices_w,
         "GetGlyphOutlineW" => fn get_glyph_outline_w,
         "SetDIBColorTable" => fn set_dib_color_table,
@@ -892,6 +1077,7 @@ pub fn gdi32_exports() -> crate::dlls::Exports {
 pub fn gdi32_overrides() -> crate::dlls::Exports {
     crate::exports! {
         "GetOutlineTextMetricsW" => fn get_outline_text_metrics_w,
+        "GetCharABCWidthsW" => fn get_char_abc_widths_w,
     }
 }
 
@@ -981,9 +1167,21 @@ mod tests {
             italic: false,
             underline: false,
             strikeout: false,
+            path: path.clone(),
+            index: 0,
         };
+        let bytes = std::fs::read(&path).unwrap();
+        let cmap = u32::from_le_bytes(*b"cmap");
+        let t = font_data(&bytes, 0, cmap, 0).expect("table cmap");
+        assert_eq!(&t[0..2], &[0, 0], "version de cmap");
+        assert_eq!(font_data(&bytes, 0, cmap, 2).unwrap().len(), t.len() - 2);
+        assert_eq!(font_data(&bytes, 0, 0, 0).unwrap().len(), bytes.len());
+        assert!(font_data(&bytes, 0, u32::from_le_bytes(*b"zzzz"), 0).is_none());
         let gid = f.font.glyph_index('A' as u32); // un carré dans la police de test
         assert_ne!(gid, 0);
+        let [a, b, c] = abc_of(&f, gid);
+        assert!(b > 0);
+        assert_eq!(a + b + c, f.advance_px(gid), "A + B + C = avance");
         let r = rasterize(&f, gid);
         assert!(!r.empty);
         assert!(r.w > 4 && r.h > 10, "{}x{}", r.w, r.h);

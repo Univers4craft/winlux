@@ -79,7 +79,7 @@ except SystemExit:
 osk["save_setting"]("auto")
 check("<img>" in osk["tray_output"]() and "toggle</click>" in osk["tray_output"](), osk["tray_output"]())
 devices.write_text(KEYBOARD)
-check(osk["tray_output"]() == "<txt></txt>", "greffon vide quand l'icône n'est pas voulue")
+check(osk["tray_output"]() == "<txt></txt><tool></tool>", "greffon vide quand l'icône n'est pas voulue")
 check(osk["ids_with_icon"]([3, 1, 2, 8, 10, 4, 5, 6, 9, 7]) == [3, 1, 2, 8, 10, 12, 4, 5, 6, 9, 7], "icône avant le réseau")
 check(osk["ids_with_icon"]([3, 1, 12, 2, 4, 7]) == [3, 1, 2, 12, 4, 7], "icône déplacée, jamais en double")
 # Disposition : celle du système (XKB_LAYOUT), belge → AZERTY, britannique → QWERTY.

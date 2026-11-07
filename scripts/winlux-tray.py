@@ -142,6 +142,17 @@ def _balance_cache():
     return base / "winlux/taskbar-balance"
 
 
+def _balance_log(message):
+    """Journal de mesure du contrepoids, seulement si WINLUX_BALANCE_LOG est défini (tests)."""
+    path = os.environ.get("WINLUX_BALANCE_LOG")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as log:
+                log.write(f"{time.monotonic():.2f} {message}\n")
+        except OSError:
+            pass
+
+
 def _settled_balance(ids, right_ids, left_ids):
     """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
 
@@ -185,12 +196,15 @@ def _settled_balance(ids, right_ids, left_ids):
             laid_out = all(x + width <= following for (x, width), (following, _) in zip(block, block[1:]))
             if expected <= present and laid_out and children == previous:
                 break
+            _balance_log(f"attente : attendus {sorted(expected)}, présents {sorted(present)}, "
+                         f"alignés {laid_out}, greffons {children}")
             previous = children
             time.sleep(0.1)
             children, screen = _panel_children()
     if not screen:
         return 0
     width = balance_width(screen, children, right_ids, left_ids)
+    _balance_log(f"mesure : {width} px, âge {age}, greffons {children}")
     cache = _balance_cache()
     try:
         if cache.read_text().split() != [key, str(width)]:
@@ -227,8 +241,50 @@ def tray_directory():
 
 
 directory = tray_directory()
-color = "#e7ddf5"
-if kind == "battery":
+
+
+def taskbar_preferences():
+    """Réglages de la barre du compte (Personnalisation) : STYLE et SEARCH."""
+    path = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "winlux/taskbar.conf"
+    values = {"STYLE": "classic", "SEARCH": "box"}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if key in values and value.strip():
+                values[key] = value.strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    return values
+
+
+def panel_dark():
+    """La barre suit le thème GTK du compte (thème clair = barre claire)."""
+    forced = os.environ.get("WINLUX_PANEL_THEME")
+    if forced in ("dark", "light"):
+        return forced == "dark"
+    settings = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "gtk-3.0/settings.ini"
+    name, prefer = "", ""
+    try:
+        for line in settings.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if key == "gtk-theme-name": name = value.casefold()
+            elif key == "gtk-application-prefer-dark-theme": prefer = value
+    except (OSError, UnicodeDecodeError):
+        return True
+    if name.startswith("winlux-"):
+        return "-dark" in name  # thème du compte écrit par winlux-personalize
+    if "dark" in name or "inverse" in name or prefer in ("1", "true"):
+        return True
+    return not name  # pas encore de thème : barre sombre livrée
+
+
+DARK = panel_dark()
+color = "#e7ddf5" if DARK else "#2a2633"
+mode = "d" if DARK else "l"
+
+
+def battery_part():
     supplies = Path(os.environ.get("WINLUX_POWER_SUPPLY", "/sys/class/power_supply"))
     batteries = sorted(supplies.glob("BAT*/capacity"))
     level = None
@@ -239,34 +295,34 @@ if kind == "battery":
             status = (batteries[0].parent / "status").read_text().strip()
         except (OSError, ValueError):
             level = None
-    if level is not None:
-        body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
-        # Certains contrôleurs annoncent « Not charging » ou « Unknown » sur
-        # secteur (seuil de charge, batterie pleine) : l'adaptateur fait foi.
-        def _online(adapter):
-            try:
-                return ((adapter / "type").read_text().strip() in ("Mains", "USB", "USB_C", "USB_PD")
-                        and (adapter / "online").read_text().strip() == "1")
-            except OSError:
-                return False
-        plugged = status in ("Charging", "Full") or any(_online(path) for path in supplies.iterdir() if not path.name.startswith("BAT"))
-        if plugged:
-            body += f'<path d="M13.5 5 8 13h4l-1.5 7L16 12h-4z" fill="{color}" stroke="#1e1b26" stroke-width="1" stroke-linejoin="round"/>'
-        if status == "Charging":
-            state = "Batterie : {level} % — en charge"
-        elif plugged and (status == "Full" or level >= 99):
-            state = "Batterie : {level} % — chargée"
-        elif plugged:
-            state = "Batterie : {level} % — branchée, pas en charge"
-        else:
-            state = "Batterie : {level} %"
-        tooltip = _t(state).format(level=level)
-        identity = f"battery-{level}-ac" if plugged else f"battery-{level}"
-    else:
+    if level is None:
         body = f'<path d="M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-6 6v4m0-4a6 6 0 0 1-6-6V8" fill="none" stroke="{color}" stroke-width="1.8"/>'
-        tooltip, identity = _t("Alimentation secteur — aucune batterie exposée par la machine"), "power-ac"
-    page = 3
-elif kind == "audio":
+        return body, _t("Alimentation secteur — aucune batterie exposée par la machine"), "power-ac", False
+    body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
+    # Certains contrôleurs annoncent « Not charging » ou « Unknown » sur
+    # secteur (seuil de charge, batterie pleine) : l'adaptateur fait foi.
+    def _online(adapter):
+        try:
+            return ((adapter / "type").read_text().strip() in ("Mains", "USB", "USB_C", "USB_PD")
+                    and (adapter / "online").read_text().strip() == "1")
+        except OSError:
+            return False
+    plugged = status in ("Charging", "Full") or any(_online(path) for path in supplies.iterdir() if not path.name.startswith("BAT"))
+    if plugged:
+        outline = "#1e1b26" if DARK else "#f6f4fa"
+        body += f'<path d="M13.5 5 8 13h4l-1.5 7L16 12h-4z" fill="{color}" stroke="{outline}" stroke-width="1" stroke-linejoin="round"/>'
+    if status == "Charging":
+        state = "Batterie : {level} % — en charge"
+    elif plugged and (status == "Full" or level >= 99):
+        state = "Batterie : {level} % — chargée"
+    elif plugged:
+        state = "Batterie : {level} % — branchée, pas en charge"
+    else:
+        state = "Batterie : {level} %"
+    return body, _t(state).format(level=level), (f"battery-{level}-ac" if plugged else f"battery-{level}"), True
+
+
+def audio_part():
     # Même détection que le panneau Son : PipeWire/PulseAudio (hors puits
     # factice « auto_null »), puis wpctl, puis ALSA.
     def run(args):
@@ -295,8 +351,10 @@ elif kind == "audio":
     if not wave: body += f'<path d="m16 9 6 6m0-6-6 6" stroke="{color}" stroke-width="1.7"/>'
     for n in range(wave): body += f'<path d="M{15 + n * 3} {9 - n * 2}q{3 + n} {3 + n * 2} 0 {6 + n * 4}" fill="none" stroke="{color}" stroke-width="1.4"/>'
     tooltip = _t("Audio indisponible") if level is None else _t("Son coupé") if muted else f"Volume : {level}%"
-    identity, page = f"audio-{wave}", 3
-elif kind == "network":
+    return body, tooltip, f"audio-{wave}"
+
+
+def network_part():
     try:
         routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
         fields = routes[0].split() if routes else []
@@ -310,7 +368,81 @@ elif kind == "network":
         body = f'<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="1.6"/><path d="M12 16v5m-5 0h10" stroke="{color}" stroke-width="1.6"/>'
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
     tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
-    identity, page = f"network-{int(bool(active))}-{int(wireless)}", 2
+    return body, tooltip, f"network-{int(bool(active))}-{int(wireless)}"
+
+
+def notification_count():
+    """Notifications gardées dans le centre (pastille sur la cloche)."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "winlux/notifications.json"
+    try:
+        items = json.loads(state.read_text(encoding="utf-8"))
+        return len(items) if isinstance(items, list) else 0
+    except (OSError, ValueError):
+        return 0
+
+
+def svg_file(identity, width, height, body):
+    icon = directory / f"{identity}-{mode}.svg"
+    if not icon.exists():
+        temporary = icon.with_name(icon.name + f".{os.getpid()}")
+        temporary.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">{body}</svg>')
+        temporary.replace(icon)
+    return icon
+
+
+def screen_width():
+    try:
+        output = subprocess.run(["xdpyinfo"], capture_output=True, text=True, timeout=2).stdout
+        found = re.search(r"dimensions:\s+(\d+)x", output)
+        return int(found[1]) if found else 1920
+    except (OSError, subprocess.SubprocessError):
+        return 1920
+
+
+# Réseau, son et batterie ouvrent les Réglages rapides, comme Windows 11 (le
+# mélangeur et le panneau Alimentation s'ouvrent depuis ce panneau) ; la cloche
+# ouvre les notifications.
+QUICK = "/usr/bin/winlux-popup quick"
+
+if kind == "battery":
+    body, tooltip, identity, _ = battery_part()
+elif kind == "audio":
+    body, tooltip, identity = audio_part()
+elif kind == "network":
+    body, tooltip, identity = network_part()
+elif kind == "status":
+    # Un seul bouton pour réseau, son et batterie (#703), comme Windows 11 :
+    # une cible de clic large au lieu de trois petites icônes séparées. Sans
+    # batterie (PC de bureau), rien n'est affiché à sa place.
+    parts = [network_part(), audio_part()]
+    battery = battery_part()
+    if battery[3]:
+        parts.append(battery[:3])
+    body = "".join(f'<g transform="translate({index * 30} 0)">{part[0]}</g>' for index, part in enumerate(parts))
+    icon = svg_file("status-" + "-".join(part[2] for part in parts), 30 * len(parts) - 6, 24, body)
+    tooltip = "\n".join(part[1] for part in parts)
+    print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>")
+    raise SystemExit(0)
+elif kind == "search":
+    # Recherche de la barre (#703) : zone « Rechercher » ou simple loupe
+    # (Personnalisation > Barre des tâches). Masquée, le greffon n'est plus
+    # dans la barre (winlux-control align-*). Une seule image, donc un seul
+    # bouton : tout le cadre est cliquable. Loupe seule sous 1500 px.
+    label = {"en": "Search", "es": "Buscar", "de": "Suchen"}.get(_LANG, "Rechercher")
+    accent = "#b69cff" if DARK else "#6a3df0"
+    glass = (f'<circle cx="10" cy="10" r="5.6" fill="none" stroke="{color}" stroke-width="1.7"/>'
+             f'<path d="M14.2 14.2 19 19" stroke="{accent}" stroke-width="2" stroke-linecap="round"/>')
+    if taskbar_preferences()["SEARCH"] == "icon" or screen_width() < 1500:
+        icon = svg_file("search-icon", 24, 24, glass)
+    else:
+        fill, stroke, text = ("#ffffff14", "#ffffff1f", "#c9c2da") if DARK else ("#ffffffd9", "#0000001a", "#5d566c")
+        width = 196
+        body = (f'<rect x="0.5" y="0.5" width="{width - 1}" height="31" rx="15.5" fill="{fill}" stroke="{stroke}"/>'
+                f'<g transform="translate(10 4)">{glass}</g>'
+                f'<text x="38" y="20.5" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="13" fill="{text}">{html.escape(label)}</text>')
+        icon = svg_file(f"search-box-{_LANG}", width, 32, body)
+    print(f"<img>{icon}</img><tool>{html.escape(label)} (Windows + S)</tool><click>/usr/bin/winlux-start-menu</click>")
+    raise SystemExit(0)
 elif kind == "balance":
     # Contrepoids de la barre centrée (greffon 13, juste après le séparateur 3).
     width = 0
@@ -322,23 +454,34 @@ elif kind == "balance":
         ids = [int(line.strip()) for line in listing.splitlines() if line.strip().isdigit()]
     except (OSError, subprocess.SubprocessError):
         ids = []
-    if 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
-        width = _settled_balance(ids, set(ids[ids.index(8) + 1:]), set(ids[:ids.index(3)]))
+    # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
+    floating = taskbar_preferences()["STYLE"] == "floating"
+    if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
+        right = set(ids[ids.index(8) + 1:])
+        width = _settled_balance(ids, right, set(ids[:ids.index(3)]))
     body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
     icon = directory / f"spacer-{width}.svg"
     if not icon.exists():
         icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{max(1, width)}" height="1" viewBox="0 0 {max(1, width)} 1">{body}</svg>')
-    print(f"<img>{icon}</img>")
+    # <tool></tool> vide : sans balise, genmon affiche son infobulle par défaut
+    # (« (genmon) », commande, période) au survol de la zone à côté de Démarrer (#645).
+    print(f"<img>{icon}</img><tool></tool>")
     raise SystemExit(0)
 elif kind == "notifications":
+    count = notification_count()
     body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
-    tooltip, identity, page = _t("Centre de notifications"), "notifications", 0
+    tooltip = _t("Centre de notifications")
+    if count:
+        # Pastille du nombre de notifications, comme Windows 11 (#703).
+        badge = "9+" if count > 9 else str(count)
+        accent, on_accent = ("#b69cff", "#1c1a26") if DARK else ("#6a3df0", "#ffffff")
+        body = (f'<g transform="translate(0 4)">{body}</g><rect x="{11 if len(badge) == 1 else 7}" y="0" width="{13 if len(badge) == 1 else 17}" height="13" rx="6.5" fill="{accent}"/>'
+                f'<text x="{17.5 if len(badge) == 1 else 15.5}" y="10" text-anchor="middle" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="{on_accent}">{badge}</text>')
+        icon = svg_file(f"notifications-{badge}", 26, 28, body)
+    else:
+        icon = svg_file("notifications", 24, 24, body)
+    print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>/usr/bin/winlux-popup notifications</click>")
+    raise SystemExit(0)
 else:
     raise SystemExit(2)
-icon = directory / (identity + ".svg")
-if not icon.exists(): icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">{body}</svg>')
-# Réseau, son et batterie ouvrent les Réglages rapides, comme Windows 11 (le
-# mélangeur et le panneau Alimentation s'ouvrent depuis ce panneau) ; la cloche
-# ouvre les notifications.
-command = "/usr/bin/winlux-popup notifications" if kind == "notifications" else "/usr/bin/winlux-popup quick"
-print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{command}</click>")
+print(f"<img>{svg_file(identity, 24, 24, body)}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>")

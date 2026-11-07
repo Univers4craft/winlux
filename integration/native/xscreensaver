@@ -6,3 +6,7 @@ unfade:         False
 mode:           one
 selected:       0
 programs:       GL: /usr/libexec/xscreensaver/pipes -root
+dpmsEnabled:    True
+dpmsStandby:    0:10:00
+dpmsSuspend:    0:10:00
+dpmsOff:        0:10:00
