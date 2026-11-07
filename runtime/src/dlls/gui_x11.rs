@@ -841,6 +841,28 @@ pub struct X11Backend {
 }
 
 impl X11Backend {
+    /// WM_NORMAL_HINTS d'une fenêtre de premier niveau : position et taille
+    /// voulues par le programme (USPosition | USSize | PPosition | PSize |
+    /// PWinGravity). NorthWestGravity : la position est celle du cadre, barre
+    /// de titre comprise, comme le rectangle d'une fenêtre Windows ; une
+    /// fenêtre demandée en (0,0) garde ainsi sa barre de titre à l'écran.
+    fn position_hints(&self, target: u32, x: i32, y: i32, width: u16, height: u16) {
+        let mut hints = [0u32; 18];
+        hints[0] = 1 | 2 | 4 | 8 | 0x200;
+        hints[1] = x as u32;
+        hints[2] = y as u32;
+        hints[3] = width as u32;
+        hints[4] = height as u32;
+        hints[17] = 1;
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            target,
+            AtomEnum::WM_NORMAL_HINTS,
+            AtomEnum::WM_SIZE_HINTS,
+            &hints,
+        );
+    }
+
     /// Ouvre la connexion X et prépare les atomes; `None` si pas de serveur.
     pub fn connect() -> Option<Self> {
         let (conn, screen) = x11rb::connect(None).ok()?;
@@ -3901,6 +3923,10 @@ impl gui::GuiBackend for X11Backend {
         let _ = self
             .conn
             .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+        // Position voulue dès la création : une boîte de message n'est
+        // jamais déplacée ensuite, et openbox la plaçait sinon à sa guise
+        // (« Recharger » de Notepad++ en bas à gauche, #744).
+        self.position_hints(win, x as i32, y as i32, w, h);
 
         let _ = self.conn.flush();
         self.windows.insert(
@@ -4124,25 +4150,10 @@ impl gui::GuiBackend for X11Backend {
             None => return,
         };
         if !child {
-            // Position voulue par le programme (WM_NORMAL_HINTS, USPosition |
-            // USSize | PPosition | PSize | PWinGravity, StaticGravity comme
-            // nos coordonnées, qui sont celles de la zone X) : sans
+            // Position voulue par le programme (WM_NORMAL_HINTS) : sans
             // elle, openbox place la fenêtre à sa guise au moment de
             // l'afficher (« À propos » de Notepad++ en bas à gauche, #706).
-            let mut hints = [0u32; 18];
-            hints[0] = 1 | 2 | 4 | 8 | 0x200;
-            hints[1] = x as u32;
-            hints[2] = y as u32;
-            hints[3] = width as u32;
-            hints[4] = height as u32;
-            hints[17] = 10;
-            let _ = self.conn.change_property32(
-                x11rb::protocol::xproto::PropMode::REPLACE,
-                if frame != 0 { frame } else { window },
-                AtomEnum::WM_NORMAL_HINTS,
-                AtomEnum::WM_SIZE_HINTS,
-                &hints,
-            );
+            self.position_hints(if frame != 0 { frame } else { window }, x, y, width, height);
         }
         let aux = ConfigureWindowAux::new()
             .x(x)
