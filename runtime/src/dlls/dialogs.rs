@@ -476,6 +476,10 @@ unsafe fn create_from_template(
     if !gui::is_window(hwnd) {
         return 0;
     }
+    // Le choix se refait après WM_INITDIALOG : la procédure a pu désactiver
+    // ou masquer ce contrôle (l'heure de compilation de Notepad++ est un
+    // champ désactivé, qui ne doit ni prendre le focus ni être surligné, #704).
+    let first = next_tab_item(hwnd, 0, false);
     if focus_default != 0 && first != 0 {
         set_dlg_focus(hwnd, first);
     }
