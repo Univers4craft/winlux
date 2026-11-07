@@ -957,8 +957,11 @@ mod tests {
             0x6000,
             0x200,
         ];
+        // Structure x86 sous 4 Go, comme dans un vrai programme 32 bits.
+        let low = crate::wow32::alloc_low(4096, false);
+        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), low as *mut u32, 12) };
         let mut wide = [0u64; 10];
-        create_to64(src.as_ptr() as usize as u32, &mut wide);
+        create_to64(low as u32, &mut wide);
         let p = wide.as_ptr() as usize;
         assert_eq!(q64(p, 0), 0x1234);
         assert_eq!(q64(p, 24), 0x40002);

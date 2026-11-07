@@ -1607,9 +1607,16 @@ pub unsafe extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -
     color
 }
 
-pub unsafe extern "win64" fn get_pixel(_hdc: usize, _x: i32, _y: i32) -> u32 {
-    // Pas d'accès en lecture aux pixels pour l'instant
-    0x00FF_FFFF // CLR_INVALID
+/// GetPixel : couleur lue dans la bitmap choisie dans le DC (DC mémoire,
+/// DIB section) ; CLR_INVALID hors de la bitmap ou sans bitmap.
+pub unsafe extern "win64" fn get_pixel(hdc: usize, x: i32, y: i32) -> u32 {
+    const CLR_INVALID: u32 = 0xFFFF_FFFF;
+    if x < 0 || y < 0 {
+        return CLR_INVALID;
+    }
+    gui::bitmap_snapshot(hdc, Rect::from_size(x, y, 1, 1))
+        .and_then(|s| s.pixels.first().copied())
+        .map_or(CLR_INVALID, |c| c & 0x00FF_FFFF)
 }
 
 pub unsafe extern "win64" fn set_pixel_v(hdc: usize, x: i32, y: i32, color: u32) -> i32 {

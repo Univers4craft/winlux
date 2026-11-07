@@ -238,6 +238,16 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
     done
 fi
 
+# Programmes Windows 32 bits de test (#232) : construits par clang sans
+# CRT, quand clang, lld-link et llvm-dlltool sont là.
+if command -v clang >/dev/null 2>&1 && command -v lld-link >/dev/null 2>&1 \
+    && command -v llvm-dlltool >/dev/null 2>&1; then
+    sh "$root/testc/wow32/build.sh" "$root/target/mingw"
+    for name in hello32 seh32 gui32; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
+
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
 for folder in Bureau Documents Images Musique "Téléchargements" "Vidéos"; do
