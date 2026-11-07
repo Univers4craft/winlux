@@ -137,6 +137,8 @@ done
 mkdir -p "$stage/usr/lib/winlux"
 cp --remove-destination "$project/scripts/winlux-tray.py" "$stage/usr/lib/winlux/winlux-tray"
 chmod 755 "$stage/usr/lib/winlux/winlux-tray"
+cp --remove-destination "$project/scripts/mesure-barre-taches.sh" "$stage/usr/lib/winlux/mesure-barre-taches.sh"
+chmod 755 "$stage/usr/lib/winlux/mesure-barre-taches.sh"
 "$components/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" --library-path "$components/usr/lib/x86_64-linux-gnu" \
     "$components/usr/bin/glib-compile-schemas" "$stage/usr/share/glib-2.0/schemas"
 for database in mime desktop; do
