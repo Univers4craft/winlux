@@ -151,11 +151,26 @@ def thunar_paste(paths, destination, cut):
 
 
 def notify(title, body):
+    """Notification par D-Bus (winlux-notifications) : notify-send n'est pas
+    dans l'image (#630) et reste seulement un repli."""
     try:
-        subprocess.Popen(["notify-send", "-i", "edit-paste", title, body],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
+        from gi.repository import Gio, GLib
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                      "org.freedesktop.Notifications", "Notify",
+                      GLib.Variant("(susssasa{sv}i)", ("Winlux", 0, "edit-paste", title, body, [], {}, -1)),
+                      None, Gio.DBusCallFlags.NONE, 2000, None)
+        return True
+    except Exception:  # pas de bus, pas de serveur, pas de PyGObject
         pass
+    if shutil.which("notify-send"):
+        try:
+            subprocess.Popen(["notify-send", "-i", "edit-paste", title, body],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def main(argv):

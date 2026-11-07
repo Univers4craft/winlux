@@ -18,6 +18,9 @@ struct FileMapping {
     owned_fd: bool,
     /// Nom (Local\…, Global\… ou nu), pour OpenFileMapping.
     name: Option<String>,
+    /// Droits du handle (SECTION_*) : un handle en lecture seule ne donne
+    /// ni vue inscriptible ni copie inscriptible (Chromium le vérifie).
+    access: u32,
 }
 
 /// Une vue créée par MapViewOfFile.
@@ -55,6 +58,34 @@ fn next_handle() -> usize {
     crate::dlls::kernel32::new_handle_number()
 }
 
+/// Droits d'un handle de section.
+pub const SECTION_QUERY: u32 = 0x0001;
+pub const SECTION_MAP_WRITE: u32 = 0x0002;
+pub const SECTION_MAP_READ: u32 = 0x0004;
+pub const SECTION_ALL_ACCESS: u32 = 0x000F_001F;
+const DUPLICATE_SAME_ACCESS: u32 = 2;
+const ERROR_ACCESS_DENIED: u32 = 5;
+
+/// Droits génériques traduits pour une section (GENERIC_MAPPING de Windows).
+pub fn section_rights(access: u32) -> u32 {
+    crate::dlls::electron_win32::map_generic_mask(
+        access,
+        [
+            0x0002_0000 | SECTION_QUERY | SECTION_MAP_READ,
+            0x0002_0000 | SECTION_MAP_WRITE,
+            0x0002_0000 | 0x0008,
+            SECTION_ALL_ACCESS,
+        ],
+    )
+}
+
+/// Les droits demandés sont-ils tous contenus dans ceux du handle ?
+/// (SYNCHRONIZE et ACCESS_SYSTEM_SECURITY mis à part.)
+pub fn rights_allowed(have: u32, want: u32) -> bool {
+    let want = section_rights(want) & !0x0010_0000 & !0x0100_0000;
+    want & !have == 0
+}
+
 const PAGE_READWRITE: u32 = 0x04;
 const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
@@ -83,7 +114,13 @@ fn name_key(name: &str) -> String {
     lower
 }
 
-fn insert_mapping(fd: i32, max_size: u64, owned_fd: bool, name: Option<String>) -> usize {
+fn insert_mapping(
+    fd: i32,
+    max_size: u64,
+    owned_fd: bool,
+    name: Option<String>,
+    access: u32,
+) -> usize {
     let handle = next_handle();
     mappings().as_mut().unwrap().insert(
         handle,
@@ -92,13 +129,14 @@ fn insert_mapping(fd: i32, max_size: u64, owned_fd: bool, name: Option<String>) 
             max_size,
             owned_fd,
             name,
+            access,
         },
     );
     handle
 }
 
 /// Nouveau handle vers un mapping nommé existant de ce processus.
-fn open_named(key: &str) -> Option<usize> {
+fn open_named(key: &str, access: u32) -> Option<usize> {
     let (fd, size) = {
         let g = mappings();
         let fm = g
@@ -108,7 +146,7 @@ fn open_named(key: &str) -> Option<usize> {
         (fm.fd, fm.max_size)
     };
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-    (copy >= 0).then(|| insert_mapping(copy, size, true, Some(key.to_string())))
+    (copy >= 0).then(|| insert_mapping(copy, size, true, Some(key.to_string()), access))
 }
 
 /// Mapping anonyme : memfd de la taille demandée (les pages ne sont
@@ -134,7 +172,7 @@ unsafe fn create_mapping(
 ) -> usize {
     let key = name.as_deref().filter(|n| !n.is_empty()).map(name_key);
     if let Some(k) = key.as_deref() {
-        if let Some(h) = open_named(k) {
+        if let Some(h) = open_named(k, SECTION_ALL_ACCESS) {
             crate::dlls::inherit::from_security_attributes(h, security);
             crate::process::set_last_error(ERROR_ALREADY_EXISTS);
             return h;
@@ -181,7 +219,7 @@ unsafe fn create_mapping(
         }
         (dup_fd, size)
     };
-    let handle = insert_mapping(fd, size, true, key);
+    let handle = insert_mapping(fd, size, true, key, SECTION_ALL_ACCESS);
     crate::dlls::inherit::from_security_attributes(handle, security);
     crate::process::set_last_error(0);
     handle
@@ -214,12 +252,12 @@ pub unsafe extern "win64" fn create_file_mapping_w(
     create_mapping(file, security, protect, max_size, name)
 }
 
-fn open_mapping(name: Option<String>, inherit: i32) -> usize {
+fn open_mapping(name: Option<String>, access: u32, inherit: i32) -> usize {
     let Some(key) = name.as_deref().filter(|n| !n.is_empty()).map(name_key) else {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    match open_named(&key) {
+    match open_named(&key, section_rights(access)) {
         Some(h) => {
             crate::dlls::inherit::set(h, inherit != 0);
             crate::process::set_last_error(0);
@@ -233,41 +271,68 @@ fn open_mapping(name: Option<String>, inherit: i32) -> usize {
 }
 
 pub unsafe extern "win64" fn open_file_mapping_w(
-    _access: u32,
+    access: u32,
     inherit: i32,
     name: *const u16,
 ) -> usize {
-    open_mapping((!name.is_null()).then(|| crate::dlls::wstr(name)), inherit)
+    open_mapping(
+        (!name.is_null()).then(|| crate::dlls::wstr(name)),
+        access,
+        inherit,
+    )
 }
 
 pub unsafe extern "win64" fn open_file_mapping_a(
-    _access: u32,
+    access: u32,
     inherit: i32,
     name: *const u8,
 ) -> usize {
-    open_mapping((!name.is_null()).then(|| crate::dlls::cstr(name)), inherit)
+    open_mapping(
+        (!name.is_null()).then(|| crate::dlls::cstr(name)),
+        access,
+        inherit,
+    )
 }
 
-/// DuplicateHandle d'un mapping : nouveau handle, même mémoire.
-pub fn duplicate_mapping(h: usize) -> Option<usize> {
-    let (fd, size, name) = {
+/// DuplicateHandle d'un mapping : nouveau handle, même mémoire. `None` si
+/// ce n'est pas un mapping ; `Err(5)` si les droits demandés dépassent
+/// ceux du handle (Chromium vérifie ainsi qu'une région en lecture seule ne
+/// peut pas redevenir inscriptible).
+pub fn duplicate_mapping(h: usize, access: u32, options: u32) -> Option<Result<usize, u32>> {
+    let (fd, size, name, have) = {
         let g = mappings();
         let fm = g.as_ref()?.get(&h)?;
-        (fm.fd, fm.max_size, fm.name.clone())
+        (fm.fd, fm.max_size, fm.name.clone(), fm.access)
+    };
+    let access = if options & DUPLICATE_SAME_ACCESS != 0 {
+        have
+    } else if rights_allowed(have, access) {
+        section_rights(access) & SECTION_ALL_ACCESS
+    } else {
+        return Some(Err(ERROR_ACCESS_DENIED));
     };
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-    (copy >= 0).then(|| insert_mapping(copy, size, true, name))
+    Some(if copy >= 0 {
+        Ok(insert_mapping(copy, size, true, name, access))
+    } else {
+        Err(ERROR_NOT_ENOUGH_MEMORY)
+    })
 }
 
-/// Mapping transmissible à un enfant : (descripteur, taille).
-pub fn export(h: usize) -> Option<(i32, u64)> {
+/// Droits d'un handle de mapping (NtQueryObject).
+pub fn mapping_access(h: usize) -> Option<u32> {
+    Some(mappings().as_ref()?.get(&h)?.access)
+}
+
+/// Mapping transmissible à un enfant : (descripteur, taille, droits).
+pub fn export(h: usize) -> Option<(i32, u64, u32)> {
     let g = mappings();
     let fm = g.as_ref()?.get(&h)?;
-    Some((fm.fd, fm.max_size))
+    Some((fm.fd, fm.max_size, fm.access))
 }
 
 /// L'enfant reprend un mapping hérité, sous le même numéro de handle.
-pub fn adopt(h: usize, fd: std::os::fd::OwnedFd, size: u64) {
+pub fn adopt(h: usize, fd: std::os::fd::OwnedFd, size: u64, access: u32) {
     use std::os::fd::IntoRawFd;
     mappings().as_mut().unwrap().insert(
         h,
@@ -276,6 +341,7 @@ pub fn adopt(h: usize, fd: std::os::fd::OwnedFd, size: u64) {
             max_size: size,
             owned_fd: true,
             name: None,
+            access,
         },
     );
 }
@@ -296,6 +362,21 @@ pub unsafe extern "win64" fn map_view_of_file(
             return 0;
         }
     };
+
+    // Vue inscriptible (ou lisible) que le handle n'autorise pas :
+    // ERROR_ACCESS_DENIED, comme Windows.
+    // FILE_MAP_WRITE suffit pour une vue lecture-écriture.
+    let need = if access & FILE_MAP_WRITE != 0 {
+        SECTION_MAP_WRITE
+    } else if access & (_FILE_MAP_READ | FILE_MAP_COPY) != 0 {
+        SECTION_MAP_READ
+    } else {
+        0
+    };
+    if need & !fm.access != 0 {
+        crate::process::set_last_error(ERROR_ACCESS_DENIED);
+        return 0;
+    }
 
     let offset = ((offset_high as u64) << 32) | offset_low as u64;
     // Décalage au-delà de la taille du mapping : ERROR_ACCESS_DENIED, comme
@@ -430,6 +511,48 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_en_lecture_seule_comme_chromium() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            use crate::dlls::kernel32::{close_handle, duplicate_handle, get_current_process};
+            let me = get_current_process();
+            let h = create_file_mapping_w(usize::MAX, 0, PAGE_READWRITE, 0, 4096, std::ptr::null());
+            assert_ne!(h, 0);
+            // Create : FILE_MAP_READ | FILE_MAP_WRITE | SECTION_QUERY.
+            let mut rw = 0usize;
+            assert_eq!(duplicate_handle(me, h, me, &mut rw, 0x7, 0, 0), 1);
+            close_handle(h);
+            assert_eq!(mapping_access(rw), Some(0x7));
+            // ConvertToReadOnly : FILE_MAP_READ | SECTION_QUERY, source fermée.
+            let mut ro = 0usize;
+            assert_eq!(duplicate_handle(me, rw, me, &mut ro, 0x5, 0, 1), 1);
+            assert_eq!(mapping_access(rw), None);
+            // Le contrôle de Chromium : FILE_MAP_WRITE doit être refusé.
+            let mut w = 0usize;
+            assert_eq!(
+                duplicate_handle(me, ro, me, &mut w, FILE_MAP_WRITE, 0, 0),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 5);
+            assert_eq!(w, 0);
+            // Ni vue inscriptible, mais une vue en lecture.
+            assert_eq!(map_view_of_file(ro, FILE_MAP_WRITE, 0, 0, 0), 0);
+            let v = map_view_of_file(ro, _FILE_MAP_READ, 0, 0, 0);
+            assert_ne!(v, 0);
+            unmap_view_of_file(v);
+            // DUPLICATE_SAME_ACCESS garde les droits.
+            let mut same = 0usize;
+            assert_eq!(duplicate_handle(me, ro, me, &mut same, 0, 0, 2), 1);
+            assert_eq!(mapping_access(same), Some(0x5));
+            // GENERIC_READ se traduit en lecture + interrogation.
+            assert!(rights_allowed(0x2_0005, 0x8000_0000));
+            assert!(!rights_allowed(0x5, 0x4000_0000));
+            close_handle(same);
+            close_handle(ro);
+        }
+    }
 
     #[test]
     fn memoire_partagee_anonyme() {

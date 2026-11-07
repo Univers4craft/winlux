@@ -582,8 +582,18 @@ jobs:
       - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
 
+      - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
+        run: |
+          /usr/bin/python3 -B scripts/test-start-for-you.py
+          for size in 1366x768 1920x1080 1024x600; do
+            xvfb-run -a -s "-screen 0 ${size}x24" dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-for-you.py
+          done
+
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
+
+      - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
+        run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
