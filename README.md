@@ -76,9 +76,9 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 | | |
 |---|---|
 | **Dernière version publiée** | [**v0.2.19**](https://github.com/Univers4craft/winlux/releases/tag/v0.2.19) (4 novembre 2026) : heure juste dès l'installation et à chaque démarrage, Edge et Chrome qui s'installent même sur une connexion lente, liens ouverts dans le navigateur installé, barre des tâches vraiment centrée, éclair de charge sur la batterie, Téléphone connecté, `su` qui passe par `sudo`. |
-| **Version en préparation** | **v0.2.20** : en cours. |
+| **Version en préparation** | **v0.2.20** : premiers programmes Windows 32 bits, barres de menus des logiciels classiques, 7-Zip utilisable, Warzone 2100 en Direct3D 11 grâce au compilateur HLSL maison, paquets MSIX, manettes et entrée brute, Explorateur « Prisme » unique pour le bureau et les `.exe`, fond « Aurore » et icônes Prisme, assistant d'ancrage, menu Démarrer à deux volets, envoi automatique des plantages, sauvegarde de mes fichiers. |
 | **Architecture prise en charge** | PC x86-64, démarrage BIOS, UEFI 64 bits ou UEFI 32 bits (Secure Boot compatible en UEFI 64 bits). |
-| **Programmes Windows** | Exécutables **64 bits** uniquement. Les `.exe` 32 bits sont détectés et refusés avec un message explicite. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
+| **Programmes Windows** | Exécutables **64 bits**. Les `.exe` **32 bits** (x86) démarrent depuis la v0.2.20, avec une prise en charge encore partielle. Les programmes .NET 32 et 64 bits passent par le CLR maison. |
 | **Validation** | Chaque pull request passe une CI de plusieurs jobs (formatage, Clippy, tests unitaires, tests de PE réels, tests C MinGW et MSVC, captures d'écran comparées). Chaque version est testée en VM (Live, installation BIOS/UEFI, mise à jour) avant publication. |
 | **Matériel réel** | Testé surtout en machine virtuelle (QEMU/KVM, VirtualBox, VMware). La validation sur une large gamme de PC réels reste à faire. |
 
