@@ -187,7 +187,8 @@ with tempfile.TemporaryDirectory() as folder:
 sample = os.environ.get("WINLUX_SPEECH_SAMPLE")
 if sample and m["engine"]() and m["current_model"]():
     text = m["transcribe_file"](sample, "en")
-    assert text and "country" in text.lower(), text
+    word = os.environ.get("WINLUX_SPEECH_SAMPLE_WORD", "country")
+    assert text and word in text.lower(), text
     print("vrai moteur :", text)
 
 # Branchements : raccourcis, migration des comptes existants, image, Paramètres.
