@@ -147,6 +147,9 @@ ok("SYSTEM_TOOLS" in setup_run and "is_linux_program" in setup_run and "WINLUX_S
 ok((ROOT / "scripts/test-setup-run.sh").is_file()
    and "scripts/test-setup-run.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "test des programmes lancés par un installateur NSIS en CI (#179)")
+msi_actions = (ROOT / "runtime/src/msi/actions.rs").read_text()
+ok("Phase::Uninstall" in msi_actions and "ServiceInstall" in msi_actions and "setup::run" in msi_actions,
+   "msiexec : actions personnalisées EXE (installation et désinstallation) et services (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,

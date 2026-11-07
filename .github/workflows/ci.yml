@@ -470,6 +470,11 @@ jobs:
           sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
           sh scripts/test-setup-run.sh
 
+      - name: Actions personnalisées et services msiexec (#833)
+        run: |
+          sudo apt-get install -y -q wixl msitools nsis || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis; }
+          sh scripts/test-msi-actions.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 

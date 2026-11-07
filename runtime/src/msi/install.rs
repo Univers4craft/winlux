@@ -270,7 +270,7 @@ fn resolve_dirs(db: &Database, ctx: &Context, admin: bool) -> HashMap<String, Di
 
 /// Actions personnalisées sûres : affectation de propriété (51) et de
 /// dossier (35) avant le calcul des chemins.
-fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
+fn run_property_actions(db: &Database, ctx: &mut Context, _log: &mut Logger) {
     let actions: HashMap<String, (i32, String, String)> = db
         .rows("CustomAction")
         .map(|r| {
@@ -308,8 +308,7 @@ fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
                 let value = ctx.format(target);
                 ctx.props.insert(source.clone(), value);
             }
-            51 | 35 => {}
-            _ => log.log(&format!("Action personnalisée ignorée : {action}")),
+            _ => {}
         }
     }
 }
@@ -834,6 +833,12 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             ctx.components.insert(c.clone(), d.clone());
         }
     }
+    if !opts.admin {
+        for what in super::actions::unsupported(db, &ctx) {
+            log.log(&format!("Action personnalisée ignorée : {what}"));
+        }
+        super::actions::run_phase(db, &ctx, super::actions::Phase::BeforeFiles, None, log);
+    }
     // Fichiers à poser.
     struct Wanted {
         dest: PathBuf,
@@ -1085,6 +1090,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     // installé qui les crée, lancé par une action personnalisée que Winlux
     // n'exécute pas (Paint.NET : « paintdotnet.exe /setupActions /install »).
     // Sans ce relais, l'appli serait installée mais absente du menu Démarrer.
+    // Programme qui se configure lui-même : remplacé par le relais
+    // ci-dessous, jamais lancé comme action personnalisée.
+    let mut relayed: Option<String> = None;
     if main_exe.is_empty() {
         if let Some((exe, desktop)) = self_setup_exe(db, &ctx) {
             let label: String = name
@@ -1112,6 +1120,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
                 manifest.files.push(file);
                 log.log(&format!("Raccourci : {link}"));
             }
+            relayed = Some(exe.clone());
             main_exe = exe;
         }
     }
@@ -1121,12 +1130,15 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     let mut ini_dirs = Vec::new();
     super::extra::ini_files(db, &ctx, &comps, &mut manifest, &mut ini_dirs);
     manifest.dirs.extend(ini_dirs);
-    let services = db.rows("ServiceInstall").count();
-    if services > 0 {
-        log.log(&format!(
-            "{services} entrée(s) de services Windows ignorée(s)"
-        ));
-    }
+    super::actions::services(
+        db,
+        &ctx,
+        &comps,
+        &mut edits,
+        &mut manifest.keys,
+        &mut manifest.values,
+        log,
+    );
     // Inscription dans « Programmes installés ».
     if !code.is_empty() {
         let key = uninstall_key(&code);
@@ -1213,10 +1225,24 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     if !apply_registry_edits(&edits) {
         return Err("écriture du registre impossible".into());
     }
+    if !opts.admin {
+        super::actions::run_phase(
+            db,
+            &ctx,
+            super::actions::Phase::AfterFiles,
+            relayed.as_deref(),
+            log,
+        );
+    }
     if !code.is_empty() {
         manifest
             .save()
             .map_err(|e| format!("journal d'installation : {e}"))?;
+        // Paquet conservé, comme le cache de Windows Installer : ses actions
+        // de désinstallation (`REMOVE="ALL"`) seront rejouées.
+        if !opts.admin && has_exe_actions(db) {
+            let _ = std::fs::copy(msi, cached_package(&code));
+        }
     }
     log.log(&format!("{name} est installé."));
     Ok(())
@@ -1236,7 +1262,67 @@ pub fn civil(days: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Copie du paquet gardée pour sa désinstallation.
+fn cached_package(code: &str) -> PathBuf {
+    manifest_path(code).with_extension("msi")
+}
+
+fn has_exe_actions(db: &Database) -> bool {
+    db.rows("CustomAction")
+        .any(|r| matches!(r.int("Type").unwrap_or(0) & 0x3F, 2 | 18 | 34 | 50))
+}
+
+/// Actions de désinstallation du paquet conservé : contexte reconstruit
+/// (propriétés, dossiers, fichiers) avec `REMOVE="ALL"` et `Installed`.
+fn run_uninstall_actions(code: &str, log: &mut Logger) {
+    let cached = cached_package(code);
+    let Ok(data) = std::fs::read(&cached) else {
+        return;
+    };
+    let Ok(db) = Database::parse(&data) else {
+        return;
+    };
+    let mut ctx = Context::default();
+    system_props(&mut ctx, &db, &Options::default());
+    for r in db.rows("Property") {
+        ctx.props.insert(r.str("Property"), r.str("Value"));
+    }
+    ctx.props.insert("Installed".into(), "1".into());
+    ctx.props.insert("REMOVE".into(), "ALL".into());
+    run_property_actions(&db, &mut ctx, log);
+    let dirs = resolve_dirs(&db, &ctx, false);
+    for (k, d) in &dirs {
+        ctx.props.insert(k.clone(), d.target.clone());
+    }
+    let comp_dir: HashMap<String, String> = db
+        .rows("Component")
+        .filter_map(|r| {
+            let d = dirs.get(&r.str("Directory_"))?;
+            Some((r.str("Component"), d.target.clone()))
+        })
+        .collect();
+    for r in db.rows("File") {
+        if let Some(dir) = comp_dir.get(&r.str("Component_")) {
+            let name = long_name(&r.str("FileName")).to_string();
+            ctx.files.insert(r.str("File"), format!("{dir}{name}"));
+        }
+    }
+    ctx.components = comp_dir;
+    let own = (db.rows("Shortcut").next().is_none())
+        .then(|| self_setup_exe(&db, &ctx).map(|(exe, _)| exe))
+        .flatten();
+    super::actions::run_phase(
+        &db,
+        &ctx,
+        super::actions::Phase::Uninstall,
+        own.as_deref(),
+        log,
+    );
+}
+
 fn remove_manifest(m: &Manifest, log: &mut Logger) {
+    run_uninstall_actions(&m.product, log);
+    let _ = std::fs::remove_file(cached_package(&m.product));
     for f in &m.files {
         let _ = std::fs::remove_file(f);
     }
