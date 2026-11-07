@@ -11,7 +11,7 @@ Usage :
 La fenêtre enregistre elle-même la réponse, se ferme seule si le programme
 qui demande a quitté, et ne s'ouvre pas si la réponse est déjà connue.
 
-Capacités : files, camera, microphone, screen, network. Le runtime Winlux
+Capacités : files, camera, microphone, screen, network, sandbox. Le runtime Winlux
 (runtime/src/permissions.rs) pose la question et mémorise la réponse dans
 ~/.config/winlux/permissions.tsv (capacité<TAB>allow|deny<TAB>chemin).
 """
@@ -81,6 +81,14 @@ _TR = {
         "The app will be able to connect to the Internet and your local network.",
         "La aplicación podrá conectarse a Internet y a su red local.",
         "Die App kann sich mit dem Internet und Ihrem lokalen Netzwerk verbinden."),
+    "Lancer « {app} » sans son isolation ?": (
+        "Start “{app}” without its isolation?",
+        "¿Iniciar «{app}» sin su aislamiento?",
+        "„{app}“ ohne seine Isolierung starten?"),
+    "Cette application (Chromium ou Electron) ne démarre pas encore avec son bac à sable sous Winlux. Sans lui, elle démarre, mais une page web piégée qu’elle afficherait aurait plus de prise sur vos fichiers.": (
+        "This app (Chromium or Electron) cannot start with its sandbox on Winlux yet. Without it, the app starts, but a booby-trapped web page it displays would have more hold over your files.",
+        "Esta aplicación (Chromium o Electron) aún no puede iniciarse con su entorno aislado en Winlux. Sin él, la aplicación se inicia, pero una página web trampa que muestre tendría más acceso a sus archivos.",
+        "Diese App (Chromium oder Electron) kann unter Winlux noch nicht mit ihrer Sandbox starten. Ohne sie startet die App, aber eine präparierte Webseite, die sie anzeigt, hätte mehr Zugriff auf Ihre Dateien."),
     "Autoriser": ("Allow", "Permitir", "Zulassen"),
     "Ne pas autoriser": ("Don't allow", "No permitir", "Nicht zulassen"),
     "Vous pourrez changer d’avis dans Paramètres > Confidentialité et sécurité.": (
@@ -97,7 +105,7 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
-CAPABILITIES = ("files", "camera", "microphone", "screen", "network")
+CAPABILITIES = ("files", "camera", "microphone", "screen", "network", "sandbox")
 QUESTIONS = {
     "files": ("Autoriser « {app} » à accéder à vos fichiers personnels ?",
               "Documents, Images, Musique, Vidéos, Bureau et Téléchargements. L’application pourra les lire et les modifier.",
@@ -112,6 +120,9 @@ QUESTIONS = {
                "video-display"),
     "network": ("Autoriser « {app} » à utiliser le réseau ?",
                 "L’application pourra se connecter à Internet et à votre réseau local.", "network-workgroup"),
+    "sandbox": ("Lancer « {app} » sans son isolation ?",
+                "Cette application (Chromium ou Electron) ne démarre pas encore avec son bac à sable sous Winlux. Sans lui, elle démarre, mais une page web piégée qu’elle afficherait aurait plus de prise sur vos fichiers.",
+                "security-medium"),
 }
 TIMEOUT_SECONDS = 120
 WATCH_MILLISECONDS = 500
