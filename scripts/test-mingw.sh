@@ -106,6 +106,10 @@ fi
 if test -f "$dir/inherit_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-heritage.sh"
 fi
+# DuplicateHandle et mémoire entre processus, enfant suspendu (#236), bloquant.
+if test -f "$dir/dupx_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-duplication.sh"
+fi
 # Fonctions vérifiées au démarrage par Chromium et Electron (#236), bloquant.
 if test -f "$dir/chromium_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-chromium-api.sh"

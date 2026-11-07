@@ -75,6 +75,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod handle_broker;
 pub mod hid;
 pub mod hlsl;
 pub mod hostcall;

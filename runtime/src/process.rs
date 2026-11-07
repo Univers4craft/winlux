@@ -38,6 +38,42 @@ pub const DLL_THREAD_DETACH: u32 = 3;
 
 static PEB: AtomicUsize = AtomicUsize::new(0);
 
+/// Adresse fixe du PEB dans chaque processus Windows de Winlux : un autre
+/// processus (bac à sable de Chromium, crashpad) la reçoit de
+/// NtQueryInformationProcess et y lit l'image du programme.
+pub const PEB_FIXED: usize = 0x5FFE_0000_0000;
+
+/// Variable posée par CreateProcess(CREATE_SUSPENDED) : le processus se
+/// fige (SIGSTOP) une fois chargé, avant tout code du programme.
+pub const SUSPENDED_ENV: &str = "WINLUX_SUSPENDU";
+
+/// PEB à son adresse fixe, ou ailleurs si elle est prise.
+fn alloc_peb() -> usize {
+    unsafe {
+        let p = libc::mmap(
+            PEB_FIXED as *mut libc::c_void,
+            0x1000,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        if p != libc::MAP_FAILED && p as usize == PEB_FIXED {
+            return PEB_FIXED;
+        }
+    }
+    alloc_zeroed(0x1000)
+}
+
+/// CREATE_SUSPENDED : se figer jusqu'au ResumeThread du parent.
+pub fn stop_if_suspended() {
+    if std::env::var_os(SUSPENDED_ENV).is_some() {
+        std::env::remove_var(SUSPENDED_ENV);
+        trace!("processus créé suspendu : attente de ResumeThread");
+        unsafe { libc::raise(libc::SIGSTOP) };
+    }
+}
+
 pub struct ProcessInfo {
     pub command_line_w: Vec<u16>,
     pub command_line_a: Vec<u8>,
@@ -283,7 +319,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
 
-    let peb = alloc_zeroed(0x1000);
+    let peb = alloc_peb();
     let params = alloc_zeroed(0x1000);
     unsafe {
         *((peb + PEB_IMAGE_BASE) as *mut usize) = exe.base;

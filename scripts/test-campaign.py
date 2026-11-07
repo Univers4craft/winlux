@@ -581,4 +581,11 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
+broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
+ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
+   and "stop_if_suspended" in (ROOT / "runtime/src/main.rs").read_text()
+   and (SCRIPTS / "test-duplication.sh").exists(),
+   "Electron : handles copiés entre processus, enfant suspendu une fois chargé")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

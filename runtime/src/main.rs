@@ -294,7 +294,9 @@ fn main() {
     }
     dlls::kernel32::init();
     dlls::inherit::adopt();
+    dlls::handle_broker::adopt();
     process::init_process(&image, &launch::windows_args(&rest));
+    process::stop_if_suspended();
     process::run(image);
 }
 

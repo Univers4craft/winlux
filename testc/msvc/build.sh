@@ -79,6 +79,15 @@ llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_inherit.def" -l "$tmp/kernel32_inh
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/inherit_msvc.c" -o "$tmp/inherit_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/inherit_msvc.obj" \
     "$tmp/kernel32_inherit.lib" /out:"$out/inherit_msvc.exe"
+# DuplicateHandle et mémoire entre processus, enfant suspendu (#236).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateEventW\nSetEvent\nWaitForSingleObject\nDuplicateHandle\nGetCurrentProcess\nGetCurrentProcessId\nOpenProcess\nCreateProcessW\nResumeThread\nGetExitCodeProcess\nGetModuleFileNameW\nGetModuleHandleW\nGetCommandLineW\nCreateFileMappingW\nMapViewOfFile\nReadProcessMemory\nWriteProcessMemory\nCloseHandle\n' >"$tmp/kernel32_dupx.def"
+printf 'LIBRARY ntdll.dll\nEXPORTS\nNtQueryInformationProcess\n' >"$tmp/ntdll_dupx.def"
+for d in kernel32_dupx ntdll_dupx; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/dupx_msvc.c" -o "$tmp/dupx_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/dupx_msvc.obj" \
+    "$tmp/kernel32_dupx.lib" "$tmp/ntdll_dupx.lib" /out:"$out/dupx_msvc.exe"
 # Fonctions vérifiées au démarrage par Chromium et Electron (#236).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nLoadLibraryA\nLoadLibraryExA\nGetProcAddress\nGetCurrentProcess\n' >"$tmp/kernel32_chromium.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_chromium.def" -l "$tmp/kernel32_chromium.lib"

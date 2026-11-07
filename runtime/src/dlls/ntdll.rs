@@ -1272,7 +1272,7 @@ pub unsafe extern "win64" fn nt_set_information_process(
 
 /// `NtQueryInformationProcess` : stub minimal.
 pub unsafe extern "win64" fn nt_query_information_process(
-    _handle: usize,
+    handle: usize,
     info_class: u32,
     info: *mut c_void,
     length: u32,
@@ -1288,16 +1288,28 @@ pub unsafe extern "win64" fn nt_query_information_process(
                 return STATUS_INVALID_PARAMETER;
             }
             std::ptr::write_bytes(info as *mut u8, 0, 48);
+            // Un autre processus Windows de Winlux : son PEB est à l'adresse
+            // fixe (crashpad, bac à sable de Chromium le lisent ensuite par
+            // ReadProcessMemory).
+            let (peb, pid) = match crate::dlls::kernel32::process_os_pid(handle) {
+                Some(pid) if pid != std::process::id() as i32 => {
+                    (crate::process::PEB_FIXED, pid as u32)
+                }
+                _ => (crate::process::peb(), std::process::id()),
+            };
             // Offset 8 : PebBaseAddress
-            std::ptr::write_unaligned(
-                (info as *mut u8).add(8) as *mut usize,
-                crate::process::peb(),
-            );
+            std::ptr::write_unaligned((info as *mut u8).add(8) as *mut usize, peb);
             // Offset 16 : UniqueProcessId
-            std::ptr::write_unaligned(
-                (info as *mut u8).add(16) as *mut usize,
-                std::process::id() as usize,
-            );
+            std::ptr::write_unaligned((info as *mut u8).add(16) as *mut usize, pid as usize);
+            // Offset 40 : InheritedFromUniqueProcessId
+            let ppid = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|st| {
+                    let rest = &st[st.rfind(')')? + 1..];
+                    rest.split_whitespace().nth(1)?.parse::<usize>().ok()
+                })
+                .unwrap_or(0);
+            std::ptr::write_unaligned((info as *mut u8).add(40) as *mut usize, ppid);
             if !return_length.is_null() {
                 *return_length = 48;
             }

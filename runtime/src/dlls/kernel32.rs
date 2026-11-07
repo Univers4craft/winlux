@@ -4875,7 +4875,11 @@ unsafe fn create_process_common(
                 .map(std::ffi::OsString::from),
         );
     }
-    let mut cmd = if suspended {
+    // Programme Windows suspendu : il se fige lui-même une fois chargé
+    // (image, DLL et PEB en place, aucun code du programme exécuté),
+    // comme sous Windows. Le bac à sable de Chromium lit puis écrit alors
+    // sa mémoire (ReadProcessMemory, WriteProcessMemory) avant ResumeThread.
+    let mut cmd = if suspended && !is_pe {
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
             .arg("kill -STOP $$; exec \"$@\"")
@@ -4964,12 +4968,38 @@ unsafe fn create_process_common(
         cmd.env("WINLUX_COMMAND_LINE", &line);
     }
     cmd.env_remove(crate::dlls::inherit::ENV);
+    cmd.env_remove(crate::process::SUSPENDED_ENV);
+    if suspended && is_pe {
+        cmd.env(crate::process::SUSPENDED_ENV, "1");
+    }
     if let Some(p) = passed.as_ref().filter(|p| !p.env.is_empty()) {
         cmd.env(crate::dlls::inherit::ENV, &p.env);
+    }
+    // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
+    // suspendu) : ouvert ici, hérité, renommé d'après son PID.
+    cmd.env_remove(crate::dlls::handle_broker::ENV);
+    let desk = if is_pe {
+        crate::dlls::handle_broker::prepare_child()
+    } else {
+        None
+    };
+    if let Some(d) = desk.as_ref() {
+        cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
     let spawned = cmd.spawn();
     // Les copies héritables restent chez l'enfant ; le parent les ferme.
     drop(passed);
+    if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
+        d.launched(c.id());
+    }
+    // Gestionnaire de plantage de crashpad (Chromium, Electron) : il lit
+    // notre mémoire pour écrire son rapport. Linux (Yama) ne laisse un
+    // enfant lire son parent que si celui-ci l'a désigné.
+    if let Ok(c) = spawned.as_ref() {
+        if is_pe && line.contains("--type=crashpad-handler") {
+            libc::prctl(libc::PR_SET_PTRACER, c.id() as libc::c_ulong, 0, 0, 0);
+        }
+    }
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
@@ -6378,6 +6408,7 @@ pub fn terminate_self(code: u32) -> ! {
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
+    crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     std::process::exit(code)
 }
@@ -8169,10 +8200,135 @@ pub unsafe extern "win64" fn get_handle_information(h: usize, flags: *mut u32) -
     }
     1
 }
+/// Processus désigné par un handle, vu de DuplicateHandle : nous-mêmes, ou
+/// un autre processus (PID Linux, et s'il est encore suspendu).
+enum DupSide {
+    Me,
+    Other(i32, bool),
+    Invalid,
+}
+fn dup_side(process: usize) -> DupSide {
+    // 0 : toléré comme le processus courant (anciens appelants internes).
+    if process == 0 || is_current_process_handle(process) {
+        return DupSide::Me;
+    }
+    match lookup_sync(process) {
+        Some(SyncHandle::Process(p)) => {
+            let s = lock(&p.state);
+            match s.child.as_ref().map(|c| c.id() as i32).or(s.foreign) {
+                Some(pid) => DupSide::Other(pid, s.suspended),
+                None => DupSide::Invalid,
+            }
+        }
+        _ => DupSide::Invalid,
+    }
+}
+
+/// DuplicateHandle : copie d'un handle d'un processus dans un autre (#236).
+/// Entre deux processus distincts, la copie passe par leur guichet
+/// (`handle_broker`) ; Chromium et Electron s'en servent pour donner
+/// mémoire partagée, événements et fichiers à leurs enfants.
 pub unsafe extern "win64" fn duplicate_handle(
-    _src_process: usize,
+    src_process: usize,
     src_handle: usize,
-    _dst_process: usize,
+    dst_process: usize,
+    dst_handle: *mut usize,
+    access: u32,
+    inherit: i32,
+    options: u32,
+) -> i32 {
+    let src = dup_side(src_process);
+    // Sans destination, seul DUPLICATE_CLOSE_SOURCE a un sens : fermer le
+    // handle chez la source.
+    let dst = if dst_process == 0 && options & 1 != 0 {
+        None
+    } else {
+        Some(dup_side(dst_process))
+    };
+    let fail = |code: u32| {
+        if !dst_handle.is_null() {
+            *dst_handle = 0;
+        }
+        crate::process::set_last_error(code);
+        0
+    };
+    let done = |h: usize| {
+        if !dst_handle.is_null() {
+            *dst_handle = h;
+        }
+        1
+    };
+    use crate::dlls::handle_broker as broker;
+    match (src, dst) {
+        (DupSide::Invalid, _) | (_, Some(DupSide::Invalid)) => fail(6),
+        (DupSide::Me, Some(DupSide::Me)) => {
+            duplicate_local(src_handle, dst_handle, access, inherit, options)
+        }
+        (DupSide::Me, None) => {
+            close_handle(src_handle);
+            1
+        }
+        (DupSide::Other(pid, _), None) => match broker::close_remote(pid, src_handle) {
+            Ok(()) => 1,
+            Err(code) => fail(code),
+        },
+        (DupSide::Me, Some(DupSide::Other(pid, suspended))) => {
+            // Copie locale aux droits demandés, envoyée puis fermée.
+            let mut copy = 0usize;
+            if duplicate_local(src_handle, &mut copy, access, 0, options & !1) == 0 {
+                let code = crate::process::last_error();
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                return fail(code);
+            }
+            let sent = broker::put(pid, copy, inherit != 0, suspended);
+            if copy != src_handle {
+                close_handle(copy);
+            }
+            if options & 1 != 0 {
+                close_handle(src_handle);
+            }
+            crate::trace!("DuplicateHandle({src_handle:#x}) vers le processus {pid} : {sent:?}");
+            match sent {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+        (DupSide::Other(pid, _), Some(DupSide::Me)) => {
+            let got = broker::get(pid, src_handle, access, options, inherit != 0);
+            crate::trace!("DuplicateHandle({src_handle:#x}) depuis le processus {pid} : {got:?}");
+            match got {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+        (DupSide::Other(from, _), Some(DupSide::Other(to, suspended))) => {
+            let r = if from == to {
+                // Copie à l'intérieur d'un même autre processus.
+                broker::forward(from, src_handle, to, access, options, inherit != 0, false)
+            } else {
+                broker::forward(
+                    from,
+                    src_handle,
+                    to,
+                    access,
+                    options,
+                    inherit != 0,
+                    suspended,
+                )
+            };
+            match r {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+    }
+}
+
+/// DuplicateHandle à l'intérieur du processus courant.
+unsafe fn duplicate_local(
+    src_handle: usize,
     dst_handle: *mut usize,
     access: u32,
     inherit: i32,
