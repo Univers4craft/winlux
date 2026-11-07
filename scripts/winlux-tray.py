@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import os
+import time
 
 
 # ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
@@ -125,6 +126,84 @@ def _panel_children():
     return children, panel[1]
 
 
+def _seconds_since_start(pid):
+    """Âge du processus, en secondes (None s'il est illisible)."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        uptime = float(Path("/proc/uptime").read_text().split()[0])
+        return uptime - int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _balance_cache():
+    """Dernier contrepoids mesuré, gardé d'une session à l'autre (par compte)."""
+    base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return base / "winlux/taskbar-balance"
+
+
+def _settled_balance(ids, right_ids, left_ids):
+    """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
+
+    Au lancement de la barre, chaque greffon genmon (réseau, son, batterie,
+    notifications, horloge…) est un processus à part qui s'insère quand il
+    est prêt, d'abord dans un carré de 16 px empilé sur ses voisins. Mesuré
+    trop tôt, le bloc de droite paraissait étroit : le contrepoids restait
+    court jusqu'à la mise à jour suivante, et le bouton Démarrer, d'abord au
+    milieu, glissait vers la gauche pendant deux secondes avant de revenir au
+    centre à chaque démarrage (#602).
+
+    Pendant les premières secondes du greffon, la réponse attend donc les
+    genmon de droite (4 s au plus) : la barre ne l'affiche qu'à ce moment.
+    La valeur de la session précédente, pour le même écran et le même ordre
+    de greffons, sert dès qu'ils sont tous insérés ; sinon, la mesure attend
+    qu'ils soient alignés sans chevauchement et que deux relevés concordent.
+    Ensuite, aucune attente : un genmon resté vide ne ralentit pas les mises
+    à jour suivantes.
+    """
+    children, screen = _panel_children()
+    age = _seconds_since_start(os.getppid())
+    key = f"{screen}:{','.join(map(str, ids))}"
+    if age is not None and age <= 15:
+        try:
+            listing = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/plugins", "-l", "-v"],
+                                     capture_output=True, text=True, timeout=2).stdout
+        except (OSError, subprocess.SubprocessError):
+            listing = ""
+        genmon = {int(found[1]) for found in re.finditer(r"^/plugins/plugin-(\d+)\s+genmon\s*$", listing, re.M)}
+        expected = (genmon & set(right_ids)) - {13}
+        try:
+            cached = _balance_cache().read_text().split()
+        except OSError:
+            cached = []
+        deadline, previous = time.monotonic() + 4, None
+        while screen and expected and time.monotonic() < deadline:
+            present = {plugin for plugin, _, width in children if width > 1}
+            if expected <= present and len(cached) == 2 and cached[0] == key and cached[1].isdigit():
+                return int(cached[1])
+            block = sorted((x, width) for plugin, x, width in children if plugin in expected and width > 1)
+            laid_out = all(x + width <= following for (x, width), (following, _) in zip(block, block[1:]))
+            if expected <= present and laid_out and children == previous:
+                break
+            previous = children
+            time.sleep(0.1)
+            children, screen = _panel_children()
+    if not screen:
+        return 0
+    width = balance_width(screen, children, right_ids, left_ids)
+    cache = _balance_cache()
+    try:
+        if cache.read_text().split() != [key, str(width)]:
+            raise OSError
+    except OSError:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(f"{key} {width}\n")
+        except OSError:
+            pass
+    return width
+
+
 kind = sys.argv[1]
 directory = Path(os.environ.get("WINLUX_TRAY_DIR", "/run/winlux/tray"))
 directory.mkdir(parents=True, exist_ok=True)
@@ -224,10 +303,7 @@ elif kind == "balance":
     except (OSError, subprocess.SubprocessError):
         ids = []
     if 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
-        children, screen = _panel_children()
-        if screen:
-            right = set(ids[ids.index(8) + 1:])
-            width = balance_width(screen, children, right, set(ids[:ids.index(3)]))
+        width = _settled_balance(ids, set(ids[ids.index(8) + 1:]), set(ids[:ids.index(3)]))
     body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
     icon = directory / f"spacer-{width}.svg"
     if not icon.exists():

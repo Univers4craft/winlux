@@ -483,4 +483,10 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
 
+# ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
+tray_source = (SCRIPTS / "winlux-tray.py").read_text()
+ok("def _settled_balance" in tray_source and "taskbar-balance" in tray_source
+   and "test-taskbar-boot-centering.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre centrée : contrepoids mesuré une fois les icônes de droite en place, valeur précédente reprise")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
