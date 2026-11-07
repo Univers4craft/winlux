@@ -764,6 +764,10 @@ struct WsaData {
     system_status: [c_char; 129],
 }
 
+/// Taille de WSADATA pour un programme x86 : 2 + 2 + 257 + 129 + 2 + 2,
+/// aligné sur 4, puis lpVendorInfo (4 octets).
+const WSADATA32_SIZE: usize = 400;
+
 pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
     if data.is_null() {
         return 10014;
@@ -794,7 +798,21 @@ pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
         out.system_status.as_mut_ptr() as *mut u8,
         status.len(),
     );
-    std::ptr::write_unaligned(data as *mut WsaData, out);
+    if crate::wow32::pointer_size() == 4 {
+        // Programme x86 : WSADATA y fait 400 octets et range les chaînes
+        // avant iMaxSockets/iMaxUdpDg/lpVendorInfo. La forme 64 bits
+        // (408 octets) débordait de 8 octets sur la pile de l'appelant :
+        // WinSCP x86 y perdait son adresse de retour (#779).
+        let b = std::slice::from_raw_parts_mut(data, WSADATA32_SIZE);
+        b.fill(0);
+        b[0..2].copy_from_slice(&out.version.to_le_bytes());
+        b[2..4].copy_from_slice(&out.high_version.to_le_bytes());
+        b[4..4 + desc.len()].copy_from_slice(desc);
+        b[261..261 + status.len()].copy_from_slice(status);
+        // iMaxSockets (390), iMaxUdpDg (392), lpVendorInfo (396) : 0.
+    } else {
+        std::ptr::write_unaligned(data as *mut WsaData, out);
+    }
     STARTUPS.fetch_add(1, Ordering::AcqRel);
     0
 }
