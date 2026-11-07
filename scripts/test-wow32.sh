@@ -226,4 +226,4 @@ for name in jeux32 jeux64; do
         jeux "$name" xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
     fi
 done
-echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"
+echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"

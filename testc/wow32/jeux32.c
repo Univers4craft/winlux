@@ -823,6 +823,44 @@ static int dsound_tests(HWND hwnd) {
     return 0;
 }
 
+/* DirectShow (#835) : graphe de lecture de quartz.dll par CoCreateInstance. */
+__declspec(dllimport) HRESULT WINAPI CoInitialize(void *);
+__declspec(dllimport) HRESULT WINAPI CoCreateInstance(const GUID *, void *, DWORD, const GUID *,
+                                                      void **);
+static const GUID CLSID_FilterGraph = {
+    0xe436ebb3, 0x524f, 0x11ce, {0x9f, 0x53, 0x00, 0x20, 0xaf, 0x0b, 0xa7, 0x70}};
+#define DS_IID(n, d1) static const GUID n = {d1, 0x0ad4, 0x11ce, {0xb0, 0x3a, 0, 0x20, 0xaf, 0x0b, 0xa7, 0x70}}
+DS_IID(IID_IGraphBuilder, 0x56a868a9);
+DS_IID(IID_IMediaControl, 0x56a868b1);
+DS_IID(IID_IMediaEventEx, 0x56a868c0);
+DS_IID(IID_IBasicAudio, 0x56a868b3);
+DS_IID(IID_IVideoWindow, 0x56a868b4);
+
+static int dshow_tests(void) {
+    void *gb = 0, *mc = 0, *me = 0, *ba = 0, *vw = 0;
+    long st = -1, vol = 0, code = 0;
+    UINT_PTR h = 0, p1 = 0, p2 = 0;
+    CoInitialize(0);
+    CHECK(150, CoCreateInstance(&CLSID_FilterGraph, 0, 1, &IID_IGraphBuilder, &gb) == 0 && gb);
+    CHECK(151, CALL2(gb, 0, &IID_IMediaControl, &mc) == 0 && mc);
+    CHECK(152, CALL2(gb, 0, &IID_IMediaEventEx, &me) == 0 && me);
+    CHECK(153, CALL2(gb, 0, &IID_IBasicAudio, &ba) == 0 && ba);
+    CHECK(154, CALL2(gb, 0, &IID_IVideoWindow, &vw) == 0 && vw);
+    /* Fichier absent : RenderFile échoue, le graphe reste arrêté. */
+    CHECK(155, CALL2(gb, 13, L"C:\\winlux-absent.avi", 0) < 0);
+    CHECK(156, CALL2(mc, 10, 0, &st) == 0 && st == 0);
+    CHECK(157, CALL1(ba, 7, -1000) == 0 && CALL1(ba, 8, &vol) == 0 && vol == -1000);
+    CHECK(158, CALL1(me, 7, &h) == 0 && h != 0);
+    /* Aucun événement en attente : E_ABORT. */
+    CHECK(159, CALL4(me, 8, &code, &p1, &p2, 0) != 0);
+    CALL0(vw, 2);
+    CALL0(ba, 2);
+    CALL0(me, 2);
+    CALL0(mc, 2);
+    CHECK(160, CALL0(gb, 2) == 0);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -843,6 +881,8 @@ void entry(void) {
     out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
+    dshow_tests();
+    out("DirectShow : 11 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

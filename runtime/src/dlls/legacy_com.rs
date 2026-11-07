@@ -127,6 +127,24 @@ pub fn x86_table(name: &'static str, methods: &[(usize, usize, &str)]) -> usize 
     v
 }
 
+/// Table de méthodes pour l'ABI du programme, avec la signature x86 de
+/// chaque méthode (`wow32::x86_vtable_sig` : `i`, `p`, `q`, `d`, `>f`).
+/// Pour les interfaces qui passent des valeurs de 8 octets ou rendent des
+/// pointeurs (DirectShow). Construite une fois par interface.
+pub fn vtable_sig(name: &'static str, methods: &[(usize, &str)]) -> usize {
+    if x86() {
+        let m: Vec<(usize, usize, &str)> = methods.iter().map(|&(f, s)| (f, f, s)).collect();
+        return x86_table(name, &m);
+    }
+    static CACHE: Mutex<Option<HashMap<&'static str, usize>>> = Mutex::new(None);
+    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = g.get_or_insert_with(HashMap::new);
+    *map.entry(name).or_insert_with(|| {
+        let t: Vec<usize> = methods.iter().map(|m| m.0).collect();
+        Box::leak(t.into_boxed_slice()).as_ptr() as usize
+    })
+}
+
 /// Tables x86 construites par `vtable` → leurs fonctions win64.
 static X86_TABLES: Mutex<Option<HashMap<usize, Vec<usize>>>> = Mutex::new(None);
 
@@ -148,6 +166,19 @@ pub unsafe fn method(obj: usize, idx: usize) -> usize {
     }
     let vt = (obj as *const usize).read_unaligned();
     *(vt as *const usize).add(idx)
+}
+
+/// L'objet `obj` (adresse sous 4 Go) a-t-il une table x86 construite ici ?
+///
+/// # Safety
+/// `obj` est un pointeur d'objet COM lisible.
+pub unsafe fn is_x86_object(obj: usize) -> bool {
+    if obj == 0 || obj >= 1 << 32 {
+        return false;
+    }
+    let vt = rd32(obj) as usize;
+    let t = X86_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    t.as_ref().is_some_and(|m| m.contains_key(&vt))
 }
 
 /// Appelle la méthode `idx` d'un objet COM du runtime (voir `method`).
