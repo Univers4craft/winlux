@@ -105,10 +105,27 @@ if test -x /usr/sbin/NetworkManager; then
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
+# Découverte réseau (#623) : sans avahi-daemon, aucune annonce mDNS n'est vue,
+# les backends dnssd/driverless de CUPS ne trouvent aucune imprimante Wi-Fi
+# (IPP Everywhere, AirPrint) et le partage annoncé par winlux-share reste
+# invisible. systemd le lançait par activation ; ici, avant cupsd.
+if test -x /usr/sbin/avahi-daemon && ! test -S /run/avahi-daemon/socket; then
+    if grep -q '^avahi:' /etc/passwd; then
+        mkdir -p /run/avahi-daemon
+        /usr/sbin/avahi-daemon --no-rlimits >/run/winlux/avahi.log 2>&1 &
+        echo "$!" >/run/winlux/avahi.pid
+    else
+        echo "avahi-daemon non lancé : compte avahi absent" >/run/winlux/avahi.log
+    fi
+fi
 # Printing (#111): there is no systemd to socket-activate CUPS, start it here.
 if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
     mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
     /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+fi
+# cups-browsed (s'il est livré) ajoute les imprimantes découvertes en mDNS.
+if test -x /usr/sbin/cups-browsed && ! pgrep -x cups-browsed >/dev/null 2>&1; then
+    /usr/sbin/cups-browsed >/run/winlux/cups-browsed.log 2>&1 &
 fi
 has_bluetooth=false
 if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
