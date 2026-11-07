@@ -4,14 +4,14 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
 #[path = "../shell/a11y.rs"]
 mod a11y;
 #[path = "../shell/admin_ui.rs"]
 mod admin_ui;
 #[path = "../shell/bsod.rs"]
 mod bsod;
-#[path = "../shell/cliphist.rs"]
-mod cliphist;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
@@ -24,14 +24,18 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/filehistory.rs"]
 mod filehistory;
-#[path = "../shell/firewall.rs"]
-mod firewall;
 #[path = "../shell/fonts.rs"]
 mod fonts;
-#[path = "../shell/gfx.rs"]
-mod gfx;
+#[path = "../shell/programs.rs"]
+mod programs;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
+#[path = "../shell/firewall.rs"]
+mod firewall;
 #[path = "../shell/gpuinfo.rs"]
 mod gpuinfo;
+#[path = "../shell/gfx.rs"]
+mod gfx;
 #[path = "../shell/locale.rs"]
 mod locale;
 #[path = "../shell/login.rs"]
@@ -44,34 +48,30 @@ mod notepad;
 mod notifications;
 #[path = "../shell/personalize.rs"]
 mod personalize;
-#[path = "../shell/programs.rs"]
-mod programs;
-#[path = "../shell/regedit.rs"]
-mod regedit;
 #[path = "../shell/restore.rs"]
 mod restore;
+#[path = "../shell/regedit.rs"]
+mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
-#[path = "../shell/settings_cpu.rs"]
-mod settings_cpu;
 #[path = "../shell/sharing.rs"]
 mod sharing;
 #[path = "../shell/snip.rs"]
 mod snip;
 #[path = "../shell/store.rs"]
 mod store;
-#[path = "../shell/sysinfo.rs"]
-mod sysinfo;
+#[path = "../shell/settings_cpu.rs"]
+mod settings_cpu;
 #[path = "../shell/sysmon.rs"]
 mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/taskschd.rs"]
 mod taskschd;
 #[path = "../shell/terminal.rs"]
 mod terminal;
-#[path = "../shell/thumbs.rs"]
-mod thumbs;
 #[path = "../shell/utilities.rs"]
 mod utilities;
 #[path = "../shell/volumes.rs"]

@@ -53,12 +53,7 @@ const ROTATE: [&[u8]; 4] = [b"Pivoter", b"Rotate", b"Girar", b"Drehen"];
 const MIRROR: [&[u8]; 4] = [b"Miroir", b"Mirror", b"Espejo", b"Spiegeln"];
 const SLIDESHOW: [&[u8]; 4] = [b"Diaporama", b"Slideshow", b"Presentaci\xF3n", b"Diashow"];
 const PRINT: [&[u8]; 4] = [b"Imprimer", b"Print", b"Imprimir", b"Drucken"];
-const OCR: [&[u8]; 4] = [
-    b"Copier le texte",
-    b"Copy text",
-    b"Copiar texto",
-    b"Text kopieren",
-];
+const OCR: [&[u8]; 4] = [b"Copier le texte", b"Copy text", b"Copiar texto", b"Text kopieren"];
 const INFO: [&[u8]; 4] = [b"Infos", b"Info", b"Info", b"Info"];
 const COMPARE: [&[u8]; 4] = [b"Comparer", b"Compare", b"Comparar", b"Vergleichen"];
 const DETAILS: [&[u8]; 4] = [b"Informations", b"Details", b"Detalles", b"Details"];
@@ -1594,17 +1589,8 @@ unsafe fn copy_text(s: &mut State) {
     params[1..=s.path_len].copy_from_slice(&s.path[..s.path_len]);
     params[s.path_len + 1] = b'"' as u16;
     let program: [u16; 11] = [
-        b'w' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'l' as u16,
-        b'u' as u16,
-        b'x' as u16,
-        b'-' as u16,
-        b'o' as u16,
-        b'c' as u16,
-        b'r' as u16,
-        0,
+        b'w' as u16, b'i' as u16, b'n' as u16, b'l' as u16, b'u' as u16, b'x' as u16, b'-' as u16,
+        b'o' as u16, b'c' as u16, b'r' as u16, 0,
     ];
     let verb: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
     ShellExecuteW(

@@ -524,12 +524,7 @@ extern "system" {
     pub fn GetFileAttributesA(path: *const c_char) -> u32;
     pub fn GetFileAttributesW(path: *const u16) -> u32;
     pub fn SetFileAttributesW(path: *const u16, attributes: u32) -> i32;
-    pub fn GetDiskFreeSpaceExW(
-        path: *const u16,
-        available: *mut u64,
-        total: *mut u64,
-        free: *mut u64,
-    ) -> i32;
+    pub fn GetDiskFreeSpaceExW(path: *const u16, available: *mut u64, total: *mut u64, free: *mut u64) -> i32;
     pub fn GetFileAttributesExA(
         path: *const c_char,
         level: u32,
@@ -1110,12 +1105,7 @@ extern "C" {
         flags: u32,
     ) -> i32;
     pub fn MoveWindow(hwnd: Handle, x: i32, y: i32, cx: i32, cy: i32, repaint: i32) -> i32;
-    pub fn SystemParametersInfoA(
-        action: u32,
-        param: u32,
-        data: *mut core::ffi::c_void,
-        update: u32,
-    ) -> i32;
+    pub fn SystemParametersInfoA(action: u32, param: u32, data: *mut core::ffi::c_void, update: u32) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
     pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
     pub fn GetDC(hwnd: Handle) -> Handle;

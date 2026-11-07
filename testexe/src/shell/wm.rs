@@ -374,9 +374,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -965,24 +963,15 @@ fn default_rect(app: usize) -> Rect {
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
     // Décalage en cascade, sans jamais sortir de la zone de travail.
-    let offset = if app == APP_WELCOME {
-        18
-    } else {
-        (app as i32 % 6) * 36
-    };
-    let x = (wk.left + (ww - w) / 2 + offset - 18)
-        .min(wk.right - w)
-        .max(wk.left);
-    let y = (wk.top + (wh - h) / 2 + offset - 18)
-        .min(wk.bottom - h)
-        .max(wk.top);
+    let offset = if app == APP_WELCOME { 18 } else { (app as i32 % 6) * 36 };
+    let x = (wk.left + (ww - w) / 2 + offset - 18).min(wk.right - w).max(wk.left);
+    let y = (wk.top + (wh - h) / 2 + offset - 18).min(wk.bottom - h).max(wk.top);
     rect(x, y, x + w, y + h)
 }
 
 /// Ouvre l'application, ou la ramène au premier plan si elle est déjà ouverte.
 pub unsafe fn open(app: usize) {
-    if app == APP_SETTINGS && !native_session() && native_settings(crate::settings::current_page())
-    {
+    if app == APP_SETTINGS && !native_session() && native_settings(crate::settings::current_page()) {
         return;
     }
     if native_session() && NATIVE_APP != app {
@@ -1844,7 +1833,14 @@ pub unsafe fn draw(g: &mut Gfx) {
             4,
             p.accent,
         );
-        text(g.hdc, g.f.small, p.on_accent, cx + sw - 58, cy + 70, b"OK");
+        text(
+            g.hdc,
+            g.f.small,
+            p.on_accent,
+            cx + sw - 58,
+            cy + 70,
+            b"OK",
+        );
     }
     if crate::explorer::file_drag_active() {
         let gl = crate::explorer::drag_glyph();
@@ -1879,7 +1875,14 @@ pub unsafe fn draw(g: &mut Gfx) {
                 9,
                 p.accent,
             );
-            text(g.hdc, g.f.small, p.on_accent, mx + 40, my + 2, &buf[..i]);
+            text(
+                g.hdc,
+                g.f.small,
+                p.on_accent,
+                mx + 40,
+                my + 2,
+                &buf[..i],
+            );
         }
     }
 }

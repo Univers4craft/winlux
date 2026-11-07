@@ -658,7 +658,15 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
                 let (top, bottom) = (card.top.max(VIEW.0), card.bottom.min(VIEW.1));
                 if bottom - top > 16 {
                     panel(
-                        g.hdc, g.b, card.left, top, card.right, bottom, 8, p.surface, p.border,
+                        g.hdc,
+                        g.b,
+                        card.left,
+                        top,
+                        card.right,
+                        bottom,
+                        8,
+                        p.surface,
+                        p.border,
                     );
                 }
                 let mut title = unc(host, part(share, 1));
@@ -702,16 +710,7 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
             }
         }
         if lines(shares(), b"share").any(|share| guest_level(part(share, 3)) != 0) {
-            line(
-                g,
-                g.f.small,
-                p.text3,
-                c.left,
-                y + 2,
-                tr4(&GUEST_WINDOWS11),
-                w,
-                false,
-            );
+            line(g, g.f.small, p.text3, c.left, y + 2, tr4(&GUEST_WINDOWS11), w, false);
             y += 20;
         }
         line(g, g.f.small, p.text3, c.left, y + 2, tr4(&[
@@ -1129,16 +1128,7 @@ pub unsafe fn draw_dialog(g: &mut Gfx, f: &Frame) {
                 b"Klicken Sie auf ein Konto, um zwischen Kein Zugriff, Lesen und \xC4ndern zu wechseln.",
             ])
         };
-        line(
-            g,
-            g.f.small,
-            p.text3,
-            r.left + 20,
-            r.top + 68,
-            hint,
-            w,
-            true,
-        );
+        line(g, g.f.small, p.text3, r.left + 20, r.top + 68, hint, w, true);
         rights(g, share, r.left + 20, r.top + 92, r.right - 20, true);
         button(
             g,

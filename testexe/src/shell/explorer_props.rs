@@ -58,14 +58,7 @@ fn ft(t: FileTime) -> u64 {
 }
 
 /// Taille et nombre d'éléments d'un dossier, borné (50 000 éléments).
-unsafe fn walk(
-    path: &[u8],
-    depth: u32,
-    size: &mut u64,
-    files: &mut u32,
-    dirs: &mut u32,
-    partial: &mut bool,
-) {
+unsafe fn walk(path: &[u8], depth: u32, size: &mut u64, files: &mut u32, dirs: &mut u32, partial: &mut bool) {
     if depth > MAX_DEPTH || *files + *dirs >= MAX_WALK {
         *partial = true;
         return;
@@ -162,14 +155,7 @@ pub(super) unsafe fn open(p: &Pane, index: usize) {
             m += 1;
         }
         let (mut size, mut files, mut dirs, mut partial) = (0, 0, 0, false);
-        walk(
-            &base[..m],
-            0,
-            &mut size,
-            &mut files,
-            &mut dirs,
-            &mut partial,
-        );
+        walk(&base[..m], 0, &mut size, &mut files, &mut dirs, &mut partial);
         props.size = size;
         props.files = files;
         props.dirs = dirs;
@@ -185,11 +171,7 @@ unsafe fn close(apply: bool) {
         let path = wstr(&mut w, &P.path[..P.path_len]);
         let attrs = GetFileAttributesW(path);
         if attrs != u32::MAX {
-            let new = if P.readonly_new {
-                attrs | 1
-            } else {
-                attrs & !1
-            };
+            let new = if P.readonly_new { attrs | 1 } else { attrs & !1 };
             if SetFileAttributesW(path, new & !0x80) == 0 {
                 notify(t4([
                     b"Impossible de modifier l'attribut Lecture seule.",
@@ -220,12 +202,7 @@ fn box_rect(f: &Frame) -> Rect {
 
 fn buttons(r: &Rect) -> (Rect, Rect) {
     let cancel = rect(r.right - 108, r.bottom - 44, r.right - 16, r.bottom - 14);
-    let ok = rect(
-        cancel.left - 100,
-        cancel.top,
-        cancel.left - 8,
-        cancel.bottom,
-    );
+    let ok = rect(cancel.left - 100, cancel.top, cancel.left - 8, cancel.bottom);
     (ok, cancel)
 }
 
@@ -282,73 +259,22 @@ pub(super) unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     let p = pal();
     let r = box_rect(f);
-    round_rect(
-        g.hdc,
-        g.b,
-        r.left - 1,
-        r.top - 1,
-        r.right + 1,
-        r.bottom + 1,
-        9,
-        p.border,
-    );
+    round_rect(g.hdc, g.b, r.left - 1, r.top - 1, r.right + 1, r.bottom + 1, 9, p.border);
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface);
     // Titre : « Propriétés de note.txt »
     let mut title = [0u8; NAME_LEN + 32];
     let mut n = 0;
-    for &c in tr4(&[
-        b"Propri\xE9t\xE9s de ",
-        b"Properties of ",
-        b"Propiedades de ",
-        b"Eigenschaften von ",
-    ])
-    .iter()
-    .chain(&P.name[..P.name_len])
-    {
+    for &c in tr4(&[b"Propri\xE9t\xE9s de ", b"Properties of ", b"Propiedades de ", b"Eigenschaften von "]).iter().chain(&P.name[..P.name_len]) {
         if n < title.len() {
             title[n] = c;
             n += 1;
         }
     }
-    text_fit(
-        g.hdc,
-        g.f.semibold,
-        14,
-        p.text,
-        r.left + 20,
-        r.top + 16,
-        &title[..n],
-        r.right - r.left - 40,
-    );
+    text_fit(g.hdc, g.f.semibold, 14, p.text, r.left + 20, r.top + 16, &title[..n], r.right - r.left - 40);
     // Icône et nom.
-    glyph(
-        g.hdc,
-        g.b,
-        g.f,
-        glyph_of(P.kind),
-        r.left + 20,
-        r.top + 50,
-        32,
-    );
-    text_fit(
-        g.hdc,
-        g.f.caption,
-        12,
-        p.text,
-        r.left + 70,
-        r.top + 59,
-        &P.name[..P.name_len],
-        r.right - r.left - 90,
-    );
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 20,
-        r.top + 94,
-        r.right - 20,
-        r.top + 95,
-        p.border,
-    );
+    glyph(g.hdc, g.b, g.f, glyph_of(P.kind), r.left + 20, r.top + 50, 32);
+    text_fit(g.hdc, g.f.caption, 12, p.text, r.left + 70, r.top + 59, &P.name[..P.name_len], r.right - r.left - 90);
+    fill(g.hdc, g.b, r.left + 20, r.top + 94, r.right - 20, r.top + 95, p.border);
     let label_x = r.left + 20;
     let value_x = r.left + 130;
     let value_w = r.right - value_x - 20;
@@ -359,38 +285,19 @@ pub(super) unsafe fn draw(g: &mut Gfx, f: &Frame) {
         *y += 24;
     };
     // Type
-    let e = Entry {
-        kind: P.kind,
-        dir: P.dir,
-        ..EMPTY_ENTRY
-    };
+    let e = Entry { kind: P.kind, dir: P.dir, ..EMPTY_ENTRY };
     let mut probe = e;
     probe.name[..P.name_len].copy_from_slice(&P.name[..P.name_len]);
     probe.len = P.name_len as u16;
     let mut tbuf = [0u8; 48];
-    row(
-        g,
-        &mut y,
-        tr4(&[b"Type :", b"Type:", b"Tipo:", b"Typ:"]),
-        type_name(&probe, &mut tbuf),
-    );
+    row(g, &mut y, tr4(&[b"Type :", b"Type:", b"Tipo:", b"Typ:"]), type_name(&probe, &mut tbuf));
     // Emplacement : dossier parent.
     let loc = parent(&P.path[..P.path_len]).unwrap_or(&P.path[..P.path_len]);
-    row(
-        g,
-        &mut y,
-        tr4(&[b"Emplacement :", b"Location:", b"Ubicaci\xF3n:", b"Ort:"]),
-        loc,
-    );
+    row(g, &mut y, tr4(&[b"Emplacement :", b"Location:", b"Ubicaci\xF3n:", b"Ort:"]), loc);
     // Taille
     let mut sbuf = [0u8; 96];
     let sn = size_line(P.size, &mut sbuf);
-    row(
-        g,
-        &mut y,
-        tr4(&[b"Taille :", b"Size:", b"Tama\xF1o:", b"Gr\xF6\xDFe:"]),
-        &sbuf[..sn],
-    );
+    row(g, &mut y, tr4(&[b"Taille :", b"Size:", b"Tama\xF1o:", b"Gr\xF6\xDFe:"]), &sbuf[..sn]);
     if P.dir {
         // « 12 fichiers, 3 dossiers »
         let mut c = [0u8; 96];
@@ -405,152 +312,49 @@ pub(super) unsafe fn draw(g: &mut Gfx, f: &Frame) {
             m += 1;
         }
         if P.partial {
-            for &ch in tr4(&[
-                b" (au moins)",
-                b" (at least)",
-                b" (al menos)",
-                b" (mindestens)",
-            ]) {
+            for &ch in tr4(&[b" (au moins)", b" (at least)", b" (al menos)", b" (mindestens)"]) {
                 c[m] = ch;
                 m += 1;
             }
         }
-        row(
-            g,
-            &mut y,
-            tr4(&[b"Contenu :", b"Contains:", b"Contiene:", b"Inhalt:"]),
-            &c[..m],
-        );
+        row(g, &mut y, tr4(&[b"Contenu :", b"Contains:", b"Contiene:", b"Inhalt:"]), &c[..m]);
     }
     y += 6;
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 20,
-        y - 6,
-        r.right - 20,
-        y - 5,
-        p.border,
-    );
+    fill(g.hdc, g.b, r.left + 20, y - 6, r.right - 20, y - 5, p.border);
     let mut d = [0u8; 24];
     for (label, t) in [
-        (
-            tr4(&[b"Cr\xE9\xE9 le :", b"Created:", b"Creado:", b"Erstellt:"]),
-            P.created,
-        ),
-        (
-            tr4(&[
-                b"Modifi\xE9 le :",
-                b"Modified:",
-                b"Modificado:",
-                b"Ge\xE4ndert:",
-            ]),
-            P.modified,
-        ),
-        (
-            tr4(&[
-                b"Dernier acc\xE8s :",
-                b"Accessed:",
-                b"\xDAltimo acceso:",
-                b"Letzter Zugriff:",
-            ]),
-            P.accessed,
-        ),
+        (tr4(&[b"Cr\xE9\xE9 le :", b"Created:", b"Creado:", b"Erstellt:"]), P.created),
+        (tr4(&[b"Modifi\xE9 le :", b"Modified:", b"Modificado:", b"Ge\xE4ndert:"]), P.modified),
+        (tr4(&[b"Dernier acc\xE8s :", b"Accessed:", b"\xDAltimo acceso:", b"Letzter Zugriff:"]), P.accessed),
     ] {
         let dn = date_text(t, &mut d);
         row(g, &mut y, label, &d[..dn]);
     }
     // Attributs
     let rb = readonly_box(&r);
-    text(
-        g.hdc,
-        g.f.caption,
-        p.text2,
-        label_x,
-        rb.top,
-        tr4(&[b"Attributs :", b"Attributes:", b"Atributos:", b"Attribute:"]),
-    );
+    text(g.hdc, g.f.caption, p.text2, label_x, rb.top, tr4(&[b"Attributs :", b"Attributes:", b"Atributos:", b"Attribute:"]));
     let check = |g: &mut Gfx, b: Rect, on: bool, enabled: bool, label: &[u8]| {
-        round_rect(
-            g.hdc,
-            g.b,
-            b.left,
-            b.top,
-            b.right,
-            b.bottom,
-            3,
-            if on { p.accent } else { p.text3 },
-        );
+        round_rect(g.hdc, g.b, b.left, b.top, b.right, b.bottom, 3, if on { p.accent } else { p.text3 });
         if !on {
-            round_rect(
-                g.hdc,
-                g.b,
-                b.left + 1,
-                b.top + 1,
-                b.right - 1,
-                b.bottom - 1,
-                3,
-                p.surface,
-            );
+            round_rect(g.hdc, g.b, b.left + 1, b.top + 1, b.right - 1, b.bottom - 1, 3, p.surface);
         } else {
-            line(
-                g.hdc,
-                g.b,
-                b.left + 3,
-                b.top + 8,
-                b.left + 6,
-                b.top + 11,
-                2,
-                p.on_accent,
-            );
-            line(
-                g.hdc,
-                g.b,
-                b.left + 6,
-                b.top + 11,
-                b.left + 12,
-                b.top + 4,
-                2,
-                p.on_accent,
-            );
+            line(g.hdc, g.b, b.left + 3, b.top + 8, b.left + 6, b.top + 11, 2, p.on_accent);
+            line(g.hdc, g.b, b.left + 6, b.top + 11, b.left + 12, b.top + 4, 2, p.on_accent);
         }
-        text(
-            g.hdc,
-            g.f.caption,
-            if enabled { p.text } else { p.text3 },
-            b.right + 8,
-            b.top,
-            label,
-        );
+        text(g.hdc, g.f.caption, if enabled { p.text } else { p.text3 }, b.right + 8, b.top, label);
     };
     check(
         g,
         rb,
         P.readonly_new,
         !P.dir,
-        tr4(&[
-            b"Lecture seule",
-            b"Read-only",
-            b"Solo lectura",
-            b"Schreibgesch\xFCtzt",
-        ]),
+        tr4(&[b"Lecture seule", b"Read-only", b"Solo lectura", b"Schreibgesch\xFCtzt"]),
     );
     let hb = rect(rb.left + 150, rb.top, rb.left + 166, rb.bottom);
-    check(
-        g,
-        hb,
-        P.hidden,
-        false,
-        tr4(&[b"Cach\xE9", b"Hidden", b"Oculto", b"Versteckt"]),
-    );
+    check(g, hb, P.hidden, false, tr4(&[b"Cach\xE9", b"Hidden", b"Oculto", b"Versteckt"]));
     let (ok, cancel) = buttons(&r);
     super::copy::button(g, &ok, b"OK", true);
-    super::copy::button(
-        g,
-        &cancel,
-        tr4(&[b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]),
-        false,
-    );
+    super::copy::button(g, &cancel, tr4(&[b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]), false);
 }
 
 // ---------- Entrées ----------
@@ -598,24 +402,10 @@ pub(super) unsafe fn regression(root: &[u8]) {
     CreateDirectoryW(wstr(&mut w, &dir[..dn]), core::ptr::null_mut());
     let mut file = [0u8; PATH_LEN + NAME_LEN + 2];
     let fnl = join(&mut file, &dir[..dn], b"note.txt");
-    let h = CreateFileW(
-        wstr(&mut w, &file[..fnl]),
-        0x4000_0000,
-        0,
-        core::ptr::null_mut(),
-        2,
-        0x80,
-        core::ptr::null_mut(),
-    );
+    let h = CreateFileW(wstr(&mut w, &file[..fnl]), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
     let data = [b'a'; 3000];
     let mut wr = 0u32;
-    WriteFile(
-        h,
-        data.as_ptr(),
-        data.len() as u32,
-        &mut wr,
-        core::ptr::null_mut(),
-    );
+    WriteFile(h, data.as_ptr(), data.len() as u32, &mut wr, core::ptr::null_mut());
     CloseHandle(h);
     let mut sub = [0u8; PATH_LEN + NAME_LEN + 2];
     let sn = join(&mut sub, &dir[..dn], b"sous-dossier");
@@ -632,36 +422,23 @@ pub(super) unsafe fn regression(root: &[u8]) {
     );
     let mut sb = [0u8; 96];
     let n = size_line(3000, &mut sb);
-    check!(
-        &sb[..n] == b"2,9 Ko (3 000 octets)"
-            || sb[..n].ends_with(b"(3 000 octets)")
-            || sb[..n].ends_with(b"(3 000 bytes)"),
-        "Proprietes : taille affichee avec les octets exacts (3 000)"
-    );
+    check!(&sb[..n] == b"2,9 Ko (3 000 octets)" || sb[..n].ends_with(b"(3 000 octets)") || sb[..n].ends_with(b"(3 000 bytes)"),
+        "Proprietes : taille affichee avec les octets exacts (3 000)");
     // Cocher Lecture seule puis OK : l'attribut est posé sur le fichier.
     key(0x20, 0);
     key(0x0D, 0);
     let attrs = GetFileAttributesW(wstr(&mut w, &file[..fnl]));
-    check!(
-        !P.open && attrs != u32::MAX && attrs & 1 != 0,
-        "Proprietes : Lecture seule + OK protege le fichier"
-    );
+    check!(!P.open && attrs != u32::MAX && attrs & 1 != 0, "Proprietes : Lecture seule + OK protege le fichier");
     // Puis la décocher : le fichier redevient modifiable.
     let p = pane();
     if let Some(fi) = (0..p.count).find(|&i| p.entries[i].name() == b"note.txt") {
         open(p, fi);
-        check!(
-            P.readonly,
-            "Proprietes : la case Lecture seule reflete l'etat du fichier"
-        );
+        check!(P.readonly, "Proprietes : la case Lecture seule reflete l'etat du fichier");
         key(0x20, 0);
         key(0x0D, 0);
     }
     let attrs = GetFileAttributesW(wstr(&mut w, &file[..fnl]));
-    check!(
-        attrs != u32::MAX && attrs & 1 == 0,
-        "Proprietes : decocher Lecture seule rend le fichier modifiable"
-    );
+    check!(attrs != u32::MAX && attrs & 1 == 0, "Proprietes : decocher Lecture seule rend le fichier modifiable");
     // Annuler ne change rien.
     let p = pane();
     if let Some(fi) = (0..p.count).find(|&i| p.entries[i].name() == b"note.txt") {
@@ -670,10 +447,7 @@ pub(super) unsafe fn regression(root: &[u8]) {
         key(0x1B, 0);
     }
     let attrs = GetFileAttributesW(wstr(&mut w, &file[..fnl]));
-    check!(
-        !P.open && attrs & 1 == 0,
-        "Proprietes : Annuler n'applique rien"
-    );
+    check!(!P.open && attrs & 1 == 0, "Proprietes : Annuler n'applique rien");
     // Dossier : contenu compté.
     navigate(root);
     let p = pane();
@@ -685,10 +459,7 @@ pub(super) unsafe fn regression(root: &[u8]) {
         );
         close(false);
     } else {
-        check!(
-            false,
-            "Proprietes d'un dossier : 1 fichier, 1 dossier, 3 000 octets"
-        );
+        check!(false, "Proprietes d'un dossier : 1 fichier, 1 dossier, 3 000 octets");
     }
     DeleteFileW(wstr(&mut w, &file[..fnl]));
     RemoveDirectoryW(wstr(&mut w, &sub[..sn]));

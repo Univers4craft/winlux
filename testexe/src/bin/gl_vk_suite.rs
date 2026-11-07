@@ -55,72 +55,22 @@ unsafe fn gl_suite() -> Handle {
     let gl = LoadLibraryA(c"opengl32.dll".as_ptr());
     check!(!gl.is_null(), "opengl32.dll chargée");
     let gdi = LoadLibraryA(c"gdi32.dll".as_ptr());
-    let choose = f!(
-        gdi,
-        c"ChoosePixelFormat",
-        unsafe extern "system" fn(Handle, *const u8) -> i32,
-        "ChoosePixelFormat"
-    );
-    let describe = f!(
-        gdi,
-        c"DescribePixelFormat",
-        unsafe extern "system" fn(Handle, i32, u32, *mut u8) -> i32,
-        "DescribePixelFormat"
-    );
-    let set = f!(
-        gdi,
-        c"SetPixelFormat",
-        unsafe extern "system" fn(Handle, i32, *const u8) -> i32,
-        "SetPixelFormat"
-    );
-    let swap = f!(
-        gdi,
-        c"SwapBuffers",
-        unsafe extern "system" fn(Handle) -> i32,
-        "SwapBuffers"
-    );
+    let choose = f!(gdi, c"ChoosePixelFormat", unsafe extern "system" fn(Handle, *const u8) -> i32, "ChoosePixelFormat");
+    let describe = f!(gdi, c"DescribePixelFormat", unsafe extern "system" fn(Handle, i32, u32, *mut u8) -> i32, "DescribePixelFormat");
+    let set = f!(gdi, c"SetPixelFormat", unsafe extern "system" fn(Handle, i32, *const u8) -> i32, "SetPixelFormat");
+    let swap = f!(gdi, c"SwapBuffers", unsafe extern "system" fn(Handle) -> i32, "SwapBuffers");
     let create = f!(gl, c"wglCreateContext", WglCreate, "wglCreateContext");
     let make = f!(gl, c"wglMakeCurrent", WglMake, "wglMakeCurrent");
     let delete = f!(gl, c"wglDeleteContext", WglDelete, "wglDeleteContext");
     let get_proc = f!(gl, c"wglGetProcAddress", WglProc, "wglGetProcAddress");
-    let clear_color = f!(
-        gl,
-        c"glClearColor",
-        unsafe extern "system" fn(f32, f32, f32, f32),
-        "glClearColor"
-    );
+    let clear_color = f!(gl, c"glClearColor", unsafe extern "system" fn(f32, f32, f32, f32), "glClearColor");
     let clear = f!(gl, c"glClear", unsafe extern "system" fn(u32), "glClear");
     let finish = f!(gl, c"glFinish", unsafe extern "system" fn(), "glFinish");
-    let read = f!(
-        gl,
-        c"glReadPixels",
-        unsafe extern "system" fn(i32, i32, i32, i32, u32, u32, *mut u8),
-        "glReadPixels"
-    );
-    let get_string = f!(
-        gl,
-        c"glGetString",
-        unsafe extern "system" fn(u32) -> *const u8,
-        "glGetString"
-    );
-    let get_integer = f!(
-        gl,
-        c"glGetIntegerv",
-        unsafe extern "system" fn(u32, *mut i32),
-        "glGetIntegerv"
-    );
-    let clear_depth = f!(
-        gl,
-        c"glClearDepth",
-        unsafe extern "system" fn(f64),
-        "glClearDepth"
-    );
-    let get_double = f!(
-        gl,
-        c"glGetDoublev",
-        unsafe extern "system" fn(u32, *mut f64),
-        "glGetDoublev"
-    );
+    let read = f!(gl, c"glReadPixels", unsafe extern "system" fn(i32, i32, i32, i32, u32, u32, *mut u8), "glReadPixels");
+    let get_string = f!(gl, c"glGetString", unsafe extern "system" fn(u32) -> *const u8, "glGetString");
+    let get_integer = f!(gl, c"glGetIntegerv", unsafe extern "system" fn(u32, *mut i32), "glGetIntegerv");
+    let clear_depth = f!(gl, c"glClearDepth", unsafe extern "system" fn(f64), "glClearDepth");
+    let get_double = f!(gl, c"glGetDoublev", unsafe extern "system" fn(u32, *mut f64), "glGetDoublev");
     let (
         Some(choose),
         Some(describe),
@@ -178,15 +128,9 @@ unsafe fn gl_suite() -> Handle {
     check!(format >= 1, "ChoosePixelFormat");
     let mut desc = [0u8; 40];
     let count = describe(hdc, format, 40, desc.as_mut_ptr());
-    check!(
-        count >= 1 && desc[9] == 32 && desc[23] == 24,
-        "DescribePixelFormat"
-    );
+    check!(count >= 1 && desc[9] == 32 && desc[23] == 24, "DescribePixelFormat");
     check!(set(hdc, format, pfd.as_ptr()) == 1, "SetPixelFormat");
-    check!(
-        get_proc(c"glPasDeTelleFonction".as_ptr()).is_null(),
-        "wglGetProcAddress inconnue → NULL"
-    );
+    check!(get_proc(c"glPasDeTelleFonction".as_ptr()).is_null(), "wglGetProcAddress inconnue → NULL");
 
     let ctx = create(hdc);
     if ctx == 0 {
@@ -223,10 +167,7 @@ unsafe fn gl_suite() -> Handle {
         check!(v == 0.5, "glClearDepth(double)");
     }
     check!(swap(hdc) == 1, "SwapBuffers");
-    check!(
-        !get_proc(c"glGenBuffers".as_ptr()).is_null(),
-        "wglGetProcAddress(glGenBuffers)"
-    );
+    check!(!get_proc(c"glGenBuffers".as_ptr()).is_null(), "wglGetProcAddress(glGenBuffers)");
     let attribs_fn = get_proc(c"wglCreateContextAttribsARB".as_ptr());
     check!(!attribs_fn.is_null(), "wglCreateContextAttribsARB");
     if !attribs_fn.is_null() {
@@ -341,22 +282,15 @@ struct AllocInfo {
 }
 
 fn has_ext(list: &[[u8; 260]], n: usize, name: &[u8]) -> bool {
-    list[..n]
-        .iter()
-        .any(|e| e.starts_with(name) && e[name.len()] == 0)
+    list[..n].iter().any(|e| e.starts_with(name) && e[name.len()] == 0)
 }
 
 unsafe fn vk_suite(hwnd: Handle) {
     out(b"\n-- Vulkan --\n");
     let lib = LoadLibraryA(c"vulkan-1.dll".as_ptr());
     check!(!lib.is_null(), "vulkan-1.dll chargée");
-    let Some(gipa) = f!(lib, c"vkGetInstanceProcAddr", Gipa, "vkGetInstanceProcAddr") else {
-        return;
-    };
-    check!(
-        !proc(lib, c"vkCreateWin32SurfaceKHR").is_null(),
-        "vkCreateWin32SurfaceKHR exportée"
-    );
+    let Some(gipa) = f!(lib, c"vkGetInstanceProcAddr", Gipa, "vkGetInstanceProcAddr") else { return };
+    check!(!proc(lib, c"vkCreateWin32SurfaceKHR").is_null(), "vkCreateWin32SurfaceKHR exportée");
     type Enum = unsafe extern "system" fn(*const c_char, *mut u32, *mut [u8; 260]) -> i32;
     let Some(enum_ext) = vk::<Enum>(gipa, 0, c"vkEnumerateInstanceExtensionProperties") else {
         check!(false, "vkEnumerateInstanceExtensionProperties");
@@ -369,15 +303,9 @@ unsafe fn vk_suite(hwnd: Handle) {
         out(b"  --     chargeur Vulkan absent : suite Vulkan sautee\n");
         return;
     }
-    check!(
-        r == VK_SUCCESS || r == 5,
-        "vkEnumerateInstanceExtensionProperties"
-    );
+    check!(r == VK_SUCCESS || r == 5, "vkEnumerateInstanceExtensionProperties");
     let n = n as usize;
-    check!(
-        !has_ext(&exts, n, b"VK_KHR_xlib_surface"),
-        "extension xlib masquée"
-    );
+    check!(!has_ext(&exts, n, b"VK_KHR_xlib_surface"), "extension xlib masquée");
     let win32 = has_ext(&exts, n, b"VK_KHR_win32_surface");
     if has_ext(&exts, n, b"VK_KHR_surface") {
         check!(win32, "VK_KHR_win32_surface annoncée");
@@ -403,11 +331,8 @@ unsafe fn vk_suite(hwnd: Handle) {
         exts: if win32 { 2 } else { 0 },
         ext_names: names.as_ptr(),
     };
-    type CreateInstance =
-        unsafe extern "system" fn(*const InstanceInfo, *const c_void, *mut usize) -> i32;
-    let Some(create_instance) = vk::<CreateInstance>(gipa, 0, c"vkCreateInstance") else {
-        return;
-    };
+    type CreateInstance = unsafe extern "system" fn(*const InstanceInfo, *const c_void, *mut usize) -> i32;
+    let Some(create_instance) = vk::<CreateInstance>(gipa, 0, c"vkCreateInstance") else { return };
     let mut inst = 0usize;
     let r = create_instance(&info, null(), &mut inst);
     if r == VK_ERROR_INCOMPATIBLE_DRIVER {
@@ -432,11 +357,7 @@ unsafe fn vk_suite(hwnd: Handle) {
     }
     if win32 {
         check!(
-            !gipa(
-                inst,
-                c"vkGetPhysicalDeviceWin32PresentationSupportKHR".as_ptr()
-            )
-            .is_null(),
+            !gipa(inst, c"vkGetPhysicalDeviceWin32PresentationSupportKHR".as_ptr()).is_null(),
             "vkGetPhysicalDeviceWin32PresentationSupportKHR"
         );
     }
@@ -456,19 +377,12 @@ unsafe fn surface_suite(gipa: Gipa, inst: usize, phys: usize, hwnd: Handle) {
         hinstance: Handle,
         hwnd: Handle,
     }
-    type Create =
-        unsafe extern "system" fn(usize, *const Win32Surface, *const c_void, *mut u64) -> i32;
+    type Create = unsafe extern "system" fn(usize, *const Win32Surface, *const c_void, *mut u64) -> i32;
     let Some(create): Option<Create> = vk(gipa, inst, c"vkCreateWin32SurfaceKHR") else {
         check!(false, "vkCreateWin32SurfaceKHR par vkGetInstanceProcAddr");
         return;
     };
-    let info = Win32Surface {
-        s_type: 1_000_009_000,
-        next: null(),
-        flags: 0,
-        hinstance: null_mut(),
-        hwnd,
-    };
+    let info = Win32Surface { s_type: 1_000_009_000, next: null(), flags: 0, hinstance: null_mut(), hwnd };
     let mut surface = 0u64;
     let r = create(inst, &info, null(), &mut surface);
     if r == -3 {
@@ -482,18 +396,12 @@ unsafe fn surface_suite(gipa: Gipa, inst: usize, phys: usize, hwnd: Handle) {
     type Support = unsafe extern "system" fn(usize, u32, u64, *mut u32) -> i32;
     let support: Support = vk(gipa, inst, c"vkGetPhysicalDeviceSurfaceSupportKHR").unwrap();
     let mut ok = 0u32;
-    check!(
-        support(phys, 0, surface, &mut ok) == VK_SUCCESS && ok == 1,
-        "surface présentable"
-    );
+    check!(support(phys, 0, surface, &mut ok) == VK_SUCCESS && ok == 1, "surface présentable");
     // VkSurfaceCapabilitiesKHR : currentExtent en +8.
     type Caps = unsafe extern "system" fn(usize, u64, *mut [u32; 13]) -> i32;
     let caps: Caps = vk(gipa, inst, c"vkGetPhysicalDeviceSurfaceCapabilitiesKHR").unwrap();
     let mut c = [0u32; 13];
-    check!(
-        caps(phys, surface, &mut c) == VK_SUCCESS && c[2] > 0 && c[3] > 0,
-        "capacités de la surface"
-    );
+    check!(caps(phys, surface, &mut c) == VK_SUCCESS && c[2] > 0 && c[3] > 0, "capacités de la surface");
     type Destroy = unsafe extern "system" fn(usize, u64, *const c_void);
     let destroy: Destroy = vk(gipa, inst, c"vkDestroySurfaceKHR").unwrap();
     destroy(inst, surface, null());
@@ -501,14 +409,7 @@ unsafe fn surface_suite(gipa: Gipa, inst: usize, phys: usize, hwnd: Handle) {
 
 unsafe fn device_suite(gipa: Gipa, inst: usize, phys: usize) {
     let prio = 1.0f32;
-    let q = QueueInfo {
-        s_type: 2,
-        next: null(),
-        flags: 0,
-        family: 0,
-        count: 1,
-        priorities: &prio,
-    };
+    let q = QueueInfo { s_type: 2, next: null(), flags: 0, family: 0, count: 1, priorities: &prio };
     let info = DeviceInfo {
         s_type: 3,
         next: null(),
@@ -521,41 +422,28 @@ unsafe fn device_suite(gipa: Gipa, inst: usize, phys: usize) {
         ext_names: null(),
         features: null(),
     };
-    type CreateDevice =
-        unsafe extern "system" fn(usize, *const DeviceInfo, *const c_void, *mut usize) -> i32;
+    type CreateDevice = unsafe extern "system" fn(usize, *const DeviceInfo, *const c_void, *mut usize) -> i32;
     let create_device: CreateDevice = vk(gipa, inst, c"vkCreateDevice").unwrap();
     let mut dev = 0usize;
-    check!(
-        create_device(phys, &info, null(), &mut dev) == VK_SUCCESS,
-        "vkCreateDevice"
-    );
+    check!(create_device(phys, &info, null(), &mut dev) == VK_SUCCESS, "vkCreateDevice");
     if dev == 0 {
         return;
     }
     type Gdpa = unsafe extern "system" fn(usize, *const c_char) -> *const c_void;
     let gdpa: Gdpa = vk(gipa, inst, c"vkGetDeviceProcAddr").unwrap();
     let d = |name: &core::ffi::CStr| gdpa(dev, name.as_ptr());
-    let create_buffer: unsafe extern "system" fn(
-        usize,
-        *const BufferInfo,
-        *const c_void,
-        *mut u64,
-    ) -> i32 = core::mem::transmute(d(c"vkCreateBuffer"));
-    let reqs: unsafe extern "system" fn(usize, u64, *mut MemReq) =
-        core::mem::transmute(d(c"vkGetBufferMemoryRequirements"));
+    let create_buffer: unsafe extern "system" fn(usize, *const BufferInfo, *const c_void, *mut u64) -> i32 =
+        core::mem::transmute(d(c"vkCreateBuffer"));
+    let reqs: unsafe extern "system" fn(usize, u64, *mut MemReq) = core::mem::transmute(d(c"vkGetBufferMemoryRequirements"));
     let alloc: unsafe extern "system" fn(usize, *const AllocInfo, *const c_void, *mut u64) -> i32 =
         core::mem::transmute(d(c"vkAllocateMemory"));
-    let bind: unsafe extern "system" fn(usize, u64, u64, u64) -> i32 =
-        core::mem::transmute(d(c"vkBindBufferMemory"));
+    let bind: unsafe extern "system" fn(usize, u64, u64, u64) -> i32 = core::mem::transmute(d(c"vkBindBufferMemory"));
     let map: unsafe extern "system" fn(usize, u64, u64, u64, u32, *mut *mut u8) -> i32 =
         core::mem::transmute(d(c"vkMapMemory"));
     let unmap: unsafe extern "system" fn(usize, u64) = core::mem::transmute(d(c"vkUnmapMemory"));
-    let free: unsafe extern "system" fn(usize, u64, *const c_void) =
-        core::mem::transmute(d(c"vkFreeMemory"));
-    let destroy_buffer: unsafe extern "system" fn(usize, u64, *const c_void) =
-        core::mem::transmute(d(c"vkDestroyBuffer"));
-    let destroy_device: unsafe extern "system" fn(usize, *const c_void) =
-        core::mem::transmute(d(c"vkDestroyDevice"));
+    let free: unsafe extern "system" fn(usize, u64, *const c_void) = core::mem::transmute(d(c"vkFreeMemory"));
+    let destroy_buffer: unsafe extern "system" fn(usize, u64, *const c_void) = core::mem::transmute(d(c"vkDestroyBuffer"));
+    let destroy_device: unsafe extern "system" fn(usize, *const c_void) = core::mem::transmute(d(c"vkDestroyDevice"));
 
     // Propriétés mémoire : trouver un type HOST_VISIBLE | HOST_COHERENT.
     let props_fn: unsafe extern "system" fn(usize, *mut u8) =
@@ -575,22 +463,14 @@ unsafe fn device_suite(gipa: Gipa, inst: usize, phys: usize) {
         family_list: null(),
     };
     let mut buf = 0u64;
-    check!(
-        create_buffer(dev, &bi, null(), &mut buf) == VK_SUCCESS && buf != 0,
-        "vkCreateBuffer"
-    );
-    let mut mr = MemReq {
-        size: 0,
-        align: 0,
-        bits: 0,
-    };
+    check!(create_buffer(dev, &bi, null(), &mut buf) == VK_SUCCESS && buf != 0, "vkCreateBuffer");
+    let mut mr = MemReq { size: 0, align: 0, bits: 0 };
     reqs(dev, buf, &mut mr);
     check!(mr.size >= 256, "vkGetBufferMemoryRequirements");
     let mut index = u32::MAX;
     for i in 0..count.min(32) {
         let off = 4 + i as usize * 8;
-        let flags =
-            u32::from_ne_bytes([props[off], props[off + 1], props[off + 2], props[off + 3]]);
+        let flags = u32::from_ne_bytes([props[off], props[off + 1], props[off + 2], props[off + 3]]);
         if mr.bits & (1 << i) != 0 && flags & 6 == 6 {
             index = i;
             break;
@@ -598,23 +478,12 @@ unsafe fn device_suite(gipa: Gipa, inst: usize, phys: usize) {
     }
     check!(index != u32::MAX, "mémoire visible par le processeur");
     if index != u32::MAX {
-        let ai = AllocInfo {
-            s_type: 5,
-            next: null(),
-            size: mr.size,
-            index,
-        };
+        let ai = AllocInfo { s_type: 5, next: null(), size: mr.size, index };
         let mut mem = 0u64;
-        check!(
-            alloc(dev, &ai, null(), &mut mem) == VK_SUCCESS,
-            "vkAllocateMemory"
-        );
+        check!(alloc(dev, &ai, null(), &mut mem) == VK_SUCCESS, "vkAllocateMemory");
         check!(bind(dev, buf, mem, 0) == VK_SUCCESS, "vkBindBufferMemory");
         let mut p: *mut u8 = null_mut();
-        check!(
-            map(dev, mem, 0, 256, 0, &mut p) == VK_SUCCESS && !p.is_null(),
-            "vkMapMemory"
-        );
+        check!(map(dev, mem, 0, 256, 0, &mut p) == VK_SUCCESS && !p.is_null(), "vkMapMemory");
         if !p.is_null() {
             for i in 0..256 {
                 *p.add(i) = i as u8;

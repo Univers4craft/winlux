@@ -238,9 +238,7 @@ fn line_of(d: &Doc, pos: usize) -> usize {
     // Recherche dichotomique : un fichier de plusieurs Mo a des centaines de
     // milliers de lignes.
     let lines = &d.lines[..d.line_count.max(1)];
-    lines
-        .partition_point(|&start| start <= pos)
-        .saturating_sub(1)
+    lines.partition_point(|&start| start <= pos).saturating_sub(1)
 }
 
 fn col_of(d: &Doc, pos: usize) -> usize {
@@ -468,13 +466,7 @@ unsafe fn write_doc(d: &mut Doc) -> bool {
         for i in 0..=d.len {
             if i == d.len || n + 2 > out.len() {
                 let mut written = 0u32;
-                ok &= WriteFile(
-                    h,
-                    out.as_ptr(),
-                    n as u32,
-                    &mut written,
-                    core::ptr::null_mut(),
-                ) != 0
+                ok &= WriteFile(h, out.as_ptr(), n as u32, &mut written, core::ptr::null_mut()) != 0
                     && written as usize == n;
                 n = 0;
                 if i == d.len {
@@ -491,13 +483,7 @@ unsafe fn write_doc(d: &mut Doc) -> bool {
         ok
     } else {
         let mut written = 0u32;
-        WriteFile(
-            h,
-            d.text.as_ptr(),
-            d.len as u32,
-            &mut written,
-            core::ptr::null_mut(),
-        ) != 0
+        WriteFile(h, d.text.as_ptr(), d.len as u32, &mut written, core::ptr::null_mut()) != 0
             && written as usize == d.len
     };
     CloseHandle(h);
@@ -520,12 +506,7 @@ unsafe fn toast_named(prefix: &[u8], name: &[u8]) {
 unsafe fn report_save(ok: bool, name: &[u8]) {
     if ok {
         toast_named(
-            tr4(&[
-                b"Enregistr\xE9 : ",
-                b"Saved: ",
-                b"Guardado: ",
-                b"Gespeichert: ",
-            ]),
+            tr4(&[b"Enregistr\xE9 : ", b"Saved: ", b"Guardado: ", b"Gespeichert: "]),
             name,
         );
     } else {
@@ -699,15 +680,7 @@ pub unsafe fn load_file_into_active(path: &[u8]) -> bool {
     if p.is_null() {
         return false;
     }
-    let h = CreateFileW(
-        p,
-        0x8000_0000,
-        1,
-        core::ptr::null_mut(),
-        3,
-        0,
-        core::ptr::null_mut(),
-    );
+    let h = CreateFileW(p, 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
     if h.is_null() || h as isize == -1 {
         return false;
     }
@@ -716,13 +689,7 @@ pub unsafe fn load_file_into_active(path: &[u8]) -> bool {
     let mut chunk = [0u8; 65536];
     loop {
         let mut got = 0u32;
-        if ReadFile(
-            h,
-            chunk.as_mut_ptr(),
-            chunk.len() as u32,
-            &mut got,
-            core::ptr::null_mut(),
-        ) == 0
+        if ReadFile(h, chunk.as_mut_ptr(), chunk.len() as u32, &mut got, core::ptr::null_mut()) == 0
             || got == 0
         {
             break;
@@ -875,15 +842,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     // === Save-as bar ===
     let find_y = my + MENU_H;
     let ey = if ST.save_open {
-        fill(
-            g.hdc,
-            g.b,
-            r.left,
-            find_y,
-            r.right,
-            find_y + FIND_H,
-            p.surface2,
-        );
+        fill(g.hdc, g.b, r.left, find_y, r.right, find_y + FIND_H, p.surface2);
         let label = tr4(&[
             b"Enregistrer sous :",
             b"Save as:",
@@ -908,15 +867,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let shown = &ST.save_buf[ST.save_len.saturating_sub(cw_field)..ST.save_len];
         text(g.hdc, mono(), p.text, field_x + 4, find_y + 8, shown);
         let scx = field_x + 4 + text_width(shown, CHAR_H);
-        fill(
-            g.hdc,
-            g.b,
-            scx,
-            find_y + 7,
-            scx + 1,
-            find_y + FIND_H - 7,
-            p.text,
-        );
+        fill(g.hdc, g.b, scx, find_y + 7, scx + 1, find_y + FIND_H - 7, p.text);
         text(g.hdc, g.f.small, p.text3, r.right - 24, find_y + 9, b"x");
         find_y + FIND_H
     } else if ST.find_open {
@@ -2534,15 +2485,7 @@ unsafe fn file_size(path: &[u8]) -> u64 {
 #[doc(hidden)]
 unsafe fn write_lines(path: &[u8], lines: usize) -> u64 {
     let mut w = [0u16; MAX_PATH + 1];
-    let h = CreateFileW(
-        wpath(&mut w, path),
-        0x4000_0000,
-        0,
-        core::ptr::null_mut(),
-        2,
-        0x80,
-        core::ptr::null_mut(),
-    );
+    let h = CreateFileW(wpath(&mut w, path), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
     if h.is_null() || h as isize == -1 {
         return 0;
     }
@@ -2582,17 +2525,11 @@ unsafe fn big_file_checks(path: &[u8]) {
     let opened = load_file_into_active(path);
     let d = doc();
     check!(
-        opened
-            && size == 320000
-            && d.len == 300000
-            && d.crlf
-            && !d.truncated
-            && d.line_count == 20001,
+        opened && size == 320000 && d.len == 300000 && d.crlf && !d.truncated && d.line_count == 20001,
         "Bloc-notes : un fichier de 312 Ko s'ouvre en entier (plus de troncature a 32 Ko)"
     );
     check!(
-        &d.text[d.lines[19999]..line_end(d, 19999)] == b"ligne 00019999"
-            && line_of(d, d.len - 3) == 19999,
+        &d.text[d.lines[19999]..line_end(d, 19999)] == b"ligne 00019999" && line_of(d, d.len - 3) == 19999,
         "Bloc-notes : la derniere ligne est la et le curseur s'y place"
     );
     d.cursor = d.len;
@@ -2610,10 +2547,7 @@ unsafe fn big_file_checks(path: &[u8]) {
     load_file_into_active(path);
     LOAD_LIMIT = MAX_TEXT - 1;
     let d = doc();
-    check!(
-        d.truncated && d.len == 100_000,
-        "Bloc-notes : au-dela de 8 Mo le debut est charge et signale"
-    );
+    check!(d.truncated && d.len == 100_000, "Bloc-notes : au-dela de 8 Mo le debut est charge et signale");
     d.modified = true;
     save_active(false);
     check!(
