@@ -388,6 +388,14 @@ pub(crate) fn forget() {
     }
 }
 
+/// Le guichet d'un autre processus que l'on vient d'arrêter
+/// (TerminateProcess) : il ne pourra plus l'effacer lui-même.
+pub(crate) fn forget_pid(pid: i32) {
+    if let Some(d) = dir() {
+        let _ = std::fs::remove_file(d.join(pid.to_string()));
+    }
+}
+
 /// Au démarrage d'un enfant : reprend le guichet ouvert par le parent, lit
 /// tout de suite les handles déjà déposés (avant que le programme ne les
 /// cherche), puis le sert en tâche de fond.

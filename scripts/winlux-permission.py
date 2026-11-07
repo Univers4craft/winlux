@@ -11,7 +11,8 @@ Usage :
 La fenêtre enregistre elle-même la réponse, se ferme seule si le programme
 qui demande a quitté, et ne s'ouvre pas si la réponse est déjà connue.
 
-Capacités : files, camera, microphone, screen, network. Le runtime Winlux
+Capacités : files, camera, microphone, screen, network, sandbox (« autoriser »
+veut dire lancer l'application Chromium/Electron sans son bac à sable, #236). Le runtime Winlux
 (runtime/src/permissions.rs) pose la question et mémorise la réponse dans
 ~/.config/winlux/permissions.tsv (capacité<TAB>allow|deny<TAB>chemin).
 """
@@ -81,6 +82,14 @@ _TR = {
         "The app will be able to connect to the Internet and your local network.",
         "La aplicación podrá conectarse a Internet y a su red local.",
         "Die App kann sich mit dem Internet und Ihrem lokalen Netzwerk verbinden."),
+    "Lancer « {app} » sans son bac à sable ?": (
+        "Start “{app}” without its sandbox?",
+        "¿Iniciar «{app}» sin su espacio aislado?",
+        "„{app}“ ohne Sandbox starten?"),
+    "Le bac à sable de sécurité de cette application ne peut pas démarrer sous Winlux. Sans lui, elle fonctionne, mais une page web malveillante y serait moins bien isolée du reste de vos fichiers.": (
+        "This app's security sandbox cannot start on Winlux. Without it the app works, but a malicious web page would be less isolated from the rest of your files.",
+        "El espacio aislado de seguridad de esta aplicación no puede iniciarse en Winlux. Sin él, la aplicación funciona, pero una página web maliciosa quedaría menos aislada del resto de sus archivos.",
+        "Die Sicherheits-Sandbox dieser App kann unter Winlux nicht starten. Ohne sie funktioniert die App, aber eine schädliche Webseite wäre schlechter vom Rest Ihrer Dateien getrennt."),
     "Autoriser": ("Allow", "Permitir", "Zulassen"),
     "Ne pas autoriser": ("Don't allow", "No permitir", "Nicht zulassen"),
     "Vous pourrez changer d’avis dans Paramètres > Confidentialité et sécurité.": (
@@ -97,7 +106,7 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
-CAPABILITIES = ("files", "camera", "microphone", "screen", "network")
+CAPABILITIES = ("files", "camera", "microphone", "screen", "network", "sandbox")
 QUESTIONS = {
     "files": ("Autoriser « {app} » à accéder à vos fichiers personnels ?",
               "Documents, Images, Musique, Vidéos, Bureau et Téléchargements. L’application pourra les lire et les modifier.",
@@ -112,6 +121,10 @@ QUESTIONS = {
                "video-display"),
     "network": ("Autoriser « {app} » à utiliser le réseau ?",
                 "L’application pourra se connecter à Internet et à votre réseau local.", "network-workgroup"),
+    "sandbox": ("Lancer « {app} » sans son bac à sable ?",
+                "Le bac à sable de sécurité de cette application ne peut pas démarrer sous Winlux. Sans lui, elle "
+                "fonctionne, mais une page web malveillante y serait moins bien isolée du reste de vos fichiers.",
+                "security-medium"),
 }
 TIMEOUT_SECONDS = 120
 WATCH_MILLISECONDS = 500

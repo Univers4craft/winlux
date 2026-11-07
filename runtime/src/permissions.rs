@@ -32,6 +32,8 @@ pub enum Capability {
     Microphone,
     Screen,
     Network,
+    /// Lancer une appli Chromium/Electron sans son bac à sable (#236).
+    Sandbox,
 }
 
 impl Capability {
@@ -42,6 +44,7 @@ impl Capability {
             Capability::Microphone => "microphone",
             Capability::Screen => "screen",
             Capability::Network => "network",
+            Capability::Sandbox => "sandbox",
         }
     }
 
@@ -351,6 +354,13 @@ fn ask(app: &App, cap: Capability) -> Option<Option<Decision>> {
     })
 }
 
+/// Décision déjà mémorisée pour l'application lancée (sans rien demander).
+pub fn decided(cap: Capability) -> Option<Decision> {
+    let app = APP.get()?;
+    let text = store_path().and_then(|p| std::fs::read_to_string(p).ok())?;
+    stored_in(&text, &app.exe, cap)
+}
+
 /// L'application lancée a-t-elle droit à cette capacité ? Peut ouvrir la
 /// fenêtre de demande (le fil appelant attend la réponse).
 pub fn allowed(cap: Capability) -> bool {
@@ -389,7 +399,10 @@ pub fn allowed(cap: Capability) -> bool {
             // touche à la vie privée est refusé plutôt qu'accordé en silence.
             None => !matches!(
                 cap,
-                Capability::Camera | Capability::Microphone | Capability::Screen
+                Capability::Camera
+                    | Capability::Microphone
+                    | Capability::Screen
+                    | Capability::Sandbox
             ),
         },
     };

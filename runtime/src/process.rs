@@ -314,6 +314,9 @@ pub fn init_process(exe: &Module, args: &[String]) {
         std::env::remove_var("WINLUX_COMMAND_LINE");
         cmd = line;
     }
+    // Bac à sable de Chromium refusé une première fois (#236) : l'appli
+    // repart sans, comme l'utilisateur l'a accepté.
+    crate::sandbox_fallback::apply_at_start(&mut cmd, chromium_child);
     crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);

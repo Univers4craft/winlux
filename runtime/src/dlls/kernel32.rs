@@ -4992,6 +4992,9 @@ unsafe fn create_process_common(
     if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
         d.launched(c.id());
     }
+    if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
+        crate::sandbox_fallback::note_child(c.id(), &line);
+    }
     // Gestionnaire de plantage de crashpad (Chromium, Electron) : il lit
     // notre mémoire pour écrire son rapport. Linux (Yama) ne laisse un
     // enfant lire son parent que si celui-ci l'a désigné.
@@ -5244,6 +5247,16 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         crate::process::set_last_error(6);
         return 0;
     };
+    // Enfant de Chromium tué avant d'avoir démarré : son bac à sable n'a
+    // pas pu être préparé (voir sandbox_fallback). La question est posée
+    // avant de verrouiller le processus.
+    let (child_pid, still_suspended) = {
+        let s = lock(&p.state);
+        (s.child.as_ref().map(|c| c.id() as i32), s.suspended)
+    };
+    if let Some(pid) = child_pid {
+        crate::sandbox_fallback::on_terminate(pid, still_suspended);
+    }
     let mut s = lock(&p.state);
     let target = s
         .foreign
@@ -5272,6 +5285,7 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         crate::process::set_last_error(5);
         return 0;
     };
+    crate::dlls::handle_broker::forget_pid(child.id() as i32);
     if child.kill().is_err() {
         crate::process::set_last_error(5);
         return 0;

@@ -35,6 +35,7 @@ __declspec(dllimport) void *__stdcall MapViewOfFile(void *, u32, u32, u32, u64);
 __declspec(dllimport) int __stdcall ReadProcessMemory(void *, const void *, void *, u64, u64 *);
 __declspec(dllimport) int __stdcall WriteProcessMemory(void *, void *, const void *, u64, u64 *);
 __declspec(dllimport) int __stdcall CloseHandle(void *);
+__declspec(dllimport) int __stdcall TerminateProcess(void *, u32);
 __declspec(dllimport) int __stdcall NtQueryInformationProcess(void *, u32, void *, u32, u32 *);
 
 void *memset(void *d, int c, u64 n) {
@@ -78,14 +79,40 @@ static int same(const char *a, const char *b, int n) {
         if (a[i] != b[i]) return 0;
     return 1;
 }
-static int is_child(const u16 *s) {
-    static const char w[] = "--enfant-dupx";
+static int has(const u16 *s, const char *w) {
     for (; *s; s++) {
         int i = 0;
         while (w[i] && s[i] == (u16)w[i]) i++;
         if (!w[i]) return 1;
     }
     return 0;
+}
+
+static int is_child(const u16 *s) { return has(s, "--enfant-dupx"); }
+
+// Bac à sable de Chromium qui ne démarre pas (#236) : le navigateur tue son
+// enfant --type=renderer encore suspendu. Winlux doit proposer de relancer
+// l'application sans bac à sable, puis la relancer avec --no-sandbox.
+static void sandbox_case(void) {
+    if (has(GetCommandLineW(), "--no-sandbox")) ExitProcess(0);
+    u16 exe[512];
+    if (!GetModuleFileNameW(0, exe, 512)) ExitProcess(60);
+    u16 line[600];
+    u32 n = 0;
+    line[n++] = '"';
+    for (u32 i = 0; exe[i]; i++) line[n++] = exe[i];
+    line[n++] = '"';
+    const char *arg = " --type=renderer --enfant-inutile";
+    for (u32 i = 0; arg[i]; i++) line[n++] = arg[i];
+    line[n] = 0;
+    struct startup si;
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    struct proc_info pi;
+    if (!CreateProcessW(exe, line, 0, 0, 0, 4, 0, 0, &si, &pi)) ExitProcess(61);
+    TerminateProcess(pi.process, 1);
+    // Toujours là : Winlux n'a pas relancé l'application.
+    ExitProcess(62);
 }
 
 static void child(void) {
@@ -104,7 +131,9 @@ static void child(void) {
 }
 
 void entry(void) {
+    if (has(GetCommandLineW(), "--enfant-inutile")) ExitProcess(63);
     if (is_child(GetCommandLineW())) child();
+    if (has(GetCommandLineW(), "--bac-a-sable")) sandbox_case();
     // 1. Mémoire partagée et événement du parent.
     void *map = CreateFileMappingW((void *)-1, 0, 4 /* PAGE_READWRITE */, 0, 4096, 0);
     char *view = map ? MapViewOfFile(map, 6, 0, 0, 0) : 0;

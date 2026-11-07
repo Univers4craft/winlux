@@ -32,6 +32,27 @@ if test "$rc" -ne 0; then
     echo "duplication : échec, code $rc (voir testc/msvc/dupx_msvc.c)" >&2
     exit 1
 fi
+# Bac à sable impossible : la proposition est acceptée (assistant factice),
+# l'application doit repartir avec --no-sandbox et la réponse être notée.
+cat >"$work/permission" <<'SH'
+#!/bin/sh
+echo "$@" >>"$WINLUX_TEST_ASKED"
+exit 0
+SH
+chmod 755 "$work/permission"
+set +e
+HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_GUI=headless \
+XDG_RUNTIME_DIR="$work/run" DISPLAY=:97 WINLUX_PERMISSION_HELPER="$work/permission" \
+WINLUX_TEST_ASKED="$work/asked.txt" timeout 60 "$runtime" "$exe" --bac-a-sable >"$work/sandbox.txt" 2>&1
+rc=$?
+set -e
+if test "$rc" -ne 0 || ! grep -q "^ask sandbox " "$work/asked.txt" 2>/dev/null; then
+    cat "$work/sandbox.txt"
+    echo "duplication : bac à sable, code $rc, question posée : $(cat "$work/asked.txt" 2>/dev/null)" >&2
+    exit 1
+fi
+grep -q "^sandbox	allow	" "$work/home/.config/winlux/permissions.tsv" || {
+    echo "duplication : réponse « sans bac à sable » non mémorisée" >&2; exit 1; }
 left=$(find "$work/run/winlux-handles" -type s 2>/dev/null | wc -l)
 test "$left" -eq 0 || { echo "duplication : $left guichets de handles laissés" >&2; exit 1; }
-echo "duplication : enfant suspendu lu et écrit, mapping et événement copiés entre processus"
+echo "duplication : enfant suspendu lu et écrit, mapping et événement copiés entre processus ; bac à sable impossible → relance proposée et faite"

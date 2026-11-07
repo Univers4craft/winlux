@@ -80,7 +80,7 @@ clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/inherit_msvc.
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/inherit_msvc.obj" \
     "$tmp/kernel32_inherit.lib" /out:"$out/inherit_msvc.exe"
 # DuplicateHandle et mémoire entre processus, enfant suspendu (#236).
-printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateEventW\nSetEvent\nWaitForSingleObject\nDuplicateHandle\nGetCurrentProcess\nGetCurrentProcessId\nOpenProcess\nCreateProcessW\nResumeThread\nGetExitCodeProcess\nGetModuleFileNameW\nGetModuleHandleW\nGetCommandLineW\nCreateFileMappingW\nMapViewOfFile\nReadProcessMemory\nWriteProcessMemory\nCloseHandle\n' >"$tmp/kernel32_dupx.def"
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateEventW\nSetEvent\nWaitForSingleObject\nDuplicateHandle\nGetCurrentProcess\nGetCurrentProcessId\nOpenProcess\nCreateProcessW\nResumeThread\nGetExitCodeProcess\nGetModuleFileNameW\nGetModuleHandleW\nGetCommandLineW\nCreateFileMappingW\nMapViewOfFile\nReadProcessMemory\nWriteProcessMemory\nCloseHandle\nTerminateProcess\n' >"$tmp/kernel32_dupx.def"
 printf 'LIBRARY ntdll.dll\nEXPORTS\nNtQueryInformationProcess\n' >"$tmp/ntdll_dupx.def"
 for d in kernel32_dupx ntdll_dupx; do
     llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"

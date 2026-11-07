@@ -137,6 +137,7 @@ _TR = {
     'Fichiers personnels': ('Personal files', 'Archivos personales', 'Persönliche Dateien'),
     'Caméra': ('Camera', 'Cámara', 'Kamera'),
     'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
+    'Lancer sans bac à sable': ('Start without sandbox', 'Iniciar sin espacio aislado', 'Ohne Sandbox starten'),
     'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
     'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
     'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
@@ -374,9 +375,10 @@ def lock_delay_text(seconds):
     return _t("{n} minutes").format(n=seconds // 60)
 
 
-PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network")
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox")
 PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
-                    "screen": "Capture de l’écran", "network": "Réseau et Internet"}
+                    "screen": "Capture de l’écran", "network": "Réseau et Internet",
+                    "sandbox": "Lancer sans bac à sable"}
 
 
 def permission_tool():
