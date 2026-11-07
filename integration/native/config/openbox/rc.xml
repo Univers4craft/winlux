@@ -59,6 +59,9 @@
     <keybind key="W-C-t"><action name="Execute"><command>winlux-snap ontop</command></action></keybind>
     <keybind key="W-S-c"><action name="Execute"><command>winlux-colorpicker</command></action></keybind>
     <keybind key="W-S-t"><action name="Execute"><command>winlux-ocr</command></action></keybind>
+    <!-- Voix, sur ce PC seulement (#662) : dictée dans la fenêtre active, sous-titres en direct. -->
+    <keybind key="W-h"><action name="Execute"><command>winlux-speech dictate</command></action></keybind>
+    <keybind key="W-C-l"><action name="Execute"><command>winlux-speech captions</command></action></keybind>
     <!-- Bureaux virtuels et vue des tâches (winlux-taskview). -->
     <keybind key="W-Tab"><action name="Execute"><command>winlux-taskview</command></action></keybind>
     <keybind key="W-C-d"><action name="Execute"><command>winlux-taskview new</command></action></keybind>

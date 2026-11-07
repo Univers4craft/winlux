@@ -13,6 +13,7 @@ The Winlux desktop uses the common keyboard shortcuts, with the Windows key. The
 | Windows + Z | Snap layouts (also by right-clicking the Maximise button) |
 | Windows + Tab | Task view: all windows and virtual desktops |
 | Windows + Ctrl + D / F4 | New virtual desktop, close the virtual desktop |
+| Windows + H / Windows + Ctrl + L | Voice typing into the active text box, live captions of the PC's audio (recognised on this PC, nothing is sent) |
 | Windows + V | Clipboard history |
 | Windows + . | Emoji, kaomoji and symbols |
 | Windows + Shift + C | Colour picker: copy the code of a colour on screen |
