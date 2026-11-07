@@ -2511,7 +2511,6 @@ unsafe fn system_parameters_info_common(
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
-    let _ = (action, param, data);
     let a11y = crate::dlls::a11y::current();
     match action {
         // SPI_GETHIGHCONTRAST : HIGHCONTRAST { cbSize, dwFlags, lpszDefaultScheme }.
@@ -3546,6 +3545,55 @@ mod tests {
         );
         assert_eq!(&a[280 + 28..280 + 36], b"Segoe UI");
         assert_eq!(&a[280 + 20..280 + 23], &[0, 0, 0]);
+    }
+
+    /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
+    /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
+    #[test]
+    fn nonclientmetrics_et_police_des_icones_remplies() {
+        unsafe {
+            let mut w = vec![0u8; 504];
+            w[..4].copy_from_slice(&504u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 504, w.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 92 + 8 + 92 + 8 + 92 + 92;
+            assert_eq!(
+                i32::from_le_bytes(w[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(
+                u16::from_le_bytes([w[lf_message + 28], w[lf_message + 29]]),
+                b'S' as u16
+            );
+            assert_eq!(i32::from_le_bytes(w[20..24].try_into().unwrap()), 23);
+            let mut a = vec![0u8; 340];
+            a[..4].copy_from_slice(&340u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_a(0x29, 340, a.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 60 + 8 + 60 + 8 + 60 + 60;
+            assert_eq!(
+                i32::from_le_bytes(a[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(a[lf_message + 28], b'S');
+            // Taille inconnue : refusée.
+            let mut bad = vec![0u8; 64];
+            bad[..4].copy_from_slice(&64u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 64, bad.as_mut_ptr().cast(), 0),
+                0
+            );
+            let mut lf = [0u8; 92];
+            assert_eq!(
+                system_parameters_info_w(0x1F, 92, lf.as_mut_ptr().cast(), 0),
+                1
+            );
+            assert_eq!(i32::from_le_bytes(lf[..4].try_into().unwrap()), -12);
+        }
     }
 
     /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de

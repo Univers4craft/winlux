@@ -421,8 +421,15 @@ __attribute__((used)) void __stdcall entry(void) {
     /* 64-65 : HOSTENT x86 (16 octets : h_name, h_aliases, h_addrtype et
      * h_length sur 2 octets, h_addr_list). */
     {
-        static char wsa[512];
+        static unsigned char wsa[512];
+        volatile unsigned char *fill = wsa; /* pas de memset : sans CRT */
+        for (int i = 0; i < 512; i++) fill[i] = 0xA5;
         if (WSAStartup(0x0202, wsa) != 0) fail(64, 0);
+        /* 72 : WSADATA x86 de 400 octets (#779), szDescription à +4 ;
+         * rien d'écrit au-delà (WinSCP y perdait son adresse de retour). */
+        if (*(unsigned short *)wsa != 0x0202 || wsa[4] == 0 || wsa[4] == 0xA5) fail(72, wsa[4]);
+        for (int i = 400; i < 512; i++)
+            if (wsa[i] != 0xA5) fail(72, i);
         unsigned char *h = gethostbyname("localhost");
         if (!h) fail(64, 1);
         if (*(short *)(h + 8) != 2 || *(short *)(h + 10) != 4) fail(65, *(DWORD *)(h + 8));
