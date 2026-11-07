@@ -785,15 +785,21 @@ class Start(Gtk.Application):
     def find_files(self, query, generation):
         # Bounded name search in visible personal directories. Never follows
         # directory symlinks or scans the system disks from the UI thread.
+        # Début de mot comme Windows (#607) : « son » trouve « Son.wav », pas
+        # « application-json.png » ni « Personnalisation ». Jusqu'à 300
+        # candidats, puis les 30 meilleurs : nom qui commence par la recherche,
+        # puis un de ses mots, les plus récents d'abord (os.walk seul remplissait
+        # la liste avec le premier dossier parcouru).
         matches, visited = [], 0
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             for name in folders + files:
                 visited += 1
-                if not name.startswith(".") and query in fold(name): matches.append(Path(directory, name))
-                if len(matches) >= 30 or visited >= 30000: break
-            if len(matches) >= 30 or visited >= 30000: break
+                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if len(matches) >= 300 or visited >= 30000: break
+            if len(matches) >= 300 or visited >= 30000: break
+        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
         def deliver():
             if generation == self.file_generation:
                 self.file_results = matches
@@ -906,6 +912,12 @@ def rank(text, query):
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
+
+
+def modified(path):
+    """Date de modification (0 si le fichier a disparu entre-temps)."""
+    try: return path.stat().st_mtime
+    except OSError: return 0
 
 
 def file_icon(path):

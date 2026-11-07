@@ -155,6 +155,71 @@ def icon_for(path, identity):
     except (OSError, ValueError, struct.error, KeyError): pass
     return "application-x-executable"
 
+# Winlux's own .exe carry no icon resource: their window gets the Prisme icon of
+# their Start menu entry (#667, #681), the same name as the .desktop's Icon=.
+BUILTIN_APPS = Path("/opt/winlux/apps")
+BUILTIN_ICONS = {"mediaplayer.exe": "multimedia-video-player", "audioplayer.exe": "multimedia-video-player"}
+# winlux-shell-app <mode> (WINLUX_SHELL_APP) and `winlux --regedit`.
+SHELL_APP_ICONS = {
+    "explorer": "/usr/share/winlux/native/icons/explorer.svg",
+    "settings": "/usr/share/winlux/native/icons/settings.svg",
+    "store": "system-software-install", "programs": "system-software-install",
+    "fonts": "font-x-generic", "taskschd": "x-office-calendar", "firewall": "security-high",
+    "welcome": "winlux-welcome", "regedit": "preferences-system", "taskmgr": "utilities-system-monitor",
+    "eventviewer": "utilities-system-monitor", "msinfo32": "computer",
+}
+ICON_ROOT = Path(os.environ.get("WINLUX_ICON_ROOT", "/usr/share/icons"))
+
+def icon_theme():
+    """Winlux-Sombre in dark mode (the default), Winlux in light mode."""
+    try:
+        name = subprocess.run(["xfconf-query", "-c", "xsettings", "-p", "/Net/IconThemeName"],
+                              capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError): name = ""
+    return name if name in ("Winlux", "Winlux-Sombre") else "Winlux-Sombre"
+
+def theme_icon(name, theme="Winlux"):
+    """Path of a Prisme icon by its freedesktop name (the theme, then Winlux it inherits), or None."""
+    if name.startswith("/"): return name if Path(name).is_file() else None
+    for root in dict.fromkeys([theme, "Winlux"]):
+        for context in ("apps", "devices", "mimetypes", "places"):
+            for directory in ("scalable", "256x256", "128x128", "64x64", "48x48"):
+                for suffix in (".svg", ".png"):
+                    path = ICON_ROOT / root / directory / context / (name + suffix)
+                    if path.is_file(): return str(path)
+    return None
+
+ICON_SIZES = (16, 24, 32, 48)
+
+def icon_argb(icon, size):
+    """One _NET_WM_ICON entry (width, height, ARGB pixels) rendered by GdkPixbuf, or []."""
+    pix = ctypes.CDLL("libgdk_pixbuf-2.0.so.0")
+    obj = ctypes.CDLL("libgobject-2.0.so.0")
+    pix.gdk_pixbuf_new_from_file_at_scale.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    pix.gdk_pixbuf_new_from_file_at_scale.restype = ctypes.c_void_p
+    pointer = pix.gdk_pixbuf_new_from_file_at_scale(os.fsencode(icon), size, size, 1, None)
+    if not pointer: return []
+    try:
+        values = []
+        for name in ["width", "height", "rowstride", "n_channels"]:
+            fn = getattr(pix, "gdk_pixbuf_get_" + name)
+            fn.argtypes, fn.restype = [ctypes.c_void_p], ctypes.c_int
+            values.append(fn(pointer))
+        width, height, stride, channels = values
+        pix.gdk_pixbuf_get_pixels.argtypes, pix.gdk_pixbuf_get_pixels.restype = [ctypes.c_void_p], ctypes.c_void_p
+        pixels = ctypes.string_at(pix.gdk_pixbuf_get_pixels(pointer), stride * (height - 1) + width * channels)
+        argb = [width, height]
+        for y in range(height):
+            for x in range(width):
+                offset = y * stride + x * channels
+                r, g, b = pixels[offset:offset + 3]
+                alpha = pixels[offset + 3] if channels == 4 else 255
+                argb.append((alpha << 24) | (r << 16) | (g << 8) | b)
+        return argb
+    finally:
+        obj.g_object_unref.argtypes = [ctypes.c_void_p]
+        obj.g_object_unref(pointer)
+
 def window_icons():
     """Publish extracted PE icons to EWMH, where the native tasklist reads them."""
     try:
@@ -163,7 +228,7 @@ def window_icons():
     cache = Path("/run/winlux/window-icons.json")
     try: known = json.loads(cache.read_text())
     except (OSError, ValueError): known = {}
-    current = {}
+    current, theme = {}, None
     for line in windows.splitlines():
         fields = line.split(None, 4)
         if len(fields) < 3: continue
@@ -173,43 +238,24 @@ def window_icons():
             args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
             if Path(os.fsdecode(args[0])).name != "winlux": continue
             target = next((Path(os.fsdecode(arg)) for arg in args[1:] if arg.lower().endswith(b".exe")), None)
-            if target is None or not target.is_file(): continue
-            identity = hashlib.sha256(str(target).encode()).hexdigest()[:24]
-            key = f"{pid}:{target.stat().st_mtime_ns}"
+            regedit = target is None and b"--regedit" in args[1:2]
+            if not regedit and (target is None or not target.is_file()): continue
+            key = f"{pid}:regedit" if regedit else f"{pid}:{target.stat().st_mtime_ns}"
             current[window] = key
             if known.get(window) == key: continue
-            icon = icon_for(target, identity)
+            icon = "application-x-executable" if regedit else icon_for(target, hashlib.sha256(str(target).encode()).hexdigest()[:24])
             if icon == "application-x-executable":
                 environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-                mode = next((item.split(b"=", 1)[1].decode() for item in environment if item.startswith(b"WINLUX_SHELL_APP=")), "")
-                if mode not in ("explorer", "settings"): continue
-                icon = f"/usr/share/winlux/native/icons/{mode}.svg"
-            pix = ctypes.CDLL("libgdk_pixbuf-2.0.so.0")
-            obj = ctypes.CDLL("libgobject-2.0.so.0")
-            pix.gdk_pixbuf_new_from_file_at_scale.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
-            pix.gdk_pixbuf_new_from_file_at_scale.restype = ctypes.c_void_p
-            pointer = pix.gdk_pixbuf_new_from_file_at_scale(os.fsencode(icon), 48, 48, 1, None)
-            if not pointer: continue
-            try:
-                values = []
-                for name in ["width", "height", "rowstride", "n_channels"]:
-                    fn = getattr(pix, "gdk_pixbuf_get_" + name)
-                    fn.argtypes, fn.restype = [ctypes.c_void_p], ctypes.c_int
-                    values.append(fn(pointer))
-                width, height, stride, channels = values
-                pix.gdk_pixbuf_get_pixels.argtypes, pix.gdk_pixbuf_get_pixels.restype = [ctypes.c_void_p], ctypes.c_void_p
-                pixels = ctypes.string_at(pix.gdk_pixbuf_get_pixels(pointer), stride * (height - 1) + width * channels)
-                argb = [width, height]
-                for y in range(height):
-                    for x in range(width):
-                        offset = y * stride + x * channels
-                        r, g, b = pixels[offset:offset + 3]
-                        alpha = pixels[offset + 3] if channels == 4 else 255
-                        argb.append((alpha << 24) | (r << 16) | (g << 8) | b)
-                publish_icon(window, argb)
-            finally:
-                obj.g_object_unref.argtypes = [ctypes.c_void_p]
-                obj.g_object_unref(pointer)
+                mode = "regedit" if regedit else next((item.split(b"=", 1)[1].decode() for item in environment if item.startswith(b"WINLUX_SHELL_APP=")), "")
+                name = BUILTIN_ICONS.get(target.name.lower()) if target is not None and target.parent == BUILTIN_APPS else None
+                name = name or SHELL_APP_ICONS.get(mode)
+                if theme is None and name: theme = icon_theme()
+                icon = theme_icon(name, theme) if name else None
+                if icon is None: continue
+            # Several sizes: openbox's title bar and Alt+Tab pick 16/32, the taskbar 32/48.
+            argb = [value for size in ICON_SIZES for value in icon_argb(icon, size)]
+            if not argb: continue
+            publish_icon(window, argb)
         except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
             current.pop(window, None)
             detail = getattr(error, "stderr", b"")

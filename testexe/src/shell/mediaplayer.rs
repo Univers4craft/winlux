@@ -37,8 +37,9 @@ const S_TRACK: usize = 18;
 const S_CHAPTER: usize = 19;
 const S_KEYS: usize = 20;
 const S_EMPTY_LIST: usize = 21;
+const S_OPEN_MEDIA: usize = 22;
 
-const STRINGS: [[&[u8]; 4]; 22] = [
+const STRINGS: [[&[u8]; 4]; 23] = [
     [
         b"Lecteur multim\xE9dia",
         b"Media Player",
@@ -135,6 +136,33 @@ const STRINGS: [[&[u8]; 4]; 22] = [
         b"No other file in this folder",
         b"Keine weiteren Dateien in diesem Ordner",
         b"No hay otros archivos en esta carpeta",
+    ],
+    [
+        b"Ouvrir un m\xE9\x64ia",
+        b"Open media",
+        b"Medien \xF6\x66\x66nen",
+        b"Abrir un medio",
+    ],
+];
+
+/// Filtres de la boîte « Ouvrir » (fr, en, de, es), au format lpstrFilter :
+/// libellé, motifs, … terminé par un double zéro.
+const VIDEO_EXT: &[u8] = b"*.mp4;*.m4v;*.mkv;*.webm;*.avi;*.mov;*.flv;*.wmv;*.asf;*.mpg;*.mpeg;*.ts;*.m2ts;*.mts;*.ogv;*.3gp;*.3g2;*.mxf;*.ogm;*.rm;*.rmvb;*.dv";
+const AUDIO_EXT: &[u8] = b"*.mp3;*.m4a;*.aac;*.flac;*.ogg;*.oga;*.opus;*.wav;*.wma;*.ape;*.ac3;*.eac3;*.dts;*.mka;*.wv;*.aif;*.aiff;*.caf;*.amr;*.au;*.mpc;*.tta";
+const FILTER_NAMES: [[&[u8]; 4]; 4] = [
+    [
+        b"Fichiers multim\xE9\x64ia",
+        b"Media files",
+        b"Mediendateien",
+        b"Archivos multimedia",
+    ],
+    [b"Vid\xE9os", b"Videos", b"Videos", b"V\xED\x64\x65os"],
+    [b"Audio", b"Audio", b"Audio", b"Audio"],
+    [
+        b"Tous les fichiers",
+        b"All files",
+        b"Alle Dateien",
+        b"Todos los archivos",
     ],
 ];
 
@@ -354,6 +382,7 @@ enum Hit {
     Playlist,
     MenuItem(usize),
     ListItem(usize),
+    OpenMedia,
 }
 
 static mut HWND: Handle = core::ptr::null_mut();
@@ -361,6 +390,13 @@ static mut PATH: WPath = WPath::empty();
 static mut LOADED: bool = false;
 static mut ENGINE: bool = true;
 static mut FORMATS: Buf<2048> = Buf::new();
+/// Bouton « Ouvrir un média » de l'écran d'accueil (vide quand il n'est pas affiché).
+static mut OPEN_BUTTON: Rect = Rect {
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+};
 
 // Informations du fichier.
 static mut DURATION: u32 = 0;
@@ -1179,6 +1215,13 @@ unsafe fn menu_rect(r: &Rect, count: usize) -> Rect {
 
 unsafe fn hit_test(x: i32, y: i32) -> Hit {
     let r = client();
+    if !LOADED {
+        return if inside(&OPEN_BUTTON, x, y) {
+            Hit::OpenMedia
+        } else {
+            Hit::None
+        };
+    }
     if MENU != Menu::None {
         let mut items = [Buf::<64>::new(); 32];
         let n = menu_items(&mut items);
@@ -1346,9 +1389,91 @@ pub unsafe fn on_mouse_up(x: i32, y: i32) -> bool {
             let p = PLAYLIST[i];
             open_file(&p, false);
         }
+        Hit::OpenMedia => open_media_dialog(),
         _ => {}
     }
     true
+}
+
+#[link(name = "comdlg32", kind = "raw-dylib")]
+extern "system" {
+    fn GetOpenFileNameW(ofn: *mut OpenFileNameW) -> i32;
+}
+
+#[repr(C)]
+struct OpenFileNameW {
+    size: u32,
+    owner: Handle,
+    instance: Handle,
+    filter: *const u16,
+    custom_filter: *mut u16,
+    max_cust_filter: u32,
+    filter_index: u32,
+    file: *mut u16,
+    max_file: u32,
+    file_title: *mut u16,
+    max_file_title: u32,
+    initial_dir: *const u16,
+    title: *const u16,
+    flags: u32,
+    file_offset: u16,
+    file_extension: u16,
+    def_ext: *const u16,
+    cust_data: isize,
+    hook: usize,
+    template: *const u16,
+    reserved_ptr: *mut core::ffi::c_void,
+    reserved: u32,
+    flags_ex: u32,
+}
+
+/// Boîte « Ouvrir » (bouton « Ouvrir un média », Ctrl+O) : lit le fichier choisi.
+unsafe fn open_media_dialog() {
+    // FILTER_NAMES suit l'ordre de STRINGS (fr, en, de, es).
+    let lang = |row: &[&'static [u8]; 4]| -> &'static [u8] { row[LANG.min(3)] };
+    // Windows-1252 → UTF-16 : les libellés n'emploient que des lettres Latin-1.
+    let mut filter = [0u16; 640];
+    let mut n = 0;
+    let mut put = |s: &[u8], n: &mut usize| {
+        for &c in s {
+            if *n + 2 < filter.len() {
+                filter[*n] = c as u16;
+                *n += 1;
+            }
+        }
+        *n += 1; // séparateur NUL
+    };
+    let mut all = Buf::<512>::new();
+    all.push(VIDEO_EXT).push(b";").push(AUDIO_EXT);
+    put(lang(&FILTER_NAMES[0]), &mut n);
+    put(all.get(), &mut n);
+    put(lang(&FILTER_NAMES[1]), &mut n);
+    put(VIDEO_EXT, &mut n);
+    put(lang(&FILTER_NAMES[2]), &mut n);
+    put(AUDIO_EXT, &mut n);
+    put(lang(&FILTER_NAMES[3]), &mut n);
+    put(b"*.*", &mut n);
+    let mut title = [0u16; 64];
+    for (i, &c) in tr(S_OPEN_MEDIA).iter().take(63).enumerate() {
+        title[i] = c as u16;
+    }
+    let mut file = [0u16; 512];
+    let mut o: OpenFileNameW = core::mem::zeroed();
+    o.size = core::mem::size_of::<OpenFileNameW>() as u32;
+    o.owner = HWND;
+    o.filter = filter.as_ptr();
+    o.filter_index = 1;
+    o.file = file.as_mut_ptr();
+    o.max_file = file.len() as u32;
+    o.title = title.as_ptr();
+    // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY
+    o.flags = 0x0008_0000 | 0x1000 | 0x0800 | 0x0004;
+    PRESSED = Hit::None;
+    HOVER = Hit::None;
+    if GetOpenFileNameW(&mut o) != 0 && file[0] != 0 {
+        open_file(&WPath::from_wide(&file), true);
+    }
+    InvalidateRect(HWND, core::ptr::null(), 0);
 }
 
 unsafe fn choose_menu(i: usize) {
@@ -1430,6 +1555,7 @@ pub unsafe fn on_key(vk: u32) -> bool {
         }
         0x4E | 0xB0 => next(1),  // N, piste suivante
         0x50 | 0xB1 => next(-1), // P, piste précédente
+        0x4F if GetKeyState(0x11) < 0 => open_media_dialog(), // Ctrl+O
         0x4C => SHOW_LIST = !SHOW_LIST,
         0x24 => seek(0),                   // Début
         0xDD | 0x6B => step_speed(1),      // ] ou +
@@ -1711,6 +1837,7 @@ unsafe fn icon(g: &mut Brushes, hdc: Handle, f: &Fonts, h: Hit, r: &Rect, c: u32
 
 unsafe fn draw_empty(g: &mut Brushes, hdc: Handle, f: &Fonts, r: &Rect) {
     let p = pal();
+    OPEN_BUTTON = rect(0, 0, 0, 0);
     fill(hdc, g, r.left, r.top, r.right, r.bottom, p.mica);
     let cx = (r.left + r.right) / 2;
     glyph(hdc, g, f, Glyph::Video, cx - 32, r.top + 36, 64);
@@ -1730,6 +1857,8 @@ unsafe fn draw_empty(g: &mut Brushes, hdc: Handle, f: &Fonts, r: &Rect) {
         );
         return;
     }
+    // Place gardée en bas pour le bouton « Ouvrir un média ».
+    let list_bottom = r.bottom - 18 - 60;
     // Formats réellement décodables ici (jamais de promesse en l'air).
     let mut hw = Buf::<96>::new();
     hw.push(tr(S_HW));
@@ -1764,7 +1893,7 @@ unsafe fn draw_empty(g: &mut Brushes, hdc: Handle, f: &Fonts, r: &Rect) {
         } else {
             (x0 + col_w + 20, &mut ya)
         };
-        if *y > r.bottom - 18 {
+        if *y > list_bottom {
             continue;
         }
         let mark_c = if ok { p.accent } else { p.text3 };
@@ -1783,6 +1912,24 @@ unsafe fn draw_empty(g: &mut Brushes, hdc: Handle, f: &Fonts, r: &Rect) {
         );
         *y += 18;
     }
+    draw_open_button(g, hdc, f, cx, yv.max(ya) + 20);
+}
+
+/// Bouton d'accent « Ouvrir un média », centré sous la liste des formats.
+unsafe fn draw_open_button(g: &mut Brushes, hdc: Handle, f: &Fonts, cx: i32, top: i32) {
+    let p = pal();
+    let label = tr(S_OPEN_MEDIA);
+    let w = text_width(label, 13) + 60;
+    let b = rect(cx - w / 2, top, cx + w / 2, top + 36);
+    OPEN_BUTTON = b;
+    let base = if HOVER == Hit::OpenMedia {
+        mix(p.accent, rgb(0xFF, 0xFF, 0xFF), 1, 8)
+    } else {
+        p.accent
+    };
+    round_rect(hdc, g, b.left, b.top, b.right, b.bottom, 4, base);
+    glyph(hdc, g, f, Glyph::Folder, b.left + 14, b.top + 10, 16);
+    text(hdc, f.semibold, p.on_accent, b.left + 40, b.top + 10, label);
 }
 
 unsafe fn draw_audio_art(g: &mut Brushes, hdc: Handle, f: &Fonts, area: &Rect) {

@@ -3825,6 +3825,18 @@ impl gui::GuiBackend for X11Backend {
                 &[std::process::id()],
             );
         }
+        // Machine (WM_CLIENT_MACHINE, ICCCM) : sans elle, wmctrl affiche
+        // « N/A » et des pagers ou lanceurs traitent mal nos fenêtres (#683).
+        // _NET_WM_DESKTOP, lui, est posé par le gestionnaire de fenêtres sur
+        // une fenêtre qu'il gère (test-pe-window-props.py le vérifie).
+        let host = client_machine();
+        let _ = self.conn.change_property8(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            win,
+            AtomEnum::WM_CLIENT_MACHINE,
+            AtomEnum::STRING,
+            host.as_bytes(),
+        );
         let class = std::env::var("WINLUX_SHELL_APP")
             .map(|app| format!("winlux-{app}"))
             .unwrap_or_else(|_| {
@@ -4295,4 +4307,14 @@ impl Drop for X11Backend {
         }
         let _ = self.conn.flush();
     }
+}
+
+/// Nom de la machine pour WM_CLIENT_MACHINE (ICCCM), comme `hostname`.
+fn client_machine() -> String {
+    ["/proc/sys/kernel/hostname", "/etc/hostname"]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty())
+        .unwrap_or_else(|| "localhost".to_string())
 }

@@ -79,6 +79,11 @@ __declspec(dllimport) HANDLE WINAPI LoadLibraryA(const char *);
 __declspec(dllimport) void *WINAPI GetProcAddress(HANDLE, const char *);
 /* msvcrt x86 : aides du compilateur et données. */
 __declspec(dllimport) extern int _adjust_fdiv;
+__declspec(dllimport) unsigned short *WINAPI SysAllocString(const unsigned short *);
+__declspec(dllimport) unsigned int WINAPI SysStringLen(unsigned short *);
+__declspec(dllimport) long WINAPI VariantCopy(void *, const void *);
+__declspec(dllimport) long WINAPI VariantClear(void *);
+__declspec(dllimport) BOOL WINAPI GetLogicalProcessorInformation(void *, DWORD *);
 __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
@@ -362,6 +367,33 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!mpr || !GetProcAddress(mpr, "WNetGetConnectionW")) fail(56, 0);
         if (!msi || !GetProcAddress(msi, (const char *)205)) fail(57, 0);
         if (!shf || !GetProcAddress(shf, "SHGetFolderPathW")) fail(58, 0);
+    }
+
+    /* 59-61 : VARIANT x86 (16 octets, BSTR sur 4 octets à +8, 4 octets
+     * quelconques derrière) : VariantCopy et VariantClear n'en lisent que 4. */
+    {
+        static const unsigned short abc[] = {'a', 'b', 'c', 0};
+        DWORD src[4] = {8 /* VT_BSTR */, 0, 0, 0x41c5a02b}, dst[4] = {0, 0, 0, 0x12345678};
+        src[2] = (DWORD)SysAllocString(abc);
+        if (!src[2]) fail(59, 0);
+        if (VariantCopy(dst, src) != 0 || dst[0] != 8 || !dst[2] || dst[2] == src[2]) fail(60, dst[2]);
+        if (SysStringLen((unsigned short *)dst[2]) != 3) fail(60, 3);
+        if (VariantClear(src) != 0 || VariantClear(dst) != 0 || src[0] != 0 || dst[2] != 0) fail(61, src[0]);
+    }
+
+    /* 62-63 : GetLogicalProcessorInformation en disposition x86 (entrées de
+     * 24 octets ; WinSCP les parcourt par pas de 24). */
+    {
+        static DWORD info[24 * 64];
+        DWORD need = 0, cores = 0;
+        if (GetLogicalProcessorInformation(0, &need) || need == 0 || need % 24 != 0) fail(62, need);
+        if (need > sizeof info || !GetLogicalProcessorInformation(info, &need)) fail(62, need);
+        for (DWORD i = 0; i < need / 24; i++) {
+            DWORD *e = info + i * 6;
+            if (e[1] > 7) fail(63, e[1]); /* Relationship plausible */
+            if (e[1] == 0 /* RelationProcessorCore */) cores++;
+        }
+        if (cores == 0) fail(63, 0);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

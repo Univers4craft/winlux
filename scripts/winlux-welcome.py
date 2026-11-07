@@ -57,6 +57,7 @@ MARKER = Path.home() / ".config/winlux/welcome-complete"
 class Welcome(Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Bienvenue dans Winlux"))
+        self.set_icon_name("winlux-welcome")
         self.set_default_size(620, 460)
         self.connect("destroy", Gtk.main_quit)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin=24)

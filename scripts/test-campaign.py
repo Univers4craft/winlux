@@ -513,6 +513,18 @@ ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/conf
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
 
+# ── Touche Windows, recherche, volume et notifications (#605–#607, #620, #624) ──
+shipped_keys = {binding.get("key"): binding for binding in shipped_rc.find(f"{OB}keyboard")}
+ok("Super_L" not in shipped_keys and all("/usr/bin/winlux-super-key" in (SCRIPTS / name).read_text()
+                                         for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
+   "touche Windows seule : Démarrer par winlux-super-key, pas par une liaison qui volerait Windows+Gauche")
+ok("found_in(query, name)" in (SCRIPTS / "winlux-start-menu.py").read_text(),
+   "recherche de fichiers par début de mot, triée par pertinence puis date")
+ok(all(key in shipped_keys for key in ("XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute")),
+   "touches de volume du clavier liées à winlux-volume")
+ok("def toast_position" in (SCRIPTS / "winlux-notifications.py").read_text(),
+   "bulle de notification en bas à droite, au-dessus de la barre des tâches")
+
 # ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
 icons = NATIVE / "icons"
 ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2

@@ -85,6 +85,7 @@ pub unsafe fn native_init() {
         usize::MAX
     };
     if NATIVE_APP == APP_EXPLORER {
+        crate::explorer::init_picker();
         let mut path = [0u8; 1024];
         let n = GetEnvironmentVariableA(
             c"WINLUX_SHELL_PATH".as_ptr(),
@@ -117,7 +118,44 @@ pub unsafe fn native_init() {
         crate::settings::open_page(value);
     }
 }
+/// Terminal de la session native (winlux-terminal, via `shell:terminal`),
+/// ouvert dans `dir` (chemin Windows de l'Explorateur, Windows-1252) ou dans
+/// le dossier courant. Le Terminal intégré n'existe que dans le bureau PE :
+/// en session native, `native_launch` le remplaçait par « editor », soit
+/// Mousepad (#663).
+pub unsafe fn native_terminal(dir: Option<&[u8]>) -> bool {
+    let to_wide = |s: &[u8], out: &mut [u16; 1024]| {
+        let n = s.len().min(out.len() - 1);
+        for (i, &c) in s[..n].iter().enumerate() {
+            out[i] = c as u16;
+        }
+        out[n] = 0;
+    };
+    let (mut verb, mut file, mut wdir) = ([0u16; 1024], [0u16; 1024], [0u16; 1024]);
+    to_wide(b"open", &mut verb);
+    to_wide(b"shell:terminal", &mut file);
+    let dir_ptr = match dir.filter(|d| !d.is_empty() && !d.contains(&0)) {
+        Some(d) => {
+            to_wide(d, &mut wdir);
+            wdir.as_ptr()
+        }
+        None => core::ptr::null(),
+    };
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        verb.as_ptr(),
+        file.as_ptr(),
+        core::ptr::null(),
+        dir_ptr,
+        1,
+    );
+    r as isize > 32
+}
 pub unsafe fn native_launch(app: usize) {
+    if app == APP_TERMINAL {
+        native_terminal(None);
+        return;
+    }
     let args = match app {
         APP_EXPLORER => c"explorer",
         APP_SETTINGS => c"settings",
@@ -613,7 +651,7 @@ fn on_current_desktop(app: usize) -> bool {
 
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
-        APP_EXPLORER => tr(S_FILE_EXPLORER),
+        APP_EXPLORER => crate::explorer::window_title(),
         APP_SETTINGS => tr(S_SETTINGS_APP),
         APP_NOTEPAD => tr(S_NOTEPAD),
         APP_TASKMGR => tr(S_TASK_MANAGER),

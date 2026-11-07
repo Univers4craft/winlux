@@ -739,6 +739,7 @@ def run_gui():
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk, GLib
     win = Gtk.Window(title=_t("Transfert de PC"))
+    win.set_icon_name("network-workgroup")
     win.set_default_size(720, 560)
     win.connect("destroy", Gtk.main_quit)
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)

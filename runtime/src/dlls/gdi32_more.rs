@@ -536,9 +536,213 @@ unsafe extern "win64" fn meta_ok(_a: usize) -> i32 {
     1
 }
 
+// --- Arcs reliés à la position courante, régions, couleurs DC_PEN/DC_BRUSH --------------
+
+unsafe fn line_to(hdc: usize, p: [i32; 2]) {
+    api!(
+        "gdi32",
+        "LineTo",
+        fn(usize, i32, i32) -> i32,
+        hdc,
+        p[0],
+        p[1]
+    );
+}
+
+unsafe fn move_to(hdc: usize, p: [i32; 2]) {
+    let none: *mut [i32; 2] = std::ptr::null_mut();
+    api!(
+        "gdi32",
+        "MoveToEx",
+        fn(usize, i32, i32, *mut [i32; 2]) -> i32,
+        hdc,
+        p[0],
+        p[1],
+        none
+    );
+}
+
+/// Trace `pts` depuis la position courante (segment jusqu'au premier
+/// point), puis place la position courante sur le dernier (ArcTo, AngleArc).
+unsafe fn path_to(hdc: usize, pts: &[[i32; 2]]) -> i32 {
+    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else {
+        return 0;
+    };
+    line_to(hdc, first);
+    let r = polyline(hdc, pts);
+    move_to(hdc, last);
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn arc_to(
+    hdc: usize,
+    l: i32,
+    t: i32,
+    r: i32,
+    b: i32,
+    xs: i32,
+    ys: i32,
+    xe: i32,
+    ye: i32,
+) -> i32 {
+    path_to(hdc, &arc_points(l, t, r, b, xs, ys, xe, ye))
+}
+
+/// Points d'AngleArc : cercle de centre (x, y), angles en degrés, sens
+/// trigonométrique pour un balayage positif.
+fn angle_arc_points(x: i32, y: i32, radius: u32, start: f32, sweep: f32) -> Vec<[i32; 2]> {
+    let (r, a0, da) = (
+        radius as f64,
+        (start as f64).to_radians(),
+        (sweep as f64).to_radians(),
+    );
+    let steps = ((da.abs() * (r + 1.0)) / 4.0).clamp(1.0, 256.0) as usize;
+    (0..=steps)
+        .map(|i| {
+            let a = a0 + da * i as f64 / steps as f64;
+            [
+                (x as f64 + r * a.cos()).round() as i32,
+                (y as f64 - r * a.sin()).round() as i32,
+            ]
+        })
+        .collect()
+}
+
+unsafe extern "win64" fn angle_arc(
+    hdc: usize,
+    x: i32,
+    y: i32,
+    r: u32,
+    start: f32,
+    sweep: f32,
+) -> i32 {
+    path_to(hdc, &angle_arc_points(x, y, r, start, sweep))
+}
+
+/// LOGPEN : style, largeur (POINT, x seul compte), couleur. Même taille en
+/// x86 et en x64.
+unsafe extern "win64" fn create_pen_indirect(lp: *const u32) -> usize {
+    if lp.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let (style, width, color) = (*lp, *lp.add(1) as i32, *lp.add(3));
+    crate::dlls::gui::create_pen(style, width, color)
+}
+
+unsafe fn fill_rect(hdc: usize, r: crate::dlls::gui::Rect, brush: usize) -> i32 {
+    api!(
+        "user32",
+        "FillRect",
+        fn(usize, *const crate::dlls::gui::Rect, usize) -> i32,
+        hdc,
+        &r,
+        brush
+    )
+    .unwrap_or(0)
+}
+
+/// FillRgn : les régions de Winlux sont des rectangles.
+unsafe extern "win64" fn fill_rgn(hdc: usize, rgn: usize, brush: usize) -> i32 {
+    match crate::dlls::gui::region_rect(rgn) {
+        Some(r) => fill_rect(hdc, r, brush).min(1),
+        None => 0,
+    }
+}
+
+/// PaintRgn : FillRgn avec le pinceau choisi dans le DC.
+unsafe extern "win64" fn paint_rgn(hdc: usize, rgn: usize) -> i32 {
+    fill_rgn(hdc, rgn, crate::dlls::gui::dc_brush(hdc))
+}
+
+/// FrameRgn : bord de `w` × `h` pixels autour de la région.
+unsafe extern "win64" fn frame_rgn(hdc: usize, rgn: usize, brush: usize, w: i32, h: i32) -> i32 {
+    use crate::dlls::gui::Rect;
+    let Some(r) = crate::dlls::gui::region_rect(rgn) else {
+        return 0;
+    };
+    let (w, h) = (w.max(1), h.max(1));
+    for side in [
+        Rect {
+            bottom: r.top + h,
+            ..r
+        },
+        Rect {
+            top: r.bottom - h,
+            ..r
+        },
+        Rect {
+            right: r.left + w,
+            ..r
+        },
+        Rect {
+            left: r.right - w,
+            ..r
+        },
+    ] {
+        fill_rect(hdc, side, brush);
+    }
+    1
+}
+
+/// Origine des pinceaux : Winlux ne décale pas les motifs, elle reste (0, 0).
+unsafe extern "win64" fn get_brush_org_ex(_hdc: usize, pt: *mut [i32; 2]) -> i32 {
+    if !pt.is_null() {
+        *pt = [0, 0];
+    }
+    1
+}
+
+/// OffsetClipRgn : le découpage n'est pas encore appliqué au dessin ; la
+/// zone reste un rectangle simple (SIMPLEREGION).
+extern "win64" fn offset_clip_rgn(_hdc: usize, _x: i32, _y: i32) -> i32 {
+    2
+}
+
+/// Couleurs des objets DC_PEN et DC_BRUSH, par DC (noir et blanc au départ).
+fn dc_colors() -> &'static Mutex<HashMap<(usize, bool), u32>> {
+    static C: OnceLock<Mutex<HashMap<(usize, bool), u32>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn swap_dc_color(hdc: usize, pen: bool, color: Option<u32>) -> u32 {
+    let mut m = lock(dc_colors());
+    let default = if pen { 0x0000_0000 } else { 0x00FF_FFFF };
+    let old = m.get(&(hdc, pen)).copied().unwrap_or(default);
+    if let Some(c) = color {
+        m.insert((hdc, pen), c & 0x00FF_FFFF);
+    }
+    old
+}
+
+extern "win64" fn set_dc_pen_color(hdc: usize, color: u32) -> u32 {
+    swap_dc_color(hdc, true, Some(color))
+}
+
+extern "win64" fn set_dc_brush_color(hdc: usize, color: u32) -> u32 {
+    swap_dc_color(hdc, false, Some(color))
+}
+
+extern "win64" fn get_dc_pen_color(hdc: usize) -> u32 {
+    swap_dc_color(hdc, true, None)
+}
+
+extern "win64" fn get_dc_brush_color(hdc: usize) -> u32 {
+    swap_dc_color(hdc, false, None)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "Arc" => fn arc, "Pie" => fn pie, "Chord" => fn chord,
+        "ArcTo" => fn arc_to, "AngleArc" => fn angle_arc, "CreatePenIndirect" => fn create_pen_indirect,
+        "FillRgn" => fn fill_rgn, "PaintRgn" => fn paint_rgn, "FrameRgn" => fn frame_rgn,
+        "GetBrushOrgEx" => fn get_brush_org_ex, "OffsetClipRgn" => fn offset_clip_rgn,
+        "SetDCPenColor" => fn set_dc_pen_color, "SetDCBrushColor" => fn set_dc_brush_color,
+        "GetDCPenColor" => fn get_dc_pen_color, "GetDCBrushColor" => fn get_dc_brush_color,
+        "GetEnhMetaFileBits" => fn meta_fail, "SetEnhMetaFileBits" => fn meta_fail,
+        "GetEnhMetaFileDescriptionW" => fn meta_fail, "GetEnhMetaFileDescriptionA" => fn meta_fail,
+        "GetEnhMetaFilePaletteEntries" => fn meta_fail,
         "PolyPolygon" => fn poly_polygon, "PolyPolyline" => fn poly_polyline,
         "CreatePolygonRgn" => fn create_polygon_rgn, "CreatePolyPolygonRgn" => fn create_poly_polygon_rgn,
         "ExtCreateRegion" => fn ext_create_region, "GetRegionData" => fn get_region_data,
@@ -560,6 +764,16 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn angle_arc_balaye_dans_le_sens_trigonometrique() {
+        let p = angle_arc_points(10, 10, 10, 0.0, 90.0);
+        assert_eq!(p.first(), Some(&[20, 10]));
+        assert_eq!(p.last(), Some(&[10, 0]));
+        assert_eq!(swap_dc_color(0x7777_0002, true, Some(0x123456)), 0);
+        assert_eq!(swap_dc_color(0x7777_0002, true, None), 0x123456);
+        assert_eq!(swap_dc_color(0x7777_0002, false, None), 0x00FF_FFFF);
+    }
 
     #[test]
     fn arc_d_un_quart_de_cercle() {

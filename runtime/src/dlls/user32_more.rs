@@ -210,6 +210,231 @@ extern "win64" fn is_char_lower_a(c: u8) -> i32 {
     (is_char_alpha_a(c) != 0 && ansi_case(c, true) != c) as i32
 }
 
+// --- Surface demandée par WinSCP (#232) ------------------------------------------------
+
+/// SendMessageTimeoutA/W : les messages de Winlux sont synchrones et ne
+/// bloquent pas ; le délai ne joue donc jamais. Le résultat (DWORD_PTR)
+/// est écrit dans `out`.
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn send_message_timeout_w(
+    hwnd: usize,
+    msg: u32,
+    wp: usize,
+    lp: isize,
+    _flags: u32,
+    _timeout: u32,
+    out: *mut usize,
+) -> isize {
+    let r = call!(
+        "SendMessageW",
+        fn(usize, u32, usize, isize) -> isize,
+        hwnd,
+        msg,
+        wp,
+        lp
+    )
+    .unwrap_or(0);
+    if !out.is_null() {
+        *out = r as usize;
+    }
+    1
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "win64" fn send_message_timeout_a(
+    hwnd: usize,
+    msg: u32,
+    wp: usize,
+    lp: isize,
+    _flags: u32,
+    _timeout: u32,
+    out: *mut usize,
+) -> isize {
+    let r = call!(
+        "SendMessageA",
+        fn(usize, u32, usize, isize) -> isize,
+        hwnd,
+        msg,
+        wp,
+        lp
+    )
+    .unwrap_or(0);
+    if !out.is_null() {
+        *out = r as usize;
+    }
+    1
+}
+
+/// SendNotifyMessage : synchrone pour une fenêtre du thread courant, déposée
+/// dans la file sinon (sans attendre la réponse).
+unsafe fn send_notify(hwnd: usize, msg: u32, wp: usize, lp: isize, wide: bool) -> i32 {
+    let same = super::gui::window_owner(hwnd) == Some(std::thread::current().id());
+    if same {
+        if wide {
+            call!(
+                "SendMessageW",
+                fn(usize, u32, usize, isize) -> isize,
+                hwnd,
+                msg,
+                wp,
+                lp
+            );
+        } else {
+            call!(
+                "SendMessageA",
+                fn(usize, u32, usize, isize) -> isize,
+                hwnd,
+                msg,
+                wp,
+                lp
+            );
+        }
+        return 1;
+    }
+    call!(
+        "PostMessageW",
+        fn(usize, u32, usize, isize) -> i32,
+        hwnd,
+        msg,
+        wp,
+        lp
+    )
+    .unwrap_or(0)
+}
+
+unsafe extern "win64" fn send_notify_message_w(hwnd: usize, msg: u32, wp: usize, lp: isize) -> i32 {
+    send_notify(hwnd, msg, wp, lp, true)
+}
+
+unsafe extern "win64" fn send_notify_message_a(hwnd: usize, msg: u32, wp: usize, lp: isize) -> i32 {
+    send_notify(hwnd, msg, wp, lp, false)
+}
+
+/// IsWindowUnicode : les fenêtres de Winlux gardent leurs textes en
+/// Unicode ; seules les HWND inconnues rendent FALSE.
+extern "win64" fn is_window_unicode(hwnd: usize) -> i32 {
+    super::gui::window_style(hwnd).is_some() as i32
+}
+
+/// ShowOwnedPopups : les fenêtres possédées suivent déjà leur propriétaire.
+extern "win64" fn show_owned_popups(hwnd: usize, _show: i32) -> i32 {
+    super::gui::window_style(hwnd).is_some() as i32
+}
+
+/// EndMenu : aucun menu modal ne reste ouvert hors de TrackPopupMenu.
+extern "win64" fn end_menu() -> i32 {
+    1
+}
+
+/// WinHelpA/W : l'aide .hlp n'existe plus (Windows 10 ne la lit pas non
+/// plus) ; échec propre, que les programmes savent traiter.
+extern "win64" fn win_help(_hwnd: usize, _file: usize, _cmd: u32, _data: usize) -> i32 {
+    crate::process::set_last_error(2); // ERROR_FILE_NOT_FOUND
+    0
+}
+
+/// DrawCaption : barre de titre (couleur active ou inactive) avec le titre
+/// de la fenêtre quand DC_TEXT est demandé.
+unsafe extern "win64" fn draw_caption(
+    hwnd: usize,
+    hdc: usize,
+    rect: *const [i32; 4],
+    flags: u32,
+) -> i32 {
+    const DC_ACTIVE: u32 = 0x1;
+    const DC_TEXT: u32 = 0x8;
+    if rect.is_null() {
+        return 0;
+    }
+    let index = if flags & DC_ACTIVE != 0 { 2 } else { 3 };
+    let brush = call!("GetSysColorBrush", fn(i32) -> usize, index).unwrap_or(0);
+    call!(
+        "FillRect",
+        fn(usize, *const [i32; 4], usize) -> i32,
+        hdc,
+        rect,
+        brush
+    );
+    if flags & DC_TEXT != 0 {
+        let mut title = [0u16; 256];
+        let n = call!(
+            "GetWindowTextW",
+            fn(usize, *mut u16, i32) -> i32,
+            hwnd,
+            title.as_mut_ptr(),
+            256
+        )
+        .unwrap_or(0);
+        if n > 0 {
+            let color = call!("GetSysColor", fn(i32) -> u32, 9).unwrap_or(0);
+            call!("SetTextColor", fn(usize, u32) -> u32, hdc, color);
+            call!("SetBkMode", fn(usize, i32) -> i32, hdc, 1);
+            let mut r = *rect;
+            r[0] += 4;
+            // DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS
+            call!(
+                "DrawTextW",
+                fn(usize, *const u16, i32, *mut [i32; 4], u32) -> i32,
+                hdc,
+                title.as_ptr(),
+                n,
+                &mut r,
+                0x20 | 0x4 | 0x8000
+            );
+        }
+    }
+    1
+}
+
+/// GetScrollBarInfo : barre verticale ou horizontale d'une fenêtre (WS_VSCROLL,
+/// WS_HSCROLL), invisible quand le style ne la demande pas.
+unsafe extern "win64" fn get_scroll_bar_info(hwnd: usize, object: i32, out: *mut u32) -> i32 {
+    const OBJID_VSCROLL: i32 = -5;
+    const OBJID_HSCROLL: i32 = -6;
+    const STATE_SYSTEM_INVISIBLE: u32 = 0x8000;
+    const BAR: i32 = 17;
+    if out.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(style) = super::gui::window_style(hwnd) else {
+        crate::process::set_last_error(1400);
+        return 0;
+    };
+    let mut w = [0i32; 4];
+    call!(
+        "GetWindowRect",
+        fn(usize, *mut [i32; 4]) -> i32,
+        hwnd,
+        &mut w
+    );
+    let (rect, shown) = match object {
+        OBJID_VSCROLL => (
+            [w[2] - BAR, w[1], w[2], w[3] - BAR],
+            style & 0x0020_0000 != 0,
+        ),
+        OBJID_HSCROLL => (
+            [w[0], w[3] - BAR, w[2] - BAR, w[3]],
+            style & 0x0010_0000 != 0,
+        ),
+        // OBJID_CLIENT : le contrôle SCROLLBAR lui-même.
+        _ => (w, true),
+    };
+    // SCROLLBARINFO : cbSize, rcScrollBar, dxyLineButton, xyThumbTop,
+    // xyThumbBottom, reserved, rgstate[6] (15 mots).
+    for i in 1..15 {
+        *out.add(i) = 0;
+    }
+    for (i, v) in rect.iter().enumerate() {
+        *out.add(1 + i) = *v as u32;
+    }
+    *out.add(5) = BAR as u32;
+    *out.add(6) = BAR as u32;
+    *out.add(7) = (2 * BAR) as u32;
+    *out.add(9) = if shown { 0 } else { STATE_SYSTEM_INVISIBLE };
+    1
+}
+
 // --- MDI --------------------------------------------------------------------------------
 
 unsafe extern "win64" fn def_frame_proc_w(
@@ -541,6 +766,11 @@ pub fn exports() -> crate::dlls::Exports {
         "CharLowerA" => fn char_lower_a, "CharUpperA" => fn char_upper_a,
         "CharUpperBuffA" => fn char_upper_buff_a, "CharLowerBuffA" => fn char_lower_buff_a,
         "CharUpperBuffW" => fn char_upper_buff_w,
+        "SendMessageTimeoutW" => fn send_message_timeout_w, "SendMessageTimeoutA" => fn send_message_timeout_a,
+        "SendNotifyMessageW" => fn send_notify_message_w, "SendNotifyMessageA" => fn send_notify_message_a,
+        "IsWindowUnicode" => fn is_window_unicode, "ShowOwnedPopups" => fn show_owned_popups,
+        "EndMenu" => fn end_menu, "WinHelpW" => fn win_help, "WinHelpA" => fn win_help,
+        "DrawCaption" => fn draw_caption, "GetScrollBarInfo" => fn get_scroll_bar_info,
         "CharNextW" => fn char_next_w, "CharPrevW" => fn char_prev_w, "CharNextExA" => fn char_next_ex_a,
         "IsCharAlphaA" => fn is_char_alpha_a, "IsCharAlphaNumericA" => fn is_char_alpha_numeric_a,
         "IsCharUpperA" => fn is_char_upper_a, "IsCharLowerA" => fn is_char_lower_a,

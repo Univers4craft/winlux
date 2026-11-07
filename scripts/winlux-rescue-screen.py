@@ -124,6 +124,7 @@ def main():
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
     window = Gtk.Window(title=text["title"])
+    window.set_icon_name("preferences-system")
     window.set_decorated(False)
     window.fullscreen()
     window.connect("destroy", Gtk.main_quit)
