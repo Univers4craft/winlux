@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert r("cmd") == ["winlux-terminal"] and r("CMD.EXE") == ["winlux-terminal"] and r("powershell") == ["winlux-terminal"]
     assert r("notepad") == ["winlux-shell-app", "editor"] and r("notepad.exe ~/a.txt") == ["winlux-shell-app", "editor", "~/a.txt"]
     assert r("control") == ["winlux-shell-app", "settings"] and r("ms-settings:display") == ["winlux-shell-app", "settings"]
-    assert r("appwiz.cpl") == ["winlux-shell-app", "settings", "1"] and r("devmgmt.msc") == ["winlux-shell-app", "settings", "34"]
+    assert r("appwiz.cpl") == ["winlux-shell-app", "settings", "39"] and r("devmgmt.msc") == ["winlux-shell-app", "settings", "34"]
     assert r("taskmgr") == ["winlux-shell-app", "taskmgr"] and r("regedit") == ["winlux", "--regedit"]
     assert r("msinfo32") == ["winlux-shell-app", "msinfo32"] and r("eventvwr.msc") == ["winlux-shell-app", "eventviewer"]
     assert r("explorer") == ["winlux-shell-app", "explorer"]

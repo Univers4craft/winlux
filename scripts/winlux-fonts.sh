@@ -70,8 +70,10 @@ msg() {
 }
 
 result() {
-    tmp="$run/fonts-action.txt.$$"
+    # Nom imprévisible (#644) : pas de fichier créé d'avance par un compte dans /run/winlux.
+    tmp=$(mktemp "$run/fonts-action.txt.XXXXXX") || return 1
     printf 'state=%s\nmessage=%s\n' "$1" "$2" > "$tmp"
+    chmod 644 "$tmp"
     mv "$tmp" "$run/fonts-action.txt"
 }
 
@@ -113,7 +115,7 @@ valid_font() {
 }
 
 list() {
-    out="$run/fonts.txt.$$"
+    out=$(mktemp "$run/fonts.txt.XXXXXX") || return 1  # nom imprévisible (#644)
     {
         if have fc-list; then
             fc-list --format '%{family[0]}|%{style[0]}|%{file}\n' 2>/dev/null
@@ -134,6 +136,7 @@ list() {
             scope = (index($3, user) == 1 || index($3, legacy) == 1 || windows) ? "user" : "system"
             print "font=" $1 "|" $2 "|" scope "|" $3
         }' | sort -f -u > "$out"
+    chmod 644 "$out"
     mv "$out" "$run/fonts.txt"
 }
 

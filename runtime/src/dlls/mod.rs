@@ -4,6 +4,7 @@
 
 pub mod a11y;
 pub mod absent_devices;
+pub mod accel;
 pub mod actctx;
 pub mod advapi32;
 pub mod advapi32_crypto;
@@ -58,8 +59,10 @@ pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
 pub mod electron_win32;
+pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
+pub mod filedialog_com;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
@@ -1000,6 +1003,7 @@ fn add_basics(all: &mut [Builtin]) {
             .chain(icons::user32_overrides())
             .chain(dialogs::user32_overrides())
             .chain(menus::user32_overrides())
+            .chain(accel::user32_overrides())
         {
             b.exports.insert(name, addr);
         }

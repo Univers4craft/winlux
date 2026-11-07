@@ -42,9 +42,13 @@ cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkM
 # Sans logind, polkit ne voit aucune session « active » : nmcli lancé par un
 # compte du bureau recevait « non autorisé ». Les membres de netdev (tous les
 # comptes créés par Winlux) pilotent le réseau, comme sous Windows.
+# /dev/rfkill ouvert au groupe netdev (#604) : sans logind, blueman-applet ne
+# pouvait pas le lire. Dans /usr pour arriver aussi par la mise à jour.
+mkdir -p "$stage/usr/lib/udev/rules.d"
+install -m 644 "$project/integration/native/udev/60-winlux-rfkill.rules" "$stage/usr/lib/udev/rules.d/60-winlux-rfkill.rules"
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -82,6 +86,10 @@ done
 cp "$project"/assets/sounds/*.wav "$stage/usr/share/winlux/sounds/"
 cp -a "$project/integration/native/helpers/." "$stage/usr/share/xfce4/helpers/"
 cp -a "$project/integration/native/applications/." "$stage/usr/share/applications/"
+# « Gestionnaire de fichiers » (exo) n'ouvrait que l'Explorateur Winlux :
+# doublon retiré du menu (#721). exo-open --launch FileManager reste réglé
+# sur l'Explorateur par helpers.rc.
+rm -f "$stage/usr/share/applications/xfce4-file-manager.desktop"
 # Archives (zip, 7z, rar, tar…) : double-clic = Explorer, qui les ouvre comme
 # un dossier avec « Extraire tout », comme sous Windows 11. Un choix de
 # l'utilisateur (~/.config/mimeapps.list) reste prioritaire.
@@ -109,13 +117,17 @@ cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage
 cp --remove-destination "$components/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
 cp --remove-destination "$project/scripts/winlux-saver-gfx.py" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx"
 chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
+# xscreensaver-systemd plante sans systemd ni logind (#634) : remplacé par un
+# assistant qui attend la fin de XScreenSaver, sans erreur ni nom D-Bus.
+cp --remove-destination "$project/scripts/winlux-xscreensaver-systemd.sh" "$stage/usr/libexec/xscreensaver/xscreensaver-systemd"
+chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-systemd"
 cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/systemctl"
 chmod 755 "$stage/usr/bin/systemctl"
 cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
 cp --remove-destination "$project/scripts/winlux-boot-menu.sh" "$stage/usr/share/winlux/boot-menu"
 chmod 755 "$stage/usr/share/winlux/boot-menu"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-network-perms.sh:winlux-network-perms' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-input-watch.sh:winlux-input-watch' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-browser-choice.py:winlux-browser-choice' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-run.py:winlux-run' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-network-perms.sh:winlux-network-perms' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-input-watch.sh:winlux-input-watch' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-installed-apps.py:winlux-installed-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-browser-choice.py:winlux-browser-choice' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-super-key.py:winlux-super-key' 'winlux-run.py:winlux-run' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"

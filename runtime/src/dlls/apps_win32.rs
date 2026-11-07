@@ -260,7 +260,7 @@ unsafe extern "win64" fn find_close_change_notification(h: usize) -> i32 {
 
 // ── user32 ──────────────────────────────────────────────────────────────
 
-fn upper_char(c: u16) -> u16 {
+pub(crate) fn upper_char(c: u16) -> u16 {
     let s = String::from_utf16_lossy(&[c]);
     let mut up = s.chars().flat_map(char::to_uppercase);
     match (up.next(), up.next()) {
@@ -907,11 +907,12 @@ unsafe extern "win64" fn extract_icon_ex_w(
     small: *mut usize,
     _n: u32,
 ) -> u32 {
+    // Une case HICON de 4 octets en x86 : write_ptr n'écrit pas au-delà.
     if !large.is_null() {
-        *large = 0;
+        crate::wow32::write_ptr(large as usize, 0);
     }
     if !small.is_null() {
-        *small = 0;
+        crate::wow32::write_ptr(small as usize, 0);
     }
     0
 }
@@ -1699,6 +1700,147 @@ pub fn comctl32_exports() -> Exports {
     }
 }
 
+/// FindExecutableW : programme qui ouvre un document. Un programme
+/// (.exe, .com, .bat, .cmd) est son propre exécutable ; sinon c'est
+/// l'association du registre (comme AssocQueryString ASSOCSTR_EXECUTABLE).
+/// Renvoie une valeur > 32 si trouvé, 2 (fichier absent) ou 31
+/// (SE_ERR_NOASSOC) sinon.
+unsafe extern "win64" fn find_executable_w(
+    file: *const u16,
+    dir: *const u16,
+    out: *mut u16,
+) -> usize {
+    const SE_ERR_FNF: usize = 2;
+    const SE_ERR_NOASSOC: usize = 31;
+    const ASSOCSTR_EXECUTABLE: u32 = 2;
+    if file.is_null() || out.is_null() {
+        return SE_ERR_FNF;
+    }
+    *out = 0;
+    let mut name = wstr(file);
+    if !dir.is_null() && !name.contains(['\\', '/', ':']) {
+        let d = wstr(dir);
+        if !d.is_empty() {
+            name = format!("{}\\{name}", d.trim_end_matches(['\\', '/']));
+        }
+    }
+    if !crate::paths::to_linux(&name).exists() {
+        return SE_ERR_FNF;
+    }
+    let full = crate::paths::full_windows(&name);
+    let lower = full.to_ascii_lowercase();
+    let exe = if [".exe", ".com", ".bat", ".cmd"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+    {
+        Some(full)
+    } else {
+        let ext = match full.rfind('.') {
+            Some(i) if !full[i..].contains('\\') => full[i..].to_string(),
+            _ => return SE_ERR_NOASSOC,
+        };
+        let ext_w: Vec<u16> = ext.encode_utf16().chain([0]).collect();
+        let mut buf = vec![0u16; 260];
+        let mut n = buf.len() as u32;
+        let r = super::shlwapi_reg::assoc_query_string_w(
+            0,
+            ASSOCSTR_EXECUTABLE,
+            ext_w.as_ptr(),
+            std::ptr::null(),
+            buf.as_mut_ptr(),
+            &mut n,
+        );
+        (r >= 0).then(|| wstr(buf.as_ptr()))
+    };
+    match exe {
+        Some(e) if !e.is_empty() => {
+            let w: Vec<u16> = e.encode_utf16().take(259).chain([0]).collect();
+            std::ptr::copy_nonoverlapping(w.as_ptr(), out, w.len());
+            42
+        }
+        _ => SE_ERR_NOASSOC,
+    }
+}
+
+/// SHAppBarMessage sur une APPBARDATA x64 : cbSize 0, hWnd 8,
+/// uCallbackMessage 16, uEdge 20, rc 24, lParam 40. Winlux ne réserve pas
+/// de place aux barres d'application des programmes ; la barre des tâches
+/// est en bas de l'écran, sous la zone de travail.
+unsafe extern "win64" fn sh_app_bar_message(msg: u32, data: *mut u8) -> usize {
+    const ABM_QUERYPOS: u32 = 2;
+    const ABM_SETPOS: u32 = 3;
+    const ABM_GETSTATE: u32 = 4;
+    const ABM_GETTASKBARPOS: u32 = 5;
+    const ABM_GETAUTOHIDEBAR: u32 = 7;
+    const ABM_SETAUTOHIDEBAR: u32 = 8;
+    const ABM_GETAUTOHIDEBAREX: u32 = 11;
+    const ABM_SETAUTOHIDEBAREX: u32 = 12;
+    const ABS_ALWAYSONTOP: usize = 2;
+    const ABE_BOTTOM: u32 = 3;
+    match msg {
+        ABM_GETSTATE => ABS_ALWAYSONTOP,
+        ABM_GETAUTOHIDEBAR | ABM_GETAUTOHIDEBAREX => 0,
+        ABM_SETAUTOHIDEBAR | ABM_SETAUTOHIDEBAREX => 0,
+        ABM_GETTASKBARPOS => {
+            if data.is_null() {
+                return 0;
+            }
+            let area = super::gui::work_area();
+            let (w, h) = super::gui::screen_size();
+            let top = if area.bottom < h { area.bottom } else { h - 48 };
+            (data.add(20) as *mut u32).write_unaligned(ABE_BOTTOM);
+            for (k, v) in [0, top, w, h].into_iter().enumerate() {
+                (data.add(24 + 4 * k) as *mut i32).write_unaligned(v);
+            }
+            1
+        }
+        // La position demandée est acceptée telle quelle.
+        ABM_QUERYPOS | ABM_SETPOS => 1,
+        _ => 1,
+    }
+}
+
+unsafe extern "win64" fn sh_free_name_mappings(_h: usize) {}
+
+unsafe extern "win64" fn sh_get_malloc(out: *mut usize) -> i32 {
+    api!("ole32", "CoGetMalloc", fn(u32, *mut usize) -> i32, 1, out)
+        .unwrap_or(0x8000_4005u32 as i32)
+}
+
+static CHANGE_NOTIFY_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// SHChangeNotifyRegister (ordinal 2) : l'inscription réussit, mais Winlux
+/// n'envoie pas encore de notification de changement du Shell.
+unsafe extern "win64" fn sh_change_notify_register(
+    _hwnd: usize,
+    _sources: i32,
+    _events: i32,
+    _msg: u32,
+    _count: i32,
+    _entries: usize,
+) -> u32 {
+    CHANGE_NOTIFY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+unsafe extern "win64" fn sh_change_notify_deregister(_id: u32) -> i32 {
+    1
+}
+
+/// SHChangeNotification_Lock (ordinal 644) : aucune notification n'est
+/// jamais envoyée, il n'y a donc rien à verrouiller.
+unsafe extern "win64" fn sh_change_notification_lock(
+    _h: usize,
+    _pid: u32,
+    _pidls: usize,
+    _event: usize,
+) -> usize {
+    0
+}
+
+unsafe extern "win64" fn sh_change_notification_unlock(_lock: usize) -> i32 {
+    1
+}
+
 pub fn shell32_exports() -> Exports {
     crate::exports! {
         "SHGetDesktopFolder" => fn sh_get_desktop_folder,
@@ -1710,6 +1852,20 @@ pub fn shell32_exports() -> Exports {
         "ILCreateFromPathW" => fn il_create_from_path_w,
         "ILFree" => fn il_free,
         "SHOpenFolderAndSelectItems" => fn sh_open_folder_and_select_items,
+        "FindExecutableW" => fn find_executable_w,
+        "SHAppBarMessage" => fn sh_app_bar_message,
+        "SHFreeNameMappings" => fn sh_free_name_mappings,
+        "SHGetMalloc" => fn sh_get_malloc,
+        "SHChangeNotifyRegister" => fn sh_change_notify_register,
+        "SHChangeNotifyDeregister" => fn sh_change_notify_deregister,
+        "SHChangeNotification_Lock" => fn sh_change_notification_lock,
+        "SHChangeNotification_Unlock" => fn sh_change_notification_unlock,
+        "#2" => fn sh_change_notify_register,
+        "#4" => fn sh_change_notify_deregister,
+        "#155" => fn il_free,
+        "#190" => fn il_create_from_path_w,
+        "#644" => fn sh_change_notification_lock,
+        "#645" => fn sh_change_notification_unlock,
     }
 }
 

@@ -66,6 +66,27 @@ def read(path):
     try: return Path(path).read_text().strip()
     except FileNotFoundError: return ""
 
+def publish_run(path, text):
+    """Fichier d'état de /run/winlux (collant) : temporaire à nom imprévisible
+    puis renommé (#644), jamais un fichier qu'un compte aurait créé d'avance."""
+    RUN.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as out: out.write(text)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        try: os.unlink(temporary)
+        except OSError: pass
+        raise
+
+def root_file(path):
+    """Drapeau croyable : posé par root (ou par ce compte, pour les tests),
+    pas par un autre compte dans /run/winlux (#643)."""
+    try: info = os.lstat(path)
+    except OSError: return False
+    return not os.path.islink(path) and info.st_uid in (0, os.geteuid())
+
 def ids(path):
     """{nom: numéro} d'après un fichier passwd ou group (racine quelconque)."""
     found = {}
@@ -138,7 +159,7 @@ def manifest(text):
     return fields
 
 def busy():
-    pid = read(RUN / "update-inhibit")
+    pid = read(RUN / "update-inhibit") if root_file(RUN / "update-inhibit") else ""
     if pid.isdigit() and int(pid) > 0:
         try: os.kill(int(pid), 0); return True
         except ProcessLookupError: pass
@@ -161,11 +182,7 @@ def busy():
     return False
 
 def phase(name, percent, item):
-    RUN.mkdir(parents=True, exist_ok=True)
-    destination = RUN / "update-progress"
-    temporary = destination.with_suffix(".new")
-    temporary.write_text(f"phase={name}\npercent={percent}\ndone=0\ntotal=0\nitem={item}\n")
-    temporary.replace(destination)
+    publish_run(RUN / "update-progress", f"phase={name}\npercent={percent}\ndone=0\ntotal=0\nitem={item}\n")
 
 def download(url, destination, accept=None):
     command = ["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https",
@@ -558,7 +575,7 @@ def main():
             (RUN / "update-action").unlink(missing_ok=True)
             return 0
         if busy(): raise RuntimeError("Une installation APT est déjà en cours")
-        (RUN / "update-inhibit").write_text(str(os.getpid()))
+        publish_run(RUN / "update-inhibit", str(os.getpid()))
         try:
             with tempfile.TemporaryDirectory(prefix="apt-update-", dir=STATE) as temporary:
                 work = Path(temporary)
@@ -629,12 +646,12 @@ def main():
                                                + "\n".join(problems[:20]))
                     BLOCKED.unlink(missing_ok=True); ROLLED_BACK.unlink(missing_ok=True)
                     write_fields(TRIAL, {"version": data["version"], "previous": previous, "boots": "0"})
-                (RUN / "update-action").write_text("reboot\n")
+                publish_run(RUN / "update-action", "reboot\n")
                 phase("ready", 100, "Winlux installé ; redémarrage conseillé")
         except Exception:
             current = read(RUN / "update-progress")
             current_phase = next((line[6:] for line in current.splitlines() if line.startswith("phase=")), "")
-            (RUN / "update-error-phase").write_text(current_phase + "\n")
+            publish_run(RUN / "update-error-phase", current_phase + "\n")
             phase("error", 0, "Échec : consulter le journal")
             raise
         finally:

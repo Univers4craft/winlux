@@ -266,7 +266,7 @@ def show(color=None):
     if color is None and history: color = parse_hex(history[0])
     window = Gtk.Window(title=_t("Pipette"))
     window.set_role("winlux-colorpicker")
-    window.set_icon_name("color-select")
+    window.set_icon_name("winlux-colorpicker")
     window.set_keep_above(True)
     window.set_resizable(False)
     window.set_position(Gtk.WindowPosition.CENTER)

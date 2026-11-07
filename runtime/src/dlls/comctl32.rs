@@ -261,8 +261,142 @@ pub extern "win64" fn init_flat_sb(_hwnd: usize) -> i32 {
     0
 }
 
+/// Fonction de user32 (les barres « plates » de comctl32 sont les barres
+/// de défilement ordinaires de la fenêtre).
+fn user32(name: &str) -> usize {
+    crate::dlls::lookup("user32", name).unwrap_or(0)
+}
+
+pub unsafe extern "win64" fn flat_sb_get_scroll_info(hwnd: usize, bar: i32, si: *mut u8) -> i32 {
+    match user32("GetScrollInfo") {
+        0 => 0,
+        f => std::mem::transmute::<usize, unsafe extern "win64" fn(usize, i32, *mut u8) -> i32>(f)(
+            hwnd, bar, si,
+        ),
+    }
+}
+pub unsafe extern "win64" fn flat_sb_set_scroll_info(
+    hwnd: usize,
+    bar: i32,
+    si: *const u8,
+    redraw: i32,
+) -> i32 {
+    match user32("SetScrollInfo") {
+        0 => 0,
+        f => std::mem::transmute::<
+            usize,
+            unsafe extern "win64" fn(usize, i32, *const u8, i32) -> i32,
+        >(f)(hwnd, bar, si, redraw),
+    }
+}
+pub unsafe extern "win64" fn flat_sb_get_scroll_pos(hwnd: usize, bar: i32) -> i32 {
+    match user32("GetScrollPos") {
+        0 => 0,
+        f => {
+            std::mem::transmute::<usize, unsafe extern "win64" fn(usize, i32) -> i32>(f)(hwnd, bar)
+        }
+    }
+}
+pub unsafe extern "win64" fn flat_sb_set_scroll_pos(
+    hwnd: usize,
+    bar: i32,
+    pos: i32,
+    redraw: i32,
+) -> i32 {
+    match user32("SetScrollPos") {
+        0 => 0,
+        f => {
+            std::mem::transmute::<usize, unsafe extern "win64" fn(usize, i32, i32, i32) -> i32>(f)(
+                hwnd, bar, pos, redraw,
+            )
+        }
+    }
+}
+pub unsafe extern "win64" fn flat_sb_get_scroll_range(
+    hwnd: usize,
+    bar: i32,
+    min: *mut i32,
+    max: *mut i32,
+) -> i32 {
+    match user32("GetScrollRange") {
+        0 => 0,
+        f => std::mem::transmute::<
+            usize,
+            unsafe extern "win64" fn(usize, i32, *mut i32, *mut i32) -> i32,
+        >(f)(hwnd, bar, min, max),
+    }
+}
+pub unsafe extern "win64" fn flat_sb_set_scroll_range(
+    hwnd: usize,
+    bar: i32,
+    min: i32,
+    max: i32,
+    redraw: i32,
+) -> i32 {
+    match user32("SetScrollRange") {
+        0 => 0,
+        f => {
+            std::mem::transmute::<usize, unsafe extern "win64" fn(usize, i32, i32, i32, i32) -> i32>(
+                f,
+            )(hwnd, bar, min, max, redraw)
+        }
+    }
+}
+/// FlatSB_SetScrollProp : les propriétés (couleurs, largeurs, style plat)
+/// ne changent rien au dessin des barres ordinaires.
+pub extern "win64" fn flat_sb_set_scroll_prop(
+    _hwnd: usize,
+    _index: u32,
+    _value: isize,
+    _redraw: i32,
+) -> i32 {
+    1
+}
+/// FlatSB_GetScrollProp : WSB_PROP_WINSTYLE (0x100) vaut FSB_REGULAR_MODE
+/// (0), les autres propriétés 0 aussi.
+pub unsafe extern "win64" fn flat_sb_get_scroll_prop(
+    _hwnd: usize,
+    _index: u32,
+    value: *mut i32,
+) -> i32 {
+    if value.is_null() {
+        return 0;
+    }
+    *value = 0;
+    1
+}
+pub extern "win64" fn uninit_flat_sb(_hwnd: usize) -> i32 {
+    0
+}
+
+/// DllGetVersion : comctl32 6.10 (celle des styles visuels). 7-Zip 23.01 ne
+/// crée sa barre d'adresse (ComboBoxEx dans une ReBar) qu'à partir de la
+/// 4.71 ; sans cette fonction il croyait avoir la version 0 (#755).
+pub unsafe extern "win64" fn dll_get_version(info: *mut u32) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+    if info.is_null() {
+        return E_INVALIDARG;
+    }
+    let size = *info;
+    if size != 20 && size != 32 {
+        return E_INVALIDARG;
+    }
+    let (major, minor, build) = (6u32, 10u32, 19041u32);
+    *info.add(1) = major;
+    *info.add(2) = minor;
+    *info.add(3) = build;
+    *info.add(4) = 2; // DLLVER_PLATFORM_NT
+    if size == 32 {
+        *info.add(5) = 0; // dwFlags
+        let full = ((major as u64) << 48) | ((minor as u64) << 32) | ((build as u64) << 16);
+        std::ptr::write_unaligned(info.add(6) as *mut u64, full);
+    }
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "DllGetVersion" => fn dll_get_version,
         "InitCommonControlsEx" => fn init_common_controls_ex,
         "InitCommonControls" => fn init_common_controls,
         "ImageList_Create" => fn image_list_create,
@@ -284,7 +418,28 @@ pub fn exports() -> crate::dlls::Exports {
         "FlatSB_EnableScrollBar" => fn flat_sb_enable_scroll_bar,
         "FlatSB_ShowScrollBar" => fn flat_sb_show_scroll_bar,
         "InitializeFlatSB" => fn init_flat_sb,
+        "UninitializeFlatSB" => fn uninit_flat_sb,
+        "FlatSB_GetScrollInfo" => fn flat_sb_get_scroll_info,
+        "FlatSB_SetScrollInfo" => fn flat_sb_set_scroll_info,
+        "FlatSB_GetScrollPos" => fn flat_sb_get_scroll_pos,
+        "FlatSB_SetScrollPos" => fn flat_sb_set_scroll_pos,
+        "FlatSB_GetScrollRange" => fn flat_sb_get_scroll_range,
+        "FlatSB_SetScrollRange" => fn flat_sb_set_scroll_range,
+        "FlatSB_GetScrollProp" => fn flat_sb_get_scroll_prop,
+        "FlatSB_SetScrollProp" => fn flat_sb_set_scroll_prop,
         "TaskDialog" => fn super::taskdialog::task_dialog,
         "TaskDialogIndirect" => fn super::taskdialog::task_dialog_indirect,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn version_de_comctl32() {
+        let mut v = [20u32, 0, 0, 0, 0];
+        assert_eq!(unsafe { super::dll_get_version(v.as_mut_ptr()) }, 0);
+        assert_eq!(&v[1..], &[6, 10, 19041, 2]);
+        let mut bad = [12u32, 0, 0, 0, 0];
+        assert_ne!(unsafe { super::dll_get_version(bad.as_mut_ptr()) }, 0);
     }
 }

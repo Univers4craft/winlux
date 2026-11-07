@@ -58,7 +58,7 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths u
         # Serveur HTTPS local jetable pour la poignée de main Schannel.
         sh "$root/scripts/run-tls-suite.sh" "$runtime" "$exe"
     elif [ "$name" = winpaths ]; then
-        WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" \
+        WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" WINLUX_WINPATHS_KEEP=1 \
             WINLUX_GUI=headless "$runtime" "$exe"
     else
         WINLUX_UAC=allow WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" \

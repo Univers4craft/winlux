@@ -11,7 +11,8 @@
 #   « non autorisé ».
 # Ce script, lancé en root au démarrage puis par winlux-network-watch,
 # remet les deux en place, ainsi que les droits de /etc/timezone,
-# /etc/hostname et /etc/default/locale. WINLUX_SYSTEM_ROOT sert aux tests.
+# /etc/hostname et /etc/default/locale, et /dev/rfkill (groupe netdev).
+# WINLUX_SYSTEM_ROOT sert aux tests.
 set -u
 root=${WINLUX_SYSTEM_ROOT:-}
 rule_source="$root/usr/share/winlux/native/network/50-winlux-network.rules"
@@ -39,6 +40,20 @@ for file in "$root/etc/timezone" "$root/etc/hostname" "$root/etc/default/locale"
         *) chmod 644 "$file" 2>/dev/null && echo "rendu lisible : $file" ;;
     esac
 done
+
+# Interrupteurs radio (#604) : /dev/rfkill au groupe netdev, même quand udev
+# a créé le nœud avant de lire 60-winlux-rfkill.rules (module chargé tôt) ou
+# ne tourne pas. Sans cela blueman-applet, l'agent d'appairage, meurt.
+rfkill="$root/dev/rfkill"
+if test -c "$rfkill" || { test -n "$root" && test -f "$rfkill"; }; then
+    if getent group netdev >/dev/null 2>&1 && test "$(stat -c %G "$rfkill" 2>/dev/null)" != netdev; then
+        chgrp netdev "$rfkill" 2>/dev/null && echo "/dev/rfkill rendu au groupe netdev"
+    fi
+    case "$(stat -c %a "$rfkill" 2>/dev/null)" in
+        664|666) ;;
+        *) chmod 664 "$rfkill" 2>/dev/null ;;
+    esac
+fi
 
 # Règle polkit du réseau, posée et lisible par polkitd.
 if test -f "$rule_source"; then

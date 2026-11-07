@@ -22,10 +22,16 @@
 //! - **Pile.** Le code 32 bits et les API 64 bits partagent la pile du
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
+mod com;
+mod comctl;
+mod comdlg;
 mod crt;
 mod cxx;
+mod fiber;
 mod kernel;
+mod layout;
 mod seh;
+mod user;
 mod wow64;
 
 pub use wow64::{
@@ -1080,6 +1086,57 @@ fn is_cdecl(dll: &str, func: &str) -> bool {
         || (n == "ntdll" && func.starts_with(|c: char| c == '_' || c.is_ascii_lowercase()))
 }
 
+/// Octets d'arguments qu'une fonction stdcall x86 dépile (`ret N`), d'après
+/// les noms décorés des bibliothèques d'import i686 de MinGW-w64
+/// (stdcall.tsv, scripts/gen-x86-stdcall.py). Un bouchon Rust peut avoir
+/// moins d'arguments que l'API qu'il sert : c'est la table qui dit ce que
+/// le code x86 attend.
+fn stdcall_bytes(dll: &str, func: &str) -> Option<u16> {
+    static TABLE: OnceLock<HashMap<String, HashMap<&'static str, u16>>> = OnceLock::new();
+    let t = TABLE.get_or_init(|| {
+        let mut t: HashMap<String, HashMap<&'static str, u16>> = HashMap::new();
+        let mut cur = String::new();
+        for line in include_str!("stdcall.tsv").lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some(d) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                cur = d.to_string();
+                continue;
+            }
+            if let Some((f, n)) = line.split_once(' ') {
+                if let Ok(n) = n.parse() {
+                    t.entry(cur.clone()).or_default().insert(f, n);
+                }
+            }
+        }
+        t
+    });
+    let n = crate::dlls::normalize(dll);
+    let n = n.strip_suffix(".drv").unwrap_or(&n);
+    t.get(n)?.get(func).copied()
+}
+
+/// `ret N` d'une passerelle : rien pour cdecl, sinon la table, à défaut la
+/// signature Rust.
+fn stub_pop(dll: &str, func: &str, slots: usize, label: &str) -> Option<u16> {
+    if is_cdecl(dll, func) {
+        return None;
+    }
+    let sig = (slots * 4) as u16;
+    match stdcall_bytes(dll, func) {
+        Some(n) => {
+            if n != sig && slots != 0 {
+                crate::trace!(
+                    "wow32 : {label} : {sig} octets d'après la signature, {n} d'après la table"
+                );
+            }
+            Some(n)
+        }
+        None => Some(sig),
+    }
+}
+
 fn stub_code(desc: usize, pop: Option<u16>) -> Vec<u8> {
     let mut c = Vec::with_capacity(24);
     c.push(0x68); // push desc
@@ -1165,7 +1222,7 @@ pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
         .iter()
         .map(|k| if matches!(k, b'q' | b'd') { 2 } else { 1 })
         .sum();
-    let pop = (!is_cdecl(dll, func)).then_some((slots * 4) as u16);
+    let pop = stub_pop(dll, func, slots, &label);
     make_stub(
         Desc {
             ret,
@@ -1187,6 +1244,11 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
     let n = crate::dlls::normalize(dll);
     let kernel = n == "kernel32" || n == "ntdll";
     let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
+    if kernel {
+        if let Some(f) = fiber::override_for(func) {
+            return Some(f);
+        }
+    }
     Some(match func {
         "RaiseException" if kernel => (seh::raise_exception as *const () as usize, "iiii>v"),
         "RtlUnwind" if kernel => (seh::rtl_unwind as *const () as usize, "iiii>i"),
@@ -1260,10 +1322,21 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
 /// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en
 /// a une ; pour une donnée exportée, son adresse sous 4 Go.
 pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
+    let n = crate::dlls::normalize(dll);
+    if let Some(code) = fiber::code_for(n == "kernel32" || n == "ntdll", func) {
+        return Some(code);
+    }
     let label = format!("{}!{func}", dll.to_ascii_lowercase());
     let (target, sig, fix) = match override_for(dll, func) {
         Some((target, sig)) => (target, sig, crt::Fix::None),
-        None => match crt::override_for(&crate::dlls::normalize(dll), func)? {
+        None => match {
+            let n = crate::dlls::normalize(dll);
+            user::override_for(&n, func)
+                .or_else(|| crt::override_for(&n, func))
+                .or_else(|| com::override_for(&n, func))
+                .or_else(|| comdlg::override_for(&n, func))
+                .or_else(|| comctl::override_for(&n, func))
+        }? {
             crt::Override::Data(addr) => return Some(addr),
             crt::Override::Native { target, sig, fix } => (target, sig, fix),
             crt::Override::Raw { target, aux, pop } => {
@@ -1365,18 +1438,22 @@ pub(super) fn native_stub(target: usize, sig: &str, label: &str) -> usize {
 
 /// Passerelle x86 vers le bouchon 64 bits d'une fonction absente.
 pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
+    let label = format!("{}!{func}", dll.to_ascii_lowercase());
+    // Même absente, une fonction stdcall doit dépiler ses arguments si le
+    // programme continue après l'échec qu'elle rend.
+    let pop = stub_pop(dll, func, 0, &label);
     make_stub(
         Desc {
             ret: b'i',
             supported: true,
             target: stub64,
             kinds: Vec::new(),
-            label: format!("{}!{func}", dll.to_ascii_lowercase()),
+            label,
             fix: crt::Fix::None,
             raw: None,
             callbacks: 0,
         },
-        None,
+        pop,
     )
 }
 
@@ -1516,6 +1593,8 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumSystemCodePagesW"
         | "EnumUILanguagesA"
         | "EnumUILanguagesW"
+        | "EnumCalendarInfoW"
+        | "EnumCalendarInfoExW"
         | "EnumWindows" => bit(0),
         "InitOnceExecuteOnce"
         | "CreateFiber"
@@ -1791,6 +1870,16 @@ pub fn wrap_fault_handlers() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_stdcall() {
+        assert_eq!(stdcall_bytes("ADVAPI32.dll", "RegSetKeySecurity"), Some(12));
+        assert_eq!(stdcall_bytes("kernel32", "SetLastError"), Some(4));
+        assert_eq!(stdcall_bytes("winspool.drv", "ClosePrinter"), Some(4));
+        assert_eq!(stdcall_bytes("kernel32", "Inexistante"), None);
+        assert_eq!(stub_pop("msvcrt.dll", "printf", 1, "t"), None);
+        assert_eq!(stub_pop("user32.dll", "GetActiveWindow", 0, "t"), Some(0));
+    }
 
     #[test]
     fn signatures_relevees_a_la_compilation() {

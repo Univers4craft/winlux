@@ -443,6 +443,10 @@ def add_taskbar_buttons(panel_config, marker_folder):
             if marker.exists(): continue
             present = any(value.get("value") == desktop for plugin in plugins for items in plugin
                           if items.get("name") == "items" for value in items)
+            # Depuis #703, la recherche est un genmon `winlux-tray search`.
+            present = present or (name == "search" and any(
+                child.get("name") == "command" and (child.get("value") or "").endswith("winlux-tray search")
+                for plugin in plugins for child in plugin))
             if not present:
                 used = {item.get("name") for item in plugins}
                 number = next((n for n in range(14, 30) if f"plugin-{n}" not in used), None)
@@ -483,13 +487,181 @@ def add_taskbar_buttons(panel_config, marker_folder):
 
 
 add_taskbar_buttons(panel_config, home / ".config/winlux")
+
+
+# Barre des tâches redessinée (#703), une fois par compte, avant le lancement
+# de la barre (un xfce4-panel lancé ne charge pas un greffon modifié) et dans
+# l'ordre exact que produit `winlux-control align-*`, pour que la remise en
+# ordre de l'ouverture de session ne relance pas la barre :
+# - réseau, son et batterie : un seul genmon `winlux-tray status` (celui du
+#   réseau), ceux du son et de la batterie disparaissent ;
+# - le lanceur « Rechercher » devient le genmon `winlux-tray search` (zone de
+#   recherche ou loupe, au choix dans Personnalisation) ;
+# - l'heure passe avant la cloche, comme Windows 11.
+def _plugin_command(plugin, rc_folder):
+    command = next((child.get("value") for child in plugin if child.get("name") == "command"), None)
+    if command is None:
+        rc = rc_folder / f"genmon-{(plugin.get('name') or '')[7:]}.rc"
+        try:
+            command = next((line[8:] for line in rc.read_text(encoding="utf-8").splitlines() if line.startswith("Command=")), None)
+        except (OSError, UnicodeDecodeError):
+            command = None
+    return command or ""
+
+
+def _set_genmon(plugin, rc_folder, command, period):
+    plugin.set("value", "genmon")
+    for child in list(plugin):
+        plugin.remove(child)
+    for key, kind, value in [("command", "string", command), ("use-label", "bool", "false"), ("text", "string", ""),
+                             ("update-period", "int", str(period)), ("font", "string", "DejaVu Sans 10")]:
+        ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+    rc = rc_folder / f"genmon-{(plugin.get('name') or '')[7:]}.rc"
+    rc_folder.mkdir(parents=True, exist_ok=True)
+    rc.write_text(f"Command={command}\nUseLabel=0\nText=\nUpdatePeriod={period}\nFont=DejaVu Sans 10\n", encoding="utf-8")
+
+
+def redesign_taskbar(panel_config, marker_folder, rc_folder):
+    """Migration unique de la barre (#703) ; True si le fichier a changé."""
+    marker = marker_folder / "taskbar-703"
+    if marker.exists() or not panel_config.is_file():
+        return False
+    try:
+        tree = ET.parse(panel_config)
+        root = tree.getroot()
+        plugins = next((item for item in root if item.get("name") == "plugins"), None)
+        panel = next((item for top in root if top.get("name") == "panels" for item in top if item.get("name") == "panel-1"), None)
+        ids = next((item for item in panel if item.get("name") == "plugin-ids"), None) if panel is not None else None
+        if plugins is None or ids is None:
+            return False
+        changed, removed = False, set()
+        clock = bell = None
+        for plugin in list(plugins):
+            name = plugin.get("name") or ""
+            number = name[7:]
+            if not number.isdigit():
+                continue
+            if plugin.get("value") == "genmon":
+                command = _plugin_command(plugin, rc_folder)
+                if command.endswith("winlux-tray network"):
+                    _set_genmon(plugin, rc_folder, "/usr/bin/winlux-tray status", 3000)
+                    changed = True
+                elif command.endswith("winlux-tray audio") or command.endswith("winlux-tray battery"):
+                    plugins.remove(plugin)
+                    removed.add(number)
+                    try:
+                        (rc_folder / f"genmon-{number}.rc").unlink()
+                    except OSError:
+                        pass
+                    changed = True
+                elif command.endswith("winlux-tray notifications"):
+                    bell = number
+                elif "winlux-clock" in command:
+                    clock = number
+            elif plugin.get("value") == "launcher":
+                items = [entry.get("value") or "" for child in plugin if child.get("name") == "items" for entry in child]
+                if any(item.endswith("winlux-search.desktop") for item in items):
+                    _set_genmon(plugin, rc_folder, "/usr/bin/winlux-tray search", 3000)
+                    changed = True
+        for value in list(ids):
+            if value.get("value") in removed:
+                ids.remove(value)
+        values = [value.get("value") for value in ids]
+        if bell in values and clock in values and values.index(clock) == values.index(bell) + 1:
+            position = values.index(bell)
+            second = list(ids)[position + 1]
+            ids.remove(second)
+            ids.insert(position, second)
+            changed = True
+        if changed:
+            temporary = panel_config.with_name(panel_config.name + ".tmp")
+            tree.write(temporary, encoding="UTF-8", xml_declaration=True)
+            temporary.replace(panel_config)
+        marker_folder.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        return changed
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        return False
+
+
+redesign_taskbar(panel_config, home / ".config/winlux", home / ".config/xfce4/panel")
+
+
+# Couleurs de la barre (#703) : elles vivent dans le thème GTK du compte
+# (winlux-personalize), que la barre recharge en direct au passage clair ↔
+# sombre. Les anciennes lignes de tête de ~/.config/gtk-3.0/gtk.css (barre
+# toujours sombre, priorité utilisateur) passeraient au-dessus : retirées.
+LEGACY_PANEL_CSS = (
+    ".xfce4-panel { background: #1c1b25; color: #f0edf6; border-top: 1px solid #4a365e; }",
+    ".xfce4-panel button { border: 0; border-bottom: 2px solid transparent; border-radius: 3px; margin: 2px; padding: 4px; }",
+    ".xfce4-panel button:hover { background: #443350; }",
+    ".xfce4-panel button:checked { background: #60467b; border-bottom: 2px solid #c3a2ff; }",
+)
+
+
+def drop_legacy_panel_css(style):
+    try:
+        text = style.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    lines = text.split("\n")
+    kept = [line for line in lines if line.strip() not in LEGACY_PANEL_CSS]
+    if kept == lines:
+        return False
+    temporary = style.with_suffix(".css.tmp")
+    temporary.write_text("\n".join(kept), encoding="utf-8")
+    temporary.replace(style)
+    return True
+
+
+def refresh_account_theme(home, personalize):
+    """Réécrit le thème Winlux-{dark,light}-N du compte avec la barre à jour."""
+    import configparser
+    import json
+    import runpy
+    try:
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(home / ".config/gtk-3.0/settings.ini")
+        name = config.get("Settings", "gtk-theme-name", fallback="")
+    except (configparser.Error, OSError):
+        return False
+    if name not in ("Winlux-dark-1", "Winlux-dark-2", "Winlux-light-1", "Winlux-light-2") or not personalize.is_file():
+        return False
+    css_path = home / ".local/share/themes" / name / "gtk-3.0/gtk.css"
+    try:
+        current = css_path.read_text(encoding="utf-8")
+        module = runpy.run_path(str(personalize), run_name="winlux_personalize")
+        try:
+            accent = json.loads((home / ".config/winlux/appearance.json").read_text()).get("accent", "#6a3df0")
+        except (OSError, ValueError, AttributeError):
+            accent = "#6a3df0"
+        dark = name.startswith("Winlux-dark")
+        start, end = module["MARKER"], module["END_MARKER"]
+        if start not in current or end not in current:
+            return False
+        block = start + "\n" + module["appearance_css"](dark, accent) + "\n" + end
+        updated = current[:current.index(start)] + block + current[current.index(end) + len(end):]
+        if updated == current:
+            return False
+        temporary = css_path.with_suffix(".css.tmp")
+        temporary.write_text(updated, encoding="utf-8")
+        temporary.replace(css_path)
+        return True
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, SyntaxError):
+        return False
+
+
+drop_legacy_panel_css(home / ".config/gtk-3.0/gtk.css")
+refresh_account_theme(home, Path(os.environ.get("WINLUX_PERSONALIZE", "/usr/bin/winlux-personalize")))
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
-# personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
+# personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox : la touche
+# Windows seule est gérée par winlux-super-key (appui-relâché, #605).
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
               "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
-              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right", "W-i", "W-s", "W-r", "W-x", "W-p")
+              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right", "W-i", "W-s", "W-r", "W-x", "W-p",
+              "XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute", "XF86AudioMicMute")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.
@@ -665,6 +837,27 @@ if openbox_menu.is_file():
     except (OSError, UnicodeDecodeError):
         pass
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
+# #735 : sans « dpmsEnabled », XScreenSaver vaut False et coupe le DPMS du
+# serveur X à son premier affichage : l'écran ne se mettait plus jamais en
+# veille. Ajouté aux fichiers déjà copiés qui ne le précisent pas ; un choix
+# fait dans les réglages de l'économiseur (clé présente) est gardé.
+def migrate_xscreensaver(path, template):
+    try:
+        text = path.read_text(encoding="utf-8")
+        wanted = [line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("dpms")]
+    except (OSError, UnicodeDecodeError):
+        return
+    if any(line.split(":", 1)[0].strip() == "dpmsEnabled" for line in text.splitlines()): return
+    present = {line.split(":", 1)[0].strip() for line in text.splitlines() if ":" in line}
+    added = [line for line in wanted if line.split(":", 1)[0].strip() not in present]
+    if not added: return
+    try:
+        temporary = path.with_name(".xscreensaver.tmp")
+        temporary.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(added) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        pass
+migrate_xscreensaver(home / ".xscreensaver", source / "xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
     user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\nXDG_PICTURES_DIR="$HOME/Images"\nXDG_MUSIC_DIR="$HOME/Musique"\nXDG_VIDEOS_DIR="$HOME/Vidéos"\n')

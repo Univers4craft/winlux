@@ -3579,6 +3579,7 @@ class InstallerApp(Gtk.Application):
     def do_activate(self):
         self.apply_display_scale()
         self.win = Gtk.ApplicationWindow(application=self, title="Installer Winlux")
+        self.win.set_icon_name("system-software-install")
         self.win.get_style_context().add_class("installer-window")
         self.win.set_position(Gtk.WindowPosition.CENTER)
         self.win.set_resizable(True)

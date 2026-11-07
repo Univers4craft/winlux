@@ -24,7 +24,7 @@ Les notes de chaque version sont dans [`docs/releases/`](https://github.com/Univ
 
 ## Mettre à jour un système installé
 
-**Depuis le bureau** : Paramètres › Mises à jour › « Rechercher des mises à jour », puis « Installer ». La page affiche la progression et le journal. Les mises à jour automatiques s'activent sur la même page ; elles ne forcent jamais de redémarrage.
+**Depuis le bureau** : Paramètres › Mises à jour › Mise à jour OS › « Rechercher des mises à jour », puis « Installer ». La page affiche la progression et le journal. Les mises à jour automatiques s'activent sur la même page ; elles ne forcent jamais de redémarrage.
 
 **En ligne de commande** :
 
@@ -36,7 +36,7 @@ winlux-update --rollback   # revenir à la version précédente
 winlux-update --auto enable   # (ou disable)
 ```
 
-Les mises à jour des paquets Ubuntu eux-mêmes passent par Paramètres › Mises à jour système (ou `apt`).
+Les mises à jour des paquets Ubuntu eux-mêmes passent par Paramètres › Mises à jour › Mise à jour application (ou `apt`).
 
 ### Comment ça marche
 

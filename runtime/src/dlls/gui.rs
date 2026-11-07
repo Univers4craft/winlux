@@ -1009,7 +1009,7 @@ pub fn create_dc(hwnd: usize) -> usize {
             text_color: 0x0000_0000,
             bk_color: 0x00FF_FFFF,
             bk_mode: 2,
-            brush: 5, // BLACK_BRUSH stock
+            brush: 1, // WHITE_BRUSH stock, comme Windows
             pen: 8,   // BLACK_PEN stock
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
@@ -1149,7 +1149,8 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
         && (is_stock_font(obj) || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
     let kind_bitmap = !kind_pen
         && !kind_font
-        && matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. }));
+        && (obj == DEFAULT_BITMAP
+            || matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. })));
     with_dc(
         hdc,
         |d| {
@@ -1162,9 +1163,16 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
                 d.font = obj;
                 old
             } else if kind_bitmap {
+                // Un DC mémoire neuf contient la bitmap 1x1 du stock :
+                // SelectObject la rend (jamais 0, que la VCL de Delphi
+                // prend pour un échec : #753), et la resélectionner vide le DC.
                 let old = d.bitmap;
-                d.bitmap = obj;
-                old
+                d.bitmap = if obj == DEFAULT_BITMAP { 0 } else { obj };
+                if old == 0 {
+                    DEFAULT_BITMAP
+                } else {
+                    old
+                }
             } else {
                 let old = d.brush;
                 d.brush = obj;
@@ -1174,6 +1182,10 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
         0,
     )
 }
+
+/// Bitmap 1x1 monochrome du stock (`GetStockObject(21)`), celle d'un DC
+/// mémoire neuf.
+pub const DEFAULT_BITMAP: usize = 22;
 
 /// Objets « stock » plume : `GetStockObject(WHITE_PEN)` → 7, `BLACK_PEN` → 8,
 /// `NULL_PEN` → 9.
@@ -1616,6 +1628,15 @@ pub fn object_info(handle: usize) -> Option<GdiObjectInfo> {
     if is_stock_font(handle) {
         return Some(GdiObjectInfo::Font(FontSpec::default()));
     }
+    if handle == DEFAULT_BITMAP {
+        return Some(GdiObjectInfo::Bitmap {
+            width: 1,
+            height: 1,
+            width_bytes: 2,
+            bits_per_pixel: 1,
+            bits: 0,
+        });
+    }
     None
 }
 
@@ -1630,7 +1651,7 @@ pub fn delete_object(obj: usize) -> bool {
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
         Some(_) => map.remove(&obj).is_some(),
-        None => (1..=9).contains(&obj),
+        None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
     }
 }
 
@@ -2132,6 +2153,10 @@ pub trait GuiBackend: Send {
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}
+    /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
+    /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
+    /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
+    fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
@@ -2496,6 +2521,48 @@ pub fn register_class(name: &str, info: ClassInfo) -> bool {
     true
 }
 
+fn class_styles() -> &'static Mutex<HashMap<String, u32>> {
+    static S: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Mémorise le style de classe (CS_DBLCLKS…) d'une classe enregistrée.
+pub fn set_class_style(name: &str, style: u32) {
+    lock(class_styles())
+        .entry(name.to_ascii_lowercase())
+        .or_insert(style);
+}
+
+/// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
+/// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
+/// texte sous Windows.
+pub fn wants_double_clicks(hwnd: usize) -> bool {
+    const CS_DBLCLKS: u32 = 0x0008;
+    let Some(class) = lock(windows())
+        .get(&hwnd)
+        .map(|w| w.class.to_ascii_lowercase())
+    else {
+        return false;
+    };
+    match lock(class_styles()).get(&class) {
+        Some(style) => style & CS_DBLCLKS != 0,
+        // Contrôles prédéfinis qui traitent le double-clic ; les autres
+        // (barres de défilement, onglets…) reçoivent deux appuis simples.
+        None => matches!(
+            class.as_str(),
+            "button"
+                | "static"
+                | "edit"
+                | "listbox"
+                | "combobox"
+                | "comboboxex32"
+                | "syslistview32"
+                | "systreeview32"
+                | "toolbarwindow32"
+        ),
+    }
+}
+
 pub fn lookup_class(name: &str) -> Option<ClassInfo> {
     let registered = lock(classes()).get(name).map(|c| ClassInfo {
         wnd_proc: c.wnd_proc,
@@ -2756,6 +2823,18 @@ fn brush_color(brush: usize) -> Option<u32> {
     }
 }
 
+/// Couleur unie du fond du parent d'un contrôle, quand ce parent est effacé
+/// avec le pinceau de sa classe (voir `begin_paint`) ; None s'il garde le
+/// dégradé du thème.
+pub fn parent_backdrop_color(hwnd: usize) -> Option<u32> {
+    let parent = window_parent(hwnd).filter(|&p| p != 0)?;
+    let background = lock(windows()).get(&parent)?.background;
+    if background == 0 || !has_control_children(parent) {
+        return None;
+    }
+    brush_color(background)
+}
+
 fn has_control_children(hwnd: usize) -> bool {
     child_windows(hwnd)
         .into_iter()
@@ -2933,7 +3012,15 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
         // sinon la fenêtre recevrait WM_PAINT sans fin.
+        // Une fenêtre à contrôles standard sans WM_PAINT à elle (boîte
+        // « À propos » de Notepad++) est effacée avec le pinceau de sa
+        // classe, comme le BeginPaint de Windows : sinon le dégradé du thème
+        // restait visible autour de contrôles peints, eux, sur un fond uni
+        // (#745).
         WM_PAINT => {
+            if let Some((hdc, _)) = begin_paint(hwnd) {
+                end_paint(hwnd, hdc);
+            }
             validate_window(hwnd);
             0
         }
@@ -3558,6 +3645,28 @@ mod tests {
     }
 
     #[test]
+    fn dc_memoire_neuf_rend_la_bitmap_du_stock() {
+        let dc = create_dc(0);
+        let bmp = create_compatible_bitmap(4, 3).unwrap();
+        // Jamais 0 : la VCL de Delphi lève EOutOfResources sinon (WinSCP).
+        assert_eq!(select_object(dc, bmp), DEFAULT_BITMAP);
+        assert_eq!(dc_bitmap(dc), bmp);
+        assert_eq!(select_object(dc, DEFAULT_BITMAP), bmp);
+        assert_eq!(dc_bitmap(dc), 0);
+        assert!(matches!(
+            object_info(DEFAULT_BITMAP),
+            Some(GdiObjectInfo::Bitmap {
+                width: 1,
+                height: 1,
+                ..
+            })
+        ));
+        assert!(delete_object(DEFAULT_BITMAP));
+        assert!(delete_object(bmp));
+        free_dc(dc);
+    }
+
+    #[test]
     fn les_rops_simples_combinent_source_et_destination() {
         assert_eq!(
             raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Copy),
@@ -3619,7 +3728,7 @@ mod tests {
         let pen = create_pen(0, 2, 0x00AA_BBCC);
         let brush = create_solid_brush(0x0011_2233);
         assert_eq!(select_object(hdc, pen), 8); // BLACK_PEN stock initial
-        assert_eq!(select_object(hdc, brush), 5); // BLACK_BRUSH stock initial
+        assert_eq!(select_object(hdc, brush), 1); // WHITE_BRUSH stock initial
         assert_eq!(dc_brush(hdc), brush);
 
         free_dc(hdc);

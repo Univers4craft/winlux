@@ -538,7 +538,7 @@ def layouts_popup(window, at=None):
     if "zone" not in chosen: return 0
     zone = chosen["zone"]
     snap(window, zone)
-    _run(["xdotool", "windowactivate", window])
+    _run(["wmctrl", "-i", "-a", window])
     layout = next(layout for layout in LAYOUTS if zone in layout)
     free = [cell for cell in layout if cell != zone]
     if free and os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0": return assist(window, free)
@@ -551,9 +551,10 @@ def snapped_windows(exclude, area):
     for window, _ in other_windows(exclude):
         zone = get_prop(window, "_WINLUX_SNAP")
         if zone not in ZONES or is_maximized(window): continue
-        rect, geometry = zone_rect(zone, area), window_geometry(window)
-        # Encore à sa place (une fenêtre déplacée au clavier garde sa propriété).
-        if geometry and all(abs(a - b) <= 12 for a, b in zip(rect, geometry)): found[window] = rect
+        # Sa place réelle, pas celle de sa case : une fenêtre à largeur minimale
+        # (Paramètres : 720 px) déborde d'une moitié en 1366x768 (#647).
+        geometry = window_geometry(window)
+        if geometry and overlap(geometry, area): found[window] = geometry
     return found
 
 
@@ -708,7 +709,13 @@ def group_props(desktop=None):
         parts = line.split(None, 3)
         if len(parts) < 3 or parts[1] not in (desktop, "-1"): continue
         group = get_prop(parts[0], "_WINLUX_SNAP_GROUP")
-        if group: found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
+        if not group: continue
+        if is_maximized(parts[0]):
+            # Agrandie par openbox (bouton, double-clic) sans passer par
+            # winlux-snap : elle a quitté son groupe (#696).
+            leave_snap(parts[0])
+            continue
+        found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
     return found
 
 
@@ -819,14 +826,18 @@ def button_under(point, buttons):
     return None
 
 
-def popup_origin(button, size, monitor):
+TOOLTIP_CLEARANCE = 52   # pixels (échelle 1) laissés à l'infobulle du bouton
+
+
+def popup_origin(button, size, monitor, gap=8):
     """Coin haut gauche de la vignette : au-dessus d'un bouton du bas de l'écran,
-    en dessous d'un bouton du haut, centrée, sans sortir de l'écran."""
+    en dessous d'un bouton du haut, centrée, sans sortir de l'écran ; gap laisse
+    la place à l'infobulle que la barre affiche contre le bouton."""
     bx, by, bw, bh = button
     width, height = size
     mx, my, mw, mh = monitor
     x = min(max(mx, bx + bw // 2 - width // 2), mx + mw - width)
-    y = by - height - 8 if by + bh // 2 > my + mh // 2 else by + bh + 8
+    y = by - height - gap if by + bh // 2 > my + mh // 2 else by + bh + gap
     return x, min(max(my, y), my + mh - height)
 
 
@@ -858,7 +869,7 @@ def group_popup(window, button):
     box.pack_start(heading, False, False, 0)
     map_w = 260
     map_h = max(80, round(map_w * area[3] / max(1, area[2])))
-    layout = Gtk.Fixed()
+    layout = Gtk.Fixed(halign=Gtk.Align.CENTER)
     layout.get_style_context().add_class("preview")
     layout.set_size_request(map_w, map_h)
     box.pack_start(layout, False, False, 0)
@@ -891,7 +902,10 @@ def group_popup(window, button):
     scale = max(1, popup.get_scale_factor())
     width, height = popup.get_size()
     monitor = pick_area([m for m in _monitors()] or [area], (button[0] + button[2] // 2, button[1] + button[3] // 2))
-    x, y = popup_origin(button, (width * scale, height * scale), monitor)
+    # L'infobulle du bouton (titre de la fenêtre, posée par la barre) se place
+    # contre le bouton : la vignette se tient au-delà pour ne pas être cachée.
+    gap = TOOLTIP_CLEARANCE * scale
+    x, y = popup_origin(button, (width * scale, height * scale), monitor, gap)
     popup.move(x // scale, y // scale)
     popup.present()
     state = {"away": 0}
@@ -901,7 +915,9 @@ def group_popup(window, button):
         px, py = px * scale, py * scale
         ox, oy = popup.get_position()
         inside = ox * scale - 16 <= px <= (ox + width) * scale + 16 and oy * scale - 16 <= py <= (oy + height) * scale + 16
-        on_button = button[0] <= px < button[0] + button[2] and button[1] - 12 <= py < button[1] + button[3] + 12
+        # Le bouton et l'espace laissé à l'infobulle mènent à la vignette.
+        on_button = min(button[0], ox * scale) <= px < max(button[0] + button[2], (ox + width) * scale) \
+            and button[1] - gap - 12 <= py < button[1] + button[3] + gap + 12
         state["away"] = 0 if inside or on_button else state["away"] + 1
         if state["away"] >= 3: Gtk.main_quit()
         return True
@@ -1347,8 +1363,16 @@ def watch():
             elif state.get("group_armed") and now - state["group_since"] >= HOVER_DELAY:
                 state["group_armed"] = False
                 rect = dict(buttons)[over]
-                subprocess.Popen([sys.executable, os.path.abspath(__file__), "group", str(over), *map(str, rect)],
-                                 stdout=subprocess.DEVNULL, start_new_session=True)
+                # Une seule vignette à la fois (#697) : celle du même bouton
+                # encore ouverte reste, celle d'un autre bouton est fermée.
+                previous, proc = state.get("group_proc") or (None, None)
+                if proc is not None and proc.poll() is None:
+                    if previous == over: proc = "kept"
+                    else: proc.terminate()
+                if proc != "kept":
+                    state["group_proc"] = (over, subprocess.Popen(
+                        [sys.executable, os.path.abspath(__file__), "group", str(over), *map(str, rect)],
+                        stdout=subprocess.DEVNULL, start_new_session=True))
         # Survol du bouton Agrandir.
         hovered = hovered_maximize(x11, rank)
         if hovered is None:

@@ -239,6 +239,25 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
         cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
     done
 fi
+# Programmes 32 bits (#232) : COM, contrôles et boîtes communes en x86.
+if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    sh "$root/testc/wow32/build.sh" "$root/target/mingw"
+    for name in com32 dlg32; do
+        if test -f "$root/target/mingw/$name.exe"; then
+            cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+        fi
+    done
+fi
+
+# Programmes Windows 32 bits de test (#232) : construits par clang sans
+# CRT, quand clang, lld-link et llvm-dlltool sont là.
+if command -v clang >/dev/null 2>&1 && command -v lld-link >/dev/null 2>&1 \
+    && command -v llvm-dlltool >/dev/null 2>&1; then
+    sh "$root/testc/wow32/build.sh" "$root/target/mingw"
+    for name in hello32 seh32 gui32; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
 
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
@@ -513,7 +532,11 @@ cp "$root/integration/winlux.desktop" "$stage/usr/share/applications/winlux.desk
 cp "$root/integration/winlux-browser.desktop" "$stage/usr/share/applications/winlux-browser.desktop"
 # Xsession et .desktop pour les display managers (installation sur disque).
 cp "$root/scripts/xsession-winlux" "$stage/usr/share/winlux/xsession-winlux"
-cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/applications/winlux-session.desktop"
+# Session pour un gestionnaire de connexion : dans xsessions, jamais dans les
+# applications (Démarrer montait un lanceur « Winlux Desktop » cassé, #635).
+mkdir -p "$stage/usr/share/xsessions"
+cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/xsessions/winlux.desktop"
+rm -f "$stage/usr/share/applications/winlux-session.desktop"
 chmod 755 "$stage/usr/share/winlux/xsession-winlux"
 # Thème : polices DejaVu déjà copiées ; on s'assure que fontconfig est à jour
 # et qu'aucune dépendance propriétaire n'est requise (pas de Segoe UI, pas de
@@ -524,6 +547,7 @@ fi
 sh "$root/scripts/stage-desktop-components.sh" "$stage"
 # Wi-Fi chiffré : la construction échoue si ce qui l'a cassé en v0.2.17 manque.
 sh "$root/scripts/check-image-wifi.sh" "$stage" "$kernel_release"
+sh "$root/scripts/check-image-session.sh" "$stage"
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
@@ -774,18 +798,31 @@ if test -n "$desktop_user"; then
     # Dossier d'état partagé : chacun y écrit ses fichiers, personne ne
     # touche à ceux des autres (sticky), root ne suit pas les liens d'autrui.
     /bin/busybox chmod 1777 /run/winlux
-    # Journal Winlux : les .exe du compte y écrivent winlux.log et crash.log.
-    # Créés ici avant tout service root (winlux --power daemon les créait en
-    # 0644 root) : sinon un plantage sous le compte n'était jamais enregistré,
-    # ni proposé au signalement, ni visible dans l'Observateur d'événements.
+    # Journal Winlux (#633) : un dossier par compte, à lui seul (0700),
+    # créé ici avant toute session pour qu'aucun autre compte ne puisse le
+    # réserver. Les .exe du compte y écrivent winlux.log, crash.log et les
+    # propositions de signalement ; les démons root gardent
+    # /run/winlux/journal (0755). Avant, un journal 1777 aux fichiers 0666
+    # laissait n'importe quel compte effacer ou falsifier les plantages
+    # d'un autre, que winlux-report envoie sur GitHub.
     /bin/busybox mkdir -p /run/winlux/journal
-    /bin/busybox chmod 1777 /run/winlux/journal
-    for journal_file in winlux.log crash.log; do
-        /bin/busybox touch "/run/winlux/journal/$journal_file"
-        /bin/busybox chmod 0666 "/run/winlux/journal/$journal_file"
-    done
+    /bin/busybox chown 0:0 /run/winlux/journal
+    /bin/busybox chmod 0755 /run/winlux/journal
+    /bin/busybox awk -F: '$3 >= 1000 && $3 < 60000 { print $3 ":" $4 }' /etc/passwd 2>/dev/null |
+        while IFS=: read -r journal_uid journal_gid; do
+            journal_dir=/run/winlux/journal-$journal_uid
+            /bin/busybox rm -rf "$journal_dir"
+            /bin/busybox mkdir -m 0700 "$journal_dir" &&
+                /bin/busybox chown "$journal_uid:$journal_gid" "$journal_dir"
+        done
     echo 1 >/proc/sys/fs/protected_symlinks 2>/dev/null || true
     echo 1 >/proc/sys/fs/protected_hardlinks 2>/dev/null || true
+    # /run/winlux reste collant (1777) pour les dossiers par compte
+    # (store-, control-, tray-, journal-<uid>) : un fichier qu'un compte y
+    # crée à l'avance ne peut plus être ouvert par root ni par un autre
+    # compte (#633), comme /tmp sur les distributions courantes.
+    echo 2 >/proc/sys/fs/protected_regular 2>/dev/null || true
+    echo 2 >/proc/sys/fs/protected_fifos 2>/dev/null || true
 else
     /bin/busybox touch /etc/winlux/live-session
 fi
@@ -969,10 +1006,17 @@ if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
     /bin/busybox poweroff -f
     while :; do /bin/busybox sleep 2; done
 fi
+# Mode jeu en cours : seulement le drapeau posé par le démon root. Un
+# gamemode.active créé par un compte (dossier collant) suspendait mises à
+# jour et historique des fichiers pour tout le monde (#643).
+gamemode_active() {
+    test -f /run/winlux/gamemode.active && test ! -L /run/winlux/gamemode.active &&
+        test "$(/bin/busybox stat -c %u /run/winlux/gamemode.active 2>/dev/null)" = 0
+}
 (
     while :; do
         # Pas de mise à jour automatique pendant une partie (mode jeu).
-        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
+        while gamemode_active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
         /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
@@ -981,7 +1025,7 @@ fi
 (
     # Historique des fichiers : chaque utilisateur selon sa fréquence.
     while :; do
-        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
+        while gamemode_active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
         /bin/busybox sleep 60
     done

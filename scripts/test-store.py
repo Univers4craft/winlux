@@ -228,7 +228,7 @@ esac
     check("refreshing=0" in index, "rafraîchissement terminé")
     check("system_updates=2" in index, "mises à jour système")
     gimp = lines.get("apt:gimp")
-    check(gimp and gimp[1] == "multimedia" and gimp[5] == "a", "GIMP apt disponible")
+    check(gimp and gimp[1] == "graphisme" and gimp[5] == "a", "GIMP apt disponible")
     check(gimp[9].endswith("gimp_gimp.png") and gimp[10] == "Ubuntu" and gimp[11] == "1", "icône, badge, sélection")
     check("flatpak:org.gimp.GIMP" in gimp[12] and "flatpak:org.gimp.GIMP" not in lines, "doublon fusionné")
     vlc = lines.get("apt:vlc")
@@ -242,7 +242,7 @@ esac
     npp = lines.get("windows:local/notepadpp")
     check(npp and npp[10] == "Catalogue local" and npp[11] == "1", "catalogue Windows")
     check(not any("empreinte" in k for k in lines), "fiche sans SHA-256 refusée")
-    for c in ["navigateurs", "bureautique", "multimedia", "developpement", "jeux", "utilitaires"]:
+    for c in ["internet", "bureautique", "multimedia", "graphisme", "developpement", "jeux", "systeme"]:
         check(any(v[1] == c for v in lines.values()), f"catégorie {c}")
 
     st("details", "apt:gimp")
@@ -381,4 +381,37 @@ esac
         check(apt_message("dlstatus", "Retrieving file 1 of 3") == ns["T"][lang]["apt_download"], f"téléchargement ({lang})")
         check(apt_message("pmstatus", "Quelque chose d'inconnu") == ns["T"][lang]["apt_working"], f"repli générique ({lang})")
     check("Installed abiword" not in (run / "store-progress.txt").read_text(), "pas d'anglais brut dans le Store")
+
+    # Sélection de l'équipe (#716) : au moins 250 logiciels, chacun décrit
+    # dans les quatre langues, rangés dans une catégorie connue.
+    rows = [l.split("|") for l in (project / "integration/store-catalog.txt").read_text().splitlines()
+            if l and not l.startswith("#") and not l.startswith("featured=")]
+    check(len(rows) >= 250, f"sélection étendue ({len(rows)} logiciels)")
+    check(all(len(r) == 9 and all(r[5:]) for r in rows), "descriptions fr/en/es/de")
+    check(all(r[1] in ns["CATEGORIES"] for r in rows), "catégories connues")
+    check(len({r[0] for r in rows}) == len(rows) and len({r[3] for r in rows}) == len(rows), "ni identifiant ni paquet en double")
+    browsers = {r[0] for r in rows if r[1] == "internet" and "navigat" in r[5].lower()}
+    featured = next(l[9:] for l in (project / "integration/store-catalog.txt").read_text().splitlines()
+                    if l.startswith("featured=")).split(",")
+    check(not browsers & set(featured), "aucun navigateur en vedette (docs/BROWSERS.md)")
+    for lang, word in (("en", "Plays almost"), ("es", "Reproduce casi"), ("de", "Spielt fast"), ("fr", "Lit presque")):
+        ns["LANG"] = lang
+        ns["Apt"].curated.__globals__["LANG"] = lang
+        ns["Apt"].curated.__globals__["CATALOG"] = project / "integration/store-catalog.txt"
+        check(ns["Apt"]().curated()["vlc"]["desc"].startswith(word), f"description de la sélection ({lang})")
+    check(ns["category_of"](["Education", "Science", "Astronomy"]) == "sciences"
+          and ns["category_of"](["Game", "Education"]) == "jeux"
+          and ns["category_of"](["Graphics", "Photography"]) == "graphisme"
+          and ns["known_category"]("navigateurs") == "internet", "règles de catégories")
+    # Le Store (store.rs) affiche tout l'index et connaît les mêmes catégories.
+    import re as _re
+    rs = (project / "testexe/src/shell/store.rs").read_text()
+    check(int(_re.search(r"const MAX_APPS: usize = (\d+);", rs)[1]) >= ns["MAX_INDEX"],
+          "le Store lit autant d'applications que l'index en contient")
+    cats_rs = rs[rs.index("const CATS:"):rs.index("const JEUX:")]
+    keys_rs = _re.findall(r'\(\s*b"([a-z]+)",\s*\[', cats_rs)
+    check(sorted(keys_rs) == sorted(ns["CATEGORIES"]), f"mêmes catégories dans store.rs ({keys_rs})")
+    check(keys_rs.index("jeux") == int(_re.search(r"const JEUX: usize = (\d+);", rs)[1])
+          and keys_rs.index("utilitaires") == int(_re.search(r"const UTILITAIRES: usize = (\d+);", rs)[1]),
+          "indices JEUX et UTILITAIRES")
     print("Store : OK")

@@ -57,17 +57,23 @@ def parent_case():
             config = temp / case / "config"
             (config / "gtk-3.0").mkdir(parents=True)
             dark = case.startswith("dark")
+            theme = "Adwaita-dark" if dark else "Adwaita"
+            if case.endswith("-user"):
+                # Thème du compte tel qu'écrit par winlux-personalize theme light|dark,
+                # barre des tâches comprise (#703 : ses couleurs vivent dans le thème).
+                personalize = runpy.run_path(str(directory / "winlux-personalize.py"), run_name="winlux_personalize")
+                theme = f"Winlux-{'dark' if dark else 'light'}-1"
+                folder = temp / "share/themes" / theme / "gtk-3.0"
+                folder.mkdir(parents=True, exist_ok=True)
+                base = "gtk-contained-dark.css" if dark else "gtk-contained.css"
+                (folder / "gtk.css").write_text(
+                    f'@import url("resource:///org/gtk/libgtk/theme/Adwaita/{base}");\n/* Winlux appearance */\n'
+                    + personalize["appearance_css"](dark, "#6a3df0", False) + "\n/* End Winlux appearance */\n", encoding="utf-8")
             (config / "gtk-3.0/settings.ini").write_text(
                 "[Settings]\ngtk-theme-name=%s\ngtk-application-prefer-dark-theme=%d\n"
-                "gtk-enable-animations=false\n" % ("Adwaita-dark" if dark else "Adwaita", dark), encoding="utf-8")
-            # gtk.css livré (couleurs de la barre), puis ce qu'ajoute winlux-personalize.
+                "gtk-enable-animations=false\n" % (theme, dark and not case.endswith("-user")), encoding="utf-8")
+            # gtk.css livré : la forme de la barre, sans couleur.
             css = (shipped / "gtk-3.0/gtk.css").read_text(encoding="utf-8")
-            if case.endswith("-user"):
-                # Ce qu'écrit winlux-personalize theme light|dark (priorité « utilisateur »).
-                bg, fg, surface = ("#181b24", "#ecedf5", "#242a38") if dark else ("#f3f5fa", "#202430", "#ffffff")
-                css += (f"\n/* Winlux appearance */\nwindow, window box, list, viewport {{background-color:{bg}; color:{fg};}} "
-                        f"button {{background:{surface}; color:{fg}; border-color:#6a3df0;}} "
-                        f"entry {{background:{surface}; color:{fg};}}\n/* End Winlux appearance */\n")
             (config / "gtk-3.0/gtk.css").write_text(css, encoding="utf-8")
             # Barre des tâches réelle : horloge et icônes pointées vers le dépôt.
             shutil.copytree(shipped / "xfce4", config / "xfce4")
@@ -280,14 +286,22 @@ def check_clock(case, problems, luminance):
     import time
     output = subprocess.run(["/bin/sh", str(directory / "winlux-clock.sh")], capture_output=True, text=True).stdout
     found = re.search(r'foreground="(#[0-9a-fA-F]{6})"', output)
-    css = (Path(os.environ["XDG_CONFIG_HOME"]) / "gtk-3.0/gtk.css").read_text(encoding="utf-8")
-    panel = re.search(r"\.xfce4-panel\s*\{[^}]*background:\s*(#[0-9a-fA-F]{6})", css)
-    if not found or not panel:
-        problems.append(f"{case} · horloge : couleur du texte ou fond de barre introuvable")
+    # Fond de barre déclaré par le thème du compte (#703) ; avec Adwaita seul,
+    # la barre prend le fond du thème : seuls les pixels affichés font foi.
+    css = "".join(path.read_text(encoding="utf-8") for path in
+                  (Path(os.environ["XDG_DATA_HOME"]) / "themes").glob("*/gtk-3.0/gtk.css")
+                  if f"Winlux-{case.split('-')[0]}-" in str(path))
+    panel = re.search(r"\.xfce4-panel\s*\{[^}]*background-color:\s*(#[0-9a-fA-F]{6})", css)
+    if not found:
+        problems.append(f"{case} · horloge : couleur du texte introuvable")
         return
-    declared = ratio_of(hex_luminance(found[1], luminance), hex_luminance(panel[1], luminance))
-    if declared < MINIMUM:
-        problems.append(f"{case} · horloge : {found[1]} sur {panel[1]} = {declared:.2f}:1")
+    if case.endswith("-user") and not panel:
+        problems.append(f"{case} · fond de la barre absent du thème du compte")
+        return
+    if panel:
+        declared = ratio_of(hex_luminance(found[1], luminance), hex_luminance(panel[1], luminance))
+        if declared < MINIMUM:
+            problems.append(f"{case} · horloge : {found[1]} sur {panel[1]} = {declared:.2f}:1")
     if not (shutil.which("xfce4-panel") and shutil.which("dbus-run-session")):
         print(f"{case} · barre réelle non vérifiée : xfce4-panel absent")
         return

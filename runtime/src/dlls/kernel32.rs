@@ -1477,6 +1477,30 @@ pub unsafe extern "win64" fn get_queued_completion_status_ex(
     1
 }
 
+/// Avec `WINLUX_APITRACE`, chaque message que l'appli écrit sur stderr est
+/// noté avec la pile de l'appelant (au plus 200 par processus) : un
+/// « bad_variant_access was thrown in -fno-exceptions mode » de libc++,
+/// suivi d'un arrêt dans le CRT statique de l'appli, dit ainsi d'où il
+/// vient.
+fn note_stderr_write(text: &[u8]) {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if !crate::thunks::api_trace_active()
+        || COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 200
+    {
+        return;
+    }
+    let shown: String = String::from_utf8_lossy(text)
+        .trim_end()
+        .chars()
+        .take(200)
+        .collect();
+    let calls = crate::dlls::seh::caller_stack(12);
+    crate::thunks::api_note(&format!(
+        "winlux[stderr] « {shown} » écrit par {}",
+        calls.join(" ")
+    ));
+}
+
 pub unsafe extern "win64" fn write_file(
     h: usize,
     buf: *const u8,
@@ -1513,6 +1537,7 @@ pub unsafe extern "win64" fn write_file(
         };
     }
     if h == (-12isize) as usize {
+        note_stderr_write(s);
         return match std::io::stderr().write_all(s) {
             Ok(()) => {
                 if !written.is_null() {
@@ -5088,6 +5113,7 @@ pub unsafe extern "win64" fn create_process_w(
             }
         }
     };
+    crate::log_debug!("process", "CreateProcessW {app:?} {line:?}");
     if app.is_none() && line.is_none() {
         crate::process::set_last_error(87);
         return 0;
@@ -5189,6 +5215,19 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     let mut s = lock(&p.state);
+    let target = s
+        .foreign
+        .or_else(|| s.child.as_ref().map(|c| c.id() as i32));
+    if let Some(pid) = target {
+        // Crashpad arrête ainsi le processus qui a planté : sans cette
+        // ligne, l'enfant disparaissait sans laisser de trace.
+        let line = format!(
+            "winlux: TerminateProcess du processus {pid} (code {code:#x}) demandé par le processus {}",
+            std::process::id()
+        );
+        eprintln!("{line}");
+        crate::thunks::api_note(&line);
+    }
     if let Some(pid) = s.foreign {
         // TerminateProcess est immédiat sous Windows : SIGKILL.
         if libc::kill(pid, libc::SIGKILL) != 0 {
@@ -8135,10 +8174,37 @@ pub unsafe extern "win64" fn duplicate_handle(
     src_handle: usize,
     _dst_process: usize,
     dst_handle: *mut usize,
-    _access: u32,
+    access: u32,
     inherit: i32,
     options: u32,
 ) -> i32 {
+    // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle,
+    // avec des droits jamais plus larges que ceux de l'original.
+    if let Some(r) = crate::dlls::mmap::duplicate_mapping(src_handle, access, options) {
+        return match r {
+            Ok(h) => {
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                crate::dlls::inherit::set(h, inherit != 0);
+                if !dst_handle.is_null() {
+                    *dst_handle = h;
+                }
+                1
+            }
+            Err(code) => {
+                if !dst_handle.is_null() {
+                    *dst_handle = 0;
+                }
+                // DUPLICATE_CLOSE_SOURCE ferme l'original même en cas d'échec.
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                crate::process::set_last_error(code);
+                0
+            }
+        };
+    }
     // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
     // l'original ne ferme pas la copie, comme sous Windows.
     let std_fd = match canon_std(src_handle) as isize {
@@ -8171,9 +8237,6 @@ pub unsafe extern "win64" fn duplicate_handle(
     } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
         // Jeton unique du compte (voir security.rs) : la copie est lui-même.
         Some(src_handle)
-    } else if let Some(h) = crate::dlls::mmap::duplicate_mapping(src_handle) {
-        // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle.
-        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le

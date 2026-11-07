@@ -44,7 +44,8 @@ query() {
 
 status() {
     out="$run/bluetooth.txt"
-    tmp="$out.tmp.$$"
+    # Nom imprévisible (#644) : pas de fichier créé d'avance par un compte dans /run/winlux.
+    tmp=$(mktemp "$out.XXXXXX") || return 1
     {
         if ! have "$ctl" || ! adapter_present || ! show=$(query show 2>/dev/null) || ! printf '%s\n' "$show" | grep -q '^Controller '; then
             printf 'present=0\npowered=0\ndiscovering=0\nconnected=0\n'
@@ -69,6 +70,7 @@ status() {
             printf 'connected=%s\n' "$connected"
         fi
     } > "$tmp"
+    chmod 644 "$tmp"
     mv "$tmp" "$out"
 }
 
@@ -83,7 +85,10 @@ have "$ctl" || { echo 'BlueZ (bluetoothctl) non installe' >&2; exit 1; }
 rc=0
 case "$action" in
     on)
-        if have rfkill; then rfkill unblock bluetooth 2>/dev/null || true; fi
+        # rfkill est dans /usr/sbin, absent du PATH de certains comptes.
+        for tool in rfkill /usr/sbin/rfkill; do
+            if have "$tool"; then "$tool" unblock bluetooth 2>/dev/null || true; break; fi
+        done
         "$ctl" power on || rc=$? ;;
     off) "$ctl" power off || rc=$? ;;
     scan)

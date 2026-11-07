@@ -14,6 +14,15 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl",
+            # Interrupteurs radio (rfkill unblock dans winlux-bluetooth, #604).
+            "rfkill",
+            # glxinfo : moteur de rendu OpenGL dans le rapport de bug (#610).
+            "mesa-utils",
+            # Bus d'accessibilité org.a11y.Bus : lecteurs d'écran, Narrateur,
+            # clavier visuel (#615).
+            "at-spi2-core",
+            # Batterie et secteur pour les applications Linux (UPower, #631).
+            "upower",
             # Luminosité des écrans de bureau par leur câble (DDC/CI, winlux-brightness).
             "ddcutil", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
@@ -22,6 +31,10 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Polices aux métriques d'Arial, Times New Roman et Courier New :
             # les fenêtres des .exe gardent leur mise en page.
             "fonts-liberation",
+            # Chinois, japonais et coréen : un .exe qui en affiche (lien
+            # « 支持台灣獨立 » de Notepad++) a ses glyphes par repli de police
+            # au lieu de carrés, comme la liaison de polices de Windows (#745).
+            "fonts-wqy-microhei",
             "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",

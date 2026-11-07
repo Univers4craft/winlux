@@ -26,7 +26,12 @@ if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$targ
             if test -f /etc/winlux/update.conf && grep -qx 'auto=enabled' /etc/winlux/update.conf; then echo enabled; else echo disabled; fi
             exit 0 ;;
         --busy)
-            pid=$(cat /run/winlux/update-inhibit 2>/dev/null || true)
+            pid=
+            # Seulement le drapeau de root (#643).
+            if test -f /run/winlux/update-inhibit && test ! -L /run/winlux/update-inhibit \
+                && test "$(stat -c %u /run/winlux/update-inhibit 2>/dev/null)" = 0; then
+                pid=$(cat /run/winlux/update-inhibit 2>/dev/null || true)
+            fi
             case "$pid" in ''|0|*[!0-9]*) ;; *) test -d "/proc/$pid" && exit 0 ;; esac
             # APT et dpkg posent des verrous POSIX (fcntl) : visibles dans /proc/locks.
             for lock in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock; do
@@ -53,10 +58,21 @@ download_cache=
 # is independent of the GUI so automatic updates are protected as well.
 progress() {
     mkdir -p "$target_root/run/winlux" "$state_dir"
-    printf 'phase=%s\npercent=%s\ndone=%s\ntotal=%s\nitem=%s\n' "$1" "$2" "$3" "$4" "$5" >"$target_root/run/winlux/update-progress.new.$$"
-    mv -fT "$target_root/run/winlux/update-progress.new.$$" "$target_root/run/winlux/update-progress"
+    # Nom imprévisible (#644) : /run/winlux est collant et ouvert à tous.
+    progress_tmp=$(mktemp "$target_root/run/winlux/update-progress.XXXXXX") || return 0
+    printf 'phase=%s\npercent=%s\ndone=%s\ntotal=%s\nitem=%s\n' "$1" "$2" "$3" "$4" "$5" >"$progress_tmp"
+    chmod 644 "$progress_tmp"
+    mv -fT "$progress_tmp" "$target_root/run/winlux/update-progress"
 }
-inhibit() { mkdir -p "$target_root/run/winlux"; printf '%s\n' "$$" >"$target_root/run/winlux/update-inhibit"; }
+inhibit() {
+    mkdir -p "$target_root/run/winlux"
+    # Fichier neuf renommé (#643) : un update-inhibit posé par un compte est remplacé.
+    inhibit_tmp=$(mktemp "$target_root/run/winlux/update-inhibit.XXXXXX") || return 0
+    printf '%s\n' "$$" >"$inhibit_tmp" && chmod 644 "$inhibit_tmp" && mv -fT "$inhibit_tmp" "$target_root/run/winlux/update-inhibit"
+}
+# Drapeau croyable seulement s'il est à root (ou à ce compte, pour les tests) :
+# un compte ne peut pas suspendre les mises à jour de tous (#643).
+trusted() { test -f "$1" && test ! -L "$1" && { o=$(stat -c %u "$1" 2>/dev/null) && { test "$o" = 0 || test "$o" = "$(id -u)"; }; }; }
 boot_id() { sed -n '1p' "$target_root/proc/sys/kernel/random/boot_id" 2>/dev/null || echo unknown; }
 
 # State/configuration paths must not redirect a confined update onto the host.
@@ -360,7 +376,8 @@ list_updates() {
 mode=${1:-}
 case "$mode" in
     --busy)
-        pid=$(sed -n '1p' "$target_root/run/winlux/update-inhibit" 2>/dev/null || true)
+        pid=
+        if trusted "$target_root/run/winlux/update-inhibit"; then pid=$(sed -n '1p' "$target_root/run/winlux/update-inhibit" 2>/dev/null || true); fi
         case "$pid" in ''|0|*[!0-9]*) exit 1 ;; esac
         kill -0 "$pid" 2>/dev/null; exit $? ;;
     --boot) test "$#" -eq 1 || fail 'arguments inattendus' ;;

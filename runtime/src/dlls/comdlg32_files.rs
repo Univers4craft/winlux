@@ -903,7 +903,158 @@ mod ofn {
     pub const DEF_EXT: usize = 104;
 }
 
-unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
+// ---------- L'Explorateur Winlux comme boîte Ouvrir / Enregistrer ----------
+//
+// Un seul Explorateur dans Winlux (#598) : avec un affichage, la boîte
+// « Ouvrir » ou « Enregistrer sous » d'un programme .exe est l'Explorateur
+// Winlux lui-même (`winlux-shell-app explorer`), avec en bas le champ
+// « Nom du fichier », le type et les boutons Ouvrir/Enregistrer et Annuler.
+// Il vérifie le nom comme la boîte intégrée (fichier introuvable,
+// remplacement, extension par défaut) puis écrit son choix dans un fichier :
+// première ligne le numéro du type (à partir de 1), puis un chemin Windows
+// par ligne, en Latin-1 comme les chemins de l'Explorateur.
+//
+// La boîte intégrée reste le repli : sans affichage, sans l'Explorateur
+// installé, avec `WINLUX_FILEDLG` (tests) ou `WINLUX_FILEDLG_BUILTIN=1`.
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PickRequest {
+    pub save: bool,
+    /// Choix d'un dossier (IFileDialog, FOS_PICKFOLDERS).
+    pub folder: bool,
+    pub flags: u32,
+    pub title: String,
+    pub filters: Vec<(String, String)>,
+    pub filter: usize,
+    pub dir: String,
+    pub name: String,
+    pub def_ext: Option<String>,
+}
+
+/// Variables d'environnement passées à l'Explorateur.
+pub(crate) fn pick_env(r: &PickRequest, result: &str) -> Vec<(&'static str, String)> {
+    let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+    let filters = r
+        .filters
+        .iter()
+        .map(|(d, p)| format!("{}\t{}", clean(d), clean(p)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    vec![
+        (
+            "WINLUX_PICK",
+            if r.folder {
+                "folder"
+            } else if r.save {
+                "save"
+            } else {
+                "open"
+            }
+            .to_string(),
+        ),
+        ("WINLUX_PICK_TITLE", clean(&r.title)),
+        ("WINLUX_PICK_FILTERS", filters),
+        ("WINLUX_PICK_FILTER", (r.filter + 1).to_string()),
+        ("WINLUX_PICK_FLAGS", r.flags.to_string()),
+        ("WINLUX_PICK_NAME", clean(&r.name)),
+        (
+            "WINLUX_PICK_DEFEXT",
+            r.def_ext.as_deref().map(clean).unwrap_or_default(),
+        ),
+        ("WINLUX_PICK_RESULT", result.to_string()),
+    ]
+}
+
+/// Choix rendu par l'Explorateur : (chemins Windows, type choisi à partir
+/// de 0). `None` : annulé.
+pub(crate) fn parse_pick_result(bytes: &[u8], filters: usize) -> Option<(Vec<String>, usize)> {
+    // Latin-1 : chaque octet est un caractère.
+    let text: String = bytes.iter().map(|&b| b as char).collect();
+    let mut lines = text.lines().map(str::trim_end).filter(|l| !l.is_empty());
+    let filter = lines.next()?.trim().parse::<usize>().ok()?;
+    let paths: Vec<String> = lines.map(String::from).collect();
+    if paths.is_empty() || paths.iter().any(|p| p.len() < 3 || p.as_bytes()[1] != b':') {
+        return None;
+    }
+    Some((
+        paths,
+        filter.saturating_sub(1).min(filters.saturating_sub(1)),
+    ))
+}
+
+pub(crate) fn explorer_app() -> Option<PathBuf> {
+    if std::env::var_os("WINLUX_FILEDLG").is_some()
+        || std::env::var("WINLUX_FILEDLG_BUILTIN").is_ok_and(|v| v == "1")
+        || !gui::backend_is_interactive()
+    {
+        return None;
+    }
+    let app = std::env::var_os("WINLUX_SHELL_APP_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/bin/winlux-shell-app"));
+    app.is_file().then_some(app)
+}
+
+/// `None` : Explorateur indisponible, la boîte intégrée prend le relais.
+/// `Some(None)` : annulé. `Some(Some(..))` : choix validé.
+pub(crate) unsafe fn pick_with_explorer(
+    owner: usize,
+    request: &PickRequest,
+    app: &Path,
+) -> Option<Option<(Vec<String>, usize)>> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let result = std::env::temp_dir().join(format!(
+        "winlux-pick-{}-{}.txt",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&result);
+    let mut cmd = std::process::Command::new(app);
+    cmd.arg("explorer").arg(&request.dir);
+    for (k, v) in pick_env(request, &paths::to_windows(&result)) {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().ok()?;
+    // Boîte modale : le programme attend, sa fenêtre reste dessinée.
+    let owner_enabled = owner != 0 && user32::is_window_enabled(owner) != 0;
+    if owner_enabled {
+        user32::enable_window(owner, 0);
+    }
+    let mut msg: gui::Msg = std::mem::zeroed();
+    loop {
+        if !matches!(child.try_wait(), Ok(None)) {
+            break;
+        }
+        let mut quit = None;
+        while user32::peek_message_w(&mut msg, 0, 0, 0, 1) != 0 {
+            if msg.message == 0x0012 {
+                quit = Some(msg.wparam as i32);
+                break;
+            }
+            user32::translate_message(&msg);
+            user32::dispatch_message_w(&msg);
+        }
+        if let Some(code) = quit {
+            let _ = child.kill();
+            let _ = child.wait();
+            user32::post_quit_message(code);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    if owner_enabled {
+        user32::enable_window(owner, 1);
+    }
+    if owner != 0 && gui::is_window(owner) {
+        user32::set_focus(owner);
+    }
+    let bytes = std::fs::read(&result).unwrap_or_default();
+    let _ = std::fs::remove_file(&result);
+    Some(parse_pick_result(&bytes, request.filters.len()))
+}
+
+pub(crate) unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
     set_error(0);
     if ofn_ptr.is_null() {
         set_error(CDERR_INITIALIZATION);
@@ -972,23 +1123,47 @@ unsafe fn file_dialog(ofn_ptr: *mut u8, wide: bool, save: bool) -> i32 {
         .or_else(|| paths::known_folder("Documents").filter(|d| d.is_dir()))
         .unwrap_or_else(paths::home);
 
-    STATE.with(|s| {
-        *s.borrow_mut() = Some(FileState {
-            save,
-            flags,
-            filters,
-            filter,
-            def_ext,
-            dir,
-            initial_name,
-            ..Default::default()
-        })
-    });
-    let r = dialogs::run_builtin(owner, &title, W, H, file_proc as *const () as usize, 0);
-    let st = STATE.with(|s| s.borrow_mut().take()).unwrap_or_default();
-    if r != 1 || st.result.is_empty() {
-        return 0;
-    }
+    let request = PickRequest {
+        save,
+        folder: false,
+        flags,
+        title: title.clone(),
+        filters: filters.clone(),
+        filter,
+        dir: paths::to_windows(&dir),
+        name: initial_name.clone(),
+        def_ext: def_ext.clone(),
+    };
+    let picked = explorer_app().and_then(|app| pick_with_explorer(owner, &request, &app));
+    let (result, filter) = match picked {
+        Some(Some(chosen)) => chosen,
+        Some(None) => return 0,
+        None => {
+            STATE.with(|s| {
+                *s.borrow_mut() = Some(FileState {
+                    save,
+                    flags,
+                    filters,
+                    filter,
+                    def_ext,
+                    dir,
+                    initial_name,
+                    ..Default::default()
+                })
+            });
+            let r = dialogs::run_builtin(owner, &title, W, H, file_proc as *const () as usize, 0);
+            let st = STATE.with(|s| s.borrow_mut().take()).unwrap_or_default();
+            if r != 1 || st.result.is_empty() {
+                return 0;
+            }
+            (st.result, st.filter)
+        }
+    };
+    let st = FileState {
+        result,
+        filter,
+        ..Default::default()
+    };
     let (parts, off, ext) = result_text(&st.result);
     let need: usize = parts.iter().map(|p| p.chars().count() + 1).sum::<usize>() + 1;
     if need > max_file as usize {
@@ -1129,6 +1304,104 @@ mod tests {
         let (p, off, _) = result_text(&["C:\\d\\a.txt".to_string(), "C:\\d\\b.txt".to_string()]);
         assert_eq!(p, vec!["C:\\d", "a.txt", "b.txt"]);
         assert_eq!(off, 5);
+    }
+
+    #[test]
+    fn explorateur_comme_boite_ouvrir_enregistrer() {
+        let r = PickRequest {
+            save: true,
+            folder: false,
+            flags: OFN_OVERWRITEPROMPT,
+            title: "Enregistrer sous".into(),
+            filters: vec![
+                ("Texte (*.txt)".into(), "*.txt".into()),
+                ("Tous\tles fichiers".into(), "*.*".into()),
+            ],
+            filter: 1,
+            dir: "C:\\Users\\d\\Documents".into(),
+            name: "note.txt".into(),
+            def_ext: Some("txt".into()),
+        };
+        let env = pick_env(&r, "Z:\\tmp\\r.txt");
+        let get = |k: &str| {
+            env.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(get("WINLUX_PICK"), "save");
+        assert_eq!(get("WINLUX_PICK_FILTER"), "2");
+        assert_eq!(
+            get("WINLUX_PICK_FILTERS"),
+            "Texte (*.txt)\t*.txt\nTous les fichiers\t*.*"
+        );
+        assert_eq!(get("WINLUX_PICK_FLAGS"), "2");
+        assert_eq!(get("WINLUX_PICK_DEFEXT"), "txt");
+        assert_eq!(get("WINLUX_PICK_RESULT"), "Z:\\tmp\\r.txt");
+        assert_eq!(
+            parse_pick_result(b"2\nC:\\d\\caf\xE9.txt\n", 2),
+            Some((vec!["C:\\d\\caf\u{e9}.txt".to_string()], 1))
+        );
+        assert_eq!(
+            parse_pick_result(b"1\r\nC:\\d\\a.txt\r\nC:\\d\\b.txt\r\n", 2),
+            Some((
+                vec!["C:\\d\\a.txt".to_string(), "C:\\d\\b.txt".to_string()],
+                0
+            ))
+        );
+        assert_eq!(parse_pick_result(b"9\nC:\\a", 2).map(|r| r.1), Some(1));
+        assert_eq!(parse_pick_result(b"", 2), None);
+        assert_eq!(parse_pick_result(b"1\n", 2), None);
+        assert_eq!(parse_pick_result(b"1\nrelatif.txt\n", 2), None);
+    }
+
+    #[test]
+    fn l_explorateur_rend_le_fichier_choisi() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("winlux-pick-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Faux Explorateur : vérifie ses arguments puis choisit un fichier.
+        let app = dir.join("winlux-shell-app");
+        std::fs::write(
+            &app,
+            "#!/bin/sh\n\
+             test \"$1\" = explorer || exit 1\n\
+             out=$(printf '%s' \"$WINLUX_PICK_RESULT\" | sed 's/^[Zz]://; s@\\\\@/@g')\n\
+             if test \"$WINLUX_PICK\" = save; then\n\
+               printf '2\\n%s\\\\%s.txt\\n' \"$2\" \"$WINLUX_PICK_NAME\" > \"$out\"\n\
+             fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut r = PickRequest {
+            save: true,
+            folder: false,
+            flags: 0,
+            title: "Enregistrer sous".into(),
+            filters: vec![("A".into(), "*.a".into()), ("Texte".into(), "*.txt".into())],
+            filter: 0,
+            dir: "C:\\Users\\d\\Documents".into(),
+            name: "note".into(),
+            def_ext: None,
+        };
+        let got = unsafe { pick_with_explorer(0, &r, &app) };
+        assert_eq!(
+            got,
+            Some(Some((
+                vec!["C:\\Users\\d\\Documents\\note.txt".to_string()],
+                1
+            )))
+        );
+        // Fenêtre fermée sans choix : annulé, pas de repli sur l'autre boîte.
+        r.save = false;
+        assert_eq!(unsafe { pick_with_explorer(0, &r, &app) }, Some(None));
+        // Explorateur absent : la boîte intégrée prend le relais.
+        assert_eq!(
+            unsafe { pick_with_explorer(0, &r, &dir.join("absent")) },
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

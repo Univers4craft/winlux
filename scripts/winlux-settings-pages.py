@@ -181,12 +181,16 @@ _TR = {
     'Annuler le dernier import': ('Undo the last import', 'Deshacer la última importación', 'Letzten Import rückgängig machen'),
     'Annuler les impressions': ('Cancel print jobs', 'Cancelar las impresiones', 'Druckaufträge abbrechen'),
     'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation.': ('Full list of Linux apps and Windows programs, with their size and uninstall.', 'Lista completa de aplicaciones de Linux y programas de Windows, con su tamaño y la desinstalación.', 'Vollständige Liste der Linux-Apps und Windows-Programme, mit Größe und Deinstallation.'),
+    'Voir les applications installées': ('See installed apps', 'Ver aplicaciones instaladas', 'Installierte Apps anzeigen'),
     'Arrêter le partage': ('Stop sharing', 'Dejar de compartir', 'Freigabe beenden'),
     'Aucun programme ne démarre avec la session.': ('No program starts with the session.', 'Ningún programa se inicia con la sesión.', 'Kein Programm startet mit der Sitzung.'),
     'Aucun réseau Wi-Fi visible pour l’instant.': ('No Wi-Fi network visible right now.', 'Ninguna red Wi-Fi visible por ahora.', 'Zurzeit ist kein WLAN sichtbar.'),
     'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
     'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
+    'Le service d’impression a refusé la recherche :': ('The print service refused the search:', 'El servicio de impresión rechazó la búsqueda:', 'Der Druckdienst hat die Suche abgelehnt:'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
     'Automatique (recommandé)': ('Automatic (recommended)', 'Automático (recomendado)', 'Automatisch (empfohlen)'),
@@ -295,6 +299,20 @@ _TR = {
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
+    'Compte GitHub': ('GitHub account', 'Cuenta de GitHub', 'GitHub-Konto'),
+    'Connecté en tant que': ('Signed in as', 'Conectado como', 'Angemeldet als'),
+    'Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer ».':
+        ('Your reports go straight to GitHub, under your name, when you click "Send".',
+         'Sus informes van directamente a GitHub, con su nombre, cuando pulsa «Enviar».',
+         'Ihre Berichte gehen direkt unter Ihrem Namen an GitHub, wenn Sie auf „Senden“ klicken.'),
+    'Connectez votre compte GitHub pour envoyer vos rapports directement depuis Winlux. Sans compte, chaque rapport s’ouvre, prérempli, sur le site GitHub.':
+        ('Connect your GitHub account to send your reports straight from Winlux. Without one, each report opens, prefilled, on the GitHub website.',
+         'Conecte su cuenta de GitHub para enviar sus informes directamente desde Winlux. Sin cuenta, cada informe se abre, ya rellenado, en el sitio de GitHub.',
+         'Verbinden Sie Ihr GitHub-Konto, um Berichte direkt aus Winlux zu senden. Ohne Konto öffnet sich jeder Bericht vorausgefüllt auf der GitHub-Website.'),
+    'Se connecter avec GitHub': ('Sign in with GitHub', 'Iniciar sesión con GitHub', 'Mit GitHub anmelden'),
+    'Changer de compte': ('Switch account', 'Cambiar de cuenta', 'Konto wechseln'),
+    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
+    'Créer un compte GitHub gratuitement': ('Create a free GitHub account', 'Crear una cuenta de GitHub gratis', 'Kostenloses GitHub-Konto erstellen'),
     'Silencieux': ('Quiet', 'Silencioso', 'Leise'),
     'Sinon, appui dans le coin inférieur droit.': ('Otherwise, press the bottom-right corner.', 'Si no, pulse la esquina inferior derecha.', 'Sonst unten rechts drücken.'),
     'Sinon, défilement sur le bord du pavé.': ('Otherwise, scroll along the edge of the pad.', 'Si no, desplazamiento por el borde del panel.', 'Sonst Scrollen am Rand des Touchpads.'),
@@ -386,6 +404,15 @@ _TR = {
     "Très grande": ("Extra large", "Muy grande", "Sehr groß"),
     "Alignement": ("Alignment", "Alineación", "Ausrichtung"),
     "Centré": ("Center", "Centrado", "Zentriert"),
+    "Style": ("Style", "Estilo", "Stil"),
+    "Classique, sur toute la largeur": ("Classic, full width", "Clásica, a lo ancho", "Klassisch, volle Breite"),
+    "Flottante, au centre": ("Floating, centered", "Flotante, en el centro", "Schwebend, mittig"),
+    "Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.": ("Floating: the taskbar is as wide as its buttons, centered, with rounded corners.", "Flotante: la barra ocupa el ancho de sus botones, en el centro, con esquinas redondeadas.", "Schwebend: Die Taskleiste ist so breit wie ihre Schaltflächen, mittig, mit abgerundeten Ecken."),
+    "Recherche": ("Search", "Búsqueda", "Suche"),
+    "Zone de recherche": ("Search box", "Cuadro de búsqueda", "Suchfeld"),
+    "Icône seule": ("Icon only", "Solo icono", "Nur Symbol"),
+    "Masquée": ("Hidden", "Oculta", "Ausgeblendet"),
+    "Windows + S ouvre toujours la recherche, même masquée.": ("Windows + S always opens search, even when hidden.", "Windows + S siempre abre la búsqueda, aunque esté oculta.", "Windows + S öffnet die Suche immer, auch wenn sie ausgeblendet ist."),
     "À gauche": ("Left", "A la izquierda", "Links"),
     "Icône du menu Démarrer": ("Start menu icon", "Icono del menú Inicio", "Startmenü-Symbol"),
     "Choisir une image…": ("Choose an image…", "Elegir una imagen…", "Bild auswählen…"),
@@ -440,7 +467,7 @@ _TR = {
     "Tout installer": ("Install all", "Instalar todo", "Alle installieren"),
     "Recherche ou installation en cours…": ("Checking or installing…", "Buscando o instalando…", "Suche oder Installation läuft…"),
     "Journal": ("Log", "Registro", "Protokoll"),
-    "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
+    "Les mises à jour de Winlux lui-même sont dans « Mise à jour OS ».": ("Updates to Winlux itself are under “OS update”.", "Las actualizaciones del propio Winlux están en «Actualización del SO».", "Updates von Winlux selbst finden Sie unter „OS-Update“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
     "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
@@ -708,6 +735,11 @@ _TR = {
     '{name} (non branché)': ('{name} (not plugged in)', '{name} (no conectado)', '{name} (nicht angeschlossen)'),
     '{path} (dossier absent, ignoré)': ('{path} (folder missing, skipped)', '{path} (carpeta ausente, omitida)', '{path} (Ordner fehlt, übersprungen)'),
     '{size} libres': ('{size} free', '{size} libres', '{size} frei'),
+    # Menu Démarrer à deux volets (#685).
+    'Menu Démarrer': ('Start menu', 'Menú Inicio', 'Startmenü'),
+    'Afficher le volet « Pour vous »': ('Show the “For you” pane', 'Mostrar el panel «Para ti»', 'Bereich „Für Sie“ anzeigen'),
+    'Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré.': ('Recent files, apps you usually open at this time and small to-dos, worked out on this PC without sending anything. When off, the menu has a single centred pane.', 'Archivos recientes, aplicaciones habituales a esta hora y pequeñas tareas, calculados en este PC sin enviar nada. Desactivado, el menú tiene un solo panel centrado.', 'Zuletzt verwendete Dateien, um diese Uhrzeit übliche Apps und kleine Aufgaben, auf diesem PC berechnet, ohne etwas zu senden. Ausgeschaltet hat das Menü nur noch einen zentrierten Bereich.'),
+    'Effacer l’historique d’utilisation': ('Clear usage history', 'Borrar el historial de uso', 'Nutzungsverlauf löschen'),
     '« Conserver les deux » : un fichier modifié depuis la sauvegarde garde sa version actuelle, l’ancienne arrive à côté avec « (restauré …) » dans son nom.': ('“Keep both”: a file changed since the backup keeps its current version; the old one is placed next to it with “(restauré …)” in its name.', '«Conservar ambos»: un archivo modificado después de la copia conserva su versión actual; la antigua se coloca al lado con «(restauré …)» en su nombre.', '„Beide behalten“: Eine seit der Sicherung geänderte Datei behält ihre aktuelle Version; die alte wird mit „(restauré …)“ im Namen daneben abgelegt.'),
 }
 
@@ -718,6 +750,39 @@ def _t(text):
 
 
 HOME = Path.home()
+START_STATE = HOME / ".config/winlux/start.json"
+
+
+def taskbar_preferences():
+    """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre (#703)."""
+    values = {"STYLE": "classic", "SEARCH": "box"}
+    path = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "winlux/taskbar.conf"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if (key, value) in (("STYLE", "classic"), ("STYLE", "floating"), ("SEARCH", "box"), ("SEARCH", "icon"), ("SEARCH", "hidden")):
+                values[key] = value
+    except (OSError, UnicodeDecodeError):
+        pass
+    return values
+
+
+def start_menu_state():
+    try:
+        state = json.loads(START_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def update_start_menu_state(**changes):
+    """Change quelques clés de start.json sans toucher aux épingles."""
+    state = start_menu_state()
+    state.update(changes)
+    START_STATE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = START_STATE.with_suffix(".settings.tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(START_STATE)
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 
 
@@ -746,6 +811,7 @@ PAGE_WIFI = 35
 PAGE_CERTS = 36
 PAGE_PHONE = 37
 PAGE_BACKUP = 38
+PAGE_INSTALLED = 39
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -857,6 +923,20 @@ REPORT_TOKEN_URL = ("https://github.com/settings/personal-access-tokens/new?name
                     "&expires_in=365&issues=write")
 
 
+GITHUB_SIGNUP_URL = "https://github.com/signup"
+
+
+def report_account():
+    """Nom du compte GitHub connecté pour les rapports (#725), ou « »."""
+    path = Path(os.environ.get("WINLUX_REPORT_ACCOUNT")
+                or Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/github-account.json")
+    try:
+        login = json.loads(path.read_text()).get("login", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return login if isinstance(login, str) and re.fullmatch(r"[A-Za-z0-9-]{1,39}", login) else ""
+
+
 def report_queue_size():
     state = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state"))
     try:
@@ -869,6 +949,35 @@ REPORT_MODES = (("auto", "Automatique"), ("browser", "Par le navigateur"), ("fil
 EXE_PRIORITIES = (("auto", "Automatique"), ("low", "Basse"), ("normal", "Normale"), ("high", "Haute"), ("realtime", "Temps réel"))
 EXE_CORES = (("auto", "Automatique"), ("performance", "Cœurs performants (P)"), ("efficiency", "Cœurs économes (E)"))
 EXE_GPUS = (("auto", "Automatique"), ("integrated", "GPU économie d’énergie"), ("dedicated", "GPU hautes performances"))
+
+
+PREVIOUS_LINE = "Version précédente conservée : "
+
+
+def recovery_text(saved):
+    return _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée.")
+
+
+def previous_version_kept(updates=None):
+    """Version précédente conservée (« v0.2.19 »), « ? » si conservée sans
+    numéro lisible, "" sinon. Un seul avis pour l'encadré du haut de Mises à
+    jour, le bouton Restaurer et « Secours et restauration » (#636) : avec APT,
+    c'est la liste publiée par winlux-update (lancé en root, il voit toujours
+    /var/cache/winlux) qui fait foi ; le compte ne regarde lui-même le paquet
+    que si cette liste n'existe pas encore."""
+    if read("/usr/share/winlux/update-backend").strip() == "apt":
+        text = read("/run/winlux/updates.txt") if updates is None else updates
+        if text.strip():
+            line = next((line for line in text.splitlines() if line.startswith(PREVIOUS_LINE)), "")
+            return (line[len(PREVIOUS_LINE):].strip() or "?") if line else ""
+        try: return "?" if os.path.isfile("/var/cache/winlux/previous.deb") else ""
+        except OSError: return ""
+    name = read("/var/lib/winlux/rollback-current").strip()
+    try:
+        kept = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
+    except OSError:
+        kept = False
+    return "?" if kept else ""
 
 
 def read(path):
@@ -1323,6 +1432,8 @@ def page_available(page, status=None):
         return module is not None and module.available()
     if page == PAGE_BACKUP:
         return have("winlux-backup") or BACKUP_RUN.is_dir()
+    if page == PAGE_INSTALLED:
+        return installed_apps_module() is not None
     if page == PAGE_PHONE:
         # Rien d’associé : pas de page (l’application Téléphone connecté associe).
         return bool(phone_devices())
@@ -1568,6 +1679,24 @@ def phone_devices():
 
 
 
+def installed_apps_module():
+    """winlux-installed-apps (#722), installé à côté ou dans scripts/ du dépôt."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-installed-apps.py"), here.with_name("winlux-installed-apps")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_installed_apps", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_installed_apps", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1600,7 +1729,7 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
-                   PAGE_BACKUP: "page_backup"}
+                   PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1858,12 +1987,21 @@ class ExtraPages:
         sizes = [("32", _t("Petite")), ("40", _t("Moyenne")), ("48", _t("Grande")), ("56", _t("Très grande"))]
         size = xfconf_get("xfce4-panel", "/panels/panel-1/size") or prefs.get("panel-size", "40")
         self.combo(box, _t("Taille"), sizes, size, lambda value: self.tool(["winlux-personalize", "panel-size", value]))
+        # Style et recherche de la barre (#703), réglage propre au compte.
+        taskbar = taskbar_preferences()
+        self.combo(box, _t("Style"), [("classic", _t("Classique, sur toute la largeur")), ("floating", _t("Flottante, au centre"))],
+                   taskbar["STYLE"], lambda value: self.tool(["winlux-personalize", "taskbar-style", value]),
+                   _t("Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.") if taskbar["STYLE"] == "floating" else None)
         self.combo(box, _t("Alignement"), [("center", _t("Centré")), ("left", _t("À gauche"))],
                    self.status.get("align") or "center", lambda value: self.execute("align-" + value))
+        self.combo(box, _t("Recherche"), [("box", _t("Zone de recherche")), ("icon", _t("Icône seule")), ("hidden", _t("Masquée"))],
+                   taskbar["SEARCH"], lambda value: self.tool(["winlux-personalize", "search", value]),
+                   _t("Windows + S ouvre toujours la recherche, même masquée."))
         self.row(box, _t("Icône du menu Démarrer"), self.browse_button(
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.start_menu_settings()
         self.theme_files()
         if have("winlux-widgets"):
             self.widget_settings()
@@ -1886,6 +2024,17 @@ class ExtraPages:
             # « Aligner les icônes sur la grille » de Windows : seul le
             # rangement automatique est proposé.
             self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
+
+    def start_menu_settings(self):
+        """Menu Démarrer (#685) : volet « Pour vous » et historique local.
+        Réglage propre au compte, dans ~/.config/winlux/start.json, relu par le
+        menu à chaque ouverture ; proposé ici seulement, pas à l'installation."""
+        self.section(_t("Menu Démarrer"))
+        box = self.card()
+        self.switch(box, _t("Afficher le volet « Pour vous »"), start_menu_state().get("for_you", True) is not False,
+                    lambda on: update_start_menu_state(for_you=bool(on)),
+                    _t("Fichiers récents, applications habituelles à cette heure et petites choses à faire, calculés sur ce PC sans rien envoyer. Coupé, le menu n’a plus qu’un volet, centré."))
+        self.actions(box, [(_t("Effacer l’historique d’utilisation"), lambda: update_start_menu_state(usage=[], recent=[], dismissed=[]))])
 
     def wallpaper_modes(self, box, tool, moods):
         """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
@@ -2063,11 +2212,11 @@ class ExtraPages:
         if verb == "remove" and not self.confirm(_t("Supprimer le lecteur {letter}: ?").format(letter=letter)): return
         self.tool(drives_tool() + [verb, letter])
 
-    # ── Mises à jour système (APT) ──
+    # ── Mise à jour application (APT, page 17) ──
 
     def page_sysupdate(self):
         status = self.status
-        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mises à jour »."))
+        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mise à jour OS »."))
         self.section(_t("Logiciels et pilotes Linux"))
         box = self.card()
         busy = status.get("sysupdate_busy") == "1"
@@ -2311,7 +2460,12 @@ class ExtraPages:
         programs = installed_programs(module)
         self.hybrid = gpu_hybrid()
         self.hint(_t("Les réglages s’appliquent au prochain lancement du programme."))
-        self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
+        # Une seule liste des applications installées, avec les vraies icônes
+        # des .exe (#756) ; la fenêtre du shell PE n'en montrait aucune.
+        if installed_apps_module() is not None:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), self.open_installed_windows)])
+        else:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
         exes = Gtk.FileFilter()
         exes.set_name(_t("Programmes Windows (.exe)"))
         exes.add_pattern("*.exe")
@@ -2325,7 +2479,14 @@ class ExtraPages:
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
         self.program_cards = {}
+        # Ouvert depuis « Compatibilité » de l'Explorateur : ce programme en
+        # premier, même s'il n'est pas dans la liste des programmes installés.
+        wanted, self.pending_exe = getattr(self, "pending_exe", None), None
+        if wanted is not None:
+            name = next((n for e, n in programs if e == wanted), wanted.stem)
+            self.program_card(module, wanted, name, first=True)
         for exe, name in programs:
+            if exe == wanted: continue
             self.program_card(module, exe, name)
         GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
 
@@ -2933,17 +3094,21 @@ class ExtraPages:
     def sections_recovery(self):
         self.section(_t("Secours et restauration"))
         box = self.card()
-        if read("/usr/share/winlux/update-backend").strip() == "apt":
-            saved = Path("/var/cache/winlux/previous.deb").is_file()
-        else:
-            name = read("/var/lib/winlux/rollback-current").strip()
-            saved = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
-        self.row(box, _t("Version précédente"), None,
-                 _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
+        line = self.row(box, _t("Version précédente"), None, recovery_text(previous_version_kept()))
+        # Relue à chaque rafraîchissement de la page (#636) : après une mise à
+        # jour, l'encadré du haut changeait et cette ligne restait à l'état
+        # d'ouverture de la page (« Aucune version précédente conservée »).
+        self.recovery_label = line.get_children()[0].get_children()[1]
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
         if page_available(PAGE_RECOVERY):
             self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    def refresh_recovery(self):
+        label = getattr(self, "recovery_label", None)
+        if label is None: return
+        text = recovery_text(previous_version_kept())
+        if label.get_text() != text: label.set_text(text)
 
     # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
 
@@ -2967,6 +3132,20 @@ class ExtraPages:
         self.actions(box, [(_t("Signaler un problème"), lambda: self.spawn(["winlux-report"])),
                            (_t("Dernier plantage"), lambda: self.spawn(["winlux-report", "--crash", "--force"])),
                            (_t("Rapports enregistrés"), lambda: self.spawn(["winlux-report", "--open-saved"]))])
+        # Compte GitHub de l'utilisateur (#725) : connexion dans la fenêtre de
+        # winlux-report, qui garde le jeton dans le compte (0600).
+        self.section(_t("Compte GitHub"))
+        box = self.card()
+        login = report_account()
+        if login:
+            self.row(box, _t("Connecté en tant que"), Gtk.Label(label="@" + login),
+                     _t("Vos rapports partent directement sur GitHub, sous votre nom, quand vous cliquez « Envoyer »."))
+            self.actions(box, [(_t("Changer de compte"), lambda: self.tool(["winlux-report", "--account-connect"])),
+                               (_t("Se déconnecter"), lambda: self.tool(["winlux-report", "--account-forget"]))])
+        else:
+            self.hint(_t("Connectez votre compte GitHub pour envoyer vos rapports directement depuis Winlux. Sans compte, chaque rapport s’ouvre, prérempli, sur le site GitHub."), box)
+            self.actions(box, [(_t("Se connecter avec GitHub"), lambda: self.tool(["winlux-report", "--account-connect"])),
+                               (_t("Créer un compte GitHub gratuitement"), lambda: self.spawn(["xdg-open", GITHUB_SIGNUP_URL]))])
         self.section(_t("Préférences"))
         box = self.card()
         self.switch(box, _t("Proposer un rapport après un plantage"), status.get("report_offer") != "off",
@@ -3061,8 +3240,18 @@ class ExtraPages:
 
     def find_printers(self):
         self.printer_list.remove_all()
-        found = run(["lpinfo", "-v"], timeout=30)
-        for line in (found.stdout.splitlines() if found else []):
+        try:
+            found = subprocess.run(["lpinfo", "-v"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.show_error(_t("Ajouter une imprimante"), str(error))
+            return
+        if found.returncode:
+            # « Interdit » (compte hors de lpadmin, #622) ou CUPS arrêté : la
+            # vraie raison, pas « vérifiez qu'elle est allumée ».
+            self.show_error(_t("Ajouter une imprimante"), _t("Le service d’impression a refusé la recherche :") + " "
+                            + ((found.stderr or found.stdout).strip()[-500:] or f"lpinfo : code {found.returncode}"))
+            return
+        for line in found.stdout.splitlines():
             uri = line.split(None, 1)[-1]
             if "://" in uri and not uri.startswith(("file:", "beh:", "cups-pdf:")):
                 self.printer_list.append(uri, uri)
@@ -3460,7 +3649,26 @@ class ExtraPages:
                         lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
         self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
 
+    def page_installed(self):
+        """Applications installées (#722) : tout ce qui est installé, Linux et
+        Windows, avec recherche, tri, taille et Désinstaller."""
+        module = installed_apps_module()
+        if module is None: return
+        # « Installer ou désinstaller des programmes » (Programmes Windows,
+        # winlux-shell-app programs) : liste filtrée sur Windows (#756).
+        kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
+        self.installed_filter = None
+        self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def open_installed_windows(self):
+        self.installed_filter = "windows"
+        self.open_page(PAGE_INSTALLED)
+
     def page_apps(self):
+        if installed_apps_module() is not None:
+            box = self.card()
+            self.row(box, _t("Applications installées"), None, _t("Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation."))
+            self.actions(box, [(_t("Voir les applications installées"), lambda: self.open_page(PAGE_INSTALLED))])
         self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:

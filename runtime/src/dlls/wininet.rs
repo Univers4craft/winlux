@@ -1050,6 +1050,103 @@ pub fn exports() -> Exports {
     }
 }
 
+/// Type MIME reconnu d'après les premiers octets (signatures publiques des
+/// formats), sinon d'après l'extension de l'URL.
+fn sniff_mime(data: &[u8], url: &str) -> Option<&'static str> {
+    let starts = |sig: &[u8]| data.starts_with(sig);
+    let by_data = if starts(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if starts(b"\xFF\xD8\xFF") {
+        Some("image/pjpeg")
+    } else if starts(b"GIF87a") || starts(b"GIF89a") {
+        Some("image/gif")
+    } else if starts(b"BM") && data.len() >= 14 {
+        Some("image/bmp")
+    } else if starts(b"%PDF-") {
+        Some("application/pdf")
+    } else if starts(b"PK\x03\x04") {
+        Some("application/x-zip-compressed")
+    } else if starts(b"MZ") {
+        Some("application/x-msdownload")
+    } else if starts(b"\x1F\x8B") {
+        Some("application/x-gzip-compressed")
+    } else {
+        let head = String::from_utf8_lossy(&data[..data.len().min(512)]).to_ascii_lowercase();
+        let t = head.trim_start();
+        if t.starts_with("<!doctype html") || t.starts_with("<html") || t.contains("<head") {
+            Some("text/html")
+        } else if t.starts_with("<?xml") {
+            Some("text/xml")
+        } else {
+            None
+        }
+    };
+    by_data.or_else(|| {
+        let ext = url
+            .rsplit(['/', '\\'])
+            .next()?
+            .rsplit_once('.')?
+            .1
+            .to_ascii_lowercase();
+        Some(match ext.as_str() {
+            "htm" | "html" => "text/html",
+            "txt" => "text/plain",
+            "xml" => "text/xml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "pdf" => "application/pdf",
+            "zip" => "application/x-zip-compressed",
+            "exe" | "dll" => "application/x-msdownload",
+            _ => return None,
+        })
+    })
+}
+
+/// FindMimeFromData : contenu d'abord, puis URL, puis type proposé ; à
+/// défaut application/octet-stream (données) ou E_FAIL (rien du tout).
+pub unsafe extern "win64" fn find_mime_from_data(
+    _bc: *mut c_void,
+    url: *const u16,
+    buffer: *const u8,
+    size: u32,
+    proposed: *const u16,
+    _flags: u32,
+    out: *mut *mut u16,
+    _reserved: u32,
+) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+    const E_FAIL: i32 = 0x8000_4005u32 as i32;
+    const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
+    if out.is_null() || (url.is_null() && buffer.is_null()) {
+        return E_INVALIDARG;
+    }
+    let data = if buffer.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(buffer, size as usize)
+    };
+    let url = if url.is_null() {
+        String::new()
+    } else {
+        super::wstr(url)
+    };
+    let mime = match sniff_mime(data, &url) {
+        Some(m) => m.to_string(),
+        None if !proposed.is_null() => super::wstr(proposed),
+        None if !data.is_empty() => "application/octet-stream".into(),
+        None => return E_FAIL,
+    };
+    let w: Vec<u16> = mime.encode_utf16().chain(Some(0)).collect();
+    let p = super::ole32::co_task_mem_alloc(w.len() * 2) as *mut u16;
+    if p.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+    *out = p;
+    0
+}
+
 pub fn urlmon_exports() -> Exports {
     crate::exports! {
         "URLDownloadToFileA" => fn url_download_to_file_a,
@@ -1057,12 +1154,24 @@ pub fn urlmon_exports() -> Exports {
         "URLDownloadToCacheFileA" => fn url_download_to_cache_file_a,
         "URLDownloadToCacheFileW" => fn url_download_to_cache_file_w,
         "ObtainUserAgentString" => fn obtain_user_agent_string,
+        "FindMimeFromData" => fn find_mime_from_data,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn type_mime_par_contenu_puis_url() {
+        assert_eq!(sniff_mime(b"\x89PNG\r\n\x1a\nxx", ""), Some("image/png"));
+        assert_eq!(sniff_mime(b"  <!DOCTYPE html><p>", ""), Some("text/html"));
+        assert_eq!(
+            sniff_mime(b"", "https://x.fr/a/b.PDF"),
+            Some("application/pdf")
+        );
+        assert_eq!(sniff_mime(b"\x00\x01", "x.inconnu"), None);
+    }
     use std::io::{Read, Write};
     use std::net::TcpListener;
 

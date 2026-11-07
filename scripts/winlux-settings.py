@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Native settings: nonblocking control actions and live Linux status."""
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,7 @@ _TR = {
     'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
     'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
     "Échec de l’opération. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
+    'Installation des mises à jour': ('Installing updates', 'Instalando actualizaciones', 'Updates werden installiert'),
     'Opération terminée.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
     'Une opération est déjà en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
     'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
@@ -97,6 +99,7 @@ _TR = {
     'Souris': ('Mouse', 'Mouse', 'Maus'),
     'Personnalisation': ('Personalization', 'Personalización', 'Personalisierung'),
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
+    'Mise à jour OS': ('OS update', 'Actualización del SO', 'OS-Update'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
     'Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation.': ('Free software (GNU GPL v3). Independent project, neither affiliated with nor endorsed by Microsoft; Windows is a trademark of Microsoft Corporation.', 'Software libre (GNU GPL v3). Proyecto independiente, no afiliado a Microsoft ni aprobado por ella; Windows es una marca de Microsoft Corporation.', 'Freie Software (GNU GPL v3). Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke der Microsoft Corporation.'),
@@ -107,7 +110,7 @@ _TR = {
     'Localisation': ('Language & region', 'Idioma y región', 'Sprache und Region'),
     'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
     'Son avancé': ('Advanced sound', 'Sonido avanzado', 'Erweiterter Sound'),
-    'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemupdates'),
+    'Mise à jour application': ('Application update', 'Actualización de aplicaciones', 'Anwendungsupdate'),
     'Confidentialité': ('Privacy', 'Privacidad', 'Datenschutz'),
     # Confidentialité et sécurité : verrouillage de l'écran.
     'Confidentialité et sécurité': ('Privacy & security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
@@ -251,6 +254,7 @@ _TR = {
     'Indisponible': ('Unavailable', 'No disponible', 'Nicht verfügbar'),
     'Installation': ('Installing', 'Instalación', 'Installation'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -322,29 +326,31 @@ def _t(text):
 # Les numéros de page ne changent jamais : barre des tâches, menu Démarrer,
 # assistant d’accueil et Paramètres PE ouvrent une page par son numéro.
 PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t("Son"), _t("Clavier et souris"),
-         _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
+         _t("Souris"), _t("Personnalisation"), _t("Mise à jour OS"), _t("Écran"), _t("À propos"),
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
-         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son"), _t("Mises à jour système"),
+         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son"), _t("Mise à jour application"),
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde")]
+         _t("Sauvegarde"), _t("Applications installées")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 38 n’existent que dans les Paramètres natifs.
-CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
+# Pages 29 à 39 n’existent que dans les Paramètres natifs.
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
-              (_t("Applications"), [1, 10, 11, 15, 30]),
+              (_t("Applications"), [39, 1, 10, 11, 15, 30]),
               (_t("Comptes"), [33, 38]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
+              # Catégorie à part, juste au-dessus de la confidentialité (voir l’issue du signalement par compte GitHub).
+              (_t("Signaler un problème"), [25]),
               (_t("Confidentialité et sécurité"), [18, 36]),
               (_t("Mises à jour"), [7, 17])]
 # Anciennes pages fondues dans une autre : Son (3) dans Son, Souris (5) dans
@@ -537,6 +543,7 @@ UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en 
                    "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
                    "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
 PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
+UPDATE_ACTIONS = ("update-apply", "update-rollback")
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -847,6 +854,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.page_opened = time.time()
         self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
+        self.recovery_label = None
         category = category_of(self.current)
         if len(self.shown_pages(category)) > 1:
             self.label(CATEGORIES[category][0] + "  ›", "subtitle")
@@ -919,7 +927,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
 
     def privacy_controls(self):
         """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
@@ -1017,6 +1025,26 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             shown = browser_buttons_shown(status, action)
             if child.get_visible() != shown: child.set_visible(shown)
 
+    def keep_screen_on(self, wanted):
+        """Demande org.freedesktop.ScreenSaver.Inhibit tenue pendant l'installation
+        (économiseur et DPMS, winlux-screensaver-inhibit) ; rendue après."""
+        cookie = getattr(self, "screen_cookie", None)
+        if wanted == (cookie is not None): return
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            if wanted:
+                reply = bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                                      "Inhibit", GLib.Variant("(ss)", ("Paramètres", _t("Installation des mises à jour"))),
+                                      GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 3000, None)
+                self.screen_cookie = reply.unpack()[0]
+            else:
+                self.screen_cookie = None
+                bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                              "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as error:
+            print(f"Demande « écran allumé » impossible : {error.message}", file=sys.stderr)
+            if not wanted: self.screen_cookie = None
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -1040,6 +1068,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Page branchée : l'état relu après l'action (appareil appairé, mode changé…).
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
+        # Installation en cours : l'écran ne s'éteint pas (#634, le DPMS coupait
+        # l'écran au milieu d'une mise à jour lancée ici).
+        self.keep_screen_on(self.busy or (self.process is not None and self.active_action in UPDATE_ACTIONS))
         fields = FIELDS.get(self.page, [])
         if self.page == 23:
             fields, _ = power_page_items(fields, [], power_hardware())
@@ -1060,8 +1091,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.rollback_button is not None:
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
-        if self.page == 7: text = localize_update_text(text)
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
+        if self.page == 7:
+            text = localize_update_text(text)
+            # « Secours et restauration » relu avec l'encadré : un seul avis (#636).
+            self.refresh_recovery()
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
             self.show_browser_buttons(status)
@@ -1184,6 +1218,23 @@ def browsers_waiting():
     return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
 
 
+def exe_from_windows(value):
+    """Chemin Linux d'un .exe donné en chemin Windows (C:\\…, Z:\\…), avec
+    les règles du runtime (lecteurs, profil, dossiers connus) ; None sinon."""
+    value = value.strip()
+    if not value: return None
+    if value.startswith("/"): path = Path(value)
+    else:
+        winlux = shutil.which("winlux") or "/usr/bin/winlux"
+        try:
+            result = subprocess.run([winlux, "--linux-path", value], capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0: return None
+        path = Path(os.fsdecode(result.stdout.rstrip(b"\n")))
+    return path if path.suffix.lower() == ".exe" and path.is_file() else None
+
+
 class SettingsApp(Gtk.Application):
     """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement
     (menu Démarrer, raccourci, autre page) la ramène devant et ouvre la page
@@ -1194,11 +1245,18 @@ class SettingsApp(Gtk.Application):
 
     def do_command_line(self, line):
         page = line.getenv("WINLUX_SETTINGS_PAGE") or ""
+        if line.getenv("WINLUX_INSTALLED_FILTER"): os.environ["WINLUX_INSTALLED_FILTER"] = line.getenv("WINLUX_INSTALLED_FILTER")
+        # « Compatibilité » d'un .exe dans l'Explorateur : Programmes Windows,
+        # sur la carte de ce programme (chemin Windows converti par winlux).
+        exe = exe_from_windows(line.getenv("WINLUX_SETTINGS_EXE") or "")
+        if exe: page = str(EXTRA.PAGE_PROGRAMS)
         if self.window is None:
             if page: os.environ["WINLUX_SETTINGS_PAGE"] = page
+            EXTRA.ExtraPages.pending_exe = exe
             self.window = Settings()
             self.add_window(self.window)
         elif page.isdigit():
+            self.window.pending_exe = exe
             self.window.open_page(int(page))
         self.window.present()
         return 0
@@ -1217,6 +1275,8 @@ PAGE_NAMES = {
     "presse-papiers": 32, "accounts": 33, "yourinfo": 33, "otherusers": 33, "comptes": 33,
     "hardware": 34, "drivers": 34, "pilotes": 34,
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
+    # ms-settings:appsfeatures ouvre « Applications installées » (#722).
+    "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
 }
 
 

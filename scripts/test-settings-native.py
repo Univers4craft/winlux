@@ -109,6 +109,24 @@ def check():
                     empty = [w for w in walk(window.body) if isinstance(w, Gtk.Label) and "card" in w.get_style_context().list_classes()
                              and not w.get_text().strip()]
                     assert not empty, f"Cadre vide : {title}"
+        # #739 : « Compatibilité » d'un .exe dans l'Explorateur ouvre Programmes
+        # Windows sur la carte de ce programme, en tête (et non la page Écran).
+        programs_page = module["EXTRA"].PAGE_PROGRAMS
+        if programs_page not in window.hidden_pages:
+            with tempfile.TemporaryDirectory() as folder:
+                exe = Path(folder) / "hello32.exe"
+                exe.write_bytes(b"MZ")
+                assert module["exe_from_windows"](str(exe)) == exe
+                assert module["exe_from_windows"]("") is None
+                assert module["exe_from_windows"](str(Path(folder) / "absent.exe")) is None
+                window.pending_exe = exe
+                window.open_page(programs_page)
+                assert window.current == programs_page
+                first = window.programs_box.get_children()[0]
+                texts = [w.get_text() for w in walk(first) if isinstance(w, Gtk.Label)]
+                assert str(exe) in texts, texts
+                assert window.pending_exe is None
+                print("OK: Compatibilit\u00e9 d'un .exe ouvre sa carte (#739)")
         # Toute page existante est rangée dans une catégorie ou fondue dans une autre.
         placed = {page for _, pages in module["CATEGORIES"] for page in pages} | set(module["MERGED"])
         assert placed == set(range(len(module["PAGES"]))), sorted(set(range(len(module["PAGES"]))) - placed)
@@ -127,6 +145,40 @@ def check():
             assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
             if not Path(module["PREVIOUS_PACKAGE"]).is_file():
                 assert not window.rollback_button.get_parent().get_visible(), "Restore shown without a previous version"
+            # #636 : une mise à jour termine pendant que la page est ouverte ;
+            # « Secours et restauration » suit l'encadré sans rouvrir la page.
+            kept = module["EXTRA"].previous_version_kept
+            kept_globals = kept.__globals__
+            original_pages_read = kept_globals["read"]
+            listing = "Version installée : v0.2.20\nWinlux est à jour.\nVersion précédente conservée : v0.2.19\n"
+            try:
+                kept_globals["read"] = lambda path: {"/usr/share/winlux/update-backend": "apt\n", "/run/winlux/updates.txt": listing}.get(path, original_pages_read(path))
+                namespace["read"] = lambda path: listing if path == "/run/winlux/updates.txt" else original_read(path)
+                assert window.recovery_label is not None, "Secours et restauration absent de la page 7"
+                window.poll()
+                assert window.recovery_label.get_text() == "Conservée : le bouton Restaurer ci-dessus y revient.", window.recovery_label.get_text()
+                assert window.rollback_button.get_parent().get_visible(), "Restaurer caché alors qu'une version est conservée"
+            finally:
+                kept_globals["read"] = original_pages_read
+            # #634 : l'écran ne s'éteint pas pendant une installation lancée ici.
+            calls = []
+
+            class FakeBus:
+                def call_sync(self, _name, _path, _interface, method, parameters, *_rest):
+                    calls.append((method, parameters.unpack()))
+                    return GLib.Variant("(u)", (7,)) if method == "Inhibit" else None
+            real_bus = namespace["Gio"].bus_get_sync
+            namespace["Gio"].bus_get_sync = lambda *_: FakeBus()
+            try:
+                namespace["read"] = lambda path: "update_busy=1\n" if path == "/run/winlux/control.txt" else original_read(path)
+                window.poll(); window.poll()
+                assert [call[0] for call in calls] == ["Inhibit"] and window.screen_cookie == 7, calls
+                namespace["read"] = lambda path: "update_busy=0\n" if path == "/run/winlux/control.txt" else original_read(path)
+                window.poll()
+                assert calls[-1] == ("UnInhibit", (7,)) and window.screen_cookie is None, calls
+            finally:
+                namespace["Gio"].bus_get_sync = real_bus
+                namespace["read"] = original_read
         finally:
             namespace["read"] = original_read
         window.show_update_error("update-apply", 1)

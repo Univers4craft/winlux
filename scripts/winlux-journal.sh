@@ -14,7 +14,14 @@
 #                                 source et message séparés par des tabulations)
 set -eu
 
-JOURNAL_DIR=/run/winlux/journal
+# Journal du compte (#633) : /run/winlux/journal-<uid>, celui de root sans uid.
+if test -n "${WINLUX_JOURNAL_DIR:-}"; then
+    JOURNAL_DIR=$WINLUX_JOURNAL_DIR
+elif test "$(id -u)" = 0; then
+    JOURNAL_DIR=/run/winlux/journal
+else
+    JOURNAL_DIR=/run/winlux/journal-$(id -u)
+fi
 LOG_FILE="$JOURNAL_DIR/winlux.log"
 CRASH_FILE="$JOURNAL_DIR/crash.log"
 PERSISTENT_DIR=/var/lib/winlux/journal
@@ -74,12 +81,11 @@ case "${1:-status}" in
         printf 'Journal exporte dans %s\n' "$dest"
         ;;
     rotate)
-        mkdir -p "$JOURNAL_DIR"
+        test -d "$JOURNAL_DIR" || { printf 'Pas de rotation necessaire\n'; exit 0; }
         if test -f "$LOG_FILE" && test "$(wc -c < "$LOG_FILE" 2>/dev/null)" -gt 1048576; then
             mv "$LOG_FILE" "$LOG_FILE.1"
-            : > "$LOG_FILE"
-            # Même droits que l'original : les .exe du compte y écrivent.
-            chmod --reference="$LOG_FILE.1" "$LOG_FILE" 2>/dev/null || true
+            # Le runtime recrée winlux.log (0600) dans le dossier du compte.
+            (umask 077; : > "$LOG_FILE")
             printf 'Rotation effectuee\n'
         else
             printf 'Pas de rotation necessaire\n'

@@ -21,6 +21,11 @@
     <!-- Touches de luminosité : même chemin que le curseur, avec l'indicateur à l'écran. -->
     <keybind key="XF86MonBrightnessUp"><action name="Execute"><command>winlux-brightness key up</command></action></keybind>
     <keybind key="XF86MonBrightnessDown"><action name="Execute"><command>winlux-brightness key down</command></action></keybind>
+    <!-- Touches de volume (#620) : pas de 2 %, sourdine, micro, avec l'indicateur à l'écran. -->
+    <keybind key="XF86AudioRaiseVolume"><action name="Execute"><command>winlux-volume key up</command></action></keybind>
+    <keybind key="XF86AudioLowerVolume"><action name="Execute"><command>winlux-volume key down</command></action></keybind>
+    <keybind key="XF86AudioMute"><action name="Execute"><command>winlux-volume key mute</command></action></keybind>
+    <keybind key="XF86AudioMicMute"><action name="Execute"><command>winlux-volume key mic-mute</command></action></keybind>
     <keybind key="W-e"><action name="Execute"><command>winlux-shell-app explorer</command></action></keybind>
     <keybind key="W-Return"><action name="Execute"><command>winlux-terminal</command></action></keybind>
     <!-- Ctrl+Alt+T par openbox : actif dès l'apparition du bureau (par xfsettingsd, il ne

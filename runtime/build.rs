@@ -126,6 +126,15 @@ fn classify(ty: &str, aliases: &HashMap<String, String>, depth: u32) -> char {
     if t.starts_with('*') || t.starts_with('&') {
         return 'i';
     }
+    // `Option<fn(…)>`, `Option<&T>`… : même disposition que le type porté
+    // (pointeur nul pour None). Sans cela, les Enum* et CreateThreadpool*
+    // à rappel restaient « pas encore disponibles en 32 bits ».
+    if let Some(inner) = t.strip_prefix("Option<").and_then(|r| r.strip_suffix('>')) {
+        return match classify(inner, aliases, depth + 1) {
+            'p' => 'i',
+            k => k,
+        };
+    }
     if t.contains("fn(") || t.contains("fn (") {
         return 'c';
     }
