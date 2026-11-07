@@ -31,6 +31,7 @@ fn validate(c: &Compiled) {
     let file = dir.join(match c.stage {
         Stage::Vertex => "s.vert",
         Stage::Geometry => "s.geom",
+        Stage::Compute => "s.comp",
         _ => "s.frag",
     });
     std::fs::write(&file, &c.glsl).unwrap();
@@ -637,4 +638,74 @@ float4 main(float4 p : SV_Position, float3 uv : TEXCOORD0) : SV_Target {
     assert!(ps.glsl.contains("sampler2DShadow t_plain"), "{}", ps.glsl);
     assert!(ps.glsl.contains("textureGrad(t_cascades"), "{}", ps.glsl);
     assert!(!ps.glsl.contains("w_cmp"), "{}", ps.glsl);
+}
+
+/// Compute shader (#580) : images, tampons structurés et bruts, mémoire
+/// partagée, barrières, atomiques et entrées SV_*.
+#[test]
+fn compute_shader() {
+    let src = r#"
+#define GROUP 8
+struct Particle { float3 pos; float life; float4 color; };
+cbuffer Params : register(b0) { float dt; uint count; };
+Texture2D<float4> input : register(t0);
+StructuredBuffer<float> weights : register(t1);
+RWTexture2D<float4> output : register(u0);
+RWStructuredBuffer<Particle> particles : register(u1);
+RWByteAddressBuffer counters : register(u2);
+RWTexture2D<uint> histogram : register(u3);
+groupshared float4 tile[GROUP * GROUP];
+groupshared uint hits;
+
+[numthreads(GROUP, GROUP, 1)]
+void main(uint3 id : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID,
+          uint gi : SV_GroupIndex, uint3 gid : SV_GroupID)
+{
+    if (gi == 0) hits = 0;
+    GroupMemoryBarrierWithGroupSync();
+    tile[gi] = input.Load(int3(id.xy, 0)) * weights[gi % 4];
+    GroupMemoryBarrierWithGroupSync();
+    float4 sum = 0;
+    [unroll] for (uint k = 0; k < 4; k++) sum += tile[(gi + k) % (GROUP * GROUP)];
+    uint w, h;
+    output.GetDimensions(w, h);
+    if (id.x < w && id.y < h) output[id.xy] = sum * 0.25;
+    InterlockedAdd(hits, 1);
+    uint old;
+    InterlockedAdd(histogram[uint2(gid.x, 0)], 1, old);
+    uint n, stride;
+    particles.GetDimensions(n, stride);
+    if (id.x < n && id.y == 0) {
+        Particle p = particles[id.x];
+        p.pos += float3(0, -9.81, 0) * dt;
+        p.life -= dt;
+        particles[id.x] = p;
+        particles[id.x].color.a = saturate(p.life);
+    }
+    counters.InterlockedAdd(0, 1);
+    uint avant;
+    counters.InterlockedAdd(4, 2, avant);
+    counters.Store2(8, uint2(gtid.xy));
+    uint first = counters.Load(4);
+    if (first == 0) output[uint2(0, 0)] += float4(1, 0, 0, 0);
+}
+"#;
+    let c = build(src, "main", "cs_5_0");
+    assert_eq!(c.stage, Stage::Compute);
+    let g = &c.glsl;
+    for want in [
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;",
+        "uniform image2D t_output;",
+        "layout(binding = 3, r32ui) uniform uimage2D t_histogram;",
+        "buffer B_t_particles",
+        "readonly buffer B_t_weights",
+        "shared vec4[64] htile;",
+        "gl_GlobalInvocationID",
+        "barrier()",
+        "atomicAdd(hhits, 1u)",
+        "imageAtomicAdd(t_histogram",
+        "imageStore(t_output",
+    ] {
+        assert!(g.contains(want), "« {want} » absent :\n{}", numbered(g));
+    }
 }

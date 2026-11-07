@@ -97,6 +97,10 @@ pub(super) const STAGES: [Stage; 3] = [Stage::Vertex, Stage::Pixel, Stage::Geome
 const MAX_CB: usize = 14;
 const MAX_SRV: usize = 16;
 const MAX_SAMPLER: usize = 16;
+/// Vues UAV d'un compute shader (D3D11 : 8 en 11.0).
+const MAX_UAV: usize = 8;
+/// Indice de l'étage de calcul dans les tableaux par étage de `State`.
+const CS: usize = 3;
 const MAX_VB: usize = 16;
 
 fn stage_slot(st: Stage) -> usize {
@@ -594,9 +598,13 @@ pub(super) struct ConstantBuffer {
 #[derive(Clone)]
 pub(super) struct State {
     pub shaders: [BoundShader; 3],
-    pub cbs: [[ConstantBuffer; MAX_CB]; 3],
-    pub srvs: [[SrvBinding; MAX_SRV]; 3],
-    pub samplers: [[usize; MAX_SAMPLER]; 3],
+    /// Par étage : VS, PS, GS puis CS (indice `CS`).
+    pub cbs: [[ConstantBuffer; MAX_CB]; 4],
+    pub srvs: [[SrvBinding; MAX_SRV]; 4],
+    pub samplers: [[usize; MAX_SAMPLER]; 4],
+    /// Compute shader lié et ses vues UAV.
+    pub cs: BoundShader,
+    pub uavs: [UavBinding; MAX_UAV],
     pub vbs: [(gl::GLuint, u32, u32); MAX_VB],
     pub index_buffer: gl::GLuint,
     pub index_offset: u32,
@@ -613,9 +621,11 @@ impl Default for State {
     fn default() -> Self {
         State {
             shaders: [BoundShader::default(); 3],
-            cbs: [[ConstantBuffer::default(); MAX_CB]; 3],
-            srvs: [[SrvBinding::default(); MAX_SRV]; 3],
-            samplers: [[0; MAX_SAMPLER]; 3],
+            cbs: [[ConstantBuffer::default(); MAX_CB]; 4],
+            srvs: [[SrvBinding::default(); MAX_SRV]; 4],
+            samplers: [[0; MAX_SAMPLER]; 4],
+            cs: BoundShader::default(),
+            uavs: [UavBinding::default(); MAX_UAV],
             vbs: [(0, 0, 0); MAX_VB],
             index_buffer: 0,
             index_offset: 0,
@@ -643,6 +653,94 @@ pub struct SrvBinding {
     pub view: bool,
     pub base: i32,
     pub max: i32,
+    /// Vue d'un tampon (StructuredBuffer, ByteAddressBuffer) : tampon GL
+    /// lié en tampon de stockage, décalage et longueur en octets.
+    pub buf: gl::GLuint,
+    pub buf_off: isize,
+    pub buf_len: isize,
+}
+
+/// Vue UAV liée : image (texture, niveau, tranche) ou tampon de stockage.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct UavBinding {
+    pub tex: gl::GLuint,
+    pub level: i32,
+    pub layered: bool,
+    pub layer: i32,
+    pub format: gl::GLenum,
+    pub buf: gl::GLuint,
+    pub off: isize,
+    pub len: isize,
+}
+
+/// Fenêtre (octets) d'une vue de tampon : FirstElement, NumElements (0 :
+/// jusqu'au bout) et taille d'élément (pas structuré, 4 en brut, format).
+unsafe fn buffer_window(
+    b: &Buffer,
+    format: u32,
+    first: u32,
+    count: u32,
+    raw: bool,
+) -> (isize, isize) {
+    const MISC_BUFFER_STRUCTURED: u32 = 0x40;
+    let elem =
+        if b.desc.misc_flags & MISC_BUFFER_STRUCTURED != 0 && b.desc.structure_byte_stride > 0 {
+            b.desc.structure_byte_stride
+        } else if raw || format == 0 {
+            4
+        } else {
+            super::dxgi_format_element_size(format)
+        } as isize;
+    let total = b.desc.byte_width as isize;
+    let off = (first as isize * elem).min(total);
+    let len = if count == 0 {
+        total - off
+    } else {
+        (count as isize * elem).min(total - off)
+    };
+    (off, len)
+}
+
+impl UavBinding {
+    /// D3D11_UNORDERED_ACCESS_VIEW_DESC : Format, ViewDimension (1 tampon,
+    /// 2/3 Texture1D[Array], 4/5 Texture2D[Array], 8 Texture3D), puis
+    /// MipSlice et tranches, ou FirstElement, NumElements, Flags.
+    pub(super) unsafe fn of_view(view: *mut SimpleComObj) -> Self {
+        let d = (*view).view_desc;
+        if let Some(b) = as_buffer((*view).view_resource) {
+            let (off, len) = buffer_window(&*b, d[0], d[2], d[3], d[4] & 1 != 0);
+            return UavBinding {
+                buf: (*b).gl_buffer,
+                off,
+                len,
+                ..Default::default()
+            };
+        }
+        let Some(t) = as_texture2d((*view).view_resource) else {
+            return UavBinding::default();
+        };
+        let format = if d[0] != 0 { d[0] } else { (*t).desc.format };
+        let mut internal = super::dxgi_format_to_gl_bind(format, 0).0;
+        // Les images n'acceptent pas le sRGB : même taille, en linéaire.
+        if internal == 0x8C43 {
+            internal = gl::GL_RGBA8;
+        }
+        let (level, layered, layer) = match d[1] {
+            3 | 5 => (d[2], d[4] != 1, d[3]),
+            8 => (d[2], true, 0),
+            _ => (d[2], false, 0),
+        };
+        // Texture en tableau mais vue sur une seule tranche : couche choisie.
+        let layered = layered && matches!((*t).gl_target, 0x8C1A | 0x806F);
+        UavBinding {
+            tex: (*t).gl_texture,
+            level: level as i32,
+            layered,
+            layer: layer as i32,
+            format: internal,
+            ..Default::default()
+        }
+    }
 }
 
 impl SrvBinding {
@@ -651,6 +749,18 @@ impl SrvBinding {
     pub(super) unsafe fn of_view(view: *mut SimpleComObj) -> Self {
         let tex = (*view).resource_tex;
         let d = (*view).view_desc;
+        // Vue de tampon : BUFFER (1 : FirstElement, NumElements) ou
+        // BUFFEREX (11 : idem puis Flags, 1 = brut).
+        if let Some(b) = as_buffer((*view).view_resource) {
+            let raw = d[1] == 11 && d[4] & 1 != 0;
+            let (buf_off, buf_len) = buffer_window(&*b, d[0], d[2], d[3], raw);
+            return SrvBinding {
+                buf: (*b).gl_buffer,
+                buf_off,
+                buf_len,
+                ..Default::default()
+            };
+        }
         let res = as_texture2d((*view).view_resource);
         let levels = res.map_or(1, |t| (*t).desc.mip_levels.max(1));
         // Vue GL dédiée : sa cible est celle de la vue D3D ; sinon la
@@ -677,6 +787,7 @@ impl SrvBinding {
             view: view_tex,
             base: base as i32,
             max: last as i32,
+            ..Default::default()
         }
     }
 }
@@ -959,55 +1070,78 @@ pub(super) unsafe fn prepare(g: &gl::GlFunctions, s: &State) -> bool {
         if sh.gl == 0 {
             continue;
         }
-        let base = st.binding_base();
-        for (slot, cb) in s.cbs[i].iter().enumerate() {
-            if cb.buffer == 0 {
-                continue;
-            }
-            if cb.size > 0 {
-                (g.BindBufferRange)(
-                    GL_UNIFORM_BUFFER,
-                    base + slot as u32,
-                    cb.buffer,
-                    cb.offset,
-                    cb.size,
-                );
-            } else {
-                (g.BindBufferBase)(GL_UNIFORM_BUFFER, base + slot as u32, cb.buffer);
-            }
-        }
-        let pairs: Vec<(u32, u32)> = match meta(sh.obj as *mut c_void).as_deref() {
-            Some(Meta::Shader { pairs, .. }) => pairs.clone(),
-            _ => Vec::new(),
-        };
-        for (t, srv) in s.srvs[i].iter().enumerate() {
-            let unit = base + t as u32;
-            (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
-            let target = if srv.target == 0 {
-                GL_TEXTURE_2D
-            } else {
-                srv.target
-            };
-            (g.BindTexture)(target, srv.tex);
-            if srv.tex != 0 && !srv.view {
-                (g.TexParameteri)(target, GL_TEXTURE_BASE_LEVEL, srv.base);
-                (g.TexParameteri)(target, GL_TEXTURE_MAX_LEVEL, srv.max);
-            }
-            let sampler_slot = pairs.iter().find(|p| p.0 == t as u32).map(|p| p.1 as usize);
-            let sampler = sampler_slot
-                .and_then(|n| s.samplers[i].get(n).copied())
-                .and_then(|obj| match meta(obj as *mut c_void).as_deref() {
-                    Some(Meta::Sampler(id)) => Some(*id),
-                    _ => None,
-                })
-                .unwrap_or(default_sampler);
-            (g.BindSampler)(unit, sampler);
-        }
+        bind_stage(g, s, i, st.binding_base(), sh.obj, default_sampler);
     }
     (g.ActiveTexture)(gl::GL_TEXTURE0);
 
     apply_fixed_function(g, s);
     true
+}
+
+/// Lie les tampons de constantes, textures, échantillonneurs et tampons de
+/// stockage (vues de tampon) d'un étage à partir de `base`.
+unsafe fn bind_stage(
+    g: &gl::GlFunctions,
+    s: &State,
+    i: usize,
+    base: u32,
+    obj: usize,
+    default_sampler: gl::GLuint,
+) {
+    for (slot, cb) in s.cbs[i].iter().enumerate() {
+        if cb.buffer == 0 {
+            continue;
+        }
+        if cb.size > 0 {
+            (g.BindBufferRange)(
+                GL_UNIFORM_BUFFER,
+                base + slot as u32,
+                cb.buffer,
+                cb.offset,
+                cb.size,
+            );
+        } else {
+            (g.BindBufferBase)(GL_UNIFORM_BUFFER, base + slot as u32, cb.buffer);
+        }
+    }
+    let pairs: Vec<(u32, u32)> = match meta(obj as *mut c_void).as_deref() {
+        Some(Meta::Shader { pairs, .. }) => pairs.clone(),
+        _ => Vec::new(),
+    };
+    for (t, srv) in s.srvs[i].iter().enumerate() {
+        if srv.buf != 0 {
+            const GL_SHADER_STORAGE_BUFFER: u32 = 0x90D2;
+            (g.BindBufferRange)(
+                GL_SHADER_STORAGE_BUFFER,
+                crate::dlls::hlsl::storage_binding(false, t as u32),
+                srv.buf,
+                srv.buf_off,
+                srv.buf_len,
+            );
+            continue;
+        }
+        let unit = base + t as u32;
+        (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
+        let target = if srv.target == 0 {
+            GL_TEXTURE_2D
+        } else {
+            srv.target
+        };
+        (g.BindTexture)(target, srv.tex);
+        if srv.tex != 0 && !srv.view {
+            (g.TexParameteri)(target, GL_TEXTURE_BASE_LEVEL, srv.base);
+            (g.TexParameteri)(target, GL_TEXTURE_MAX_LEVEL, srv.max);
+        }
+        let sampler_slot = pairs.iter().find(|p| p.0 == t as u32).map(|p| p.1 as usize);
+        let sampler = sampler_slot
+            .and_then(|n| s.samplers[i].get(n).copied())
+            .and_then(|obj| match meta(obj as *mut c_void).as_deref() {
+                Some(Meta::Sampler(id)) => Some(*id),
+                _ => None,
+            })
+            .unwrap_or(default_sampler);
+        (g.BindSampler)(unit, sampler);
+    }
 }
 
 /// Mode GL d'une topologie D3D11 (avec adjacence).
@@ -1234,6 +1368,133 @@ macro_rules! per_stage {
 per_stage!(vs_set_cbs, vs_set_srvs, vs_set_samplers, 0);
 per_stage!(ps_set_cbs, ps_set_srvs, ps_set_samplers, 1);
 per_stage!(gs_set_cbs, gs_set_srvs, gs_set_samplers, 2);
+per_stage!(cs_set_cbs, cs_set_srvs, cs_set_samplers, CS);
+
+pub(super) unsafe extern "win64" fn cs_set_shader(
+    this: *mut DeviceContext,
+    shader: *mut c_void,
+    _class: *const *mut c_void,
+    _n: u32,
+) {
+    let gl_id = as_simple(shader).map_or(0, |o| (*o).gl_id);
+    with_state(this, |s| {
+        s.cs = BoundShader {
+            obj: shader as usize,
+            gl: gl_id,
+        }
+    });
+}
+
+pub(super) unsafe extern "win64" fn cs_set_uavs(
+    this: *mut DeviceContext,
+    start: u32,
+    n: u32,
+    views: *const *mut c_void,
+    _initial_counts: *const u32,
+) {
+    with_state(this, |s| {
+        for i in 0..n as usize {
+            let slot = start as usize + i;
+            if slot >= MAX_UAV {
+                break;
+            }
+            let v = if views.is_null() {
+                std::ptr::null_mut()
+            } else {
+                *views.add(i)
+            };
+            s.uavs[slot] = as_simple(v).map_or(UavBinding::default(), |o| UavBinding::of_view(o));
+        }
+    });
+}
+
+/// Lance le compute shader lié : tampons de constantes, vues de ressources
+/// et UAV liés, puis glDispatchCompute et une barrière complète (les
+/// lectures suivantes, tirages ou copies, voient les écritures).
+unsafe fn dispatch(
+    this: *mut DeviceContext,
+    groups: Option<[u32; 3]>,
+    indirect: Option<(gl::GLuint, u32)>,
+) {
+    let Some(g) = gl_here() else { return };
+    let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    let s = &st.pipe;
+    if s.cs.gl == 0 {
+        return;
+    }
+    let prog = program(g, s.cs.gl, 0, 0);
+    if prog == 0 {
+        return;
+    }
+    (g.UseProgram)(prog);
+    let default_sampler = DEFAULT_SAMPLER.with(|c| {
+        if c.get() == 0 {
+            c.set(create_sampler(g, &default_sampler_desc()));
+        }
+        c.get()
+    });
+    bind_stage(
+        g,
+        s,
+        CS,
+        Stage::Compute.binding_base(),
+        s.cs.obj,
+        default_sampler,
+    );
+    const GL_SHADER_STORAGE_BUFFER: u32 = 0x90D2;
+    const GL_READ_WRITE: u32 = 0x88BA;
+    for (u, v) in s.uavs.iter().enumerate() {
+        if v.buf != 0 {
+            (g.BindBufferRange)(
+                GL_SHADER_STORAGE_BUFFER,
+                crate::dlls::hlsl::storage_binding(true, u as u32),
+                v.buf,
+                v.off,
+                v.len,
+            );
+        } else if v.tex != 0 {
+            (g.BindImageTexture)(
+                u as u32,
+                v.tex,
+                v.level,
+                u8::from(v.layered),
+                v.layer,
+                GL_READ_WRITE,
+                v.format,
+            );
+        }
+    }
+    match (groups, indirect) {
+        (Some([x, y, z]), _) => (g.DispatchCompute)(x, y, z),
+        (None, Some((buf, off))) => {
+            const GL_DISPATCH_INDIRECT_BUFFER: u32 = 0x90EE;
+            (g.BindBuffer)(GL_DISPATCH_INDIRECT_BUFFER, buf);
+            (g.DispatchComputeIndirect)(off as isize);
+            (g.BindBuffer)(GL_DISPATCH_INDIRECT_BUFFER, 0);
+        }
+        _ => {}
+    }
+    const GL_ALL_BARRIER_BITS: u32 = 0xFFFF_FFFF;
+    (g.MemoryBarrier)(GL_ALL_BARRIER_BITS);
+    (g.ActiveTexture)(gl::GL_TEXTURE0);
+}
+
+pub(super) unsafe extern "win64" fn ctx_dispatch(this: *mut DeviceContext, x: u32, y: u32, z: u32) {
+    if x == 0 || y == 0 || z == 0 {
+        return;
+    }
+    dispatch(this, Some([x, y, z]), None);
+}
+
+pub(super) unsafe extern "win64" fn ctx_dispatch_indirect(
+    this: *mut DeviceContext,
+    args: *mut c_void,
+    offset: u32,
+) {
+    if let Some(b) = as_buffer(args) {
+        dispatch(this, None, Some(((*b).gl_buffer, offset)));
+    }
+}
 
 pub(super) unsafe fn set_shader(this: *mut DeviceContext, stage: usize, shader: *mut c_void) {
     let gl_id = as_simple(shader).map_or(0, |o| (*o).gl_id);
