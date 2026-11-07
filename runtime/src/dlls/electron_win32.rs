@@ -537,7 +537,9 @@ unsafe extern "win64" fn NtQueryObject(
             // OBJECT_BASIC_INFORMATION (56 octets).
             bytes = vec![0u8; 56];
             bytes[0..4].copy_from_slice(&(if inherit { 2u32 } else { 0 }).to_le_bytes());
-            bytes[4..8].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+            // GrantedAccess : les vrais droits d'une section, sinon tous.
+            let granted = crate::dlls::mmap::mapping_access(h).unwrap_or(0x001F_01FF);
+            bytes[4..8].copy_from_slice(&granted.to_le_bytes());
             bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
             bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
         }
@@ -624,7 +626,7 @@ unsafe extern "win64" fn NtQuerySection(
     const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
     const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
     const SEC_COMMIT: u32 = 0x0800_0000;
-    let Some((_, size)) = crate::dlls::mmap::export(h) else {
+    let Some((_, size, _)) = crate::dlls::mmap::export(h) else {
         return STATUS_INVALID_HANDLE;
     };
     match class {
