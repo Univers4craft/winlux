@@ -11,7 +11,7 @@ use super::lzma::{Lzma2Reader, LzmaReader};
 use super::{le_u32, le_u64, utf16z, Folders, Info, Installer, Kind, Options, Stream};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Nature d'un champ dans les structures d'Inno Setup.
 pub enum Field {
@@ -376,6 +376,7 @@ const E_REGISTRY: usize = 11;
 const E_INSTALL_DELETE: usize = 12;
 const E_UNINSTALL_DELETE: usize = 13;
 const E_RUN: usize = 14;
+const E_UNINSTALL_RUN: usize = 15;
 
 /// Contexte d'expansion des constantes `{app}`, `{group}`…
 struct Ctx {
@@ -387,6 +388,8 @@ struct Ctx {
     src: String,
     srcexe: String,
     uninstexe: String,
+    /// `{tmp}` : dossier temporaire propre à l'installation.
+    tmp: String,
     messages: HashMap<String, String>,
     components: Vec<String>,
     tasks: Vec<String>,
@@ -413,7 +416,7 @@ impl Ctx {
             "syswow64" => "C:\\windows\\syswow64".into(),
             "fonts" | "commonfonts" | "autofonts" => "C:\\windows\\Fonts".into(),
             "userfonts" => "C:\\AppData\\Local\\Microsoft\\Windows\\Fonts".into(),
-            "tmp" => Folders::temp().into(),
+            "tmp" => self.tmp.clone(),
             "src" => self.src.clone(),
             "srcexe" => self.srcexe.clone(),
             "uninstallexe" => self.uninstexe.clone(),
@@ -903,6 +906,7 @@ fn make_ctx(setup: &Setup, path: &Path, opts: &Options) -> Ctx {
         src,
         srcexe,
         uninstexe: String::new(),
+        tmp: Folders::temp().into(),
         messages,
         components,
         tasks: Vec::new(),
@@ -1057,6 +1061,11 @@ pub fn install(
 ) -> Result<(), String> {
     let setup = parse(data)?;
     let mut ctx = make_ctx(&setup, path, opts);
+    // `{tmp}` : prérequis extraits pour les programmes de [Run], effacés à
+    // la fin de l'installation (comme le dossier is-XXXXX.tmp de Windows).
+    ctx.tmp = format!("{}\\is-winlux-{}.tmp", Folders::temp(), std::process::id());
+    let tmp_host = crate::paths::to_linux(&ctx.tmp);
+    let mut temporary: Vec<PathBuf> = Vec::new();
     let h = &setup.header;
     let app_id = {
         let id = ctx.expand(&h.s("AppId"));
@@ -1127,7 +1136,9 @@ pub fn install(
                 .to_ascii_lowercase()
                 .starts_with(&Folders::temp().to_ascii_lowercase())
         {
-            continue;
+            // Fichier de travail (prérequis à lancer…) : extrait, puis
+            // effacé après [Run] et absent du journal de désinstallation.
+            temporary.push(crate::paths::to_linux(&dest));
         }
         if f.flag("Options", "OnlyIfDestFileExists") && !crate::paths::to_linux(&dest).exists() {
             continue;
@@ -1292,14 +1303,60 @@ pub fn install(
                 .push((ctx.expand(&d.s("Name")), d.int("DeleteType") as u8));
         }
     }
+    // Programmes à lancer ([Run]), comme une installation silencieuse de
+    // Windows : les cases « Lancer … » de la dernière page sont suivies
+    // sauf `skipifsilent` ou décochées.
     for r in &setup.entries[E_RUN] {
-        if ctx.wanted(r, false) && !r.flag("Options", "PostInstall") {
-            inst.log.log(&format!(
-                "programme d'installation annexe ignoré : {} {}",
-                ctx.expand(&r.s("Name")),
-                ctx.expand(&r.s("Parameters"))
-            ));
+        if !ctx.wanted(r, false) {
+            continue;
         }
+        let file = ctx.expand(&r.s("Name"));
+        let params = ctx.expand(&r.s("Parameters"));
+        let what = format!("{file} {params}").trim().to_string();
+        if r.flag("Options", "SkipIfSilent")
+            || (r.flag("Options", "PostInstall") && r.flag("Options", "Unchecked"))
+        {
+            inst.log
+                .log(&format!("programme proposé, non lancé : {what}"));
+            continue;
+        }
+        let shell = r.flag("Options", "ShellExec");
+        if r.flag("Options", "SkipIfDoesntExist") && !crate::paths::to_linux(&file).exists() {
+            continue;
+        }
+        let mut workdir = ctx.expand(&r.s("WorkingDir"));
+        if workdir.is_empty() && !shell {
+            workdir = file
+                .rsplit_once('\\')
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_default();
+        }
+        let wait = r.enum_name("Wait") != "NoWait";
+        let outcome = super::run::program(&file, &params, &workdir, wait, shell);
+        inst.log.log(&super::run::describe(&what, &outcome));
+    }
+    // Fichiers de travail effacés ; ils ne font pas partie de l'application.
+    for t in &temporary {
+        let _ = std::fs::remove_file(t);
+    }
+    let _ = std::fs::remove_dir_all(&tmp_host);
+    inst.manifest
+        .files
+        .retain(|f| !temporary.contains(f) && !f.starts_with(&tmp_host));
+    inst.manifest.dirs.retain(|d| !d.starts_with(&tmp_host));
+    // Programmes lancés par la désinstallation ([UninstallRun]).
+    for r in &setup.entries[E_UNINSTALL_RUN] {
+        if !ctx.wanted(r, false) {
+            continue;
+        }
+        let file = ctx.expand(&r.s("Name"));
+        inst.manifest.runs.push(super::RunEntry {
+            wait: r.enum_name("Wait") != "NoWait",
+            shell: r.flag("Options", "ShellExec"),
+            workdir: ctx.expand(&r.s("WorkingDir")),
+            params: ctx.expand(&r.s("Parameters")),
+            file,
+        });
     }
 
     // Désinstalleur et inscription dans « Applications installées ».

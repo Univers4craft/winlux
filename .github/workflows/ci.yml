@@ -465,6 +465,11 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Programmes lancés par les installeurs NSIS (#179)
+        run: |
+          sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
+          sh scripts/test-setup-run.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 

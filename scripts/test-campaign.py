@@ -141,6 +141,12 @@ ok("def forget_uninstalled" in pages_source and "timeout_add(1500, self.forget_u
 programs_source = (ROOT / "testexe/src/shell/programs.rs").read_text()
 ok('b"squirrel" => b"Squirrel"' in programs_source and 'b" application Windows"' in programs_source,
    "Applications installées : type Squirrel affiché, « 1 application Windows » au singulier")
+setup_run = (ROOT / "runtime/src/setup/run.rs").read_text()
+ok("SYSTEM_TOOLS" in setup_run and "is_linux_program" in setup_run and "WINLUX_SETUP_DEPTH" in setup_run,
+   "installateurs NSIS/Inno : programmes lancés (prérequis, ancien désinstalleur), jamais un programme Linux (#179)")
+ok((ROOT / "scripts/test-setup-run.sh").is_file()
+   and "scripts/test-setup-run.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "test des programmes lancés par un installateur NSIS en CI (#179)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,

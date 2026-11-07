@@ -19,6 +19,7 @@ pub mod lzma;
 pub mod msix;
 pub mod nsis;
 pub mod programs;
+pub mod run;
 pub mod sevenz;
 pub mod squirrel;
 
@@ -217,6 +218,18 @@ pub fn user_language() -> u16 {
     }
 }
 
+/// Programme à lancer au début de la désinstallation (Inno `[UninstallRun]`).
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct RunEntry {
+    /// Programme (chemin Windows ou nom).
+    pub file: String,
+    pub params: String,
+    pub workdir: String,
+    pub wait: bool,
+    /// Ouvert comme par ShellExecute (`shellexec`).
+    pub shell: bool,
+}
+
 /// Ce que l'installation a créé, pour la désinstallation.
 #[derive(Default, Debug)]
 pub struct Manifest {
@@ -241,6 +254,8 @@ pub struct Manifest {
     pub trees: Vec<String>,
     /// Motifs à effacer à la désinstallation (chemin Windows, type).
     pub deletes: Vec<(String, u8)>,
+    /// Programmes lancés au début de la désinstallation.
+    pub runs: Vec<RunEntry>,
 }
 
 pub fn manifest_dir() -> PathBuf {
@@ -298,6 +313,16 @@ impl Manifest {
         for (p, t) in &self.deletes {
             text.push_str(&format!("delete\t{t}\t{}\n", clean(p)));
         }
+        for r in &self.runs {
+            text.push_str(&format!(
+                "run\t{}\t{}\t{}\t{}\t{}\n",
+                u8::from(r.wait),
+                u8::from(r.shell),
+                clean(&r.workdir),
+                clean(&r.file),
+                clean(&r.params)
+            ));
+        }
         let path = manifest_path(&self.id);
         std::fs::create_dir_all(manifest_dir())?;
         let tmp = path.with_extension("tmp");
@@ -328,6 +353,13 @@ impl Manifest {
                 ["key", k] => m.keys.push(k.to_string()),
                 ["tree", k] => m.trees.push(k.to_string()),
                 ["delete", t, p] => m.deletes.push((p.to_string(), t.parse().unwrap_or(0))),
+                ["run", wait, shell, workdir, file, params] => m.runs.push(RunEntry {
+                    wait: *wait == "1",
+                    shell: *shell == "1",
+                    workdir: workdir.to_string(),
+                    file: file.to_string(),
+                    params: params.to_string(),
+                }),
                 _ => {}
             }
         }
@@ -680,6 +712,13 @@ pub fn wildcard(pattern: &str, name: &str) -> bool {
 
 /// Retire tout ce qu'une installation a créé.
 pub fn remove(m: &Manifest, log: &mut Logger) {
+    // [UninstallRun] : avant de retirer les fichiers, comme Windows (l'outil
+    // lancé est souvent celui de l'application : désinscription, arrêt…).
+    for r in &m.runs {
+        let outcome = run::program(&r.file, &r.params, &r.workdir, r.wait, r.shell);
+        let what = format!("{} {}", r.file, r.params);
+        log.log(&run::describe(what.trim(), &outcome));
+    }
     for (pattern, kind) in &m.deletes {
         delete_pattern(pattern, *kind);
     }
