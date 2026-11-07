@@ -755,19 +755,66 @@ extern "win64" fn create_toolbar_ex32(args: u32, target: usize) -> u64 {
     r
 }
 
+/// IMAGELISTDRAWPARAMS : himl et hdcDst sont des handles, le reste des
+/// DWORD contigus (x, y, cx, cy, xBitmap, yBitmap, rgbBk, rgbFg, fStyle,
+/// dwRop, fState, Frame, crEffect).
+static IMAGELISTDRAWPARAMS: Layout = Layout {
+    size32: 68,
+    size64: 88,
+    fields: &[Size(0, 0), P(4, 8), D(8, 16), P(12, 24), N(16, 32, 52)],
+};
+
+/// APPBARDATA (shell32!SHAppBarMessage) : hWnd et lParam changent de taille.
+static APPBARDATA: Layout = Layout {
+    size32: 36,
+    size64: 48,
+    fields: &[
+        Size(0, 0),
+        P(4, 8),
+        D(8, 16),
+        D(12, 20),
+        N(16, 24, 16),
+        P(32, 40),
+    ],
+};
+
+extern "win64" fn draw_indirect32(args: u32, target: usize) -> u64 {
+    super::comdlg::call_with_struct(target, &IMAGELISTDRAWPARAMS, rd(args))
+}
+
+/// SHAppBarMessage(dwMessage, pData) : la structure est le second argument.
+extern "win64" fn app_bar_message32(args: u32, target: usize) -> u64 {
+    let msg = rd(args);
+    let ptr = rd(args + 4);
+    let f: extern "win64" fn(u32, *mut u8) -> u64 = unsafe { std::mem::transmute(target) };
+    if ptr == 0 {
+        return f(msg, std::ptr::null_mut());
+    }
+    let given = (rd(ptr) as usize).clamp(4, APPBARDATA.size32);
+    let mut x86 = vec![0u8; APPBARDATA.size32 + 8];
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr as usize as *const u8, x86.as_mut_ptr(), given);
+        let mut wide = APPBARDATA.boxed64(x86.as_ptr() as usize);
+        let r = f(msg, wide.as_mut_ptr() as *mut u8);
+        APPBARDATA.to32(wide.as_ptr() as *const u8, x86.as_mut_ptr() as usize);
+        std::ptr::copy_nonoverlapping(x86.as_ptr(), ptr as usize as *mut u8, given);
+        r
+    }
+}
+
 /// Passerelles x86 propres à comctl32.
 pub(super) fn override_for(dll: &str, func: &str) -> Option<super::crt::Override> {
-    if dll != "comctl32" {
-        return None;
-    }
-    match func {
-        "CreateToolbarEx" => Some(super::crt::Override::Raw {
-            target: create_toolbar_ex32 as *const () as usize,
-            aux: crate::dlls::lookup(dll, func)?,
-            pop: Some(13 * 4),
-        }),
-        _ => None,
-    }
+    let (target, pop): (usize, u16) = match (dll, func) {
+        ("comctl32", "CreateToolbarEx") => (create_toolbar_ex32 as *const () as usize, 13 * 4),
+        ("comctl32", "ImageList_DrawIndirect") => (draw_indirect32 as *const () as usize, 4),
+        ("shell32", "SHAppBarMessage") => (app_bar_message32 as *const () as usize, 8),
+        _ => return None,
+    };
+    Some(super::crt::Override::Raw {
+        target,
+        aux: crate::dlls::lookup(dll, func)?,
+        pop: Some(pop),
+    })
 }
 
 #[cfg(test)]
@@ -815,6 +862,8 @@ mod tests {
             &DELETEITEMSTRUCT,
             &COMPAREITEMSTRUCT,
             nmmouse(),
+            &IMAGELISTDRAWPARAMS,
+            &APPBARDATA,
         ];
         for l in all {
             let (e32, e64) = ends(l);

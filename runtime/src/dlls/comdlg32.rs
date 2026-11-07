@@ -1364,6 +1364,16 @@ pub unsafe extern "win64" fn page_setup_dlg_w(ps: *mut u8) -> i32 {
     page_setup_dlg(ps, true)
 }
 
+/// FindText / ReplaceText : boîtes non modales de recherche (#712). Winlux ne les
+/// a pas encore ; elles rendent NULL avec CDERR_INITIALIZATION, ce que les
+/// programmes savent traiter (« la boîte n'a pas pu s'ouvrir ») au lieu de
+/// refuser de démarrer faute de la fonction.
+pub extern "win64" fn find_text(_fr: *mut u8) -> usize {
+    const CDERR_INITIALIZATION: u32 = 0x0002;
+    set_extended_error(CDERR_INITIALIZATION);
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "PrintDlgA" => fn print_dlg_a,
@@ -1383,6 +1393,10 @@ pub fn exports() -> crate::dlls::Exports {
         "ChooseColorW" => fn super::comdlg32_ui::choose_color_w,
         "ChooseFontA" => fn super::comdlg32_ui::choose_font_a,
         "ChooseFontW" => fn super::comdlg32_ui::choose_font_w,
+        "FindTextA" => fn find_text,
+        "FindTextW" => fn find_text,
+        "ReplaceTextA" => fn find_text,
+        "ReplaceTextW" => fn find_text,
     }
 }
 
