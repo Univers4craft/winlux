@@ -748,7 +748,7 @@ def InstalledAppsPanel(window, kind=None):
             line = Gtk.Box(spacing=12, margin=8)
             line.pack_start(self.icon_for(app), False, False, 0)
             texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
-            name = Gtk.Label(label=app["name"], xalign=0, ellipsize=Pango.EllipsizeMode.END)
+            name = Gtk.Label(label=app["name"], xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=60)
             bold = Pango.AttrList()
             bold.insert(Pango.attr_weight_new(Pango.Weight.SEMIBOLD))
             name.set_attributes(bold)
@@ -756,13 +756,13 @@ def InstalledAppsPanel(window, kind=None):
             kind = _t("Composant de Winlux") if app["system"] and app["kind"] == "local" else KINDS.get(app["kind"], "")
             parts = [part for part in (app["version"], app["publisher"], kind) if part]
             if app["date"]: parts.append(_t("Installé le {date}", date=human_date(app["date"])))
-            detail = Gtk.Label(label=" · ".join(parts), xalign=0, ellipsize=Pango.EllipsizeMode.END)
+            detail = Gtk.Label(label=" · ".join(parts), xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=60)
             detail.get_style_context().add_class("subtitle")
             texts.pack_start(detail, False, False, 0)
             if app["also"]:
                 also = Gtk.Label(label=_t("Comprend aussi : {names}", names=", ".join(app["also"][:6])
                                           + ("…" if len(app["also"]) > 6 else "")),
-                                 xalign=0, ellipsize=Pango.EllipsizeMode.END)
+                                 xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=60)
                 also.get_style_context().add_class("subtitle")
                 texts.pack_start(also, False, False, 0)
             line.pack_start(texts, True, True, 0)
