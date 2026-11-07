@@ -13,7 +13,8 @@ noms_devices="computer drive-harddisk drive-harddisk-system drive-removable-medi
 noms_mime="text-x-generic text-plain application-x-shellscript text-rust text-html application-json application-pdf
 image-png image-jpeg audio-mpeg video-mp4 x-office-document x-office-spreadsheet x-office-presentation font-ttf
 application-vnd.debian.binary-package application-zip application-x-executable
-application-vnd.microsoft.portable-executable application-x-msdownload application-x-msi application-vnd.efi.iso"
+application-vnd.microsoft.portable-executable application-x-msdownload application-x-msi application-vnd.efi.iso
+application-octet-stream unknown application-x-generic"
 
 for theme in Winlux Winlux-Sombre; do
     d="$racine/$theme"
@@ -48,7 +49,7 @@ racine = os.environ["WINLUX_ICONES"]
 ok = True
 for theme in ("Winlux", "Winlux-Sombre"):
     t = Gtk.IconTheme(); t.set_search_path([racine, "/usr/share/icons"]); t.set_custom_theme(theme)
-    for n in ("folder-documents", "user-home", "document-open-recent", "audio-mpeg", "application-vnd.microsoft.portable-executable", "drive-harddisk-system"):
+    for n in ("folder-documents", "user-home", "document-open-recent", "audio-mpeg", "application-vnd.microsoft.portable-executable", "drive-harddisk-system", "application-octet-stream"):
         for s in (16, 24, 48, 256):
             i = t.lookup_icon(n, s, 0)
             f = i.get_filename() if i else None

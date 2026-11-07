@@ -363,6 +363,7 @@ ICONES = {
     "package-x-generic": ("mimetypes", paquet, "Paquet", ["application-vnd.debian.binary-package", "application-x-deb", "application-x-rpm", "application-x-flatpak"]),
     "application-x-archive": ("mimetypes", archive, "Archive", ["application-zip", "application-x-7z-compressed", "application-x-rar", "application-vnd.rar", "application-x-tar", "application-gzip", "application-x-compressed-tar", "application-x-xz-compressed-tar", "application-x-bzip-compressed-tar", "application-x-zstd-compressed-tar"]),
     "application-x-executable": ("mimetypes", executable, "Programme", ["application-vnd.microsoft.portable-executable", "application-x-ms-dos-executable", "application-x-msdownload", "application-x-msi", "application-x-dosexec", "application-x-sharedlib", "application-x-pie-executable"]),
+    "application-octet-stream": ("mimetypes", lambda p, big: page(p, big), "Fichier de type inconnu", ["unknown", "application-x-generic", "text-x-generic-template"]),
     "application-x-cd-image": ("mimetypes", image_iso, "Image disque", ["application-vnd.efi.iso", "application-x-iso9660-image", "application-vnd.efi.img", "application-x-raw-disk-image"]),
 }
 
@@ -372,7 +373,7 @@ EXPLORATEUR = {
     "disque-c": "drive-harddisk-system", "disque-z": "drive-harddisk-linux",
     "bureau": "user-desktop", "documents": "folder-documents", "images": "folder-pictures",
     "musique": "folder-music", "videos": "folder-videos", "telechargements": "folder-download",
-    "ce-pc": "computer", "accueil": "user-home",
+    "ce-pc": "computer", "accueil": "user-home", "fichier-inconnu": "application-octet-stream",
 }
 GLYPHES_BARRE = ["couper", "copier", "coller", "renommer", "supprimer", "partager", "trier", "afficher", "nouveau"]
 
