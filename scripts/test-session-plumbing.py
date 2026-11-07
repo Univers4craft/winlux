@@ -56,6 +56,31 @@ check(build.index("check-image-session.sh") > build.index("stage-desktop-compone
       "check-image-session.sh doit passer après les composants du bureau")
 
 
+# Nœud déjà créé avant la règle udev (module rfkill chargé tôt) : la remise
+# en ordre du démarrage (winlux-network-perms) le rend au groupe netdev.
+import os
+import grp
+import stat
+fake = Path(tempfile.mkdtemp(prefix="winlux-rfkill-"))
+try:
+    (fake / "dev").mkdir()
+    node = fake / "dev/rfkill"
+    node.write_text("")
+    node.chmod(0o600)
+    repaired = subprocess.run(["sh", str(HERE / "winlux-network-perms.sh")], env={**os.environ, "WINLUX_SYSTEM_ROOT": str(fake)},
+                              capture_output=True, text=True, timeout=30)
+    check(repaired.returncode == 0, "winlux-network-perms : " + repaired.stderr)
+    check(stat.S_IMODE(node.stat().st_mode) == 0o664, f"/dev/rfkill en {oct(stat.S_IMODE(node.stat().st_mode))}, attendu 0664")
+    try:
+        netdev = grp.getgrnam("netdev").gr_gid
+    except KeyError:
+        netdev = None
+    if netdev is not None and os.geteuid() == 0:
+        check(node.stat().st_gid == netdev, "/dev/rfkill pas rendu au groupe netdev")
+finally:
+    shutil.rmtree(fake)
+
+
 def image_check(stage):
     return subprocess.run(["sh", str(HERE / "check-image-session.sh"), str(stage)], capture_output=True, text=True)
 
