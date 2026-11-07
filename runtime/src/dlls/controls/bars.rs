@@ -593,7 +593,7 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
 fn tb_bitmap_image(inst: usize, id: usize) -> Option<crate::dlls::icons::Image> {
     const HINST_COMMCTRL: usize = usize::MAX;
     if inst == HINST_COMMCTRL {
-        return None;
+        return standard_bitmap(id);
     }
     let mut img = if inst == 0 {
         let (w, h, px, alpha) = gui::bitmap_pixels(id)?;
@@ -617,6 +617,122 @@ fn tb_bitmap_image(inst: usize, id: usize) -> Option<crate::dlls::icons::Image> 
         }
     }
     Some(img)
+}
+
+/// Bandes d'images standard de comctl32 (TB_ADDBITMAP avec HINST_COMMCTRL,
+/// TB_LOADIMAGES) : IDB_STD_* (15 images), IDB_VIEW_* (12), IDB_HIST_* (5),
+/// en 16 px (identifiant pair) ou 24 px (impair). Dessins Winlux simples :
+/// dossier parent (VIEW_PARENTFOLDER, la flèche « remonter » de 7-Zip, #555),
+/// nouveau, ouvrir, enregistrer, supprimer, couper, copier, coller. Les
+/// autres cases restent transparentes.
+fn standard_bitmap(id: usize) -> Option<crate::dlls::icons::Image> {
+    let count = match id {
+        0 | 1 => 15,
+        4 | 5 => 12,
+        8 | 9 => 5,
+        _ => return None,
+    };
+    let n = if id.is_multiple_of(2) { 16 } else { 24 };
+    let mut img = crate::dlls::icons::Image::blank(n * count, n);
+    let glyphs: &[(usize, Glyph)] = match id {
+        0 | 1 => &[
+            (0, Glyph::Cut),
+            (1, Glyph::Copy),
+            (2, Glyph::Paste),
+            (5, Glyph::Delete),
+            (6, Glyph::Page),
+            (7, Glyph::Folder),
+            (8, Glyph::Disk),
+        ],
+        4 | 5 => &[(8, Glyph::ParentFolder), (11, Glyph::Folder)],
+        _ => &[],
+    };
+    for &(slot, g) in glyphs {
+        draw_glyph(&mut img, slot * n, n, g);
+    }
+    Some(img)
+}
+
+#[derive(Clone, Copy)]
+enum Glyph {
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    Page,
+    Folder,
+    Disk,
+    ParentFolder,
+}
+
+fn draw_glyph(img: &mut crate::dlls::icons::Image, x0: usize, n: usize, g: Glyph) {
+    let k = n as f32 / 16.0;
+    let w = img.w;
+    let mut rect = |l: f32, t: f32, r: f32, b: f32, c: u32| {
+        let (l, t) = ((l * k) as usize, (t * k) as usize);
+        let (r, b) = (((r * k) as usize).min(n), ((b * k) as usize).min(n));
+        for y in t..b {
+            for x in l..r {
+                img.px[y * w + x0 + x] = c;
+            }
+        }
+    };
+    const FOLDER: u32 = 0xFFE8_B64C;
+    const EDGE: u32 = 0xFF8A_6420;
+    const PAPER: u32 = 0xFFFF_FFFF;
+    const INK: u32 = 0xFF50_5868;
+    const GREEN: u32 = 0xFF2E_9E4F;
+    const RED: u32 = 0xFFD8_3B3B;
+    const BLUE: u32 = 0xFF3C_6FD0;
+    let page = |rect: &mut dyn FnMut(f32, f32, f32, f32, u32), l: f32, t: f32| {
+        rect(l, t, l + 9.0, t + 12.0, INK);
+        rect(l + 1.0, t + 1.0, l + 8.0, t + 11.0, PAPER);
+    };
+    match g {
+        Glyph::Folder | Glyph::ParentFolder => {
+            rect(1.0, 3.0, 7.0, 5.0, EDGE);
+            rect(1.0, 5.0, 15.0, 14.0, EDGE);
+            rect(2.0, 6.0, 14.0, 13.0, FOLDER);
+            if matches!(g, Glyph::ParentFolder) {
+                // Flèche vers le haut.
+                rect(7.0, 7.0, 9.0, 13.0, GREEN);
+                rect(5.0, 9.0, 11.0, 10.0, GREEN);
+                rect(6.0, 8.0, 10.0, 9.0, GREEN);
+            }
+        }
+        Glyph::Page => page(&mut rect, 3.0, 2.0),
+        Glyph::Copy => {
+            page(&mut rect, 2.0, 1.0);
+            page(&mut rect, 6.0, 4.0);
+        }
+        Glyph::Paste => {
+            rect(2.0, 2.0, 12.0, 15.0, EDGE);
+            rect(3.0, 3.0, 11.0, 14.0, FOLDER);
+            rect(5.0, 1.0, 9.0, 3.0, INK);
+            page(&mut rect, 6.0, 5.0);
+        }
+        Glyph::Cut => {
+            for i in 0..8 {
+                let f = i as f32;
+                rect(4.0 + f, 2.0 + f, 5.0 + f, 3.0 + f, INK);
+                rect(11.0 - f, 2.0 + f, 12.0 - f, 3.0 + f, INK);
+            }
+            rect(2.0, 10.0, 6.0, 14.0, RED);
+            rect(10.0, 10.0, 14.0, 14.0, RED);
+        }
+        Glyph::Delete => {
+            for i in 0..10 {
+                let f = i as f32;
+                rect(3.0 + f, 3.0 + f, 5.0 + f, 4.0 + f, RED);
+                rect(11.0 - f, 3.0 + f, 13.0 - f, 4.0 + f, RED);
+            }
+        }
+        Glyph::Disk => {
+            rect(2.0, 2.0, 14.0, 14.0, BLUE);
+            rect(4.0, 2.0, 12.0, 7.0, PAPER);
+            rect(5.0, 10.0, 11.0, 14.0, INK);
+        }
+    }
 }
 
 fn hit_button(hwnd: usize, s: &BarState, x: i32, y: i32) -> Option<usize> {
@@ -1061,7 +1177,17 @@ unsafe fn toolbar_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<is
         }
         0x0430 => with(hwnd, |s| std::mem::replace(&mut s.image_list, lp as usize)) as isize,
         0x0431 => snap(hwnd).image_list as isize,
-        0x0432 => 0, // TB_LOADIMAGES
+        0x0432 => {
+            // TB_LOADIMAGES : ajoute une bande standard (HINST_COMMCTRL) ;
+            // renvoie le nombre d'images de la liste.
+            let Some(n) = standard_bitmap(wp).map(|img| img.w / img.h.max(1)) else {
+                return Some(0);
+            };
+            let add = [lp as usize, wp];
+            toolbar_proc(hwnd, 0x0413, n, add.as_ptr() as isize);
+            let list = snap(hwnd).image_list;
+            crate::dlls::icons::image_list_get_image_count(list) as isize
+        }
         0x0434 => with(hwnd, |s| std::mem::replace(&mut s.hot_list, lp as usize)) as isize,
         0x0435 => snap(hwnd).hot_list as isize,
         0x0436 => with(hwnd, |s| {
@@ -2101,4 +2227,25 @@ unsafe fn cbex_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize
         _ => return None,
     };
     Some(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Bande IDB_VIEW_SMALL_COLOR : 12 images de 16 px, et une flèche
+    /// « dossier parent » visible (bouton « remonter » de 7-Zip, #555).
+    #[test]
+    fn images_standard_de_comctl32() {
+        let img = standard_bitmap(4).expect("IDB_VIEW_SMALL_COLOR");
+        assert_eq!((img.w, img.h), (16 * 12, 16));
+        let opaque = |slot: usize| {
+            (0..16).any(|y| (0..16).any(|x| img.px[y * img.w + slot * 16 + x] >> 24 != 0))
+        };
+        assert!(opaque(8), "VIEW_PARENTFOLDER dessiné");
+        assert!(!opaque(0), "case sans dessin transparente");
+        let large = standard_bitmap(1).expect("IDB_STD_LARGE_COLOR");
+        assert_eq!((large.w, large.h), (24 * 15, 24));
+        assert!(standard_bitmap(2).is_none());
+    }
 }
