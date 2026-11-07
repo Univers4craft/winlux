@@ -311,12 +311,39 @@ def write_wav(path, pcm):
         out.writeframes(pcm)
 
 
+def pcm16_to_16k_mono(data, rate, channels):
+    """WAV 16 bits quelconque (espeak-ng écrit du 22 050 Hz) → 16 kHz mono, sans ffmpeg."""
+    if rate == RATE and channels == 1: return data
+    samples = array.array("h")
+    samples.frombytes(data[:len(data) - len(data) % 2])
+    if sys.byteorder == "big": samples.byteswap()
+    if channels > 1:
+        samples = array.array("h", (sum(samples[i:i + channels]) // channels
+                                    for i in range(0, len(samples) - channels + 1, channels)))
+    count = int(len(samples) * RATE / rate)
+    out = array.array("h", bytes(2 * count))
+    step = rate / RATE
+    last = len(samples) - 1
+    for i in range(count):
+        position = i * step
+        left = int(position)
+        if left >= last:
+            out[i] = samples[last] if last >= 0 else 0
+            continue
+        frac = position - left
+        out[i] = int(samples[left] * (1 - frac) + samples[left + 1] * frac)
+    if sys.byteorder == "big": out.byteswap()
+    return out.tobytes()
+
+
 def read_wav_16k(path):
     """PCM 16 kHz mono d'un enregistrement (ffmpeg si le format diffère)."""
     try:
         with wave.open(str(path), "rb") as source:
-            if source.getframerate() == RATE and source.getnchannels() == 1 and source.getsampwidth() == 2:
-                return source.readframes(source.getnframes())
+            rate, channels, width = source.getframerate(), source.getnchannels(), source.getsampwidth()
+            data = source.readframes(source.getnframes())
+        if width == 2:
+            return pcm16_to_16k_mono(data, rate, channels)
     except (wave.Error, EOFError, OSError):
         pass
     if not shutil.which("ffmpeg"): return None

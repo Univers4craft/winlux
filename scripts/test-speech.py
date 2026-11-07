@@ -68,6 +68,12 @@ assert segments(silence(3)) == []
 # Un claquement bref (100 ms) n'est pas une phrase.
 assert segments(silence(1) + tone(0.1) + silence(1.5)) == []
 
+# Rééchantillonnage sans ffmpeg : 22 050 Hz stéréo → 16 kHz mono, durée gardée.
+stereo = array.array("h", [1000, 3000] * 22050)
+mono = m["pcm16_to_16k_mono"](stereo.tobytes(), 22050, 2)
+assert len(mono) == 2 * RATE and set(array.array("h", mono)) == {2000}
+assert m["pcm16_to_16k_mono"](b"ab", RATE, 1) == b"ab"
+
 # Nettoyage du texte et textes inventés sur du silence.
 clean = m["clean_text"]
 assert clean(" Bonjour , tout le monde .\n Ça va ? ") == "Bonjour, tout le monde. Ça va ?"
