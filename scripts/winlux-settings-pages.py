@@ -812,7 +812,7 @@ PAGE_CERTS = 36
 PAGE_PHONE = 37
 PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
-PAGE_PARENTAL = 40
+PAGE_PARENTAL = 42
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 

@@ -1,6 +1,6 @@
 # Contrôle parental
 
-Paramètres › Comptes › **Contrôle parental** (page 40, `ms-settings:family-group`), issue #661.
+Paramètres › Comptes › **Contrôle parental** (page 42, `ms-settings:family-group`), issue #661.
 
 Entièrement local : comptes locaux, aucun compte en ligne, aucune donnée envoyée. Un administrateur surveille un compte **standard** (un compte administrateur ne peut pas être surveillé : il pourrait tout lever lui-même).
 
@@ -29,8 +29,8 @@ Entièrement local : comptes locaux, aucun compte en ligne, aucune donnée envoy
 
 ## Limites connues
 
-- Une application bloquée l'est par son nom de programme : une copie renommée d'un `.exe` n'est pas reconnue. Les applications Flatpak et Snap ne sont pas proposées.
-- Le filtre web repose sur le DNS : un VPN, un proxy ou un résolveur DoH inconnu le contournent ; « Autoriser seulement » bloque aussi les domaines techniques des sites autorisés (CDN), à ajouter à la main.
+- Une application bloquée l'est par son nom de programme : une copie renommée d'un `.exe` n'est pas reconnue (#815). Les applications Flatpak et Snap ne sont pas proposées.
+- Le filtre web repose sur le DNS : un VPN, un proxy ou un résolveur DoH inconnu le contournent (#816) ; « Autoriser seulement » bloque aussi les domaines techniques des sites autorisés (CDN), à ajouter à la main.
 - Le compte doit avoir un UID entre 1000 et 1999 pour le filtre web (comptes créés par Winlux).
 - La session Live n'a pas de contrôle parental (page masquée).
 

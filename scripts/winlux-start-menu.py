@@ -93,6 +93,7 @@ _TR = {
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Système Linux': ('Linux system', 'Sistema Linux', 'Linux-System'),
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Contrôle parental': ('Parental controls', 'Control parental', 'Jugendschutz'),
     'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
     'Clavier et souris': ('Keyboard and mouse', 'Teclado y ratón', 'Tastatur und Maus'),
@@ -259,6 +260,7 @@ SETTINGS_INDEX = [
     (36, "Certificats", "certificats certificat securite ssl tls certificates certificate certificados certificado Zertifikate Zertifikat"),
     (37, "Appareils mobiles", "appareils mobiles telephone smartphone android mobile devices phone dispositivos moviles telefono movil Mobilgerate Telefon Handy Smartphone"),
     (38, "Sauvegarde", "sauvegarde sauvegarder documents copie de securite disque externe restaurer backup back up external drive restore copia de seguridad disco externo restaurar Sicherung sichern externe Festplatte wiederherstellen"),
+    (42, "Contrôle parental", "controle parental famille enfant temps d ecran limite horaires bloquer sites applications parental controls family child screen time limit block control parental familia nino tiempo de pantalla Jugendschutz Familie Kind Bildschirmzeit sperren"),
 ]
 SETTINGS = [(_t(label), page) for page, label, _ in SETTINGS_INDEX]
 # Une seule application Paramètres : les panneaux de réglages du bureau XFCE et

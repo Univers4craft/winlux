@@ -377,12 +377,13 @@ daemon.enforce_time()
 check(frozen[-1] == (1002, signal.SIGCONT) and ("bob", ":7") not in daemon.screens,
       "écran levé normalement : programmes repris")
 
-# ── Paramètres : page 40 branchée ──────────────────────────────────────────
+# ── Paramètres : page 42 branchée ──────────────────────────────────────────
 settings = (HERE / "winlux-settings.py").read_text(encoding="utf-8")
 pages = (HERE / "winlux-settings-pages.py").read_text(encoding="utf-8")
-check('_t("Applications installées"), _t("Contrôle parental")]' in settings and '(_t("Comptes"), [33, 38, 40])' in settings
-      and '"family-group": 40' in settings, "Paramètres : page 40 dans Comptes, ms-settings:family-group")
-check("PAGE_PARENTAL = 40" in pages and 'PAGE_PARENTAL: "page_parental"' in pages, "page branchée sur winlux-parental")
+check('_t("Contrôle parental")]' in settings and '(_t("Comptes"), [33, 38, 42])' in settings
+      and '"family-group": 42' in settings, "Paramètres : page 42 dans Comptes, ms-settings:family-group")
+check('(42, "Contrôle parental"' in (HERE / "winlux-start-menu.py").read_text(), "recherche du menu Démarrer")
+check("PAGE_PARENTAL = 42" in pages and 'PAGE_PARENTAL: "page_parental"' in pages, "page branchée sur winlux-parental")
 check("winlux-parental" in (HERE / "stage-desktop-components.sh").read_text()
       and "winlux-parental daemon" in (HERE / "winlux-system-services.sh").read_text(),
       "installé dans /usr/bin et lancé en root au démarrage")
