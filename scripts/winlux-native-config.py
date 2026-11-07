@@ -467,12 +467,14 @@ def add_taskbar_buttons(panel_config, marker_folder):
 
 add_taskbar_buttons(panel_config, home / ".config/winlux")
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
-# personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
+# personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox : la touche
+# Windows seule est gérée par winlux-super-key (appui-relâché, #605).
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
               "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
-              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right", "W-i", "W-s", "W-r", "W-x", "W-p")
+              "W-C-t", "W-S-c", "W-S-t", "W-C-S-Left", "W-C-S-Right", "W-i", "W-s", "W-r", "W-x", "W-p",
+              "XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute", "XF86AudioMicMute")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.

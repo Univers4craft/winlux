@@ -62,6 +62,7 @@ _TR = {
     'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
     'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
     "Échec de l’opération. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
+    'Installation des mises à jour': ('Installing updates', 'Instalando actualizaciones', 'Updates werden installiert'),
     'Opération terminée.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
     'Une opération est déjà en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
     'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
@@ -538,6 +539,7 @@ UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en 
                    "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
                    "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
 PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
+UPDATE_ACTIONS = ("update-apply", "update-rollback")
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -848,6 +850,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.page_opened = time.time()
         self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
+        self.recovery_label = None
         category = category_of(self.current)
         if len(self.shown_pages(category)) > 1:
             self.label(CATEGORIES[category][0] + "  ›", "subtitle")
@@ -920,7 +923,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
 
     def privacy_controls(self):
         """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
@@ -1018,6 +1021,26 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             shown = browser_buttons_shown(status, action)
             if child.get_visible() != shown: child.set_visible(shown)
 
+    def keep_screen_on(self, wanted):
+        """Demande org.freedesktop.ScreenSaver.Inhibit tenue pendant l'installation
+        (économiseur et DPMS, winlux-screensaver-inhibit) ; rendue après."""
+        cookie = getattr(self, "screen_cookie", None)
+        if wanted == (cookie is not None): return
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            if wanted:
+                reply = bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                                      "Inhibit", GLib.Variant("(ss)", ("Paramètres", _t("Installation des mises à jour"))),
+                                      GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 3000, None)
+                self.screen_cookie = reply.unpack()[0]
+            else:
+                self.screen_cookie = None
+                bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                              "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as error:
+            print(f"Demande « écran allumé » impossible : {error.message}", file=sys.stderr)
+            if not wanted: self.screen_cookie = None
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -1041,6 +1064,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Page branchée : l'état relu après l'action (appareil appairé, mode changé…).
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
+        # Installation en cours : l'écran ne s'éteint pas (#634, le DPMS coupait
+        # l'écran au milieu d'une mise à jour lancée ici).
+        self.keep_screen_on(self.busy or (self.process is not None and self.active_action in UPDATE_ACTIONS))
         fields = FIELDS.get(self.page, [])
         if self.page == 23:
             fields, _ = power_page_items(fields, [], power_hardware())
@@ -1061,8 +1087,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.rollback_button is not None:
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
-        if self.page == 7: text = localize_update_text(text)
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
+        if self.page == 7:
+            text = localize_update_text(text)
+            # « Secours et restauration » relu avec l'encadré : un seul avis (#636).
+            self.refresh_recovery()
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
             self.show_browser_buttons(status)
