@@ -166,4 +166,18 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(["sh", "-eu", "-c", script], check=True)
     ok((proc / "register").read_text() == "", "init Live : une règle déjà enregistrée n'est pas réécrite")
 
+# ── #689 : direction « Prisme » (Accueil en cartes, volet Détails) ─────────
+home = (SHELL / "explorer_home.rs").read_text(encoding="utf-8")
+ok('#[path = "explorer_home.rs"]' in explorer and "home::fill_home(p)" in explorer,
+   "Accueil : lecteurs et récents ajoutés après les dossiers personnels")
+ok("home::draw(g, pn, r, which, focused)" in explorer and "home::item_at(p, r, x, y)" in explorer,
+   "Accueil : cartes dessinées et cliquables avec la même mise en page")
+ok("home::draw_details(g, &d)" in explorer and "details_button(geo)" in explorer,
+   "Volet Détails : bouton « Détails » dans la barre de commandes et volet à droite")
+ok(explorer.count("home::name_badge(") >= 3, "Pastille « Windows » dans les vues Détails, Liste et Mosaïques")
+ok("home::regression();" in explorer and "pub(super) unsafe fn regression()" in home,
+   "Accueil et volet Détails vérifiés par explorer_regression")
+ok(all(w in home for w in ('b"Lecteurs"', 'b"Drives"', 'b"Unidades"', 'b"Laufwerke"')),
+   "Accueil : titres de section dans les quatre langues")
+
 print(f"test-explorer-fixes : {checks} vérifications OK")
