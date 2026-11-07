@@ -12,6 +12,11 @@ Réglages : /etc/winlux/lock.conf
   LOCK_AFTER=300      secondes d'inactivité avant verrouillage (0 : jamais)
   LOCK_ON_RESUME=1    demander le mot de passe à la sortie de veille
 
+Options de connexion (#659) : un compte qui a choisi un code PIN le tape à
+la place du mot de passe (« Options de connexion » sous le champ), et un
+doigt enregistré déverrouille dès qu'il est posé sur le lecteur, même sur
+l'horloge. Le relais root vérifie les deux (winlux-signin).
+
 Le mot de passe est celui du compte local : haché dans /etc/shadow (vérifié
 avec la fonction crypt() de la libc), ou, en session Live, celui du fichier
 /etc/winlux/users.conf. Un compte sans mot de passe déverrouille d'un clic,
@@ -64,6 +69,20 @@ _TR = {
     "Verr. Maj activé": ("Caps Lock is on", "Bloq Mayús activado", "Feststelltaste ist aktiviert"),
     "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Afficher le mot de passe": ("Show password", "Mostrar contraseña", "Kennwort anzeigen"),
+    "Code PIN": ("PIN", "PIN", "PIN"),
+    "Options de connexion": ("Sign-in options", "Opciones de inicio de sesión", "Anmeldeoptionen"),
+    "Posez votre doigt sur le lecteur d’empreintes.": (
+        "Place your finger on the fingerprint reader.",
+        "Ponga el dedo en el lector de huellas.",
+        "Legen Sie Ihren Finger auf den Fingerabdruckleser."),
+    "Empreinte non reconnue. Réessayez.": (
+        "Fingerprint not recognised. Try again.",
+        "Huella no reconocida. Inténtelo de nuevo.",
+        "Fingerabdruck nicht erkannt. Versuchen Sie es erneut."),
+    "Utilisez votre code PIN ou votre mot de passe.": (
+        "Use your PIN or password.",
+        "Use su PIN o su contraseña.",
+        "Verwenden Sie Ihre PIN oder Ihr Kennwort."),
     "Appuyez sur une touche ou cliquez pour vous connecter": (
         "Press any key or click to sign in",
         "Pulse una tecla o haga clic para iniciar sesión",
@@ -109,6 +128,23 @@ def type_into(entry, key, submit):
     elif len(key) == 1:
         entry.insert_text(key, position)
         entry.set_position(position + 1)
+
+
+def signin_module():
+    """Options de connexion (/usr/bin/winlux-signin, ou le script voisin)."""
+    import importlib.machinery
+    import importlib.util
+    for path_ in (Path("/usr/bin/winlux-signin"), Path(__file__).resolve().with_name("winlux-signin.py")):
+        if path_.is_file():
+            try:
+                loader = importlib.machinery.SourceFileLoader("winlux_signin", str(path_))
+                spec = importlib.util.spec_from_loader("winlux_signin", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def osk_module():
@@ -315,19 +351,25 @@ def relay_check(user, password, op="check"):
         return None
 
 
-def relay_switch(user, password):
+def relay_switch(user, password, pin=None, answer_out=None):
     """Ouvre ou rejoint la session d'un autre compte après vérification de son
-    mot de passe par le relais root (winlux-sessions switch). Vrai si fait."""
+    mot de passe (ou de son code PIN) par le relais root (winlux-sessions
+    switch). Vrai si fait ; la réponse complète va dans answer_out."""
     import json
     import socket
+    request = {"op": "switch", "user": user, "password": password}
+    if pin is not None:
+        request = {"op": "switch", "user": user, "pin": pin}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(60)
             client.connect(str(path(RELAY)))
-            client.sendall((json.dumps({"op": "switch", "user": user, "password": password}) + "\n").encode())
-            answer = client.makefile("r", encoding="utf-8").readline()
-        return bool(json.loads(answer or "{}").get("ok"))
-    except (OSError, ValueError):
+            client.sendall((json.dumps(request) + "\n").encode())
+            answer = json.loads(client.makefile("r", encoding="utf-8").readline() or "{}")
+        if answer_out is not None and isinstance(answer, dict):
+            answer_out.update(answer)
+        return bool(answer.get("ok"))
+    except (OSError, ValueError, AttributeError):
         return False
 
 
@@ -550,6 +592,14 @@ def run_lock(start="clock"):
       button.lock-go, button.lock-signin { background: rgba(255,255,255,0.20); color: white; border: none;
                             border-radius: 4px; padding: 8px 14px; box-shadow: none; text-shadow: none; }
       button.lock-go:hover, button.lock-signin:hover { background: rgba(255,255,255,0.32); }
+      button.lock-link { background: transparent; color: white; border: none; box-shadow: none;
+                         text-shadow: 0 1px 3px rgba(0,0,0,0.7); padding: 2px 6px; font-size: 13px; }
+      button.lock-link:hover { text-decoration: underline; background: transparent; }
+      button.lock-method { background: rgba(255,255,255,0.14); color: white; border: 2px solid transparent;
+                           border-radius: 4px; padding: 6px 10px; box-shadow: none; text-shadow: none; }
+      button.lock-method:hover { background: rgba(255,255,255,0.26); }
+      button.lock-method.selected { border-color: #B69CFF; }
+      .lock-finger { color: white; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
     """
 
     class Lock:
@@ -560,6 +610,13 @@ def run_lock(start="clock"):
             self.failures = 0
             self.blocked_until = 0
             self.view = "clock"
+            # Options de connexion du compte affiché : code PIN, empreinte.
+            self.signin_mod = signin_module()
+            self.method = "password"
+            self.can_pin = False
+            self.can_finger = False
+            self.finger_request = None
+            self.finger_failures = 0
             self.last_typing = time.monotonic()
             provider = Gtk.CssProvider()
             provider.load_from_data(css)
@@ -714,11 +771,119 @@ def run_lock(start="clock"):
             self.password_entry.set_text("")
             self.error.set_text("")
             self.entry = self.password_entry if self.password else None
+            self.stop_finger()
+            self.finger_failures = 0
+            self.apply_methods(name, None)
+            self.refresh_methods(name)
             if self.view == "signin":
                 self.password_row.set_visible(self.password)
                 self.signin_button.set_visible(not self.password)
                 if self.entry is not None:
                     self.entry.grab_focus()
+
+        # ── Code PIN et empreinte ──
+
+        def refresh_methods(self, name):
+            """État des options de connexion demandé au relais, hors du fil GTK
+            (fprintd peut mettre une seconde à démarrer)."""
+            if self.signin_mod is None or not path(RELAY).exists():
+                return
+            import threading
+            module, socket_path = self.signin_mod, str(path(RELAY))
+
+            def work():
+                status = module.client_status(name, socket_path)
+                GLib.idle_add(lambda: self.apply_methods(name, status) and False)
+            threading.Thread(target=work, daemon=True).start()
+
+        def apply_methods(self, name, status):
+            if name != self.user:
+                return False
+            status = status or {}
+            self.can_pin = bool(self.password and status.get("pin") and not status.get("pin_locked"))
+            self.can_finger = bool(self.password and status.get("reader") and status.get("fingers"))
+            self.options_link.set_visible(self.can_pin)
+            if not self.can_pin:
+                self.options_box.hide()
+            self.set_method("pin" if self.can_pin else "password", keep_error=True)
+            if self.can_finger:
+                self.finger_label.set_text(_t("Posez votre doigt sur le lecteur d’empreintes."))
+                self.start_finger()
+            else:
+                self.finger_label.set_text("")
+            self.finger_label.set_visible(self.can_finger and self.view == "signin")
+            return False
+
+        def set_method(self, method, keep_error=False):
+            self.method = method if (method != "pin" or self.can_pin) else "password"
+            entry = self.password_entry
+            entry.set_placeholder_text(_t("Code PIN") if self.method == "pin" else _t("Mot de passe"))
+            entry.set_input_purpose(Gtk.InputPurpose.PIN if self.method == "pin" else Gtk.InputPurpose.PASSWORD)
+            entry.set_text("")
+            entry.set_visibility(False)
+            if not keep_error:
+                self.error.set_text("")
+            for key, button in self.method_buttons.items():
+                context = button.get_style_context()
+                (context.add_class if key == self.method else context.remove_class)("selected")
+            if self.view == "signin" and self.entry is not None and self.entry.get_sensitive():
+                self.entry.grab_focus()
+
+        def start_finger(self):
+            """Le lecteur attend un doigt, sur l'horloge comme à la connexion."""
+            if self.finger_request is not None or not self.can_finger or self.signin_mod is None:
+                return
+            import threading
+            user = self.user
+            if user == self.owner:
+                payload = {"action": "fp-verify", "user": user}
+            else:
+                payload = {"op": "switch", "user": user, "finger": True}
+            request = self.signin_mod.Request(payload, str(path(RELAY)))
+            self.finger_request = request
+
+            def event(item):
+                if item.get("event") == "retry":
+                    GLib.idle_add(lambda: self.finger_label.set_text(self.signin_mod.message("retry")) and False)
+
+            def work():
+                answer = request.run(event, timeout=self.signin_mod.VERIFY_SECONDS + 60)
+                GLib.idle_add(lambda: self.finger_done(request, user, answer) and False)
+            threading.Thread(target=work, daemon=True).start()
+
+        def stop_finger(self):
+            request, self.finger_request = self.finger_request, None
+            if request is not None:
+                request.cancel()
+
+        def finger_done(self, request, user, answer):
+            if request is not self.finger_request or request.cancelled or user != self.user:
+                return False
+            self.finger_request = None
+            if answer.get("ok"):
+                if user == self.owner:
+                    self.unlock()
+                else:
+                    self.show_clock()
+                return False
+            error = answer.get("error")
+            if error == "no-match":
+                self.finger_failures += 1
+                if self.finger_failures >= MAX_TRIES:
+                    self.finger_label.set_text(_t("Utilisez votre code PIN ou votre mot de passe."))
+                    return False
+                self.finger_label.set_text(_t("Empreinte non reconnue. Réessayez."))
+                if self.view == "clock":
+                    self.show_signin()
+            elif error in ("timeout", "busy"):
+                pass
+            else:
+                # Lecteur débranché, relais absent : seul le clavier reste.
+                self.can_finger = False
+                self.finger_label.hide()
+                return False
+            GLib.timeout_add(1500 if error == "busy" else 300, lambda: self.start_finger() and False)
+            return False
 
         def clock_view(self, width=1920, height=1080):
             # Heure, date et invite au-dessus du losange du fond d'écran (il
@@ -787,6 +952,34 @@ def run_lock(start="clock"):
             self.signin.pack_start(button, False, False, 0)
             for widget in (row, go, self.password_entry):
                 widget.show()
+            # Doigt attendu par le lecteur (affiché seulement s'il y en a un).
+            self.finger_label = Gtk.Label(wrap=True, max_width_chars=44, justify=Gtk.Justification.CENTER)
+            self.finger_label.get_style_context().add_class("lock-finger")
+            self.finger_label.set_no_show_all(True)
+            self.signin.pack_start(self.finger_label, False, False, 0)
+            # « Options de connexion » : mot de passe ou code PIN.
+            self.options_link = Gtk.Button(label=_t("Options de connexion"), halign=Gtk.Align.CENTER)
+            self.options_link.get_style_context().add_class("lock-link")
+            self.options_link.set_no_show_all(True)
+            self.options_link.connect("clicked", lambda *_: self.options_box.set_visible(not self.options_box.get_visible()))
+            self.signin.pack_start(self.options_link, False, False, 0)
+            self.options_box = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+            self.options_box.set_no_show_all(True)
+            self.method_buttons = {}
+            theme = Gtk.IconTheme.get_default()
+            for key, label, icon in (("password", _t("Mot de passe"), "dialog-password-symbolic"),
+                                     ("pin", _t("Code PIN"), "input-dialpad-symbolic")):
+                button = Gtk.Button(label=label)
+                if theme is not None and theme.has_icon(icon):
+                    button.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
+                    button.set_always_show_image(True)
+                button.get_style_context().add_class("lock-method")
+                button.get_accessible().set_name(label)
+                button.connect("clicked", lambda _b, k=key: self.set_method(k))
+                button.show_all()
+                self.options_box.pack_start(button, False, False, 0)
+                self.method_buttons[key] = button
+            self.signin.pack_start(self.options_box, False, False, 0)
             self.entry = self.password_entry if self.password else None
             self.error = Gtk.Label(wrap=True, max_width_chars=44, justify=Gtk.Justification.CENTER)
             self.error.get_style_context().add_class("lock-error")
@@ -794,6 +987,9 @@ def run_lock(start="clock"):
             self.caps = Gtk.Label()
             self.caps.get_style_context().add_class("lock-caps")
             self.signin.pack_start(self.caps, False, False, 0)
+            # Message d'erreur juste sous le champ, options de connexion après.
+            for widget in (self.finger_label, self.options_link, self.options_box):
+                self.signin.reorder_child(widget, -1)
             return self.signin
 
         def draw_background(self, widget, cr):
@@ -879,6 +1075,8 @@ def run_lock(start="clock"):
             self.signin.show()
             self.password_row.set_visible(self.password)
             self.signin_button.set_visible(not self.password)
+            self.finger_label.set_visible(self.can_finger)
+            self.options_link.set_visible(self.can_pin)
             if len(self.account_names) > 1:
                 self.accounts.show_all()
             self.area.queue_draw()
@@ -964,6 +1162,9 @@ def run_lock(start="clock"):
         def submit(self):
             if self.entry is None or time.monotonic() < self.blocked_until:
                 return
+            if self.method == "pin" and self.can_pin:
+                self.submit_pin()
+                return
             if self.user != self.owner:
                 # Autre compte : le relais root vérifie et bascule de session ;
                 # celle-ci reste verrouillée derrière.
@@ -983,6 +1184,30 @@ def run_lock(start="clock"):
             else:
                 self.error.set_text(_t("Le mot de passe est incorrect. Réessayez."))
 
+        def submit_pin(self):
+            """Code PIN : le relais compare et compte les essais (5 au plus,
+            puis le mot de passe redevient obligatoire)."""
+            pin = self.entry.get_text()
+            if self.user != self.owner:
+                answer = {}
+                if relay_switch(self.user, "", pin=pin, answer_out=answer):
+                    self.failures = 0
+                    self.show_clock()
+                    return
+            else:
+                answer = self.signin_mod.ask("pin-check", str(path(RELAY)), timeout=30, user=self.user, pin=pin)
+                if answer.get("ok"):
+                    self.unlock()
+                    return
+            self.entry.set_text("")
+            error = answer.get("error") or "pin-wrong"
+            if answer.get("locked") or error == "pin-locked":
+                self.can_pin = False
+                self.options_link.hide()
+                self.options_box.hide()
+                self.set_method("password", keep_error=True)
+            self.error.set_text(self.signin_mod.message(error))
+
         def sign_in(self):
             """Compte sans mot de passe : sa session, ou celle d'un autre."""
             if self.user == self.owner:
@@ -993,6 +1218,7 @@ def run_lock(start="clock"):
                 self.error.set_text(_t("Impossible d’ouvrir la session de {name}.").format(name=self.user))
 
         def unlock(self):
+            self.stop_finger()
             Gdk.Display.get_default().get_default_seat().ungrab()
             Gtk.main_quit()
 

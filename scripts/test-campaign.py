@@ -587,4 +587,13 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #659 : code PIN et empreinte à la connexion, vérifiés par le relais root.
+signin_tool = (SCRIPTS / "winlux-signin.py").read_text()
+ok("hashlib.scrypt" in signin_tool and "MAX_PIN_TRIES = 5" in signin_tool
+   and "def signin_prepare" in (SCRIPTS / "winlux-root.py").read_text()
+   and "def submit_pin" in (SCRIPTS / "winlux-lock.py").read_text()
+   and "def sections_signin" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and all((SCRIPTS / name).exists() for name in ("test-signin.py", "test-lock-signin.py", "test-signin-page.py")),
+   "options de connexion : code PIN (scrypt, 5 essais) et empreinte par le relais, écran et Paramètres testés")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

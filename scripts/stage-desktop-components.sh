@@ -48,7 +48,12 @@ mkdir -p "$stage/usr/lib/udev/rules.d"
 install -m 644 "$project/integration/native/udev/60-winlux-rfkill.rules" "$stage/usr/lib/udev/rules.d/60-winlux-rfkill.rules"
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
+# Empreinte digitale (#659) : fprintd n'obéit qu'à root, donc au relais
+# winlux-root qui a vérifié le compte ; aucun droit sur le lecteur lui-même.
+# Dans /usr pour arriver aussi par la mise à jour.
+mkdir -p "$stage/usr/share/polkit-1/rules.d"
+install -m 644 "$project/integration/native/fprint/49-winlux-fprint.rules" "$stage/usr/share/polkit-1/rules.d/49-winlux-fprint.rules"
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-signin winlux-wifi winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
