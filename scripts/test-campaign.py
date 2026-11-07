@@ -157,11 +157,12 @@ with patch("os.getuid", return_value=1000), patch("pwd.getpwuid", return_value=e
 state = {"text": "final", "rendered": 0}
 fake = SimpleNamespace(all_apps=False,
                        search=SimpleNamespace(get_text=lambda: state["text"], set_text=lambda text: state.update(text=text)),
-                       render=lambda: state.update(rendered=state["rendered"] + 1))
+                       render=lambda: state.update(rendered=state["rendered"] + 1),
+                       scroll_top=lambda: state.update(top=state.get("top", 0) + 1))
 menu["Start"].toggle_list(fake)
 ok(state["text"] == "" and fake.all_apps is False and state["rendered"] == 1, "« Retour » efface la recherche en cours")
 menu["Start"].toggle_list(fake)
-ok(fake.all_apps is True, "« Toutes les applications » s'ouvre sans recherche")
+ok(fake.all_apps is True and state.get("top") == 2, "« Toutes les applications » s'ouvre sans recherche, liste en haut")
 
 # ── Terminal Winlux : coller ce qui a été copié (signalé par damien) ───────
 with tempfile.TemporaryDirectory() as directory:
@@ -494,6 +495,18 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
    "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
+
+# ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
+tray_source = (SCRIPTS / "winlux-tray.py").read_text()
+ok("def _settled_balance" in tray_source and "taskbar-balance" in tray_source
+   and "test-taskbar-boot-centering.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre centrée : contrepoids mesuré une fois les icônes de droite en place, valeur précédente reprise")
+ok("test-taskbar-live-align.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "*' 13 '*) ;;" not in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre : changement d'alignement en direct suivi d'une relance de la barre (#651)")
+ok("def scroll_top" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-menu-reset.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : chaque ouverture repart en haut de la vue Épinglé (#673)")
 
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()

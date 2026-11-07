@@ -384,6 +384,12 @@ class Start(Gtk.Application):
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+        # Comme Windows 11, chaque ouverture repart du haut de la liste : la
+        # fenêtre cachée gardait le défilement de la fois précédente, qu'il
+        # fallait remonter à la main (#673). Remis à zéro aussi une fois la
+        # liste dessinée, GTK recalant la position à la nouvelle hauteur.
+        self.scroll_top()
+        GLib.idle_add(self.scroll_top)
 
     def workarea(self):
         display = self.window.get_display()
@@ -523,7 +529,7 @@ class Start(Gtk.Application):
         on_click(self.toggle, self.toggle_list)
         header.pack_end(self.toggle, False, False, 0)
         body.pack_start(header, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
+        scroll = self.scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         scroll.add(self.content)
@@ -547,6 +553,10 @@ class Start(Gtk.Application):
         sinon le thème GTK impose la sienne (Adwaita clair : texte gris foncé des
         boutons et des champs) sur le fond du menu et le texte disparaît."""
         self.css.load_from_data(MENU_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
+
+    def scroll_top(self):
+        self.scroll.get_vadjustment().set_value(0)
+        return False
 
     def hide(self):
         if self.window.has_grab():self.window.grab_remove()
@@ -601,6 +611,8 @@ class Start(Gtk.Application):
         else:
             self.all_apps = not self.all_apps
         self.render()
+        # Changement de vue (Épinglé ↔ Toutes les applications) : en haut.
+        self.scroll_top()
 
     def first_result(self, *_):
         # Même ordre que la liste : applications, Paramètres, fichiers.

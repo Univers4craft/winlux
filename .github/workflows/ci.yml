@@ -527,6 +527,12 @@ jobs:
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
 
+      - name: Bouton Démarrer immobile au lancement de la barre centrée
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-boot-centering.py
+
+      - name: Alignement de la barre appliqué en direct, sans relance manuelle
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-live-align.py
+
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
@@ -557,6 +563,9 @@ jobs:
 
       - name: Menu Démarrer sur tablette (clavier tactile intégré, appuis xdotool)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-osk.py
+
+      - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
 
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
