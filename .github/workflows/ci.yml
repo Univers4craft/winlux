@@ -518,6 +518,9 @@ jobs:
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
+      - name: Fenêtres agrandies à coins carrés (règle picom, veilleur, migration)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-maximized-corners.py
+
       - name: Fenêtre Jeux (cartes, tri, recherche)
         run: |
           mkdir -p build/captures

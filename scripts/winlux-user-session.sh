@@ -179,6 +179,9 @@ fi
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
     compositor_pid=$!
+    # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
+    # openbox, seul lu par les règles de picom (#582).
+    if test -x /usr/bin/winlux-maximized-watch; then start maximized-watch.log /usr/bin/winlux-maximized-watch; fi
 fi
 # Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
 # de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
