@@ -85,7 +85,7 @@ ALIASES = {
     "msinfo32": ["winlux-shell-app", "msinfo32"], "taskschd.msc": ["winlux-shell-app", "taskschd"],
     "wf.msc": ["winlux-shell-app", "firewall"], "firewall.cpl": ["winlux-shell-app", "firewall"],
     "notepad": ["winlux-shell-app", "editor"], "write": ["winlux-shell-app", "editor"],
-    "appwiz.cpl": SETTINGS + ["1"], "ncpa.cpl": SETTINGS + ["2"], "desk.cpl": SETTINGS + ["8"],
+    "appwiz.cpl": SETTINGS + ["39"], "ncpa.cpl": SETTINGS + ["2"], "desk.cpl": SETTINGS + ["8"],
     "mmsys.cpl": SETTINGS + ["16"], "powercfg.cpl": SETTINGS + ["23"], "sysdm.cpl": SETTINGS + ["9"],
     "timedate.cpl": SETTINGS + ["14"], "main.cpl": SETTINGS + ["4"], "devmgmt.msc": SETTINGS + ["34"],
     "winver": SETTINGS + ["9"], "certmgr.msc": SETTINGS + ["36"], "intl.cpl": SETTINGS + ["14"],
@@ -238,7 +238,7 @@ def quick_menu():
         return (f'<item label="{html.escape(_t(label))}"><action name="Execute"><command>'
                 f'{html.escape(command)}</command></action></item>')
     lines = ['<openbox_pipe_menu>',
-             item("Applications installées", "winlux-shell-app settings 1"),
+             item("Applications installées", "winlux-shell-app settings 39"),
              item("Options d’alimentation", "winlux-shell-app settings 23"),
              item("Observateur d’événements", "winlux-shell-app eventviewer"),
              item("Système", "winlux-shell-app settings 9"),

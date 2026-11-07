@@ -253,6 +253,7 @@ _TR = {
     'Indisponible': ('Unavailable', 'No disponible', 'Nicht verfügbar'),
     'Installation': ('Installing', 'Instalación', 'Installation'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -332,17 +333,17 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde")]
+         _t("Sauvegarde"), _t("Applications installées")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 38 n’existent que dans les Paramètres natifs.
+# Pages 29 à 39 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
-              (_t("Applications"), [1, 10, 11, 15, 30]),
+              (_t("Applications"), [39, 1, 10, 11, 15, 30]),
               (_t("Comptes"), [33, 38]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
@@ -1247,6 +1248,8 @@ PAGE_NAMES = {
     "presse-papiers": 32, "accounts": 33, "yourinfo": 33, "otherusers": 33, "comptes": 33,
     "hardware": 34, "drivers": 34, "pilotes": 34,
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
+    # ms-settings:appsfeatures ouvre « Applications installées » (#722).
+    "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
 }
 
 
