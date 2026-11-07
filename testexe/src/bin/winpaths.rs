@@ -196,15 +196,26 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let mut long = W::new();
         long.push("\\\\?\\").push_w(docs.slice());
         let mut ok = true;
-        for _ in 0..8 {
+        let mut dirs = [0usize; 8];
+        for d in dirs.iter_mut() {
             long.push("\\un-dossier-avec-un-nom-plutot-long");
-            ok &= CreateDirectoryW(long.ptr(), null_mut()) != 0;
+            *d = long.len;
+            // Un dossier resté d'un essai interrompu ne fait pas échouer le test (#613).
+            ok &= CreateDirectoryW(long.ptr(), null_mut()) != 0 || GetLastError() == 183;
         }
         long.push("\\fin.txt");
         ok &= long.len > 300 && write_file(&long, b"x");
         let mut plain = W::new();
         plain.push_w(&long.slice()[4..]);
         check!(ok && GetFileAttributesW(plain.ptr()) != u32::MAX, "chemin de plus de 260 caractères");
+        // Rangement : le test ne laisse rien dans le vrai dossier Documents (#614).
+        let cleaned = DeleteFileW(long.ptr()) != 0
+            && dirs.iter().rev().all(|&n| {
+                long.len = n;
+                long.buf[n] = 0;
+                RemoveDirectoryW(long.ptr()) != 0
+            });
+        check!(cleaned, "arborescence longue supprimée");
 
         // 9. Lecture seule : vraie protection, et retour sans « écriture pour tous ».
         let ro = SetFileAttributesW(report.ptr(), 1) != 0 && GetFileAttributesW(report.ptr()) & 1 != 0;
@@ -212,6 +223,13 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let refused = h as usize == usize::MAX && GetLastError() == 5;
         let back = SetFileAttributesW(report.ptr(), 0x80) != 0 && GetFileAttributesW(report.ptr()) & 1 == 0;
         check!(ro && refused && back, "lecture seule posée, respectée puis retirée");
+
+        // Le rapport accentué n'est gardé que pour le contrôle côté Linux de
+        // scripts/test-runtime.sh (WINLUX_WINPATHS_KEEP=1).
+        let mut keep = [0u16; 8];
+        if GetEnvironmentVariableW(W::of("WINLUX_WINPATHS_KEEP").ptr(), keep.as_mut_ptr(), 8) == 0 {
+            check!(DeleteFileW(report.ptr()) != 0, "rapport accentué supprimé");
+        }
     }
     finish()
 }
