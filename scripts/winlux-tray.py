@@ -449,6 +449,8 @@ elif kind == "balance":
     icon = directory / f"spacer-{width}.svg"
     if not icon.exists():
         icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{max(1, width)}" height="1" viewBox="0 0 {max(1, width)} 1">{body}</svg>')
+    # <tool></tool> vide : sans balise, genmon affiche son infobulle par défaut
+    # (« (genmon) », commande, période) au survol de la zone à côté de Démarrer (#645).
     print(f"<img>{icon}</img><tool></tool>")
     raise SystemExit(0)
 elif kind == "notifications":

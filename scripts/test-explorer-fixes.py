@@ -137,6 +137,19 @@ ok("if app == APP_TERMINAL {" in launch[:400] and "native_terminal(None)" in lau
 ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer,
    "Explorateur : Terminal ouvre winlux-terminal dans le dossier affiché")
 
+# ── #699 : la boîte COM de Vista (IFileOpenDialog) passe par l'Explorateur ──
+com_rs = (ROOT / "runtime/src/dlls/filedialog_com.rs").read_text(encoding="utf-8")
+ole_rs = (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+apps_rs = (ROOT / "runtime/src/dlls/common_apps.rs").read_text(encoding="utf-8")
+ok("filedialog_com::create_builtin(&guid, &iid, out)" in ole_rs,
+   "CoCreateInstance(CLSID_FileOpenDialog / CLSID_FileSaveDialog) ne rend plus REGDB_E_CLASSNOTREG")
+ok("files::file_dialog(" in com_rs and "pick_folder(" in com_rs,
+   "IFileDialog::Show ouvre l'Explorateur Winlux, comme GetOpenFileNameW")
+ok("filedialog_com::sh_create_item_from_parsing_name" in apps_rs and "E_NOTIMPL" not in apps_rs.split("SHCreateItemFromParsingName")[0][-200:],
+   "SHCreateItemFromParsingName rend un vrai IShellItem")
+ok('b"folder"' in pick_rs and "fn accept_folder(" in pick_rs,
+   "FOS_PICKFOLDERS : l'Explorateur sait choisir un dossier")
+
 # ── #674 : Explorateur étroit, colonnes dans l'ordre, masquées par la droite ─
 ok("while shown > 0 && NAME_MIN" in explorer and "sx.min(ir.right) - tx - 12" in explorer,
    "vue Détails étroite : Type et Taille disparaissent au lieu de « … » ou d'être inversées")

@@ -22,10 +22,14 @@
 //! - **Pile.** Le code 32 bits et les API 64 bits partagent la pile du
 //!   thread, qui est sous 4 Go grâce à la réservation.
 
+mod com;
+mod comctl;
+mod comdlg;
 mod crt;
 mod cxx;
 mod fiber;
 mod kernel;
+mod layout;
 mod seh;
 mod user;
 mod wow64;
@@ -1325,9 +1329,14 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
     let label = format!("{}!{func}", dll.to_ascii_lowercase());
     let (target, sig, fix) = match override_for(dll, func) {
         Some((target, sig)) => (target, sig, crt::Fix::None),
-        None => match user::override_for(&crate::dlls::normalize(dll), func)
-            .or_else(|| crt::override_for(&crate::dlls::normalize(dll), func))?
-        {
+        None => match {
+            let n = crate::dlls::normalize(dll);
+            user::override_for(&n, func)
+                .or_else(|| crt::override_for(&n, func))
+                .or_else(|| com::override_for(&n, func))
+                .or_else(|| comdlg::override_for(&n, func))
+                .or_else(|| comctl::override_for(&n, func))
+        }? {
             crt::Override::Data(addr) => return Some(addr),
             crt::Override::Native { target, sig, fix } => (target, sig, fix),
             crt::Override::Raw { target, aux, pop } => {

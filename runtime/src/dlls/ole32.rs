@@ -846,6 +846,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
             return hr;
         }
+        // Boîtes Ouvrir/Enregistrer de Vista (IFileOpenDialog/IFileSaveDialog).
+        if let Some(hr) = super::filedialog_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
@@ -1320,6 +1324,11 @@ pub fn exports() -> crate::dlls::Exports {
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
+        // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
+        // (MinGW les importe d'ole32).
+        "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
+        "GetErrorInfo"=>fn super::errorinfo::get_error_info,
+        "SetErrorInfo"=>fn super::errorinfo::set_error_info,
         "RoInitialize"=>fn ro_initialize,"RoUninitialize"=>fn ro_uninitialize
     }
 }

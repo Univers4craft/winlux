@@ -30,6 +30,171 @@ extern "C" {
     fn CommDlgExtendedError() -> u32;
 }
 
+#[link(name = "ole32", kind = "raw-dylib")]
+extern "system" {
+    fn CoInitializeEx(reserved: *mut c_void, model: u32) -> i32;
+    fn CoCreateInstance(
+        clsid: *const [u8; 16],
+        outer: *mut c_void,
+        ctx: u32,
+        iid: *const [u8; 16],
+        out: *mut *mut c_void,
+    ) -> i32;
+    fn CoTaskMemFree(p: *mut c_void);
+}
+
+#[link(name = "shell32", kind = "raw-dylib")]
+extern "system" {
+    fn SHCreateItemFromParsingName(
+        path: *const u16,
+        bc: *mut c_void,
+        iid: *const [u8; 16],
+        out: *mut *mut c_void,
+    ) -> i32;
+}
+
+/// GUID écrit dans l'ordre de la mémoire (Data1..3 en petit-boutiste).
+const fn guid(a: u32, b: u16, c: u16, d: [u8; 8]) -> [u8; 16] {
+    let a = a.to_le_bytes();
+    let b = b.to_le_bytes();
+    let c = c.to_le_bytes();
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+        d[7],
+    ]
+}
+const CLSID_FILE_OPEN_DIALOG: [u8; 16] = guid(
+    0xDC1C_5A9C,
+    0xE88A,
+    0x4DDE,
+    [0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7],
+);
+const CLSID_FILE_SAVE_DIALOG: [u8; 16] = guid(
+    0xC0B4_E2F3,
+    0xBA21,
+    0x4773,
+    [0x8D, 0xBA, 0x33, 0x5E, 0xC9, 0x46, 0xEB, 0x8B],
+);
+const IID_IFILE_OPEN_DIALOG: [u8; 16] = guid(
+    0xD57C_7288,
+    0xD4AD,
+    0x4768,
+    [0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32, 0xD9, 0x60],
+);
+const IID_IFILE_SAVE_DIALOG: [u8; 16] = guid(
+    0x84BC_CD23,
+    0x5FDE,
+    0x4CDB,
+    [0xAE, 0xA4, 0xAF, 0x64, 0xB8, 0x3D, 0x78, 0xAB],
+);
+const IID_ISHELL_ITEM: [u8; 16] = guid(
+    0x4382_6D1E,
+    0xE718,
+    0x42EE,
+    [0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE],
+);
+
+/// Entrée `n` de la vtable d'un objet COM.
+unsafe fn slot(obj: *mut c_void, n: usize) -> usize {
+    *(*(obj as *const *const usize)).add(n)
+}
+
+unsafe fn release(obj: *mut c_void) {
+    let f: extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(slot(obj, 2));
+    f(obj);
+}
+
+/// IShellItem::GetDisplayName(SIGDN_FILESYSPATH) copié dans `out`.
+unsafe fn item_path(item: *mut c_void, out: &mut [u16]) -> bool {
+    let f: extern "system" fn(*mut c_void, u32, *mut *mut u16) -> i32 =
+        core::mem::transmute(slot(item, 5));
+    let mut p: *mut u16 = core::ptr::null_mut();
+    if f(item, 0x8005_8000, &mut p) != 0 || p.is_null() {
+        return false;
+    }
+    let mut i = 0;
+    while i + 1 < out.len() && *p.add(i) != 0 {
+        out[i] = *p.add(i);
+        i += 1;
+    }
+    out[i] = 0;
+    CoTaskMemFree(p.cast());
+    true
+}
+
+/// Boîte COM de Vista, appelée comme Notepad++ 8 (Fichier > Ouvrir,
+/// Enregistrer sous) : CoCreateInstance, SetFileTypes, SetFolder, Show,
+/// GetResult. Sans elle, Notepad++ ne montre rien (#699).
+unsafe fn com_dialog(temp: &[u16], save: bool) {
+    CoInitializeEx(core::ptr::null_mut(), 2);
+    let (clsid, iid) = if save {
+        (&CLSID_FILE_SAVE_DIALOG, &IID_IFILE_SAVE_DIALOG)
+    } else {
+        (&CLSID_FILE_OPEN_DIALOG, &IID_IFILE_OPEN_DIALOG)
+    };
+    let mut d: *mut c_void = core::ptr::null_mut();
+    check!(
+        CoCreateInstance(clsid, core::ptr::null_mut(), 1, iid, &mut d) == 0 && !d.is_null(),
+        "CoCreateInstance(CLSID_FileOpenDialog / FileSaveDialog)"
+    );
+    let name = w(b"Cle privee PuTTY\0");
+    let spec = w(b"*.ppk;*.log\0");
+    let specs = [[name.as_ptr(), spec.as_ptr()]];
+    let set_types: extern "system" fn(*mut c_void, u32, *const [*const u16; 2]) -> i32 =
+        core::mem::transmute(slot(d, 4));
+    check!(
+        set_types(d, 1, specs.as_ptr()) == 0,
+        "IFileDialog::SetFileTypes"
+    );
+    let mut folder: *mut c_void = core::ptr::null_mut();
+    check!(
+        SHCreateItemFromParsingName(
+            temp.as_ptr(),
+            core::ptr::null_mut(),
+            &IID_ISHELL_ITEM,
+            &mut folder
+        ) == 0,
+        "SHCreateItemFromParsingName"
+    );
+    let set_folder: extern "system" fn(*mut c_void, *mut c_void) -> i32 =
+        core::mem::transmute(slot(d, 12));
+    check!(set_folder(d, folder) == 0, "IFileDialog::SetFolder");
+    release(folder);
+    if save {
+        let def = w(b"log\0");
+        let set_def: extern "system" fn(*mut c_void, *const u16) -> i32 =
+            core::mem::transmute(slot(d, 22));
+        set_def(d, def.as_ptr());
+    }
+    let show: extern "system" fn(*mut c_void, Handle) -> i32 = core::mem::transmute(slot(d, 3));
+    check!(show(d, OWNER) == 0, "IFileDialog::Show");
+    let mut item: *mut c_void = core::ptr::null_mut();
+    let get_result: extern "system" fn(*mut c_void, *mut *mut c_void) -> i32 =
+        core::mem::transmute(slot(d, 20));
+    check!(
+        get_result(d, &mut item) == 0 && !item.is_null(),
+        "IFileDialog::GetResult"
+    );
+    let mut path = [0u16; 300];
+    check!(
+        item_path(item, &mut path),
+        "IShellItem::GetDisplayName(SIGDN_FILESYSPATH)"
+    );
+    if save {
+        check!(
+            ends_with(&path, b"\\session-com.log"),
+            "IFileSaveDialog : extension par defaut"
+        );
+    } else {
+        check!(
+            ends_with(&path, b"\\winlux-cle-test.ppk"),
+            "IFileOpenDialog : fichier choisi"
+        );
+    }
+    release(item);
+    release(d);
+}
+
 #[repr(C)]
 struct OpenFileName {
     size: u32,
@@ -319,6 +484,16 @@ pub extern "C" fn mainCRTStartup() -> ! {
             ends_with(&out, b"\\session-putty.log"),
             "extension par defaut"
         );
+
+        // Boîtes COM de Vista (Notepad++ 8, #699).
+        if SHOW_MS == 0 {
+            let open = w(b"winlux-cle-test.ppk\0");
+            SetEnvironmentVariableW(env_file.as_ptr(), open.as_ptr());
+            com_dialog(&temp, false);
+            let save = w(b"session-com\0");
+            SetEnvironmentVariableW(env_file.as_ptr(), save.as_ptr());
+            com_dialog(&temp, true);
+        }
 
         // Couleur.
         let env = w(b"WINLUX_CHOOSECOLOR\0");
