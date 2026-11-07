@@ -1,5 +1,5 @@
 //! Écran bleu de la mort (BSOD) style Windows 10/11 : affiché quand le
-//! shell détecte un crash critique via /run/winlux/crash-bsod. Affiche le
+//! shell détecte un crash critique via crash-bsod (journal du compte). Affiche le
 //! stop code, le QR code (simplifié en grille), le message d'erreur, et un
 //! compteur de redémarrage automatique.
 
@@ -44,12 +44,15 @@ pub unsafe fn check_crash() {
     LAST_CHECK = now;
     // Échec sans faute mémoire (fonction Windows absente, erreur interne) :
     // pas d'écran bleu, seulement la proposition de signalement.
-    let offer = c"Z:\\run\\winlux\\crash-offer".as_ptr();
+    // Fichiers du compte (#633) : un autre compte ne les voit pas.
+    let offer_path = crate::admin_ui::journal_file(b"crash-offer");
+    let offer = offer_path.ptr();
     if GetFileAttributesA(offer) != u32::MAX {
         DeleteFileA(offer);
         offer_report();
     }
-    let path = c"Z:\\run\\winlux\\crash-bsod".as_ptr();
+    let bsod_path = crate::admin_ui::journal_file(b"crash-bsod");
+    let path = bsod_path.ptr();
     let handle = CreateFileA(
         path,
         0x80000000,

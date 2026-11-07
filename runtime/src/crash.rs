@@ -326,14 +326,14 @@ unsafe fn write_crash_log(
     frames: &[(usize, bool)],
 ) {
     let [rip, rsp, rbp, rax, rcx, rdx, addr] = regs;
-    libc::mkdir(c"/run/winlux".as_ptr(), 0o755);
-    let dir = b"/run/winlux/journal\0";
-    libc::mkdir(dir.as_ptr() as *const i8, 0o755);
-    let path = b"/run/winlux/journal/crash.log\0";
+    // Dossier du compte, préparé par install() (#633) : rien à créer ici.
+    let Some(paths) = crate::journal::signal_paths() else {
+        return;
+    };
     let fd = libc::open(
-        path.as_ptr() as *const i8,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
-        0o644,
+        paths.crash_log.as_ptr(),
+        libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NOFOLLOW,
+        0o600,
     );
     if fd < 0 {
         return;
@@ -408,11 +408,10 @@ unsafe fn write_crash_log(
     libc::close(fd);
 
     // Écrire aussi un fichier BSOD que le shell peut lire pour afficher l'écran bleu
-    let bsod_path = b"/run/winlux/crash-bsod\0";
     let bfd = libc::open(
-        bsod_path.as_ptr() as *const i8,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
-        0o644,
+        paths.crash_bsod.as_ptr(),
+        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
+        0o600,
     );
     if bfd >= 0 {
         write_fd(bfd, stop_code);
@@ -481,8 +480,9 @@ unsafe fn write_hex(mut n: usize) {
 /// le bureau surveille pour proposer le signalement sans écran bleu.
 pub fn record_failure(exception: &str, detail: &str) {
     use std::io::Write;
-    let dir = std::path::Path::new("/run/winlux/journal");
-    let _ = std::fs::create_dir_all(dir);
+    let Some(dir) = crate::journal::dir() else {
+        return;
+    };
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -504,18 +504,24 @@ pub fn record_failure(exception: &str, detail: &str) {
     for line in detail.lines().take(40) {
         entry.push_str(&format!("  detail={line}\n"));
     }
+    use std::os::unix::fs::OpenOptionsExt;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(dir.join("crash.log"))
     {
         let _ = f.write_all(entry.as_bytes());
     }
-    let _ = std::fs::write("/run/winlux/crash-offer", format!("{ts}\n{exe}\n"));
+    // Proposition de signalement : dans le dossier du compte, pour que le
+    // bureau d'un autre compte ne la voie pas (#633).
+    let _ = std::fs::write(dir.join("crash-offer"), format!("{ts}\n{exe}\n"));
 }
 
 pub fn install() {
     crate::dlls::seh_hw::init();
+    crate::journal::prepare_signal_paths();
     unsafe {
         let mut fds = [-1i32; 2];
         if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) == 0 {

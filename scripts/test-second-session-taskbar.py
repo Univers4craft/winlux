@@ -122,7 +122,8 @@ with tempfile.TemporaryDirectory() as directory:
 control = (ROOT / "scripts/winlux-control.sh").read_text()
 ok('mine="$run/control-$(id -u)"' in control and 'log="$mine/action.log"' in control
    and 'mkdir "$mine/control.lock"' in control, "winlux-control : message, journal et verrou par compte")
-ok('publish "$run/control.txt.tmp.$$" "$run/control.txt"' in control, "relevé partagé : un compte qui ne peut pas le remplacer n'échoue pas")
+ok('control_tmp=$(fresh "$run/control.txt")' in control and 'publish "$control_tmp" "$run/control.txt"' in control,
+   "relevé partagé : un compte qui ne peut pas le remplacer n'échoue pas")
 with tempfile.TemporaryDirectory() as directory:
     work = Path(directory)
     for sub in ("bin", "root/etc/winlux", "home"):

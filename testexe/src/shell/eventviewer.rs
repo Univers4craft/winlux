@@ -1,7 +1,7 @@
 //! Observateur d'événements façon Windows 11.  Journaux : Système et
 //! Sécurité (journald, sinon messages du noyau, exportés par
 //! `winlux-journal events`), Applications (.exe) et Winlux (journal du
-//! runtime /run/winlux/journal/winlux.log), Plantages (crash.log).
+//! runtime, /run/winlux/journal-<uid>/winlux.log), Plantages (crash.log).
 //! Filtres par journal et par niveau, recherche, détail de l'événement,
 //! export CSV et « Signaler » (winlux-report).
 
@@ -466,7 +466,7 @@ unsafe fn load() {
     parse_events(&buf[..k]);
     // Plantages
     let k = ui::read_file(
-        c"Z:\\run\\winlux\\journal\\crash.log".as_ptr(),
+        ui::journal_file(b"crash.log").ptr(),
         &mut buf[..262144],
         true,
     );
@@ -474,7 +474,7 @@ unsafe fn load() {
     // Journal du runtime
     let room = buf.len();
     let k = ui::read_file(
-        c"Z:\\run\\winlux\\journal\\winlux.log".as_ptr(),
+        ui::journal_file(b"winlux.log").ptr(),
         &mut buf[..room],
         true,
     );

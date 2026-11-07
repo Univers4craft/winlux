@@ -549,4 +549,10 @@ ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
    and (SCRIPTS / "test-update-page-names.py").exists(),
    "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
 
+# #633 : journal et état propres à chaque compte, jamais en 0666 dans /run/winlux.
+iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
+ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
+   and "journal-$journal_uid" in iso_init,
+   "journal : un dossier 0700 par compte, protected_regular=2")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

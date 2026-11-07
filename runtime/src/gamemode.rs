@@ -344,6 +344,9 @@ fn write_rel(root: &Path, rel: &str, value: &str) -> bool {
 /// Début du mode jeu.
 pub fn start(root: &Path, caps: &Caps, cpu_caps: &cpu::Caps) -> Session {
     let mut s = Session::default();
+    // Un drapeau posé d'avance par un compte (dossier collant) est remplacé
+    // par celui de root, le seul que l'init croit (#643).
+    let _ = fs::remove_file(root.join(ACTIVE_FLAG));
     let _ = fs::write(root.join(ACTIVE_FLAG), "1\n");
     let _ = fs::create_dir_all(root.join(INHIBIT));
     let _ = fs::write(

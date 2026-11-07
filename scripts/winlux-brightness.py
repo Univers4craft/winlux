@@ -122,8 +122,19 @@ def note_last(directory, maximum, percent):
     try:
         RUN.mkdir(parents=True, exist_ok=True)
         path = RUN / "brightness-last"
-        path.write_text(f"{directory.name} {raw_of(maximum, percent)} {percent}\n")
-        os.chmod(path, 0o666)
+        # Fichier neuf puis renommé, 0644 (#633) : en 0666 n'importe quel
+        # compte pouvait le réécrire, et root n'ouvre jamais un fichier
+        # qu'un compte aurait créé à l'avance dans /run/winlux (collant).
+        pending = RUN / f".brightness-last.{os.getpid()}"
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        try:
+            with os.fdopen(fd, "w") as out:
+                out.write(f"{directory.name} {raw_of(maximum, percent)} {percent}\n")
+            os.replace(pending, path)
+        except OSError:
+            try: os.unlink(pending)
+            except OSError: pass
+            raise
     except OSError:
         pass
 

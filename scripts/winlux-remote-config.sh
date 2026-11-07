@@ -70,6 +70,8 @@ allowed() {
 
 status() {
     out="$run/remote.txt"
+    # Nom imprévisible (#644) : pas de fichier créé d'avance par un compte dans /run/winlux.
+    status_tmp=$(mktemp "$out.XXXXXX") || return 1
     {
         printf 'enabled=%s\n' "$(getd ENABLED 0)"
         printf 'port=%s\n' "$(port)"
@@ -89,8 +91,9 @@ status() {
             addr=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
         fi
         printf 'address=%s\n' "$addr"
-    } > "$out.tmp.$$"
-    mv "$out.tmp.$$" "$out"
+    } > "$status_tmp"
+    chmod 644 "$status_tmp"
+    mv "$status_tmp" "$out"
 }
 
 action=${1:-status}
