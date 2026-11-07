@@ -754,6 +754,13 @@ def migrate_openbox(openbox_config, default_rc):
                     if menu_name.text == "client-menu":
                         menu_name.text = "winlux-window-menu"
                         changed = True
+                # Menu du bureau : l'ancien root-menu de ~/.config/openbox/menu.xml
+                # est figé en français ; le menu généré suit la langue (#787).
+                for section in (mouse, keyboard):
+                    for menu_name in section.iter(f"{{{namespace}}}menu") if section is not None else []:
+                        if menu_name.text == "root-menu":
+                            menu_name.text = "winlux-desktop-menu"
+                            changed = True
                 menus = tree.getroot().find(f"{{{namespace}}}menu")
                 window_menu = "/usr/share/winlux/native/config/openbox/window-menu.xml"
                 if menus is not None and window_menu not in [item.text for item in menus.findall(f"{{{namespace}}}file")]:
