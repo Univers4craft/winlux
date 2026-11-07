@@ -58,7 +58,7 @@ fn ft(t: FileTime) -> u64 {
 }
 
 /// Taille et nombre d'éléments d'un dossier, borné (50 000 éléments).
-unsafe fn walk(path: &[u8], depth: u32, size: &mut u64, files: &mut u32, dirs: &mut u32, partial: &mut bool) {
+pub(super) unsafe fn walk(path: &[u8], depth: u32, size: &mut u64, files: &mut u32, dirs: &mut u32, partial: &mut bool) {
     if depth > MAX_DEPTH || *files + *dirs >= MAX_WALK {
         *partial = true;
         return;
@@ -299,18 +299,9 @@ pub(super) unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let sn = size_line(P.size, &mut sbuf);
     row(g, &mut y, tr4(&[b"Taille :", b"Size:", b"Tama\xF1o:", b"Gr\xF6\xDFe:"]), &sbuf[..sn]);
     if P.dir {
-        // « 12 fichiers, 3 dossiers »
+        // « 12 fichiers, 3 dossiers », au singulier quand il le faut.
         let mut c = [0u8; 96];
-        let mut m = write_num(&mut c, 0, P.files as u64);
-        for &ch in tr4(&[b" fichiers, ", b" files, ", b" archivos, ", b" Dateien, "]) {
-            c[m] = ch;
-            m += 1;
-        }
-        m = write_num(&mut c, m, P.dirs as u64);
-        for &ch in tr4(&[b" dossiers", b" folders", b" carpetas", b" Ordner"]) {
-            c[m] = ch;
-            m += 1;
-        }
+        let mut m = content_text(P.files, P.dirs, &mut c);
         if P.partial {
             for &ch in tr4(&[b" (au moins)", b" (at least)", b" (al menos)", b" (mindestens)"]) {
                 c[m] = ch;
@@ -391,6 +382,28 @@ pub(super) unsafe fn key(vk: u32, _ch: u16) -> bool {
     true
 }
 
+/// « 1 fichier, 0 dossier », « 12 files, 1 folder »… Le français met le
+/// singulier à 0 et 1, les autres langues seulement à 1.
+fn content_text(files: u32, dirs: u32, c: &mut [u8; 96]) -> usize {
+    let one = |n: u32| if ui_lang() == 0 { n <= 1 } else { n == 1 };
+    let mut m = write_num(c, 0, files as u64);
+    let f = if one(files) {
+        t4([b" fichier, ", b" file, ", b" archivo, ", b" Datei, "])
+    } else {
+        t4([b" fichiers, ", b" files, ", b" archivos, ", b" Dateien, "])
+    };
+    c[m..m + f.len()].copy_from_slice(f);
+    m += f.len();
+    m = write_num(c, m, dirs as u64);
+    let d = if one(dirs) {
+        t4([b" dossier", b" folder", b" carpeta", b" Ordner"])
+    } else {
+        t4([b" dossiers", b" folders", b" carpetas", b" Ordner"])
+    };
+    c[m..m + d.len()].copy_from_slice(d);
+    m + d.len()
+}
+
 // ---------- Régression ----------
 
 #[doc(hidden)]
@@ -464,4 +477,22 @@ pub(super) unsafe fn regression(root: &[u8]) {
     DeleteFileW(wstr(&mut w, &file[..fnl]));
     RemoveDirectoryW(wstr(&mut w, &sub[..sn]));
     RemoveDirectoryW(wstr(&mut w, &dir[..dn]));
+    // Pluriels du Contenu dans les 4 langues.
+    let saved = ui_lang();
+    let mut c = [0u8; 96];
+    let mut all = true;
+    for (l, a, b) in [
+        (crate::locale::Lang::Fr, &b"1 fichier, 1 dossier"[..], &b"2 fichiers, 0 dossier"[..]),
+        (crate::locale::Lang::En, b"1 file, 1 folder", b"2 files, 0 folders"),
+        (crate::locale::Lang::Es, b"1 archivo, 1 carpeta", b"2 archivos, 0 carpetas"),
+        (crate::locale::Lang::De, b"1 Datei, 1 Ordner", b"2 Dateien, 0 Ordner"),
+    ] {
+        set_ui_lang(l as usize);
+        let n = content_text(1, 1, &mut c);
+        all &= &c[..n] == a;
+        let n = content_text(2, 0, &mut c);
+        all &= &c[..n] == b;
+    }
+    set_ui_lang(saved);
+    check!(all, "Proprietes : singulier et pluriel du Contenu en fr, en, es et de");
 }

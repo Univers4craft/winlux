@@ -120,12 +120,23 @@ fi
 # dépend, pas l'affichage du bureau.
 if test -x /usr/bin/winlux-trust-shortcuts; then (/usr/bin/winlux-trust-shortcuts </dev/null >"$logs/trust-shortcuts.log" 2>&1 &); fi
 if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
-# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur :
+# Winlux-Sombre en mode sombre (le défaut), Winlux en mode clair. Un compte
+# resté sur l'un des deux suit le mode de Personnalisation, sinon celui du
+# système (THEME= de /etc/winlux/preferences.conf).
 # Le défaut XFCE (elementary-xfce-dark) n'est pas livré : un thème configuré
 # mais absent laissait les silhouettes noires d'Adwaita.
 icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
-if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
-    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+icon_wanted=Winlux-Sombre
+if test -f "$HOME/.config/winlux/appearance.json"; then
+    if grep -q '"theme": *"light"' "$HOME/.config/winlux/appearance.json" 2>/dev/null; then icon_wanted=Winlux; fi
+elif grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then
+    icon_wanted=Winlux
+fi
+test -d "/usr/share/icons/$icon_wanted" || icon_wanted=Winlux
+case "$icon_theme" in Winlux|Winlux-Sombre|'') icon_reset=1 ;; *) icon_reset=0; test -d "/usr/share/icons/$icon_theme" || icon_reset=1 ;; esac
+if test -d "/usr/share/icons/$icon_wanted" && test -x /usr/bin/xfconf-query && test "$icon_reset" = 1 && test "$icon_theme" != "$icon_wanted"; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s "$icon_wanted" || true
 fi
 # Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
 # sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
@@ -179,6 +190,9 @@ fi
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
     compositor_pid=$!
+    # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
+    # openbox, seul lu par les règles de picom (#582).
+    if test -x /usr/bin/winlux-maximized-watch; then start maximized-watch.log /usr/bin/winlux-maximized-watch; fi
 fi
 # Icône du clavier tactile (tablette sans clavier) écrite AVANT le lancement
 # de la barre : un xfce4-panel déjà lancé ne chargeait pas le greffon ajouté
@@ -292,10 +306,12 @@ wait_desktop() {
     # relevé d'état en basse priorité : ils ne passent jamais devant le bureau.
     status_nice=
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
+    # Catalogue résident : refait seulement quand un raccourci, le registre ou
+    # un navigateur change, au lieu de relancer Python toutes les 5 s (#214).
+    $status_nice /usr/bin/winlux-applications watch </dev/null >>"$logs/catalogue.log" 2>&1 &
+    pids="$pids $!"
     (
         while :; do
-            $status_nice /usr/bin/winlux-applications refresh >"$logs/catalogue.log" 2>&1 || true
-            $status_nice /usr/bin/winlux-applications window-icons >>"$logs/catalogue.log" 2>&1 || true
             if test "$primary" = 1 && test -O /run/winlux/browser-chooser; then
                 rm -f /run/winlux/browser-chooser
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &

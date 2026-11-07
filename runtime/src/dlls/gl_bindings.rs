@@ -408,6 +408,15 @@ pub(crate) struct GlFunctions {
     ),
     pub CopyBufferSubData: unsafe extern "C" fn(GLenum, GLenum, isize, isize, isize),
     pub GetBufferSubData: unsafe extern "C" fn(GLenum, isize, isize, *mut c_void),
+    // Compute shaders et vues UAV (GL 4.2 / 4.3).
+    pub DispatchCompute: unsafe extern "C" fn(GLuint, GLuint, GLuint),
+    pub DispatchComputeIndirect: unsafe extern "C" fn(isize),
+    pub MemoryBarrier: unsafe extern "C" fn(GLenum),
+    pub BindImageTexture:
+        unsafe extern "C" fn(GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum),
+    pub ClearBufferSubData:
+        unsafe extern "C" fn(GLenum, GLenum, isize, isize, GLenum, GLenum, *const c_void),
+    pub ClearTexImage: unsafe extern "C" fn(GLuint, GLint, GLenum, GLenum, *const c_void),
     pub TexStorage2D: unsafe extern "C" fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei),
     pub TexStorage3D: unsafe extern "C" fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei),
     pub TexSubImage3D: unsafe extern "C" fn(
@@ -947,6 +956,24 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
         GetBufferSubData: ext!(
             "glGetBufferSubData",
             unsafe extern "C" fn(GLenum, isize, isize, *mut c_void)
+        ),
+        DispatchCompute: ext!(
+            "glDispatchCompute",
+            unsafe extern "C" fn(GLuint, GLuint, GLuint)
+        ),
+        DispatchComputeIndirect: ext!("glDispatchComputeIndirect", unsafe extern "C" fn(isize)),
+        MemoryBarrier: ext!("glMemoryBarrier", unsafe extern "C" fn(GLenum)),
+        BindImageTexture: ext!(
+            "glBindImageTexture",
+            unsafe extern "C" fn(GLuint, GLuint, GLint, GLboolean, GLint, GLenum, GLenum)
+        ),
+        ClearBufferSubData: ext!(
+            "glClearBufferSubData",
+            unsafe extern "C" fn(GLenum, GLenum, isize, isize, GLenum, GLenum, *const c_void)
+        ),
+        ClearTexImage: ext!(
+            "glClearTexImage",
+            unsafe extern "C" fn(GLuint, GLint, GLenum, GLenum, *const c_void)
         ),
         TexStorage2D: ext!(
             "glTexStorage2D",

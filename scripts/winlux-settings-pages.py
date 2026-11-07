@@ -717,6 +717,13 @@ def _t(text):
 
 HOME = Path.home()
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
+
+
+def run_file(name):
+    """Message ou journal d'une action de winlux-control : celui du compte
+    (/run/winlux/control-<uid>, /run/winlux étant collant), sinon le partagé."""
+    mine = RUN / f"control-{os.getuid()}" / name
+    return mine if mine.exists() else RUN / name
 CONTROL = RUN / "control.txt"
 A11Y_FILE = HOME / ".local/share/winlux/accessibility.ini"
 APPEARANCE = HOME / ".config/winlux/appearance.json"
@@ -2063,7 +2070,7 @@ class ExtraPages:
             self.actions(box, [(_t("Heure −"), lambda: self.execute("sysupdate-hour-down")),
                                (_t("Heure +"), lambda: self.execute("sysupdate-hour-up")),
                                (_t("Changer de jour"), lambda: self.execute("sysupdate-day-next"))])
-        log = read(RUN / "sysupdate.log").strip()
+        log = read(run_file("sysupdate.log")).strip()
         if log:
             self.section(_t("Journal"))
             self.body.pack_start(Gtk.Label(label=log[-4000:], xalign=0, wrap=True, selectable=True), False, False, 0)
@@ -2547,7 +2554,7 @@ class ExtraPages:
         def wait():
             if process.poll() is None: return True
             if process.returncode:
-                detail = read(RUN / "action.log").strip()[-2000:] or (process.stderr.read() or "").strip()
+                detail = read(run_file("action.log")).strip()[-2000:] or (process.stderr.read() or "").strip()
                 self.show_error(_t("L’opération a échoué"), detail)
             self.extra_refresh()
             return False

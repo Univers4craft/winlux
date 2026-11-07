@@ -743,6 +743,27 @@ unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> usize {
     pidl_from_path(&crate::paths::full_windows(&p))
 }
 
+/// SHOpenFolderAndSelectItems (« Afficher dans le dossier » de Chrome,
+/// Electron, des lanceurs…) : l'Explorateur Winlux sur le dossier, comme
+/// `explorer.exe /select,CHEMIN`. Les éléments enfants relatifs ne sont pas
+/// encore lus : le dossier visé suffit à l'ouvrir.
+unsafe extern "win64" fn sh_open_folder_and_select_items(
+    folder: *const u8,
+    _count: u32,
+    _items: *const usize,
+    _flags: u32,
+) -> u32 {
+    let Some(path) = path_from_pidl(folder) else {
+        return 0x8007_0057; // E_INVALIDARG
+    };
+    let params = format!("/select,\"{path}\"");
+    if crate::dlls::shell32::execute("explorer.exe", &params, None, None) > 32 {
+        0
+    } else {
+        0x8000_4005 // E_FAIL
+    }
+}
+
 unsafe extern "win64" fn il_free(pidl: usize) {
     if pidl != 0 {
         api!("ole32", "CoTaskMemFree", fn(usize) -> (), pidl);
@@ -1688,6 +1709,7 @@ pub fn shell32_exports() -> Exports {
         "SHChangeNotify" => fn sh_change_notify,
         "ILCreateFromPathW" => fn il_create_from_path_w,
         "ILFree" => fn il_free,
+        "SHOpenFolderAndSelectItems" => fn sh_open_folder_and_select_items,
     }
 }
 
@@ -1867,6 +1889,59 @@ mod tests {
             );
             il_free(p);
         }
+    }
+
+    #[test]
+    fn afficher_dans_le_dossier_ouvre_l_explorateur_winlux() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("winlux-shopen-{}", std::process::id()));
+        let bin = dir.join("bin");
+        let folder = dir.join("Rapports");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("final.pdf"), b"x").unwrap();
+        let log = dir.join("ouvert.txt");
+        let opener = bin.join("xdg-open");
+        std::fs::write(
+            &opener,
+            format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _env = crate::launch::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+        unsafe {
+            let p = pidl_from_path(&crate::paths::to_windows(&folder.join("final.pdf")));
+            if p != 0 {
+                assert_eq!(
+                    sh_open_folder_and_select_items(p as *const u8, 0, std::ptr::null(), 0),
+                    0
+                );
+                il_free(p);
+                for _ in 0..200 {
+                    if log.exists() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert_eq!(
+                    std::fs::read_to_string(&log).unwrap(),
+                    folder.to_string_lossy()
+                );
+            }
+            assert_eq!(
+                sh_open_folder_and_select_items(std::ptr::null(), 0, std::ptr::null(), 0),
+                0x8007_0057
+            );
+        }
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

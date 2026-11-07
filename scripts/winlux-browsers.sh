@@ -264,7 +264,9 @@ launch() {
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
             env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" LANG="$LANG" LANGUAGE="$LANGUAGE" LC_MESSAGES="$LC_MESSAGES" \
             /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
-            printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
+            notice="$run/action.txt"
+            if test "$(id -u)" != 0; then mkdir -p "$run/control-$(id -u)" 2>/dev/null && notice="$run/control-$(id -u)/action.txt"; fi
+            printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$notice" || true
             printf '1\n' > "$run/browser-chooser"
             return 1
         fi

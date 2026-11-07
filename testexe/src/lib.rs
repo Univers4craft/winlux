@@ -1160,6 +1160,21 @@ extern "C" {
         offset: u32,
     ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
+    /// AlphaBlend (gdi32) : `blend` = BLENDFUNCTION tassé (0x01FF0000 pour
+    /// une source BGRA prémultipliée à alpha par pixel).
+    pub fn GdiAlphaBlend(
+        dst: Handle,
+        xd: i32,
+        yd: i32,
+        wd: i32,
+        hd: i32,
+        src: Handle,
+        xs: i32,
+        ys: i32,
+        ws: i32,
+        hs: i32,
+        blend: u32,
+    ) -> i32;
     pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
     pub fn StretchDIBits(
         dc: Handle,

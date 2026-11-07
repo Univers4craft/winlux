@@ -27,6 +27,8 @@ use winlux_testexe::*;
 mod copy;
 #[path = "explorer_props.rs"]
 mod props;
+#[path = "explorer_icons.rs"]
+mod icons;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -597,6 +599,22 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     }
 }
 
+/// Glyphe de l'Explorateur : l'icône intégrée quand elle existe (#589),
+/// sinon le dessin en primitives du shell.
+unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, gl: Glyph, x: i32, y: i32, s: i32) {
+    if let Some(ic) = icons::of_glyph(gl) {
+        if icons::draw(hdc, ic, x, y, s, glyph_fg()) {
+            return;
+        }
+    }
+    crate::gfx::glyph(hdc, b, f, gl, x, y, s)
+}
+
+/// Icône d'un dossier d'Accueil d'après son chemin, s'il en est un.
+unsafe fn place_icon(path: &[u8]) -> Option<icons::Icon> {
+    (0..PLACES.len()).find(|&k| place_path(k).get() == path).map(icons::of_place)
+}
+
 fn glyph_of(k: Kind) -> Glyph {
     match k {
         Kind::Folder => Glyph::Folder,
@@ -623,6 +641,11 @@ fn glyph_of(k: Kind) -> Glyph {
 /// les icônes de fichiers de Windows 11. Dossiers et lecteurs gardent leur
 /// glyphe.
 unsafe fn row_icon(g: &mut Gfx, k: Kind, x: i32, y: i32) {
+    if let Some(ic) = icons::of_glyph(glyph_of(k)) {
+        if icons::draw(g.hdc, ic, x, y, 16, glyph_fg()) {
+            return;
+        }
+    }
     let (h, b) = (g.hdc, &mut *g.b);
     let page = rgb(0xF4, 0xF6, 0xF9);
     let edge = rgb(0x8A, 0x93, 0xA0);
@@ -1215,10 +1238,9 @@ unsafe fn go_up() {
 unsafe fn item_path(p: &Pane, index: usize, out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
     let e = &p.entries[index];
     if p.loc.is(HOME) {
-        let k = PLACES
-            .iter()
-            .position(|pl| pl.name == e.name())
-            .unwrap_or(0);
+        // Les entrées d'Accueil portent le libellé traduit (place_label),
+        // pas le nom français de PLACES : on compare au libellé affiché.
+        let k = (0..PLACES.len()).find(|&i| place_label(i) == e.name()).unwrap_or(0);
         let pp = place_path(k);
         out[..pp.len as usize].copy_from_slice(pp.get());
         out[pp.len as usize] = 0;
@@ -1779,9 +1801,8 @@ unsafe fn item_at(p: &Pane, r: &Rect, x: i32, y: i32) -> Option<usize> {
     if !inside(&ir, x, y) {
         return None;
     }
-    if VIEW == View::Details && x > ir.left + detail_cols(&ir).1 {
-        return None;
-    }
+    // Vue Détails : toute la ligne est cliquable (Date, Type, Taille), comme
+    // Windows 11 ; seul l'espace sous les lignes reste du vide.
     Some(v)
 }
 
@@ -1813,7 +1834,7 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
     for i in 0..NTABS {
         let r = rect(x, t.top + 6, x + w, t.bottom);
         let active = i == CUR;
-        let hover = !active && inside(&r, wm::MOUSE_X, wm::MOUSE_Y);
+        let hover = !active && hovered(&r);
         if active {
             round_rect(
                 g.hdc,
@@ -1869,7 +1890,7 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
         );
         let close = rect(r.right - 28, r.top + 6, r.right - 8, r.top + 26);
         if active || hover {
-            if inside(&close, wm::MOUSE_X, wm::MOUSE_Y) {
+            if hovered(&close) {
                 round_rect(
                     g.hdc,
                     g.b,
@@ -1881,7 +1902,7 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
                     p.hover,
                 );
             }
-            set_glyph_bg(Some(if inside(&close, wm::MOUSE_X, wm::MOUSE_Y) {
+            set_glyph_bg(Some(if hovered(&close) {
                 p.hover
             } else if active {
                 p.window
@@ -1902,7 +1923,7 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
         x += w;
     }
     let plus = rect(x + 4, t.top + 8, x + 36, t.bottom - 4);
-    if inside(&plus, wm::MOUSE_X, wm::MOUSE_Y) {
+    if hovered(&plus) {
         round_rect(
             g.hdc,
             g.b,
@@ -1925,8 +1946,34 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
     );
 }
 
+// Zones à survol relevées au dernier dessin : un mouvement de souris ne
+// repeint la fenêtre que s'il fait entrer ou sortir le pointeur de l'une
+// d'elles (#209), au lieu de tout repeindre à chaque pixel.
+const HOT_MAX: usize = 128;
+static mut HOT: [Rect; HOT_MAX] = [Rect { left: 0, top: 0, right: 0, bottom: 0 }; HOT_MAX];
+static mut NHOT: usize = 0;
+static mut HOT_FULL: bool = false;
+static mut LAST_MOVE: (i32, i32) = (i32::MIN, i32::MIN);
+
 fn hovered(r: &Rect) -> bool {
-    unsafe { inside(r, wm::MOUSE_X, wm::MOUSE_Y) }
+    unsafe {
+        if NHOT < HOT_MAX {
+            HOT[NHOT] = *r;
+            NHOT += 1;
+        } else {
+            HOT_FULL = true;
+        }
+        inside(r, wm::MOUSE_X, wm::MOUSE_Y)
+    }
+}
+
+/// Vrai si le passage de `from` à `to` change l'état de survol d'une zone
+/// dessinée (bouton, onglet, entrée de menu…).
+unsafe fn hot_changed(from: (i32, i32), to: (i32, i32)) -> bool {
+    if HOT_FULL || from.0 == i32::MIN {
+        return true;
+    }
+    (0..NHOT).any(|i| inside(&HOT[i], from.0, from.1) != inside(&HOT[i], to.0, to.1))
 }
 
 unsafe fn icon_button(g: &mut Gfx, r: &Rect, gl: Glyph, enabled: bool, on: bool) {
@@ -2492,7 +2539,10 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         }
         let x = r.left + 14 + indent * 18;
         set_glyph_bg(Some(bg));
-        glyph(g.hdc, g.b, g.f, gl, x, r.top + 7, 16);
+        match place_icon(path.get()) {
+            Some(ic) if icons::draw(g.hdc, ic, x, r.top + 7, 16, 0) => {}
+            _ => glyph(g.hdc, g.b, g.f, gl, x, r.top + 7, 16),
+        }
         set_glyph_bg(None);
         text_fit(
             g.hdc,
@@ -2686,12 +2736,23 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         let name = display_name(&e);
         let renaming = FOCUS == Focus::Rename && RENAME_INDEX == idx && which == t.focus;
         set_glyph_bg(Some(bg));
+        // Accueil : chaque dossier personnel a son icône (Documents, Images…).
+        let home_ic = if pn.loc.is(HOME) {
+            (0..PLACES.len()).find(|&k| place_label(k) == e.name()).map(icons::of_place)
+        } else {
+            None
+        };
+        let entry_icon = |g: &mut Gfx, x: i32, y: i32, s: i32| match home_ic {
+            Some(ic) if icons::draw(g.hdc, ic, x, y, s, 0) => {}
+            _ if s == 16 => row_icon(g, e.kind, x, y),
+            _ => glyph(g.hdc, g.b, g.f, glyph_of(e.kind), x, y, s),
+        };
         match VIEW {
             View::XLarge | View::Large | View::Medium => {
                 let s = c.icon;
                 let gx = (ir.left + ir.right - s) / 2;
                 if !draw_thumbnail(g, pn, idx, gx, ir.top + 8, s, bg) {
-                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), gx, ir.top + 8, s);
+                    entry_icon(g, gx, ir.top + 8, s);
                     format_badge(g, &e, gx, ir.top + 8, s);
                 }
                 let ty = ir.top + 14 + s;
@@ -2709,7 +2770,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 }
             }
             View::Small | View::List => {
-                row_icon(g, e.kind, ir.left + 8, ir.top + (c.ch - 16) / 2);
+                entry_icon(g, ir.left + 8, ir.top + (c.ch - 16) / 2, 16);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(ir.left + 30, ty - 3, ir.right - 6, ty + 19));
@@ -2729,7 +2790,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             View::Tiles => {
                 let gy = ir.top + (c.ch - c.icon) / 2;
                 if !draw_thumbnail(g, pn, idx, ir.left + 10, gy, c.icon, bg) {
-                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), ir.left + 10, gy, c.icon);
+                    entry_icon(g, ir.left + 10, gy, c.icon);
                     format_badge(g, &e, ir.left + 10, gy, c.icon);
                 }
                 let tx = ir.left + 20 + c.icon;
@@ -2773,7 +2834,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             }
             View::Details => {
                 let (nx, nw, dx, tx, sx) = detail_cols(&ir);
-                row_icon(g, e.kind, ir.left + 10, ir.top + (c.ch - 16) / 2);
+                entry_icon(g, ir.left + 10, ir.top + (c.ch - 16) / 2, 16);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(nx - 4, ty - 3, ir.left + nw, ty + 19));
@@ -4428,8 +4489,19 @@ static mut PURGE_ARMED_UNTIL: u32 = 0;
 unsafe fn delete_selection() {
     let p = pane();
     if p.loc.is(HOME) || p.loc.is(PC) {
+        // Lecteurs et dossiers d'Accueil : rien à supprimer, mais on le dit (#209).
+        if sel_count(p) > 0 {
+            notify(tr4(&[
+                b"Les lecteurs et les dossiers d'Accueil ne peuvent pas \xEAtre supprim\xE9s ici.",
+                b"Drives and Home folders can't be deleted here.",
+                b"Las unidades y las carpetas de Inicio no se pueden eliminar aqu\xED.",
+                b"Laufwerke und Start-Ordner k\xF6nnen hier nicht gel\xF6scht werden.",
+            ]));
+        }
         return;
     }
+    let mut since = 0u64;
+    GetSystemTimeAsFileTime(&mut since);
     let in_trash = p.loc.is(TRASH);
     if in_trash {
         // Rien n'est récupérable ensuite : comme Windows, demander confirmation.
@@ -4598,6 +4670,9 @@ unsafe fn delete_selection() {
         notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.", b"Some items couldn't be deleted.", b"Algunos elementos no se pudieron eliminar.", b"Einige Elemente konnten nicht gel\xF6scht werden."]));
     } else if !in_trash {
         notify(tr4(&[b"\xC9l\xE9ments d\xE9plac\xE9s dans la Corbeille.", b"Items moved to the Recycle Bin.", b"Elementos movidos a la Papelera.", b"Elemente in den Papierkorb verschoben."]));
+    }
+    if !in_trash {
+        copy::enforce_trash_limit(since);
     }
 }
 
@@ -5979,6 +6054,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         open_tab(HOME);
     }
     let geo = geo(f);
+    NHOT = 0;
+    HOT_FULL = false;
     draw_tabs(g, f);
     draw_toolbar(g, &geo);
     draw_nav(g, &geo);
@@ -6172,13 +6249,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 HOVER_ZONE = zone;
                 return true;
             }
-            update_hover(&geo, x, y)
-                || inside(&f.title, x, y)
-                || inside(&geo.toolbar, x, y)
-                || inside(&geo.command, x, y)
-                || inside(&geo.nav, x, y)
-                || inside(&geo.status, x, y)
-                || MENU != Menu::None
+            let from = LAST_MOVE;
+            LAST_MOVE = (x, y);
+            // `|` et non `||` : update_hover doit toujours mettre HOVER à jour.
+            update_hover(&geo, x, y) | hot_changed(from, (x, y))
         }
         Mouse::Up => {
             let was_file_drag = FILE_DRAG_ACTIVE;
@@ -7055,8 +7129,8 @@ unsafe fn row_icon_checks() {
     let pdf = measure(Kind::Pdf);
     let exe = measure(Kind::Exe);
     check!(
-        text.0 >= 12 && pdf.0 >= 12,
-        "Icones des lignes : pages de fichiers de 12 px en vue Details (11 avant)"
+        text.0 >= 10 && pdf.0 >= 10,
+        "Icones des lignes : pages de fichiers Prisme lisibles en vue Details (10 px et plus)"
     );
     check!(exe.1 >= 10, "Icones des lignes : un .exe est une fenetre claire, plus un pave sombre");
     // « Ce PC » : espace du lecteur C: et texte « X libres sur Y ».
@@ -7085,6 +7159,58 @@ unsafe fn row_icon_checks() {
     SelectObject(dc, old);
     DeleteObject(bmp);
     DeleteDC(dc);
+}
+
+/// #209 : chemins d'Accueil quelle que soit la langue, et survol sans
+/// repeindre à chaque pixel.
+#[doc(hidden)]
+unsafe fn places_and_hover_checks() {
+    let saved = crate::locale::CURRENT_LANG;
+    let old_loc = pane().loc;
+    let mut all = true;
+    for l in [crate::locale::Lang::Fr, crate::locale::Lang::En, crate::locale::Lang::Es, crate::locale::Lang::De] {
+        crate::locale::CURRENT_LANG = l;
+        let p = pane();
+        p.loc.set(HOME);
+        reload(p);
+        for i in 0..p.count {
+            let k = (0..PLACES.len()).find(|&k| place_label(k) == p.entries[i].name()).unwrap_or(usize::MAX);
+            let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
+            let n = item_path(p, i, &mut out);
+            all &= k < PLACES.len() && &out[..n] == place_path(k).get();
+        }
+        all &= p.count == PLACES.len();
+    }
+    crate::locale::CURRENT_LANG = saved;
+    pane().loc = old_loc;
+    reload(pane());
+    check!(all, "Accueil : chaque dossier ouvre son propre chemin en fr, en, es et de");
+    // Vue Détails : un clic dans la colonne Type ou Taille vise la ligne.
+    let saved_view = VIEW;
+    VIEW = View::Details;
+    let r = rect(0, 0, 1000, 600);
+    let c = cells(&r);
+    let p = pane();
+    let in_row = p.nview > 0 && {
+        let ir = item_rect(&r, &c, 0, p.scroll);
+        let (_, _, _, type_x, size_x) = detail_cols(&ir);
+        let y = (ir.top + ir.bottom) / 2;
+        item_at(p, &r, type_x + 10, y) == Some(0) && item_at(p, &r, size_x + 10, y) == Some(0)
+    };
+    VIEW = saved_view;
+    check!(in_row, "Details : un clic dans les colonnes Type ou Taille selectionne la ligne");
+    NHOT = 0;
+    HOT_FULL = false;
+    let b = rect(100, 100, 140, 130);
+    hovered(&b);
+    check!(!hot_changed((10, 10), (20, 20)) && !hot_changed((105, 105), (130, 120)),
+        "Survol : bouger sans entrer ni sortir d'une zone ne repeint pas");
+    check!(hot_changed((10, 10), (110, 110)) && hot_changed((110, 110), (150, 110)),
+        "Survol : entrer ou sortir d'un bouton repeint");
+    HOT_FULL = true;
+    check!(hot_changed((10, 10), (11, 10)), "Survol : trop de zones relevees, on repeint toujours");
+    HOT_FULL = false;
+    NHOT = 0;
 }
 
 pub unsafe fn regression_checks() {
@@ -7321,7 +7447,9 @@ pub unsafe fn regression_checks() {
     MENU = Menu::None;
     archive_regression(root);
     row_icon_checks();
+    places_and_hover_checks();
     props::regression(root);
+    icons::regression();
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;

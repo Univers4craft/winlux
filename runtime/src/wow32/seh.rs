@@ -149,7 +149,7 @@ pub fn resume(ctx: u32, chain: u64, fx: Option<&Fx>) -> ! {
 
 /// Saut vers un bloc `__except` depuis un gestionnaire : la répartition qui
 /// l'a appelé (et ses cadres 64 bits) est abandonnée.
-fn transfer(ctx: u32) -> ! {
+pub(super) fn transfer(ctx: u32) -> ! {
     let chain = DISPATCHES
         .with(|d| d.borrow_mut().pop())
         .unwrap_or_else(chain_now);
@@ -472,7 +472,7 @@ impl Scopes {
 
 /// Appelle un filtre ou un bloc `__finally` : code de la fonction, qui
 /// attend son ebp.
-fn call_with_ebp(code: u32, ebp: u32) -> u32 {
+pub(super) fn call_with_ebp(code: u32, ebp: u32) -> u32 {
     call32(super::call_ebp_helper(), &[code, ebp]) as u32
 }
 

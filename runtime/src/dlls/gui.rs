@@ -919,6 +919,8 @@ pub struct DcState {
     pub bitmap: usize,
     /// Mode de `SetStretchBltMode` (4 = HALFTONE : agrandissement lissé).
     pub stretch_mode: i32,
+    /// Mode de `SetTextAlign` (TA_LEFT|TA_TOP = 0 par défaut).
+    pub text_align: u32,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -1012,6 +1014,7 @@ pub fn create_dc(hwnd: usize) -> usize {
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
             stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
+            text_align: 0,
         },
     );
     hdc
@@ -1121,6 +1124,19 @@ pub fn dc_bk_color(hdc: usize) -> u32 {
 }
 
 /// Mode de fond courant d'un DC (2 = opaque, 1 = transparent).
+pub fn dc_text_align(hdc: usize) -> u32 {
+    with_dc(hdc, |d| d.text_align, 0)
+}
+
+/// Change l'alignement du texte et renvoie l'ancien ; GDI_ERROR sans DC.
+pub fn set_dc_text_align(hdc: usize, align: u32) -> u32 {
+    with_dc(
+        hdc,
+        |d| std::mem::replace(&mut d.text_align, align),
+        u32::MAX,
+    )
+}
+
 pub fn dc_bk_mode(hdc: usize) -> u32 {
     with_dc(hdc, |d| d.bk_mode, 2)
 }

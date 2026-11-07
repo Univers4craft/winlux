@@ -205,8 +205,28 @@ def _settled_balance(ids, right_ids, left_ids):
 
 
 kind = sys.argv[1]
-directory = Path(os.environ.get("WINLUX_TRAY_DIR", "/run/winlux/tray"))
-directory.mkdir(parents=True, exist_ok=True)
+def tray_directory():
+    """Icônes de la barre : un dossier par compte. /run/winlux est collant et
+    /run/winlux/tray appartenait au premier compte (0755) : un second compte
+    ne pouvait y écrire ni contrepoids ni icône (PermissionError)."""
+    if os.environ.get("WINLUX_TRAY_DIR"):
+        candidates = [Path(os.environ["WINLUX_TRAY_DIR"])]
+    elif os.getuid() == 0:
+        candidates = [Path("/run/winlux/tray")]
+    else:
+        candidates = [Path(f"/run/winlux/tray-{os.getuid()}")]
+    candidates.append(Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "winlux/tray")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            if os.access(candidate, os.W_OK):
+                return candidate
+        except OSError:
+            continue
+    return candidates[-1]
+
+
+directory = tray_directory()
 color = "#e7ddf5"
 if kind == "battery":
     supplies = Path(os.environ.get("WINLUX_POWER_SUPPLY", "/sys/class/power_supply"))
