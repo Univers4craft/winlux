@@ -188,6 +188,7 @@ _TR = {
     'Winlux {version} est disponible': ('Winlux {version} is available', 'Winlux {version} está disponible', 'Winlux {version} ist verfügbar'),
     'Mise à jour du système prête': ('System update ready', 'Actualización del sistema lista', 'Systemupdate bereit'),
     'Téléchargements : {size}': ('Downloads: {size}', 'Descargas: {size}', 'Downloads: {size}'),
+    '1 fichier non ouvert depuis 3 mois': ('1 file untouched for 3 months', '1 archivo sin abrir desde hace 3 meses', '1 Datei seit 3 Monaten nicht geöffnet'),
     '{n} fichiers non ouverts depuis 3 mois': ('{n} files untouched for 3 months', '{n} archivos sin abrir desde hace 3 meses', '{n} Dateien seit 3 Monaten nicht geöffnet'),
     'Calculé sur ce PC à partir de votre usage, rien n’est envoyé. Désactivable dans Paramètres.': ('Worked out on this PC from your usage, nothing is sent. Can be turned off in Settings.', 'Calculado en este PC a partir de su uso, no se envía nada. Se puede desactivar en Configuración.', 'Auf diesem PC aus Ihrer Nutzung berechnet, nichts wird gesendet. In den Einstellungen abschaltbar.'),
     'à l’instant': ('just now', 'ahora mismo', 'gerade eben'),
@@ -773,7 +774,7 @@ class Start(Gtk.Application):
 
     def app_button(self, app, grid=False, badge=False):
         button = Gtk.Button()
-        if grid: button.set_size_request(88, 82)
+        if grid: button.set_size_request(80, 82)  # six colonnes tiennent dans 560 px (1366x768)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if grid else Gtk.Orientation.HORIZONTAL, spacing=6)
         icon = app.get_icon() or Gio.ThemedIcon.new("application-x-executable")
         image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG if grid else Gtk.IconSize.LARGE_TOOLBAR)
@@ -1138,7 +1139,7 @@ class Start(Gtk.Application):
             row.connect("button-press-event", lambda widget, event, target=path: self.file_context(widget, event, target))
             body.pack_start(row, False, False, 0)
         if not data["files"]:
-            hint = Gtk.Label(label=_t("Les fichiers que vous ouvrez apparaîtront ici."), xalign=0, wrap=True, margin_start=4)
+            hint = Gtk.Label(label=_t("Les fichiers que vous ouvrez apparaîtront ici."), xalign=0, wrap=True, margin_start=4, max_width_chars=28)
             hint.get_style_context().add_class("dim")
             body.pack_start(hint, False, False, 0)
         habits = [self.apps[ident] for ident in data["habits"] if ident in getattr(self, "apps", {})]
@@ -1152,11 +1153,11 @@ class Start(Gtk.Application):
                 tiles.attach(tile, index, 0, 1, 1)
             for index in range(len(habits[:3]), 3): tiles.attach(Gtk.Box(), index, 0, 1, 1)
             body.pack_start(tiles, False, False, 0)
-            why = Gtk.Label(label=habit_reason(now), wrap=True, justify=Gtk.Justification.CENTER)
+            why = Gtk.Label(label=habit_reason(now), wrap=True, justify=Gtk.Justification.CENTER, max_width_chars=28)
             why.get_style_context().add_class("dim")
             body.pack_start(why, False, False, 0)
         else:
-            hint = Gtk.Label(label=_t("Winlux apprend vos habitudes au fil des jours, sans rien envoyer."), xalign=0, wrap=True, margin_start=4)
+            hint = Gtk.Label(label=_t("Winlux apprend vos habitudes au fil des jours, sans rien envoyer."), xalign=0, wrap=True, margin_start=4, max_width_chars=28)
             hint.get_style_context().add_class("dim")
             body.pack_start(hint, False, False, 0)
         if data["todo"]:
@@ -1175,7 +1176,7 @@ class Start(Gtk.Application):
         privacy.pack_start(lock, False, False, 0)
         note = Gtk.Label(label=_t("Calculé sur ce PC à partir de votre usage, rien n’est envoyé. Désactivable dans Paramètres."),
                          xalign=0, wrap=True)
-        note.set_max_width_chars(30)
+        note.set_max_width_chars(28)
         note.get_style_context().add_class("dim")
         privacy.pack_start(note, True, True, 0)
         inner.pack_end(privacy, False, False, 0)
@@ -1632,7 +1633,7 @@ def todo_items(downloads, opened, dismissed, now, update=None, limit=3):
                       "action": _t("Installer"), "path": path, "icon": "application-x-msdownload"})
     if total >= DOWNLOADS_HEAVY:
         items.append({"key": "downloads", "kind": "downloads", "title": _t("Téléchargements : {size}").format(size=human_size(total)),
-                      "detail": _t("{n} fichiers non ouverts depuis 3 mois").format(n=old), "action": _t("Trier"),
+                      "detail": _t("1 fichier non ouvert depuis 3 mois") if old == 1 else _t("{n} fichiers non ouverts depuis 3 mois").format(n=old), "action": _t("Trier"),
                       "path": Path(downloads), "icon": "folder-download"})
     return [item for item in items if item["key"] not in dismissed][:limit]
 
