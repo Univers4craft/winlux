@@ -908,6 +908,13 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("oleaut32", "VariantCopy" | "#10") => k!(Var, Var),
         ("oleaut32", "VariantChangeType" | "#12") => k!(Var, Var, I, I),
         ("oleaut32", "SafeArrayAccessData" | "#23") => k!(I, OutPtr),
+        ("oleaut32", "SafeArrayPtrOfIndex" | "#148") => k!(I, I, OutPtr),
+        ("oleaut32", "VariantCopyInd" | "#11") => k!(Var, Var),
+        ("oleaut32", "GetActiveObject" | "#35") => k!(I, I, Out(&IUNKNOWN)),
+        ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
+        ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
+        ("comctl32", "ImageList_Read") => k!(In(&ISTREAM)),
+        ("comctl32", "ImageList_Write") => k!(I, In(&ISTREAM)),
         ("oleaut32", "GetErrorInfo" | "#200") | ("ole32", "GetErrorInfo") => {
             k!(I, Out(&IERRORINFO))
         }
