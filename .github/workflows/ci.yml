@@ -272,6 +272,9 @@ jobs:
       - name: Vérifier le thème automatique, le diaporama et les thèmes partageables
         run: python3 -B scripts/test-appearance-auto.py
 
+      - name: Vérifier le fond « Winlux Aurore » (définitions, choix selon l'écran)
+        run: python3 -B scripts/test-wallpaper-aurore.py
+
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 

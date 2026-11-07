@@ -30,7 +30,12 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
 
 ## Fonds et son
 
-- « Winlux Nuit » (défaut) et « Winlux Aube » : calculés au pixel dans
+- « Winlux Aurore » (défaut, #596) : rideaux d'aurore violet → cyan
+  au-dessus de collines, le logo au-dessus, étoiles la nuit ; version claire
+  « Winlux Aurore claire ». Calculé par `render-brand.py` en 1920x1080,
+  2560x1440 et 3840x2160 (`winlux-prisme-aurore[-clair][-LxH].png`) ; la
+  session et Paramètres prennent la définition la plus proche de l'écran.
+- « Winlux Nuit » et « Winlux Aube » : calculés au pixel dans
   `shell/personalize.rs`, et rendus en PNG pour la session XFCE.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.
 - L'ancien fond `Fond ecran.png` reste proposé sous le nom « Winlux classique ».

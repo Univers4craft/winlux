@@ -155,10 +155,20 @@ if test "${WINLUX_LOCK_AT_START:-0}" = 1 && test -x /usr/bin/winlux-lock; then
     (setsid /usr/bin/winlux-lock now >"$logs/lock-start.log" 2>&1 &)
 fi
 # Fond d'écran par écran, fixé avant la barre des tâches : l'identité Winlux, sinon le fond de l'image.
-default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
-test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
+# « Winlux Aurore » (#596) dans la définition la plus proche de chaque écran.
+aurora_wallpaper() {
+    base=/usr/share/winlux/wallpapers/winlux-prisme-aurore
+    picked=$base.png
+    if test "${1:-0}" -ge 1800 && test -f "$base-3840x2160.png"; then picked=$base-3840x2160.png
+    elif test "${1:-0}" -ge 1260 && test -f "$base-2560x1440.png"; then picked=$base-2560x1440.png; fi
+    test -f "$picked" || picked=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+    test -f "$picked" || picked=/usr/share/winlux/wallpaper.bmp
+    echo "$picked"
+}
 if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
-    for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+    /usr/bin/xrandr --query | awk '$2 == "connected" {h = 0; for (i = 3; i <= NF; i++) if (match($i, /^[0-9]+x[0-9]+\+/)) {split($i, d, /[x+]/); h = d[2]; break}; print $1, h}' |
+    while read -r output height; do
+        default_wallpaper=$(aurora_wallpaper "$height")
         property="/backdrop/screen0/monitor$output/workspace0/last-image"
         if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
             /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper" || true

@@ -174,6 +174,72 @@ def background(w, h, light=False):
     return Image.fromarray(img.clip(0, 255).astype(np.uint8), "RGB")
 
 
+def aurora_background(w, h, light=False):
+    """Fond « Aurore » : rideaux de lumière violet → cyan au-dessus de
+    collines, ciel étoilé la nuit. Tout est proportionnel à la hauteur, si
+    bien que 1080p, 1440p et 4K donnent la même image."""
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    u, v = x / w, y / h
+    del x, y
+    if light:
+        img = lerp((0xF7, 0xF5, 0xFF), (0xE0, 0xE8, 0xFF), v)
+    else:
+        img = lerp((0x05, 0x06, 0x18), (0x16, 0x10, 0x3E), v ** 1.3)
+    # Halo très doux derrière le logo.
+    r = np.hypot(u - 0.5, (v - 0.36) * h / w)
+    halo = np.clip(1 - r / 0.30, 0, 1) ** 2
+    img += (np.asarray((0xD9, 0xCC, 0xFF) if light else (0x3A, 0x26, 0x8C), float) - img) * (halo * 0.45)[..., None]
+    # Rayons verticaux : mêmes fréquences en coordonnées relatives quelle que
+    # soit la résolution (u * fréquence), phase irrégulière pour éviter l'effet
+    # « code-barres ».
+    curtains = (
+        # base, amplitude, phase, intensité, hauteur des rayons
+        (0.60, 0.065, 0.4, 1.00, 0.30),
+        (0.69, 0.050, 2.1, 0.70, 0.22),
+        (0.54, 0.040, 4.0, 0.35, 0.38),
+    )
+    for k, (y0, amp, ph, gain, hgt) in enumerate(curtains):
+        base = y0 + amp * np.sin(u * 2 * np.pi * 0.7 + ph) + 0.02 * np.sin(u * 2 * np.pi * 2.3 + k)
+        above = base - v
+        prof = np.where(above > 0, np.exp(-np.maximum(above, 0) / hgt), np.exp(-(above / 0.012) ** 2))
+        wobble = 3 * np.sin(u * 17 + k) + 1.5 * np.sin(u * 53 + 2 * k)
+        rays = 0.55 + 0.45 * (0.5 + 0.5 * np.sin(u * 230 + wobble)) * (0.6 + 0.4 * np.sin(u * 41 + k))
+        m = prof * rays * gain * np.clip(0.25 + 0.75 * np.sin(np.pi * u) ** 0.6, 0, 1)
+        t = np.clip(above / 0.25, 0, 1)
+        col = lerp(lerp(VIOLET, VIOLET_LIGHT, t), lerp(CYAN, CYAN_LIGHT, t), u)
+        if light:
+            img += (col - img) * (m * 0.55)[..., None]
+        else:
+            img += col * (m * 0.62)[..., None]
+        del base, above, prof, rays, m, t, col
+    if not light:
+        # Étoiles fixes (même tirage, positions relatives) au-dessus des rideaux.
+        rng = np.random.default_rng(3)
+        n = 230
+        su, sv = rng.uniform(0, 1, n), rng.uniform(0, 0.5, n) ** 1.2
+        glow = rng.uniform(40, 150, n)
+        rad = max(1, round(h / 1080))
+        for a, b, g in zip(su, sv, glow):
+            cx, cy = int(a * w), int(b * h)
+            img[max(cy - rad + 1, 0):cy + rad, max(cx - rad + 1, 0):cx + rad] += g
+    rng = np.random.default_rng(7)
+    img += rng.normal(0, 0.6, img.shape).astype(np.float32)
+    return Image.fromarray(img.clip(0, 255).astype(np.uint8), "RGB")
+
+
+def aurora_wallpaper(w, h, light):
+    img = aurora_background(w, h, light).convert("RGBA")
+    paste_logo(img, int(h * 0.16), w // 2, int(h * 0.36), light=light)
+    return img.convert("RGB")
+
+
+# Fond « Aurore » (#596) : sombre par défaut, clair, en trois définitions. Le
+# 1080p garde le nom court ; Paramètres et la session prennent la définition
+# la plus proche de l'écran.
+AURORA_SIZES = ((1920, 1080, ""), (2560, 1440, "-2560x1440"), (3840, 2160, "-3840x2160"))
+AURORA_NAMES = (("winlux-prisme-aurore", False), ("winlux-prisme-aurore-clair", True))
+
+
 def paste_logo(img, size, cx, cy, shadow=True, light=False):
     logo = logo_rgba(size)
     if shadow:
@@ -248,6 +314,9 @@ def main():
     grub_selection(grub)
     for name, light in (("winlux-prisme-nuit", False), ("winlux-prisme-aube", True)):
         wallpaper(1920, 1080, light).save(WALL / f"{name}.png", optimize=True)
+    for name, light in AURORA_NAMES:
+        for w, h, suffix in AURORA_SIZES:
+            aurora_wallpaper(w, h, light).save(WALL / f"{name}{suffix}.png", optimize=True)
     print("identité Winlux rendue dans", BRAND, "et", WALL)
 
 
