@@ -2866,6 +2866,28 @@ pub fn parent_backdrop_color(hwnd: usize) -> Option<u32> {
     brush_color(background)
 }
 
+/// WM_ERASEBKGND envoyé par le programme lui-même avec son propre DC :
+/// peindre le fond de la classe dedans, comme DefWindowProc. Notepad++
+/// lit ainsi la couleur de fond du dialogue « À propos » dans une image
+/// hors écran pour le fond de son lien (#768). Winlux peint le fond des
+/// fenêtres lui-même, il n'envoie jamais ce message.
+pub fn erase_background(hwnd: usize, hdc: usize) -> bool {
+    if hdc == 0 {
+        return false;
+    }
+    let Some((background, rect)) = lock(windows())
+        .get(&hwnd)
+        .map(|w| (w.background, w.client_rect()))
+    else {
+        return false;
+    };
+    let Some(color) = (background != 0).then(|| brush_color(background)).flatten() else {
+        return false;
+    };
+    record(hdc, DrawCmd::FillRect { rect, color });
+    true
+}
+
 fn has_control_children(hwnd: usize) -> bool {
     child_windows(hwnd)
         .into_iter()
@@ -3013,7 +3035,10 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             destroy_window(hwnd);
             0
         }
-        WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        WM_ERASEBKGND => {
+            erase_background(hwnd, wparam);
+            1
+        }
         // WM_PRINT : la fenêtre se peint dans le DC fourni (fond puis zone
         // client), comme le fait DefWindowProc ; Notepad++ peint ainsi ses
         // onglets et sa barre d'état dans une image hors écran.
@@ -3714,6 +3739,43 @@ mod tests {
         assert!(delete_object(font));
         assert_eq!(font_spec(font), None);
         free_dc(dc);
+    }
+
+    #[test]
+    fn wm_erasebkgnd_peint_le_fond_de_classe_dans_un_dc_memoire() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        let h = alloc_hwnd();
+        insert_window(
+            h,
+            Window {
+                class: "Fond".to_string(),
+                wnd_proc: proc_addr as usize,
+                background: 16, // COLOR_BTNFACE + 1
+                title: String::new(),
+                rect: Rect::from_size(0, 0, 8, 8),
+                visible: true,
+                parent: 0,
+                owner: std::thread::current().id(),
+                needs_paint: false,
+                paint_queued: false,
+                style: 0,
+                ex_style: 0,
+                pending: Vec::new(),
+                menu_bar: 0,
+            },
+        );
+        let dc = create_dc(0);
+        let bmp = create_compatible_bitmap(8, 8).unwrap();
+        select_object(dc, bmp);
+        assert!(erase_background(h, dc));
+        let pixel = bitmap_snapshot(dc, Rect::from_size(2, 2, 1, 1))
+            .unwrap()
+            .pixels[0];
+        assert_eq!(pixel & 0x00FF_FFFF, crate::dlls::user32::get_sys_color(15));
+        select_object(dc, DEFAULT_BITMAP);
+        delete_object(bmp);
+        free_dc(dc);
+        destroy_window(h);
     }
 
     #[test]

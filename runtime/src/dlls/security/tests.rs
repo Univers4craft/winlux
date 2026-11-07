@@ -275,3 +275,13 @@ fn jeton_pose_sur_un_thread_puis_relu() {
         assert_eq!(open_thread_token(CURRENT_THREAD_PSEUDO, &mut t), 0);
     }
 }
+
+/// Chromium ferme l'objet Job de chaque enfant et vérifie que CloseHandle
+/// réussit (#767).
+#[test]
+fn objet_job_se_ferme_une_fois() {
+    let _teb = crate::process::test_teb();
+    let job = unsafe { crate::dlls::kernel32_node::CreateJobObjectW(0, std::ptr::null()) };
+    assert_eq!(crate::dlls::kernel32::close_handle(job), 1);
+    assert_eq!(crate::dlls::kernel32::close_handle(job), 0);
+}

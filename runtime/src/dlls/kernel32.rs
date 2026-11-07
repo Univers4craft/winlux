@@ -5363,7 +5363,9 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle) {
+    if crate::dlls::kernel32_node::close_snapshot(handle)
+        || crate::dlls::kernel32_node::close_job(handle)
+    {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))

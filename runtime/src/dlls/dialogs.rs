@@ -582,7 +582,10 @@ pub unsafe fn def_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize
             }
             0
         }
-        WM_ERASEBKGND => 1,
+        WM_ERASEBKGND => {
+            gui::erase_background(hwnd, wp);
+            1
+        }
         WM_CTLCOLORMSGBOX..=WM_CTLCOLORSTATIC => user32::get_sys_color_brush(15) as isize,
         WM_GETFONT => lock(dialogs()).get(&hwnd).map_or(0, |d| d.font as isize),
         WM_SETFONT => {
