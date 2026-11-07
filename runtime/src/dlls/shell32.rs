@@ -601,8 +601,15 @@ pub unsafe extern "win64" fn shell_execute_ex_w(info: *mut ShellExecuteInfo) -> 
     execute_ex(info, true)
 }
 
+/// SHAddToRecentDocs(uFlags, pv) : ajoute un fichier aux documents récents
+/// de Windows. Winlux n'a pas encore de liste « Récents » propre aux
+/// programmes Windows ; l'appel est accepté sans effet (VLC quittait sur
+/// cette fonction absente, #849).
+pub unsafe extern "win64" fn sh_add_to_recent_docs(_flags: u32, _item: *const std::ffi::c_void) {}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "SHAddToRecentDocs"=>fn sh_add_to_recent_docs,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
         "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,
