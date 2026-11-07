@@ -65,6 +65,7 @@ pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
 pub mod gdi32_palette;
+pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
@@ -427,6 +428,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(gdi32_more::exports());
+                    e.extend(gdi32_path::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
                     e.extend(displaymode::gdi32_exports());
@@ -922,6 +924,8 @@ fn add_basics(all: &mut [Builtin]) {
         {
             b.exports.insert(name, addr);
         }
+        // En dernier : les tracés passent par le chemin ouvert (BeginPath).
+        gdi32_path::hook(&mut b.exports);
     }
     // Fichiers .ini : de vraies lectures et écritures remplacent les
     // anciennes versions qui rendaient toujours la valeur par défaut.
