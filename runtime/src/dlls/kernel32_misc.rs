@@ -361,14 +361,24 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
 pub extern "win64" fn is_debugger_present() -> i32 {
     0
 }
+/// Texte de débogage de l'appli : sur stderr avec `WINLUX_TRACE`, et dans
+/// le journal d'API avec `WINLUX_APITRACE` (Crashpad y écrit pourquoi il
+/// arrête un processus).
+fn debug_text(text: &str) {
+    let line = format!("winlux[debug]: {}", text.trim_end());
+    if std::env::var_os("WINLUX_TRACE").is_some() {
+        eprintln!("{line}");
+    }
+    crate::thunks::api_note(&line);
+}
 pub unsafe extern "win64" fn output_debug_string_a(s: *const u8) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::cstr(s).trim_end());
+    if !s.is_null() {
+        debug_text(&crate::dlls::cstr(s));
     }
 }
 pub unsafe extern "win64" fn output_debug_string_w(s: *const u16) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::wstr(s).trim_end());
+    if !s.is_null() {
+        debug_text(&crate::dlls::wstr(s));
     }
 }
 /// Fonctionnalités processeur (PF_*) : on répond pour celles qu'impose x86-64
@@ -1033,6 +1043,17 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texte_de_debogage_accepte() {
+        unsafe {
+            output_debug_string_a(std::ptr::null());
+            output_debug_string_w(std::ptr::null());
+            output_debug_string_a(b"crashpad: dump ok\n\0".as_ptr());
+            let w: Vec<u16> = "Claude\n".encode_utf16().chain(Some(0)).collect();
+            output_debug_string_w(w.as_ptr());
+        }
+    }
 
     #[test]
     fn error_mode_has_process_state_sticky_alignment_and_thread_isolation() {
