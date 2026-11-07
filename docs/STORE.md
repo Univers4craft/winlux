@@ -20,6 +20,31 @@ Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
 AppStream ou nom) : la source installée, sinon apt, sinon Flatpak, Snap,
 AppImage, Windows. Les autres sources restent choisissables dans la fiche.
 
+**Présentation (#716).** Une barre d'icônes à gauche (Accueil, Applis,
+Jeux, Windows ; Bibliothèque et Actualiser en bas), la recherche en haut. L'accueil
+montre un grand bandeau tournant (sélection Winlux, vignettes des autres
+sélections à droite), puis des rangées de cartes : applications essentielles,
+jeux, programmes Windows, et une rangée par catégorie qui a des logiciels.
+« Applis » affiche toutes les applications avec des puces de catégorie et
+leur nombre ; « Windows » montre les programmes des catalogues Windows
+ajoutés, ou explique comment en ajouter un. Le bouton d'une carte installe
+ou met à jour directement ; un clic sur la carte ouvre la fiche.
+
+**Catégories.** Onze clés, communes à `winlux-store` (`CATEGORY_RULES`) et à
+`store.rs` (`CATS`) : `bureautique`, `internet`, `multimedia` (audio et vidéo),
+`graphisme` (photo et graphisme), `developpement`, `jeux`, `education`,
+`sciences`, `utilitaires`, `systeme`, `accessibilite`. Les catégories
+AppStream/Flathub sont rangées par la première règle qui correspond (un jeu
+éducatif reste un jeu) ; l'ancienne clé `navigateurs` vaut `internet`.
+
+**Sélection Winlux.** `integration/store-catalog.txt` (environ 300 logiciels) :
+`id|catégorie|nom|paquet apt|éditeur|fr|en|es|de`, une description par
+langue de l'interface (le français à défaut) ; `featured=` liste les
+vedettes du bandeau, jamais un navigateur (`docs/BROWSERS.md`). Un paquet
+absent des dépôts configurés est masqué. L'index peut compter jusqu'à
+6 000 logiciels (`MAX_INDEX`, `MAX_APPS` dans `store.rs`) : le catalogue
+Ubuntu seul en donne déjà près de 2 000.
+
 **Toujours à jour.** `winlux-store refresh` est lancé à l'ouverture du Store :
 il écrit d'abord l'index des sources locales, puis rafraîchit en arrière-plan
 (`apt-get update` si les listes ont plus de 6 h et que le service est root,
