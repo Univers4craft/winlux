@@ -37,6 +37,8 @@ _TR = {
     'Wi-Fi : ': ('Wi-Fi: ', 'Wi-Fi: ', 'WLAN: '),
     'Ethernet : ': ('Ethernet: ', 'Ethernet: ', 'Ethernet: '),
     'Réseau déconnecté': ('Network disconnected', 'Red desconectada', 'Netzwerk getrennt'),
+    'VPN : {name}': ('VPN: {name}', 'VPN: {name}', 'VPN: {name}'),
+    'Point d’accès sans fil mobile activé': ('Mobile hotspot on', 'Zona con cobertura inalámbrica móvil activada', 'Mobiler Hotspot ein'),
     'Centre de notifications': ('Notification center', 'Centro de notificaciones', 'Benachrichtigungscenter'),
     'Batterie : {level} %': ('Battery: {level}%', 'Batería: {level} %', 'Akku: {level} %'),
     'Batterie : {level} % — en charge': ('Battery: {level}% — charging', 'Batería: {level} % — cargando', 'Akku: {level} % — wird geladen'),
@@ -354,6 +356,29 @@ def audio_part():
     return body, tooltip, f"audio-{wave}"
 
 
+# Profil du point d'accès sans fil mobile (winlux-hotspot, même UUID).
+HOTSPOT_UUID = "6a3df0b6-9cff-4e1a-9a5e-77696e6c7578"
+
+
+def tunnels():
+    """(noms des VPN actifs, point d'accès actif) d'après NetworkManager (lecture permise au compte)."""
+    try:
+        output = subprocess.run(["nmcli", "-t", "-f", "TYPE,UUID,NAME", "connection", "show", "--active"],
+                                capture_output=True, text=True, timeout=2,
+                                env=dict(os.environ, LC_ALL="C")).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [], False
+    vpns, hotspot = [], False
+    for line in output.splitlines():
+        kind, _, rest = line.partition(":")
+        ident, _, name = rest.partition(":")
+        if kind in ("vpn", "wireguard"):
+            vpns.append(name.replace("\\:", ":"))
+        elif ident == HOTSPOT_UUID:
+            hotspot = True
+    return vpns, hotspot
+
+
 def network_part():
     try:
         routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
@@ -368,7 +393,19 @@ def network_part():
         body = f'<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="1.6"/><path d="M12 16v5m-5 0h10" stroke="{color}" stroke-width="1.6"/>'
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
     tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
-    return body, tooltip, f"network-{int(bool(active))}-{int(wireless)}"
+    # VPN actif : petit bouclier sur l'icône réseau, comme Windows 11 ; point
+    # d'accès sans fil mobile : ondes en coin et une ligne de l'infobulle.
+    vpns, hotspot = tunnels()
+    accent = "#b69cff" if DARK else "#6a3df0"
+    if vpns:
+        body += (f'<path d="M17.5 12.5l4.5 1.6v3.3c0 2.8-2 4.6-4.5 5.6-2.5-1-4.5-2.8-4.5-5.6v-3.3z" fill="{accent}" '
+                 f'stroke="{color}" stroke-width="0.8"/>')
+        tooltip += "\n" + "\n".join(_t("VPN : {name}").format(name=name) for name in vpns)
+    if hotspot:
+        body += (f'<circle cx="4" cy="20" r="1.4" fill="{accent}"/><path d="M1.2 16.6q2.8-2.4 5.6 0" fill="none" '
+                 f'stroke="{accent}" stroke-width="1.3"/>')
+        tooltip += "\n" + _t("Point d’accès sans fil mobile activé")
+    return body, tooltip, f"network-{int(bool(active))}-{int(wireless)}-{int(bool(vpns))}{int(hotspot)}"
 
 
 def notification_count():
