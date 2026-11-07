@@ -27,6 +27,8 @@ use winlux_testexe::*;
 mod copy;
 #[path = "explorer_props.rs"]
 mod props;
+#[path = "explorer_icons.rs"]
+mod icons;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -597,6 +599,22 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     }
 }
 
+/// Glyphe de l'Explorateur : l'icône intégrée quand elle existe (#589),
+/// sinon le dessin en primitives du shell.
+unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, gl: Glyph, x: i32, y: i32, s: i32) {
+    if let Some(ic) = icons::of_glyph(gl) {
+        if icons::draw(hdc, ic, x, y, s, glyph_fg()) {
+            return;
+        }
+    }
+    crate::gfx::glyph(hdc, b, f, gl, x, y, s)
+}
+
+/// Icône d'un dossier d'Accueil d'après son chemin, s'il en est un.
+unsafe fn place_icon(path: &[u8]) -> Option<icons::Icon> {
+    (0..PLACES.len()).find(|&k| place_path(k).get() == path).map(icons::of_place)
+}
+
 fn glyph_of(k: Kind) -> Glyph {
     match k {
         Kind::Folder => Glyph::Folder,
@@ -623,6 +641,11 @@ fn glyph_of(k: Kind) -> Glyph {
 /// les icônes de fichiers de Windows 11. Dossiers et lecteurs gardent leur
 /// glyphe.
 unsafe fn row_icon(g: &mut Gfx, k: Kind, x: i32, y: i32) {
+    if let Some(ic) = icons::of_glyph(glyph_of(k)) {
+        if icons::draw(g.hdc, ic, x, y, 16, glyph_fg()) {
+            return;
+        }
+    }
     let (h, b) = (g.hdc, &mut *g.b);
     let page = rgb(0xF4, 0xF6, 0xF9);
     let edge = rgb(0x8A, 0x93, 0xA0);
@@ -2516,7 +2539,10 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         }
         let x = r.left + 14 + indent * 18;
         set_glyph_bg(Some(bg));
-        glyph(g.hdc, g.b, g.f, gl, x, r.top + 7, 16);
+        match place_icon(path.get()) {
+            Some(ic) if icons::draw(g.hdc, ic, x, r.top + 7, 16, 0) => {}
+            _ => glyph(g.hdc, g.b, g.f, gl, x, r.top + 7, 16),
+        }
         set_glyph_bg(None);
         text_fit(
             g.hdc,
@@ -2710,12 +2736,23 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         let name = display_name(&e);
         let renaming = FOCUS == Focus::Rename && RENAME_INDEX == idx && which == t.focus;
         set_glyph_bg(Some(bg));
+        // Accueil : chaque dossier personnel a son icône (Documents, Images…).
+        let home_ic = if pn.loc.is(HOME) {
+            (0..PLACES.len()).find(|&k| place_label(k) == e.name()).map(icons::of_place)
+        } else {
+            None
+        };
+        let entry_icon = |g: &mut Gfx, x: i32, y: i32, s: i32| match home_ic {
+            Some(ic) if icons::draw(g.hdc, ic, x, y, s, 0) => {}
+            _ if s == 16 => row_icon(g, e.kind, x, y),
+            _ => glyph(g.hdc, g.b, g.f, glyph_of(e.kind), x, y, s),
+        };
         match VIEW {
             View::XLarge | View::Large | View::Medium => {
                 let s = c.icon;
                 let gx = (ir.left + ir.right - s) / 2;
                 if !draw_thumbnail(g, pn, idx, gx, ir.top + 8, s, bg) {
-                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), gx, ir.top + 8, s);
+                    entry_icon(g, gx, ir.top + 8, s);
                     format_badge(g, &e, gx, ir.top + 8, s);
                 }
                 let ty = ir.top + 14 + s;
@@ -2733,7 +2770,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 }
             }
             View::Small | View::List => {
-                row_icon(g, e.kind, ir.left + 8, ir.top + (c.ch - 16) / 2);
+                entry_icon(g, ir.left + 8, ir.top + (c.ch - 16) / 2, 16);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(ir.left + 30, ty - 3, ir.right - 6, ty + 19));
@@ -2753,7 +2790,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             View::Tiles => {
                 let gy = ir.top + (c.ch - c.icon) / 2;
                 if !draw_thumbnail(g, pn, idx, ir.left + 10, gy, c.icon, bg) {
-                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), ir.left + 10, gy, c.icon);
+                    entry_icon(g, ir.left + 10, gy, c.icon);
                     format_badge(g, &e, ir.left + 10, gy, c.icon);
                 }
                 let tx = ir.left + 20 + c.icon;
@@ -2797,7 +2834,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
             }
             View::Details => {
                 let (nx, nw, dx, tx, sx) = detail_cols(&ir);
-                row_icon(g, e.kind, ir.left + 10, ir.top + (c.ch - 16) / 2);
+                entry_icon(g, ir.left + 10, ir.top + (c.ch - 16) / 2, 16);
                 let ty = ir.top + (c.ch - 14) / 2;
                 if renaming {
                     draw_rename(g, rect(nx - 4, ty - 3, ir.left + nw, ty + 19));
@@ -7092,8 +7129,8 @@ unsafe fn row_icon_checks() {
     let pdf = measure(Kind::Pdf);
     let exe = measure(Kind::Exe);
     check!(
-        text.0 >= 12 && pdf.0 >= 12,
-        "Icones des lignes : pages de fichiers de 12 px en vue Details (11 avant)"
+        text.0 >= 10 && pdf.0 >= 10,
+        "Icones des lignes : pages de fichiers Prisme lisibles en vue Details (10 px et plus)"
     );
     check!(exe.1 >= 10, "Icones des lignes : un .exe est une fenetre claire, plus un pave sombre");
     // « Ce PC » : espace du lecteur C: et texte « X libres sur Y ».
@@ -7412,6 +7449,7 @@ pub unsafe fn regression_checks() {
     row_icon_checks();
     places_and_hover_checks();
     props::regression(root);
+    icons::regression();
     copy::regression(root);
     copy::trash_regression(root);
     PASSWORD.len = 0;

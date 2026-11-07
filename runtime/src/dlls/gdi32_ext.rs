@@ -204,6 +204,7 @@ pub unsafe extern "win64" fn ext_text_out_a(
             Some(gui::dc_bk_color(hdc))
         };
         let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+        let (x, y) = aligned_origin(hdc, x, y, &s);
         gui::record(
             hdc,
             DrawCmd::Text {
@@ -245,6 +246,7 @@ pub unsafe extern "win64" fn ext_text_out_w(
             Some(gui::dc_bk_color(hdc))
         };
         let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+        let (x, y) = aligned_origin(hdc, x, y, &s);
         gui::record(
             hdc,
             DrawCmd::Text {
@@ -284,6 +286,7 @@ pub unsafe extern "win64" fn text_out_w(
         Some(gui::dc_bk_color(hdc))
     };
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let (x, y) = aligned_origin(hdc, x, y, &s);
     gui::record(
         hdc,
         DrawCmd::Text {
@@ -414,6 +417,7 @@ struct DcState {
     pen: usize,
     font: usize,
     pos: (i32, i32),
+    text_align: u32,
 }
 
 fn dc_stack() -> &'static Mutex<HashMap<usize, Vec<DcState>>> {
@@ -431,6 +435,7 @@ pub extern "win64" fn save_dc(hdc: usize) -> i32 {
         brush: gui::dc_brush(hdc),
         pen: gui::dc_pen(hdc),
         font: gui::dc_font(hdc),
+        text_align: gui::dc_text_align(hdc),
         pos: pen_pos()
             .lock()
             .unwrap()
@@ -465,6 +470,7 @@ pub extern "win64" fn restore_dc(hdc: usize, saved: i32) -> i32 {
     gui::set_dc_text_color(hdc, state.text_color);
     gui::set_dc_bk_color(hdc, state.bk_color);
     gui::set_dc_bk_mode(hdc, state.bk_mode);
+    gui::set_dc_text_align(hdc, state.text_align);
     gui::select_object(hdc, state.brush);
     gui::select_object(hdc, state.pen);
     gui::select_object(hdc, state.font);
@@ -1207,11 +1213,38 @@ pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
     }
 }
 
-pub extern "win64" fn set_text_align(_hdc: usize, _align: u32) -> u32 {
-    0
+pub extern "win64" fn set_text_align(hdc: usize, align: u32) -> u32 {
+    gui::set_dc_text_align(hdc, align)
 }
-pub extern "win64" fn get_text_align(_hdc: usize) -> u32 {
-    0
+pub extern "win64" fn get_text_align(hdc: usize) -> u32 {
+    gui::dc_text_align(hdc)
+}
+
+/// Coin haut-gauche du texte d'après SetTextAlign : (x, y) désigne la
+/// ligne de base (TA_BASELINE, utilisé par Scintilla) ou le bas (TA_BOTTOM),
+/// et le bord droit (TA_RIGHT) ou le centre (TA_CENTER).
+pub fn aligned_origin(hdc: usize, x: i32, y: i32, text: &str) -> (i32, i32) {
+    const TA_RIGHT: u32 = 2;
+    const TA_CENTER: u32 = 6;
+    const TA_BOTTOM: u32 = 8;
+    const TA_BASELINE: u32 = 24;
+    let align = gui::dc_text_align(hdc);
+    let mut origin = (x, y);
+    if align & (TA_RIGHT | TA_CENTER) != 0 {
+        let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+        let width = gui::measure_text(&font, text).0;
+        origin.0 -= if align & TA_CENTER == TA_CENTER {
+            width / 2
+        } else {
+            width
+        };
+    }
+    if align & TA_BASELINE == TA_BASELINE {
+        origin.1 -= font_metrics(hdc).1;
+    } else if align & TA_BOTTOM != 0 {
+        origin.1 -= font_metrics(hdc).0;
+    }
+    origin
 }
 pub extern "win64" fn set_text_justification(_hdc: usize, _extra: i32, _count: i32) -> i32 {
     1
@@ -1378,5 +1411,34 @@ pub fn exports() -> crate::dlls::Exports {
         "GdiFlush" => fn gdi_flush,
         "GdiSetBatchLimit" => fn gdi_set_batch_limit,
         "CreateBitmap" => fn create_bitmap,
+    }
+}
+
+#[cfg(test)]
+mod text_align_tests {
+    use super::*;
+
+    /// Scintilla (Notepad++) écrit avec TA_BASELINE : y désigne la ligne de
+    /// base, le texte doit donc remonter de l'ascent de la police.
+    #[test]
+    fn ta_baseline_remonte_le_texte_de_l_ascent() {
+        let hdc = gui::create_dc(0);
+        assert_eq!(get_text_align(hdc), 0);
+        assert_eq!(aligned_origin(hdc, 10, 40, "abc"), (10, 40));
+        assert_eq!(set_text_align(hdc, 24), 0); // TA_BASELINE
+        assert_eq!(get_text_align(hdc), 24);
+        let ascent = font_metrics(hdc).1;
+        assert!(ascent > 0);
+        assert_eq!(aligned_origin(hdc, 10, 40, "abc"), (10, 40 - ascent));
+        // TA_RIGHT | TA_BOTTOM : coin bas-droit.
+        set_text_align(hdc, 2 | 8);
+        let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+        let width = gui::measure_text(&font, "abc").0;
+        assert_eq!(
+            aligned_origin(hdc, 100, 40, "abc"),
+            (100 - width, 40 - font_metrics(hdc).0)
+        );
+        gui::free_dc(hdc);
+        assert_eq!(set_text_align(hdc, 0), u32::MAX);
     }
 }

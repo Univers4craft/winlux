@@ -830,6 +830,17 @@ pub fn sfx_config(data: &[u8], archive_at: usize) -> Option<Vec<(String, String)
     )
 }
 
+/// Machine de l'en-tête PE (0x14c x86, 0x8664 x64, 0xAA64 ARM64).
+pub(super) fn pe_machine(data: &[u8]) -> Option<u16> {
+    let pe = u32::from_le_bytes(data.get(0x3C..0x40)?.try_into().ok()?) as usize;
+    if data.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    Some(u16::from_le_bytes(
+        data.get(pe + 4..pe + 6)?.try_into().ok()?,
+    ))
+}
+
 pub(super) fn is_gui_pe64(data: &[u8]) -> Option<(bool, bool)> {
     let pe = u32::from_le_bytes(data.get(0x3C..0x40)?.try_into().ok()?) as usize;
     if data.get(pe..pe + 4)? != b"PE\0\0" {

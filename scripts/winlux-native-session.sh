@@ -94,12 +94,23 @@ elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/d
     has_bluetooth=true
 fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
-# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur :
+# Winlux-Sombre en mode sombre (le défaut), Winlux en mode clair. Un compte
+# resté sur l'un des deux suit le mode de Personnalisation, sinon celui du
+# système (THEME= de /etc/winlux/preferences.conf).
 # Le défaut d'XFCE (elementary-xfce-dark) n'est pas livré : sans thème réel,
 # les icônes retombaient sur les silhouettes noires d'Adwaita (Installer…).
 icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
-if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
-    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+icon_wanted=Winlux-Sombre
+if test -f "$HOME/.config/winlux/appearance.json"; then
+    if grep -q '"theme": *"light"' "$HOME/.config/winlux/appearance.json" 2>/dev/null; then icon_wanted=Winlux; fi
+elif grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then
+    icon_wanted=Winlux
+fi
+test -d "/usr/share/icons/$icon_wanted" || icon_wanted=Winlux
+case "$icon_theme" in Winlux|Winlux-Sombre|'') icon_reset=1 ;; *) icon_reset=0; test -d "/usr/share/icons/$icon_theme" || icon_reset=1 ;; esac
+if test -d "/usr/share/icons/$icon_wanted" && test -x /usr/bin/xfconf-query && test "$icon_reset" = 1 && test "$icon_theme" != "$icon_wanted"; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s "$icon_wanted" || true
 fi
 # Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
 # sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
@@ -125,9 +136,19 @@ fi
 # Fond d'écran fixé avant la barre des tâches : le bureau arrive avec lui.
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
 # Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
-default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
-test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
-for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+# « Winlux Aurore » (#596) dans la définition la plus proche de chaque écran.
+aurora_wallpaper() {
+    base=/usr/share/winlux/wallpapers/winlux-prisme-aurore
+    picked=$base.png
+    if test "${1:-0}" -ge 1800 && test -f "$base-3840x2160.png"; then picked=$base-3840x2160.png
+    elif test "${1:-0}" -ge 1260 && test -f "$base-2560x1440.png"; then picked=$base-2560x1440.png; fi
+    test -f "$picked" || picked=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+    test -f "$picked" || picked=/usr/share/winlux/wallpaper.bmp
+    echo "$picked"
+}
+/usr/bin/xrandr --query | awk '$2 == "connected" {h = 0; for (i = 3; i <= NF; i++) if (match($i, /^[0-9]+x[0-9]+\+/)) {split($i, d, /[x+]/); h = d[2]; break}; print $1, h}' |
+while read -r output height; do
+    default_wallpaper=$(aurora_wallpaper "$height")
     property="/backdrop/screen0/monitor$output/workspace0/last-image"
     if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
         /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper"
@@ -233,6 +254,11 @@ done
 # fenêtre découverte doit se repeindre et un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
     /usr/bin/picom --config "$HOME/.config/picom/picom.conf" >/run/winlux/compositor.log 2>&1 &
+    # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
+    # openbox, seul lu par les règles de picom (#582).
+    if test -x /usr/bin/winlux-maximized-watch; then
+        /usr/bin/winlux-maximized-watch >/run/winlux/maximized-watch.log 2>&1 &
+    fi
     # Le bureau (xfdesktop) est lancé ensuite par l'init : son arrivée laissait
     # noires les fenêtres déjà ouvertes (Bienvenue au premier démarrage).
     # Une remise à zéro de picom, une fois le bureau affiché, les repeint.

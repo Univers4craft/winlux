@@ -162,6 +162,8 @@ fi
 # et g++ pour le C++.
 if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     i686-w64-mingw32-gcc -O1 "$src/thread32.c" -o "$out/thread32_gcc.exe"
+    # Fibres x86 (étape 7, WinSCP).
+    i686-w64-mingw32-gcc -O1 "$src/fiber32.c" -o "$out/fiber32.exe"
     mingw_clang="clang --target=i686-w64-mingw32 -O1 --sysroot=/usr -fuse-ld=lld"
     $mingw_clang "$src/thread32.c" -o "$out/thread32.exe"
     # Bibliothèque d'import à part : $tmp contient aussi kernel32.lib (sans

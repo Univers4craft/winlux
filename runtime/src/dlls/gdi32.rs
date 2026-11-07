@@ -812,6 +812,7 @@ pub unsafe extern "win64" fn text_out_a(
         Some(gui::dc_bk_color(hdc))
     };
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let (x, y) = super::gdi32_ext::aligned_origin(hdc, x, y, &s);
     gui::record(
         hdc,
         DrawCmd::Text {
@@ -1287,6 +1288,7 @@ pub unsafe extern "win64" fn text_out_w(
         Some(gui::dc_bk_color(hdc))
     };
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let (x, y) = super::gdi32_ext::aligned_origin(hdc, x, y, &s);
     gui::record(
         hdc,
         DrawCmd::Text {

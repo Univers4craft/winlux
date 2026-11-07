@@ -54,7 +54,7 @@ Winlux exécute des programmes Windows, mais n'est pas associé à Microsoft :
 
 L'ergonomie est familière, mais **aucun logo, police, icône ni son de Microsoft n'apparaît nulle part**. Le logo de Winlux est **Prisme** : un losange taillé en quatre facettes, violet à gauche (Linux, la nuit) et cyan à droite (*lux*, la lumière). Accent de marque `#7C4DFF`, fond de nuit `#070A1F`.
 
-Prisme apparaît sur le bouton Démarrer, le menu GRUB, l'écran de démarrage, l'installateur, l'assistant de bienvenue et la page À propos. Les fonds d'écran « Winlux Nuit » (par défaut), « Winlux Aube » et « Winlux classique » et le son de démarrage « Prisme » sont aussi créés dans le dépôt. Tout est régénérable avec `scripts/render-brand.py` ([docs/IDENTITE-VISUELLE.md](https://github.com/Univers4craft/winlux/blob/master/docs/IDENTITE-VISUELLE.md)).
+Prisme apparaît sur le bouton Démarrer, le menu GRUB, l'écran de démarrage, l'installateur, l'assistant de bienvenue et la page À propos. Les fonds d'écran « Winlux Aurore » (par défaut, clair et sombre, jusqu'en 4K), « Winlux Nuit » et « Winlux Aube » et le son de démarrage « Prisme » sont aussi créés dans le dépôt. Tout est régénérable avec `scripts/render-brand.py` ([docs/IDENTITE-VISUELLE.md](https://github.com/Univers4craft/winlux/blob/master/docs/IDENTITE-VISUELLE.md)).
 
 ### 4. Une ergonomie familière
 

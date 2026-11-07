@@ -1,10 +1,10 @@
 #!/usr/bin/python3
 """Thème d'icônes « Winlux » (freedesktop), dessiné ici en SVG.
 
-Un seul langage visuel : coins arrondis, dégradés doux, pictogrammes blancs
-sur tuile de couleur pour les applications, dossiers ambrés avec emblème
-pour les emplacements. Couleurs de la marque Prisme (violet → cyan).
-Les icônes absentes viennent d'Adwaita (Inherits). Relancer :
+Ce script ne dessine plus que les icônes d'applications (scalable/apps) :
+pictogrammes blancs sur tuile de couleur, couleurs de la marque Prisme
+(violet → cyan). Emplacements, périphériques, types de fichiers, l'index.theme
+et le thème Winlux-Sombre viennent de scripts/generer-icones.py. Relancer :
 
     python3 scripts/render-icons.py
 """
@@ -72,119 +72,8 @@ APPS = {
     "system-help": ("violet", '<circle cx="32" cy="32" r="14"/><path d="M27 28a5 5 0 1 1 7 4.5c-1.5.8-2 1.7-2 3.5M32 41v.5"/>', "Aide"),
 }
 
-FOLDER_BACK = "#D99A1E"
-FOLDER_FRONT = ("#FFD978", "#F2AE34")
-
-
-def folder(emblem, name):
-    return (
-        HEAD
-        + f'<defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop stop-color="{FOLDER_FRONT[0]}"/>'
-        f'<stop offset="1" stop-color="{FOLDER_FRONT[1]}"/></linearGradient></defs>'
-        '<path d="M5 15a5 5 0 0 1 5-5h14l6 7h24a5 5 0 0 1 5 5v29a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5z" '
-        f'fill="{FOLDER_BACK}"/>'
-        '<rect x="8" y="20" width="48" height="30" rx="3" fill="#F6F1FB"/>'
-        '<path d="M4 26a3 3 0 0 1 3-3h50a3 3 0 0 1 3 3l-3 27a4 4 0 0 1-4 3.6H11a4 4 0 0 1-4-3.6z" fill="url(#f)"/>'
-        + (f'<g fill="none" stroke="#9A5B0C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".8">{emblem}</g>' if emblem else "")
-        + f"<title>{name}</title></svg>\n"
-    )
-
-
-PLACES = {
-    "folder": ("", "Dossier"),
-    "folder-documents": ('<path d="M26 32h12M26 38h12M26 44h8"/>', "Documents"),
-    "folder-download": ('<path d="M32 30v14M26 39l6 6 6-6"/>', "Téléchargements"),
-    "folder-pictures": ('<rect x="23" y="31" width="18" height="14" rx="2"/><path d="M24 44l6-6 4 4 3-3 4 4"/>', "Images"),
-    "folder-music": ('<path d="M29 44V32l10-2v12"/><circle cx="27" cy="44" r="2.5"/><circle cx="37" cy="42" r="2.5"/>', "Musique"),
-    "folder-videos": ('<path d="M28 32l11 6-11 6z"/>', "Vidéos"),
-    "user-desktop": ('<rect x="22" y="31" width="20" height="12" rx="2"/><path d="M28 47h8"/>', "Bureau"),
-    "user-home": ('<path d="M23 38l9-8 9 8M26 36v9h12v-9"/>', "Dossier personnel"),
-    "folder-remote": ('<circle cx="32" cy="39" r="7"/><path d="M25 39h14M32 32c-3 4-3 10 0 14M32 32c3 4 3 10 0 14"/>', "Lecteur réseau"),
-}
-
-
-def drive(kind, name):
-    body = {
-        "drive-harddisk": '<rect x="8" y="22" width="48" height="24" rx="5" fill="url(#d)"/>'
-        '<rect x="8" y="38" width="48" height="8" rx="4" fill="#3C4458" opacity=".25"/>'
-        '<circle cx="47" cy="38" r="2.5" fill="#4FD69C"/>',
-        "drive-removable-media": '<rect x="18" y="12" width="28" height="40" rx="5" fill="url(#d)"/>'
-        '<rect x="25" y="6" width="14" height="9" rx="2" fill="#9AA3B5"/>'
-        '<path d="M27 9h2M35 9h2" stroke="#59627A" stroke-width="2"/>'
-        '<circle cx="32" cy="40" r="3" fill="#7C4DFF"/>',
-        "computer": '<rect x="7" y="12" width="50" height="32" rx="4" fill="#2C2F42"/>'
-        '<rect x="10" y="15" width="44" height="26" rx="2" fill="url(#s)"/>'
-        '<path d="M26 44h12l2 8H24z" fill="#9AA3B5"/><rect x="18" y="51" width="28" height="4" rx="2" fill="#C7CDD9"/>',
-        "user-trash": '<path d="M18 20h28l-3 34a3 3 0 0 1-3 3H24a3 3 0 0 1-3-3z" fill="url(#d)"/>'
-        '<rect x="14" y="14" width="36" height="6" rx="3" fill="#9AA3B5"/>'
-        '<path d="M27 27v22M37 27v22" stroke="#7B8499" stroke-width="2.5" stroke-linecap="round"/>',
-        "user-trash-full": '<path d="M18 20h28l-3 34a3 3 0 0 1-3 3H24a3 3 0 0 1-3-3z" fill="url(#d)"/>'
-        '<path d="M20 18l8-8 6 6 6-5 6 7" fill="#F6F1FB" stroke="#B9C0CF" stroke-width="1.5"/>'
-        '<rect x="14" y="14" width="36" height="6" rx="3" fill="#9AA3B5"/>'
-        '<path d="M27 27v22M37 27v22" stroke="#7B8499" stroke-width="2.5" stroke-linecap="round"/>',
-    }[kind]
-    return (
-        HEAD
-        + '<defs><linearGradient id="d" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#E9ECF3"/>'
-        '<stop offset="1" stop-color="#B9C0CF"/></linearGradient>'
-        '<linearGradient id="s" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2A1C66"/>'
-        '<stop offset=".55" stop-color="#5B2FE0"/><stop offset="1" stop-color="#1E90E8"/></linearGradient></defs>'
-        + body
-        + f"<title>{name}</title></svg>\n"
-    )
-
-
-def executable():
-    """Programme Windows (.exe) : fenêtre claire portant le logo Prisme."""
-    return (
-        HEAD
-        + SHADOW
-        + '<rect x="6" y="8" width="52" height="48" rx="7" fill="#F4F2FA"/>'
-        '<path d="M6 15a7 7 0 0 1 7-7h38a7 7 0 0 1 7 7v3H6z" fill="#5B2FE0"/>'
-        '<circle cx="47" cy="13" r="1.6" fill="#fff"/><circle cx="52" cy="13" r="1.6" fill="#fff"/>'
-        '<g transform="translate(19 23) scale(.40625)">' + PRISME + "</g>"
-        "<title>Programme Windows</title></svg>\n"
-    )
-
-
 def logo():
     return HEAD + PRISME + "<title>Winlux</title></svg>\n"
-
-
-INDEX = """[Icon Theme]
-Name=Winlux
-Comment=Icônes Winlux (logo Prisme), complétées par Adwaita
-Inherits=Adwaita,hicolor
-Directories=scalable/apps,scalable/places,scalable/devices,scalable/mimetypes
-
-[scalable/apps]
-Size=64
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Applications
-
-[scalable/places]
-Size=64
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Places
-
-[scalable/devices]
-Size=64
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Devices
-
-[scalable/mimetypes]
-Size=64
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=MimeTypes
-"""
 
 
 def main():
@@ -192,20 +81,10 @@ def main():
     for name, (color, glyph, title) in APPS.items():
         out[f"scalable/apps/{name}.svg"] = tile(color, glyph, title)
     out["scalable/apps/winlux.svg"] = logo()
-    out["scalable/places/start-here.svg"] = logo()
-    for name, (emblem, title) in PLACES.items():
-        out[f"scalable/places/{name}.svg"] = folder(emblem, title)
-    for name in ("drive-harddisk", "drive-removable-media", "computer"):
-        out[f"scalable/devices/{name}.svg"] = drive(name, name)
-    for name in ("user-trash", "user-trash-full"):
-        out[f"scalable/places/{name}.svg"] = drive(name, name)
-    out["scalable/mimetypes/application-x-ms-dos-executable.svg"] = executable()
-    out["scalable/mimetypes/application-x-msdownload.svg"] = executable()
     for rel, svg in out.items():
         path = THEME / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(svg)
-    (THEME / "index.theme").write_text(INDEX)
     print(f"{len(out)} icônes écrites dans {THEME}")
 
 
