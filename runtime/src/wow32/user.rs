@@ -24,6 +24,7 @@
 //!   Les contrôles communs (WM_NOTIFY, LVITEM…) viendront de `comctl`.
 
 use super::crt::{Fix, Override};
+use super::layout::{Layout, F};
 use super::{call32, rd, wr, Desc};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -128,6 +129,11 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         }
         "TranslateAcceleratorA" | "TranslateAcceleratorW" | "TranslateAccelerator" => {
             spec(msg_in, t?, 3, 2)
+        }
+        // MENUITEMINFO : 48 octets en x86, 80 en x64 (#752, 7zFM).
+        "GetMenuItemInfoA" | "GetMenuItemInfoW" => spec(menu_item_info, t?, 4, 1),
+        "SetMenuItemInfoA" | "SetMenuItemInfoW" | "InsertMenuItemA" | "InsertMenuItemW" => {
+            spec(menu_item_info, t?, 4, 0)
         }
         // ICONINFO : 20 octets en x86 (deux HBITMAP de 4), 32 en x64.
         "GetIconInfo" => raw(get_icon_info, t?, 2),
@@ -979,6 +985,58 @@ extern "win64" fn create_brush_indirect(args: u32, target: usize) -> u64 {
     call64(target, &[b.as_ptr() as u64])
 }
 
+/// MENUITEMINFO jusqu'à hbmpItem : hSubMenu, hbmpChecked, hbmpUnchecked,
+/// dwItemData, dwTypeData et hbmpItem ont 8 octets en x64. cbSize vaut 44
+/// (sans hbmpItem) ou 48 en x86.
+static MENUITEMINFO: Layout = Layout {
+    size32: 48,
+    size64: 80,
+    fields: &[
+        F::Size(0, 0),
+        F::D(4, 4),
+        F::D(8, 8),
+        F::D(12, 12),
+        F::D(16, 16),
+        F::P(20, 24),
+        F::P(24, 32),
+        F::P(28, 40),
+        F::P(32, 48),
+        F::P(36, 56),
+        F::D(40, 64),
+        F::P(44, 72),
+    ],
+};
+
+/// Get/SetMenuItemInfo, InsertMenuItem : (menu, item, byPosition, info).
+/// `spec.at` vaut 1 quand la structure est recopiée au retour.
+extern "win64" fn menu_item_info(args: u32, s: usize) -> u64 {
+    let s = unsafe { &*(s as *const Spec) };
+    let info = arg(args, 3);
+    let head = [
+        ext(arg(args, 0)) as u64,
+        arg(args, 1) as u64,
+        arg(args, 2) as u64,
+    ];
+    if info == 0 {
+        return call64(s.target, &[head[0], head[1], head[2], 0]);
+    }
+    let given = (rd(info) as usize).clamp(44, MENUITEMINFO.size32);
+    let mut x86 = [0u8; 48];
+    unsafe { std::ptr::copy_nonoverlapping(info as usize as *const u8, x86.as_mut_ptr(), given) };
+    let mut wide = unsafe { MENUITEMINFO.boxed64(x86.as_ptr() as usize) };
+    let r = call64(
+        s.target,
+        &[head[0], head[1], head[2], wide.as_mut_ptr() as u64],
+    );
+    if s.at == 1 && r != 0 {
+        unsafe {
+            MENUITEMINFO.to32(wide.as_ptr() as *const u8, x86.as_mut_ptr() as usize);
+            std::ptr::copy_nonoverlapping(x86.as_ptr(), info as usize as *mut u8, given);
+        }
+    }
+    r
+}
+
 /// ICONINFO x64 : fIcon, xHotspot, yHotspot, 4 octets de remplissage,
 /// hbmMask (+16), hbmColor (+24). En x86 : hbmMask +12, hbmColor +16.
 fn iconinfo_to_x86(p: usize, out: u32) {
@@ -1025,6 +1083,25 @@ extern "win64" fn create_icon_indirect(args: u32, target: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menuiteminfo_x86() {
+        // 7zFM : MIIM_STRING|MIIM_SUBMENU, texte dans un tampon x86.
+        let low = crate::wow32::alloc_low(4096, false);
+        let x86 = unsafe { std::slice::from_raw_parts_mut(low as *mut u32, 12) };
+        let buf = (low + 1024) as u32;
+        x86.copy_from_slice(&[48, 0x44, 0, 0, 7, 0x1234, 0, 0, 0x99, buf, 64, 0]);
+        let w = unsafe { MENUITEMINFO.boxed64(low) };
+        let p = w.as_ptr() as usize;
+        assert_eq!(r64(p, 0), 80, "cbSize x64");
+        assert_eq!(q64(p, 24), 0x1234, "hSubMenu");
+        assert_eq!(q64(p, 48), 0x99, "dwItemData");
+        assert_eq!(q64(p, 56), buf as u64, "dwTypeData");
+        assert_eq!(r64(p, 64), 64, "cch");
+        let mut back = [0u32; 12];
+        unsafe { MENUITEMINFO.to32(p as *const u8, back.as_mut_ptr() as usize) };
+        assert_eq!(&back[1..], &x86[1..]);
+    }
 
     #[test]
     fn iconinfo_x86() {

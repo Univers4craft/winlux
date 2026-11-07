@@ -2707,6 +2707,33 @@ unsafe fn draw_thumbnail(g: &mut Gfx, pn: &Pane, idx: usize, x: i32, y: i32, s: 
     n != 0 && crate::thumbs::draw_thumb(g.hdc, &path[..n], src, x, y, s, bg)
 }
 
+/// Petit en-tête d'un volet du double volet : chemin courant, accent sur le
+/// volet actif.
+unsafe fn pane_label(g: &mut Gfx, r: &Rect, pn: &Pane, focused: bool) {
+    let p = pal();
+    fill(g.hdc, g.b, r.left, r.top, r.right, r.top + 22, p.window);
+    let name = last_component(pn.loc.get());
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.top + 3,
+        if focused { p.accent } else { p.border },
+    );
+    text_fit(
+        g.hdc,
+        g.f.small,
+        11,
+        if focused { p.text } else { p.text3 },
+        r.left + 12,
+        r.top + 7,
+        name,
+        r.right - r.left - 24,
+    );
+}
+
 unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     let p = pal();
     let t = tab();
@@ -2714,27 +2741,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     let focused = !t.dual || t.focus == which;
     fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.window);
     if t.dual {
-        // Petit en-tête du volet : chemin courant, accent sur le volet actif.
-        let name = last_component(pn.loc.get());
-        fill(
-            g.hdc,
-            g.b,
-            r.left,
-            r.top,
-            r.right,
-            r.top + 3,
-            if focused { p.accent } else { p.border },
-        );
-        text_fit(
-            g.hdc,
-            g.f.small,
-            11,
-            if focused { p.text } else { p.text3 },
-            r.left + 12,
-            r.top + 7,
-            name,
-            r.right - r.left - 24,
-        );
+        pane_label(g, r, pn, focused);
     }
     let r = &if t.dual {
         rect(r.left, r.top + 22, r.right, r.bottom)
@@ -2768,6 +2775,12 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     let home_cards = home::cards(pn);
     if home_cards {
         home::draw(g, pn, r, which, focused);
+        // Le GDI du runtime ne découpe pas : une carte remontée par le
+        // défilement déborde au-dessus du volet. L'en-tête du double volet
+        // est redessiné ici, la barre de commandes après les volets (#738).
+        if t.dual {
+            pane_label(g, &rect(r.left, r.top - 22, r.right, r.bottom), pn, focused);
+        }
     }
     if VIEW == View::Details && !home_cards {
         let sx_off = pn.scroll_x;
@@ -6182,7 +6195,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     NHOT = 0;
     HOT_FULL = false;
     draw_tabs(g, f);
-    draw_toolbar(g, &geo);
     draw_nav(g, &geo);
     draw_pane(g, &geo.panes[0], 0);
     if tab().dual {
@@ -6197,6 +6209,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         );
         draw_pane(g, &geo.panes[1], 1);
     }
+    // Barre d'adresse et de commandes par-dessus ce que le contenu défilé a
+    // pu dessiner au-dessus de son volet (Accueil en cartes, #738).
+    draw_toolbar(g, &geo);
     if let Some(d) = geo.details {
         home::draw_details(g, &d);
     }

@@ -109,6 +109,24 @@ def check():
                     empty = [w for w in walk(window.body) if isinstance(w, Gtk.Label) and "card" in w.get_style_context().list_classes()
                              and not w.get_text().strip()]
                     assert not empty, f"Cadre vide : {title}"
+        # #739 : « Compatibilité » d'un .exe dans l'Explorateur ouvre Programmes
+        # Windows sur la carte de ce programme, en tête (et non la page Écran).
+        programs_page = module["EXTRA"].PAGE_PROGRAMS
+        if programs_page not in window.hidden_pages:
+            with tempfile.TemporaryDirectory() as folder:
+                exe = Path(folder) / "hello32.exe"
+                exe.write_bytes(b"MZ")
+                assert module["exe_from_windows"](str(exe)) == exe
+                assert module["exe_from_windows"]("") is None
+                assert module["exe_from_windows"](str(Path(folder) / "absent.exe")) is None
+                window.pending_exe = exe
+                window.open_page(programs_page)
+                assert window.current == programs_page
+                first = window.programs_box.get_children()[0]
+                texts = [w.get_text() for w in walk(first) if isinstance(w, Gtk.Label)]
+                assert str(exe) in texts, texts
+                assert window.pending_exe is None
+                print("OK: Compatibilit\u00e9 d'un .exe ouvre sa carte (#739)")
         # Toute page existante est rangée dans une catégorie ou fondue dans une autre.
         placed = {page for _, pages in module["CATEGORIES"] for page in pages} | set(module["MERGED"])
         assert placed == set(range(len(module["PAGES"]))), sorted(set(range(len(module["PAGES"]))) - placed)

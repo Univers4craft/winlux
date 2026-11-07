@@ -14,6 +14,15 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl",
+            # Interrupteurs radio (rfkill unblock dans winlux-bluetooth, #604).
+            "rfkill",
+            # glxinfo : moteur de rendu OpenGL dans le rapport de bug (#610).
+            "mesa-utils",
+            # Bus d'accessibilité org.a11y.Bus : lecteurs d'écran, Narrateur,
+            # clavier visuel (#615).
+            "at-spi2-core",
+            # Batterie et secteur pour les applications Linux (UPower, #631).
+            "upower",
             # Luminosité des écrans de bureau par leur câble (DDC/CI, winlux-brightness).
             "ddcutil", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",

@@ -91,6 +91,12 @@ __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int
 __declspec(dllimport) BOOL WINAPI EnumCalendarInfoW(BOOL(WINAPI *)(unsigned short *), DWORD, DWORD, DWORD);
 __declspec(dllimport) HANDLE WINAPI LoadIconW(HANDLE, const unsigned short *);
 __declspec(dllimport) BOOL WINAPI GetIconInfo(HANDLE, void *);
+__declspec(dllimport) HANDLE WINAPI CreatePopupMenu(void);
+__declspec(dllimport) BOOL WINAPI InsertMenuItemW(HANDLE, DWORD, BOOL, const void *);
+__declspec(dllimport) BOOL WINAPI GetMenuItemInfoW(HANDLE, DWORD, BOOL, void *);
+__declspec(dllimport) HANDLE WINAPI CreateCompatibleDC(HANDLE);
+__declspec(dllimport) HANDLE WINAPI CreateCompatibleBitmap(HANDLE, int, int);
+__declspec(dllimport) HANDLE WINAPI SelectObject(HANDLE, HANDLE);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
 int _fltused = 0;
@@ -455,6 +461,34 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!GetIconInfo(icon, info)) fail(68, 1);
         if (info[5] != GUARD) fail(68, info[5]);
         if (info[0] != 1 || info[4] == 0) fail(68, info[0]);
+    }
+
+    /* 69 : MENUITEMINFOW de 48 octets (7zFM lit le texte de ses menus). */
+    {
+        static const unsigned short name[] = {'F', 'i', 'c', 'h', 'i', 'e', 'r', 0};
+        HANDLE menu = CreatePopupMenu();
+        HANDLE sub = CreatePopupMenu();
+        DWORD in[12] = {48, 0x40 | 0x4 | 0x2 | 0x20, 0, 0, 77, (DWORD)sub, 0, 0, 0x99,
+                        (DWORD)name, 7, 0};
+        if (!menu || !InsertMenuItemW(menu, 0, 1, in)) fail(69, 0);
+        unsigned short text[16];
+        DWORD out[13] = {48, 0x40 | 0x4 | 0x2 | 0x20, 0, 0, 0, 0, 0, 0, 0, (DWORD)text, 16, 0,
+                         GUARD};
+        if (!GetMenuItemInfoW(menu, 0, 1, out)) fail(69, 1);
+        if (out[12] != GUARD) fail(69, out[12]);
+        if (out[4] != 77 || out[5] != (DWORD)sub || out[8] != 0x99) fail(69, out[4]);
+        if (out[10] != 7 || text[0] != 'F' || text[6] != 'r' || text[7] != 0) fail(69, out[10]);
+    }
+
+    /* 70 : SelectObject d'une bitmap dans un DC mémoire neuf rend la bitmap
+     * 1x1 du stock, jamais 0 (la VCL de WinSCP y voyait un échec). */
+    {
+        HANDLE dc = CreateCompatibleDC(0);
+        HANDLE bmp = CreateCompatibleBitmap(dc, 8, 8);
+        if (!dc || !bmp) fail(70, 0);
+        HANDLE old = SelectObject(dc, bmp);
+        if (!old) fail(70, 1);
+        if (SelectObject(dc, old) != bmp) fail(70, 2);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

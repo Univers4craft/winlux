@@ -2165,7 +2165,10 @@ pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
         1 => gui::dc_bitmap(hdc), // OBJ_PEN → bitmap (approx)
         2 => gui::dc_brush(hdc),  // OBJ_BRUSH
         6 => gui::dc_font(hdc),   // OBJ_FONT
-        7 => gui::dc_bitmap(hdc), // OBJ_BITMAP
+        7 => match gui::dc_bitmap(hdc) {
+            0 if gui::dc_window(hdc) == Some(0) => gui::DEFAULT_BITMAP,
+            b => b,
+        }, // OBJ_BITMAP
         _ => 0,
     }
 }
