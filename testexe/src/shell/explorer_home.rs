@@ -402,12 +402,27 @@ pub(super) unsafe fn draw(g: &mut Gfx, pn: &Pane, r: &Rect, which: usize, focuse
     let p = pal();
     let t = tab();
     let l = layout(pn, r);
-    text(g.hdc, g.f.large, p.text, l.x, l.title_y, tr(S_HOME));
-    text(g.hdc, g.f.title, p.text, l.x, l.quick_head, tr4(&[b"Acc\xE8s rapide", b"Quick access", b"Acceso r\xE1pido", b"Schnellzugriff"]));
-    text(g.hdc, g.f.title, p.text, l.x, l.drive_head, tr4(&[b"Lecteurs", b"Drives", b"Unidades", b"Laufwerke"]));
-    text(g.hdc, g.f.title, p.text, l.x, l.recent_head, recent_label());
+    // Le GDI du runtime ne découpe pas : ce qui a défilé au-dessus du volet
+    // n'est pas dessiné. La barre de commandes, peinte après les volets,
+    // recouvre seulement ce qui dépasse d'une ligne (#738, #757).
+    let shown = |top: i32, bottom: i32| bottom > r.top && top < r.bottom;
+    if shown(l.title_y, l.title_y + 40) {
+        text(g.hdc, g.f.large, p.text, l.x, l.title_y, tr(S_HOME));
+    }
+    for (y, label) in [
+        (l.quick_head, tr4(&[b"Acc\xE8s rapide", b"Quick access", b"Acceso r\xE1pido", b"Schnellzugriff"])),
+        (l.drive_head, tr4(&[b"Lecteurs", b"Drives", b"Unidades", b"Laufwerke"])),
+        (l.recent_head, recent_label()),
+    ] {
+        if shown(y, y + 28) {
+            text(g.hdc, g.f.title, p.text, l.x, y, label);
+        }
+    }
     // Filtres des récents.
     for (i, c) in chip_rects(&l).iter().enumerate() {
+        if !shown(c.top, c.bottom) {
+            continue;
+        }
         let on = FILTER as usize == i;
         let (bg, edge) = if on {
             (p.accent, p.accent)
@@ -424,8 +439,12 @@ pub(super) unsafe fn draw(g: &mut Gfx, pn: &Pane, r: &Rect, which: usize, focuse
     // Cadre des récents.
     let (q, d, n) = l.counts;
     let frame = rect(l.x, l.recent_y, l.x + l.w, l.end - 12);
-    card(g, &frame, p.surface, p.border);
-    if n == 0 {
+    // Cadre haut d'une longue liste : son bord défilé reste sous la barre.
+    let framed = rect(frame.left, frame.top.max(r.top - 24), frame.right, frame.bottom.min(r.bottom + 24));
+    if framed.bottom > framed.top {
+        card(g, &framed, p.surface, p.border);
+    }
+    if n == 0 && shown(frame.top + 16, frame.top + 32) {
         text(
             g.hdc,
             g.f.caption,
