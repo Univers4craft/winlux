@@ -42,7 +42,7 @@ def props(win: str) -> dict[str, str]:
     return found
 
 
-def check(label: str, cmd: list[str], env: dict[str, str]) -> list[str]:
+def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) -> list[str]:
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     errors = []
     try:
@@ -70,6 +70,28 @@ def check(label: str, cmd: list[str], env: dict[str, str]) -> list[str]:
                 errors.append(f"{label} : _NET_WM_DESKTOP = {got['_NET_WM_DESKTOP']} au lieu de 0")
             else:
                 print(f"  OK     {label} : {', '.join(f'{k}={v}' for k, v in got.items())}")
+        if cycle and not errors:
+            # Réduire puis réafficher : la fenêtre doit rester gérée, avec son
+            # bureau (cas relevé sur la VM après windowminimize puis snap).
+            w = wins[0]
+            # (Sans --sync : xdotool lit alors _NET_ACTIVE_WINDOW pendant la
+            # transition et échoue même avec une fenêtre GTK.)
+            subprocess.run(["xdotool", "windowminimize", w], capture_output=True, timeout=10)
+            time.sleep(1)
+            act = subprocess.run(["xdotool", "windowactivate", w], capture_output=True, text=True, timeout=10)
+            got: dict[str, str] = {}
+            for _ in range(20):
+                time.sleep(0.25)
+                got = props(w)
+                if got.get("_NET_WM_DESKTOP") == "0" and "Normal" in subprocess.run(
+                        ["xprop", "-id", w, "WM_STATE"], capture_output=True, text=True).stdout:
+                    break
+            if act.returncode != 0 or "failed" in act.stderr:
+                errors.append(f"{label} : windowactivate après réduction refusé ({act.stderr.strip()})")
+            elif got.get("_NET_WM_DESKTOP") != "0" or "WM_STATE" not in got:
+                errors.append(f"{label} : après réduction puis réaffichage, {got}")
+            else:
+                print(f"  OK     {label} : réduite puis réaffichée, toujours gérée (bureau 0)")
     finally:
         proc.terminate()
         try:
@@ -111,6 +133,7 @@ def run() -> int:
             "Explorateur Winlux",
             [str(WINLUX), str(PE / "gui_demo.exe")],
             dict(base, WINLUX_NATIVE_SHELL="1", WINLUX_SHELL_APP="explorer"),
+            cycle=True,
         )
         errors += check(
             "fenêtre Win32 (controls_suite)",
