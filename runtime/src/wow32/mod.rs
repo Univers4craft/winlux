@@ -24,6 +24,7 @@
 
 mod crt;
 mod cxx;
+mod fiber;
 mod kernel;
 mod seh;
 mod wow64;
@@ -1187,6 +1188,11 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
     let n = crate::dlls::normalize(dll);
     let kernel = n == "kernel32" || n == "ntdll";
     let crt = n == "msvcrt" || n == "ucrtbase" || n.starts_with("msvcr");
+    if kernel {
+        if let Some(f) = fiber::override_for(func) {
+            return Some(f);
+        }
+    }
     Some(match func {
         "RaiseException" if kernel => (seh::raise_exception as *const () as usize, "iiii>v"),
         "RtlUnwind" if kernel => (seh::rtl_unwind as *const () as usize, "iiii>i"),
@@ -1260,6 +1266,10 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
 /// Passerelle x86 vers la version 32 bits propre d'une fonction, s'il y en
 /// a une ; pour une donnée exportée, son adresse sous 4 Go.
 pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
+    let n = crate::dlls::normalize(dll);
+    if let Some(code) = fiber::code_for(n == "kernel32" || n == "ntdll", func) {
+        return Some(code);
+    }
     let label = format!("{}!{func}", dll.to_ascii_lowercase());
     let (target, sig, fix) = match override_for(dll, func) {
         Some((target, sig)) => (target, sig, crt::Fix::None),
