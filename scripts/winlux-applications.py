@@ -16,6 +16,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import time
 
 HOME = Path.home()
 DATA = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
@@ -772,6 +773,61 @@ def refresh():
             any(APPS.glob("winlux-assoc-*.desktop")) and not (APPS / "mimeinfo.cache").is_file()):
         update_database("update-desktop-database", APPS)
 
+START_MENUS = ("AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
+               "ProgramData/Microsoft/Windows/Start Menu/Programs", "Start Menu/Programs")
+BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
+                    "firefox/root/usr/lib/firefox/firefox")
+
+def watched_inputs():
+    """What refresh() reads, as (path, mtime, size): a change means a new pass is due."""
+    homes = [HOME]
+    if os.getuid() == 0 and Path("/home/winlux-web").is_dir(): homes.append(Path("/home/winlux-web"))
+    paths = [APPS, desktop_dir(HOME), Path("/opt/winlux/browsers")]
+    paths += [Path("/opt/winlux/browsers") / binary for binary in BROWSER_BINARIES]
+    for home in homes:
+        paths += [home / ".local/share/winlux/launchers.json", home / ".local/share/winlux/registry.tsv"]
+        for menu in START_MENUS:
+            root = home / menu
+            if not root.is_dir(): continue
+            paths.append(root)
+            # A shortcut added in a sub-folder changes only that folder's mtime.
+            for count, folder in enumerate(item for item in root.rglob("*") if item.is_dir()):
+                if count >= 1024: break
+                paths.append(folder)
+    signature = []
+    for path in paths:
+        try:
+            info = path.stat()
+            signature.append((str(path), info.st_mtime_ns, info.st_size))
+        except OSError: signature.append((str(path), None, None))
+    return tuple(signature)
+
+def watch(interval=5.0, full_pass=300.0, log_limit=1024 * 1024):
+    """Resident catalogue: window icons each tick, refresh() only when an input changed.
+
+    Replaces the session loop that started Python twice every 5 seconds and
+    rescanned every launcher, registry and shortcut each time (#214). A full
+    pass still runs every 5 minutes in case an input is not watched.
+    """
+    signature, last_full = None, float("-inf")
+    while True:
+        try:
+            current = watched_inputs()
+            if current != signature or time.monotonic() - last_full >= full_pass:
+                CHANGED.clear()
+                refresh()
+                # refresh() itself touches APPS: read the inputs after it.
+                signature, last_full = watched_inputs(), time.monotonic()
+            window_icons()
+        except Exception as error:  # one bad tick must not stop the catalogue
+            print(f"Catalogue : {type(error).__name__}: {error}", file=sys.stderr)
+        try:
+            # The session opens this log in append mode: cut it back when it grows.
+            sys.stderr.flush()
+            if os.fstat(2).st_size > log_limit: os.ftruncate(2, 0)
+        except OSError: pass
+        time.sleep(interval)
+
 def print_shortcut(path):
     """Target, working folder then one argument per line, for winlux-open (sh)."""
     target, arguments, workdir, _, _ = lnk_resolve(path)
@@ -782,6 +838,7 @@ def print_shortcut(path):
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "refresh"
     if command == "window-icons": window_icons()
+    elif command == "watch": watch()
     elif command == "register" and len(sys.argv) > 2:
         register(Path(sys.argv[2]))
         refresh()
