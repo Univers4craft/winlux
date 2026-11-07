@@ -128,6 +128,88 @@ unsafe extern "win64" fn char_upper_a(p: usize) -> usize {
     char_case(p, true)
 }
 
+/// Casse d'un octet ANSI (page 1252 : ASCII et lettres latines accentuées).
+fn ansi_case(b: u8, upper: bool) -> u8 {
+    match b {
+        b'a'..=b'z' | 0xE0..=0xFE if upper && b != 0xF7 => b - 0x20,
+        b'A'..=b'Z' | 0xC0..=0xDE if !upper && b != 0xD7 => b + 0x20,
+        _ => b,
+    }
+}
+
+/// CharUpperBuffA / CharLowerBuffA : `n` octets en place (WinSCP).
+unsafe extern "win64" fn char_upper_buff_a(p: *mut u8, n: u32) -> u32 {
+    char_buff_a(p, n, true)
+}
+
+unsafe extern "win64" fn char_lower_buff_a(p: *mut u8, n: u32) -> u32 {
+    char_buff_a(p, n, false)
+}
+
+unsafe fn char_buff_a(p: *mut u8, n: u32, upper: bool) -> u32 {
+    if p.is_null() {
+        return 0;
+    }
+    for i in 0..n as usize {
+        *p.add(i) = ansi_case(*p.add(i), upper);
+    }
+    n
+}
+
+/// CharUpperBuffW : `n` caractères UTF-16 en place, comme CharLowerBuffW.
+unsafe extern "win64" fn char_upper_buff_w(p: *mut u16, n: u32) -> u32 {
+    if p.is_null() {
+        return 0;
+    }
+    for i in 0..n as usize {
+        *p.add(i) = super::apps_win32::upper_char(*p.add(i));
+    }
+    n
+}
+
+/// CharNextW : caractère suivant, sans dépasser le zéro final.
+unsafe extern "win64" fn char_next_w(p: *const u16) -> *const u16 {
+    if p.is_null() || *p == 0 {
+        p
+    } else {
+        p.add(1)
+    }
+}
+
+/// CharPrevW : caractère précédent, sans reculer avant `start`.
+unsafe extern "win64" fn char_prev_w(start: *const u16, cur: *const u16) -> *const u16 {
+    if cur <= start {
+        start
+    } else {
+        cur.sub(1)
+    }
+}
+
+/// CharNextExA : pages de code à un octet.
+unsafe extern "win64" fn char_next_ex_a(_cp: u16, p: *const u8, _flags: u32) -> *const u8 {
+    if p.is_null() || *p == 0 {
+        p
+    } else {
+        p.add(1)
+    }
+}
+
+extern "win64" fn is_char_alpha_a(c: u8) -> i32 {
+    (c.is_ascii_alphabetic() || (c >= 0xC0 && c != 0xD7 && c != 0xF7)) as i32
+}
+
+extern "win64" fn is_char_alpha_numeric_a(c: u8) -> i32 {
+    (is_char_alpha_a(c) != 0 || c.is_ascii_digit()) as i32
+}
+
+extern "win64" fn is_char_upper_a(c: u8) -> i32 {
+    (is_char_alpha_a(c) != 0 && ansi_case(c, false) != c) as i32
+}
+
+extern "win64" fn is_char_lower_a(c: u8) -> i32 {
+    (is_char_alpha_a(c) != 0 && ansi_case(c, true) != c) as i32
+}
+
 // --- MDI --------------------------------------------------------------------------------
 
 unsafe extern "win64" fn def_frame_proc_w(
@@ -457,6 +539,11 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "SetMenuInfo" => fn set_menu_info, "GetMenuInfo" => fn get_menu_info,
         "CharLowerA" => fn char_lower_a, "CharUpperA" => fn char_upper_a,
+        "CharUpperBuffA" => fn char_upper_buff_a, "CharLowerBuffA" => fn char_lower_buff_a,
+        "CharUpperBuffW" => fn char_upper_buff_w,
+        "CharNextW" => fn char_next_w, "CharPrevW" => fn char_prev_w, "CharNextExA" => fn char_next_ex_a,
+        "IsCharAlphaA" => fn is_char_alpha_a, "IsCharAlphaNumericA" => fn is_char_alpha_numeric_a,
+        "IsCharUpperA" => fn is_char_upper_a, "IsCharLowerA" => fn is_char_lower_a,
         "DefFrameProcW" => fn def_frame_proc_w, "DefFrameProcA" => fn def_frame_proc_a,
         "DefMDIChildProcW" => fn def_mdi_child_proc_w, "DefMDIChildProcA" => fn def_mdi_child_proc_a,
         "TranslateMDISysAccel" => fn translate_mdi_sys_accel,
@@ -493,5 +580,27 @@ mod tests {
             assert_eq!(out[8], 0x10);
             assert_eq!(out[32], 0x42);
         }
+    }
+}
+
+#[cfg(test)]
+mod char_tests {
+    use super::*;
+
+    #[test]
+    fn casse_des_tampons() {
+        let mut w: Vec<u16> = "winscp é ß".encode_utf16().collect();
+        let n = w.len() as u32;
+        assert_eq!(unsafe { char_upper_buff_w(w.as_mut_ptr(), n) }, n);
+        assert_eq!(String::from_utf16_lossy(&w), "WINSCP É ß");
+        let mut a = *b"abc\xe9\xff\xf7";
+        unsafe { char_upper_buff_a(a.as_mut_ptr(), 4) };
+        assert_eq!(&a, b"ABC\xc9\xff\xf7");
+        unsafe { char_lower_buff_a(a.as_mut_ptr(), 6) };
+        assert_eq!(&a, b"abc\xe9\xff\xf7");
+        assert_eq!(is_char_upper_a(b'Q'), 1);
+        assert_eq!(is_char_lower_a(0xE9), 1);
+        assert_eq!(is_char_alpha_a(b'1'), 0);
+        assert_eq!(is_char_alpha_numeric_a(b'1'), 1);
     }
 }
