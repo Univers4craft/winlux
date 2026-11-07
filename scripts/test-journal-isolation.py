@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(module["root_file"](flag), "winlux-update-apt : drapeau de ce compte cru")
     link = Path(tmp) / "lien"
     link.symlink_to(flag)
-    ok(module["root_file"](link) == (os.geteuid() == 0), "winlux-update-apt : lien jugé sur lui-même")
+    ok(not module["root_file"](link), "winlux-update-apt : un lien n'est jamais cru")
     module["RUN"] = Path(tmp)
     module["publish_run"].__globals__["RUN"] = Path(tmp)
     (Path(tmp) / "update-progress.new").write_text("piège\n")

@@ -83,9 +83,9 @@ def publish_run(path, text):
 def root_file(path):
     """Drapeau croyable : posé par root (ou par ce compte, pour les tests),
     pas par un autre compte dans /run/winlux (#643)."""
-    try: owner = os.lstat(path).st_uid
+    try: info = os.lstat(path)
     except OSError: return False
-    return owner in (0, os.geteuid())
+    return not os.path.islink(path) and info.st_uid in (0, os.geteuid())
 
 def ids(path):
     """{nom: numéro} d'après un fichier passwd ou group (racine quelconque)."""
