@@ -190,6 +190,11 @@ jobs:
       - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py
 
+      - name: Vérifier les types de fichiers traduits (Thunar, fr/en/de/es)
+        run: |
+          sudo apt-get install -y -q shared-mime-info
+          /usr/bin/python3 -B scripts/test-mime-translations.py
+
       - name: Vérifier les icônes Prisme claires et sombres (thèmes Winlux et Winlux-Sombre)
         run: xvfb-run -a -s '-screen 0 1366x768x24' sh scripts/test-icones.sh integration/native/icons
 
