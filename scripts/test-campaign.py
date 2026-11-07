@@ -500,6 +500,9 @@ tray_source = (SCRIPTS / "winlux-tray.py").read_text()
 ok("def _settled_balance" in tray_source and "taskbar-balance" in tray_source
    and "test-taskbar-boot-centering.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "barre centrée : contrepoids mesuré une fois les icônes de droite en place, valeur précédente reprise")
+ok("test-taskbar-live-align.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "*' 13 '*) ;;" not in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre : changement d'alignement en direct suivi d'une relance de la barre (#651)")
 
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
