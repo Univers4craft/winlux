@@ -5043,6 +5043,13 @@ unsafe fn open_terminal() {
     } else {
         p.loc.get()
     };
+    // Session native : le vrai terminal, dans ce dossier (pas Mousepad).
+    if wm::native_session() {
+        if !wm::native_terminal(Some(dir)) {
+            notify(tr4(&[b"Impossible d'ouvrir le terminal.", b"Couldn't open the terminal.", b"No se pudo abrir el terminal.", b"Das Terminal konnte nicht ge\xF6ffnet werden."]));
+        }
+        return;
+    }
     crate::terminal::init_at(dir);
     crate::wm::open(crate::wm::APP_TERMINAL);
 }

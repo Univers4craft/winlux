@@ -129,6 +129,14 @@ ok("pick::choose(p, index)" in explorer and "fn finish(" in pick_rs and "ExitPro
 ok("SetEnvironmentVariableA(name.as_ptr(), core::ptr::null())" in pick_rs,
    "les programmes lancés depuis la boîte ne deviennent pas une boîte Ouvrir")
 
+# ── #663 : « Terminal » ouvrait Mousepad en session native ──────────────────
+wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
+launch = wm_rs[wm_rs.index("pub unsafe fn native_launch"):]
+ok("if app == APP_TERMINAL {" in launch[:400] and "native_terminal(None)" in launch[:400],
+   "session native : le Terminal ne retombe plus sur « editor » (Mousepad)")
+ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer,
+   "Explorateur : Terminal ouvre winlux-terminal dans le dossier affiché")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]
