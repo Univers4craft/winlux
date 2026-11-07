@@ -241,11 +241,15 @@ fn frame_ok(f: u32) -> bool {
 /// Répartition d'une exception x86. Rend si personne ne l'a prise ou si un
 /// gestionnaire demande de continuer (`true`).
 fn dispatch(rec: u32, ctx: u32) -> bool {
-    DISPATCHES.with(|d| d.borrow_mut().push(chain_now()));
-    let result = walk(rec, ctx);
-    DISPATCHES.with(|d| {
-        d.borrow_mut().pop();
+    // Une répartition abandonnée par un saut direct (Delphi, C++Builder)
+    // laisse sa valeur : la longueur notée ici la retire au retour.
+    let depth = DISPATCHES.with(|d| {
+        let mut d = d.borrow_mut();
+        d.push(chain_now());
+        d.len() - 1
     });
+    let result = walk(rec, ctx);
+    DISPATCHES.with(|d| d.borrow_mut().truncate(depth));
     result
 }
 
