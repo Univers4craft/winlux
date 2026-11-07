@@ -354,9 +354,51 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
     );
     if code == 0xE06D_7363 {
         eprintln!("winlux: il s'agit d'une exception C++ MSVC qu'aucun bloc catch n'a rattrapée");
+        if let Some(text) = unsafe { cxx_thrown_value(args) } {
+            eprintln!("winlux: objet lancé : {text}");
+        }
     }
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+/// Type (nom décoré) et valeur d'une exception C++ MSVC x64 : `throw hr;` de
+/// 7-Zip ou `throw "message";` deviennent lisibles dans le journal.
+/// args = [magie, objet, ThrowInfo, base de l'image].
+unsafe fn cxx_thrown_value(args: &[usize]) -> Option<String> {
+    if args.len() < 4 || args[0] != 0x1993_0520 || args[2] == 0 || args[3] == 0 {
+        return None;
+    }
+    let (object, info, base) = (args[1], args[2], args[3]);
+    let rva = |at: usize| unsafe { std::ptr::read_unaligned(at as *const i32) } as usize;
+    let array = base + rva(info + 12);
+    if unsafe { std::ptr::read_unaligned(array as *const i32) } < 1 {
+        return None;
+    }
+    let catchable = base + rva(array + 4);
+    let name_at = (base + rva(catchable + 4) + 16) as *const std::ffi::c_char;
+    let name = unsafe { std::ffi::CStr::from_ptr(name_at) }
+        .to_string_lossy()
+        .into_owned();
+    if object == 0 {
+        return Some(name);
+    }
+    let value = match name.as_str() {
+        ".H" | ".J" | ".K" => {
+            let v = unsafe { std::ptr::read_unaligned(object as *const u32) };
+            format!(" = 0x{v:08X} ({})", v as i32)
+        }
+        ".PEBD" | ".PEAD" => {
+            let text = unsafe { std::ptr::read_unaligned(object as *const usize) };
+            if text == 0 {
+                String::new()
+            } else {
+                let c = unsafe { std::ffi::CStr::from_ptr(text as *const std::ffi::c_char) };
+                format!(" = {:?}", c.to_string_lossy())
+            }
+        }
+        _ => String::new(),
+    };
+    Some(format!("{name}{value}"))
 }
 pub extern "win64" fn is_debugger_present() -> i32 {
     0

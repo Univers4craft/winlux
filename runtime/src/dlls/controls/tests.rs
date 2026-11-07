@@ -654,6 +654,22 @@ fn liste_textes_fournis_a_la_demande_et_liste_virtuelle() {
     notify_codes();
     assert_eq!(get(0, 0), "auto0-0");
     assert!(notify_codes().contains(&-177), "LVN_GETDISPINFOW");
+    // Sous-colonne jamais renseignée d'une ligne callback : demandée aussi
+    // au parent (Taille, dates de 7-Zip, #553).
+    assert_eq!(get(0, 1), "auto0-1");
+    // LVM_GETCOLUMNW (largeur + LVCF_ORDER) : 7-Zip lance une exception si
+    // l'appel échoue à l'ouverture d'un dossier (#553/#554).
+    let mut raw = [0u8; 40];
+    raw[0..4].copy_from_slice(&(0x2u32 | 0x20).to_le_bytes());
+    raw[0x24..0x28].copy_from_slice(&(-1i32).to_le_bytes());
+    assert_eq!(sendw(lv, 0x105F, 0, raw.as_mut_ptr() as isize), 1);
+    assert_eq!(i32::from_le_bytes(raw[8..12].try_into().unwrap()), 120);
+    assert_eq!(i32::from_le_bytes(raw[0x24..0x28].try_into().unwrap()), 0);
+    assert_eq!(
+        sendw(lv, 0x105F, 5, raw.as_mut_ptr() as isize),
+        0,
+        "colonne absente"
+    );
     gui::destroy_window(p);
 
     // LVS_OWNERDATA : LVM_SETITEMCOUNT donne le nombre de lignes
@@ -872,6 +888,13 @@ fn barre_d_outils_bandes_et_liste_etendue() {
     assert_eq!(h, size[1] as isize + 4, "RB_GETBARHEIGHT");
     assert_eq!(gui::window_rect(rebar).unwrap().height() as isize, h);
     assert!(notify_codes().contains(&-831), "RBN_HEIGHTCHANGE");
+    // SetWindowPos ne peut pas écraser la hauteur d'une barre à bandes (7-Zip
+    // la redimensionnait à 0 et la barre d'adresse disparaissait, #555).
+    unsafe { user32::set_window_pos(rebar, 0, 0, 0, 400, 2, 0x4) };
+    assert_eq!(gui::window_rect(rebar).unwrap().height() as isize, h);
+    // Double-clic : les contrôles prédéfinis qui le traitent le reçoivent.
+    assert!(gui::wants_double_clicks(tb));
+    assert!(!gui::wants_double_clicks(rebar));
     // Un WM_COMMAND de la barre d'outils arrive toujours au parent d'origine.
     sendw(tb, 0x0401, 1001, 1);
     sendw(tb, WM_LBUTTONDOWN, 1, at);

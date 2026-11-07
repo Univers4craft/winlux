@@ -772,6 +772,9 @@ pub struct X11Backend {
     gestures: bool,
     /// Échelle du pincement au dernier cran de zoom envoyé.
     pinch_last: f32,
+    /// Dernier appui (fenêtre, bouton, instant, x, y) pour reconnaître un
+    /// double-clic.
+    last_click: Option<(usize, u8, std::time::Instant, i32, i32)>,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
@@ -845,6 +848,7 @@ impl X11Backend {
             pointer_style: (1, 0),
             gestures,
             pinch_last: 1.0,
+            last_click: None,
             xdnd,
         })
     }
@@ -2256,9 +2260,27 @@ impl X11Backend {
                     });
                 }
                 let wparam = button_wparam(e.detail) | button_state(e.state);
+                let now = std::time::Instant::now();
+                let double = self.last_click.take().is_some_and(|(h, b, t, lx, ly)| {
+                    h == hwnd
+                        && b == e.detail
+                        && now.duration_since(t).as_millis()
+                            <= crate::dlls::mouse::current().double_click as u128
+                        && (x - lx).abs() <= 4
+                        && (y - ly).abs() <= 4
+                }) && gui::wants_double_clicks(hwnd);
+                // Le clic qui conclut un double-clic n'en commence pas un autre.
+                if !double {
+                    self.last_click = Some((hwnd, e.detail, now, x, y));
+                }
+                let message = button_message(e.detail, true);
                 Some(PendingEvent {
                     hwnd,
-                    message: button_message(e.detail, true),
+                    message: if double {
+                        double_click_message(message)
+                    } else {
+                        message
+                    },
                     wparam,
                     lparam,
                 })
@@ -2768,6 +2790,11 @@ fn button_message(detail: u8, down: bool) -> u32 {
         (_, true) => gui::WM_LBUTTONDOWN,
         (_, false) => gui::WM_LBUTTONUP,
     }
+}
+
+/// WM_xBUTTONDOWN → WM_xBUTTONDBLCLK (0x201→0x203, 0x204→0x206, 0x207→0x209).
+fn double_click_message(down: u32) -> u32 {
+    down + 2
 }
 
 /// Boutons X11 4/5 (molette verticale) et 6/7 (horizontale) : un cran vaut

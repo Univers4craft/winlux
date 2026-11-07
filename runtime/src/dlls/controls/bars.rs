@@ -1376,6 +1376,21 @@ fn bar_height(hwnd: usize, s: &BarState) -> i32 {
         .unwrap_or(0)
 }
 
+/// Hauteur qu'impose une ReBar sans CCS_NORESIZE quand on la déplace,
+/// comme WM_WINDOWPOSCHANGING sous Windows : 7-Zip la place en 0 de haut
+/// puis lit sa hauteur pour poser la liste dessous (barre d'adresse).
+pub(super) fn rebar_forced_height(hwnd: usize) -> Option<i32> {
+    if style(hwnd) & CCS_NORESIZE != 0 {
+        return None;
+    }
+    let s = snap(hwnd);
+    if s.bands.is_empty() {
+        return None;
+    }
+    let border = if style(hwnd) & WS_BORDER != 0 { 2 } else { 0 };
+    Some((bar_height(hwnd, &s) + border).max(1))
+}
+
 /// Place les enfants des bandes et ajuste la hauteur de la barre ; prévient
 /// le parent (RBN_HEIGHTCHANGE) quand elle change.
 fn rebar_layout(hwnd: usize) {
