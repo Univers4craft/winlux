@@ -166,6 +166,7 @@ pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_midi;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
@@ -453,6 +454,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = winmm::exports();
                     e.extend(winmm_waveout::exports());
+                    e.extend(winmm_midi::exports());
                     e
                 },
                 handle: fake_module(),
