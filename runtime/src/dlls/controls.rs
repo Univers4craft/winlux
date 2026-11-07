@@ -454,6 +454,34 @@ pub(crate) fn strip_prefix(s: &str) -> String {
 
 /// Coupe un texte en lignes qui tiennent dans `width` (retours à la ligne
 /// explicites conservés, mots trop longs coupés au caractère).
+/// Tabulations remplacées par des espaces jusqu'au prochain multiple de 8
+/// caractères, comme DT_EXPANDTABS (#818).
+fn expand_tabs(text: &str) -> String {
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut col = 0;
+    for ch in text.chars() {
+        match ch {
+            '\t' => {
+                let n = 8 - col % 8;
+                out.extend(std::iter::repeat_n(' ', n));
+                col += n;
+            }
+            '\n' => {
+                out.push(ch);
+                col = 0;
+            }
+            _ => {
+                out.push(ch);
+                col += 1;
+            }
+        }
+    }
+    out
+}
+
 fn wrap(font: usize, text: &str, width: i32) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in text.split('\n') {
@@ -1109,10 +1137,17 @@ fn paint_static(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
                 _ => 0,
             };
             let lh = line_height(p.font);
-            let lines = if kind == 0x0B || kind == 0x0C {
-                vec![text] // SS_SIMPLE, SS_LEFTNOWORDWRAP
-            } else {
-                wrap(p.font, &text, r.width())
+            // DrawText des statiques : DT_EXPANDTABS.
+            let text = expand_tabs(&text);
+            let lines = match kind {
+                0x0B => vec![text.replace(['\r', '\n'], "")], // SS_SIMPLE : une ligne
+                // SS_LEFTNOWORDWRAP : pas de coupure automatique, mais les
+                // fins de ligne du texte comptent (boîte « Copier » de 7-Zip).
+                0x0C => text
+                    .split('\n')
+                    .map(|l| l.trim_end_matches('\r').to_string())
+                    .collect(),
+                _ => wrap(p.font, &text, r.width()),
             };
             let total = lh * lines.len() as i32;
             let mut y = if s & 0x200 != 0 {
