@@ -332,6 +332,29 @@ fn liste_ajout_tri_selection_double_clic() {
     gui::destroy_window(p);
 }
 
+/// #841 : comme sous Windows, SetWindowPos sur une liste déroulante fermée
+/// ne change que la hauteur de la liste ouverte ; le champ garde la sienne
+/// (wxWidgets relit cette taille pour régler le champ).
+#[test]
+fn liste_deroulante_garde_la_hauteur_du_champ() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let cb = child(p, "COMBOBOX", "", 0x2, 32, (0, 0, 150, 200));
+    let h = gui::window_rect(cb).unwrap().height();
+    unsafe { user32::set_window_pos(cb, 0, 0, 0, 300, 170, 0x0002 | 0x0004) };
+    let r = gui::window_rect(cb).unwrap();
+    assert_eq!((r.width(), r.height()), (300, h));
+    // Champ plus haut : la fenêtre fermée suit.
+    sendw(cb, 0x153, usize::MAX, 30);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
+    // La liste ouverte reprend la hauteur demandée.
+    sendw(cb, 0x14F, 1, 0);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 170);
+    sendw(cb, 0x14F, 0, 0);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
+    gui::destroy_window(p);
+}
+
 #[test]
 fn liste_deroulante_selection_et_texte() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());

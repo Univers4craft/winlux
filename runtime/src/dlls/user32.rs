@@ -960,7 +960,7 @@ pub unsafe extern "win64" fn set_window_pos(
     // wxWidgets remet ainsi ses contrôles à 0×0 avant de les placer.
     let (width, mut height) = (width.max(0), height.max(0));
     if flags & SWP_NOSIZE == 0 {
-        if let Some(h) = super::controls::forced_height(hwnd) {
+        if let Some(h) = super::controls::forced_height(hwnd, height) {
             height = h;
         }
     }
