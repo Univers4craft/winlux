@@ -106,6 +106,10 @@ cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage
 cp --remove-destination "$components/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
 cp --remove-destination "$project/scripts/winlux-saver-gfx.py" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx"
 chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
+# xscreensaver-systemd plante sans systemd ni logind (#634) : remplacé par un
+# assistant qui attend la fin de XScreenSaver, sans erreur ni nom D-Bus.
+cp --remove-destination "$project/scripts/winlux-xscreensaver-systemd.sh" "$stage/usr/libexec/xscreensaver/xscreensaver-systemd"
+chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-systemd"
 cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/systemctl"
 chmod 755 "$stage/usr/bin/systemctl"
 cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"

@@ -869,6 +869,31 @@ EXE_CORES = (("auto", "Automatique"), ("performance", "Cœurs performants (P)"),
 EXE_GPUS = (("auto", "Automatique"), ("integrated", "GPU économie d’énergie"), ("dedicated", "GPU hautes performances"))
 
 
+PREVIOUS_LINE = "Version précédente conservée : "
+
+
+def previous_version_kept(updates=None):
+    """Version précédente conservée (« v0.2.19 »), « ? » si conservée sans
+    numéro lisible, "" sinon. Un seul avis pour l'encadré du haut de Mises à
+    jour, le bouton Restaurer et « Secours et restauration » (#636) : avec APT,
+    c'est la liste publiée par winlux-update (lancé en root, il voit toujours
+    /var/cache/winlux) qui fait foi ; le compte ne regarde lui-même le paquet
+    que si cette liste n'existe pas encore."""
+    if read("/usr/share/winlux/update-backend").strip() == "apt":
+        text = read("/run/winlux/updates.txt") if updates is None else updates
+        if text.strip():
+            line = next((line for line in text.splitlines() if line.startswith(PREVIOUS_LINE)), "")
+            return (line[len(PREVIOUS_LINE):].strip() or "?") if line else ""
+        try: return "?" if os.path.isfile("/var/cache/winlux/previous.deb") else ""
+        except OSError: return ""
+    name = read("/var/lib/winlux/rollback-current").strip()
+    try:
+        kept = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
+    except OSError:
+        kept = False
+    return "?" if kept else ""
+
+
 def read(path):
     try: return Path(path).read_text(errors="replace")
     except OSError: return ""
@@ -2905,11 +2930,7 @@ class ExtraPages:
     def sections_recovery(self):
         self.section(_t("Secours et restauration"))
         box = self.card()
-        if read("/usr/share/winlux/update-backend").strip() == "apt":
-            saved = Path("/var/cache/winlux/previous.deb").is_file()
-        else:
-            name = read("/var/lib/winlux/rollback-current").strip()
-            saved = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
+        saved = previous_version_kept()
         self.row(box, _t("Version précédente"), None,
                  _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
         self.row(box, _t("Si le bureau ne démarre plus"), None,

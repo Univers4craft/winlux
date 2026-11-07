@@ -68,6 +68,25 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not box.items and not marker.exists()
 print("A7 : org.freedesktop.ScreenSaver.Inhibit tenu par Winlux (demandes, programme parti, éveil)")
 
+# #634 : xscreensaver-systemd (qui plante sans logind) remplacé dans l'image et
+# dans le paquet APT (dpkg-divert), par un assistant qui attend XScreenSaver.
+assert '"$project/scripts/winlux-xscreensaver-systemd.sh" "$stage/usr/libexec/xscreensaver/xscreensaver-systemd"' in stage
+assert "usr/libexec/xscreensaver/xscreensaver-systemd" in apt["DIVERTED"] and apt["winlux_path"]("usr/libexec/xscreensaver/xscreensaver-systemd")
+stub = ROOT / "scripts/winlux-xscreensaver-systemd.sh"
+assert os.access(stub, os.X_OK)
+started = time.time()
+# Le parent (XScreenSaver) part au bout d'une seconde : l'assistant s'arrête sans erreur.
+helper = subprocess.run(["sh", "-c", f'sh "{stub}" >/dev/null 2>&1 & child=$!; sleep 1; echo $child'], capture_output=True, text=True, timeout=10, env=dict(os.environ, WINLUX_XSS_SYSTEMD_INTERVAL="1"))
+child = int(helper.stdout.strip())
+for _ in range(80):
+    try: os.kill(child, 0)
+    except OSError: break
+    time.sleep(0.5)
+else:
+    raise AssertionError("l'assistant xscreensaver-systemd survit à XScreenSaver")
+assert "systemd" not in stub.read_text().split("exit 0")[0].split("\nparent=")[1], "l'assistant ne doit rien appeler"
+print("#634 : xscreensaver-systemd remplacé par un assistant silencieux (image et paquet APT)")
+
 # Service réel sur un bus de session, si D-Bus et PyGObject sont là.
 try:
     import gi  # noqa: F401

@@ -919,7 +919,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
 
     def privacy_controls(self):
         """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
@@ -1060,7 +1060,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.rollback_button is not None:
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
-            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+            self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
