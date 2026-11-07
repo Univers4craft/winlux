@@ -607,7 +607,9 @@ unsafe fn variant32(src: *const u8, dst: u32) {
         std::ptr::copy_nonoverlapping(src.add(8), (dst + 8) as usize as *mut u8, 8);
         return;
     }
-    let p = (src.add(8) as *const u64).read_unaligned();
+    // Pointeurs sous 4 Go : 32 bits bas seulement (la version 64 bits peut
+    // n'écrire que 4 octets, voir wow32::write_ptr).
+    let p = (src.add(8) as *const u32).read_unaligned() as u64;
     let v = match vt {
         VT_UNKNOWN | VT_DISPATCH => {
             let f = if vt == VT_UNKNOWN {
