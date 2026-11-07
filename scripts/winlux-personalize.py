@@ -182,8 +182,8 @@ def apply(kind,value):
     with gtk_preferences.open("w") as stream:gtk_config.write(stream)
     query("xsettings","/Net/ThemeName",theme,"string")
     # Icônes Prisme claires ou sombres, sauf si l'utilisateur a choisi un autre thème.
-    try: icons=subprocess.run(["xfconf-query","-c","xsettings","-p","/Net/IconThemeName"],capture_output=True,text=True).stdout.strip()
-    except OSError: icons=""
+    try: icons=(subprocess.run(["xfconf-query","-c","xsettings","-p","/Net/IconThemeName"],capture_output=True,text=True).stdout or "").strip()
+    except (OSError,subprocess.SubprocessError): icons=""
     if icons in ("","Winlux","Winlux-Sombre") and (Path(os.environ.get("WINLUX_ICON_ROOT","/usr/share/icons"))/"Winlux-Sombre").is_dir():
         query("xsettings","/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux","string")
     sync_system_theme(dark)
