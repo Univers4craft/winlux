@@ -1022,6 +1022,60 @@ struct NmListView {
     param: isize,
 }
 
+/// NMITEMACTIVATE : NM_CLICK, NM_DBLCLK et LVN_ITEMACTIVATE d'une liste.
+#[repr(C)]
+struct NmItemActivate {
+    hdr: NmHdr,
+    item: i32,
+    sub_item: i32,
+    new_state: u32,
+    old_state: u32,
+    changed: u32,
+    pt: [i32; 2],
+    param: isize,
+    key_flags: u32,
+}
+
+/// NMLVKEYDOWN, déclarée en paquet de 1 dans commctrl.h.
+#[repr(C, packed(1))]
+struct NmLvKeyDown {
+    hdr: NmHdr,
+    vkey: u16,
+    flags: u32,
+}
+
+fn lv_notify_item(hwnd: usize, code: i32, item: i32, pt: (i32, i32)) -> isize {
+    let mut keys = 0;
+    if ctrl_down() {
+        keys |= 0x1; // LVKF_CONTROL
+    }
+    let param = (item >= 0)
+        .then(|| {
+            common_snapshot(hwnd)
+                .rows
+                .get(item as usize)
+                .map(|r| r.param)
+        })
+        .flatten()
+        .unwrap_or(0);
+    let mut nm = NmItemActivate {
+        hdr: NmHdr {
+            hwnd_from: 0,
+            id_from: 0,
+            code: 0,
+        },
+        item,
+        sub_item: 0,
+        new_state: 0,
+        old_state: 0,
+        changed: 0,
+        pt: [pt.0, pt.1],
+        param,
+        key_flags: keys,
+    };
+    notify_struct(hwnd, code, &mut nm)
+}
+
 fn report(hwnd: usize) -> bool {
     style(hwnd) & 0x3 == LVS_REPORT
 }
@@ -1038,7 +1092,11 @@ fn callback_bit(sub: usize) -> u64 {
 /// pour une liste virtuelle (LVS_OWNERDATA), le texte est demandé au parent
 /// par `LVN_GETDISPINFO`, comme le fait comctl32.
 fn lv_cell_text(hwnd: usize, item: usize, sub: usize, row: &LvRow) -> String {
-    if row.callback & callback_bit(sub) == 0 {
+    // Une sous-colonne jamais renseignée d'une ligne « callback » est aussi
+    // demandée au parent : 7-Zip ne remplit Taille, Modifié le… que par
+    // LVN_GETDISPINFO.
+    let inherited = sub > 0 && row.callback & 1 != 0 && row.texts.len() <= sub;
+    if row.callback & callback_bit(sub) == 0 && !inherited {
         return row.texts.get(sub).cloned().unwrap_or_default();
     }
     lv_dispinfo(hwnd, item, sub, row.param, LVIF_TEXT).0
@@ -1448,8 +1506,8 @@ unsafe fn lv_column(hwnd: usize, wp: usize, lp: isize, wide: bool, insert: bool)
     r
 }
 
-/// LVM_GETCOLUMN : titre (LVCF_TEXT), largeur (LVCF_WIDTH) et rang
-/// (LVCF_SUBITEM) de la colonne `wp`.
+/// LVM_GETCOLUMN : 7-Zip relit largeur et ordre de chaque colonne à chaque
+/// changement de dossier et lance une exception si l'appel échoue (#553).
 unsafe fn lv_get_column(hwnd: usize, wp: usize, lp: isize, wide: bool) -> isize {
     if lp == 0 {
         return 0;
@@ -1457,17 +1515,23 @@ unsafe fn lv_get_column(hwnd: usize, wp: usize, lp: isize, wide: bool) -> isize 
     let Some((title, width)) = common_snapshot(hwnd).columns.get(wp).cloned() else {
         return 0;
     };
-    let p = lp as *mut LvColumn;
-    let mut col = std::ptr::read_unaligned(p);
+    let mut col = std::ptr::read_unaligned(lp as *const LvColumn);
+    if col.mask & 0x1 != 0 {
+        col.fmt = 0; // LVCFMT_LEFT
+    }
     if col.mask & 0x2 != 0 {
         col.cx = width;
+    }
+    if col.mask & 0x4 != 0 && col.text != 0 {
+        write_text_ptr(col.text, col.text_max, &title, wide);
     }
     if col.mask & 0x8 != 0 {
         col.sub_item = wp as i32;
     }
-    std::ptr::write_unaligned(p, col);
-    if col.mask & 0x4 != 0 && col.text != 0 && col.text_max > 0 {
-        write_text_ptr(col.text, col.text_max, &title, wide);
+    std::ptr::write_unaligned(lp as *mut LvColumn, col);
+    if col.mask & 0x20 != 0 {
+        // LVCF_ORDER : iOrder après iImage (x64 : décalage 0x24).
+        std::ptr::write_unaligned((lp as usize + 0x24) as *mut i32, wp as i32);
     }
     1
 }
@@ -1769,20 +1833,34 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             } else {
                 lv_set_state(hwnd, -1, 0, LVIS_SELECTED);
             }
-            notify_simple(
+            let pt = point(lp);
+            lv_notify_item(
                 hwnd,
                 if msg == WM_LBUTTONDBLCLK {
                     NM_DBLCLK
                 } else {
                     NM_CLICK
                 },
+                i,
+                pt,
             );
             if msg == WM_LBUTTONDBLCLK && i >= 0 {
-                notify_simple(hwnd, -114); // LVN_ITEMACTIVATE
+                lv_notify_item(hwnd, -114, i, pt); // LVN_ITEMACTIVATE
             }
             0
         }
         WM_KEYDOWN => {
+            // LVN_KEYDOWN d'abord : 7-Zip y traite Entrée et Retour arrière.
+            let mut kd = NmLvKeyDown {
+                hdr: NmHdr {
+                    hwnd_from: 0,
+                    id_from: 0,
+                    code: 0,
+                },
+                vkey: wp as u16,
+                flags: 0,
+            };
+            notify_struct(hwnd, -155, &mut kd);
             let s = common_snapshot(hwnd);
             let n = s.rows.len() as i32;
             if n == 0 {
@@ -1798,7 +1876,9 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
                 VK_PRIOR => Some(cur - rows + 1),
                 VK_NEXT => Some(cur + rows - 1),
                 VK_RETURN => {
-                    notify_simple(hwnd, -114);
+                    if notify_simple(hwnd, NM_RETURN) == 0 && s.lv_focus >= 0 {
+                        lv_notify_item(hwnd, -114, s.lv_focus, (0, 0));
+                    }
                     None
                 }
                 _ => None,

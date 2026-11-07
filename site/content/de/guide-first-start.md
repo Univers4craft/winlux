@@ -11,7 +11,7 @@ Bei der ersten Anmeldung öffnet sich auf dem Desktop das Fenster **Willkommen b
 - **Tastatur auswählen**: öffnet Einstellungen › Tastatur und Maus.
 - **Netzwerk einrichten**: öffnet die Schnelleinstellungen, für das WLAN.
 - **Darstellung anpassen**: öffnet Einstellungen › Hintergrund und Farben.
-- **Wiederherstellung entdecken**: öffnet Einstellungen › Updates; dort lässt sich die vorherige Version wiederherstellen, und dort steht, was zu tun ist, wenn der Desktop nicht mehr startet.
+- **Wiederherstellung entdecken**: öffnet Einstellungen › Updates › OS-Update; dort lässt sich die vorherige Version wiederherstellen, und dort steht, was zu tun ist, wenn der Desktop nicht mehr startet.
 
 ![Das Willkommensfenster](img:assistant-bienvenue.jpg "Das Willkommensfenster: fünf Abkürzungen zur geführten Tour und zu den ersten Einstellungen.")
 

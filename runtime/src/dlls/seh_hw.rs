@@ -506,7 +506,9 @@ unsafe extern "C" fn hw_dispatch(frame: *mut HwFrame) -> ! {
     // Filtre de dernier recours du programme (SetUnhandledExceptionFilter).
     let filter = super::kernel32_misc::current_unhandled_filter();
     if filter != 0 {
-        eprintln!("{}", seh::describe_for_app_filter(&f.rec, &f.ctx));
+        let line = seh::describe_for_app_filter(&f.rec, &f.ctx);
+        eprintln!("{line}");
+        crate::thunks::api_note(&line);
         let mut ptrs = seh::ExceptionPointers {
             record: &mut f.rec,
             context: f.ctx.ptr(),

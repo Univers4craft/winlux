@@ -354,21 +354,104 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
     );
     if code == 0xE06D_7363 {
         eprintln!("winlux: il s'agit d'une exception C++ MSVC qu'aucun bloc catch n'a rattrapée");
+        if let Some(text) = unsafe { cxx_thrown_value(args) } {
+            eprintln!("winlux: objet lancé : {text}");
+        }
     }
+    print_debug_tail();
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+/// Type (nom décoré) et valeur d'une exception C++ MSVC x64 : `throw hr;` de
+/// 7-Zip ou `throw "message";` deviennent lisibles dans le journal.
+/// args = [magie, objet, ThrowInfo, base de l'image].
+unsafe fn cxx_thrown_value(args: &[usize]) -> Option<String> {
+    if args.len() < 4 || args[0] != 0x1993_0520 || args[2] == 0 || args[3] == 0 {
+        return None;
+    }
+    let (object, info, base) = (args[1], args[2], args[3]);
+    let rva = |at: usize| unsafe { std::ptr::read_unaligned(at as *const i32) } as usize;
+    let array = base + rva(info + 12);
+    if unsafe { std::ptr::read_unaligned(array as *const i32) } < 1 {
+        return None;
+    }
+    let catchable = base + rva(array + 4);
+    let name_at = (base + rva(catchable + 4) + 16) as *const std::ffi::c_char;
+    let name = unsafe { std::ffi::CStr::from_ptr(name_at) }
+        .to_string_lossy()
+        .into_owned();
+    if object == 0 {
+        return Some(name);
+    }
+    let value = match name.as_str() {
+        ".H" | ".J" | ".K" => {
+            let v = unsafe { std::ptr::read_unaligned(object as *const u32) };
+            format!(" = 0x{v:08X} ({})", v as i32)
+        }
+        ".PEBD" | ".PEAD" => {
+            let text = unsafe { std::ptr::read_unaligned(object as *const usize) };
+            if text == 0 {
+                String::new()
+            } else {
+                let c = unsafe { std::ffi::CStr::from_ptr(text as *const std::ffi::c_char) };
+                format!(" = {:?}", c.to_string_lossy())
+            }
+        }
+        _ => String::new(),
+    };
+    Some(format!("{name}{value}"))
 }
 pub extern "win64" fn is_debugger_present() -> i32 {
     0
 }
+/// Derniers messages OutputDebugString, rappelés sur stderr quand le
+/// programme s'arrête sur abort() ou une exception non gérée : Qt y écrit la
+/// raison de son qFatal (VLC), d'autres bibliothèques leur dernière erreur.
+static DEBUG_TAIL: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+const DEBUG_TAIL_LEN: usize = 20;
+
+fn debug_string(text: String) {
+    let text = text.trim_end().to_string();
+    if text.is_empty() {
+        return;
+    }
+    let line = format!("winlux[debug]: {text}");
+    if std::env::var_os("WINLUX_TRACE").is_some() {
+        eprintln!("{line}");
+    } else {
+        crate::log_info!("debug", "OutputDebugString : {text}");
+    }
+    // Journal d'API (WINLUX_APITRACE) : Crashpad y écrit pourquoi il arrête
+    // un processus.
+    crate::thunks::api_note(&line);
+    let mut tail = crate::dlls::lock(&DEBUG_TAIL);
+    if tail.len() == DEBUG_TAIL_LEN {
+        tail.pop_front();
+    }
+    tail.push_back(text);
+}
+
+/// Affiche (une fois) les derniers messages OutputDebugString du programme.
+pub fn print_debug_tail() {
+    let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).drain(..).collect();
+    if tail.is_empty() {
+        return;
+    }
+    eprintln!("winlux: derniers messages de débogage du programme (OutputDebugString) :");
+    for line in tail {
+        eprintln!("winlux:   {line}");
+    }
+}
+
 pub unsafe extern "win64" fn output_debug_string_a(s: *const u8) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::cstr(s).trim_end());
+    if !s.is_null() {
+        debug_string(crate::dlls::cstr(s));
     }
 }
 pub unsafe extern "win64" fn output_debug_string_w(s: *const u16) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::wstr(s).trim_end());
+    if !s.is_null() {
+        debug_string(crate::dlls::wstr(s));
     }
 }
 /// Fonctionnalités processeur (PF_*) : on répond pour celles qu'impose x86-64
@@ -1035,6 +1118,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn texte_de_debogage_accepte() {
+        unsafe {
+            output_debug_string_a(std::ptr::null());
+            output_debug_string_w(std::ptr::null());
+            output_debug_string_a(b"crashpad: dump ok\n\0".as_ptr());
+            let w: Vec<u16> = "Claude\n".encode_utf16().chain(Some(0)).collect();
+            output_debug_string_w(w.as_ptr());
+        }
+    }
+
+    #[test]
     fn error_mode_has_process_state_sticky_alignment_and_thread_isolation() {
         struct Restore(u32);
         impl Drop for Restore {
@@ -1158,5 +1252,24 @@ mod tests {
             assert!(n > 0);
             assert!(crate::dlls::wstr(msg.as_ptr()).starts_with("Fichier introuvable"));
         }
+    }
+
+    #[test]
+    fn output_debug_string_garde_les_derniers_messages() {
+        let w: Vec<u16> = "qt.qpa.plugin: Could not load\r\n"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        unsafe { output_debug_string_w(w.as_ptr()) };
+        unsafe { output_debug_string_a(b"deuxieme\0".as_ptr()) };
+        let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
+        assert!(tail.contains(&"qt.qpa.plugin: Could not load".to_string()));
+        assert_eq!(tail.last().map(String::as_str), Some("deuxieme"));
+        for n in 0..DEBUG_TAIL_LEN + 5 {
+            debug_string(format!("m{n}"));
+        }
+        assert_eq!(crate::dlls::lock(&DEBUG_TAIL).len(), DEBUG_TAIL_LEN);
+        print_debug_tail();
+        assert!(crate::dlls::lock(&DEBUG_TAIL).is_empty());
     }
 }

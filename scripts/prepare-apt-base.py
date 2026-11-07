@@ -127,6 +127,9 @@ def main():
         + "localedef --no-archive -i fr_FR -f UTF-8 /usr/lib/locale/fr_FR.utf8\n"
           # Le menu de l'icône réseau est traduit dans chaque langue.
           "for l in fr es de; do test -s /usr/share/locale-langpack/$l/LC_MESSAGES/nm-applet.mo; done\n"
+          # Thunar (universe) garde ses traductions dans /usr/share/locale : une
+          # exclusion de .mo laisserait l'Explorateur natif en anglais.
+          "for l in fr es de; do test -s /usr/share/locale/$l/LC_MESSAGES/thunar.mo; done\n"
           "test -z \"$(find /usr/share/help-langpack -type f 2>/dev/null)\"\n"
           "dpkg --audit > /winlux-bootstrap/audit\ntest ! -s /winlux-bootstrap/audit\n"
           "apt-get check\nhello\napt-get purge -y hello\napt-get clean\n"

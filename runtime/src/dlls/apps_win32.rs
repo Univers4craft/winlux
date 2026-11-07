@@ -260,7 +260,7 @@ unsafe extern "win64" fn find_close_change_notification(h: usize) -> i32 {
 
 // ── user32 ──────────────────────────────────────────────────────────────
 
-fn upper_char(c: u16) -> u16 {
+pub(crate) fn upper_char(c: u16) -> u16 {
     let s = String::from_utf16_lossy(&[c]);
     let mut up = s.chars().flat_map(char::to_uppercase);
     match (up.next(), up.next()) {

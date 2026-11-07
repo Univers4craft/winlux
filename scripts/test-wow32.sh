@@ -22,6 +22,10 @@
 # Wow6432Node, System32 → SysWOW64, variables) et structures kernel32 à la
 # taille x86 (CRITICAL_SECTION, SRWLOCK, SLIST, SYSTEM_INFO, STARTUPINFO…).
 # cxx32.exe (étape 7) : exceptions C++ MSVC x86 (__CxxFrameHandler3).
+# gui32.exe (étape 5) : fenêtre x86 (classe, CREATESTRUCT, boucle de
+# messages, WM_PAINT et GDI, clavier, souris, minuteurs, sous-classement,
+# WINDOWPOS recopiée, DIB section, GetObject, boîte de dialogue), sans écran
+# puis sous un vrai serveur X (Xvfb) quand il est là.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -31,7 +35,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32"
+names="hello32 seh32 wow64 cxx32 gui32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -176,4 +180,26 @@ if test -f "$out/com32.exe"; then
     echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
+fi
+
+gui() {
+    set +e
+    "$@" timeout 60 "$runtime" "$out/gui32.exe" >"$work/gui.txt" 2>&1
+    status=$?
+    set -e
+    if test "$status" -ne 0 || ! grep -q 'GUI 32 bits : tout est correct' "$work/gui.txt"; then
+        cat "$work/gui.txt"
+        echo "gui32.exe ($*) : code $status, vérification n° $status en échec" >&2
+        exit 1
+    fi
+}
+gui env WINLUX_GUI=headless
+echo "gui32 : fenêtre x86 sans écran (WNDPROC, MSG, PAINTSTRUCT, GDI, minuteurs, dialogue)"
+gui env WINLUX_GUI=headless WINLUX_WOW32_NO_FSGSBASE=1
+echo "gui32 : idem sans FSGSBASE"
+if command -v xvfb-run >/dev/null 2>&1; then
+    gui xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
+    echo "gui32 : fenêtre x86 sous X11 (Xvfb)"
+else
+    echo "gui32 : xvfb-run absent, essai X11 sauté"
 fi

@@ -180,6 +180,7 @@ def run_dialog(app, win_path, elevate=False):
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, 900)
 
     window = Gtk.Window(title=_t("Contrôle de compte d'utilisateur"))
+    window.set_icon_name("security-high")
     window.get_style_context().add_class("uac")
     window.set_keep_above(True)
     window.set_position(Gtk.WindowPosition.CENTER_ALWAYS)

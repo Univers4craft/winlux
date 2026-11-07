@@ -1477,6 +1477,30 @@ pub unsafe extern "win64" fn get_queued_completion_status_ex(
     1
 }
 
+/// Avec `WINLUX_APITRACE`, chaque message que l'appli écrit sur stderr est
+/// noté avec la pile de l'appelant (au plus 200 par processus) : un
+/// « bad_variant_access was thrown in -fno-exceptions mode » de libc++,
+/// suivi d'un arrêt dans le CRT statique de l'appli, dit ainsi d'où il
+/// vient.
+fn note_stderr_write(text: &[u8]) {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if !crate::thunks::api_trace_active()
+        || COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 200
+    {
+        return;
+    }
+    let shown: String = String::from_utf8_lossy(text)
+        .trim_end()
+        .chars()
+        .take(200)
+        .collect();
+    let calls = crate::dlls::seh::caller_stack(12);
+    crate::thunks::api_note(&format!(
+        "winlux[stderr] « {shown} » écrit par {}",
+        calls.join(" ")
+    ));
+}
+
 pub unsafe extern "win64" fn write_file(
     h: usize,
     buf: *const u8,
@@ -1513,6 +1537,7 @@ pub unsafe extern "win64" fn write_file(
         };
     }
     if h == (-12isize) as usize {
+        note_stderr_write(s);
         return match std::io::stderr().write_all(s) {
             Ok(()) => {
                 if !written.is_null() {
@@ -5189,6 +5214,19 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     let mut s = lock(&p.state);
+    let target = s
+        .foreign
+        .or_else(|| s.child.as_ref().map(|c| c.id() as i32));
+    if let Some(pid) = target {
+        // Crashpad arrête ainsi le processus qui a planté : sans cette
+        // ligne, l'enfant disparaissait sans laisser de trace.
+        let line = format!(
+            "winlux: TerminateProcess du processus {pid} (code {code:#x}) demandé par le processus {}",
+            std::process::id()
+        );
+        eprintln!("{line}");
+        crate::thunks::api_note(&line);
+    }
     if let Some(pid) = s.foreign {
         // TerminateProcess est immédiat sous Windows : SIGKILL.
         if libc::kill(pid, libc::SIGKILL) != 0 {

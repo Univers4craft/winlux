@@ -31,6 +31,7 @@ mod fiber;
 mod kernel;
 mod layout;
 mod seh;
+mod user;
 mod wow64;
 
 pub use wow64::{
@@ -1279,7 +1280,8 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
         Some((target, sig)) => (target, sig, crt::Fix::None),
         None => match {
             let n = crate::dlls::normalize(dll);
-            crt::override_for(&n, func)
+            user::override_for(&n, func)
+                .or_else(|| crt::override_for(&n, func))
                 .or_else(|| com::override_for(&n, func))
                 .or_else(|| comdlg::override_for(&n, func))
                 .or_else(|| comctl::override_for(&n, func))

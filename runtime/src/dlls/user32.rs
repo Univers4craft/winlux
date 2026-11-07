@@ -134,6 +134,7 @@ unsafe fn load_class_menu(class: &str) -> usize {
 
 unsafe fn register_class_common(
     name: String,
+    style: u32,
     wnd_proc: usize,
     background: usize,
     instance: usize,
@@ -144,6 +145,7 @@ unsafe fn register_class_common(
     }
     // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
     // classe ; on rend son atome.
+    gui::set_class_style(&name, style);
     gui::register_class(
         &name,
         ClassInfo {
@@ -163,7 +165,7 @@ pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
 }
 
 pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
@@ -175,7 +177,7 @@ pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16 {
@@ -186,7 +188,7 @@ pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16 {
@@ -197,7 +199,7 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
 }
 
 // ---------- Création de fenêtres ----------
@@ -938,7 +940,12 @@ pub unsafe extern "win64" fn set_window_pos(
     };
     // Windows accepte une taille nulle et ramène une taille négative à 0 :
     // wxWidgets remet ainsi ses contrôles à 0×0 avant de les placer.
-    let (width, height) = (width.max(0), height.max(0));
+    let (width, mut height) = (width.max(0), height.max(0));
+    if flags & SWP_NOSIZE == 0 {
+        if let Some(h) = super::controls::forced_height(hwnd) {
+            height = h;
+        }
+    }
     let Some(right) = left.checked_add(width) else {
         crate::process::set_last_error(87);
         return 0;

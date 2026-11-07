@@ -440,7 +440,7 @@ _TR = {
     "Tout installer": ("Install all", "Instalar todo", "Alle installieren"),
     "Recherche ou installation en cours…": ("Checking or installing…", "Buscando o instalando…", "Suche oder Installation läuft…"),
     "Journal": ("Log", "Registro", "Protokoll"),
-    "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
+    "Les mises à jour de Winlux lui-même sont dans « Mise à jour OS ».": ("Updates to Winlux itself are under “OS update”.", "Las actualizaciones del propio Winlux están en «Actualización del SO».", "Updates von Winlux selbst finden Sie unter „OS-Update“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
     "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
@@ -869,6 +869,35 @@ REPORT_MODES = (("auto", "Automatique"), ("browser", "Par le navigateur"), ("fil
 EXE_PRIORITIES = (("auto", "Automatique"), ("low", "Basse"), ("normal", "Normale"), ("high", "Haute"), ("realtime", "Temps réel"))
 EXE_CORES = (("auto", "Automatique"), ("performance", "Cœurs performants (P)"), ("efficiency", "Cœurs économes (E)"))
 EXE_GPUS = (("auto", "Automatique"), ("integrated", "GPU économie d’énergie"), ("dedicated", "GPU hautes performances"))
+
+
+PREVIOUS_LINE = "Version précédente conservée : "
+
+
+def recovery_text(saved):
+    return _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée.")
+
+
+def previous_version_kept(updates=None):
+    """Version précédente conservée (« v0.2.19 »), « ? » si conservée sans
+    numéro lisible, "" sinon. Un seul avis pour l'encadré du haut de Mises à
+    jour, le bouton Restaurer et « Secours et restauration » (#636) : avec APT,
+    c'est la liste publiée par winlux-update (lancé en root, il voit toujours
+    /var/cache/winlux) qui fait foi ; le compte ne regarde lui-même le paquet
+    que si cette liste n'existe pas encore."""
+    if read("/usr/share/winlux/update-backend").strip() == "apt":
+        text = read("/run/winlux/updates.txt") if updates is None else updates
+        if text.strip():
+            line = next((line for line in text.splitlines() if line.startswith(PREVIOUS_LINE)), "")
+            return (line[len(PREVIOUS_LINE):].strip() or "?") if line else ""
+        try: return "?" if os.path.isfile("/var/cache/winlux/previous.deb") else ""
+        except OSError: return ""
+    name = read("/var/lib/winlux/rollback-current").strip()
+    try:
+        kept = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
+    except OSError:
+        kept = False
+    return "?" if kept else ""
 
 
 def read(path):
@@ -2063,11 +2092,11 @@ class ExtraPages:
         if verb == "remove" and not self.confirm(_t("Supprimer le lecteur {letter}: ?").format(letter=letter)): return
         self.tool(drives_tool() + [verb, letter])
 
-    # ── Mises à jour système (APT) ──
+    # ── Mise à jour application (APT, page 17) ──
 
     def page_sysupdate(self):
         status = self.status
-        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mises à jour »."))
+        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mise à jour OS »."))
         self.section(_t("Logiciels et pilotes Linux"))
         box = self.card()
         busy = status.get("sysupdate_busy") == "1"
@@ -2933,17 +2962,21 @@ class ExtraPages:
     def sections_recovery(self):
         self.section(_t("Secours et restauration"))
         box = self.card()
-        if read("/usr/share/winlux/update-backend").strip() == "apt":
-            saved = Path("/var/cache/winlux/previous.deb").is_file()
-        else:
-            name = read("/var/lib/winlux/rollback-current").strip()
-            saved = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
-        self.row(box, _t("Version précédente"), None,
-                 _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
+        line = self.row(box, _t("Version précédente"), None, recovery_text(previous_version_kept()))
+        # Relue à chaque rafraîchissement de la page (#636) : après une mise à
+        # jour, l'encadré du haut changeait et cette ligne restait à l'état
+        # d'ouverture de la page (« Aucune version précédente conservée »).
+        self.recovery_label = line.get_children()[0].get_children()[1]
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
         if page_available(PAGE_RECOVERY):
             self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    def refresh_recovery(self):
+        label = getattr(self, "recovery_label", None)
+        if label is None: return
+        text = recovery_text(previous_version_kept())
+        if label.get_text() != text: label.set_text(text)
 
     # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
 

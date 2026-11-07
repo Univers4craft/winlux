@@ -4,8 +4,8 @@
 //! en-têtes, info-bulles) reçoivent leurs éléments par messages, avec des
 //! structures pleines de pointeurs (LVITEM, TVINSERTSTRUCT, TBBUTTON,
 //! TCITEM…), et préviennent leur parent par WM_NOTIFY avec NMHDR et ses
-//! extensions. Ce module convertit ces structures dans les deux sens ; la
-//! passerelle de SendMessage (fil user32, `user.rs`) l'appelle :
+//! extensions. Ce module convertit ces structures dans les deux sens ; les
+//! passerelles de messages de `user.rs` l'appellent :
 //!
 //! - `convert_message` : message x86 vers un contrôle du runtime ;
 //! - `convert_to_x86` : notification d'un contrôle vers une fenêtre x86
@@ -682,8 +682,6 @@ static COMPAREITEMSTRUCT: Layout = Layout {
     ],
 };
 
-/// Appelée par la passerelle des procédures de fenêtre x86 (fil user32).
-#[allow(dead_code)]
 /// Message d'un contrôle du runtime vers une fenêtre x86 : structures
 /// converties en 32 bits. `done` reçoit le résultat x86 étendu.
 pub(super) fn convert_to_x86(
@@ -757,49 +755,8 @@ extern "win64" fn create_toolbar_ex32(args: u32, target: usize) -> u64 {
     r
 }
 
-/// SendMessageA/W et SendDlgItemMessageA/W provisoires : seuls les
-/// messages des contrôles communs sont convertis, les autres passent tels
-/// quels. La passerelle complète de user32 (`user.rs`, étape 5 de #232)
-/// les remplacera et appellera `convert_message` elle-même.
-extern "win64" fn send_message32(args: u32, aux: usize) -> u64 {
-    let (target, dlg) = unsafe { *(aux as *const (usize, bool)) };
-    let a = |i: u32| rd(args + 4 * i);
-    let mut slots: Vec<u64> = (0..if dlg { 5 } else { 4 }).map(|i| widen(a(i))).collect();
-    let hwnd = if dlg {
-        crate::dlls::user32::get_dlg_item(widen(a(0)) as usize, a(1) as i32)
-    } else {
-        widen(a(0)) as usize
-    };
-    let at = if dlg { 2 } else { 1 };
-    let conv = convert_message(hwnd, a(at), a(at + 1), a(at + 2));
-    if let Some(c) = &conv {
-        slots[at as usize + 1] = c.wparam as u64;
-        slots[at as usize + 2] = c.lparam as u64;
-    }
-    let mut xmm0 = 0u64;
-    let r = unsafe { super::winlux_wow_call64(target, slots.as_ptr(), slots.len(), &mut xmm0) };
-    match conv.and_then(|c| c.done) {
-        Some(done) => done(r as isize) as u64,
-        None => r,
-    }
-}
-
 /// Passerelles x86 propres à comctl32.
 pub(super) fn override_for(dll: &str, func: &str) -> Option<super::crt::Override> {
-    if dll == "user32" {
-        let dlg = func.starts_with("SendDlgItemMessage");
-        if !matches!(
-            func,
-            "SendMessageA" | "SendMessageW" | "SendDlgItemMessageA" | "SendDlgItemMessageW"
-        ) {
-            return None;
-        }
-        return Some(super::crt::Override::Raw {
-            target: send_message32 as *const () as usize,
-            aux: Box::leak(Box::new((crate::dlls::lookup(dll, func)?, dlg))) as *const _ as usize,
-            pop: Some(if dlg { 20 } else { 16 }),
-        });
-    }
     if dll != "comctl32" {
         return None;
     }

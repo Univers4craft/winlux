@@ -8,7 +8,8 @@ import subprocess
 import time
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gio, GLib
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gtk, Gio, GLib
 
 STATE = Path(os.environ.get("XDG_STATE_HOME",Path.home()/".local/state")) / "winlux/notifications.json"
 PREF = Path(os.environ.get("XDG_CONFIG_HOME",Path.home()/".config")) / "winlux/do-not-disturb"
@@ -30,6 +31,28 @@ def play_sound(name):
             except OSError:
                 continue
     return False
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="): code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_TR = {"Fermer": ("Close", "Cerrar", "Schließen"), "Notification": ("Notification", "Notificación", "Benachrichtigung")}
+
+
+def _t(text):
+    row = _TR.get(text)
+    return row[("en", "es", "de").index(_LANG)] if row and _LANG != "fr" else text
+
+
 XML = '''<node><interface name="org.freedesktop.Notifications">
 <method name="GetCapabilities"><arg type="as" direction="out"/></method>
 <method name="GetServerInformation"><arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
@@ -127,7 +150,7 @@ class Notifications:
             self.live = {key: value for key, value in self.live.items() if key in retained}
             self.save()
             if not PREF.exists():
-                self.show(identity,title[:1024],body[:8192],timeout)
+                self.show(identity,title[:1024],body[:8192],timeout,app=app[:256],icon=icon,hints=hints)
                 # Indices standard : « suppress-sound » coupe le son,
                 # « sound-name » choisit un son système Winlux connu.
                 if not bool(hints.get("suppress-sound", False)):
@@ -135,25 +158,129 @@ class Notifications:
                     play_sound(wanted if (SOUNDS / f"{wanted}.wav").is_file() and "/" not in wanted else "notification")
             invocation.return_value(GLib.Variant("(u)", (identity,)))
 
-    def show(self, identity, title, body, timeout):
+    def show(self, identity, title, body, timeout, app="", icon="", hints=None):
+        """Bulle façon Windows 11 (#624) : en bas à droite, juste au-dessus de la
+        barre des tâches (zone de travail), jamais sur les boutons d'une fenêtre
+        agrandie ; en-tête icône + nom de l'application + croix, puis titre en
+        gras et texte, alignés à gauche. Un clic sur la bulle lance l'action
+        « default » si l'application en propose une."""
         if self.toast: self.toast.destroy()
+        hints = hints or {}
+        name, app_icon = app_identity(app, icon, hints)
         popup = Gtk.Window(type=Gtk.WindowType.POPUP)
+        popup.set_name("winlux-toast")
+        popup.set_title(title or name)
         popup.set_keep_above(True)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=18)
-        popup.add(box)
-        box.pack_start(Gtk.Label(label=title, wrap=True, max_width_chars=45), False, False, 0)
-        box.pack_start(Gtk.Label(label=body, wrap=True, max_width_chars=45), False, False, 0)
+        popup.set_accept_focus(False)
+        popup.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+        popup.set_size_request(TOAST_WIDTH, -1)
+        events = Gtk.EventBox()
+        popup.add(events)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=14)
+        events.add(box)
+        header = Gtk.Box(spacing=8)
+        header.pack_start(Gtk.Image.new_from_gicon(app_icon, Gtk.IconSize.MENU), False, False, 0)
+        source = Gtk.Label(label=name, xalign=0, ellipsize=3)
+        source.get_style_context().add_class("dim-label")
+        header.pack_start(source, True, True, 0)
+        close = Gtk.Button.new_from_icon_name("window-close-symbolic", Gtk.IconSize.MENU)
+        close.set_relief(Gtk.ReliefStyle.NONE)
+        close.set_tooltip_text(_t("Fermer"))
+        header.pack_end(close, False, False, 0)
+        box.pack_start(header, False, False, 0)
+        content = Gtk.Box(spacing=12)
+        picture = hint_image(hints)
+        if picture is not None:
+            content.pack_start(picture, False, False, 0)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        heading = Gtk.Label(label=title, xalign=0, wrap=True, max_width_chars=38)
+        heading.get_style_context().add_class("toast-title")
+        texts.pack_start(heading, False, False, 0)
+        if body:
+            texts.pack_start(Gtk.Label(label=body, xalign=0, wrap=True, max_width_chars=38, lines=4, ellipsize=3), False, False, 0)
+        content.pack_start(texts, True, True, 0)
+        box.pack_start(content, False, False, 0)
+        css = Gtk.CssProvider()
+        css.load_from_data(b"#winlux-toast { border: 1px solid alpha(currentColor, 0.18); border-radius: 8px; }"
+                           b"#winlux-toast .toast-title { font-weight: bold; }")
+        popup.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        heading.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        box.show_all(); events.show(); popup.realize()
+        # Placée avant d'apparaître : aucun saut depuis le coin supérieur gauche.
+        height = popup.get_preferred_height()[1]
+        display = popup.get_display()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        x, y = toast_position(monitor.get_workarea(), monitor.get_geometry(), TOAST_WIDTH, height)
+        popup.move(x, y)
         popup.show_all()
-        area = popup.get_display().get_monitor(0).get_workarea()
-        popup.move(area.x + area.width - popup.get_allocated_width() - 20, area.y + 20)
         self.toast = popup
         self.toast_id=identity
-        def hide():
+        def hide(*_):
             if self.toast == popup:
                 popup.destroy()
                 self.toast = None
             return False
+        close.connect("clicked", hide)
+        def clicked(_, event):
+            live = self.live.get(identity)
+            if event.button == 1 and live and "default" in live[1][::2] and getattr(self, "bus", None):
+                self.bus.emit_signal(live[0], "/org/freedesktop/Notifications", "org.freedesktop.Notifications",
+                                     "ActionInvoked", GLib.Variant("(us)", (identity, "default")))
+            return hide()
+        events.connect("button-release-event", clicked)
         if timeout!=0:GLib.timeout_add(max(500,min(timeout if timeout>0 else 7000,60000)),hide)
+
+
+TOAST_WIDTH = 364
+TOAST_MARGIN = 12
+
+
+def toast_position(workarea, geometry, width, height):
+    """Coin inférieur droit de la zone de travail (au-dessus de la barre des
+    tâches). Sans réservation de la barre (zone de travail = écran entier),
+    48 px sont laissés en bas pour ne pas la recouvrir."""
+    bottom = workarea.y + workarea.height
+    if bottom >= geometry.y + geometry.height:
+        bottom = geometry.y + geometry.height - 48
+    right = workarea.x + workarea.width
+    return right - width - TOAST_MARGIN, bottom - height - TOAST_MARGIN
+
+
+def app_identity(app, icon, hints):
+    """Nom et icône de l'application : lanceur « desktop-entry », sinon le nom
+    et l'icône envoyés, sinon une cloche."""
+    name, gicon = app or "", None
+    entry = str(hints.get("desktop-entry", "") or "")
+    if entry and "/" not in entry:
+        try:
+            info = Gio.DesktopAppInfo.new(entry if entry.endswith(".desktop") else entry + ".desktop")
+        except TypeError:
+            info = None
+        if info is not None:
+            name = info.get_display_name() or name
+            gicon = info.get_icon()
+    if icon and gicon is None:
+        gicon = file_icon(icon) or (Gio.ThemedIcon.new(icon) if "/" not in icon else None)
+    return name or _t("Notification"), gicon or Gio.ThemedIcon.new("preferences-system-notifications-symbolic")
+
+
+def file_icon(value):
+    path = value[7:] if value.startswith("file://") else value
+    if path.startswith("/") and os.path.isfile(path):
+        return Gio.FileIcon.new(Gio.File.new_for_path(path))
+    return None
+
+
+def hint_image(hints):
+    """Image jointe (« image-path ») : vignette de 48 px à gauche du texte."""
+    value = str(hints.get("image-path", "") or hints.get("image_path", "") or "")
+    gicon = file_icon(value) if value else None
+    if gicon is None and value and "/" not in value: gicon = Gio.ThemedIcon.new(value)
+    if gicon is None: return None
+    image = Gtk.Image.new_from_gicon(gicon, Gtk.IconSize.DIALOG)
+    image.set_pixel_size(48)
+    image.set_valign(Gtk.Align.START)
+    return image
 
 if __name__ == "__main__":
     Notifications()

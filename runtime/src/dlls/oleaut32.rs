@@ -130,6 +130,16 @@ pub unsafe extern "win64" fn sys_realloc_string_len(
 
 // ── VARIANT ─────────────────────────────────────────────────────────
 
+/// BSTR d'un VARIANT (union à +8). Un programme x86 n'y range que 4 octets
+/// ; les 4 suivants sont quelconques (#232, 7-Zip 32 bits).
+unsafe fn variant_bstr(v: *const c_void) -> *mut u16 {
+    crate::wow32::read_ptr(v as usize + 8) as *mut u16
+}
+
+unsafe fn set_variant_bstr(v: *mut c_void, bstr: *mut u16) {
+    crate::wow32::write_ptr(v as usize + 8, bstr as usize)
+}
+
 pub unsafe extern "win64" fn variant_init(v: *mut c_void) {
     if v.is_null() {
         return;
@@ -143,8 +153,7 @@ pub unsafe extern "win64" fn variant_clear(v: *mut c_void) -> i32 {
     }
     let vt = *(v as *const u16);
     if vt == VT_BSTR {
-        let bstr = *((v as *const u8).add(8) as *const *mut u16);
-        sys_free_string(bstr);
+        sys_free_string(variant_bstr(v));
     }
     std::ptr::write_bytes(v as *mut u8, 0, 16);
     0
@@ -158,9 +167,8 @@ pub unsafe extern "win64" fn variant_copy(dest: *mut c_void, src: *const c_void)
     std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, 16);
     let vt = *(src as *const u16);
     if vt == VT_BSTR {
-        let bstr = *((src as *const u8).add(8) as *const *const u16);
-        let dup = sys_alloc_string(bstr);
-        *((dest as *mut u8).add(8) as *mut *mut u16) = dup;
+        let dup = sys_alloc_string(variant_bstr(src));
+        set_variant_bstr(dest, dup);
     }
     0
 }
@@ -188,7 +196,7 @@ pub unsafe extern "win64" fn variant_change_type(
             let empty: [u16; 1] = [0];
             let bstr = sys_alloc_string(empty.as_ptr());
             *(dest as *mut u16) = VT_BSTR;
-            *((dest as *mut u8).add(8) as *mut *mut u16) = bstr;
+            set_variant_bstr(dest, bstr);
             0
         }
         (VT_I4, VT_BSTR) | (VT_I2, VT_BSTR) => {
@@ -202,11 +210,11 @@ pub unsafe extern "win64" fn variant_change_type(
             variant_clear(dest);
             let bstr = sys_alloc_string_len(wide.as_ptr(), wide.len() as u32);
             *(dest as *mut u16) = VT_BSTR;
-            *((dest as *mut u8).add(8) as *mut *mut u16) = bstr;
+            set_variant_bstr(dest, bstr);
             0
         }
         (VT_BSTR, VT_I4) => {
-            let bstr = *((src as *const u8).add(8) as *const *const u16);
+            let bstr = variant_bstr(src) as *const u16;
             let s = if bstr.is_null() {
                 String::new()
             } else {

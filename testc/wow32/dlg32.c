@@ -176,6 +176,76 @@ static void tab_control(void)
     DestroyWindow(tab);
 }
 
+/* Notifications des contrôles vers une fenêtre x86 (WM_NOTIFY en
+ * disposition x86 : NMHDR de 12 octets, NMLISTVIEW, NMTREEVIEW). */
+static int lv_changed = -1, lv_param;
+static LPARAM tv_param;
+static UINT tv_code;
+static LRESULT CALLBACK parent_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_NOTIFY) {
+        NMHDR *hdr = (NMHDR *)lp;
+        if (hdr->code == LVN_ITEMCHANGED && hdr->idFrom == 51) {
+            NMLISTVIEW *nm = (NMLISTVIEW *)lp;
+            if (nm->uNewState & LVIS_SELECTED) {
+                lv_changed = nm->iItem;
+                lv_param = (int)nm->lParam;
+            }
+        } else if ((hdr->code == TVN_SELCHANGEDW || hdr->code == TVN_SELCHANGEDA) && hdr->idFrom == 52) {
+            NMTREEVIEWW *nm = (NMTREEVIEWW *)lp;
+            tv_code = hdr->code;
+            tv_param = nm->itemNew.lParam;
+        }
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+
+static void notifications(void)
+{
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = parent_proc;
+    wc.lpszClassName = L"Dlg32Parent";
+    CHECK(RegisterClassW(&wc) != 0, "RegisterClassW (parent x86)");
+    HWND parent = CreateWindowExW(0, L"Dlg32Parent", L"Parent", WS_OVERLAPPEDWINDOW, 0, 0, 400, 300,
+                                  NULL, NULL, NULL, NULL);
+    CHECK(parent != NULL, "fenêtre parente x86");
+    HWND lv = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | LVS_REPORT, 0, 0, 200, 200, parent,
+                              (HMENU)51, NULL, NULL);
+    CHECK(lv != NULL, "liste enfant");
+    LVCOLUMNW col = {0};
+    col.mask = LVCF_TEXT | LVCF_WIDTH;
+    col.cx = 100;
+    col.pszText = L"Nom";
+    SendMessageW(lv, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
+    for (int i = 0; i < 2; i++) {
+        LVITEMW it = {0};
+        it.mask = LVIF_TEXT | LVIF_PARAM;
+        it.iItem = i;
+        it.pszText = i ? L"deux" : L"un";
+        it.lParam = 500 + i;
+        SendMessageW(lv, LVM_INSERTITEMW, 0, (LPARAM)&it);
+    }
+    LVITEMW st = {0};
+    st.stateMask = LVIS_SELECTED;
+    st.state = LVIS_SELECTED;
+    SendMessageW(lv, LVM_SETITEMSTATE, 1, (LPARAM)&st);
+    CHECK(lv_changed == 1 && lv_param == 501, "LVN_ITEMCHANGED reçu en x86 (NMLISTVIEW)");
+
+    HWND tv = CreateWindowExW(0, WC_TREEVIEWW, L"", WS_CHILD, 0, 0, 200, 200, parent, (HMENU)52, NULL, NULL);
+    CHECK(tv != NULL, "arbre enfant");
+    TVINSERTSTRUCTW ins = {0};
+    ins.hParent = TVI_ROOT;
+    ins.hInsertAfter = TVI_LAST;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM;
+    ins.item.pszText = L"Session";
+    ins.item.lParam = 77;
+    HTREEITEM h = (HTREEITEM)SendMessageW(tv, TVM_INSERTITEMW, 0, (LPARAM)&ins);
+    SendMessageW(tv, TVM_SELECTITEM, TVGN_CARET, (LPARAM)h);
+    CHECK(tv_code != 0 && tv_param == 77, "TVN_SELCHANGED reçu en x86 (NMTREEVIEW)");
+    DestroyWindow(parent);
+}
+
 static void dialogs(void)
 {
     WCHAR temp[MAX_PATH];
@@ -266,6 +336,7 @@ int main(void)
     tree_view();
     tool_bar();
     tab_control();
+    notifications();
     dialogs();
     printf("dlg32 : contrôles et boîtes communes 32 bits, %d vérifications passées. Tout est correct\n", step);
     return 0;

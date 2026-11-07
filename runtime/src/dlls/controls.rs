@@ -765,6 +765,14 @@ const BS_NOTIFY: u32 = 0x4000;
 /// rectangle ou cadre STATIC. Sous Windows ils ne recouvrent pas leurs
 /// voisins ; en X11, où chaque contrôle est une fenêtre opaque, ils doivent
 /// rester derrière.
+/// Hauteur imposée par un contrôle qui se dimensionne seul (ReBar).
+pub fn forced_height(hwnd: usize) -> Option<i32> {
+    match kind_of(hwnd)? {
+        Kind::ReBar => bars::rebar_forced_height(hwnd),
+        _ => None,
+    }
+}
+
 pub fn is_backdrop(hwnd: usize) -> bool {
     match kind_of(hwnd) {
         Some(Kind::Button) => button_type(hwnd) == BS_GROUPBOX,
@@ -3322,6 +3330,16 @@ pub fn text_changed(hwnd: usize) {
     let Some(kind) = kind_of(hwnd) else {
         return;
     };
+    if kind == Kind::ComboBoxEx {
+        // SetWindowText sur une ComboBoxEx remplit son champ (barre
+        // d'adresse de 7-Zip), comme le WM_SETTEXT que Windows lui envoie.
+        let combo = unsafe { bars::cbex_combo(hwnd) };
+        if combo != 0 {
+            let text: Vec<u16> = title(hwnd).encode_utf16().chain([0]).collect();
+            with_charset(true, || send(combo, WM_SETTEXT, 0, text.as_ptr() as isize));
+        }
+        return;
+    }
     if kind == Kind::Edit || kind == Kind::ComboBox {
         with_ctl(hwnd, |c| {
             c.edit.caret = 0;

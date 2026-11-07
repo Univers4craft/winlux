@@ -11,7 +11,7 @@ La primera vez que inicia sesión, la ventana **Bienvenido a Winlux** se abre en
 - **Elegir el teclado**: abre Configuración › Teclado y mouse.
 - **Configurar la red**: abre la configuración rápida, para el wifi.
 - **Personalizar la apariencia**: abre Configuración › Fondo y colores.
-- **Descubrir la recuperación**: abre Configuración › Actualizaciones, donde se restaura la versión anterior y se explica qué hacer si el escritorio ya no arranca.
+- **Descubrir la recuperación**: abre Configuración › Actualizaciones › Actualización del SO, donde se restaura la versión anterior y se explica qué hacer si el escritorio ya no arranca.
 
 ![La ventana de bienvenida](img:assistant-bienvenue.jpg "La ventana de bienvenida: cinco accesos al recorrido guiado y a los primeros ajustes.")
 
