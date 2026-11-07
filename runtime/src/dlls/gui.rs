@@ -1707,13 +1707,51 @@ pub fn bitmap_pixels(handle: usize) -> Option<(usize, usize, Vec<u32>, bool)> {
     Some((w, h, out, alpha))
 }
 
-/// Crée une DIB section 32 bits haut-bas à partir de pixels COLORREF dont
+/// Bitmaps que Winlux garde en mémoire comme des DIB mais présente comme
+/// des bitmaps dépendantes du périphérique (DDB) : celles de GetIconInfo,
+/// comme sous Windows. wxWidgets en tire une DIB à lui puis supprime
+/// l'originale ; s'il la voyait comme une DIB section, il supprimait sa
+/// propre copie (#793).
+fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
+pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
+    let h = bitmap_from_pixels(width, height, pixels)?;
+    lock(device_dependent()).insert(h);
+    Some(h)
+}
+
+/// Vrai pour une bitmap présentée comme DDB (voir `ddb_from_pixels`).
+pub fn is_device_dependent(handle: usize) -> bool {
+    lock(device_dependent()).contains(&handle)
+}
+
+/// Sens d'une DIB section : `Some(true)` haut-bas, `Some(false)` bas-haut,
+/// `None` pour une bitmap qui n'est pas une DIB section.
+pub fn dib_top_down(handle: usize) -> Option<bool> {
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Bitmap {
+            dib_bits: Some(_),
+            top_down,
+            ..
+        }) => Some(*top_down),
+        _ => None,
+    }
+}
+
+/// Crée une DIB section 32 bits bas-haut à partir de pixels COLORREF dont
 /// l'octet haut est l'alpha.
 pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     if pixels.len() < width * height {
         return None;
     }
-    let (handle, _) = create_dib_section(width as i32, height as i32, 32, true)?;
+    // Bas-haut, comme les DIB que Windows rend pour une icône : wxWidgets
+    // refuse de convertir une DIB haut-bas (image vide, puis écriture à
+    // l'adresse -1 dans wxImageList::Add, #793).
+    let (handle, _) = create_dib_section(width as i32, height as i32, 32, false)?;
     let mut objects = lock(objects());
     if let Some(GdiObject::Bitmap {
         pixels: store,
@@ -1722,10 +1760,12 @@ pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option
     }) = objects.get_mut(&handle)
     {
         for (i, &c) in pixels[..width * height].iter().enumerate() {
-            bytes[i * 4] = (c >> 16) as u8;
-            bytes[i * 4 + 1] = (c >> 8) as u8;
-            bytes[i * 4 + 2] = c as u8;
-            bytes[i * 4 + 3] = (c >> 24) as u8;
+            let (x, y) = (i % width, i / width);
+            let o = ((height - 1 - y) * width + x) * 4;
+            bytes[o] = (c >> 16) as u8;
+            bytes[o + 1] = (c >> 8) as u8;
+            bytes[o + 2] = c as u8;
+            bytes[o + 3] = (c >> 24) as u8;
             store[i] = c & 0x00FF_FFFF;
         }
     }
@@ -1876,7 +1916,10 @@ pub fn delete_object(obj: usize) -> bool {
     let mut map = lock(objects());
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
-        Some(_) => map.remove(&obj).is_some(),
+        Some(_) => {
+            lock(device_dependent()).remove(&obj);
+            map.remove(&obj).is_some()
+        }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
     }
 }
