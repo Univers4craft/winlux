@@ -107,6 +107,7 @@ def main():
         "".join(f"path-include=/usr/share/locale/{lang}/LC_MESSAGES/*.mo\n" for lang in ("fr", "en", "es", "de"))
         + "path-exclude=/usr/share/help-langpack/*\n")
     (root / "etc/resolv.conf").unlink(missing_ok=True)
+    # QEMU user networking, for apt inside the build VM only (reset before the archive).
     (root / "etc/resolv.conf").write_text("nameserver 10.0.2.3\n")
     # Signed Ubuntu indexes authenticate packages; no trusted=yes or disabled checks.
     for entry in (root / "etc/apt/sources.list.d").glob("*"): entry.unlink()
@@ -131,6 +132,10 @@ def main():
           "apt-get check\nhello\napt-get purge -y hello\napt-get clean\n"
           "rm -rf /var/lib/apt/lists/*\nmkdir -p /usr/share/winlux\n"
           "echo ubuntu-resolute > /usr/share/winlux/apt-base\n"
+          # 10.0.2.3 is QEMU's resolver, only valid for this build VM:
+          # the image ships a resolv.conf that NetworkManager or the DHCP
+          # hook fills at connection time (#214).
+          "printf '# Rempli par NetworkManager ou winlux-network a la connexion.\\n' > /etc/resolv.conf\n"
           "tar --numeric-owner --exclude=./proc --exclude=./sys --exclude=./dev "
           "--exclude=./run --exclude=./tmp --exclude=./winlux-bootstrap "
           "-C / -cpf /winlux-bootstrap/root.tar .\n")

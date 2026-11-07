@@ -12,6 +12,8 @@ pub(crate) struct Parser {
     row_major_default: bool,
     /// Dernier `[maxvertexcount(N)]` lu.
     max_vertex_count: u32,
+    /// Dernier `[numthreads(X, Y, Z)]` lu.
+    num_threads: [u32; 3],
 }
 
 type R<T> = Result<T, String>;
@@ -50,6 +52,7 @@ struct Mods {
     flat: bool,
     dir_in: bool,
     dir_out: bool,
+    groupshared: bool,
 }
 
 pub(crate) fn parse(tokens: Vec<Token>, row_major: bool) -> R<Program> {
@@ -60,6 +63,7 @@ pub(crate) fn parse(tokens: Vec<Token>, row_major: bool) -> R<Program> {
         typedefs: HashMap::new(),
         row_major_default: row_major,
         max_vertex_count: 0,
+        num_threads: [0; 3],
     };
     while p.p < p.t.len() {
         p.top()?;
@@ -122,6 +126,30 @@ fn tex_kind(s: &str) -> Option<TexKind> {
     })
 }
 
+/// RWTexture* : genre de l'image.
+fn rw_kind(s: &str) -> Option<TexKind> {
+    Some(match s {
+        "RWTexture1D" => TexKind::T1D,
+        "RWTexture1DArray" => TexKind::T1DArray,
+        "RWTexture2D" => TexKind::T2D,
+        "RWTexture2DArray" => TexKind::T2DArray,
+        "RWTexture3D" => TexKind::T3D,
+        _ => return None,
+    })
+}
+
+/// Tampons de stockage (structurés, typés en écriture, bruts).
+fn is_storage(s: &str) -> bool {
+    matches!(
+        s,
+        "StructuredBuffer"
+            | "RWStructuredBuffer"
+            | "RWBuffer"
+            | "ByteAddressBuffer"
+            | "RWByteAddressBuffer"
+    )
+}
+
 impl Parser {
     fn err<T>(&self, msg: &str) -> R<T> {
         let line = self.t.get(self.p).or(self.t.last()).map_or(0, |t| t.line);
@@ -179,6 +207,30 @@ impl Parser {
                     self.max_vertex_count = *n as u32;
                 }
             }
+            // [numthreads(X, Y, Z)] : expressions constantes.
+            if matches!(self.peek_at(1), Some(Tok::Ident(a)) if a == "numthreads")
+                && matches!(self.peek_at(2), Some(Tok::Punct("(")))
+            {
+                let save = self.p;
+                self.p += 3;
+                let mut v = [1u32; 3];
+                let mut ok = true;
+                for (k, slot) in v.iter_mut().enumerate() {
+                    match self.assign().ok().and_then(|e| self.const_int(&e)) {
+                        Some(n) if n > 0 => *slot = n as u32,
+                        _ => ok = false,
+                    }
+                    if k < 2 && !self.eat(",") {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok && self.eat(")") && self.eat("]") {
+                    self.num_threads = v;
+                    continue;
+                }
+                self.p = save;
+            }
             let mut depth = 0;
             while let Some(t) = self.peek() {
                 match t {
@@ -209,6 +261,7 @@ impl Parser {
                 "row_major" => m.row_major = Some(true),
                 "column_major" => m.row_major = Some(false),
                 "nointerpolation" => m.flat = true,
+                "groupshared" => m.groupshared = true,
                 "in" => m.dir_in = true,
                 "out" => m.dir_out = true,
                 "inout" => {
@@ -227,6 +280,8 @@ impl Parser {
             Some(Tok::Ident(s)) => {
                 builtin_numeric(s).is_some()
                     || tex_kind(s).is_some()
+                    || rw_kind(s).is_some()
+                    || is_storage(s)
                     || matches!(
                         s.as_str(),
                         "void"
@@ -268,6 +323,20 @@ impl Parser {
                 self.expect(">")?;
             }
             return Ok(Ty::Texture(k, Box::new(elem)));
+        }
+        if let Some(k) = rw_kind(&name) {
+            let elem = self.template_elem()?;
+            return Ok(Ty::Rw(k, Box::new(elem)));
+        }
+        if is_storage(&name) {
+            return Ok(match name.as_str() {
+                "ByteAddressBuffer" => Ty::Bab(false),
+                "RWByteAddressBuffer" => Ty::Bab(true),
+                n => {
+                    let elem = self.template_elem()?;
+                    Ty::Sb(n.starts_with("RW"), Box::new(elem))
+                }
+            });
         }
         match name.as_str() {
             "void" => Ok(Ty::Void),
@@ -317,6 +386,17 @@ impl Parser {
                 self.err(&format!("type inconnu « {name} »"))
             }
         }
+    }
+
+    /// `<unorm float4>` d'un RWTexture ou d'un tampon (float4 par défaut).
+    fn template_elem(&mut self) -> R<Ty> {
+        if !self.eat("<") {
+            return Ok(Ty::Vector(Base::Float, 4));
+        }
+        self.mods();
+        let t = self.ty()?;
+        self.expect(">")?;
+        Ok(t)
     }
 
     fn int_const(&mut self) -> R<u64> {
@@ -556,6 +636,7 @@ impl Parser {
                 packoffset,
                 interp: Interp { flat: m.flat },
                 row_major: m.row_major.unwrap_or(self.row_major_default),
+                groupshared: m.groupshared,
                 line,
             });
             if !self.eat(",") {
@@ -651,12 +732,14 @@ impl Parser {
             Some(self.block()?)
         };
         let max_vertex_count = std::mem::take(&mut self.max_vertex_count);
+        let num_threads = std::mem::take(&mut self.num_threads);
         self.prog.funcs.push(Func {
             name,
             ret,
             ret_semantic,
             params,
             max_vertex_count,
+            num_threads,
             body,
             line,
         });

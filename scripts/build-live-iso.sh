@@ -203,7 +203,7 @@ sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stag
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell et
 # l'écran de verrouillage. Seul un fond maison Prisme (render-brand.py) est
 # livré : l'ancien « Fond ecran.png » évoquait le logo Windows (#590).
-wallpaper_src="$root/assets/wallpapers/winlux-prisme-nuit.png"
+wallpaper_src="$root/assets/wallpapers/winlux-prisme-aurore.png"
 if test -f "$wallpaper_src"; then
     if command -v convert >/dev/null 2>&1; then
         convert "$wallpaper_src" -filter Lanczos -resize '1920x1080^' -gravity center -extent 1920x1080 -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
@@ -1336,6 +1336,12 @@ done
 # de son chroot et le retire.
 if test -f "$stage/usr/sbin/policy-rc.d" && test "$(cat "$stage/usr/sbin/policy-rc.d")" = "$(printf '#!/bin/sh\nexit 101')"; then
     rm -f "$stage/usr/sbin/policy-rc.d"
+fi
+# Le résolveur de QEMU (10.0.2.3) ne sert qu'à la VM de prepare-apt-base :
+# figé dans l'image, il était faux sur tout vrai réseau (#214).
+if grep -qs '10\.0\.2\.3' "$stage/etc/resolv.conf"; then
+    echo "resolv.conf de l'image figé sur le résolveur de QEMU : refaites la base APT." >&2
+    exit 1
 fi
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"

@@ -354,6 +354,8 @@ _TR = {
     "Les programmes Windows (.exe) utilisent ces appareils directement.": ("Windows programs (.exe) use these devices directly.", "Los programas de Windows (.exe) usan estos dispositivos directamente.", "Windows-Programme (.exe) verwenden diese Geräte direkt."),
     # Personnalisation du bureau
     "Arrière-plan": ("Background", "Fondo", "Hintergrund"),
+    "Winlux Aurore": ("Winlux Aurora", "Winlux Aurora", "Winlux Polarlicht"),
+    "Winlux Aurore claire": ("Winlux Aurora light", "Winlux Aurora clara", "Winlux Polarlicht hell"),
     "Winlux Nuit": ("Winlux Night", "Winlux Noche", "Winlux Nacht"),
     "Winlux Aube": ("Winlux Dawn", "Winlux Amanecer", "Winlux Morgenröte"),
     "Classique": ("Classic", "Clásico", "Klassisch"),
@@ -717,6 +719,13 @@ def _t(text):
 
 HOME = Path.home()
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
+
+
+def run_file(name):
+    """Message ou journal d'une action de winlux-control : celui du compte
+    (/run/winlux/control-<uid>, /run/winlux étant collant), sinon le partagé."""
+    mine = RUN / f"control-{os.getuid()}" / name
+    return mine if mine.exists() else RUN / name
 CONTROL = RUN / "control.txt"
 A11Y_FILE = HOME / ".local/share/winlux/accessibility.ini"
 APPEARANCE = HOME / ".config/winlux/appearance.json"
@@ -1226,12 +1235,38 @@ def pe_pixbuf(module, exe, size=32):
         return None
 
 
+def screen_height():
+    """Plus grande hauteur d'écran en pixels réels, 1080 si inconnue."""
+    try:
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk
+        display = Gdk.Display.get_default()
+        heights = [display.get_monitor(i).get_geometry().height * display.get_monitor(i).get_scale_factor()
+                   for i in range(display.get_n_monitors())]
+        return max(heights) if heights else 1080
+    except Exception:
+        return 1080
+
+
+def wallpaper_variant(path, height=None):
+    """Fond « Aurore » (#596) : définition 1440p ou 4K quand l'écran la vaut
+    et qu'elle est installée, sinon le 1080p au nom court."""
+    height = screen_height() if height is None else height
+    for minimum, suffix in ((1800, "-3840x2160"), (1260, "-2560x1440")):
+        candidate = path.with_name(path.stem + suffix + path.suffix)
+        if height >= minimum and candidate.is_file():
+            return candidate
+    return path
+
+
 def wallpapers():
     found = []
-    for name, title in (("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
+    for name, title in (("wallpapers/winlux-prisme-aurore.png", "Winlux Aurore"),
+                        ("wallpapers/winlux-prisme-aurore-clair.png", "Winlux Aurore claire"),
+                        ("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
                         ("wallpapers/winlux-prisme-aube.png", "Winlux Aube")):
         path = WALLPAPERS / name
-        if path.is_file(): found.append((path, title))
+        if path.is_file(): found.append((wallpaper_variant(path), title))
     return found
 
 
@@ -2063,7 +2098,7 @@ class ExtraPages:
             self.actions(box, [(_t("Heure −"), lambda: self.execute("sysupdate-hour-down")),
                                (_t("Heure +"), lambda: self.execute("sysupdate-hour-up")),
                                (_t("Changer de jour"), lambda: self.execute("sysupdate-day-next"))])
-        log = read(RUN / "sysupdate.log").strip()
+        log = read(run_file("sysupdate.log")).strip()
         if log:
             self.section(_t("Journal"))
             self.body.pack_start(Gtk.Label(label=log[-4000:], xalign=0, wrap=True, selectable=True), False, False, 0)
@@ -2547,7 +2582,7 @@ class ExtraPages:
         def wait():
             if process.poll() is None: return True
             if process.returncode:
-                detail = read(RUN / "action.log").strip()[-2000:] or (process.stderr.read() or "").strip()
+                detail = read(run_file("action.log")).strip()[-2000:] or (process.stderr.read() or "").strip()
                 self.show_error(_t("L’opération a échoué"), detail)
             self.extra_refresh()
             return False

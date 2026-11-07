@@ -242,6 +242,9 @@ for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
     ok("/usr/games" in (SCRIPTS / script).read_text(), f"{script} : /usr/games dans PATH (jeux visibles dans le menu)")
 ok("pkill -USR1 -x picom" in (SCRIPTS / "winlux-native-session.sh").read_text(),
    "premier démarrage : Bienvenue repeinte après l'arrivée du bureau")
+ok('"_WINLUX_MAXIMIZED = 1"; corner-radius = 0' in (ROOT / "integration/native/config/picom/picom.conf").read_text()
+   and all("/usr/bin/winlux-maximized-watch" in (SCRIPTS / s).read_text() for s in ("winlux-native-session.sh", "winlux-user-session.sh")),
+   "fenêtre agrandie : coins carrés, fond d'écran invisible aux coins (#582)")
 installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
 ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
@@ -405,6 +408,15 @@ ok(shipped_rc.findtext(f"{OB}mouse/{OB}screenEdgeWarpTime") == "0",
 ok(all("winlux-snap watch" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "ancrage à la souris lancé avec la session (compte et live)")
 
+# ── Assistant d'ancrage (#585) ─────────────────────────────────────────────
+snap_tool = runpy.run_path(str(SCRIPTS / "winlux-snap.py"), run_name="campaign_snap")
+snap_area = (0, 0, 1366, 728)
+ok(snap_tool["free_zones"](snap_tool["following_zones"]("quarter:tr"), snap_area, [snap_tool["zone_rect"]("half:left", snap_area)]) == ["quarter:br"],
+   "assistant d'ancrage : après un coin, seule la place encore libre est proposée")
+ok(snap_tool["card_grid"](683, 364, 1, 6)[0] >= 2, "assistant d'ancrage lisible dans un quart en 1366x768")
+ok(snap_tool["group_members"]("a", {"a": ("g", "half:left"), "b": ("g", "half:right")}) == ["a", "b"],
+   "groupe d'ancrage : deux fenêtres ancrées ensemble se restaurent ensemble (#597)")
+
 # ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
 for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
     ok([p for _, p in menu["settings_for"](query)][:1] == [page], f"recherche « {query} » : page {page} des Paramètres")
@@ -482,5 +494,24 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
    "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
+
+# ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
+ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
+   and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
+   "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
+
+# ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
+icons = NATIVE / "icons"
+ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2
+   and (icons / "Winlux/scalable/apps/winlux.svg").is_file()
+   and "Inherits=Winlux," in (icons / "Winlux-Sombre/index.theme").read_text(),
+   "icônes : applications gardées dans Winlux, Winlux-Sombre hérite de Winlux")
+ok("for icon_theme in Winlux Winlux-Sombre" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "gtk-update-icon-cache" in (SCRIPTS / "stage-apt-root.py").read_text()
+   and "usr/share/icons/Winlux-Sombre/" in (SCRIPTS / "stage-apt-root.py").read_text(),
+   "icônes : les deux thèmes dans winlux-desktop, cache GTK en postinst")
+ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh"))
+   and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
+   "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -64,7 +64,7 @@ ok("dots[n]" not in explorer and "fn masked(" in explorer, "mot de passe d'archi
 ok("fn copy_as_path(" in explorer and "cliphist::set_text" in explorer, "Copier le chemin d'accès va dans le presse-papiers")
 
 # ── Finition de l'Explorateur en 1366x768 ───────────────────────────────────
-ok("unsafe fn row_icon(" in explorer and explorer.count("row_icon(g, e.kind") == 2,
+ok("unsafe fn row_icon(" in explorer and "_ if s == 16 => row_icon(g, e.kind, x, y)" in explorer,
    "vues Détails et Liste : icônes de fichiers de 12 px (row_icon)")
 ok("Glyph::Chevron\n" not in explorer.split("heads: [(&[u8], i32, SortKey); 4]")[1][:1500],
    "en-tête de colonne : le tri croissant n'est plus dessiné « › »")
@@ -87,6 +87,33 @@ ok("fn key(vk: u32, _ch: u16)" in props and "0x0D => close(true)" in props,
    "Propriétés : Entrée/Échap sur la touche virtuelle (le caractère d'Alt+Entrée ne referme pas la boîte)")
 ok("SetFileAttributesW" in props and "fn walk(" in props and "props::regression(root)" in explorer,
    "Propriétés : lecture seule appliquée, taille de dossier, test de régression")
+
+# ── #209 / #10 : Suppr hors dossier, chemins d'Accueil, survol, taille de la Corbeille ──
+ok("Les lecteurs et les dossiers d'Accueil ne peuvent pas" in explorer,
+   "Suppr dans Ce PC ou Accueil : un message au lieu du silence")
+ok(".position(|pl| pl.name == e.name())" not in explorer and "place_label(i) == e.name()" in explorer,
+   "item_path d'Accueil compare le libellé traduit, pas le nom français")
+ok("|| inside(&geo.toolbar, x, y)" not in explorer and "hot_changed(from, (x, y))" in explorer,
+   "Mouse::Move ne repeint que si une zone survolée change")
+ok("wm::MOUSE_X" not in explorer.replace("inside(r, wm::MOUSE_X, wm::MOUSE_Y)", ""),
+   "tous les survols de l'Explorateur passent par hovered()")
+ok("fn enforce_trash_limit(" in copy and "copy::enforce_trash_limit(since)" in explorer and "taille-max-mo=" in copy,
+   "Corbeille : taille maximale (5 % du disque ou taille-max-mo) et purge des plus anciens")
+
+ok("x > ir.left + detail_cols(&ir).1" not in explorer,
+   "vue Détails : un clic dans Date, Type ou Taille sélectionne la ligne")
+ok("fn content_text(" in props and 'b" dossier"' in props and 'b" folder"' in props,
+   "Propriétés : « 1 dossier », « 1 folder » au singulier")
+
+# ── #589 : icônes Prisme intégrées au lieu des primitives ──
+icons_rs = (SHELL / "explorer_icons.rs").read_text(encoding="utf-8")
+icons_data = (SHELL / "explorer_icons_data.rs").read_text(encoding="utf-8")
+icons_bin = (SHELL / "explorer_icons.bin").read_bytes()
+ok(f"ICON_BYTES: usize = {len(icons_bin)};" in icons_data, "explorer_icons.bin correspond à la table générée")
+ok("GdiAlphaBlend(hdc" in icons_rs and "icons::of_glyph(gl)" in explorer and "icons::of_place" in explorer,
+   "Explorateur : icônes composées par AlphaBlend, dossiers d'Accueil à pictogramme")
+ok(not (ROOT / "assets/icons/fluent").exists() and "Fluent" not in icons_data,
+   "un seul jeu d'icônes : Prisme, comme la session native")
 
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")

@@ -97,7 +97,10 @@ with tempfile.TemporaryDirectory() as tmp:
 # livrés. Une image extérieure (générée ou trouvée) n'est pas vérifiable
 # automatiquement et a déjà apporté une fenêtre à quatre carreaux proche du
 # logo Windows ; en ajouter une passe par une revue et cette liste.
-rendered = set(re.findall(r'"(winlux-prisme-[a-z]+)"', (HERE / "render-brand.py").read_text()))
+brand_source = (HERE / "render-brand.py").read_text()
+rendered = set(re.findall(r'"(winlux-prisme-[a-z-]+)"', brand_source))
+# Définitions supplémentaires (« Winlux Aurore », #596) : suffixes -LxH.
+rendered |= {name + size for name in rendered for size in re.findall(r'"(-\d+x\d+)"', brand_source)}
 for wall in (ROOT / "assets/wallpapers").iterdir():
     check(wall.stem in rendered, f"fond d'écran non dessiné par render-brand.py : {wall.name}")
 iso = (HERE / "build-live-iso.sh").read_text()

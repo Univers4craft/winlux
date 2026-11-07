@@ -103,7 +103,19 @@ CreateProcessA@40
 WaitForSingleObject@8
 GetExitCodeProcess@8
 GetModuleFileNameA@12
+InterlockedIncrement@4
+InterlockedDecrement@4
+InterlockedExchange@8
+InterlockedCompareExchange@12
+GlobalAddAtomA@4
+GlobalFindAtomA@4
+GlobalDeleteAtom@4
+SetHandleCount@4
+LoadLibraryA@4
+GetProcAddress@8
 DEF
+printf 'LIBRARY msvcrt.dll\nEXPORTS\n_adjust_fdiv DATA\n_controlfp\n_ftol\n' >"$tmp/msvcrt_wow64.def"
+llvm-dlltool -m i386 -d "$tmp/msvcrt_wow64.def" -l "$tmp/msvcrt_wow64.lib"
 cat >"$tmp/advapi32_wow64.def" <<'DEF'
 LIBRARY advapi32.dll
 EXPORTS
@@ -117,7 +129,25 @@ llvm-dlltool -m i386 -k -d "$tmp/kernel32_wow64.def" -l "$tmp/kernel32_wow64.lib
 llvm-dlltool -m i386 -k -d "$tmp/advapi32_wow64.def" -l "$tmp/advapi32_wow64.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wow64.c" -o "$tmp/wow64.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
-    "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" /out:"$out/wow64.exe"
+    "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" "$tmp/msvcrt_wow64.lib" \
+    /out:"$out/wow64.exe"
+# Exceptions C++ MSVC x86 (#232, étape 7) : tables de clang en cible
+# i686-pc-windows-msvc, msvcrt!__CxxFrameHandler3 et _CxxThrowException.
+cat >"$tmp/kernel32_cxx.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+lstrlenA@4
+DEF
+printf 'LIBRARY msvcrt.dll\nEXPORTS\n__CxxFrameHandler3\n_CxxThrowException@8\n' >"$tmp/msvcrt_cxx.def"
+llvm-dlltool -m i386 -k -d "$tmp/kernel32_cxx.def" -l "$tmp/kernel32_cxx.lib"
+llvm-dlltool -m i386 -k -d "$tmp/msvcrt_cxx.def" -l "$tmp/msvcrt_cxx.lib"
+clang++ --target=i686-pc-windows-msvc -O1 -fexceptions -fcxx-exceptions -fno-builtin -fno-stack-protector \
+    -fno-rtti -c "$src/cxx32.cpp" -o "$tmp/cxx32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/cxx32.obj" "$tmp/kernel32_cxx.lib" "$tmp/msvcrt_cxx.lib" /out:"$out/cxx32.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.
