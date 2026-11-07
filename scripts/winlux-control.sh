@@ -474,6 +474,9 @@ perform() {
                     xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
                 fi
             fi
+            # Windows + X s'ouvre au-dessus du bouton Démarrer, pas sous le
+            # pointeur : position réécrite dans le rc.xml du compte.
+            if have winlux-run; then winlux-run place-menu "$alignment" >/dev/null 2>&1 || true; fi
             save "$config/preferences.conf" TASKBAR_ALIGN "$alignment" ;;
         desktop-icon-recycle)
             mkdir -p "$HOME/Bureau"

@@ -483,4 +483,9 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
 
+# ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
+ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
+   and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
+   "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
