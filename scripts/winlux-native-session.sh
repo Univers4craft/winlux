@@ -235,6 +235,11 @@ done
 # fenêtre découverte doit se repeindre et un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
     /usr/bin/picom --config "$HOME/.config/picom/picom.conf" >/run/winlux/compositor.log 2>&1 &
+    # Coins carrés des fenêtres agrandies : l'état est recopié sur le cadre
+    # openbox, seul lu par les règles de picom (#582).
+    if test -x /usr/bin/winlux-maximized-watch; then
+        /usr/bin/winlux-maximized-watch >/run/winlux/maximized-watch.log 2>&1 &
+    fi
     # Le bureau (xfdesktop) est lancé ensuite par l'init : son arrivée laissait
     # noires les fenêtres déjà ouvertes (Bienvenue au premier démarrage).
     # Une remise à zéro de picom, une fois le bureau affiché, les repeint.

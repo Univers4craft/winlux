@@ -247,7 +247,7 @@ fn image_viewer() -> Option<PathBuf> {
 /// Commande Linux qui réalise `ShellExecute(file, params)`, ou le code
 /// d'erreur Win32 (`SE_ERR_*`) si rien ne convient.
 /// `explorer.exe` (avec ou sans chemin) : l'Explorateur de Windows.
-fn is_explorer(file: &str) -> bool {
+pub(crate) fn is_explorer(file: &str) -> bool {
     let base = file.rsplit(['\\', '/']).next().unwrap_or(file);
     base.eq_ignore_ascii_case("explorer") || base.eq_ignore_ascii_case("explorer.exe")
 }
@@ -273,7 +273,7 @@ fn explorer_target(params: &str) -> (String, bool) {
 /// `explorer.exe [/select,]CHEMIN` → le gestionnaire de dossiers de la session
 /// (`xdg-open`, soit l'Explorateur Winlux) sur le dossier voulu. Sans chemin :
 /// le dossier personnel.
-fn explorer(params: &str) -> Option<Result<(PathBuf, Vec<String>), isize>> {
+pub(crate) fn explorer(params: &str) -> Option<Result<(PathBuf, Vec<String>), isize>> {
     let opener = which("xdg-open")?;
     let (target, select) = explorer_target(params);
     let mut folder = if target.is_empty() {
@@ -436,7 +436,12 @@ fn spawn(
     }
 }
 
-fn execute(file: &str, params: &str, dir: Option<String>, verb: Option<String>) -> isize {
+pub(crate) fn execute(
+    file: &str,
+    params: &str,
+    dir: Option<String>,
+    verb: Option<String>,
+) -> isize {
     execute_keep(file, params, dir, false, is_runas(verb.as_deref())).0
 }
 

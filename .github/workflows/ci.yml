@@ -519,6 +519,9 @@ jobs:
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
+      - name: Fenêtres agrandies à coins carrés (règle picom, veilleur, migration)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-maximized-corners.py
+
       - name: Fenêtre Jeux (cartes, tri, recherche)
         run: |
           mkdir -p build/captures
@@ -561,6 +564,9 @@ jobs:
 
       - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
+
+      - name: Assistant d'ancrage sous openbox (place libre, quarts, cases prises, clavier)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-assist.py
 
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py

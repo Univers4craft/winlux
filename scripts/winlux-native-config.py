@@ -143,6 +143,26 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+
+
+def migrate_picom(shipped, target):
+    """Remplace un picom.conf livré par une version précédente de Winlux.
+
+    Les fenêtres agrandies gardaient leurs coins arrondis et laissaient voir le
+    fond d'écran aux quatre coins (#582) : la règle _WINLUX_MAXIMIZED manquait.
+    Un picom.conf personnel (qui ne commence pas par l'en-tête Winlux) est
+    toujours laissé tel quel.
+    """
+    try:
+        current = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    if current.startswith("# Compositeur de la session Winlux") and "_WINLUX_MAXIMIZED" not in current \
+            and shipped.is_file():
+        shutil.copyfile(shipped, target)
+
+
+migrate_picom(source / "config/picom/picom.conf", home / ".config/picom/picom.conf")
 # Raccourcis clavier : xfsettingsd applique ceux d'XFCE et les saisit avant
 # openbox. Windows+E ouvrait Thunar sur « / », Windows+R/P et Ctrl+Alt+L
 # visaient des programmes absents de l'image. Une valeur restée celle d'XFCE
