@@ -1088,6 +1088,29 @@ impl Path {
     }
 }
 
+/// Fichier du journal Winlux de ce compte, en chemin Windows (Z:\…).
+/// Le runtime choisit le dossier (/run/winlux/journal-<uid>, #633) et le
+/// donne dans WINLUX_JOURNAL_DIR ; sans lui, le journal des démons root.
+pub unsafe fn journal_file(name: &[u8]) -> Path {
+    let mut dir = [0u8; 200];
+    let n = GetEnvironmentVariableA(c"WINLUX_JOURNAL_DIR".as_ptr(), dir.as_mut_ptr().cast(), 200)
+        as usize;
+    let dir: &[u8] = if n > 0 && n < 200 && dir[0] == b'/' {
+        &dir[..n]
+    } else {
+        b"/run/winlux/journal"
+    };
+    let mut p = Path::new(b"Z:");
+    for &c in dir.iter().chain(b"/").chain(name) {
+        p.push(if c == b'/' {
+            b"\\"
+        } else {
+            core::slice::from_ref(&c)
+        });
+    }
+    p
+}
+
 pub unsafe fn exists(p: *const i8) -> bool {
     GetFileAttributesA(p) != u32::MAX
 }

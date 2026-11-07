@@ -8174,10 +8174,37 @@ pub unsafe extern "win64" fn duplicate_handle(
     src_handle: usize,
     _dst_process: usize,
     dst_handle: *mut usize,
-    _access: u32,
+    access: u32,
     inherit: i32,
     options: u32,
 ) -> i32 {
+    // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle,
+    // avec des droits jamais plus larges que ceux de l'original.
+    if let Some(r) = crate::dlls::mmap::duplicate_mapping(src_handle, access, options) {
+        return match r {
+            Ok(h) => {
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                crate::dlls::inherit::set(h, inherit != 0);
+                if !dst_handle.is_null() {
+                    *dst_handle = h;
+                }
+                1
+            }
+            Err(code) => {
+                if !dst_handle.is_null() {
+                    *dst_handle = 0;
+                }
+                // DUPLICATE_CLOSE_SOURCE ferme l'original même en cas d'échec.
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                crate::process::set_last_error(code);
+                0
+            }
+        };
+    }
     // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
     // l'original ne ferme pas la copie, comme sous Windows.
     let std_fd = match canon_std(src_handle) as isize {
@@ -8210,9 +8237,6 @@ pub unsafe extern "win64" fn duplicate_handle(
     } else if src_handle == crate::dlls::security::TOKEN_HANDLE {
         // Jeton unique du compte (voir security.rs) : la copie est lui-même.
         Some(src_handle)
-    } else if let Some(h) = crate::dlls::mmap::duplicate_mapping(src_handle) {
-        // Mapping (mémoire partagée de Chromium) : même mémoire, nouveau handle.
-        Some(h)
     } else {
         // Objet de synchronisation (événement, mutex, sémaphore, thread,
         // processus, port de complétion) : nouveau numéro de handle vers le

@@ -35,7 +35,9 @@ for index in range(60):
         f"[Desktop Entry]\nType=Application\nName=Application {index:02}\nExec=true\nCategories=Utility;\n")
     pins.append(f"appli{index:02}.desktop")
 (home / ".config/winlux").mkdir(parents=True)
-(home / ".config/winlux/start.json").write_text(json.dumps({"pins": pins, "recent": []}))
+# Toutes les applications en liste A–Z (#685) : les 60 applications d'une
+# seule catégorie tiendraient sinon dans une seule carte, sans défilement.
+(home / ".config/winlux/start.json").write_text(json.dumps({"pins": pins, "recent": [], "apps_view": "list"}))
 
 here = Path(__file__).resolve().parent
 module = runpy.run_path(str(here / "winlux-start-menu.py"), run_name="start_reset_test")

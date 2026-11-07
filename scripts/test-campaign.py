@@ -507,6 +507,10 @@ ok("test-taskbar-live-align.py" in (ROOT / ".github/workflows/ci.yml").read_text
 ok("def scroll_top" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "test-start-menu-reset.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : chaque ouverture repart en haut de la vue Épinglé (#673)")
+ok("def render_side" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "def start_menu_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "test-start-for-you.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer à deux volets : « Pour vous » calculé sur le PC, coupable dans Paramètres, recentré (#685)")
 
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
@@ -544,5 +548,11 @@ ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
    and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
    and (SCRIPTS / "test-update-page-names.py").exists(),
    "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
+
+# #633 : journal et état propres à chaque compte, jamais en 0666 dans /run/winlux.
+iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
+ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
+   and "journal-$journal_uid" in iso_init,
+   "journal : un dossier 0700 par compte, protected_regular=2")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -63,9 +63,23 @@ home_of() {
     printf '%s\n' "$home"
 }
 
+# Dossier à ce compte (root en service) : un dossier ou un lien posé à
+# l'avance par un autre compte est remplacé, et refusé s'il revient.
+own_dir() {
+    d=$1
+    if test -L "$d" || { test -e "$d" && test "$(stat -c %u "$d")" != "$(id -u)"; }; then rm -rf "$d"; fi
+    mkdir -p "$d"
+    test ! -L "$d" && test "$(stat -c %u "$d")" = "$(id -u)" || fail "dossier $d détourné par un autre compte"
+    chmod 755 "$d"
+    printf '%s\n' "$d"
+}
+
 do_list() {
     out="$run/sessions.txt"
     active=$(current_vt)
+    # Nom imprévisible (#633) : un fichier temporaire nommé d'avance par un
+    # autre compte bloquait la liste.
+    tmp=$(mktemp "$out.XXXXXX")
     for f in "$registry"/*; do
         test -f "$f" || continue
         user=${f##*/}
@@ -73,8 +87,9 @@ do_list() {
         vt=$(get "$f" vt)
         state=background; test "$vt" != "$active" || state=active
         printf 'session=%s|%s|%s|%s\n' "$user" "$(get "$f" display)" "$vt" "$state"
-    done > "$out.tmp.$$"
-    mv "$out.tmp.$$" "$out"
+    done > "$tmp"
+    chmod 644 "$tmp"
+    mv "$tmp" "$out"
 }
 
 do_register() {
@@ -117,7 +132,14 @@ start_session() {
     home=$(home_of "$user")
     mkdir -p "$root$home"
     for sub in Bureau Documents Images Musique Vidéos Téléchargements; do mkdir -p "$root$home/$sub"; done
-    log="$run/session-$user.log"
+    # Journaux du bureau et de Xorg dans un dossier à root (#633) : dans
+    # /run/winlux (collant), un autre compte pouvait créer d'avance
+    # session-<compte>.log ou Xorg.<n>.log et lire ce que root y écrivait ;
+    # avec fs.protected_regular=2, root refuse ce fichier et la session ne
+    # démarrait plus.
+    logs=$(own_dir "$run/session-logs")
+    log="$logs/session-$user.log"
+    xlog="$logs/Xorg.$n.log"
     xorg=${WINLUX_XORG:-/usr/bin/Xorg}
     test -x "$xorg" || fail "serveur X introuvable : $xorg"
     # Parent chef de session (comme le Xorg :0 de l'init) : le setsid de
@@ -125,15 +147,15 @@ start_session() {
     if have setsid; then
         # shellcheck disable=SC2016
         setsid /bin/sh -c 'trap "kill \$x 2>/dev/null" TERM INT HUP; "$@" & x=$!; wait "$x"' winlux-xorg \
-            "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$run/Xorg.$n.log" > "$log" 2>&1 &
+            "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$xlog" > "$log" 2>&1 &
     else
-        "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$run/Xorg.$n.log" > "$log" 2>&1 &
+        "$xorg" ":$n" "vt$vt" -noreset -nolisten tcp -logfile "$xlog" > "$log" 2>&1 &
     fi
     xpid=$!
     tries=0
     while ! test -S "$xsock/X$n"; do
         tries=$((tries + 1))
-        kill -0 "$xpid" 2>/dev/null || fail "le serveur X :$n s'est arrêté (journal $run/Xorg.$n.log)"
+        kill -0 "$xpid" 2>/dev/null || fail "le serveur X :$n s'est arrêté (journal $xlog)"
         test "$tries" -lt 100 || { kill "$xpid" 2>/dev/null || true; fail "le serveur X :$n ne répond pas"; }
         sleep 0.1
     done

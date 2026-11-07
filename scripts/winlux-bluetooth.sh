@@ -44,7 +44,8 @@ query() {
 
 status() {
     out="$run/bluetooth.txt"
-    tmp="$out.tmp.$$"
+    # Nom imprévisible (#644) : pas de fichier créé d'avance par un compte dans /run/winlux.
+    tmp=$(mktemp "$out.XXXXXX") || return 1
     {
         if ! have "$ctl" || ! adapter_present || ! show=$(query show 2>/dev/null) || ! printf '%s\n' "$show" | grep -q '^Controller '; then
             printf 'present=0\npowered=0\ndiscovering=0\nconnected=0\n'
@@ -69,6 +70,7 @@ status() {
             printf 'connected=%s\n' "$connected"
         fi
     } > "$tmp"
+    chmod 644 "$tmp"
     mv "$tmp" "$out"
 }
 

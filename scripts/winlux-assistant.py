@@ -59,7 +59,8 @@ LOCAL_DIR = DATA / "ia-locale"
 ACCOUNTS = DATA / "assistant-comptes"
 CLAUDE_ACCOUNT = ACCOUNTS / "claude"
 CODEX_ACCOUNT = ACCOUNTS / "chatgpt"
-JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
+# Journal du compte (#633) : /run/winlux/journal-<uid>, celui de root sans uid.
+JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR") or ("/run/winlux/journal" if os.geteuid() == 0 else f"/run/winlux/journal-{os.geteuid()}"))
 DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
