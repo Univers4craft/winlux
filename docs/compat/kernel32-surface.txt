@@ -335,6 +335,8 @@ GetSystemTime
 GetSystemTimeAdjustment
 GetSystemTimeAsFileTime
 GetSystemTimePreciseAsFileTime
+GetSystemWow64DirectoryA
+GetSystemWow64DirectoryW
 GetTempFileNameA
 GetTempFileNameW
 GetTempPath2W
@@ -768,7 +770,10 @@ WinluxResizePty
 WinluxSavePng
 WinluxSetGraphicsOption
 WinluxWritePty
+Wow64DisableWow64FsRedirection
+Wow64EnableWow64FsRedirection
 Wow64GetThreadContext
+Wow64RevertWow64FsRedirection
 Wow64SetThreadContext
 WriteConsoleA
 WriteConsoleInputW

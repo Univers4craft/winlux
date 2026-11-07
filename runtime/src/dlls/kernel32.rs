@@ -2201,7 +2201,7 @@ pub struct StartupInfo {
     pub std_error: usize,
 }
 
-fn startup_info() -> StartupInfo {
+pub(crate) fn startup_info() -> StartupInfo {
     StartupInfo {
         cb: std::mem::size_of::<StartupInfo>() as u32,
         reserved: 0,
@@ -4261,31 +4261,56 @@ fn critical_object(cs: usize) -> Option<Arc<MutexObject>> {
 }
 unsafe fn update_critical_fields(cs: *mut c_void, m: &MutexObject) {
     let s = lock(&m.state);
-    let p = cs as *mut CriticalSection;
-    (*p).lock_count = if s.owner.is_some() { 0 } else { -1 };
-    (*p).recursion_count = s.recursion.min(i32::MAX as usize) as i32;
-    (*p).owning_thread = s
+    let lock_count = if s.owner.is_some() { 0 } else { -1 };
+    let recursion = s.recursion.min(i32::MAX as usize) as i32;
+    let owner = s
         .owner
         .as_ref()
         .map_or(0, |_| get_current_thread_id() as usize);
+    if crate::wow32::active() {
+        // RTL_CRITICAL_SECTION x86 : 24 octets, champs de 4 octets.
+        let p = cs as *mut u32;
+        p.add(1).write_unaligned(lock_count as u32);
+        p.add(2).write_unaligned(recursion as u32);
+        p.add(3).write_unaligned(owner as u32);
+        return;
+    }
+    let p = cs as *mut CriticalSection;
+    (*p).lock_count = lock_count;
+    (*p).recursion_count = recursion;
+    (*p).owning_thread = owner;
+}
+/// Remet à zéro une CRITICAL_SECTION (40 octets en 64 bits, 24 en x86 :
+/// écrire la forme 64 bits déborderait sur les données voisines).
+unsafe fn reset_critical_fields(cs: *mut c_void, lock_count: i32, spin: usize) {
+    if crate::wow32::active() {
+        let p = cs as *mut u32;
+        for (i, v) in [0, lock_count as u32, 0, 0, 0, spin as u32]
+            .into_iter()
+            .enumerate()
+        {
+            p.add(i).write_unaligned(v);
+        }
+        return;
+    }
+    std::ptr::write(
+        cs as *mut CriticalSection,
+        CriticalSection {
+            debug_info: std::ptr::null_mut(),
+            lock_count,
+            recursion_count: 0,
+            owning_thread: 0,
+            lock_semaphore: 0,
+            spin_count: spin,
+        },
+    );
 }
 pub unsafe extern "win64" fn initialize_critical_section(cs: *mut c_void) {
     if cs.is_null() {
         crate::process::set_last_error(87);
         return;
     }
-    let p = cs as *mut CriticalSection;
-    std::ptr::write(
-        p,
-        CriticalSection {
-            debug_info: std::ptr::null_mut(),
-            lock_count: -1,
-            recursion_count: 0,
-            owning_thread: 0,
-            lock_semaphore: 0,
-            spin_count: 0,
-        },
-    );
+    reset_critical_fields(cs, -1, 0);
     lock(CRITICALS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
         cs as usize,
         Arc::new(MutexObject {
@@ -4305,7 +4330,7 @@ pub unsafe extern "win64" fn initialize_critical_section_and_spin_count(
     if cs.is_null() {
         return 0;
     }
-    (*(cs as *mut CriticalSection)).spin_count = spin as usize;
+    reset_critical_fields(cs, -1, spin as usize);
     1
 }
 pub unsafe extern "win64" fn initialize_critical_section_ex(
@@ -4356,17 +4381,7 @@ pub unsafe extern "win64" fn delete_critical_section(cs: *mut c_void) {
         return;
     }
     lock(CRITICALS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&(cs as usize));
-    std::ptr::write(
-        cs as *mut CriticalSection,
-        CriticalSection {
-            debug_info: std::ptr::null_mut(),
-            lock_count: 0,
-            recursion_count: 0,
-            owning_thread: 0,
-            lock_semaphore: 0,
-            spin_count: 0,
-        },
-    );
+    reset_critical_fields(cs, 0, 0);
 }
 pub unsafe extern "win64" fn create_thread(
     _attrs: usize,
@@ -6554,7 +6569,7 @@ pub(crate) fn get_srw(p: usize) -> Arc<SrwLockState> {
 pub extern "win64" fn initialize_srw_lock(p: usize) {
     if p != 0 {
         unsafe {
-            std::ptr::write_bytes(p as *mut u8, 0, 8);
+            std::ptr::write_bytes(p as *mut u8, 0, crate::wow32::pointer_size());
         }
     }
 }
@@ -6672,7 +6687,7 @@ pub(crate) fn condvar_sleep(
 pub extern "win64" fn initialize_condition_variable(p: usize) {
     if p != 0 {
         unsafe {
-            std::ptr::write_bytes(p as *mut u8, 0, 8);
+            std::ptr::write_bytes(p as *mut u8, 0, crate::wow32::pointer_size());
         }
     }
 }
@@ -6763,7 +6778,7 @@ pub extern "win64" fn init_once_begin_initialize(
     let (mu, cv) = init_once_gate();
     let mut guard = mu.lock().unwrap_or_else(|e| e.into_inner());
     loop {
-        let value = unsafe { std::ptr::read_volatile(init_once as *const usize) };
+        let value = unsafe { crate::wow32::read_ptr(init_once) };
         match value & 3 {
             2 => {
                 unsafe {
@@ -6783,7 +6798,7 @@ pub extern "win64" fn init_once_begin_initialize(
                 // Mode asynchrone : plusieurs initialisations concurrentes sont
                 // permises, seule la première InitOnceComplete est retenue.
                 if flags & INIT_ONCE_ASYNC == 0 {
-                    unsafe { std::ptr::write_volatile(init_once as *mut usize, 1) };
+                    unsafe { crate::wow32::write_ptr(init_once, 1) };
                 }
                 unsafe { *pending = 1 };
                 return 1;
@@ -6810,7 +6825,7 @@ pub extern "win64" fn init_once_complete(init_once: usize, flags: u32, context: 
     }
     let (mu, cv) = init_once_gate();
     let _guard = mu.lock().unwrap_or_else(|e| e.into_inner());
-    let value = unsafe { std::ptr::read_volatile(init_once as *const usize) };
+    let value = unsafe { crate::wow32::read_ptr(init_once) };
     if value & 3 == 2 {
         // Déjà terminée par un autre initialiseur (mode asynchrone).
         crate::process::set_last_error(1001);
@@ -6821,14 +6836,14 @@ pub extern "win64" fn init_once_complete(init_once: usize, flags: u32, context: 
     } else {
         context | 2
     };
-    unsafe { std::ptr::write_volatile(init_once as *mut usize, new) };
+    unsafe { crate::wow32::write_ptr(init_once, new) };
     cv.notify_all();
     1
 }
 pub extern "win64" fn init_once_initialize(init_once: usize) {
     if init_once != 0 {
         unsafe {
-            std::ptr::write_bytes(init_once as *mut u8, 0, 8);
+            std::ptr::write_bytes(init_once as *mut u8, 0, crate::wow32::pointer_size());
         }
     }
 }
@@ -9737,7 +9752,11 @@ mod audit_tests {
         assert_eq!(try_acquire_srw_lock_shared(lock_word), 0);
         let waiter = std::thread::spawn(move || {
             // Le ntdll Rtl* partage le même état que kernel32.
-            unsafe { super::super::ntdll::rtl_acquire_srw_lock_exclusive(lock_word as *mut usize) };
+            unsafe {
+                super::super::ntdll::rtl_acquire_srw_lock_exclusive(
+                    lock_word as *mut std::ffi::c_void,
+                )
+            };
             let seen = ORDER.fetch_add(1, Ordering::SeqCst);
             release_srw_lock_exclusive(lock_word);
             seen

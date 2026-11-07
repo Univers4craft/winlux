@@ -176,11 +176,32 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 && GetLastError() == 1400,
             "SetWindowPos rejette HWND invalide"
         );
-        SetLastError(0);
+        // Windows accepte une largeur nulle et ramène une taille négative à 0
+        // (wxWidgets remet ainsi ses contrôles à 0×0 avant de les placer).
+        let mut before: Rect = Default::default();
+        GetWindowRect(hwnd, &mut before);
+        let mut zero: Rect = Default::default();
+        let accepted = SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, 0, -5, 0) != 0;
+        GetWindowRect(hwnd, &mut zero);
         check!(
-            SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, 0, 10, 0) == 0 && GetLastError() == 87,
-            "SetWindowPos rejette taille invalide"
+            accepted && zero.right == zero.left && zero.bottom == zero.top,
+            "SetWindowPos accepte une taille nulle"
         );
+        SetWindowPos(
+            hwnd,
+            core::ptr::null_mut(),
+            before.left,
+            before.top,
+            before.right - before.left,
+            before.bottom - before.top,
+            0,
+        );
+        // WM_MOVE/WM_SIZE de ces deux appels : traités tout de suite pour ne
+        // pas fausser les compteurs vérifiés plus loin.
+        let mut pending: Msg = core::mem::zeroed();
+        while PeekMessageA(&mut pending, hwnd, 0x0003, 0x0005, 1) > 0 {
+            DispatchMessageA(&pending);
+        }
 
         check!(GetFocus().is_null(), "GetFocus initial");
         check!(
