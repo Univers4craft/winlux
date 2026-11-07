@@ -7,17 +7,17 @@ use crate::locale::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
-#[path = "printers.rs"]
-mod printers;
-#[path = "settings_gpu.rs"]
-mod graphics;
 /// Page « À propos » (logo, version, caractéristiques de l'appareil).
 #[path = "about.rs"]
 mod about;
-#[path = "settings_display.rs"]
-mod screens;
+#[path = "settings_gpu.rs"]
+mod graphics;
 #[path = "settings_input.rs"]
 mod input;
+#[path = "printers.rs"]
+mod printers;
+#[path = "settings_display.rs"]
+mod screens;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -49,7 +49,17 @@ const BT_ROWS: usize = 5;
 /// pages 3 (Son) et 5 (Souris) sont fondues dans 16 et 4, voir `merged`.
 const CATEGORY_COUNT: usize = 9;
 const CATEGORIES: [&[usize]; CATEGORY_COUNT] = [
-    &[8, 16, PAGE_POWER, PAGE_GRAPHICS, PAGE_CPU, 0, PAGE_REMOTE, PAGE_REPORT, 9],
+    &[
+        8,
+        16,
+        PAGE_POWER,
+        PAGE_GRAPHICS,
+        PAGE_CPU,
+        0,
+        PAGE_REMOTE,
+        PAGE_REPORT,
+        9,
+    ],
     &[BLUETOOTH_PAGE, 4, PAGE_PRINTERS],
     &[2, PAGE_NETDRIVES, PAGE_SHARING],
     &[PAGE_PERSONALIZE, 6, 13],
@@ -61,14 +71,49 @@ const CATEGORIES: [&[usize]; CATEGORY_COUNT] = [
 ];
 const CATEGORY_NAMES: [&Tr4; CATEGORY_COUNT] = [
     &[b"Syst\xE8me", b"System", b"Sistema", b"System"],
-    &[b"Bluetooth et appareils", b"Bluetooth & devices", b"Bluetooth y dispositivos", b"Bluetooth und Ger\xE4te"],
-    &[b"R\xE9seau et Internet", b"Network & internet", b"Red e Internet", b"Netzwerk und Internet"],
-    &[b"Personnalisation", b"Personalization", b"Personalizaci\xF3n", b"Personalisierung"],
+    &[
+        b"Bluetooth et appareils",
+        b"Bluetooth & devices",
+        b"Bluetooth y dispositivos",
+        b"Bluetooth und Ger\xE4te",
+    ],
+    &[
+        b"R\xE9seau et Internet",
+        b"Network & internet",
+        b"Red e Internet",
+        b"Netzwerk und Internet",
+    ],
+    &[
+        b"Personnalisation",
+        b"Personalization",
+        b"Personalizaci\xF3n",
+        b"Personalisierung",
+    ],
     &[b"Applications", b"Apps", b"Aplicaciones", b"Apps"],
-    &[b"Heure et langue", b"Time & language", b"Hora e idioma", b"Zeit und Sprache"],
-    &[b"Accessibilit\xE9", b"Accessibility", b"Accesibilidad", b"Barrierefreiheit"],
-    &[b"Confidentialit\xE9 et s\xE9curit\xE9", b"Privacy & security", b"Privacidad y seguridad", b"Datenschutz und Sicherheit"],
-    &[b"Mises \xE0 jour", b"Updates", b"Actualizaciones", b"Updates"],
+    &[
+        b"Heure et langue",
+        b"Time & language",
+        b"Hora e idioma",
+        b"Zeit und Sprache",
+    ],
+    &[
+        b"Accessibilit\xE9",
+        b"Accessibility",
+        b"Accesibilidad",
+        b"Barrierefreiheit",
+    ],
+    &[
+        b"Confidentialit\xE9 et s\xE9curit\xE9",
+        b"Privacy & security",
+        b"Privacidad y seguridad",
+        b"Datenschutz und Sicherheit",
+    ],
+    &[
+        b"Mises \xE0 jour",
+        b"Updates",
+        b"Actualizaciones",
+        b"Updates",
+    ],
 ];
 /// Rangées du menu au plus : toutes les catégories et la plus longue ouverte.
 const NAV_ROWS: usize = 20;
@@ -146,9 +191,19 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_APPS_WINDOWS),
         tr(S_NETWORK),
         tr(S_SOUND_BATTERY),
-        tr4(&[b"Clavier et souris", b"Keyboard & mouse", b"Teclado y mouse", b"Tastatur und Maus"]),
+        tr4(&[
+            b"Clavier et souris",
+            b"Keyboard & mouse",
+            b"Teclado y mouse",
+            b"Tastatur und Maus",
+        ]),
         tr(S_MOUSE),
-        tr4(&[b"Th\xE8me et barre des t\xE2ches", b"Theme & taskbar", b"Tema y barra de tareas", b"Design und Taskleiste"]),
+        tr4(&[
+            b"Th\xE8me et barre des t\xE2ches",
+            b"Theme & taskbar",
+            b"Tema y barra de tareas",
+            b"Design und Taskleiste",
+        ]),
         tr(S_UPDATES),
         tr(S_DISPLAY),
         tr(S_ABOUT),
@@ -163,7 +218,12 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_PRIVACY),
         tr(S_PROCESSOR),
         tr(S_NETWORK_DRIVES),
-        tr4(&[b"Fond d'\xE9cran et couleurs", b"Background & colors", b"Fondo y colores", b"Hintergrund und Farben"]),
+        tr4(&[
+            b"Fond d'\xE9cran et couleurs",
+            b"Background & colors",
+            b"Fondo y colores",
+            b"Hintergrund und Farben",
+        ]),
         b"Bluetooth",
         tr(S_POWER_BATTERY),
         tr(S_GRAPHICS),
@@ -212,7 +272,15 @@ static mut HOVER_NAV: i32 = -1;
 /// Boutons dessinés au dernier passage de `draw` : rectangle et identifiant.
 /// `hit()` s'en sert, ce qui garantit qu'un clic touche le bouton affiché et
 /// qu'une zone vide ne déclenche rien, quelle que soit la mise en page.
-static mut BUTTONS: [(Rect, i32); 64] = [(Rect { left: 0, top: 0, right: 0, bottom: 0 }, -1); 64];
+static mut BUTTONS: [(Rect, i32); 64] = [(
+    Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    },
+    -1,
+); 64];
 static mut BUTTON_COUNT: usize = 0;
 static mut SHOW_LOG: bool = false;
 static mut EXE_PATH: [u16; 2048] = [0; 2048];
@@ -222,7 +290,12 @@ static mut EXE_TRACE: bool = false;
 /// GPU préféré du programme : 0 auto, 1 intégré, 2 dédié (machines hybrides).
 static mut EXE_GPU: usize = 0;
 const EXE_GPUS: [&[u8]; 3] = [b"auto", b"integrated", b"dedicated"];
-static mut EXE_NOTICE: &Tr4 = &[b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.", b"Settings are optional and specific to this program.", b"Los ajustes son opcionales y propios de este programa.", b"Die Einstellungen sind optional und gelten nur f\xFCr dieses Programm."];
+static mut EXE_NOTICE: &Tr4 = &[
+    b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.",
+    b"Settings are optional and specific to this program.",
+    b"Los ajustes son opcionales y propios de este programa.",
+    b"Die Einstellungen sind optional und gelten nur f\xFCr dieses Programm.",
+];
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
 static mut LOCALE_KB_SCROLL: usize = 0;
@@ -280,7 +353,12 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
             .position(|&v| v == field(data, b"gpu"))
             .unwrap_or(0);
     }
-    EXE_NOTICE = &[b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.", b"A double-click starts the program, even without saved settings.", b"Un doble clic inicia el programa, incluso sin ajustes guardados.", b"Ein Doppelklick startet das Programm, auch ohne gespeicherte Einstellungen."];
+    EXE_NOTICE = &[
+        b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.",
+        b"A double-click starts the program, even without saved settings.",
+        b"Un doble clic inicia el programa, incluso sin ajustes guardados.",
+        b"Ein Doppelklick startet das Programm, auch ohne gespeicherte Einstellungen.",
+    ];
     PAGE = 10;
     HOVER = -1;
     SCROLL = 0;
@@ -299,7 +377,12 @@ unsafe fn save_exe_settings(reset: bool) {
         EXE_TRACE = false;
         EXE_GPU = 0;
         crate::settings_cpu::reset_program();
-        EXE_NOTICE = &[b"Valeurs par d\xE9faut restaur\xE9es.", b"Defaults restored.", b"Valores predeterminados restaurados.", b"Standardwerte wiederhergestellt."];
+        EXE_NOTICE = &[
+            b"Valeurs par d\xE9faut restaur\xE9es.",
+            b"Defaults restored.",
+            b"Valores predeterminados restaurados.",
+            b"Standardwerte wiederhergestellt.",
+        ];
         return;
     }
     let h = CreateFileW(
@@ -343,9 +426,19 @@ unsafe fn save_exe_settings(reset: bool) {
     );
     CloseHandle(h);
     EXE_NOTICE = if ok != 0 && written == total as u32 {
-        &[b"R\xE9glages enregistr\xE9s pour le prochain lancement.", b"Settings saved for the next launch.", b"Ajustes guardados para el pr\xF3ximo inicio.", b"Einstellungen f\xFCr den n\xE4chsten Start gespeichert."]
+        &[
+            b"R\xE9glages enregistr\xE9s pour le prochain lancement.",
+            b"Settings saved for the next launch.",
+            b"Ajustes guardados para el pr\xF3ximo inicio.",
+            b"Einstellungen f\xFCr den n\xE4chsten Start gespeichert.",
+        ]
     } else {
-        &[b"Enregistrement incomplet : r\xE9essayez.", b"Save incomplete: try again.", b"Guardado incompleto: int\xE9ntelo de nuevo.", b"Speichern unvollst\xE4ndig: Versuchen Sie es erneut."]
+        &[
+            b"Enregistrement incomplet : r\xE9essayez.",
+            b"Save incomplete: try again.",
+            b"Guardado incompleto: int\xE9ntelo de nuevo.",
+            b"Speichern unvollst\xE4ndig: Versuchen Sie es erneut.",
+        ]
     };
 }
 
@@ -443,7 +536,12 @@ pub(crate) unsafe fn launch_exe() {
         ) as isize
             <= 32
     {
-        EXE_NOTICE = &[b"Lancement impossible : consultez le journal de lancement Winlux.", b"Unable to start: see the Winlux launch log.", b"No se puede iniciar: consulte el registro de inicio de Winlux.", b"Start nicht m\xF6glich: Siehe Winlux-Startprotokoll."];
+        EXE_NOTICE = &[
+            b"Lancement impossible : consultez le journal de lancement Winlux.",
+            b"Unable to start: see the Winlux launch log.",
+            b"No se puede iniciar: consulte el registro de inicio de Winlux.",
+            b"Start nicht m\xF6glich: Siehe Winlux-Startprotokoll.",
+        ];
     }
 }
 pub(crate) fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
@@ -666,26 +764,81 @@ unsafe fn bt_command(verb: &[u8], mac: &[u8]) -> Option<&'static core::ffi::CStr
 /// Action du bouton principal d'un appareil : appairer, connecter, déconnecter.
 fn bt_primary(dev: &[u8]) -> (&'static [u8], &'static [u8]) {
     match (bt_field(dev, 3), bt_field(dev, 4)) {
-        (b"1", b"1") => (b"bluetooth-disconnect", tr4(&[b"D\xE9connecter", b"Disconnect", b"Desconectar", b"Trennen"])),
-        (b"1", _) => (b"bluetooth-connect", tr4(&[b"Connecter", b"Connect", b"Conectar", b"Verbinden"])),
-        _ => (b"bluetooth-pair", tr4(&[b"Appairer", b"Pair", b"Emparejar", b"Koppeln"])),
+        (b"1", b"1") => (
+            b"bluetooth-disconnect",
+            tr4(&[b"D\xE9connecter", b"Disconnect", b"Desconectar", b"Trennen"]),
+        ),
+        (b"1", _) => (
+            b"bluetooth-connect",
+            tr4(&[b"Connecter", b"Connect", b"Conectar", b"Verbinden"]),
+        ),
+        _ => (
+            b"bluetooth-pair",
+            tr4(&[b"Appairer", b"Pair", b"Emparejar", b"Koppeln"]),
+        ),
     }
 }
 unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
     let bt = BLUETOOTH.get();
     let state: &[u8] = if field(bt, b"present") != b"1" {
-        tr4(&[b"Aucun adaptateur Bluetooth d\xE9tect\xE9 (BlueZ).", b"No Bluetooth adapter found (BlueZ).", b"No se detect\xF3 ning\xFAn adaptador Bluetooth (BlueZ).", b"Kein Bluetooth-Adapter erkannt (BlueZ)."])
+        tr4(&[
+            b"Aucun adaptateur Bluetooth d\xE9tect\xE9 (BlueZ).",
+            b"No Bluetooth adapter found (BlueZ).",
+            b"No se detect\xF3 ning\xFAn adaptador Bluetooth (BlueZ).",
+            b"Kein Bluetooth-Adapter erkannt (BlueZ).",
+        ])
     } else if field(bt, b"powered") != b"1" {
         tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
     } else if field(bt, b"discovering") == b"1" {
-        tr4(&[b"Activ\xE9 - recherche d'appareils en cours...", b"On - searching for devices...", b"Activado - buscando dispositivos...", b"Ein - Ger\xE4te werden gesucht..."])
+        tr4(&[
+            b"Activ\xE9 - recherche d'appareils en cours...",
+            b"On - searching for devices...",
+            b"Activado - buscando dispositivos...",
+            b"Ein - Ger\xE4te werden gesucht...",
+        ])
     } else {
-        tr4(&[b"Activ\xE9 - visible pour les appareils \xE0 proximit\xE9", b"On - visible to nearby devices", b"Activado - visible para dispositivos cercanos", b"Ein - f\xFCr Ger\xE4te in der N\xE4he sichtbar"])
+        tr4(&[
+            b"Activ\xE9 - visible pour les appareils \xE0 proximit\xE9",
+            b"On - visible to nearby devices",
+            b"Activado - visible para dispositivos cercanos",
+            b"Ein - f\xFCr Ger\xE4te in der N\xE4he sichtbar",
+        ])
     };
     row(g, c, 44, b"Bluetooth", state);
-    button(g, c, 0, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 0);
-    button(g, c, 0, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 1);
-    button(g, c, 0, 2, tr4(&[b"Rechercher des appareils", b"Search for devices", b"Buscar dispositivos", b"Nach Ger\xE4ten suchen"]), 2);
+    button(
+        g,
+        c,
+        0,
+        0,
+        tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+        0,
+    );
+    button(
+        g,
+        c,
+        0,
+        1,
+        tr4(&[
+            b"D\xE9sactiver",
+            b"Turn off",
+            b"Desactivar",
+            b"Deaktivieren",
+        ]),
+        1,
+    );
+    button(
+        g,
+        c,
+        0,
+        2,
+        tr4(&[
+            b"Rechercher des appareils",
+            b"Search for devices",
+            b"Buscar dispositivos",
+            b"Nach Ger\xE4ten suchen",
+        ]),
+        2,
+    );
     let mut shown = 0;
     for k in 0..BT_ROWS {
         let Some(dev) = bt_device(bt, k) else { break };
@@ -696,11 +849,21 @@ unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
             b"clavier" => tr4(&[b" (clavier)", b" (keyboard)", b" (teclado)", b" (Tastatur)"]),
             b"souris" => tr4(&[b" (souris)", b" (mouse)", b" (mouse)", b" (Maus)"]),
             b"manette" => tr4(&[b" (manette)", b" (gamepad)", b" (mando)", b" (Gamepad)"]),
-            b"telephone" => tr4(&[b" (t\xE9l\xE9phone)", b" (phone)", b" (tel\xE9fono)", b" (Telefon)"]),
+            b"telephone" => tr4(&[
+                b" (t\xE9l\xE9phone)",
+                b" (phone)",
+                b" (tel\xE9fono)",
+                b" (Telefon)",
+            ]),
             _ => b"",
         };
         let status: &[u8] = if bt_field(dev, 4) == b"1" {
-            tr4(&[b" - connect\xE9", b" - connected", b" - conectado", b" - verbunden"])
+            tr4(&[
+                b" - connect\xE9",
+                b" - connected",
+                b" - conectado",
+                b" - verbunden",
+            ])
         } else {
             b""
         };
@@ -714,7 +877,14 @@ unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
         button(g, c, row_i, 0, &label[..n], id);
         button(g, c, row_i, 1, bt_primary(dev).1, id + 1);
         if bt_field(dev, 3) == b"1" {
-            button(g, c, row_i, 2, tr4(&[b"Oublier", b"Forget", b"Olvidar", b"Entfernen"]), id + 2);
+            button(
+                g,
+                c,
+                row_i,
+                2,
+                tr4(&[b"Oublier", b"Forget", b"Olvidar", b"Entfernen"]),
+                id + 2,
+            );
         }
         shown += 1;
     }
@@ -733,7 +903,12 @@ unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
     for part in [
         tr4(&[b"Manettes : ", b"Gamepads: ", b"Mandos: ", b"Gamepads: "]),
         value(b"gamepads"),
-        tr4(&[b"   Webcams : ", b"   Webcams: ", b"   C\xE1maras web: ", b"   Webcams: "]),
+        tr4(&[
+            b"   Webcams : ",
+            b"   Webcams: ",
+            b"   C\xE1maras web: ",
+            b"   Webcams: ",
+        ]),
         value(b"cameras"),
     ] {
         let take = part.len().min(summary.len() - n);
@@ -744,10 +919,26 @@ unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
         g,
         c,
         y,
-        tr4(&[b"P\xE9riph\xE9riques des programmes Windows", b"Windows program devices", b"Dispositivos de los programas de Windows", b"Ger\xE4te der Windows-Programme"]),
+        tr4(&[
+            b"P\xE9riph\xE9riques des programmes Windows",
+            b"Windows program devices",
+            b"Dispositivos de los programas de Windows",
+            b"Ger\xE4te der Windows-Programme",
+        ]),
         &summary[..n],
     );
-    row(g, c, y + 60, tr4(&[b"Micro par d\xE9faut", b"Default microphone", b"Micr\xF3fono predeterminado", b"Standardmikrofon"]), value(b"microphone"));
+    row(
+        g,
+        c,
+        y + 60,
+        tr4(&[
+            b"Micro par d\xE9faut",
+            b"Default microphone",
+            b"Micr\xF3fono predeterminado",
+            b"Standardmikrofon",
+        ]),
+        value(b"microphone"),
+    );
     journal(g, c, y + 124, LOG.get());
 }
 pub unsafe fn control(action: &core::ffi::CStr) -> bool {
@@ -757,7 +948,12 @@ pub unsafe fn control(action: &core::ffi::CStr) -> bool {
             b"poweroff" | b"reboot" | b"restart-session" | b"update-apply" | b"update-rollback"
         )
     {
-        crate::desktop::toast(tr4(&[b"Installation en cours : attendez la fin avant de red\xE9marrer.", b"Installation in progress: wait until it finishes before restarting.", b"Instalaci\xF3n en curso: espere a que termine antes de reiniciar.", b"Installation l\xE4uft: Warten Sie bis zum Ende, bevor Sie neu starten."]));
+        crate::desktop::toast(tr4(&[
+            b"Installation en cours : attendez la fin avant de red\xE9marrer.",
+            b"Installation in progress: wait until it finishes before restarting.",
+            b"Instalaci\xF3n en curso: espere a que termine antes de reiniciar.",
+            b"Installation l\xE4uft: Warten Sie bis zum Ende, bevor Sie neu starten.",
+        ]));
         return false;
     }
     if ShellExecuteA(
@@ -771,13 +967,23 @@ pub unsafe fn control(action: &core::ffi::CStr) -> bool {
         > 32
     {
         ACTION = EMPTY;
-        let s = tr4(&[b"Operation en cours...", b"Operation in progress...", b"Operaci\xF3n en curso...", b"Vorgang l\xE4uft..."]);
+        let s = tr4(&[
+            b"Operation en cours...",
+            b"Operation in progress...",
+            b"Operaci\xF3n en curso...",
+            b"Vorgang l\xE4uft...",
+        ]);
         ACTION.bytes[..s.len()].copy_from_slice(s);
         ACTION.len = s.len();
         LAST_POLL = 0;
         true
     } else {
-        crate::desktop::toast(tr4(&[b"Le service de contr\xF4le Winlux n'est pas disponible.", b"The Winlux control service is not available.", b"El servicio de control de Winlux no est\xE1 disponible.", b"Der Winlux-Steuerungsdienst ist nicht verf\xFCgbar."]));
+        crate::desktop::toast(tr4(&[
+            b"Le service de contr\xF4le Winlux n'est pas disponible.",
+            b"The Winlux control service is not available.",
+            b"El servicio de control de Winlux no est\xE1 disponible.",
+            b"Der Winlux-Steuerungsdienst ist nicht verf\xFCgbar.",
+        ]));
         false
     }
 }
@@ -890,7 +1096,9 @@ unsafe fn button_in(g: &mut Gfx, c: &Rect, r: Rect, label: &[u8], id: i32) {
         (PAGE_REMOTE, 4) => remote(b"view_only") == b"1",
         (PAGE_REMOTE, 5) => remote(b"legacy") == b"1",
         (PAGE_REMOTE, 13) => remote(b"port") == b"5900",
-        (PAGE_REMOTE, id @ 21..=26) => remote_account(id as usize - 21).is_some_and(|(_, allowed)| allowed),
+        (PAGE_REMOTE, id @ 21..=26) => {
+            remote_account(id as usize - 21).is_some_and(|(_, allowed)| allowed)
+        }
         (PAGE_SYSUPDATE, 0) => value(b"sysupdate_mode") == b"auto",
         (PAGE_SYSUPDATE, 1) => !matches!(value(b"sysupdate_mode"), b"auto" | b"scheduled"),
         (PAGE_SYSUPDATE, 2) => value(b"sysupdate_mode") == b"scheduled",
@@ -1019,7 +1227,12 @@ unsafe fn row(g: &mut Gfx, c: &Rect, y: i32, label: &[u8], val: &[u8]) {
         c.left,
         c.top + y + 22,
         if val.is_empty() {
-            tr4(&[b"Information indisponible", b"Information unavailable", b"Informaci\xF3n no disponible", b"Information nicht verf\xFCgbar"])
+            tr4(&[
+                b"Information indisponible",
+                b"Information unavailable",
+                b"Informaci\xF3n no disponible",
+                b"Information nicht verf\xFCgbar",
+            ])
         } else {
             &val[..end]
         },
@@ -1154,7 +1367,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text,
         f.client.left + 20,
         f.client.top + 20,
-        tr4(&[b"Param\xE8tres", b"Settings", b"Configuraci\xF3n", b"Einstellungen"]),
+        tr4(&[
+            b"Param\xE8tres",
+            b"Settings",
+            b"Configuraci\xF3n",
+            b"Einstellungen",
+        ]),
     );
     let page_names = pages();
     let mut rows = [Nav::Category(0); NAV_ROWS];
@@ -1166,7 +1384,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             Nav::Category(k) => {
                 let open = k == current;
                 let single = shown_count(k) == 1;
-                let font = if open && !single { g.f.semibold } else { g.f.body };
+                let font = if open && !single {
+                    g.f.semibold
+                } else {
+                    g.f.body
+                };
                 (tr4(CATEGORY_NAMES[k]), 8, open && single, font, 13)
             }
             Nav::Page(i) => (page_names[i], 24, i == PAGE, g.f.small, 12),
@@ -1191,18 +1413,30 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         }
         // Centré dans la rangée, même quand le menu se resserre.
         let ty = r.top + (r.bottom - r.top - 18) / 2;
-        let color = if matches!(entry, Nav::Page(_)) && !selected { p.text2 } else { p.text };
+        let color = if matches!(entry, Nav::Page(_)) && !selected {
+            p.text2
+        } else {
+            p.text
+        };
         text(g.hdc, font, color, r.left + indent, ty, &name[..end]);
     }
     // Fil d'Ariane : la catégorie au-dessus du titre de la sous-page.
     let mut crumb = [0u8; 96];
     let mut n = 0;
-    for part in [tr4(CATEGORY_NAMES[current]), b"  \x9B  ".as_slice(), page_names[PAGE]] {
+    for part in [
+        tr4(CATEGORY_NAMES[current]),
+        b"  \x9B  ".as_slice(),
+        page_names[PAGE],
+    ] {
         let take = part.len().min(crumb.len() - n);
         crumb[n..n + take].copy_from_slice(&part[..take]);
         n += take;
     }
-    let crumb_len = if shown_count(current) > 1 { n } else { tr4(CATEGORY_NAMES[current]).len() };
+    let crumb_len = if shown_count(current) > 1 {
+        n
+    } else {
+        tr4(CATEGORY_NAMES[current]).len()
+    };
     text(
         g.hdc,
         g.f.small,
@@ -1236,96 +1470,295 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     "Rapide"
                 }
             };
-            row(g, &c, 44, tr4(&[b"Rapidit\xE9 de la souris", b"Mouse speed", b"Velocidad del mouse", b"Mausgeschwindigkeit"]), speed_str.as_bytes());
-            button(g, &c, 0, 0, tr4(&[b"Lente", b"Slow", b"Lenta", b"Langsam"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Normale", b"Normal", b"Normal", b"Normal"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Rapide", b"Fast", b"R\xE1pida", b"Schnell"]), 2);
+            row(
+                g,
+                &c,
+                44,
+                tr4(&[
+                    b"Rapidit\xE9 de la souris",
+                    b"Mouse speed",
+                    b"Velocidad del mouse",
+                    b"Mausgeschwindigkeit",
+                ]),
+                speed_str.as_bytes(),
+            );
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[b"Lente", b"Slow", b"Lenta", b"Langsam"]),
+                0,
+            );
+            button(
+                g,
+                &c,
+                0,
+                1,
+                tr4(&[b"Normale", b"Normal", b"Normal", b"Normal"]),
+                1,
+            );
+            button(
+                g,
+                &c,
+                0,
+                2,
+                tr4(&[b"Rapide", b"Fast", b"R\xE1pida", b"Schnell"]),
+                2,
+            );
         }
         12 => crate::a11y::page_draw(g, &c),
         13 => {
-            row(g, &c, 44, tr4(&[b"Effets visuels", b"Visual effects", b"Efectos visuales", b"Visuelle Effekte"]), tr4(&[b"Options d'effet visuels.", b"Visual effect options.", b"Opciones de efectos visuales.", b"Optionen f\xFCr visuelle Effekte."]));
+            row(
+                g,
+                &c,
+                44,
+                tr4(&[
+                    b"Effets visuels",
+                    b"Visual effects",
+                    b"Efectos visuales",
+                    b"Visuelle Effekte",
+                ]),
+                tr4(&[
+                    b"Options d'effet visuels.",
+                    b"Visual effect options.",
+                    b"Opciones de efectos visuales.",
+                    b"Optionen f\xFCr visuelle Effekte.",
+                ]),
+            );
             row(
                 g,
                 &c,
                 104,
-                tr4(&[b"Effet de flou", b"Blur effect", b"Efecto de desenfoque", b"Unsch\xE4rfeeffekt"]),
+                tr4(&[
+                    b"Effet de flou",
+                    b"Blur effect",
+                    b"Efecto de desenfoque",
+                    b"Unsch\xE4rfeeffekt",
+                ]),
                 if unsafe { ENABLE_BLUR } {
                     tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"])
                 } else {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button_y(g, &c, 168, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 0);
-            button_y(g, &c, 168, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 1);
+            button_y(
+                g,
+                &c,
+                168,
+                0,
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+                0,
+            );
+            button_y(
+                g,
+                &c,
+                168,
+                1,
+                tr4(&[
+                    b"D\xE9sactiver",
+                    b"Turn off",
+                    b"Desactivar",
+                    b"Deaktivieren",
+                ]),
+                1,
+            );
             row(
                 g,
                 &c,
                 216,
-                tr4(&[b"Animations fluides", b"Smooth animations", b"Animaciones fluidas", b"Fl\xFCssige Animationen"]),
+                tr4(&[
+                    b"Animations fluides",
+                    b"Smooth animations",
+                    b"Animaciones fluidas",
+                    b"Fl\xFCssige Animationen",
+                ]),
                 if crate::gfx::animations() {
                     tr4(&[b"Activ\xE9es", b"On", b"Activadas", b"Ein"])
                 } else {
                     tr4(&[b"D\xE9sactiv\xE9es", b"Off", b"Desactivadas", b"Aus"])
                 },
             );
-            button_y(g, &c, 280, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 3);
-            button_y(g, &c, 280, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 4);
+            button_y(
+                g,
+                &c,
+                280,
+                0,
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+                3,
+            );
+            button_y(
+                g,
+                &c,
+                280,
+                1,
+                tr4(&[
+                    b"D\xE9sactiver",
+                    b"Turn off",
+                    b"Desactivar",
+                    b"Deaktivieren",
+                ]),
+                4,
+            );
             row(
                 g,
                 &c,
                 328,
-                tr4(&[b"Miniatures des fen\xEAtres", b"Window thumbnails", b"Miniaturas de ventanas", b"Fenstervorschauen"]),
+                tr4(&[
+                    b"Miniatures des fen\xEAtres",
+                    b"Window thumbnails",
+                    b"Miniaturas de ventanas",
+                    b"Fenstervorschauen",
+                ]),
                 if unsafe { ENABLE_THUMBNAILS } {
                     tr4(&[b"Activ\xE9es", b"On", b"Activadas", b"Ein"])
                 } else {
                     tr4(&[b"D\xE9sactiv\xE9es", b"Off", b"Desactivadas", b"Aus"])
                 },
             );
-            button_y(g, &c, 392, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 6);
-            button_y(g, &c, 392, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 7);
+            button_y(
+                g,
+                &c,
+                392,
+                0,
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+                6,
+            );
+            button_y(
+                g,
+                &c,
+                392,
+                1,
+                tr4(&[
+                    b"D\xE9sactiver",
+                    b"Turn off",
+                    b"Desactivar",
+                    b"Deaktivieren",
+                ]),
+                7,
+            );
             row(
                 g,
                 &c,
                 440,
-                tr4(&[b"Th\xE8me automatique", b"Automatic theme", b"Tema autom\xE1tico", b"Automatisches Design"]),
+                tr4(&[
+                    b"Th\xE8me automatique",
+                    b"Automatic theme",
+                    b"Tema autom\xE1tico",
+                    b"Automatisches Design",
+                ]),
                 if unsafe { AUTO_THEME } {
                     tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"])
                 } else {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button_y(g, &c, 504, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 9);
-            button_y(g, &c, 504, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 10);
+            button_y(
+                g,
+                &c,
+                504,
+                0,
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+                9,
+            );
+            button_y(
+                g,
+                &c,
+                504,
+                1,
+                tr4(&[
+                    b"D\xE9sactiver",
+                    b"Turn off",
+                    b"Desactivar",
+                    b"Deaktivieren",
+                ]),
+                10,
+            );
         }
         11 => {
             row(
                 g,
                 &c,
                 44,
-                tr4(&[b"Navigateur par d\xE9faut", b"Default browser", b"Navegador predeterminado", b"Standardbrowser"]),
+                tr4(&[
+                    b"Navigateur par d\xE9faut",
+                    b"Default browser",
+                    b"Navegador predeterminado",
+                    b"Standardbrowser",
+                ]),
                 // Aucun navigateur fourni ni favorisé : l'utilisateur choisit.
                 match value(b"browser_default") {
                     b"chrome" => b"Google Chrome",
                     b"edge" => b"Microsoft Edge",
                     b"firefox" => b"Mozilla Firefox",
-                    _ => tr4(&[b"Aucun - choisissez-en un ci-dessous", b"None - choose one below", b"Ninguno - elija uno abajo", b"Keiner - unten einen ausw\xE4hlen"]),
+                    _ => tr4(&[
+                        b"Aucun - choisissez-en un ci-dessous",
+                        b"None - choose one below",
+                        b"Ninguno - elija uno abajo",
+                        b"Keiner - unten einen ausw\xE4hlen",
+                    ]),
                 },
             );
             for (i, labels) in [
                 [
-                    tr4(&[b"Installer Chrome", b"Install Chrome", b"Instalar Chrome", b"Chrome installieren"]),
-                    tr4(&[b"Choisir Chrome", b"Choose Chrome", b"Elegir Chrome", b"Chrome w\xE4hlen"]),
-                    tr4(&[b"Ouvrir Chrome", b"Open Chrome", b"Abrir Chrome", b"Chrome \xF6ffnen"]),
+                    tr4(&[
+                        b"Installer Chrome",
+                        b"Install Chrome",
+                        b"Instalar Chrome",
+                        b"Chrome installieren",
+                    ]),
+                    tr4(&[
+                        b"Choisir Chrome",
+                        b"Choose Chrome",
+                        b"Elegir Chrome",
+                        b"Chrome w\xE4hlen",
+                    ]),
+                    tr4(&[
+                        b"Ouvrir Chrome",
+                        b"Open Chrome",
+                        b"Abrir Chrome",
+                        b"Chrome \xF6ffnen",
+                    ]),
                 ],
                 [
-                    tr4(&[b"Installer Edge", b"Install Edge", b"Instalar Edge", b"Edge installieren"]),
-                    tr4(&[b"Choisir Edge", b"Choose Edge", b"Elegir Edge", b"Edge w\xE4hlen"]),
-                    tr4(&[b"Ouvrir Edge", b"Open Edge", b"Abrir Edge", b"Edge \xF6ffnen"]),
+                    tr4(&[
+                        b"Installer Edge",
+                        b"Install Edge",
+                        b"Instalar Edge",
+                        b"Edge installieren",
+                    ]),
+                    tr4(&[
+                        b"Choisir Edge",
+                        b"Choose Edge",
+                        b"Elegir Edge",
+                        b"Edge w\xE4hlen",
+                    ]),
+                    tr4(&[
+                        b"Ouvrir Edge",
+                        b"Open Edge",
+                        b"Abrir Edge",
+                        b"Edge \xF6ffnen",
+                    ]),
                 ],
                 [
-                    tr4(&[b"Installer Firefox", b"Install Firefox", b"Instalar Firefox", b"Firefox installieren"]),
-                    tr4(&[b"Choisir Firefox", b"Choose Firefox", b"Elegir Firefox", b"Firefox w\xE4hlen"]),
-                    tr4(&[b"Ouvrir Firefox", b"Open Firefox", b"Abrir Firefox", b"Firefox \xF6ffnen"]),
+                    tr4(&[
+                        b"Installer Firefox",
+                        b"Install Firefox",
+                        b"Instalar Firefox",
+                        b"Firefox installieren",
+                    ]),
+                    tr4(&[
+                        b"Choisir Firefox",
+                        b"Choose Firefox",
+                        b"Elegir Firefox",
+                        b"Firefox w\xE4hlen",
+                    ]),
+                    tr4(&[
+                        b"Ouvrir Firefox",
+                        b"Open Firefox",
+                        b"Abrir Firefox",
+                        b"Firefox \xF6ffnen",
+                    ]),
                 ],
             ]
             .iter()
@@ -1354,12 +1787,34 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                         b"Mozilla Firefox",
                     ][i],
                     match value(key) {
-                        b"installed" => tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"]),
-                        b"available" => tr4(&[b"Paquet pr\xEAt - installation hors ligne", b"Package ready - offline installation", b"Paquete listo - instalaci\xF3n sin conexi\xF3n", b"Paket bereit - Offline-Installation"]),
-                        b"update" => tr4(&[b"Mise \xE0 jour disponible", b"Update available", b"Actualizaci\xF3n disponible", b"Update verf\xFCgbar"]),
+                        b"installed" => {
+                            tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"])
+                        }
+                        b"available" => tr4(&[
+                            b"Paquet pr\xEAt - installation hors ligne",
+                            b"Package ready - offline installation",
+                            b"Paquete listo - instalaci\xF3n sin conexi\xF3n",
+                            b"Paket bereit - Offline-Installation",
+                        ]),
+                        b"update" => tr4(&[
+                            b"Mise \xE0 jour disponible",
+                            b"Update available",
+                            b"Actualizaci\xF3n disponible",
+                            b"Update verf\xFCgbar",
+                        ]),
                         // Edge et Chrome : jamais fournis, téléchargés chez l'éditeur.
-                        b"downloadable" => tr4(&[b"T\xE9l\xE9charg\xE9 sur le site de l'\xE9diteur \xE0 l'installation", b"Downloaded from the publisher's website when installed", b"Se descarga del sitio del editor al instalar", b"Wird bei der Installation von der Website des Herstellers geladen"]),
-                        _ => tr4(&[b"Paquet absent de cette image", b"Package not in this image", b"Paquete ausente de esta imagen", b"Paket nicht in diesem Image"]),
+                        b"downloadable" => tr4(&[
+                            b"T\xE9l\xE9charg\xE9 sur le site de l'\xE9diteur \xE0 l'installation",
+                            b"Downloaded from the publisher's website when installed",
+                            b"Se descarga del sitio del editor al instalar",
+                            b"Wird bei der Installation von der Website des Herstellers geladen",
+                        ]),
+                        _ => tr4(&[
+                            b"Paquet absent de cette image",
+                            b"Package not in this image",
+                            b"Paquete ausente de esta imagen",
+                            b"Paket nicht in diesem Image",
+                        ]),
                     },
                 );
             }
@@ -1395,16 +1850,41 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 c.right - c.left,
             );
             for (i, label) in [
-                tr4(&[b"\xC9chelle auto", b"Auto scale", b"Escala autom\xE1tica", b"Automatische Skalierung"]),
+                tr4(&[
+                    b"\xC9chelle auto",
+                    b"Auto scale",
+                    b"Escala autom\xE1tica",
+                    b"Automatische Skalierung",
+                ]),
                 b"100 %",
                 b"125 %",
                 b"150 %",
                 b"200 %",
-                tr4(&[b"Journal diagnostic", b"Diagnostic log", b"Registro de diagn\xF3stico", b"Diagnoseprotokoll"]),
+                tr4(&[
+                    b"Journal diagnostic",
+                    b"Diagnostic log",
+                    b"Registro de diagn\xF3stico",
+                    b"Diagnoseprotokoll",
+                ]),
                 tr4(&[b"Enregistrer", b"Save", b"Guardar", b"Speichern"]),
-                tr4(&[b"Valeurs par d\xE9faut", b"Defaults", b"Valores predeterminados", b"Standardwerte"]),
-                tr4(&[b"Lancer le .exe", b"Run the .exe", b"Ejecutar el .exe", b".exe starten"]),
-                tr4(&[b"Processeur et priorit\xE9\x85", b"Processor and priority\x85", b"Procesador y prioridad\x85", b"Prozessor und Priorit\xE4t\x85"]),
+                tr4(&[
+                    b"Valeurs par d\xE9faut",
+                    b"Defaults",
+                    b"Valores predeterminados",
+                    b"Standardwerte",
+                ]),
+                tr4(&[
+                    b"Lancer le .exe",
+                    b"Run the .exe",
+                    b"Ejecutar el .exe",
+                    b".exe starten",
+                ]),
+                tr4(&[
+                    b"Processeur et priorit\xE9\x85",
+                    b"Processor and priority\x85",
+                    b"Procesador y prioridad\x85",
+                    b"Prozessor und Priorit\xE4t\x85",
+                ]),
             ]
             .iter()
             .enumerate()
@@ -1417,9 +1897,24 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             // Machines hybrides uniquement : sinon il n'y a rien à choisir.
             if graphics::exe_choices() {
                 for (i, label) in [
-                    tr4(&[b"GPU : automatique", b"GPU: automatic", b"GPU: autom\xE1tica", b"GPU: automatisch"]),
-                    tr4(&[b"GPU \xE9conomie", b"Power-saving GPU", b"GPU de ahorro", b"Energiespar-GPU"]),
-                    tr4(&[b"GPU performances", b"High-performance GPU", b"GPU de alto rendimiento", b"Hochleistungs-GPU"]),
+                    tr4(&[
+                        b"GPU : automatique",
+                        b"GPU: automatic",
+                        b"GPU: autom\xE1tica",
+                        b"GPU: automatisch",
+                    ]),
+                    tr4(&[
+                        b"GPU \xE9conomie",
+                        b"Power-saving GPU",
+                        b"GPU de ahorro",
+                        b"Energiespar-GPU",
+                    ]),
+                    tr4(&[
+                        b"GPU performances",
+                        b"High-performance GPU",
+                        b"GPU de alto rendimiento",
+                        b"Hochleistungs-GPU",
+                    ]),
                 ]
                 .iter()
                 .enumerate()
@@ -1431,34 +1926,112 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 350,
-                tr4(&[b"Application des r\xE9glages", b"Applying settings", b"Aplicaci\xF3n de los ajustes", b"Anwendung der Einstellungen"]),
-                tr4(&[b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.", b"Save, then restart the program. No profile is required.", b"Guarde y vuelva a iniciar el programa. Ning\xFAn perfil es obligatorio.", b"Speichern und das Programm neu starten. Kein Profil ist erforderlich."]),
+                tr4(&[
+                    b"Application des r\xE9glages",
+                    b"Applying settings",
+                    b"Aplicaci\xF3n de los ajustes",
+                    b"Anwendung der Einstellungen",
+                ]),
+                tr4(&[
+                    b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
+                    b"Save, then restart the program. No profile is required.",
+                    b"Guarde y vuelva a iniciar el programa. Ning\xFAn perfil es obligatorio.",
+                    b"Speichern und das Programm neu starten. Kein Profil ist erforderlich.",
+                ]),
             );
             row(g, &c, 410, tr4(&[b"P\xE9rim\xE8tre", b"Scope", b"Alcance", b"Umfang"]), tr4(&[b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.", b"Winlux rendering scale and traces; missing APIs still need implementing.", b"Escala del renderizado de Winlux y trazas; las API que faltan quedan por implementar.", b"Skalierung der Winlux-Darstellung und Ablaufprotokolle; fehlende APIs m\xFCssen noch implementiert werden."]));
         }
         9 => about::draw(g, &c, BUILD_INFO.get(), value(b"version")),
         0 => {
-            row(g, &c, 44, tr4(&[b"Version de Winlux", b"Winlux version", b"Versi\xF3n de Winlux", b"Winlux-Version"]), value(b"version"));
-            button(g, &c, 0, 0, tr4(&[b"Relancer le bureau", b"Restart the desktop", b"Reiniciar el escritorio", b"Desktop neu starten"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Red\xE9marrer", b"Restart", b"Reiniciar", b"Neu starten"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Arr\xEAter", b"Shut down", b"Apagar", b"Herunterfahren"]), 2);
-            row(g, &c, 170, tr4(&[b"Noyau Linux", b"Linux kernel", b"Kernel de Linux", b"Linux-Kernel"]), value(b"kernel"));
+            row(
+                g,
+                &c,
+                44,
+                tr4(&[
+                    b"Version de Winlux",
+                    b"Winlux version",
+                    b"Versi\xF3n de Winlux",
+                    b"Winlux-Version",
+                ]),
+                value(b"version"),
+            );
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[
+                    b"Relancer le bureau",
+                    b"Restart the desktop",
+                    b"Reiniciar el escritorio",
+                    b"Desktop neu starten",
+                ]),
+                0,
+            );
+            button(
+                g,
+                &c,
+                0,
+                1,
+                tr4(&[b"Red\xE9marrer", b"Restart", b"Reiniciar", b"Neu starten"]),
+                1,
+            );
+            button(
+                g,
+                &c,
+                0,
+                2,
+                tr4(&[b"Arr\xEAter", b"Shut down", b"Apagar", b"Herunterfahren"]),
+                2,
+            );
+            row(
+                g,
+                &c,
+                170,
+                tr4(&[
+                    b"Noyau Linux",
+                    b"Linux kernel",
+                    b"Kernel de Linux",
+                    b"Linux-Kernel",
+                ]),
+                value(b"kernel"),
+            );
             row(
                 g,
                 &c,
                 230,
-                tr4(&[b"P\xE9riph\xE9riques d'entr\xE9e d\xE9tect\xE9s", b"Input devices found", b"Dispositivos de entrada detectados", b"Erkannte Eingabeger\xE4te"]),
+                tr4(&[
+                    b"P\xE9riph\xE9riques d'entr\xE9e d\xE9tect\xE9s",
+                    b"Input devices found",
+                    b"Dispositivos de entrada detectados",
+                    b"Erkannte Eingabeger\xE4te",
+                ]),
                 value(b"input_devices"),
             );
             row(
                 g,
                 &c,
                 290,
-                tr4(&[b"Stockage du syst\xE8me", b"System storage", b"Almacenamiento del sistema", b"Systemspeicher"]),
+                tr4(&[
+                    b"Stockage du syst\xE8me",
+                    b"System storage",
+                    b"Almacenamiento del sistema",
+                    b"Systemspeicher",
+                ]),
                 if value(b"persistent") == b"1" {
-                    tr4(&[b"Disque persistant : r\xE9glages et mises \xE0 jour conserv\xE9s.", b"Persistent disk: settings and updates are kept.", b"Disco persistente: se conservan los ajustes y las actualizaciones.", b"Persistenter Datentr\xE4ger: Einstellungen und Updates bleiben erhalten."])
+                    tr4(&[
+                        b"Disque persistant : r\xE9glages et mises \xE0 jour conserv\xE9s.",
+                        b"Persistent disk: settings and updates are kept.",
+                        b"Disco persistente: se conservan los ajustes y las actualizaciones.",
+                        b"Persistenter Datentr\xE4ger: Einstellungen und Updates bleiben erhalten.",
+                    ])
                 } else {
-                    tr4(&[b"Session Live en RAM : modifications perdues au red\xE9marrage.", b"Live session in RAM: changes are lost on restart.", b"Sesi\xF3n Live en RAM: los cambios se pierden al reiniciar.", b"Live-Sitzung im RAM: \xC4nderungen gehen beim Neustart verloren."])
+                    tr4(&[
+                        b"Session Live en RAM : modifications perdues au red\xE9marrage.",
+                        b"Live session in RAM: changes are lost on restart.",
+                        b"Sesi\xF3n Live en RAM: los cambios se pierden al reiniciar.",
+                        b"Live-Sitzung im RAM: \xC4nderungen gehen beim Neustart verloren.",
+                    ])
                 },
             );
             journal(g, &c, 356, LOG.get());
@@ -1468,25 +2041,91 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 44,
-                tr4(&[b"Couche Windows / Win32", b"Windows / Win32 layer", b"Capa Windows / Win32", b"Windows-/Win32-Schicht"]),
-                tr4(&[b"Runtime Winlux - .exe via Explorer", b"Winlux runtime - .exe via File Explorer", b"Runtime de Winlux - .exe mediante el Explorador", b"Winlux-Runtime - .exe \xFCber den Explorer"]),
+                tr4(&[
+                    b"Couche Windows / Win32",
+                    b"Windows / Win32 layer",
+                    b"Capa Windows / Win32",
+                    b"Windows-/Win32-Schicht",
+                ]),
+                tr4(&[
+                    b"Runtime Winlux - .exe via Explorer",
+                    b"Winlux runtime - .exe via File Explorer",
+                    b"Runtime de Winlux - .exe mediante el Explorador",
+                    b"Winlux-Runtime - .exe \xFCber den Explorer",
+                ]),
             );
-            button(g, &c, 0, 0, tr4(&[b"Programmes .exe", b".exe programs", b"Programas .exe", b".exe-Programme"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Dossier personnel", b"Home folder", b"Carpeta personal", b"Pers\xF6nlicher Ordner"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Mises \xE0 jour", b"Updates", b"Actualizaciones", b"Updates"]), 2);
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[
+                    b"Programmes .exe",
+                    b".exe programs",
+                    b"Programas .exe",
+                    b".exe-Programme",
+                ]),
+                0,
+            );
+            button(
+                g,
+                &c,
+                0,
+                1,
+                tr4(&[
+                    b"Dossier personnel",
+                    b"Home folder",
+                    b"Carpeta personal",
+                    b"Pers\xF6nlicher Ordner",
+                ]),
+                1,
+            );
+            button(
+                g,
+                &c,
+                0,
+                2,
+                tr4(&[
+                    b"Mises \xE0 jour",
+                    b"Updates",
+                    b"Actualizaciones",
+                    b"Updates",
+                ]),
+                2,
+            );
             row(
                 g,
                 &c,
                 170,
-                tr4(&[b"Installer une application Windows", b"Install a Windows app", b"Instalar una aplicaci\xF3n de Windows", b"Windows-App installieren"]),
-                tr4(&[b"Ouvrir son installateur .exe dans Explorer.", b"Open its .exe installer in File Explorer.", b"Abra su instalador .exe en el Explorador.", b"\xD6ffnen Sie das .exe-Installationsprogramm im Explorer."]),
+                tr4(&[
+                    b"Installer une application Windows",
+                    b"Install a Windows app",
+                    b"Instalar una aplicaci\xF3n de Windows",
+                    b"Windows-App installieren",
+                ]),
+                tr4(&[
+                    b"Ouvrir son installateur .exe dans Explorer.",
+                    b"Open its .exe installer in File Explorer.",
+                    b"Abra su instalador .exe en el Explorador.",
+                    b"\xD6ffnen Sie das .exe-Installationsprogramm im Explorer.",
+                ]),
             );
             row(
                 g,
                 &c,
                 228,
-                tr4(&[b"Linux et Windows", b"Linux and Windows", b"Linux y Windows", b"Linux und Windows"]),
-                tr4(&[b"Les .exe partagent la session Linux et les fichiers.", b".exe programs share the Linux session and files.", b"Los .exe comparten la sesi\xF3n de Linux y los archivos.", b".exe-Programme teilen sich die Linux-Sitzung und die Dateien."]),
+                tr4(&[
+                    b"Linux et Windows",
+                    b"Linux and Windows",
+                    b"Linux y Windows",
+                    b"Linux und Windows",
+                ]),
+                tr4(&[
+                    b"Les .exe partagent la session Linux et les fichiers.",
+                    b".exe programs share the Linux session and files.",
+                    b"Los .exe comparten la sesi\xF3n de Linux y los archivos.",
+                    b".exe-Programme teilen sich die Linux-Sitzung und die Dateien.",
+                ]),
             );
             row(
                 g,
@@ -1497,32 +2136,131 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
         }
         2 => {
-            row(g, &c, 44, tr4(&[b"Connexion / adresse IPv4", b"Connection / IPv4 address", b"Conexi\xF3n / direcci\xF3n IPv4", b"Verbindung / IPv4-Adresse"]), value(b"network"));
-            button(g, &c, 0, 0, tr4(&[b"Renouveler DHCP", b"Renew DHCP", b"Renovar DHCP", b"DHCP erneuern"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 1);
+            row(
+                g,
+                &c,
+                44,
+                tr4(&[
+                    b"Connexion / adresse IPv4",
+                    b"Connection / IPv4 address",
+                    b"Conexi\xF3n / direcci\xF3n IPv4",
+                    b"Verbindung / IPv4-Adresse",
+                ]),
+                value(b"network"),
+            );
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[
+                    b"Renouveler DHCP",
+                    b"Renew DHCP",
+                    b"Renovar DHCP",
+                    b"DHCP erneuern",
+                ]),
+                0,
+            );
+            button(
+                g,
+                &c,
+                0,
+                1,
+                tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+                1,
+            );
             row(
                 g,
                 &c,
                 170,
-                tr4(&[b"Machine virtuelle", b"Virtual machine", b"M\xE1quina virtual", b"Virtuelle Maschine"]),
-                tr4(&[b"Ethernet virtuel ; le Wi-Fi reste g\xE9r\xE9 par l'h\xF4te.", b"Virtual Ethernet; Wi-Fi is managed by the host.", b"Ethernet virtual; el Wi-Fi lo gestiona el anfitri\xF3n.", b"Virtuelles Ethernet; WLAN wird vom Host verwaltet."]),
+                tr4(&[
+                    b"Machine virtuelle",
+                    b"Virtual machine",
+                    b"M\xE1quina virtual",
+                    b"Virtuelle Maschine",
+                ]),
+                tr4(&[
+                    b"Ethernet virtuel ; le Wi-Fi reste g\xE9r\xE9 par l'h\xF4te.",
+                    b"Virtual Ethernet; Wi-Fi is managed by the host.",
+                    b"Ethernet virtual; el Wi-Fi lo gestiona el anfitri\xF3n.",
+                    b"Virtuelles Ethernet; WLAN wird vom Host verwaltet.",
+                ]),
             );
             journal(g, &c, 236, LOG.get());
         }
         PAGE_POWER => draw_power(g, &c),
         3 => {
-            row(g, &c, 44, tr4(&[b"Sortie audio / volume", b"Audio output / volume", b"Salida de audio / volumen", b"Audioausgabe / Lautst\xE4rke"]), value(b"audio"));
-            button(g, &c, 0, 0, tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Muet / r\xE9tablir", b"Mute / unmute", b"Silenciar / restablecer", b"Stumm / Ton an"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]), 2);
+            row(
+                g,
+                &c,
+                44,
+                tr4(&[
+                    b"Sortie audio / volume",
+                    b"Audio output / volume",
+                    b"Salida de audio / volumen",
+                    b"Audioausgabe / Lautst\xE4rke",
+                ]),
+                value(b"audio"),
+            );
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]),
+                0,
+            );
+            button(
+                g,
+                &c,
+                0,
+                1,
+                tr4(&[
+                    b"Muet / r\xE9tablir",
+                    b"Mute / unmute",
+                    b"Silenciar / restablecer",
+                    b"Stumm / Ton an",
+                ]),
+                1,
+            );
+            button(
+                g,
+                &c,
+                0,
+                2,
+                tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]),
+                2,
+            );
             row(
                 g,
                 &c,
                 170,
-                tr4(&[b"Batterie et alimentation", b"Battery and power", b"Bater\xEDa y energ\xEDa", b"Akku und Energie"]),
-                tr4(&[b"Modes d'alimentation, veille et luminosit\xE9 : page Alimentation.", b"Power modes, sleep and brightness: Power page.", b"Modos de energ\xEDa, suspensi\xF3n y brillo: p\xE1gina Energ\xEDa.", b"Energiemodi, Energiesparen und Helligkeit: Seite Energie."]),
+                tr4(&[
+                    b"Batterie et alimentation",
+                    b"Battery and power",
+                    b"Bater\xEDa y energ\xEDa",
+                    b"Akku und Energie",
+                ]),
+                tr4(&[
+                    b"Modes d'alimentation, veille et luminosit\xE9 : page Alimentation.",
+                    b"Power modes, sleep and brightness: Power page.",
+                    b"Modos de energ\xEDa, suspensi\xF3n y brillo: p\xE1gina Energ\xEDa.",
+                    b"Energiemodi, Energiesparen und Helligkeit: Seite Energie.",
+                ]),
             );
-            button(g, &c, 3, 0, tr4(&[b"Options d'alimentation", b"Power options", b"Opciones de energ\xEDa", b"Energieoptionen"]), 9);
+            button(
+                g,
+                &c,
+                3,
+                0,
+                tr4(&[
+                    b"Options d'alimentation",
+                    b"Power options",
+                    b"Opciones de energ\xEDa",
+                    b"Energieoptionen",
+                ]),
+                9,
+            );
             journal(g, &c, 280, LOG.get());
         }
         6 => {
@@ -1530,47 +2268,185 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 44,
-                tr4(&[b"Barre des t\xE2ches", b"Taskbar", b"Barra de tareas", b"Taskleiste"]),
-                tr4(&[b"Pr\xE9f\xE9rences enregistr\xE9es pour la prochaine session.", b"Preferences saved for the next session.", b"Preferencias guardadas para la pr\xF3xima sesi\xF3n.", b"Einstellungen f\xFCr die n\xE4chste Sitzung gespeichert."]),
+                tr4(&[
+                    b"Barre des t\xE2ches",
+                    b"Taskbar",
+                    b"Barra de tareas",
+                    b"Taskleiste",
+                ]),
+                tr4(&[
+                    b"Pr\xE9f\xE9rences enregistr\xE9es pour la prochaine session.",
+                    b"Preferences saved for the next session.",
+                    b"Preferencias guardadas para la pr\xF3xima sesi\xF3n.",
+                    b"Einstellungen f\xFCr die n\xE4chste Sitzung gespeichert.",
+                ]),
             );
-            button_y(g, &c, 108, 0, tr4(&[b"Aligner \xE0 gauche", b"Align left", b"Alinear a la izquierda", b"Links ausrichten"]), 0);
-            button_y(g, &c, 108, 1, tr4(&[b"Centrer", b"Center", b"Centrar", b"Zentrieren"]), 1);
-            button_y(g, &c, 152, 0, tr4(&[b"Th\xE8me sombre", b"Dark theme", b"Tema oscuro", b"Dunkles Design"]), 3);
-            button_y(g, &c, 152, 1, tr4(&[b"Th\xE8me clair", b"Light theme", b"Tema claro", b"Helles Design"]), 4);
+            button_y(
+                g,
+                &c,
+                108,
+                0,
+                tr4(&[
+                    b"Aligner \xE0 gauche",
+                    b"Align left",
+                    b"Alinear a la izquierda",
+                    b"Links ausrichten",
+                ]),
+                0,
+            );
+            button_y(
+                g,
+                &c,
+                108,
+                1,
+                tr4(&[b"Centrer", b"Center", b"Centrar", b"Zentrieren"]),
+                1,
+            );
+            button_y(
+                g,
+                &c,
+                152,
+                0,
+                tr4(&[
+                    b"Th\xE8me sombre",
+                    b"Dark theme",
+                    b"Tema oscuro",
+                    b"Dunkles Design",
+                ]),
+                3,
+            );
+            button_y(
+                g,
+                &c,
+                152,
+                1,
+                tr4(&[
+                    b"Th\xE8me clair",
+                    b"Light theme",
+                    b"Tema claro",
+                    b"Helles Design",
+                ]),
+                4,
+            );
             row(
                 g,
                 &c,
                 200,
-                tr4(&[b"Th\xE8me automatique", b"Automatic theme", b"Tema autom\xE1tico", b"Automatisches Design"]),
+                tr4(&[
+                    b"Th\xE8me automatique",
+                    b"Automatic theme",
+                    b"Tema autom\xE1tico",
+                    b"Automatisches Design",
+                ]),
                 if unsafe { AUTO_THEME } {
-                    tr4(&[b"Jour clair / nuit sombre (8h\x9620h)", b"Light by day / dark by night (8am\x968pm)", b"Claro de d\xEDa / oscuro de noche (8\x9620 h)", b"Tags\xFCber hell / nachts dunkel (8\x9620 Uhr)"])
+                    tr4(&[
+                        b"Jour clair / nuit sombre (8h\x9620h)",
+                        b"Light by day / dark by night (8am\x968pm)",
+                        b"Claro de d\xEDa / oscuro de noche (8\x9620 h)",
+                        b"Tags\xFCber hell / nachts dunkel (8\x9620 Uhr)",
+                    ])
                 } else {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button_y(g, &c, 256, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 5);
-            button_y(g, &c, 256, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 6);
+            button_y(
+                g,
+                &c,
+                256,
+                0,
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]),
+                5,
+            );
+            button_y(
+                g,
+                &c,
+                256,
+                1,
+                tr4(&[
+                    b"D\xE9sactiver",
+                    b"Turn off",
+                    b"Desactivar",
+                    b"Deaktivieren",
+                ]),
+                6,
+            );
             row(
                 g,
                 &c,
                 304,
                 tr4(&[b"Stockage", b"Storage", b"Almacenamiento", b"Speicher"]),
                 if value(b"persistent") == b"1" {
-                    tr4(&[b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque.", b"Preferences are kept on disk.", b"Las preferencias se conservan en el disco.", b"Die Einstellungen werden auf dem Datentr\xE4ger gespeichert."])
+                    tr4(&[
+                        b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque.",
+                        b"Preferences are kept on disk.",
+                        b"Las preferencias se conservan en el disco.",
+                        b"Die Einstellungen werden auf dem Datentr\xE4ger gespeichert.",
+                    ])
                 } else {
-                    tr4(&[b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage.", b"Live session: settings last until restart.", b"Sesi\xF3n Live: los ajustes duran hasta el reinicio.", b"Live-Sitzung: Einstellungen gelten bis zum Neustart."])
+                    tr4(&[
+                        b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage.",
+                        b"Live session: settings last until restart.",
+                        b"Sesi\xF3n Live: los ajustes duran hasta el reinicio.",
+                        b"Live-Sitzung: Einstellungen gelten bis zum Neustart.",
+                    ])
                 },
             );
             row(
                 g,
                 &c,
                 364,
-                tr4(&[b"Fond d'\xE9cran, couleurs, barre des t\xE2ches, ic\xF4nes et sons", b"Wallpaper, colors, taskbar, icons and sounds", b"Fondo de pantalla, colores, barra de tareas, iconos y sonidos", b"Hintergrund, Farben, Taskleiste, Symbole und Sounds"]),
-                tr4(&[b"Galerie et aper\xE7u dans la page Personnalisation.", b"Gallery and preview on the Personalization page.", b"Galer\xEDa y vista previa en la p\xE1gina Personalizaci\xF3n.", b"Galerie und Vorschau auf der Seite Personalisierung."]),
+                tr4(&[
+                    b"Fond d'\xE9cran, couleurs, barre des t\xE2ches, ic\xF4nes et sons",
+                    b"Wallpaper, colors, taskbar, icons and sounds",
+                    b"Fondo de pantalla, colores, barra de tareas, iconos y sonidos",
+                    b"Hintergrund, Farben, Taskleiste, Symbole und Sounds",
+                ]),
+                tr4(&[
+                    b"Galerie et aper\xE7u dans la page Personnalisation.",
+                    b"Gallery and preview on the Personalization page.",
+                    b"Galer\xEDa y vista previa en la p\xE1gina Personalizaci\xF3n.",
+                    b"Galerie und Vorschau auf der Seite Personalisierung.",
+                ]),
             );
-            button_y(g, &c, 420, 0, tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]), 12);
-            button_y(g, &c, 420, 1, tr4(&[b"Assistant de bienvenue", b"Welcome assistant", b"Asistente de bienvenida", b"Willkommensassistent"]), 13);
-            button_y(g, &c, 420, 2, tr4(&[b"R\xE9glages de l'\xE9cran", b"Display settings", b"Configuraci\xF3n de pantalla", b"Bildschirmeinstellungen"]), 18);
+            button_y(
+                g,
+                &c,
+                420,
+                0,
+                tr4(&[
+                    b"Personnaliser",
+                    b"Personalize",
+                    b"Personalizar",
+                    b"Anpassen",
+                ]),
+                12,
+            );
+            button_y(
+                g,
+                &c,
+                420,
+                1,
+                tr4(&[
+                    b"Assistant de bienvenue",
+                    b"Welcome assistant",
+                    b"Asistente de bienvenida",
+                    b"Willkommensassistent",
+                ]),
+                13,
+            );
+            button_y(
+                g,
+                &c,
+                420,
+                2,
+                tr4(&[
+                    b"R\xE9glages de l'\xE9cran",
+                    b"Display settings",
+                    b"Configuraci\xF3n de pantalla",
+                    b"Bildschirmeinstellungen",
+                ]),
+                18,
+            );
         }
         7 => {
             if updating() {
@@ -1583,8 +2459,18 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     g,
                     &c,
                     44,
-                    tr4(&[b"Installation termin\xE9e", b"Installation complete", b"Instalaci\xF3n terminada", b"Installation abgeschlossen"]),
-                    tr4(&[b"Un red\xE9marrage est n\xE9cessaire pour terminer la mise \xE0 jour.", b"A restart is needed to finish the update.", b"Es necesario reiniciar para terminar la actualizaci\xF3n.", b"Zum Abschlie\xDFen des Updates ist ein Neustart erforderlich."]),
+                    tr4(&[
+                        b"Installation termin\xE9e",
+                        b"Installation complete",
+                        b"Instalaci\xF3n terminada",
+                        b"Installation abgeschlossen",
+                    ]),
+                    tr4(&[
+                        b"Un red\xE9marrage est n\xE9cessaire pour terminer la mise \xE0 jour.",
+                        b"A restart is needed to finish the update.",
+                        b"Es necesario reiniciar para terminar la actualizaci\xF3n.",
+                        b"Zum Abschlie\xDFen des Updates ist ein Neustart erforderlich.",
+                    ]),
                 );
                 let r = restart_rect(&c);
                 round_rect(
@@ -1604,7 +2490,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     if HOVER == 0 { p.text } else { p.on_accent },
                     (r.left + r.right) / 2,
                     r.top + 15,
-                    tr4(&[b"Red\xE9marrer pour terminer la mise \xE0 jour", b"Restart to finish the update", b"Reiniciar para terminar la actualizaci\xF3n", b"Neu starten, um das Update abzuschlie\xDFen"]),
+                    tr4(&[
+                        b"Red\xE9marrer pour terminer la mise \xE0 jour",
+                        b"Restart to finish the update",
+                        b"Reiniciar para terminar la actualizaci\xF3n",
+                        b"Neu starten, um das Update abzuschlie\xDFen",
+                    ]),
                 );
                 journal(g, &c, 198, LOG.get());
                 return;
@@ -1614,44 +2505,120 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     g,
                     &c,
                     44,
-                    tr4(&[b"Installation termin\xE9e - red\xE9marrage requis", b"Installation complete - restart required", b"Instalaci\xF3n terminada - es necesario reiniciar", b"Installation abgeschlossen - Neustart erforderlich"]),
-                    tr4(&[b"Red\xE9marrez maintenant, ou \xE9teignez puis rallumez la machine.", b"Restart now, or turn the machine off and on again.", b"Reinicie ahora, o apague y vuelva a encender el equipo.", b"Starten Sie jetzt neu oder schalten Sie den Computer aus und wieder ein."]),
+                    tr4(&[
+                        b"Installation termin\xE9e - red\xE9marrage requis",
+                        b"Installation complete - restart required",
+                        b"Instalaci\xF3n terminada - es necesario reiniciar",
+                        b"Installation abgeschlossen - Neustart erforderlich",
+                    ]),
+                    tr4(&[
+                        b"Red\xE9marrez maintenant, ou \xE9teignez puis rallumez la machine.",
+                        b"Restart now, or turn the machine off and on again.",
+                        b"Reinicie ahora, o apague y vuelva a encender el equipo.",
+                        b"Starten Sie jetzt neu oder schalten Sie den Computer aus und wieder ein.",
+                    ]),
                 );
             } else if field(PROGRESS.get(), b"phase") == b"error" {
                 row(
                     g,
                     &c,
                     44,
-                    tr4(&[b"L'installation n'a pas abouti", b"The installation did not complete", b"La instalaci\xF3n no se complet\xF3", b"Die Installation wurde nicht abgeschlossen"]),
-                    tr4(&[b"Consultez le journal avant de r\xE9essayer.", b"Check the log before trying again.", b"Consulte el registro antes de volver a intentarlo.", b"Pr\xFCfen Sie das Protokoll, bevor Sie es erneut versuchen."]),
+                    tr4(&[
+                        b"L'installation n'a pas abouti",
+                        b"The installation did not complete",
+                        b"La instalaci\xF3n no se complet\xF3",
+                        b"Die Installation wurde nicht abgeschlossen",
+                    ]),
+                    tr4(&[
+                        b"Consultez le journal avant de r\xE9essayer.",
+                        b"Check the log before trying again.",
+                        b"Consulte el registro antes de volver a intentarlo.",
+                        b"Pr\xFCfen Sie das Protokoll, bevor Sie es erneut versuchen.",
+                    ]),
                 );
             } else {
                 row(
                     g,
                     &c,
                     44,
-                    tr4(&[b"Mises \xE0 jour Winlux", b"Winlux updates", b"Actualizaciones de Winlux", b"Winlux-Updates"]),
+                    tr4(&[
+                        b"Mises \xE0 jour Winlux",
+                        b"Winlux updates",
+                        b"Actualizaciones de Winlux",
+                        b"Winlux-Updates",
+                    ]),
                     if value(b"update_auto") == b"enabled" {
-                        tr4(&[b"Recherche automatique activ\xE9e.", b"Automatic check is on.", b"B\xFAsqueda autom\xE1tica activada.", b"Automatische Suche aktiviert."])
+                        tr4(&[
+                            b"Recherche automatique activ\xE9e.",
+                            b"Automatic check is on.",
+                            b"B\xFAsqueda autom\xE1tica activada.",
+                            b"Automatische Suche aktiviert.",
+                        ])
                     } else {
-                        tr4(&[b"Installation sur demande.", b"Installation on request.", b"Instalaci\xF3n a petici\xF3n.", b"Installation auf Anfrage."])
+                        tr4(&[
+                            b"Installation sur demande.",
+                            b"Installation on request.",
+                            b"Instalaci\xF3n a petici\xF3n.",
+                            b"Installation auf Anfrage.",
+                        ])
                     },
                 );
             }
-            button(g, &c, 0, 0, tr4(&[b"Rechercher", b"Check", b"Buscar", b"Suchen"]), 0);
+            button(
+                g,
+                &c,
+                0,
+                0,
+                tr4(&[b"Rechercher", b"Check", b"Buscar", b"Suchen"]),
+                0,
+            );
             if !already_up_to_date() {
-                button(g, &c, 0, 1, tr4(&[b"Tout installer", b"Install all", b"Instalar todo", b"Alle installieren"]), 1);
+                button(
+                    g,
+                    &c,
+                    0,
+                    1,
+                    tr4(&[
+                        b"Tout installer",
+                        b"Install all",
+                        b"Instalar todo",
+                        b"Alle installieren",
+                    ]),
+                    1,
+                );
             }
-            button(g, &c, 0, 2, tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]), 2);
+            button(
+                g,
+                &c,
+                0,
+                2,
+                tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]),
+                2,
+            );
             button(
                 g,
                 &c,
                 1,
                 0,
                 match value(b"sysupdate_mode") {
-                    b"auto" => tr4(&[b"Mode : automatique", b"Mode: automatic", b"Modo: autom\xE1tico", b"Modus: automatisch"]),
-                    b"scheduled" => tr4(&[b"Mode : planifi\xE9", b"Mode: scheduled", b"Modo: programado", b"Modus: geplant"]),
-                    _ => tr4(&[b"Mode : manuel", b"Mode: manual", b"Modo: manual", b"Modus: manuell"]),
+                    b"auto" => tr4(&[
+                        b"Mode : automatique",
+                        b"Mode: automatic",
+                        b"Modo: autom\xE1tico",
+                        b"Modus: automatisch",
+                    ]),
+                    b"scheduled" => tr4(&[
+                        b"Mode : planifi\xE9",
+                        b"Mode: scheduled",
+                        b"Modo: programado",
+                        b"Modus: geplant",
+                    ]),
+                    _ => tr4(&[
+                        b"Mode : manuel",
+                        b"Mode: manual",
+                        b"Modo: manual",
+                        b"Modus: manuell",
+                    ]),
                 },
                 3,
             );
@@ -1660,11 +2627,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 &c,
                 1,
                 1,
-                if SHOW_LOG { tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]) } else { tr4(&[b"Journal", b"Log", b"Registro", b"Protokoll"]) },
+                if SHOW_LOG {
+                    tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"])
+                } else {
+                    tr4(&[b"Journal", b"Log", b"Registro", b"Protokoll"])
+                },
                 4,
             );
             if restart == b"reboot" {
-                button(g, &c, 1, 2, tr4(&[b"Red\xE9marrer", b"Restart", b"Reiniciar", b"Neu starten"]), 5);
+                button(
+                    g,
+                    &c,
+                    1,
+                    2,
+                    tr4(&[b"Red\xE9marrer", b"Restart", b"Reiniciar", b"Neu starten"]),
+                    5,
+                );
             }
             text(g.hdc, g.f.small, p.text3, c.left, c.top + 208, tr4(&[b"Les mises \xE0 jour sont t\xE9l\xE9charg\xE9es depuis les releases publiques GitHub.", b"Updates are downloaded from the public GitHub releases.", b"Las actualizaciones se descargan de las releases p\xFAblicas de GitHub.", b"Updates werden aus den \xF6ffentlichen GitHub-Releases heruntergeladen."]));
             text(
@@ -1674,9 +2652,19 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 c.left,
                 c.top + 244,
                 if SHOW_LOG {
-                    tr4(&[b"Journal d'installation", b"Installation log", b"Registro de instalaci\xF3n", b"Installationsprotokoll"])
+                    tr4(&[
+                        b"Journal d'installation",
+                        b"Installation log",
+                        b"Registro de instalaci\xF3n",
+                        b"Installationsprotokoll",
+                    ])
                 } else {
-                    tr4(&[b"Modifications apport\xE9es par la mise \xE0 jour", b"Changes in this update", b"Cambios incluidos en la actualizaci\xF3n", b"\xC4nderungen durch das Update"])
+                    tr4(&[
+                        b"Modifications apport\xE9es par la mise \xE0 jour",
+                        b"Changes in this update",
+                        b"Cambios incluidos en la actualizaci\xF3n",
+                        b"\xC4nderungen durch das Update",
+                    ])
                 },
             );
             journal(
@@ -1697,7 +2685,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(g, &c, 44, tr(S_LANGUAGE), tr(S_LANGUAGE_DESC));
             let cur_lang = unsafe { CURRENT_LANG } as usize;
             for i in 0..LANG_COUNT {
-                button_y(g, &c, 108 + 44 * (i as i32 / 3), i as i32 % 3, LANG_NAMES[i], i as i32);
+                button_y(
+                    g,
+                    &c,
+                    108 + 44 * (i as i32 / 3),
+                    i as i32 % 3,
+                    LANG_NAMES[i],
+                    i as i32,
+                );
             }
             row(
                 g,
@@ -1744,84 +2739,290 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 44,
-                tr4(&[b"Gestionnaire de fichiers", b"File manager", b"Administrador de archivos", b"Dateimanager"]),
-                tr4(&[b"Pr\xE9f\xE9rences de l'explorateur de fichiers Winlux.", b"Winlux File Explorer preferences.", b"Preferencias del Explorador de archivos de Winlux.", b"Einstellungen des Winlux-Datei-Explorers."]),
+                tr4(&[
+                    b"Gestionnaire de fichiers",
+                    b"File manager",
+                    b"Administrador de archivos",
+                    b"Dateimanager",
+                ]),
+                tr4(&[
+                    b"Pr\xE9f\xE9rences de l'explorateur de fichiers Winlux.",
+                    b"Winlux File Explorer preferences.",
+                    b"Preferencias del Explorador de archivos de Winlux.",
+                    b"Einstellungen des Winlux-Datei-Explorers.",
+                ]),
             );
             row(
                 g,
                 &c,
                 104,
-                tr4(&[b"Affichage par d\xE9faut", b"Default view", b"Vista predeterminada", b"Standardansicht"]),
+                tr4(&[
+                    b"Affichage par d\xE9faut",
+                    b"Default view",
+                    b"Vista predeterminada",
+                    b"Standardansicht",
+                ]),
                 match unsafe { crate::explorer::current_view() } {
-                    0 => tr4(&[b"Tr\xE8s grandes ic\xF4nes", b"Extra large icons", b"Iconos muy grandes", b"Extra gro\xDFe Symbole"]),
-                    1 => tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]),
-                    2 => tr4(&[b"Ic\xF4nes moyennes", b"Medium icons", b"Iconos medianos", b"Mittelgro\xDFe Symbole"]),
-                    3 => tr4(&[b"Petites ic\xF4nes", b"Small icons", b"Iconos peque\xF1os", b"Kleine Symbole"]),
+                    0 => tr4(&[
+                        b"Tr\xE8s grandes ic\xF4nes",
+                        b"Extra large icons",
+                        b"Iconos muy grandes",
+                        b"Extra gro\xDFe Symbole",
+                    ]),
+                    1 => tr4(&[
+                        b"Grandes ic\xF4nes",
+                        b"Large icons",
+                        b"Iconos grandes",
+                        b"Gro\xDFe Symbole",
+                    ]),
+                    2 => tr4(&[
+                        b"Ic\xF4nes moyennes",
+                        b"Medium icons",
+                        b"Iconos medianos",
+                        b"Mittelgro\xDFe Symbole",
+                    ]),
+                    3 => tr4(&[
+                        b"Petites ic\xF4nes",
+                        b"Small icons",
+                        b"Iconos peque\xF1os",
+                        b"Kleine Symbole",
+                    ]),
                     4 => tr4(&[b"Liste", b"List", b"Lista", b"Liste"]),
                     5 => tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
                     _ => tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]),
                 },
             );
-            button_y(g, &c, 160, 0, tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]), 0);
-            button_y(g, &c, 160, 1, tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]), 1);
-            button_y(g, &c, 160, 2, tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]), 2);
+            button_y(
+                g,
+                &c,
+                160,
+                0,
+                tr4(&[
+                    b"Grandes ic\xF4nes",
+                    b"Large icons",
+                    b"Iconos grandes",
+                    b"Gro\xDFe Symbole",
+                ]),
+                0,
+            );
+            button_y(
+                g,
+                &c,
+                160,
+                1,
+                tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
+                1,
+            );
+            button_y(
+                g,
+                &c,
+                160,
+                2,
+                tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]),
+                2,
+            );
             row(
                 g,
                 &c,
                 208,
-                tr4(&[b"\xC9l\xE9ments masqu\xE9s", b"Hidden items", b"Elementos ocultos", b"Ausgeblendete Elemente"]),
+                tr4(&[
+                    b"\xC9l\xE9ments masqu\xE9s",
+                    b"Hidden items",
+                    b"Elementos ocultos",
+                    b"Ausgeblendete Elemente",
+                ]),
                 if unsafe { crate::explorer::show_hidden() } {
                     tr4(&[b"Visibles", b"Shown", b"Visibles", b"Sichtbar"])
                 } else {
                     tr4(&[b"Masqu\xE9s", b"Hidden", b"Ocultos", b"Ausgeblendet"])
                 },
             );
-            button_y(g, &c, 272, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 3);
-            button_y(g, &c, 272, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 4);
+            button_y(
+                g,
+                &c,
+                272,
+                0,
+                tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]),
+                3,
+            );
+            button_y(
+                g,
+                &c,
+                272,
+                1,
+                tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]),
+                4,
+            );
             row(
                 g,
                 &c,
                 320,
-                tr4(&[b"Extensions de noms de fichiers", b"File name extensions", b"Extensiones de nombre de archivo", b"Dateinamenerweiterungen"]),
+                tr4(&[
+                    b"Extensions de noms de fichiers",
+                    b"File name extensions",
+                    b"Extensiones de nombre de archivo",
+                    b"Dateinamenerweiterungen",
+                ]),
                 if unsafe { crate::explorer::show_ext() } {
                     tr4(&[b"Affich\xE9es", b"Shown", b"Visibles", b"Angezeigt"])
                 } else {
                     tr4(&[b"Masqu\xE9es", b"Hidden", b"Ocultas", b"Ausgeblendet"])
                 },
             );
-            button_y(g, &c, 384, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 6);
-            button_y(g, &c, 384, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 7);
+            button_y(
+                g,
+                &c,
+                384,
+                0,
+                tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]),
+                6,
+            );
+            button_y(
+                g,
+                &c,
+                384,
+                1,
+                tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]),
+                7,
+            );
         }
         16 => {
             row(
                 g,
                 &c,
                 44,
-                tr4(&[b"P\xE9riph\xE9rique de sortie", b"Output device", b"Dispositivo de salida", b"Ausgabeger\xE4t"]),
+                tr4(&[
+                    b"P\xE9riph\xE9rique de sortie",
+                    b"Output device",
+                    b"Dispositivo de salida",
+                    b"Ausgabeger\xE4t",
+                ]),
                 value(b"audio_output"),
             );
-            button_y(g, &c, 108, 0, tr4(&[b"Haut-parleurs", b"Speakers", b"Altavoces", b"Lautsprecher"]), 0);
-            button_y(g, &c, 108, 1, tr4(&[b"Casque / HDMI", b"Headphones / HDMI", b"Auriculares / HDMI", b"Kopfh\xF6rer / HDMI"]), 1);
-            button_y(g, &c, 108, 2, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 2);
+            button_y(
+                g,
+                &c,
+                108,
+                0,
+                tr4(&[b"Haut-parleurs", b"Speakers", b"Altavoces", b"Lautsprecher"]),
+                0,
+            );
+            button_y(
+                g,
+                &c,
+                108,
+                1,
+                tr4(&[
+                    b"Casque / HDMI",
+                    b"Headphones / HDMI",
+                    b"Auriculares / HDMI",
+                    b"Kopfh\xF6rer / HDMI",
+                ]),
+                1,
+            );
+            button_y(
+                g,
+                &c,
+                108,
+                2,
+                tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+                2,
+            );
             row(
                 g,
                 &c,
                 156,
-                tr4(&[b"P\xE9riph\xE9rique d'entr\xE9e", b"Input device", b"Dispositivo de entrada", b"Eingabeger\xE4t"]),
+                tr4(&[
+                    b"P\xE9riph\xE9rique d'entr\xE9e",
+                    b"Input device",
+                    b"Dispositivo de entrada",
+                    b"Eingabeger\xE4t",
+                ]),
                 value(b"audio_input"),
             );
-            button_y(g, &c, 220, 0, tr4(&[b"Micro int\xE9gr\xE9", b"Built-in microphone", b"Micr\xF3fono integrado", b"Integriertes Mikrofon"]), 3);
-            button_y(g, &c, 220, 1, tr4(&[b"Micro externe", b"External microphone", b"Micr\xF3fono externo", b"Externes Mikrofon"]), 4);
-            row(g, &c, 268, tr4(&[b"Volume principal", b"Main volume", b"Volumen principal", b"Hauptlautst\xE4rke"]), value(b"audio"));
-            button_y(g, &c, 332, 0, tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]), 6);
-            button_y(g, &c, 332, 1, tr4(&[b"Muet / r\xE9tablir", b"Mute / unmute", b"Silenciar / restablecer", b"Stumm / Ton an"]), 7);
-            button_y(g, &c, 332, 2, tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]), 8);
+            button_y(
+                g,
+                &c,
+                220,
+                0,
+                tr4(&[
+                    b"Micro int\xE9gr\xE9",
+                    b"Built-in microphone",
+                    b"Micr\xF3fono integrado",
+                    b"Integriertes Mikrofon",
+                ]),
+                3,
+            );
+            button_y(
+                g,
+                &c,
+                220,
+                1,
+                tr4(&[
+                    b"Micro externe",
+                    b"External microphone",
+                    b"Micr\xF3fono externo",
+                    b"Externes Mikrofon",
+                ]),
+                4,
+            );
+            row(
+                g,
+                &c,
+                268,
+                tr4(&[
+                    b"Volume principal",
+                    b"Main volume",
+                    b"Volumen principal",
+                    b"Hauptlautst\xE4rke",
+                ]),
+                value(b"audio"),
+            );
+            button_y(
+                g,
+                &c,
+                332,
+                0,
+                tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]),
+                6,
+            );
+            button_y(
+                g,
+                &c,
+                332,
+                1,
+                tr4(&[
+                    b"Muet / r\xE9tablir",
+                    b"Mute / unmute",
+                    b"Silenciar / restablecer",
+                    b"Stumm / Ton an",
+                ]),
+                7,
+            );
+            button_y(
+                g,
+                &c,
+                332,
+                2,
+                tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]),
+                8,
+            );
             row(
                 g,
                 &c,
                 380,
-                tr4(&[b"Volume par application", b"Volume per app", b"Volumen por aplicaci\xF3n", b"Lautst\xE4rke pro App"]),
-                tr4(&[b"Chaque fen\xEAtre ouverte a son propre niveau de volume.", b"Each open window has its own volume level.", b"Cada ventana abierta tiene su propio nivel de volumen.", b"Jedes ge\xF6ffnete Fenster hat eine eigene Lautst\xE4rke."]),
+                tr4(&[
+                    b"Volume par application",
+                    b"Volume per app",
+                    b"Volumen por aplicaci\xF3n",
+                    b"Lautst\xE4rke pro App",
+                ]),
+                tr4(&[
+                    b"Chaque fen\xEAtre ouverte a son propre niveau de volume.",
+                    b"Each open window has its own volume level.",
+                    b"Cada ventana abierta tiene su propio nivel de volumen.",
+                    b"Jedes ge\xF6ffnete Fenster hat eine eigene Lautst\xE4rke.",
+                ]),
             );
             let mut ay = 440i32;
             for app in 0..crate::wm::APP_COUNT {
@@ -1853,7 +3054,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     } else if PAGE == PAGE_GRAPHICS {
         graphics::runtime_notice()
     } else if !available() {
-        tr4(&[b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.", b"Winlux service unavailable: these actions need Winlux.", b"Servicio de Winlux no disponible: las acciones requieren Winlux.", b"Winlux-Dienst nicht verf\xFCgbar: Die Aktionen erfordern Winlux."])
+        tr4(&[
+            b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.",
+            b"Winlux service unavailable: these actions need Winlux.",
+            b"Servicio de Winlux no disponible: las acciones requieren Winlux.",
+            b"Winlux-Dienst nicht verf\xFCgbar: Die Aktionen erfordern Winlux.",
+        ])
     } else {
         ACTION.get().split(|&v| v == b'\n').next().unwrap_or(b"")
     };
@@ -1918,7 +3124,15 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
         let mut parts = who.split(|&v| v == b'|');
         let (user, ip) = (parts.next().unwrap_or(b""), parts.next().unwrap_or(b""));
         join(
-            &[tr(S_REMOTE_CONNECTED), clients, b" (", user, tr(S_REMOTE_FROM), ip, b")"],
+            &[
+                tr(S_REMOTE_CONNECTED),
+                clients,
+                b" (",
+                user,
+                tr(S_REMOTE_FROM),
+                ip,
+                b")",
+            ],
             &mut state,
         )
     };
@@ -1945,7 +3159,13 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
         join(&[address, b":", remote(b"port")], &mut addr)
     } else {
         join(
-            &[address, b":", remote(b"port"), tr(S_REMOTE_FINGERPRINT), remote(b"fingerprint")],
+            &[
+                address,
+                b":",
+                remote(b"port"),
+                tr(S_REMOTE_FINGERPRINT),
+                remote(b"fingerprint"),
+            ],
             &mut addr,
         )
     };
@@ -1953,13 +3173,7 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
     button(g, c, 4, 0, b"Port -", 12);
     button(g, c, 4, 1, b"Port 5900", 13);
     button(g, c, 4, 2, b"Port +", 14);
-    row(
-        g,
-        c,
-        346,
-        tr(S_REMOTE_ACCOUNTS),
-        tr(S_REMOTE_ACCOUNTS_HINT),
-    );
+    row(g, c, 346, tr(S_REMOTE_ACCOUNTS), tr(S_REMOTE_ACCOUNTS_HINT));
     for i in 0..6 {
         if let Some((name, _)) = remote_account(i) {
             button(g, c, 7 + i as i32 / 3, i as i32 % 3, name, 21 + i as i32);
@@ -2029,11 +3243,26 @@ impl Line {
 
 fn action_label(key: &[u8]) -> &'static [u8] {
     match key {
-        b"nothing" => tr4(&[b"Ne rien faire", b"Do nothing", b"No hacer nada", b"Nichts unternehmen"]),
+        b"nothing" => tr4(&[
+            b"Ne rien faire",
+            b"Do nothing",
+            b"No hacer nada",
+            b"Nichts unternehmen",
+        ]),
         b"sleep" => tr4(&[b"Veille", b"Sleep", b"Suspender", b"Energie sparen"]),
-        b"hibernate" => tr4(&[b"Veille prolong\xE9e", b"Hibernate", b"Hibernar", b"Ruhezustand"]),
+        b"hibernate" => tr4(&[
+            b"Veille prolong\xE9e",
+            b"Hibernate",
+            b"Hibernar",
+            b"Ruhezustand",
+        ]),
         b"shutdown" => tr4(&[b"Arr\xEAter", b"Shut down", b"Apagar", b"Herunterfahren"]),
-        b"display-off" => tr4(&[b"\xC9teindre l'\xE9cran", b"Turn off the screen", b"Apagar la pantalla", b"Bildschirm ausschalten"]),
+        b"display-off" => tr4(&[
+            b"\xC9teindre l'\xE9cran",
+            b"Turn off the screen",
+            b"Apagar la pantalla",
+            b"Bildschirm ausschalten",
+        ]),
         _ => b"?",
     }
 }
@@ -2043,97 +3272,322 @@ fn action_label(key: &[u8]) -> &'static [u8] {
 unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
     let mut battery = Line::new();
     if pvalue(b"power_battery").is_empty() {
-        battery.push(tr4(&[b"Service d'alimentation Winlux non d\xE9marr\xE9", b"Winlux power service not started", b"Servicio de energ\xEDa de Winlux no iniciado", b"Winlux-Energiedienst nicht gestartet"]));
+        battery.push(tr4(&[
+            b"Service d'alimentation Winlux non d\xE9marr\xE9",
+            b"Winlux power service not started",
+            b"Servicio de energ\xEDa de Winlux no iniciado",
+            b"Winlux-Energiedienst nicht gestartet",
+        ]));
     } else if pvalue(b"power_battery") == b"0" {
-        battery.push(tr4(&[b"Alimentation secteur - aucune batterie d\xE9tect\xE9e", b"Plugged in - no battery found", b"Conectado a la corriente - no se detect\xF3 bater\xEDa", b"Netzbetrieb - kein Akku erkannt"]));
+        battery.push(tr4(&[
+            b"Alimentation secteur - aucune batterie d\xE9tect\xE9e",
+            b"Plugged in - no battery found",
+            b"Conectado a la corriente - no se detect\xF3 bater\xEDa",
+            b"Netzbetrieb - kein Akku erkannt",
+        ]));
     } else {
         battery.num(number(pvalue(b"power_percent"))).push(b" % - ");
         let left = pvalue(b"power_seconds_left");
         let full = pvalue(b"power_seconds_to_full");
         match pvalue(b"power_state") {
             b"charging" => {
-                battery.push(tr4(&[b"En charge", b"Charging", b"Cargando", b"Wird geladen"]));
+                battery.push(tr4(&[
+                    b"En charge",
+                    b"Charging",
+                    b"Cargando",
+                    b"Wird geladen",
+                ]));
                 if !full.is_empty() {
-                    battery.push(tr4(&[b", pleine dans ", b", full in ", b", completa en ", b", voll in "])).duration(number(full));
+                    battery
+                        .push(tr4(&[
+                            b", pleine dans ",
+                            b", full in ",
+                            b", completa en ",
+                            b", voll in ",
+                        ]))
+                        .duration(number(full));
                 }
             }
             b"discharging" => {
-                battery.push(tr4(&[b"Sur batterie", b"On battery", b"Con bater\xEDa", b"Akkubetrieb"]));
+                battery.push(tr4(&[
+                    b"Sur batterie",
+                    b"On battery",
+                    b"Con bater\xEDa",
+                    b"Akkubetrieb",
+                ]));
                 if !left.is_empty() {
-                    battery.push(b", ").duration(number(left)).push(tr4(&[b" restantes", b" left", b" restantes", b" verbleibend"]));
+                    battery.push(b", ").duration(number(left)).push(tr4(&[
+                        b" restantes",
+                        b" left",
+                        b" restantes",
+                        b" verbleibend",
+                    ]));
                 }
             }
             b"full" => {
                 battery.push(tr4(&[b"Charg\xE9e", b"Charged", b"Cargada", b"Geladen"]));
             }
             b"not-charging" => {
-                battery.push(tr4(&[b"Branch\xE9e, pas en charge", b"Plugged in, not charging", b"Conectada, sin cargar", b"Angeschlossen, wird nicht geladen"]));
+                battery.push(tr4(&[
+                    b"Branch\xE9e, pas en charge",
+                    b"Plugged in, not charging",
+                    b"Conectada, sin cargar",
+                    b"Angeschlossen, wird nicht geladen",
+                ]));
             }
             _ => {
-                battery.push(tr4(&[b"\xC9tat inconnu", b"Unknown state", b"Estado desconocido", b"Unbekannter Zustand"]));
+                battery.push(tr4(&[
+                    b"\xC9tat inconnu",
+                    b"Unknown state",
+                    b"Estado desconocido",
+                    b"Unbekannter Zustand",
+                ]));
             }
         }
         if !pvalue(b"power_health").is_empty() {
             battery
-                .push(tr4(&[b" - sant\xE9 ", b" - health ", b" - salud ", b" - Zustand "]))
+                .push(tr4(&[
+                    b" - sant\xE9 ",
+                    b" - health ",
+                    b" - salud ",
+                    b" - Zustand ",
+                ]))
                 .num(number(pvalue(b"power_health")))
                 .push(b" %");
         }
     }
-    row(g, c, 44, tr4(&[b"Batterie et mode d'alimentation", b"Battery and power mode", b"Bater\xEDa y modo de energ\xEDa", b"Akku und Energiemodus"]), battery.get());
-    button(g, c, 0, 0, tr4(&[b"Performances maximales", b"Best performance", b"M\xE1ximo rendimiento", b"H\xF6chstleistung"]), 0);
-    button(g, c, 0, 1, tr4(&[b"\xC9quilibr\xE9", b"Balanced", b"Equilibrado", b"Ausbalanciert"]), 1);
-    button(g, c, 0, 2, tr4(&[b"\xC9conomie d'\xE9nergie", b"Power saver", b"Ahorro de energ\xEDa", b"Energiesparmodus"]), 2);
+    row(
+        g,
+        c,
+        44,
+        tr4(&[
+            b"Batterie et mode d'alimentation",
+            b"Battery and power mode",
+            b"Bater\xEDa y modo de energ\xEDa",
+            b"Akku und Energiemodus",
+        ]),
+        battery.get(),
+    );
+    button(
+        g,
+        c,
+        0,
+        0,
+        tr4(&[
+            b"Performances maximales",
+            b"Best performance",
+            b"M\xE1ximo rendimiento",
+            b"H\xF6chstleistung",
+        ]),
+        0,
+    );
+    button(
+        g,
+        c,
+        0,
+        1,
+        tr4(&[
+            b"\xC9quilibr\xE9",
+            b"Balanced",
+            b"Equilibrado",
+            b"Ausbalanciert",
+        ]),
+        1,
+    );
+    button(
+        g,
+        c,
+        0,
+        2,
+        tr4(&[
+            b"\xC9conomie d'\xE9nergie",
+            b"Power saver",
+            b"Ahorro de energ\xEDa",
+            b"Energiesparmodus",
+        ]),
+        2,
+    );
 
     let mut now = Line::new();
-    now.push(tr4(&[b"Appliqu\xE9 maintenant : \xE9cran ", b"Applied now: screen ", b"Aplicado ahora: pantalla ", b"Jetzt angewendet: Bildschirm "]))
-        .push(pvalue(b"power_screen_now"))
-        .push(tr4(&[b", veille ", b", sleep ", b", suspensi\xF3n ", b", Energiesparen "]))
-        .push(pvalue(b"power_sleep_now"));
-    row(g, c, 176, tr4(&[b"\xC9cran et mise en veille (cliquer pour changer)", b"Screen and sleep (click to change)", b"Pantalla y suspensi\xF3n (haga clic para cambiar)", b"Bildschirm und Energiesparen (zum \xC4ndern klicken)"]), now.get());
+    now.push(tr4(&[
+        b"Appliqu\xE9 maintenant : \xE9cran ",
+        b"Applied now: screen ",
+        b"Aplicado ahora: pantalla ",
+        b"Jetzt angewendet: Bildschirm ",
+    ]))
+    .push(pvalue(b"power_screen_now"))
+    .push(tr4(&[
+        b", veille ",
+        b", sleep ",
+        b", suspensi\xF3n ",
+        b", Energiesparen ",
+    ]))
+    .push(pvalue(b"power_sleep_now"));
+    row(
+        g,
+        c,
+        176,
+        tr4(&[
+            b"\xC9cran et mise en veille (cliquer pour changer)",
+            b"Screen and sleep (click to change)",
+            b"Pantalla y suspensi\xF3n (haga clic para cambiar)",
+            b"Bildschirm und Energiesparen (zum \xC4ndern klicken)",
+        ]),
+        now.get(),
+    );
     let mut l = Line::new();
-    l.push(tr4(&[b"\xC9cran secteur : ", b"Screen plugged in: ", b"Pantalla con corriente: ", b"Bildschirm Netzbetrieb: "])).delay(pvalue(b"power_screen_ac"));
+    l.push(tr4(&[
+        b"\xC9cran secteur : ",
+        b"Screen plugged in: ",
+        b"Pantalla con corriente: ",
+        b"Bildschirm Netzbetrieb: ",
+    ]))
+    .delay(pvalue(b"power_screen_ac"));
     button(g, c, 3, 0, l.get(), 9);
     let mut l = Line::new();
-    l.push(tr4(&[b"\xC9cran batterie : ", b"Screen on battery: ", b"Pantalla con bater\xEDa: ", b"Bildschirm Akku: "])).delay(pvalue(b"power_screen_dc"));
+    l.push(tr4(&[
+        b"\xC9cran batterie : ",
+        b"Screen on battery: ",
+        b"Pantalla con bater\xEDa: ",
+        b"Bildschirm Akku: ",
+    ]))
+    .delay(pvalue(b"power_screen_dc"));
     button(g, c, 3, 1, l.get(), 10);
     if pvalue(b"power_can_sleep") == b"1" {
-        button(g, c, 3, 2, tr4(&[b"Mettre en veille", b"Sleep", b"Suspender", b"Energie sparen"]), 11);
+        button(
+            g,
+            c,
+            3,
+            2,
+            tr4(&[
+                b"Mettre en veille",
+                b"Sleep",
+                b"Suspender",
+                b"Energie sparen",
+            ]),
+            11,
+        );
     }
     let mut l = Line::new();
-    l.push(tr4(&[b"Veille secteur : ", b"Sleep plugged in: ", b"Suspensi\xF3n con corriente: ", b"Energiesparen Netzbetrieb: "])).delay(pvalue(b"power_sleep_ac"));
+    l.push(tr4(&[
+        b"Veille secteur : ",
+        b"Sleep plugged in: ",
+        b"Suspensi\xF3n con corriente: ",
+        b"Energiesparen Netzbetrieb: ",
+    ]))
+    .delay(pvalue(b"power_sleep_ac"));
     button(g, c, 4, 0, l.get(), 12);
     let mut l = Line::new();
-    l.push(tr4(&[b"Veille batterie : ", b"Sleep on battery: ", b"Suspensi\xF3n con bater\xEDa: ", b"Energiesparen Akku: "])).delay(pvalue(b"power_sleep_dc"));
+    l.push(tr4(&[
+        b"Veille batterie : ",
+        b"Sleep on battery: ",
+        b"Suspensi\xF3n con bater\xEDa: ",
+        b"Energiesparen Akku: ",
+    ]))
+    .delay(pvalue(b"power_sleep_dc"));
     button(g, c, 4, 1, l.get(), 13);
 
     let mut l = Line::new();
-    l.push(tr4(&[b"Luminosit\xE9 ", b"Brightness ", b"Brillo ", b"Helligkeit "]));
+    l.push(tr4(&[
+        b"Luminosit\xE9 ",
+        b"Brightness ",
+        b"Brillo ",
+        b"Helligkeit ",
+    ]));
     if pvalue(b"power_brightness").is_empty() {
-        l.push(tr4(&[b"non r\xE9glable ici (VM ou \xE9cran externe)", b"not adjustable here (VM or external screen)", b"no ajustable aqu\xED (VM o pantalla externa)", b"hier nicht einstellbar (VM oder externer Bildschirm)"]));
+        l.push(tr4(&[
+            b"non r\xE9glable ici (VM ou \xE9cran externe)",
+            b"not adjustable here (VM or external screen)",
+            b"no ajustable aqu\xED (VM o pantalla externa)",
+            b"hier nicht einstellbar (VM oder externer Bildschirm)",
+        ]));
     } else {
         l.num(number(pvalue(b"power_brightness"))).push(b" %");
         if pvalue(b"power_profile") == b"saver" {
-            l.push(tr4(&[b" (mode \xE9conomie)", b" (power saver)", b" (modo ahorro)", b" (Energiesparmodus)"]));
+            l.push(tr4(&[
+                b" (mode \xE9conomie)",
+                b" (power saver)",
+                b" (modo ahorro)",
+                b" (Energiesparmodus)",
+            ]));
         }
     }
     l.push(if pvalue(b"power_can_hibernate") == b"1" {
-        tr4(&[b" - veille prolong\xE9e pr\xEAte", b" - hibernate ready", b" - hibernaci\xF3n lista", b" - Ruhezustand bereit"]) as &[u8]
+        tr4(&[
+            b" - veille prolong\xE9e pr\xEAte",
+            b" - hibernate ready",
+            b" - hibernaci\xF3n lista",
+            b" - Ruhezustand bereit",
+        ]) as &[u8]
     } else {
-        tr4(&[b" - veille prolong\xE9e \xE0 pr\xE9parer", b" - hibernate needs setup", b" - hibernaci\xF3n por preparar", b" - Ruhezustand muss eingerichtet werden"])
+        tr4(&[
+            b" - veille prolong\xE9e \xE0 pr\xE9parer",
+            b" - hibernate needs setup",
+            b" - hibernaci\xF3n por preparar",
+            b" - Ruhezustand muss eingerichtet werden",
+        ])
     });
-    row(g, c, 352, tr4(&[b"Capot, bouton d'alimentation et luminosit\xE9", b"Lid, power button and brightness", b"Tapa, bot\xF3n de encendido y brillo", b"Deckel, Netzschalter und Helligkeit"]), l.get());
+    row(
+        g,
+        c,
+        352,
+        tr4(&[
+            b"Capot, bouton d'alimentation et luminosit\xE9",
+            b"Lid, power button and brightness",
+            b"Tapa, bot\xF3n de encendido y brillo",
+            b"Deckel, Netzschalter und Helligkeit",
+        ]),
+        l.get(),
+    );
     let mut l = Line::new();
-    l.push(tr4(&[b"Capot : ", b"Lid: ", b"Tapa: ", b"Deckel: "])).push(action_label(pvalue(b"power_lid")));
+    l.push(tr4(&[b"Capot : ", b"Lid: ", b"Tapa: ", b"Deckel: "]))
+        .push(action_label(pvalue(b"power_lid")));
     button(g, c, 7, 0, l.get(), 21);
     let mut l = Line::new();
-    l.push(tr4(&[b"Bouton : ", b"Button: ", b"Bot\xF3n: ", b"Taste: "])).push(action_label(pvalue(b"power_button")));
+    l.push(tr4(&[b"Bouton : ", b"Button: ", b"Bot\xF3n: ", b"Taste: "]))
+        .push(action_label(pvalue(b"power_button")));
     button(g, c, 7, 1, l.get(), 22);
     if pvalue(b"power_can_hibernate") == b"1" {
-        button(g, c, 7, 2, tr4(&[b"Veille prolong\xE9e", b"Hibernate", b"Hibernar", b"Ruhezustand"]), 23);
+        button(
+            g,
+            c,
+            7,
+            2,
+            tr4(&[
+                b"Veille prolong\xE9e",
+                b"Hibernate",
+                b"Hibernar",
+                b"Ruhezustand",
+            ]),
+            23,
+        );
     }
-    button(g, c, 8, 0, tr4(&[b"Luminosit\xE9 -", b"Brightness -", b"Brillo -", b"Helligkeit -"]), 24);
-    button(g, c, 8, 1, tr4(&[b"Luminosit\xE9 +", b"Brightness +", b"Brillo +", b"Helligkeit +"]), 25);
+    button(
+        g,
+        c,
+        8,
+        0,
+        tr4(&[
+            b"Luminosit\xE9 -",
+            b"Brightness -",
+            b"Brillo -",
+            b"Helligkeit -",
+        ]),
+        24,
+    );
+    button(
+        g,
+        c,
+        8,
+        1,
+        tr4(&[
+            b"Luminosit\xE9 +",
+            b"Brightness +",
+            b"Brillo +",
+            b"Helligkeit +",
+        ]),
+        25,
+    );
 }
 
 unsafe fn nav_hover(f: &Frame, x: i32, y: i32) -> i32 {
@@ -2173,7 +3627,11 @@ unsafe fn locale_wheel(c: &Rect, y: i32, down: bool) -> bool {
     };
     let max = count.saturating_sub(vis);
     let cur = *list;
-    let next = if down { (cur + 3).min(max) } else { cur.saturating_sub(3) };
+    let next = if down {
+        (cur + 3).min(max)
+    } else {
+        cur.saturating_sub(3)
+    };
     *list = next;
     next != cur
 }
@@ -2246,9 +3704,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         if inside(&nav_rect(f, pos, count), x, y) {
             let page = match entry {
                 // Une catégorie s'ouvre sur sa première sous-page visible.
-                Nav::Category(k) if k != category_of(PAGE) || shown_count(k) == 1 => {
-                    CATEGORIES[k].iter().copied().find(|&p| page_shown(p)).unwrap_or(PAGE)
-                }
+                Nav::Category(k) if k != category_of(PAGE) || shown_count(k) == 1 => CATEGORIES[k]
+                    .iter()
+                    .copied()
+                    .find(|&p| page_shown(p))
+                    .unwrap_or(PAGE),
                 Nav::Category(_) => return false,
                 Nav::Page(i) => i,
             };
@@ -2328,7 +3788,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         ),
         (10, id @ 12..=14) if EXE_LEN > 0 && graphics::exe_choices() => {
             EXE_GPU = (id - 12) as usize;
-            EXE_NOTICE = &[b"Cliquez sur Enregistrer puis relancez le programme.", b"Click Save, then restart the program.", b"Haga clic en Guardar y vuelva a iniciar el programa.", b"Klicken Sie auf Speichern und starten Sie das Programm neu."];
+            EXE_NOTICE = &[
+                b"Cliquez sur Enregistrer puis relancez le programme.",
+                b"Click Save, then restart the program.",
+                b"Haga clic en Guardar y vuelva a iniciar el programa.",
+                b"Klicken Sie auf Speichern und starten Sie das Programm neu.",
+            ];
             return true;
         }
         (10, 9) if EXE_LEN > 0 && crate::settings_cpu::available() => {
@@ -2499,7 +3964,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (PAGE_REMOTE, id @ 21..=26) => {
             if let Some((name, allowed)) = remote_account(id as usize - 21) {
                 let mut cmd = [0u8; 64];
-                let verb: &[u8] = if allowed { b"remote-deny " } else { b"remote-allow " };
+                let verb: &[u8] = if allowed {
+                    b"remote-deny "
+                } else {
+                    b"remote-allow "
+                };
                 let n = name.len().min(40);
                 cmd[..verb.len()].copy_from_slice(verb);
                 cmd[verb.len()..verb.len() + n].copy_from_slice(&name[..n]);
@@ -2736,25 +4205,95 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
             _ => tr4(&[b"Manuel : recherche chaque jour et notification ; vous installez quand vous voulez.", b"Manual: daily check and notification; you install when you want.", b"Manual: b\xFAsqueda diaria y notificaci\xF3n; usted instala cuando quiera.", b"Manuell: t\xE4gliche Suche und Benachrichtigung; Sie installieren, wann Sie m\xF6chten."]),
         },
     );
-    button(g, c, 0, 0, tr4(&[b"Automatique", b"Automatic", b"Autom\xE1tica", b"Automatisch"]), 0);
-    button(g, c, 0, 1, tr4(&[b"Manuel", b"Manual", b"Manual", b"Manuell"]), 1);
-    button(g, c, 0, 2, tr4(&[b"Planifi\xE9", b"Scheduled", b"Programado", b"Geplant"]), 2);
+    button(
+        g,
+        c,
+        0,
+        0,
+        tr4(&[
+            b"Automatique",
+            b"Automatic",
+            b"Autom\xE1tica",
+            b"Automatisch",
+        ]),
+        0,
+    );
+    button(
+        g,
+        c,
+        0,
+        1,
+        tr4(&[b"Manuel", b"Manual", b"Manual", b"Manuell"]),
+        1,
+    );
+    button(
+        g,
+        c,
+        0,
+        2,
+        tr4(&[b"Planifi\xE9", b"Scheduled", b"Programado", b"Geplant"]),
+        2,
+    );
     let mut slot = [0u8; 64];
     let mut n = push(
         &mut slot,
         0,
         match value(b"sysupdate_day") {
-            b"mon" => tr4(&[b"Chaque lundi", b"Every Monday", b"Cada lunes", b"Jeden Montag"]),
-            b"tue" => tr4(&[b"Chaque mardi", b"Every Tuesday", b"Cada martes", b"Jeden Dienstag"]),
-            b"wed" => tr4(&[b"Chaque mercredi", b"Every Wednesday", b"Cada mi\xE9rcoles", b"Jeden Mittwoch"]),
-            b"thu" => tr4(&[b"Chaque jeudi", b"Every Thursday", b"Cada jueves", b"Jeden Donnerstag"]),
-            b"fri" => tr4(&[b"Chaque vendredi", b"Every Friday", b"Cada viernes", b"Jeden Freitag"]),
-            b"sat" => tr4(&[b"Chaque samedi", b"Every Saturday", b"Cada s\xE1bado", b"Jeden Samstag"]),
-            b"sun" => tr4(&[b"Chaque dimanche", b"Every Sunday", b"Cada domingo", b"Jeden Sonntag"]),
-            _ => tr4(&[b"Tous les jours", b"Every day", b"Todos los d\xEDas", b"T\xE4glich"]),
+            b"mon" => tr4(&[
+                b"Chaque lundi",
+                b"Every Monday",
+                b"Cada lunes",
+                b"Jeden Montag",
+            ]),
+            b"tue" => tr4(&[
+                b"Chaque mardi",
+                b"Every Tuesday",
+                b"Cada martes",
+                b"Jeden Dienstag",
+            ]),
+            b"wed" => tr4(&[
+                b"Chaque mercredi",
+                b"Every Wednesday",
+                b"Cada mi\xE9rcoles",
+                b"Jeden Mittwoch",
+            ]),
+            b"thu" => tr4(&[
+                b"Chaque jeudi",
+                b"Every Thursday",
+                b"Cada jueves",
+                b"Jeden Donnerstag",
+            ]),
+            b"fri" => tr4(&[
+                b"Chaque vendredi",
+                b"Every Friday",
+                b"Cada viernes",
+                b"Jeden Freitag",
+            ]),
+            b"sat" => tr4(&[
+                b"Chaque samedi",
+                b"Every Saturday",
+                b"Cada s\xE1bado",
+                b"Jeden Samstag",
+            ]),
+            b"sun" => tr4(&[
+                b"Chaque dimanche",
+                b"Every Sunday",
+                b"Cada domingo",
+                b"Jeden Sonntag",
+            ]),
+            _ => tr4(&[
+                b"Tous les jours",
+                b"Every day",
+                b"Todos los d\xEDas",
+                b"T\xE4glich",
+            ]),
         },
     );
-    n = push(&mut slot, n, tr4(&[b" \xE0 ", b" at ", b" a las ", b" um "]));
+    n = push(
+        &mut slot,
+        n,
+        tr4(&[b" \xE0 ", b" at ", b" a las ", b" um "]),
+    );
     let hour = number(value(b"sysupdate_hour")).min(23);
     if hour < 10 {
         n = push(&mut slot, n, b"0");
@@ -2762,12 +4301,58 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
     n = push_number(&mut slot, n, hour);
     n = push(&mut slot, n, b":00");
     if mode != b"scheduled" {
-        n = push(&mut slot, n, tr4(&[b" (utilis\xE9 en mode Planifi\xE9)", b" (used in Scheduled mode)", b" (se usa en modo Programado)", b" (im Modus Geplant verwendet)"]));
+        n = push(
+            &mut slot,
+            n,
+            tr4(&[
+                b" (utilis\xE9 en mode Planifi\xE9)",
+                b" (used in Scheduled mode)",
+                b" (se usa en modo Programado)",
+                b" (im Modus Geplant verwendet)",
+            ]),
+        );
     }
-    row(g, c, 166, tr4(&[b"Cr\xE9neau planifi\xE9", b"Scheduled slot", b"Franja programada", b"Geplantes Zeitfenster"]), &slot[..n]);
-    button(g, c, 3, 0, tr4(&[b"Heure -", b"Hour -", b"Hora -", b"Stunde -"]), 9);
-    button(g, c, 3, 1, tr4(&[b"Heure +", b"Hour +", b"Hora +", b"Stunde +"]), 10);
-    button(g, c, 3, 2, tr4(&[b"Changer le jour", b"Change the day", b"Cambiar el d\xEDa", b"Tag \xE4ndern"]), 11);
+    row(
+        g,
+        c,
+        166,
+        tr4(&[
+            b"Cr\xE9neau planifi\xE9",
+            b"Scheduled slot",
+            b"Franja programada",
+            b"Geplantes Zeitfenster",
+        ]),
+        &slot[..n],
+    );
+    button(
+        g,
+        c,
+        3,
+        0,
+        tr4(&[b"Heure -", b"Hour -", b"Hora -", b"Stunde -"]),
+        9,
+    );
+    button(
+        g,
+        c,
+        3,
+        1,
+        tr4(&[b"Heure +", b"Hour +", b"Hora +", b"Stunde +"]),
+        10,
+    );
+    button(
+        g,
+        c,
+        3,
+        2,
+        tr4(&[
+            b"Changer le jour",
+            b"Change the day",
+            b"Cambiar el d\xEDa",
+            b"Tag \xE4ndern",
+        ]),
+        11,
+    );
     let count = number(value(b"sysupdate_count"));
     let mut summary = [0u8; 128];
     let mut n = 0;
@@ -2777,42 +4362,104 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
         n = push(
             &mut summary,
             n,
-            tr4(&[b"Installation des paquets en cours : n'\xE9teignez pas la machine.", b"Installing packages: don't turn off the machine.", b"Instalando paquetes: no apague el equipo.", b"Pakete werden installiert: Schalten Sie den Computer nicht aus."]),
+            tr4(&[
+                b"Installation des paquets en cours : n'\xE9teignez pas la machine.",
+                b"Installing packages: don't turn off the machine.",
+                b"Instalando paquetes: no apague el equipo.",
+                b"Pakete werden installiert: Schalten Sie den Computer nicht aus.",
+            ]),
         );
     } else {
         if count == 0 {
-            n = push(&mut summary, n, tr4(&[b"Syst\xE8me \xE0 jour", b"System up to date", b"Sistema actualizado", b"System auf dem neuesten Stand"]));
+            n = push(
+                &mut summary,
+                n,
+                tr4(&[
+                    b"Syst\xE8me \xE0 jour",
+                    b"System up to date",
+                    b"Sistema actualizado",
+                    b"System auf dem neuesten Stand",
+                ]),
+            );
         } else {
             n = push_number(&mut summary, n, count);
             n = push(
                 &mut summary,
                 n,
                 if count == 1 {
-                    tr4(&[b" paquet \xE0 mettre \xE0 jour", b" package to update", b" paquete por actualizar", b" Paket zu aktualisieren"])
+                    tr4(&[
+                        b" paquet \xE0 mettre \xE0 jour",
+                        b" package to update",
+                        b" paquete por actualizar",
+                        b" Paket zu aktualisieren",
+                    ])
                 } else {
-                    tr4(&[b" paquets \xE0 mettre \xE0 jour", b" packages to update", b" paquetes por actualizar", b" Pakete zu aktualisieren"])
+                    tr4(&[
+                        b" paquets \xE0 mettre \xE0 jour",
+                        b" packages to update",
+                        b" paquetes por actualizar",
+                        b" Pakete zu aktualisieren",
+                    ])
                 },
             );
         }
-        n = push(&mut summary, n, tr4(&[b" - derni\xE8re recherche : ", b" - last check: ", b" - \xFAltima b\xFAsqueda: ", b" - letzte Suche: "]));
+        n = push(
+            &mut summary,
+            n,
+            tr4(&[
+                b" - derni\xE8re recherche : ",
+                b" - last check: ",
+                b" - \xFAltima b\xFAsqueda: ",
+                b" - letzte Suche: ",
+            ]),
+        );
         n = push(&mut summary, n, value(b"sysupdate_last"));
     }
     row(
         g,
         c,
         300,
-        tr4(&[b"Paquets du syst\xE8me Linux (APT)", b"Linux system packages (APT)", b"Paquetes del sistema Linux (APT)", b"Pakete des Linux-Systems (APT)"]),
+        tr4(&[
+            b"Paquets du syst\xE8me Linux (APT)",
+            b"Linux system packages (APT)",
+            b"Paquetes del sistema Linux (APT)",
+            b"Pakete des Linux-Systems (APT)",
+        ]),
         &summary[..n],
     );
-    button(g, c, 6, 0, tr4(&[b"Rechercher", b"Check", b"Buscar", b"Suchen"]), 18);
-    button(g, c, 6, 1, tr4(&[b"Tout installer", b"Install all", b"Instalar todo", b"Alle installieren"]), 19);
+    button(
+        g,
+        c,
+        6,
+        0,
+        tr4(&[b"Rechercher", b"Check", b"Buscar", b"Suchen"]),
+        18,
+    );
+    button(
+        g,
+        c,
+        6,
+        1,
+        tr4(&[
+            b"Tout installer",
+            b"Install all",
+            b"Instalar todo",
+            b"Alle installieren",
+        ]),
+        19,
+    );
     button(
         g,
         c,
         6,
         2,
         if SHOW_LOG {
-            tr4(&[b"Liste des paquets", b"Package list", b"Lista de paquetes", b"Paketliste"])
+            tr4(&[
+                b"Liste des paquets",
+                b"Package list",
+                b"Lista de paquetes",
+                b"Paketliste",
+            ])
         } else {
             tr4(&[b"Journal", b"Log", b"Registro", b"Protokoll"])
         },
@@ -2825,9 +4472,19 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
         c.left,
         c.top + 420,
         if SHOW_LOG {
-            tr4(&[b"Journal APT", b"APT log", b"Registro de APT", b"APT-Protokoll"])
+            tr4(&[
+                b"Journal APT",
+                b"APT log",
+                b"Registro de APT",
+                b"APT-Protokoll",
+            ])
         } else {
-            tr4(&[b"Paquets concern\xE9s", b"Affected packages", b"Paquetes afectados", b"Betroffene Pakete"])
+            tr4(&[
+                b"Paquets concern\xE9s",
+                b"Affected packages",
+                b"Paquetes afectados",
+                b"Betroffene Pakete",
+            ])
         },
     );
     journal(
@@ -2848,21 +4505,60 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         g,
         c,
         44,
-        tr4(&[b"T\xE9l\xE9m\xE9trie et donn\xE9es de diagnostic", b"Telemetry and diagnostic data", b"Telemetr\xEDa y datos de diagn\xF3stico", b"Telemetrie und Diagnosedaten"]),
+        tr4(&[
+            b"T\xE9l\xE9m\xE9trie et donn\xE9es de diagnostic",
+            b"Telemetry and diagnostic data",
+            b"Telemetr\xEDa y datos de diagn\xF3stico",
+            b"Telemetrie und Diagnosedaten",
+        ]),
         if value(b"privacy_telemetry") == b"on" {
-            tr4(&[b"Autoris\xE9e : aucun composant actuel de Winlux n'envoie pourtant de donn\xE9es.", b"Allowed: no current Winlux component actually sends data.", b"Permitida: aun as\xED, ning\xFAn componente actual de Winlux env\xEDa datos.", b"Erlaubt: Derzeit sendet trotzdem keine Winlux-Komponente Daten."])
+            tr4(&[
+                b"Autoris\xE9e : aucun composant actuel de Winlux n'envoie pourtant de donn\xE9es.",
+                b"Allowed: no current Winlux component actually sends data.",
+                b"Permitida: aun as\xED, ning\xFAn componente actual de Winlux env\xEDa datos.",
+                b"Erlaubt: Derzeit sendet trotzdem keine Winlux-Komponente Daten.",
+            ])
         } else {
-            tr4(&[b"D\xE9sactiv\xE9e : Winlux n'envoie aucune donn\xE9e d'utilisation.", b"Off: Winlux sends no usage data.", b"Desactivada: Winlux no env\xEDa ning\xFAn dato de uso.", b"Aus: Winlux sendet keine Nutzungsdaten."])
+            tr4(&[
+                b"D\xE9sactiv\xE9e : Winlux n'envoie aucune donn\xE9e d'utilisation.",
+                b"Off: Winlux sends no usage data.",
+                b"Desactivada: Winlux no env\xEDa ning\xFAn dato de uso.",
+                b"Aus: Winlux sendet keine Nutzungsdaten.",
+            ])
         },
     );
-    button(g, c, 0, 0, tr4(&[b"D\xE9sactiv\xE9e", b"Off", b"Desactivada", b"Aus"]), 0);
-    button(g, c, 0, 1, tr4(&[b"Autoris\xE9e", b"Allowed", b"Permitida", b"Erlaubt"]), 1);
+    button(
+        g,
+        c,
+        0,
+        0,
+        tr4(&[b"D\xE9sactiv\xE9e", b"Off", b"Desactivada", b"Aus"]),
+        0,
+    );
+    button(
+        g,
+        c,
+        0,
+        1,
+        tr4(&[b"Autoris\xE9e", b"Allowed", b"Permitida", b"Erlaubt"]),
+        1,
+    );
     row(
         g,
         c,
         166,
-        tr4(&[b"Autorisations des applications Windows (.exe)", b"Windows app (.exe) permissions", b"Permisos de las aplicaciones de Windows (.exe)", b"Berechtigungen der Windows-Apps (.exe)"]),
-        tr4(&[b"Bouton en surbrillance : acc\xE8s autoris\xE9. Cliquez pour bloquer ou autoriser.", b"Highlighted button: access allowed. Click to block or allow.", b"Bot\xF3n resaltado: acceso permitido. Haga clic para bloquear o permitir.", b"Hervorgehobene Schaltfl\xE4che: Zugriff erlaubt. Klicken zum Sperren oder Erlauben."]),
+        tr4(&[
+            b"Autorisations des applications Windows (.exe)",
+            b"Windows app (.exe) permissions",
+            b"Permisos de las aplicaciones de Windows (.exe)",
+            b"Berechtigungen der Windows-Apps (.exe)",
+        ]),
+        tr4(&[
+            b"Bouton en surbrillance : acc\xE8s autoris\xE9. Cliquez pour bloquer ou autoriser.",
+            b"Highlighted button: access allowed. Click to block or allow.",
+            b"Bot\xF3n resaltado: acceso permitido. Haga clic para bloquear o permitir.",
+            b"Hervorgehobene Schaltfl\xE4che: Zugriff erlaubt. Klicken zum Sperren oder Erlauben.",
+        ]),
     );
     let state = |key: &[u8], allowed_default: bool| {
         let v = value(key);
@@ -2878,9 +4574,19 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         3,
         0,
         if state(b"privacy_microphone", true) {
-            tr4(&[b"Microphone : autoris\xE9", b"Microphone: allowed", b"Micr\xF3fono: permitido", b"Mikrofon: erlaubt"])
+            tr4(&[
+                b"Microphone : autoris\xE9",
+                b"Microphone: allowed",
+                b"Micr\xF3fono: permitido",
+                b"Mikrofon: erlaubt",
+            ])
         } else {
-            tr4(&[b"Microphone : bloqu\xE9", b"Microphone: blocked", b"Micr\xF3fono: bloqueado", b"Mikrofon: gesperrt"])
+            tr4(&[
+                b"Microphone : bloqu\xE9",
+                b"Microphone: blocked",
+                b"Micr\xF3fono: bloqueado",
+                b"Mikrofon: gesperrt",
+            ])
         },
         9,
     );
@@ -2890,9 +4596,19 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         3,
         1,
         if state(b"privacy_camera", true) {
-            tr4(&[b"Cam\xE9ra : autoris\xE9e", b"Camera: allowed", b"C\xE1mara: permitida", b"Kamera: erlaubt"])
+            tr4(&[
+                b"Cam\xE9ra : autoris\xE9e",
+                b"Camera: allowed",
+                b"C\xE1mara: permitida",
+                b"Kamera: erlaubt",
+            ])
         } else {
-            tr4(&[b"Cam\xE9ra : bloqu\xE9e", b"Camera: blocked", b"C\xE1mara: bloqueada", b"Kamera: gesperrt"])
+            tr4(&[
+                b"Cam\xE9ra : bloqu\xE9e",
+                b"Camera: blocked",
+                b"C\xE1mara: bloqueada",
+                b"Kamera: gesperrt",
+            ])
         },
         10,
     );
@@ -2902,9 +4618,19 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         3,
         2,
         if state(b"privacy_location", false) {
-            tr4(&[b"Localisation : autoris\xE9e", b"Location: allowed", b"Ubicaci\xF3n: permitida", b"Standort: erlaubt"])
+            tr4(&[
+                b"Localisation : autoris\xE9e",
+                b"Location: allowed",
+                b"Ubicaci\xF3n: permitida",
+                b"Standort: erlaubt",
+            ])
         } else {
-            tr4(&[b"Localisation : bloqu\xE9e", b"Location: blocked", b"Ubicaci\xF3n: bloqueada", b"Standort: gesperrt"])
+            tr4(&[
+                b"Localisation : bloqu\xE9e",
+                b"Location: blocked",
+                b"Ubicaci\xF3n: bloqueada",
+                b"Standort: gesperrt",
+            ])
         },
         11,
     );
@@ -2912,15 +4638,44 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         g,
         c,
         300,
-        tr4(&[b"Historique de localisation", b"Location history", b"Historial de ubicaciones", b"Standortverlauf"]),
+        tr4(&[
+            b"Historique de localisation",
+            b"Location history",
+            b"Historial de ubicaciones",
+            b"Standortverlauf",
+        ]),
         if value(b"privacy_location_history") == b"on" {
-            tr4(&[b"Activ\xE9 : conserv\xE9 uniquement sur cet ordinateur.", b"On: kept only on this computer.", b"Activado: se conserva solo en este equipo.", b"Ein: nur auf diesem Computer gespeichert."])
+            tr4(&[
+                b"Activ\xE9 : conserv\xE9 uniquement sur cet ordinateur.",
+                b"On: kept only on this computer.",
+                b"Activado: se conserva solo en este equipo.",
+                b"Ein: nur auf diesem Computer gespeichert.",
+            ])
         } else {
-            tr4(&[b"D\xE9sactiv\xE9 : aucune position n'est enregistr\xE9e.", b"Off: no location is recorded.", b"Desactivado: no se registra ninguna ubicaci\xF3n.", b"Aus: Es wird kein Standort gespeichert."])
+            tr4(&[
+                b"D\xE9sactiv\xE9 : aucune position n'est enregistr\xE9e.",
+                b"Off: no location is recorded.",
+                b"Desactivado: no se registra ninguna ubicaci\xF3n.",
+                b"Aus: Es wird kein Standort gespeichert.",
+            ])
         },
     );
-    button(g, c, 6, 0, tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"]), 18);
-    button(g, c, 6, 1, tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"]), 19);
+    button(
+        g,
+        c,
+        6,
+        0,
+        tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"]),
+        18,
+    );
+    button(
+        g,
+        c,
+        6,
+        1,
+        tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"]),
+        19,
+    );
     row(
         g,
         c,
@@ -2951,12 +4706,20 @@ unsafe fn draw_report(g: &mut Gfx, c: &Rect) {
     button(g, c, 0, 1, tr(S_REPORT_LAST), 1);
     button(g, c, 0, 2, tr(S_REPORT_SAVED), 2);
     let offer = value(b"report_offer") != b"off";
-    let offer_desc = if offer { S_REPORT_OFFER_ON_DESC } else { S_REPORT_OFFER_OFF_DESC };
+    let offer_desc = if offer {
+        S_REPORT_OFFER_ON_DESC
+    } else {
+        S_REPORT_OFFER_OFF_DESC
+    };
     row(g, c, 166, tr(S_REPORT_OFFER), tr(offer_desc));
     button(g, c, 3, 0, tr(S_REPORT_PROPOSE), 9);
     button(g, c, 3, 1, tr(S_REPORT_SILENT), 10);
     let mask = value(b"report_redact") != b"off";
-    let mask_desc = if mask { S_REPORT_MASK_DESC } else { S_REPORT_NOMASK_DESC };
+    let mask_desc = if mask {
+        S_REPORT_MASK_DESC
+    } else {
+        S_REPORT_NOMASK_DESC
+    };
     row(g, c, 300, tr(S_REPORT_PRIVATE), tr(mask_desc));
     button(g, c, 6, 0, tr(S_REPORT_MASK), 18);
     button(g, c, 6, 1, tr(S_REPORT_NOMASK), 19);
@@ -2982,13 +4745,48 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     );
     let phase = field(PROGRESS.get(), b"phase");
     let title: &[u8] = match phase {
-        b"downloading" => tr4(&[b"T\xE9l\xE9chargement du paquet", b"Downloading the package", b"Descargando el paquete", b"Paket wird heruntergeladen"]),
-        b"verifying" => tr4(&[b"V\xE9rification de l'int\xE9grit\xE9", b"Checking integrity", b"Comprobando la integridad", b"Integrit\xE4t wird gepr\xFCft"]),
-        b"backing-up" => tr4(&[b"Sauvegarde des fichiers pr\xE9c\xE9dents", b"Backing up previous files", b"Copia de seguridad de los archivos anteriores", b"Vorherige Dateien werden gesichert"]),
-        b"installing" => tr4(&[b"Installation des composants", b"Installing components", b"Instalando componentes", b"Komponenten werden installiert"]),
-        b"restoring" => tr4(&[b"Restauration de la sauvegarde", b"Restoring the backup", b"Restaurando la copia de seguridad", b"Sicherung wird wiederhergestellt"]),
-        b"finalizing" => tr4(&[b"Finalisation et synchronisation", b"Finishing and syncing", b"Finalizando y sincronizando", b"Abschluss und Synchronisierung"]),
-        _ => tr4(&[b"Pr\xE9paration de la mise \xE0 jour", b"Preparing the update", b"Preparando la actualizaci\xF3n", b"Update wird vorbereitet"]),
+        b"downloading" => tr4(&[
+            b"T\xE9l\xE9chargement du paquet",
+            b"Downloading the package",
+            b"Descargando el paquete",
+            b"Paket wird heruntergeladen",
+        ]),
+        b"verifying" => tr4(&[
+            b"V\xE9rification de l'int\xE9grit\xE9",
+            b"Checking integrity",
+            b"Comprobando la integridad",
+            b"Integrit\xE4t wird gepr\xFCft",
+        ]),
+        b"backing-up" => tr4(&[
+            b"Sauvegarde des fichiers pr\xE9c\xE9dents",
+            b"Backing up previous files",
+            b"Copia de seguridad de los archivos anteriores",
+            b"Vorherige Dateien werden gesichert",
+        ]),
+        b"installing" => tr4(&[
+            b"Installation des composants",
+            b"Installing components",
+            b"Instalando componentes",
+            b"Komponenten werden installiert",
+        ]),
+        b"restoring" => tr4(&[
+            b"Restauration de la sauvegarde",
+            b"Restoring the backup",
+            b"Restaurando la copia de seguridad",
+            b"Sicherung wird wiederhergestellt",
+        ]),
+        b"finalizing" => tr4(&[
+            b"Finalisation et synchronisation",
+            b"Finishing and syncing",
+            b"Finalizando y sincronizando",
+            b"Abschluss und Synchronisierung",
+        ]),
+        _ => tr4(&[
+            b"Pr\xE9paration de la mise \xE0 jour",
+            b"Preparing the update",
+            b"Preparando la actualizaci\xF3n",
+            b"Update wird vorbereitet",
+        ]),
     };
     text(g.hdc, g.f.large, p.text, c.left + 12, c.top + 140, title);
     let bar = rect(c.left, c.top + 188, c.right, c.top + 198);
@@ -3017,14 +4815,24 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
         g,
         c,
         238,
-        tr4(&[b"\xC9l\xE9ment trait\xE9 en temps r\xE9el", b"Item being processed", b"Elemento procesado en tiempo real", b"Aktuell verarbeitetes Element"]),
+        tr4(&[
+            b"\xC9l\xE9ment trait\xE9 en temps r\xE9el",
+            b"Item being processed",
+            b"Elemento procesado en tiempo real",
+            b"Aktuell verarbeitetes Element",
+        ]),
         field(PROGRESS.get(), b"item"),
     );
     row(
         g,
         c,
         300,
-        tr4(&[b"Fichiers termin\xE9s dans cette \xE9tape", b"Files completed in this step", b"Archivos terminados en esta etapa", b"In diesem Schritt abgeschlossene Dateien"]),
+        tr4(&[
+            b"Fichiers termin\xE9s dans cette \xE9tape",
+            b"Files completed in this step",
+            b"Archivos terminados en esta etapa",
+            b"In diesem Schritt abgeschlossene Dateien",
+        ]),
         field(PROGRESS.get(), b"done"),
     );
     text(
@@ -3033,7 +4841,12 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
         p.text3,
         c.right - 140,
         c.top + 300,
-        tr4(&[b"Nombre total", b"Total count", b"N\xFAmero total", b"Gesamtzahl"]),
+        tr4(&[
+            b"Nombre total",
+            b"Total count",
+            b"N\xFAmero total",
+            b"Gesamtzahl",
+        ]),
     );
     text(
         g.hdc,

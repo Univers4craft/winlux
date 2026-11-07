@@ -189,7 +189,12 @@ unsafe fn empty_dirs(files: &[u8], info: &[u8]) {
             }
         }
     } else {
-        notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.", b"Some items couldn't be deleted.", b"Algunos elementos no se pudieron eliminar.", b"Einige Elemente konnten nicht gel\xF6scht werden."]));
+        notify(tr4(&[
+            b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.",
+            b"Some items couldn't be deleted.",
+            b"Algunos elementos no se pudieron eliminar.",
+            b"Einige Elemente konnten nicht gel\xF6scht werden.",
+        ]));
     }
 }
 
@@ -209,9 +214,25 @@ fn confirm_buttons(r: &Rect) -> (Rect, Rect) {
 unsafe fn draw_confirm(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let r = confirm_box(f);
-    round_rect(g.hdc, g.b, r.left - 1, r.top - 1, r.right + 1, r.bottom + 1, 9, p.border);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left - 1,
+        r.top - 1,
+        r.right + 1,
+        r.bottom + 1,
+        9,
+        p.border,
+    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface);
-    text(g.hdc, g.f.semibold, p.text, r.left + 20, r.top + 18, tr(S_EMPTY_TRASH));
+    text(
+        g.hdc,
+        g.f.semibold,
+        p.text,
+        r.left + 20,
+        r.top + 18,
+        tr(S_EMPTY_TRASH),
+    );
     let mut t = [0u8; 200];
     let mut n = 0;
     if EMPTY_ASK == 1 {
@@ -248,7 +269,16 @@ unsafe fn draw_confirm(g: &mut Gfx, f: &Frame) {
             ]),
         );
     }
-    text_fit(g.hdc, g.f.caption, 12, p.text, r.left + 20, r.top + 52, &t[..n], r.right - r.left - 40);
+    text_fit(
+        g.hdc,
+        g.f.caption,
+        12,
+        p.text,
+        r.left + 20,
+        r.top + 52,
+        &t[..n],
+        r.right - r.left - 40,
+    );
     text_fit(
         g.hdc,
         g.f.small,
@@ -268,8 +298,6 @@ unsafe fn draw_confirm(g: &mut Gfx, f: &Frame) {
     button(g, &yes, t4([b"Oui", b"Yes", b"S\xED", b"Ja"]), true);
     button(g, &no, t4([b"Non", b"No", b"No", b"Nein"]), false);
 }
-
-
 
 fn exists(path: &[u8]) -> bool {
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -357,8 +385,7 @@ pub(super) unsafe fn transfer(
         }
         let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
         let present = exists(&direct[..dn]);
-        let n = if present && (in_folder(src, dest) || matches!(mode, Mode::KeepBoth | Mode::Ask))
-        {
+        let n = if present && (in_folder(src, dest) || matches!(mode, Mode::KeepBoth | Mode::Ask)) {
             let (base, ext) = split_name(name);
             unique_name(dest, base, ext, &mut dst)
         } else {
@@ -407,7 +434,13 @@ pub(super) unsafe fn transfer(
             }
             | TEST_FLAGS;
         let from = srcs.first().and_then(|s| parent(s.get())).unwrap_or(b"");
-        if start(WinluxFileCopy(LIST.as_ptr(), flags), moving, pairs, from, dest) {
+        if start(
+            WinluxFileCopy(LIST.as_ptr(), flags),
+            moving,
+            pairs,
+            from,
+            dest,
+        ) {
             out.queued = pairs;
         } else {
             out.failed += pairs;
@@ -420,7 +453,10 @@ unsafe fn start(id: u32, moving: bool, count: u32, from: &[u8], to: &[u8]) -> bo
     if id == 0 {
         return false;
     }
-    let slot = COPIES.iter().position(|c| c.id == 0).unwrap_or(COPY_MAX - 1);
+    let slot = COPIES
+        .iter()
+        .position(|c| c.id == 0)
+        .unwrap_or(COPY_MAX - 1);
     if COPIES[slot].id != 0 {
         // Plus de carte libre : la plus ancienne n'est plus montrée, mais
         // sa tâche continue et finira seule.
@@ -465,7 +501,12 @@ pub(super) unsafe fn tick() -> bool {
         any = true;
         let mut stats = [0u64; 4];
         let mut wname = [0u16; NAME_LEN];
-        let paused = WinluxJobStats(c.id, stats.as_mut_ptr(), wname.as_mut_ptr(), NAME_LEN as u32);
+        let paused = WinluxJobStats(
+            c.id,
+            stats.as_mut_ptr(),
+            wname.as_mut_ptr(),
+            NAME_LEN as u32,
+        );
         if paused != u32::MAX {
             c.paused = paused == 1;
             [c.done, c.total, c.items_done, c.items_total] = stats;
@@ -475,7 +516,11 @@ pub(super) unsafe fn tick() -> bool {
         if dt >= 250 {
             let bytes = c.done.saturating_sub(c.last_done);
             let inst = bytes * 1000 / dt as u64;
-            c.rate = if c.rate == 0 { inst } else { (c.rate * 3 + inst) / 4 };
+            c.rate = if c.rate == 0 {
+                inst
+            } else {
+                (c.rate * 3 + inst) / 4
+            };
             if c.nhist == HIST {
                 c.hist.copy_within(1.., 0);
                 c.nhist -= 1;
@@ -500,7 +545,12 @@ pub(super) unsafe fn tick() -> bool {
         let n = ansi_from_wide(&msg, &mut m);
         if deleting && st != 1 {
             notify_with(
-                t4([b"Suppression interrompue : ", b"Deletion stopped: ", b"Eliminaci\xF3n interrumpida: ", b"L\xF6schen unterbrochen: "]),
+                t4([
+                    b"Suppression interrompue : ",
+                    b"Deletion stopped: ",
+                    b"Eliminaci\xF3n interrumpida: ",
+                    b"L\xF6schen unterbrochen: ",
+                ]),
                 &m[..n],
             );
             finished(1, b"", false);
@@ -596,7 +646,12 @@ fn card_rect(f: &Frame, slot: i32) -> Rect {
 
 fn card_buttons(r: &Rect) -> (Rect, Rect) {
     let cancel = rect(r.right - 104, r.bottom - 44, r.right - 16, r.bottom - 14);
-    let pause = rect(cancel.left - 104, cancel.top, cancel.left - 8, cancel.bottom);
+    let pause = rect(
+        cancel.left - 104,
+        cancel.top,
+        cancel.left - 8,
+        cancel.bottom,
+    );
     (pause, cancel)
 }
 
@@ -615,12 +670,24 @@ fn eta_text(secs: u64, out: &mut [u8; 64]) -> usize {
         n = write_num(out, n, secs % 3600 / 60);
         push(out, &mut n, b" min");
     } else if secs >= 90 {
-        push(out, &mut n, t4([b"environ ", b"about ", b"unos ", b"etwa "]));
+        push(
+            out,
+            &mut n,
+            t4([b"environ ", b"about ", b"unos ", b"etwa "]),
+        );
         n = write_num(out, n, (secs + 30) / 60);
-        push(out, &mut n, t4([b" minutes", b" minutes", b" minutos", b" Minuten"]));
+        push(
+            out,
+            &mut n,
+            t4([b" minutes", b" minutes", b" minutos", b" Minuten"]),
+        );
     } else {
         n = write_num(out, n, secs.max(1));
-        push(out, &mut n, t4([b" secondes", b" seconds", b" segundos", b" Sekunden"]));
+        push(
+            out,
+            &mut n,
+            t4([b" secondes", b" seconds", b" segundos", b" Sekunden"]),
+        );
     }
     n
 }
@@ -635,7 +702,16 @@ pub(super) unsafe fn button(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool) 
         p.window
     };
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.border);
-    round_rect(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 4, bg);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 1,
+        r.top + 1,
+        r.right - 1,
+        r.bottom - 1,
+        4,
+        bg,
+    );
     text(
         g.hdc,
         g.f.caption,
@@ -648,7 +724,16 @@ pub(super) unsafe fn button(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool) 
 
 unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
     let p = pal();
-    round_rect(g.hdc, g.b, r.left - 1, r.top - 1, r.right + 1, r.bottom + 1, 9, p.border);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left - 1,
+        r.top - 1,
+        r.right + 1,
+        r.bottom + 1,
+        9,
+        p.border,
+    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface);
     let inner = r.right - r.left - 32;
     // « Copie de 3 éléments de Documents vers Clé USB »
@@ -658,9 +743,19 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         &mut t,
         &mut n,
         if c.deleting {
-            t4([b"Suppression de ", b"Deleting ", b"Eliminando ", b"L\xF6schen: "])
+            t4([
+                b"Suppression de ",
+                b"Deleting ",
+                b"Eliminando ",
+                b"L\xF6schen: ",
+            ])
         } else if c.moving {
-            t4([b"D\xE9placement de ", b"Moving ", b"Moviendo ", b"Verschieben: "])
+            t4([
+                b"D\xE9placement de ",
+                b"Moving ",
+                b"Moviendo ",
+                b"Verschieben: ",
+            ])
         } else {
             t4([b"Copie de ", b"Copying ", b"Copiando ", b"Kopieren: "])
         },
@@ -670,9 +765,19 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         &mut t,
         &mut n,
         if c.items_total.max(c.count as u64) == 1 {
-            t4([b" \xE9l\xE9ment de ", b" item from ", b" elemento de ", b" Element von "])
+            t4([
+                b" \xE9l\xE9ment de ",
+                b" item from ",
+                b" elemento de ",
+                b" Element von ",
+            ])
         } else {
-            t4([b" \xE9l\xE9ments de ", b" items from ", b" elementos de ", b" Elemente von "])
+            t4([
+                b" \xE9l\xE9ments de ",
+                b" items from ",
+                b" elementos de ",
+                b" Elemente von ",
+            ])
         },
     );
     push(&mut t, &mut n, last_component(c.from.get()));
@@ -680,29 +785,66 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         push(&mut t, &mut n, t4([b" vers ", b" to ", b" a ", b" nach "]));
         push(&mut t, &mut n, last_component(c.to.get()));
     }
-    text_fit(g.hdc, g.f.small, 11, p.text2, r.left + 16, r.top + 14, &t[..n], inner);
+    text_fit(
+        g.hdc,
+        g.f.small,
+        11,
+        p.text2,
+        r.left + 16,
+        r.top + 14,
+        &t[..n],
+        inner,
+    );
     // « 42 % terminé » ou « En pause ».
-    let pct = if c.total == 0 { 0 } else { (c.done.min(c.total) * 100 / c.total) as u32 };
+    let pct = if c.total == 0 {
+        0
+    } else {
+        (c.done.min(c.total) * 100 / c.total) as u32
+    };
     let mut l = [0u8; 64];
     let mut ln = 0;
     if c.paused {
-        push(&mut l, &mut ln, t4([b"En pause", b"Paused", b"En pausa", b"Angehalten"]));
+        push(
+            &mut l,
+            &mut ln,
+            t4([b"En pause", b"Paused", b"En pausa", b"Angehalten"]),
+        );
     } else {
         ln = write_num(&mut l, 0, pct as u64);
         push(
             &mut l,
             &mut ln,
-            t4([b" % termin\xE9", b"% complete", b" % completado", b" % abgeschlossen"]),
+            t4([
+                b" % termin\xE9",
+                b"% complete",
+                b" % completado",
+                b" % abgeschlossen",
+            ]),
         );
     }
-    text(g.hdc, g.f.semibold, p.text, r.left + 16, r.top + 32, &l[..ln]);
+    text(
+        g.hdc,
+        g.f.semibold,
+        p.text,
+        r.left + 16,
+        r.top + 32,
+        &l[..ln],
+    );
     // Graphique du débit, barre d'avancement en fond.
     let gr = rect(r.left + 16, r.top + 56, r.right - 16, r.top + 104);
     fill(g.hdc, g.b, gr.left, gr.top, gr.right, gr.bottom, p.window);
     let gw = gr.right - gr.left;
     let donew = gw * pct as i32 / 100;
     let tint = if c.paused { p.text3 } else { p.accent };
-    fill(g.hdc, g.b, gr.left, gr.top, gr.left + donew, gr.bottom, p.selected);
+    fill(
+        g.hdc,
+        g.b,
+        gr.left,
+        gr.top,
+        gr.left + donew,
+        gr.bottom,
+        p.selected,
+    );
     // Comme Windows : le débit se dessine jusqu'au point d'avancement.
     let peak = c.hist[..c.nhist].iter().copied().max().unwrap_or(0).max(1);
     let cols = c.nhist.max(1) as i32;
@@ -714,31 +856,82 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
             fill(g.hdc, g.b, x, gr.bottom - h, x2, gr.bottom, tint);
         }
     }
-    fill(g.hdc, g.b, gr.left, gr.bottom - 1, gr.right, gr.bottom, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        gr.left,
+        gr.bottom - 1,
+        gr.right,
+        gr.bottom,
+        p.border,
+    );
     // Vitesse, nom, temps et éléments restants.
     let mut line = [0u8; 320];
     let mut k = 0;
-    push(&mut line, &mut k, t4([b"Vitesse : ", b"Speed: ", b"Velocidad: ", b"Geschwindigkeit: "]));
+    push(
+        &mut line,
+        &mut k,
+        t4([
+            b"Vitesse : ",
+            b"Speed: ",
+            b"Velocidad: ",
+            b"Geschwindigkeit: ",
+        ]),
+    );
     let mut sb = [0u8; 24];
     if c.deleting {
         // Avancement en éléments : « 120 éléments/s ».
         k = write_num(&mut line, k, if c.paused { 0 } else { c.rate });
-        push(&mut line, &mut k, t4([b" \xE9l\xE9ments/s", b" items/s", b" elementos/s", b" Elemente/s"]));
+        push(
+            &mut line,
+            &mut k,
+            t4([
+                b" \xE9l\xE9ments/s",
+                b" items/s",
+                b" elementos/s",
+                b" Elemente/s",
+            ]),
+        );
     } else {
         let sn = size_text(if c.paused { 0 } else { c.rate }, &mut sb);
         push(&mut line, &mut k, &sb[..sn]);
         push(&mut line, &mut k, b"/s");
     }
-    text(g.hdc, g.f.small, p.text2, r.left + 16, r.top + 110, &line[..k]);
-    k = 0;
-    push(&mut line, &mut k, t4([b"Nom : ", b"Name: ", b"Nombre: ", b"Name: "]));
-    push(&mut line, &mut k, &c.name[..c.name_len]);
-    text_fit(g.hdc, g.f.small, 11, p.text2, r.left + 16, r.top + 126, &line[..k], inner);
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        r.left + 16,
+        r.top + 110,
+        &line[..k],
+    );
     k = 0;
     push(
         &mut line,
         &mut k,
-        t4([b"Temps restant : ", b"Time remaining: ", b"Tiempo restante: ", b"Verbleibende Zeit: "]),
+        t4([b"Nom : ", b"Name: ", b"Nombre: ", b"Name: "]),
+    );
+    push(&mut line, &mut k, &c.name[..c.name_len]);
+    text_fit(
+        g.hdc,
+        g.f.small,
+        11,
+        p.text2,
+        r.left + 16,
+        r.top + 126,
+        &line[..k],
+        inner,
+    );
+    k = 0;
+    push(
+        &mut line,
+        &mut k,
+        t4([
+            b"Temps restant : ",
+            b"Time remaining: ",
+            b"Tiempo restante: ",
+            b"Verbleibende Zeit: ",
+        ]),
     );
     if c.paused {
         push(&mut line, &mut k, b"-");
@@ -746,19 +939,36 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         push(
             &mut line,
             &mut k,
-            t4([b"calcul en cours\x85", b"calculating\x85", b"calculando\x85", b"wird berechnet\x85"]),
+            t4([
+                b"calcul en cours\x85",
+                b"calculating\x85",
+                b"calculando\x85",
+                b"wird berechnet\x85",
+            ]),
         );
     } else {
         let mut e = [0u8; 64];
         let en = eta_text(c.total.saturating_sub(c.done) / c.rate.max(1), &mut e);
         push(&mut line, &mut k, &e[..en]);
     }
-    text(g.hdc, g.f.small, p.text2, r.left + 16, r.top + 142, &line[..k]);
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        r.left + 16,
+        r.top + 142,
+        &line[..k],
+    );
     k = 0;
     push(
         &mut line,
         &mut k,
-        t4([b"\xC9l\xE9ments restants : ", b"Items remaining: ", b"Elementos restantes: ", b"Verbleibende Elemente: "]),
+        t4([
+            b"\xC9l\xE9ments restants : ",
+            b"Items remaining: ",
+            b"Elementos restantes: ",
+            b"Verbleibende Elemente: ",
+        ]),
     );
     k = write_num(&mut line, k, c.items_total.saturating_sub(c.items_done));
     if !c.deleting {
@@ -767,7 +977,14 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         push(&mut line, &mut k, &sb[..sn]);
         push(&mut line, &mut k, b")");
     }
-    text(g.hdc, g.f.small, p.text2, r.left + 16, r.top + 158, &line[..k]);
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        r.left + 16,
+        r.top + 158,
+        &line[..k],
+    );
     let (pause, cancel) = card_buttons(r);
     button(
         g,
@@ -779,7 +996,12 @@ unsafe fn draw_card(g: &mut Gfx, c: &CopyJob, r: &Rect) {
         },
         false,
     );
-    button(g, &cancel, t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]), false);
+    button(
+        g,
+        &cancel,
+        t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]),
+        false,
+    );
 }
 
 // ---------- Boîte « Remplacer ou ignorer des fichiers » ----------
@@ -792,7 +1014,14 @@ fn ask_box(f: &Frame) -> Rect {
 }
 
 fn ask_rows(r: &Rect) -> [Rect; 3] {
-    let row = |i: i32| rect(r.left + 16, r.top + 100 + i * 46, r.right - 16, r.top + 140 + i * 46);
+    let row = |i: i32| {
+        rect(
+            r.left + 16,
+            r.top + 100 + i * 46,
+            r.right - 16,
+            r.top + 140 + i * 46,
+        )
+    };
     [row(0), row(1), row(2)]
 }
 
@@ -805,7 +1034,16 @@ const ASK_MODES: [Mode; 3] = [Mode::Replace, Mode::Skip, Mode::KeepBoth];
 unsafe fn draw_ask(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let r = ask_box(f);
-    round_rect(g.hdc, g.b, r.left - 1, r.top - 1, r.right + 1, r.bottom + 1, 9, p.border);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left - 1,
+        r.top - 1,
+        r.right + 1,
+        r.bottom + 1,
+        9,
+        p.border,
+    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface);
     let inner = r.right - r.left - 40;
     text(
@@ -835,7 +1073,11 @@ unsafe fn draw_ask(g: &mut Gfx, f: &Frame) {
             ]),
         );
         push(&mut t, &mut n, ASK_FIRST.get());
-        push(&mut t, &mut n, t4([b" \xBB.", b"\x94.", b"\xBB.", b"\x93."]));
+        push(
+            &mut t,
+            &mut n,
+            t4([b" \xBB.", b"\x94.", b"\xBB.", b"\x93."]),
+        );
     } else {
         push(
             &mut t,
@@ -859,7 +1101,16 @@ unsafe fn draw_ask(g: &mut Gfx, f: &Frame) {
             ]),
         );
     }
-    text_fit(g.hdc, g.f.caption, 12, p.text, r.left + 20, r.top + 48, &t[..n], inner);
+    text_fit(
+        g.hdc,
+        g.f.caption,
+        12,
+        p.text,
+        r.left + 20,
+        r.top + 48,
+        &t[..n],
+        inner,
+    );
     text_fit(
         g.hdc,
         g.f.small,
@@ -892,12 +1143,45 @@ unsafe fn draw_ask(g: &mut Gfx, f: &Frame) {
     ];
     for (row, label) in ask_rows(&r).iter().zip(labels) {
         let bg = if hovered(row) { p.hover } else { p.window };
-        round_rect(g.hdc, g.b, row.left, row.top, row.right, row.bottom, 4, p.border);
-        round_rect(g.hdc, g.b, row.left + 1, row.top + 1, row.right - 1, row.bottom - 1, 4, bg);
-        fill(g.hdc, g.b, row.left + 12, row.top + 14, row.left + 24, row.top + 26, p.accent);
-        text_fit(g.hdc, g.f.caption, 12, p.text, row.left + 36, row.top + 13, label, row.right - row.left - 48);
+        round_rect(
+            g.hdc, g.b, row.left, row.top, row.right, row.bottom, 4, p.border,
+        );
+        round_rect(
+            g.hdc,
+            g.b,
+            row.left + 1,
+            row.top + 1,
+            row.right - 1,
+            row.bottom - 1,
+            4,
+            bg,
+        );
+        fill(
+            g.hdc,
+            g.b,
+            row.left + 12,
+            row.top + 14,
+            row.left + 24,
+            row.top + 26,
+            p.accent,
+        );
+        text_fit(
+            g.hdc,
+            g.f.caption,
+            12,
+            p.text,
+            row.left + 36,
+            row.top + 13,
+            label,
+            row.right - row.left - 48,
+        );
     }
-    button(g, &ask_cancel(&r), t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]), false);
+    button(
+        g,
+        &ask_cancel(&r),
+        t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]),
+        false,
+    );
 }
 
 // ---------- Entrées ----------
@@ -977,7 +1261,9 @@ pub(super) unsafe fn key(_vk: u32, ch: u16) -> bool {
         match ch {
             13 => empty_trash(),
             27 => EMPTY_ASK = 0,
-            c if c < 128 && matches!((c as u8).to_ascii_lowercase(), b'o' | b'y' | b's' | b'j') => empty_trash(),
+            c if c < 128 && matches!((c as u8).to_ascii_lowercase(), b'o' | b'y' | b's' | b'j') => {
+                empty_trash()
+            }
             c if c < 128 && matches!((c as u8).to_ascii_lowercase(), b'n') => EMPTY_ASK = 0,
             _ => {}
         }
@@ -1014,14 +1300,28 @@ pub(super) unsafe fn cancel_latest() -> bool {
 #[doc(hidden)]
 unsafe fn write_file(path: &[u8], data: &[u8], repeat: usize) -> bool {
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
-    let h = CreateFileW(wstr(&mut w, path), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
+    let h = CreateFileW(
+        wstr(&mut w, path),
+        0x4000_0000,
+        0,
+        core::ptr::null_mut(),
+        2,
+        0x80,
+        core::ptr::null_mut(),
+    );
     if h.is_null() || h as isize == -1 {
         return false;
     }
     let mut ok = true;
     for _ in 0..repeat {
         let mut written = 0u32;
-        ok &= WriteFile(h, data.as_ptr(), data.len() as u32, &mut written, core::ptr::null_mut()) != 0
+        ok &= WriteFile(
+            h,
+            data.as_ptr(),
+            data.len() as u32,
+            &mut written,
+            core::ptr::null_mut(),
+        ) != 0
             && written as usize == data.len();
     }
     CloseHandle(h);
@@ -1031,7 +1331,15 @@ unsafe fn write_file(path: &[u8], data: &[u8], repeat: usize) -> bool {
 #[doc(hidden)]
 unsafe fn first_bytes(path: &[u8], out: &mut [u8; 16]) -> usize {
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
-    let h = CreateFileW(wstr(&mut w, path), 0x8000_0000, 7, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
+    let h = CreateFileW(
+        wstr(&mut w, path),
+        0x8000_0000,
+        7,
+        core::ptr::null_mut(),
+        3,
+        0x80,
+        core::ptr::null_mut(),
+    );
     if h.is_null() || h as isize == -1 {
         return 0;
     }
@@ -1068,28 +1376,43 @@ pub(super) unsafe fn regression(root: &[u8]) {
     wait_all();
     let mut head = [0u8; 16];
     let n = first_bytes(&fb[..fbn], &mut head);
-    check!(!dialog_open() && &head[..n] == b"ancien", "Ignorer garde le fichier de la destination");
+    check!(
+        !dialog_open() && &head[..n] == b"ancien",
+        "Ignorer garde le fichier de la destination"
+    );
     transfer(&src, &b[..bn], false, Mode::Ask, false);
     test_answer(Some(Mode::KeepBoth));
     wait_all();
     let mut both = [0u8; PATH_LEN + NAME_LEN + 2];
     let bon = join(&mut both, &b[..bn], b"note (2).txt");
     let n = first_bytes(&both[..bon], &mut head);
-    check!(&head[..n] == b"nouveau", "Conserver les deux cree \"note (2).txt\"");
+    check!(
+        &head[..n] == b"nouveau",
+        "Conserver les deux cree \"note (2).txt\""
+    );
     transfer(&src, &b[..bn], false, Mode::Ask, false);
     test_answer(Some(Mode::Replace));
     wait_all();
     let n = first_bytes(&fb[..fbn], &mut head);
-    check!(&head[..n] == b"nouveau" && exists(&fa[..fan]), "Remplacer ecrase la destination et garde la source");
+    check!(
+        &head[..n] == b"nouveau" && exists(&fa[..fan]),
+        "Remplacer ecrase la destination et garde la source"
+    );
     // Annuler la boîte : rien n'est fait.
     transfer(&src, &b[..bn], true, Mode::Ask, false);
     test_answer(None);
-    check!(!busy() && exists(&fa[..fan]), "Annuler la boite de conflit ne deplace rien");
+    check!(
+        !busy() && exists(&fa[..fan]),
+        "Annuler la boite de conflit ne deplace rien"
+    );
     // Gros fichier : la copie se fait en fond, se met en pause et s'annule.
     let mut big = [0u8; PATH_LEN + NAME_LEN + 2];
     let bgn = join(&mut big, &a[..an], b"gros.bin");
     let chunk = [0x5Au8; 65536];
-    check!(write_file(&big[..bgn], &chunk, 48), "Prepare un fichier de 3 Mo");
+    check!(
+        write_file(&big[..bgn], &chunk, 48),
+        "Prepare un fichier de 3 Mo"
+    );
     let mut one = [EMPTY_PATH; 1];
     one[0].set(&big[..bgn]);
     let t0 = GetTickCount();
@@ -1105,12 +1428,19 @@ pub(super) unsafe fn regression(root: &[u8]) {
     let mut s1 = [0u64; 4];
     let p1 = WinluxJobStats(id, s1.as_mut_ptr(), core::ptr::null_mut(), 0);
     tick();
-    let c = COPIES.iter().find(|c| c.id == id).copied().unwrap_or(EMPTY_JOB);
+    let c = COPIES
+        .iter()
+        .find(|c| c.id == id)
+        .copied()
+        .unwrap_or(EMPTY_JOB);
     check!(
         p1 == 1 && s1[0] == 0 && c.paused,
         "Pause : la copie n'avance plus et la carte affiche \"En pause\""
     );
-    check!(cancel_latest(), "Echap annule la copie en cours, meme en pause");
+    check!(
+        cancel_latest(),
+        "Echap annule la copie en cours, meme en pause"
+    );
     wait_all();
     let mut dbig = [0u8; PATH_LEN + NAME_LEN + 2];
     let dbn = join(&mut dbig, &b[..bn], b"gros.bin");
@@ -1143,7 +1473,10 @@ pub(super) unsafe fn regression(root: &[u8]) {
     wait_all();
     let mut dest = [0u8; PATH_LEN + NAME_LEN + 2];
     let dn = join(&mut dest, &c2[..c2n], b"gros.bin");
-    check!(exists(&dest[..dn]) && !exists(&dbig[..dbn]), "Deplacer retire la source");
+    check!(
+        exists(&dest[..dn]) && !exists(&dbig[..dbn]),
+        "Deplacer retire la source"
+    );
 }
 
 /// Vider la Corbeille, sur des dossiers de test (jamais la vraie Corbeille).
@@ -1166,10 +1499,16 @@ pub(super) unsafe fn trash_regression(root: &[u8]) {
     write_file(&y[..yl2], b"[Trash Info]\n", 1);
     EMPTY_ASK = 2;
     key(0, 27);
-    check!(EMPTY_ASK == 0 && !busy() && exists(&x[..xl]), "Vider la Corbeille : Non ne supprime rien");
+    check!(
+        EMPTY_ASK == 0 && !busy() && exists(&x[..xl]),
+        "Vider la Corbeille : Non ne supprime rien"
+    );
     EMPTY_ASK = 2;
     empty_dirs(&files[..fl], &info[..il]);
-    check!(EMPTY_ASK == 0 && busy(), "Vider la Corbeille : suppression en tache de fond");
+    check!(
+        EMPTY_ASK == 0 && busy(),
+        "Vider la Corbeille : suppression en tache de fond"
+    );
     wait_all();
     check!(
         !exists(&x[..xl]) && !exists(&y[..yl2]) && exists(&files[..fl]) && exists(&info[..il]),

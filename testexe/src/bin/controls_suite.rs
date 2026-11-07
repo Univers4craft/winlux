@@ -412,7 +412,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         // MessageBox : vraie boîte modale sous X11 (fermée par Entrée), choix
         // par défaut sans affichage. Les deux donnent OK.
-        SetTimer(main, 2, if ms > 0 { 1500 } else { 20 }, press_enter as *const () as usize);
+        SetTimer(
+            main,
+            2,
+            if ms > 0 { 1500 } else { 20 },
+            press_enter as *const () as usize,
+        );
         let text = wide(b"Voulez-vous enregistrer la session \"serveur-maison\" ?\0");
         let caption = wide(b"Connexion\0");
         let answer = MessageBoxW(main, text.as_ptr(), caption.as_ptr(), 0x21); // MB_OKCANCEL | MB_ICONQUESTION
