@@ -1910,3 +1910,31 @@ mod tests {
         assert!(!is_cdecl("ntdll.dll", "RtlGetVersion"));
     }
 }
+
+/// Table de méthodes x86 (stdcall) d'un objet COM du runtime qui lit
+/// lui-même la disposition x86 de ses arguments (DirectDraw, Direct3D 8,
+/// #237). `methods[i]` = (fonction win64, nombre d'arguments après `this`) ;
+/// chaque argument x86 de 4 octets est passé étendu à 64 bits (un `float`
+/// garde ses bits dans les 32 bits bas). Rend l'adresse x86 de la table.
+pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {
+    let table: Vec<u32> = methods
+        .iter()
+        .enumerate()
+        .map(|(i, &(target, n))| {
+            make_stub(
+                Desc {
+                    ret: b'i',
+                    supported: true,
+                    target,
+                    kinds: vec![b'i'; n as usize + 1],
+                    label: format!("{name}::méthode n° {i}"),
+                    fix: crt::Fix::None,
+                    raw: None,
+                    callbacks: 0,
+                },
+                Some(((n as u16) + 1) * 4),
+            ) as u32
+        })
+        .collect();
+    Box::leak(table.into_boxed_slice()).as_ptr() as usize as u32
+}

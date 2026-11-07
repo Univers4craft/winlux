@@ -435,7 +435,10 @@ impl Synth {
     fn note_off(&mut self, ch: usize, note: u8) {
         let sustain = self.channels[ch].sustain;
         for v in self.voices.iter_mut() {
-            if v.channel as usize == ch && v.note == note && !v.held && v.env.stage != Stage::Release
+            if v.channel as usize == ch
+                && v.note == note
+                && !v.held
+                && v.env.stage != Stage::Release
             {
                 if sustain {
                     v.held = true;
@@ -627,7 +630,11 @@ fn sample(v: &mut Voice, freq: f32, rate: f32, noise: &mut Noise) -> f32 {
             let cur = v.string[v.pos];
             let next = v.string[(v.pos + 1) % n];
             // Moyenne amortie : la corde perd ses aigus puis s'éteint.
-            let damp = if v.env.stage == Stage::Release { 0.95 } else { 0.996 };
+            let damp = if v.env.stage == Stage::Release {
+                0.95
+            } else {
+                0.996
+            };
             v.string[v.pos] = (cur + next) * 0.5 * damp;
             v.pos = (v.pos + 1) % n;
             v.last = cur;
@@ -637,7 +644,11 @@ fn sample(v: &mut Voice, freq: f32, rate: f32, noise: &mut Noise) -> f32 {
             let a = saw(adv(0, 1.0), dt);
             let b = saw(adv(1, 1.004), dt);
             let c = saw(adv(2, 0.996), dt);
-            let cut = if v.timbre == Timbre::Pad { 1800.0 } else { 3500.0 };
+            let cut = if v.timbre == Timbre::Pad {
+                1800.0
+            } else {
+                3500.0
+            };
             v.filter.low((a + b + c) * 0.33, cut, rate, 0.9) * 0.8
         }
         Timbre::Brass => {

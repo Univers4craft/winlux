@@ -407,7 +407,13 @@ pub extern "win64" fn midi_in_invalid_handle() -> u32 {
     MMSYSERR_INVALHANDLE
 }
 
-unsafe fn open(device: u32, callback: usize, instance: usize, flags: u32, stream: bool) -> Result<Arc<MidiOut>, u32> {
+unsafe fn open(
+    device: u32,
+    callback: usize,
+    instance: usize,
+    flags: u32,
+    stream: bool,
+) -> Result<Arc<MidiOut>, u32> {
     if device != 0 && device != MIDI_MAPPER {
         return Err(MMSYSERR_BADDEVICEID);
     }
@@ -508,7 +514,11 @@ pub unsafe extern "win64" fn midi_out_close(h: usize) -> u32 {
     let Some(m) = get(h) else {
         return MMSYSERR_INVALHANDLE;
     };
-    if lock(&m.st).stream.as_ref().is_some_and(|s| !s.queue.is_empty()) {
+    if lock(&m.st)
+        .stream
+        .as_ref()
+        .is_some_and(|s| !s.queue.is_empty())
+    {
         return MIDIERR_STILLPLAYING;
     }
     lock(table()).remove(&h);
@@ -737,7 +747,12 @@ pub unsafe extern "win64" fn midi_out_get_id(h: usize, out: *mut u32) -> u32 {
 
 /// midiOutCachePatches / midiOutCacheDrumPatches : tous les instruments
 /// sont toujours disponibles.
-pub extern "win64" fn midi_out_cache_patches(h: usize, _bank: u32, _patches: usize, _flags: u32) -> u32 {
+pub extern "win64" fn midi_out_cache_patches(
+    h: usize,
+    _bank: u32,
+    _patches: usize,
+    _flags: u32,
+) -> u32 {
     if get(h).is_none() {
         return MMSYSERR_INVALHANDLE;
     }

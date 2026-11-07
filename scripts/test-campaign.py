@@ -581,4 +581,14 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #237 : anciens jeux. DirectDraw et MIDI existent, jeux32/jeux64 les testent
+# en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
+runtime_dlls = ROOT / "runtime/src/dlls"
+ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exists()
+   and (ROOT / "runtime/src/audio/synth.rs").exists()
+   and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
+   and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
+   "anciens jeux : DirectDraw, synthétiseur MIDI, rappels x86 des minuteurs et de waveOut")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

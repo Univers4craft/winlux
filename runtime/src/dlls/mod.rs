@@ -44,6 +44,7 @@ pub mod d3dcompiler;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
+pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
@@ -93,6 +94,7 @@ pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
 pub mod knownfolders;
+pub mod legacy_com;
 pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -557,6 +559,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dxva2",
                 exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ddraw",
+                exports: ddraw::exports(),
                 handle: fake_module(),
             },
             Builtin {
