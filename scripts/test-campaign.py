@@ -498,4 +498,10 @@ ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/conf
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
 
+# ── Paramètres : « Mise à jour OS » et « Mise à jour application » (#637) ──
+ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and (SCRIPTS / "test-update-page-names.py").exists(),
+   "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

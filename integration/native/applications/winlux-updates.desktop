@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Mises à jour Winlux
+Name=Mise à jour OS
+Name[en]=OS update
+Name[es]=Actualización del SO
+Name[de]=OS-Update
 Exec=/usr/bin/winlux-shell-app settings 7
 Icon=/usr/share/winlux/native/icons/settings.svg
 StartupWMClass=winlux-settings
