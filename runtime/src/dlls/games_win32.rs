@@ -1298,7 +1298,7 @@ pub fn advapi32_exports() -> Exports {
         "BuildExplicitAccessWithNameW" => fn BuildExplicitAccessWithNameW,
         "BuildSecurityDescriptorW" => fn BuildSecurityDescriptorW,
         "ConvertStringSecurityDescriptorToSecurityDescriptorW" => fn ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        "ImpersonateNamedPipeClient" => fn ok1, "RevertToSelf" => fn ok1,
+        "ImpersonateNamedPipeClient" => fn ok1,
     }
 }
 

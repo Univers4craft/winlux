@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Centre de notifications
+Name[en]=Notification center
+Name[de]=Benachrichtigungscenter
+Name[es]=Centro de notificaciones
 Exec=/usr/bin/winlux-system-tools notifications
 Icon=preferences-system-notifications
 Categories=Settings;

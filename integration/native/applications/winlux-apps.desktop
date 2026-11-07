@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Applications et démarrage
+Name[en]=Apps and startup
+Name[de]=Apps und Autostart
+Name[es]=Aplicaciones e inicio
 Exec=/usr/bin/winlux-shell-app settings 1
 Icon=system-software-install
 Categories=Settings;PackageManager;

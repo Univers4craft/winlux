@@ -137,9 +137,9 @@ _TR = {
     'Fichiers personnels': ('Personal files', 'Archivos personales', 'Persönliche Dateien'),
     'Caméra': ('Camera', 'Cámara', 'Kamera'),
     'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
-    'Lancer sans bac à sable': ('Start without sandbox', 'Iniciar sin espacio aislado', 'Ohne Sandbox starten'),
     'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
     'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Lancer sans isolation (Chromium, Electron)': ('Start without isolation (Chromium, Electron)', 'Iniciar sin aislamiento (Chromium, Electron)', 'Ohne Isolierung starten (Chromium, Electron)'),
     'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
@@ -243,7 +243,6 @@ _TR = {
     'La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation.': ('Preparing updates uses the disk. Keep the computer on during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga el ordenador encendido durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie den Computer während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
-    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
     'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
@@ -378,7 +377,7 @@ def lock_delay_text(seconds):
 PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox")
 PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
                     "screen": "Capture de l’écran", "network": "Réseau et Internet",
-                    "sandbox": "Lancer sans bac à sable"}
+                    "sandbox": "Lancer sans isolation (Chromium, Electron)"}
 
 
 def permission_tool():

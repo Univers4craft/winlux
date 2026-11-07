@@ -314,8 +314,11 @@ pub fn init_process(exe: &Module, args: &[String]) {
         std::env::remove_var("WINLUX_COMMAND_LINE");
         cmd = line;
     }
-    // Bac à sable de Chromium refusé une première fois (#236) : l'appli
-    // repart sans, comme l'utilisateur l'a accepté.
+    if !chromium_child && chromium_sandbox_refused(&exe_win, &cmd) {
+        cmd.push_str(" --no-sandbox");
+    }
+    // Bac à sable refusé en cours de route (appli non reconnue au départ,
+    // #236) : l'appli repart sans, comme l'utilisateur l'a accepté.
     crate::sandbox_fallback::apply_at_start(&mut cmd, chromium_child);
     crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
@@ -829,4 +832,29 @@ pub fn run(exe: Module) -> ! {
         .expect("création du thread principal");
     let code = h.join().unwrap_or(0xC000_0005);
     crate::dlls::kernel32::flush_and_exit(code as i32)
+}
+
+/// Programme Chromium ou Electron (Claude, Discord, VS Code…) : son bac à
+/// sable Windows exige d'écrire dans la mémoire de l'enfant et de lui
+/// confier des poignées avant son démarrage, ce que Winlux ne sait pas
+/// encore faire ; le courtier tue alors chaque enfant (#767). Winlux pose
+/// la question à l'utilisateur (capacité « sandbox ») et n'ajoute
+/// `--no-sandbox` qu'après un « Autoriser » explicite, révocable dans
+/// Paramètres > Confidentialité et sécurité.
+fn chromium_sandbox_refused(exe_win: &str, cmd: &str) -> bool {
+    if cmd.contains("--no-sandbox") {
+        return false;
+    }
+    let exe = crate::paths::to_linux(exe_win);
+    let is_chromium = std::path::Path::new(&exe)
+        .parent()
+        .is_some_and(is_chromium_dir);
+    is_chromium && crate::permissions::allowed(crate::permissions::Capability::Sandbox)
+}
+
+/// Dossier d'un programme Chromium : données ICU et instantané V8 côte à côte.
+fn is_chromium_dir(dir: &std::path::Path) -> bool {
+    dir.join("icudtl.dat").is_file()
+        && (dir.join("v8_context_snapshot.bin").is_file()
+            || dir.join("snapshot_blob.bin").is_file())
 }

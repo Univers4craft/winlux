@@ -1768,45 +1768,107 @@ pub extern "win64" fn equal_rgn(_rgn1: usize, _rgn2: usize) -> i32 {
 // Clipping
 // =====================================================================
 
-pub extern "win64" fn select_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
-    1 // SIMPLEREGION
+/// `SelectClipRgn` : la région (un rectangle chez Winlux) devient la zone de
+/// découpage du DC ; `NULL` l'enlève.
+pub extern "win64" fn select_clip_rgn(hdc: usize, rgn: usize) -> i32 {
+    ext_select_clip_rgn(hdc, rgn, 5) // RGN_COPY
 }
 
-pub extern "win64" fn ext_select_clip_rgn(_hdc: usize, _rgn: usize, _mode: i32) -> i32 {
-    1
+/// `ExtSelectClipRgn` : combine la région avec la zone actuelle.
+pub extern "win64" fn ext_select_clip_rgn(hdc: usize, rgn: usize, mode: i32) -> i32 {
+    const RGN_AND: i32 = 1;
+    const RGN_DIFF: i32 = 4;
+    const RGN_COPY: i32 = 5;
+    if gui::dc_window(hdc).is_none() {
+        return 0; // ERROR
+    }
+    if rgn == 0 {
+        return if mode == RGN_COPY {
+            gui::set_dc_clip(hdc, None)
+        } else {
+            0
+        };
+    }
+    let Some(r) = gui::region_rect(rgn) else {
+        return 0;
+    };
+    match mode {
+        RGN_AND => gui::intersect_dc_clip(hdc, r),
+        RGN_DIFF => gui::exclude_dc_clip(hdc, r),
+        _ => gui::set_dc_clip(hdc, Some(vec![r])),
+    }
 }
 
 pub extern "win64" fn intersect_clip_rect(
-    _hdc: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
+    hdc: usize,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
 ) -> i32 {
-    1
+    if gui::dc_window(hdc).is_none() {
+        return 0;
+    }
+    gui::intersect_dc_clip(
+        hdc,
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        },
+    )
 }
 
 pub extern "win64" fn exclude_clip_rect(
-    _hdc: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
+    hdc: usize,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
 ) -> i32 {
-    1
+    if gui::dc_window(hdc).is_none() {
+        return 0;
+    }
+    gui::exclude_dc_clip(
+        hdc,
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        },
+    )
 }
 
-pub unsafe extern "win64" fn get_clip_box(_hdc: usize, rect: *mut Rect) -> i32 {
-    if !rect.is_null() {
+/// `GetClipBox` : la zone client de la fenêtre (l'écran pour un DC sans
+/// fenêtre), réduite par la zone de découpage du DC.
+pub unsafe extern "win64" fn get_clip_box(hdc: usize, rect: *mut Rect) -> i32 {
+    let base = match gui::dc_window(hdc) {
+        Some(hwnd) if hwnd > 1 => gui::window_client_rect(hwnd),
+        _ => None,
+    }
+    .unwrap_or_else(|| {
         let (w, h) = gui::screen_size();
-        *rect = Rect {
+        Rect {
             left: 0,
             top: 0,
             right: w,
             bottom: h,
-        };
+        }
+    });
+    let (boxed, code) = match gui::dc_clip_box(hdc) {
+        Some(c) => match gui::intersect_rects(&c, &base) {
+            Some(r) => (r, 2),
+            None => (Rect::default(), 1),
+        },
+        None if gui::dc_clip(hdc).is_some() => (Rect::default(), 1),
+        None => (base, 2),
+    };
+    if !rect.is_null() {
+        *rect = boxed;
     }
-    1
+    code
 }
 
 pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {

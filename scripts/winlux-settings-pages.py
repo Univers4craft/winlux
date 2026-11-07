@@ -198,7 +198,6 @@ _TR = {
     'Ce PC': ('This PC', 'Este equipo', 'Dieser PC'),
     'Choisir un dossier': ('Choose a folder', 'Elegir una carpeta', 'Ordner auswählen'),
     'Parcourir…': ('Browse…', 'Examinar…', 'Durchsuchen…'),
-    'Images': ('Pictures', 'Imágenes', 'Bilder'),
     'Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support.': ('Choose “Winlux recovery” at startup, or start from the installation USB drive. Keep a copy of your documents on another drive.', 'Elija «Winlux recuperación» al arrancar o inicie desde la memoria USB de instalación. Guarde una copia de sus documentos en otro soporte.', 'Wählen Sie beim Start „Winlux-Wiederherstellung“ oder starten Sie vom Installations-USB-Stick. Bewahren Sie eine Kopie Ihrer Dokumente auf einem anderen Datenträger auf.'),
     'Clic droit à deux doigts': ('Two-finger right-click', 'Clic derecho con dos dedos', 'Rechtsklick mit zwei Fingern'),
     'Compatibilité VNC classique': ('Classic VNC compatibility', 'Compatibilidad con VNC clásico', 'Klassische VNC-Kompatibilität'),
@@ -237,7 +236,6 @@ _TR = {
     'Créer le jeton sur GitHub': ('Create the token on GitHub', 'Crear el token en GitHub', 'Token auf GitHub erstellen'),
     'Seul le système le lit : ni votre compte ni les programmes Windows n’y ont accès.': ('Only the system reads it: neither your account nor Windows programs can access it.', 'Solo el sistema lo lee: ni su cuenta ni los programas de Windows tienen acceso.', 'Nur das System liest es: Weder Ihr Konto noch Windows-Programme haben Zugriff.'),
     'Envoi du rapport': ('Sending the report', 'Envío del informe', 'Senden des Berichts'),
-    'Explorateur': ('File Explorer', 'Explorador', 'Explorer'),
     'Exporter mes réglages': ('Export my settings', 'Exportar mi configuración', 'Meine Einstellungen exportieren'),
     'Exporter vers': ('Export to', 'Exportar a', 'Exportieren nach'),
     'Icônes du bureau': ('Desktop icons', 'Iconos del escritorio', 'Desktopsymbole'),
@@ -383,11 +381,7 @@ _TR = {
     "Clair": ("Light", "Claro", "Hell"),
     "Couleur d’accentuation": ("Accent color", "Color de énfasis", "Akzentfarbe"),
     "Personnalisée…": ("Custom…", "Personalizado…", "Benutzerdefiniert…"),
-    "Icônes du bureau": ("Desktop icons", "Iconos del escritorio", "Desktopsymbole"),
-    "Corbeille": ("Recycle Bin", "Papelera de reciclaje", "Papierkorb"),
-    "Ce PC": ("This PC", "Este equipo", "Dieser PC"),
     "Explorateur": ("File Explorer", "Explorador de archivos", "Explorer"),
-    "Documents": ("Documents", "Documentos", "Dokumente"),
     "Barre des tâches": ("Taskbar", "Barra de tareas", "Taskleiste"),
     "Ce PC (système de fichiers)": ("This PC (file system)", "Este equipo (sistema de archivos)", "Dieser PC (Dateisystem)"),
     "Dossier de l’utilisateur": ("User's files", "Archivos del usuario", "Benutzerdateien"),
@@ -460,7 +454,6 @@ _TR = {
     "Dernière recherche : {date}": ("Last checked: {date}", "Última búsqueda: {date}", "Zuletzt gesucht: {date}"),
     "jamais": ("never", "nunca", "nie"),
     "Aucune recherche pour l’instant.": ("Not checked yet.", "Todavía no se ha buscado.", "Noch nicht gesucht."),
-    "Parcourir…": ("Browse…", "Examinar…", "Durchsuchen…"),
     "Votre système est à jour.": ("Your system is up to date.", "El sistema está actualizado.", "Ihr System ist auf dem neuesten Stand."),
     "{count} mise(s) à jour disponible(s)": ("{count} update(s) available", "{count} actualización(es) disponible(s)", "{count} Update(s) verfügbar"),
     "Rechercher des mises à jour": ("Check for updates", "Buscar actualizaciones", "Nach Updates suchen"),
@@ -655,7 +648,6 @@ _TR = {
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
     'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
-    'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
     'Claude et ChatGPT : seuls votre question et la conversation en cours partent vers Anthropic ou OpenAI. Rien n’est gardé sur ce PC une fois la fenêtre fermée.': ('Claude and ChatGPT: only your question and the current conversation go to Anthropic or OpenAI. Nothing is kept on this PC once the window is closed.', 'Claude y ChatGPT: solo su pregunta y la conversación actual se envían a Anthropic u OpenAI. No se guarda nada en este equipo al cerrar la ventana.', 'Claude und ChatGPT: Nur Ihre Frage und das aktuelle Gespräch gehen an Anthropic oder OpenAI. Nach dem Schließen des Fensters bleibt nichts auf diesem PC gespeichert.'),
     'Ils ne lisent rien et ne changent rien tout seuls : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi.': ('They read and change nothing on their own: each read (a program’s log, a file search) shows you the exact text before it is sent.', 'No leen ni cambian nada por sí solos: cada lectura (registro de un programa, búsqueda de archivos) le muestra el texto exacto antes del envío.', 'Sie lesen und ändern nichts von selbst: Jeder Lesezugriff (Protokoll eines Programms, Dateisuche) zeigt Ihnen vor dem Senden den genauen Text.'),
@@ -1373,7 +1365,7 @@ def wallpapers():
     for name, title in (("wallpapers/winlux-prisme-aurore.png", "Winlux Aurore"),
                         ("wallpapers/winlux-prisme-aurore-clair.png", "Winlux Aurore claire"),
                         ("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
-                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube"), ("wallpaper.bmp", "Classique")):
+                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube")):
         path = WALLPAPERS / name
         if path.is_file(): found.append((wallpaper_variant(path), title))
     return found
