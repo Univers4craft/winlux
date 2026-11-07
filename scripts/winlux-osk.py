@@ -389,7 +389,7 @@ CSS = b"""
 .osk-key:hover { background: #454c62; }
 .osk-key:active { background: #5a6280; }
 .osk-special { background: #2a2f3e; font-size: 15px; }
-.osk-active, .osk-active label { background: #8178b7; color: #ffffff; }
+.osk-active, .osk-active label { background: #6a3df0; color: #ffffff; }
 """
 
 

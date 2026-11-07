@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Choisir un navigateur
+Name[en]=Choose a browser
+Name[de]=Browser auswählen
+Name[es]=Elegir un navegador
 Exec=/usr/bin/winlux-shell-app settings 11
 Icon=web-browser
 Terminal=false

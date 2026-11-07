@@ -384,7 +384,7 @@ pour plusieurs composants.
 | Données emojibase / CLDR | Dépôt | MIT + licence Unicode v3 | Oui | Déjà dans `NOTICES` |
 | Microsoft Edge, Google Chrome | Téléchargés par le Store depuis l'éditeur | Propriétaires | **Non** | Déjà le cas (`WINLUX_EDGE_DEB` n'est pas activé par défaut) |
 | Claude Code | Téléchargé par l'utilisateur | Conditions d'Anthropic | **Non** | Déjà le cas (« rien dans l'ISO »). Voir section 5 |
-| Roue Python `pycryptodome-…whl` à la racine du dépôt | Dépôt | BSD / domaine public | Oui | Rien d'illégal, mais un binaire à la racine surprend : le déplacer ou l'expliquer dans `NOTICES` |
+| Roue Python `pycryptodome-…whl` à la racine du dépôt | Dépôt | BSD / domaine public | Non | Retirée le 07/11/2026 : ajoutée par erreur avec #353, rien ne l'utilisait |
 
 ### Brevets des codecs vidéo (H.264, HEVC)
 
