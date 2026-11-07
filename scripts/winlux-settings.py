@@ -62,6 +62,7 @@ _TR = {
     'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
     'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
     "Échec de l’opération. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
+    'Installation des mises à jour': ('Installing updates', 'Instalando actualizaciones', 'Updates werden installiert'),
     'Opération terminée.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
     'Une opération est déjà en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
     'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
@@ -537,6 +538,7 @@ UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en 
                    "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
                    "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
 PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
+UPDATE_ACTIONS = ("update-apply", "update-rollback")
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -1018,6 +1020,26 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             shown = browser_buttons_shown(status, action)
             if child.get_visible() != shown: child.set_visible(shown)
 
+    def keep_screen_on(self, wanted):
+        """Demande org.freedesktop.ScreenSaver.Inhibit tenue pendant l'installation
+        (économiseur et DPMS, winlux-screensaver-inhibit) ; rendue après."""
+        cookie = getattr(self, "screen_cookie", None)
+        if wanted == (cookie is not None): return
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            if wanted:
+                reply = bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                                      "Inhibit", GLib.Variant("(ss)", ("Paramètres", _t("Installation des mises à jour"))),
+                                      GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 3000, None)
+                self.screen_cookie = reply.unpack()[0]
+            else:
+                self.screen_cookie = None
+                bus.call_sync("org.freedesktop.ScreenSaver", "/org/freedesktop/ScreenSaver", "org.freedesktop.ScreenSaver",
+                              "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as error:
+            print(f"Demande « écran allumé » impossible : {error.message}", file=sys.stderr)
+            if not wanted: self.screen_cookie = None
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -1041,6 +1063,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Page branchée : l'état relu après l'action (appareil appairé, mode changé…).
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
+        # Installation en cours : l'écran ne s'éteint pas (#634, le DPMS coupait
+        # l'écran au milieu d'une mise à jour lancée ici).
+        self.keep_screen_on(self.busy or (self.process is not None and self.active_action in UPDATE_ACTIONS))
         fields = FIELDS.get(self.page, [])
         if self.page == 23:
             fields, _ = power_page_items(fields, [], power_hardware())

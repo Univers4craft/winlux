@@ -10,6 +10,13 @@ D-Bus, tient la liste des demandes ; tant qu'il en reste une, il réveille
 XScreenSaver et le compteur d'inactivité de X, et pose une demande d'éveil au
 démon d'alimentation Winlux. Une demande disparaît avec le programme qui l'a
 faite.
+
+L'écran s'éteignait quand même (#634) : XScreenSaver n'est pas seul, le
+serveur X coupe l'écran par DPMS à son propre délai (Standby/Suspend/Off à
+600 s). Tant qu'une demande est là, le DPMS est donc suspendu (`xset -dpms`,
+réaffirmé à chaque réveil au cas où XScreenSaver le remettrait) puis rétabli
+s'il était actif ; une marque dans $XDG_RUNTIME_DIR le rétablit aussi après un
+arrêt brutal du service.
 """
 import os
 from pathlib import Path
@@ -35,8 +42,9 @@ IDLE_EXIT_SECONDS = 600
 class Inhibitors:
     """Demandes en cours : cookie → (programme D-Bus, application, raison)."""
 
-    def __init__(self, poke=None, inhibit_file=None):
+    def __init__(self, poke=None, inhibit_file=None, hold=None):
         self.items = {}
+        self.hold = hold if hold is not None else DisplayHold()
         self.next_cookie = 1
         self.poke = poke or wake_screen
         self.inhibit_file = inhibit_file or INHIBIT_DIR / f"{os.getpid()}-screensaver"
@@ -64,7 +72,10 @@ class Inhibitors:
         return {item[0] for item in self.items.values()}
 
     def sync(self):
-        """Demande d'éveil au démon d'alimentation (écran et veille) tant qu'il en reste."""
+        """Demande d'éveil au démon d'alimentation (écran et veille) tant qu'il en
+        reste, et DPMS du serveur X suspendu pendant ce temps."""
+        if self.items: self.hold.start()
+        else: self.hold.stop()
         try:
             if self.items:
                 self.inhibit_file.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +84,50 @@ class Inhibitors:
                 self.inhibit_file.unlink(missing_ok=True)
         except OSError as error:
             print(f"Demande d'éveil non posée ({self.inhibit_file}) : {error}", file=sys.stderr, flush=True)
+
+
+def _xset(*args):
+    if not shutil.which("xset"): return ""
+    try:
+        return subprocess.run(["xset", *args], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+class DisplayHold:
+    """DPMS du serveur X suspendu tant qu'une demande est posée."""
+
+    def __init__(self, xset=_xset, marker=None):
+        self.xset = xset
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+        display = "".join(c if c.isalnum() else "_" for c in os.environ.get("DISPLAY", "none"))
+        self.marker = Path(marker) if marker else Path(runtime) / f"winlux-dpms-suspendu-{display}"
+        self.active = False
+
+    def recover(self):
+        """Service arrêté brutalement pendant une demande : DPMS rétabli."""
+        if self.marker.exists() and not self.active:
+            self.xset("+dpms")
+            self.marker.unlink(missing_ok=True)
+
+    def start(self):
+        if not self.active:
+            self.active = True
+            if "DPMS is Enabled" in self.xset("q"):
+                try: self.marker.write_text("1\n")
+                except OSError: pass
+        self.reassert()
+
+    def reassert(self):
+        if self.active and self.marker.exists():
+            self.xset("-dpms")
+
+    def stop(self):
+        if not self.active: return
+        self.active = False
+        if self.marker.exists():
+            self.xset("+dpms")
+            self.marker.unlink(missing_ok=True)
 
 
 def wake_screen():
@@ -87,6 +142,7 @@ def wake_screen():
 def main():
     from gi.repository import Gio, GLib
     inhibitors = Inhibitors()
+    inhibitors.hold.recover()
     watches = {}
     loop = GLib.MainLoop()
     state = {"idle_since": GLib.get_monotonic_time()}
@@ -123,6 +179,7 @@ def main():
     def tick():
         if inhibitors.items:
             wake_screen()
+            inhibitors.hold.reassert()
             state["idle_since"] = GLib.get_monotonic_time()
         elif GLib.get_monotonic_time() - state["idle_since"] > IDLE_EXIT_SECONDS * 1_000_000:
             loop.quit()   # relancé par D-Bus à la prochaine demande

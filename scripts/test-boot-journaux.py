@@ -56,7 +56,13 @@ tool = runpy.run_path(str(ROOT / "scripts/winlux-screensaver-inhibit.py"), run_n
 with tempfile.TemporaryDirectory() as tmp:
     pokes = []
     marker = Path(tmp) / "power-inhibit" / "1-screensaver"
-    box = tool["Inhibitors"](poke=lambda: pokes.append(1), inhibit_file=marker)
+    holds = []
+
+    class FakeHold:
+        def start(self): holds.append("start")
+        def stop(self): holds.append("stop")
+        def reassert(self): pass
+    box = tool["Inhibitors"](poke=lambda: pokes.append(1), inhibit_file=marker, hold=FakeHold())
     first = box.add(":1.5", "firefox", "video-playing")
     second = box.add(":1.5", "firefox", "audio")
     third = box.add(":1.9", "mpv", "video")
@@ -66,7 +72,31 @@ with tempfile.TemporaryDirectory() as tmp:
     assert list(box.items) == [third] and marker.exists()
     box.remove(third)
     assert not box.items and not marker.exists()
-print("A7 : org.freedesktop.ScreenSaver.Inhibit tenu par Winlux (demandes, programme parti, éveil)")
+    assert holds[0] == "start" and holds[-1] == "stop", holds
+
+# #634 : le DPMS du serveur X éteignait l'écran à 600 s malgré l'économiseur
+# bloqué ; suspendu pendant une demande, rétabli seulement s'il était actif.
+with tempfile.TemporaryDirectory() as tmp:
+    calls = []
+    def fake_xset(*args, enabled=True):
+        calls.append(args)
+        return "DPMS (Display Power Management Signaling):\n  DPMS is Enabled\n" if args == ("q",) and enabled else ""
+    hold = tool["DisplayHold"](xset=fake_xset, marker=Path(tmp) / "dpms")
+    hold.start(); hold.reassert(); hold.start()
+    assert calls == [("q",), ("-dpms",), ("-dpms",), ("-dpms",)], calls
+    hold.stop()
+    assert calls[-1] == ("+dpms",) and not (Path(tmp) / "dpms").exists()
+    calls.clear()
+    off = tool["DisplayHold"](xset=lambda *args: fake_xset(*args, enabled=False), marker=Path(tmp) / "dpms")
+    off.start(); off.stop()
+    assert calls == [("q",)], f"DPMS désactivé par l'utilisateur : laissé tel quel ({calls})"
+    # Service tué pendant une demande : le suivant rétablit le DPMS.
+    calls.clear()
+    killed = tool["DisplayHold"](xset=fake_xset, marker=Path(tmp) / "dpms")
+    killed.start()
+    tool["DisplayHold"](xset=fake_xset, marker=Path(tmp) / "dpms").recover()
+    assert calls[-1] == ("+dpms",) and not (Path(tmp) / "dpms").exists(), calls
+print("A7 : org.freedesktop.ScreenSaver.Inhibit tenu par Winlux (demandes, programme parti, éveil, DPMS suspendu)")
 
 # #634 : xscreensaver-systemd (qui plante sans logind) remplacé dans l'image et
 # dans le paquet APT (dpkg-divert), par un assistant qui attend XScreenSaver.
@@ -101,8 +131,9 @@ if usable:
         log = tmp / "calls"
         for name in ("xscreensaver-command", "xset"):
             fake = tmp / "bin" / name
-            fake.write_text(f'#!/bin/sh\necho "{name} $*" >>"{log}"\n'); fake.chmod(0o755)
-        env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", WINLUX_POWER_INHIBIT_DIR=str(tmp / "inhibit"))
+            fake.write_text(f'#!/bin/sh\necho "{name} $*" >>"{log}"\ntest "$*" = q && echo "  DPMS is Enabled"\nexit 0\n'); fake.chmod(0o755)
+        env = dict(os.environ, PATH=f"{tmp / 'bin'}:{os.environ['PATH']}", WINLUX_POWER_INHIBIT_DIR=str(tmp / "inhibit"),
+                   XDG_RUNTIME_DIR=str(tmp))
         script = f'''
 {sys.executable} -B {ROOT / "scripts/winlux-screensaver-inhibit.py"} &
 for i in $(seq 1 50); do gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.freedesktop.ScreenSaver 2>/dev/null | grep -q true && break; sleep 0.1; done
@@ -126,6 +157,8 @@ print("pendant :", os.listdir({str(tmp / "inhibit")!r}))
         assert "-screensaver']" in out.stdout, out.stdout + out.stderr
         assert "après départ du client : []" in out.stdout, out.stdout + out.stderr
         assert "xscreensaver-command -deactivate" in log.read_text()
-    print("A7 : service réel sur un bus de session : Inhibit → cookie, économiseur réveillé, demande d'éveil posée puis retirée au départ du client")
+        calls = log.read_text().splitlines()
+        assert "xset -dpms" in calls and calls.index("xset +dpms") > calls.index("xset -dpms"), calls
+    print("A7 : service réel sur un bus de session : Inhibit → cookie, économiseur réveillé, DPMS suspendu puis rétabli, demande d'éveil posée puis retirée au départ du client")
 else:
     print("(pas de D-Bus ou de PyGObject ici : essai du service réel sauté)")

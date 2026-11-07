@@ -142,6 +142,25 @@ def check():
                 assert window.rollback_button.get_parent().get_visible(), "Restaurer caché alors qu'une version est conservée"
             finally:
                 kept_globals["read"] = original_pages_read
+            # #634 : l'écran ne s'éteint pas pendant une installation lancée ici.
+            calls = []
+
+            class FakeBus:
+                def call_sync(self, _name, _path, _interface, method, parameters, *_rest):
+                    calls.append((method, parameters.unpack()))
+                    return GLib.Variant("(u)", (7,)) if method == "Inhibit" else None
+            real_bus = namespace["Gio"].bus_get_sync
+            namespace["Gio"].bus_get_sync = lambda *_: FakeBus()
+            try:
+                namespace["read"] = lambda path: "update_busy=1\n" if path == "/run/winlux/control.txt" else original_read(path)
+                window.poll(); window.poll()
+                assert [call[0] for call in calls] == ["Inhibit"] and window.screen_cookie == 7, calls
+                namespace["read"] = lambda path: "update_busy=0\n" if path == "/run/winlux/control.txt" else original_read(path)
+                window.poll()
+                assert calls[-1] == ("UnInhibit", (7,)) and window.screen_cookie is None, calls
+            finally:
+                namespace["Gio"].bus_get_sync = real_bus
+                namespace["read"] = original_read
         finally:
             namespace["read"] = original_read
         window.show_update_error("update-apply", 1)
