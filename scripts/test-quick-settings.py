@@ -163,13 +163,14 @@ def tray_battery(status, online, lang="fr"):
     (root / "BAT1/capacity").write_text("29\n"); (root / "BAT1/status").write_text(status + "\n")
     (root / "ADP1/type").write_text("Mains\n"); (root / "ADP1/online").write_text(online + "\n")
     result = subprocess.run([sys.executable, str(HERE / "winlux-tray.py"), "battery"], capture_output=True, text=True,
-                            env=dict(os.environ, WINLUX_POWER_SUPPLY=str(root), WINLUX_TRAY_DIR=str(root / "tray"), WINLUX_LANG=lang))
+                            env=dict(os.environ, WINLUX_POWER_SUPPLY=str(root), WINLUX_TRAY_DIR=str(root / "tray"), WINLUX_LANG=lang,
+                                     WINLUX_PANEL_THEME="dark"))  # icône « -d » : barre sombre (#703)
     assert result.returncode == 0, result.stderr
     icon = Path(re.search(r"<img>(.*?)</img>", result.stdout)[1])
     return icon.name, "M13.5 5" in icon.read_text(), re.search(r"<tool>(.*?)</tool>", result.stdout)[1]
-assert tray_battery("Charging", "1") == ("battery-29-ac.svg", True, "Batterie : 29 % — en charge"), tray_battery("Charging", "1")
-assert tray_battery("Discharging", "0") == ("battery-29.svg", False, "Batterie : 29 %"), tray_battery("Discharging", "0")
-assert tray_battery("Not charging", "1") == ("battery-29-ac.svg", True, "Batterie : 29 % — branchée, pas en charge")
+assert tray_battery("Charging", "1") == ("battery-29-ac-d.svg", True, "Batterie : 29 % — en charge"), tray_battery("Charging", "1")
+assert tray_battery("Discharging", "0") == ("battery-29-d.svg", False, "Batterie : 29 %"), tray_battery("Discharging", "0")
+assert tray_battery("Not charging", "1") == ("battery-29-ac-d.svg", True, "Batterie : 29 % — branchée, pas en charge")
 assert tray_battery("Charging", "1", "en")[2] == "Battery: 29% — charging"
 tray_tr = re.search(r"_TR = \{(.*?)\n\}", tray, re.S)[1]
 assert tray_tr.count("{level}") >= 16, "infobulles batterie traduites dans les 4 langues"
@@ -203,8 +204,8 @@ try:
                                          WINLUX_TRAY_DIR=str(fake / "tray")))
         assert result.returncode == 0, result.stderr
         return Path(re.search(r"<img>(.*?)</img>", result.stdout)[1]).name
-    assert balance("3 13 1 2 8 10 12 4 5 6 9 7") == "spacer-279.svg", balance("3 13 1 2 8 10 12 4 5 6 9 7")
-    assert balance("3 1 2 8 10 12 4 5 6 9 7 13") == "spacer-0.svg"  # barre à gauche : contrepoids nul
+    assert balance("3 13 1 2 8 10 12 4 7 9") == "spacer-279.svg", balance("3 13 1 2 8 10 12 4 7 9")
+    assert balance("3 1 2 8 10 12 4 7 9 13") == "spacer-0.svg"  # barre à gauche : contrepoids nul
 finally:
     for process in [*wrappers.values(), tray_app]:
         process.kill()

@@ -400,6 +400,15 @@ _TR = {
     "Très grande": ("Extra large", "Muy grande", "Sehr groß"),
     "Alignement": ("Alignment", "Alineación", "Ausrichtung"),
     "Centré": ("Center", "Centrado", "Zentriert"),
+    "Style": ("Style", "Estilo", "Stil"),
+    "Classique, sur toute la largeur": ("Classic, full width", "Clásica, a lo ancho", "Klassisch, volle Breite"),
+    "Flottante, au centre": ("Floating, centered", "Flotante, en el centro", "Schwebend, mittig"),
+    "Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.": ("Floating: the taskbar is as wide as its buttons, centered, with rounded corners.", "Flotante: la barra ocupa el ancho de sus botones, en el centro, con esquinas redondeadas.", "Schwebend: Die Taskleiste ist so breit wie ihre Schaltflächen, mittig, mit abgerundeten Ecken."),
+    "Recherche": ("Search", "Búsqueda", "Suche"),
+    "Zone de recherche": ("Search box", "Cuadro de búsqueda", "Suchfeld"),
+    "Icône seule": ("Icon only", "Solo icono", "Nur Symbol"),
+    "Masquée": ("Hidden", "Oculta", "Ausgeblendet"),
+    "Windows + S ouvre toujours la recherche, même masquée.": ("Windows + S always opens search, even when hidden.", "Windows + S siempre abre la búsqueda, aunque esté oculta.", "Windows + S öffnet die Suche immer, auch wenn sie ausgeblendet ist."),
     "À gauche": ("Left", "A la izquierda", "Links"),
     "Icône du menu Démarrer": ("Start menu icon", "Icono del menú Inicio", "Startmenü-Symbol"),
     "Choisir une image…": ("Choose an image…", "Elegir una imagen…", "Bild auswählen…"),
@@ -738,6 +747,20 @@ def _t(text):
 
 HOME = Path.home()
 START_STATE = HOME / ".config/winlux/start.json"
+
+
+def taskbar_preferences():
+    """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre (#703)."""
+    values = {"STYLE": "classic", "SEARCH": "box"}
+    path = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "winlux/taskbar.conf"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            if (key, value) in (("STYLE", "classic"), ("STYLE", "floating"), ("SEARCH", "box"), ("SEARCH", "icon"), ("SEARCH", "hidden")):
+                values[key] = value
+    except (OSError, UnicodeDecodeError):
+        pass
+    return values
 
 
 def start_menu_state():
@@ -1939,8 +1962,16 @@ class ExtraPages:
         sizes = [("32", _t("Petite")), ("40", _t("Moyenne")), ("48", _t("Grande")), ("56", _t("Très grande"))]
         size = xfconf_get("xfce4-panel", "/panels/panel-1/size") or prefs.get("panel-size", "40")
         self.combo(box, _t("Taille"), sizes, size, lambda value: self.tool(["winlux-personalize", "panel-size", value]))
+        # Style et recherche de la barre (#703), réglage propre au compte.
+        taskbar = taskbar_preferences()
+        self.combo(box, _t("Style"), [("classic", _t("Classique, sur toute la largeur")), ("floating", _t("Flottante, au centre"))],
+                   taskbar["STYLE"], lambda value: self.tool(["winlux-personalize", "taskbar-style", value]),
+                   _t("Flottante : la barre prend la largeur de ses boutons, au centre, coins arrondis.") if taskbar["STYLE"] == "floating" else None)
         self.combo(box, _t("Alignement"), [("center", _t("Centré")), ("left", _t("À gauche"))],
                    self.status.get("align") or "center", lambda value: self.execute("align-" + value))
+        self.combo(box, _t("Recherche"), [("box", _t("Zone de recherche")), ("icon", _t("Icône seule")), ("hidden", _t("Masquée"))],
+                   taskbar["SEARCH"], lambda value: self.tool(["winlux-personalize", "search", value]),
+                   _t("Windows + S ouvre toujours la recherche, même masquée."))
         self.row(box, _t("Icône du menu Démarrer"), self.browse_button(
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),

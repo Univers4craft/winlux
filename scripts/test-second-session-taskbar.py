@@ -4,7 +4,7 @@
 Relevé VM du 5 novembre 2026 : le compte camille, créé après la mise à jour
 et ouvert en 2e session, avait le bouton Démarrer à x≈838, ni à gauche
 (TASKBAR_ALIGN=left) ni au milieu. Ordre de ses greffons :
-3 1 2 8 10 12 4 5 6 9 7 13. C'est la copie figée de xfce4-panel.xml, avec le
+3 1 2 8 10 12 4 7 9 13 (depuis #703). C'est la copie figée de xfce4-panel.xml, avec le
 séparateur 3 étiré et le contrepoids 13 au bout. winlux-user-session
 n'appliquait l'alignement que dans la 1re session.
 
@@ -81,10 +81,10 @@ with tempfile.TemporaryDirectory() as directory:
     store, log = work / "xfconf.json", work / "xfconf.log"
 
     def camille():
-        state = {"/panels/panel-1/plugin-ids": "3 1 2 8 10 12 4 5 6 9 7 13".split(),
+        state = {"/panels/panel-1/plugin-ids": "3 1 2 8 10 12 4 7 9 13".split(),
                  "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
                  "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon"}
-        for number in (4, 5, 6, 7, 9, 13):
+        for number in (4, 7, 9, 13):  # barre de #703 : réseau/son/batterie = 4
             state[f"/plugins/plugin-{number}"] = "genmon"
         store.write_text(json.dumps(state))
         log.write_text("")
@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory() as directory:
     camille()
     result, ids, expand = align("left")
     ok(result.returncode == 0, f"align-left réussit ({result.stderr.strip()[:200]})")
-    ok(ids == "3 1 2 8 10 12 4 5 6 9 7 13" and expand == "false",
+    ok(ids == "3 1 2 8 10 12 4 7 9 13" and expand == "false",
        f"à gauche : séparateur 3 non étiré, Démarrer contre le bord (ids {ids}, expand {expand})")
     ok("xfce4-panel -r" not in log.read_text(), "pas de relance de la barre (13 déjà chargé)")
 
@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory() as directory:
     ok(result.returncode == 0, "align-center réussit")
     ok(ids.startswith("3 13 1 2 8") and expand == "true",
        f"centrée : contrepoids 13 juste après le séparateur 3 (ids {ids})")
-    ok(re.fullmatch(r"3 13 1 2 8 10 12 4 5 6 9 7", ids) is not None, "centrée : zone de notification et clavier gardés")
+    ok(re.fullmatch(r"3 13 1 2 8 10 12 4 7 9", ids) is not None, "centrée : zone de notification et clavier gardés")
     ok("xfce4-panel -r" not in log.read_text(), "centrée : pas de relance de la barre")
 
 # ── 3. Fichiers propres au compte (relevé VM du 7 novembre 2026) ───────────
@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory() as directory:
     run = work / "root/run/winlux"
     run.mkdir(parents=True)
     store, log = work / "xfconf.json", work / "xfconf.log"
-    state = {"/panels/panel-1/plugin-ids": "3 1 15 14 2 8 10 12 4 5 6 9 7 13".split(),
+    state = {"/panels/panel-1/plugin-ids": "3 1 15 14 2 8 10 12 4 7 9 13".split(),
              "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
              "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon",
              "/plugins/plugin-15": "launcher", "/plugins/plugin-15/items": ["winlux-search.desktop"],
