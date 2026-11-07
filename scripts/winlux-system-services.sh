@@ -105,10 +105,15 @@ if test -x /usr/sbin/NetworkManager; then
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
+# Imprimantes (#622) : les administrateurs dans lpadmin, que CUPS exige pour
+# « Rechercher » et « Ajouter » (lpinfo, lpadmin) faute de logind.
+if test -x /usr/sbin/cupsd && test -x /usr/bin/winlux-accounts; then
+    /usr/bin/winlux-accounts sync-printing >>/run/winlux/cups.log 2>&1 || true
+fi
 # Printing (#111): there is no systemd to socket-activate CUPS, start it here.
 if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
     mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
-    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+    /usr/sbin/cupsd -f >>/run/winlux/cups.log 2>&1 &
 fi
 has_bluetooth=false
 if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then

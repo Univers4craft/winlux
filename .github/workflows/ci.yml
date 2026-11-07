@@ -166,6 +166,8 @@ jobs:
 
       - name: Vérifier les comptes locaux, « Changer d'utilisateur » et la veille du menu Démarrer
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-accounts.py
+      - name: Imprimantes, administrateurs dans lpadmin et refus de CUPS affiché (#622)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-printer-perms.py
 
       - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py

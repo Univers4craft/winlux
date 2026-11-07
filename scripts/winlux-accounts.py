@@ -6,6 +6,7 @@
     winlux-accounts password NOM                 nouveau mot de passe sur l'entrée standard
     winlux-accounts role NOM admin|user          administrateur ou standard
     winlux-accounts remove NOM keep|delete       garde ou efface le dossier personnel
+    winlux-accounts sync-printing                administrateurs dans lpadmin (démarrage)
 
 Comptes locaux uniquement : aucun compte en ligne. Les actions qui modifient
 un compte tournent en root, par `winlux-control account-*` relayé par
@@ -200,6 +201,8 @@ def role(name, kind):
             run(["gpasswd", "-a", name, group])
         elif kind == "user" and name in existing[group]:
             run(["gpasswd", "-d", name, group])
+    if kind == "admin" and "lpadmin" in existing and name not in existing["lpadmin"]:
+        run(["gpasswd", "-a", name, "lpadmin"])
     set_conf_role(name, kind == "admin")
 
 
@@ -223,6 +226,24 @@ def remove(name, files):
     write_users_conf(entries)
 
 
+def sync_printing():
+    """Administrateurs dans lpadmin, le SystemGroup de CUPS (#622).
+
+    Sans logind, CUPS n'accorde « Rechercher » et « Ajouter une imprimante »
+    (lpinfo, lpadmin) qu'aux membres de lpadmin. Le groupe manquait sur une
+    installation v0.2.19 (créé par le script du paquet cups, qui n'a pas
+    tourné dans l'image) : le compte administrateur recevait « Interdit ».
+    Lancé en root à chaque démarrage, avant cupsd ; ne retire personne.
+    """
+    existing = groups()
+    if "lpadmin" not in existing:
+        run(["groupadd", "--system", "lpadmin"])
+        existing["lpadmin"] = []
+    for account in accounts():
+        if account["admin"] and account["name"] not in existing["lpadmin"]:
+            run(["gpasswd", "-a", account["name"], "lpadmin"])
+
+
 def main(argv):
     if not argv:
         print(__doc__.strip(), file=sys.stderr)
@@ -240,6 +261,8 @@ def main(argv):
             role(rest[0], rest[1])
         elif command == "remove" and len(rest) == 2:
             remove(rest[0], rest[1])
+        elif command == "sync-printing" and not rest:
+            sync_printing()
         else:
             print(__doc__.strip(), file=sys.stderr)
             return 2

@@ -187,6 +187,7 @@ _TR = {
     'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
     'Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.': ('Choose a network, enter its key, WPS, hidden networks and airplane mode.', 'Elegir una red, escribir su clave, WPS, redes ocultas y modo avión.', 'Netzwerk wählen, Schlüssel eingeben, WPS, verborgene Netzwerke und Flugzeugmodus.'),
     'Aucune imprimante pour l’instant.': ('No printer yet.', 'Todavía no hay impresoras.', 'Noch kein Drucker.'),
+    'Le service d’impression a refusé la recherche :': ('The print service refused the search:', 'El servicio de impresión rechazó la búsqueda:', 'Der Druckdienst hat die Suche abgelehnt:'),
     'Aucune imprimante trouvée. Vérifiez qu’elle est allumée et branchée.': ('No printer found. Check that it is on and connected.', 'No se encontró ninguna impresora. Compruebe que esté encendida y conectada.', 'Kein Drucker gefunden. Prüfen Sie, ob er eingeschaltet und verbunden ist.'),
     'Aucune version précédente conservée.': ('No previous version kept.', 'No se conserva ninguna versión anterior.', 'Keine vorherige Version gespeichert.'),
     'Automatique (recommandé)': ('Automatic (recommended)', 'Automático (recomendado)', 'Automatisch (empfohlen)'),
@@ -3033,8 +3034,18 @@ class ExtraPages:
 
     def find_printers(self):
         self.printer_list.remove_all()
-        found = run(["lpinfo", "-v"], timeout=30)
-        for line in (found.stdout.splitlines() if found else []):
+        try:
+            found = subprocess.run(["lpinfo", "-v"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.show_error(_t("Ajouter une imprimante"), str(error))
+            return
+        if found.returncode:
+            # « Interdit » (compte hors de lpadmin, #622) ou CUPS arrêté : la
+            # vraie raison, pas « vérifiez qu'elle est allumée ».
+            self.show_error(_t("Ajouter une imprimante"), _t("Le service d’impression a refusé la recherche :") + " "
+                            + ((found.stderr or found.stdout).strip()[-500:] or f"lpinfo : code {found.returncode}"))
+            return
+        for line in found.stdout.splitlines():
             uri = line.split(None, 1)[-1]
             if "://" in uri and not uri.startswith(("file:", "beh:", "cups-pdf:")):
                 self.printer_list.append(uri, uri)
