@@ -4994,6 +4994,11 @@ unsafe fn create_process_common(
     }
     if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
         crate::sandbox_fallback::note_child(c.id(), &line);
+        // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
+        // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
+        // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP
+        // et l'enfant reste figé pour toujours.
+        wait_until_stopped(c.id());
     }
     // Gestionnaire de plantage de crashpad (Chromium, Electron) : il lit
     // notre mémoire pour écrire son rapport. Linux (Yama) ne laisse un
@@ -10516,5 +10521,27 @@ mod surveillance_de_dossiers {
             usize::MAX
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Attend (au plus 30 s) que le processus `pid` soit arrêté par SIGSTOP,
+/// ou qu'il ait disparu. Lit l'état dans /proc/<pid>/stat sans le récolter.
+fn wait_until_stopped(pid: u32) {
+    let path = format!("/proc/{pid}/stat");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let state = std::fs::read_to_string(&path).ok().and_then(|t| {
+            t.rsplit_once(')')
+                .and_then(|(_, r)| r.trim_start().chars().next())
+        });
+        match state {
+            Some('T') | Some('t') | Some('Z') | Some('X') | None => return,
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            crate::trace!("CreateProcess suspendu : l'enfant {pid} ne s'est pas figé");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }

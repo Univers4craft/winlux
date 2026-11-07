@@ -42,7 +42,7 @@ SH
 chmod 755 "$work/permission"
 set +e
 HOME="$work/home" WINLUX_HOME="$work/home" WINLUX_DRIVE_C="$work/home" WINLUX_GUI=headless \
-XDG_RUNTIME_DIR="$work/run" DISPLAY=:97 WINLUX_PERMISSION_HELPER="$work/permission" \
+XDG_CONFIG_HOME="$work/home/.config" XDG_RUNTIME_DIR="$work/run" DISPLAY=:97 WINLUX_PERMISSION_HELPER="$work/permission" \
 WINLUX_TEST_ASKED="$work/asked.txt" timeout 60 "$runtime" "$exe" --bac-a-sable >"$work/sandbox.txt" 2>&1
 rc=$?
 set -e
