@@ -1166,3 +1166,34 @@ fn defer_window_pos_place_les_enfants() {
     assert_eq!(user32::end_defer_window_pos(hdwp), 0);
     unsafe { user32::destroy_window(parent) };
 }
+
+/// « À propos » de Notepad++ (#505) : un STATIC SS_OWNERDRAW est dessiné
+/// par le parent (WM_DRAWITEM, ODT_STATIC) sans fond qui masquerait ses
+/// voisins, et le texte d'un champ multiligne en lecture seule revient à la
+/// ligne pour tenir dans sa largeur.
+#[test]
+fn statique_dessine_par_le_parent_et_licence_coupee() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let logo = child(p, "Static", "", 0x0D, 40, (0, 0, 192, 192));
+    assert!(is_backdrop(logo), "derrière ses voisins");
+    DRAWN.lock().unwrap().clear();
+    let (dc, bmp) = memory_dc(192, 192);
+    sendw(logo, 0x0317, dc, 0xC); // WM_PRINT
+    assert!(DRAWN.lock().unwrap().contains(&(5, 0, 0)), "ODT_STATIC");
+    let (_, _, px, _) = gui::bitmap_pixels(bmp).unwrap();
+    assert!(
+        px.iter().all(|&c| c == px[0]),
+        "aucun fond peint par Winlux"
+    );
+
+    let font = 0;
+    let text: Vec<char> = "un deux trois quatre\r\ncinq".chars().collect();
+    let width = measure(font, "un deux trois").0;
+    let rows = wrapped_rows(font, &text, width);
+    let lines: Vec<&str> = rows.iter().map(|(_, s)| s.trim_end()).collect();
+    assert_eq!(lines, ["un deux trois", "quatre", "cinq"]);
+    assert_eq!(rows[1].0, 14, "« quatre » commence au 15e caractère");
+    assert_eq!(rows[2].0, 22, "ligne suivant le \\r\\n");
+    gui::destroy_window(p);
+}

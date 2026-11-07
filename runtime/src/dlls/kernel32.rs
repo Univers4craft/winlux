@@ -5113,6 +5113,7 @@ pub unsafe extern "win64" fn create_process_w(
             }
         }
     };
+    crate::log_debug!("process", "CreateProcessW {app:?} {line:?}");
     if app.is_none() && line.is_none() {
         crate::process::set_last_error(87);
         return 0;
