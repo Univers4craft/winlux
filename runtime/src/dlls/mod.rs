@@ -656,6 +656,24 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: uxtheme::exports(),
                 handle: fake_module(),
             },
+            // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
+            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
+            // charger (LoadLibrary de wxWidgets, #795).
+            Builtin {
+                name: "msftedit",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "riched20",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "riched32",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),

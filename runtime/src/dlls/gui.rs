@@ -1707,13 +1707,51 @@ pub fn bitmap_pixels(handle: usize) -> Option<(usize, usize, Vec<u32>, bool)> {
     Some((w, h, out, alpha))
 }
 
-/// Crée une DIB section 32 bits haut-bas à partir de pixels COLORREF dont
+/// Bitmaps que Winlux garde en mémoire comme des DIB mais présente comme
+/// des bitmaps dépendantes du périphérique (DDB) : celles de GetIconInfo,
+/// comme sous Windows. wxWidgets en tire une DIB à lui puis supprime
+/// l'originale ; s'il la voyait comme une DIB section, il supprimait sa
+/// propre copie (#793).
+fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
+pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
+    let h = bitmap_from_pixels(width, height, pixels)?;
+    lock(device_dependent()).insert(h);
+    Some(h)
+}
+
+/// Vrai pour une bitmap présentée comme DDB (voir `ddb_from_pixels`).
+pub fn is_device_dependent(handle: usize) -> bool {
+    lock(device_dependent()).contains(&handle)
+}
+
+/// Sens d'une DIB section : `Some(true)` haut-bas, `Some(false)` bas-haut,
+/// `None` pour une bitmap qui n'est pas une DIB section.
+pub fn dib_top_down(handle: usize) -> Option<bool> {
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Bitmap {
+            dib_bits: Some(_),
+            top_down,
+            ..
+        }) => Some(*top_down),
+        _ => None,
+    }
+}
+
+/// Crée une DIB section 32 bits bas-haut à partir de pixels COLORREF dont
 /// l'octet haut est l'alpha.
 pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     if pixels.len() < width * height {
         return None;
     }
-    let (handle, _) = create_dib_section(width as i32, height as i32, 32, true)?;
+    // Bas-haut, comme les DIB que Windows rend pour une icône : wxWidgets
+    // refuse de convertir une DIB haut-bas (image vide, puis écriture à
+    // l'adresse -1 dans wxImageList::Add, #793).
+    let (handle, _) = create_dib_section(width as i32, height as i32, 32, false)?;
     let mut objects = lock(objects());
     if let Some(GdiObject::Bitmap {
         pixels: store,
@@ -1722,10 +1760,12 @@ pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option
     }) = objects.get_mut(&handle)
     {
         for (i, &c) in pixels[..width * height].iter().enumerate() {
-            bytes[i * 4] = (c >> 16) as u8;
-            bytes[i * 4 + 1] = (c >> 8) as u8;
-            bytes[i * 4 + 2] = c as u8;
-            bytes[i * 4 + 3] = (c >> 24) as u8;
+            let (x, y) = (i % width, i / width);
+            let o = ((height - 1 - y) * width + x) * 4;
+            bytes[o] = (c >> 16) as u8;
+            bytes[o + 1] = (c >> 8) as u8;
+            bytes[o + 2] = c as u8;
+            bytes[o + 3] = (c >> 24) as u8;
             store[i] = c & 0x00FF_FFFF;
         }
     }
@@ -1876,7 +1916,10 @@ pub fn delete_object(obj: usize) -> bool {
     let mut map = lock(objects());
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
-        Some(_) => map.remove(&obj).is_some(),
+        Some(_) => {
+            lock(device_dependent()).remove(&obj);
+            map.remove(&obj).is_some()
+        }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
     }
 }
@@ -2720,11 +2763,15 @@ pub fn request_paint(hwnd: usize) {
                 lparam: 0,
                 time: 0,
                 pt: Point::default(),
-                l_private: 0,
+                l_private: SYSTEM_PAINT,
             },
         );
     }
 }
+
+/// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
+/// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
+const SYSTEM_PAINT: u32 = 0x5750;
 
 pub fn destroy_window(hwnd: usize) -> bool {
     // Capture du wndproc et du parent avant retrait de la table.
@@ -3174,10 +3221,22 @@ pub fn flush_paint_over(hwnd: usize) {
 
 /// Retire et renvoie le premier message correspondant au filtre.
 pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
-    let taken = {
-        let mut items = lock(&q.items);
-        let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
-        items.remove(idx)?
+    let taken = loop {
+        let m = {
+            let mut items = lock(&q.items);
+            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            items.remove(idx)?
+        };
+        // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
+        // via UpdateWindow, ValidateRect) n'existe plus sous Windows : le
+        // délivrer relançait une peinture de trop (#796).
+        if m.message == WM_PAINT
+            && m.l_private == SYSTEM_PAINT
+            && lock(windows()).get(&m.hwnd).is_some_and(|w| !w.needs_paint)
+        {
+            continue;
+        }
+        break m;
     };
     if taken.message == WM_PAINT {
         // Le WM_PAINT n'est plus en file ; la zone reste invalidée tant que
@@ -3205,6 +3264,14 @@ pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
             .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
     })?;
     Some(Msg::new(target, WM_PAINT, 0, 0))
+}
+
+/// Zone invalidée d'une fenêtre visible du thread appelant (UpdateWindow).
+pub fn paint_pending_here(hwnd: usize) -> bool {
+    let tid = std::thread::current().id();
+    lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint)
 }
 
 /// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
@@ -3735,6 +3802,7 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -3948,6 +4016,44 @@ mod tests {
         _lparam: isize,
     ) -> isize {
         0
+    }
+
+    static PEINTURES: AtomicUsize = AtomicUsize::new(0);
+
+    extern "win64" fn wnd_proc_compte_peintures(
+        hwnd: usize,
+        msg: u32,
+        _wparam: usize,
+        _lparam: isize,
+    ) -> isize {
+        if msg == WM_PAINT {
+            PEINTURES.fetch_add(1, Ordering::SeqCst);
+            validate_window(hwnd);
+        }
+        0
+    }
+
+    /// #796 : UpdateWindow peint tout de suite une fenêtre invalidée, ne fait
+    /// rien sur une fenêtre valide, et le WM_PAINT resté en file n'est plus
+    /// délivré une seconde fois.
+    #[test]
+    fn update_window_peint_tout_de_suite_et_une_seule_fois() {
+        let hwnd = fenetre_de_test();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize =
+            wnd_proc_compte_peintures;
+        lock(windows()).get_mut(&hwnd).unwrap().wnd_proc = proc_addr as usize;
+        let q = current_queue();
+        PEINTURES.store(0, Ordering::SeqCst);
+        request_paint(hwnd);
+        assert_eq!(unsafe { crate::dlls::user32::update_window(hwnd) }, 1);
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        unsafe { crate::dlls::user32::update_window(hwnd) };
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        // Un WM_PAINT posté par l'appli elle-même reste délivré.
+        post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        destroy_window(hwnd);
     }
 
     fn fenetre_de_test() -> usize {
