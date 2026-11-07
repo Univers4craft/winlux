@@ -85,6 +85,7 @@ fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-default-accent.py" python3 -B scripts/test-default-accent.py
+step "scripts/test-mime-translations.py (types de fichiers traduits)" python3 -B scripts/test-mime-translations.py
 
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
 # Playwright, sauf WINLUX_SITE_RENDER=required.
