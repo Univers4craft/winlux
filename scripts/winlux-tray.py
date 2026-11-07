@@ -142,6 +142,17 @@ def _balance_cache():
     return base / "winlux/taskbar-balance"
 
 
+def _balance_log(message):
+    """Journal de mesure du contrepoids, seulement si WINLUX_BALANCE_LOG est défini (tests)."""
+    path = os.environ.get("WINLUX_BALANCE_LOG")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as log:
+                log.write(f"{time.monotonic():.2f} {message}\n")
+        except OSError:
+            pass
+
+
 def _settled_balance(ids, right_ids, left_ids):
     """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
 
@@ -185,12 +196,15 @@ def _settled_balance(ids, right_ids, left_ids):
             laid_out = all(x + width <= following for (x, width), (following, _) in zip(block, block[1:]))
             if expected <= present and laid_out and children == previous:
                 break
+            _balance_log(f"attente : attendus {sorted(expected)}, présents {sorted(present)}, "
+                         f"alignés {laid_out}, greffons {children}")
             previous = children
             time.sleep(0.1)
             children, screen = _panel_children()
     if not screen:
         return 0
     width = balance_width(screen, children, right_ids, left_ids)
+    _balance_log(f"mesure : {width} px, âge {age}, greffons {children}")
     cache = _balance_cache()
     try:
         if cache.read_text().split() != [key, str(width)]:

@@ -27,7 +27,7 @@ import time
 directory = Path(__file__).resolve().parent
 project = directory.parent
 shipped = project / "integration/native/config"
-CENTERED = (3, 13, 1, 15, 14, 2, 8, 10, 4, 5, 6, 9, 7)
+CENTERED = (3, 13, 1, 15, 14, 2, 8, 10, 4, 7, 9)
 MAX_OFF = 1.2
 TOLERANCE = 8
 # Boutons de la barre en magenta uni : sans fenêtre ouverte, le premier depuis
@@ -97,7 +97,8 @@ def boot(home, label, problems):
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk
     env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"),
-               XDG_DATA_HOME=str(home / ".local/share"), WINLUX_TRAY_DIR=str(home / "tray"), WINLUX_LANG="fr")
+               XDG_DATA_HOME=str(home / ".local/share"), WINLUX_TRAY_DIR=str(home / "tray"), WINLUX_LANG="fr",
+               WINLUX_BALANCE_LOG=str(home / "balance.log"))
     process = subprocess.Popen(["dbus-run-session", "--", "sh", "-c",
                                 "openbox & sleep 1; xfce4-panel --disable-wm-check & echo go; wait"],
                                env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, text=True)
@@ -146,6 +147,10 @@ def main():
         prepare(home)
         boot(home, "premier démarrage", problems)
         boot(home, "démarrage suivant", problems)
+        if problems:
+            # Ce qu'a vu le contrepoids pendant le lancement (diagnostic CI).
+            log = home / "balance.log"
+            print(log.read_text(encoding="utf-8")[-6000:] if log.exists() else "contrepoids : aucun journal")
     for problem in problems:
         print("ÉCHEC : " + problem, file=sys.stderr)
     if not problems:
