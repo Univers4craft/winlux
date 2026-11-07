@@ -1253,6 +1253,11 @@ fn message_box_buttons(kind: u32) -> Vec<(usize, &'static str)> {
     }
 }
 
+/// Fins de ligne d'une boîte de message : CR LF, CR seul et LF deviennent LF.
+fn message_box_lines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Construit un DLGTEMPLATE en mémoire pour une boîte de message.
 fn message_box_template(text: &str, caption: &str, kind: u32) -> Vec<u8> {
     let font = super::gdi32::get_stock_object(17);
@@ -1430,6 +1435,9 @@ unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp:
 /// MessageBox : vraie fenêtre modale quand un affichage est là ; sinon le
 /// texte va dans le journal et le premier bouton est choisi.
 pub unsafe fn message_box(owner: usize, text: &str, caption: &str, kind: u32) -> i32 {
+    // Un retour chariot seul coupe la ligne comme CR LF (Notepad++ écrit
+    // « \r\r » dans sa boîte « Recharger »).
+    let text = &message_box_lines(text);
     let caption = if caption.is_empty() {
         "Erreur"
     } else {

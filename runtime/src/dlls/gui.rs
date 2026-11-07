@@ -42,6 +42,7 @@ pub const WM_ACTIVATE: u32 = 0x0006;
 #[allow(dead_code)]
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
+pub const WM_ACTIVATEAPP: u32 = 0x001C;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
@@ -2302,14 +2303,41 @@ pub fn screen_size() -> (i32, i32) {
     size.unwrap_or((1920, 1080))
 }
 
+/// Le programme a-t-il le focus du bureau ? Sert à n'envoyer
+/// WM_ACTIVATEAPP qu'au passage d'un programme à l'autre.
+static APP_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// WM_ACTIVATEAPP à toutes les fenêtres de premier niveau du programme
+/// quand il gagne ou perd le focus face à un autre programme. Notepad++ y
+/// vérifie si ses fichiers ont changé sur le disque (#769).
+fn activate_app(active: bool) {
+    use std::sync::atomic::Ordering;
+    if APP_ACTIVE.swap(active, Ordering::Relaxed) == active {
+        return;
+    }
+    let mut tops: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(_, w)| w.parent == 0 || w.style & 0x4000_0000 == 0)
+        .map(|(&h, _)| h)
+        .collect();
+    tops.sort_unstable();
+    for top in tops {
+        post_to_window(top, Msg::new(top, WM_ACTIVATEAPP, active as usize, 0));
+    }
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
         let mut b = lock(backend());
         b.pump()
     };
+    // Un FocusOut suivi d'un FocusIn dans le même lot : le focus change de
+    // fenêtre sans quitter le programme.
+    let refocused = events.iter().any(|e| e.message == WM_SETFOCUS);
     for e in events {
         if e.message == WM_SETFOCUS {
+            activate_app(true);
             let change = set_focus_from_backend(e.hwnd);
             if let Some(old) = change {
                 if old != 0 {
@@ -2325,6 +2353,9 @@ pub fn pump_backend() {
             let cleared = clear_focus_from_backend(e.hwnd);
             if cleared {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
+            }
+            if !refocused {
+                activate_app(false);
             }
             continue;
         }
@@ -3453,6 +3484,47 @@ mod tests {
         for h in [bouton, groupe, popup, haut] {
             destroy_window(h);
         }
+    }
+
+    #[test]
+    fn wm_activateapp_au_passage_d_un_programme_a_l_autre() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        let h = alloc_hwnd();
+        insert_window(
+            h,
+            Window {
+                class: "Activation".to_string(),
+                wnd_proc: proc_addr as usize,
+                background: 0,
+                title: String::new(),
+                rect: Rect::from_size(0, 0, 100, 100),
+                visible: true,
+                parent: 0,
+                owner: std::thread::current().id(),
+                needs_paint: false,
+                paint_queued: false,
+                style: 0,
+                ex_style: 0,
+                pending: Vec::new(),
+                menu_bar: 0,
+            },
+        );
+        let q = current_queue();
+        let recus = || {
+            lock(&q.items)
+                .iter()
+                .filter(|m| m.hwnd == h && m.message == WM_ACTIVATEAPP)
+                .map(|m| m.wparam)
+                .collect::<Vec<_>>()
+        };
+        APP_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+        activate_app(true);
+        activate_app(true);
+        assert_eq!(recus(), vec![1]);
+        activate_app(false);
+        assert_eq!(recus(), vec![1, 0]);
+        lock(&q.items).retain(|m| m.hwnd != h);
+        destroy_window(h);
     }
 
     #[test]
