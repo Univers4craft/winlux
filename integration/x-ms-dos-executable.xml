@@ -1,31 +1,297 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Types Winlux (programmes Windows) et traductions fr/de/es des types
+     courants que shared-mime-info ne traduit pas ou plus (#591) : Thunar et
+     le bureau affichent ces libellés dans la langue de la session. Les
+     commentaires s'ajoutent à ceux de freedesktop.org.xml (fusion par
+     update-mime-database) ; vérifié par scripts/test-mime-translations.py. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-ms-dos-executable">
-    <comment>Exécutable Windows</comment>
+    <comment>Windows program</comment>
+    <comment xml:lang="fr">Programme Windows</comment>
+    <comment xml:lang="de">Windows-Programm</comment>
+    <comment xml:lang="es">Programa de Windows</comment>
     <glob pattern="*.exe"/>
     <magic priority="80">
       <match type="string" offset="0" value="MZ"/>
     </magic>
   </mime-type>
   <mime-type type="application/x-ms-shortcut">
-    <comment>Raccourci Windows</comment>
+    <comment>Windows shortcut</comment>
+    <comment xml:lang="fr">Raccourci Windows</comment>
+    <comment xml:lang="de">Windows-Verknüpfung</comment>
+    <comment xml:lang="es">Acceso directo de Windows</comment>
     <glob pattern="*.lnk"/>
     <magic priority="60">
       <match type="string" offset="0" value="L\0\0\0"/>
     </magic>
   </mime-type>
   <mime-type type="application/x-msi">
-    <comment>Paquet Windows Installer</comment>
+    <comment>Windows Installer package</comment>
+    <comment xml:lang="fr">Paquet Windows Installer</comment>
+    <comment xml:lang="de">Windows-Installer-Paket</comment>
+    <comment xml:lang="es">Paquete de Windows Installer</comment>
     <glob pattern="*.msi"/>
   </mime-type>
   <mime-type type="application/msix">
-    <comment>Paquet d'application Windows (MSIX)</comment>
+    <comment>Windows app package (MSIX)</comment>
+    <comment xml:lang="fr">Paquet d&apos;application Windows (MSIX)</comment>
+    <comment xml:lang="de">Windows-App-Paket (MSIX)</comment>
+    <comment xml:lang="es">Paquete de aplicación de Windows (MSIX)</comment>
     <glob pattern="*.msix"/>
     <glob pattern="*.appx"/>
   </mime-type>
   <mime-type type="application/msixbundle">
-    <comment>Ensemble de paquets d'application Windows (MSIX)</comment>
+    <comment>Windows app package bundle (MSIX)</comment>
+    <comment xml:lang="fr">Ensemble de paquets d&apos;application Windows (MSIX)</comment>
+    <comment xml:lang="de">Windows-App-Paketbündel (MSIX)</comment>
+    <comment xml:lang="es">Conjunto de paquetes de aplicación de Windows (MSIX)</comment>
     <glob pattern="*.msixbundle"/>
     <glob pattern="*.appxbundle"/>
+  </mime-type>
+  <mime-type type="inode/directory">
+    <comment xml:lang="fr">Dossier</comment>
+  </mime-type>
+  <mime-type type="inode/symlink">
+    <comment xml:lang="fr">Lien symbolique</comment>
+  </mime-type>
+  <mime-type type="inode/blockdevice">
+    <comment xml:lang="fr">Périphérique de type bloc</comment>
+  </mime-type>
+  <mime-type type="inode/chardevice">
+    <comment xml:lang="fr">Périphérique de type caractère</comment>
+  </mime-type>
+  <mime-type type="inode/fifo">
+    <comment xml:lang="fr">Tube</comment>
+  </mime-type>
+  <mime-type type="inode/socket">
+    <comment xml:lang="fr">Socket</comment>
+  </mime-type>
+  <mime-type type="inode/mount-point">
+    <comment xml:lang="fr">Point de montage</comment>
+  </mime-type>
+  <mime-type type="text/plain">
+    <comment xml:lang="fr">Document texte</comment>
+  </mime-type>
+  <mime-type type="text/x-log">
+    <comment xml:lang="fr">Journal d&apos;application</comment>
+  </mime-type>
+  <mime-type type="text/x-patch">
+    <comment xml:lang="fr">Différences entre fichiers</comment>
+  </mime-type>
+  <mime-type type="text/vcard">
+    <comment xml:lang="fr">Carte de visite électronique</comment>
+  </mime-type>
+  <mime-type type="text/richtext">
+    <comment xml:lang="fr">Document texte enrichi</comment>
+  </mime-type>
+  <mime-type type="text/x-copying">
+    <comment xml:lang="fr">Conditions de licence</comment>
+  </mime-type>
+  <mime-type type="text/x-authors">
+    <comment xml:lang="fr">Liste des auteurs</comment>
+  </mime-type>
+  <mime-type type="text/x-install">
+    <comment xml:lang="fr">Instructions d&apos;installation</comment>
+  </mime-type>
+  <mime-type type="text/x-basic">
+    <comment xml:lang="fr">Programme BASIC</comment>
+  </mime-type>
+  <mime-type type="text/x-vb">
+    <comment xml:lang="fr">Code source Visual Basic .NET</comment>
+  </mime-type>
+  <mime-type type="text/x-gettext-translation">
+    <comment xml:lang="fr">Fichier de traduction</comment>
+  </mime-type>
+  <mime-type type="message/rfc822">
+    <comment xml:lang="fr">Courriel</comment>
+  </mime-type>
+  <mime-type type="application/x-shellscript">
+    <comment xml:lang="fr">Script shell</comment>
+  </mime-type>
+  <mime-type type="application/x-bat">
+    <comment xml:lang="fr">Fichier de commandes DOS/Windows</comment>
+  </mime-type>
+  <mime-type type="application/x-powershell">
+    <comment xml:lang="fr">Script PowerShell</comment>
+  </mime-type>
+  <mime-type type="application/x-desktop">
+    <comment xml:lang="fr">Lanceur d&apos;application</comment>
+  </mime-type>
+  <mime-type type="application/x-executable">
+    <comment xml:lang="fr">Exécutable</comment>
+  </mime-type>
+  <mime-type type="application/x-sharedlib">
+    <comment xml:lang="fr">Bibliothèque partagée</comment>
+  </mime-type>
+  <mime-type type="application/x-object">
+    <comment xml:lang="fr">Code objet</comment>
+  </mime-type>
+  <mime-type type="application/x-msdownload">
+    <comment xml:lang="fr">Programme Windows ou DOS</comment>
+    <comment xml:lang="de">Windows- oder DOS-Programm</comment>
+    <comment xml:lang="es">Programa de Windows o DOS</comment>
+  </mime-type>
+  <mime-type type="application/x-dosexec">
+    <comment xml:lang="fr">Exécutable DOS</comment>
+    <comment xml:lang="de">DOS-Programm</comment>
+    <comment xml:lang="es">Ejecutable de DOS</comment>
+  </mime-type>
+  <mime-type type="application/x-ms-ne-executable">
+    <comment xml:lang="fr">Programme Windows 16 bits</comment>
+    <comment xml:lang="de">16-Bit-Windows-Programm</comment>
+    <comment xml:lang="es">Programa de Windows de 16 bits</comment>
+  </mime-type>
+  <mime-type type="application/vnd.microsoft.portable-executable">
+    <comment xml:lang="fr">Programme Windows</comment>
+    <comment xml:lang="de">Windows-Programm</comment>
+    <comment xml:lang="es">Programa de Windows</comment>
+  </mime-type>
+  <mime-type type="application/x-ms-pdb">
+    <comment xml:lang="fr">Base de données de programme Windows</comment>
+  </mime-type>
+  <mime-type type="application/appx">
+    <comment xml:lang="fr">Paquet d&apos;application Windows</comment>
+  </mime-type>
+  <mime-type type="application/appxbundle">
+    <comment xml:lang="fr">Ensemble de paquets d&apos;application Windows</comment>
+    <comment xml:lang="es">Conjunto de paquetes de aplicación de Windows</comment>
+  </mime-type>
+  <mime-type type="application/appinstaller">
+    <comment xml:lang="fr">Installateur d&apos;application Windows</comment>
+  </mime-type>
+  <mime-type type="application/vnd.efi.iso">
+    <comment xml:lang="fr">Image disque</comment>
+  </mime-type>
+  <mime-type type="application/x-bzip2">
+    <comment xml:lang="fr">Archive Bzip2</comment>
+  </mime-type>
+  <mime-type type="application/x-bzip2-compressed-tar">
+    <comment xml:lang="fr">Archive tar (compressée avec bzip2)</comment>
+  </mime-type>
+  <mime-type type="application/x-bzip1">
+    <comment xml:lang="fr">Archive Bzip1</comment>
+  </mime-type>
+  <mime-type type="application/x-zerosize">
+    <comment xml:lang="fr">Document vide</comment>
+  </mime-type>
+  <mime-type type="application/x-trash">
+    <comment xml:lang="fr">Fichier de sauvegarde</comment>
+  </mime-type>
+  <mime-type type="application/x-theme">
+    <comment xml:lang="fr">Thème</comment>
+  </mime-type>
+  <mime-type type="application/x-troff-man">
+    <comment xml:lang="fr">Page de manuel</comment>
+  </mime-type>
+  <mime-type type="application/epub+zip">
+    <comment xml:lang="fr">Livre électronique</comment>
+  </mime-type>
+  <mime-type type="application/mbox">
+    <comment xml:lang="fr">Boîte aux lettres</comment>
+  </mime-type>
+  <mime-type type="application/octet-stream">
+    <comment xml:lang="fr">Inconnu</comment>
+  </mime-type>
+  <mime-type type="application/pgp-signature">
+    <comment xml:lang="fr">Signature OpenPGP détachée</comment>
+  </mime-type>
+  <mime-type type="application/pkix-crl">
+    <comment xml:lang="fr">Liste de révocation de certificats</comment>
+  </mime-type>
+  <mime-type type="application/toml">
+    <comment xml:lang="fr">Document TOML</comment>
+  </mime-type>
+  <mime-type type="application/json5">
+    <comment xml:lang="fr">Document JSON5</comment>
+  </mime-type>
+  <mime-type type="application/x-core">
+    <comment xml:lang="fr">Données de plantage d&apos;un programme</comment>
+  </mime-type>
+  <mime-type type="application/x-gettext-translation">
+    <comment xml:lang="fr">Messages traduits (lisibles par la machine)</comment>
+  </mime-type>
+  <mime-type type="application/vnd.cups-ppd">
+    <comment xml:lang="fr">Description d&apos;imprimante PostScript</comment>
+  </mime-type>
+  <mime-type type="application/wasm">
+    <comment xml:lang="fr">Module binaire WASM</comment>
+  </mime-type>
+  <mime-type type="application/x-openvpn-profile">
+    <comment xml:lang="fr">Profil OpenVPN</comment>
+  </mime-type>
+  <mime-type type="application/x-vhd-disk">
+    <comment xml:lang="fr">Image disque VHD</comment>
+  </mime-type>
+  <mime-type type="application/x-vhdx-disk">
+    <comment xml:lang="fr">Image disque VHDX</comment>
+  </mime-type>
+  <mime-type type="application/x-vmdk-disk">
+    <comment xml:lang="fr">Image disque VMDK</comment>
+  </mime-type>
+  <mime-type type="application/x-vdi-disk">
+    <comment xml:lang="fr">Image disque VDI</comment>
+  </mime-type>
+  <mime-type type="application/ovf">
+    <comment xml:lang="fr">Image disque OVF</comment>
+  </mime-type>
+  <mime-type type="application/x-asar">
+    <comment xml:lang="fr">Archive Electron (ASAR)</comment>
+  </mime-type>
+  <mime-type type="application/vnd.comicbook+zip">
+    <comment xml:lang="fr">Archive de bande dessinée (conteneur zip)</comment>
+  </mime-type>
+  <mime-type type="application/vnd.comicbook-rar">
+    <comment xml:lang="fr">Archive de bande dessinée (conteneur rar)</comment>
+  </mime-type>
+  <mime-type type="audio/x-mpegurl">
+    <comment xml:lang="fr">Liste de lecture multimédia</comment>
+  </mime-type>
+  <mime-type type="image/jxl">
+    <comment xml:lang="fr">Image JPEG XL</comment>
+  </mime-type>
+  <mime-type type="image/avif">
+    <comment xml:lang="fr">Image AVIF</comment>
+  </mime-type>
+  <mime-type type="image/apng">
+    <comment xml:lang="fr">Image PNG animée</comment>
+  </mime-type>
+  <mime-type type="image/svg+xml-compressed">
+    <comment xml:lang="fr">Image SVG compressée</comment>
+  </mime-type>
+  <mime-type type="image/x-dcraw">
+    <comment xml:lang="fr">Image brute d&apos;appareil photo</comment>
+  </mime-type>
+  <mime-type type="image/x-canon-cr3">
+    <comment xml:lang="fr">Image brute Canon CR3</comment>
+  </mime-type>
+  <mime-type type="model/obj">
+    <comment xml:lang="fr">Modèle 3D OBJ</comment>
+  </mime-type>
+  <mime-type type="model/gltf-binary">
+    <comment xml:lang="fr">Modèle glTF</comment>
+  </mime-type>
+  <mime-type type="model/gltf+json">
+    <comment xml:lang="fr">Modèle glTF</comment>
+  </mime-type>
+  <mime-type type="model/3mf">
+    <comment xml:lang="fr">Document 3MF</comment>
+  </mime-type>
+  <mime-type type="x-content/software">
+    <comment xml:lang="fr">Logiciel</comment>
+  </mime-type>
+  <mime-type type="x-content/audio-cdda">
+    <comment xml:lang="fr">CD audio</comment>
+  </mime-type>
+  <mime-type type="x-content/video-dvd">
+    <comment xml:lang="fr">DVD vidéo</comment>
+  </mime-type>
+  <mime-type type="x-content/blank-cd">
+    <comment xml:lang="fr">CD vierge</comment>
+  </mime-type>
+  <mime-type type="x-content/blank-dvd">
+    <comment xml:lang="fr">DVD vierge</comment>
+  </mime-type>
+  <mime-type type="x-content/image-dcf">
+    <comment xml:lang="fr">Photos numériques</comment>
   </mime-type>
 </mime-info>
