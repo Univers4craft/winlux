@@ -99,6 +99,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
 pub mod mouse;
+pub mod mpr;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -657,6 +658,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dwmapi",
                 exports: dwmapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mpr",
+                exports: mpr::exports(),
                 handle: fake_module(),
             },
             Builtin {
