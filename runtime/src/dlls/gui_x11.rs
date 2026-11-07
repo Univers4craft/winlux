@@ -257,6 +257,8 @@ struct XftApi {
         *const c_uchar,
         c_int,
     ),
+    /// XftCharExists (facultatif) : la police a-t-elle ce glyphe ?
+    char_exists: Option<unsafe extern "C" fn(*mut Display, *mut XftFont, u32) -> c_int>,
 }
 
 unsafe impl Send for XftApi {}
@@ -315,8 +317,23 @@ impl XftApi {
             color_free: required!(xft, b"XftColorFree\0"),
             text_extents: required!(xft, b"XftTextExtentsUtf8\0"),
             draw_string: required!(xft, b"XftDrawStringUtf8\0"),
+            char_exists: symbol(xft, b"XftCharExists\0"),
         })
     }
+}
+
+/// Équivalent courant d'un symbole souvent absent des polices de texte.
+fn symbol_substitute(c: char) -> Option<char> {
+    Some(match c {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0)?, // pleine chasse
+        '\u{2715}' | '\u{2716}' | '\u{2A2F}' | '\u{274C}' => '\u{00D7}',
+        '\u{2795}' | '\u{271A}' => '+',
+        '\u{2796}' | '\u{2212}' => '-',
+        '\u{2714}' | '\u{2713}' => '\u{221A}',
+        '\u{25BE}' | '\u{2BC6}' | '\u{2B9F}' => '\u{25BC}',
+        '\u{25B4}' | '\u{2BC5}' => '\u{25B2}',
+        _ => return None,
+    })
 }
 
 struct XftRenderer {
@@ -385,8 +402,40 @@ impl XftRenderer {
         Some(font)
     }
 
+    /// Remplace les symboles absents de la police par un équivalent qu'elle
+    /// a, au lieu d'un carré « ▯ » : « ＋ » et « ✕ » de la barre de menus de
+    /// Notepad++ deviennent « + » et « × ».
+    fn substitute<'t>(&self, font: *mut XftFont, text: &'t [u8]) -> std::borrow::Cow<'t, [u8]> {
+        let Some(exists) = self.api.char_exists else {
+            return text.into();
+        };
+        let Ok(s) = std::str::from_utf8(text) else {
+            return text.into();
+        };
+        let has = |c: char| unsafe { exists(self.display, font, c as u32) != 0 };
+        if s.chars().all(|c| c.is_ascii() || has(c)) {
+            return text.into();
+        }
+        let out: String = s
+            .chars()
+            .map(|c| {
+                if c.is_ascii() || has(c) {
+                    return c;
+                }
+                let alt = symbol_substitute(c).unwrap_or(c);
+                if alt.is_ascii() || has(alt) {
+                    alt
+                } else {
+                    c
+                }
+            })
+            .collect();
+        out.into_bytes().into()
+    }
+
     fn measure(&mut self, spec: &FontSpec, text: &[u8]) -> Option<(i32, i32, i32)> {
         let font = self.font(spec)?;
+        let text = &*self.substitute(font, text);
         let mut extents = XGlyphInfo::default();
         unsafe {
             (self.api.text_extents)(
@@ -416,6 +465,7 @@ impl XftRenderer {
         let Some(font) = self.font(spec) else {
             return false;
         };
+        let text = &*self.substitute(font, text);
         let render = XRenderColor {
             red: ((colorref & 0xFF) as u16) * 257,
             green: (((colorref >> 8) & 0xFF) as u16) * 257,
@@ -772,6 +822,9 @@ pub struct X11Backend {
     gestures: bool,
     /// Échelle du pincement au dernier cran de zoom envoyé.
     pinch_last: f32,
+    /// Dernier appui (fenêtre, bouton, instant, x, y) pour reconnaître un
+    /// double-clic.
+    last_click: Option<(usize, u8, std::time::Instant, i32, i32)>,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
@@ -845,6 +898,7 @@ impl X11Backend {
             pointer_style: (1, 0),
             gestures,
             pinch_last: 1.0,
+            last_click: None,
             xdnd,
         })
     }
@@ -2256,9 +2310,27 @@ impl X11Backend {
                     });
                 }
                 let wparam = button_wparam(e.detail) | button_state(e.state);
+                let now = std::time::Instant::now();
+                let double = self.last_click.take().is_some_and(|(h, b, t, lx, ly)| {
+                    h == hwnd
+                        && b == e.detail
+                        && now.duration_since(t).as_millis()
+                            <= crate::dlls::mouse::current().double_click as u128
+                        && (x - lx).abs() <= 4
+                        && (y - ly).abs() <= 4
+                }) && gui::wants_double_clicks(hwnd);
+                // Le clic qui conclut un double-clic n'en commence pas un autre.
+                if !double {
+                    self.last_click = Some((hwnd, e.detail, now, x, y));
+                }
+                let message = button_message(e.detail, true);
                 Some(PendingEvent {
                     hwnd,
-                    message: button_message(e.detail, true),
+                    message: if double {
+                        double_click_message(message)
+                    } else {
+                        message
+                    },
                     wparam,
                     lparam,
                 })
@@ -2770,6 +2842,11 @@ fn button_message(detail: u8, down: bool) -> u32 {
     }
 }
 
+/// WM_xBUTTONDOWN → WM_xBUTTONDBLCLK (0x201→0x203, 0x204→0x206, 0x207→0x209).
+fn double_click_message(down: u32) -> u32 {
+    down + 2
+}
+
 /// Boutons X11 4/5 (molette verticale) et 6/7 (horizontale) : un cran vaut
 /// `WHEEL_DELTA` (120), positif vers le haut ou vers la droite.
 fn wheel_message(detail: u8) -> Option<(u32, i16)> {
@@ -2977,6 +3054,13 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn symboles_remplaces_par_un_equivalent() {
+        assert_eq!(super::symbol_substitute('\u{FF0B}'), Some('+'));
+        assert_eq!(super::symbol_substitute('\u{2715}'), Some('\u{00D7}'));
+        assert_eq!(super::symbol_substitute('é'), None);
+    }
+
     use super::*;
 
     #[test]

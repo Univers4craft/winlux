@@ -585,6 +585,9 @@ jobs:
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
 
+      - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
+        run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py
+
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
 
