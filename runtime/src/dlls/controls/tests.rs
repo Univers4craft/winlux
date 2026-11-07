@@ -943,6 +943,10 @@ fn barre_d_outils_bandes_et_liste_etendue() {
     let set = [0x1usize, usize::MAX, path.as_ptr() as usize, 0, 0, 0, 0];
     assert_eq!(sendw(cbex, 0x040C, 0, set.as_ptr() as isize), 1);
     assert_eq!(text_of(combo), "D:\\Photos");
+    // SetWindowText sur la ComboBoxEx remplit son champ (barre d'adresse de 7-Zip).
+    let addr = w("C:\\Users");
+    unsafe { user32::set_window_text_w(cbex, addr.as_ptr()) };
+    assert_eq!(text_of(combo), "C:\\Users");
     notes();
     sendw(cbex, 0x014E, 2, 0); // CB_SETCURSEL
     sendw(combo, WM_SETFOCUS, 0, 0); // CBN_SETFOCUS

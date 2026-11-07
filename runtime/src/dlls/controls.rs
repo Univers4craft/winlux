@@ -3330,6 +3330,16 @@ pub fn text_changed(hwnd: usize) {
     let Some(kind) = kind_of(hwnd) else {
         return;
     };
+    if kind == Kind::ComboBoxEx {
+        // SetWindowText sur une ComboBoxEx remplit son champ (barre
+        // d'adresse de 7-Zip), comme le WM_SETTEXT que Windows lui envoie.
+        let combo = unsafe { bars::cbex_combo(hwnd) };
+        if combo != 0 {
+            let text: Vec<u16> = title(hwnd).encode_utf16().chain([0]).collect();
+            with_charset(true, || send(combo, WM_SETTEXT, 0, text.as_ptr() as isize));
+        }
+        return;
+    }
     if kind == Kind::Edit || kind == Kind::ComboBox {
         with_ctl(hwnd, |c| {
             c.edit.caret = 0;
