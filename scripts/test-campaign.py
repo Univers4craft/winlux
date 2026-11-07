@@ -242,6 +242,9 @@ for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
     ok("/usr/games" in (SCRIPTS / script).read_text(), f"{script} : /usr/games dans PATH (jeux visibles dans le menu)")
 ok("pkill -USR1 -x picom" in (SCRIPTS / "winlux-native-session.sh").read_text(),
    "premier démarrage : Bienvenue repeinte après l'arrivée du bureau")
+ok('"_WINLUX_MAXIMIZED = 1"; corner-radius = 0' in (ROOT / "integration/native/config/picom/picom.conf").read_text()
+   and all("/usr/bin/winlux-maximized-watch" in (SCRIPTS / s).read_text() for s in ("winlux-native-session.sh", "winlux-user-session.sh")),
+   "fenêtre agrandie : coins carrés, fond d'écran invisible aux coins (#582)")
 installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
 ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
