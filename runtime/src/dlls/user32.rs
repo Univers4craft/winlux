@@ -294,6 +294,7 @@ unsafe fn create_window_common(
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            painting: false,
         },
     );
 
@@ -1126,7 +1127,7 @@ pub unsafe extern "win64" fn release_dc(hwnd: usize, hdc: usize) -> i32 {
         return 0;
     }
     gui::free_dc(hdc);
-    gui::flush_paint(hwnd);
+    gui::flush_paint_over(hwnd);
     1
 }
 
