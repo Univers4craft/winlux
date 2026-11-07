@@ -1014,7 +1014,10 @@ pub extern "win64" fn image_list_add_masked(himl: usize, bmp: usize, key: u32) -
     let Some((w, h, px, alpha)) = gui::bitmap_pixels(bmp) else {
         return -1;
     };
-    let any_alpha = alpha && px.iter().any(|p| p >> 24 != 0);
+    // Un canal alpha ne compte que s'il varie : LoadBitmap rend des DIB
+    // 32 bits entièrement opaques (7-Zip), dont le fond magenta doit
+    // disparaître par la couleur de masque.
+    let any_alpha = alpha && px.iter().any(|p| p >> 24 != 0) && px.iter().any(|p| p >> 24 != 0xFF);
     let key = key & 0x00FF_FFFF;
     let px = px
         .into_iter()
@@ -1446,6 +1449,19 @@ mod tests {
         d.extend([0b0100_0000, 0, 0, 0]);
         d.extend([0, 0, 0, 0]);
         d
+    }
+
+    /// 7-Zip : bitmap 32 bits entièrement opaque à fond magenta ; la couleur
+    /// de masque d'ImageList_AddMasked doit quand même s'appliquer (#504).
+    #[test]
+    fn add_masked_retire_le_magenta_d_une_bitmap_opaque() {
+        let magenta = 0x00FF_00FF;
+        let px = [0xFF00_0000 | magenta, 0xFF00_00FF];
+        let bmp = gui::bitmap_from_pixels(2, 1, &px).unwrap();
+        let list = create_list(1, 1, 0x21);
+        assert_eq!(image_list_add_masked(list, bmp, magenta), 0);
+        assert_eq!(list_image(list, 0).unwrap().px[0] >> 24, 0);
+        assert_eq!(list_image(list, 1).unwrap().px[0], 0xFF00_00FF);
     }
 
     #[test]

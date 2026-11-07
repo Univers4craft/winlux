@@ -617,12 +617,24 @@ fn put<T: Copy>(buf: &mut Vec<u8>, value: T) {
 }
 
 /// SYSTEM_LOGICAL_PROCESSOR_INFORMATION (32 octets en x64).
+/// SYSTEM_LOGICAL_PROCESSOR_INFORMATION : 32 octets en x64, 24 pour un
+/// programme x86 (ProcessorMask est un ULONG_PTR, l'union suit sans
+/// remplissage). WinSCP 32 bits parcourt le tableau par pas de 24 (#232).
 fn legacy_info(caps: &Caps) -> Vec<u8> {
+    legacy_info_for(caps, crate::wow32::pointer_size() == 4)
+}
+
+fn legacy_info_for(caps: &Caps, x86: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let mut entry = |mask: u64, relation: u32, payload: [u8; 16]| {
-        put(&mut out, mask);
-        put(&mut out, relation);
-        put(&mut out, 0u32);
+        if x86 {
+            put(&mut out, mask as u32);
+            put(&mut out, relation);
+        } else {
+            put(&mut out, mask);
+            put(&mut out, relation);
+            put(&mut out, 0u32);
+        }
         out.extend_from_slice(&payload);
     };
     for (mask, _) in cores(caps) {
@@ -930,6 +942,15 @@ mod tests {
         let caps = caps();
         let legacy = legacy_info(caps);
         assert_eq!(legacy.len() % 32, 0);
+        // Disposition x86 : mêmes entrées, 24 octets chacune.
+        let x86 = legacy_info_for(caps, true);
+        assert_eq!(x86.len() % 24, 0);
+        assert_eq!(x86.len() / 24, legacy.len() / 32);
+        for (a, b) in x86.chunks(24).zip(legacy.chunks(32)) {
+            assert_eq!(a[..4], b[..4], "masque");
+            assert_eq!(a[4..8], b[8..12], "relation");
+            assert_eq!(a[8..], b[16..], "union");
+        }
         // Chaque processeur logique appartient à exactement un cœur.
         let cores: u64 = super::cores(caps).iter().fold(0, |m, (c, _)| {
             assert_eq!(m & c, 0);

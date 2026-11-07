@@ -125,6 +125,9 @@ jobs:
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 
+      - name: Vérifier que chaque application livrée a son icône Prisme
+        run: python3 -B scripts/test-app-icons.py
+
       - name: Vérifier benchmark, profils et migration de l'installateur
         run: python3 -B scripts/test-installer-oobe.py
 
@@ -154,6 +157,9 @@ jobs:
 
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
+
+      - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
+        run: python3 -B scripts/test-update-page-names.py
 
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
@@ -194,6 +200,8 @@ jobs:
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
+      - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
+        run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
         run: python3 -B scripts/test-su-sudo.py
       - name: Vérifier « winlux-settings about » et les noms de page
@@ -204,6 +212,9 @@ jobs:
 
       - name: Vérifier l'envoi automatique des plantages (file, anonymisation, dédoublonnage)
         run: python3 -B scripts/test-report-auto.py
+
+      - name: Vérifier le journal et l'état isolés entre comptes (#633)
+        run: python3 -B scripts/test-journal-isolation.py
 
       - name: Vérifier l'écran de verrouillage (mot de passe, inactivité, réveil)
         run: python3 -B scripts/test-lock.py
@@ -274,6 +285,9 @@ jobs:
 
       - name: Vérifier le thème automatique, le diaporama et les thèmes partageables
         run: python3 -B scripts/test-appearance-auto.py
+
+      - name: Vérifier le fond « Winlux Aurore » (définitions, choix selon l'écran)
+        run: python3 -B scripts/test-wallpaper-aurore.py
 
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
@@ -523,16 +537,34 @@ jobs:
       - name: Barre des tâches sans infobulle « (genmon) » ni trait doublé à côté de Démarrer
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-panel-tooltips.py --barre
 
+      - name: Bouton Démarrer immobile au lancement de la barre centrée
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-boot-centering.py
+
+      - name: Alignement de la barre appliqué en direct, sans relance manuelle
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-live-align.py
+
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
       - name: Fenêtres agrandies à coins carrés (règle picom, veilleur, migration)
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-maximized-corners.py
 
+      - name: Fenêtres PE gérées par openbox (bureau, machine, PID, classe)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-pe-window-props.py
+
       - name: Fenêtre Jeux (cartes, tri, recherche)
         run: |
           mkdir -p build/captures
           xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
+
+      - name: Version précédente conservée (même avis partout) et session hors des applications
+        run: xvfb-run -a /usr/bin/python3 -B scripts/test-update-previous-version.py
+
+      - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py
+
+      - name: Touches de volume du clavier sous openbox réel (pas de 2 %, sourdine, micro, indicateur)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-volume-keys.py
 
       - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
         run: |
@@ -554,14 +586,30 @@ jobs:
       - name: Menu Démarrer sur tablette (clavier tactile intégré, appuis xdotool)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-osk.py
 
+      - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
+
+      - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
+        run: |
+          /usr/bin/python3 -B scripts/test-start-for-you.py
+          for size in 1366x768 1920x1080 1024x600; do
+            xvfb-run -a -s "-screen 0 ${size}x24" dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-for-you.py
+          done
+
       - name: Recherche du menu Démarrer (Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-search.py
+
+      - name: Bulles des programmes Windows et notification de « Coller » par D-Bus, sans notify-send (#630)
+        run: dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notify-dbus.py
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py
 
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
+
+      - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
 
       - name: Assistant et groupes d'ancrage sous openbox (place libre, quarts, cases prises, clavier, survol de la barre)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-assist.py

@@ -100,6 +100,8 @@ EncodePointer
 EndUpdateResourceW
 EnterCriticalSection
 EnumCalendarInfoExEx
+EnumCalendarInfoExW
+EnumCalendarInfoW
 EnumDateFormatsExEx
 EnumResourceLanguagesW
 EnumResourceNamesW
@@ -562,6 +564,8 @@ RegEnumValueW
 RegFlushKey
 RegGetValueA
 RegGetValueW
+RegLoadKeyA
+RegLoadKeyW
 RegLoadMUIStringW
 RegNotifyChangeKeyValue
 RegOpenCurrentUser
@@ -572,9 +576,15 @@ RegQueryInfoKeyA
 RegQueryInfoKeyW
 RegQueryValueExA
 RegQueryValueExW
+RegRestoreKeyA
+RegRestoreKeyW
+RegSaveKeyExA
+RegSaveKeyExW
 RegSetKeySecurity
 RegSetValueExA
 RegSetValueExW
+RegUnLoadKeyA
+RegUnLoadKeyW
 RegisterApplicationRestart
 RegisterWaitForSingleObject
 ReleaseActCtx

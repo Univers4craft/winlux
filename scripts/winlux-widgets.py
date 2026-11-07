@@ -824,6 +824,7 @@ class Widgets(Gtk.Application):
 
     def build(self):
         self.window = Gtk.ApplicationWindow(application=self, title=_t("Widgets"))
+        self.window.set_icon_name("winlux-widgets")
         self.window.set_name("winlux-widgets")
         self.css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(self.window.get_screen(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)

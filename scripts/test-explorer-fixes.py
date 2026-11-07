@@ -115,6 +115,32 @@ ok("GdiAlphaBlend(hdc" in icons_rs and "icons::of_glyph(gl)" in explorer and "ic
 ok(not (ROOT / "assets/icons/fluent").exists() and "Fluent" not in icons_data,
    "un seul jeu d'icônes : Prisme, comme la session native")
 
+# ── Boîte Ouvrir / Enregistrer des .exe = l'Explorateur Winlux ─────────────
+pick_rs = (SHELL / "explorer_pick.rs").read_text(encoding="utf-8")
+files_rs = (ROOT / "runtime/src/dlls/comdlg32_files.rs").read_text(encoding="utf-8")
+ok("pick_with_explorer(owner, &request, &app)" in files_rs and '"/usr/bin/winlux-shell-app"' in files_rs,
+   "GetOpenFileName / GetSaveFileName ouvrent l'Explorateur Winlux")
+ok('cmd.arg("explorer")' in files_rs and "dialogs::run_builtin" in files_rs,
+   "boîte intégrée gardée en repli (sans affichage, tests WINLUX_FILEDLG)")
+ok("Focus::FileName" in explorer and "pick::draw(g, &geo.status)" in explorer and "pick::shows(e.name(), e.dir)" in explorer,
+   "Explorateur : Nom du fichier, type et boutons à la place de la barre d'état, liste filtrée")
+ok("pick::choose(p, index)" in explorer and "fn finish(" in pick_rs and "ExitProcess(0)" in pick_rs,
+   "Explorateur : double-clic sur un fichier = Ouvrir, le choix est rendu au programme")
+ok("SetEnvironmentVariableA(name.as_ptr(), core::ptr::null())" in pick_rs,
+   "les programmes lancés depuis la boîte ne deviennent pas une boîte Ouvrir")
+
+# ── #663 : « Terminal » ouvrait Mousepad en session native ──────────────────
+wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
+launch = wm_rs[wm_rs.index("pub unsafe fn native_launch"):]
+ok("if app == APP_TERMINAL {" in launch[:400] and "native_terminal(None)" in launch[:400],
+   "session native : le Terminal ne retombe plus sur « editor » (Mousepad)")
+ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer,
+   "Explorateur : Terminal ouvre winlux-terminal dans le dossier affiché")
+
+# ── #674 : Explorateur étroit, colonnes dans l'ordre, masquées par la droite ─
+ok("while shown > 0 && NAME_MIN" in explorer and "sx.min(ir.right) - tx - 12" in explorer,
+   "vue Détails étroite : Type et Taille disparaissent au lieu de « … » ou d'être inversées")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]
@@ -139,5 +165,19 @@ with tempfile.TemporaryDirectory() as tmp:
     (proc / "winlux").write_text("enabled\n")
     subprocess.run(["sh", "-eu", "-c", script], check=True)
     ok((proc / "register").read_text() == "", "init Live : une règle déjà enregistrée n'est pas réécrite")
+
+# ── #689 : direction « Prisme » (Accueil en cartes, volet Détails) ─────────
+home = (SHELL / "explorer_home.rs").read_text(encoding="utf-8")
+ok('#[path = "explorer_home.rs"]' in explorer and "home::fill_home(p)" in explorer,
+   "Accueil : lecteurs et récents ajoutés après les dossiers personnels")
+ok("home::draw(g, pn, r, which, focused)" in explorer and "home::item_at(p, r, x, y)" in explorer,
+   "Accueil : cartes dessinées et cliquables avec la même mise en page")
+ok("home::draw_details(g, &d)" in explorer and "details_button(geo)" in explorer,
+   "Volet Détails : bouton « Détails » dans la barre de commandes et volet à droite")
+ok(explorer.count("home::name_badge(") >= 3, "Pastille « Windows » dans les vues Détails, Liste et Mosaïques")
+ok("home::regression();" in explorer and "pub(super) unsafe fn regression()" in home,
+   "Accueil et volet Détails vérifiés par explorer_regression")
+ok(all(w in home for w in ('b"Lecteurs"', 'b"Drives"', 'b"Unidades"', 'b"Laufwerke"')),
+   "Accueil : titres de section dans les quatre langues")
 
 print(f"test-explorer-fixes : {checks} vérifications OK")

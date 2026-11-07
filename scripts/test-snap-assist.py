@@ -62,6 +62,9 @@ assert snap["group_members"]("d", props) == [], "un groupe d'une seule fenêtre 
 buttons = [(7, (100, 728, 150, 40)), (8, (250, 728, 150, 40))]
 assert snap["button_under"]((260, 740), buttons) == 8 and snap["button_under"]((50, 740), buttons) is None
 assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768)) == (25, 520), "au-dessus d'un bouton du bas"
+clear = snap["TOOLTIP_CLEARANCE"]
+assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768), clear)[1] + 200 <= 728 - 40, \
+    "place laissée à l'infobulle du bouton (#675)"
 assert snap["popup_origin"]((0, 0, 150, 27), (300, 200), (0, 0, 1366, 768)) == (0, 35), "en dessous d'un bouton du haut"
 assert snap["popup_origin"]((1300, 728, 60, 40), (300, 200), (0, 0, 1366, 768))[0] == 1066, "sans sortir de l'écran"
 print("assistant d'ancrage (logique) : OK")
@@ -121,9 +124,10 @@ def near(a, b, slack=14):
     return a and b and all(abs(p - q) <= slack for p, q in zip(a, b))
 
 
-def open_window(title, at):
+def open_window(title, at, minimum=None):
     script = ("import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk;"
               f"w=Gtk.Window(title={title!r}); w.set_default_size(420,260); w.move({at[0]},{at[1]});"
+              + (f"w.set_size_request({minimum[0]},{minimum[1]});" if minimum else "") +
               "w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()")
     start(sys.executable, "-c", script)
     found = wait(lambda: x("xdotool", "search", "--name", f"^{title}$").split()[:1])
@@ -210,15 +214,24 @@ try:
     time.sleep(1.2)
     x("xdotool", "mousemove", "170", "740")
 
+    def group_windows():
+        return [w for w in x("xdotool", "search", "--onlyvisible", "--name", "^" + snap["_t"]("Groupe d’ancrage") + "$").split()
+                if "winlux-snap-group" in x("xprop", "-id", w, "WM_WINDOW_ROLE")]
+
     def group_window():
-        found = [w for w in x("xdotool", "search", "--onlyvisible", "--name", "^" + snap["_t"]("Groupe d’ancrage") + "$").split()
-                 if "winlux-snap-group" in x("xprop", "-id", w, "WM_WINDOW_ROLE")]
+        found = group_windows()
         return found[0] if found else None
 
     card = wait(group_window)
     assert card, "survol du bouton d'une fenêtre groupée : vignette du groupe attendue"
     left_, top_, width_, height_ = frame(card)
-    assert top_ + height_ <= 720, f"vignette au-dessus du bouton, {frame(card)}"
+    assert top_ + height_ <= 720 - 40, f"vignette au-dessus du bouton et de son infobulle, {frame(card)}"
+    # Aller sur la vignette puis revenir au bouton : toujours une seule vignette (#697).
+    x("xdotool", "mousemove", str(left_ + width_ // 2), str(top_ + height_ // 2))
+    time.sleep(0.6)
+    x("xdotool", "mousemove", "170", "740")
+    time.sleep(snap["HOVER_DELAY"] + 1.2)
+    assert len(group_windows()) == 1, f"une seule vignette à la fois (#697), {group_windows()}"
     x("xdotool", "mousemove", str(left_ + width_ // 4), str(top_ + height_ // 2))
     time.sleep(0.3)
     x("xdotool", "click", "1")
@@ -235,6 +248,36 @@ try:
     assert subprocess.run(TOOL + ["drop", two, "maximize"], env=env, timeout=10).returncode == 0
     assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP") and subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, \
         "agrandie : le groupe est défait"
+    # Agrandie par openbox lui-même (bouton Agrandir, double-clic sur la barre
+    # de titre), sans winlux-snap : le groupe est défait aussi (#696).
+    snap["restore"](two)
+    assert subprocess.run(TOOL + ["place", "half:left", one], env=env, timeout=10).returncode == 0
+    assert subprocess.run(TOOL + ["drop", two, "half:right"], env=env, timeout=10).returncode == 0
+    assert snap["get_prop"](two, "_WINLUX_SNAP_GROUP"), "regroupées"
+    x("wmctrl", "-i", "-r", two, "-b", "add,maximized_vert,maximized_horz")
+    assert wait(lambda: snap["is_maximized"](two)), "agrandie par openbox"
+    x("xdotool", "mousemove", "600", "300")
+    time.sleep(0.8)
+    x("xdotool", "mousemove", "170", "740")
+    assert not wait(group_window, snap["HOVER_DELAY"] + 1.5), "agrandie par openbox : plus de vignette de groupe (#696)"
+    assert subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, "agrandie par openbox : groupe défait (#696)"
+    assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP"), "agrandie par openbox : plus de groupe sur la fenêtre (#696)"
+
+    # 6. Fenêtre plus large que sa moitié (Paramètres : 720 px minimum en
+    #    1366x768, #647) : elle occupe quand même la gauche, aucun quart
+    #    gauche n'est proposé après un coin à droite.
+    for window in (one, two, three):
+        snap["restore"](window)
+    wide = open_window("fenetre-large", (200, 150), (760, 300))
+    time.sleep(0.5)
+    assert subprocess.run(TOOL + ["place", "half:left", wide], env=env, timeout=10).returncode == 0
+    assert subprocess.run(TOOL + ["place", "half:right", two], env=env, timeout=10).returncode == 0
+    time.sleep(0.5)
+    assert frame(wide)[2] > area[2] // 2 + 40, f"la fenêtre large déborde de sa moitié, {frame(wide)}"
+    helper = subprocess.Popen(TOOL + ["drop", three, "quarter:tr"], env=env, stderr=open(work / "log", "a"))
+    processes.append(helper)
+    assert helper.wait(timeout=10) == 0
+    assert not wait(assist_window, 1.5), "gauche occupée par une fenêtre large : pas d'assistant à gauche (#647)"
 finally:
     for process in reversed(processes):
         if process.poll() is None: process.terminate()

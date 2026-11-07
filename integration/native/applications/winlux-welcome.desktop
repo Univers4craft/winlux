@@ -10,6 +10,6 @@ Comment[es]=Vuelve a abrir la ventana de bienvenida: visita guiada, teclado, red
 Comment[de]=Öffnet das Willkommensfenster erneut: Rundgang, Tastatur, Netzwerk, Darstellung und Wiederherstellung
 Keywords=bienvenue;visite;guide;démarrage;demarrage;welcome;tour;getting started;bienvenida;visita;willkommen;Rundgang;
 Exec=/usr/bin/winlux-welcome
-Icon=help-about
+Icon=winlux-welcome
 Categories=Utility;
 Terminal=false

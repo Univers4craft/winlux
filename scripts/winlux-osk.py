@@ -424,7 +424,7 @@ def run_window(start_hidden=False):
             if self.window is not None:
                 return self.window
             window = Gtk.ApplicationWindow(application=self, title=_t("Clavier tactile"))
-            window.set_icon_name("input-keyboard")
+            window.set_icon_name("winlux-osk")
             window.set_accept_focus(False)
             window.set_focus_on_map(False)
             window.set_keep_above(True)

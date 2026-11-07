@@ -10,6 +10,6 @@ Comment[es]=Elegir un color en cualquier parte de la pantalla y copiar su códig
 Comment[de]=Eine Farbe irgendwo auf dem Bildschirm auswählen und ihren Code kopieren (Windows + Umschalt + C)
 Keywords=pipette;couleur;color;picker;hex;rgb;colores;Farbe;Farbwähler;
 Exec=/usr/bin/winlux-colorpicker
-Icon=color-select
+Icon=winlux-colorpicker
 Categories=Utility;Graphics;
 Terminal=false

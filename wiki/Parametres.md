@@ -18,7 +18,7 @@
 | 4 | **Clavier** | Disposition (AZERTY, QWERTY, QWERTZ…), répétition. |
 | 5 | **Souris** | Vitesse, boutons, pavé tactile (appui pour cliquer). |
 | 6 | **Personnalisation** | Thème clair/sombre, couleur d'accent. |
-| 7 | **Mises à jour** | Rechercher et installer les mises à jour de Winlux, mises à jour automatiques, retour arrière. |
+| 7 | **Mise à jour OS** | Rechercher et installer les mises à jour de Winlux, mises à jour automatiques, retour arrière. |
 | 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle), **éclairage nocturne** (intensité, planning du coucher au lever du soleil calculé hors ligne ou heures choisies ; masqué si l’écran n’a pas de rampe gamma). |
 | 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), puis **Votre PC** : fabricant et modèle, processeur, mémoire, cartes graphiques, disques et place libre, écran et définition, réseau, son, batterie, micrologiciel (BIOS hérité ou UEFI 32/64 bits), architecture et Secure Boot — seulement ce qui a été détecté, en quatre langues. |
 | 10 | **Programmes Windows** | Réglages par `.exe` (fichiers `<programme>.exe.winlux.ini` partagés avec le runtime). |
@@ -28,7 +28,7 @@
 | 14 | **Localisation** | Langue (FR/EN/ES/DE, changement immédiat), formats, fuseau horaire. |
 | 15 | **Gestionnaire de fichiers** | Fichiers cachés, extensions, comportement de l'Explorateur. |
 | 16 | **Son avancé** | Volume par application, périphériques (PipeWire). |
-| 17 | **Mises à jour système** | Mises à jour des paquets Ubuntu (APT), planifiables. |
+| 17 | **Mise à jour application** | Mises à jour des logiciels et pilotes Linux installés (paquets APT), planifiables. |
 | 18 | **Confidentialité et sécurité** | Verrouillage (délai, au réveil), autorisations des applications (caméra, micro, écran, fichiers, réseau), « Tout redemander ». |
 | 19 | **Processeur** | Profils de performance, gouverneur, mode jeu, temps de démarrage mesuré, affichés selon le matériel. |
 | 20 | **Lecteurs réseau** | SMB, NFS, SFTP, FTP, WebDAV, S3 montés comme un disque. |

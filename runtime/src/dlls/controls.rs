@@ -765,11 +765,22 @@ const BS_NOTIFY: u32 = 0x4000;
 /// rectangle ou cadre STATIC. Sous Windows ils ne recouvrent pas leurs
 /// voisins ; en X11, où chaque contrôle est une fenêtre opaque, ils doivent
 /// rester derrière.
+/// Hauteur imposée par un contrôle qui se dimensionne seul (ReBar).
+pub fn forced_height(hwnd: usize) -> Option<i32> {
+    match kind_of(hwnd)? {
+        Kind::ReBar => bars::rebar_forced_height(hwnd),
+        _ => None,
+    }
+}
+
 pub fn is_backdrop(hwnd: usize) -> bool {
     match kind_of(hwnd) {
         Some(Kind::Button) => button_type(hwnd) == BS_GROUPBOX,
         Some(Kind::Tab) => true,
-        Some(Kind::Static) => matches!(style(hwnd) & 0x1F, 0x4..=0x9 | 0x10..=0x12),
+        // SS_OWNERDRAW aussi : le logo de « À propos » de Notepad++ occupe
+        // 192 × 192 pixels mais n'en dessine que 80 ; devant, il masquerait
+        // le numéro de version et le lien posés à côté.
+        Some(Kind::Static) => matches!(style(hwnd) & 0x1F, 0x4..=0x9 | 0x0D | 0x10..=0x12),
         _ => false,
     }
 }
@@ -1061,6 +1072,13 @@ unsafe fn button_proc_impl(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Optio
 fn paint_static(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
     let s = style(hwnd);
     let kind = s & 0x1F;
+    if kind == 0x0D {
+        // SS_OWNERDRAW : le parent dessine tout, fond compris (WM_DRAWITEM,
+        // ODT_STATIC) ; aucun remplissage qui masquerait ses voisins.
+        let state = if enabled(hwnd) { 0 } else { 4 }; // ODS_DISABLED
+        draw_item(hwnd, p.hdc, 5, 0, state, r, 0);
+        return;
+    }
     let text_color = background(hwnd, p.hdc, WM_CTLCOLORSTATIC, face_color(), p, r);
     match kind {
         0x04 => p.fill(r, TEXT),           // SS_BLACKRECT
@@ -1072,7 +1090,7 @@ fn paint_static(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         0x10 => p.line(r.left, r.top, r.right, r.top, CONTROL_BORDER, 1), // SS_ETCHEDHORZ
         0x11 => p.line(r.left, r.top, r.left, r.bottom, CONTROL_BORDER, 1), // SS_ETCHEDVERT
         0x12 => p.frame(r, CONTROL_BORDER), // SS_ETCHEDFRAME
-        0x03 | 0x0E | 0x0F | 0x0D => {}    // icône, bitmap, métafichier, owner draw
+        0x03 | 0x0E | 0x0F => {}           // icône, bitmap, métafichier
         _ => {
             let raw = title(hwnd);
             let text = if s & 0x80 != 0 {
@@ -1142,6 +1160,8 @@ const ES_UPPERCASE: u32 = 0x8;
 const ES_LOWERCASE: u32 = 0x10;
 const ES_PASSWORD: u32 = 0x20;
 const ES_READONLY: u32 = 0x800;
+const ES_AUTOHSCROLL: u32 = 0x80;
+const WS_HSCROLL: u32 = 0x0010_0000;
 const ES_NUMBER: u32 = 0x2000;
 
 fn chars(s: &str) -> Vec<char> {
@@ -1170,6 +1190,42 @@ fn line_starts(text: &[char]) -> Vec<usize> {
         }
     }
     starts
+}
+
+/// Lignes affichées d'un texte coupé aux espaces pour tenir dans `width` :
+/// (indice du premier caractère, contenu sans `\r\n`).
+fn wrapped_rows(font: usize, text: &[char], width: i32) -> Vec<(usize, String)> {
+    let starts = line_starts(text);
+    let mut rows = Vec::new();
+    for l in 0..starts.len() {
+        let line: Vec<char> = line_text(text, &starts, l).chars().collect();
+        let mut from = 0;
+        loop {
+            let rest: String = line[from..].iter().collect();
+            if width <= 0 || from >= line.len() || measure(font, &rest).0 <= width {
+                rows.push((starts[l] + from, rest));
+                break;
+            }
+            // Plus long préfixe qui tient, coupé après un espace si possible.
+            let mut fit = from + 1;
+            while fit < line.len()
+                && measure(font, &line[from..fit + 1].iter().collect::<String>()).0 <= width
+            {
+                fit += 1;
+            }
+            let cut = (from + 1..=fit)
+                .rev()
+                .find(|&i| line[i - 1] == ' ' || line.get(i) == Some(&' '))
+                .unwrap_or(fit);
+            rows.push((starts[l] + from, line[from..cut].iter().collect()));
+            // Les espaces à la coupure restent en fin de ligne.
+            from = cut;
+            while from < line.len() && line[from] == ' ' {
+                from += 1;
+            }
+        }
+    }
+    rows
 }
 
 /// Contenu d'une ligne sans `\r\n`.
@@ -1272,13 +1328,23 @@ fn paint_edit_text(
     let all = chars(text);
     let lh = line_height(p.font);
     let (sel_a, sel_b) = (e.anchor.min(e.caret), e.anchor.max(e.caret));
-    let starts = if multiline {
-        line_starts(&all)
+    // Retour à la ligne automatique (champ multiligne sans ES_AUTOHSCROLL
+    // ni barre horizontale), pour l'instant sur les champs en lecture
+    // seule : licence de « À propos » de Notepad++.
+    let wraps =
+        multiline && style(hwnd) & (ES_AUTOHSCROLL | ES_READONLY | WS_HSCROLL) == ES_READONLY;
+    let rows: Vec<(usize, String)> = if wraps {
+        wrapped_rows(p.font, &all, area.width())
+    } else if multiline {
+        let starts = line_starts(&all);
+        (0..starts.len())
+            .map(|l| (starts[l], line_text(&all, &starts, l)))
+            .collect()
     } else {
-        vec![0]
+        vec![(0, all.iter().collect())]
     };
     let first = if multiline {
-        e.top_line.min(starts.len() - 1)
+        e.top_line.min(rows.len() - 1)
     } else {
         0
     };
@@ -1289,7 +1355,8 @@ fn paint_edit_text(
     } else {
         0
     };
-    for (line, &start) in starts.iter().enumerate().skip(first) {
+    for (line, (start, content)) in rows.iter().enumerate().skip(first) {
+        let start = *start;
         let y = if multiline {
             area.top + (line - first) as i32 * lh
         } else {
@@ -1298,12 +1365,7 @@ fn paint_edit_text(
         if y > area.bottom {
             break;
         }
-        let content = if multiline {
-            line_text(&all, &starts, line)
-        } else {
-            all.iter().collect()
-        };
-        let shown = displayed(e, &content);
+        let shown = displayed(e, content);
         let width = measure(p.font, &shown).0;
         let x0 = if !multiline && align == ES_CENTER {
             area.left + (area.width() - width) / 2
@@ -1335,8 +1397,12 @@ fn paint_edit_text(
         }
         // Curseur.
         if c.focused && e.caret >= start && e.caret <= start + n {
-            let (cl, _) = line_col(&all, e.caret);
-            if !multiline || cl == line {
+            let on_row = if wraps {
+                rows.get(line + 1).is_none_or(|(next, _)| e.caret < *next)
+            } else {
+                line_col(&all, e.caret).0 == line
+            };
+            if !multiline || on_row {
                 let x = x0 + prefix(e.caret - start);
                 if x >= area.left - 1 && x <= area.right {
                     p.line(x, y + 1, x, y + lh - 1, TEXT, 1);
@@ -3322,6 +3388,16 @@ pub fn text_changed(hwnd: usize) {
     let Some(kind) = kind_of(hwnd) else {
         return;
     };
+    if kind == Kind::ComboBoxEx {
+        // SetWindowText sur une ComboBoxEx remplit son champ (barre
+        // d'adresse de 7-Zip), comme le WM_SETTEXT que Windows lui envoie.
+        let combo = unsafe { bars::cbex_combo(hwnd) };
+        if combo != 0 {
+            let text: Vec<u16> = title(hwnd).encode_utf16().chain([0]).collect();
+            with_charset(true, || send(combo, WM_SETTEXT, 0, text.as_ptr() as isize));
+        }
+        return;
+    }
     if kind == Kind::Edit || kind == Kind::ComboBox {
         with_ctl(hwnd, |c| {
             c.edit.caret = 0;

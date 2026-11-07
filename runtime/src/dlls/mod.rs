@@ -3,6 +3,7 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod a11y;
+pub mod accel;
 pub mod actctx;
 pub mod advapi32;
 pub mod advapi32_crypto;
@@ -969,6 +970,7 @@ fn add_basics(all: &mut [Builtin]) {
             .chain(icons::user32_overrides())
             .chain(dialogs::user32_overrides())
             .chain(menus::user32_overrides())
+            .chain(accel::user32_overrides())
         {
             b.exports.insert(name, addr);
         }

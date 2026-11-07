@@ -144,7 +144,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 - Écran de verrouillage (Windows+L, inactivité, réveil), fenêtre **UAC** pour les programmes qui demandent les droits administrateur, **autorisations par application** (caméra, micro, capture d'écran, dossiers personnels).
 - Applications intégrées : Gestionnaire des tâches (Ctrl+Maj+Échap), Éditeur du Registre, Observateur d'événements, Informations système, Planificateur de tâches, Pare-feu, Gestion des disques, Nettoyage de disque, Store, Gestionnaire de polices, Terminal, lecteur multimédia (FFmpeg), visionneuse d'images, lecteur PDF, calculatrice, capture d'écran et enregistrement, historique du presse-papiers (Windows+V), enregistreur vocal, post-it.
 - Accessibilité : loupe, Narrateur, contraste élevé, aides clavier.
-- Identité « Prisme » : logo, menu GRUB, écran de démarrage, fonds « Winlux Nuit », « Aube » et « classique », son de démarrage.
+- Identité « Prisme » : logo, menu GRUB, écran de démarrage, fonds « Winlux Aurore », « Nuit » et « Aube », son de démarrage.
 
 ### Compatibilité Windows
 

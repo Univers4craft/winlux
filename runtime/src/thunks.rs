@@ -223,6 +223,20 @@ fn open_api_log() -> Option<ApiLog> {
     })
 }
 
+/// Note de diagnostic dans le journal d'API, seulement quand
+/// `WINLUX_APITRACE` est actif : exceptions, texte d'OutputDebugString,
+/// arrêt d'un autre processus. Utile pour les enfants de Chromium dont
+/// stderr ne mène nulle part.
+pub fn api_trace_active() -> bool {
+    api_trace_filter().is_some()
+}
+
+pub fn api_note(line: &str) {
+    if api_trace_filter().is_some() {
+        api_log(line);
+    }
+}
+
 /// Écrit une ligne dans le journal d'API du processus (stderr si le
 /// fichier ne peut pas être créé).
 fn api_log(line: &str) {

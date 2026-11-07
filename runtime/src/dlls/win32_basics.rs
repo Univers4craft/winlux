@@ -1285,6 +1285,64 @@ pub extern "win64" fn set_layered_window_attributes(
     1
 }
 
+/// UpdateLayeredWindow : place la fenêtre (pptDst, psize) et y copie le
+/// contenu de hdcSrc à partir de pptSrc. La transparence par pixel n'est pas
+/// composée par le serveur X : l'image est posée opaque.
+pub unsafe extern "win64" fn update_layered_window(
+    hwnd: usize,
+    _hdc_dst: usize,
+    pt_dst: *const [i32; 2],
+    size: *const [i32; 2],
+    hdc_src: usize,
+    pt_src: *const [i32; 2],
+    _key: u32,
+    _blend: *const u32,
+    _flags: u32,
+) -> i32 {
+    let Some(rect) = super::gui::window_rect(hwnd) else {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    };
+    let (x, y) = pt_dst
+        .as_ref()
+        .map_or((rect.left, rect.top), |p| (p[0], p[1]));
+    let (w, h) = size
+        .as_ref()
+        .map_or((rect.width(), rect.height()), |s| (s[0], s[1]));
+    const SWP_NOZORDER: u32 = 0x4;
+    const SWP_NOACTIVATE: u32 = 0x10;
+    if (x, y, w, h) != (rect.left, rect.top, rect.width(), rect.height()) {
+        super::user32::set_window_pos(hwnd, 0, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if hdc_src != 0 {
+        let (sx, sy) = pt_src.as_ref().map_or((0, 0), |p| (p[0], p[1]));
+        let dc = super::user32::get_dc(hwnd);
+        super::gdi32::bit_blt(dc, 0, 0, w, h, hdc_src, sx, sy, 0x00CC_0020);
+        super::user32::release_dc(hwnd, dc);
+    }
+    1
+}
+
+/// UpdateLayeredWindowIndirect : mêmes champs dans UPDATELAYEREDWINDOWINFO.
+pub unsafe extern "win64" fn update_layered_window_indirect(hwnd: usize, info: *const u8) -> i32 {
+    if info.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let at = |o: usize| std::ptr::read_unaligned(info.add(o) as *const usize);
+    update_layered_window(
+        hwnd,
+        at(8),
+        at(16) as *const [i32; 2],
+        at(24) as *const [i32; 2],
+        at(32),
+        at(40) as *const [i32; 2],
+        std::ptr::read_unaligned(info.add(48) as *const u32),
+        at(56) as *const u32,
+        std::ptr::read_unaligned(info.add(64) as *const u32),
+    )
+}
+
 // ── gdi32 ───────────────────────────────────────────────────────────────
 
 /// GetTextExtentExPoint : largeurs cumulées caractère par caractère et
@@ -1779,6 +1837,8 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "TabbedTextOutA" => fn tabbed_text_out_a,
         "TabbedTextOutW" => fn tabbed_text_out_w,
         "SetLayeredWindowAttributes" => fn set_layered_window_attributes,
+        "UpdateLayeredWindow" => fn update_layered_window,
+        "UpdateLayeredWindowIndirect" => fn update_layered_window_indirect,
     }
 }
 
@@ -1948,6 +2008,28 @@ mod tests {
         assert_eq!(
             crate::paths::to_linux("\\\\.\\COM4").to_string_lossy(),
             "/dev/ttyS3"
+        );
+    }
+
+    #[test]
+    fn update_layered_window_refuse_une_fenetre_inconnue() {
+        let r = unsafe {
+            update_layered_window(
+                0xDEAD_0000,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(
+            unsafe { update_layered_window_indirect(0xDEAD_0000, std::ptr::null()) },
+            0
         );
     }
 }

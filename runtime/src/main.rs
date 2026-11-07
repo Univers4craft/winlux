@@ -17,6 +17,7 @@ mod gamemode;
 mod gpu;
 mod imaging;
 mod intl;
+mod journal;
 mod launch;
 mod loader;
 pub mod log;
@@ -47,6 +48,8 @@ mod wow32;
 use std::path::PathBuf;
 
 fn main() {
+    // Journal du compte (#633), fixé tant qu'il n'y a qu'un fil.
+    journal::init();
     let mut args = std::env::args_os();
     let program = args.next();
     // `winlux-drives …` (lien vers winlux) ou `winlux --drives …` : lecteurs réseau.

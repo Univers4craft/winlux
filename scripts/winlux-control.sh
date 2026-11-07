@@ -54,12 +54,16 @@ else
     mine=$run
 fi
 message() {
-    printf '%s\n' "$*" > "$mine/action.txt.tmp.$$" && mv "$mine/action.txt.tmp.$$" "$mine/action.txt" && return 0
-    rm -f "$mine/action.txt.tmp.$$" 2>/dev/null || true
+    action_tmp=$(mktemp "$mine/action.txt.XXXXXX" 2>/dev/null) || return 0
+    printf '%s\n' "$*" > "$action_tmp" && chmod 644 "$action_tmp" && mv "$action_tmp" "$mine/action.txt" && return 0
+    rm -f "$action_tmp" 2>/dev/null || true
 }
+# Fichier temporaire à nom imprévisible (#644) : un compte ne peut ni le
+# créer d'avance dans /run/winlux (collant) ni le faire publier à sa place.
+fresh() { mktemp "$1.XXXXXX"; }
 # Fichier d'état partagé (relevé de l'init, en root) : un compte qui ne peut
 # pas le remplacer laisse la version de l'init, sans faire échouer l'action.
-publish() { mv "$1" "$2" 2>/dev/null || { rm -f "$1" 2>/dev/null; true; }; }
+publish() { chmod 644 "$1" 2>/dev/null; mv "$1" "$2" 2>/dev/null || { rm -f "$1" 2>/dev/null; true; }; }
 # Relevé périodique (boucle de l'init, toutes les 3 s) : les sondes lentes
 # dont la réponse change rarement (deux sont en Python) sont reprises du
 # relevé de moins d'une minute. Toute action de winlux-control, dont chaque
@@ -72,13 +76,17 @@ cached() {
     fi
     # Session du compte : /run/winlux peut ne pas lui être inscriptible,
     # la valeur est alors calculée à chaque relevé, sans cache.
-    if mkdir -p "$mine/status-cache" 2>/dev/null && "$@" >"$file.tmp.$$" 2>/dev/null; then
-        mv "$file.tmp.$$" "$file" && cat "$file" && return 0
+    cache_tmp=
+    if mkdir -p "$mine/status-cache" 2>/dev/null && cache_tmp=$(mktemp "$file.XXXXXX" 2>/dev/null) \
+        && "$@" >"$cache_tmp" 2>/dev/null; then
+        chmod 644 "$cache_tmp" 2>/dev/null
+        mv "$cache_tmp" "$file" && cat "$file" && return 0
     fi
-    rm -f "$file.tmp.$$" 2>/dev/null || true
+    test -z "$cache_tmp" || rm -f "$cache_tmp" 2>/dev/null || true
     "$@" 2>/dev/null || true
 }
 status() {
+    control_tmp=$(fresh "$run/control.txt") || return
     {
         printf 'version=%s\n' "$(head -n 1 "$root/usr/share/winlux/version" 2>/dev/null || printf 'developpement')"
         printf 'kernel=%s\n' "$(uname -r)"
@@ -200,17 +208,18 @@ status() {
         if have winlux-browsers; then cached browsers winlux-browsers --status; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
-    } > "$run/control.txt.tmp.$$"
-    publish "$run/control.txt.tmp.$$" "$run/control.txt"
+    } > "$control_tmp"
+    publish "$control_tmp" "$run/control.txt"
     cpu_status
     drivers_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
     # Refait seulement si l'une de ses sources a change depuis (les dossiers
     # d'etat comptent : un fichier supprime change leur date).
     if have winlux-update && ! updates_current; then
-        if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
-            publish "$run/updates.txt.tmp.$$" "$run/updates.txt"
-        else rm -f "$run/updates.txt.tmp.$$"; fi
+        updates_tmp=$(fresh "$run/updates.txt") || return 0
+        if winlux-update --list > "$updates_tmp" 2>/dev/null; then
+            publish "$updates_tmp" "$run/updates.txt"
+        else rm -f "$updates_tmp"; fi
     fi
 }
 updates_current() {
@@ -226,23 +235,25 @@ updates_current() {
 # Parametres n'apparait que si son cap_*=1 (garde-fous materiels).
 cpu_status() {
     have winlux || { rm -f "$run/cpu.txt"; return 0; }
-    if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
+    cpu_tmp=$(fresh "$run/cpu.txt") || return 0
+    if winlux --cpu-report "${root:-/}" > "$cpu_tmp" 2>/dev/null; then
         hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
-        printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$cpu_tmp"
         # Temps du dernier démarrage (repères notés par l'init).
-        winlux --boot-time "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
+        winlux --boot-time "${root:-/}" >> "$cpu_tmp" 2>/dev/null || true
         # Mode jeu : réglage, capacités réelles et partie en cours.
-        winlux --gamemode status "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
-        publish "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
-    else rm -f "$run/cpu.txt.tmp.$$"; fi
+        winlux --gamemode status "${root:-/}" >> "$cpu_tmp" 2>/dev/null || true
+        publish "$cpu_tmp" "$run/cpu.txt"
+    else rm -f "$cpu_tmp"; fi
 }
 # Pilotes du matériel réel (Paramètres > Matériel et pilotes, Graphismes,
 # Processeur) : relevé sysfs de winlux-drivers, repris s'il a moins d'une minute.
 drivers_status() {
     have winlux-drivers || { rm -f "$run/drivers.txt"; return 0; }
-    if cached drivers env WINLUX_DRIVERS_ROOT="${root:-/}" winlux-drivers status > "$run/drivers.txt.tmp.$$" 2>/dev/null; then
-        publish "$run/drivers.txt.tmp.$$" "$run/drivers.txt"
-    else rm -f "$run/drivers.txt.tmp.$$"; fi
+    drivers_tmp=$(fresh "$run/drivers.txt") || return 0
+    if cached drivers env WINLUX_DRIVERS_ROOT="${root:-/}" winlux-drivers status > "$drivers_tmp" 2>/dev/null; then
+        publish "$drivers_tmp" "$run/drivers.txt"
+    else rm -f "$drivers_tmp"; fi
 }
 fan_daemon() {
     pid=$(cat "$run/fan-daemon.pid" 2>/dev/null || true)
@@ -304,8 +315,9 @@ perform() {
         network-scan)
             # Write available networks to a file the desktop shell can read.
             out="$run/networks.txt"
+            networks_tmp=$(fresh "$out") || return
             if command -v nmcli >/dev/null 2>&1 && nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then
-                nmcli -t -f SSID,SIGNAL,SECURITY,IN-USE device wifi list --rescan yes 2>/dev/null | head -n 20 > "$out.tmp.$$" || true
+                nmcli -t -f SSID,SIGNAL,SECURITY,IN-USE device wifi list --rescan yes 2>/dev/null | head -n 20 > "$networks_tmp" || true
             elif command -v iwlist >/dev/null 2>&1; then
                 iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
                 test -n "$iface" || iface=$(ls /sys/class/net/ 2>/dev/null | grep -v '^lo$' | head -n 1)
@@ -315,9 +327,9 @@ perform() {
                     /Signal level=/ { gsub(/.*Signal level=/,""); gsub(/ .*/,""); signal=int(($0+100)*2); if(signal>100) signal=100 }
                     /Encryption key:on/ { enc="WPA" }
                     END { if (ssid!="") print ssid ":" signal ":" enc ":" use }
-                ' | head -n 20 > "$out.tmp.$$" || true
+                ' | head -n 20 > "$networks_tmp" || true
             else
-                printf '' > "$out.tmp.$$"
+                printf '' > "$networks_tmp"
             fi
             # Active connection info
             {
@@ -333,8 +345,8 @@ perform() {
                 else
                     printf 'connected=0\niface=\naddr=\nwifi=0\nssid=\n'
                 fi
-            } >> "$out.tmp.$$"
-            mv "$out.tmp.$$" "$out" ;;
+            } >> "$networks_tmp"
+            publish "$networks_tmp" "$out" ;;
         network-connect)
             ssid=${2:-}
             test -n "$ssid" || { echo 'SSID manquant' >&2; return 1; }
@@ -463,11 +475,14 @@ perform() {
                     for id in $ids; do set -- "$@" -t int -s "$id"; done
                     xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a "$@" || return
                     # Une barre déjà lancée ne charge pas un greffon ajouté
-                    # après coup : une seule relance, la première fois.
-                    case " $current" in
-                        *' 13 '*) ;;
-                        *) if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then xfce4-panel -r >/dev/null 2>&1 || true; fi ;;
-                    esac
+                    # après coup, et ne déplace pas non plus correctement ceux
+                    # qu'elle a déjà : le contrepoids 13 restait au bout de la
+                    # barre, zone de notification décalée de sa largeur et
+                    # Démarrer au quart de l'écran (#651). Relance dès que l'ordre
+                    # change ; à l'ouverture de session, il est déjà en place.
+                    if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+                        xfce4-panel -r >/dev/null 2>&1 || true
+                    fi
                 fi
                 expand=false; test "$alignment" != center || expand=true
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then
@@ -559,8 +574,9 @@ perform() {
             winlux-display scale "$scale" ;;
         update-check)
             winlux-update --check || return
-            winlux-update --list > "$run/updates.txt.tmp.$$" || return
-            mv "$run/updates.txt.tmp.$$" "$run/updates.txt" ;;
+            updates_tmp=$(fresh "$run/updates.txt") || return
+            winlux-update --list > "$updates_tmp" || { rm -f "$updates_tmp"; return 1; }
+            publish "$updates_tmp" "$run/updates.txt" ;;
         update-apply) winlux-update --apply ;;
         update-rollback) winlux-update --rollback ;;
         update-auto-on) winlux-update --auto enable ;;
