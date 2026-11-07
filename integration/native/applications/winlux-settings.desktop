@@ -1,7 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=Paramètres
+Name[en]=Settings
+Name[de]=Einstellungen
+Name[es]=Configuración
 Comment=Paramètres Linux, Windows, affichage et applications
+Comment[en]=Linux and Windows settings, display and apps
+Comment[de]=Linux- und Windows-Einstellungen, Anzeige und Apps
+Comment[es]=Configuración de Linux y Windows, pantalla y aplicaciones
 Exec=/usr/bin/winlux-shell-app settings
 Icon=/usr/share/winlux/native/icons/settings.svg
 StartupWMClass=winlux-settings
