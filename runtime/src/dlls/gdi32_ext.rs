@@ -186,38 +186,21 @@ pub unsafe extern "win64" fn ext_text_out_a(
     rect: *const Rect,
     text: *const u8,
     count: u32,
-    _dx: *const i32,
+    dx: *const i32,
 ) -> i32 {
-    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
-    // écraser le fond.
-    if !rect.is_null() && options & 0x2 != 0 {
-        let r = std::ptr::read_unaligned(rect);
-        let bk = gui::dc_bk_color(hdc);
-        gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
-    }
-    if !text.is_null() && count > 0 {
-        let s = crate::dlls::decode_ansi(std::slice::from_raw_parts(text, count as usize));
-        let color = gui::dc_text_color(hdc);
-        let bk = if gui::dc_bk_mode(hdc) == 1 {
-            None
-        } else {
-            Some(gui::dc_bk_color(hdc))
-        };
-        let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
-        let (x, y) = aligned_origin(hdc, x, y, &s);
-        gui::record(
-            hdc,
-            DrawCmd::Text {
-                x,
-                y,
-                text: s,
-                color,
-                bk,
-                font,
-            },
-        );
-    }
-    1
+    let s = if !text.is_null() && count > 0 {
+        crate::dlls::decode_ansi(std::slice::from_raw_parts(text, count as usize))
+    } else {
+        String::new()
+    };
+    // lpDx compte des octets : il ne s'applique tel quel qu'à un texte où
+    // chaque octet donne un caractère (pas de DBCS).
+    let dx = if s.chars().count() == count as usize {
+        dx
+    } else {
+        std::ptr::null()
+    };
+    ext_text_out(hdc, x, y, options, rect, &s, dx)
 }
 
 pub unsafe extern "win64" fn ext_text_out_w(
@@ -228,17 +211,57 @@ pub unsafe extern "win64" fn ext_text_out_w(
     rect: *const Rect,
     text: *const u16,
     count: u32,
-    _dx: *const i32,
+    dx: *const i32,
 ) -> i32 {
-    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
-    // écraser le fond.
-    if !rect.is_null() && options & 0x2 != 0 {
-        let r = std::ptr::read_unaligned(rect);
+    const ETO_GLYPH_INDEX: u32 = 0x10;
+    let s = if !text.is_null() && count > 0 && options & ETO_GLYPH_INDEX == 0 {
+        String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize))
+    } else {
+        String::new()
+    };
+    // lpDx compte des unités UTF-16 : une paire de substitution (hors BMP)
+    // fausserait l'appariement, on retombe alors sur l'avance naturelle.
+    let dx = if s.chars().count() == count as usize {
+        dx
+    } else {
+        std::ptr::null()
+    };
+    ext_text_out(hdc, x, y, options, rect, &s, dx)
+}
+
+/// Cœur d'`ExtTextOut` : ETO_OPAQUE remplit le rectangle avec la couleur de
+/// fond, ETO_CLIPPED limite le dessin au rectangle, et `lpDx` place chaque
+/// caractère dans sa cellule (terminaux comme PuTTY, qui imposent la
+/// largeur de cellule de leur police à espacement fixe).
+unsafe fn ext_text_out(
+    hdc: usize,
+    x: i32,
+    y: i32,
+    options: u32,
+    rect: *const Rect,
+    s: &str,
+    dx: *const i32,
+) -> i32 {
+    const ETO_OPAQUE: u32 = 0x2;
+    const ETO_CLIPPED: u32 = 0x4;
+    const ETO_PDY: u32 = 0x2000;
+    if gui::dc_window(hdc).is_none() {
+        return 0;
+    }
+    let r = (!rect.is_null()).then(|| std::ptr::read_unaligned(rect));
+    let saved_clip = match r {
+        Some(r) if options & ETO_CLIPPED != 0 => {
+            let old = gui::dc_clip(hdc);
+            gui::intersect_dc_clip(hdc, r);
+            Some(old)
+        }
+        _ => None,
+    };
+    if let Some(r) = r.filter(|_| options & ETO_OPAQUE != 0) {
         let bk = gui::dc_bk_color(hdc);
         gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
     }
-    if !text.is_null() && count > 0 {
-        let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize));
+    if !s.is_empty() {
         let color = gui::dc_text_color(hdc);
         let bk = if gui::dc_bk_mode(hdc) == 1 {
             None
@@ -246,18 +269,73 @@ pub unsafe extern "win64" fn ext_text_out_w(
             Some(gui::dc_bk_color(hdc))
         };
         let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
-        let (x, y) = aligned_origin(hdc, x, y, &s);
-        gui::record(
-            hdc,
-            DrawCmd::Text {
-                x,
-                y,
-                text: s,
-                color,
-                bk,
-                font,
-            },
-        );
+        let n = s.chars().count();
+        let step = if options & ETO_PDY != 0 { 2 } else { 1 };
+        let advances: Option<Vec<(i32, i32)>> = (!dx.is_null()).then(|| {
+            (0..n)
+                .map(|i| {
+                    let ax = std::ptr::read_unaligned(dx.add(i * step));
+                    let ay = if step == 2 {
+                        std::ptr::read_unaligned(dx.add(i * step + 1))
+                    } else {
+                        0
+                    };
+                    (ax, ay)
+                })
+                .collect()
+        });
+        let natural = gui::measure_text(&font, s).0;
+        match advances {
+            Some(adv)
+                if adv.iter().any(|a| a.1 != 0)
+                    || adv.iter().map(|a| a.0).sum::<i32>() != natural =>
+            {
+                // Chaque caractère à sa place : l'origine suit les avances
+                // de lpDx et non celles de la police de remplacement.
+                let total: i32 = adv.iter().map(|a| a.0).sum();
+                let (ox, oy) = aligned_origin(hdc, x, y, "");
+                let shift = match gui::dc_text_align(hdc) & 6 {
+                    6 => total / 2,
+                    2 => total,
+                    _ => 0,
+                };
+                let (mut cx, mut cy) = (ox - shift, oy);
+                for (ch, (ax, ay)) in s.chars().zip(adv) {
+                    if !ch.is_whitespace() || bk.is_some() {
+                        gui::record(
+                            hdc,
+                            DrawCmd::Text {
+                                x: cx,
+                                y: cy,
+                                text: ch.to_string(),
+                                color,
+                                bk,
+                                font: font.clone(),
+                            },
+                        );
+                    }
+                    cx += ax;
+                    cy -= ay;
+                }
+            }
+            _ => {
+                let (x, y) = aligned_origin(hdc, x, y, s);
+                gui::record(
+                    hdc,
+                    DrawCmd::Text {
+                        x,
+                        y,
+                        text: s.to_string(),
+                        color,
+                        bk,
+                        font,
+                    },
+                );
+            }
+        }
+    }
+    if let Some(old) = saved_clip {
+        gui::set_dc_clip(hdc, old);
     }
     1
 }
@@ -418,6 +496,7 @@ struct DcState {
     font: usize,
     pos: (i32, i32),
     text_align: u32,
+    clip: Option<Vec<gui::Rect>>,
 }
 
 fn dc_stack() -> &'static Mutex<HashMap<usize, Vec<DcState>>> {
@@ -436,6 +515,7 @@ pub extern "win64" fn save_dc(hdc: usize) -> i32 {
         pen: gui::dc_pen(hdc),
         font: gui::dc_font(hdc),
         text_align: gui::dc_text_align(hdc),
+        clip: gui::dc_clip(hdc),
         pos: pen_pos()
             .lock()
             .unwrap()
@@ -475,6 +555,7 @@ pub extern "win64" fn restore_dc(hdc: usize, saved: i32) -> i32 {
     gui::select_object(hdc, state.pen);
     gui::select_object(hdc, state.font);
     pen_pos().lock().unwrap().insert(hdc, state.pos);
+    gui::set_dc_clip(hdc, state.clip);
     1
 }
 
@@ -490,16 +571,16 @@ pub unsafe extern "win64" fn create_rect_rgn_indirect(rect: *const Rect) -> usiz
     crate::dlls::gdi32::create_rect_rgn_indirect(rect)
 }
 
-pub extern "win64" fn select_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
-    1 // SIMPLEREGION
+pub extern "win64" fn select_clip_rgn(hdc: usize, rgn: usize) -> i32 {
+    crate::dlls::gdi32::select_clip_rgn(hdc, rgn)
 }
 
-pub extern "win64" fn intersect_clip_rect(_hdc: usize, _l: i32, _t: i32, _r: i32, _b: i32) -> i32 {
-    1 // SIMPLEREGION
+pub extern "win64" fn intersect_clip_rect(hdc: usize, l: i32, t: i32, r: i32, b: i32) -> i32 {
+    crate::dlls::gdi32::intersect_clip_rect(hdc, l, t, r, b)
 }
 
-pub extern "win64" fn exclude_clip_rect(_hdc: usize, _l: i32, _t: i32, _r: i32, _b: i32) -> i32 {
-    1 // SIMPLEREGION
+pub extern "win64" fn exclude_clip_rect(hdc: usize, l: i32, t: i32, r: i32, b: i32) -> i32 {
+    crate::dlls::gdi32::exclude_clip_rect(hdc, l, t, r, b)
 }
 
 pub extern "win64" fn combine_rgn(dst: usize, src1: usize, src2: usize, mode: i32) -> i32 {

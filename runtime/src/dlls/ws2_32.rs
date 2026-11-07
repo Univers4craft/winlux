@@ -645,8 +645,6 @@ unsafe fn reverse_v4(ip: [u8; 4]) -> Vec<u8> {
     }
 }
 
-static INET_NTOA_BUF: OnceLock<Mutex<[u8; 16]>> = OnceLock::new();
-
 #[repr(C)]
 pub(crate) struct WinServent {
     s_name: *mut c_char,
@@ -1398,6 +1396,48 @@ fn register_addrinfo(head: usize, allocation: AddrInfoAllocation) {
         lock(ADDRINFO_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(head, allocation);
     }
 }
+/// Programme x86 (wow32) : ADDRINFOA/W y fait 32 octets (size_t et
+/// pointeurs sur 4 octets) au lieu de 48. Chaque nœud est réécrit sur place
+/// (sa place de 48 octets suffit) ; toute la mémoire d'un processus x86
+/// est sous 4 Go, les pointeurs tiennent donc sur 4 octets. Sans cela,
+/// PuTTY 32 bits lisait le port et l'adresse au mauvais endroit et se
+/// connectait au port 22 au lieu de celui demandé.
+unsafe fn compact_addrinfo_x86(head: usize) {
+    if crate::wow32::pointer_size() != 4 {
+        return;
+    }
+    let mut nodes = Vec::new();
+    let mut cur = head as *const WinAddrInfoA;
+    while !cur.is_null() {
+        let n = std::ptr::read_unaligned(cur);
+        nodes.push((
+            cur as usize,
+            n.flags,
+            n.family,
+            n.socktype,
+            n.protocol,
+            n.addrlen,
+            n.canonname as usize,
+            n.addr as usize,
+            n.next as usize,
+        ));
+        cur = n.next;
+    }
+    for &(at, flags, family, socktype, protocol, addrlen, canon, addr, next) in &nodes {
+        let words: [u32; 8] = [
+            flags as u32,
+            family as u32,
+            socktype as u32,
+            protocol as u32,
+            addrlen as u32,
+            canon as u32,
+            addr as u32,
+            next as u32,
+        ];
+        std::ptr::copy_nonoverlapping(words.as_ptr() as *const u8, at as *mut u8, 32);
+    }
+}
+
 unsafe extern "win64" fn get_addr_info_a(
     node: *const u8,
     service: *const u8,
@@ -1455,6 +1495,7 @@ unsafe extern "win64" fn get_addr_info_a(
     }
     match make_addr_a(raw) {
         Ok((head, alloc)) => {
+            compact_addrinfo_x86(head);
             *result = head as *mut WinAddrInfoA;
             register_addrinfo(head, alloc);
             0
@@ -1526,6 +1567,7 @@ unsafe extern "win64" fn get_addr_info_w(
     }
     match make_addr_w(raw) {
         Ok((head, alloc)) => {
+            compact_addrinfo_x86(head);
             *result = head as *mut WinAddrInfoW;
             register_addrinfo(head, alloc);
             0
@@ -2102,12 +2144,19 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
 pub unsafe extern "win64" fn inet_ntoa(addr: u32) -> *const u8 {
     let octets = addr.to_ne_bytes();
     let s = format!("{}.{}.{}.{}\0", octets[0], octets[1], octets[2], octets[3]);
-    let buf = INET_NTOA_BUF.get_or_init(|| Mutex::new([0u8; 16]));
-    let mut g = lock(buf);
-    let b = s.as_bytes();
-    let n = b.len().min(16);
-    g[..n].copy_from_slice(&b[..n]);
-    g.as_ptr()
+    // Tampon par thread sur le tas, comme Windows : une statique du binaire
+    // est au-dessus de 4 Go, hors de portée d'un programme x86 (PuTTY 32
+    // bits plantait en lisant l'adresse qu'il venait de résoudre).
+    thread_local! {
+        static NTOA: std::cell::RefCell<Box<[u8; 16]>> = std::cell::RefCell::new(Box::new([0u8; 16]));
+    }
+    NTOA.with(|buf| {
+        let mut g = buf.borrow_mut();
+        let b = s.as_bytes();
+        let n = b.len().min(16);
+        g[..n].copy_from_slice(&b[..n]);
+        g.as_ptr()
+    })
 }
 
 pub unsafe extern "win64" fn inet_pton(af: i32, src: *const u8, dst: *mut u8) -> i32 {
