@@ -709,7 +709,13 @@ def group_props(desktop=None):
         parts = line.split(None, 3)
         if len(parts) < 3 or parts[1] not in (desktop, "-1"): continue
         group = get_prop(parts[0], "_WINLUX_SNAP_GROUP")
-        if group: found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
+        if not group: continue
+        if is_maximized(parts[0]):
+            # Agrandie par openbox (bouton, double-clic) sans passer par
+            # winlux-snap : elle a quitté son groupe (#696).
+            leave_snap(parts[0])
+            continue
+        found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
     return found
 
 
@@ -1357,8 +1363,16 @@ def watch():
             elif state.get("group_armed") and now - state["group_since"] >= HOVER_DELAY:
                 state["group_armed"] = False
                 rect = dict(buttons)[over]
-                subprocess.Popen([sys.executable, os.path.abspath(__file__), "group", str(over), *map(str, rect)],
-                                 stdout=subprocess.DEVNULL, start_new_session=True)
+                # Une seule vignette à la fois (#697) : celle du même bouton
+                # encore ouverte reste, celle d'un autre bouton est fermée.
+                previous, proc = state.get("group_proc") or (None, None)
+                if proc is not None and proc.poll() is None:
+                    if previous == over: proc = "kept"
+                    else: proc.terminate()
+                if proc != "kept":
+                    state["group_proc"] = (over, subprocess.Popen(
+                        [sys.executable, os.path.abspath(__file__), "group", str(over), *map(str, rect)],
+                        stdout=subprocess.DEVNULL, start_new_session=True))
         # Survol du bouton Agrandir.
         hovered = hovered_maximize(x11, rank)
         if hovered is None:
