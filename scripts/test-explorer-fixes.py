@@ -162,6 +162,10 @@ ok(order.index("draw_pane(g, &geo.panes[0], 0)") < order.index("draw_toolbar(g, 
 ok("pane_label(g, &rect(r.left, r.top - 22, r.right, r.bottom), pn, focused)" in explorer,
    "double volet : l'en-tête du volet redessiné par-dessus les cartes défilées")
 
+home_rs = (SHELL / "explorer_home.rs").read_text(encoding="utf-8")
+ok("if shown(l.title_y, l.title_y + 40)" in home_rs and "frame.top.max(r.top - 24)" in home_rs,
+   "#757 : titres et cadre des Récents défilés hors du volet ne sont plus dessinés sur les onglets")
+
 # ── #739 : « Compatibilité » d'un .exe ouvre sa carte dans Paramètres ──────
 wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
 settings_rs = (SHELL / "settings.rs").read_text(encoding="utf-8")
