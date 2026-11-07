@@ -150,6 +150,10 @@ ok((ROOT / "scripts/test-setup-run.sh").is_file()
 msi_actions = (ROOT / "runtime/src/msi/actions.rs").read_text()
 ok("Phase::Uninstall" in msi_actions and "ServiceInstall" in msi_actions and "setup::run" in msi_actions,
    "msiexec : actions personnalisées EXE (installation et désinstallation) et services (#833)")
+ok("winlux-setup-wizard" in (ROOT / "integration/winlux-open").read_text()
+   and "winlux-setup-wizard.py:winlux-setup-wizard" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "scripts/test-setup-wizard.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "assistant d'installation au double-clic (.msi, NSIS, Inno) en quatre langues, testé en CI (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,

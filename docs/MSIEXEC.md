@@ -45,10 +45,21 @@ Codes de retour : 0, 1603 (échec), 1605 (produit inconnu), 1619 (paquet
 introuvable), 1620 (paquet invalide), 1639 (ligne de commande). Linux tronque
 les codes de sortie à 8 bits (1605 devient 69).
 
+## Assistant au double-clic
+
+Un double-clic sur un `.msi` (ou sur un installateur NSIS ou Inno Setup
+reconnu par `winlux --setup --info`) ouvre `winlux-setup-wizard` : accueil
+avec nom, version et éditeur (dossier modifiable et raccourci sur le Bureau
+pour NSIS et Inno), progression, puis fin avec le journal en cas d'échec,
+en français, anglais, allemand et espagnol. L'installation elle-même reste
+silencieuse (`--msiexec /i … /qn` ou `--setup … [/D=…] [/nodesktop]`).
+Sans session graphique, ou si des arguments sont passés (`/S`, `/qn`…),
+`winlux-open` installe sans l'assistant. Test : `scripts/test-setup-wizard.sh`.
+
 ## Pas encore pris en charge
 
 Actions personnalisées DLL autres que celles de WiX ci-dessus, et scripts
 (journalisées puis ignorées, #833),
-recherche `CompLocator`, interface graphique d'installation (`/qf`), réparation `/f`
+recherche `CompLocator`, boîtes de dialogue propres au paquet (table `Dialog`), réparation `/f`
 (traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`,
 compression Quantum.

@@ -914,7 +914,25 @@ pub fn cli(args: &[String]) -> i32 {
                     eprintln!("{USAGE}");
                     return 2;
                 };
-                return match info(&host_path(p)) {
+                let host = host_path(p);
+                if host
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("msi"))
+                {
+                    // Paquet Windows Installer : le dossier se choisit par
+                    // ses propriétés, pas par /D= (colonne vide).
+                    return match crate::msi::install::package_summary(&host) {
+                        Ok((name, version, publisher)) => {
+                            println!("msi\t{name}\t{version}\t{publisher}\t");
+                            0
+                        }
+                        Err(code) => {
+                            eprintln!("setup : paquet MSI illisible ({code})");
+                            1
+                        }
+                    };
+                }
+                return match info(&host) {
                     Ok(inf) => {
                         println!(
                             "{}\t{}\t{}\t{}\t{}",

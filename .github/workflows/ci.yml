@@ -487,6 +487,11 @@ jobs:
           sudo apt-get install -y -q wixl msitools nsis || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis; }
           sh scripts/test-msi-actions.sh
 
+      - name: Assistant d'installation au double-clic (#833)
+        run: |
+          sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
+          sh scripts/test-setup-wizard.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 

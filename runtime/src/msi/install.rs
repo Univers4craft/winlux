@@ -713,6 +713,18 @@ pub fn package_info(msi: &Path) -> Result<(String, String, String), i32> {
     ))
 }
 
+/// Nom, version et éditeur d'un paquet (assistant d'installation).
+pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
+    let data = std::fs::read(msi).map_err(|_| ERROR_INSTALL_PACKAGE_OPEN_FAILED)?;
+    let db = Database::parse(&data).map_err(|_| ERROR_INSTALL_PACKAGE_INVALID)?;
+    let get = |p: &str| clean(&db.property(p).unwrap_or_default());
+    Ok((
+        get("ProductName"),
+        get("ProductVersion"),
+        get("Manufacturer"),
+    ))
+}
+
 /// Code produit d'un paquet (pour `/x paquet.msi`).
 pub fn product_of(msi: &Path) -> Result<String, i32> {
     package_info(msi).map(|info| info.0)
