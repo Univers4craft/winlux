@@ -193,6 +193,8 @@ EndDialog@8
 IsWindow@4
 CharUpperBuffW@8
 CharUpperBuffA@8
+SendMessageTimeoutA@28
+GetScrollBarInfo@12
 DEF
 cat >"$tmp/gdi32.def" <<'DEF'
 LIBRARY gdi32.dll
@@ -211,6 +213,8 @@ CreateDIBSection@24
 GetObjectA@12
 GetPixel@12
 GdiFlush@0
+CreatePenIndirect@4
+SetDCBrushColor@8
 DEF
 for lib in kernel32_gui user32 gdi32; do
     llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
