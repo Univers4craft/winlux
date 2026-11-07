@@ -52,6 +52,8 @@ GetStdHandle@4
 WriteFile@20
 GetCommandLineA@0
 SetUnhandledExceptionFilter@4
+RtlUnwind@16
+EnumCalendarInfoW@16
 DEF
 printf 'LIBRARY msvcrt.dll\nEXPORTS\n_except_handler3\n' >"$tmp/msvcrt_seh.def"
 llvm-dlltool -m i386 -k -d "$tmp/kernel32_seh.def" -l "$tmp/kernel32_seh.lib"
