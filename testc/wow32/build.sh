@@ -256,3 +256,9 @@ fi
 if command -v i686-w64-mingw32-g++ >/dev/null 2>&1; then
     i686-w64-mingw32-g++ -O1 -static "$src/cpp32.cpp" -o "$out/cpp32.exe"
 fi
+# COM, contrôles communs et boîtes communes (#232, étape 6) : vrais
+# en-têtes MinGW, structures dans leur disposition x86.
+if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    i686-w64-mingw32-gcc -O1 "$src/com32.c" -o "$out/com32.exe" -lole32 -loleaut32 -luuid
+    i686-w64-mingw32-gcc -O1 "$src/dlg32.c" -o "$out/dlg32.exe" -lcomctl32 -lcomdlg32
+fi

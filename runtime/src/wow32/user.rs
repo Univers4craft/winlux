@@ -271,9 +271,13 @@ fn native_of(proc32: u32) -> Option<usize> {
 extern "win64" fn native_from32(args: u32, native: usize) -> u64 {
     let hwnd = ext(arg(args, 0));
     let msg = arg(args, 1);
-    send_conv(msg, arg(args, 2), arg(args, 3), &mut |wp, lp| unsafe {
-        crate::dlls::gui::call_wndproc(native, hwnd, msg, wp, lp)
-    }) as u64
+    send_conv(
+        hwnd,
+        msg,
+        arg(args, 2),
+        arg(args, 3),
+        &mut |wp, lp| unsafe { crate::dlls::gui::call_wndproc(native, hwnd, msg, wp, lp) },
+    ) as u64
 }
 
 /// Procédure x86 appelée par le runtime (passerelle `wndproc64`).
@@ -289,7 +293,7 @@ extern "win64" fn wndproc_dispatch(
         crate::process::init_thread();
     }
     let proc32 = proc32 as u32;
-    recv_conv(msg, wparam, lparam, &mut |wp, lp| {
+    recv_conv(hwnd, msg, wparam, lparam, &mut |wp, lp| {
         call32(proc32 as usize, &[hwnd as u32, msg, wp, lp]) as u32
     }) as i32 as isize
 }
@@ -389,7 +393,21 @@ fn pos_to64(p32: usize, p64: usize) {
 
 /// Message parti du code x86 vers une procédure 64 bits : structure en
 /// disposition 64 bits pendant l'appel, recopiée au retour.
-fn send_conv(msg: u32, wp: u32, lp: u32, call: &mut dyn FnMut(usize, isize) -> isize) -> u32 {
+fn send_conv(
+    hwnd: usize,
+    msg: u32,
+    wp: u32,
+    lp: u32,
+    call: &mut dyn FnMut(usize, isize) -> isize,
+) -> u32 {
+    // Contrôles communs (LVITEM, TVINSERTSTRUCT, TBBUTTON…) : comctl.rs.
+    if let Some(c) = super::comctl::convert_message(hwnd, msg, wp, lp) {
+        let r = call(c.wparam, c.lparam);
+        return match c.done {
+            Some(done) => done(r),
+            None => r,
+        } as u32;
+    }
     let wp64 = ext(wp);
     if lp == 0 {
         return call(wp64, 0) as u32;
@@ -442,7 +460,21 @@ fn send_conv(msg: u32, wp: u32, lp: u32, call: &mut dyn FnMut(usize, isize) -> i
 
 /// Message du runtime vers une procédure x86 : structure en disposition
 /// x86 pendant l'appel, recopiée au retour.
-fn recv_conv(msg: u32, wp: usize, lp: isize, call: &mut dyn FnMut(u32, u32) -> u32) -> u32 {
+fn recv_conv(
+    hwnd: usize,
+    msg: u32,
+    wp: usize,
+    lp: isize,
+    call: &mut dyn FnMut(u32, u32) -> u32,
+) -> u32 {
+    // Notifications des contrôles communs (WM_NOTIFY, WM_DRAWITEM…) : comctl.rs.
+    if let Some(c) = super::comctl::convert_to_x86(hwnd, msg, wp, lp) {
+        let r = call(c.wparam as u32, c.lparam as u32) as i32 as isize;
+        return match c.done {
+            Some(done) => done(r),
+            None => r,
+        } as u32;
+    }
     let wp32 = wp as u32;
     let p64 = lp as usize;
     if lp == 0 {
@@ -769,7 +801,7 @@ extern "win64" fn call_window_proc(args: u32, _aux: usize) -> u64 {
         return 0;
     }
     match native_of(proc32) {
-        Some(native) => send_conv(msg, wp, lp, &mut |w, l| unsafe {
+        Some(native) => send_conv(ext(hwnd), msg, wp, lp, &mut |w, l| unsafe {
             crate::dlls::gui::call_wndproc(native, ext(hwnd), msg, w, l)
         }) as u64,
         None => call32(proc32 as usize, &[hwnd, msg, wp, lp]) as u32 as u64,
@@ -783,16 +815,23 @@ extern "win64" fn send_message(args: u32, s: usize) -> u64 {
     let mut slots: Vec<u64> = (0..s.nargs).map(|i| ext(arg(args, i)) as u64).collect();
     let at = s.at;
     let msg = arg(args, at + 1);
-    send_conv(msg, arg(args, at + 2), arg(args, at + 3), &mut |wp, lp| {
-        slots[at as usize + 2] = wp as u64;
-        slots[at as usize + 3] = lp as u64;
-        call64(s.target, &slots) as isize
-    }) as u64
+    send_conv(
+        ext(arg(args, at)),
+        msg,
+        arg(args, at + 2),
+        arg(args, at + 3),
+        &mut |wp, lp| {
+            slots[at as usize + 2] = wp as u64;
+            slots[at as usize + 3] = lp as u64;
+            call64(s.target, &slots) as isize
+        },
+    ) as u64
 }
 
 extern "win64" fn send_dlg_item_message(args: u32, target: usize) -> u64 {
     let (dlg, id, msg) = (ext(arg(args, 0)), arg(args, 1), arg(args, 2));
-    send_conv(msg, arg(args, 3), arg(args, 4), &mut |wp, lp| {
+    let item = crate::dlls::user32::get_dlg_item(dlg, id as i32);
+    send_conv(item, msg, arg(args, 3), arg(args, 4), &mut |wp, lp| {
         call64(
             target,
             &[dlg as u64, id as u64, msg as u64, wp as u64, lp as u64],
@@ -806,7 +845,7 @@ extern "win64" fn send_message_timeout(args: u32, target: usize) -> u64 {
     let (flags, timeout, out) = (arg(args, 4), arg(args, 5), arg(args, 6));
     let mut result = 0u64;
     let mut ok = 0u64;
-    send_conv(msg, arg(args, 2), arg(args, 3), &mut |wp, lp| {
+    send_conv(hwnd, msg, arg(args, 2), arg(args, 3), &mut |wp, lp| {
         ok = call64(
             target,
             &[

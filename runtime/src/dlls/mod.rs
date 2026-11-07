@@ -58,6 +58,7 @@ pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
 pub mod electron_win32;
+pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod filedialog_com;
