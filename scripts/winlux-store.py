@@ -191,8 +191,7 @@ def apt_message(kind, text):
 
 OFFLINE = os.environ.get("WINLUX_STORE_OFFLINE") == "1"
 REMOTE_TTL = 6 * 3600
-MAX_INDEX = 2500
-CATEGORIES = ["navigateurs", "bureautique", "multimedia", "developpement", "jeux", "utilitaires"]
+MAX_INDEX = 6000
 
 # ---------------------------------------------------------------------------
 # Outils communs
@@ -334,17 +333,50 @@ def to_png(data):
                 pass
     return None
 
+# Catégories du Store, dans l'ordre où le premier groupe reconnu l'emporte
+# (un jeu éducatif reste un jeu, Stellarium « Education;Science » va en
+# Sciences). Clés AppStream/Flathub en minuscules.
+CATEGORY_RULES = (
+    ("accessibilite", ("accessibility",)),
+    ("jeux", ("game", "games", "actiongame", "adventuregame", "arcadegame", "boardgame", "blocksgame",
+              "cardgame", "kidsgame", "logicgame", "roleplaying", "shooter", "simulation", "sportsgame",
+              "strategygame", "emulator")),
+    ("internet", ("webbrowser", "network", "email", "chat", "instantmessaging", "ircclient", "filetransfer",
+                  "p2p", "remoteaccess", "news", "feed", "telephony", "videoconference", "communication",
+                  "networking")),
+    ("developpement", ("development", "ide", "programming", "debugger", "revisioncontrol", "guidesigner",
+                       "developer-tools", "translation", "webdevelopment", "building")),
+    ("sciences", ("science", "math", "astronomy", "chemistry", "physics", "biology", "geography",
+                  "geoscience", "electronics", "engineering", "datavisualization", "numericalanalysis",
+                  "medicalsoftware", "maps")),
+    ("education", ("education", "languages", "literature", "children", "teaching")),
+    ("graphisme", ("graphics", "photography", "2dgraphics", "3dgraphics", "rastergraphics", "vectorgraphics",
+                   "art-and-design", "imageprocessing", "scanning", "viewer", "drawing", "paint")),
+    ("multimedia", ("audiovideo", "audio", "video", "music", "player", "recorder", "music-and-audio",
+                    "photo-and-video", "tv", "midi", "mixer", "sequencer", "audiovideoediting", "discburning")),
+    ("bureautique", ("office", "wordprocessor", "spreadsheet", "presentation", "productivity", "finance",
+                     "projectmanagement", "calendar", "contactmanagement", "publishing", "dictionary",
+                     "chart", "flowchart")),
+    ("systeme", ("system", "monitor", "filesystem", "filemanager", "packagemanager", "terminalemulator",
+                 "settings", "hardwaresettings", "security")),
+)
+CATEGORIES = tuple(c for c, _ in CATEGORY_RULES) + ("utilitaires",)
+# Anciennes clés (catalogues Windows ou fichiers locaux d'avant la refonte).
+CATEGORY_ALIASES = {"navigateurs": "internet"}
+
+
 def category_of(cats):
     cats = {c.lower() for c in cats}
-    for keys, name in ((("webbrowser",), "navigateurs"), (("game", "games"), "jeux"),
-                       (("development", "ide", "programming"), "developpement"),
-                       (("office", "wordprocessor", "spreadsheet", "presentation", "productivity"), "bureautique"),
-                       (("audiovideo", "audio", "video", "graphics", "photography", "music", "player",
-                         "photo-and-video", "music-and-audio", "art-and-design"), "multimedia"),
-                       ):
+    for name, keys in CATEGORY_RULES:
         if cats & set(keys):
             return name
     return "utilitaires"
+
+
+def known_category(name):
+    """Catégorie déclarée par un catalogue ou le fichier de sélection."""
+    name = CATEGORY_ALIASES.get(name, name)
+    return name if name in CATEGORIES else "utilitaires"
 
 def html_text(text):
     """Description AppStream (<p>, <li>) -> paragraphes de texte simple."""
@@ -706,8 +738,11 @@ class Apt(Source):
             if line.startswith("featured="):
                 featured.update(line[9:].split(","))
             elif line and not line.startswith("#") and line.count("|") >= 5:
-                ident, cat, name, pkg, pub, desc = line.split("|", 5)
-                apps[pkg] = {"id": ident, "cat": cat, "name": name, "pub": pub, "desc": desc}
+                # id|catégorie|nom|paquet|éditeur|fr[|en|es|de]
+                ident, cat, name, pkg, pub, *descs = line.split("|")
+                descs = (descs + ["", "", ""])[:4]
+                desc = dict(zip(("fr", "en", "es", "de"), descs)).get(LANG) or descs[0]
+                apps[pkg] = {"id": ident, "cat": known_category(cat), "name": name, "pub": pub, "desc": desc}
         for pkg, entry in apps.items():
             entry["featured"] = entry["id"] in featured
         return apps
@@ -1256,9 +1291,9 @@ class WindowsCatalog:
             apps = [a for a in adapter(data) if valid_windows_entry(a)]
         except (ValueError, TypeError, AttributeError, KeyError, OSError, EOFError, tarfile.TarError):
             return []
-        if self.conf.get("category") in CATEGORIES:
+        if self.conf.get("category"):
             for a in apps:
-                a["category"] = self.conf["category"]  # boutique de jeux : tout en Jeux
+                a["category"] = known_category(self.conf["category"])  # boutique de jeux : tout en Jeux
         memo.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(memo, json.dumps({"digest": digest, "apps": apps}, ensure_ascii=False))
         return apps
@@ -1282,14 +1317,20 @@ def winlux_format(data):
 
 WindowsCatalog.FORMATS["winlux"] = winlux_format
 
-WORDS = ((("browser", "navigateur", "web browser"), "navigateurs"),
+WORDS = ((("browser", "navigateur", "web browser", "ftp", "ssh", "torrent", "messenger", "chat client",
+           "email client", "remote desktop", "download manager"), "internet"),
          (("game", "emulator", "jeu ", "chess", "minecraft"), "jeux"),
          (("editor for code", "code editor", "ide", "developer", "programming", "git ", "git client",
            "compiler", "debugger", "database", "sql", "api ", "json", "regex", "hex editor"), "developpement"),
+         (("screen reader", "magnifier", "on-screen keyboard", "accessib"), "accessibilite"),
+         (("math", "astronom", "chemi", "physics", "statistic", "circuit", "gis "), "sciences"),
+         (("learn", "typing tutor", "education", "flashcard", "vocabulary"), "education"),
+         (("image", "photo", "paint", "drawing", "graphic", "3d", "cad ", "vector", "icon editor"), "graphisme"),
+         (("video", "audio", "music", "media", "player", "recorder", "podcast", "stream"), "multimedia"),
          (("office", "pdf", "document", "spreadsheet", "note", "markdown", "ebook", "e-book",
            "text editor", "writer", "calendar", "mail", "email"), "bureautique"),
-         (("video", "audio", "music", "image", "photo", "media", "player", "paint", "drawing",
-           "graphic", "3d", "screenshot", "recorder", "podcast", "stream"), "multimedia"))
+         (("partition", "disk usage", "system monitor", "process", "file manager", "terminal", "driver",
+           "registry", "uninstall"), "systeme"))
 
 def category_from_text(text):
     text = f" {text.lower()} "
@@ -1450,7 +1491,7 @@ class Windows(Source):
                 app = App("windows", ref, a["name"], summary=a.get("summary", ""),
                           description=a.get("description") if isinstance(a.get("description"), list)
                           else [a.get("description", "")],
-                          category=a.get("category") if a.get("category") in CATEGORIES else category_of(a.get("categories") or []),
+                          category=known_category(a["category"]) if a.get("category") else category_of(a.get("categories") or []),
                           publisher=a.get("publisher", ""), license=a.get("license", ""),
                           homepage=a.get("homepage", ""), icon=a.get("icon", ""),
                           screenshots=a.get("screenshots", [])[:6],
