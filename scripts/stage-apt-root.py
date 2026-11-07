@@ -26,7 +26,7 @@ def owned_paths(root):
 def winlux_path(relative):
     if relative == "usr/share/winlux/kernel-version": return False
     return (relative.startswith(("usr/bin/winlux", "usr/share/winlux/", "usr/lib/winlux/", "opt/winlux/",
-                                "usr/share/themes/Winlux/", "usr/share/icons/Winlux/",
+                                "usr/share/themes/Winlux/", "usr/share/icons/Winlux/", "usr/share/icons/Winlux-Sombre/",
                                 "usr/share/xfce4/helpers/winlux", "usr/share/thumbnailers/winlux"))
             or relative.startswith("usr/share/applications/winlux")
             # Xorg : seuls les fichiers Winlux (20-winlux-display.conf), jamais 40-libinput.conf.
@@ -123,6 +123,12 @@ def build(stage, base, output):
             'test -z "${DPKG_ROOT:-}" || exit 0\n'
             'update-desktop-database /usr/share/applications\n'
             'update-mime-database /usr/share/mime\n'
+            '# Icônes Prisme : cache GTK des thèmes clair et sombre.\n'
+            'if command -v gtk-update-icon-cache >/dev/null; then\n'
+            '    for theme in Winlux Winlux-Sombre; do\n'
+            '        test -f /usr/share/icons/$theme/index.theme && gtk-update-icon-cache -f -q /usr/share/icons/$theme || true\n'
+            '    done\n'
+            'fi\n'
             '# Menu GRUB court et noyau silencieux sur les installations existantes.\n'
             'if test -x /usr/share/winlux/boot-menu; then /usr/share/winlux/boot-menu || true; fi\n')
         (metadata / "postinst").chmod(0o755)

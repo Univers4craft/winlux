@@ -120,12 +120,23 @@ fi
 # dépend, pas l'affichage du bureau.
 if test -x /usr/bin/winlux-trust-shortcuts; then (/usr/bin/winlux-trust-shortcuts </dev/null >"$logs/trust-shortcuts.log" 2>&1 &); fi
 if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
-# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur :
+# Winlux-Sombre en mode sombre (le défaut), Winlux en mode clair. Un compte
+# resté sur l'un des deux suit le mode de Personnalisation, sinon celui du
+# système (THEME= de /etc/winlux/preferences.conf).
 # Le défaut XFCE (elementary-xfce-dark) n'est pas livré : un thème configuré
 # mais absent laissait les silhouettes noires d'Adwaita.
 icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
-if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
-    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+icon_wanted=Winlux-Sombre
+if test -f "$HOME/.config/winlux/appearance.json"; then
+    if grep -q '"theme": *"light"' "$HOME/.config/winlux/appearance.json" 2>/dev/null; then icon_wanted=Winlux; fi
+elif grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then
+    icon_wanted=Winlux
+fi
+test -d "/usr/share/icons/$icon_wanted" || icon_wanted=Winlux
+case "$icon_theme" in Winlux|Winlux-Sombre|'') icon_reset=1 ;; *) icon_reset=0; test -d "/usr/share/icons/$icon_theme" || icon_reset=1 ;; esac
+if test -d "/usr/share/icons/$icon_wanted" && test -x /usr/bin/xfconf-query && test "$icon_reset" = 1 && test "$icon_theme" != "$icon_wanted"; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s "$icon_wanted" || true
 fi
 # Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
 # sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème

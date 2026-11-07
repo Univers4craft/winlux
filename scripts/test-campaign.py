@@ -488,4 +488,18 @@ ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/conf
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
 
+# ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
+icons = NATIVE / "icons"
+ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2
+   and (icons / "Winlux/scalable/apps/winlux.svg").is_file()
+   and "Inherits=Winlux," in (icons / "Winlux-Sombre/index.theme").read_text(),
+   "icônes : applications gardées dans Winlux, Winlux-Sombre hérite de Winlux")
+ok("for icon_theme in Winlux Winlux-Sombre" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "gtk-update-icon-cache" in (SCRIPTS / "stage-apt-root.py").read_text()
+   and "usr/share/icons/Winlux-Sombre/" in (SCRIPTS / "stage-apt-root.py").read_text(),
+   "icônes : les deux thèmes dans winlux-desktop, cache GTK en postinst")
+ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh"))
+   and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
+   "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
