@@ -320,6 +320,8 @@ unsafe fn create_window_common(
             if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
                 // Menu surgissant : ni cadre ni placement du gestionnaire.
                 b.set_popup(hwnd);
+            } else if let Some(level) = popup_decorations(style) {
+                b.set_decorations(hwnd, level);
             }
         }
     });
@@ -855,6 +857,7 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
     if old == hwnd {
         return old;
     }
+    super::dialogs::note_focus(hwnd);
     if hwnd == 0 {
         gui::clear_current_thread_keyboard_state();
         gui::clear_async_key_down_states();
@@ -3316,6 +3319,23 @@ pub fn exports() -> crate::dlls::Exports {
         "CharNextA"=>fn char_next_a, "CharPrevA"=>fn char_prev_a,
         "wsprintfA"=>fn wsprintfa_thunk, "wsprintfW"=>fn wsprintfw_thunk,
     }
+}
+
+/// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
+/// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
+/// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
+fn popup_decorations(style: u32) -> Option<u8> {
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_BORDER: u32 = 0x0080_0000;
+    const WS_DLGFRAME: u32 = 0x0040_0000;
+    if style & WS_POPUP == 0 || style & WS_CAPTION == WS_CAPTION {
+        return None;
+    }
+    Some(u8::from(
+        style & (WS_BORDER | WS_DLGFRAME | WS_THICKFRAME) != 0,
+    ))
 }
 
 #[cfg(test)]

@@ -2132,6 +2132,10 @@ pub trait GuiBackend: Send {
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}
+    /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
+    /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
+    /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
+    fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
