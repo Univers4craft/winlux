@@ -2340,7 +2340,9 @@ pub unsafe extern "win64" fn system_parameters_info_a(
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
-    let _ = (action, param, data);
+    if let Some(r) = system_fonts_info(action, param, data, false) {
+        return r;
+    }
     let a11y = crate::dlls::a11y::current();
     match action {
         // SPI_GETHIGHCONTRAST : HIGHCONTRAST { cbSize, dwFlags, lpszDefaultScheme }.
@@ -2389,7 +2391,88 @@ pub unsafe extern "win64" fn system_parameters_info_w(
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
+    if let Some(r) = system_fonts_info(action, param, data, true) {
+        return r;
+    }
     system_parameters_info_a(action, param, data, _update)
+}
+
+/// LOGFONT de la police de l'interface : Segoe UI 9 pt à 96 ppp (comme
+/// Windows 10), en UTF-16 (`wide`, 92 octets) ou en ANSI (60 octets).
+unsafe fn write_system_logfont(out: *mut u8, wide: bool) {
+    let size = if wide { 92 } else { 60 };
+    std::ptr::write_bytes(out, 0, size);
+    std::ptr::write_unaligned(out as *mut i32, -12); // lfHeight
+    std::ptr::write_unaligned(out.add(16) as *mut i32, 400); // lfWeight
+    *out.add(23) = 1; // DEFAULT_CHARSET
+    *out.add(26) = 5; // CLEARTYPE_QUALITY
+    for (i, ch) in "Segoe UI".encode_utf16().enumerate() {
+        if wide {
+            std::ptr::write_unaligned(out.add(28 + 2 * i) as *mut u16, ch);
+        } else {
+            *out.add(28 + i) = ch as u8;
+        }
+    }
+}
+
+/// SPI_GETNONCLIENTMETRICS (0x29) et SPI_GETICONTITLELOGFONT (0x1F). Ces
+/// demandes réussissaient sans rien remplir : Qt (VLC) lisait des polices
+/// de hauteur 0, en tirait une taille de 0 point et des tailles de fenêtre
+/// aberrantes (#850).
+unsafe fn system_fonts_info(action: u32, param: u32, data: *mut c_void, wide: bool) -> Option<i32> {
+    let out = data as *mut u8;
+    let logfont = if wide { 92 } else { 60 };
+    match action {
+        0x001F => {
+            if out.is_null() || (param != 0 && (param as usize) < logfont) {
+                crate::process::set_last_error(87);
+                return Some(0);
+            }
+            write_system_logfont(out, wide);
+            Some(1)
+        }
+        0x0029 => {
+            if out.is_null() {
+                crate::process::set_last_error(87);
+                return Some(0);
+            }
+            let cb = std::ptr::read_unaligned(out as *const u32) as usize;
+            // Taille sans puis avec iPaddedBorderWidth (Vista et après).
+            let base = 24 + 5 * logfont + 4 * 4;
+            if cb != base && cb != base + 4 {
+                crate::process::set_last_error(87);
+                return Some(0);
+            }
+            std::ptr::write_bytes(out.add(4), 0, cb - 4);
+            let int = |off: usize, v: i32| std::ptr::write_unaligned(out.add(off) as *mut i32, v);
+            int(4, 1); // iBorderWidth
+            int(8, 17); // iScrollWidth
+            int(12, 17); // iScrollHeight
+            int(16, 36); // iCaptionWidth
+            int(20, 23); // iCaptionHeight
+            let mut off = 24;
+            write_system_logfont(out.add(off), wide); // lfCaptionFont
+            off += logfont;
+            int(off, 22); // iSmCaptionWidth
+            int(off + 4, 22); // iSmCaptionHeight
+            off += 8;
+            write_system_logfont(out.add(off), wide); // lfSmCaptionFont
+            off += logfont;
+            int(off, 19); // iMenuWidth
+            int(off + 4, 19); // iMenuHeight
+            off += 8;
+            for _ in 0..3 {
+                // lfMenuFont, lfStatusFont, lfMessageFont
+                write_system_logfont(out.add(off), wide);
+                off += logfont;
+            }
+            if cb == base + 4 {
+                int(off, 0); // iPaddedBorderWidth
+            }
+            Some(1)
+        }
+        _ => None,
+    }
 }
 
 pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut u32) -> u32 {
@@ -3342,6 +3425,55 @@ fn popup_decorations(style: u32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
+    /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
+    #[test]
+    fn nonclientmetrics_et_police_des_icones_remplies() {
+        unsafe {
+            let mut w = vec![0u8; 504];
+            w[..4].copy_from_slice(&504u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 504, w.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 92 + 8 + 92 + 8 + 92 + 92;
+            assert_eq!(
+                i32::from_le_bytes(w[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(
+                u16::from_le_bytes([w[lf_message + 28], w[lf_message + 29]]),
+                b'S' as u16
+            );
+            assert_eq!(i32::from_le_bytes(w[20..24].try_into().unwrap()), 23);
+            let mut a = vec![0u8; 340];
+            a[..4].copy_from_slice(&340u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_a(0x29, 340, a.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 60 + 8 + 60 + 8 + 60 + 60;
+            assert_eq!(
+                i32::from_le_bytes(a[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(a[lf_message + 28], b'S');
+            // Taille inconnue : refusée.
+            let mut bad = vec![0u8; 64];
+            bad[..4].copy_from_slice(&64u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 64, bad.as_mut_ptr().cast(), 0),
+                0
+            );
+            let mut lf = [0u8; 92];
+            assert_eq!(
+                system_parameters_info_w(0x1F, 92, lf.as_mut_ptr().cast(), 0),
+                1
+            );
+            assert_eq!(i32::from_le_bytes(lf[..4].try_into().unwrap()), -12);
+        }
+    }
 
     /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de
     /// wParam 0, pas le wParam d'un message précédent (code de sortie au
