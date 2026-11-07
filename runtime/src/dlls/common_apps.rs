@@ -346,7 +346,7 @@ unsafe extern "win64" fn child_window_from_point(parent: usize, pt: u64) -> usiz
     .unwrap_or(0)
 }
 
-fn lower_char(c: u16) -> u16 {
+pub(crate) fn lower_char(c: u16) -> u16 {
     let s = String::from_utf16_lossy(&[c]);
     let mut low = s.chars().flat_map(char::to_lowercase);
     match (low.next(), low.next()) {
@@ -1109,7 +1109,7 @@ unsafe extern "win64" fn get_string_type_ex_w(
     .unwrap_or(0)
 }
 
-unsafe extern "win64" fn get_string_type_ex_a(
+pub(crate) unsafe extern "win64" fn get_string_type_ex_a(
     _locale: u32,
     ty: u32,
     src: *const u8,

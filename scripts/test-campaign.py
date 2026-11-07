@@ -405,6 +405,13 @@ ok(shipped_rc.findtext(f"{OB}mouse/{OB}screenEdgeWarpTime") == "0",
 ok(all("winlux-snap watch" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "ancrage à la souris lancé avec la session (compte et live)")
 
+# ── Assistant d'ancrage (#585) ─────────────────────────────────────────────
+snap_tool = runpy.run_path(str(SCRIPTS / "winlux-snap.py"), run_name="campaign_snap")
+snap_area = (0, 0, 1366, 728)
+ok(snap_tool["free_zones"](snap_tool["following_zones"]("quarter:tr"), snap_area, [snap_tool["zone_rect"]("half:left", snap_area)]) == ["quarter:br"],
+   "assistant d'ancrage : après un coin, seule la place encore libre est proposée")
+ok(snap_tool["card_grid"](683, 364, 1, 6)[0] >= 2, "assistant d'ancrage lisible dans un quart en 1366x768")
+
 # ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
 for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
     ok([p for _, p in menu["settings_for"](query)][:1] == [page], f"recherche « {query} » : page {page} des Paramètres")

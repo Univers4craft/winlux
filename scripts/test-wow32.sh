@@ -19,6 +19,7 @@
 # wow64.exe (étape 7) : personnalité WOW64 (IsWow64Process, registre
 # Wow6432Node, System32 → SysWOW64, variables) et structures kernel32 à la
 # taille x86 (CRITICAL_SECTION, SRWLOCK, SLIST, SYSTEM_INFO, STARTUPINFO…).
+# cxx32.exe (étape 7) : exceptions C++ MSVC x86 (__CxxFrameHandler3).
 # gui32.exe (étape 5) : fenêtre x86 (classe, CREATESTRUCT, boucle de
 # messages, WM_PAINT et GDI, clavier, souris, minuteurs, sous-classement,
 # WINDOWPOS recopiée, DIB section, GetObject, boîte de dialogue), sans écran
@@ -32,7 +33,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 gui32"
+names="hello32 seh32 wow64 cxx32 gui32"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -167,6 +168,9 @@ if test -e "$work/c/Windows/System32/winlux-wow64-redirige.txt"; then
     exit 1
 fi
 echo "wow64 : IsWow64Process, structures x86 (CS, SRW, SLIST, SYSTEM_INFO…), Wow6432Node, SysWOW64, CreateProcess"
+
+check cxx32 'C++ MSVC 32 bits : tout est correct'
+echo "cxx32 : exceptions C++ MSVC x86 (catch par valeur et référence, catch(...), throw;, try dans un catch)"
 
 gui() {
     set +e

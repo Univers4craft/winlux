@@ -804,6 +804,14 @@ pub unsafe extern "win64" fn controlfp_s(current: *mut u32, new: u32, mask: u32)
     0
 }
 
+/// `_controlfp` / `_control87` : même mot virtuel que `_controlfp_s`, rendu
+/// après modification.
+pub extern "win64" fn controlfp(new: u32, mask: u32) -> u32 {
+    let mut word = 0;
+    unsafe { controlfp_s(&mut word, new, mask) };
+    word
+}
+
 /// `___lc_locale_name_func` : noms de locale par catégorie ; la locale « C »
 /// de démarrage n'a pas de nom (pointeurs nuls).
 pub extern "win64" fn lc_locale_name_func() -> *const *const u16 {
@@ -1008,6 +1016,8 @@ pub fn exports() -> crate::dlls::Exports {
         "_callnewh" => fn callnewh,
         "_register_thread_local_exe_atexit_callback" => fn register_thread_local_exe_atexit_callback,
         "_controlfp_s" => fn controlfp_s,
+        "_controlfp" => fn controlfp,
+        "_control87" => fn controlfp,
         "___lc_locale_name_func" => fn lc_locale_name_func,
         "_lock_locales" => fn lock_locales, "_unlock_locales" => fn lock_locales,
         "acosf" => fn acosf, "asinf" => fn asinf, "atanf" => fn atanf, "atan2f" => fn atan2f,

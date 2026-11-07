@@ -553,6 +553,9 @@ jobs:
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
 
+      - name: Assistant d'ancrage sous openbox (place libre, quarts, cases prises, clavier)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-assist.py
+
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
 

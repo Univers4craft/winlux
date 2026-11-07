@@ -85,6 +85,8 @@ __declspec(dllimport) HCURSOR WINAPI LoadCursorA(HINSTANCE, const char *);
 __declspec(dllimport) int WINAPI DialogBoxIndirectParamA(HINSTANCE, const void *, HWND, DLGPROC, LPARAM);
 __declspec(dllimport) BOOL WINAPI EndDialog(HWND, int);
 __declspec(dllimport) BOOL WINAPI IsWindow(HWND);
+__declspec(dllimport) DWORD WINAPI CharUpperBuffW(unsigned short *, DWORD);
+__declspec(dllimport) DWORD WINAPI CharUpperBuffA(char *, DWORD);
 
 __declspec(dllimport) HBRUSH WINAPI CreateSolidBrush(COLORREF);
 __declspec(dllimport) HBRUSH WINAPI CreateBrushIndirect(const LOGBRUSH *);
@@ -405,6 +407,13 @@ void __stdcall entry(void) {
     while ((got = GetMessageA(&m, 0, 0, 0)) > 0) DispatchMessageA(&m);
     CHECK(71, got == 0 && m.message == 0x0012 && m.wParam == 7, m.wParam);
     CHECK(72, !IsWindow(hwnd), 0);
+
+    /* Casse des tampons (WinSCP.com s'arrêtait sur CharUpperBuffW). */
+    unsigned short wtext[] = {'s', 'c', 'p', 0xE9, 0};
+    char atext[] = "ftp";
+    CHECK(73, CharUpperBuffW(wtext, 4) == 4 && wtext[0] == 'S' && wtext[3] == 0xC9, wtext[3]);
+    CHECK(74, CharUpperBuffA(atext, 2) == 2 && atext[0] == 'F' && atext[1] == 'T' && atext[2] == 'p',
+          atext[2]);
 
     say("GUI 32 bits : tout est correct\r\n");
     ExitProcess(0);

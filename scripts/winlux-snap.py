@@ -8,8 +8,10 @@ Windows + flèches suit la logique de Windows :
   sinon agrandie ;
 - ↓ : depuis une moitié, quart du bas ; depuis un quart du haut, moitié ;
   agrandie → taille d'avant ; sinon réduite.
-Après un ancrage en moitié, l'Assistant d'ancrage propose les autres fenêtres
-pour remplir l'autre moitié. Windows + Z (ou clic droit sur le bouton
+Après un ancrage (moitié, quart, case d'une disposition), l'Assistant
+d'ancrage remplit la place encore libre avec les autres fenêtres, en cartes
+(aperçu ou icône, titre) : un clic ou Entrée la place, Échap ferme. Une case
+déjà occupée par une fenêtre ancrée n'est pas proposée. Windows + Z (ou clic droit sur le bouton
 Agrandir) ouvre les dispositions : moitiés, deux tiers / un tiers, trois
 colonnes, quatre quarts.
 
@@ -59,6 +61,9 @@ _TR = {
     'Dispositions d’ancrage': ('Snap layouts', 'Diseños de acoplamiento', 'Andocklayouts'),
     'Choisissez une fenêtre pour l’autre côté': ('Choose a window for the other side', 'Elija una ventana para el otro lado', 'Fenster für die andere Seite auswählen'),
     'Échap pour fermer': ('Esc to close', 'Esc para cerrar', 'Esc zum Schließen'),
+    'Choisissez une fenêtre pour cet emplacement': ('Choose a window for this space', 'Elija una ventana para este espacio', 'Fenster für diesen Bereich auswählen'),
+    'Emplacement {n} sur {total} · Échap pour fermer': ('Space {n} of {total} · Esc to close', 'Espacio {n} de {total} · Esc para cerrar', 'Bereich {n} von {total} · Esc zum Schließen'),
+    'Sans titre': ('Untitled', 'Sin título', 'Ohne Titel'),
 }
 
 
@@ -82,6 +87,80 @@ LAYOUTS = (("half:left", "half:right"), ("wide:left", "wide:right"), ("third:1",
 # Case restante proposée par l'Assistant d'ancrage.
 OPPOSITE = {"half:left": "half:right", "half:right": "half:left", "wide:left": "wide:right",
             "wide:right": "wide:left", "narrow:left": "narrow:right", "narrow:right": "narrow:left"}
+QUARTERS = ("quarter:tl", "quarter:tr", "quarter:bl", "quarter:br")
+
+
+def following_zones(zone):
+    """Cases que l'Assistant d'ancrage propose après « zone », dans l'ordre :
+    l'autre côté d'une moitié (ou d'un deux tiers / un tiers), les autres
+    quarts après un coin, les autres cases de la disposition sinon."""
+    if zone in OPPOSITE: return [OPPOSITE[zone]]
+    if zone in QUARTERS: return [quarter for quarter in QUARTERS if quarter != zone]
+    layout = next((layout for layout in LAYOUTS if zone in layout), ())
+    return [cell for cell in layout if cell != zone]
+
+
+def overlap(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    w, h = min(ax + aw, bx + bw) - max(ax, bx), min(ay + ah, by + bh) - max(ay, by)
+    return w * h if w > 0 and h > 0 else 0
+
+
+def free_zones(zones, area, taken):
+    """Cases encore libres : une case couverte (aux quatre cinquièmes) par une
+    fenêtre déjà ancrée n'est plus proposée, comme sous Windows."""
+    free = []
+    for zone in zones:
+        rect = zone_rect(zone, area)
+        size = max(1, rect[2] * rect[3])
+        if any(overlap(rect, other) >= 0.8 * size for other in taken): continue
+        free.append(zone)
+    return free
+
+
+def card_grid(width, height, scale=1, count=1):
+    """(colonnes, largeur, hauteur) des cartes de l'assistant, en pixels GTK,
+    pour une case de width x height pixels réels : lisible du 4K (échelle 2)
+    au 1366x768, où un quart ne fait que 683x364."""
+    width, height = width / max(1, scale), height / max(1, scale)
+    inner = max(120, width - 2 * 24)
+    columns = max(1, min(4, count, int((inner + 16) // (180 + 16))))
+    card_w = int(min(300, (inner - 16 * (columns - 1)) / columns))
+    card_h = int(max(90, min(card_w * 0.66, height - 120)))
+    return columns, card_w, card_h
+
+
+def parse_icons(values):
+    """_NET_WM_ICON (largeur, hauteur, pixels ARGB, …) → [(l, h, pixels)]."""
+    icons, index = [], 0
+    while index + 2 <= len(values):
+        w, h = values[index], values[index + 1]
+        if w <= 0 or h <= 0 or w > 1024 or h > 1024 or index + 2 + w * h > len(values): break
+        icons.append((w, h, values[index + 2:index + 2 + w * h]))
+        index += 2 + w * h
+    return icons
+
+
+def best_icon(icons, size):
+    """La plus petite icône au moins aussi grande que size, sinon la plus grande."""
+    if not icons: return None
+    big = [icon for icon in icons if icon[0] >= size]
+    return min(big, key=lambda icon: icon[0]) if big else max(icons, key=lambda icon: icon[0])
+
+
+def unobscured(window, stacking, geometries):
+    """Vrai si aucune fenêtre au-dessus ne cache window : sans compositeur,
+    l'aperçu d'une fenêtre cachée montrerait celle de devant."""
+    if window not in stacking or window not in geometries: return False
+    mine = geometries[window]
+    above = stacking[stacking.index(window) + 1:]
+    return not any(other in geometries and overlap(mine, geometries[other]) > 64 for other in above)
+
+
+def order_candidates(candidates, snapped):
+    """Fenêtres pas encore ancrées d'abord (ordre gardé), puis les ancrées."""
+    return [c for c in candidates if c[0] not in snapped] + [c for c in candidates if c[0] in snapped]
 
 
 def next_state(state, key, maximized=False):
@@ -358,6 +437,14 @@ CSS = b"""
   .layout { background: #2a3040; border-radius: 6px; padding: 6px; }
   button.window { background: #2a3040; border: 1px solid #48536b; border-radius: 6px; padding: 10px; color: #ecedf5; }
   button.window:hover { background: #343b4e; border-color: #b69cff; }
+  window.assist { background: rgba(24, 27, 38, 0.94); border: 1px solid #56607a; border-radius: 8px; }
+  window.assist .heading { font-size: 15px; }
+  flowboxchild { padding: 0; border-radius: 8px; border: 2px solid transparent; }
+  flowboxchild:selected, flowboxchild:focus { background: transparent; border-color: #b69cff; }
+  .card { background: #2a3040; border-radius: 8px; padding: 8px; }
+  flowboxchild:hover .card { background: #343b4e; }
+  .card-title { font-size: 13px; }
+  .preview { background: #1b1f2a; border-radius: 4px; }
 """
 
 
@@ -441,60 +528,219 @@ def layouts_popup(window, at=None):
     _run(["xdotool", "windowactivate", window])
     layout = next(layout for layout in LAYOUTS if zone in layout)
     free = [cell for cell in layout if cell != zone]
-    if free: return assist(window, free)
+    if free and os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0": return assist(window, free)
     return 0
 
 
-def assist(window, free_zones):
-    """Assistant d'ancrage : propose les autres fenêtres pour les cases restantes."""
+def snapped_windows(exclude, area):
+    """{fenêtre: rectangle} des fenêtres ancrées visibles sur ce bureau et cet écran."""
+    found = {}
+    for window, _ in other_windows(exclude):
+        zone = get_prop(window, "_WINLUX_SNAP")
+        if zone not in ZONES or is_maximized(window): continue
+        rect, geometry = zone_rect(zone, area), window_geometry(window)
+        # Encore à sa place (une fenêtre déplacée au clavier garde sa propriété).
+        if geometry and all(abs(a - b) <= 12 for a, b in zip(rect, geometry)): found[window] = rect
+    return found
+
+
+def stacking_order():
+    """Fenêtres du bas vers le haut (_NET_CLIENT_LIST_STACKING), en nombres."""
+    out = _run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"])
+    # « _NET_CLIENT_LIST_STACKING(WINDOW): window id # 0x400003, 0x600003 »
+    return [int(value, 16) for value in re.findall(r"0x[0-9a-fA-F]+", out)]
+
+
+def window_icon_values(window):
+    """_NET_WM_ICON de la fenêtre (liste de nombres), lue par Xlib."""
+    try:
+        x11 = _X()
+        lib = x11.lib
+        lib.XInternAtom.argtypes, lib.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+        lib.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+                                           ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+                                           ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                                           ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong))]
+        atom = lib.XInternAtom(x11.display, b"_NET_WM_ICON", 0)
+        kind, fmt, count, after = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong()
+        data = ctypes.POINTER(ctypes.c_ulong)()
+        if lib.XGetWindowProperty(x11.display, window_number(window), atom, 0, 1 << 20, 0, 6, ctypes.byref(kind),
+                                  ctypes.byref(fmt), ctypes.byref(count), ctypes.byref(after), ctypes.byref(data)) != 0 or not data:
+            return []
+        # Format 32 : Xlib rend des « long » natifs (64 bits sur amd64).
+        values = [data[index] & 0xFFFFFFFF for index in range(count.value)] if fmt.value == 32 else []
+        lib.XFree(data)
+        return values
+    except (OSError, AttributeError):
+        return []
+
+
+def assist(window, wanted, area=None):
+    """Assistant d'ancrage : la place libre se remplit de cartes, une par autre
+    fenêtre ; la carte choisie va dans la case, puis la case suivante."""
     Gdk, GLib, Gtk = _gtk()
-    area = area_of(window)
+    from gi.repository import GdkPixbuf, Gio
+    try:
+        __import__("gi").require_version("GdkX11", "3.0")
+        from gi.repository import GdkX11
+    except (ValueError, ImportError):
+        GdkX11 = None
+    area = area or area_of(window)
+    zones = _still_free(window, wanted, area, snapped_windows(None, area))
     used = [window]
-    for zone in free_zones:
-        taken = {window_number(item) for item in used}
-        candidates = [item for item in other_windows(None) if window_number(item[0]) not in taken]
+    css = Gtk.CssProvider()
+    css.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, 600)
+    for step, zone in enumerate(zones, 1):
+        numbers = {window_number(item) for item in used}
+        candidates = [item for item in other_windows(None) if window_number(item[0]) not in numbers]
         if not candidates: return 0
-        picked = {}
-        popup = Gtk.Window(title=_t("Choisissez une fenêtre pour l’autre côté"))
+        snapped_now = set(snapped_windows(None, area))
+        candidates = order_candidates(candidates, snapped_now)[:16]
+        x, y, w, h = zone_rect(zone, area)
+        # Aperçus pris avant d'afficher l'assistant, seulement des fenêtres
+        # entièrement visibles (pas de compositeur sous openbox).
+        stacking = stacking_order()
+        geometries = {}
+        for candidate, _ in candidates:
+            geometry = window_geometry(candidate)
+            if geometry: geometries[window_number(candidate)] = geometry
+        for number in stacking:
+            if number not in geometries:
+                geometry = window_geometry(str(number))
+                if geometry: geometries[number] = geometry
+        popup = Gtk.Window(title=_t("Choisissez une fenêtre pour l’autre côté") if zone in OPPOSITE.values() and len(zones) == 1
+                           else _t("Choisissez une fenêtre pour cet emplacement"))
         popup.set_role("winlux-snap-assist")
         popup.set_decorated(False)
         popup.set_keep_above(True)
         popup.set_skip_taskbar_hint(True)
-        css = Gtk.CssProvider()
-        css.load_from_data(CSS)
-        Gtk.StyleContext.add_provider_for_screen(popup.get_screen(), css, 600)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=14)
+        popup.set_skip_pager_hint(True)
+        popup.get_style_context().add_class("assist")
+        scale = max(1, popup.get_scale_factor())
+        columns, card_w, card_h = card_grid(w, h, scale, len(candidates))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=18)
         popup.add(box)
-        title = Gtk.Label(label=_t("Choisissez une fenêtre pour l’autre côté"), xalign=0)
+        title = Gtk.Label(label=popup.get_title(), xalign=0, ellipsize=3)
         title.get_style_context().add_class("heading")
         box.pack_start(title, False, False, 0)
-        hint = Gtk.Label(label=_t("Échap pour fermer"), xalign=0)
+        hint = Gtk.Label(label=_t("Emplacement {n} sur {total} · Échap pour fermer").format(n=step, total=len(zones))
+                         if len(zones) > 1 else _t("Échap pour fermer"), xalign=0)
         hint.get_style_context().add_class("subtitle")
         box.pack_start(hint, False, False, 0)
-        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=2, row_spacing=8, column_spacing=8)
-        box.pack_start(flow, True, True, 0)
-        for candidate, name in candidates[:12]:
-            button = Gtk.Button(label=name[:60] or candidate)
-            button.get_style_context().add_class("window")
-            button.connect("clicked", lambda _, c=candidate: (picked.setdefault("window", c), Gtk.main_quit()))
-            flow.add(button)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
+        box.pack_start(scroll, True, True, 6)
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.SINGLE, activate_on_single_click=True, homogeneous=True,
+                           min_children_per_line=columns, max_children_per_line=columns, row_spacing=16, column_spacing=16,
+                           valign=Gtk.Align.START, halign=Gtk.Align.CENTER)
+        scroll.add(flow)
+        theme = Gtk.IconTheme.get_default()
+        for candidate, name in candidates:
+            flow.add(_card(Gtk, GdkPixbuf, Gio, Gdk, GdkX11, theme, candidate, name, card_w, card_h,
+                           unobscured(window_number(candidate), stacking, geometries)))
+        picked = {}
+        flow.connect("child-activated", lambda _, child: (picked.setdefault("window", child.winlux_window), Gtk.main_quit()))
         popup.connect("key-press-event", lambda _, event: event.keyval == Gdk.KEY_Escape and (Gtk.main_quit() or True))
-        # Comme sous Windows : passer à une autre fenêtre ferme l'assistant
-        # (il restait affiché au premier plan, sans fin, si on l'ignorait).
-        popup.connect("focus-out-event", lambda *_: GLib.timeout_add(200, lambda: popup.is_active() or Gtk.main_quit()) and False)
-        x, y, w, h = zone_rect(zone, area)
-        popup.set_default_size(min(w - 40, 640), -1)
+        # Comme sous Windows : passer à une autre fenêtre ferme l'assistant.
+        popup.connect("focus-out-event", lambda *_: GLib.timeout_add(250, lambda: popup.is_active() or Gtk.main_quit()) and False)
+        margin = 6 * scale
+        popup.set_size_request(max(1, (w - 2 * margin) // scale), max(1, (h - 2 * margin) // scale))
+        popup.move((x + margin) // scale, (y + margin) // scale)
         popup.show_all()
-        width, height = popup.get_size()
-        popup.move(x + max(0, (w - width) // 2), y + max(0, (h - height) // 2))
+        first = flow.get_child_at_index(0)
+        if first is not None:
+            flow.select_child(first)
+            first.grab_focus()
         popup.present()
         Gtk.main()
         popup.destroy()
+        while Gtk.events_pending(): Gtk.main_iteration()
         if "window" not in picked: return 0
         snap(picked["window"], zone, area)
         _run(["wmctrl", "-i", "-a", picked["window"]])
         used.append(picked["window"])
     return 0
+
+
+def _still_free(window, zones, area, taken):
+    others = [rect for other, rect in taken.items() if window_number(other) != window_number(window)]
+    return free_zones(zones, area, others)
+
+
+def _card(Gtk, GdkPixbuf, Gio, Gdk, GdkX11, theme, window, name, card_w, card_h, visible):
+    """Carte d'une fenêtre : petite icône et titre, puis l'aperçu (ou la grande icône)."""
+    child = Gtk.FlowBoxChild()
+    child.winlux_window = window
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    card.get_style_context().add_class("card")
+    card.set_size_request(card_w, card_h)
+    child.add(card)
+    head = Gtk.Box(spacing=8)
+    small, large = _icons(Gtk, GdkPixbuf, Gio, theme, window, 20, 64)
+    head.pack_start(small, False, False, 0)
+    label = Gtk.Label(label=name or _t("Sans titre"), xalign=0, ellipsize=3)
+    label.get_style_context().add_class("card-title")
+    head.pack_start(label, True, True, 0)
+    card.pack_start(head, False, False, 0)
+    preview = None
+    if visible and GdkX11 is not None:
+        try:
+            foreign = GdkX11.X11Window.foreign_new_for_display(Gdk.Display.get_default(), window_number(window))
+            pixbuf = Gdk.pixbuf_get_from_window(foreign, 0, 0, foreign.get_width(), foreign.get_height()) if foreign else None
+            if pixbuf is not None:
+                factor = min((card_w - 16) / pixbuf.get_width(), (card_h - 48) / pixbuf.get_height())
+                if factor > 0:
+                    preview = Gtk.Image.new_from_pixbuf(pixbuf.scale_simple(max(1, int(pixbuf.get_width() * factor)),
+                                                                            max(1, int(pixbuf.get_height() * factor)),
+                                                                            GdkPixbuf.InterpType.BILINEAR))
+        except Exception:
+            preview = None
+    frame = Gtk.Box()
+    frame.get_style_context().add_class("preview")
+    frame.pack_start(preview or large, True, True, 0)
+    card.pack_start(frame, True, True, 0)
+    child.set_tooltip_text(name or _t("Sans titre"))
+    return child
+
+
+def _icons(Gtk, GdkPixbuf, Gio, theme, window, small, large):
+    """(petite, grande) icônes de l'application : celle de son lanceur
+    (WM_CLASS), sinon _NET_WM_ICON (logiciels .exe compris), sinon générique."""
+    klass = re.search(r'WM_CLASS\(\w+\) = "(.*)", "(.*)"', _run(["xprop", "-id", window, "WM_CLASS"]))
+    names = []
+    if klass:
+        for value in (klass.group(2), klass.group(1)):
+            names += [value, value.lower()]
+    for value in names:
+        info = None
+        try: info = Gio.DesktopAppInfo.new(value + ".desktop")
+        except TypeError: info = None
+        icon = info.get_icon() if info else None
+        if icon is None and value and theme.has_icon(value): icon = Gio.ThemedIcon.new(value)
+        if icon is not None:
+            return (Gtk.Image.new_from_gicon(icon, Gtk.IconSize.LARGE_TOOLBAR),
+                    _sized(Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG), large))
+    icons = parse_icons(window_icon_values(window))
+    images = []
+    for size in (small, large):
+        chosen = best_icon(icons, size)
+        if chosen is None:
+            images.append(_sized(Gtk.Image.new_from_icon_name("application-x-executable", Gtk.IconSize.DIALOG), size))
+            continue
+        w, h, pixels = chosen
+        data = bytearray()
+        for argb in pixels:
+            data += bytes(((argb >> 16) & 255, (argb >> 8) & 255, argb & 255, (argb >> 24) & 255))
+        pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(__import__("gi").repository.GLib.Bytes.new(bytes(data)),
+                                                 GdkPixbuf.Colorspace.RGB, True, 8, w, h, w * 4)
+        if w != size: pixbuf = pixbuf.scale_simple(size, size, GdkPixbuf.InterpType.BILINEAR)
+        images.append(Gtk.Image.new_from_pixbuf(pixbuf))
+    return images[0], images[1]
+
+
+def _sized(image, size):
+    image.set_pixel_size(size)
+    return image
 
 
 # ── Ancrage à la souris (winlux-snap watch) ────────────────────────────────
@@ -707,8 +953,8 @@ def drop(window, zone, point=None):
     area = pick_area(work_areas(), point) if point else None
     snap(window, zone, area)
     _run(["wmctrl", "-i", "-a", window])
-    if zone in OPPOSITE and os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0":
-        return assist(window, [OPPOSITE[zone]])
+    if os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0":
+        return assist(window, following_zones(zone), area)
     return 0
 
 
@@ -905,8 +1151,8 @@ def key(direction):
     action, zone = next_state(state, direction, is_maximized(window))
     if action == "snap":
         snap(window, zone)
-        if zone in OPPOSITE and os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0":
-            return assist(window, [OPPOSITE[zone]])
+        if os.environ.get("WINLUX_SNAP_ASSIST", "1") != "0":
+            return assist(window, following_zones(zone))
     elif action == "restore":
         restore(window)
     elif action == "maximize":
