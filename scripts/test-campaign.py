@@ -570,6 +570,12 @@ ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/pr
    and "journal-$journal_uid" in iso_init,
    "journal : un dossier 0700 par compte, protected_regular=2")
 
+# #721 / #722 : plus de « Gestionnaire de fichiers » en double, page Applications installées.
+ok('"xfce4-file-manager.desktop"' in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and (SCRIPTS / "winlux-installed-apps.py").exists() and (SCRIPTS / "test-installed-apps.py").exists()
+   and '_t("Applications installées")]' in (SCRIPTS / "winlux-settings.py").read_text(),
+   "menu Démarrer sans « Gestionnaire de fichiers » ; Paramètres > Applications installées (page 39)")
+
 # #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
 # économiseur ; la veille de l'écran ne revenait plus de la session.
 with tempfile.TemporaryDirectory() as directory:
