@@ -163,7 +163,7 @@ pub struct Wallpaper {
 }
 pub const WALLPAPERS: [Wallpaper; 15] = [
     Wallpaper {
-        name: b"Winlux classique",
+        name: b"Winlux Prisme",
         slug: b"winlux",
         category: 2,
         accent: hex(0x7C4DFF),

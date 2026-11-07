@@ -93,6 +93,20 @@ with tempfile.TemporaryDirectory() as tmp:
           "migration sans doublon")
     check(migrate(None) == module["DEFAULTS"], "épingles illisibles : valeurs par défaut")
 
+# Fonds d'écran (#590) : seuls ceux que dessine scripts/render-brand.py sont
+# livrés. Une image extérieure (générée ou trouvée) n'est pas vérifiable
+# automatiquement et a déjà apporté une fenêtre à quatre carreaux proche du
+# logo Windows ; en ajouter une passe par une revue et cette liste.
+rendered = set(re.findall(r'"(winlux-prisme-[a-z]+)"', (HERE / "render-brand.py").read_text()))
+for wall in (ROOT / "assets/wallpapers").iterdir():
+    check(wall.stem in rendered, f"fond d'écran non dessiné par render-brand.py : {wall.name}")
+iso = (HERE / "build-live-iso.sh").read_text()
+source = re.search(r'^wallpaper_src="\$root/assets/wallpapers/([^"]+)"', iso, re.M)
+check(source and Path(source.group(1)).stem in rendered, "wallpaper.bmp ne vient pas d'un fond Prisme")
+for path in (ROOT / "scripts").glob("*.py"):
+    check("Fond ecran" not in path.read_text(errors="replace") or path.name == Path(__file__).name,
+          f"{path.name} : référence à l'ancien fond retiré")
+
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
     sys.exit(1)

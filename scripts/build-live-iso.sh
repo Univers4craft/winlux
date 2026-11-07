@@ -200,8 +200,10 @@ cp "$root"/assets/brand/winlux-logo*.svg "$root"/assets/brand/winlux-logo-*.png 
 cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpapers/"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
-# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
-wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
+# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell et
+# l'écran de verrouillage. Seul un fond maison Prisme (render-brand.py) est
+# livré : l'ancien « Fond ecran.png » évoquait le logo Windows (#590).
+wallpaper_src="$root/assets/wallpapers/winlux-prisme-nuit.png"
 if test -f "$wallpaper_src"; then
     if command -v convert >/dev/null 2>&1; then
         convert "$wallpaper_src" -filter Lanczos -resize '1920x1080^' -gravity center -extent 1920x1080 -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"

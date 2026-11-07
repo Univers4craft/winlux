@@ -1229,7 +1229,7 @@ def pe_pixbuf(module, exe, size=32):
 def wallpapers():
     found = []
     for name, title in (("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
-                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube"), ("wallpaper.bmp", "Classique")):
+                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube")):
         path = WALLPAPERS / name
         if path.is_file(): found.append((path, title))
     return found

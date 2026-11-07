@@ -293,7 +293,7 @@ if __name__=="__main__":
         if len(sys.argv)!=3: raise ValueError(_t("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR"))
         if sys.argv[1] == "reset" and sys.argv[2] == "default":
             for kind, value in (("theme", "dark"), ("accent", "#6a3df0"), ("panel-size", "40"),
-                                ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpaper.bmp")):
+                                ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpapers/winlux-prisme-nuit.png")):
                 apply(kind, value)
         else: apply(sys.argv[1],sys.argv[2])
     except (OSError,ValueError,subprocess.SubprocessError) as error:
