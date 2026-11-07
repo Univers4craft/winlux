@@ -1,6 +1,8 @@
 AcquireSRWLockExclusive
 AcquireSRWLockShared
 ActivateActCtx
+AddAtomA
+AddAtomW
 AddDllDirectory
 AddRefActCtx
 AddVectoredContinueHandler
@@ -83,6 +85,7 @@ CreateWaitableTimerW
 DeactivateActCtx
 DebugBreak
 DecodePointer
+DeleteAtom
 DeleteCriticalSection
 DeleteFileA
 DeleteFileW
@@ -118,6 +121,8 @@ FillConsoleOutputCharacterW
 FindActCtxSectionGuid
 FindActCtxSectionStringA
 FindActCtxSectionStringW
+FindAtomA
+FindAtomW
 FindClose
 FindCloseChangeNotification
 FindFirstChangeNotificationA
@@ -163,6 +168,8 @@ GetACP
 GetActiveProcessorCount
 GetActiveProcessorGroupCount
 GetApplicationRestartSettings
+GetAtomNameA
+GetAtomNameW
 GetCPInfo
 GetCPInfoExA
 GetCPInfoExW
@@ -319,6 +326,7 @@ GetShortPathNameW
 GetStartupInfoA
 GetStartupInfoW
 GetStdHandle
+GetStringTypeA
 GetStringTypeExA
 GetStringTypeExW
 GetStringTypeW
@@ -335,6 +343,9 @@ GetSystemTime
 GetSystemTimeAdjustment
 GetSystemTimeAsFileTime
 GetSystemTimePreciseAsFileTime
+GetSystemTimes
+GetSystemWow64DirectoryA
+GetSystemWow64DirectoryW
 GetTempFileNameA
 GetTempFileNameW
 GetTempPath2W
@@ -374,9 +385,16 @@ GetVolumePathNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
 GetXStateFeaturesMask
+GlobalAddAtomA
+GlobalAddAtomW
 GlobalAlloc
+GlobalDeleteAtom
+GlobalFindAtomA
+GlobalFindAtomW
 GlobalFlags
 GlobalFree
+GlobalGetAtomNameA
+GlobalGetAtomNameW
 GlobalLock
 GlobalMemoryStatus
 GlobalMemoryStatusEx
@@ -396,6 +414,7 @@ HeapSize
 HeapUnlock
 HeapValidate
 HeapWalk
+InitAtomTable
 InitOnceBeginInitialize
 InitOnceComplete
 InitOnceExecuteOnce
@@ -412,6 +431,11 @@ InitializeSRWLock
 InterlockedFlushSList
 InterlockedPopEntrySList
 InterlockedPushEntrySList
+IsBadCodePtr
+IsBadReadPtr
+IsBadStringPtrA
+IsBadStringPtrW
+IsBadWritePtr
 IsDBCSLeadByte
 IsDBCSLeadByteEx
 IsDebuggerPresent
@@ -474,7 +498,10 @@ OpenEventW
 OpenFileById
 OpenFileMappingA
 OpenFileMappingW
+OpenJobObjectA
+OpenJobObjectW
 OpenMutexA
+OpenMutexW
 OpenProcess
 OpenThread
 OutputDebugStringA
@@ -612,6 +639,7 @@ SetFileInformationByHandle
 SetFilePointer
 SetFilePointerEx
 SetFileTime
+SetHandleCount
 SetHandleInformation
 SetInformationJobObject
 SetLastError
@@ -768,7 +796,10 @@ WinluxResizePty
 WinluxSavePng
 WinluxSetGraphicsOption
 WinluxWritePty
+Wow64DisableWow64FsRedirection
+Wow64EnableWow64FsRedirection
 Wow64GetThreadContext
+Wow64RevertWow64FsRedirection
 Wow64SetThreadContext
 WriteConsoleA
 WriteConsoleInputW

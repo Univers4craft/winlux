@@ -193,6 +193,210 @@ unsafe fn empty_dirs(files: &[u8], info: &[u8]) {
     }
 }
 
+// ---------- Taille maximale de la Corbeille (#10) ----------
+//
+// Comme Windows, la Corbeille a une taille maximale : 5 % du disque par
+// défaut, ou `taille-max-mo=N` dans C:\.config\winlux\corbeille.conf. Après
+// une mise à la corbeille qui la fait dépasser, les éléments les plus
+// anciens sont supprimés définitivement, jamais ceux qu'on vient d'y mettre.
+
+const PURGE_MAX: usize = 512;
+const TRASH_CONF: &[u8] = b"C:\\.config\\winlux\\corbeille.conf";
+
+#[derive(Clone, Copy)]
+struct TrashItem {
+    name: [u8; NAME_LEN],
+    len: usize,
+    size: u64,
+    time: u64,
+    fresh: bool,
+}
+const EMPTY_ITEM: TrashItem = TrashItem { name: [0; NAME_LEN], len: 0, size: 0, time: 0, fresh: false };
+static mut TITEMS: [TrashItem; PURGE_MAX] = [EMPTY_ITEM; PURGE_MAX];
+
+/// Taille maximale en octets ; `u64::MAX` si elle est inconnue.
+pub(super) unsafe fn trash_limit() -> u64 {
+    let mut buf = [0u8; 256];
+    let n = first_bytes(TRASH_CONF, &mut buf);
+    if let Some(mo) = conf_mo(&buf[..n]) {
+        return mo.saturating_mul(1 << 20);
+    }
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    if GetDiskFreeSpaceExW(wstr(&mut w, b"C:\\"), &mut avail, &mut total, &mut free) == 0 || total == 0 {
+        return u64::MAX;
+    }
+    (total / 20).max(64 << 20)
+}
+
+/// Valeur de `taille-max-mo=` dans le fichier de réglage.
+fn conf_mo(text: &[u8]) -> Option<u64> {
+    for line in text.split(|&c| c == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if let Some(v) = line.strip_prefix(b"taille-max-mo=") {
+            let mut n = 0u64;
+            let mut any = false;
+            for &c in v.iter().skip_while(|c| **c == b' ') {
+                if !c.is_ascii_digit() {
+                    break;
+                }
+                n = n.saturating_mul(10).saturating_add((c - b'0') as u64);
+                any = true;
+            }
+            if any {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Applique la taille maximale à la vraie Corbeille. `since` : heure
+/// (FILETIME) du début de la mise à la corbeille en cours.
+pub(super) unsafe fn enforce_trash_limit(since: u64) -> u32 {
+    let n = trash_plan(TRASH, TRASH_INFO, trash_limit(), since);
+    trash_purge(TRASH, TRASH_INFO, n)
+}
+
+/// Relève le contenu de la Corbeille et range en tête de TITEMS, du plus
+/// ancien au plus récent, les éléments à supprimer pour revenir sous `limit`.
+/// Renvoie leur nombre.
+unsafe fn trash_plan(files: &[u8], info: &[u8], limit: u64, since: u64) -> usize {
+    let mut pat = [0u8; PATH_LEN + NAME_LEN + 2];
+    let pn = join(&mut pat, files, b"*");
+    if pn == 0 {
+        return 0;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wstr(&mut w, &pat[..pn]), &mut data);
+    if h as isize == -1 {
+        return 0;
+    }
+    let mut count = 0usize;
+    let mut total = 0u64;
+    loop {
+        let name = find_name_w(&data);
+        if !name.is_empty() && name != b"." && name != b".." && name.len() <= NAME_LEN - 10 {
+            let mut full = [0u8; PATH_LEN + NAME_LEN + 2];
+            let fl = join(&mut full, files, name);
+            let mut size = 0u64;
+            if data.attributes & 0x10 != 0 {
+                if data.attributes & 0x400 == 0 && fl > 0 {
+                    let (mut nf, mut nd, mut partial) = (0u32, 0u32, false);
+                    super::props::walk(&full[..fl], 0, &mut size, &mut nf, &mut nd, &mut partial);
+                }
+            } else {
+                size = (data.size_high as u64) << 32 | data.size_low as u64;
+            }
+            total = total.saturating_add(size);
+            // Date de suppression : celle de la fiche .trashinfo. Sans fiche,
+            // l'élément passe en premier (orphelin).
+            let mut nm = [0u8; NAME_LEN + 12];
+            nm[..name.len()].copy_from_slice(name);
+            nm[name.len()..name.len() + 10].copy_from_slice(b".trashinfo");
+            let mut ip = [0u8; PATH_LEN + NAME_LEN + 2];
+            let il = join(&mut ip, info, &nm[..name.len() + 10]);
+            let mut time = 0u64;
+            if il > 0 {
+                let mut d2: Win32FindDataW = core::mem::zeroed();
+                let mut w2 = [0u16; PATH_LEN + NAME_LEN + 2];
+                let h2 = FindFirstFileW(wstr(&mut w2, &ip[..il]), &mut d2);
+                if h2 as isize != -1 {
+                    time = d2.write_time;
+                    FindClose(h2);
+                }
+            }
+            if count < PURGE_MAX {
+                let it = &mut TITEMS[count];
+                it.name[..name.len()].copy_from_slice(name);
+                it.len = name.len();
+                it.size = size;
+                it.time = time;
+                it.fresh = time != 0 && time >= since;
+                count += 1;
+            }
+        }
+        if FindNextFileW(h, &mut data) == 0 {
+            break;
+        }
+    }
+    FindClose(h);
+    if total <= limit {
+        return 0;
+    }
+    // Tri par date (tri par insertion : quelques centaines d'éléments).
+    for i in 1..count {
+        let mut j = i;
+        while j > 0 && TITEMS[j - 1].time > TITEMS[j].time {
+            TITEMS.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut picked = 0usize;
+    for i in 0..count {
+        if total <= limit || picked >= CLIP_MAX {
+            break;
+        }
+        if TITEMS[i].fresh {
+            continue;
+        }
+        total = total.saturating_sub(TITEMS[i].size);
+        TITEMS.swap(picked, i);
+        picked += 1;
+    }
+    picked
+}
+
+/// Supprime définitivement les `n` premiers éléments de TITEMS et leurs
+/// fiches, en tâche de fond. Renvoie `n` si la tâche a démarré.
+unsafe fn trash_purge(files: &[u8], info: &[u8], n: usize) -> u32 {
+    if n == 0 {
+        return 0;
+    }
+    let mut at = 0usize;
+    let mut push = |path: &[u8]| {
+        for &c in path {
+            LIST[at] = c as u16;
+            at += 1;
+        }
+        LIST[at] = 0;
+        at += 1;
+    };
+    for it in TITEMS[..n].iter() {
+        let name = &it.name[..it.len];
+        let mut p = [0u8; PATH_LEN + NAME_LEN + 2];
+        let l = join(&mut p, files, name);
+        if l > 0 {
+            push(&p[..l]);
+        }
+        let mut nm = [0u8; NAME_LEN + 12];
+        nm[..name.len()].copy_from_slice(name);
+        nm[name.len()..name.len() + 10].copy_from_slice(b".trashinfo");
+        let l = join(&mut p, info, &nm[..name.len() + 10]);
+        if l > 0 && exists(&p[..l]) {
+            push(&p[..l]);
+        }
+    }
+    LIST[at] = 0;
+    let id = WinluxFileDelete(LIST.as_ptr(), 0);
+    if !start(id, false, n as u32, files, files) {
+        return 0;
+    }
+    for c in COPIES.iter_mut() {
+        if c.id == id {
+            c.deleting = true;
+        }
+    }
+    notify(tr4(&[
+        b"Corbeille pleine : les \xE9l\xE9ments les plus anciens sont supprim\xE9s d\xE9finitivement.",
+        b"Recycle Bin full: the oldest items are being permanently deleted.",
+        b"Papelera llena: se eliminan definitivamente los elementos m\xE1s antiguos.",
+        b"Papierkorb voll: Die \xE4ltesten Elemente werden endg\xFCltig gel\xF6scht.",
+    ]));
+    n as u32
+}
+
 fn confirm_box(f: &Frame) -> Rect {
     let (w, h) = (440, 168);
     let cx = (f.client.left + f.client.right) / 2;
@@ -1029,14 +1233,14 @@ unsafe fn write_file(path: &[u8], data: &[u8], repeat: usize) -> bool {
 }
 
 #[doc(hidden)]
-unsafe fn first_bytes(path: &[u8], out: &mut [u8; 16]) -> usize {
+unsafe fn first_bytes(path: &[u8], out: &mut [u8]) -> usize {
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
     let h = CreateFileW(wstr(&mut w, path), 0x8000_0000, 7, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
     if h.is_null() || h as isize == -1 {
         return 0;
     }
     let mut read = 0u32;
-    ReadFile(h, out.as_mut_ptr(), 16, &mut read, core::ptr::null_mut());
+    ReadFile(h, out.as_mut_ptr(), out.len() as u32, &mut read, core::ptr::null_mut());
     CloseHandle(h);
     read as usize
 }
@@ -1175,4 +1379,41 @@ pub(super) unsafe fn trash_regression(root: &[u8]) {
         !exists(&x[..xl]) && !exists(&y[..yl2]) && exists(&files[..fl]) && exists(&info[..il]),
         "Vider la Corbeille supprime fichiers et fiches, garde les dossiers"
     );
+    // Taille maximale : les plus anciens partent, jamais ceux qu'on vient de jeter.
+    check!(conf_mo(b"# r\xE9glage\ntaille-max-mo= 250\n") == Some(250) && conf_mo(b"x=1\n").is_none(), "Corbeille : lecture de taille-max-mo");
+    check!(trash_limit() > 0, "Corbeille : taille maximale connue");
+    let mut since = 0u64;
+    for (i, nm) in [&b"ancien.bin"[..], b"moyen.bin", b"recent.bin"].iter().enumerate() {
+        let mut fp = [0u8; PATH_LEN + NAME_LEN + 2];
+        let n = join(&mut fp, &files[..fl], nm);
+        write_file(&fp[..n], &[b'x'; 1000], 1);
+        let mut ip = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut inm = [0u8; 40];
+        inm[..nm.len()].copy_from_slice(nm);
+        inm[nm.len()..nm.len() + 10].copy_from_slice(b".trashinfo");
+        let n2 = join(&mut ip, &info[..il], &inm[..nm.len() + 10]);
+        write_file(&ip[..n2], b"[Trash Info]\n", 1);
+        if i == 2 {
+            GetSystemTimeAsFileTime(&mut since);
+        }
+        Sleep(30);
+    }
+    // Avant le 3e : on vient de jeter recent.bin seulement.
+    since = since.saturating_sub(1);
+    check!(trash_plan(&files[..fl], &info[..il], 10_000, since) == 0, "Corbeille sous la limite : rien n'est purge");
+    let n = trash_plan(&files[..fl], &info[..il], 1500, since);
+    check!(n == 2 && &TITEMS[0].name[..TITEMS[0].len] == b"ancien.bin" && &TITEMS[1].name[..TITEMS[1].len] == b"moyen.bin",
+        "Corbeille trop pleine : les plus anciens sont choisis d'abord");
+    let n = trash_plan(&files[..fl], &info[..il], 0, 0);
+    check!(n == 0, "Corbeille : un element tout juste jete n'est jamais purge");
+    let n = trash_plan(&files[..fl], &info[..il], 1500, since);
+    check!(trash_purge(&files[..fl], &info[..il], n) == 2, "Corbeille : purge en tache de fond");
+    wait_all();
+    let mut fp = [0u8; PATH_LEN + NAME_LEN + 2];
+    let a = join(&mut fp, &files[..fl], b"ancien.bin");
+    let gone_a = !exists(&fp[..a]);
+    let r = join(&mut fp, &files[..fl], b"recent.bin");
+    let kept = exists(&fp[..r]);
+    let ia = join(&mut fp, &info[..il], b"ancien.bin.trashinfo");
+    check!(gone_a && kept && !exists(&fp[..ia]), "Corbeille : fichier et fiche purges, le recent reste");
 }

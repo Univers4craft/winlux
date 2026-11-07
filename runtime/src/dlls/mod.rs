@@ -87,9 +87,11 @@ pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
 pub mod kernel32_fs;
+pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
 pub mod knownfolders;
+pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
 pub mod menus;
@@ -260,6 +262,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    for (name, addr) in kernel32_legacy::exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     // Langue, pages de code et heure : priment sur les anciennes versions.
                     e.extend(crate::intl::api::kernel32_exports());
                     // nls couvre les LCTYPE lus par la globalisation NLS de .NET
@@ -759,6 +764,18 @@ fn builtins() -> &'static Vec<Builtin> {
         ];
         add_basics(&mut all);
         add_psapi(&mut all);
+        // mpr, msi et shfolder : importées directement par WinSCP et 7-Zip (#486).
+        for (name, exports) in [
+            ("mpr", legacy_dlls::mpr_exports()),
+            ("msi", legacy_dlls::msi_exports()),
+            ("shfolder", legacy_dlls::shfolder_exports()),
+        ] {
+            all.push(Builtin {
+                name,
+                exports,
+                handle: fake_module(),
+            });
+        }
         all
     })
 }

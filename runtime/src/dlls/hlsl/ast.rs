@@ -74,6 +74,13 @@ pub(crate) enum Ty {
     /// Flux de sortie d'un geometry shader : 0 PointStream, 1 LineStream,
     /// 2 TriangleStream, et type des sommets.
     Stream(u8, Box<Ty>),
+    /// RWTexture* : image en lecture-écriture (vue UAV) et type d'élément.
+    Rw(TexKind, Box<Ty>),
+    /// StructuredBuffer / RWStructuredBuffer / RWBuffer (vrai = écriture
+    /// permise) et type d'élément : tampon de stockage GLSL.
+    Sb(bool, Box<Ty>),
+    /// ByteAddressBuffer / RWByteAddressBuffer : tampon de mots de 32 bits.
+    Bab(bool),
 }
 
 impl Ty {
@@ -108,7 +115,7 @@ impl Ty {
     }
     pub(crate) fn is_resource(&self) -> bool {
         match self {
-            Ty::Texture(..) | Ty::Sampler(_) => true,
+            Ty::Texture(..) | Ty::Sampler(_) | Ty::Rw(..) | Ty::Sb(..) | Ty::Bab(_) => true,
             Ty::Array(t, _) => t.is_resource(),
             _ => false,
         }
@@ -163,6 +170,8 @@ pub(crate) struct VarDecl {
     #[allow(dead_code)] // interpolation d'une globale : sans effet
     pub interp: Interp,
     pub row_major: bool,
+    /// `groupshared` : mémoire partagée du groupe (compute shader).
+    pub groupshared: bool,
     pub line: u32,
 }
 
@@ -193,6 +202,8 @@ pub(crate) struct Func {
     pub params: Vec<Param>,
     /// `[maxvertexcount(N)]` d'un geometry shader (0 sinon).
     pub max_vertex_count: u32,
+    /// `[numthreads(X, Y, Z)]` d'un compute shader ([0; 3] sinon).
+    pub num_threads: [u32; 3],
     pub body: Option<Vec<Stmt>>,
     pub line: u32,
 }

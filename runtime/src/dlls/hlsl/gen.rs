@@ -31,6 +31,8 @@ enum GKind {
     /// (tampon, décalage en composantes).
     Cb(usize, u32),
     Res,
+    /// `groupshared` : variable `shared` du groupe de calcul.
+    Shared,
 }
 
 struct Global {
@@ -74,6 +76,16 @@ enum V {
     E(String, Ty),
     Cb(CbRef),
     Res(ResRef),
+    /// Texel d'un RWTexture : lu par imageLoad, écrit par imageStore.
+    Img(ImgRef),
+}
+
+#[derive(Clone, Debug)]
+struct ImgRef {
+    g: usize,
+    name: String,
+    coord: String,
+    elem: Ty,
 }
 
 #[derive(Clone)]
@@ -118,6 +130,18 @@ pub(crate) struct Gen<'p> {
     /// Textures lues par SampleCmp : (texture, repère, forme « shadow »,
     /// forme comparée à la main). La forme est choisie à l'assemblage.
     cmp_exprs: Vec<(usize, String, String, String)>,
+    /// Images lues (imageLoad, atomiques) : il leur faut un format.
+    img_read: BTreeSet<usize>,
+}
+
+/// Liaison GLSL d'un tampon de stockage : vue de ressource (t) au numéro
+/// du registre, vue UAV (u) à 16 + registre. Même règle côté D3D11.
+pub(crate) fn storage_binding(uav: bool, reg: u32) -> u32 {
+    if uav {
+        16 + reg
+    } else {
+        reg
+    }
 }
 
 /// Nom GLSL d'un identifiant HLSL : préfixe, et pas de « __ » (réservé).
@@ -221,6 +245,7 @@ impl<'p> Gen<'p> {
             gs_stream: None,
             plain_use: BTreeSet::new(),
             cmp_exprs: Vec::new(),
+            img_read: BTreeSet::new(),
             protos: Vec::new(),
             defs: Vec::new(),
             body: String::new(),
@@ -249,6 +274,10 @@ impl<'p> Gen<'p> {
         let mut end = 0;
         let mut any = false;
         for d in &p.globals {
+            if d.groupshared {
+                g.add_global(d.clone(), GKind::Shared);
+                continue;
+            }
             if d.is_static || d.ty.is_resource() {
                 let kind = if d.ty.is_resource() {
                     GKind::Res
@@ -364,7 +393,7 @@ impl<'p> Gen<'p> {
             // Le flux d'un geometry shader n'a pas de valeur : un entier
             // factice le représente, Append appelle w_append.
             Ty::Stream(..) => "int".into(),
-            Ty::Texture(..) | Ty::Sampler(_) => {
+            Ty::Texture(..) | Ty::Sampler(_) | Ty::Rw(..) | Ty::Sb(..) | Ty::Bab(_) => {
                 return Err("ressource utilisée comme valeur".into());
             }
         })
@@ -475,6 +504,13 @@ impl<'p> Gen<'p> {
                 .map_or("struct".into(), |s| s.name.clone()),
             Ty::Texture(k, _) => format!("Texture{}", k.glsl()),
             Ty::Sampler(_) => "SamplerState".into(),
+            Ty::Rw(k, t) => format!("RWTexture{}<{}>", k.glsl(), self.show(t)),
+            Ty::Sb(rw, t) => format!(
+                "{}StructuredBuffer<{}>",
+                if *rw { "RW" } else { "" },
+                self.show(t)
+            ),
+            Ty::Bab(rw) => format!("{}ByteAddressBuffer", if *rw { "RW" } else { "" }),
             Ty::Stream(k, t) => format!(
                 "{}<{}>",
                 ["PointStream", "LineStream", "TriangleStream"][(*k).min(2) as usize],
@@ -500,7 +536,7 @@ impl<'p> Gen<'p> {
             .ok_or_else(|| format!("identifiant inconnu « {name} »"))?;
         let g = &self.globals[gi];
         Ok(match g.kind {
-            GKind::Static => V::E(mg("h", name), g.d.ty.clone()),
+            GKind::Static | GKind::Shared => V::E(mg("h", name), g.d.ty.clone()),
             GKind::Cb(cb, off) => {
                 self.used_cb.insert(cb);
                 V::Cb(CbRef {
@@ -621,7 +657,53 @@ impl<'p> Gen<'p> {
             V::E(s, t) => Ok((s, t)),
             V::Cb(c) => Ok((self.cb_load(&c)?, c.ty)),
             V::Res(_) => Err("ressource utilisée comme valeur".into()),
+            V::Img(i) => Ok(self.image_load(&i)),
         }
+    }
+
+    /// imageLoad réduit au type d'élément.
+    fn image_load(&self, i: &ImgRef) -> (String, Ty) {
+        let b = i.elem.base().unwrap_or(Base::Float);
+        let n = i.elem.comps().unwrap_or(4);
+        let s = format!("imageLoad({}, {})", i.name, i.coord);
+        let s = if n == 4 {
+            s
+        } else {
+            format!("{s}.{}", swz(0, n as u32))
+        };
+        (s, Ty::vec(b, n))
+    }
+
+    /// Valeur à écrire par imageStore : vecteur de 4 du type de l'image.
+    fn image_value(&self, s: &str, t: &Ty, elem: &Ty) -> R<String> {
+        let b = elem.base().unwrap_or(Base::Float);
+        let b = if b == Base::Bool { Base::Uint } else { b };
+        let n = elem.comps().unwrap_or(4);
+        let v = self.conv(s, t, &Ty::vec(b, n))?;
+        let z = self.zero(&Ty::Scalar(b))?;
+        Ok(match n {
+            4 => v,
+            1 => format!("{}({v}, {z}, {z}, {z})", vec_name(b, 4)),
+            2 => format!("{}({v}, {z}, {z})", vec_name(b, 4)),
+            _ => format!("{}({v}, {z})", vec_name(b, 4)),
+        })
+    }
+
+    /// `img[c] = v` (ou `+=`…) : imageStore, lecture préalable si composée.
+    fn image_assign(&mut self, op: &str, img: &ImgRef, r: &Expr) -> R<V> {
+        let (rs, rt) = self.rv(r)?;
+        let val = if op == "=" {
+            (rs, rt)
+        } else {
+            self.img_read.insert(img.g);
+            let (cur, ct) = self.image_load(img);
+            self.binary(&op[..op.len() - 1], cur, &ct, rs, &rt)?
+        };
+        let v = self.image_value(&val.0, &val.1, &img.elem)?;
+        Ok(V::E(
+            format!("imageStore({}, {}, {v})", img.name, img.coord),
+            Ty::Void,
+        ))
     }
 
     fn at(&self, e: &Expr, m: &str) -> String {
@@ -668,6 +750,7 @@ impl<'p> Gen<'p> {
             ExprKind::Assign(op, l, r) => {
                 let (ls, lt) = match self.expr(l)? {
                     V::E(s, t) => (s, t),
+                    V::Img(img) => return self.image_assign(op, &img, r),
                     _ => return Err("affectation d'une constante de tampon".into()),
                 };
                 let rs = if let ExprKind::InitList(items) = &r.k {
@@ -1038,6 +1121,11 @@ impl<'p> Gen<'p> {
                 _ => Err(format!("« .{m} » sur {}", self.show(&t))),
             },
             V::Res(_) => Err(format!("membre « {m} » d'une ressource")),
+            V::Img(i) => {
+                self.img_read.insert(i.g);
+                let (s, t) = self.image_load(&i);
+                self.member(V::E(s, t), m)
+            }
         }
     }
 
@@ -1115,8 +1203,30 @@ impl<'p> Gen<'p> {
                     let (s, t) = self.load_texel(&r, i, None)?;
                     Ok(V::E(s, t))
                 }
+                Ty::Rw(k, elem) => {
+                    let coord = self.ivec(i, k.coords())?;
+                    let name = self.res_name(&r);
+                    Ok(V::Img(ImgRef {
+                        g: r.g,
+                        name,
+                        coord,
+                        elem: (**elem).clone(),
+                    }))
+                }
+                Ty::Sb(_, elem) => {
+                    let elem = (**elem).clone();
+                    let k = self.index_str(i)?;
+                    let n = self.res_name(&r);
+                    Ok(V::E(format!("{n}[{k}]"), elem))
+                }
+                Ty::Bab(_) => Err("indexation d'un ByteAddressBuffer (Load attendu)".into()),
                 _ => Err("indexation d'un échantillonneur".into()),
             },
+            V::Img(img) => {
+                self.img_read.insert(img.g);
+                let (s, t) = self.image_load(&img);
+                self.index(V::E(s, t), i)
+            }
         }
     }
 
@@ -1266,6 +1376,7 @@ impl<'p> Gen<'p> {
             V::E(_, t) => t.clone(),
             V::Cb(c) => c.ty.clone(),
             V::Res(r) => r.ty.clone(),
+            V::Img(i) => i.elem.clone(),
         }
     }
 
@@ -1276,6 +1387,8 @@ impl<'p> Gen<'p> {
         match (from, to) {
             (Ty::Texture(a, _), Ty::Texture(b, _)) if a == b => Some(0),
             (Ty::Sampler(_), Ty::Sampler(_)) => Some(0),
+            (Ty::Rw(a, _), Ty::Rw(b, _)) if a == b => Some(0),
+            (Ty::Sb(..), Ty::Sb(..)) | (Ty::Bab(_), Ty::Bab(_)) => Some(0),
             (Ty::Scalar(_), Ty::Scalar(_)) => Some(1),
             (Ty::Vector(_, n), Ty::Vector(_, m)) if n == m => Some(1),
             (Ty::Matrix(_, r, c), Ty::Matrix(_, r2, c2)) if r == r2 && c == c2 => Some(1),
@@ -1510,6 +1623,25 @@ impl<'p> Gen<'p> {
             let v = self.args(args)?;
             let (s, t) = self.unify(&v, Some(Base::Float))?;
             return Ok((format!("{g}({})", s[0]), t));
+        }
+        if name.starts_with("Interlocked") {
+            let d = args.first().ok_or("Interlocked : destination manquante")?;
+            let dest = self.expr(d)?;
+            return self.atomic(name, dest, &args[1..]);
+        }
+        let barrier = match name {
+            "GroupMemoryBarrier" => Some("memoryBarrierShared()"),
+            "GroupMemoryBarrierWithGroupSync" => Some("memoryBarrierShared(); barrier()"),
+            "DeviceMemoryBarrier" => Some("memoryBarrierBuffer(); memoryBarrierImage()"),
+            "DeviceMemoryBarrierWithGroupSync" => {
+                Some("memoryBarrierBuffer(); memoryBarrierImage(); barrier()")
+            }
+            "AllMemoryBarrier" => Some("memoryBarrier()"),
+            "AllMemoryBarrierWithGroupSync" => Some("memoryBarrier(); barrier()"),
+            _ => None,
+        };
+        if let Some(b) = barrier {
+            return Ok((b.to_string(), Ty::Void));
         }
         let fl = Some(Base::Float);
         Ok(match name {
@@ -1985,6 +2117,9 @@ impl<'p> Gen<'p> {
         let V::Res(r) = v else {
             return Err(format!("méthode « {m} » sur une valeur"));
         };
+        if matches!(r.ty, Ty::Rw(..) | Ty::Sb(..) | Ty::Bab(_)) {
+            return self.storage_method(&r, m, args);
+        }
         let Ty::Texture(k, elem) = r.ty.clone() else {
             return Err(format!("méthode « {m} » sur un échantillonneur"));
         };
@@ -2167,6 +2302,188 @@ impl<'p> Gen<'p> {
                 Ok((format!("({})", parts.join(", ")), Ty::Void))
             }
             _ => Err(format!("méthode de texture « {m} » non prise en charge")),
+        }
+    }
+
+    /// Taille d'un élément de tampon structuré (disposition HLSL serrée).
+    fn tight_size(&self, t: &Ty) -> u32 {
+        match t {
+            Ty::Scalar(_) => 4,
+            Ty::Vector(_, n) => 4 * *n as u32,
+            Ty::Matrix(_, r, c) => 4 * (*r as u32) * (*c as u32),
+            Ty::Array(e, n) => self.tight_size(e) * n,
+            Ty::Struct(i) => self.p.structs[*i]
+                .members
+                .iter()
+                .map(|m| self.tight_size(&m.ty))
+                .sum(),
+            _ => 0,
+        }
+    }
+
+    /// Affecte des valeurs aux paramètres `out` : « (a = x, b = y) ».
+    fn assign_outs(&mut self, outs: &[Expr], vals: &[(String, Ty)]) -> R<String> {
+        let mut parts = Vec::new();
+        for (o, (v, vt)) in outs.iter().zip(vals) {
+            let V::E(os, ot) = self.expr(o)? else {
+                return Err("paramètre de sortie attendu".into());
+            };
+            parts.push(format!("{os} = {}", self.conv(v, vt, &ot)?));
+        }
+        Ok(format!("({})", parts.join(", ")))
+    }
+
+    /// Méthodes des RWTexture et des tampons de stockage (compute shaders).
+    fn storage_method(&mut self, r: &ResRef, m: &str, args: &[Expr]) -> R<(String, Ty)> {
+        let n = self.res_name(r);
+        let uint = Ty::Scalar(Base::Uint);
+        match (&r.ty, m) {
+            (Ty::Rw(k, _), "GetDimensions") => {
+                let dims = k.coords() as usize;
+                let size = format!("imageSize({n})");
+                let vals: Vec<(String, Ty)> = (0..dims)
+                    .map(|i| {
+                        let v = if dims == 1 {
+                            size.clone()
+                        } else {
+                            format!("{size}.{}", SW[i])
+                        };
+                        (v, Ty::Scalar(Base::Int))
+                    })
+                    .collect();
+                Ok((self.assign_outs(args, &vals)?, Ty::Void))
+            }
+            (Ty::Rw(..), "Load") => {
+                let a = args.first().ok_or("Load : coordonnées manquantes")?;
+                let V::Img(img) = self.index(V::Res(r.clone()), a)? else {
+                    return Err("Load sur une image".into());
+                };
+                self.img_read.insert(img.g);
+                Ok(self.image_load(&img))
+            }
+            (Ty::Sb(_, elem), "GetDimensions") => {
+                let stride = self.tight_size(elem);
+                let vals = [
+                    (format!("uint({n}.length())"), uint.clone()),
+                    (format!("{stride}u"), uint),
+                ];
+                let k = args.len().min(2);
+                Ok((self.assign_outs(&args[..k], &vals[..k])?, Ty::Void))
+            }
+            (Ty::Sb(_, elem), "Load") => {
+                let a = args.first().ok_or("Load : indice manquant")?;
+                let k = self.index_str(a)?;
+                Ok((format!("{n}[{k}]"), (**elem).clone()))
+            }
+            (Ty::Bab(_), "GetDimensions") => {
+                let vals = [(format!("(uint({n}.length()) * 4u)"), uint)];
+                Ok((
+                    self.assign_outs(&args[..args.len().min(1)], &vals)?,
+                    Ty::Void,
+                ))
+            }
+            (Ty::Bab(_), "Load" | "Load2" | "Load3" | "Load4") => {
+                let a = args.first().ok_or("Load : adresse manquante")?;
+                let (s, t) = self.rv(a)?;
+                let w = format!("({} >> 2u)", self.conv(&s, &t, &Ty::Scalar(Base::Uint))?);
+                let c: u8 = m[4..].parse().unwrap_or(1);
+                if c == 1 {
+                    return Ok((format!("{n}[{w}]"), Ty::Scalar(Base::Uint)));
+                }
+                let v: Vec<String> = (0..c).map(|i| format!("{n}[{w} + {i}u]")).collect();
+                Ok((
+                    format!("uvec{c}({})", v.join(", ")),
+                    Ty::Vector(Base::Uint, c),
+                ))
+            }
+            (Ty::Bab(_), "Store" | "Store2" | "Store3" | "Store4") => {
+                Self::need(m, args, 2)?;
+                let (s, t) = self.rv(&args[0])?;
+                let w = format!("({} >> 2u)", self.conv(&s, &t, &Ty::Scalar(Base::Uint))?);
+                let c: u8 = m[5..].parse().unwrap_or(1);
+                let (vs, vt) = self.rv(&args[1])?;
+                let v = self.conv(&vs, &vt, &Ty::vec(Base::Uint, c))?;
+                if c == 1 {
+                    return Ok((format!("({n}[{w}] = {v})"), Ty::Void));
+                }
+                let parts: Vec<String> = (0..c)
+                    .map(|i| format!("{n}[{w} + {i}u] = {v}.{}", SW[i as usize]))
+                    .collect();
+                Ok((format!("({})", parts.join(", ")), Ty::Void))
+            }
+            (Ty::Bab(_), _) if m.starts_with("Interlocked") => {
+                if args.len() < 2 {
+                    return Err(format!("{m} : arguments manquants"));
+                }
+                let (s, t) = self.rv(&args[0])?;
+                let w = format!("({} >> 2u)", self.conv(&s, &t, &Ty::Scalar(Base::Uint))?);
+                self.atomic(
+                    m,
+                    V::E(format!("{n}[{w}]"), Ty::Scalar(Base::Uint)),
+                    &args[1..],
+                )
+            }
+            _ => Err(format!(
+                "méthode « {m} » de {} non prise en charge",
+                self.show(&r.ty)
+            )),
+        }
+    }
+
+    /// Interlocked* sur une variable (tampon, groupshared) ou un texel :
+    /// `args` = valeur(s) puis la sortie facultative de l'ancienne valeur.
+    fn atomic(&mut self, name: &str, dest: V, args: &[Expr]) -> R<(String, Ty)> {
+        let op = name.trim_start_matches("Interlocked");
+        let (f, nvals) = match op {
+            "Add" => ("Add", 1),
+            "Min" => ("Min", 1),
+            "Max" => ("Max", 1),
+            "And" => ("And", 1),
+            "Or" => ("Or", 1),
+            "Xor" => ("Xor", 1),
+            "Exchange" => ("Exchange", 1),
+            "CompareExchange" => ("CompSwap", 2),
+            "CompareStore" => ("CompSwap", 2),
+            _ => return Err(format!("{name} non pris en charge")),
+        };
+        if args.len() < nvals {
+            return Err(format!("{name} : arguments manquants"));
+        }
+        let (target, ty) = match &dest {
+            V::E(s, t) => (s.clone(), t.clone()),
+            V::Img(i) => (String::new(), i.elem.clone()),
+            _ => return Err(format!("{name} : destination invalide")),
+        };
+        let b = match ty.base() {
+            Some(Base::Int) => Base::Int,
+            _ => Base::Uint,
+        };
+        let mut vals = Vec::new();
+        for a in &args[..nvals] {
+            let (s, t) = self.rv(a)?;
+            vals.push(self.conv(&s, &t, &Ty::Scalar(b))?);
+        }
+        let call = match &dest {
+            V::Img(i) => {
+                self.img_read.insert(i.g);
+                format!(
+                    "imageAtomic{f}({}, {}, {})",
+                    i.name,
+                    i.coord,
+                    vals.join(", ")
+                )
+            }
+            _ => format!("atomic{f}({target}, {})", vals.join(", ")),
+        };
+        match args.get(nvals) {
+            Some(o) if op != "CompareStore" => {
+                let V::E(os, ot) = self.expr(o)? else {
+                    return Err(format!("{name} : sortie invalide"));
+                };
+                let v = self.conv(&call, &Ty::Scalar(b), &ot)?;
+                Ok((format!("({os} = {v})"), Ty::Void))
+            }
+            _ => Ok((call, Ty::Void)),
         }
     }
 
@@ -2471,6 +2788,16 @@ impl<'p> Gen<'p> {
         let mut init = String::new();
         self.scopes = vec![HashMap::new()];
         for gi in 0..self.globals.len() {
+            if self.globals[gi].kind == GKind::Shared {
+                let d = &self.globals[gi].d;
+                let _ = writeln!(
+                    decls,
+                    "shared {} {};",
+                    self.tyname(&d.ty)?,
+                    mg("h", &d.name)
+                );
+                continue;
+            }
             if self.globals[gi].kind != GKind::Static {
                 continue;
             }
@@ -2611,6 +2938,21 @@ impl<'p> Gen<'p> {
                 (Stage::Pixel, "SV_SAMPLEINDEX") => {
                     sv = 10;
                     ("gl_SampleID".into(), Ty::Scalar(Base::Int))
+                }
+                (Stage::Compute, "SV_DISPATCHTHREADID") => {
+                    ("gl_GlobalInvocationID".into(), Ty::Vector(Base::Uint, 3))
+                }
+                (Stage::Compute, "SV_GROUPID") => {
+                    ("gl_WorkGroupID".into(), Ty::Vector(Base::Uint, 3))
+                }
+                (Stage::Compute, "SV_GROUPTHREADID") => {
+                    ("gl_LocalInvocationID".into(), Ty::Vector(Base::Uint, 3))
+                }
+                (Stage::Compute, "SV_GROUPINDEX") => {
+                    ("gl_LocalInvocationIndex".into(), Ty::Scalar(Base::Uint))
+                }
+                (Stage::Compute, other) => {
+                    return Err(format!("entrée « {other} » d'un compute shader inconnue"));
                 }
                 _ => {
                     let loc = varying_location(&e.name, e.index);
@@ -2883,15 +3225,16 @@ impl<'p> Gen<'p> {
             cb_slot.insert(c, slot);
         }
         let mut res_reg: HashMap<usize, u32> = HashMap::new();
-        for class in ['t', 's'] {
+        for class in ['t', 's', 'u'] {
             let is_class = |t: &Ty| -> bool {
                 let mut t = t;
                 while let Ty::Array(e, _) = t {
                     t = e;
                 }
                 match t {
-                    Ty::Texture(..) => class == 't',
+                    Ty::Texture(..) | Ty::Sb(false, _) | Ty::Bab(false) => class == 't',
                     Ty::Sampler(_) => class == 's',
+                    Ty::Rw(..) | Ty::Sb(true, _) | Ty::Bab(true) => class == 'u',
                     _ => false,
                 }
             };
@@ -2959,9 +3302,28 @@ impl<'p> Gen<'p> {
         let tag = match self.stage {
             Stage::Vertex => "vs",
             Stage::Geometry => "gs",
+            Stage::Compute => "cs",
             _ => "ps",
         };
         let mut s = String::from("#version 430 core\n");
+        // Image lue sans format connu (vecteur) : format pris à la liaison.
+        let formatted = self.used_res.iter().any(|g| {
+            self.img_read.contains(g)
+                && matches!(&self.globals[*g].d.ty, Ty::Rw(_, e) if e.comps().unwrap_or(4) > 1)
+        });
+        if formatted {
+            s.push_str("#extension GL_EXT_shader_image_load_formatted : require\n");
+        }
+        if self.stage == Stage::Compute {
+            let [x, y, z] = f.num_threads;
+            let _ = writeln!(
+                s,
+                "layout(local_size_x = {}, local_size_y = {}, local_size_z = {}) in;",
+                x.max(1),
+                y.max(1),
+                z.max(1)
+            );
+        }
         if gs {
             let input = match gs_prim.as_deref() {
                 Some("point") => "points",
@@ -3031,6 +3393,53 @@ impl<'p> Gen<'p> {
                 Ty::Array(e, n) => ((**e).clone(), format!("[{n}]")),
                 t => (t.clone(), String::new()),
             };
+            let name = mg("t_", &d.name);
+            match &t {
+                Ty::Rw(k, elem) => {
+                    let b = elem.base().unwrap_or(Base::Float);
+                    let pre = match b {
+                        Base::Int => "i",
+                        Base::Uint | Base::Bool => "u",
+                        Base::Float => "",
+                    };
+                    let read = self.img_read.contains(&gi);
+                    // Lecture d'un scalaire : format R32 (seul permis en
+                    // lecture par D3D11) ; vecteur : format de la liaison.
+                    let fmt = match (read, elem.comps().unwrap_or(4), b) {
+                        (true, 1, Base::Float) => ", r32f",
+                        (true, 1, Base::Int) => ", r32i",
+                        (true, 1, _) => ", r32ui",
+                        _ => "",
+                    };
+                    let access = if read { "" } else { "writeonly " };
+                    let _ = writeln!(
+                        s,
+                        "layout(binding = {r}{fmt}) uniform {access}{pre}image{} {name}{arr};",
+                        k.glsl()
+                    );
+                    continue;
+                }
+                Ty::Sb(rw, elem) => {
+                    let _ = writeln!(
+                        s,
+                        "layout(std430, row_major, binding = {}) {}buffer B_{name} {{ {} {name}[]; }};",
+                        storage_binding(*rw, r),
+                        if *rw { "" } else { "readonly " },
+                        self.tyname(elem)?
+                    );
+                    continue;
+                }
+                Ty::Bab(rw) => {
+                    let _ = writeln!(
+                        s,
+                        "layout(std430, binding = {}) {}buffer B_{name} {{ uint {name}[]; }};",
+                        storage_binding(*rw, r),
+                        if *rw { "" } else { "readonly " }
+                    );
+                    continue;
+                }
+                _ => {}
+            }
             if let Ty::Texture(k, elem) = t {
                 let pre = vec_prefix(elem.base().unwrap_or(Base::Float));
                 let pre = if pre == "b" { "u" } else { pre };

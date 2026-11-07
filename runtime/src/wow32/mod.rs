@@ -26,8 +26,15 @@ mod com;
 mod comctl;
 mod comdlg;
 mod crt;
+mod cxx;
+mod kernel;
 mod layout;
 mod seh;
+mod wow64;
+
+pub use wow64::{
+    apply_env, fs_redirection, pointer_size, read_ptr, registry_view, set_fs_redirection, write_ptr,
+};
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -428,7 +435,7 @@ fn alloc_low(size: usize, exec: bool) -> usize {
 }
 
 /// Petits morceaux de code x86 (passerelles), sous 2 Go.
-fn alloc_code(code: &[u8]) -> u32 {
+pub(super) fn alloc_code(code: &[u8]) -> u32 {
     let mut p = CODE_POOL.lock().unwrap_or_else(|e| e.into_inner());
     let need = (code.len() + 15) & !15;
     if p.cur + need > p.end {
@@ -1116,15 +1123,38 @@ fn make_stub(desc: Desc, pop: Option<u16>) -> usize {
     alloc_code(&stub_code(desc, pop)) as usize
 }
 
+/// Fonctions dont un `*mut usize` n'est pas une case unique (tableau,
+/// structure) : l'appelé reçoit l'adresse x86 telle quelle.
+const POINTER_ARRAYS: [&str; 11] = [
+    "GetKeyboardLayoutList",
+    "EnumProcessModules",
+    "EnumProcessModulesEx",
+    "K32EnumProcessModules",
+    "K32EnumProcessModulesEx",
+    "ExtractIconExA",
+    "ExtractIconExW",
+    "RtlCaptureStackBackTrace",
+    "CaptureStackBackTrace",
+    "__std_exception_copy",
+    "__std_exception_destroy",
+];
+
 /// Passerelle x86 vers la fonction intégrée `orig` (appelée via `target`,
 /// qui peut être son traceur WINLUX_APITRACE).
 pub fn import_stub(dll: &str, func: &str, orig: usize, target: usize) -> usize {
     let label = format!("{}!{func}", dll.to_ascii_lowercase());
     let sig = sig_of_addr(orig);
-    let (args, ret) = match sig.and_then(|s| s.split_once('>')) {
+    let (mut args, ret) = match sig.and_then(|s| s.split_once('>')) {
         Some((a, r)) => (a.as_bytes().to_vec(), r.as_bytes()[0]),
         None => (b"?".to_vec(), b'?'),
     };
+    // Tableaux de handles en sortie : une seule case de 8 octets prêtée ne
+    // suffirait pas, l'appelé écrit directement (disposition 64 bits).
+    if POINTER_ARRAYS.contains(&func) {
+        for k in args.iter_mut().filter(|k| **k == b'p') {
+            *k = b'i';
+        }
+    }
     let supported = sig.is_some() && !args.contains(&b'?') && ret != b'?';
     // Rappels typés `fn(…)` dans la signature Rust : passerelle 64 → 32.
     let callbacks = args
@@ -1172,11 +1202,58 @@ fn override_for(dll: &str, func: &str) -> Option<(usize, &'static str)> {
             (seh::unhandled_exception_filter as *const () as usize, "i>i")
         }
         "GetProcAddress" if kernel => (get_proc_address32 as *const () as usize, "ii>i"),
+        // Structures à pointeurs ou handles remplies par kernel32 : versions
+        // à la disposition x86 (étape 7).
+        "GetSystemInfo" if kernel => (kernel::get_system_info as *const () as usize, "i>v"),
+        "GetNativeSystemInfo" if kernel => {
+            (kernel::get_native_system_info as *const () as usize, "i>v")
+        }
+        "VirtualQuery" if kernel => (kernel::virtual_query as *const () as usize, "iii>i"),
+        "VirtualQueryEx" if kernel => (kernel::virtual_query_ex as *const () as usize, "iiii>i"),
+        "GetStartupInfoA" | "GetStartupInfoW" if kernel => {
+            (kernel::get_startup_info as *const () as usize, "i>v")
+        }
+        "GlobalMemoryStatus" if kernel => {
+            (kernel::global_memory_status as *const () as usize, "i>v")
+        }
+        "CreateProcessA" if kernel => (
+            kernel::create_process_a as *const () as usize,
+            "iiiiiiiiii>i",
+        ),
+        "CreateProcessW" if kernel => (
+            kernel::create_process_w as *const () as usize,
+            "iiiiiiiiii>i",
+        ),
+        // Fonctions Interlocked* : exportées par le kernel32 x86 seulement
+        // (intrinsèques en 64 bits).
+        "InterlockedIncrement" if kernel => {
+            (kernel::interlocked_increment as *const () as usize, "i>i")
+        }
+        "InterlockedDecrement" if kernel => {
+            (kernel::interlocked_decrement as *const () as usize, "i>i")
+        }
+        "InterlockedExchange" if kernel => {
+            (kernel::interlocked_exchange as *const () as usize, "ii>i")
+        }
+        "InterlockedExchangeAdd" if kernel => (
+            kernel::interlocked_exchange_add as *const () as usize,
+            "ii>i",
+        ),
+        "InterlockedCompareExchange" if kernel => (
+            kernel::interlocked_compare_exchange as *const () as usize,
+            "iii>i",
+        ),
+        "IsWow64Process" if kernel => (kernel::is_wow64_process as *const () as usize, "ii>i"),
+        "IsWow64Process2" if kernel => (kernel::is_wow64_process2 as *const () as usize, "iii>i"),
         "_except_handler3" if crt => (seh::except_handler3 as *const () as usize, "iiii>i"),
         "_except_handler4_common" if crt => (
             seh::except_handler4_common as *const () as usize,
             "iiiiii>i",
         ),
+        "_CxxThrowException" if crt => (cxx::cxx_throw_exception as *const () as usize, "ii>v"),
+        "?terminate@@YAXXZ" if crt => (cxx::terminate as *const () as usize, ">v"),
+        "_XcptFilter" if crt => (cxx::xcpt_filter as *const () as usize, "ii>i"),
+        "__setusermatherr" if crt => (cxx::set_user_matherr as *const () as usize, "i>v"),
         "_local_unwind2" if crt => (seh::local_unwind2 as *const () as usize, "ii>v"),
         "_global_unwind2" if crt => (seh::global_unwind2 as *const () as usize, "i>v"),
         "_local_unwind4" if crt => (seh::local_unwind4 as *const () as usize, "iii>v"),
@@ -1278,6 +1355,24 @@ extern "win64" fn get_proc_address32(module: u32, name: u32) -> u32 {
     stub as u32
 }
 
+/// Passerelle x86 cdecl vers une fonction win64 de signature `sig`.
+pub(super) fn native_stub(target: usize, sig: &str, label: &str) -> usize {
+    let (args, ret) = sig.split_once('>').unwrap_or(("", "i"));
+    make_stub(
+        Desc {
+            ret: ret.as_bytes()[0],
+            supported: true,
+            target,
+            kinds: args.as_bytes().to_vec(),
+            label: label.to_string(),
+            fix: crt::Fix::None,
+            raw: None,
+            callbacks: 0,
+        },
+        None,
+    )
+}
+
 /// Passerelle x86 vers le bouchon 64 bits d'une fonction absente.
 pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
     make_stub(
@@ -1293,6 +1388,18 @@ pub fn missing_stub(dll: &str, func: &str, stub64: usize) -> usize {
         },
         None,
     )
+}
+
+/// Argument x86 de 32 bits vers sa case 64 bits. Pseudo-handles (-1,
+/// -2…) et constantes négatives gardent leur signe ; adresses et entiers
+/// positifs sont complétés par des zéros. Une fonction qui attend un u32
+/// n'en lit de toute façon que les 32 bits bas.
+fn widen(v: u32) -> u64 {
+    if v >= 0xffff_0000 {
+        v as i32 as i64 as u64
+    } else {
+        v as u64
+    }
 }
 
 /// Relit les arguments x86 et appelle la fonction win64.
@@ -1316,10 +1423,30 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         return f(args, aux);
     }
     let mut slots: Vec<u64> = Vec::with_capacity(d.kinds.len().max(4));
+    // Cases de 8 octets prêtées à l'appelé pour les arguments `p` : (case
+    // x86 de 4 octets, valeur 64 bits). Taille fixée d'avance : les adresses
+    // passées à l'appelé ne bougent pas.
+    let mut wide: Vec<(usize, [u64; 2])> = Vec::with_capacity(d.kinds.len());
     let mut p = args as usize;
     let rd = |p: usize| unsafe { (p as *const u32).read_unaligned() };
     for k in &d.kinds {
         match k {
+            b'p' => {
+                let at = rd(p) as usize;
+                p += 4;
+                if at == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                // Valeur d'entrée (tailles en entrée-sortie, handle à
+                // remplacer…) : étendue comme un argument ordinaire.
+                let v = unsafe { (at as *const u32).read_unaligned() };
+                // 16 octets par case : un appelé qui écrirait un peu plus
+                // loin qu'un pointeur ne déborde pas sur le tas.
+                wide.push((at, [widen(v), 0]));
+                let cell = wide.last_mut().map(|w| w.1.as_mut_ptr());
+                slots.push(cell.map_or(0, |c| c as u64));
+            }
             b'q' | b'd' => {
                 slots.push(rd(p) as u64 | (rd(p + 4) as u64) << 32);
                 p += 8;
@@ -1329,16 +1456,7 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
                 p += 4;
             }
             _ => {
-                let v = rd(p);
-                // Pseudo-handles (-1, -2…) et constantes négatives gardent
-                // leur signe ; adresses et entiers positifs sont complétés
-                // par des zéros. Une fonction qui attend un u32 n'en lit
-                // de toute façon que les 32 bits bas.
-                slots.push(if v >= 0xffff_0000 {
-                    v as i32 as i64 as u64
-                } else {
-                    v as u64
-                });
+                slots.push(widen(rd(p)));
                 p += 4;
             }
         }
@@ -1356,6 +1474,15 @@ extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
         slots.push(0);
     }
     let r = unsafe { winlux_wow_call64(d.target, slots.as_ptr(), n, xmm0) };
+    for &(at, [v, _]) in &wide {
+        if (v >> 32) != 0 && (v >> 32) != 0xffff_ffff {
+            crate::trace!(
+                "wow32 : {} a écrit 0x{v:x} dans une case de 4 octets (tronqué)",
+                d.label
+            );
+        }
+        unsafe { (at as *mut u32).write_unaligned(v as u32) };
+    }
     if d.ret == b'i' {
         let r = crt::apply_fix(d.fix, r);
         if (r >> 32) != 0 && (r >> 32) != 0xffff_ffff && r as usize >= limit() {

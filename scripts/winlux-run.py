@@ -3,6 +3,8 @@
 
     winlux-run              boîte Exécuter
     winlux-run menu         menu d'accès rapide (menu « pipe » d'openbox)
+    winlux-run place-menu [left|center] [TAILLE]
+                            place ce menu au-dessus du bouton Démarrer
     winlux-run resolve TEXTE   commande lancée pour TEXTE (tests)
 
 La boîte comprend les noms courants de Windows (cmd, notepad, control,
@@ -261,9 +263,65 @@ def quick_menu():
     return 0
 
 
+def menu_position(alignment, size):
+    """Position openbox du menu Windows + X, au-dessus du bouton Démarrer.
+
+    Sans <position>, openbox ouvre le menu sous le pointeur. Un y négatif
+    compte depuis le bas de l'écran jusqu'au bas du menu : -TAILLE le pose
+    juste au-dessus de la barre. Barre centrée : le bouton Démarrer est au
+    début du groupe centré, le menu est centré au-dessus de la barre."""
+    x = "center" if alignment == "center" else "0"
+    return f"<position><x>{x}</x><y>-{size}</y></position>"
+
+
+def _panel_size():
+    try:
+        out = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/size"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    return out if out.isdigit() and 16 <= int(out) <= 128 else "40"
+
+
+def _alignment():
+    try:
+        for line in Path("/etc/winlux/preferences.conf").read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN="): return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return "left"
+
+
+def place_menu(alignment=None, size=None, config=None):
+    """Réécrit la position du menu Windows + X dans le rc.xml du compte
+    (copie figée par compte) et recharge openbox si elle a changé."""
+    alignment = alignment or _alignment()
+    size = size or _panel_size()
+    if alignment not in ("left", "center") or not str(size).isdigit(): return 2
+    config = Path(config or os.path.expanduser("~/.config/openbox/rc.xml"))
+    try:
+        text = config.read_text(encoding="utf-8")
+    except OSError:
+        return 1
+    pattern = re.compile(r'(<keybind key="W-x">\s*<action name="ShowMenu">\s*<menu>winlux-quick-link</menu>)'
+                         r'\s*(?:<position>.*?</position>)?(\s*</action>)', re.S)
+    updated = pattern.sub(lambda m: m.group(1) + menu_position(alignment, size) + m.group(2), text, count=1)
+    if updated == text: return 0
+    temp = config.with_name(config.name + ".tmp")
+    temp.write_text(updated, encoding="utf-8")
+    temp.replace(config)
+    if os.environ.get("DISPLAY") and shutil.which("openbox"):
+        try:
+            subprocess.run(["openbox", "--reconfigure"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return 0
+
+
 def main(argv):
     if len(argv) == 1: return run_dialog()
     if len(argv) == 2 and argv[1] == "menu": return quick_menu()
+    if 2 <= len(argv) <= 4 and argv[1] == "place-menu": return place_menu(*argv[2:])
     if len(argv) == 3 and argv[1] == "resolve":
         command = resolve(argv[2])
         if command is None: return 1

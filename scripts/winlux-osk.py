@@ -469,7 +469,7 @@ ICON = ('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox=
 
 
 def tray_icon():
-    for directory in (Path("/run/winlux/tray"),
+    for directory in (Path("/run/winlux/tray" if os.getuid() == 0 else f"/run/winlux/tray-{os.getuid()}"),
                       Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "winlux/tray"):
         try:
             directory.mkdir(parents=True, exist_ok=True)

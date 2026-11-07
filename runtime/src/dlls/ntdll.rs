@@ -635,7 +635,7 @@ pub unsafe extern "win64" fn rtl_initialize_slist_head(head: *mut u8) {
     if head.is_null() {
         return;
     }
-    std::ptr::write_bytes(head, 0, 16);
+    std::ptr::write_bytes(head, 0, 2 * crate::wow32::pointer_size());
 }
 
 pub unsafe extern "win64" fn rtl_interlocked_push_entry_slist(
@@ -673,46 +673,52 @@ pub unsafe extern "win64" fn rtl_query_depth_slist(head: *const u8) -> u16 {
 
 static SLIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+// SLIST_HEADER : 16 octets en 64 bits (Next, puis Depth:16 | Sequence:16
+// au décalage 8) ; 8 octets en x86 (Next sur 4 octets, Depth et Sequence
+// au décalage 4). L'entrée commence par son pointeur Next dans les deux cas.
+fn slist_meta_offset() -> usize {
+    crate::wow32::pointer_size()
+}
+
 unsafe fn slist_push(head: *mut u8, entry: *mut u8) -> *mut u8 {
     let _guard = lock(SLIST_LOCK.get_or_init(|| Mutex::new(())));
-    let old_next = std::ptr::read_unaligned(head as *const usize);
-    // entry.Next = old_next
-    std::ptr::write_unaligned(entry as *mut usize, old_next);
-    // head.Next = entry
-    std::ptr::write_unaligned(head as *mut usize, entry as usize);
-    // depth++ (word 1, low 16 bits)
-    let meta = std::ptr::read_unaligned(head.add(8) as *const u32);
+    let old_next = crate::wow32::read_ptr(head as usize);
+    crate::wow32::write_ptr(entry as usize, old_next);
+    crate::wow32::write_ptr(head as usize, entry as usize);
+    let at = head.add(slist_meta_offset()) as *mut u32;
+    let meta = std::ptr::read_unaligned(at);
     let depth = (meta & 0xFFFF) + 1;
     let seq = ((meta >> 16) + 1) & 0xFFFF;
-    std::ptr::write_unaligned(head.add(8) as *mut u32, depth | (seq << 16));
+    std::ptr::write_unaligned(at, depth | (seq << 16));
     old_next as *mut u8
 }
 
 unsafe fn slist_pop(head: *mut u8) -> *mut u8 {
     let _guard = lock(SLIST_LOCK.get_or_init(|| Mutex::new(())));
-    let first = std::ptr::read_unaligned(head as *const usize);
+    let first = crate::wow32::read_ptr(head as usize);
     if first == 0 {
         return std::ptr::null_mut();
     }
-    let next = std::ptr::read_unaligned(first as *const usize);
-    std::ptr::write_unaligned(head as *mut usize, next);
-    let meta = std::ptr::read_unaligned(head.add(8) as *const u32);
+    let next = crate::wow32::read_ptr(first);
+    crate::wow32::write_ptr(head as usize, next);
+    let at = head.add(slist_meta_offset()) as *mut u32;
+    let meta = std::ptr::read_unaligned(at);
     let depth = (meta & 0xFFFF).saturating_sub(1);
     let seq = ((meta >> 16) + 1) & 0xFFFF;
-    std::ptr::write_unaligned(head.add(8) as *mut u32, depth | (seq << 16));
+    std::ptr::write_unaligned(at, depth | (seq << 16));
     first as *mut u8
 }
 
 unsafe fn slist_flush(head: *mut u8) -> *mut u8 {
     let _guard = lock(SLIST_LOCK.get_or_init(|| Mutex::new(())));
-    let first = std::ptr::read_unaligned(head as *const usize);
-    std::ptr::write_unaligned(head as *mut usize, 0usize);
-    std::ptr::write_bytes(head.add(8), 0, 8);
+    let first = crate::wow32::read_ptr(head as usize);
+    let size = 2 * crate::wow32::pointer_size();
+    std::ptr::write_bytes(head, 0, size);
     first as *mut u8
 }
 
 unsafe fn slist_depth(head: *const u8) -> u16 {
-    let meta = std::ptr::read_unaligned(head.add(8) as *const u32);
+    let meta = std::ptr::read_unaligned(head.add(slist_meta_offset()) as *const u32);
     (meta & 0xFFFF) as u16
 }
 
@@ -725,49 +731,49 @@ unsafe fn slist_depth(head: *const u8) -> u16 {
 // l'adresse du SRWLOCK). Un programme qui mélange AcquireSRWLockExclusive et
 // RtlReleaseSRWLockExclusive voit donc le même verrou.
 
-pub unsafe extern "win64" fn rtl_initialize_srw_lock(lock_ptr: *mut usize) {
+pub unsafe extern "win64" fn rtl_initialize_srw_lock(lock_ptr: *mut c_void) {
     if lock_ptr.is_null() {
         return;
     }
     super::kernel32::initialize_srw_lock(lock_ptr as usize);
 }
 
-pub unsafe extern "win64" fn rtl_acquire_srw_lock_exclusive(lock_ptr: *mut usize) {
+pub unsafe extern "win64" fn rtl_acquire_srw_lock_exclusive(lock_ptr: *mut c_void) {
     if lock_ptr.is_null() {
         return;
     }
     super::kernel32::acquire_srw_lock_exclusive(lock_ptr as usize);
 }
 
-pub unsafe extern "win64" fn rtl_release_srw_lock_exclusive(lock_ptr: *mut usize) {
+pub unsafe extern "win64" fn rtl_release_srw_lock_exclusive(lock_ptr: *mut c_void) {
     if lock_ptr.is_null() {
         return;
     }
     super::kernel32::release_srw_lock_exclusive(lock_ptr as usize);
 }
 
-pub unsafe extern "win64" fn rtl_acquire_srw_lock_shared(lock_ptr: *mut usize) {
+pub unsafe extern "win64" fn rtl_acquire_srw_lock_shared(lock_ptr: *mut c_void) {
     if lock_ptr.is_null() {
         return;
     }
     super::kernel32::acquire_srw_lock_shared(lock_ptr as usize);
 }
 
-pub unsafe extern "win64" fn rtl_release_srw_lock_shared(lock_ptr: *mut usize) {
+pub unsafe extern "win64" fn rtl_release_srw_lock_shared(lock_ptr: *mut c_void) {
     if lock_ptr.is_null() {
         return;
     }
     super::kernel32::release_srw_lock_shared(lock_ptr as usize);
 }
 
-pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_exclusive(lock_ptr: *mut usize) -> u8 {
+pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_exclusive(lock_ptr: *mut c_void) -> u8 {
     if lock_ptr.is_null() {
         return 0;
     }
     super::kernel32::try_acquire_srw_lock_exclusive(lock_ptr as usize)
 }
 
-pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut usize) -> u8 {
+pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut c_void) -> u8 {
     if lock_ptr.is_null() {
         return 0;
     }
@@ -779,7 +785,7 @@ pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut usiz
 // ============================================================
 // Même table que kernel32 (InitializeConditionVariable & co.).
 
-pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut usize) {
+pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut c_void) {
     if cv.is_null() {
         return;
     }
@@ -788,8 +794,8 @@ pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut usize) {
 
 /// `RtlSleepConditionVariableSRW` : attend la condition en relâchant le SRW lock.
 pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
-    cv: *mut usize,
-    srw: *mut usize,
+    cv: *mut c_void,
+    srw: *mut c_void,
     timeout: u32,
     flags: u32,
 ) -> i32 {
@@ -825,7 +831,7 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
 
 /// `RtlSleepConditionVariableCS` : même chose avec une section critique.
 pub unsafe extern "win64" fn rtl_sleep_condition_variable_cs(
-    cv: *mut usize,
+    cv: *mut c_void,
     cs: *mut c_void,
     timeout: u32,
 ) -> i32 {
@@ -845,14 +851,14 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_cs(
     }
 }
 
-pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut usize) {
+pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut c_void) {
     if cv.is_null() {
         return;
     }
     super::kernel32::wake_condition_variable(cv as usize);
 }
 
-pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut usize) {
+pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut c_void) {
     if cv.is_null() {
         return;
     }

@@ -292,10 +292,12 @@ wait_desktop() {
     # relevé d'état en basse priorité : ils ne passent jamais devant le bureau.
     status_nice=
     if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
+    # Catalogue résident : refait seulement quand un raccourci, le registre ou
+    # un navigateur change, au lieu de relancer Python toutes les 5 s (#214).
+    $status_nice /usr/bin/winlux-applications watch </dev/null >>"$logs/catalogue.log" 2>&1 &
+    pids="$pids $!"
     (
         while :; do
-            $status_nice /usr/bin/winlux-applications refresh >"$logs/catalogue.log" 2>&1 || true
-            $status_nice /usr/bin/winlux-applications window-icons >>"$logs/catalogue.log" 2>&1 || true
             if test "$primary" = 1 && test -O /run/winlux/browser-chooser; then
                 rm -f /run/winlux/browser-chooser
                 /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &

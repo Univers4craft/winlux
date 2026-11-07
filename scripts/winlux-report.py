@@ -65,7 +65,7 @@ BODY_LIMIT = 60000
 
 T = {
  "fr": {
-  "attach": "Joindre les journaux de diagnostic :",
+  "attach_logs": "Joindre les journaux de diagnostic :",
   "d_network": "Réseau et Wi-Fi", "d_sound": "Son", "d_boot": "Démarrage", "d_update": "Mises à jour",
   "h_diag": "Journaux de diagnostic", "d_empty": "vide (rien n'est encore écrit dans ce journal)",
   "d_unreadable": "illisible depuis ce compte", "d_none": "aucun journal trouvé pour ce domaine",
@@ -147,7 +147,7 @@ T = {
   "nothing_system": "Aucun arrêt anormal du système à signaler.",
  },
  "en": {
-  "attach": "Attach diagnostic logs:",
+  "attach_logs": "Attach diagnostic logs:",
   "d_network": "Network and Wi-Fi", "d_sound": "Sound", "d_boot": "Startup", "d_update": "Updates",
   "h_diag": "Diagnostic logs", "d_empty": "empty (nothing written to this log yet)",
   "d_unreadable": "not readable from this account", "d_none": "no log found for this area",
@@ -229,7 +229,7 @@ T = {
   "nothing_system": "No abnormal system stop to report.",
  },
  "es": {
-  "attach": "Adjuntar los registros de diagnóstico:",
+  "attach_logs": "Adjuntar los registros de diagnóstico:",
   "d_network": "Red y Wi-Fi", "d_sound": "Sonido", "d_boot": "Arranque", "d_update": "Actualizaciones",
   "h_diag": "Registros de diagnóstico", "d_empty": "vacío (aún no se ha escrito nada en este registro)",
   "d_unreadable": "ilegible desde esta cuenta", "d_none": "no se encontró ningún registro para este ámbito",
@@ -311,7 +311,7 @@ T = {
   "nothing_system": "No hay ninguna parada anómala del sistema que informar.",
  },
  "de": {
-  "attach": "Diagnoseprotokolle anhängen:",
+  "attach_logs": "Diagnoseprotokolle anhängen:",
   "d_network": "Netzwerk und WLAN", "d_sound": "Ton", "d_boot": "Start", "d_update": "Updates",
   "h_diag": "Diagnoseprotokolle", "d_empty": "leer (in dieses Protokoll wurde noch nichts geschrieben)",
   "d_unreadable": "von diesem Konto aus nicht lesbar", "d_none": "kein Protokoll für diesen Bereich gefunden",
@@ -1188,7 +1188,7 @@ DIAG_DOMAINS = {
                        "/run/winlux/boot-splash.log", "/run/winlux/system-services.log",
                        "/var/lib/winlux/native-boot-failure.log", "/run/winlux/hardware.log"],
              "commands": [["dmesg", "--level=emerg,alert,crit,err"]]},
-    "update": {"files": ["/run/winlux/update.log", "/run/winlux/boot-update.log", "/run/winlux/sysupdate-auto.log",
+    "update": {"files": ["/run/winlux/update.log", f"/run/winlux/control-{os.getuid()}/update.log", "/run/winlux/boot-update.log", "/run/winlux/sysupdate-auto.log",
                          "/run/winlux/updates.txt", "/run/winlux/sysupdates.txt",
                          "/var/log/winlux-first-boot-packages.log", "/var/log/winlux-drivers.log"],
                "commands": []},
@@ -2037,7 +2037,7 @@ def gui(report, conf):
     box.pack_start(mask, False, False, 0)
 
     attach_row = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE)
-    attach_row.add(Gtk.Label(label=tr("attach", L), xalign=0))
+    attach_row.add(Gtk.Label(label=tr("attach_logs", L), xalign=0))
     attach_checks = {}
     for domain in DIAG_DOMAINS:
         check = Gtk.CheckButton(label=tr("d_" + domain, L))

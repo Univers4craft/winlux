@@ -352,6 +352,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           python3 -B scripts/test-second-session-taskbar.py
+          python3 -B scripts/test-quick-menu-position.py
           python3 -B scripts/test-power.py
           python3 -B scripts/test-power-reboot-guard.py
           sh scripts/test-fonts.sh
@@ -501,7 +502,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
             gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
-            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool x11-utils
+            dbus-x11 xfce4-panel xfce4-genmon-plugin xdotool x11-utils imagemagick python3-pil
 
       - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
@@ -552,8 +553,14 @@ jobs:
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
 
+      - name: Assistant d'ancrage sous openbox (place libre, quarts, cases prises, clavier)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-assist.py
+
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
+
+      - name: Windows + X au-dessus du bouton Démarrer sous openbox réel
+        run: /usr/bin/python3 -B scripts/test-quick-menu-position.py
 
       - name: Bureau en 1080p, 1440p et 4K (menu Démarrer, réglages rapides, Paramètres)
         run: |
