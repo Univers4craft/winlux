@@ -1526,6 +1526,8 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumSystemCodePagesW"
         | "EnumUILanguagesA"
         | "EnumUILanguagesW"
+        | "EnumCalendarInfoW"
+        | "EnumCalendarInfoExW"
         | "EnumWindows" => bit(0),
         "InitOnceExecuteOnce"
         | "CreateFiber"

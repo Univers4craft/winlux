@@ -84,6 +84,8 @@ __declspec(dllimport) unsigned int WINAPI SysStringLen(unsigned short *);
 __declspec(dllimport) long WINAPI VariantCopy(void *, const void *);
 __declspec(dllimport) long WINAPI VariantClear(void *);
 __declspec(dllimport) BOOL WINAPI GetLogicalProcessorInformation(void *, DWORD *);
+__declspec(dllimport) int WINAPI WSAStartup(WORD, void *);
+__declspec(dllimport) void *WINAPI gethostbyname(const char *);
 __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
@@ -394,6 +396,18 @@ __attribute__((used)) void __stdcall entry(void) {
             if (e[1] == 0 /* RelationProcessorCore */) cores++;
         }
         if (cores == 0) fail(63, 0);
+    }
+
+    /* 64-65 : HOSTENT x86 (16 octets : h_name, h_aliases, h_addrtype et
+     * h_length sur 2 octets, h_addr_list). */
+    {
+        static char wsa[512];
+        if (WSAStartup(0x0202, wsa) != 0) fail(64, 0);
+        unsigned char *h = gethostbyname("localhost");
+        if (!h) fail(64, 1);
+        if (*(short *)(h + 8) != 2 || *(short *)(h + 10) != 4) fail(65, *(DWORD *)(h + 8));
+        unsigned char **list = *(unsigned char ***)(h + 12);
+        if (!list || !list[0] || list[0][0] != 127) fail(65, 1);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

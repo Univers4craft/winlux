@@ -371,6 +371,89 @@ pub unsafe extern "win64" fn sh_create_stream_on_file_a(
     0x8000_4005u32 as i32 // E_NOTIMPL
 }
 
+/// StrCmpLogicalW : ordre de l'Explorateur, sans casse, les suites de
+/// chiffres comparées comme des nombres (« 2 » avant « 10 »).
+pub unsafe extern "win64" fn str_cmp_logical_w(s1: *const u16, s2: *const u16) -> i32 {
+    match (s1.is_null(), s2.is_null()) {
+        (true, true) => return 0,
+        (true, false) => return -1,
+        (false, true) => return 1,
+        _ => {}
+    }
+    logical_cmp(&crate::dlls::wstr(s1), &crate::dlls::wstr(s2)) as i32
+}
+
+fn logical_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let si = i;
+            while i < a.len() && a[i].is_ascii_digit() {
+                i += 1;
+            }
+            let sj = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let na: String = a[si..i]
+                .iter()
+                .collect::<String>()
+                .trim_start_matches('0')
+                .into();
+            let nb: String = b[sj..j]
+                .iter()
+                .collect::<String>()
+                .trim_start_matches('0')
+                .into();
+            let o = na.len().cmp(&nb.len()).then_with(|| na.cmp(&nb));
+            if o != Ordering::Equal {
+                return o;
+            }
+            continue;
+        }
+        let ca: String = a[i].to_lowercase().collect();
+        let cb: String = b[j].to_lowercase().collect();
+        if ca != cb {
+            return ca.cmp(&cb);
+        }
+        i += 1;
+        j += 1;
+    }
+    (a.len() - i).cmp(&(b.len() - j))
+}
+
+/// PathSkipRootW : pointe juste après la racine (« C:\\ », « \\\\serveur\\partage\\ »,
+/// « \\ ») ; NULL si le chemin n'a pas de racine.
+pub unsafe extern "win64" fn path_skip_root_w(path: *const u16) -> *const u16 {
+    if path.is_null() {
+        return std::ptr::null();
+    }
+    let n = crate::printf::wide_len(path);
+    let p = std::slice::from_raw_parts(path, n);
+    let sep = |c: u16| c == b'\\' as u16 || c == b'/' as u16;
+    let at = if n >= 2 && sep(p[0]) && sep(p[1]) {
+        // UNC : sauter serveur et partage.
+        let mut i = 2;
+        let mut parts = 0;
+        while i < n && parts < 2 {
+            if sep(p[i]) {
+                parts += 1;
+            }
+            i += 1;
+        }
+        Some(i)
+    } else if n >= 1 && sep(p[0]) {
+        Some(1)
+    } else if n >= 3 && p[1] == b':' as u16 && sep(p[2]) {
+        Some(3)
+    } else {
+        None
+    };
+    at.map_or(std::ptr::null(), |i| path.add(i))
+}
+
 pub fn exports() -> crate::dlls::Exports {
     let mut m = crate::exports! {
         "PathFileExistsA" => fn path_file_exists_a,
@@ -391,6 +474,8 @@ pub fn exports() -> crate::dlls::Exports {
         "PathRemoveFileSpecW" => fn path_remove_filespec_w,
         "PathRemoveExtensionW" => fn path_remove_extension_w,
         "StrCmpIW" => fn str_cmp_iw,
+        "StrCmpLogicalW" => fn str_cmp_logical_w,
+        "PathSkipRootW" => fn path_skip_root_w,
         "StrCmpNIW" => fn str_cmp_niw,
         "StrStrIW" => fn str_str_iw,
         "SHCreateStreamOnFileA" => fn sh_create_stream_on_file_a,
@@ -403,6 +488,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordre_logique_et_racine() {
+        use std::cmp::Ordering::*;
+        assert_eq!(logical_cmp("fichier2.txt", "Fichier10.txt"), Less);
+        assert_eq!(logical_cmp("a010", "a10"), Equal);
+        assert_eq!(logical_cmp("abc", "abd"), Less);
+        assert_eq!(logical_cmp("abc", "ab"), Greater);
+        let w = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        unsafe {
+            for (p, rest) in [
+                ("C:\\Windows\\x", Some("Windows\\x")),
+                ("\\\\srv\\part\\d", Some("d")),
+                ("\\a", Some("a")),
+                ("rel\\x", None),
+            ] {
+                let v = w(p);
+                let r = path_skip_root_w(v.as_ptr());
+                assert_eq!(
+                    (!r.is_null()).then(|| crate::dlls::wstr(r)).as_deref(),
+                    rest,
+                    "{p}"
+                );
+            }
+        }
+    }
 
     fn remove_filespec(p: &str) -> (i32, String) {
         let mut buf: Vec<u16> = p.encode_utf16().chain([0]).collect();
