@@ -129,6 +129,9 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "TranslateAcceleratorA" | "TranslateAcceleratorW" | "TranslateAccelerator" => {
             spec(msg_in, t?, 3, 2)
         }
+        // ICONINFO : 20 octets en x86 (deux HBITMAP de 4), 32 en x64.
+        "GetIconInfo" => raw(get_icon_info, t?, 2),
+        "CreateIconIndirect" => raw(create_icon_indirect, t?, 1),
         "BeginPaint" => raw(begin_paint, t?, 2),
         "EndPaint" => raw(end_paint, t?, 2),
         "GetWindowLongA" | "GetWindowLongW" => raw(get_window_long, t?, 2),
@@ -976,9 +979,71 @@ extern "win64" fn create_brush_indirect(args: u32, target: usize) -> u64 {
     call64(target, &[b.as_ptr() as u64])
 }
 
+/// ICONINFO x64 : fIcon, xHotspot, yHotspot, 4 octets de remplissage,
+/// hbmMask (+16), hbmColor (+24). En x86 : hbmMask +12, hbmColor +16.
+fn iconinfo_to_x86(p: usize, out: u32) {
+    wr(out, r64(p, 0));
+    wr(out + 4, r64(p, 4));
+    wr(out + 8, r64(p, 8));
+    wr(out + 12, low(q64(p, 16), "hbmMask"));
+    wr(out + 16, low(q64(p, 24), "hbmColor"));
+}
+
+fn iconinfo_from_x86(info: u32) -> [u64; 4] {
+    [
+        rd(info) as u64 | (rd(info + 4) as u64) << 32,
+        rd(info + 8) as u64,
+        ext(rd(info + 12)) as u64,
+        ext(rd(info + 16)) as u64,
+    ]
+}
+
+/// GetIconInfo : le runtime écrirait 32 octets dans les 20 du programme
+/// (WinSCP y perdait son cadre de pile : #719).
+extern "win64" fn get_icon_info(args: u32, target: usize) -> u64 {
+    let (icon, out) = (ext(arg(args, 0)), arg(args, 1));
+    if out == 0 {
+        return call64(target, &[icon as u64, 0]);
+    }
+    let mut buf = [0u64; 4];
+    let r = call64(target, &[icon as u64, buf.as_mut_ptr() as u64]);
+    if r != 0 {
+        iconinfo_to_x86(buf.as_ptr() as usize, out);
+    }
+    r
+}
+
+extern "win64" fn create_icon_indirect(args: u32, target: usize) -> u64 {
+    let info = arg(args, 0);
+    if info == 0 {
+        return call64(target, &[0]);
+    }
+    let b = iconinfo_from_x86(info);
+    call64(target, &[b.as_ptr() as u64])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iconinfo_x86() {
+        let mut x64 = [0u64; 4];
+        let p = x64.as_mut_ptr() as usize;
+        w64(p, 0, 1);
+        w64(p, 4, 16);
+        w64(p, 8, 24);
+        unsafe { ((p + 16) as *mut u64).write(0x51) };
+        unsafe { ((p + 24) as *mut u64).write(0x52) };
+        // Cinq mots x86 sous 4 Go puis une sentinelle qui ne doit pas bouger.
+        let low = crate::wow32::alloc_low(4096, false);
+        let out = unsafe { std::slice::from_raw_parts_mut(low as *mut u32, 6) };
+        out.fill(0xAAAA_AAAA);
+        iconinfo_to_x86(p, low as u32);
+        assert_eq!(out, [1, 16, 24, 0x51, 0x52, 0xAAAA_AAAA]);
+        let back = iconinfo_from_x86(low as u32);
+        assert_eq!(back, [1 | 16 << 32, 24, 0x51, 0x52]);
+    }
 
     #[test]
     fn createstruct_aller_retour() {

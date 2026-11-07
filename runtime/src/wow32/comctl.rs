@@ -163,6 +163,57 @@ static TOOLINFO: Layout = Layout {
     ],
 };
 
+/// COMBOBOXEXITEM : iItem est un INT_PTR, pszText et lParam des pointeurs.
+/// Lue telle quelle, la structure x86 donnait au contrôle un pszText fait
+/// de iImage et iSelectedImage (0x1_0000_0000 pour les images 0 et 1 :
+/// plantage de 7zFM x86).
+static COMBOBOXEXITEM: Layout = Layout {
+    size32: 36,
+    size64: 56,
+    fields: &[
+        D(0, 0),
+        P(4, 8),
+        P(8, 16),
+        D(12, 24),
+        D(16, 28),
+        D(20, 32),
+        D(24, 36),
+        D(28, 40),
+        P(32, 48),
+    ],
+};
+
+/// REBARBANDINFO jusqu'à uChevronState ; cbSize dit la version (56, 80 ou
+/// 100 octets en x86).
+static REBARBANDINFO: Layout = Layout {
+    size32: 100,
+    size64: 128,
+    fields: &[
+        Size(0, 0),
+        D(4, 4),
+        D(8, 8),
+        D(12, 12),
+        D(16, 16),
+        P(20, 24),
+        D(24, 32),
+        D(28, 36),
+        P(32, 40),
+        D(36, 48),
+        D(40, 52),
+        D(44, 56),
+        P(48, 64),
+        D(52, 72),
+        D(56, 76),
+        D(60, 80),
+        D(64, 84),
+        D(68, 88),
+        P(72, 96),
+        D(76, 104),
+        N(80, 108, 16),
+        D(96, 124),
+    ],
+};
+
 /// Décale une liste de champs (structure incluse dans une autre).
 fn shifted(fields: &[F], d32: u16, d64: u16) -> impl Iterator<Item = F> + '_ {
     fields.iter().map(move |f| match *f {
@@ -479,6 +530,34 @@ pub(super) fn convert_message(
             )),
             _ => None,
         },
+        "comboboxex32" => match msg {
+            // CBEM_INSERTITEM A/W, CBEM_SETITEM A/W.
+            0x401 | 0x40B | 0x405 | 0x40C if lparam != 0 => {
+                Some(struct_in(&COMBOBOXEXITEM, lparam, 36, wp, false))
+            }
+            // CBEM_GETITEM A/W : texte, image et lParam recopiés.
+            0x404 | 0x40D if lparam != 0 => Some(struct_in(&COMBOBOXEXITEM, lparam, 36, wp, true)),
+            _ => None,
+        },
+        "rebarwindow32" => match msg {
+            // RB_INSERTBAND A/W, RB_SETBANDINFO A/W.
+            0x401 | 0x40A | 0x406 | 0x40B if lparam != 0 => Some(struct_in(
+                &REBARBANDINFO,
+                lparam,
+                rd(lparam) as usize,
+                wp,
+                false,
+            )),
+            // RB_GETBANDINFO W/A et l'ancien RB_GETBANDINFO.
+            0x41C | 0x41D | 0x405 if lparam != 0 => Some(struct_in(
+                &REBARBANDINFO,
+                lparam,
+                rd(lparam) as usize,
+                wp,
+                true,
+            )),
+            _ => None,
+        },
         "tooltips_class32" => match msg {
             // GETTOOLINFO A/W, ENUMTOOLS A/W, GETCURRENTTOOL A/W : recopiés.
             0x408 | 0x435 | 0x40E | 0x43A | 0x40F | 0x43B if lparam != 0 => {
@@ -532,6 +611,8 @@ fn notify_layout(code: i32) -> (&'static Layout, bool) {
     static NMTOOLBAR: OnceLock<Layout> = OnceLock::new();
     static NMTBHOTITEM: OnceLock<Layout> = OnceLock::new();
     static NMUPDOWN: OnceLock<Layout> = OnceLock::new();
+    static NMCBEENDEDITW: OnceLock<Layout> = OnceLock::new();
+    static NMCBEENDEDITA: OnceLock<Layout> = OnceLock::new();
     let nm = &[(NMHDR, 0u16, 0u16)];
     match code {
         // LVN_ITEMCHANGING … BEGINRDRAG : NMLISTVIEW.
@@ -626,6 +707,21 @@ fn notify_layout(code: i32) -> (&'static Layout, bool) {
             (
                 build(&NMUPDOWN, 20, 32, &[(NMHDR, 0, 0), (tail, 0, 0)]),
                 true,
+            )
+        }
+        // CBEN_ENDEDITW / A : fChanged, iNewSelection, szText[260], iWhy.
+        -806 => {
+            let tail: &[F] = &[D(12, 24), D(16, 28), N(20, 32, 520), D(540, 552)];
+            (
+                build(&NMCBEENDEDITW, 544, 556, &[(NMHDR, 0, 0), (tail, 0, 0)]),
+                false,
+            )
+        }
+        -805 => {
+            let tail: &[F] = &[D(12, 24), D(16, 28), N(20, 32, 260), D(280, 292)];
+            (
+                build(&NMCBEENDEDITA, 284, 296, &[(NMHDR, 0, 0), (tail, 0, 0)]),
+                false,
             )
         }
         _ => (build(&NM, 12, 24, nm), false),
@@ -857,6 +953,8 @@ mod tests {
             &TBBUTTON,
             &TBBUTTONINFO,
             &TOOLINFO,
+            &COMBOBOXEXITEM,
+            &REBARBANDINFO,
             &DRAWITEMSTRUCT,
             &MEASUREITEMSTRUCT,
             &DELETEITEMSTRUCT,
@@ -870,7 +968,9 @@ mod tests {
             assert!(e32 <= l.size32, "x86 {e32} > {}", l.size32);
             assert!(e64 <= l.size64, "x64 {e64} > {}", l.size64);
         }
-        for code in [-101, -150, -155, -402, -452, -403, -710, -713, -722, -2] {
+        for code in [
+            -101, -150, -155, -402, -452, -403, -710, -713, -722, -805, -806, -2,
+        ] {
             let (l, _) = notify_layout(code);
             let (e32, e64) = ends(l);
             assert!(e32 <= l.size32 && e64 <= l.size64, "code {code}");
@@ -893,5 +993,35 @@ mod tests {
         assert_eq!(b[8], 4);
         assert_eq!(u64::from_le_bytes(b[24..32].try_into().unwrap()), u64::MAX);
         assert_eq!(&b[32..36], &7i32.to_le_bytes());
+    }
+
+    #[test]
+    fn comboboxex_item_converti() {
+        // 7zFM x86 : CBEM_INSERTITEMW, texte, iImage 0, iSelectedImage 1.
+        let low = super::super::alloc_low(4096, false);
+        let text: Vec<u16> = "C:\\".encode_utf16().chain([0]).collect();
+        let t = low + 512;
+        unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), t as *mut u16, text.len()) };
+        let x86 = unsafe { std::slice::from_raw_parts_mut(low as *mut u32, 9) };
+        x86.copy_from_slice(&[
+            0x1 | 0x2 | 0x4 | 0x20,
+            u32::MAX,
+            t as u32,
+            0,
+            0,
+            1,
+            0,
+            2,
+            0x55,
+        ]);
+        let c = struct_in(&COMBOBOXEXITEM, low as u32, 36, 0, false);
+        let w = c.lparam as usize;
+        let q = |o: usize| unsafe { ((w + o) as *const u64).read_unaligned() };
+        let d = |o: usize| unsafe { ((w + o) as *const u32).read_unaligned() };
+        assert_eq!(q(8), u64::MAX, "iItem -1 garde son signe");
+        assert_eq!(q(16), t as u64, "pszText");
+        assert_eq!((d(28), d(32), d(40)), (0, 1, 2));
+        assert_eq!(q(48), 0x55);
+        (c.done.unwrap())(0);
     }
 }
