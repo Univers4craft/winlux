@@ -18,8 +18,12 @@
 //! greffons NSIS) : `WixQuietExec`/`CAQuietExec` (et leurs variantes 64
 //! bits et « Silent ») lancent la ligne de commande rangée dans la
 //! propriété du nom de l'action (`CustomActionData` pour une action
-//! différée). Les autres actions DLL (1, 17) et les scripts (5, 6, 21, 22,
-//! 37, 38) sont notés dans le journal.
+//! différée). Les autres actions DLL (1 : table `Binary`, 17 : fichier
+//! installé) sont exécutées dans un processus à part
+//! (`winlux --msi-dll-action`, voir `session.rs`) avec les fonctions de
+//! session de msi.dll ; une action immédiate peut y poser des propriétés.
+//! Un échec est journalisé sans arrêter l'installation. Les scripts (5, 6,
+//! 21, 22, 37, 38) sont notés dans le journal.
 
 use super::cond::Context;
 use super::db::Database;
@@ -192,12 +196,12 @@ pub fn run_phase(
             ctx.props.insert(a.source.clone(), value);
             continue;
         }
-        if !matches!(base, 2 | 18 | 34 | 50) && !is_quiet_exec(a) {
-            continue; // DLL et scripts notés par `unsupported`
+        if !matches!(base, 1 | 2 | 17 | 18 | 34 | 50) || is_shell_exec(a) {
+            continue; // scripts notés par `unsupported`
         }
         let wanted = match phase {
-            Phase::BeforeFiles => *n < files_at && base != 18,
-            Phase::AfterFiles => *n >= files_at || base == 18,
+            Phase::BeforeFiles => *n < files_at && !matches!(base, 17 | 18),
+            Phase::AfterFiles => *n >= files_at || matches!(base, 17 | 18),
             Phase::Uninstall => true,
         };
         if !wanted || !ctx.eval(cond) {
@@ -220,6 +224,17 @@ pub fn run_phase(
                 a.target,
                 run::describe(line.trim(), &outcome)
             ));
+            continue;
+        }
+        if matches!(base, 1 | 17) {
+            if let Some(m) = dll_action(db, ctx, name, a, phase, &temp) {
+                if m.lines().next().is_some_and(|l| l.ends_with(": terminée")) {
+                    launched += 1;
+                }
+                for line in m.lines() {
+                    log.log(line);
+                }
+            }
             continue;
         }
         let (target, params, dir) = match command(db, ctx, name, a, &temp) {
@@ -259,6 +274,117 @@ pub fn run_phase(
     launched
 }
 
+/// Action DLL (1, 17) exécutée par `winlux --msi-dll-action` : propriétés
+/// passées par un fichier de session, relues après une action immédiate.
+/// Renvoie les lignes à journaliser.
+fn dll_action(
+    db: &Database,
+    ctx: &mut Context,
+    name: &str,
+    a: &Action,
+    phase: Phase,
+    temp: &std::path::Path,
+) -> Option<String> {
+    let dll = match a.kind & 0x3F {
+        1 => {
+            let Some(data) = db
+                .streams
+                .get(&format!("Binary.{}", a.source))
+                .or_else(|| db.streams.get(&a.source))
+            else {
+                return Some(format!(
+                    "Action personnalisée {name} non lancée : binaire {} absent du paquet",
+                    a.source
+                ));
+            };
+            if data.get(..2) != Some(b"MZ") {
+                return Some(format!(
+                    "Action personnalisée {name} non lancée : {} n'est pas une DLL Windows",
+                    a.source
+                ));
+            }
+            if std::fs::create_dir_all(temp).is_err() {
+                return None;
+            }
+            let p = temp.join(format!("{}.dll", a.source));
+            std::fs::write(&p, data).ok()?;
+            p
+        }
+        _ => match ctx.files.get(&a.source) {
+            Some(f) => crate::paths::to_linux(f),
+            None => {
+                return Some(format!(
+                    "Action personnalisée {name} non lancée : fichier {} non installé",
+                    a.source
+                ))
+            }
+        },
+    };
+    let deferred = a.kind & 0x400 != 0;
+    let mut props = ctx.props.clone();
+    if deferred {
+        props.insert("CustomActionData".into(), ctx.get(name));
+    }
+    let _ = std::fs::create_dir_all(temp);
+    let session = temp.join(format!("{name}.session"));
+    std::fs::write(&session, super::session::encode(&props)).ok()?;
+    let flag = |b: bool| if b { "1" } else { "0" }.to_string();
+    let env = [
+        ("WINLUX_MSI_SESSION", session.to_string_lossy().into_owned()),
+        ("WINLUX_MSI_SCHEDULED", flag(deferred)),
+        ("WINLUX_MSI_REMOVING", flag(phase == Phase::Uninstall)),
+    ];
+    let params = format!("\"{}\" {}", dll.display(), a.target);
+    let (outcome, output) = run::spawn_with(
+        &Target::Builtin("--msi-dll-action"),
+        &params,
+        "",
+        a.kind & 0x80 == 0,
+        true,
+        &env,
+    );
+    let mut lines: Vec<String> = output
+        .lines()
+        .filter_map(|l| {
+            l.strip_prefix("msi.dll : ").or_else(|| {
+                (l.starts_with("DLL ") || l.starts_with("point d'entrée ")).then_some(l)
+            })
+        })
+        .map(|l| format!("  {l}"))
+        .collect();
+    // Code exact et propriétés rendues par l'action (fichier de session).
+    let mut back = std::fs::read_to_string(&session)
+        .map(|t| super::session::decode(&t))
+        .unwrap_or_default();
+    let code = back
+        .remove(super::session::CODE_KEY)
+        .and_then(|c| c.parse::<i32>().ok());
+    let outcome = match (outcome, code) {
+        (Outcome::Exited(_), Some(c)) => Outcome::Exited(c),
+        (o, _) => o,
+    };
+    let head = match &outcome {
+        Outcome::Exited(0) | Outcome::Started => {
+            if !deferred && code.is_some() {
+                ctx.props = back;
+            }
+            format!("Action personnalisée DLL {name} ({}) : terminée", a.target)
+        }
+        Outcome::Exited(c) => format!(
+            "Action personnalisée DLL {name} ({}) en échec (code {c}), installation poursuivie",
+            a.target
+        ),
+        other => format!(
+            "Action personnalisée DLL {name} ({}) : {}",
+            a.target,
+            run::describe(&a.target, other)
+        ),
+    };
+    let _ = std::fs::remove_file(&session);
+    lines.insert(0, head);
+    Some(lines.join("\n"))
+}
+
 /// Actions de la séquence ni EXE ni propriété : notées dans le journal.
 pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
     let actions = actions(db);
@@ -267,14 +393,15 @@ pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
         .filter_map(|(_, name, cond)| {
             let a = actions.get(&name)?;
             let base = a.kind & 0x3F;
-            if matches!(base, 2 | 18 | 34 | 50 | 51 | 35) || is_quiet_exec(a) || !ctx.eval(&cond) {
+            if matches!(base, 1 | 2 | 17 | 18 | 34 | 50 | 51 | 35) && !is_shell_exec(a)
+                || !ctx.eval(&cond)
+            {
                 return None;
             }
             if is_shell_exec(a) {
                 return Some(format!("{name} (ouverture en fin d'installation)"));
             }
             let what = match base {
-                1 | 17 => "DLL",
                 5 | 6 | 21 | 22 | 37 | 38 => "script",
                 19 => "erreur",
                 7 | 23 | 39 => "installation imbriquée",

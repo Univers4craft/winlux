@@ -154,6 +154,11 @@ ok("winlux-setup-wizard" in (ROOT / "integration/winlux-open").read_text()
    and "winlux-setup-wizard.py:winlux-setup-wizard" in (SCRIPTS / "stage-desktop-components.sh").read_text()
    and "scripts/test-setup-wizard.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "assistant d'installation au double-clic (.msi, NSIS, Inno) en quatre langues, testé en CI (#833)")
+msi_session = (ROOT / "runtime/src/msi/session.rs").read_text()
+ok("MsiGetPropertyW" in msi_session and "MsiProcessMessage" in msi_session
+   and "--msi-dll-action" in (ROOT / "runtime/src/main.rs").read_text()
+   and "i686-w64-mingw32-gcc" in (SCRIPTS / "test-msi-actions.sh").read_text(),
+   "msiexec : actions personnalisées DLL x86 et x64 (types 1 et 17) avec session msi.dll (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,

@@ -241,6 +241,18 @@ pub fn spawn(
     wait: bool,
     capture: bool,
 ) -> (Outcome, String) {
+    spawn_with(target, params, workdir, wait, capture, &[])
+}
+
+/// [`spawn`] avec des variables d'environnement en plus (session MSI).
+pub fn spawn_with(
+    target: &Target,
+    params: &str,
+    workdir: &str,
+    wait: bool,
+    capture: bool,
+    env: &[(&str, String)],
+) -> (Outcome, String) {
     let depth = match allowed() {
         Ok(d) => d,
         Err(e) => return (Outcome::Skipped(e), String::new()),
@@ -260,6 +272,7 @@ pub fn spawn(
         cmd.current_dir(dir);
     }
     cmd.env("WINLUX_SETUP_DEPTH", (depth + 1).to_string())
+        .envs(env.iter().map(|(k, v)| (*k, v)))
         .stdin(Stdio::null());
     if capture {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());

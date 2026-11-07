@@ -13,6 +13,7 @@ pub mod extra;
 pub(crate) mod install;
 pub use install::{civil, shortcut_bytes};
 mod lzx;
+pub mod session;
 
 use install::{Logger, Options};
 use std::path::{Path, PathBuf};

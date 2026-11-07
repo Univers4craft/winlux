@@ -625,7 +625,14 @@ extern "C" fn early_init(
     }
     // Pas d'héritage par les processus enfants : chacun refait le test.
     unsafe { libc::unsetenv(var.as_ptr() as *const libc::c_char) };
-    let path = unsafe { *argv.add(1) };
+    let mut path = unsafe { *argv.add(1) };
+    // Action personnalisée DLL d'un paquet MSI (#833) : la DLL suit.
+    if !path.is_null()
+        && argc >= 3
+        && unsafe { std::ffi::CStr::from_ptr(path) }.to_bytes() == b"--msi-dll-action"
+    {
+        path = unsafe { *argv.add(2) };
+    }
     if path.is_null() || unsafe { *path } == b'-' as libc::c_char {
         return;
     }
