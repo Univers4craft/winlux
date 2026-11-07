@@ -388,6 +388,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           python3 -B scripts/test-second-session-taskbar.py
+          python3 -B scripts/test-tray-serve.py
           python3 -B scripts/test-panel-tooltips.py
           python3 -B scripts/test-quick-menu-position.py
           python3 -B scripts/test-power.py
