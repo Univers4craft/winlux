@@ -1109,7 +1109,7 @@ unsafe extern "win64" fn get_string_type_ex_w(
     .unwrap_or(0)
 }
 
-unsafe extern "win64" fn get_string_type_ex_a(
+pub(crate) unsafe extern "win64" fn get_string_type_ex_a(
     _locale: u32,
     ty: u32,
     src: *const u8,

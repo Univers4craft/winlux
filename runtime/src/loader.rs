@@ -857,6 +857,15 @@ fn resolve_imports(m: &Module) -> Result<(), String> {
                     break;
                 }
                 if value & (1 << (width * 8 - 1)) == 0 {
+                    // Ancien format (VC6, 7-Zip x86) : l'INT contient des
+                    // adresses, comme le reste du descripteur.
+                    let value = if attrs & 1 == 0 {
+                        let va =
+                            u32::try_from(value).map_err(|_| "nom d'import différé invalide")?;
+                        delay_rva(m, attrs, va)? as u64
+                    } else {
+                        value
+                    };
                     let rva = u32::try_from(value)
                         .ok()
                         .and_then(|value| value.checked_add(2))
