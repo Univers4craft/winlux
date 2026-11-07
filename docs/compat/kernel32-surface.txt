@@ -1,6 +1,8 @@
 AcquireSRWLockExclusive
 AcquireSRWLockShared
 ActivateActCtx
+AddAtomA
+AddAtomW
 AddDllDirectory
 AddRefActCtx
 AddVectoredContinueHandler
@@ -83,6 +85,7 @@ CreateWaitableTimerW
 DeactivateActCtx
 DebugBreak
 DecodePointer
+DeleteAtom
 DeleteCriticalSection
 DeleteFileA
 DeleteFileW
@@ -97,6 +100,8 @@ EncodePointer
 EndUpdateResourceW
 EnterCriticalSection
 EnumCalendarInfoExEx
+EnumCalendarInfoExW
+EnumCalendarInfoW
 EnumDateFormatsExEx
 EnumResourceLanguagesW
 EnumResourceNamesW
@@ -118,6 +123,8 @@ FillConsoleOutputCharacterW
 FindActCtxSectionGuid
 FindActCtxSectionStringA
 FindActCtxSectionStringW
+FindAtomA
+FindAtomW
 FindClose
 FindCloseChangeNotification
 FindFirstChangeNotificationA
@@ -163,6 +170,8 @@ GetACP
 GetActiveProcessorCount
 GetActiveProcessorGroupCount
 GetApplicationRestartSettings
+GetAtomNameA
+GetAtomNameW
 GetCPInfo
 GetCPInfoExA
 GetCPInfoExW
@@ -319,6 +328,7 @@ GetShortPathNameW
 GetStartupInfoA
 GetStartupInfoW
 GetStdHandle
+GetStringTypeA
 GetStringTypeExA
 GetStringTypeExW
 GetStringTypeW
@@ -335,6 +345,7 @@ GetSystemTime
 GetSystemTimeAdjustment
 GetSystemTimeAsFileTime
 GetSystemTimePreciseAsFileTime
+GetSystemTimes
 GetSystemWow64DirectoryA
 GetSystemWow64DirectoryW
 GetTempFileNameA
@@ -376,9 +387,16 @@ GetVolumePathNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
 GetXStateFeaturesMask
+GlobalAddAtomA
+GlobalAddAtomW
 GlobalAlloc
+GlobalDeleteAtom
+GlobalFindAtomA
+GlobalFindAtomW
 GlobalFlags
 GlobalFree
+GlobalGetAtomNameA
+GlobalGetAtomNameW
 GlobalLock
 GlobalMemoryStatus
 GlobalMemoryStatusEx
@@ -398,6 +416,7 @@ HeapSize
 HeapUnlock
 HeapValidate
 HeapWalk
+InitAtomTable
 InitOnceBeginInitialize
 InitOnceComplete
 InitOnceExecuteOnce
@@ -414,6 +433,11 @@ InitializeSRWLock
 InterlockedFlushSList
 InterlockedPopEntrySList
 InterlockedPushEntrySList
+IsBadCodePtr
+IsBadReadPtr
+IsBadStringPtrA
+IsBadStringPtrW
+IsBadWritePtr
 IsDBCSLeadByte
 IsDBCSLeadByteEx
 IsDebuggerPresent
@@ -476,7 +500,10 @@ OpenEventW
 OpenFileById
 OpenFileMappingA
 OpenFileMappingW
+OpenJobObjectA
+OpenJobObjectW
 OpenMutexA
+OpenMutexW
 OpenProcess
 OpenThread
 OutputDebugStringA
@@ -537,6 +564,8 @@ RegEnumValueW
 RegFlushKey
 RegGetValueA
 RegGetValueW
+RegLoadKeyA
+RegLoadKeyW
 RegLoadMUIStringW
 RegNotifyChangeKeyValue
 RegOpenCurrentUser
@@ -547,9 +576,15 @@ RegQueryInfoKeyA
 RegQueryInfoKeyW
 RegQueryValueExA
 RegQueryValueExW
+RegRestoreKeyA
+RegRestoreKeyW
+RegSaveKeyExA
+RegSaveKeyExW
 RegSetKeySecurity
 RegSetValueExA
 RegSetValueExW
+RegUnLoadKeyA
+RegUnLoadKeyW
 RegisterApplicationRestart
 RegisterWaitForSingleObject
 ReleaseActCtx
@@ -614,6 +649,7 @@ SetFileInformationByHandle
 SetFilePointer
 SetFilePointerEx
 SetFileTime
+SetHandleCount
 SetHandleInformation
 SetInformationJobObject
 SetLastError

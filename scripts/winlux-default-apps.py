@@ -201,7 +201,7 @@ class DefaultAppsPanel(Gtk.Box):
 class DefaultApps(Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Applications par défaut"))
-        self.set_icon_name("preferences-desktop-default-applications")
+        self.set_icon_name("preferences-system")
         self.set_default_size(860, 680)
         self.connect("destroy", Gtk.main_quit)
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=24)

@@ -542,6 +542,23 @@ fn liste_a_colonnes_lignes_textes_et_selection() {
             i as isize
         );
     }
+    // LVM_GETCOLUMNW : titre et largeur relus.
+    let mut buf = [0u16; 16];
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 0,
+        text: buf.as_mut_ptr(),
+        text_max: 16,
+        sub_item: 0,
+    };
+    assert_eq!(sendw(lv, 0x105F, 1, &mut col as *mut LvColumnW as isize), 1);
+    assert_eq!(col.cx, 120);
+    assert_eq!(
+        &buf[..5],
+        &[b'P' as u16, b'o' as u16, b'r' as u16, b't' as u16, 0]
+    );
+    assert_eq!(sendw(lv, 0x105F, 9, &mut col as *mut LvColumnW as isize), 0);
     for (i, (host, port)) in [("serveur", "22"), ("routeur", "23")].iter().enumerate() {
         let t = w(host);
         let mut it = LvItemW {
@@ -654,6 +671,22 @@ fn liste_textes_fournis_a_la_demande_et_liste_virtuelle() {
     notify_codes();
     assert_eq!(get(0, 0), "auto0-0");
     assert!(notify_codes().contains(&-177), "LVN_GETDISPINFOW");
+    // Sous-colonne jamais renseignée d'une ligne callback : demandée aussi
+    // au parent (Taille, dates de 7-Zip, #553).
+    assert_eq!(get(0, 1), "auto0-1");
+    // LVM_GETCOLUMNW (largeur + LVCF_ORDER) : 7-Zip lance une exception si
+    // l'appel échoue à l'ouverture d'un dossier (#553/#554).
+    let mut raw = [0u8; 40];
+    raw[0..4].copy_from_slice(&(0x2u32 | 0x20).to_le_bytes());
+    raw[0x24..0x28].copy_from_slice(&(-1i32).to_le_bytes());
+    assert_eq!(sendw(lv, 0x105F, 0, raw.as_mut_ptr() as isize), 1);
+    assert_eq!(i32::from_le_bytes(raw[8..12].try_into().unwrap()), 120);
+    assert_eq!(i32::from_le_bytes(raw[0x24..0x28].try_into().unwrap()), 0);
+    assert_eq!(
+        sendw(lv, 0x105F, 5, raw.as_mut_ptr() as isize),
+        0,
+        "colonne absente"
+    );
     gui::destroy_window(p);
 
     // LVS_OWNERDATA : LVM_SETITEMCOUNT donne le nombre de lignes
@@ -872,6 +905,13 @@ fn barre_d_outils_bandes_et_liste_etendue() {
     assert_eq!(h, size[1] as isize + 4, "RB_GETBARHEIGHT");
     assert_eq!(gui::window_rect(rebar).unwrap().height() as isize, h);
     assert!(notify_codes().contains(&-831), "RBN_HEIGHTCHANGE");
+    // SetWindowPos ne peut pas écraser la hauteur d'une barre à bandes (7-Zip
+    // la redimensionnait à 0 et la barre d'adresse disparaissait, #555).
+    unsafe { user32::set_window_pos(rebar, 0, 0, 0, 400, 2, 0x4) };
+    assert_eq!(gui::window_rect(rebar).unwrap().height() as isize, h);
+    // Double-clic : les contrôles prédéfinis qui le traitent le reçoivent.
+    assert!(gui::wants_double_clicks(tb));
+    assert!(!gui::wants_double_clicks(rebar));
     // Un WM_COMMAND de la barre d'outils arrive toujours au parent d'origine.
     sendw(tb, 0x0401, 1001, 1);
     sendw(tb, WM_LBUTTONDOWN, 1, at);
@@ -920,6 +960,10 @@ fn barre_d_outils_bandes_et_liste_etendue() {
     let set = [0x1usize, usize::MAX, path.as_ptr() as usize, 0, 0, 0, 0];
     assert_eq!(sendw(cbex, 0x040C, 0, set.as_ptr() as isize), 1);
     assert_eq!(text_of(combo), "D:\\Photos");
+    // SetWindowText sur la ComboBoxEx remplit son champ (barre d'adresse de 7-Zip).
+    let addr = w("C:\\Users");
+    unsafe { user32::set_window_text_w(cbex, addr.as_ptr()) };
+    assert_eq!(text_of(combo), "C:\\Users");
     notes();
     sendw(cbex, 0x014E, 2, 0); // CB_SETCURSEL
     sendw(combo, WM_SETFOCUS, 0, 0); // CBN_SETFOCUS
@@ -1138,4 +1182,35 @@ fn defer_window_pos_place_les_enfants() {
     assert_eq!((rb.top, rb.width(), rb.height()), (30, 0, 0));
     assert_eq!(user32::end_defer_window_pos(hdwp), 0);
     unsafe { user32::destroy_window(parent) };
+}
+
+/// « À propos » de Notepad++ (#505) : un STATIC SS_OWNERDRAW est dessiné
+/// par le parent (WM_DRAWITEM, ODT_STATIC) sans fond qui masquerait ses
+/// voisins, et le texte d'un champ multiligne en lecture seule revient à la
+/// ligne pour tenir dans sa largeur.
+#[test]
+fn statique_dessine_par_le_parent_et_licence_coupee() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let logo = child(p, "Static", "", 0x0D, 40, (0, 0, 192, 192));
+    assert!(is_backdrop(logo), "derrière ses voisins");
+    DRAWN.lock().unwrap().clear();
+    let (dc, bmp) = memory_dc(192, 192);
+    sendw(logo, 0x0317, dc, 0xC); // WM_PRINT
+    assert!(DRAWN.lock().unwrap().contains(&(5, 0, 0)), "ODT_STATIC");
+    let (_, _, px, _) = gui::bitmap_pixels(bmp).unwrap();
+    assert!(
+        px.iter().all(|&c| c == px[0]),
+        "aucun fond peint par Winlux"
+    );
+
+    let font = 0;
+    let text: Vec<char> = "un deux trois quatre\r\ncinq".chars().collect();
+    let width = measure(font, "un deux trois").0;
+    let rows = wrapped_rows(font, &text, width);
+    let lines: Vec<&str> = rows.iter().map(|(_, s)| s.trim_end()).collect();
+    assert_eq!(lines, ["un deux trois", "quatre", "cinq"]);
+    assert_eq!(rows[1].0, 14, "« quatre » commence au 15e caractère");
+    assert_eq!(rows[2].0, 22, "ligne suivant le \\r\\n");
+    gui::destroy_window(p);
 }

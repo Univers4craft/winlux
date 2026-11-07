@@ -10,6 +10,6 @@ Comment[es]=Enmarcar una zona de la pantalla para copiar su texto (Windows + May
 Comment[de]=Einen Bildschirmbereich markieren und seinen Text kopieren (Windows + Umschalt + T)
 Keywords=ocr;texte;text;reconnaissance;recognition;extraire;extractor;copier;copy;texto;Texterkennung;
 Exec=/usr/bin/winlux-ocr
-Icon=edit-copy
+Icon=winlux-ocr
 Categories=Utility;
 Terminal=false

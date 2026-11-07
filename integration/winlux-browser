@@ -21,6 +21,16 @@ root=${WINLUX_BROWSER_ROOT:-}
 uid=$(id -u 2>/dev/null || /bin/busybox id -u 2>/dev/null || echo 1000)
 pending="$root/run/winlux/browser-pending-$uid"
 
+# Qui appelle peut savoir ce qu'est devenu le lien (winlux-report) :
+# WINLUX_BROWSER_STATUS nomme un fichier où l'on écrit « ouvert » (navigateur
+# lancé), « annule » (choix du navigateur annulé, rien ne s'ouvre) ou
+# « attente » (aucun navigateur : le lien est gardé jusqu'au choix).
+report_status() {
+    if [ -n "${WINLUX_BROWSER_STATUS:-}" ]; then
+        printf '%s\n' "$1" > "$WINLUX_BROWSER_STATUS" 2>/dev/null || true
+    fi
+}
+
 # Navigateurs installés, un par ligne : « catalogue:<id> » (Chrome, Edge,
 # Firefox du catalogue, ordre alphabétique) puis « systeme:<commande> ».
 # « defaut » est le navigateur par défaut du catalogue s'il est installé.
@@ -42,6 +52,7 @@ installed_browsers() {
 
 run_browser() {
     choice=$1; shift
+    report_status ouvert
     case "$choice" in
         defaut:*) exec winlux-browsers --open "$@" ;;
         catalogue:*) exec winlux-browsers --launch "${choice#catalogue:}" "$@" ;;
@@ -60,6 +71,7 @@ run_browser() {
 # défaut) ; Annuler n'ouvre rien.
 open_now() {
     if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
+        report_status ouvert
         exec "$WINLUX_BROWSER" "$@"
     fi
     list=$(installed_browsers)
@@ -76,7 +88,7 @@ open_now() {
         chooser=${WINLUX_BROWSER_CHOICE:-/usr/bin/winlux-browser-choice}
         if [ -x "$chooser" ] || command -v "$chooser" >/dev/null 2>&1; then
             # shellcheck disable=SC2086 # une entrée par ligne, sans espace
-            answer=$("$chooser" $found) || exit 0
+            answer=$("$chooser" $found) || { report_status annule; exit 0; }
             case "$answer" in
                 toujours\ catalogue:*)
                     answer=${answer#toujours }
@@ -85,6 +97,7 @@ open_now() {
                     ;;
             esac
             if printf '%s\n' "$found" | grep -qxF "$answer"; then run_browser "$answer" "$@"; fi
+            report_status annule
             exit 0
         fi
     fi
@@ -113,6 +126,7 @@ if [ "$#" -gt 0 ]; then
     mkdir -p "${pending%/*}" 2>/dev/null || true
     ( umask 077; printf '%s\n' "$@" > "$pending" ) 2>/dev/null || true
 fi
+report_status attente
 if command -v winlux-browsers >/dev/null 2>&1; then
     exec winlux-browsers --open
 fi

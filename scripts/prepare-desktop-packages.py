@@ -41,6 +41,8 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
             "cups", "cups-filters", "ipp-usb",
+            # Imprimantes Wi-Fi (IPP Everywhere, AirPrint) annoncées en mDNS (#623).
+            "avahi-daemon",
             # Son : PipeWire (un flux par .exe, volume par application) et pactl.
             "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber", "pulseaudio-utils",
             # Son des portables récents : firmware Sound Open Firmware (Intel

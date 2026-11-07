@@ -30,6 +30,9 @@ pub struct Logger {
 
 impl Logger {
     pub fn log(&mut self, msg: &str) {
+        // Aussi dans la trace (WINLUX_TRACE) : une installation silencieuse
+        // (/quiet) n'affiche rien et doit pouvoir se relire.
+        crate::log_info!("installeur", "{msg}");
         if !self.quiet {
             println!("{msg}");
         }
@@ -307,6 +310,74 @@ fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
             _ => log.log(&format!("Action personnalisée ignorée : {action}")),
         }
     }
+}
+
+/// Programme fenêtré installé par le paquet et lancé par une action
+/// personnalisée de type 18 (exécutable tiré de la table File) à
+/// l'installation : c'est lui qui, sous Windows, finit l'installation et
+/// pose les raccourcis. Winlux ne le lance pas, mais s'en sert de cible.
+/// Renvoie aussi si sa ligne de commande demande un raccourci sur le Bureau
+/// (`DESKTOPSHORTCUT=[DESKTOPSHORTCUT]` chez Paint.NET, propriété à 1 par
+/// défaut, case cochée de l'interface d'installation).
+fn self_setup_exe(db: &Database, ctx: &Context) -> Option<(String, bool)> {
+    let actions: HashMap<String, (i32, String, String)> = db
+        .rows("CustomAction")
+        .map(|r| {
+            (
+                r.str("Action"),
+                (r.int("Type").unwrap_or(0), r.str("Source"), r.str("Target")),
+            )
+        })
+        .collect();
+    let mut seq: Vec<(i32, String, String)> = db
+        .rows("InstallExecuteSequence")
+        .map(|r| {
+            (
+                r.int("Sequence").unwrap_or(0),
+                r.str("Action"),
+                r.str("Condition"),
+            )
+        })
+        .collect();
+    seq.sort();
+    seq.iter().find_map(|(_, action, cond)| {
+        let (kind, source, target) = actions.get(action)?;
+        if kind & 0x3F != 18 || !ctx.eval(cond) {
+            return None;
+        }
+        let exe = ctx.files.get(source)?;
+        if !exe.to_ascii_lowercase().ends_with(".exe") {
+            return None;
+        }
+        let mut head = vec![0u8; 4096];
+        let n = std::fs::File::open(crate::paths::to_linux(exe))
+            .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+            .ok()?;
+        head.truncate(n);
+        if crate::pe::peek_subsystem(&head) != Some(2) {
+            return None;
+        }
+        Some((exe.clone(), wants_desktop_shortcut(target, ctx)))
+    })
+}
+
+/// La ligne de commande transmet une propriété « raccourci Bureau »
+/// (`[…DESKTOP…SHORTCUT…]` ou `[…DESKTOP…ICON…]`) qui vaut oui.
+fn wants_desktop_shortcut(cmdline: &str, ctx: &Context) -> bool {
+    cmdline
+        .split('[')
+        .skip(1)
+        .filter_map(|part| part.split_once(']').map(|(name, _)| name))
+        .filter(|name| {
+            let n = name.to_ascii_uppercase();
+            n.contains("DESKTOP") && (n.contains("SHORTCUT") || n.contains("ICON"))
+        })
+        .any(|name| {
+            matches!(
+                ctx.get(name).trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "oui"
+            )
+        })
 }
 
 fn selected_components(db: &Database, ctx: &Context) -> HashSet<String> {
@@ -992,8 +1063,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
                 ctx.get(&w)
             }
         };
-        let file =
-            crate::paths::to_linux(&format!("{}{}.lnk", dir.target, long_name(&r.str("Name"))));
+        let link = format!("{}{}.lnk", dir.target, long_name(&r.str("Name")));
+        crate::setup::hide_desktop_link(&link);
+        let file = crate::paths::to_linux(&link);
         if let Some(parent) = file.parent() {
             mkdirs(parent, &mut manifest.dirs).map_err(|e| e.to_string())?;
         }
@@ -1005,6 +1077,40 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         );
         std::fs::write(&file, bytes).map_err(|e| format!("{} : {e}", file.display()))?;
         manifest.files.push(file);
+    }
+    // Aucun raccourci dans le paquet : sous Windows, c'est le programme
+    // installé qui les crée, lancé par une action personnalisée que Winlux
+    // n'exécute pas (Paint.NET : « paintdotnet.exe /setupActions /install »).
+    // Sans ce relais, l'appli serait installée mais absente du menu Démarrer.
+    if main_exe.is_empty() {
+        if let Some((exe, desktop)) = self_setup_exe(db, &ctx) {
+            let label: String = name
+                .chars()
+                .map(|c| if "\\/:*?\"<>|".contains(c) { ' ' } else { c })
+                .collect();
+            let label = label.trim().to_string();
+            let workdir = exe
+                .rsplit_once('\\')
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_default();
+            let mut folders = vec![ctx.get("ProgramMenuFolder")];
+            if desktop {
+                folders.push(with_slash(ctx.get("DesktopFolder")));
+            }
+            for folder in folders {
+                let link = format!("{folder}{label}.lnk");
+                crate::setup::hide_desktop_link(&link);
+                let file = crate::paths::to_linux(&link);
+                if let Some(parent) = file.parent() {
+                    mkdirs(parent, &mut manifest.dirs).map_err(|e| e.to_string())?;
+                }
+                let bytes = shortcut_bytes(&exe, "", &workdir, &name);
+                std::fs::write(&file, bytes).map_err(|e| format!("{} : {e}", file.display()))?;
+                manifest.files.push(file);
+                log.log(&format!("Raccourci : {link}"));
+            }
+            main_exe = exe;
+        }
     }
     super::extra::remove_registry(db, &ctx, &comps, all_users, &mut edits);
     super::extra::environment(db, &ctx, &comps, &mut edits, &mut manifest);
@@ -1153,5 +1259,26 @@ pub fn uninstall(code: &str, log: &mut Logger) -> i32 {
             log.log(&format!("Produit inconnu : {code}"));
             ERROR_UNKNOWN_PRODUCT
         }
+    }
+}
+
+#[cfg(test)]
+mod relais_tests {
+    use super::*;
+
+    #[test]
+    fn raccourci_bureau_demande_par_la_ligne_de_commande() {
+        let mut ctx = Context::default();
+        ctx.props.insert("DESKTOPSHORTCUT".into(), "1".into());
+        let pdn = "/setupActions /install DESKTOPSHORTCUT=[DESKTOPSHORTCUT] \
+                   PDNUPDATING=[PDNUPDATING] \"PROGRAMSGROUP=[PROGRAMSGROUP]\"";
+        assert!(wants_desktop_shortcut(pdn, &ctx));
+        ctx.props.insert("DESKTOPSHORTCUT".into(), "0".into());
+        assert!(!wants_desktop_shortcut(pdn, &ctx));
+        ctx.props.insert("INSTALLDESKTOPICON".into(), "yes".into());
+        assert!(wants_desktop_shortcut("/i ICON=[INSTALLDESKTOPICON]", &ctx));
+        // Une propriété sans rapport avec le Bureau ne compte pas.
+        ctx.props.insert("PDNUPDATING".into(), "1".into());
+        assert!(!wants_desktop_shortcut("/x [PDNUPDATING]", &ctx));
     }
 }

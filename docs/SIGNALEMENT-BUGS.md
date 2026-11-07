@@ -11,7 +11,7 @@ Paramètres : l'envoi automatique des plantages (ci-dessous).
 | Point d'entrée | Ce qui se passe |
 |---|---|
 | Plantage d'un `.exe` dans le bureau Winlux | Après l'écran bleu, la boîte « Signaler un problème » s'ouvre avec la cause probable. |
-| Fonction Windows absente, erreur interne du runtime | Pas d'écran bleu : le bureau ouvre directement la même boîte (`/run/winlux/crash-offer`). |
+| Fonction Windows absente, erreur interne du runtime | Pas d'écran bleu : le bureau ouvre directement la même boîte (`crash-offer` dans le journal du compte, `/run/winlux/journal-<uid>`). |
 | Double-clic hors du bureau Winlux (GNOME, KDE, XFCE…) | `winlux-open` lance `winlux-report --crash --since <début>` si un plantage a été enregistré. |
 | Paramètres > Signaler un problème | Nouveau signalement, dernier plantage, rapports enregistrés, et les réglages ci-dessous. |
 | Observateur d'événements | Bouton « Signaler » : le plantage sélectionné, sinon un signalement libre. |
@@ -38,7 +38,7 @@ proposer ») : le plantage reste dans le journal et l'Observateur.
   langue.
 
 Côté runtime, `runtime/src/crash.rs` écrit ces données dans
-`/run/winlux/journal/crash.log`. La pile est lue par sondage sûr : chaque mot
+`/run/winlux/journal-<uid>/crash.log` (un journal par compte, 0700, #633 ; `/run/winlux/journal` pour les démons root). La pile est lue par sondage sûr : chaque mot
 passe par un tube, une adresse illisible renvoie `EFAULT` au lieu de refaire
 planter le gestionnaire. `record_failure` couvre les échecs sans signal
 (fonction absente, panique Rust).
@@ -194,6 +194,22 @@ envoie directement avec son propre jeton.
 Les rapports utilisent `bug`, `signalement-utilisateur`, `plantage`,
 `fonction-manquante`, `à-trier`, `compatibilité-windows`, `runtime` et
 `bureau` ; elles existent toutes sur le dépôt (créées le 31/10/2026).
+
+Chaque rapport, manuel ou automatique, porte aussi une urgence (#611) :
+`urgence:1-quotidien` pour un arrêt du système, `urgence:2-confort` sinon, à
+revoir au tri. Selon le chemin d'envoi :
+
+- **Relais ou jeton** : les étiquettes sont posées par l'API GitHub. Le relais
+  ajoute `urgence:2-confort` à un rapport qui n'en a pas et n'en garde qu'une.
+- **Formulaire dans le navigateur** : GitHub n'applique les étiquettes du lien
+  (`&labels=…`) qu'aux membres du dépôt. Le modèle `rapport-winlux.md` pose
+  `bug`, `signalement-utilisateur` et `à-trier` pour tout le monde, et la
+  première ligne du corps (« > Étiquettes / Labels : … ») donne les autres à
+  poser au tri.
+
+Le message « formulaire ouvert » n'apparaît qu'une fois le navigateur lancé :
+`winlux-browser` écrit `ouvert`, `annule` ou `attente` dans le fichier nommé
+par `WINLUX_BROWSER_STATUS` (#612).
 
 ## Tests
 

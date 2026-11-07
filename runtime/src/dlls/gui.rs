@@ -919,6 +919,8 @@ pub struct DcState {
     pub bitmap: usize,
     /// Mode de `SetStretchBltMode` (4 = HALFTONE : agrandissement lissé).
     pub stretch_mode: i32,
+    /// Mode de `SetTextAlign` (TA_LEFT|TA_TOP = 0 par défaut).
+    pub text_align: u32,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -1007,11 +1009,12 @@ pub fn create_dc(hwnd: usize) -> usize {
             text_color: 0x0000_0000,
             bk_color: 0x00FF_FFFF,
             bk_mode: 2,
-            brush: 5, // BLACK_BRUSH stock
+            brush: 1, // WHITE_BRUSH stock, comme Windows
             pen: 8,   // BLACK_PEN stock
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
             stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
+            text_align: 0,
         },
     );
     hdc
@@ -1121,6 +1124,19 @@ pub fn dc_bk_color(hdc: usize) -> u32 {
 }
 
 /// Mode de fond courant d'un DC (2 = opaque, 1 = transparent).
+pub fn dc_text_align(hdc: usize) -> u32 {
+    with_dc(hdc, |d| d.text_align, 0)
+}
+
+/// Change l'alignement du texte et renvoie l'ancien ; GDI_ERROR sans DC.
+pub fn set_dc_text_align(hdc: usize, align: u32) -> u32 {
+    with_dc(
+        hdc,
+        |d| std::mem::replace(&mut d.text_align, align),
+        u32::MAX,
+    )
+}
+
 pub fn dc_bk_mode(hdc: usize) -> u32 {
     with_dc(hdc, |d| d.bk_mode, 2)
 }
@@ -2116,6 +2132,10 @@ pub trait GuiBackend: Send {
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}
+    /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
+    /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
+    /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
+    fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
@@ -2478,6 +2498,48 @@ pub fn register_class(name: &str, info: ClassInfo) -> bool {
     }
     map.insert(name.to_string(), info);
     true
+}
+
+fn class_styles() -> &'static Mutex<HashMap<String, u32>> {
+    static S: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Mémorise le style de classe (CS_DBLCLKS…) d'une classe enregistrée.
+pub fn set_class_style(name: &str, style: u32) {
+    lock(class_styles())
+        .entry(name.to_ascii_lowercase())
+        .or_insert(style);
+}
+
+/// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
+/// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
+/// texte sous Windows.
+pub fn wants_double_clicks(hwnd: usize) -> bool {
+    const CS_DBLCLKS: u32 = 0x0008;
+    let Some(class) = lock(windows())
+        .get(&hwnd)
+        .map(|w| w.class.to_ascii_lowercase())
+    else {
+        return false;
+    };
+    match lock(class_styles()).get(&class) {
+        Some(style) => style & CS_DBLCLKS != 0,
+        // Contrôles prédéfinis qui traitent le double-clic ; les autres
+        // (barres de défilement, onglets…) reçoivent deux appuis simples.
+        None => matches!(
+            class.as_str(),
+            "button"
+                | "static"
+                | "edit"
+                | "listbox"
+                | "combobox"
+                | "comboboxex32"
+                | "syslistview32"
+                | "systreeview32"
+                | "toolbarwindow32"
+        ),
+    }
 }
 
 pub fn lookup_class(name: &str) -> Option<ClassInfo> {
@@ -3603,7 +3665,7 @@ mod tests {
         let pen = create_pen(0, 2, 0x00AA_BBCC);
         let brush = create_solid_brush(0x0011_2233);
         assert_eq!(select_object(hdc, pen), 8); // BLACK_PEN stock initial
-        assert_eq!(select_object(hdc, brush), 5); // BLACK_BRUSH stock initial
+        assert_eq!(select_object(hdc, brush), 1); // WHITE_BRUSH stock initial
         assert_eq!(dc_brush(hdc), brush);
 
         free_dc(hdc);

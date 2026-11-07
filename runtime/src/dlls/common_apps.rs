@@ -346,7 +346,7 @@ unsafe extern "win64" fn child_window_from_point(parent: usize, pt: u64) -> usiz
     .unwrap_or(0)
 }
 
-fn lower_char(c: u16) -> u16 {
+pub(crate) fn lower_char(c: u16) -> u16 {
     let s = String::from_utf16_lossy(&[c]);
     let mut low = s.chars().flat_map(char::to_lowercase);
     match (low.next(), low.next()) {
@@ -1109,7 +1109,7 @@ unsafe extern "win64" fn get_string_type_ex_w(
     .unwrap_or(0)
 }
 
-unsafe extern "win64" fn get_string_type_ex_a(
+pub(crate) unsafe extern "win64" fn get_string_type_ex_a(
     _locale: u32,
     ty: u32,
     src: *const u8,
@@ -1397,19 +1397,6 @@ unsafe extern "win64" fn path_strip_path_w(path: *mut u16) {
 
 // ── shell32 ─────────────────────────────────────────────────────────────
 
-/// Pas encore d'objets IShellItem : l'appelant reprend son chemin texte.
-unsafe extern "win64" fn sh_create_item_from_parsing_name(
-    _path: *const u16,
-    _bc: usize,
-    _riid: *const u8,
-    out: *mut usize,
-) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    E_NOTIMPL
-}
-
 // ── uxtheme ─────────────────────────────────────────────────────────────
 
 unsafe extern "win64" fn draw_theme_text_ex(
@@ -1690,7 +1677,7 @@ pub fn all() -> Vec<(&'static str, Exports)> {
         (
             "shell32",
             crate::exports! {
-                "SHCreateItemFromParsingName" => fn sh_create_item_from_parsing_name,
+                "SHCreateItemFromParsingName" => fn super::filedialog_com::sh_create_item_from_parsing_name,
             },
         ),
         (

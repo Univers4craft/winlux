@@ -45,6 +45,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -53,7 +54,8 @@ import urllib.request
 
 REPO = os.environ.get("WINLUX_REPORT_REPO", "Univers4craft/winlux")
 API = os.environ.get("WINLUX_GITHUB_API", "https://api.github.com")
-JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
+# Journal du compte (#633) : /run/winlux/journal-<uid>, celui de root sans uid.
+JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR") or ("/run/winlux/journal" if os.geteuid() == 0 else f"/run/winlux/journal-{os.geteuid()}"))
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 CONF = Path(os.environ.get("WINLUX_REPORT_CONF", "/etc/winlux/report.conf"))
 DEFAULTS = Path(os.environ.get("WINLUX_REPORT_DEFAULTS", "/usr/share/winlux/report.conf"))
@@ -88,9 +90,31 @@ T = {
   "acct_open": "Ouvrir GitHub", "acct_signup": "Créer un compte GitHub", "acct_later": "Enregistrer seulement",
   "via_browser": "Le service sans compte n'est pas encore en ligne : le rapport s'ouvrira, prérempli, sur le site GitHub, où un compte GitHub gratuit est nécessaire pour l'envoyer.",
   "via_file": "Le rapport sera seulement enregistré sur cet ordinateur.",
+  "via_account": "Envoi direct sur GitHub avec votre compte @{login}.",
+  "acct_hint": "Astuce : connectez votre compte GitHub dans Paramètres > Signaler un problème pour envoyer vos rapports directement.",
+  "gh_window": "Compte GitHub",
+  "gh_intro": "Connectez votre compte GitHub : vos rapports partiront directement depuis Winlux, sous votre nom, sans ouvrir le navigateur. Rien n'est envoyé sans votre clic sur « Envoyer ».",
+  "gh_device": "Se connecter avec GitHub",
+  "gh_code": "Saisissez ce code sur la page GitHub qui vient de s'ouvrir (il est aussi copié) :",
+  "gh_open_page": "Rouvrir la page GitHub",
+  "gh_waiting": "En attente de votre accord sur GitHub…",
+  "gh_token_title": "Ou avec un jeton personnel",
+  "gh_token_text": "Créez un jeton « classic » avec la seule case public_repo, puis collez-le ici. Il reste dans votre compte Winlux, lisible par vous seul.",
+  "gh_token_create": "Créer le jeton sur GitHub",
+  "gh_token_check": "Valider",
+  "gh_signup": "Créer un compte GitHub gratuitement",
+  "gh_close": "Fermer",
+  "gh_checking": "Vérification auprès de GitHub…",
+  "gh_done": "Connecté : @{login}.",
+  "gh_failed": "Connexion refusée : {error}",
+  "gh_expired": "Le code a expiré : recommencez.",
+  "gh_denied": "Connexion annulée sur GitHub.",
   "searching": "Recherche d'un signalement identique…", "sending": "Envoi en cours…",
   "sent": "Merci ! Signalement envoyé : {url}", "commented": "Merci ! Votre rapport a été ajouté au signalement existant : {url}",
   "opened": "Le formulaire GitHub est ouvert dans le navigateur. Rapport enregistré dans {path}.",
+  "opening": "Ouverture du formulaire GitHub… Choisissez un navigateur s'il vous est demandé. Rapport enregistré dans {path}.",
+  "browser_cancelled": "Aucun navigateur choisi : le formulaire GitHub n'a pas été ouvert. Le lien ci-dessous permet de le rouvrir. Rapport enregistré dans {path}.",
+  "browser_pending": "Aucun navigateur n'est installé : le formulaire GitHub s'ouvrira dès que vous en aurez choisi un dans Paramètres > Navigateurs. Rapport enregistré dans {path}.",
   "copied": "Le rapport complet est trop long pour l'adresse : il a été copié dans le presse-papiers, collez-le dans le formulaire.",
   "saved": "Rapport enregistré dans {path}.", "failed": "L'envoi a échoué : {error}. Le rapport est enregistré dans {path}.",
   "dup_title": "Ce problème a déjà été signalé",
@@ -170,9 +194,31 @@ T = {
   "acct_open": "Open GitHub", "acct_signup": "Create a GitHub account", "acct_later": "Only save",
   "via_browser": "The no-account service is not online yet: the report will open, prefilled, on the GitHub website, where a free GitHub account is needed to submit it.",
   "via_file": "The report will only be saved on this computer.",
+  "via_account": "Sent directly to GitHub with your account @{login}.",
+  "acct_hint": "Tip: connect your GitHub account in Settings > Report a problem to send your reports directly.",
+  "gh_window": "GitHub account",
+  "gh_intro": "Connect your GitHub account: your reports will be sent straight from Winlux, under your name, without opening the browser. Nothing is sent until you click \"Send\".",
+  "gh_device": "Sign in with GitHub",
+  "gh_code": "Enter this code on the GitHub page that just opened (it is also copied):",
+  "gh_open_page": "Open the GitHub page again",
+  "gh_waiting": "Waiting for your approval on GitHub…",
+  "gh_token_title": "Or with a personal token",
+  "gh_token_text": "Create a \"classic\" token with only the public_repo box, then paste it here. It stays in your Winlux account, readable by you only.",
+  "gh_token_create": "Create the token on GitHub",
+  "gh_token_check": "Confirm",
+  "gh_signup": "Create a free GitHub account",
+  "gh_close": "Close",
+  "gh_checking": "Checking with GitHub…",
+  "gh_done": "Connected: @{login}.",
+  "gh_failed": "Connection refused: {error}",
+  "gh_expired": "The code expired: try again.",
+  "gh_denied": "Sign-in cancelled on GitHub.",
   "searching": "Looking for an identical report…", "sending": "Sending…",
   "sent": "Thank you! Report sent: {url}", "commented": "Thank you! Your report was added to the existing issue: {url}",
   "opened": "The GitHub form is open in your browser. Report saved to {path}.",
+  "opening": "Opening the GitHub form… Pick a browser if you are asked to. Report saved to {path}.",
+  "browser_cancelled": "No browser was chosen: the GitHub form was not opened. The link below opens it again. Report saved to {path}.",
+  "browser_pending": "No browser is installed: the GitHub form will open as soon as you choose one in Settings > Browsers. Report saved to {path}.",
   "copied": "The full report is too long for the link: it was copied to the clipboard, paste it into the form.",
   "saved": "Report saved to {path}.", "failed": "Sending failed: {error}. The report is saved to {path}.",
   "dup_title": "This problem was already reported",
@@ -252,9 +298,31 @@ T = {
   "acct_open": "Abrir GitHub", "acct_signup": "Crear una cuenta de GitHub", "acct_later": "Solo guardar",
   "via_browser": "El servicio sin cuenta todavía no está en línea: el informe se abrirá, ya rellenado, en el sitio de GitHub, donde se necesita una cuenta gratuita de GitHub para enviarlo.",
   "via_file": "El informe solo se guardará en este equipo.",
+  "via_account": "Envío directo a GitHub con su cuenta @{login}.",
+  "acct_hint": "Consejo: conecte su cuenta de GitHub en Configuración > Informar de un problema para enviar sus informes directamente.",
+  "gh_window": "Cuenta de GitHub",
+  "gh_intro": "Conecte su cuenta de GitHub: sus informes saldrán directamente desde Winlux, con su nombre, sin abrir el navegador. No se envía nada hasta que pulse «Enviar».",
+  "gh_device": "Iniciar sesión con GitHub",
+  "gh_code": "Escriba este código en la página de GitHub que se acaba de abrir (también está copiado):",
+  "gh_open_page": "Volver a abrir la página de GitHub",
+  "gh_waiting": "Esperando su autorización en GitHub…",
+  "gh_token_title": "O con un token personal",
+  "gh_token_text": "Cree un token «classic» con solo la casilla public_repo y péguelo aquí. Se queda en su cuenta de Winlux, solo usted puede leerlo.",
+  "gh_token_create": "Crear el token en GitHub",
+  "gh_token_check": "Validar",
+  "gh_signup": "Crear una cuenta de GitHub gratis",
+  "gh_close": "Cerrar",
+  "gh_checking": "Comprobando con GitHub…",
+  "gh_done": "Conectado: @{login}.",
+  "gh_failed": "Conexión rechazada: {error}",
+  "gh_expired": "El código ha caducado: vuelva a empezar.",
+  "gh_denied": "Inicio de sesión cancelado en GitHub.",
   "searching": "Buscando un informe idéntico…", "sending": "Enviando…",
   "sent": "¡Gracias! Informe enviado: {url}", "commented": "¡Gracias! Su informe se añadió al existente: {url}",
   "opened": "El formulario de GitHub está abierto en el navegador. Informe guardado en {path}.",
+  "opening": "Abriendo el formulario de GitHub… Elija un navegador si se le pide. Informe guardado en {path}.",
+  "browser_cancelled": "No se eligió ningún navegador: el formulario de GitHub no se abrió. El enlace de abajo permite abrirlo de nuevo. Informe guardado en {path}.",
+  "browser_pending": "No hay ningún navegador instalado: el formulario de GitHub se abrirá en cuanto elija uno en Configuración > Navegadores. Informe guardado en {path}.",
   "copied": "El informe completo es demasiado largo para el enlace: se ha copiado al portapapeles, péguelo en el formulario.",
   "saved": "Informe guardado en {path}.", "failed": "El envío ha fallado: {error}. El informe está guardado en {path}.",
   "dup_title": "Este problema ya se ha informado",
@@ -334,9 +402,31 @@ T = {
   "acct_open": "GitHub öffnen", "acct_signup": "GitHub-Konto erstellen", "acct_later": "Nur speichern",
   "via_browser": "Der kontolose Dienst ist noch nicht online: Der Bericht öffnet sich vorausgefüllt auf der GitHub-Website, wo zum Absenden ein kostenloses GitHub-Konto nötig ist.",
   "via_file": "Der Bericht wird nur auf diesem Computer gespeichert.",
+  "via_account": "Direkter Versand an GitHub mit Ihrem Konto @{login}.",
+  "acct_hint": "Tipp: Verbinden Sie Ihr GitHub-Konto unter Einstellungen > Problem melden, um Berichte direkt zu senden.",
+  "gh_window": "GitHub-Konto",
+  "gh_intro": "Verbinden Sie Ihr GitHub-Konto: Ihre Berichte gehen direkt aus Winlux unter Ihrem Namen hinaus, ohne Browser. Nichts wird gesendet, bevor Sie auf „Senden“ klicken.",
+  "gh_device": "Mit GitHub anmelden",
+  "gh_code": "Geben Sie diesen Code auf der eben geöffneten GitHub-Seite ein (er ist auch kopiert):",
+  "gh_open_page": "GitHub-Seite erneut öffnen",
+  "gh_waiting": "Warten auf Ihre Zustimmung bei GitHub…",
+  "gh_token_title": "Oder mit einem persönlichen Token",
+  "gh_token_text": "Erstellen Sie ein „classic“-Token nur mit dem Kästchen public_repo und fügen Sie es hier ein. Es bleibt in Ihrem Winlux-Konto, nur für Sie lesbar.",
+  "gh_token_create": "Token auf GitHub erstellen",
+  "gh_token_check": "Bestätigen",
+  "gh_signup": "Kostenloses GitHub-Konto erstellen",
+  "gh_close": "Schließen",
+  "gh_checking": "Prüfung bei GitHub…",
+  "gh_done": "Verbunden: @{login}.",
+  "gh_failed": "Verbindung abgelehnt: {error}",
+  "gh_expired": "Der Code ist abgelaufen: bitte erneut versuchen.",
+  "gh_denied": "Anmeldung bei GitHub abgebrochen.",
   "searching": "Suche nach einer identischen Meldung…", "sending": "Wird gesendet…",
   "sent": "Danke! Meldung gesendet: {url}", "commented": "Danke! Ihr Bericht wurde der bestehenden Meldung hinzugefügt: {url}",
   "opened": "Das GitHub-Formular ist im Browser geöffnet. Bericht gespeichert unter {path}.",
+  "opening": "Das GitHub-Formular wird geöffnet… Wählen Sie einen Browser, falls Sie gefragt werden. Bericht gespeichert unter {path}.",
+  "browser_cancelled": "Es wurde kein Browser gewählt: Das GitHub-Formular wurde nicht geöffnet. Über den Link unten können Sie es erneut öffnen. Bericht gespeichert unter {path}.",
+  "browser_pending": "Es ist kein Browser installiert: Das GitHub-Formular öffnet sich, sobald Sie unter Einstellungen > Browser einen gewählt haben. Bericht gespeichert unter {path}.",
   "copied": "Der vollständige Bericht ist für den Link zu lang: Er wurde in die Zwischenablage kopiert, fügen Sie ihn in das Formular ein.",
   "saved": "Bericht gespeichert unter {path}.", "failed": "Senden fehlgeschlagen: {error}. Der Bericht ist unter {path} gespeichert.",
   "dup_title": "Dieses Problem wurde bereits gemeldet",
@@ -496,6 +586,117 @@ def token_path(conf):
     return ""
 
 
+# Compte GitHub de l'utilisateur (#725, Paramètres > Signaler un problème) :
+# ses rapports manuels partent alors directement, sous son nom. Le jeton est
+# le sien, gardé dans son compte en 0600 ; rien n'est livré dans l'ISO.
+ACCOUNT = Path(os.environ.get("WINLUX_REPORT_ACCOUNT")
+               or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/github-account.json")
+# Identifiant public d'une application GitHub (flux « device », sans secret) :
+# tant qu'il est vide, la connexion se fait avec un jeton personnel.
+GITHUB_CLIENT_ID = ""
+GITHUB_WEB = os.environ.get("WINLUX_GITHUB_WEB", "https://github.com")
+SIGNUP_URL = "https://github.com/signup"
+ACCOUNT_TOKEN_URL = ("https://github.com/settings/tokens/new?scopes=public_repo"
+                     "&description=Winlux%20-%20signaler%20un%20probl%C3%A8me")
+TOKEN_SHAPE = re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})")
+
+
+def account():
+    """Compte connecté : {"login", "token"}, ou {} s'il n'y en a pas."""
+    try:
+        data = json.loads(ACCOUNT.read_text())
+    except (OSError, ValueError):
+        return {}
+    if isinstance(data, dict) and isinstance(data.get("token"), str) and data["token"] \
+            and isinstance(data.get("login"), str) and data["login"]:
+        return data
+    return {}
+
+
+def client_id(conf=None):
+    conf = conf or config()
+    value = conf.get("GITHUB_CLIENT_ID", "") or GITHUB_CLIENT_ID
+    return value if re.fullmatch(r"[A-Za-z0-9.]{8,64}", value) else ""
+
+
+def account_login(token):
+    """Vérifie le jeton auprès de GitHub et rend le nom du compte."""
+    login = http("GET", f"{API}/user", token=token).get("login", "")
+    if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", login):
+        raise ValueError("compte GitHub illisible")
+    return login
+
+
+def save_account(login, token, method):
+    ACCOUNT.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ACCOUNT.with_name(ACCOUNT.name + f".{os.getpid()}")
+    old = os.umask(0o077)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump({"login": login, "token": token, "method": method, "since": int(time.time())}, handle)
+        os.chmod(tmp, 0o600)
+        tmp.replace(ACCOUNT)
+    finally:
+        os.umask(old)
+
+
+def forget_account():
+    ACCOUNT.unlink(missing_ok=True)
+
+
+def connect_token(text):
+    token = text.strip()
+    if not TOKEN_SHAPE.fullmatch(token):
+        raise ValueError("jeton GitHub invalide")
+    login = account_login(token)
+    save_account(login, token, "token")
+    return login
+
+
+def device_start(cid):
+    """Flux « device » de GitHub (documentation publique) : code à saisir sur
+    github.com/login/device, aucun secret côté Winlux."""
+    answer = form_post(f"{GITHUB_WEB}/login/device/code", {"client_id": cid})
+    if not answer.get("device_code") or not answer.get("user_code"):
+        raise ValueError(answer.get("error_description") or answer.get("error") or "réponse inattendue")
+    return answer
+
+
+def device_poll(cid, device_code):
+    """Rend le jeton, None tant que l'utilisateur n'a pas répondu, ou lève
+    ValueError (expired_token, access_denied…)."""
+    answer = form_post(f"{GITHUB_WEB}/login/oauth/access_token",
+                       {"client_id": cid, "device_code": device_code,
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+    if answer.get("access_token"):
+        return answer["access_token"]
+    if answer.get("error") in ("authorization_pending", "slow_down"):
+        return None
+    raise ValueError(answer.get("error") or "réponse inattendue")
+
+
+def form_post(url, fields):
+    req = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(), method="POST")
+    req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", "winlux-report")
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as response:
+        return json.loads(response.read().decode() or "{}")
+
+
+def manual_transport(conf=None):
+    """Transport d'un rapport écrit à la main. Le jeton du système ne sert
+    qu'aux envois automatiques vérifiés par root ; le compte GitHub connecté
+    remplace le navigateur, sauf si « Par le navigateur » est choisi."""
+    conf = conf or config()
+    kind = transport(conf)
+    if kind == "system":
+        kind = "browser"
+    if kind == "browser" and conf["MODE"] == "auto" and account():
+        kind = "account"
+    return kind
+
+
 def auto_enabled(conf=None):
     conf = conf or config()
     if conf["AUTO"] == "default":
@@ -508,9 +709,8 @@ def status():
     print(f"report_offer={conf['OFFER']}")
     print(f"report_redact={conf['REDACT']}")
     print(f"report_mode={conf['MODE']}")
-    manual = transport(conf)
-    # Transport d'un rapport manuel : le jeton du système ne sert qu'aux envois automatiques.
-    print(f"report_transport={'browser' if manual == 'system' else manual}")
+    print(f"report_transport={manual_transport(conf)}")
+    print(f"report_account={account().get('login', '')}")
     print(f"report_relay={1 if conf.get('RELAY', '').startswith('https://') else 0}")
     print(f"report_auto={conf['AUTO']}")
     print(f"report_token={1 if SYSTEM_TOKEN.exists() else 0}")
@@ -994,6 +1194,10 @@ def winlux_version():
 def session_type():
     if os.environ.get("WINLUX_DESKTOP_DEMO") or Path("/run/winlux/desktop-shell").exists():
         desktop = "Bureau Winlux (shell)"
+    elif os.environ.get("WINLUX_NATIVE_SHELL") == "1" or os.environ.get("XDG_SESSION_DESKTOP") == "winlux":
+        # La session native met XDG_CURRENT_DESKTOP=XFCE pour la compatibilité
+        # des applications : ce n'est pas ce que l'utilisateur a devant lui.
+        desktop = "Session native Winlux"
     else:
         desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "?"
     display = "Wayland" if os.environ.get("WAYLAND_DISPLAY") else "X11" if os.environ.get("DISPLAY") else "console"
@@ -1341,6 +1545,9 @@ class Report:
             labels.append("compatibilité-windows")
         if kind == "internal" or self.component:
             labels.append("runtime" if not self.component else "bureau")
+        # Toute issue doit porter une urgence (règle du dépôt) : un arrêt du
+        # système bloque l'usage quotidien, le reste se trie en confort.
+        labels.append(urgency(kind))
         return labels
 
     def technical(self):
@@ -1378,7 +1585,7 @@ class Report:
             out.append("")
         if self.checks:
             out += [f"### {tr('h_checks', L)}", ""]
-            out += [f"- {'✅' if ok else '⚠️'} {text}" for ok, text in self.checks] + [""]
+            out += [f"- {'✔' if ok else '⚠'} {text}" for ok, text in self.checks] + [""]
         if self.system:
             out += [f"<details><summary>{tr('h_system', L)}</summary>", "", "```"]
             out += [l[:300].replace("```", "'''") for l in self.system["lines"]] + ["```", "", "</details>", ""]
@@ -1476,8 +1683,17 @@ def find_duplicates(report, summary="", token=None):
     return ("identical" if report.signature else "similar"), issues
 
 
-def send_api(conf, title, body, labels, issue=None):
-    kind = transport(conf)
+def send_api(conf, title, body, labels, issue=None, kind=None):
+    kind = kind or transport(conf)
+    if kind == "account":
+        # GitHub ignore les étiquettes posées par un non-membre : on les
+        # recopie en tête du corps pour le tri, comme pour le formulaire.
+        token = account()["token"]
+        if issue:
+            return http("POST", f"{API}/repos/{REPO}/issues/{issue}/comments", {"body": body}, token)["html_url"]
+        if labels and not body.startswith("> Étiquettes / Labels"):
+            body = labels_line(labels) + "\n\n" + body
+        return http("POST", f"{API}/repos/{REPO}/issues", {"title": title, "body": body, "labels": labels}, token)["html_url"]
     if kind == "relay":
         payload = {"title": title, "body": body, "labels": labels, "issue": issue}
         return http("POST", conf["RELAY"].rstrip("/") + "/report", payload).get("url", "")
@@ -1487,11 +1703,22 @@ def send_api(conf, title, body, labels, issue=None):
     return http("POST", f"{API}/repos/{REPO}/issues", {"title": title, "body": body, "labels": labels}, token)["html_url"]
 
 
+def labels_line(labels):
+    """Étiquettes voulues, recopiées en tête du corps : GitHub n'applique les
+    étiquettes du lien qu'aux membres du dépôt, on les pose donc à la main au
+    tri (le modèle rapport-winlux.md pose déjà bug, signalement-utilisateur et
+    à-trier pour tout le monde)."""
+    return "> Étiquettes / Labels : " + " ".join(f"`{l}`" for l in labels)
+
+
 def browser_url(title, body, labels, issue=None):
     """Formulaire prérempli. Les étiquettes du lien ne s'appliquent que pour les
-    membres du dépôt ; le modèle rapport-winlux.md les pose pour les autres."""
+    membres du dépôt ; pour les autres, le modèle rapport-winlux.md pose les
+    étiquettes de base et la ligne labels_line() garde les autres pour le tri."""
     if issue:
         return f"https://github.com/{REPO}/issues/{issue}#new_comment_field", False
+    if labels and not body.startswith("> Étiquettes / Labels"):
+        body = labels_line(labels) + "\n\n" + body
     base = f"https://github.com/{REPO}/issues/new?template=rapport-winlux.md&labels=" + \
         urllib.parse.quote(",".join(labels)) + "&title=" + urllib.parse.quote(title) + "&body="
     full = base + urllib.parse.quote(body)
@@ -1515,6 +1742,49 @@ def open_url(url):
     return False
 
 
+BROWSER_STATES = ("ouvert", "annule", "attente")
+
+
+def open_url_watched(url):
+    """Ouvre le lien par winlux-browser en suivant ce qu'il en fait.
+
+    Renvoie une fonction d'état : None tant que rien n'est décidé (fenêtre de
+    choix du navigateur encore ouverte), puis « ouvert », « annule » (choix
+    annulé, rien ne s'ouvre) ou « attente » (aucun navigateur : le lien est
+    gardé jusqu'au choix). Renvoie None si winlux-browser est absent : on ne
+    sait alors rien de plus que « lancé »."""
+    browser = shutil.which("winlux-browser")
+    if not browser:
+        return None
+    fd, status = tempfile.mkstemp(prefix="navigateur-", dir=str(STATE) if STATE.is_dir() else None)
+    os.close(fd)
+    env = dict(os.environ, WINLUX_BROWSER_STATUS=status)
+    try:
+        process = subprocess.Popen([browser, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=True, env=env)
+    except OSError:
+        os.unlink(status)
+        return None
+
+    def state():
+        try:
+            text = Path(status).read_text().strip()
+        except OSError:
+            text = ""
+        if text not in BROWSER_STATES:
+            code = process.poll()
+            if code is None:
+                return None
+            # Sorti sans rien dire (ancien winlux-browser) : ouvert si code 0.
+            text = "ouvert" if code == 0 else "annule"
+        try:
+            os.unlink(status)
+        except OSError:
+            pass
+        return text
+    return state
+
+
 def save_report(title, body):
     directory = STATE / "reports"
     directory.mkdir(parents=True, exist_ok=True)
@@ -1528,7 +1798,7 @@ def mark_offered(crash):
     réagissent tous les deux."""
     if not crash:
         return True
-    marker = RUN / "report-offered"
+    marker = JOURNAL / "report-offered"  # par compte (#633)
     key = f"{crash.get('ts')}-{crash.get('pid')}"
     try:
         if marker.read_text().strip() == key:
@@ -1540,7 +1810,7 @@ def mark_offered(crash):
     except OSError:
         pass
     try:
-        (RUN / "crash-offer").unlink()
+        (JOURNAL / "crash-offer").unlink()
     except OSError:
         pass
     return True
@@ -1618,7 +1888,7 @@ def enqueue(report, key):
             old.unlink(missing_ok=True)
     description = tr("auto_desc", "fr")
     item = {"key": key, "signature": report.signature, "kind": report.kind(), "created": int(time.time()),
-            "title": report.title(), "labels": report.labels() + [auto_urgency(report)],
+            "title": report.title(), "labels": report.labels(),
             "body": report.body(description, redacted=True),
             "comment": report.body(description, redacted=True, comment=True)}
     name = time.strftime("%Y%m%d-%H%M%S-") + hashlib.sha256(key.encode()).hexdigest()[:8] + ".json"
@@ -1626,8 +1896,9 @@ def enqueue(report, key):
     auto_log(f"en file : {report.signature or key} ({item['kind']})")
 
 
-def auto_urgency(report):
-    return "urgence:1-quotidien" if report.kind() == "system" else "urgence:2-confort"
+def urgency(kind):
+    """Étiquette d'urgence d'un rapport (noms des étiquettes du dépôt)."""
+    return "urgence:1-quotidien" if kind == "system" else "urgence:2-confort"
 
 
 def collect():
@@ -1964,6 +2235,136 @@ class Lock_at(Lock):
 
 # ── Interface ────────────────────────────────────────────────────────────
 
+def account_gui():
+    """Fenêtre « Compte GitHub » ouverte depuis Paramètres (qui relit l'état
+    à sa fermeture)."""
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, Gdk, GLib
+
+    cid = client_id()
+    win = Gtk.Window(title=f"{tr('gh_window')} — Winlux")
+    win.set_default_size(560, -1)
+    win.set_resizable(False)
+    win.connect("destroy", Gtk.main_quit)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=20)
+    win.add(box)
+    box.pack_start(Gtk.Label(label=tr("gh_intro"), xalign=0, wrap=True, max_width_chars=70), False, False, 0)
+    notice = Gtk.Label(label="", xalign=0, wrap=True, selectable=True, max_width_chars=70)
+    state = {"busy": False, "url": ""}
+
+    def connected(login):
+        notice.set_text(tr("gh_done", login=login))
+        GLib.timeout_add(1200, lambda: win.destroy() or False)
+
+    def failed(message):
+        state["busy"] = False
+        notice.set_text(message)
+
+    def guarded(work, *values):
+        if state["busy"]:
+            return
+        state["busy"] = True
+        notice.set_text(tr("gh_checking"))
+        threading.Thread(target=work, args=values, daemon=True).start()
+
+    if cid:
+        device = Gtk.Button(label=tr("gh_device"))
+        device.get_style_context().add_class("suggested-action")
+        device.set_halign(Gtk.Align.START)
+        box.pack_start(device, False, False, 0)
+        code_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        code_box.set_no_show_all(True)
+        code_text = Gtk.Label(label=tr("gh_code"), xalign=0, wrap=True)
+        code = Gtk.Label(label="", xalign=0, selectable=True)
+        reopen = Gtk.Button(label=tr("gh_open_page"))
+        reopen.set_halign(Gtk.Align.START)
+        reopen.connect("clicked", lambda *_: state["url"] and open_url(state["url"]))
+        for widget in (code_text, code, reopen):
+            code_box.pack_start(widget, False, False, 0)
+        box.pack_start(code_box, False, False, 0)
+
+        def show_code(answer):
+            state["url"] = answer.get("verification_uri") or f"{GITHUB_WEB}/login/device"
+            code.set_markup(f"<span size='xx-large' weight='bold'>{GLib.markup_escape_text(answer['user_code'])}</span>")
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(answer["user_code"], -1)
+            code_box.set_no_show_all(False)
+            code_box.show_all()
+            notice.set_text(tr("gh_waiting"))
+            open_url(state["url"])
+
+        def device_work():
+            try:
+                answer = device_start(cid)
+                GLib.idle_add(show_code, answer)
+                interval = max(5, int(answer.get("interval", 5)))
+                deadline = time.time() + int(answer.get("expires_in", 900))
+                while time.time() < deadline:
+                    time.sleep(interval)
+                    try:
+                        token = device_poll(cid, answer["device_code"])
+                    except ValueError as error:
+                        key = {"expired_token": "gh_expired", "access_denied": "gh_denied"}.get(str(error))
+                        GLib.idle_add(failed, tr(key) if key else tr("gh_failed", error=error))
+                        return
+                    if token:
+                        login = account_login(token)
+                        save_account(login, token, "device")
+                        GLib.idle_add(connected, login)
+                        return
+                GLib.idle_add(failed, tr("gh_expired"))
+            except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
+                GLib.idle_add(failed, tr("gh_failed", error=error))
+        device.connect("clicked", lambda *_: guarded(device_work))
+
+    token_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    token_box.pack_start(Gtk.Label(label=tr("gh_token_text"), xalign=0, wrap=True, max_width_chars=70), False, False, 0)
+    create = Gtk.Button(label=tr("gh_token_create"))
+    create.set_halign(Gtk.Align.START)
+    create.connect("clicked", lambda *_: open_url(ACCOUNT_TOKEN_URL))
+    token_box.pack_start(create, False, False, 0)
+    line = Gtk.Box(spacing=8)
+    entry = Gtk.Entry(visibility=False, hexpand=True)
+    entry.get_accessible().set_name(tr("gh_token_title"))
+    check = Gtk.Button(label=tr("gh_token_check"))
+    line.pack_start(entry, True, True, 0)
+    line.pack_start(check, False, False, 0)
+    token_box.pack_start(line, False, False, 0)
+
+    def token_work(text):
+        try:
+            login = connect_token(text)
+            GLib.idle_add(connected, login)
+        except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
+            GLib.idle_add(failed, tr("gh_failed", error=error))
+
+    def on_check(*_):
+        text = entry.get_text()
+        entry.set_text("")
+        guarded(token_work, text)
+    check.connect("clicked", on_check)
+    entry.connect("activate", on_check)
+    if cid:
+        expander = Gtk.Expander(label=tr("gh_token_title"))
+        expander.add(token_box)
+        box.pack_start(expander, False, False, 0)
+    else:
+        box.pack_start(token_box, False, False, 0)
+    box.pack_start(notice, False, False, 0)
+    buttons = Gtk.Box(spacing=8)
+    signup = Gtk.Button(label=tr("gh_signup"))
+    signup.connect("clicked", lambda *_: open_url(SIGNUP_URL))
+    close = Gtk.Button(label=tr("gh_close"))
+    close.connect("clicked", lambda *_: win.destroy())
+    buttons.pack_start(signup, False, False, 0)
+    buttons.pack_end(close, False, False, 0)
+    box.pack_end(buttons, False, False, 0)
+    win.show_all()
+    Gtk.main()
+    return 0
+
+
 def gui(report, conf):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -2068,12 +2469,12 @@ def gui(report, conf):
     expander.set_expanded(True)
     box.pack_start(expander, True, True, 0)
 
-    kind = transport(conf)
-    if kind == "system":
-        # Le jeton du système ne sert qu'aux rapports automatiques vérifiés par
-        # root : un rapport libre passe par le navigateur.
-        kind = "browser"
-    via = Gtk.Label(label=tr("via_" + kind, L), xalign=0, wrap=True)
+    kind = manual_transport(conf)
+    if kind == "account":
+        via_text = tr("via_account", L, login=account().get("login", "?"))
+    else:
+        via_text = tr("via_" + kind, L) + ("\n" + tr("acct_hint", L) if kind == "browser" else "")
+    via = Gtk.Label(label=via_text, xalign=0, wrap=True)
     box.pack_start(via, False, False, 0)
     notice = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
     box.pack_start(notice, False, False, 0)
@@ -2164,12 +2565,12 @@ def gui(report, conf):
         if issue:
             body = f"### {tr('h_comment', L)}\n\n" + body
         path = save_report(title, body)
-        if kind in ("relay", "token"):
+        if kind in ("relay", "token", "account"):
             busy(tr("sending", L))
 
             def work():
                 try:
-                    url = send_api(conf, title, body, labels, issue)
+                    url = send_api(conf, title, body, labels, issue, kind)
                     GLib.idle_add(finish, tr("commented" if issue else "sent", L, url=url), url)
                 except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
                     GLib.idle_add(fallback, title, body, labels, issue, path, str(error))
@@ -2188,7 +2589,7 @@ def gui(report, conf):
         """Tant que le relais n'est pas en ligne, l'envoi passe par le site
         GitHub : on le dit clairement avant d'ouvrir le navigateur."""
         dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.INFO,
-                                   text=tr("acct_title", L))
+                                   text=tr("acct_title", L), title=tr("window", L))
         notice.set_text("")
         dialog.format_secondary_text(tr("acct_text", L, path=path))
         dialog.add_button(tr("acct_later", L), 0)
@@ -2208,17 +2609,29 @@ def gui(report, conf):
         url, truncated = browser_url(title, body, labels, issue)
         if truncated or issue:
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(body, -1)
-        opened = open_url(url)
-        message = tr("opened", L, path=path) if opened else tr("saved", L, path=path)
-        if error:
-            message = tr("failed", L, error=error, path=path) + " " + message
-        if truncated or issue:
-            message += " " + tr("copied", L)
-        finish(message, url)
+        prefix = tr("failed", L, error=error, path=path) + " " if error else ""
+        suffix = " " + tr("copied", L) if truncated or issue else ""
+        state = open_url_watched(url)
+        if state is None:
+            opened = open_url(url)
+            finish(prefix + (tr("opened", L, path=path) if opened else tr("saved", L, path=path)) + suffix, url)
+            return
+        # La fenêtre de choix du navigateur peut rester ouverte : on n'annonce
+        # le formulaire ouvert qu'une fois le navigateur réellement lancé.
+        finish(prefix + tr("opening", L, path=path) + suffix, url)
+        messages = {"ouvert": "opened", "annule": "browser_cancelled", "attente": "browser_pending"}
+
+        def poll():
+            result = state()
+            if result is None:
+                return True
+            notice.set_text(prefix + tr(messages[result], L, path=path) + suffix)
+            return False
+        GLib.timeout_add(300, poll)
 
     def ask_duplicate(found, issues):
         dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                   text=tr("dup_title", L))
+                                   text=tr("dup_title", L), title=tr("window", L))
         if found == "identical":
             dialog.format_secondary_text(tr("dup_text", L, number=issues[0]["number"], title=issues[0]["title"]))
             choices = issues[:1]
@@ -2296,6 +2709,22 @@ def main(argv):
         return 0
     if "--send-stdin" in args:
         return send_stdin()
+    if "--account-status" in args:
+        print(f"account_login={account().get('login', '')}")
+        print(f"account_device={1 if client_id() else 0}")
+        return 0
+    if "--account-forget" in args:
+        forget_account()
+        return 0
+    if "--account-token" in args:
+        # Jeton lu sur l'entrée standard, jamais sur la ligne de commande.
+        try:
+            print(connect_token(sys.stdin.read()))
+        except (OSError, ValueError, urllib.error.URLError) as error:
+            raise SystemExit(f"winlux-report: {error}")
+        return 0
+    if "--account-connect" in args:
+        return account_gui()
     if "--open-saved" in args:
         directory = STATE / "reports"
         directory.mkdir(parents=True, exist_ok=True)

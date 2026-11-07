@@ -80,7 +80,7 @@ fn dialogs() -> &'static Mutex<HashMap<usize, Dialog>> {
     D.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn is_dialog(hwnd: usize) -> bool {
+pub(crate) fn is_dialog(hwnd: usize) -> bool {
     lock(dialogs()).contains_key(&hwnd)
 }
 
@@ -730,6 +730,23 @@ unsafe fn set_dlg_focus(dlg: usize, target: usize) {
     // Un champ reçoit tout son texte sélectionné, comme sous Windows.
     if dlg_code(target, None) & DLGC_HASSETSEL != 0 {
         user32::send_message_w(target, 0x00B1, 0, -1);
+    }
+}
+
+/// SetFocus sur un contrôle : son dialogue s'en souvient, pour le lui
+/// rendre quand le focus revient au dialogue. Sans cela, un clic sur « Non »
+/// donnait le focus au bouton, puis le retour du focus X au dialogue le
+/// rendait à « Oui » et le bouton perdait son appui (#709).
+pub fn note_focus(hwnd: usize) {
+    let mut h = gui::window_parent(hwnd).unwrap_or(0);
+    let mut guard = 0;
+    while h != 0 && guard < 64 {
+        if let Some(d) = lock(dialogs()).get_mut(&h) {
+            d.focus = hwnd;
+            return;
+        }
+        h = gui::window_parent(h).unwrap_or(0);
+        guard += 1;
     }
 }
 

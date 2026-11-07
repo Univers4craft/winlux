@@ -5,14 +5,14 @@ description: Las nuevas versiones de Winlux se instalan desde Configuración, co
 
 ## Desde Configuración
 
-1. Abra **Configuración › Actualizaciones**.
+1. Abra **Configuración › Actualizaciones › Actualización del SO**.
 2. Pulse **«Buscar»**. La página indica la versión instalada y la versión disponible.
 3. Si existe una versión más reciente, pulse **«Instalar»** y siga el progreso.
 4. Reinicie cuando le venga bien: Winlux nunca fuerza el reinicio.
 
-![La página Actualizaciones](img:mises-a-jour.jpg "Configuración › Actualizaciones: versión instalada, versión disponible, actualizaciones automáticas.")
+![La página Actualización del SO](img:mises-a-jour.jpg "Configuración › Actualizaciones › Actualización del SO: versión instalada, versión disponible, actualizaciones automáticas.")
 
-En la misma página, **«Actualizaciones automáticas»** instala las nuevas versiones sin que tenga que intervenir. Los paquetes del sistema base se actualizan en **Configuración › Actualizaciones del sistema**.
+En la misma página, **«Actualizaciones automáticas»** instala las nuevas versiones sin que tenga que intervenir. Los paquetes del sistema base se actualizan en **Configuración › Actualizaciones › Actualización de aplicaciones**.
 
 ## Lo que protege su sistema
 

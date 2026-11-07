@@ -424,7 +424,7 @@ def run_window(start_hidden=False):
             if self.window is not None:
                 return self.window
             window = Gtk.ApplicationWindow(application=self, title=_t("Clavier tactile"))
-            window.set_icon_name("input-keyboard")
+            window.set_icon_name("winlux-osk")
             window.set_accept_focus(False)
             window.set_focus_on_map(False)
             window.set_keep_above(True)
@@ -486,7 +486,7 @@ def tray_output():
     """Sortie genmon : l'icône quand elle est voulue, rien sinon (greffon vide)."""
     icon = tray_icon() if icon_wanted() else None
     if icon is None:
-        return "<txt></txt>"
+        return "<txt></txt><tool></tool>"  # sans infobulle « (genmon) » (#645)
     command = "/usr/bin/winlux-osk" if Path("/usr/bin/winlux-osk").exists() else f"python3 {Path(__file__).resolve()}"
     return f"<img>{icon}</img><tool>{_t('Clavier tactile')}</tool><click>{command} toggle</click>"
 

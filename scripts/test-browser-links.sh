@@ -37,7 +37,8 @@ browser() { sh "$project/integration/winlux-browser" "$@"; }
 fail() { echo "ÉCHEC : $*" >&2; exit 1; }
 
 # 1. Aucun navigateur : le choix s'ouvre et le lien est gardé.
-browser 'https://example.invalid/connexion?code=1&state=a b' 2>/dev/null || true
+WINLUX_BROWSER_STATUS="$work/etat" browser 'https://example.invalid/connexion?code=1&state=a b' 2>/dev/null || true
+test "$(cat "$work/etat")" = attente || fail "état sans navigateur : $(cat "$work/etat" 2>/dev/null)"
 test -f "$run/browser-chooser" || fail "le choix du navigateur ne s'ouvre pas sans navigateur"
 grep -Fxq 'https://example.invalid/connexion?code=1&state=a b' "$pending" || fail 'lien perdu pendant le choix'
 # Toujours aucun navigateur : le lien attend.
@@ -91,7 +92,9 @@ printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s"\n' "$work/controle" > "$work/bin/
 chmod 755 "$work/bin/winlux-control"
 export WINLUX_BROWSER_CHOICE="$work/choix"
 printf 'catalogue:firefox\n' > "$work/reponse"
-WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/choix'
+rm -f "$work/etat"
+WINLUX_BROWSER_STATUS="$work/etat" WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/choix'
+test "$(cat "$work/etat")" = ouvert || fail "état après choix : $(cat "$work/etat" 2>/dev/null)"
 printf 'catalogue:chrome\ncatalogue:firefox\nsysteme:autre-navigateur\n' | cmp -s - "$work/propose" || fail "navigateurs proposés : $(cat "$work/propose")"
 test "$(sed -n 1p "$log")" = firefox || fail "choix ignoré : $(cat "$log")"
 grep -Fxq 'https://example.invalid/choix' "$log"
@@ -101,9 +104,11 @@ printf 'systeme:autre-navigateur\n' > "$work/reponse"
 WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/systeme-choisi'
 test "$(sed -n 1p "$log")" = system || fail "choix du système ignoré : $(cat "$log")"
 # Annuler : rien ne s'ouvre, pas d'écran Paramètres.
-rm -f "$work/reponse" "$log"
-WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/annule'
+rm -f "$work/reponse" "$log" "$work/etat"
+WINLUX_BROWSER_STATUS="$work/etat" WINLUX_BROWSER_CANDIDATES=autre-navigateur browser 'https://example.invalid/annule'
 test ! -e "$log" || fail 'navigateur ouvert après Annuler'
+# winlux-report lit cet état pour ne pas annoncer un formulaire jamais ouvert (#612).
+test "$(cat "$work/etat")" = annule || fail "état après Annuler : $(cat "$work/etat" 2>/dev/null)"
 test ! -e "$run/browser-chooser" || fail 'Paramètres ouverts après Annuler'
 # « Toujours utiliser ce navigateur » : il devient le navigateur par défaut.
 printf 'toujours catalogue:chrome\n' > "$work/reponse"
@@ -112,9 +117,10 @@ test "$(sed -n 1p "$log")" = chrome || fail "choix « toujours » ignoré : $(ca
 for attempt in 1 2 3 4 5 6 7 8 9 10; do test -s "$work/controle" && break; sleep 0.2; done
 test "$(cat "$work/controle")" = browser-default-chrome || fail "navigateur par défaut non enregistré : $(cat "$work/controle" 2>/dev/null)"
 # Réponse inconnue : rien n'est lancé.
-printf 'systeme:rm\n' > "$work/reponse"; rm -f "$log"
-browser 'https://example.invalid/inconnu'
+printf 'systeme:rm\n' > "$work/reponse"; rm -f "$log" "$work/etat"
+WINLUX_BROWSER_STATUS="$work/etat" browser 'https://example.invalid/inconnu'
 test ! -e "$log" || fail 'réponse inconnue lancée'
+test "$(cat "$work/etat")" = annule || fail "état après réponse inconnue : $(cat "$work/etat" 2>/dev/null)"
 # Un seul navigateur : pas de fenêtre.
 rm -rf "${installed:?}/chrome" "$work/propose"
 browser 'https://example.invalid/seul'

@@ -1014,7 +1014,10 @@ pub extern "win64" fn image_list_add_masked(himl: usize, bmp: usize, key: u32) -
     let Some((w, h, px, alpha)) = gui::bitmap_pixels(bmp) else {
         return -1;
     };
-    let any_alpha = alpha && px.iter().any(|p| p >> 24 != 0);
+    // Un canal alpha ne compte que s'il varie : LoadBitmap rend des DIB
+    // 32 bits entièrement opaques (7-Zip), dont le fond magenta doit
+    // disparaître par la couleur de masque.
+    let any_alpha = alpha && px.iter().any(|p| p >> 24 != 0) && px.iter().any(|p| p >> 24 != 0xFF);
     let key = key & 0x00FF_FFFF;
     let px = px
         .into_iter()
@@ -1196,6 +1199,242 @@ pub extern "win64" fn image_list_duplicate(himl: usize) -> usize {
     let h = gui::next_handle(0x0021_0000);
     lock(lists()).insert(h, copy);
     h
+}
+
+/// ImageList_Copy : copie (ILCF_MOVE) ou échange (ILCF_SWAP) deux images,
+/// dans la même liste ou entre deux listes.
+pub extern "win64" fn image_list_copy(
+    dst: usize,
+    idst: i32,
+    src: usize,
+    isrc: i32,
+    flags: u32,
+) -> i32 {
+    const ILCF_SWAP: u32 = 1;
+    let (Some(a), Some(b)) = (list_image(src, isrc), list_image(dst, idst)) else {
+        return 0;
+    };
+    let put = |h: usize, i: i32, img: Image| {
+        with_list(h, |l| {
+            let img = img.scaled(l.cx, l.cy);
+            l.images[i as usize] = img;
+        })
+    };
+    put(dst, idst, a);
+    if flags & ILCF_SWAP != 0 {
+        put(src, isrc, b);
+    }
+    1
+}
+
+/// IMAGELISTDRAWPARAMS x64 : himl 8, i 16, hdcDst 24, x 32, y 36, cx 40,
+/// cy 44, rgbBk 56, rgbFg 60, fStyle 64.
+pub unsafe extern "win64" fn image_list_draw_indirect(p: *const u8) -> i32 {
+    if p.is_null() {
+        return 0;
+    }
+    let u = |o: usize| (p.add(o) as *const u32).read_unaligned();
+    let h = |o: usize| (p.add(o) as *const usize).read_unaligned();
+    image_list_draw_ex(
+        h(8),
+        u(16) as i32,
+        h(24),
+        u(32) as i32,
+        u(36) as i32,
+        u(40) as i32,
+        u(44) as i32,
+        u(56),
+        u(60),
+        u(64),
+    )
+}
+
+/// ImageList_GetDragImage : Winlux ne garde pas d'image de glissement.
+pub unsafe extern "win64" fn image_list_get_drag_image(
+    pt: *mut [i32; 2],
+    hot: *mut [i32; 2],
+) -> usize {
+    for q in [pt, hot] {
+        if !q.is_null() {
+            *q = [0, 0];
+        }
+    }
+    0
+}
+
+const IL_MAGIC: u16 = 0x4C49; // « IL »
+const IL_HEADER: usize = 28;
+
+/// Appelle IStream::Read (index 3) ou IStream::Write (index 4).
+unsafe fn stream_io(stream: usize, write: bool, buf: *mut u8, n: usize) -> bool {
+    let vt = *(stream as *const *const usize);
+    let f: unsafe extern "win64" fn(usize, *mut u8, u32, *mut u32) -> i32 =
+        std::mem::transmute(*vt.add(if write { 4 } else { 3 }));
+    let mut done = 0u32;
+    f(stream, buf, n as u32, &mut done) >= 0 && done as usize == n
+}
+
+/// Fichier BMP 32 bits (de haut en bas) des images, `cols` par ligne.
+fn bmp_file(images: &[Image], cx: usize, cy: usize, cols: usize) -> Vec<u8> {
+    let rows = images.len().div_ceil(cols).max(1);
+    let (w, h) = (cx * cols, cy * rows);
+    let bits = w * h * 4;
+    let mut d = Vec::with_capacity(54 + bits);
+    d.extend(b"BM");
+    d.extend(((54 + bits) as u32).to_le_bytes());
+    d.extend(0u32.to_le_bytes());
+    d.extend(54u32.to_le_bytes());
+    d.extend(40u32.to_le_bytes());
+    d.extend((w as i32).to_le_bytes());
+    d.extend((-(h as i32)).to_le_bytes());
+    d.extend(1u16.to_le_bytes());
+    d.extend(32u16.to_le_bytes());
+    d.extend([0u8; 24]);
+    let mut px = vec![0u32; w * h];
+    for (k, img) in images.iter().enumerate() {
+        let (ox, oy) = ((k % cols) * cx, (k / cols) * cy);
+        for y in 0..cy.min(img.h) {
+            for x in 0..cx.min(img.w) {
+                px[(oy + y) * w + ox + x] = img.px[y * img.w + x];
+            }
+        }
+    }
+    for c in px {
+        // COLORREF (rouge en bas) vers BGRA.
+        let (r, g, b, a) = (c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, c >> 24);
+        d.extend([b as u8, g as u8, r as u8, a as u8]);
+    }
+    d
+}
+
+/// ImageList_Write : en-tête « IL » de 28 octets (nombre d'images, taille,
+/// couleur de fond, drapeaux) puis un BMP 32 bits avec alpha, quatre images
+/// par ligne. Pas de masque séparé : l'alpha le remplace.
+pub unsafe extern "win64" fn image_list_write(himl: usize, stream: usize) -> i32 {
+    const ILC_MASK: u32 = 1;
+    if stream == 0 {
+        return 0;
+    }
+    let Some(l) = lock(lists()).get(&himl).cloned() else {
+        return 0;
+    };
+    let n = l.images.len() as u16;
+    let mut d = Vec::with_capacity(IL_HEADER);
+    d.extend(IL_MAGIC.to_le_bytes());
+    d.extend(0x0101u16.to_le_bytes());
+    d.extend(n.to_le_bytes());
+    d.extend(n.max(4).to_le_bytes());
+    d.extend(4u16.to_le_bytes());
+    d.extend((l.cx as u16).to_le_bytes());
+    d.extend((l.cy as u16).to_le_bytes());
+    d.extend(l.bk.to_le_bytes());
+    d.extend(((l.flags & !ILC_MASK & 0xFFFF) as u16 | 0x20).to_le_bytes());
+    d.extend([0xFFu8; 8]); // pas d'image de superposition
+    d.extend(bmp_file(&l.images, l.cx, l.cy, 4));
+    stream_io(stream, true, d.as_mut_ptr(), d.len()) as i32
+}
+
+/// Lit un BMP complet du flux (en-tête de fichier compris).
+unsafe fn read_bmp(stream: usize) -> Option<Image> {
+    let mut fh = [0u8; 14];
+    if !stream_io(stream, false, fh.as_mut_ptr(), 14) || &fh[..2] != b"BM" {
+        return None;
+    }
+    let total = rd32(&fh, 2)? as usize;
+    if !(14 + 40..=64 << 20).contains(&total) {
+        return None;
+    }
+    let mut d = vec![0u8; total - 14];
+    if !stream_io(stream, false, d.as_mut_ptr(), d.len()) {
+        return None;
+    }
+    // decode_dib attend les couleurs juste après les en-têtes : bfOffBits
+    // compte depuis le début du fichier.
+    let off = rd32(&fh, 10)? as usize;
+    let hsize = rd32(&d, 0)? as usize;
+    let bpp = rd16(&d, 14)? as usize;
+    let used = rd32(&d, 32)? as usize;
+    let pal = if bpp <= 8 {
+        if used != 0 {
+            used
+        } else {
+            1 << bpp
+        }
+    } else {
+        0
+    };
+    let masks = if rd32(&d, 16)? == 3 && hsize == 40 {
+        12
+    } else {
+        0
+    };
+    let natural = 14 + hsize + masks + pal * 4;
+    if off > natural && off - 14 <= d.len() {
+        let mut v = d[..natural - 14].to_vec();
+        v.extend(&d[off - 14..]);
+        d = v;
+    }
+    decode_dib(&d, false)
+}
+
+/// ImageList_Read : relit le format d'ImageList_Write, et plus largement
+/// tout flux « IL » suivi d'un BMP d'images (puis d'un BMP de masque si le
+/// drapeau ILC_MASK est mis) : les images sont prises de gauche à droite
+/// puis de haut en bas.
+pub unsafe extern "win64" fn image_list_read(stream: usize) -> usize {
+    const ILC_MASK: u32 = 1;
+    if stream == 0 {
+        return 0;
+    }
+    let mut h = [0u8; IL_HEADER];
+    if !stream_io(stream, false, h.as_mut_ptr(), IL_HEADER) || rd16(&h, 0) != Some(IL_MAGIC) {
+        return 0;
+    }
+    let count = rd16(&h, 4).unwrap_or(0) as usize;
+    let cx = rd16(&h, 10).unwrap_or(0) as usize;
+    let cy = rd16(&h, 12).unwrap_or(0) as usize;
+    let bk = rd32(&h, 14).unwrap_or(CLR_NONE);
+    let flags = rd16(&h, 18).unwrap_or(0) as u32;
+    if cx == 0 || cy == 0 || cx > 1024 || cy > 1024 {
+        return 0;
+    }
+    let mut images = Vec::new();
+    if count > 0 {
+        let Some(mut strip) = read_bmp(stream) else {
+            return 0;
+        };
+        if flags & ILC_MASK != 0 {
+            if let Some(mask) = read_bmp(stream) {
+                let any_alpha = strip.px.iter().any(|p| p >> 24 != 0xFF);
+                if !any_alpha && mask.w == strip.w && mask.h == strip.h {
+                    for (p, m) in strip.px.iter_mut().zip(&mask.px) {
+                        if m & 0x00FF_FFFF != 0 {
+                            *p = 0;
+                        }
+                    }
+                }
+            }
+        }
+        let cols = (strip.w / cx).max(1);
+        for k in 0..count {
+            let (ox, oy) = ((k % cols) * cx, (k / cols) * cy);
+            let mut img = Image::blank(cx, cy);
+            for y in 0..cy {
+                for x in 0..cx {
+                    if ox + x < strip.w && oy + y < strip.h {
+                        img.px[y * cx + x] = strip.px[(oy + y) * strip.w + ox + x];
+                    }
+                }
+            }
+            images.push(img);
+        }
+    }
+    let himl = create_list(cx, cy, flags);
+    with_list(himl, |l| {
+        l.images = images;
+        l.bk = bk;
+    });
+    himl
 }
 
 /// IMAGEINFO : hbmImage, hbmMask, Unused1, Unused2, rcImage.
@@ -1407,6 +1646,11 @@ pub fn comctl32_overrides() -> crate::dlls::Exports {
         "ImageList_GetIcon" => fn image_list_get_icon,
         "ImageList_Duplicate" => fn image_list_duplicate,
         "ImageList_GetImageInfo" => fn image_list_get_image_info,
+        "ImageList_Copy" => fn image_list_copy,
+        "ImageList_DrawIndirect" => fn image_list_draw_indirect,
+        "ImageList_GetDragImage" => fn image_list_get_drag_image,
+        "ImageList_Read" => fn image_list_read,
+        "ImageList_Write" => fn image_list_write,
         "ImageList_LoadImageW" => fn image_list_load_image_w,
         "ImageList_LoadImageA" => fn image_list_load_image_a,
         "ImageList_LoadImage" => fn image_list_load_image_a,
@@ -1446,6 +1690,19 @@ mod tests {
         d.extend([0b0100_0000, 0, 0, 0]);
         d.extend([0, 0, 0, 0]);
         d
+    }
+
+    /// 7-Zip : bitmap 32 bits entièrement opaque à fond magenta ; la couleur
+    /// de masque d'ImageList_AddMasked doit quand même s'appliquer (#504).
+    #[test]
+    fn add_masked_retire_le_magenta_d_une_bitmap_opaque() {
+        let magenta = 0x00FF_00FF;
+        let px = [0xFF00_0000 | magenta, 0xFF00_00FF];
+        let bmp = gui::bitmap_from_pixels(2, 1, &px).unwrap();
+        let list = create_list(1, 1, 0x21);
+        assert_eq!(image_list_add_masked(list, bmp, magenta), 0);
+        assert_eq!(list_image(list, 0).unwrap().px[0] >> 24, 0);
+        assert_eq!(list_image(list, 1).unwrap().px[0], 0xFF00_00FF);
     }
 
     #[test]

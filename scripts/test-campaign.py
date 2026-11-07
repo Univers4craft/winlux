@@ -157,11 +157,12 @@ with patch("os.getuid", return_value=1000), patch("pwd.getpwuid", return_value=e
 state = {"text": "final", "rendered": 0}
 fake = SimpleNamespace(all_apps=False,
                        search=SimpleNamespace(get_text=lambda: state["text"], set_text=lambda text: state.update(text=text)),
-                       render=lambda: state.update(rendered=state["rendered"] + 1))
+                       render=lambda: state.update(rendered=state["rendered"] + 1),
+                       scroll_top=lambda: state.update(top=state.get("top", 0) + 1))
 menu["Start"].toggle_list(fake)
 ok(state["text"] == "" and fake.all_apps is False and state["rendered"] == 1, "« Retour » efface la recherche en cours")
 menu["Start"].toggle_list(fake)
-ok(fake.all_apps is True, "« Toutes les applications » s'ouvre sans recherche")
+ok(fake.all_apps is True and state.get("top") == 2, "« Toutes les applications » s'ouvre sans recherche, liste en haut")
 
 # ── Terminal Winlux : coller ce qui a été copié (signalé par damien) ───────
 with tempfile.TemporaryDirectory() as directory:
@@ -242,6 +243,9 @@ for script in ("winlux-native-session.sh", "winlux-user-session.sh"):
     ok("/usr/games" in (SCRIPTS / script).read_text(), f"{script} : /usr/games dans PATH (jeux visibles dans le menu)")
 ok("pkill -USR1 -x picom" in (SCRIPTS / "winlux-native-session.sh").read_text(),
    "premier démarrage : Bienvenue repeinte après l'arrivée du bureau")
+ok('"_WINLUX_MAXIMIZED = 1"; corner-radius = 0' in (ROOT / "integration/native/config/picom/picom.conf").read_text()
+   and all("/usr/bin/winlux-maximized-watch" in (SCRIPTS / s).read_text() for s in ("winlux-native-session.sh", "winlux-user-session.sh")),
+   "fenêtre agrandie : coins carrés, fond d'écran invisible aux coins (#582)")
 installer = (SCRIPTS / "winlux-installer.py").read_text()
 ok('"root/Bureau/winlux-installer.desktop"' in installer, "système installé : « Installer Winlux » retiré du bureau")
 ok('"winlux-power", "now", "reboot"' in installer or '[power, "now", "reboot"]' in installer,
@@ -412,6 +416,15 @@ ok(shipped_rc.findtext(f"{OB}mouse/{OB}screenEdgeWarpTime") == "0",
 ok(all("winlux-snap watch" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
    "ancrage à la souris lancé avec la session (compte et live)")
 
+# ── Assistant d'ancrage (#585) ─────────────────────────────────────────────
+snap_tool = runpy.run_path(str(SCRIPTS / "winlux-snap.py"), run_name="campaign_snap")
+snap_area = (0, 0, 1366, 728)
+ok(snap_tool["free_zones"](snap_tool["following_zones"]("quarter:tr"), snap_area, [snap_tool["zone_rect"]("half:left", snap_area)]) == ["quarter:br"],
+   "assistant d'ancrage : après un coin, seule la place encore libre est proposée")
+ok(snap_tool["card_grid"](683, 364, 1, 6)[0] >= 2, "assistant d'ancrage lisible dans un quart en 1366x768")
+ok(snap_tool["group_members"]("a", {"a": ("g", "half:left"), "b": ("g", "half:right")}) == ["a", "b"],
+   "groupe d'ancrage : deux fenêtres ancrées ensemble se restaurent ensemble (#597)")
+
 # ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
 for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
     ok([p for _, p in menu["settings_for"](query)][:1] == [page], f"recherche « {query} » : page {page} des Paramètres")
@@ -422,9 +435,17 @@ with tempfile.TemporaryDirectory() as directory:
     native_config(home)
     panel = ET.parse(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
     order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
-    after = [panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value") for number in order[order.index('1') + 1:order.index('1') + 3]]
-    ok([item.get("value").rsplit("/", 1)[-1] if item is not None else None for item in after] == ["winlux-search.desktop", "winlux-taskview.desktop"],
-       "profil neuf : boutons Rechercher et Vue des tâches juste après Démarrer")
+    def button(number):
+        """Lanceur (fichier .desktop) ou genmon (commande) d'un greffon."""
+        item = panel.find(f".//property[@name='plugin-{number}']/property[@name='items']/value")
+        command = panel.find(f".//property[@name='plugin-{number}']/property[@name='command']")
+        return item.get("value").rsplit("/", 1)[-1] if item is not None else command.get("value") if command is not None else None
+    ok([button(number) for number in order[order.index('1') + 1:order.index('1') + 3]] == ["/usr/bin/winlux-tray search", "winlux-taskview.desktop"],
+       "profil neuf : zone Rechercher (#703) et Vue des tâches juste après Démarrer")
+    # Barre redessinée (#703) : réseau, son et batterie en un bouton, l'heure avant la cloche.
+    ok([button(number) for number in order[order.index('10') + 1:order.index('10') + 4]]
+       == ["/usr/bin/winlux-tray status", "/usr/bin/winlux-clock", "/usr/bin/winlux-tray notifications"],
+       "profil neuf : état groupé, heure puis cloche (#703)")
     ok(panel.find(".//property[@name='all-workspaces']").get("value") == "false",
        "profil neuf : la barre ne montre que les fenêtres du bureau en cours")
     rc = ET.parse(home / ".config/openbox/rc.xml").getroot()
@@ -490,9 +511,63 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
 
+# ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
+tray_source = (SCRIPTS / "winlux-tray.py").read_text()
+ok("def _settled_balance" in tray_source and "taskbar-balance" in tray_source
+   and "test-taskbar-boot-centering.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre centrée : contrepoids mesuré une fois les icônes de droite en place, valeur précédente reprise")
+ok("test-taskbar-live-align.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "*' 13 '*) ;;" not in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre : changement d'alignement en direct suivi d'une relance de la barre (#651)")
+ok("def scroll_top" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-menu-reset.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : chaque ouverture repart en haut de la vue Épinglé (#673)")
+ok("def render_side" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "def start_menu_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "test-start-for-you.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer à deux volets : « Pour vous » calculé sur le PC, coupable dans Paramètres, recentré (#685)")
+
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
+
+# ── Touche Windows, recherche, volume et notifications (#605–#607, #620, #624) ──
+shipped_keys = {binding.get("key"): binding for binding in shipped_rc.find(f"{OB}keyboard")}
+ok("Super_L" not in shipped_keys and all("/usr/bin/winlux-super-key" in (SCRIPTS / name).read_text()
+                                         for name in ("winlux-user-session.sh", "winlux-native-session.sh")),
+   "touche Windows seule : Démarrer par winlux-super-key, pas par une liaison qui volerait Windows+Gauche")
+ok("found_in(query, name)" in (SCRIPTS / "winlux-start-menu.py").read_text(),
+   "recherche de fichiers par début de mot, triée par pertinence puis date")
+ok(all(key in shipped_keys for key in ("XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioMute")),
+   "touches de volume du clavier liées à winlux-volume")
+ok("def toast_position" in (SCRIPTS / "winlux-notifications.py").read_text(),
+   "bulle de notification en bas à droite, au-dessus de la barre des tâches")
+
+# ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
+icons = NATIVE / "icons"
+ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2
+   and (icons / "Winlux/scalable/apps/winlux.svg").is_file()
+   and "Inherits=Winlux," in (icons / "Winlux-Sombre/index.theme").read_text(),
+   "icônes : applications gardées dans Winlux, Winlux-Sombre hérite de Winlux")
+ok("for icon_theme in Winlux Winlux-Sombre" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "gtk-update-icon-cache" in (SCRIPTS / "stage-apt-root.py").read_text()
+   and "usr/share/icons/Winlux-Sombre/" in (SCRIPTS / "stage-apt-root.py").read_text(),
+   "icônes : les deux thèmes dans winlux-desktop, cache GTK en postinst")
+ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh"))
+   and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
+   "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
+
+# ── Paramètres : « Mise à jour OS » et « Mise à jour application » (#637) ──
+ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and (SCRIPTS / "test-update-page-names.py").exists(),
+   "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
+
+# #633 : journal et état propres à chaque compte, jamais en 0666 dans /run/winlux.
+iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
+ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
+   and "journal-$journal_uid" in iso_init,
+   "journal : un dossier 0700 par compte, protected_regular=2")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

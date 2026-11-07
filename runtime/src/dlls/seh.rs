@@ -1330,22 +1330,50 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
     if n > 0 {
         line.push_str(&format!(" (arguments {:x?})", &rec.info[..n]));
     }
+    if rec.code == 0xC000_0005 && n >= 2 {
+        // Adresse fautive dans un module : « lib.dll+0x… » dit quelle donnée.
+        let at = crate::thunks::describe_site(rec.info[1]);
+        if at.contains('+') {
+            line.push_str(&format!(", adresse {at}"));
+        }
+    }
     if rip != rec.address {
         line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));
     }
-    // Adresses de retour probables : les mots de la pile qui tombent dans
-    // un module chargé.
+    let calls = stack_calls(rsp, 8);
+    if !calls.is_empty() {
+        line.push_str(&format!(", pile {}", calls.join(" ")));
+    }
+    line
+}
+
+/// Adresses de retour probables à partir de `rsp` : les mots de la pile du
+/// thread qui tombent dans un module chargé (au plus `max`).
+pub fn stack_calls(rsp: usize, max: usize) -> Vec<String> {
+    stack_calls_within(rsp, 64, max)
+}
+
+/// Pile de l'appli qui appelle une fonction de Winlux : les cadres de Winlux
+/// sont au-dessus, la recherche va donc plus loin (8 Kio).
+#[inline(never)]
+pub fn caller_stack(max: usize) -> Vec<String> {
+    let rsp: usize;
+    unsafe { std::arch::asm!("mov {}, rsp", out(reg) rsp) };
+    stack_calls_within(rsp, 1024, max)
+}
+
+fn stack_calls_within(rsp: usize, words: usize, max: usize) -> Vec<String> {
     let teb = crate::process::teb();
     let base = if teb == 0 {
         0
     } else {
         unsafe { *((teb + crate::process::TEB_STACK_BASE) as *const usize) }
     };
+    let mut calls = Vec::new();
     if rsp != 0 && rsp < base {
-        let end = base.min(rsp + 64 * 8);
-        let mut calls = Vec::new();
+        let end = base.min(rsp + words * 8);
         let mut at = rsp & !7;
-        while at + 8 <= end && calls.len() < 8 {
+        while at + 8 <= end && calls.len() < max {
             let w = unsafe { *(at as *const usize) };
             let d = crate::thunks::describe_site(w);
             if d.contains('+') {
@@ -1353,11 +1381,8 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
             }
             at += 8;
         }
-        if !calls.is_empty() {
-            line.push_str(&format!(", pile {}", calls.join(" ")));
-        }
     }
-    line
+    calls
 }
 
 /// Exception non gérée : filtre de dernier recours du programme, puis arrêt
@@ -1365,7 +1390,9 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
 unsafe fn unhandled(rec: &ExceptionRecord, ctx: &mut Context) -> ! {
     let filter = crate::dlls::kernel32_misc::current_unhandled_filter();
     if filter != 0 {
-        eprintln!("{}", describe_for_app_filter(rec, ctx));
+        let line = describe_for_app_filter(rec, ctx);
+        eprintln!("{line}");
+        crate::thunks::api_note(&line);
         let mut copy = *rec;
         let mut ptrs = ExceptionPointers {
             record: &mut copy,
@@ -1787,6 +1814,9 @@ mod tests {
         rec.nparams = 2;
         rec.info[1] = 0x10;
         let ctx = Context::zeroed();
+        // Pas de pile connue (rsp nul ou hors du thread) : aucune adresse.
+        assert!(stack_calls(0, 8).is_empty());
+        assert!(caller_stack(3).len() <= 3);
         let line = describe_for_app_filter(&rec, &ctx);
         assert!(line.contains("0xc0000005"), "{line}");
         assert!(line.contains("filtre de l'appli"), "{line}");

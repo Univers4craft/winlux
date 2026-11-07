@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Winlux Desktop
 Comment=Bureau Windows 11 natif via le runtime Winlux
-Exec=/usr/share/xsessions/xsession-winlux
+Exec=/usr/share/winlux/xsession-winlux
 Type=Application
 DesktopNames=Winlux

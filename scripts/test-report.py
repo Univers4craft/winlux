@@ -15,6 +15,7 @@ os.environ["WINLUX_RUN_DIR"] = str(tmp / "run")
 os.environ["WINLUX_NETWORK_LOG_DIR"] = str(tmp / "netlog")
 os.environ["XDG_STATE_HOME"] = str(tmp / "state")
 os.environ["WINLUX_PSTORE"] = str(tmp / "pstore")
+os.environ["WINLUX_REPORT_ACCOUNT"] = str(tmp / "config/winlux/github-account.json")
 (tmp / "journal").mkdir()
 (tmp / "run").mkdir()
 r = runpy.run_path(str(Path(__file__).with_name("winlux-report.py")), run_name="report_test")
@@ -77,6 +78,9 @@ report.exe = {"version": "2.1.0.0"}
 title = report.title("Al pulsar Instalar")
 assert title.startswith("[Plantage] Setup.exe 2.1.0.0 : EXCEPTION_ACCESS_VIOLATION dans setup.exe"), title
 assert "plantage" in report.labels() and "bug" in report.labels()
+# #611 : toute issue porte une urgence, avec les noms d'étiquettes du dépôt.
+assert "urgence:2-confort" in report.labels(), report.labels()
+assert [l for l in r["Report"](None).labels() if l.startswith("urgence:")] == ["urgence:2-confort"]
 body = report.body("Al pulsar Instalar", redacted=True)
 assert "### Descripción" in body and sig in body and "Al pulsar Instalar" in body
 assert "Téléchargements" not in body and "~/…/Setup.exe" in body, body
@@ -90,6 +94,31 @@ url, truncated = r["browser_url"]("Titre é", "court", ["bug"])
 query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
 assert not truncated and query["title"] == ["Titre é"] and query["labels"] == ["bug"]
 assert query["template"] == ["rapport-winlux.md"]
+# #611 : GitHub ignore les étiquettes du lien pour qui n'est pas membre du
+# dépôt ; elles sont recopiées en tête du corps pour le tri.
+url, _ = r["browser_url"]("Titre", "corps", ["bug", "à-trier", "urgence:2-confort"])
+body_q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["body"][0]
+assert body_q.startswith("> Étiquettes / Labels : `bug` `à-trier` `urgence:2-confort`\n\ncorps"), body_q
+template = (Path(__file__).parent.parent / ".github/ISSUE_TEMPLATE/rapport-winlux.md").read_text()
+assert '"à-trier"' in template and '"signalement-utilisateur"' in template
+
+# #609 : la session native n'est pas « XFCE » dans le rapport.
+saved_env = {k: os.environ.get(k) for k in ("XDG_CURRENT_DESKTOP", "WINLUX_NATIVE_SHELL", "XDG_SESSION_DESKTOP", "WINLUX_DESKTOP_DEMO")}
+os.environ.pop("WINLUX_DESKTOP_DEMO", None)
+os.environ.update(XDG_CURRENT_DESKTOP="XFCE", WINLUX_NATIVE_SHELL="1", XDG_SESSION_DESKTOP="winlux")
+assert r["session_type"]().startswith("Session native Winlux"), r["session_type"]()
+os.environ.pop("WINLUX_NATIVE_SHELL")
+assert r["session_type"]().startswith("Session native Winlux")
+os.environ.pop("XDG_SESSION_DESKTOP")
+assert r["session_type"]().startswith("XFCE")
+for key, value in saved_env.items():
+    os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+
+# #608 : l'aperçu n'emploie pas d'émoji couleur (carré vide sans police émoji).
+checked = r["Report"](None, language="fr")
+checked.checks = [(True, "réseau"), (False, "son")]
+text = checked.body("x", redacted=False)
+assert "- ✔ réseau" in text and "- ⚠ son" in text and "✅" not in text and "\ufe0f" not in text
 
 # Réglages et choix du transport.
 assert r["transport"]() == "browser"
@@ -148,7 +177,10 @@ relay = runpy.run_path(str(Path(__file__).parent.parent / "integration/report-re
                        run_name="relay_test")
 title, body, labels, issue = relay["validate"]({"title": report.title(), "body": body + " @damien",
                                                "labels": ["bug", "admin", "plantage"]})
-assert labels == ["bug", "plantage", "signalement-utilisateur"] and issue is None
+assert labels == ["bug", "plantage", "signalement-utilisateur", "urgence:2-confort"] and issue is None
+_, _, labels, _ = relay["validate"]({"title": report.title(), "body": body,
+                                    "labels": ["bug", "urgence:2-confort", "urgence:1-quotidien"]})
+assert [l for l in labels if l.startswith("urgence:")] == ["urgence:1-quotidien"], labels
 assert "@\u200bdamien" in body
 for bad in ({"title": "spam", "body": "x" * 100}, {"title": "[x] titre ok", "body": "pas un rapport " * 10},
             {"title": report.title(), "body": body, "issue": "12"}):
@@ -226,4 +258,78 @@ for language in table.values:
     assert not doubles, f"clés de traduction en double : {doubles}"
 assert r["tr"]("attach_logs", "fr") == "Joindre les journaux de diagnostic :"
 assert r["tr"]("attach", "fr", number=12) == "Ajouter à #12"
+# #612 : l'état du lien vient de winlux-browser ; Annuler n'est pas « ouvert ».
+import time as _time
+fake = tmp / "bin"
+fake.mkdir(exist_ok=True)
+(fake / "winlux-browser").write_text('#!/bin/sh\nread etat < "$FAUX_ETAT"\n'
+                                     '[ "$etat" = rien ] || printf "%s\\n" "$etat" > "$WINLUX_BROWSER_STATUS"\n')
+(fake / "winlux-browser").chmod(0o755)
+os.environ["PATH"] = f"{fake}:{os.environ['PATH']}"
+for wanted in ("ouvert", "annule", "attente"):
+    (tmp / "etat").write_text(wanted + "\n")
+    os.environ["FAUX_ETAT"] = str(tmp / "etat")
+    state = r["open_url_watched"]("https://example.invalid/")
+    for _ in range(50):
+        result = state()
+        if result is not None:
+            break
+        _time.sleep(0.1)
+    assert result == wanted, (wanted, result)
+assert not list((tmp / "state" / "winlux").glob("navigateur-*")), "fichiers d'état laissés"
+# #725 : compte GitHub de l'utilisateur, jeton gardé en 0600, transport manuel.
+g = r["connect_token"].__globals__
+calls = []
+
+
+def fake_http(method, url, payload=None, token=None, timeout=20):
+    calls.append((method, url, payload, token))
+    if url.endswith("/user"):
+        return {"login": "alice-dev"} if token == "ghp_" + "a" * 36 else {}
+    return {"html_url": "https://github.com/x/y/issues/1"}
+
+
+real_http = g["http"]
+g["http"] = fake_http
+g["set_value"]("mode=auto")
+(tmp / "defaults.conf").write_text("")
+assert g["manual_transport"]() == "browser" and g["account"]() == {}
+for bad in ("pas-un-jeton", "ghp_" + "b" * 36):
+    try:
+        g["connect_token"](bad)
+        raise AssertionError("jeton refusé attendu")
+    except ValueError:
+        pass
+assert not (tmp / "config/winlux/github-account.json").exists()
+assert g["connect_token"]("  ghp_" + "a" * 36 + "\n") == "alice-dev"
+saved = tmp / "config/winlux/github-account.json"
+assert saved.stat().st_mode & 0o777 == 0o600, oct(saved.stat().st_mode)
+assert g["account"]()["login"] == "alice-dev" and g["manual_transport"]() == "account"
+g["set_value"]("mode=browser")
+assert g["manual_transport"]() == "browser", "« Par le navigateur » reste respecté"
+g["set_value"]("mode=auto")
+calls.clear()
+url = g["send_api"](g["config"](), "[Plantage] x", "corps", ["bug", "plantage"], None, "account")
+method, target, payload, token = calls[-1]
+assert target.endswith("/repos/Univers4craft/winlux/issues") and token == "ghp_" + "a" * 36
+assert payload["body"].startswith("> Étiquettes / Labels : `bug` `plantage`"), payload["body"]
+g["send_api"](g["config"](), "t", "réponse", [], 12, "account")
+assert calls[-1][1].endswith("/issues/12/comments") and calls[-1][2] == {"body": "réponse"}
+# Le jeton du système reste réservé aux envois automatiques.
+assert g["transport"]() == "browser"
+g["forget_account"]()
+assert g["account"]() == {} and g["manual_transport"]() == "browser"
+# Flux « device » : en attente, refus, jeton.
+answers = iter([{"error": "authorization_pending"}, {"error": "access_denied"}, {"access_token": "gho_x"}])
+g["form_post"] = lambda url, fields: next(answers)
+assert g["device_poll"]("Iv1.0123456789", "dc") is None
+try:
+    g["device_poll"]("Iv1.0123456789", "dc")
+    raise AssertionError("refus attendu")
+except ValueError as error:
+    assert str(error) == "access_denied"
+assert g["device_poll"]("Iv1.0123456789", "dc") == "gho_x"
+assert g["client_id"]({"GITHUB_CLIENT_ID": "Iv1.0123456789"}) == "Iv1.0123456789"
+assert g["client_id"]({"GITHUB_CLIENT_ID": "x y"}) == g["GITHUB_CLIENT_ID"]
+g["http"] = real_http
 print("winlux-report : tests OK")

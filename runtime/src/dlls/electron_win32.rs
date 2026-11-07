@@ -537,7 +537,9 @@ unsafe extern "win64" fn NtQueryObject(
             // OBJECT_BASIC_INFORMATION (56 octets).
             bytes = vec![0u8; 56];
             bytes[0..4].copy_from_slice(&(if inherit { 2u32 } else { 0 }).to_le_bytes());
-            bytes[4..8].copy_from_slice(&0x001F_01FFu32.to_le_bytes());
+            // GrantedAccess : les vrais droits d'une section, sinon tous.
+            let granted = crate::dlls::mmap::mapping_access(h).unwrap_or(0x001F_01FF);
+            bytes[4..8].copy_from_slice(&granted.to_le_bytes());
             bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
             bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
         }
@@ -624,7 +626,7 @@ unsafe extern "win64" fn NtQuerySection(
     const STATUS_SECTION_NOT_IMAGE: u32 = 0xC000_0049;
     const STATUS_INVALID_INFO_CLASS: u32 = 0xC000_0003;
     const SEC_COMMIT: u32 = 0x0800_0000;
-    let Some((_, size)) = crate::dlls::mmap::export(h) else {
+    let Some((_, size, _)) = crate::dlls::mmap::export(h) else {
         return STATUS_INVALID_HANDLE;
     };
     match class {
@@ -1758,39 +1760,113 @@ unsafe extern "win64" fn WSAGetOverlappedResult(
     i32::from(*ov == 0)
 }
 
+/// NS_NLA : l'emplacement réseau (Network Location Awareness), que
+/// Chromium interroge pour savoir si la machine est connectée.
+const NS_NLA: u32 = 15;
+const WSAQUERYSETW_SIZE: usize = 120;
+
+type NlaQueries = std::sync::Mutex<std::collections::HashMap<usize, bool>>;
+
+fn nla_queries() -> &'static NlaQueries {
+    static Q: std::sync::OnceLock<NlaQueries> = std::sync::OnceLock::new();
+    Q.get_or_init(Default::default)
+}
+
+/// Une interface autre que la boucle locale est-elle active, avec une
+/// adresse ?
+pub fn network_connected() -> bool {
+    unsafe {
+        let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut list) != 0 {
+            return false;
+        }
+        let mut found = false;
+        let mut at = list;
+        while !at.is_null() {
+            let i = &*at;
+            let up = libc::IFF_UP as u32 | libc::IFF_RUNNING as u32;
+            if i.ifa_flags & up == up
+                && i.ifa_flags & libc::IFF_LOOPBACK as u32 == 0
+                && !i.ifa_addr.is_null()
+            {
+                let family = (*i.ifa_addr).sa_family as i32;
+                if family == libc::AF_INET || family == libc::AF_INET6 {
+                    found = true;
+                    break;
+                }
+            }
+            at = i.ifa_next;
+        }
+        libc::freeifaddrs(list);
+        found
+    }
+}
+
+fn wsa_error(code: u32) -> i32 {
+    unsafe { api!("ws2_32", "WSASetLastError", fn(i32) -> (), code as i32) };
+    SOCKET_ERROR
+}
+
 unsafe extern "win64" fn WSALookupServiceBeginW(
-    _q: *mut c_void,
+    q: *mut c_void,
     _flags: u32,
     handle: *mut usize,
 ) -> i32 {
-    if !handle.is_null() {
-        *handle = 0;
+    if handle.is_null() || q.is_null() {
+        return wsa_error(10014); // WSAEFAULT
     }
-    api!(
-        "ws2_32",
-        "WSASetLastError",
-        fn(i32) -> (),
-        WSASERVICE_NOT_FOUND as i32
-    );
-    SOCKET_ERROR
+    *handle = 0;
+    let namespace = ((q as *const u8).add(40) as *const u32).read_unaligned();
+    if namespace != NS_NLA {
+        return wsa_error(WSASERVICE_NOT_FOUND);
+    }
+    let h = crate::dlls::kernel32::new_handle_number();
+    nla_queries()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(h, false);
+    *handle = h;
+    0
 }
 
 unsafe extern "win64" fn WSALookupServiceNextW(
-    _h: usize,
+    h: usize,
     _flags: u32,
-    _len: *mut u32,
-    _out: *mut c_void,
+    len: *mut u32,
+    out: *mut c_void,
 ) -> i32 {
-    api!(
-        "ws2_32",
-        "WSASetLastError",
-        fn(i32) -> (),
-        WSA_E_NO_MORE as i32
-    );
-    SOCKET_ERROR
+    let mut queries = nla_queries().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(done) = queries.get_mut(&h) else {
+        return wsa_error(6); // WSA_INVALID_HANDLE
+    };
+    // Un seul emplacement, « Réseau », quand une interface est active.
+    if *done || !network_connected() {
+        return wsa_error(WSA_E_NO_MORE);
+    }
+    let name: Vec<u16> = "Réseau".encode_utf16().chain(Some(0)).collect();
+    let need = WSAQUERYSETW_SIZE + name.len() * 2;
+    if len.is_null() || out.is_null() || (*len as usize) < need {
+        if !len.is_null() {
+            *len = need as u32;
+        }
+        return wsa_error(10014); // WSAEFAULT : tampon trop petit
+    }
+    let base = out as *mut u8;
+    std::ptr::write_bytes(base, 0, WSAQUERYSETW_SIZE);
+    (base as *mut u32).write_unaligned(WSAQUERYSETW_SIZE as u32);
+    let text = base.add(WSAQUERYSETW_SIZE) as *mut u16;
+    std::ptr::copy_nonoverlapping(name.as_ptr(), text, name.len());
+    (base.add(8) as *mut usize).write_unaligned(text as usize);
+    (base.add(40) as *mut u32).write_unaligned(NS_NLA);
+    *done = true;
+    0
 }
 
-unsafe extern "win64" fn WSALookupServiceEnd(_h: usize) -> i32 {
+unsafe extern "win64" fn WSALookupServiceEnd(h: usize) -> i32 {
+    nla_queries()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&h);
     0
 }
 
@@ -2762,6 +2838,44 @@ mod tests {
             assert_eq!(mask, 0x11);
         }
         assert_eq!(map_generic_mask(0x1000_0000, [1, 2, 4, 0x1F]), 0x1F);
+    }
+
+    #[test]
+    fn emplacement_reseau_nla() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let mut q = [0u8; WSAQUERYSETW_SIZE];
+            q[40] = NS_NLA as u8;
+            let mut h = 0usize;
+            assert_eq!(WSALookupServiceBeginW(q.as_mut_ptr().cast(), 0, &mut h), 0);
+            assert_ne!(h, 0);
+            let mut out = [0u8; 256];
+            let mut len = 8u32;
+            let connected = network_connected();
+            let r = WSALookupServiceNextW(h, 0, &mut len, out.as_mut_ptr().cast());
+            assert_eq!(r, SOCKET_ERROR);
+            if connected {
+                assert!(len as usize > WSAQUERYSETW_SIZE);
+                assert_eq!(
+                    WSALookupServiceNextW(h, 0, &mut len, out.as_mut_ptr().cast()),
+                    0
+                );
+                assert_eq!(u32::from_le_bytes(out[40..44].try_into().unwrap()), NS_NLA);
+                assert_ne!(usize::from_le_bytes(out[8..16].try_into().unwrap()), 0);
+            }
+            // Un seul emplacement : ensuite, plus rien.
+            assert_eq!(
+                WSALookupServiceNextW(h, 0, &mut len, out.as_mut_ptr().cast()),
+                SOCKET_ERROR
+            );
+            assert_eq!(WSALookupServiceEnd(h), 0);
+            // Autre espace de noms : introuvable, comme avant.
+            q[40] = 12;
+            assert_eq!(
+                WSALookupServiceBeginW(q.as_mut_ptr().cast(), 0, &mut h),
+                SOCKET_ERROR
+            );
+        }
     }
 
     #[test]

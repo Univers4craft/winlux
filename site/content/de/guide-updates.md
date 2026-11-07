@@ -5,14 +5,14 @@ description: Neue Winlux-Versionen werden aus den Einstellungen installiert, mit
 
 ## Aus den Einstellungen
 
-1. Öffnen Sie **Einstellungen › Updates**.
+1. Öffnen Sie **Einstellungen › Updates › OS-Update**.
 2. Klicken Sie auf **„Suchen“**. Die Seite zeigt die installierte und die verfügbare Version.
 3. Gibt es eine neuere Version, klicken Sie auf **„Installieren“** und verfolgen Sie den Fortschritt.
 4. Starten Sie neu, wann es Ihnen passt: Winlux erzwingt nie einen Neustart.
 
-![Die Seite Updates](img:mises-a-jour.jpg "Einstellungen › Updates: installierte Version, verfügbare Version, automatische Updates.")
+![Die Seite OS-Update](img:mises-a-jour.jpg "Einstellungen › Updates › OS-Update: installierte Version, verfügbare Version, automatische Updates.")
 
-Auf derselben Seite installiert **„Automatische Updates“** neue Versionen ohne Ihr Zutun. Die Pakete des Basissystems werden unter **Einstellungen › Systemupdates** aktualisiert.
+Auf derselben Seite installiert **„Automatische Updates“** neue Versionen ohne Ihr Zutun. Die Pakete des Basissystems werden unter **Einstellungen › Updates › Anwendungsupdate** aktualisiert.
 
 ## Was Ihr System schützt
 

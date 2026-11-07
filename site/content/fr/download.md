@@ -5,7 +5,7 @@ description: Récupérez l'image d'installation de la dernière version, le cré
 
 {{download}}
 
-Les fichiers viennent directement de la page des versions publiées du projet sur GitHub. Le nom de l'image ressemble à `winlux-live-v0.2.19.iso` ; elle pèse environ 1,3 Go.
+Les fichiers viennent directement de la page des versions publiées du projet sur GitHub. Le nom de l'image ressemble à `winlux-live-v0.2.20.iso` ; elle pèse environ 1,3 Go.
 
 ## Ce qu'il faut
 
@@ -46,10 +46,10 @@ Démarrez la machine virtuelle sur le fichier ISO, puis suivez [l'installation](
 Le créateur de clé USB vérifie l'image tout seul. Si vous l'utilisez autrement, comparez sa somme SHA-256 au fichier `.sha256` publié à côté. Sur Linux :
 
 ```sh
-sha256sum -c winlux-live-v0.2.19.iso.sha256
+sha256sum -c winlux-live-v0.2.20.iso.sha256
 ```
 
 Les deux sommes doivent être identiques ; sinon, téléchargez l'image à nouveau.
 
 > [!note]
-> Vous avez déjà Winlux installé ? Vous n'avez rien à télécharger ici : les nouvelles versions s'installent depuis [Paramètres › Mises à jour](page:guide-updates).
+> Vous avez déjà Winlux installé ? Vous n'avez rien à télécharger ici : les nouvelles versions s'installent depuis [Paramètres › Mises à jour › Mise à jour OS](page:guide-updates).

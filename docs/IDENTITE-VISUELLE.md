@@ -30,7 +30,12 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
 
 ## Fonds et son
 
-- « Winlux Nuit » (défaut) et « Winlux Aube » : calculés au pixel dans
+- « Winlux Aurore » (défaut, #596) : rideaux d'aurore violet → cyan
+  au-dessus de collines, le logo au-dessus, étoiles la nuit ; version claire
+  « Winlux Aurore claire ». Calculé par `render-brand.py` en 1920x1080,
+  2560x1440 et 3840x2160 (`winlux-prisme-aurore[-clair][-LxH].png`) ; la
+  session et Paramètres prennent la définition la plus proche de l'écran.
+- « Winlux Nuit » et « Winlux Aube » : calculés au pixel dans
   `shell/personalize.rs`, et rendus en PNG pour la session XFCE.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.
 - L'ancien fond `Fond ecran.png` reste proposé sous le nom « Winlux classique ».
@@ -67,14 +72,32 @@ nappe, 22 050 Hz mono 16 bits).
 
 ## Icônes
 
-Thème d'icônes freedesktop « Winlux » (`integration/native/icons/Winlux`,
-installé dans `/usr/share/icons/Winlux`), choisi par défaut dans GTK et
-xsettings sans écraser un choix existant. 34 icônes : tuiles d'applications
-(dégradé + pictogramme blanc), dossiers ambrés avec emblème, disques,
-corbeille, logo Prisme pour `start-here`, et une fenêtre marquée du logo pour
-les `.exe` / `.msi`. Tout le reste vient d'Adwaita (`Inherits`).
+Jeu d'icônes freedesktop « Prisme », en deux thèmes installés par le paquet
+winlux-desktop : `Winlux` (clair, `integration/native/icons/Winlux`) et
+`Winlux-Sombre` (sombre, hérite de `Winlux`), dans `/usr/share/icons`.
+Accent `#6A3DF0` en clair, `#B69CFF` en sombre ; aucun logo ni nom tiers : le
+disque système porte le Prisme, le disque Linux (Z:) une invite `>_`.
 
-Régénération : `python3 scripts/render-icons.py`.
+* Emplacements, périphériques et types de fichiers (texte, PDF, archives,
+  audio, vidéo, images, bureautique, polices, paquets, ISO, `.exe` / `.msi`…) :
+  deux dessins par icône, un petit sur grille 16 (16 à 24 px, traits alignés
+  sur le pixel) et un grand (32 px et au-delà, 4K compris), plus des PNG 16,
+  20, 24, 32, 48, 64, 96, 128 et 256 px et des alias en liens relatifs.
+* Applications (`scalable/apps`, tuiles dégradées avec pictogramme blanc et
+  logo `winlux.svg`) : dans le thème clair seulement, dont le sombre hérite.
+
+Le thème sombre est le défaut ; la session (`winlux-user-session`,
+`winlux-native-session`) et Personnalisation (`winlux-personalize`) passent de
+l'un à l'autre avec le mode clair ou sombre, sans remplacer un autre thème
+choisi par l'utilisateur. Le postinst reconstruit le cache GTK
+(`gtk-update-icon-cache`). Le reste vient d'Adwaita (`Inherits`).
+
+Régénération (Python 3 + GdkPixbuf/librsvg) :
+`python3 scripts/generer-icones.py` (thèmes, et PNG de l'Explorateur et
+planches de contrôle dans `target/icones-prisme`), puis
+`python3 scripts/render-icons.py` pour les applications. Vérification :
+`sh scripts/test-icones.sh integration/native/icons` (sans argument :
+`/usr/share/icons` d'une machine installée).
 
 ## Régénérer les images
 

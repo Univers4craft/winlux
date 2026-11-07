@@ -130,6 +130,16 @@ pub unsafe extern "win64" fn sys_realloc_string_len(
 
 // ── VARIANT ─────────────────────────────────────────────────────────
 
+/// BSTR d'un VARIANT (union à +8). Un programme x86 n'y range que 4 octets
+/// ; les 4 suivants sont quelconques (#232, 7-Zip 32 bits).
+unsafe fn variant_bstr(v: *const c_void) -> *mut u16 {
+    crate::wow32::read_ptr(v as usize + 8) as *mut u16
+}
+
+unsafe fn set_variant_bstr(v: *mut c_void, bstr: *mut u16) {
+    crate::wow32::write_ptr(v as usize + 8, bstr as usize)
+}
+
 pub unsafe extern "win64" fn variant_init(v: *mut c_void) {
     if v.is_null() {
         return;
@@ -143,8 +153,7 @@ pub unsafe extern "win64" fn variant_clear(v: *mut c_void) -> i32 {
     }
     let vt = *(v as *const u16);
     if vt == VT_BSTR {
-        let bstr = *((v as *const u8).add(8) as *const *mut u16);
-        sys_free_string(bstr);
+        sys_free_string(variant_bstr(v));
     }
     std::ptr::write_bytes(v as *mut u8, 0, 16);
     0
@@ -158,9 +167,8 @@ pub unsafe extern "win64" fn variant_copy(dest: *mut c_void, src: *const c_void)
     std::ptr::copy_nonoverlapping(src as *const u8, dest as *mut u8, 16);
     let vt = *(src as *const u16);
     if vt == VT_BSTR {
-        let bstr = *((src as *const u8).add(8) as *const *const u16);
-        let dup = sys_alloc_string(bstr);
-        *((dest as *mut u8).add(8) as *mut *mut u16) = dup;
+        let dup = sys_alloc_string(variant_bstr(src));
+        set_variant_bstr(dest, dup);
     }
     0
 }
@@ -188,7 +196,7 @@ pub unsafe extern "win64" fn variant_change_type(
             let empty: [u16; 1] = [0];
             let bstr = sys_alloc_string(empty.as_ptr());
             *(dest as *mut u16) = VT_BSTR;
-            *((dest as *mut u8).add(8) as *mut *mut u16) = bstr;
+            set_variant_bstr(dest, bstr);
             0
         }
         (VT_I4, VT_BSTR) | (VT_I2, VT_BSTR) => {
@@ -202,11 +210,11 @@ pub unsafe extern "win64" fn variant_change_type(
             variant_clear(dest);
             let bstr = sys_alloc_string_len(wide.as_ptr(), wide.len() as u32);
             *(dest as *mut u16) = VT_BSTR;
-            *((dest as *mut u8).add(8) as *mut *mut u16) = bstr;
+            set_variant_bstr(dest, bstr);
             0
         }
         (VT_BSTR, VT_I4) => {
-            let bstr = *((src as *const u8).add(8) as *const *const u16);
+            let bstr = variant_bstr(src) as *const u16;
             let s = if bstr.is_null() {
                 String::new()
             } else {
@@ -256,7 +264,7 @@ pub unsafe extern "win64" fn variant_change_type(
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SafeArrayBound {
+pub(crate) struct SafeArrayBound {
     elements: u32,
     lower_bound: i32,
 }
@@ -525,15 +533,112 @@ pub unsafe extern "win64" fn safe_array_get_vartype(sa: usize, pvt: *mut u16) ->
 
 // ── Divers ──────────────────────────────────────────────────────────
 
-pub extern "win64" fn get_error_info(_reserved: u32, _info: *mut usize) -> i32 {
-    1
-} // S_FALSE
-pub extern "win64" fn set_error_info(_reserved: u32, _info: usize) -> i32 {
+/// SafeArrayPtrOfIndex : adresse d'un élément (le tableau doit être
+/// verrouillé par l'appelant, comme le veut la documentation).
+pub unsafe extern "win64" fn safe_array_ptr_of_index(
+    sa: usize,
+    indices: *const i32,
+    out: *mut usize,
+) -> i32 {
+    if sa == 0 || indices.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut map = lock(safe_arrays());
+    let Some(inner) = map.get_mut(&sa) else {
+        return E_INVALIDARG;
+    };
+    let Some(offset) = compute_offset(inner, indices) else {
+        return DISP_E_BADINDEX;
+    };
+    if offset + inner.element_size as usize > inner.data.len() {
+        return DISP_E_BADINDEX;
+    }
+    *out = inner.data.as_mut_ptr().add(offset) as usize;
     0
 }
-pub extern "win64" fn create_error_info(_info: *mut usize) -> i32 {
-    0x8000_4005u32 as i32
+
+/// SafeArrayRedim : nouvelle borne de la dimension la moins significative
+/// (la dernière de rgsabound) ; les éléments gardés restent en place, les
+/// nouveaux sont à zéro. Refusé tant que le tableau est verrouillé.
+pub unsafe extern "win64" fn safe_array_redim(sa: usize, bound: *const SafeArrayBound) -> i32 {
+    const DISP_E_ARRAYISLOCKED: i32 = 0x8002_000Du32 as i32;
+    if sa == 0 || bound.is_null() {
+        return E_INVALIDARG;
+    }
+    let mut map = lock(safe_arrays());
+    let Some(inner) = map.get_mut(&sa) else {
+        return E_INVALIDARG;
+    };
+    if inner.locks != 0 {
+        return DISP_E_ARRAYISLOCKED;
+    }
+    let Some(last) = inner.bounds.last_mut() else {
+        return E_INVALIDARG;
+    };
+    *last = std::ptr::read_unaligned(bound);
+    let total = inner
+        .bounds
+        .iter()
+        .try_fold(inner.element_size as usize, |n, b| {
+            n.checked_mul(b.elements as usize)
+        });
+    match total {
+        Some(n) if n <= 1 << 30 => {
+            inner.data.resize(n, 0);
+            0
+        }
+        _ => E_OUTOFMEMORY,
+    }
 }
+
+/// VariantCopyInd : comme VariantCopy, mais une référence (VT_BYREF) est
+/// suivie et la valeur pointée est copiée.
+pub unsafe extern "win64" fn variant_copy_ind(dest: *mut c_void, src: *const c_void) -> i32 {
+    const VT_BYREF: u16 = 0x4000;
+    if dest.is_null() || src.is_null() {
+        return E_INVALIDARG;
+    }
+    let vt = *(src as *const u16);
+    if vt & VT_BYREF == 0 {
+        return variant_copy(dest, src);
+    }
+    let base = vt & !VT_BYREF;
+    let p = crate::wow32::read_ptr(src as usize + 8);
+    if p == 0 {
+        return E_INVALIDARG;
+    }
+    if base == 12 {
+        // VT_VARIANT | VT_BYREF : le VARIANT pointé.
+        return variant_copy(dest, p as *const c_void);
+    }
+    let mut tmp = [0u8; 24];
+    *(tmp.as_mut_ptr() as *mut u16) = base;
+    let size = match base {
+        VT_UI1 => 1,
+        VT_I2 | VT_BOOL => 2,
+        VT_BSTR | 9 | 13 => crate::wow32::pointer_size(),
+        5 | 6 | 7 | 20 | 21 => 8, // R8, CY, DATE, I8, UI8
+        _ => 4,
+    };
+    std::ptr::copy_nonoverlapping(p as *const u8, tmp.as_mut_ptr().add(8), size);
+    variant_copy(dest, tmp.as_ptr() as *const c_void)
+}
+
+/// GetActiveObject : aucun objet n'est inscrit dans la table des objets
+/// actifs (pas de RegisterActiveObject) : MK_E_UNAVAILABLE.
+pub unsafe extern "win64" fn get_active_object(
+    _clsid: *const u8,
+    _reserved: usize,
+    out: *mut usize,
+) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    0x8004_01E3u32 as i32
+}
+
+// GetErrorInfo, SetErrorInfo, CreateErrorInfo : voir errorinfo.rs.
+use super::errorinfo::{create_error_info, get_error_info, set_error_info};
 
 // ── Bibliothèques de types ──────────────────────────────────────────
 //
@@ -619,6 +724,10 @@ pub fn exports() -> crate::dlls::Exports {
         "SafeArrayPutElement" => fn safe_array_put_element,
         "SafeArrayGetElemsize" => fn safe_array_get_elem_size,
         "SafeArrayGetVartype" => fn safe_array_get_vartype,
+        "SafeArrayPtrOfIndex" => fn safe_array_ptr_of_index,
+        "SafeArrayRedim" => fn safe_array_redim,
+        "VariantCopyInd" => fn variant_copy_ind,
+        "GetActiveObject" => fn get_active_object,
         "GetErrorInfo" => fn get_error_info,
         "SetErrorInfo" => fn set_error_info,
         "CreateErrorInfo" => fn create_error_info,
@@ -628,7 +737,9 @@ pub fn exports() -> crate::dlls::Exports {
         "#4" => fn sys_alloc_string_len, "#5" => fn sys_realloc_string_len,
         "#6" => fn sys_free_string, "#7" => fn sys_string_len,
         "#8" => fn variant_init, "#9" => fn variant_clear, "#10" => fn variant_copy,
-        "#12" => fn variant_change_type,
+        "#11" => fn variant_copy_ind, "#12" => fn variant_change_type,
+        "#35" => fn get_active_object, "#40" => fn safe_array_redim,
+        "#148" => fn safe_array_ptr_of_index,
         "#15" => fn safe_array_create, "#16" => fn safe_array_destroy,
         "#17" => fn safe_array_get_dim, "#18" => fn safe_array_get_elem_size,
         "#19" => fn safe_array_get_u_bound, "#20" => fn safe_array_get_l_bound,

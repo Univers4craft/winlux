@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Recherche du menu Démarrer (#461) : toutes les pages des Paramètres, mots-clés
+"""Recherche du menu Démarrer (#461, #606, #607) : toutes les pages des Paramètres, mots-clés
 des quatre langues, mots dans n'importe quel ordre, résultats groupés avec
 icônes, clic droit « Ouvrir l'emplacement du fichier », bouton Rechercher.
 
@@ -24,6 +24,13 @@ os.environ.pop("XDG_CONFIG_HOME", None)
 (home / "Documents/Impôts").mkdir(parents=True)
 (home / "Documents/Impôts/Déclaration 2026.pdf").write_text("x")
 (home / "Documents/Facture électricité.odt").write_text("x")
+# #607 : « son » ne trouve ni « json » ni « Personnalisation » ; nom qui
+# commence par la recherche d'abord, puis un mot, les plus récents d'abord.
+for name, age in [("Bureau/icones/application-json.png", 0), ("Bureau/Personnalisation.png", 0),
+                  ("Musique/Mon son ancien.wav", 5000), ("Musique/Mon son récent.wav", 10), ("Documents/son-test.txt", 9000)]:
+    (home / name).parent.mkdir(parents=True, exist_ok=True)
+    (home / name).write_text("x")
+    os.utime(home / name, (1_700_000_000 - age, 1_700_000_000 - age))
 applications = home / ".local/share/applications"
 applications.mkdir(parents=True)
 (applications / "winlux-settings.desktop").write_text("[Desktop Entry]\nType=Application\nName=Paramètres\nExec=true\nCategories=Settings;\n")
@@ -108,6 +115,33 @@ def check_files():
         module["subprocess"].Popen = lambda args, **_: opened.append(args)
         app.open_location(home / "Documents/Impôts/Déclaration 2026.pdf")
         assert opened == [["winlux-shell-app", "explorer", str(home / "Documents/Impôts")]], opened
+        app.search.set_text("son")
+        app.render()
+    except AssertionError as error:
+        problems.append(error)
+        app.quit()
+    GLib.timeout_add(1200, check_ranking)
+    return False
+
+
+def check_ranking():
+    try:
+        # #607 : début de mot seulement, puis classement.
+        names = [path.name for path in app.file_results]
+        assert names == ["son-test.txt", "Mon son récent.wav", "Mon son ancien.wav"], names
+        labels = texts(app.content, [])
+        assert "Son" in labels and not any("json" in label or "Personnalisation" in label for label in labels), labels
+        # #606 : Paramètres et fichiers comme les applications, icône puis texte aligné à gauche.
+        rows = [child for child in app.content.get_children() if isinstance(child, Gtk.Button)
+                and (child.get_tooltip_text() or "").startswith(("Paramètres · ", "Fichier · "))]
+        assert len(rows) >= 4, [row.get_tooltip_text() for row in rows]
+        for row in rows:
+            box = row.get_child()
+            first = box.get_children()[0]
+            assert isinstance(box, Gtk.Box) and isinstance(first, Gtk.Image), row.get_tooltip_text()
+            title = texts(box, [])[0]
+            label = next(widget for widget in box.get_children()[1].get_children() if isinstance(widget, Gtk.Label))
+            assert label.get_xalign() == 0 and "/" not in title and "·" not in title, (row.get_tooltip_text(), title)
     except AssertionError as error:
         problems.append(error)
     app.quit()
@@ -131,5 +165,9 @@ assert (ROOT / "integration/native/search.svg").is_file()
 panel = ET.parse(ROOT / "integration/native/config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml").getroot()
 order = [value.get("value") for value in panel.find(".//property[@name='plugin-ids']")]
 search = order[order.index("1") + 1]
-assert panel.find(f".//property[@name='plugin-{search}']/property[@name='items']/value").get("value").endswith("winlux-search.desktop")
+# Depuis #703 : genmon `winlux-tray search` (zone « Rechercher » ou loupe), même commande au clic.
+assert panel.find(f".//property[@name='plugin-{search}']").get("value") == "genmon"
+rc = ROOT / f"integration/native/config/xfce4/panel/genmon-{search}.rc"
+assert "Command=/usr/bin/winlux-tray search" in rc.read_text(encoding="utf-8")
+assert "<click>/usr/bin/winlux-start-menu</click>" in (ROOT / "scripts/winlux-tray.py").read_text(encoding="utf-8")
 print("OK: recherche du menu Démarrer (pages des Paramètres en 4 langues, groupes, fichiers, bouton Rechercher)")
