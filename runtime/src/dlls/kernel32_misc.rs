@@ -358,6 +358,7 @@ pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
             eprintln!("winlux: objet lancé : {text}");
         }
     }
+    print_debug_tail();
     crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
@@ -403,14 +404,50 @@ unsafe fn cxx_thrown_value(args: &[usize]) -> Option<String> {
 pub extern "win64" fn is_debugger_present() -> i32 {
     0
 }
+/// Derniers messages OutputDebugString, rappelés sur stderr quand le
+/// programme s'arrête sur abort() ou une exception non gérée : Qt y écrit la
+/// raison de son qFatal (VLC), d'autres bibliothèques leur dernière erreur.
+static DEBUG_TAIL: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+const DEBUG_TAIL_LEN: usize = 20;
+
+fn debug_string(text: String) {
+    let text = text.trim_end().to_string();
+    if text.is_empty() {
+        return;
+    }
+    if std::env::var_os("WINLUX_TRACE").is_some() {
+        eprintln!("winlux[debug]: {text}");
+    } else {
+        crate::log_info!("debug", "OutputDebugString : {text}");
+    }
+    let mut tail = crate::dlls::lock(&DEBUG_TAIL);
+    if tail.len() == DEBUG_TAIL_LEN {
+        tail.pop_front();
+    }
+    tail.push_back(text);
+}
+
+/// Affiche (une fois) les derniers messages OutputDebugString du programme.
+pub fn print_debug_tail() {
+    let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).drain(..).collect();
+    if tail.is_empty() {
+        return;
+    }
+    eprintln!("winlux: derniers messages de débogage du programme (OutputDebugString) :");
+    for line in tail {
+        eprintln!("winlux:   {line}");
+    }
+}
+
 pub unsafe extern "win64" fn output_debug_string_a(s: *const u8) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::cstr(s).trim_end());
+    if !s.is_null() {
+        debug_string(crate::dlls::cstr(s));
     }
 }
 pub unsafe extern "win64" fn output_debug_string_w(s: *const u16) {
-    if std::env::var_os("WINLUX_TRACE").is_some() && !s.is_null() {
-        eprintln!("winlux[debug]: {}", crate::dlls::wstr(s).trim_end());
+    if !s.is_null() {
+        debug_string(crate::dlls::wstr(s));
     }
 }
 /// Fonctionnalités processeur (PF_*) : on répond pour celles qu'impose x86-64
@@ -1200,5 +1237,24 @@ mod tests {
             assert!(n > 0);
             assert!(crate::dlls::wstr(msg.as_ptr()).starts_with("Fichier introuvable"));
         }
+    }
+
+    #[test]
+    fn output_debug_string_garde_les_derniers_messages() {
+        let w: Vec<u16> = "qt.qpa.plugin: Could not load\r\n"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        unsafe { output_debug_string_w(w.as_ptr()) };
+        unsafe { output_debug_string_a(b"deuxieme\0".as_ptr()) };
+        let tail: Vec<String> = crate::dlls::lock(&DEBUG_TAIL).iter().cloned().collect();
+        assert!(tail.contains(&"qt.qpa.plugin: Could not load".to_string()));
+        assert_eq!(tail.last().map(String::as_str), Some("deuxieme"));
+        for n in 0..DEBUG_TAIL_LEN + 5 {
+            debug_string(format!("m{n}"));
+        }
+        assert_eq!(crate::dlls::lock(&DEBUG_TAIL).len(), DEBUG_TAIL_LEN);
+        print_debug_tail();
+        assert!(crate::dlls::lock(&DEBUG_TAIL).is_empty());
     }
 }
