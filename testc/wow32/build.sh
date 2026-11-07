@@ -115,6 +115,8 @@ LoadLibraryA@4
 GetProcAddress@8
 GetLogicalProcessorInformation@8
 EnumCalendarInfoW@16
+K32EnumProcessModules@16
+GetModuleHandleA@4
 DEF
 printf 'LIBRARY msvcrt.dll\nEXPORTS\n_adjust_fdiv DATA\n_controlfp\n_ftol\n' >"$tmp/msvcrt_wow64.def"
 llvm-dlltool -m i386 -d "$tmp/msvcrt_wow64.def" -l "$tmp/msvcrt_wow64.lib"
