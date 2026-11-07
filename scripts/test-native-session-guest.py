@@ -144,6 +144,8 @@ if rfkill.exists():
         "/dev/rfkill inaccessible au groupe netdev"
 print(run("gdbus", "call", "--session", "--dest", "org.a11y.Bus", "--object-path", "/org/a11y/bus",
           "--method", "org.a11y.Bus.GetAddress", timeout=30), flush=True)
+print(run("gdbus", "call", "--system", "--dest", "org.freedesktop.UPower", "--object-path", "/org/freedesktop/UPower",
+          "--method", "org.freedesktop.UPower.GetDisplayDevice", timeout=30), flush=True)
 print("WINLUX_SESSION_PLUMBING=0", flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)

@@ -5,6 +5,7 @@
   dans /usr (donc aussi par la mise à jour), et paquet rfkill dans l'image ;
 - #610 : mesa-utils (glxinfo) dans l'image pour la ligne OpenGL du rapport ;
 - #615 : at-spi2-core (bus org.a11y.Bus) dans l'image ;
+- #631 : upower dans l'image, upowerd lancé par winlux-system-services ;
 - check-image-session.sh, appelé par build-live-iso.sh après les composants
   du bureau, échoue s'il manque l'un d'eux et passe quand tout y est.
 """
@@ -26,7 +27,7 @@ def check(cond, message):
 
 
 packages = runpy.run_path(str(HERE / "prepare-desktop-packages.py"))["PACKAGES"]
-for name in ("rfkill", "mesa-utils", "at-spi2-core", "blueman"):
+for name in ("rfkill", "mesa-utils", "at-spi2-core", "upower", "blueman"):
     check(name in packages, f"paquet {name} absent de l'image")
 
 rule = [line for line in RULE.read_text().splitlines() if line and not line.startswith("#")]
@@ -44,6 +45,11 @@ winlux_path = runpy.run_path(str(HERE / "stage-apt-root.py"), run_name="winlux_t
 check(winlux_path("usr/lib/udev/rules.d/60-winlux-rfkill.rules"), "la règle rfkill n'est pas dans le paquet de mise à jour")
 check(not winlux_path("usr/lib/udev/rules.d/50-udev-default.rules"), "le paquet de mise à jour reprendrait une règle d'Ubuntu")
 
+services = (HERE / "winlux-system-services.sh").read_text()
+check("/usr/libexec/upowerd >" in services and "mkdir -p /var/lib/upower" in services,
+      "winlux-system-services ne lance pas upowerd")
+check(services.index("/usr/libexec/upowerd >") > services.index("dbus-daemon --system"), "upowerd doit démarrer après le bus système")
+
 build = (HERE / "build-live-iso.sh").read_text()
 check('scripts/check-image-session.sh" "$stage"' in build, "build-live-iso.sh n'appelle pas check-image-session.sh")
 check(build.index("check-image-session.sh") > build.index("stage-desktop-components.sh"),
@@ -57,7 +63,7 @@ def image_check(stage):
 tmp = Path(tempfile.mkdtemp(prefix="winlux-session-"))
 try:
     files = ["usr/bin/rfkill", "usr/bin/glxinfo", "usr/libexec/at-spi-bus-launcher",
-             "usr/share/dbus-1/services/org.a11y.Bus.service"]
+             "usr/share/dbus-1/services/org.a11y.Bus.service", "usr/libexec/upowerd"]
     for name in files:
         (tmp / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp / name).write_text("")

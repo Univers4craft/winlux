@@ -21,6 +21,8 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Bus d'accessibilité org.a11y.Bus : lecteurs d'écran, Narrateur,
             # clavier visuel (#615).
             "at-spi2-core",
+            # Batterie et secteur pour les applications Linux (UPower, #631).
+            "upower",
             # Luminosité des écrans de bureau par leur câble (DDC/CI, winlux-brightness).
             "ddcutil", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",

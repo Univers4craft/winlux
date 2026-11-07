@@ -66,6 +66,13 @@ if test -x /usr/libexec/udisks2/udisksd; then
     /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
     udisks_pid=$!
 fi
+# Batterie et secteur pour les applications Linux (#631) : Edge, Chromium,
+# GTK et les lecteurs vidéo lisent UPower (DisplayDevice) ; sans systemd,
+# personne ne l'activait.
+if test -x /usr/libexec/upowerd; then
+    mkdir -p /var/lib/upower
+    /usr/libexec/upowerd >/run/winlux/upower.log 2>&1 &
+fi
 if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
 if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
 if test -x /usr/sbin/NetworkManager; then

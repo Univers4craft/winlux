@@ -6,12 +6,13 @@
 #   #610 : glxinfo absent → ligne OpenGL du rapport toujours « ? » ;
 #   #615 : at-spi2-core absent → pas de bus org.a11y.Bus, aucune technologie
 #          d'assistance possible.
+#   #631 : upower absent → batterie invisible pour les applications Linux.
 #   check-image-session.sh <stage>
 set -eu
 stage=$1
 missing=""
 for path in usr/bin/rfkill usr/bin/glxinfo usr/libexec/at-spi-bus-launcher \
-            usr/share/dbus-1/services/org.a11y.Bus.service; do
+            usr/share/dbus-1/services/org.a11y.Bus.service usr/libexec/upowerd; do
     test -e "$stage/$path" || missing="$missing /$path"
 done
 rule="$stage/usr/lib/udev/rules.d/60-winlux-rfkill.rules"
@@ -25,4 +26,4 @@ if test -n "$missing"; then
     echo "Session native : absent de l'image :$missing" >&2
     exit 1
 fi
-echo "Session native : rfkill, glxinfo, bus d'accessibilité et règle udev présents"
+echo "Session native : rfkill, glxinfo, bus d'accessibilité, UPower et règle udev présents"
