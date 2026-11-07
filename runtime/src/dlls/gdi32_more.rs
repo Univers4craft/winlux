@@ -324,7 +324,10 @@ unsafe extern "win64" fn get_dib_color_table(
     0
 }
 
-/// MaskBlt : sans masque, c'est un BitBlt de l'opération de premier plan.
+/// MaskBlt : là où le masque monochrome vaut 1, l'opération de premier plan
+/// (octets bas de `rop`) ; là où il vaut 0, celle d'arrière-plan (octet
+/// haut). wxWidgets dessine ainsi ses bitmaps à masque, avec
+/// MAKEROP4(SRCCOPY, DSTCOPY) : seuls les pixels opaques sont copiés.
 #[allow(clippy::too_many_arguments)]
 unsafe extern "win64" fn mask_blt(
     dst: usize,
@@ -335,11 +338,23 @@ unsafe extern "win64" fn mask_blt(
     src: usize,
     xs: i32,
     ys: i32,
-    _mask: usize,
-    _xm: i32,
-    _ym: i32,
+    mask: usize,
+    xm: i32,
+    ym: i32,
     rop: u32,
 ) -> i32 {
+    const SRCCOPY: u32 = 0xCC;
+    const DSTCOPY: u32 = 0xAA;
+    let fore = (rop >> 16) & 0xFF;
+    let back = rop >> 24;
+    if mask != 0 && w > 0 && h > 0 {
+        let copies = |code: u32| code == SRCCOPY || code == DSTCOPY;
+        if copies(fore) && copies(back) {
+            if let Some(img) = masked_source(src, xs, ys, w, h, mask, xm, ym, fore, back) {
+                return super::common_apps::blend_image(dst, x, y, &img) as i32;
+            }
+        }
+    }
     api!(
         "gdi32",
         "BitBlt",
@@ -355,6 +370,47 @@ unsafe extern "win64" fn mask_blt(
         rop & 0x00FF_FFFF
     )
     .unwrap_or(0)
+}
+
+/// Pixels de la source avec un alpha tout ou rien tiré du masque : opaque
+/// là où l'opération retenue est SRCCOPY, transparent pour DSTCOPY.
+#[allow(clippy::too_many_arguments)]
+fn masked_source(
+    src: usize,
+    xs: i32,
+    ys: i32,
+    w: i32,
+    h: i32,
+    mask: usize,
+    xm: i32,
+    ym: i32,
+    fore: u32,
+    back: u32,
+) -> Option<super::icons::Image> {
+    let bmp = super::gui::dc_bitmap(src);
+    let (sw, sh, spx, _) = (bmp != 0)
+        .then(|| super::gui::bitmap_pixels(bmp))
+        .flatten()?;
+    let (mw, mh, mpx, _) = super::gui::bitmap_pixels(mask)?;
+    let at = |px: &[u32], pw: usize, ph: usize, x: i32, y: i32| {
+        (x >= 0 && y >= 0 && (x as usize) < pw && (y as usize) < ph)
+            .then(|| px[y as usize * pw + x as usize])
+    };
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for j in 0..h {
+        for i in 0..w {
+            let c = at(&spx, sw, sh, xs + i, ys + j).unwrap_or(0) & 0x00FF_FFFF;
+            let bit = at(&mpx, mw, mh, xm + i, ym + j).is_some_and(|m| m & 0x00FF_FFFF != 0);
+            let code = if bit { fore } else { back };
+            let alpha = if code == 0xCC { 0xFF00_0000 } else { 0 };
+            out.push(c | alpha);
+        }
+    }
+    Some(super::icons::Image {
+        w: w as usize,
+        h: h as usize,
+        px: out,
+    })
 }
 
 /// ExtFloodFill : remplissage par diffusion non pris en charge.
@@ -530,6 +586,39 @@ mod tests {
             assert_eq!(modify_world_transform(hdc, std::ptr::null(), 1), 1);
             get_world_transform(hdc, &mut out);
             assert_eq!(out, IDENTITY);
+        }
+    }
+
+    #[test]
+    fn maskblt_ne_copie_que_les_pixels_du_masque() {
+        type Dc = unsafe extern "win64" fn(usize) -> usize;
+        type Sel = unsafe extern "win64" fn(usize, usize) -> usize;
+        type Bmp = unsafe extern "win64" fn(i32, i32, u32, u32, *const u8) -> usize;
+        let f = |name: &str| crate::dlls::lookup("gdi32", name).unwrap();
+        unsafe {
+            let dc: Dc = std::mem::transmute(f("CreateCompatibleDC"));
+            let select: Sel = std::mem::transmute(f("SelectObject"));
+            let create_bitmap: Bmp = std::mem::transmute(f("CreateBitmap"));
+            // Masque 2×1 : premier pixel opaque (1), second transparent (0).
+            // Lignes alignées sur 16 bits.
+            let mask = create_bitmap(2, 1, 1, 1, [0x80u8, 0].as_ptr());
+            assert_eq!(
+                super::super::gui::bitmap_pixels(mask).unwrap().2,
+                vec![0x00FF_FFFF, 0]
+            );
+            let src_bmp = super::super::gui::bitmap_from_pixels(2, 1, &[0x0000_00FF; 2]).unwrap();
+            let dst_bmp = super::super::gui::bitmap_from_pixels(2, 1, &[0x00FF_0000; 2]).unwrap();
+            let (src, dst) = (dc(0), dc(0));
+            select(src, src_bmp);
+            select(dst, dst_bmp);
+            // MAKEROP4(SRCCOPY, DSTCOPY), comme wxWidgets.
+            assert_eq!(
+                mask_blt(dst, 0, 0, 2, 1, src, 0, 0, mask, 0, 0, 0xAACC_0020),
+                1
+            );
+            let px = super::super::gui::bitmap_pixels(dst_bmp).unwrap().2;
+            assert_eq!(px[0] & 0x00FF_FFFF, 0x0000_00FF);
+            assert_eq!(px[1] & 0x00FF_FFFF, 0x00FF_0000);
         }
     }
 }
