@@ -2507,7 +2507,7 @@ pub unsafe extern "win64" fn system_parameters_info_a(
 
 unsafe fn system_parameters_info_common(
     action: u32,
-    param: u32,
+    _param: u32,
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
