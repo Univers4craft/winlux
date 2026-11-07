@@ -772,18 +772,31 @@ if test -n "$desktop_user"; then
     # Dossier d'état partagé : chacun y écrit ses fichiers, personne ne
     # touche à ceux des autres (sticky), root ne suit pas les liens d'autrui.
     /bin/busybox chmod 1777 /run/winlux
-    # Journal Winlux : les .exe du compte y écrivent winlux.log et crash.log.
-    # Créés ici avant tout service root (winlux --power daemon les créait en
-    # 0644 root) : sinon un plantage sous le compte n'était jamais enregistré,
-    # ni proposé au signalement, ni visible dans l'Observateur d'événements.
+    # Journal Winlux (#633) : un dossier par compte, à lui seul (0700),
+    # créé ici avant toute session pour qu'aucun autre compte ne puisse le
+    # réserver. Les .exe du compte y écrivent winlux.log, crash.log et les
+    # propositions de signalement ; les démons root gardent
+    # /run/winlux/journal (0755). Avant, un journal 1777 aux fichiers 0666
+    # laissait n'importe quel compte effacer ou falsifier les plantages
+    # d'un autre, que winlux-report envoie sur GitHub.
     /bin/busybox mkdir -p /run/winlux/journal
-    /bin/busybox chmod 1777 /run/winlux/journal
-    for journal_file in winlux.log crash.log; do
-        /bin/busybox touch "/run/winlux/journal/$journal_file"
-        /bin/busybox chmod 0666 "/run/winlux/journal/$journal_file"
-    done
+    /bin/busybox chown 0:0 /run/winlux/journal
+    /bin/busybox chmod 0755 /run/winlux/journal
+    /bin/busybox awk -F: '$3 >= 1000 && $3 < 60000 { print $3 ":" $4 }' /etc/passwd 2>/dev/null |
+        while IFS=: read -r journal_uid journal_gid; do
+            journal_dir=/run/winlux/journal-$journal_uid
+            /bin/busybox rm -rf "$journal_dir"
+            /bin/busybox mkdir -m 0700 "$journal_dir" &&
+                /bin/busybox chown "$journal_uid:$journal_gid" "$journal_dir"
+        done
     echo 1 >/proc/sys/fs/protected_symlinks 2>/dev/null || true
     echo 1 >/proc/sys/fs/protected_hardlinks 2>/dev/null || true
+    # /run/winlux reste collant (1777) pour les dossiers par compte
+    # (store-, control-, tray-, journal-<uid>) : un fichier qu'un compte y
+    # crée à l'avance ne peut plus être ouvert par root ni par un autre
+    # compte (#633), comme /tmp sur les distributions courantes.
+    echo 2 >/proc/sys/fs/protected_regular 2>/dev/null || true
+    echo 2 >/proc/sys/fs/protected_fifos 2>/dev/null || true
 else
     /bin/busybox touch /etc/winlux/live-session
 fi

@@ -43,13 +43,19 @@ const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
 fn journal_file() -> &'static Mutex<Option<std::fs::File>> {
     JOURNAL_FILE.get_or_init(|| {
-        let dir = "/run/winlux/journal";
-        let _ = std::fs::create_dir_all(dir);
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("{dir}/winlux.log"));
-        Mutex::new(file.ok())
+        // Journal propre au compte (#633) : aucun autre compte ne peut
+        // l'effacer ni y glisser de fausses lignes.
+        let file = crate::journal::file("winlux.log").and_then(|path| {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)
+                .ok()
+        });
+        Mutex::new(file)
     })
 }
 

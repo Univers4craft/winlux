@@ -2231,7 +2231,15 @@ unsafe fn load_winlux() {
             ])
         },
     );
-    let crashes = small(&[b"/run/winlux/journal/crash.log"]);
+    let crashes = {
+        let buf = &mut *core::ptr::addr_of_mut!(SMALL);
+        let n = crate::admin_ui::read_file(
+            crate::admin_ui::journal_file(b"crash.log").ptr(),
+            &mut buf[..],
+            false,
+        );
+        &buf[..n]
+    };
     let count = crashes
         .split(|&ch| ch == b'\n')
         .filter(|l| l.starts_with(b"[CRASH]"))
@@ -2248,10 +2256,18 @@ unsafe fn load_winlux() {
         ]),
         t.get(),
     );
+    let mut dir = [0u8; 200];
+    let n = GetEnvironmentVariableA(c"WINLUX_JOURNAL_DIR".as_ptr(), dir.as_mut_ptr().cast(), 200)
+        as usize;
+    let dir: &[u8] = if n > 0 && n < 200 {
+        &dir[..n]
+    } else {
+        b"/run/winlux/journal"
+    };
     add(
         c,
         tr4(&[b"Journaux", b"Logs", b"Registros", b"Protokolle"]),
-        b"/run/winlux/journal",
+        dir,
     );
 }
 

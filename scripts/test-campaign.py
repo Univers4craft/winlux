@@ -498,4 +498,10 @@ ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/conf
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
 
+# #633 : journal et état propres à chaque compte, jamais en 0666 dans /run/winlux.
+iso_init = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
+ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/protected_regular" in iso_init
+   and "journal-$journal_uid" in iso_init,
+   "journal : un dossier 0700 par compte, protected_regular=2")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

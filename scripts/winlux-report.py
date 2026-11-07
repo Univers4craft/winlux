@@ -53,7 +53,8 @@ import urllib.request
 
 REPO = os.environ.get("WINLUX_REPORT_REPO", "Univers4craft/winlux")
 API = os.environ.get("WINLUX_GITHUB_API", "https://api.github.com")
-JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
+# Journal du compte (#633) : /run/winlux/journal-<uid>, celui de root sans uid.
+JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR") or ("/run/winlux/journal" if os.geteuid() == 0 else f"/run/winlux/journal-{os.geteuid()}"))
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
 CONF = Path(os.environ.get("WINLUX_REPORT_CONF", "/etc/winlux/report.conf"))
 DEFAULTS = Path(os.environ.get("WINLUX_REPORT_DEFAULTS", "/usr/share/winlux/report.conf"))
@@ -1528,7 +1529,7 @@ def mark_offered(crash):
     réagissent tous les deux."""
     if not crash:
         return True
-    marker = RUN / "report-offered"
+    marker = JOURNAL / "report-offered"  # par compte (#633)
     key = f"{crash.get('ts')}-{crash.get('pid')}"
     try:
         if marker.read_text().strip() == key:
@@ -1540,7 +1541,7 @@ def mark_offered(crash):
     except OSError:
         pass
     try:
-        (RUN / "crash-offer").unlink()
+        (JOURNAL / "crash-offer").unlink()
     except OSError:
         pass
     return True

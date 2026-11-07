@@ -383,7 +383,12 @@ if [ "$status" -ne 0 ]; then
         winlux-report --crash --since "$started"
         case $? in 0) exit "$status" ;; esac
     fi
-    crashes=${WINLUX_JOURNAL_DIR:-/run/winlux/journal}/crash.log
+    journal=${WINLUX_JOURNAL_DIR:-}
+    if [ -z "$journal" ]; then
+        # Journal du compte (#633).
+        if [ "$(id -u)" = 0 ]; then journal=/run/winlux/journal; else journal=/run/winlux/journal-$(id -u); fi
+    fi
+    crashes=$journal/crash.log
     [ "$pe_desktop" = 1 ] && [ -e "$crashes" ] \
         && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' "$crashes" | tail -n 1)" -ge "$started" ] 2>/dev/null \
         && exit "$status"
