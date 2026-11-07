@@ -545,6 +545,7 @@ fi
 sh "$root/scripts/stage-desktop-components.sh" "$stage"
 # Wi-Fi chiffré : la construction échoue si ce qui l'a cassé en v0.2.17 manque.
 sh "$root/scripts/check-image-wifi.sh" "$stage" "$kernel_release"
+sh "$root/scripts/check-image-session.sh" "$stage"
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
