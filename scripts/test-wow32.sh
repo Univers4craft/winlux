@@ -16,6 +16,8 @@
 # signal, localtime…), sautés sans i686-w64-mingw32-gcc.
 # thread32.exe, load32.exe, cpp32.exe (étape 4) : threads x86, TLS statique,
 # DLL x86 importée et chargée par LoadLibrary, C++ avec exceptions.
+# com32.exe et dlg32.exe (étape 6) : COM (IStream, fabrique x86, VARIANT,
+# IErrorInfo), contrôles communs et boîtes Ouvrir/Couleur/Police/Imprimer.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -26,7 +28,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
 names="hello32 seh32"
-command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32"
+command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
         || test "$root/testc/wow32/build.sh" -nt "$out/$name.exe"; then
@@ -137,4 +139,10 @@ fi
 if test -f "$out/cpp32.exe"; then
     check cpp32 'C++ 32 bits : tout est correct'
     echo "cpp32 : C++ MinGW 32 bits (exceptions, iostream)"
+fi
+if test -f "$out/com32.exe"; then
+    check com32 'COM 32 bits, .* Tout est correct'
+    echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
+    check dlg32 'boîtes communes 32 bits, .* Tout est correct'
+    echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
 fi

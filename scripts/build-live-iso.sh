@@ -237,6 +237,15 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
         cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
     done
 fi
+# Programmes 32 bits (#232) : COM, contrôles et boîtes communes en x86.
+if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
+    sh "$root/testc/wow32/build.sh" "$root/target/mingw"
+    for name in com32 dlg32; do
+        if test -f "$root/target/mingw/$name.exe"; then
+            cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+        fi
+    done
+fi
 
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.

@@ -1320,6 +1320,11 @@ pub fn exports() -> crate::dlls::Exports {
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
+        // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
+        // (MinGW les importe d'ole32).
+        "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
+        "GetErrorInfo"=>fn super::errorinfo::get_error_info,
+        "SetErrorInfo"=>fn super::errorinfo::set_error_info,
         "RoInitialize"=>fn ro_initialize,"RoUninitialize"=>fn ro_uninitialize
     }
 }

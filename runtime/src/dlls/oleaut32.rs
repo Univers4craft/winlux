@@ -525,15 +525,8 @@ pub unsafe extern "win64" fn safe_array_get_vartype(sa: usize, pvt: *mut u16) ->
 
 // ── Divers ──────────────────────────────────────────────────────────
 
-pub extern "win64" fn get_error_info(_reserved: u32, _info: *mut usize) -> i32 {
-    1
-} // S_FALSE
-pub extern "win64" fn set_error_info(_reserved: u32, _info: usize) -> i32 {
-    0
-}
-pub extern "win64" fn create_error_info(_info: *mut usize) -> i32 {
-    0x8000_4005u32 as i32
-}
+// GetErrorInfo, SetErrorInfo, CreateErrorInfo : voir errorinfo.rs.
+use super::errorinfo::{create_error_info, get_error_info, set_error_info};
 
 // ── Bibliothèques de types ──────────────────────────────────────────
 //

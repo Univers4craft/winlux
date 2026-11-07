@@ -1448,6 +1448,30 @@ unsafe fn lv_column(hwnd: usize, wp: usize, lp: isize, wide: bool, insert: bool)
     r
 }
 
+/// LVM_GETCOLUMN : titre (LVCF_TEXT), largeur (LVCF_WIDTH) et rang
+/// (LVCF_SUBITEM) de la colonne `wp`.
+unsafe fn lv_get_column(hwnd: usize, wp: usize, lp: isize, wide: bool) -> isize {
+    if lp == 0 {
+        return 0;
+    }
+    let Some((title, width)) = common_snapshot(hwnd).columns.get(wp).cloned() else {
+        return 0;
+    };
+    let p = lp as *mut LvColumn;
+    let mut col = std::ptr::read_unaligned(p);
+    if col.mask & 0x2 != 0 {
+        col.cx = width;
+    }
+    if col.mask & 0x8 != 0 {
+        col.sub_item = wp as i32;
+    }
+    std::ptr::write_unaligned(p, col);
+    if col.mask & 0x4 != 0 && col.text != 0 && col.text_max > 0 {
+        write_text_ptr(col.text, col.text_max, &title, wide);
+    }
+    1
+}
+
 fn lv_hit(hwnd: usize, y: i32) -> i32 {
     let Some(c) = snapshot(hwnd) else {
         return -1;
@@ -1507,6 +1531,7 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
         }
         0x101B | 0x1061 => lv_column(hwnd, wp, lp, msg == 0x1061, true), // INSERTCOLUMN
         0x101A | 0x1060 => lv_column(hwnd, wp, lp, msg == 0x1060, false), // SETCOLUMN
+        0x1019 | 0x105F => lv_get_column(hwnd, wp, lp, msg == 0x105F),   // GETCOLUMN
         0x101C => {
             with_common(hwnd, |s| {
                 if wp < s.columns.len() {
