@@ -123,6 +123,9 @@ jobs:
       - name: Vérifier l'accent violet par défaut (#790)
         run: python3 -B scripts/test-default-accent.py
 
+      - name: Vérifier les tables de traduction (aucune clé en double)
+        run: python3 -B scripts/test-translation-keys.py
+
       - name: Vérifier les navigateurs hors ligne
         run: |
           sh scripts/test-browsers.sh
