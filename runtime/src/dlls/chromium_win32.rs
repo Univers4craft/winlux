@@ -503,6 +503,12 @@ pub extern "win64" fn GetWindowDpiAwarenessContext(_hwnd: usize) -> isize {
     PROCESS_CONTEXT.load(Ordering::Relaxed)
 }
 
+/// IsProcessDPIAware : vrai dès que le processus n'est plus « non conscient »
+/// (SetProcessDPIAware, SetProcessDpiAwareness(Context)). WPF le lit (#268).
+pub extern "win64" fn IsProcessDPIAware() -> i32 {
+    i32::from(awareness(PROCESS_CONTEXT.load(Ordering::Relaxed)) > 0)
+}
+
 // DPI_HOSTING_BEHAVIOR : -1 invalide, 0 par défaut, 1 mixte. WinForms .NET 8
 // le lit au démarrage par GetProcAddress (#666).
 const DPI_HOSTING_DEFAULT: i32 = 0;
@@ -589,6 +595,7 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "SetThreadDpiAwarenessContext" => fn SetThreadDpiAwarenessContext,
         "GetWindowDpiAwarenessContext" => fn GetWindowDpiAwarenessContext,
         "GetThreadDpiHostingBehavior" => fn GetThreadDpiHostingBehavior,
+        "IsProcessDPIAware" => fn IsProcessDPIAware,
         "SetThreadDpiHostingBehavior" => fn SetThreadDpiHostingBehavior,
         "GetWindowDpiHostingBehavior" => fn GetWindowDpiHostingBehavior,
         "GetAwarenessFromDpiAwarenessContext" => fn GetAwarenessFromDpiAwarenessContext,

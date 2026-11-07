@@ -1767,8 +1767,11 @@ pub extern "win64" fn set_capture(hwnd: usize) -> usize {
     gui::set_capture(hwnd)
 }
 
+/// ReleaseCapture réussit aussi quand aucune fenêtre n'a la capture : WPF
+/// lève une Win32Exception sur un FALSE (#268).
 pub extern "win64" fn release_capture() -> i32 {
-    gui::release_capture() as i32
+    gui::release_capture();
+    1
 }
 
 pub extern "win64" fn get_capture() -> usize {
@@ -1807,15 +1810,17 @@ pub unsafe extern "win64" fn get_cursor_pos(point: *mut Point) -> i32 {
     if point.is_null() {
         return 0;
     }
-    // Position par défaut au centre de l'écran
-    let (w, h) = gui::screen_size();
-    (*point).x = w / 2;
-    (*point).y = h / 2;
+    // Position réelle du pointeur (#268 : WPF compare WindowFromPoint de
+    // cette position à sa fenêtre et ignorait tous les clics).
+    let (x, y) = gui::cursor_screen_pos();
+    (*point).x = x;
+    (*point).y = y;
     1
 }
 
-pub unsafe extern "win64" fn set_cursor_pos(_x: i32, _y: i32) -> i32 {
-    1 // Stub : succès
+pub unsafe extern "win64" fn set_cursor_pos(x: i32, y: i32) -> i32 {
+    gui::set_cursor_screen_pos(x, y);
+    1
 }
 
 pub unsafe extern "win64" fn screen_to_client(hwnd: usize, point: *mut Point) -> i32 {
@@ -2381,12 +2386,102 @@ pub unsafe extern "win64" fn map_window_points(
 // System / Misc
 // =====================================================================
 
+/// LOGFONT de l'interface (Segoe UI 9 pt à 96 ppp, normal) écrit en `out`,
+/// version large (92 octets) ou ANSI (60 octets).
+unsafe fn write_ui_logfont(out: *mut u8, wide: bool, weight: i32) {
+    let size = if wide { 92 } else { 60 };
+    std::ptr::write_bytes(out, 0, size);
+    out.cast::<i32>().write_unaligned(-12); // lfHeight
+    out.add(16).cast::<i32>().write_unaligned(weight); // lfWeight
+    *out.add(23) = 1; // lfCharSet = DEFAULT_CHARSET
+    *out.add(26) = 5; // lfQuality = CLEARTYPE_QUALITY
+    let face = "Segoe UI";
+    if wide {
+        for (i, c) in face.encode_utf16().enumerate() {
+            out.add(28 + 2 * i).cast::<u16>().write_unaligned(c);
+        }
+    } else {
+        std::ptr::copy_nonoverlapping(face.as_ptr(), out.add(28), face.len());
+    }
+}
+
+/// SPI_GETNONCLIENTMETRICS : NONCLIENTMETRICS rempli (bordures, légendes,
+/// menus et polices). WPF lit le poids de ces polices : 0 lève
+/// ArgumentOutOfRangeException dans FontWeight.FromOpenTypeWeight (#268).
+unsafe fn non_client_metrics(data: *mut u8, wide: bool) -> i32 {
+    let lf = if wide { 92 } else { 60 };
+    let full = 24 + lf + 8 + lf + 8 + 3 * lf + 4;
+    let given = data.cast::<u32>().read_unaligned() as usize;
+    // Taille avec ou sans iPaddedBorderWidth (avant Vista).
+    if given != full && given != full - 4 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    std::ptr::write_bytes(data.add(4), 0, given - 4);
+    let ints = data.cast::<i32>();
+    ints.add(1).write_unaligned(1); // iBorderWidth
+    ints.add(2).write_unaligned(17); // iScrollWidth
+    ints.add(3).write_unaligned(17); // iScrollHeight
+    ints.add(4).write_unaligned(36); // iCaptionWidth
+    ints.add(5).write_unaligned(31); // iCaptionHeight
+    let mut at = 24;
+    write_ui_logfont(data.add(at), wide, 400); // lfCaptionFont
+    at += lf;
+    data.add(at).cast::<i32>().write_unaligned(22); // iSmCaptionWidth
+    data.add(at + 4).cast::<i32>().write_unaligned(22); // iSmCaptionHeight
+    at += 8;
+    write_ui_logfont(data.add(at), wide, 400); // lfSmCaptionFont
+    at += lf;
+    data.add(at).cast::<i32>().write_unaligned(19); // iMenuWidth
+    data.add(at + 4).cast::<i32>().write_unaligned(19); // iMenuHeight
+    at += 8;
+    for _ in 0..3 {
+        // lfMenuFont, lfStatusFont, lfMessageFont
+        write_ui_logfont(data.add(at), wide, 400);
+        at += lf;
+    }
+    if given == full {
+        data.add(at).cast::<i32>().write_unaligned(0); // iPaddedBorderWidth
+    }
+    1
+}
+
+/// Actions de SystemParametersInfo qui diffèrent entre A et W (polices).
+unsafe fn system_parameters_fonts(
+    action: u32,
+    param: u32,
+    data: *mut c_void,
+    wide: bool,
+) -> Option<i32> {
+    match action {
+        0x0029 if !data.is_null() => Some(non_client_metrics(data.cast(), wide)),
+        // SPI_GETICONTITLELOGFONT : LOGFONT de la taille annoncée.
+        0x001F if !data.is_null() => {
+            let need = if wide { 92 } else { 60 };
+            if param != 0 && (param as usize) < need {
+                crate::process::set_last_error(87);
+                return Some(0);
+            }
+            write_ui_logfont(data.cast(), wide, 400);
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 pub unsafe extern "win64" fn system_parameters_info_a(
     action: u32,
     param: u32,
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
+    if let Some(r) = system_parameters_fonts(action, param, data, false) {
+        return r;
+    }
+    system_parameters_common(action, param, data)
+}
+
+unsafe fn system_parameters_common(action: u32, param: u32, data: *mut c_void) -> i32 {
     let _ = (action, param, data);
     let a11y = crate::dlls::a11y::current();
     match action {
@@ -2436,17 +2531,29 @@ pub unsafe extern "win64" fn system_parameters_info_w(
     data: *mut c_void,
     _update: u32,
 ) -> i32 {
-    system_parameters_info_a(action, param, data, _update)
+    if let Some(r) = system_parameters_fonts(action, param, data, true) {
+        return r;
+    }
+    system_parameters_common(action, param, data)
 }
 
+/// Thread créateur de la fenêtre (son GetCurrentThreadId) et processus.
+/// WPF refuse d'attacher son rendu à une fenêtre d'un autre thread (#268).
 pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut u32) -> u32 {
+    let Some(tid) = gui::window_thread_id(hwnd) else {
+        if gui::wnd_proc_of(hwnd).is_none() {
+            crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+            return 0;
+        }
+        if !pid.is_null() {
+            *pid = std::process::id();
+        }
+        return std::process::id();
+    };
     if !pid.is_null() {
         *pid = std::process::id();
     }
-    // Thread ID : on retourne un ID basé sur le propriétaire
-    let _owner = gui::window_owner(hwnd);
-    // Utiliser le PID comme thread ID fictif
-    std::process::id()
+    tid
 }
 
 pub extern "win64" fn get_active_window() -> usize {
@@ -2749,8 +2856,10 @@ pub unsafe extern "win64" fn register_window_message_w(name: *const u16) -> u32 
     register_window_message(crate::dlls::wstr(name))
 }
 
+/// GetMessagePos : position du pointeur (écran) au dernier message lu.
 pub extern "win64" fn get_message_pos() -> u32 {
-    0
+    let (x, y) = gui::cursor_screen_pos();
+    (x as u16 as u32) | ((y as u16 as u32) << 16)
 }
 
 pub extern "win64" fn get_message_time() -> i32 {
@@ -3500,6 +3609,27 @@ mod tests {
     }
 
     /// WinForms borne un Form par SM_CXMAXTRACK : jamais 0.
+    #[test]
+    fn release_capture_sans_capture_reussit() {
+        assert_eq!(release_capture(), 1);
+        assert_eq!(release_capture(), 1);
+    }
+
+    #[test]
+    fn position_du_pointeur_suivie() {
+        unsafe {
+            gui::set_cursor_screen_pos(260, 200);
+            let mut p = Point { x: 0, y: 0 };
+            assert_eq!(get_cursor_pos(&mut p), 1);
+            assert_eq!((p.x, p.y), (260, 200));
+            assert_eq!(get_message_pos(), 260 | (200 << 16));
+            set_cursor_pos(-5, 7);
+            get_cursor_pos(&mut p);
+            assert_eq!((p.x, p.y), (-5, 7));
+            assert_eq!(get_message_pos(), 0xFFFB | (7 << 16));
+        }
+    }
+
     #[test]
     fn tailles_de_suivi_des_fenetres() {
         assert!(get_system_metrics(59) >= get_system_metrics(0));

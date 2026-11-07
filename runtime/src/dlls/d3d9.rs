@@ -797,8 +797,15 @@ unsafe extern "win64" fn d3d_caps(_: *mut Obj, adapter: u32, _ty: u32, out: *mut
     S_OK
 }
 
-unsafe extern "win64" fn d3d_monitor(_: *mut Obj, _adapter: u32) -> usize {
-    0x0001_0001
+/// GetAdapterMonitor : le seul adaptateur affiche sur l'écran principal, dont
+/// le HMONITOR est celui d'EnumDisplayMonitors (1). WPF rapproche les deux
+/// et refuse l'affichage s'ils diffèrent (#268).
+unsafe extern "win64" fn d3d_monitor(_: *mut Obj, adapter: u32) -> usize {
+    if adapter == 0 {
+        1 // monitors::list() range l'écran principal en tête
+    } else {
+        0
+    }
 }
 
 #[repr(C)]
@@ -864,11 +871,61 @@ unsafe extern "win64" fn d3d_mode_count_ex(
     d3d_mode_count(this, adapter, D3DFMT_X8R8G8B8)
 }
 
+/// D3DDISPLAYMODEEX : Size, Width, Height, RefreshRate, Format, ScanLineOrdering.
+unsafe fn write_mode_ex(out: *mut u8, m: &DisplayMode) {
+    let v = [24u32, m.width, m.height, m.refresh, m.format, 1];
+    std::ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out, 24);
+}
+
+unsafe extern "win64" fn d3d_enum_modes_ex(
+    _: *mut Obj,
+    adapter: u32,
+    _filter: *const c_void,
+    i: u32,
+    out: *mut u8,
+) -> i32 {
+    if adapter != 0 || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    match modes().get(i as usize) {
+        Some(m) => {
+            write_mode_ex(
+                out,
+                &DisplayMode {
+                    format: D3DFMT_X8R8G8B8,
+                    ..*m
+                },
+            );
+            S_OK
+        }
+        None => D3DERR_INVALIDCALL,
+    }
+}
+
+unsafe extern "win64" fn d3d_display_mode_ex(
+    _: *mut Obj,
+    adapter: u32,
+    out: *mut u8,
+    rot: *mut u32,
+) -> i32 {
+    if adapter != 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    if !out.is_null() {
+        write_mode_ex(out, &desktop_mode());
+    }
+    if !rot.is_null() {
+        *rot = 1; // D3DDISPLAYROTATION_IDENTITY
+    }
+    S_OK
+}
+
 unsafe extern "win64" fn d3d_luid(_: *mut Obj, _adapter: u32, out: *mut u64) -> i32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    *out = 0x5749_4e4c;
+    // LUID (deux DWORD) : aligné sur 4 seulement.
+    std::ptr::write_unaligned(out, 0x5749_4e4c);
     S_OK
 }
 
@@ -897,8 +954,8 @@ fn d3d9_vtable() -> &'static [usize] {
                 (15, f!(d3d_monitor)),
                 (16, f!(d3d_create_device)),
                 (17, f!(d3d_mode_count_ex)),
-                (18, f!(stub_invalid)),
-                (19, f!(stub_invalid)),
+                (18, f!(d3d_enum_modes_ex)),
+                (19, f!(d3d_display_mode_ex)),
                 (20, f!(d3d_create_device_ex)),
                 (21, f!(d3d_luid)),
             ],
@@ -3912,11 +3969,8 @@ unsafe extern "win64" fn dev_display_mode_ex(
     out: *mut u8,
     rot: *mut u32,
 ) -> i32 {
-    // D3DDISPLAYMODEEX : Size, Width, Height, RefreshRate, Format, ScanLineOrdering
     if !out.is_null() {
-        let m = desktop_mode();
-        let v = [24u32, m.width, m.height, m.refresh, m.format, 1];
-        std::ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out, 24);
+        write_mode_ex(out, &desktop_mode());
     }
     if !rot.is_null() {
         *rot = 1;
@@ -5070,6 +5124,38 @@ mod tests {
     {
         let vt = (*obj).vtbl;
         std::mem::transmute_copy::<usize, F>(&*vt.add(idx))
+    }
+
+    #[test]
+    fn moniteur_et_mode_etendu_de_l_adaptateur() {
+        unsafe {
+            let mut d = std::ptr::null_mut();
+            assert_eq!(Direct3DCreate9Ex(32, &mut d), S_OK);
+            let monitor: unsafe extern "win64" fn(*mut Obj, u32) -> usize = call(d, 15);
+            // Même HMONITOR que l'écran principal d'EnumDisplayMonitors.
+            assert_eq!(monitor(d, 0), 1);
+            assert_eq!(monitor(d, 1), 0);
+            type ModeEx = unsafe extern "win64" fn(*mut Obj, u32, *mut u8, *mut u32) -> i32;
+            let mode_ex: ModeEx = call(d, 19);
+            let mut m = [0u32; 6];
+            let mut rot = 0u32;
+            assert_eq!(mode_ex(d, 0, m.as_mut_ptr() as *mut u8, &mut rot), S_OK);
+            assert_eq!(m[0], 24);
+            assert!(m[1] > 0 && m[2] > 0);
+            assert_eq!(rot, 1);
+            assert_eq!(
+                mode_ex(d, 1, m.as_mut_ptr() as *mut u8, &mut rot),
+                D3DERR_INVALIDCALL
+            );
+            type EnumEx =
+                unsafe extern "win64" fn(*mut Obj, u32, *const c_void, u32, *mut u8) -> i32;
+            let enum_ex: EnumEx = call(d, 18);
+            assert_eq!(
+                enum_ex(d, 0, std::ptr::null(), 0, m.as_mut_ptr() as *mut u8),
+                S_OK
+            );
+            assert_eq!(m[4], D3DFMT_X8R8G8B8);
+        }
     }
 
     #[test]

@@ -2409,6 +2409,10 @@ impl X11Backend {
             Event::ButtonPress(e) => {
                 crate::power::note_activity();
                 gui::raw_mouse_button(e.detail, true);
+                gui::set_cursor_screen_pos(
+                    self.logical(e.root_x as i32),
+                    self.logical(e.root_y as i32),
+                );
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if self.is_frame(hwnd, e.event) {
                     // Clic dans la barre de menus : WM_NCLBUTTONDOWN sur
@@ -2498,6 +2502,10 @@ impl X11Backend {
             }
             Event::ButtonRelease(e) => {
                 gui::raw_mouse_button(e.detail, false);
+                gui::set_cursor_screen_pos(
+                    self.logical(e.root_x as i32),
+                    self.logical(e.root_y as i32),
+                );
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if self.is_frame(hwnd, e.event) {
                     return None;
@@ -2519,6 +2527,10 @@ impl X11Backend {
             Event::MotionNotify(e) => {
                 crate::power::note_activity();
                 gui::raw_mouse_motion(e.root_x as i32, e.root_y as i32);
+                gui::set_cursor_screen_pos(
+                    self.logical(e.root_x as i32),
+                    self.logical(e.root_y as i32),
+                );
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if self.is_frame(hwnd, e.event) {
                     return None;

@@ -505,14 +505,14 @@ Les applis .NET autonomes qui embarquent `coreclr.dll` démarrent par leur
 propre runtime ; Paint.NET avance sur ce chemin (#138). Depuis #664–#666,
 une appli **WinForms** autonome simple s'ouvre, reçoit les clics et se ferme
 proprement (`scripts/test-winforms-bonjour.sh`, sur le runtime .NET 9 de
-Paint.NET portable). Les applis qui
+Paint.NET portable). Depuis #268, une appli **WPF** autonome simple fait de
+même (`scripts/test-wpf-bonjour.sh`) : `wpfgfx` dessine par Direct3D 9, le
+texte passe par l'analyseur DirectWrite maison. Le rendu WPF reste incomplet
+(couleurs pâles, texte des contrôles absent). Les applis qui
 s'appuient sur un .NET installé passent par le CLR maison, qui n'a encore ni
-génériques de la BCL, ni délégués, ni LINQ, ni WinForms, ni WPF. WPF demande en
-plus Direct3D 9 (déjà là) et ses DLL natives (`wpfgfx`, `PresentationNative`).
-Le corpus .NET Core 3.1 montre 118 fonctions natives manquantes, dont une
-partie dans `ole32`/`oleaut32`.
+génériques de la BCL, ni délégués, ni LINQ, ni WinForms, ni WPF.
 
-Ampleur : **XL**. Suivi : #22, #138.
+Ampleur : **XL**. Suivi : #22, #138, #268.
 
 ### 10. Communication entre processus et COM complet
 

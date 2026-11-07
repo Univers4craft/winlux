@@ -902,7 +902,9 @@ pub unsafe extern "win64" fn adjust_window_rect_ex_for_dpi(
     .unwrap_or(0)
 }
 
+/// SetProcessDPIAware : le processus devient « conscient du DPI système ».
 pub extern "win64" fn set_process_dpi_aware() -> i32 {
+    crate::dlls::chromium_win32::SetProcessDpiAwareness(1);
     1
 }
 
