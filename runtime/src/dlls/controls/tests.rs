@@ -1296,3 +1296,24 @@ fn richedit_journal_qui_defile_jusqu_a_la_derniere_page() {
         user32::destroy_window(p);
     }
 }
+
+/// #802 : Ctrl+A dans un champ sélectionne tout ; la frappe suivante remplace.
+#[test]
+fn ctrl_a_selectionne_tout_le_champ() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "EDIT", "22", WS_BORDER | 0x80, 13, (10, 10, 120, 24));
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYDOWN, 0x11, 0));
+    sendw(e, gui::WM_KEYDOWN, 0x41, 0);
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYUP, 0x11, 0));
+    let r = sendw(e, 0x00B0, 0, 0);
+    assert_eq!((r & 0xFFFF, r >> 16), (0, 2));
+    for ch in "2222".chars() {
+        sendw(e, WM_CHAR, ch as usize, 0);
+    }
+    assert_eq!(text_of(e), "2222");
+    unsafe {
+        user32::destroy_window(e);
+        user32::destroy_window(p);
+    }
+}

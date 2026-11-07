@@ -1686,6 +1686,13 @@ fn edit_key(hwnd: usize, vk: usize) -> bool {
             }
         })
     };
+    // Ctrl+A, C, V, X : Winlux ne produit pas de WM_CHAR de contrôle pour
+    // Ctrl+lettre (les raccourcis des applis passent par WM_KEYDOWN), donc
+    // le champ les traite ici, comme le ferait l'EDIT de Windows (#802).
+    if ctrl && !shift && matches!(vk, 0x41 | 0x43 | 0x56 | 0x58) {
+        edit_char(hwnd, (vk - 0x40) as u32);
+        return true;
+    }
     let new_caret = match vk {
         VK_LEFT if ctrl => Some(word_left(caret)),
         VK_LEFT => Some(if !shift && c.edit.anchor != caret {
