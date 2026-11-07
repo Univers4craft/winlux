@@ -42,9 +42,11 @@ fn lookup(p: *mut c_void) -> Option<Arc<Stream>> {
         .cloned()
 }
 
-/// Réserve une valeur de pointeur opaque pour un nouveau flux.
+/// Réserve une valeur de pointeur pour un nouveau flux : un bloc de la
+/// taille d'un `FILE` de msvcrt, à zéro. Les macros putc/getc des vieux
+/// compilateurs y lisent `_cnt` (nul : elles appellent _flsbuf/_filbuf).
 fn new_slot() -> *mut c_void {
-    Box::into_raw(Box::new(0u64)) as *mut c_void
+    Box::into_raw(Box::new([0u64; MSVCRT_FILE_SIZE / 8])) as *mut c_void
 }
 
 fn register(kind: Kind, file: Option<File>) -> *mut c_void {
@@ -65,7 +67,7 @@ fn register(kind: Kind, file: Option<File>) -> *mut c_void {
 
 fn free_slot(p: *mut c_void) {
     if !p.is_null() {
-        unsafe { drop(Box::from_raw(p as *mut u64)) };
+        unsafe { drop(Box::from_raw(p as *mut [u64; MSVCRT_FILE_SIZE / 8])) };
     }
 }
 
@@ -431,6 +433,28 @@ pub unsafe extern "win64" fn fputc(c: i32, p: *mut c_void) -> i32 {
         s.err.store(true, Ordering::Release);
         -1
     }
+}
+
+/// Remet à zéro `_cnt` (après `_ptr`) : la macro putc/getc l'a décrémenté
+/// avant d'appeler _flsbuf/_filbuf, le prochain appel repassera par nous.
+unsafe fn reset_count(p: *mut c_void) {
+    if lookup(p).is_some() {
+        std::ptr::write_unaligned((p as *mut u8).add(8) as *mut i32, 0);
+    }
+}
+
+/// `_flsbuf(c, f)` : appelée par la macro putc de msvcrt quand le tampon
+/// est plein. Les flux de Winlux n'exposent pas de tampon : on écrit le
+/// caractère directement (VLC).
+pub unsafe extern "win64" fn flsbuf(c: i32, p: *mut c_void) -> i32 {
+    reset_count(p);
+    fputc(c, p)
+}
+
+/// `_filbuf(f)` : appelée par la macro getc quand le tampon est vide.
+pub unsafe extern "win64" fn filbuf(p: *mut c_void) -> i32 {
+    reset_count(p);
+    fgetc(p)
 }
 
 pub unsafe extern "win64" fn fgetc(p: *mut c_void) -> i32 {
@@ -951,7 +975,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "fopen" => fn fopen, "_wfopen" => fn wfopen, "fopen_s" => fn fopen_s, "fclose" => fn fclose,
         "fread" => fn fread, "fwrite" => fn fwrite, "fgets" => fn fgets, "fputs" => fn fputs,
-        "fgetc" => fn fgetc, "fputc" => fn fputc, "ungetc" => fn ungetc, "getc" => fn fgetc, "putc" => fn fputc,
+        "fgetc" => fn fgetc, "fputc" => fn fputc, "_flsbuf" => fn flsbuf, "_filbuf" => fn filbuf, "ungetc" => fn ungetc, "getc" => fn fgetc, "putc" => fn fputc,
         "fseek" => fn fseek, "ftell" => fn ftell, "rewind" => fn rewind, "fgetpos" => fn fgetpos, "fsetpos" => fn fsetpos,
         "_fseeki64" => fn fseeki64, "_ftelli64" => fn ftelli64,
         "feof" => fn feof, "ferror" => fn ferror, "clearerr" => fn clearerr,
@@ -970,6 +994,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Macro putc/getc de msvcrt (VLC) : `_cnt` passe sous zéro, la macro
+    /// appelle _flsbuf/_filbuf, qui écrivent ou lisent et le remettent à 0.
+    #[test]
+    fn flsbuf_et_filbuf_pour_les_macros_putc_getc() {
+        unsafe {
+            let base =
+                std::env::temp_dir().join(format!("winlux-crt-flsbuf-{}.txt", std::process::id()));
+            let path = format!("{}\0", base.display());
+            let f = fopen(path.as_ptr(), b"w+\0".as_ptr());
+            assert!(!f.is_null());
+            let cnt = (f as *mut u8).add(8) as *mut i32;
+            for c in b"ok" {
+                *cnt -= 1; // --f->_cnt de la macro
+                assert_eq!(flsbuf(*c as i32, f), *c as i32);
+                assert_eq!(*cnt, 0);
+            }
+            assert_eq!(fseek(f, 0, 0), 0);
+            *cnt -= 1;
+            assert_eq!(filbuf(f), b'o' as i32);
+            assert_eq!(*cnt, 0);
+            assert_eq!(fgetc(f), b'k' as i32);
+            fclose(f);
+            let _ = std::fs::remove_file(&base);
+        }
+    }
 
     #[test]
     fn ftell_echoue_au_dela_de_32_bits_et_fileno_rend_le_descripteur() {
