@@ -62,7 +62,7 @@ def image_check(stage):
 
 tmp = Path(tempfile.mkdtemp(prefix="winlux-session-"))
 try:
-    files = ["usr/bin/rfkill", "usr/bin/glxinfo", "usr/libexec/at-spi-bus-launcher",
+    files = ["usr/sbin/rfkill", "usr/bin/glxinfo", "usr/libexec/at-spi-bus-launcher",
              "usr/share/dbus-1/services/org.a11y.Bus.service", "usr/libexec/upowerd"]
     for name in files:
         (tmp / name).parent.mkdir(parents=True, exist_ok=True)

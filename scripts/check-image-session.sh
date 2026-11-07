@@ -11,7 +11,9 @@
 set -eu
 stage=$1
 missing=""
-for path in usr/bin/rfkill usr/bin/glxinfo usr/libexec/at-spi-bus-launcher \
+# rfkill est dans /usr/sbin chez Debian et Ubuntu.
+test -e "$stage/usr/sbin/rfkill" || test -e "$stage/usr/bin/rfkill" || missing="$missing /usr/sbin/rfkill"
+for path in usr/bin/glxinfo usr/libexec/at-spi-bus-launcher \
             usr/share/dbus-1/services/org.a11y.Bus.service usr/libexec/upowerd; do
     test -e "$stage/$path" || missing="$missing /$path"
 done
