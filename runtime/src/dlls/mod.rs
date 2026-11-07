@@ -55,6 +55,7 @@ pub mod dinput8;
 pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
+pub mod dplayx;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -517,6 +518,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "oleaut32",
                 exports: oleaut32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dplayx",
+                exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dplay",
+                exports: dplayx::exports(),
                 handle: fake_module(),
             },
             Builtin {

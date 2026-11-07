@@ -861,6 +861,135 @@ static int dshow_tests(void) {
     return 0;
 }
 
+/* DirectPlay (#836) : hôte et client dans le même programme, sur 127.0.0.1. */
+__declspec(dllimport) HRESULT WINAPI DirectPlayCreate(const GUID *, void **, void *);
+__declspec(dllimport) HRESULT WINAPI DirectPlayLobbyCreateA(const GUID *, void **, void *, void *,
+                                                           DWORD);
+typedef struct {
+    DWORD dwSize, dwFlags;
+    GUID guidInstance, guidApplication;
+    DWORD dwMaxPlayers, dwCurrentPlayers;
+    char *lpszSessionNameA, *lpszPasswordA;
+    DWORD dwReserved1, dwReserved2, dwUser1, dwUser2, dwUser3, dwUser4;
+} DPSESSIONDESC2;
+typedef struct { DWORD dwSize, dwFlags; char *lpszShortNameA, *lpszLongNameA; } DPNAME;
+static const GUID DPSPGUID_TCPIP = {
+    0x36e95ee0, 0x8577, 0x11cf, {0x96, 0x0c, 0x00, 0x80, 0xc7, 0x53, 0x4e, 0x82}};
+static const GUID DPAID_INet = {
+    0xc4a54da0, 0xe0af, 0x11cf, {0x9c, 0x4e, 0x00, 0xa0, 0xc9, 0x05, 0x42, 0x5e}};
+static const GUID IID_IDirectPlay4A = {
+    0x0ab1c531, 0x4745, 0x11d1, {0xa7, 0xa1, 0x00, 0x00, 0xf8, 0x03, 0xab, 0xfc}};
+static const GUID IID_IDirectPlayLobby3A = {
+    0x2db72491, 0x652c, 0x11d1, {0xa7, 0xa8, 0x00, 0x00, 0xf8, 0x03, 0xab, 0xfc}};
+static const GUID APP_JEUX = {0x57494e4c, 0x5558, 0x4a45, {0x55, 0x58, 1, 2, 3, 4, 5, 6}};
+static int sessions, connections, players;
+static GUID found_instance;
+static DWORD found_current;
+static BOOL WINAPI enum_session(const DPSESSIONDESC2 *sd, DWORD *timeout, DWORD flags, void *ctx) {
+    const char *n;
+    if (flags & 1) return 0; /* DPESC_TIMEDOUT */
+    n = sd->lpszSessionNameA;
+    if (ctx == (void *)0x5150 && *timeout == 1500 && n[0] == 'W' && n[5] == 'x') {
+        found_instance = sd->guidInstance;
+        found_current = sd->dwCurrentPlayers;
+        sessions++;
+    }
+    return 1;
+}
+static BOOL WINAPI enum_connection(const GUID *sp, void *conn, DWORD size, const DPNAME *name,
+                                   DWORD flags, void *ctx) {
+    if (sp->d1 == DPSPGUID_TCPIP.d1 && size > 40 && name->lpszShortNameA[0] && flags == 1 &&
+        ctx == (void *)7)
+        connections++;
+    return 1;
+}
+static BOOL WINAPI enum_player(DWORD id, DWORD type, const DPNAME *name, DWORD flags, void *ctx) {
+    if (type == 1) players++;
+    return 1;
+}
+
+static int dplay_tests(void) {
+    void *v1 = 0, *host = 0, *client = 0, *lobby = 0;
+    DPSESSIONDESC2 sd;
+    DPNAME nm;
+    DWORD hp = 0, cp = 0, from, to, size, i;
+    unsigned char addr[128], buf[256];
+    HANDLE hev = CreateEventA(0, 0, 0, 0), cev = CreateEventA(0, 0, 0, 0);
+    int got_create = 0, got_msg = 0;
+
+    CHECK(170, DirectPlayCreate(&DPSPGUID_TCPIP, &v1, 0) == 0 && v1);
+    CHECK(171, CALL2(v1, 0, &IID_IDirectPlay4A, &host) == 0 && host);
+    CALL0(v1, 2);
+    zero(&sd, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.guidApplication = APP_JEUX;
+    sd.dwMaxPlayers = 4;
+    sd.lpszSessionNameA = "Winlux";
+    CHECK(172, CALL2(host, 24, &sd, 2) == 0); /* Open(DPOPEN_CREATE) */
+    zero(&nm, sizeof nm);
+    nm.dwSize = sizeof nm;
+    nm.lpszShortNameA = "Hote";
+    CHECK(173, CALL6(host, 6, &hp, &nm, hev, 0, 0, 0) == 0 && hp > 1);
+
+    /* Client : objet non initialisé, connexion TCP/IP par une adresse du lobby. */
+    CHECK(174, DirectPlayLobbyCreateA(0, &v1, 0, 0, 0) == 0 && v1);
+    CHECK(175, CALL2(v1, 0, &IID_IDirectPlayLobby3A, &lobby) == 0 && lobby);
+    CALL0(v1, 2);
+    size = sizeof addr;
+    CHECK(176, CALL6(lobby, 4, &DPSPGUID_TCPIP, &DPAID_INet, "127.0.0.1", 10, addr, &size) == 0 &&
+                   size == 90);
+    CHECK(177, DirectPlayCreate(0, &v1, 0) == 0 && CALL2(v1, 0, &IID_IDirectPlay4A, &client) == 0);
+    CALL0(v1, 2);
+    CHECK(178, CALL4(client, 35, 0, enum_connection, 7, 0) == 0 && connections == 1);
+    CHECK(179, CALL2(client, 38, addr, 0) == 0);
+    zero(&sd, sizeof sd);
+    sd.dwSize = sizeof sd;
+    sd.guidApplication = APP_JEUX;
+    CHECK(180, CALL5(client, 13, &sd, 1500, enum_session, 0x5150, 0) == 0 && sessions == 1 &&
+                   found_current == 1);
+    sd.guidInstance = found_instance;
+    CHECK(181, CALL2(client, 24, &sd, 1) == 0); /* Open(DPOPEN_JOIN) */
+    nm.lpszShortNameA = "Client";
+    CHECK(182, CALL6(client, 6, &cp, &nm, cev, 0, 0, 0) == 0 && cp > 1 && cp != hp);
+    CHECK(183, CALL5(client, 26, cp, hp, 1, "bonjour", 8) == 0);
+
+    /* Hôte : création du joueur distant (message système) puis le message. */
+    for (i = 0; i < 20 && !(got_create && got_msg); i++) {
+        WaitForSingleObject(hev, 200);
+        for (;;) {
+            from = to = 0;
+            size = sizeof buf;
+            if (CALL5(host, 25, &from, &to, 0, buf, &size) != 0) break;
+            if (from == 0 && *(DWORD *)buf == 3 && ((DWORD *)buf)[2] == cp) {
+                const DPNAME *n = (const DPNAME *)(buf + (sizeof(void *) == 4 ? 24 : 32));
+                if (n->lpszShortNameA[0] == 'C') got_create = 1;
+            } else if (from == cp && to == hp && size == 8 && buf[0] == 'b' && buf[6] == 'r') {
+                got_msg = 1;
+            }
+        }
+    }
+    CHECK(184, got_create);
+    CHECK(185, got_msg);
+    /* Réponse de l'hôte : l'événement du joueur client est signalé. */
+    CHECK(186, CALL5(host, 26, hp, cp, 1, "salut", 6) == 0);
+    CHECK(187, WaitForSingleObject(cev, 3000) == 0);
+    from = 0;
+    to = cp;
+    size = sizeof buf;
+    CHECK(188, CALL5(client, 25, &from, &to, 2, buf, &size) == 0 && from == hp && size == 6 &&
+                   buf[0] == 's');
+    size = sizeof buf;
+    CHECK(189, CALL2(client, 22, buf, &size) == 0 &&
+                   ((DPSESSIONDESC2 *)buf)->dwCurrentPlayers == 2 &&
+                   ((DPSESSIONDESC2 *)buf)->lpszSessionNameA[0] == 'W');
+    CHECK(190, CALL4(client, 12, 0, enum_player, 0, 0) == 0 && players == 2);
+    CHECK(191, CALL0(client, 4) == 0 && CALL0(host, 4) == 0); /* Close */
+    CALL0(client, 2);
+    CALL0(host, 2);
+    CHECK(192, CALL0(lobby, 2) == 0);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -883,6 +1012,8 @@ void entry(void) {
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();
     out("DirectShow : 11 verifications passees\n");
+    dplay_tests();
+    out("DirectPlay : 23 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

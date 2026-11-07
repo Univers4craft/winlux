@@ -854,6 +854,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::quartz::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // DirectPlay et son lobby (dplayx.dll, #836).
+        if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
