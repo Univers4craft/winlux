@@ -155,6 +155,9 @@ jobs:
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
+      - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
+        run: python3 -B scripts/test-update-page-names.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 

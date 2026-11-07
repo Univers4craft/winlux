@@ -188,7 +188,7 @@ _TR = {
     # Pages des Paramètres et description du PC, dans la langue choisie.
     "Réseau": ("Network", "Red", "Netzwerk"),
     "Clavier et souris": ("Keyboard and mouse", "Teclado y ratón", "Tastatur und Maus"),
-    "Mises à jour": ("Updates", "Actualizaciones", "Updates"),
+    "Mise à jour OS": ("OS update", "Actualización del SO", "OS-Update"),
     "Écran": ("Display", "Pantalla", "Bildschirm"),
     "Programmes Windows": ("Windows programs", "Programas de Windows", "Windows-Programme"),
     "Navigateurs": ("Browsers", "Navegadores", "Browser"),
@@ -969,7 +969,7 @@ SETTINGS = {
     "mises_a_jour": ("Rechercher les mises à jour de Winlux", "update-check"),
 }
 # Pages des Paramètres que Claude peut proposer d'ouvrir (numéros stables).
-SETTINGS_PAGES = {2: "Réseau", 4: "Clavier et souris", 7: "Mises à jour", 8: "Écran", 10: "Programmes Windows",
+SETTINGS_PAGES = {2: "Réseau", 4: "Clavier et souris", 7: "Mise à jour OS", 8: "Écran", 10: "Programmes Windows",
                   11: "Navigateurs", 12: "Accessibilité", 14: "Localisation", 16: "Son",
                   18: "Confidentialité et sécurité", 20: "Lecteurs réseau", 21: "Fond d’écran et couleurs",
                   22: "Bluetooth", 23: "Alimentation et batterie", 24: "Graphismes", 26: "Imprimantes et scanners",

@@ -52,4 +52,4 @@ sha256sum -c winlux-live-v0.2.19.iso.sha256
 Die beiden Prüfsummen müssen übereinstimmen; andernfalls laden Sie das Abbild erneut herunter.
 
 > [!note]
-> Winlux ist bei Ihnen schon installiert? Dann müssen Sie hier nichts herunterladen: Neue Versionen werden über [Einstellungen › Updates](page:guide-updates) installiert.
+> Winlux ist bei Ihnen schon installiert? Dann müssen Sie hier nichts herunterladen: Neue Versionen werden über [Einstellungen › Updates › OS-Update](page:guide-updates) installiert.

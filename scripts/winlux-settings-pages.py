@@ -440,7 +440,7 @@ _TR = {
     "Tout installer": ("Install all", "Instalar todo", "Alle installieren"),
     "Recherche ou installation en cours…": ("Checking or installing…", "Buscando o instalando…", "Suche oder Installation läuft…"),
     "Journal": ("Log", "Registro", "Protokoll"),
-    "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
+    "Les mises à jour de Winlux lui-même sont dans « Mise à jour OS ».": ("Updates to Winlux itself are under “OS update”.", "Las actualizaciones del propio Winlux están en «Actualización del SO».", "Updates von Winlux selbst finden Sie unter „OS-Update“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
     "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
@@ -2063,11 +2063,11 @@ class ExtraPages:
         if verb == "remove" and not self.confirm(_t("Supprimer le lecteur {letter}: ?").format(letter=letter)): return
         self.tool(drives_tool() + [verb, letter])
 
-    # ── Mises à jour système (APT) ──
+    # ── Mise à jour application (APT, page 17) ──
 
     def page_sysupdate(self):
         status = self.status
-        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mises à jour »."))
+        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mise à jour OS »."))
         self.section(_t("Logiciels et pilotes Linux"))
         box = self.card()
         busy = status.get("sysupdate_busy") == "1"
