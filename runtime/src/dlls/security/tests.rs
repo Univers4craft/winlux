@@ -251,3 +251,27 @@ fn absolute_descriptor_and_explicit_acl() {
         assert_eq!(EqualSid(got, owner.as_ptr()), 1);
     }
 }
+
+/// Le courtier du bac à sable de Chromium pose un jeton sur le thread de
+/// l'enfant puis le relit avec OpenThreadToken ; sans jeton, il tue
+/// l'enfant (#767).
+#[test]
+fn jeton_pose_sur_un_thread_puis_relu() {
+    let _teb = crate::process::test_teb();
+    let thread = 0x7a5e_0001usize;
+    let mut t = 0usize;
+    unsafe {
+        assert_eq!(open_thread_token(thread, &mut t), 0);
+        assert_eq!(crate::process::last_error(), 1008);
+        assert_eq!(SetThreadToken(&thread, TOKEN_HANDLE), 1);
+        assert_eq!(open_thread_token(thread, &mut t), 1);
+        assert_eq!(t, TOKEN_HANDLE);
+        assert_eq!(SetThreadToken(&thread, 0), 1);
+        assert_eq!(open_thread_token(thread, &mut t), 0);
+        // Thread courant : ImpersonateSelf puis RevertToSelf.
+        assert_eq!(ImpersonateSelf(2), 1);
+        assert_eq!(open_thread_token(CURRENT_THREAD_PSEUDO, &mut t), 1);
+        assert_eq!(RevertToSelf(), 1);
+        assert_eq!(open_thread_token(CURRENT_THREAD_PSEUDO, &mut t), 0);
+    }
+}
