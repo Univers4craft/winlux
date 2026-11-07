@@ -181,6 +181,9 @@ _TR = {
     'Annuler le dernier import': ('Undo the last import', 'Deshacer la última importación', 'Letzten Import rückgängig machen'),
     'Annuler les impressions': ('Cancel print jobs', 'Cancelar las impresiones', 'Druckaufträge abbrechen'),
     'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
+    'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation.': ('Full list of Linux apps and Windows programs, with their size and uninstall.', 'Lista completa de aplicaciones de Linux y programas de Windows, con su tamaño y la desinstalación.', 'Vollständige Liste der Linux-Apps und Windows-Programme, mit Größe und Deinstallation.'),
+    'Voir les applications installées': ('See installed apps', 'Ver aplicaciones instaladas', 'Installierte Apps anzeigen'),
     'Arrêter le partage': ('Stop sharing', 'Dejar de compartir', 'Freigabe beenden'),
     'Aucun programme ne démarre avec la session.': ('No program starts with the session.', 'Ningún programa se inicia con la sesión.', 'Kein Programm startet mit der Sitzung.'),
     'Aucun réseau Wi-Fi visible pour l’instant.': ('No Wi-Fi network visible right now.', 'Ninguna red Wi-Fi visible por ahora.', 'Zurzeit ist kein WLAN sichtbar.'),
@@ -808,6 +811,7 @@ PAGE_WIFI = 35
 PAGE_CERTS = 36
 PAGE_PHONE = 37
 PAGE_BACKUP = 38
+PAGE_INSTALLED = 39
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1428,6 +1432,8 @@ def page_available(page, status=None):
         return module is not None and module.available()
     if page == PAGE_BACKUP:
         return have("winlux-backup") or BACKUP_RUN.is_dir()
+    if page == PAGE_INSTALLED:
+        return installed_apps_module() is not None
     if page == PAGE_PHONE:
         # Rien d’associé : pas de page (l’application Téléphone connecté associe).
         return bool(phone_devices())
@@ -1673,6 +1679,24 @@ def phone_devices():
 
 
 
+def installed_apps_module():
+    """winlux-installed-apps (#722), installé à côté ou dans scripts/ du dépôt."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-installed-apps.py"), here.with_name("winlux-installed-apps")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_installed_apps", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_installed_apps", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1705,7 +1729,7 @@ class ExtraPages:
                    PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts",
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
-                   PAGE_BACKUP: "page_backup"}
+                   PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -2436,7 +2460,12 @@ class ExtraPages:
         programs = installed_programs(module)
         self.hybrid = gpu_hybrid()
         self.hint(_t("Les réglages s’appliquent au prochain lancement du programme."))
-        self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
+        # Une seule liste des applications installées, avec les vraies icônes
+        # des .exe (#756) ; la fenêtre du shell PE n'en montrait aucune.
+        if installed_apps_module() is not None:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), self.open_installed_windows)])
+        else:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
         exes = Gtk.FileFilter()
         exes.set_name(_t("Programmes Windows (.exe)"))
         exes.add_pattern("*.exe")
@@ -3620,7 +3649,26 @@ class ExtraPages:
                         lambda on, i=ident: self.execute(f"store-catalog-{'add' if on else 'remove'}-{i}"), summary)
         self.actions(box, [(_t("Ouvrir le Store"), lambda: self.spawn(["winlux-shell-app", "store"]))])
 
+    def page_installed(self):
+        """Applications installées (#722) : tout ce qui est installé, Linux et
+        Windows, avec recherche, tri, taille et Désinstaller."""
+        module = installed_apps_module()
+        if module is None: return
+        # « Installer ou désinstaller des programmes » (Programmes Windows,
+        # winlux-shell-app programs) : liste filtrée sur Windows (#756).
+        kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
+        self.installed_filter = None
+        self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def open_installed_windows(self):
+        self.installed_filter = "windows"
+        self.open_page(PAGE_INSTALLED)
+
     def page_apps(self):
+        if installed_apps_module() is not None:
+            box = self.card()
+            self.row(box, _t("Applications installées"), None, _t("Liste complète des applications Linux et des programmes Windows, avec leur taille et la désinstallation."))
+            self.actions(box, [(_t("Voir les applications installées"), lambda: self.open_page(PAGE_INSTALLED))])
         self.store_catalogs_section()
         panel = default_apps_panel(self)
         if panel is not None:

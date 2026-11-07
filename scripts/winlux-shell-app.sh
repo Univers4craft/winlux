@@ -55,6 +55,14 @@ case "${1:-explorer}" in
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     store|fonts|programs|taskschd|firewall|welcome|regedit|taskmgr|eventviewer|msinfo32)
         export WINLUX_SHELL_APP=$1
+        # Bureau natif : « Installer ou désinstaller des programmes » est la page
+        # Applications installées des Paramètres, filtrée sur Windows, avec les
+        # vraies icônes des .exe (#756). La fenêtre PE reste pour le shell PE.
+        if test "$1" = programs && test "${WINLUX_LEGACY_SETTINGS:-0}" != 1 && test -x /usr/bin/winlux-installed-apps &&
+           test -f /usr/bin/winlux-settings; then
+            export WINLUX_INSTALLED_FILTER=windows
+            exec /usr/bin/python3 /usr/bin/winlux-settings installed-apps
+        fi
         # Lanceur d'une boutique (winlux-store-catalogs) : le Store n'affiche
         # que ses logiciels, sous son nom (« flatpak: Flathub »).
         if test "$1" = store && test -n "${2:-}"; then
