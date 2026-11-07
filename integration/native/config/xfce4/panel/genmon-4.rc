@@ -1,4 +1,4 @@
-Command=/usr/bin/winlux-tray network
+Command=/usr/bin/winlux-tray status
 UseLabel=0
 Text=
 UpdatePeriod=3000
