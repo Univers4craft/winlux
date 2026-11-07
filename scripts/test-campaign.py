@@ -594,8 +594,8 @@ ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
    and (SCRIPTS / "test-duplication.sh").exists(),
    "Electron : handles copiés entre processus, enfant suspendu une fois chargé")
 permission_tool = (SCRIPTS / "winlux-permission.py").read_text(encoding="utf-8")
-ok('"sandbox"' in permission_tool and "Lancer « {app} » sans son bac à sable ?" in permission_tool
-   and '"sandbox": "Lancer sans bac à sable"' in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+ok('"sandbox"' in permission_tool and "Lancer « {app} » sans son isolation ?" in permission_tool
+   and '"sandbox": "Lancer sans isolation (Chromium, Electron)"' in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
    "Electron : bac à sable impossible → proposition claire, choix visible dans Paramètres")
 ok((SCRIPTS / "winlux-webview.py").exists() and (SCRIPTS / "test-webview2.sh").exists()
    and "winlux-webview" in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")
