@@ -36,6 +36,28 @@ MARK = ("\n.xfce4-panel button, .xfce4-panel button:checked, .xfce4-panel button
         "border-color: #ff00ff; border-radius: 0; box-shadow: none; }\n")
 
 
+def genmon_in_xfconf(config):
+    """xfce4-genmon-plugin 4.2+ (Ubuntu 26.04) lit sa commande dans xfconf, plus
+    dans genmon-N.rc : même report que winlux-native-config."""
+    import xml.etree.ElementTree as ET
+    path = config / "xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+    tree = ET.parse(path)
+    plugins = next(item for item in tree.getroot() if item.get("name") == "plugins")
+    for plugin in plugins:
+        name = plugin.get("name") or ""
+        rc = config / "xfce4/panel" / f"genmon-{name[7:]}.rc"
+        if plugin.get("value") != "genmon" or any(child.get("name") == "command" for child in plugin) or not rc.is_file():
+            continue
+        values = dict(line.split("=", 1) for line in rc.read_text(encoding="utf-8").splitlines() if "=" in line)
+        for key, kind, value in (("command", "string", values["Command"]),
+                                 ("use-label", "bool", "true" if values.get("UseLabel") == "1" else "false"),
+                                 ("text", "string", values.get("Text", "")),
+                                 ("update-period", "int", values.get("UpdatePeriod", "3000")),
+                                 ("font", "string", values.get("Font", "DejaVu Sans 10"))):
+            ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+    tree.write(path, encoding="UTF-8", xml_declaration=True)
+
+
 def prepare(home):
     config = home / ".config"
     shutil.copytree(shipped, config)
@@ -55,6 +77,7 @@ def prepare(home):
         text = text.replace("/usr/bin/winlux-tray", f"{sys.executable} -B {directory}/winlux-tray.py")
         text = re.sub(r'(<property name="plugin-ids" type="array">).*?(</property>)', lambda m: m[1] + ids + m[2], text)
         path.write_text(text, encoding="utf-8")
+    genmon_in_xfconf(config)
 
 
 def start_x(Gdk, root, width, height):
