@@ -22,6 +22,10 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Polices aux métriques d'Arial, Times New Roman et Courier New :
             # les fenêtres des .exe gardent leur mise en page.
             "fonts-liberation",
+            # Chinois, japonais et coréen : un .exe qui en affiche (lien
+            # « 支持台灣獨立 » de Notepad++) a ses glyphes par repli de police
+            # au lieu de carrés, comme la liaison de polices de Windows (#745).
+            "fonts-wqy-microhei",
             "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",

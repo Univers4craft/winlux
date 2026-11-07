@@ -157,7 +157,9 @@ fn jeton_du_processus() {
         );
         assert_eq!(u32::from_le_bytes(logon[0..4].try_into().unwrap()), 1);
         let sid = std::ptr::read_unaligned(logon.as_ptr().add(8) as *const *const u8);
-        assert!(sid_text(sid_at(sid).unwrap()).unwrap().starts_with("S-1-5-5-"));
+        assert!(sid_text(sid_at(sid).unwrap())
+            .unwrap()
+            .starts_with("S-1-5-5-"));
         let attrs = u32::from_le_bytes(logon[16..20].try_into().unwrap());
         assert_ne!(attrs & SE_GROUP_LOGON_ID, 0);
 

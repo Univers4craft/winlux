@@ -2802,6 +2802,18 @@ fn brush_color(brush: usize) -> Option<u32> {
     }
 }
 
+/// Couleur unie du fond du parent d'un contrôle, quand ce parent est effacé
+/// avec le pinceau de sa classe (voir `begin_paint`) ; None s'il garde le
+/// dégradé du thème.
+pub fn parent_backdrop_color(hwnd: usize) -> Option<u32> {
+    let parent = window_parent(hwnd).filter(|&p| p != 0)?;
+    let background = lock(windows()).get(&parent)?.background;
+    if background == 0 || !has_control_children(parent) {
+        return None;
+    }
+    brush_color(background)
+}
+
 fn has_control_children(hwnd: usize) -> bool {
     child_windows(hwnd)
         .into_iter()
@@ -2979,7 +2991,15 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
         // sinon la fenêtre recevrait WM_PAINT sans fin.
+        // Une fenêtre à contrôles standard sans WM_PAINT à elle (boîte
+        // « À propos » de Notepad++) est effacée avec le pinceau de sa
+        // classe, comme le BeginPaint de Windows : sinon le dégradé du thème
+        // restait visible autour de contrôles peints, eux, sur un fond uni
+        // (#745).
         WM_PAINT => {
+            if let Some((hdc, _)) = begin_paint(hwnd) {
+                end_paint(hwnd, hdc);
+            }
             validate_window(hwnd);
             0
         }
