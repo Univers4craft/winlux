@@ -524,6 +524,12 @@ jobs:
           mkdir -p build/captures
           xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
 
+      - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py
+
+      - name: Touches de volume du clavier sous openbox réel (pas de 2 %, sourdine, micro, indicateur)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-volume-keys.py
+
       - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
@@ -552,6 +558,9 @@ jobs:
 
       - name: Ancrage à la souris sous openbox (bords, coins, barre des dispositions, survol d'Agrandir)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-mouse.py
+
+      - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
 
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-run-dialog.py
