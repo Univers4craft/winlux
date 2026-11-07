@@ -88,6 +88,9 @@ __declspec(dllimport) int WINAPI WSAStartup(WORD, void *);
 __declspec(dllimport) long WINAPI RegSetKeySecurity(void *, DWORD, void *);
 __declspec(dllimport) void *WINAPI gethostbyname(const char *);
 __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
+__declspec(dllimport) BOOL WINAPI EnumCalendarInfoW(BOOL(WINAPI *)(unsigned short *), DWORD, DWORD, DWORD);
+__declspec(dllimport) HANDLE WINAPI LoadIconW(HANDLE, const unsigned short *);
+__declspec(dllimport) BOOL WINAPI GetIconInfo(HANDLE, void *);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
 int _fltused = 0;
@@ -103,6 +106,12 @@ static void *volatile __imp_RegSetKeySecurity_ptr = (void *)&RegSetKeySecurity;
 static void say(const char *s) {
     DWORD n = 0;
     WriteFile(GetStdHandle((DWORD)-11), s, lstrlenA(s), &n, 0);
+}
+
+static DWORD calendar_calls, calendar_first;
+static BOOL WINAPI calendar_proc(unsigned short *s) {
+    if (calendar_calls++ == 0) calendar_first = s ? s[0] : 0xFFFF;
+    return 1;
 }
 
 static void fail(DWORD check, DWORD value) {
@@ -426,6 +435,26 @@ __attribute__((used)) void __stdcall entry(void) {
             : "m"(__imp_RegSetKeySecurity_ptr)
             : "eax", "ecx", "edx", "memory");
         if (before != after) fail(66, before - after);
+    }
+
+    /* 67 : EnumCalendarInfoW appelle le rappel x86 (WinSCP, VCL) : nom
+     * du premier jour de la semaine, CAL_SDAYNAME1, locale de l'usager. */
+    {
+        if (!EnumCalendarInfoW(calendar_proc, 0x400, 1, 7)) fail(67, 0);
+        if (calendar_calls == 0 || calendar_first == 0 || calendar_first == 0xFFFF)
+            fail(67, calendar_calls);
+    }
+
+    /* 68 : GetIconInfo remplit 20 octets en x86 (WinSCP perdait son cadre
+     * de pile quand 32 octets étaient écrits). */
+    {
+        DWORD info[6];
+        info[5] = GUARD;
+        HANDLE icon = LoadIconW(0, (const unsigned short *)32512);
+        if (!icon) fail(68, 0);
+        if (!GetIconInfo(icon, info)) fail(68, 1);
+        if (info[5] != GUARD) fail(68, info[5]);
+        if (info[0] != 1 || info[4] == 0) fail(68, info[0]);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

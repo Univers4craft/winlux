@@ -15,6 +15,7 @@ os.environ["WINLUX_RUN_DIR"] = str(tmp / "run")
 os.environ["WINLUX_NETWORK_LOG_DIR"] = str(tmp / "netlog")
 os.environ["XDG_STATE_HOME"] = str(tmp / "state")
 os.environ["WINLUX_PSTORE"] = str(tmp / "pstore")
+os.environ["WINLUX_REPORT_ACCOUNT"] = str(tmp / "config/winlux/github-account.json")
 (tmp / "journal").mkdir()
 (tmp / "run").mkdir()
 r = runpy.run_path(str(Path(__file__).with_name("winlux-report.py")), run_name="report_test")
@@ -276,4 +277,59 @@ for wanted in ("ouvert", "annule", "attente"):
         _time.sleep(0.1)
     assert result == wanted, (wanted, result)
 assert not list((tmp / "state" / "winlux").glob("navigateur-*")), "fichiers d'état laissés"
+# #725 : compte GitHub de l'utilisateur, jeton gardé en 0600, transport manuel.
+g = r["connect_token"].__globals__
+calls = []
+
+
+def fake_http(method, url, payload=None, token=None, timeout=20):
+    calls.append((method, url, payload, token))
+    if url.endswith("/user"):
+        return {"login": "alice-dev"} if token == "ghp_" + "a" * 36 else {}
+    return {"html_url": "https://github.com/x/y/issues/1"}
+
+
+real_http = g["http"]
+g["http"] = fake_http
+g["set_value"]("mode=auto")
+(tmp / "defaults.conf").write_text("")
+assert g["manual_transport"]() == "browser" and g["account"]() == {}
+for bad in ("pas-un-jeton", "ghp_" + "b" * 36):
+    try:
+        g["connect_token"](bad)
+        raise AssertionError("jeton refusé attendu")
+    except ValueError:
+        pass
+assert not (tmp / "config/winlux/github-account.json").exists()
+assert g["connect_token"]("  ghp_" + "a" * 36 + "\n") == "alice-dev"
+saved = tmp / "config/winlux/github-account.json"
+assert saved.stat().st_mode & 0o777 == 0o600, oct(saved.stat().st_mode)
+assert g["account"]()["login"] == "alice-dev" and g["manual_transport"]() == "account"
+g["set_value"]("mode=browser")
+assert g["manual_transport"]() == "browser", "« Par le navigateur » reste respecté"
+g["set_value"]("mode=auto")
+calls.clear()
+url = g["send_api"](g["config"](), "[Plantage] x", "corps", ["bug", "plantage"], None, "account")
+method, target, payload, token = calls[-1]
+assert target.endswith("/repos/Univers4craft/winlux/issues") and token == "ghp_" + "a" * 36
+assert payload["body"].startswith("> Étiquettes / Labels : `bug` `plantage`"), payload["body"]
+g["send_api"](g["config"](), "t", "réponse", [], 12, "account")
+assert calls[-1][1].endswith("/issues/12/comments") and calls[-1][2] == {"body": "réponse"}
+# Le jeton du système reste réservé aux envois automatiques.
+assert g["transport"]() == "browser"
+g["forget_account"]()
+assert g["account"]() == {} and g["manual_transport"]() == "browser"
+# Flux « device » : en attente, refus, jeton.
+answers = iter([{"error": "authorization_pending"}, {"error": "access_denied"}, {"access_token": "gho_x"}])
+g["form_post"] = lambda url, fields: next(answers)
+assert g["device_poll"]("Iv1.0123456789", "dc") is None
+try:
+    g["device_poll"]("Iv1.0123456789", "dc")
+    raise AssertionError("refus attendu")
+except ValueError as error:
+    assert str(error) == "access_denied"
+assert g["device_poll"]("Iv1.0123456789", "dc") == "gho_x"
+assert g["client_id"]({"GITHUB_CLIENT_ID": "Iv1.0123456789"}) == "Iv1.0123456789"
+assert g["client_id"]({"GITHUB_CLIENT_ID": "x y"}) == g["GITHUB_CLIENT_ID"]
+g["http"] = real_http
 print("winlux-report : tests OK")

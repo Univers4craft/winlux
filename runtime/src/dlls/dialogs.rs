@@ -733,6 +733,23 @@ unsafe fn set_dlg_focus(dlg: usize, target: usize) {
     }
 }
 
+/// SetFocus sur un contrôle : son dialogue s'en souvient, pour le lui
+/// rendre quand le focus revient au dialogue. Sans cela, un clic sur « Non »
+/// donnait le focus au bouton, puis le retour du focus X au dialogue le
+/// rendait à « Oui » et le bouton perdait son appui (#709).
+pub fn note_focus(hwnd: usize) {
+    let mut h = gui::window_parent(hwnd).unwrap_or(0);
+    let mut guard = 0;
+    while h != 0 && guard < 64 {
+        if let Some(d) = lock(dialogs()).get_mut(&h) {
+            d.focus = hwnd;
+            return;
+        }
+        h = gui::window_parent(h).unwrap_or(0);
+        guard += 1;
+    }
+}
+
 /// Le dialogue qui contient `hwnd` (lui-même ou un ancêtre).
 fn owning_dialog(dlg: usize, hwnd: usize) -> bool {
     let mut h = hwnd;

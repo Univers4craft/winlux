@@ -339,7 +339,7 @@ GRAPHICS_PAGE = 24
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
 # Pages 29 à 39 n’existent que dans les Paramètres natifs.
-CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
@@ -348,6 +348,8 @@ CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
+              # Catégorie à part, juste au-dessus de la confidentialité (voir l’issue du signalement par compte GitHub).
+              (_t("Signaler un problème"), [25]),
               (_t("Confidentialité et sécurité"), [18, 36]),
               (_t("Mises à jour"), [7, 17])]
 # Anciennes pages fondues dans une autre : Son (3) dans Son, Souris (5) dans

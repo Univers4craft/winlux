@@ -8,9 +8,13 @@
  * de la vérification en échec. */
 #define _WIN32_IE 0x0600
 #define _WIN32_WINNT 0x0601
+#define COBJMACROS
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <objbase.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -325,6 +329,93 @@ static void dialogs(void)
         GlobalFree(pd.hDevNames);
 }
 
+/* Fonctions de comctl32, comdlg32 et shell32 demandées par WinSCP 6.7 x86. */
+static void winscp(void)
+{
+    /* Barres de défilement « plates » : celles de la fenêtre. */
+    HWND w = CreateWindowExW(0, L"Dlg32Parent", L"", WS_POPUP | WS_VSCROLL, 0, 0, 100, 100, NULL, NULL, NULL, NULL);
+    CHECK(w != NULL, "fenêtre à barre de défilement");
+    InitializeFlatSB(w);
+    SCROLLINFO si = { sizeof si, SIF_RANGE | SIF_POS | SIF_PAGE, 0, 100, 10, 30, 0 };
+    FlatSB_SetScrollInfo(w, SB_VERT, &si, FALSE);
+    CHECK(FlatSB_GetScrollPos(w, SB_VERT) == 30, "FlatSB_GetScrollPos");
+    FlatSB_SetScrollPos(w, SB_VERT, 40, FALSE);
+    SCROLLINFO got = { sizeof got, SIF_ALL };
+    CHECK(FlatSB_GetScrollInfo(w, SB_VERT, &got) && got.nPos == 40 && got.nMax == 100, "FlatSB_GetScrollInfo");
+    CHECK(FlatSB_SetScrollProp(w, WSB_PROP_VSTYLE, FSB_FLAT_MODE, FALSE), "FlatSB_SetScrollProp");
+    UninitializeFlatSB(w);
+    DestroyWindow(w);
+
+    /* Liste d'images : copie, dessin indirect, écriture puis relecture. */
+    HIMAGELIST il = ImageList_Create(4, 4, ILC_COLOR32, 2, 2);
+    DWORD px[16 * 2];
+    for (int i = 0; i < 32; i++)
+        px[i] = (i % 8) < 4 ? 0xFFFF0000u : 0xFF0000FFu; /* bleu puis rouge (BGRA) */
+    BITMAPINFO bi = {{ sizeof(BITMAPINFOHEADER), 8, -4, 1, 32, BI_RGB }};
+    HDC screen = GetDC(NULL);
+    HBITMAP bmp = CreateDIBitmap(screen, &bi.bmiHeader, CBM_INIT, px, &bi, DIB_RGB_COLORS);
+    CHECK(ImageList_Add(il, bmp, NULL) == 0 && ImageList_GetImageCount(il) == 2, "deux images");
+    CHECK(ImageList_Copy(il, 0, il, 1, ILCF_SWAP), "ImageList_Copy (échange)");
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP canvas = CreateCompatibleBitmap(screen, 8, 8);
+    SelectObject(mem, canvas);
+    IMAGELISTDRAWPARAMS dp = { sizeof dp };
+    dp.himl = il;
+    dp.i = 1;
+    dp.hdcDst = mem;
+    dp.rgbBk = CLR_NONE;
+    dp.rgbFg = CLR_DEFAULT;
+    dp.fStyle = ILD_NORMAL;
+    CHECK(sizeof dp == 68, "IMAGELISTDRAWPARAMS de 68 octets");
+    CHECK(ImageList_DrawIndirect(&dp), "ImageList_DrawIndirect");
+    POINT pt = { 5, 5 }, hot = { 5, 5 };
+    ImageList_GetDragImage(&pt, &hot);
+    CHECK(pt.x == 0 && hot.y == 0, "ImageList_GetDragImage");
+    IStream *st = NULL;
+    CHECK(CreateStreamOnHGlobal(NULL, TRUE, &st) == S_OK, "flux en mémoire");
+    CHECK(ImageList_Write(il, st), "ImageList_Write");
+    LARGE_INTEGER zero = {{0}};
+    IStream_Seek(st, zero, STREAM_SEEK_SET, NULL);
+    HIMAGELIST il2 = ImageList_Read(st);
+    int cx = 0, cy = 0;
+    CHECK(il2 != NULL && ImageList_GetImageCount(il2) == 2 && ImageList_GetIconSize(il2, &cx, &cy) && cx == 4,
+          "ImageList_Read");
+    IStream_Release(st);
+    ImageList_Destroy(il2);
+    ImageList_Destroy(il);
+    DeleteDC(mem);
+    DeleteObject(canvas);
+    DeleteObject(bmp);
+    ReleaseDC(NULL, screen);
+
+    /* Recherche : la boîte non modale n'existe pas encore, NULL propre. */
+    WCHAR what[32] = L"abc";
+    FINDREPLACEW fr = { sizeof fr };
+    fr.lpstrFindWhat = what;
+    fr.wFindWhatLen = 32;
+    HWND fd = FindTextW(&fr);
+    CHECK(fd != NULL || CommDlgExtendedError() != 0, "FindTextW");
+    if (fd)
+        DestroyWindow(fd);
+
+    /* shell32. */
+    APPBARDATA abd = { sizeof abd };
+    CHECK(sizeof abd == 36, "APPBARDATA de 36 octets");
+    CHECK(SHAppBarMessage(ABM_GETTASKBARPOS, &abd) && abd.uEdge == ABE_BOTTOM && abd.rc.bottom > abd.rc.top,
+          "SHAppBarMessage (barre des tâches)");
+    CHECK(SHAppBarMessage(ABM_GETSTATE, &abd) != 0, "SHAppBarMessage (état)");
+    WCHAR self[MAX_PATH], exe[MAX_PATH];
+    GetModuleFileNameW(NULL, self, MAX_PATH);
+    CHECK((INT_PTR)FindExecutableW(self, NULL, exe) > 32 && lstrcmpiW(self, exe) == 0, "FindExecutableW (.exe)");
+    SHFreeNameMappings(NULL);
+    LPITEMIDLIST pidl = ILCreateFromPathW(self);
+    CHECK(pidl != NULL, "ILCreateFromPathW");
+    ILFree(pidl);
+    SHChangeNotifyEntry ne = { NULL, FALSE };
+    ULONG id = SHChangeNotifyRegister(GetDesktopWindow(), SHCNRF_ShellLevel, SHCNE_ALLEVENTS, WM_USER, 1, &ne);
+    CHECK(id != 0 && SHChangeNotifyDeregister(id), "SHChangeNotifyRegister");
+}
+
 int main(void)
 {
     INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_WIN95_CLASSES | ICC_TAB_CLASSES };
@@ -338,6 +429,7 @@ int main(void)
     tab_control();
     notifications();
     dialogs();
+    winscp();
     printf("dlg32 : contrôles et boîtes communes 32 bits, %d vérifications passées. Tout est correct\n", step);
     return 0;
 }
