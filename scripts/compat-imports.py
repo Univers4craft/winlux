@@ -24,8 +24,6 @@ import fnmatch
 import os
 import sys
 
-import pefile
-
 PE_EXT = (".exe", ".dll", ".pyd", ".node")
 
 # Motifs (fnmatch) de DLL supposées livrées par l'écosystème de l'appli,
@@ -108,6 +106,10 @@ def pe_files(root):
 
 
 def analyse(exports, root):
+    # Importé ici : scripts/test-games-imports.py n'utilise que normalize()
+    # et lookup(), sans avoir besoin de python3-pefile.
+    import pefile
+
     shipped = {}
     for p in pe_files(root):
         shipped.setdefault(os.path.basename(p).lower(), p)

@@ -1567,7 +1567,7 @@ class WifiPanel:
 #winlux-osk button.osk-key:hover { background: #454c62; }
 #winlux-osk button.osk-key:active { background: #5a6280; }
 #winlux-osk button.osk-special { background: #2a2f3e; font-size: 15px; }
-#winlux-osk button.osk-active, #winlux-osk button.osk-active label { background: #8178b7; color: #ffffff; }
+#winlux-osk button.osk-active, #winlux-osk button.osk-active label { background: #6a3df0; color: #ffffff; }
 """)
         screen = Gdk.Screen.get_default()
         if screen is not None:

@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Claude Code
+Name[en]=Claude Code
+Name[de]=Claude Code
+Name[es]=Claude Code
 Comment=Assistant de programmation d'Anthropic, dans le terminal Winlux
 Comment[en]=Anthropic's coding assistant, in the Winlux terminal
 Comment[es]=Asistente de programación de Anthropic, en el terminal de Winlux
