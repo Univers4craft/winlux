@@ -1397,19 +1397,6 @@ unsafe extern "win64" fn path_strip_path_w(path: *mut u16) {
 
 // ── shell32 ─────────────────────────────────────────────────────────────
 
-/// Pas encore d'objets IShellItem : l'appelant reprend son chemin texte.
-unsafe extern "win64" fn sh_create_item_from_parsing_name(
-    _path: *const u16,
-    _bc: usize,
-    _riid: *const u8,
-    out: *mut usize,
-) -> i32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    E_NOTIMPL
-}
-
 // ── uxtheme ─────────────────────────────────────────────────────────────
 
 unsafe extern "win64" fn draw_theme_text_ex(
@@ -1690,7 +1677,7 @@ pub fn all() -> Vec<(&'static str, Exports)> {
         (
             "shell32",
             crate::exports! {
-                "SHCreateItemFromParsingName" => fn sh_create_item_from_parsing_name,
+                "SHCreateItemFromParsingName" => fn super::filedialog_com::sh_create_item_from_parsing_name,
             },
         ),
         (

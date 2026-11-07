@@ -846,6 +846,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
             return hr;
         }
+        // Boîtes Ouvrir/Enregistrer de Vista (IFileOpenDialog/IFileSaveDialog).
+        if let Some(hr) = super::filedialog_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);

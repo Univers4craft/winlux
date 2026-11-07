@@ -60,6 +60,7 @@ pub mod dxva2;
 pub mod electron_win32;
 pub mod evdev;
 pub mod eventing;
+pub mod filedialog_com;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;

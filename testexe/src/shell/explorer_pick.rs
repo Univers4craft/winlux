@@ -40,6 +40,8 @@ const OFN_CREATEPROMPT: u32 = 0x2000;
 
 static mut ACTIVE: bool = false;
 static mut SAVE: bool = false;
+/// FOS_PICKFOLDERS : la boîte choisit un dossier, pas un fichier.
+static mut FOLDER: bool = false;
 static mut FLAGS: u32 = 0;
 static mut TITLE: [u8; 128] = [0; 128];
 static mut TITLE_LEN: usize = 0;
@@ -113,6 +115,7 @@ pub(super) unsafe fn init() {
     RESULT[rn] = 0;
     ACTIVE = true;
     SAVE = &mode[..n] == b"save";
+    FOLDER = &mode[..n] == b"folder";
     let mut buf = [0u8; 2048];
     if let Some(n) = env(c"WINLUX_PICK_FLAGS", &mut buf) {
         FLAGS = num(&buf[..n]);
@@ -187,7 +190,9 @@ pub(super) fn title() -> Option<&'static [u8]> {
         if TITLE_LEN > 0 {
             return Some(&*core::ptr::slice_from_raw_parts(core::ptr::addr_of!(TITLE) as *const u8, TITLE_LEN));
         }
-        Some(if SAVE {
+        Some(if FOLDER {
+            t4([b"S\xE9lectionner un dossier", b"Select Folder", b"Seleccionar carpeta", b"Ordner ausw\xE4hlen"])
+        } else if SAVE {
             t4([b"Enregistrer sous", b"Save As", b"Guardar como", b"Speichern unter"])
         } else {
             t4([b"Ouvrir", b"Open", b"Abrir", b"\xD6ffnen"])
@@ -250,6 +255,10 @@ pub(super) fn matches_any(patterns: &[u8], name: &[u8]) -> bool {
 pub(super) unsafe fn shows(name: &[u8], dir: bool) -> bool {
     if !ACTIVE || dir {
         return true;
+    }
+    if FOLDER {
+        // Choix d'un dossier : les fichiers sont masqués, comme sous Windows.
+        return false;
     }
     if TYPED.len > 0 {
         return matches_any(TYPED.get(), name);
@@ -339,6 +348,14 @@ unsafe fn sync_from_selection() {
         return;
     }
     SIG = sig;
+    if FOLDER {
+        // Le dossier sélectionné devient le choix ; aucun, le dossier affiché.
+        NAME = EMPTY_FIELD;
+        if sel_count(p) == 1 && p.entries[first].dir {
+            NAME.set(p.entries[first].name());
+        }
+        return;
+    }
     let multi = !SAVE && FLAGS & OFN_ALLOWMULTISELECT != 0;
     let mut files = 0;
     for i in 0..p.count {
@@ -391,6 +408,10 @@ unsafe fn ask(kind: Ask, parts: &[&[u8]]) {
 /// Bouton Ouvrir / Enregistrer, Entrée, double-clic sur un fichier.
 pub(super) unsafe fn accept() {
     LIST_OPEN = false;
+    if FOLDER {
+        accept_folder();
+        return;
+    }
     let text = NAME;
     let text = trim(text.get());
     let p = pane();
@@ -513,6 +534,36 @@ pub(super) unsafe fn accept() {
     }
 }
 
+/// « Sélectionner un dossier » : le dossier nommé (relatif au dossier
+/// affiché), ou le dossier affiché lui-même quand le champ est vide.
+unsafe fn accept_folder() {
+    let text = NAME;
+    let text = trim(text.get());
+    let t = text.strip_prefix(b"\"").unwrap_or(text);
+    let t = t.strip_suffix(b"\"").unwrap_or(t);
+    let loc = pane().loc;
+    let mut full = EMPTY_PATH;
+    if !resolve(loc.get(), if t.is_empty() { b"." } else { t }, &mut full) {
+        ask(Ask::Info, &[t4([
+            b"Choisissez d'abord un dossier, par exemple Documents.",
+            b"Choose a folder first, for example Documents.",
+            b"Elija primero una carpeta, por ejemplo Documentos.",
+            b"W\xE4hlen Sie zuerst einen Ordner, zum Beispiel Dokumente.",
+        ])]);
+        return;
+    }
+    if !exists_dir(full.get()) {
+        ask(Ask::Info, &[full.get(), b"\n", t4([
+            b"Chemin introuvable. V\xE9rifiez le chemin et r\xE9essayez.",
+            b"Path not found. Check the path and try again.",
+            b"No se encuentra la ruta. Compruebe la ruta e int\xE9ntelo de nuevo.",
+            b"Pfad nicht gefunden. \xDCberpr\xFCfen Sie den Pfad, und versuchen Sie es erneut.",
+        ])]);
+        return;
+    }
+    finish(&[full]);
+}
+
 /// Écrit le choix (UTF-16 → Latin-1, comme les chemins de l'Explorateur) et
 /// ferme la boîte.
 unsafe fn finish(paths: &[Path]) -> ! {
@@ -572,10 +623,16 @@ struct Layout {
 
 fn layout(s: &Rect) -> Layout {
     let top = s.top + 12;
-    let kind = rect(s.right - 300, top, s.right - 16, top + 32);
-    let name = rect(s.left + 150, top, kind.left - 12, top + 32);
+    // Choix d'un dossier : pas de liste des types, le champ prend la place.
+    let kind = if unsafe { FOLDER } {
+        rect(s.right + 4096, top, s.right + 4096, top + 32)
+    } else {
+        rect(s.right - 300, top, s.right - 16, top + 32)
+    };
+    let name = rect(s.left + 150, top, kind.left.min(s.right - 4) - 12, top + 32);
     let cancel = rect(s.right - 116, s.bottom - 44, s.right - 16, s.bottom - 12);
-    let ok = rect(cancel.left - 108, cancel.top, cancel.left - 8, cancel.bottom);
+    let ok_w = if unsafe { FOLDER } { 200 } else { 100 };
+    let ok = rect(cancel.left - 8 - ok_w, cancel.top, cancel.left - 8, cancel.bottom);
     Layout {
         label_x: s.left + 16,
         name,
@@ -591,7 +648,9 @@ fn list_rect(l: &Layout) -> Rect {
 }
 
 fn ok_label() -> &'static [u8] {
-    if unsafe { SAVE } {
+    if unsafe { FOLDER } {
+        t4([b"S\xE9lectionner un dossier", b"Select Folder", b"Seleccionar carpeta", b"Ordner ausw\xE4hlen"])
+    } else if unsafe { SAVE } {
         t4([b"Enregistrer", b"Save", b"Guardar", b"Speichern"])
     } else {
         t4([b"Ouvrir", b"Open", b"Abrir", b"\xD6ffnen"])
@@ -620,7 +679,11 @@ pub(super) unsafe fn draw(g: &mut Gfx, s: &Rect) {
     fill(g.hdc, g.b, s.left, s.top, s.right, s.bottom, p.window);
     fill(g.hdc, g.b, s.left, s.top, s.right, s.top + 1, p.border);
     let l = layout(s);
-    let label = t4([b"Nom du fichier :", b"File name:", b"Nombre:", b"Dateiname:"]);
+    let label = if FOLDER {
+        t4([b"Dossier :", b"Folder:", b"Carpeta:", b"Ordner:"])
+    } else {
+        t4([b"Nom du fichier :", b"File name:", b"Nombre:", b"Dateiname:"])
+    };
     text_fit(g.hdc, g.f.body, 13, p.text, l.label_x, l.name.top + 8, label, l.name.left - l.label_x - 8);
     let active = FOCUS == Focus::FileName;
     field_box(g, &l.name, active);
@@ -629,6 +692,11 @@ pub(super) unsafe fn draw(g: &mut Gfx, s: &Rect) {
     if active && GetTickCount() / 530 % 2 == 0 {
         let cx = l.name.left + 12 + text_width(NAME.get(), 13).min(w);
         fill(g.hdc, g.b, cx, l.name.top + 7, cx + crate::gfx::caret_w(1), l.name.bottom - 7, p.text);
+    }
+    if FOLDER {
+        copy::button(g, &l.ok, ok_label(), true);
+        copy::button(g, &l.cancel, t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]), false);
+        return;
     }
     // Type de fichier : liste déroulante.
     field_box(g, &l.kind, LIST_OPEN);
@@ -855,4 +923,16 @@ pub(super) unsafe fn regression() {
         "Ouvrir : un nom seul dans Accueil ne designe rien"
     );
     check!(!active(), "Explorateur normal : pas de boite Ouvrir sans WINLUX_PICK");
+    FOLDER = true;
+    ACTIVE = true;
+    check!(
+        !shows(b"a.txt", false) && shows(b"Documents", true),
+        "Choisir un dossier : fichiers masques, dossiers visibles"
+    );
+    check!(
+        resolve(b"C:\\Users\\d\\Documents", b".", &mut out) && out.is(b"C:\\Users\\d\\Documents"),
+        "Choisir un dossier : champ vide = dossier affiche"
+    );
+    FOLDER = false;
+    ACTIVE = false;
 }
