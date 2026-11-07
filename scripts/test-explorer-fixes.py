@@ -115,6 +115,20 @@ ok("GdiAlphaBlend(hdc" in icons_rs and "icons::of_glyph(gl)" in explorer and "ic
 ok(not (ROOT / "assets/icons/fluent").exists() and "Fluent" not in icons_data,
    "un seul jeu d'icônes : Prisme, comme la session native")
 
+# ── Boîte Ouvrir / Enregistrer des .exe = l'Explorateur Winlux ─────────────
+pick_rs = (SHELL / "explorer_pick.rs").read_text(encoding="utf-8")
+files_rs = (ROOT / "runtime/src/dlls/comdlg32_files.rs").read_text(encoding="utf-8")
+ok("pick_with_explorer(owner, &request, &app)" in files_rs and '"/usr/bin/winlux-shell-app"' in files_rs,
+   "GetOpenFileName / GetSaveFileName ouvrent l'Explorateur Winlux")
+ok('cmd.arg("explorer")' in files_rs and "dialogs::run_builtin" in files_rs,
+   "boîte intégrée gardée en repli (sans affichage, tests WINLUX_FILEDLG)")
+ok("Focus::FileName" in explorer and "pick::draw(g, &geo.status)" in explorer and "pick::shows(e.name(), e.dir)" in explorer,
+   "Explorateur : Nom du fichier, type et boutons à la place de la barre d'état, liste filtrée")
+ok("pick::choose(p, index)" in explorer and "fn finish(" in pick_rs and "ExitProcess(0)" in pick_rs,
+   "Explorateur : double-clic sur un fichier = Ouvrir, le choix est rendu au programme")
+ok("SetEnvironmentVariableA(name.as_ptr(), core::ptr::null())" in pick_rs,
+   "les programmes lancés depuis la boîte ne deviennent pas une boîte Ouvrir")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

@@ -85,6 +85,7 @@ pub unsafe fn native_init() {
         usize::MAX
     };
     if NATIVE_APP == APP_EXPLORER {
+        crate::explorer::init_picker();
         let mut path = [0u8; 1024];
         let n = GetEnvironmentVariableA(
             c"WINLUX_SHELL_PATH".as_ptr(),
@@ -613,7 +614,7 @@ fn on_current_desktop(app: usize) -> bool {
 
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
-        APP_EXPLORER => tr(S_FILE_EXPLORER),
+        APP_EXPLORER => crate::explorer::window_title(),
         APP_SETTINGS => tr(S_SETTINGS_APP),
         APP_NOTEPAD => tr(S_NOTEPAD),
         APP_TASKMGR => tr(S_TASK_MANAGER),
