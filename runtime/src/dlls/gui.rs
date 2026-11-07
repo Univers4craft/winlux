@@ -2720,11 +2720,15 @@ pub fn request_paint(hwnd: usize) {
                 lparam: 0,
                 time: 0,
                 pt: Point::default(),
-                l_private: 0,
+                l_private: SYSTEM_PAINT,
             },
         );
     }
 }
+
+/// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
+/// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
+const SYSTEM_PAINT: u32 = 0x5750;
 
 pub fn destroy_window(hwnd: usize) -> bool {
     // Capture du wndproc et du parent avant retrait de la table.
@@ -3174,10 +3178,22 @@ pub fn flush_paint_over(hwnd: usize) {
 
 /// Retire et renvoie le premier message correspondant au filtre.
 pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
-    let taken = {
-        let mut items = lock(&q.items);
-        let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
-        items.remove(idx)?
+    let taken = loop {
+        let m = {
+            let mut items = lock(&q.items);
+            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            items.remove(idx)?
+        };
+        // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
+        // via UpdateWindow, ValidateRect) n'existe plus sous Windows : le
+        // délivrer relançait une peinture de trop (#796).
+        if m.message == WM_PAINT
+            && m.l_private == SYSTEM_PAINT
+            && lock(windows()).get(&m.hwnd).is_some_and(|w| !w.needs_paint)
+        {
+            continue;
+        }
+        break m;
     };
     if taken.message == WM_PAINT {
         // Le WM_PAINT n'est plus en file ; la zone reste invalidée tant que
@@ -3205,6 +3221,14 @@ pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
             .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
     })?;
     Some(Msg::new(target, WM_PAINT, 0, 0))
+}
+
+/// Zone invalidée d'une fenêtre visible du thread appelant (UpdateWindow).
+pub fn paint_pending_here(hwnd: usize) -> bool {
+    let tid = std::thread::current().id();
+    lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint)
 }
 
 /// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
@@ -3735,6 +3759,7 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -3948,6 +3973,44 @@ mod tests {
         _lparam: isize,
     ) -> isize {
         0
+    }
+
+    static PEINTURES: AtomicUsize = AtomicUsize::new(0);
+
+    extern "win64" fn wnd_proc_compte_peintures(
+        hwnd: usize,
+        msg: u32,
+        _wparam: usize,
+        _lparam: isize,
+    ) -> isize {
+        if msg == WM_PAINT {
+            PEINTURES.fetch_add(1, Ordering::SeqCst);
+            validate_window(hwnd);
+        }
+        0
+    }
+
+    /// #796 : UpdateWindow peint tout de suite une fenêtre invalidée, ne fait
+    /// rien sur une fenêtre valide, et le WM_PAINT resté en file n'est plus
+    /// délivré une seconde fois.
+    #[test]
+    fn update_window_peint_tout_de_suite_et_une_seule_fois() {
+        let hwnd = fenetre_de_test();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize =
+            wnd_proc_compte_peintures;
+        lock(windows()).get_mut(&hwnd).unwrap().wnd_proc = proc_addr as usize;
+        let q = current_queue();
+        PEINTURES.store(0, Ordering::SeqCst);
+        request_paint(hwnd);
+        assert_eq!(unsafe { crate::dlls::user32::update_window(hwnd) }, 1);
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        unsafe { crate::dlls::user32::update_window(hwnd) };
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        // Un WM_PAINT posté par l'appli elle-même reste délivré.
+        post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        destroy_window(hwnd);
     }
 
     fn fenetre_de_test() -> usize {
