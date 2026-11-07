@@ -32,6 +32,10 @@ pub enum Capability {
     Microphone,
     Screen,
     Network,
+    /// Démarrer un programme Chromium/Electron sans son bac à sable
+    /// (`--no-sandbox`), que Winlux ne sait pas encore fournir (#767).
+    /// Jamais accordé sans un « Autoriser » explicite de l'utilisateur.
+    Sandbox,
 }
 
 impl Capability {
@@ -42,6 +46,7 @@ impl Capability {
             Capability::Microphone => "microphone",
             Capability::Screen => "screen",
             Capability::Network => "network",
+            Capability::Sandbox => "sandbox",
         }
     }
 
@@ -357,11 +362,13 @@ pub fn allowed(cap: Capability) -> bool {
     if globally_denied(cap) {
         return false;
     }
+    // Le bac à sable ne se retire que sur un choix explicite.
+    let implied = cap != Capability::Sandbox;
     let Some(app) = APP.get() else {
-        return true;
+        return implied;
     };
     if app.trusted {
-        return true;
+        return implied;
     }
     if let Some(&known) = lock(&SESSION).as_ref().and_then(|m| m.get(&cap)) {
         return known;
@@ -389,7 +396,10 @@ pub fn allowed(cap: Capability) -> bool {
             // touche à la vie privée est refusé plutôt qu'accordé en silence.
             None => !matches!(
                 cap,
-                Capability::Camera | Capability::Microphone | Capability::Screen
+                Capability::Camera
+                    | Capability::Microphone
+                    | Capability::Screen
+                    | Capability::Sandbox
             ),
         },
     };
@@ -429,14 +439,21 @@ pub fn path_allowed(path: &Path) -> bool {
     allowed(Capability::Files)
 }
 
+const DENIED_ROOT: &str = "/proc/winlux-permission-denied";
+
 /// Chemin inexistant renvoyé à la place d'un fichier refusé : l'application
 /// reçoit « fichier introuvable » et ne peut rien y créer.
 pub fn denied_path(path: &Path) -> PathBuf {
-    let mut p = PathBuf::from("/proc/winlux-permission-denied");
+    let mut p = PathBuf::from(DENIED_ROOT);
     if let Some(name) = path.file_name() {
         p.push(name);
     }
     p
+}
+
+/// Chemin produit par `denied_path` : l'accès a été refusé à l'application.
+pub fn is_denied_path(path: &Path) -> bool {
+    path.starts_with(DENIED_ROOT)
 }
 
 /// Adresse d'une socket locale (boucle locale, socket Unix) : jamais demandée.
@@ -479,6 +496,17 @@ mod tests {
     }
 
     use super::*;
+
+    /// Retirer le bac à sable de Chromium n'est jamais implicite : sans
+    /// application identifiée ni réponse, la réponse est non (#767).
+    #[test]
+    fn bac_a_sable_jamais_retire_sans_reponse() {
+        if APP.get().is_none() {
+            assert!(!allowed(Capability::Sandbox));
+            assert!(allowed(Capability::Files));
+        }
+        assert_eq!(Capability::Sandbox.key(), "sandbox");
+    }
 
     #[test]
     fn decisions_are_remembered_per_app() {

@@ -42,8 +42,20 @@ def _t(text):
 
 
 def _append_account_line(path, line, mode):
-    """Ajoute une ligne par fichier temporaire + fsync + rename."""
+    """Ajoute une ligne par fichier temporaire + fsync + rename, sous le
+    verrou /etc/.pwd.lock que prennent useradd, passwd et chpasswd (lckpwdf),
+    puis fsync du dossier pour que le rename survive à une coupure (#399)."""
+    import fcntl
     target = Path(path)
+    lock = os.open(str(target.parent / ".pwd.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.lockf(lock, fcntl.LOCK_EX)
+        _append_locked(target, line, mode)
+    finally:
+        os.close(lock)
+
+
+def _append_locked(target, line, mode):
     try:
         text = target.read_text(encoding="utf-8", errors="surrogateescape")
         info = target.stat()
@@ -60,6 +72,11 @@ def _append_account_line(path, line, mode):
     os.chown(temporary, owner, group)
     os.chmod(temporary, mode)
     os.rename(temporary, target)
+    directory = os.open(str(target.parent), os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def ensure_system_account(name, first_uid, comment, home):

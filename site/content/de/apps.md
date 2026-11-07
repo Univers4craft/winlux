@@ -14,9 +14,9 @@ Winlux öffnet Windows-Programme dank einer von Grund auf geschriebenen Kompatib
 | .NET-Anwendung, die ihre eigene Laufzeit mitbringt | Startet, aber ihre Oberfläche öffnet sich nicht immer |
 | Oberflächen mit WinForms und WPF | Noch nicht |
 | Spiele mit Direct3D 9, 11 und 12 | Teilweise, Spiel für Spiel zu prüfen |
-| 32-Bit-Programm | Noch nicht: mit klarer Meldung abgelehnt |
+| 32-Bit-Programm | Teilweise: die ersten 32-Bit-Programme starten, viele öffnen sich noch nicht |
 | Treiber, Virenschutz, Anti-Cheat auf Systemebene | Nicht unterstützt |
-| Store-Anwendungen als MSIX-Paket | Nicht unterstützt |
+| Anwendungen als MSIX- oder AppX-Paket | Installation, Verknüpfungen und Deinstallation |
 
 ## Ausprobierte Software
 
@@ -27,8 +27,8 @@ Winlux öffnet Windows-Programme dank einer von Grund auf geschriebenen Kompatib
 | ShareX 16.1 | Saubere Installation und Deinstallation |
 | Audacity 3.6 | Saubere Installation und Deinstallation |
 | Eingebaute Anwendungen (Explorer, Task-Manager, Registrierungs-Editor…) | Funktionieren: Sie sind selbst `.exe`-Dateien, die Winlux ausführt |
-| Paint.NET 5.1 | Startet seine Laufzeit, die Oberfläche öffnet sich noch nicht |
-| KI-Chat-Assistenten für Windows | Starten noch nicht |
+| Paint.NET 5.1 | Das offizielle Installationsprogramm installiert und deinstalliert sauber; die Oberfläche öffnet sich noch nicht |
+| Claude für Windows | In Arbeit, noch nicht nutzbar |
 | Photoshop | Nicht unterstützt |
 
 Diese Liste wächst mit jeder Version. Die Einzelheiten Funktion für Funktion und die Reihenfolge der nächsten Arbeiten stehen im Wiki: [Kompatibilität der Anwendungen](wiki:Compatibilite-des-applications).

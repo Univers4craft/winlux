@@ -3,6 +3,7 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod a11y;
+pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
 pub mod advapi32;
@@ -62,12 +63,14 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod filedialog_com;
+pub mod ftp_apps;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
 pub mod gdi32_palette;
+pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
@@ -117,6 +120,7 @@ pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
 pub mod opengl32;
+pub mod pdh;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -483,7 +487,17 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ncrypt",
-                exports: ncrypt::exports(),
+                // ncrypt.dll exporte aussi les BCrypt* (FileZilla les y
+                // importe pour BCryptGenRandom).
+                exports: {
+                    let mut e = ncrypt::exports();
+                    for (name, addr) in bcrypt::exports() {
+                        if name.starts_with("BCrypt") {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -508,6 +522,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(gdi32_more::exports());
+                    e.extend(gdi32_path::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
                     e.extend(displaymode::gdi32_exports());
@@ -716,6 +731,31 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "pdh",
+                exports: pdh::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winscard",
+                exports: absent_devices::winscard_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "bthprops.cpl",
+                exports: absent_devices::bthprops_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dcomp",
+                exports: absent_devices::dcomp_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "fontsub",
+                exports: absent_devices::fontsub_exports(),
                 handle: fake_module(),
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
@@ -962,12 +1002,15 @@ fn add_basics(all: &mut [Builtin]) {
     let electron = electron_win32::all();
     // Fonctions communes à Notepad++, Audacity et Claude (common_apps).
     let common = common_apps::all();
+    // Imports de FileZilla (ftp_apps).
+    let ftp = ftp_apps::all();
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
         .chain(apps)
         .chain(electron)
         .chain(common)
+        .chain(ftp)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1020,6 +1063,8 @@ fn add_basics(all: &mut [Builtin]) {
         {
             b.exports.insert(name, addr);
         }
+        // En dernier : les tracés passent par le chemin ouvert (BeginPath).
+        gdi32_path::hook(&mut b.exports);
     }
     // Fichiers .ini : de vraies lectures et écritures remplacent les
     // anciennes versions qui rendaient toujours la valeur par défaut.
@@ -1224,7 +1269,13 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
-    matches!(normalized, "msvcp140")
+    // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
+    // couvre que les petits tests C++ ; une appli qui livre la sienne
+    // (FileZilla, wxWidgets…) en a besoin en entier (#783).
+    matches!(
+        normalized,
+        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+    )
 }
 
 pub fn is_builtin(normalized: &str) -> bool {

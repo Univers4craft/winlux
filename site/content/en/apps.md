@@ -14,9 +14,9 @@ Winlux opens Windows programs thanks to a compatibility layer written from scrat
 | .NET application that ships its own runtime | Starts, but its interface does not always open |
 | WinForms and WPF interfaces | Not yet |
 | Direct3D 9, 11 and 12 games | Partial, to be checked game by game |
-| 32-bit program | Not yet: refused with a clear message |
+| 32-bit program | Partial: the first 32-bit programs start, many do not open yet |
 | Drivers, antivirus, system-level anti-cheat | Not supported |
-| Store applications packaged as MSIX | Not supported |
+| Applications packaged as MSIX or AppX | Install, shortcuts and uninstall |
 
 ## Software tried
 
@@ -27,8 +27,8 @@ Winlux opens Windows programs thanks to a compatibility layer written from scrat
 | ShareX 16.1 | Clean install and uninstall |
 | Audacity 3.6 | Clean install and uninstall |
 | Built-in applications (Explorer, Task Manager, Registry Editor…) | Work: they are themselves `.exe` files run by Winlux |
-| Paint.NET 5.1 | Starts its runtime, the interface does not open yet |
-| AI chat assistants for Windows | Do not start yet |
+| Paint.NET 5.1 | The official installer installs and uninstalls; the interface does not open yet |
+| Claude for Windows | In progress, not usable yet |
 | Photoshop | Not supported |
 
 This list grows with every version. The function-by-function details and the order of the next work items are in the wiki: [Application compatibility](wiki:Compatibilite-des-applications).
