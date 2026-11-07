@@ -344,8 +344,13 @@ unsafe fn create_window_common(
 
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
+    // La procédure est relue avant chaque message : un programme peut sous-
+    // classer la fenêtre dès WM_NCCREATE (WinForms y appelle AssignHandle,
+    // puis SetWindowLongPtr(GWLP_WNDPROC) ; lui renvoyer WM_CREATE par la
+    // procédure de classe lève « Window handle already exists. », #666).
+    let current_proc = || gui::wnd_proc_of(hwnd).unwrap_or(info.wnd_proc);
     let nc = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        current_proc(),
         hwnd,
         WM_NCCREATE,
         0,
@@ -357,7 +362,7 @@ unsafe fn create_window_common(
         return 0;
     }
     let created = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        current_proc(),
         hwnd,
         gui::WM_CREATE,
         0,
@@ -1213,6 +1218,19 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         75 => 1,                              // SM_MOUSEWHEELPRESENT
         90 => 96,                             // LOGPIXELSX
         91 => 96,                             // LOGPIXELSY
+        // Icônes : 32 px, petite icône 16 px.
+        11 | 12 => 32, // SM_CXICON / SM_CYICON
+        49 | 50 => 16, // SM_CXSMICON / SM_CYSMICON
+        // Taille minimale d'une fenêtre et de son suivi au redimensionnement.
+        28 | 34 => 136, // SM_CXMIN / SM_CXMINTRACK
+        29 | 35 => 39,  // SM_CYMIN / SM_CYMINTRACK
+        // Taille maximale de suivi (bureau virtuel + cadre) et fenêtre
+        // agrandie. WinForms borne la taille d'un Form par SM_CXMAXTRACK :
+        // à 0, chaque Form était créé en 0×0 (#666).
+        59 => crate::dlls::monitors::virtual_rect().width() + 12, // SM_CXMAXTRACK
+        60 => crate::dlls::monitors::virtual_rect().height() + 12, // SM_CYMAXTRACK
+        61 => crate::dlls::monitors::list()[0].rect.width() + 16, // SM_CXMAXIMIZED
+        62 => crate::dlls::monitors::list()[0].rect.height() + 16, // SM_CYMAXIMIZED
         _ => 0,
     }
 }
@@ -1519,21 +1537,51 @@ pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_co
     }
 }
 
+/// Remplit un WNDCLASSEX (A ou W, même disposition en x64) pour la classe
+/// `name`, enregistrée ou prédéfinie (BUTTON, EDIT…). WinForms en dérive ses
+/// classes « WindowsForms10.BUTTON… » par GetClassInfo (#666).
+unsafe fn fill_class_info_ex(name: &str, name_ptr: usize, out: *mut u8) -> i32 {
+    const ERROR_CLASS_DOES_NOT_EXIST: u32 = 1411;
+    if out.is_null() || name.is_empty() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(info) = gui::lookup_class(name) else {
+        crate::process::set_last_error(ERROR_CLASS_DOES_NOT_EXIST);
+        return 0;
+    };
+    let mut style = gui::class_style(name);
+    if style == 0 && crate::dlls::controls::builtin_class(name).is_some() {
+        // Contrôles prédéfinis : CS_DBLCLKS | CS_PARENTDC, plus
+        // CS_VREDRAW | CS_HREDRAW, comme BUTTON sous Windows.
+        style = 0x0008 | 0x0080 | 0x0001 | 0x0002;
+    }
+    // WNDCLASSEX x64 : cbSize(0) style(4) lpfnWndProc(8) cbClsExtra(16)
+    // cbWndExtra(20) hInstance(24) hIcon(32) hCursor(40) hbrBackground(48)
+    // lpszMenuName(56) lpszClassName(64) hIconSm(72). cbSize est laissé.
+    std::ptr::write_bytes(out.add(4), 0, 76);
+    out.add(4).cast::<u32>().write_unaligned(style);
+    out.add(8).cast::<usize>().write_unaligned(info.wnd_proc);
+    out.add(24).cast::<usize>().write_unaligned(info.instance);
+    out.add(48).cast::<usize>().write_unaligned(info.background);
+    out.add(64).cast::<usize>().write_unaligned(name_ptr);
+    class_atom(name) as i32
+}
+
 pub unsafe extern "win64" fn get_class_info_ex_a(
     _instance: usize,
-    _name: *const u8,
-    _out: *mut u8,
+    name: *const u8,
+    out: *mut u8,
 ) -> i32 {
-    // Stub : renvoie 0 (non trouvé)
-    0
+    fill_class_info_ex(&read_class_name_a(name), name as usize, out)
 }
 
 pub unsafe extern "win64" fn get_class_info_ex_w(
     _instance: usize,
-    _name: *const u16,
-    _out: *mut u8,
+    name: *const u16,
+    out: *mut u8,
 ) -> i32 {
-    0
+    fill_class_info_ex(&read_class_name_w(name), name as usize, out)
 }
 
 // =====================================================================
@@ -2672,12 +2720,33 @@ pub unsafe extern "win64" fn to_unicode(
     to_unicode_ex(vk, scan, state, buf, buf_size, flags, 0)
 }
 
-pub extern "win64" fn register_window_message_a(_name: *const u8) -> u32 {
-    0xC000
+/// Message enregistré : un numéro de 0xC000 à 0xFFFF propre au nom (sans
+/// tenir compte de la casse) et identique dans tous les processus, comme
+/// l'atome global de Windows. Tous les noms rendaient 0xC000 : WinForms
+/// confondait « WinFormsMouseEnter » et « WinFormsUnSubclass » et rendait au
+/// bouton sa procédure d'origine au premier survol (#666).
+fn register_window_message(name: String) -> u32 {
+    if name.is_empty() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    super::clipboard::registered_id(&name)
 }
 
-pub extern "win64" fn register_window_message_w(_name: *const u16) -> u32 {
-    0xC000
+pub unsafe extern "win64" fn register_window_message_a(name: *const u8) -> u32 {
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    register_window_message(crate::dlls::cstr(name))
+}
+
+pub unsafe extern "win64" fn register_window_message_w(name: *const u16) -> u32 {
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    register_window_message(crate::dlls::wstr(name))
 }
 
 pub extern "win64" fn get_message_pos() -> u32 {
@@ -3385,6 +3454,117 @@ mod tests {
                 read_class_name_a(b as usize as *const u8),
                 "Chrome_MessageWindow"
             );
+        }
+    }
+
+    /// Un message enregistré par nom : distinct d'un nom à l'autre, même
+    /// numéro quelle que soit la casse (#666, WinForms).
+    #[test]
+    fn messages_enregistres_distincts() {
+        let w = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain([0]).collect();
+            unsafe { register_window_message_w(v.as_ptr()) }
+        };
+        let enter = w("WinFormsMouseEnter");
+        let unsub = w("WinFormsUnSubclass");
+        assert!((0xC000..=0xFFFF).contains(&enter));
+        assert!((0xC000..=0xFFFF).contains(&unsub));
+        assert_ne!(enter, unsub);
+        assert_eq!(w("winformsmouseenter"), enter);
+        assert_eq!(
+            unsafe { register_window_message_a(c"WinFormsMouseEnter".as_ptr().cast()) },
+            enter
+        );
+        assert_eq!(w(""), 0);
+    }
+
+    /// GetClassInfoEx sur une classe prédéfinie (WinForms en dérive ses
+    /// boutons) et sur une classe inconnue.
+    #[test]
+    fn infos_de_classe_predefinie() {
+        let _teb = crate::process::test_teb();
+        let name: Vec<u16> = "BUTTON".encode_utf16().chain([0]).collect();
+        let mut wc = [0u8; 80];
+        wc[0..4].copy_from_slice(&80u32.to_le_bytes());
+        unsafe {
+            assert_ne!(get_class_info_ex_w(0, name.as_ptr(), wc.as_mut_ptr()), 0);
+        }
+        let proc_ = usize::from_le_bytes(wc[8..16].try_into().unwrap());
+        assert_eq!(Some(proc_), crate::dlls::controls::builtin_class("BUTTON"));
+        assert_ne!(u32::from_le_bytes(wc[4..8].try_into().unwrap()) & 0x0008, 0); // CS_DBLCLKS
+        let none: Vec<u16> = "ClasseInexistante666".encode_utf16().chain([0]).collect();
+        unsafe {
+            assert_eq!(get_class_info_ex_w(0, none.as_ptr(), wc.as_mut_ptr()), 0);
+        }
+        assert_eq!(crate::process::last_error(), 1411);
+    }
+
+    /// WinForms borne un Form par SM_CXMAXTRACK : jamais 0.
+    #[test]
+    fn tailles_de_suivi_des_fenetres() {
+        assert!(get_system_metrics(59) >= get_system_metrics(0));
+        assert!(get_system_metrics(60) >= get_system_metrics(1));
+        assert_eq!((get_system_metrics(34), get_system_metrics(35)), (136, 39));
+        assert_eq!((get_system_metrics(11), get_system_metrics(49)), (32, 16));
+    }
+
+    static CREATE_SEEN_BY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "win64" fn proc_sous_classe(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == gui::WM_CREATE {
+            CREATE_SEEN_BY.store(2, std::sync::atomic::Ordering::SeqCst);
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// Procédure de classe qui sous-classe la fenêtre dès WM_NCCREATE, comme
+    /// NativeWindow de WinForms.
+    unsafe extern "win64" fn proc_de_classe(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        if msg == WM_NCCREATE {
+            set_window_long_ptr_w(h, GWL_WNDPROC, proc_sous_classe as *const () as isize);
+            return 1;
+        }
+        if msg == gui::WM_CREATE {
+            CREATE_SEEN_BY.store(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// WM_CREATE va à la procédure courante, pas à celle de la classe (#666).
+    #[test]
+    fn wm_create_suit_la_sous_classe_posee_en_wm_nccreate() {
+        let name: Vec<u16> = "Winlux666SousClasse".encode_utf16().chain([0]).collect();
+        unsafe {
+            let wc = gui::WndClassA {
+                style: 0,
+                wnd_proc: proc_de_classe as *const () as usize,
+                cls_extra: 0,
+                wnd_extra: 0,
+                instance: 0,
+                icon: 0,
+                cursor: 0,
+                background: 0,
+                menu_name: std::ptr::null(),
+                class_name: name.as_ptr().cast(),
+            };
+            assert_ne!(register_class_w(&wc), 0);
+            let hwnd = create_window_ex_w(
+                0,
+                name.as_ptr(),
+                name.as_ptr(),
+                0,
+                10,
+                10,
+                320,
+                200,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            assert_eq!(CREATE_SEEN_BY.load(std::sync::atomic::Ordering::SeqCst), 2);
+            destroy_window(hwnd);
         }
     }
 

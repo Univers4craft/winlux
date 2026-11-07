@@ -2183,7 +2183,7 @@ pub extern "win64" fn get_object_type(obj: usize) -> u32 {
             gui::GdiObjectInfo::Region(_) => 8, // OBJ_REGION
         }
     } else {
-        0
+        gui::dc_object_type(obj).unwrap_or(0)
     }
 }
 
@@ -2543,5 +2543,21 @@ mod display_name_tests {
         assert!(super::is_display_name("\\\\.\\display12"));
         assert!(!super::is_display_name("\\\\.\\DISPLAY"));
         assert!(!super::is_display_name("Microsoft Print to PDF"));
+    }
+}
+
+#[cfg(test)]
+mod object_type_tests {
+    /// GetObjectType d'un HDC : OBJ_MEMDC pour un DC mémoire, OBJ_DC pour
+    /// celui d'une fenêtre. System.Drawing (WinForms) refuse un type 0 (#666).
+    #[test]
+    fn type_d_un_dc() {
+        let mem = super::create_compatible_dc(0);
+        assert_eq!(super::get_object_type(mem), 10);
+        let win = crate::dlls::gui::create_dc(0x4242);
+        assert_eq!(super::get_object_type(win), 3);
+        crate::dlls::gui::free_dc(win);
+        crate::dlls::gui::free_dc(mem);
+        assert_eq!(super::get_object_type(win), 0);
     }
 }

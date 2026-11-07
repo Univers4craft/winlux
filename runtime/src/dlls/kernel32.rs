@@ -3487,8 +3487,26 @@ pub unsafe extern "win64" fn virtual_alloc(
             .iter_mut()
             .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
         else {
-            crate::process::set_last_error(487);
-            return std::ptr::null_mut();
+            drop(maps);
+            // Pages d'une vue MapViewOfFile(Ex) d'une section SEC_RESERVE :
+            // Windows les valide par VirtualAlloc(MEM_COMMIT). Le memfd
+            // fournit déjà les pages ; on pose la protection (#665).
+            return match crate::dlls::mmap::protect_view_pages(
+                page_base,
+                page_end,
+                prot,
+                win_prot(prot),
+            ) {
+                Some(Ok(_)) => page_base as *mut c_void,
+                Some(Err(code)) => {
+                    crate::process::set_last_error(code);
+                    std::ptr::null_mut()
+                }
+                None => {
+                    crate::process::set_last_error(487);
+                    std::ptr::null_mut()
+                }
+            };
         };
         let start = (page_base - region_base) / PAGE;
         let count = (page_end - page_base) / PAGE;
@@ -3704,8 +3722,23 @@ pub unsafe extern "win64" fn virtual_protect(
         .iter_mut()
         .find(|(b, r)| start >= **b && end <= **b + r.size)
     else {
-        crate::process::set_last_error(487);
-        return 0;
+        drop(maps);
+        // Vue d'un mappage de fichier ou de section (code double-mappé de
+        // coreclr, #665).
+        return match crate::dlls::mmap::protect_view_pages(start, end, prot, win_prot(prot)) {
+            Some(Ok(previous)) => {
+                *old = previous;
+                1
+            }
+            Some(Err(code)) => {
+                crate::process::set_last_error(code);
+                0
+            }
+            None => {
+                crate::process::set_last_error(487);
+                0
+            }
+        };
     };
     let first = (start - base) / PAGE;
     let count = (end - start) / PAGE;

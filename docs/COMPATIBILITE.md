@@ -502,7 +502,10 @@ Ampleur : **XL**. Suivi : #236, qui s'appuie sur #19 et #20.
 ### 9. Applications .NET de bureau (WinForms, WPF)
 
 Les applis .NET autonomes qui embarquent `coreclr.dll` démarrent par leur
-propre runtime ; Paint.NET avance sur ce chemin (#138). Les applis qui
+propre runtime ; Paint.NET avance sur ce chemin (#138). Depuis #664–#666,
+une appli **WinForms** autonome simple s'ouvre, reçoit les clics et se ferme
+proprement (`scripts/test-winforms-bonjour.sh`, sur le runtime .NET 9 de
+Paint.NET portable). Les applis qui
 s'appuient sur un .NET installé passent par le CLR maison, qui n'a encore ni
 génériques de la BCL, ni délégués, ni LINQ, ni WinForms, ni WPF. WPF demande en
 plus Direct3D 9 (déjà là) et ses DLL natives (`wpfgfx`, `PresentationNative`).

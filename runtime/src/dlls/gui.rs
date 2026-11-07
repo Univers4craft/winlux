@@ -1025,6 +1025,15 @@ pub fn free_dc(hdc: usize) {
     lock(dcs()).remove(&hdc);
 }
 
+/// Type GDI d'un HDC pour GetObjectType : OBJ_MEMDC (10) pour un DC
+/// mémoire (sans fenêtre), OBJ_DC (3) sinon ; `None` si ce n'est pas un DC.
+/// System.Drawing refuse un DC dont le type est 0 (#666).
+pub fn dc_object_type(hdc: usize) -> Option<u32> {
+    lock(dcs())
+        .get(&hdc)
+        .map(|d| if d.hwnd == 0 { 10 } else { 3 })
+}
+
 /// Fenêtre cible d'un HDC, `None` si l'invalide.
 pub fn dc_window(hdc: usize) -> Option<usize> {
     lock(dcs()).get(&hdc).map(|d| d.hwnd)
@@ -2531,6 +2540,14 @@ pub fn set_class_style(name: &str, style: u32) {
     lock(class_styles())
         .entry(name.to_ascii_lowercase())
         .or_insert(style);
+}
+
+/// Style de classe mémorisé (0 si inconnu), pour GetClassInfoEx.
+pub fn class_style(name: &str) -> u32 {
+    lock(class_styles())
+        .get(&name.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(0)
 }
 
 /// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte

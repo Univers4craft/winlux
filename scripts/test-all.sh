@@ -87,6 +87,12 @@ fi
 step "scripts/test-default-accent.py" python3 -B scripts/test-default-accent.py
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 
+# Appli WinForms .NET autonome (#664–#666) : télécharge une fois le runtime
+# .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.
+if test "$quick" = 0; then
+    step "scripts/test-winforms-bonjour.sh" sh scripts/test-winforms-bonjour.sh
+fi
+
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
 # Playwright, sauf WINLUX_SITE_RENDER=required.
 step "scripts/test-site.py (site web)" python3 -B scripts/test-site.py --render
