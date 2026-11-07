@@ -145,7 +145,8 @@ with tempfile.TemporaryDirectory() as directory:
     for tool in ("xfconf-query", "winlux-control", "openbox"):
         (tools / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "{calls}"\n')
         (tools / tool).chmod(0o755)
-    env = {**os.environ, "HOME": str(home), "PATH": f"{tools}:{os.environ['PATH']}"}
+    (root / "icons/Winlux-Sombre").mkdir(parents=True)
+    env = {**os.environ, "HOME": str(home), "PATH": f"{tools}:{os.environ['PATH']}", "WINLUX_ICON_ROOT": str(root / "icons")}
 
     def apply(*args):
         subprocess.run([sys.executable, "-B", str(PERSONALIZE), *args], env=env, check=True, stdout=subprocess.DEVNULL)
@@ -168,6 +169,14 @@ with tempfile.TemporaryDirectory() as directory:
     dark = apply("theme", "dark")
     assert dark.startswith("Winlux-dark-") and "winlux-control theme-dark" in calls.read_text()
     assert "gtk-contained-dark.css" in (home / ".local/share/themes" / dark / "gtk-3.0/gtk.css").read_text()
+    # Icônes Prisme (#616) : Winlux en clair, Winlux-Sombre en sombre.
+    icon_calls = [line for line in calls.read_text().splitlines() if "-p /Net/IconThemeName" in line and " -s " in line]
+    assert [line.rsplit(" -s ", 1)[1] for line in icon_calls] == ["Winlux", "Winlux", "Winlux-Sombre"], icon_calls
+    # Un thème d'icônes choisi par l'utilisateur n'est jamais remplacé.
+    (tools / "xfconf-query").write_text(f'#!/bin/sh\necho "xfconf-query $*" >> "{calls}"\necho Papirus\n')
+    calls.write_text("")
+    apply("theme", "light")
+    assert "IconThemeName -s" not in calls.read_text(), calls.read_text()
 
 for key, row in personalize["_TR"].items():
     assert len(row) == 3 and all(row), key

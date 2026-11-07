@@ -72,10 +72,13 @@ done
 cp "$project/integration/native/dbus/org.freedesktop.FileManager1.service" "$stage/usr/share/dbus-1/services/"
 mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
-# Identité Winlux : thème d'icônes maison (complété par Adwaita) et sons système.
+# Identité Winlux : icônes Prisme claires (Winlux) et sombres (Winlux-Sombre,
+# hérite de Winlux), complétées par Adwaita, et sons système.
 mkdir -p "$stage/usr/share/icons" "$stage/usr/share/winlux/sounds"
-rm -rf "$stage/usr/share/icons/Winlux"
-cp -a "$project/integration/native/icons/Winlux" "$stage/usr/share/icons/Winlux"
+for icon_theme in Winlux Winlux-Sombre; do
+    rm -rf "$stage/usr/share/icons/$icon_theme"
+    cp -a "$project/integration/native/icons/$icon_theme" "$stage/usr/share/icons/$icon_theme"
+done
 cp "$project"/assets/sounds/*.wav "$stage/usr/share/winlux/sounds/"
 cp -a "$project/integration/native/helpers/." "$stage/usr/share/xfce4/helpers/"
 cp -a "$project/integration/native/applications/." "$stage/usr/share/applications/"
