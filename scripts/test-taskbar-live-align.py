@@ -5,7 +5,9 @@
 xfce4-panel avec la configuration livrée (barre à gauche, contrepoids 13 au
 bout), le vrai `winlux-tray`, puis applique `winlux-control align-center`
 pendant que la barre tourne, comme Paramètres > Personnalisation > Barre des
-tâches, et enfin `align-left`.
+tâches, et enfin `align-left`. Dans les deux cas, Rechercher (genmon 15) et Vue
+des tâches (lanceur 14) restent juste après Démarrer : `winlux-tray` garde son
+nom de commande, auquel winlux-control reconnaît le bouton Rechercher.
 
 Avant le correctif (#651), la barre déjà lancée ne déplaçait pas le contrepoids
 13 du bout de la barre vers la gauche de Démarrer : la zone de notification
@@ -61,11 +63,17 @@ def prepare(home):
     start.write_text((project / "integration/native/applications/winlux-start.desktop").read_text(encoding="utf-8")
                      .replace("/usr/share/winlux/native/start.svg", str(project / "integration/native/start.svg")),
                      encoding="utf-8")
+    tray = home / "bin/winlux-tray"
+    tray.parent.mkdir(parents=True, exist_ok=True)
+    tray.write_text(f'#!/bin/sh\nexec {sys.executable} -B {directory}/winlux-tray.py "$@"\n', encoding="utf-8")
+    tray.chmod(0o755)
     for path in list((config / "xfce4").rglob("*.rc")) + list((config / "xfce4").rglob("*.xml")):
         text = path.read_text(encoding="utf-8")
         text = text.replace("/usr/bin/winlux-clock", f"/bin/sh {directory}/winlux-clock.sh")
         text = text.replace("/usr/share/applications/winlux-start.desktop", str(start))
-        text = text.replace("/usr/bin/winlux-tray", f"{sys.executable} -B {directory}/winlux-tray.py")
+        # Même nom de commande que sur le système (« …/winlux-tray search ») :
+        # winlux-control reconnaît le bouton Rechercher à cette commande.
+        text = text.replace("/usr/bin/winlux-tray", str(tray))
         path.write_text(text, encoding="utf-8")
     genmon_in_xfconf(config)
 
@@ -126,7 +134,8 @@ def main():
         # winlux-control doit joindre le même xfconfd que la barre : il est lancé
         # dans la même session D-Bus, à la demande, par la file « commandes ».
         script = (f"openbox & sleep 1; xfce4-panel --disable-wm-check & "
-                  f"while read action < '{fifo}'; do sh '{directory}/winlux-control.sh' \"$action\" >/dev/null 2>&1; done")
+                  f"while read action < '{fifo}'; do sh '{directory}/winlux-control.sh' \"$action\" >/dev/null 2>&1; "
+                  f"xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids > \"{temp}/ordre-$action\"; done")
         process = subprocess.Popen(["dbus-run-session", "--", "sh", "-c", script], env=env, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, start_new_session=True)
         try:
@@ -139,6 +148,18 @@ def main():
                     pipe.write(action + "\n")
                 start, last = settle(Gdk, root, width, height)
                 print(f"{action} en direct : Démarrer x={start}, bord droit x={last}")
+                # Rechercher (genmon 15) et Vue des tâches (lanceur 14) juste
+                # après Démarrer, dans les deux alignements.
+                order = Path(temp) / f"ordre-{action}"
+                for _ in range(100):
+                    if order.is_file() and order.stat().st_size:
+                        break
+                    time.sleep(0.2)
+                # Une ligne par id ; la première annonce le nombre d'éléments.
+                ids = [int(line) for line in order.read_text().splitlines() if line.strip().isdigit()] if order.is_file() else []
+                print(f"{action} en direct : ordre {ids}")
+                if 1 not in ids or ids[ids.index(1) + 1:ids.index(1) + 3] != [15, 14]:
+                    problems.append(f"{action} en direct : Rechercher et Vue des tâches absents après Démarrer ({ids})")
                 if last is None or last < width - 30:
                     problems.append(f"{action} en direct : zone de notification décalée, bord droit à x={last} sur {width}")
                 if action == "align-center" and not (start is not None and width // 2 - 160 < start < width // 2):

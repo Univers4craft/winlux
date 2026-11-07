@@ -1149,7 +1149,8 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
         && (is_stock_font(obj) || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
     let kind_bitmap = !kind_pen
         && !kind_font
-        && matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. }));
+        && (obj == DEFAULT_BITMAP
+            || matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. })));
     with_dc(
         hdc,
         |d| {
@@ -1162,9 +1163,16 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
                 d.font = obj;
                 old
             } else if kind_bitmap {
+                // Un DC mémoire neuf contient la bitmap 1x1 du stock :
+                // SelectObject la rend (jamais 0, que la VCL de Delphi
+                // prend pour un échec : #753), et la resélectionner vide le DC.
                 let old = d.bitmap;
-                d.bitmap = obj;
-                old
+                d.bitmap = if obj == DEFAULT_BITMAP { 0 } else { obj };
+                if old == 0 {
+                    DEFAULT_BITMAP
+                } else {
+                    old
+                }
             } else {
                 let old = d.brush;
                 d.brush = obj;
@@ -1174,6 +1182,10 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
         0,
     )
 }
+
+/// Bitmap 1x1 monochrome du stock (`GetStockObject(21)`), celle d'un DC
+/// mémoire neuf.
+pub const DEFAULT_BITMAP: usize = 22;
 
 /// Objets « stock » plume : `GetStockObject(WHITE_PEN)` → 7, `BLACK_PEN` → 8,
 /// `NULL_PEN` → 9.
@@ -1616,6 +1628,15 @@ pub fn object_info(handle: usize) -> Option<GdiObjectInfo> {
     if is_stock_font(handle) {
         return Some(GdiObjectInfo::Font(FontSpec::default()));
     }
+    if handle == DEFAULT_BITMAP {
+        return Some(GdiObjectInfo::Bitmap {
+            width: 1,
+            height: 1,
+            width_bytes: 2,
+            bits_per_pixel: 1,
+            bits: 0,
+        });
+    }
     None
 }
 
@@ -1630,7 +1651,7 @@ pub fn delete_object(obj: usize) -> bool {
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
         Some(_) => map.remove(&obj).is_some(),
-        None => (1..=9).contains(&obj),
+        None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
     }
 }
 
@@ -3600,6 +3621,28 @@ mod tests {
         assert_eq!(select_object(dc, 14), font);
         assert!(delete_object(font));
         assert_eq!(font_spec(font), None);
+        free_dc(dc);
+    }
+
+    #[test]
+    fn dc_memoire_neuf_rend_la_bitmap_du_stock() {
+        let dc = create_dc(0);
+        let bmp = create_compatible_bitmap(4, 3).unwrap();
+        // Jamais 0 : la VCL de Delphi lève EOutOfResources sinon (WinSCP).
+        assert_eq!(select_object(dc, bmp), DEFAULT_BITMAP);
+        assert_eq!(dc_bitmap(dc), bmp);
+        assert_eq!(select_object(dc, DEFAULT_BITMAP), bmp);
+        assert_eq!(dc_bitmap(dc), 0);
+        assert!(matches!(
+            object_info(DEFAULT_BITMAP),
+            Some(GdiObjectInfo::Bitmap {
+                width: 1,
+                height: 1,
+                ..
+            })
+        ));
+        assert!(delete_object(DEFAULT_BITMAP));
+        assert!(delete_object(bmp));
         free_dc(dc);
     }
 

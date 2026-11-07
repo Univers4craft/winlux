@@ -6,6 +6,7 @@
     winlux-accounts password NOM                 nouveau mot de passe sur l'entrée standard
     winlux-accounts role NOM admin|user          administrateur ou standard
     winlux-accounts remove NOM keep|delete       garde ou efface le dossier personnel
+    winlux-accounts sync-printing                lpadmin = les administrateurs (démarrage)
 
 Comptes locaux uniquement : aucun compte en ligne. Les actions qui modifient
 un compte tournent en root, par `winlux-control account-*` relayé par
@@ -29,7 +30,9 @@ USERS_CONF = ROOT + "/etc/winlux/users.conf"
 NAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 FULLNAME = re.compile(r"^[^:\n\r\0,=]{0,64}$")
 ADMIN_GROUPS = ("sudo", "wheel", "admin")
-BASE_GROUPS = ("audio", "video", "plugdev", "input", "netdev", "bluetooth", "lpadmin", "scanner")
+BASE_GROUPS = ("audio", "video", "plugdev", "input", "netdev", "bluetooth", "scanner")
+# Administration des imprimantes (SystemGroup de CUPS) : administrateurs seulement (#741).
+PRINTER_ADMIN = "lpadmin"
 RESERVED = {"root", "winlux-web", "nobody", "daemon", "bin", "sys", "admin", "administrateur", "administrator"}
 FOLDERS = ("Bureau", "Documents", "Images", "Musique", "Téléchargements", "Vidéos")
 
@@ -166,6 +169,8 @@ def add(name, role, fullname=""):
     wanted = [group for group in BASE_GROUPS if group in existing]
     if role == "admin":
         wanted.append(next((group for group in ADMIN_GROUPS if group in existing), "sudo"))
+        if PRINTER_ADMIN in existing:
+            wanted.append(PRINTER_ADMIN)
     args = ["useradd", "-m", "-s", "/bin/bash", "-c", fullname or name]
     if wanted:
         args += ["-G", ",".join(wanted)]
@@ -200,6 +205,12 @@ def role(name, kind):
             run(["gpasswd", "-a", name, group])
         elif kind == "user" and name in existing[group]:
             run(["gpasswd", "-d", name, group])
+    printer_admins = existing.get(PRINTER_ADMIN)
+    if printer_admins is not None:
+        if kind == "admin" and name not in printer_admins:
+            run(["gpasswd", "-a", name, PRINTER_ADMIN])
+        elif kind == "user" and name in printer_admins:
+            run(["gpasswd", "-d", name, PRINTER_ADMIN])
     set_conf_role(name, kind == "admin")
 
 
@@ -223,6 +234,27 @@ def remove(name, files):
     write_users_conf(entries)
 
 
+def sync_printing():
+    """lpadmin = les administrateurs, ni plus ni moins (#622, #741).
+
+    lpadmin est le SystemGroup de CUPS : ses membres ajoutent, suppriment et
+    reconfigurent les imprimantes (lpinfo, lpadmin). Le groupe manquait sur
+    une installation v0.2.19 (l'administrateur recevait « Interdit »), et
+    winlux-accounts y mettait aussi les comptes standard. Lancé en root à
+    chaque démarrage, avant cupsd ; les comptes système ne sont pas touchés.
+    """
+    existing = groups()
+    if PRINTER_ADMIN not in existing:
+        run(["groupadd", "--system", PRINTER_ADMIN])
+        existing[PRINTER_ADMIN] = []
+    for account in accounts():
+        member = account["name"] in existing[PRINTER_ADMIN]
+        if account["admin"] and not member:
+            run(["gpasswd", "-a", account["name"], PRINTER_ADMIN])
+        elif not account["admin"] and member:
+            run(["gpasswd", "-d", account["name"], PRINTER_ADMIN])
+
+
 def main(argv):
     if not argv:
         print(__doc__.strip(), file=sys.stderr)
@@ -240,6 +272,8 @@ def main(argv):
             role(rest[0], rest[1])
         elif command == "remove" and len(rest) == 2:
             remove(rest[0], rest[1])
+        elif command == "sync-printing" and not rest:
+            sync_printing()
         else:
             print(__doc__.strip(), file=sys.stderr)
             return 2
