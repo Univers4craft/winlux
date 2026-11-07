@@ -576,6 +576,10 @@ fn system_message(code: u32) -> Option<&'static str> {
         126 => "Bibliothèque (DLL) introuvable.",
         127 => "Fonction absente de la bibliothèque.",
         183 => "Un élément de ce nom existe déjà.",
+        267 => "Ce nom ne désigne pas un dossier.",
+        // HRESULT_FROM_WIN32 (0x8007xxxx) : le texte du code Win32 contenu,
+        // comme sous Windows (7-Zip passe ainsi ses erreurs, #483).
+        c if c & 0xFFFF_0000 == 0x8007_0000 => return system_message(c & 0xFFFF),
         _ => return None,
     })
 }
@@ -1115,6 +1119,13 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hresult_win32_donne_le_texte_du_code_contenu() {
+        assert_eq!(system_message(0x8007_0005), system_message(5));
+        assert!(system_message(0x8007_010B).is_some());
+        assert_eq!(system_message(0x8000_4005), None);
+    }
+
     use super::*;
 
     #[test]

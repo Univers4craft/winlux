@@ -1365,7 +1365,7 @@ def wallpapers():
     for name, title in (("wallpapers/winlux-prisme-aurore.png", "Winlux Aurore"),
                         ("wallpapers/winlux-prisme-aurore-clair.png", "Winlux Aurore claire"),
                         ("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
-                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube"), ("wallpaper.bmp", "Classique")):
+                        ("wallpapers/winlux-prisme-aube.png", "Winlux Aube")):
         path = WALLPAPERS / name
         if path.is_file(): found.append((wallpaper_variant(path), title))
     return found
