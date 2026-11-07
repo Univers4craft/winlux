@@ -40,10 +40,21 @@ fn status<T>(r: Result<T, i32>) -> i32 {
 }
 
 fn sub_path(root: usize, sub: &str) -> Result<String, i32> {
+    sub_path_view(root, sub, 0)
+}
+
+/// Chemin d'une sous-clé dans la vue du registre du programme : un
+/// programme x86 (ou `KEY_WOW64_32KEY`) voit `HKLM\Software\Wow6432Node`.
+fn sub_path_view(root: usize, sub: &str, access: u32) -> Result<String, i32> {
     if sub.contains('\0') {
         return Err(ERROR_INVALID_PARAMETER);
     }
-    Ok(reg::join(&reg::handle_path(root)?, sub))
+    let path = reg::join(&reg::handle_path(root)?, sub);
+    if access & 0x0300 == 0 && !crate::wow32::active() {
+        return Ok(path);
+    }
+    let exists = |p: &str| reg::read(|d| Ok(d.exists(p))).unwrap_or(false);
+    Ok(crate::wow32::registry_view(&path, access, &exists))
 }
 
 /// Copie des données dans un tampon Win32 (`size` en octets).
@@ -94,11 +105,11 @@ unsafe fn put_name_w(s: &str, buf: *mut u16, size: *mut u32) -> i32 {
 
 // ── Ouverture, création, fermeture ─────────────────────────────────
 
-unsafe fn open_impl(root: usize, sub: &str, result: *mut usize) -> i32 {
+unsafe fn open_impl(root: usize, sub: &str, access: u32, result: *mut usize) -> i32 {
     if result.is_null() {
         return ERROR_INVALID_PARAMETER;
     }
-    let path = match sub_path(root, sub) {
+    let path = match sub_path_view(root, sub, access) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -113,11 +124,17 @@ unsafe fn open_impl(root: usize, sub: &str, result: *mut usize) -> i32 {
     }
 }
 
-unsafe fn create_impl(root: usize, sub: &str, result: *mut usize, disposition: *mut u32) -> i32 {
+unsafe fn create_impl(
+    root: usize,
+    sub: &str,
+    access: u32,
+    result: *mut usize,
+    disposition: *mut u32,
+) -> i32 {
     if result.is_null() {
         return ERROR_INVALID_PARAMETER;
     }
-    let path = match sub_path(root, sub) {
+    let path = match sub_path_view(root, sub, access) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -141,33 +158,33 @@ pub unsafe extern "win64" fn reg_open_key_ex_a(
     root: usize,
     sub: *const u8,
     _options: u32,
-    _access: u32,
+    access: u32,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_a(sub), result)
+    open_impl(root, &text_a(sub), access, result)
 }
 pub unsafe extern "win64" fn reg_open_key_ex_w(
     root: usize,
     sub: *const u16,
     _options: u32,
-    _access: u32,
+    access: u32,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_w(sub), result)
+    open_impl(root, &text_w(sub), access, result)
 }
 pub unsafe extern "win64" fn reg_open_key_a(
     root: usize,
     sub: *const u8,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_a(sub), result)
+    open_impl(root, &text_a(sub), 0, result)
 }
 pub unsafe extern "win64" fn reg_open_key_w(
     root: usize,
     sub: *const u16,
     result: *mut usize,
 ) -> i32 {
-    open_impl(root, &text_w(sub), result)
+    open_impl(root, &text_w(sub), 0, result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,12 +194,12 @@ pub unsafe extern "win64" fn reg_create_key_ex_a(
     _reserved: u32,
     _class: *const u8,
     _options: u32,
-    _access: u32,
+    access: u32,
     _security: usize,
     result: *mut usize,
     disposition: *mut u32,
 ) -> i32 {
-    create_impl(root, &text_a(sub), result, disposition)
+    create_impl(root, &text_a(sub), access, result, disposition)
 }
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn reg_create_key_ex_w(
@@ -191,26 +208,26 @@ pub unsafe extern "win64" fn reg_create_key_ex_w(
     _reserved: u32,
     _class: *const u16,
     _options: u32,
-    _access: u32,
+    access: u32,
     _security: usize,
     result: *mut usize,
     disposition: *mut u32,
 ) -> i32 {
-    create_impl(root, &text_w(sub), result, disposition)
+    create_impl(root, &text_w(sub), access, result, disposition)
 }
 pub unsafe extern "win64" fn reg_create_key_a(
     root: usize,
     sub: *const u8,
     result: *mut usize,
 ) -> i32 {
-    create_impl(root, &text_a(sub), result, std::ptr::null_mut())
+    create_impl(root, &text_a(sub), 0, result, std::ptr::null_mut())
 }
 pub unsafe extern "win64" fn reg_create_key_w(
     root: usize,
     sub: *const u16,
     result: *mut usize,
 ) -> i32 {
-    create_impl(root, &text_w(sub), result, std::ptr::null_mut())
+    create_impl(root, &text_w(sub), 0, result, std::ptr::null_mut())
 }
 
 pub unsafe extern "win64" fn reg_open_current_user(_access: u32, result: *mut usize) -> i32 {
@@ -230,6 +247,7 @@ pub unsafe extern "win64" fn reg_open_user_classes_root(
     create_impl(
         reg::HKEY_CURRENT_USER,
         "Software\\Classes",
+        0,
         result,
         std::ptr::null_mut(),
     )
