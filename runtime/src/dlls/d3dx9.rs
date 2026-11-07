@@ -1584,9 +1584,9 @@ impl Rgba {
             return;
         }
         let [kb, kg, kr, ka] = key.to_le_bytes();
-        for p in self.px.chunks_exact_mut(4) {
-            if p[0] == kr && p[1] == kg && p[2] == kb && p[3] == ka {
-                p.copy_from_slice(&[0, 0, 0, 0]);
+        for p in self.px.as_chunks_mut::<4>().0 {
+            if *p == [kr, kg, kb, ka] {
+                *p = [0; 4];
             }
         }
     }
@@ -1715,7 +1715,7 @@ fn decode_image(d: &[u8], hint: &str) -> Option<Decoded> {
         .ok()?;
     let page = img.pages.into_iter().next()?;
     let r = page.into_raster();
-    let alpha = r.px.chunks_exact(4).any(|p| p[3] != 255);
+    let alpha = r.px.as_chunks::<4>().0.iter().any(|p| p[3] != 255);
     let (fmt, mips) = match raw_dds(d) {
         Some(raw) => (raw.fmt, raw.mips),
         None => (

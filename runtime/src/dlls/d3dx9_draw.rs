@@ -576,7 +576,9 @@ unsafe fn render_text(
         w: tw,
         h: th,
         px: px
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [255, 255, 255, p[0].max(p[1]).max(p[2])])
             .collect(),
     };
