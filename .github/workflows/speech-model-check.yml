@@ -1,0 +1,46 @@
+# Temporaire (#662) : empreintes des modèles de reconnaissance vocale et essai
+# réel de winlux-speech sur un runner (les conteneurs de développement ne
+# joignent pas huggingface.co). Retiré avant la fusion.
+name: speech-model-check
+on:
+  push:
+    branches: [claude/project-thread-xvfub4]
+jobs:
+  hashes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empreintes des modèles
+        run: |
+          mkdir -p "$RUNNER_TEMP/models"
+          for name in ggml-base-q5_1.bin ggml-small-q5_1.bin; do
+            curl -sSIL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$name" | grep -i -E '^(x-repo-commit|x-linked-etag|x-linked-size|location)' || true
+            curl -sSL --fail -o "$RUNNER_TEMP/models/$name" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$name"
+            printf '%s %s %s\n' "$name" "$(stat -c %s "$RUNNER_TEMP/models/$name")" "$(sha256sum "$RUNNER_TEMP/models/$name" | cut -d' ' -f1)"
+          done
+      - name: whisper.cpp 1.8.3 (même version qu'Ubuntu 26.04)
+        run: |
+          sudo apt-get install -y -q cmake espeak-ng sox
+          git clone -q --depth 1 --branch v1.8.3 https://github.com/ggml-org/whisper.cpp "$RUNNER_TEMP/w"
+          cmake -S "$RUNNER_TEMP/w" -B "$RUNNER_TEMP/w/build" -DCMAKE_BUILD_TYPE=Release -DWHISPER_SDL2=OFF >/dev/null
+          cmake --build "$RUNNER_TEMP/w/build" -j4 --target whisper-cli >/dev/null
+          ls "$RUNNER_TEMP/w/build/bin"
+      - name: Essai réel
+        run: |
+          set -x
+          export WINLUX_SPEECH_ENGINE="$RUNNER_TEMP/w/build/bin/whisper-cli"
+          if test -f scripts/winlux-speech.py; then
+            export WINLUX_SPEECH_MODEL_DIR="$RUNNER_TEMP/models"
+            python3 -I scripts/winlux-speech.py status || true
+          fi
+          espeak-ng -v fr -s 140 -w fr.wav "Bonjour, je dicte une phrase en français pour essayer la reconnaissance vocale."
+          for model in ggml-base-q5_1.bin ggml-small-q5_1.bin; do
+            for f in "$RUNNER_TEMP/w/samples/jfk.wav" fr.wav; do
+              lang=en; case "$f" in fr.wav) lang=fr ;; esac
+              sox "$f" -r 16000 -c 1 -b 16 in.wav
+              /usr/bin/time -f "%e s" "$WINLUX_SPEECH_ENGINE" -m "$RUNNER_TEMP/models/$model" -f in.wav -l $lang -nt -np -t 4
+              if test -f scripts/winlux-speech.py; then
+                WINLUX_SPEECH_MODEL_DIR="$RUNNER_TEMP/models" python3 -I scripts/winlux-speech.py transcribe "$f" || true
+              fi
+            done
+          done
