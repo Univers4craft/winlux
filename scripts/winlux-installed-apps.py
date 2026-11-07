@@ -622,8 +622,9 @@ def main(argv):
 
 # ── Page des Paramètres ────────────────────────────────────────────────────
 
-def InstalledAppsPanel(window):
-    """Contenu de Paramètres > Applications > Applications installées."""
+def InstalledAppsPanel(window, kind=None):
+    """Contenu de Paramètres > Applications > Applications installées ;
+    `kind` (« windows »…) présélectionne un filtre."""
     import threading
     import gi
     gi.require_version("Gtk", "3.0")
@@ -675,6 +676,7 @@ def InstalledAppsPanel(window):
             placeholder = Gtk.Label(label=_t("Aucune application ne correspond."), margin=18)
             placeholder.show()
             self.list.set_placeholder(placeholder)
+            if kind in dict(FILTERS): self.filter.set_active_id(kind)
             self.pack_start(self.list, False, False, 0)
             self.show_all()
             self.notice.hide()

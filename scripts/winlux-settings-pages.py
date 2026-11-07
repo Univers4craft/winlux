@@ -2459,7 +2459,12 @@ class ExtraPages:
         programs = installed_programs(module)
         self.hybrid = gpu_hybrid()
         self.hint(_t("Les réglages s’appliquent au prochain lancement du programme."))
-        self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
+        # Une seule liste des applications installées, avec les vraies icônes
+        # des .exe (#756) ; la fenêtre du shell PE n'en montrait aucune.
+        if installed_apps_module() is not None:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), self.open_installed_windows)])
+        else:
+            self.actions(self.body, [(_t("Installer ou désinstaller des programmes"), lambda: self.spawn(["winlux-shell-app", "programs"]))])
         exes = Gtk.FileFilter()
         exes.set_name(_t("Programmes Windows (.exe)"))
         exes.add_pattern("*.exe")
@@ -3631,7 +3636,15 @@ class ExtraPages:
         Windows, avec recherche, tri, taille et Désinstaller."""
         module = installed_apps_module()
         if module is None: return
-        self.body.pack_start(module.InstalledAppsPanel(self), False, False, 0)
+        # « Installer ou désinstaller des programmes » (Programmes Windows,
+        # winlux-shell-app programs) : liste filtrée sur Windows (#756).
+        kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
+        self.installed_filter = None
+        self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def open_installed_windows(self):
+        self.installed_filter = "windows"
+        self.open_page(PAGE_INSTALLED)
 
     def page_apps(self):
         if installed_apps_module() is not None:

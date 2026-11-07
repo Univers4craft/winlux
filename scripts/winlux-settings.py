@@ -1227,6 +1227,7 @@ class SettingsApp(Gtk.Application):
 
     def do_command_line(self, line):
         page = line.getenv("WINLUX_SETTINGS_PAGE") or ""
+        if line.getenv("WINLUX_INSTALLED_FILTER"): os.environ["WINLUX_INSTALLED_FILTER"] = line.getenv("WINLUX_INSTALLED_FILTER")
         if self.window is None:
             if page: os.environ["WINLUX_SETTINGS_PAGE"] = page
             self.window = Settings()

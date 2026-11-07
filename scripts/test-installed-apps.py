@@ -99,7 +99,15 @@ portable = home / "Téléchargements/putty.exe"
 write(program / "notepad++.exe", "MZ" + "x" * 4000)
 write(portable, "MZ" + "y" * 1000)
 icon_png = home / ".local/share/winlux/icons/npp.png"
-write(icon_png, "png")
+import struct, zlib
+def png(size=48, rgb=(0x6A, 0x3D, 0xF0)):
+    """Vraie image PNG (icône extraite d'un .exe par winlux-applications)."""
+    chunk = lambda kind, data: struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    rows = b"".join(b"\0" + bytes(rgb) * size for _ in range(size))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+icon_png.parent.mkdir(parents=True, exist_ok=True)
+icon_png.write_bytes(png())
 write(local / "winlux-pe-npp.desktop", f"[Desktop Entry]\nType=Application\nName=Notepad++\nIcon={icon_png}\nExec=x\nX-Winlux-Executable={program / 'notepad++.exe'}\nX-Winlux-Generated-Hash=1\n")
 write(local / "winlux-pe-putty.desktop", f"[Desktop Entry]\nType=Application\nName=PuTTY\nIcon=putty\nExec=x\nX-Winlux-Executable={portable}\nX-Winlux-Generated-Hash=1\n")
 write(local / "winlux-browser-firefox.desktop", "[Desktop Entry]\nType=Application\nName=Firefox\nExec=x\nX-Winlux-Generated-Hash=1\n")
@@ -202,6 +210,11 @@ check("PAGE_INSTALLED = 39" in pages_source and 'PAGE_INSTALLED: "page_installed
 start = (HERE / "winlux-start-menu.py").read_text()
 check(re.search(r'SESSION_SERVICES = \{[^}]*"xfce4-file-manager\.desktop"', start), "#721 : menu Démarrer sans xfce4-file-manager")
 check('rm -f "$stage/usr/share/applications/xfce4-file-manager.desktop"' in (HERE / "stage-desktop-components.sh").read_text(), "#721 : lanceur retiré de l'image")
+check("self.open_installed_windows" in pages_source and 'self.installed_filter = "windows"' in pages_source,
+      "#756 : Programmes Windows > Installer ou désinstaller ouvre la liste filtrée")
+shell_app = (HERE / "winlux-shell-app.sh").read_text()
+check("export WINLUX_INSTALLED_FILTER=windows" in shell_app and "winlux-settings installed-apps" in shell_app,
+      "#756 : winlux-shell-app programs ouvre la page native")
 check("'winlux-installed-apps.py:winlux-installed-apps'" in (HERE / "stage-desktop-components.sh").read_text(), "installé dans /usr/bin")
 
 # ── La page elle-même (écran requis) ──
@@ -253,8 +266,25 @@ if os.environ.get("DISPLAY"):
     buttons = {row.app["id"]: row.uninstall_button for row in panel.list.get_children()}
     check(buttons["apt:vlc"].get_sensitive() and not buttons["apt:mousepad"].get_sensitive()
           and buttons["apt:mousepad"].get_tooltip_text(), "Désinstaller grisé pour un composant du système, avec la raison")
+    # #756 : vraie icône du .exe (celle du Bureau et du menu Démarrer), pas l'icône générique.
+    npp_row = next(row for row in panel.list.get_children() if row.app["name"] == "Notepad++")
+    first = npp_row.get_child().get_children()[0]
+    check(isinstance(first, Gtk.Image) and first.get_storage_type() == Gtk.ImageType.PIXBUF
+          and first.get_pixbuf().get_width() == 32, "#756 : icône réelle du programme Windows dans la liste")
     width = panel.get_preferred_width()[0]
     check(width <= 640, f"page trop large pour 1366x768 : {width} px")
+    window.destroy()
+    # « Installer ou désinstaller des programmes » : liste filtrée sur Windows (#756).
+    window = Gtk.Window()
+    panel = module["InstalledAppsPanel"](window, "windows")
+    window.add(panel)
+    window.show_all()
+    deadline = time.time() + 20
+    while not panel.rows and time.time() < deadline:
+        Gtk.main_iteration_do(False)
+    settle()
+    check(panel.filter.get_active_id() == "windows" and sorted(shown()) == ["Notepad++", "Outil maison", "PuTTY"],
+          f"#756 : filtre Windows présélectionné : {shown()}")
     window.destroy()
 else:
     print("Pas d'écran : la partie GTK est sautée.")
