@@ -125,6 +125,7 @@ RegOpenKeyExA@20
 RegSetValueExA@24
 RegCloseKey@4
 RegDeleteKeyA@8
+RegSetKeySecurity@12
 DEF
 llvm-dlltool -m i386 -k -d "$tmp/kernel32_wow64.def" -l "$tmp/kernel32_wow64.lib"
 llvm-dlltool -m i386 -k -d "$tmp/advapi32_wow64.def" -l "$tmp/advapi32_wow64.lib"
