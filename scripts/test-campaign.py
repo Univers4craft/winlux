@@ -454,7 +454,7 @@ with tempfile.TemporaryDirectory() as directory:
 
 # ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
 backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
-ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38' in settings,
    "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
 ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
    "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
@@ -573,7 +573,7 @@ ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/pr
 # #721 / #722 : plus de « Gestionnaire de fichiers » en double, page Applications installées.
 ok('"xfce4-file-manager.desktop"' in (SCRIPTS / "winlux-start-menu.py").read_text()
    and (SCRIPTS / "winlux-installed-apps.py").exists() and (SCRIPTS / "test-installed-apps.py").exists()
-   and '_t("Applications installées")]' in (SCRIPTS / "winlux-settings.py").read_text(),
+   and '_t("Applications installées")' in (SCRIPTS / "winlux-settings.py").read_text(),
    "menu Démarrer sans « Gestionnaire de fichiers » ; Paramètres > Applications installées (page 39)")
 
 # #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
@@ -586,5 +586,16 @@ with tempfile.TemporaryDirectory() as directory:
     ok(all("dpmsEnabled:    True" in (home / ".xscreensaver").read_text() for home in (fresh, old))
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
+
+# #661 : contrôle parental. Le compte surveillé ne lit ni ne modifie ses
+# réglages par le relais root, et ne déverrouille pas hors du temps permis.
+parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py")], capture_output=True, text=True,
+                          timeout=600)
+ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
+   and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
+   "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
+ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
+   "relais root : vrai code de retour malgré SIGCHLD ignoré")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

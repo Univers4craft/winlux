@@ -255,6 +255,7 @@ _TR = {
     'Installation': ('Installing', 'Instalación', 'Installation'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Contrôle parental': ('Parental controls', 'Control parental', 'Jugendschutz'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -334,18 +335,18 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde"), _t("Applications installées")]
+         _t("Sauvegarde"), _t("Applications installées"), _t("Contrôle parental")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 39 n’existent que dans les Paramètres natifs.
+# Pages 29 à 40 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [39, 1, 10, 11, 15, 30]),
-              (_t("Comptes"), [33, 38]),
+              (_t("Comptes"), [33, 38, 40]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
@@ -1277,6 +1278,8 @@ PAGE_NAMES = {
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
     # ms-settings:appsfeatures ouvre « Applications installées » (#722).
     "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
+    # ms-settings:family-group : contrôle parental local (#661).
+    "family-group": 40, "family": 40, "parental": 40, "controle-parental": 40,
 }
 
 
