@@ -1,0 +1,6 @@
+# Winlux (#604) : /dev/rfkill (interrupteurs radio Wi-Fi et Bluetooth) est
+# réservé à root par défaut. Sans systemd-logind, aucune ACL « uaccess » ne
+# l'ouvre au compte de la session : blueman-applet (agent d'appairage) mourait
+# au démarrage et « rfkill unblock bluetooth » échouait. Les comptes Winlux
+# sont tous dans netdev, qui pilote déjà le réseau (50-winlux-network.rules).
+KERNEL=="rfkill", SUBSYSTEM=="misc", GROUP="netdev", MODE="0664", TAG+="uaccess"

@@ -346,6 +346,13 @@ ok("nm-connection-editor" not in (SCRIPTS / "winlux-system-tools.py").read_text(
 ok((ROOT / "integration/native/network/50-winlux-network.rules").is_file(),
    "polkit : les comptes du groupe netdev pilotent NetworkManager")
 
+# ── PC de damien, v0.2.19 (07/11/2026) : Bluetooth, OpenGL, accessibilité ──
+ok('GROUP="netdev"' in (ROOT / "integration/native/udev/60-winlux-rfkill.rules").read_text(),
+   "Bluetooth : /dev/rfkill ouvert au groupe netdev, blueman-applet reste l'agent d'appairage (#604)")
+desktop_packages = (SCRIPTS / "prepare-desktop-packages.py").read_text()
+ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"at-spi2-core"' in desktop_packages,
+   "image : rfkill (#604), glxinfo pour la ligne OpenGL du rapport (#610), bus org.a11y.Bus (#615)")
+
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
 hardware_page = (SCRIPTS / "winlux-hardware-page.py").read_text()

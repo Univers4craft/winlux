@@ -31,6 +31,8 @@ def winlux_path(relative):
             or relative.startswith("usr/share/applications/winlux")
             # Xorg : seuls les fichiers Winlux (20-winlux-display.conf), jamais 40-libinput.conf.
             or relative.startswith("usr/share/X11/xorg.conf.d/") and "winlux" in Path(relative).name
+            # udev : seules les règles Winlux (60-winlux-rfkill.rules).
+            or relative.startswith("usr/lib/udev/rules.d/") and "winlux" in Path(relative).name
             or relative == "usr/share/mime/packages/winlux.xml"
             or relative == "usr/share/thumbnailers/winlux-windows.thumbnailer"
             or relative == "usr/share/dbus-1/services/org.freedesktop.Notifications.service"

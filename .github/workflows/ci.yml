@@ -191,6 +191,8 @@ jobs:
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
+      - name: Vérifier Bluetooth (rfkill), OpenGL et bus d'accessibilité dans l'image
+        run: python3 -B scripts/test-session-plumbing.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
         run: python3 -B scripts/test-su-sudo.py
       - name: Vérifier « winlux-settings about » et les noms de page

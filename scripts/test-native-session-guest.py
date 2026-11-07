@@ -135,6 +135,16 @@ assert network_rule.stat().st_mode & 0o004 and Path("/etc/polkit-1/rules.d").sta
 if Path("/etc/resolv.conf").exists():
     assert Path("/etc/resolv.conf").resolve().stat().st_mode & 0o004, "resolv.conf illisible par les comptes"
 print("WINLUX_NETWORK_ACCOUNT_ACCESS=0", flush=True)
+# PC de damien, v0.2.19 : /dev/rfkill réservé à root (blueman-applet mort,
+# #604) et pas de bus d'accessibilité (#615).
+rfkill = Path("/dev/rfkill")
+if rfkill.exists():
+    import grp
+    assert grp.getgrgid(rfkill.stat().st_gid).gr_name == "netdev" and rfkill.stat().st_mode & 0o060 == 0o060, \
+        "/dev/rfkill inaccessible au groupe netdev"
+print(run("gdbus", "call", "--session", "--dest", "org.a11y.Bus", "--object-path", "/org/a11y/bus",
+          "--method", "org.a11y.Bus.GetAddress", timeout=30), flush=True)
+print("WINLUX_SESSION_PLUMBING=0", flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")

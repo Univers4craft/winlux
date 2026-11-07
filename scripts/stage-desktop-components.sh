@@ -42,6 +42,10 @@ cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkM
 # Sans logind, polkit ne voit aucune session « active » : nmcli lancé par un
 # compte du bureau recevait « non autorisé ». Les membres de netdev (tous les
 # comptes créés par Winlux) pilotent le réseau, comme sous Windows.
+# /dev/rfkill ouvert au groupe netdev (#604) : sans logind, blueman-applet ne
+# pouvait pas le lire. Dans /usr pour arriver aussi par la mise à jour.
+mkdir -p "$stage/usr/lib/udev/rules.d"
+install -m 644 "$project/integration/native/udev/60-winlux-rfkill.rules" "$stage/usr/lib/udev/rules.d/60-winlux-rfkill.rules"
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
 for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-brightness winlux-certificates winlux-force-close winlux-close-watch winlux-phone winlux-screensaver-inhibit; do
