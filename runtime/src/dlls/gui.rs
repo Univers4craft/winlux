@@ -42,6 +42,7 @@ pub const WM_ACTIVATE: u32 = 0x0006;
 #[allow(dead_code)]
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
+pub const WM_ACTIVATEAPP: u32 = 0x001C;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
@@ -2543,14 +2544,41 @@ pub fn screen_size() -> (i32, i32) {
     size.unwrap_or((1920, 1080))
 }
 
+/// Le programme a-t-il le focus du bureau ? Sert à n'envoyer
+/// WM_ACTIVATEAPP qu'au passage d'un programme à l'autre.
+static APP_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// WM_ACTIVATEAPP à toutes les fenêtres de premier niveau du programme
+/// quand il gagne ou perd le focus face à un autre programme. Notepad++ y
+/// vérifie si ses fichiers ont changé sur le disque (#769).
+fn activate_app(active: bool) {
+    use std::sync::atomic::Ordering;
+    if APP_ACTIVE.swap(active, Ordering::Relaxed) == active {
+        return;
+    }
+    let mut tops: Vec<usize> = lock(windows())
+        .iter()
+        .filter(|(_, w)| w.parent == 0 || w.style & 0x4000_0000 == 0)
+        .map(|(&h, _)| h)
+        .collect();
+    tops.sort_unstable();
+    for top in tops {
+        post_to_window(top, Msg::new(top, WM_ACTIVATEAPP, active as usize, 0));
+    }
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
         let mut b = lock(backend());
         b.pump()
     };
+    // Un FocusOut suivi d'un FocusIn dans le même lot : le focus change de
+    // fenêtre sans quitter le programme.
+    let refocused = events.iter().any(|e| e.message == WM_SETFOCUS);
     for e in events {
         if e.message == WM_SETFOCUS {
+            activate_app(true);
             let change = set_focus_from_backend(e.hwnd);
             if let Some(old) = change {
                 if old != 0 {
@@ -2566,6 +2594,9 @@ pub fn pump_backend() {
             let cleared = clear_focus_from_backend(e.hwnd);
             if cleared {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
+            }
+            if !refocused {
+                activate_app(false);
             }
             continue;
         }
@@ -3065,6 +3096,40 @@ fn brush_color(brush: usize) -> Option<u32> {
     }
 }
 
+/// Couleur unie du fond du parent d'un contrôle, quand ce parent est effacé
+/// avec le pinceau de sa classe (voir `begin_paint`) ; None s'il garde le
+/// dégradé du thème.
+pub fn parent_backdrop_color(hwnd: usize) -> Option<u32> {
+    let parent = window_parent(hwnd).filter(|&p| p != 0)?;
+    let background = lock(windows()).get(&parent)?.background;
+    if background == 0 || !has_control_children(parent) {
+        return None;
+    }
+    brush_color(background)
+}
+
+/// WM_ERASEBKGND envoyé par le programme lui-même avec son propre DC :
+/// peindre le fond de la classe dedans, comme DefWindowProc. Notepad++
+/// lit ainsi la couleur de fond du dialogue « À propos » dans une image
+/// hors écran pour le fond de son lien (#768). Winlux peint le fond des
+/// fenêtres lui-même, il n'envoie jamais ce message.
+pub fn erase_background(hwnd: usize, hdc: usize) -> bool {
+    if hdc == 0 {
+        return false;
+    }
+    let Some((background, rect)) = lock(windows())
+        .get(&hwnd)
+        .map(|w| (w.background, w.client_rect()))
+    else {
+        return false;
+    };
+    let Some(color) = (background != 0).then(|| brush_color(background)).flatten() else {
+        return false;
+    };
+    record(hdc, DrawCmd::FillRect { rect, color });
+    true
+}
+
 fn has_control_children(hwnd: usize) -> bool {
     child_windows(hwnd)
         .into_iter()
@@ -3237,7 +3302,10 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             destroy_window(hwnd);
             0
         }
-        WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        WM_ERASEBKGND => {
+            erase_background(hwnd, wparam);
+            1
+        }
         // WM_PRINT : la fenêtre se peint dans le DC fourni (fond puis zone
         // client), comme le fait DefWindowProc ; Notepad++ peint ainsi ses
         // onglets et sa barre d'état dans une image hors écran.
@@ -3267,7 +3335,15 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
         // sinon la fenêtre recevrait WM_PAINT sans fin.
+        // Une fenêtre à contrôles standard sans WM_PAINT à elle (boîte
+        // « À propos » de Notepad++) est effacée avec le pinceau de sa
+        // classe, comme le BeginPaint de Windows : sinon le dégradé du thème
+        // restait visible autour de contrôles peints, eux, sur un fond uni
+        // (#745).
         WM_PAINT => {
+            if let Some((hdc, _)) = begin_paint(hwnd) {
+                end_paint(hwnd, hdc);
+            }
             validate_window(hwnd);
             0
         }
@@ -3704,6 +3780,47 @@ mod tests {
     }
 
     #[test]
+    fn wm_activateapp_au_passage_d_un_programme_a_l_autre() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        let h = alloc_hwnd();
+        insert_window(
+            h,
+            Window {
+                class: "Activation".to_string(),
+                wnd_proc: proc_addr as usize,
+                background: 0,
+                title: String::new(),
+                rect: Rect::from_size(0, 0, 100, 100),
+                visible: true,
+                parent: 0,
+                owner: std::thread::current().id(),
+                needs_paint: false,
+                paint_queued: false,
+                style: 0,
+                ex_style: 0,
+                pending: Vec::new(),
+                menu_bar: 0,
+            },
+        );
+        let q = current_queue();
+        let recus = || {
+            lock(&q.items)
+                .iter()
+                .filter(|m| m.hwnd == h && m.message == WM_ACTIVATEAPP)
+                .map(|m| m.wparam)
+                .collect::<Vec<_>>()
+        };
+        APP_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+        activate_app(true);
+        activate_app(true);
+        assert_eq!(recus(), vec![1]);
+        activate_app(false);
+        assert_eq!(recus(), vec![1, 0]);
+        lock(&q.items).retain(|m| m.hwnd != h);
+        destroy_window(h);
+    }
+
+    #[test]
     fn file_messages_par_thread_est_isolee() {
         let q = current_queue();
         lock(&q.items).clear();
@@ -3891,6 +4008,43 @@ mod tests {
         assert!(delete_object(font));
         assert_eq!(font_spec(font), None);
         free_dc(dc);
+    }
+
+    #[test]
+    fn wm_erasebkgnd_peint_le_fond_de_classe_dans_un_dc_memoire() {
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        let h = alloc_hwnd();
+        insert_window(
+            h,
+            Window {
+                class: "Fond".to_string(),
+                wnd_proc: proc_addr as usize,
+                background: 16, // COLOR_BTNFACE + 1
+                title: String::new(),
+                rect: Rect::from_size(0, 0, 8, 8),
+                visible: true,
+                parent: 0,
+                owner: std::thread::current().id(),
+                needs_paint: false,
+                paint_queued: false,
+                style: 0,
+                ex_style: 0,
+                pending: Vec::new(),
+                menu_bar: 0,
+            },
+        );
+        let dc = create_dc(0);
+        let bmp = create_compatible_bitmap(8, 8).unwrap();
+        select_object(dc, bmp);
+        assert!(erase_background(h, dc));
+        let pixel = bitmap_snapshot(dc, Rect::from_size(2, 2, 1, 1))
+            .unwrap()
+            .pixels[0];
+        assert_eq!(pixel & 0x00FF_FFFF, crate::dlls::user32::get_sys_color(15));
+        select_object(dc, DEFAULT_BITMAP);
+        delete_object(bmp);
+        free_dc(dc);
+        destroy_window(h);
     }
 
     #[test]

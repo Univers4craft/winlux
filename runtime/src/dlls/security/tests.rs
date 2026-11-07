@@ -149,6 +149,20 @@ fn jeton_du_processus() {
         let first = std::ptr::read_unaligned(groups.as_ptr().add(8) as *const *const u8);
         assert_eq!(sid_text(sid_at(first).unwrap()).unwrap(), EVERYONE);
 
+        // TokenLogonSid (#747) : un seul groupe, le SID de session S-1-5-5-….
+        let mut logon = vec![0u8; 128];
+        assert_eq!(
+            GetTokenInformation(tok, 28, logon.as_mut_ptr(), 128, &mut need),
+            1
+        );
+        assert_eq!(u32::from_le_bytes(logon[0..4].try_into().unwrap()), 1);
+        let sid = std::ptr::read_unaligned(logon.as_ptr().add(8) as *const *const u8);
+        assert!(sid_text(sid_at(sid).unwrap())
+            .unwrap()
+            .starts_with("S-1-5-5-"));
+        let attrs = u32::from_le_bytes(logon[16..20].try_into().unwrap());
+        assert_ne!(attrs & SE_GROUP_LOGON_ID, 0);
+
         let everyone = sid_bytes(EVERYONE).unwrap();
         let admins = sid_bytes(ADMINISTRATORS).unwrap();
         let mut member = 0;
@@ -236,4 +250,38 @@ fn absolute_descriptor_and_explicit_acl() {
         );
         assert_eq!(EqualSid(got, owner.as_ptr()), 1);
     }
+}
+
+/// Le courtier du bac à sable de Chromium pose un jeton sur le thread de
+/// l'enfant puis le relit avec OpenThreadToken ; sans jeton, il tue
+/// l'enfant (#767).
+#[test]
+fn jeton_pose_sur_un_thread_puis_relu() {
+    let _teb = crate::process::test_teb();
+    let thread = 0x7a5e_0001usize;
+    let mut t = 0usize;
+    unsafe {
+        assert_eq!(open_thread_token(thread, &mut t), 0);
+        assert_eq!(crate::process::last_error(), 1008);
+        assert_eq!(SetThreadToken(&thread, TOKEN_HANDLE), 1);
+        assert_eq!(open_thread_token(thread, &mut t), 1);
+        assert_eq!(t, TOKEN_HANDLE);
+        assert_eq!(SetThreadToken(&thread, 0), 1);
+        assert_eq!(open_thread_token(thread, &mut t), 0);
+        // Thread courant : ImpersonateSelf puis RevertToSelf.
+        assert_eq!(ImpersonateSelf(2), 1);
+        assert_eq!(open_thread_token(CURRENT_THREAD_PSEUDO, &mut t), 1);
+        assert_eq!(RevertToSelf(), 1);
+        assert_eq!(open_thread_token(CURRENT_THREAD_PSEUDO, &mut t), 0);
+    }
+}
+
+/// Chromium ferme l'objet Job de chaque enfant et vérifie que CloseHandle
+/// réussit (#767).
+#[test]
+fn objet_job_se_ferme_une_fois() {
+    let _teb = crate::process::test_teb();
+    let job = unsafe { crate::dlls::kernel32_node::CreateJobObjectW(0, std::ptr::null()) };
+    assert_eq!(crate::dlls::kernel32::close_handle(job), 1);
+    assert_eq!(crate::dlls::kernel32::close_handle(job), 0);
 }

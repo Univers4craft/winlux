@@ -1214,3 +1214,13 @@ fn statique_dessine_par_le_parent_et_licence_coupee() {
     assert_eq!(rows[2].0, 22, "ligne suivant le \\r\\n");
     gui::destroy_window(p);
 }
+
+#[test]
+fn tabulations_des_statiques_deviennent_des_espaces() {
+    assert_eq!(expand_tabs("a\tb"), "a       b");
+    assert_eq!(
+        expand_tabs("Dossiers:\t1\nC:\\\tBureau"),
+        "Dossiers:       1\nC:\\     Bureau"
+    );
+    assert_eq!(expand_tabs("sans"), "sans");
+}

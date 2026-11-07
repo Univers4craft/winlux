@@ -476,6 +476,10 @@ unsafe fn create_from_template(
     if !gui::is_window(hwnd) {
         return 0;
     }
+    // Le choix se refait après WM_INITDIALOG : la procédure a pu désactiver
+    // ou masquer ce contrôle (l'heure de compilation de Notepad++ est un
+    // champ désactivé, qui ne doit ni prendre le focus ni être surligné, #704).
+    let first = next_tab_item(hwnd, 0, false);
     if focus_default != 0 && first != 0 {
         set_dlg_focus(hwnd, first);
     }
@@ -578,7 +582,10 @@ pub unsafe fn def_dlg_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize
             }
             0
         }
-        WM_ERASEBKGND => 1,
+        WM_ERASEBKGND => {
+            gui::erase_background(hwnd, wp);
+            1
+        }
         WM_CTLCOLORMSGBOX..=WM_CTLCOLORSTATIC => user32::get_sys_color_brush(15) as isize,
         WM_GETFONT => lock(dialogs()).get(&hwnd).map_or(0, |d| d.font as isize),
         WM_SETFONT => {
@@ -1249,6 +1256,11 @@ fn message_box_buttons(kind: u32) -> Vec<(usize, &'static str)> {
     }
 }
 
+/// Fins de ligne d'une boîte de message : CR LF, CR seul et LF deviennent LF.
+fn message_box_lines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Construit un DLGTEMPLATE en mémoire pour une boîte de message.
 fn message_box_template(text: &str, caption: &str, kind: u32) -> Vec<u8> {
     let font = super::gdi32::get_stock_object(17);
@@ -1426,6 +1438,9 @@ unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp:
 /// MessageBox : vraie fenêtre modale quand un affichage est là ; sinon le
 /// texte va dans le journal et le premier bouton est choisi.
 pub unsafe fn message_box(owner: usize, text: &str, caption: &str, kind: u32) -> i32 {
+    // Un retour chariot seul coupe la ligne comme CR LF (Notepad++ écrit
+    // « \r\r » dans sa boîte « Recharger »).
+    let text = &message_box_lines(text);
     let caption = if caption.is_empty() {
         "Erreur"
     } else {

@@ -214,9 +214,15 @@ fn token_info(class: u32) -> Option<(Vec<u8>, Vec<(usize, usize)>)> {
         1 => one(user, Some(0)), // TokenUser
         4 => one(user, None),    // TokenOwner
         5 => one(sid_bytes(&gid_sid(unsafe { libc::getegid() }))?, None), // TokenPrimaryGroup
-        2 => {
-            // TokenGroups
-            let groups = token_groups();
+        2 | 28 => {
+            // TokenGroups, ou TokenLogonSid (le seul SID de session) : le bac
+            // à sable de Chromium lit ce dernier pour verrouiller la DACL par
+            // défaut des jetons de ses enfants ; une erreur autre que
+            // ERROR_NOT_FOUND y faisait échouer tout lancement (#747).
+            let mut groups = token_groups();
+            if class == 28 {
+                groups.retain(|g| g.1 & SE_GROUP_LOGON_ID != 0);
+            }
             let head = 8 + 16 * groups.len();
             let mut b = vec![0u8; head];
             b[0..4].copy_from_slice(&(groups.len() as u32).to_le_bytes());
@@ -1341,15 +1347,76 @@ pub unsafe extern "win64" fn SetTokenInformation(
     1
 }
 
-pub unsafe extern "win64" fn TokenOk(_token: usize) -> i32 {
-    1
+/// Threads qui empruntent une identité (SetThreadToken, ImpersonateSelf…).
+/// Clé : la poignée de thread reçue, ou `THIS_THREAD | tid` pour le thread
+/// courant. Le jeton lui-même reste l'unique jeton Winlux ; seul compte le
+/// fait que le thread en ait un, ce que vérifie le courtier du bac à sable
+/// de Chromium juste après avoir créé un enfant (#767).
+static IMPERSONATING: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+const THIS_THREAD: usize = 1 << 62;
+const CURRENT_THREAD_PSEUDO: usize = usize::MAX - 1;
+
+fn thread_key(thread: usize) -> usize {
+    if thread == 0 || thread == CURRENT_THREAD_PSEUDO {
+        THIS_THREAD | unsafe { libc::syscall(libc::SYS_gettid) } as usize
+    } else {
+        thread
+    }
+}
+
+fn set_impersonation(thread: usize, on: bool) {
+    let key = thread_key(thread);
+    let mut list = IMPERSONATING.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|&k| k != key);
+    if on {
+        list.push(key);
+    }
+}
+
+/// Le thread désigné (poignée, ou 0 / pseudo-poignée pour le thread
+/// courant) a-t-il reçu un jeton d'emprunt ?
+pub fn thread_has_token(thread: usize) -> bool {
+    let key = thread_key(thread);
+    IMPERSONATING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&key)
+}
+
+/// OpenThreadToken côté advapi32/kernel32 : un jeton seulement si le thread
+/// en a reçu un, sinon ERROR_NO_TOKEN comme sous Windows.
+pub unsafe fn open_thread_token(thread: usize, token: *mut usize) -> i32 {
+    if thread_has_token(thread) {
+        return give_token(token);
+    }
+    if !token.is_null() {
+        *token = 0;
+    }
+    crate::process::set_last_error(1008);
+    0
 }
 
 pub unsafe extern "win64" fn ImpersonateSelf(_level: u32) -> i32 {
+    set_impersonation(0, true);
     1
 }
 
-pub unsafe extern "win64" fn SetThreadToken(_thread: usize, _token: usize) -> i32 {
+pub unsafe extern "win64" fn ImpersonateLoggedOnUser(_token: usize) -> i32 {
+    set_impersonation(0, true);
+    1
+}
+
+pub unsafe extern "win64" fn RevertToSelf() -> i32 {
+    set_impersonation(0, false);
+    1
+}
+
+/// SetThreadToken(PHANDLE thread, HANDLE token) : `thread` NULL désigne le
+/// thread courant ; un jeton NULL met fin à l'emprunt.
+pub unsafe extern "win64" fn SetThreadToken(thread: *const usize, token: usize) -> i32 {
+    let target = if thread.is_null() { 0 } else { *thread };
+    set_impersonation(target, token != 0);
+    crate::process::set_last_error(0);
     1
 }
 
@@ -1537,7 +1604,8 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
         "DuplicateToken" => fn DuplicateToken,
         "CreateRestrictedToken" => fn CreateRestrictedToken,
         "SetTokenInformation" => fn SetTokenInformation,
-        "ImpersonateLoggedOnUser" => fn TokenOk,
+        "ImpersonateLoggedOnUser" => fn ImpersonateLoggedOnUser,
+        "RevertToSelf" => fn RevertToSelf,
         "ImpersonateSelf" => fn ImpersonateSelf,
         "SetThreadToken" => fn SetThreadToken,
         "IsTokenRestricted" => fn IsTokenRestricted,

@@ -665,8 +665,19 @@ pub unsafe extern "win64" fn QueueUserWorkItem(func: usize, context: usize, _fla
 /// sont acceptés sans effet : sous Linux, chaque enfant reste attaché à
 /// son groupe de processus et Winlux le termine avec la session.
 static NEXT_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x4A4F_0000);
+static JOBS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 pub unsafe extern "win64" fn CreateJobObjectW(_sa: usize, _name: *const u16) -> usize {
-    NEXT_JOB.fetch_add(4, Ordering::Relaxed)
+    let job = NEXT_JOB.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::lock(&JOBS).push(job);
+    job
+}
+/// CloseHandle d'un objet Job : doit réussir, Chromium vérifie la fermeture
+/// de chaque poignée (CHECK de ScopedHandle, #767).
+pub(crate) fn close_job(h: usize) -> bool {
+    let mut jobs = crate::dlls::lock(&JOBS);
+    let before = jobs.len();
+    jobs.retain(|&j| j != h);
+    jobs.len() != before
 }
 pub unsafe extern "win64" fn job_ok2(_a: usize, _b: usize) -> i32 {
     1
@@ -1077,13 +1088,15 @@ pub unsafe extern "win64" fn K32EnumProcessModules(
         return 0;
     }
     let list = crate::loader::list_modules();
-    let size = std::mem::size_of::<usize>();
+    // HMODULE de 4 octets pour un programme x86 : une case de 8 octets
+    // donnait au programme la liste « base, 0, base, 0… » (#763, WinSCP).
+    let size = crate::wow32::pointer_size();
     if !needed.is_null() {
         *needed = (list.len() * size) as u32;
     }
     if !modules.is_null() {
         for (i, m) in list.iter().take(cb as usize / size).enumerate() {
-            *modules.add(i) = m.base;
+            crate::wow32::write_ptr(modules as usize + i * size, m.base);
         }
     }
     1

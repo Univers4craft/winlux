@@ -1378,7 +1378,7 @@ entry { background: #171b25; color: #ecedf5; border: 1px solid #48536b; border-r
 button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 8px 14px; box-shadow: none; }
 button:hover { background: #414b64; }
 button.suggested-action { background: #5b52a3; }
-stackswitcher button:checked { background: #423d66; border-color: #8178b7; }
+stackswitcher button:checked { background: #423d66; border-color: #b69cff; }
 """
 
 

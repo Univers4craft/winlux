@@ -369,8 +369,34 @@ pub extern "win64" fn uninit_flat_sb(_hwnd: usize) -> i32 {
     0
 }
 
+/// DllGetVersion : comctl32 6.10 (celle des styles visuels). 7-Zip 23.01 ne
+/// crée sa barre d'adresse (ComboBoxEx dans une ReBar) qu'à partir de la
+/// 4.71 ; sans cette fonction il croyait avoir la version 0 (#755).
+pub unsafe extern "win64" fn dll_get_version(info: *mut u32) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+    if info.is_null() {
+        return E_INVALIDARG;
+    }
+    let size = *info;
+    if size != 20 && size != 32 {
+        return E_INVALIDARG;
+    }
+    let (major, minor, build) = (6u32, 10u32, 19041u32);
+    *info.add(1) = major;
+    *info.add(2) = minor;
+    *info.add(3) = build;
+    *info.add(4) = 2; // DLLVER_PLATFORM_NT
+    if size == 32 {
+        *info.add(5) = 0; // dwFlags
+        let full = ((major as u64) << 48) | ((minor as u64) << 32) | ((build as u64) << 16);
+        std::ptr::write_unaligned(info.add(6) as *mut u64, full);
+    }
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "DllGetVersion" => fn dll_get_version,
         "InitCommonControlsEx" => fn init_common_controls_ex,
         "InitCommonControls" => fn init_common_controls,
         "ImageList_Create" => fn image_list_create,
@@ -403,5 +429,17 @@ pub fn exports() -> crate::dlls::Exports {
         "FlatSB_SetScrollProp" => fn flat_sb_set_scroll_prop,
         "TaskDialog" => fn super::taskdialog::task_dialog,
         "TaskDialogIndirect" => fn super::taskdialog::task_dialog_indirect,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn version_de_comctl32() {
+        let mut v = [20u32, 0, 0, 0, 0];
+        assert_eq!(unsafe { super::dll_get_version(v.as_mut_ptr()) }, 0);
+        assert_eq!(&v[1..], &[6, 10, 19041, 2]);
+        let mut bad = [12u32, 0, 0, 0, 0];
+        assert_ne!(unsafe { super::dll_get_version(bad.as_mut_ptr()) }, 0);
     }
 }

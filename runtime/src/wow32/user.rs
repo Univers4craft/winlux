@@ -146,8 +146,10 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         "SetClassLongA" | "SetClassLongW" => raw(set_class_long, t?, 3),
         "CallWindowProcA" | "CallWindowProcW" => raw(call_window_proc, 0, 5),
         // Messages qui peuvent porter une structure : conversion 32 → 64.
-        "SendMessageA" | "SendMessageW" | "DefWindowProcA" | "DefWindowProcW" | "DefDlgProcA"
-        | "DefDlgProcW" | "SendNotifyMessageA" | "SendNotifyMessageW" | "DefFrameProcA"
+        "SendMessageA" | "SendMessageW" | "SendNotifyMessageA" | "SendNotifyMessageW" => {
+            spec(send_message, t?, 4, TO_WINDOW)
+        }
+        "DefWindowProcA" | "DefWindowProcW" | "DefDlgProcA" | "DefDlgProcW" | "DefFrameProcA"
         | "DefFrameProcW" | "DefMDIChildProcA" | "DefMDIChildProcW" => {
             let (nargs, at) = if func.starts_with("DefFrameProc") {
                 (5, 1)
@@ -409,8 +411,26 @@ fn send_conv(
     lp: u32,
     call: &mut dyn FnMut(usize, isize) -> isize,
 ) -> u32 {
+    send_conv_with(hwnd, msg, wp, lp, true, call)
+}
+
+/// `comctl` faux : la structure d'un contrôle commun reste en x86 (la
+/// procédure qui la reçoit est du code x86).
+fn send_conv_with(
+    hwnd: usize,
+    msg: u32,
+    wp: u32,
+    lp: u32,
+    comctl: bool,
+    call: &mut dyn FnMut(usize, isize) -> isize,
+) -> u32 {
     // Contrôles communs (LVITEM, TVINSERTSTRUCT, TBBUTTON…) : comctl.rs.
-    if let Some(c) = super::comctl::convert_message(hwnd, msg, wp, lp) {
+    let converted = if comctl {
+        super::comctl::convert_message(hwnd, msg, wp, lp)
+    } else {
+        None
+    };
+    if let Some(c) = converted {
         let r = call(c.wparam, c.lparam);
         return match c.done {
             Some(done) => done(r),
@@ -817,18 +837,37 @@ extern "win64" fn call_window_proc(args: u32, _aux: usize) -> u64 {
     }
 }
 
+/// `Spec.at` de SendMessage : le message va à la procédure de la fenêtre,
+/// qui peut être du code x86 (sous-classement).
+const TO_WINDOW: u32 = 0x100;
+
+/// Fenêtre dont la procédure est du code x86 : un contrôle du runtime
+/// sous-classé par le programme (SetWindowLong GWL_WNDPROC). Elle doit
+/// recevoir les structures des contrôles communs en disposition x86 ; elle
+/// les passe ensuite à la procédure d'origine par CallWindowProc, qui
+/// convertit (#762 : 7zFM, liste et barre d'adresse sans texte, les
+/// structures étaient converties deux fois).
+fn x86_window(hwnd: usize) -> bool {
+    let proc_ = get_ptr(hwnd, GWL_WNDPROC);
+    proc_ != 0 && with_procs(|p| p.from64.contains_key(&proc_))
+}
+
 /// SendMessage, DefWindowProc… : hwnd au rang `s.at`, puis message,
 /// wParam, lParam.
 extern "win64" fn send_message(args: u32, s: usize) -> u64 {
     let s = unsafe { &*(s as *const Spec) };
     let mut slots: Vec<u64> = (0..s.nargs).map(|i| ext(arg(args, i)) as u64).collect();
-    let at = s.at;
+    let to_window = s.at & TO_WINDOW != 0;
+    let at = s.at & !TO_WINDOW;
     let msg = arg(args, at + 1);
-    send_conv(
-        ext(arg(args, at)),
+    let hwnd = ext(arg(args, at));
+    let comctl = !(to_window && x86_window(hwnd));
+    send_conv_with(
+        hwnd,
         msg,
         arg(args, at + 2),
         arg(args, at + 3),
+        comctl,
         &mut |wp, lp| {
             slots[at as usize + 2] = wp as u64;
             slots[at as usize + 3] = lp as u64;
@@ -840,12 +879,20 @@ extern "win64" fn send_message(args: u32, s: usize) -> u64 {
 extern "win64" fn send_dlg_item_message(args: u32, target: usize) -> u64 {
     let (dlg, id, msg) = (ext(arg(args, 0)), arg(args, 1), arg(args, 2));
     let item = crate::dlls::user32::get_dlg_item(dlg, id as i32);
-    send_conv(item, msg, arg(args, 3), arg(args, 4), &mut |wp, lp| {
-        call64(
-            target,
-            &[dlg as u64, id as u64, msg as u64, wp as u64, lp as u64],
-        ) as isize
-    }) as u64
+    let comctl = !x86_window(item);
+    send_conv_with(
+        item,
+        msg,
+        arg(args, 3),
+        arg(args, 4),
+        comctl,
+        &mut |wp, lp| {
+            call64(
+                target,
+                &[dlg as u64, id as u64, msg as u64, wp as u64, lp as u64],
+            ) as isize
+        },
+    ) as u64
 }
 
 /// SendMessageTimeout : le résultat (DWORD_PTR) est écrit sur 8 octets en x64.
@@ -854,21 +901,29 @@ extern "win64" fn send_message_timeout(args: u32, target: usize) -> u64 {
     let (flags, timeout, out) = (arg(args, 4), arg(args, 5), arg(args, 6));
     let mut result = 0u64;
     let mut ok = 0u64;
-    send_conv(hwnd, msg, arg(args, 2), arg(args, 3), &mut |wp, lp| {
-        ok = call64(
-            target,
-            &[
-                hwnd as u64,
-                msg as u64,
-                wp as u64,
-                lp as u64,
-                flags as u64,
-                timeout as u64,
-                &mut result as *mut u64 as u64,
-            ],
-        );
-        result as isize
-    });
+    let comctl = !x86_window(hwnd);
+    send_conv_with(
+        hwnd,
+        msg,
+        arg(args, 2),
+        arg(args, 3),
+        comctl,
+        &mut |wp, lp| {
+            ok = call64(
+                target,
+                &[
+                    hwnd as u64,
+                    msg as u64,
+                    wp as u64,
+                    lp as u64,
+                    flags as u64,
+                    timeout as u64,
+                    &mut result as *mut u64 as u64,
+                ],
+            );
+            result as isize
+        },
+    );
     if out != 0 {
         wr(out, result as u32);
     }

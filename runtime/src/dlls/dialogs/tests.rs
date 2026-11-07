@@ -192,6 +192,27 @@ fn navigation_tab_et_echap_dans_une_boite_non_modale() {
 }
 
 #[test]
+fn champ_desactive_dans_wm_initdialog_ne_prend_pas_le_focus() {
+    // #704 : Notepad++ désactive l'heure de compilation (premier WS_TABSTOP)
+    // dans WM_INITDIALOG ; le focus doit aller au bouton suivant.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe extern "win64" fn proc_(hwnd: usize, msg: u32, _wp: usize, _lp: isize) -> isize {
+        if msg == WM_INITDIALOG {
+            user32::enable_window(user32::get_dlg_item(hwnd, 100), 0);
+            return 1;
+        }
+        0
+    }
+    let data = template(false);
+    let dlg = unsafe {
+        create_dialog_indirect_param_w(0, data.as_ptr(), 0, proc_ as *const () as usize, 0)
+    };
+    assert_ne!(dlg, 0);
+    assert_eq!(gui::focused_window(), user32::get_dlg_item(dlg, 1));
+    gui::destroy_window(dlg);
+}
+
+#[test]
 fn boite_de_message_sans_affichage_et_boutons() {
     assert_eq!(
         message_box_buttons(4)
@@ -213,4 +234,12 @@ fn boite_de_message_sans_affichage_et_boutons() {
     assert_eq!(parsed.items[2].id, 2);
     assert_eq!(mnemonic("&Ouvrir"), Some('o'));
     assert_eq!(mnemonic("A && B"), None);
+}
+
+#[test]
+fn retour_chariot_seul_coupe_la_ligne_d_une_boite_de_message() {
+    assert_eq!(
+        message_box_lines("\"a.txt\"\r\rModifié.\r\nRecharger ?"),
+        "\"a.txt\"\n\nModifié.\nRecharger ?"
+    );
 }

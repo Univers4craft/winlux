@@ -354,6 +354,10 @@ struct XftRenderer {
     visual: *mut Visual,
     colormap: c_ulong,
     fonts: HashMap<FontSpec, *mut XftFont>,
+    /// Polices de repli ouvertes pour une police demandée : les caractères
+    /// qu'elle n'a pas (chinois, japonais…) y sont cherchés, comme la
+    /// liaison de polices de GDI.
+    fallbacks: HashMap<FontSpec, Vec<*mut XftFont>>,
     cairo: Option<Cairo>,
 }
 
@@ -380,8 +384,77 @@ impl XftRenderer {
             visual,
             colormap,
             fonts: HashMap::new(),
+            fallbacks: HashMap::new(),
             cairo: Cairo::load(),
         })
+    }
+
+    const RENDER: &'static str =
+        ":antialias=true:hinting=true:hintstyle=hintfull:rgba=none:lcdfilter=lcdnone";
+
+    /// Police de repli qui a le caractère `c`, à la taille de `spec` :
+    /// d'abord parmi celles déjà ouvertes, sinon fontconfig en choisit une
+    /// par « charset ». None si aucune ne l'a.
+    fn fallback(&mut self, spec: &FontSpec, c: char) -> Option<*mut XftFont> {
+        let exists = self.api.char_exists?;
+        let has = |f: *mut XftFont| unsafe { exists(self.display, f, c as u32) != 0 };
+        if let Some(f) = self
+            .fallbacks
+            .get(spec)
+            .and_then(|l| l.iter().copied().find(|&f| has(f)))
+        {
+            return Some(f);
+        }
+        let size = spec.height.saturating_abs().max(9);
+        let weight = if spec.weight >= 600 {
+            "bold"
+        } else {
+            "regular"
+        };
+        let pattern = CString::new(format!(
+            ":charset={:x}:pixelsize={size}:weight={weight}{}",
+            c as u32,
+            Self::RENDER
+        ))
+        .ok()?;
+        let font =
+            unsafe { (self.api.font_open_name)(self.display, self.screen, pattern.as_ptr()) };
+        if font.is_null() {
+            return None;
+        }
+        if !has(font) {
+            unsafe { (self.api.font_close)(self.display, font) };
+            return None;
+        }
+        self.fallbacks.entry(spec.clone()).or_default().push(font);
+        Some(font)
+    }
+
+    /// Découpe le texte en morceaux, chacun avec la police qui a ses
+    /// caractères : la police demandée, ou une police de repli.
+    fn runs(&mut self, spec: &FontSpec, text: &[u8]) -> Option<Vec<(*mut XftFont, Vec<u8>)>> {
+        let font = self.font(spec)?;
+        let text = self.substitute(font, text).into_owned();
+        let (Some(exists), Ok(s)) = (self.api.char_exists, std::str::from_utf8(&text)) else {
+            return Some(vec![(font, text)]);
+        };
+        let s = s.to_string();
+        let mut out: Vec<(*mut XftFont, Vec<u8>)> = Vec::new();
+        for c in s.chars() {
+            let own = c.is_ascii() || unsafe { exists(self.display, font, c as u32) != 0 };
+            let f = if own {
+                font
+            } else {
+                self.fallback(spec, c).unwrap_or(font)
+            };
+            let mut buf = [0u8; 4];
+            let bytes = c.encode_utf8(&mut buf).as_bytes();
+            match out.last_mut() {
+                Some((last, run)) if *last == f => run.extend_from_slice(bytes),
+                _ => out.push((f, bytes.to_vec())),
+            }
+        }
+        Some(out)
     }
 
     fn font(&mut self, spec: &FontSpec) -> Option<*mut XftFont> {
@@ -401,7 +474,8 @@ impl XftRenderer {
         };
         let slant = if spec.italic { "italic" } else { "roman" };
         let pattern = CString::new(format!(
-            "{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true:hintstyle=hintfull:rgba=none:lcdfilter=lcdnone"
+            "{family}:pixelsize={size}:weight={weight}:slant={slant}{}",
+            Self::RENDER
         ))
         .ok()?;
         let font =
@@ -444,9 +518,7 @@ impl XftRenderer {
         out.into_bytes().into()
     }
 
-    fn measure(&mut self, spec: &FontSpec, text: &[u8]) -> Option<(i32, i32, i32)> {
-        let font = self.font(spec)?;
-        let text = &*self.substitute(font, text);
+    fn advance(&self, font: *mut XftFont, text: &[u8]) -> (i32, i32) {
         let mut extents = XGlyphInfo::default();
         unsafe {
             (self.api.text_extents)(
@@ -456,12 +528,21 @@ impl XftRenderer {
                 text.len() as c_int,
                 &mut extents,
             );
-            Some((
-                extents.x_off.max(extents.width as i16) as i32,
-                (*font).height.max(1),
-                (*font).ascent.max(1),
-            ))
         }
+        (extents.x_off as i32, extents.width as i32)
+    }
+
+    fn measure(&mut self, spec: &FontSpec, text: &[u8]) -> Option<(i32, i32, i32)> {
+        let font = self.font(spec)?;
+        let runs = self.runs(spec, text)?;
+        let mut width = 0;
+        let mut ink = 0;
+        for (f, run) in &runs {
+            let (adv, w) = self.advance(*f, run);
+            ink = ink.max(width + w);
+            width += adv;
+        }
+        unsafe { Some((width.max(ink), (*font).height.max(1), (*font).ascent.max(1))) }
     }
 
     fn draw(
@@ -473,10 +554,9 @@ impl XftRenderer {
         text: &[u8],
         colorref: u32,
     ) -> bool {
-        let Some(font) = self.font(spec) else {
+        let Some(runs) = self.runs(spec, text) else {
             return false;
         };
-        let text = &*self.substitute(font, text);
         let render = XRenderColor {
             red: ((colorref & 0xFF) as u16) * 257,
             green: (((colorref >> 8) & 0xFF) as u16) * 257,
@@ -505,15 +585,19 @@ impl XftRenderer {
                 (self.api.draw_destroy)(draw);
                 return false;
             }
-            (self.api.draw_string)(
-                draw,
-                &color,
-                font,
-                x,
-                baseline,
-                text.as_ptr(),
-                text.len() as c_int,
-            );
+            let mut pen = x;
+            for (font, run) in &runs {
+                (self.api.draw_string)(
+                    draw,
+                    &color,
+                    *font,
+                    pen,
+                    baseline,
+                    run.as_ptr(),
+                    run.len() as c_int,
+                );
+                pen += self.advance(*font, run).0;
+            }
             (self.api.color_free)(self.display, self.visual, self.colormap, &mut color);
             (self.api.draw_destroy)(draw);
         }
@@ -539,6 +623,11 @@ impl Drop for XftRenderer {
             }
             for (_, font) in self.fonts.drain() {
                 (self.api.font_close)(self.display, font);
+            }
+            for (_, list) in self.fallbacks.drain() {
+                for font in list {
+                    (self.api.font_close)(self.display, font);
+                }
             }
             (self.api.close_display)(self.display);
             drop(cairo);
@@ -841,6 +930,28 @@ pub struct X11Backend {
 }
 
 impl X11Backend {
+    /// WM_NORMAL_HINTS d'une fenêtre de premier niveau : position et taille
+    /// voulues par le programme (USPosition | USSize | PPosition | PSize |
+    /// PWinGravity). NorthWestGravity : la position est celle du cadre, barre
+    /// de titre comprise, comme le rectangle d'une fenêtre Windows ; une
+    /// fenêtre demandée en (0,0) garde ainsi sa barre de titre à l'écran.
+    fn position_hints(&self, target: u32, x: i32, y: i32, width: u16, height: u16) {
+        let mut hints = [0u32; 18];
+        hints[0] = 1 | 2 | 4 | 8 | 0x200;
+        hints[1] = x as u32;
+        hints[2] = y as u32;
+        hints[3] = width as u32;
+        hints[4] = height as u32;
+        hints[17] = 1;
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            target,
+            AtomEnum::WM_NORMAL_HINTS,
+            AtomEnum::WM_SIZE_HINTS,
+            &hints,
+        );
+    }
+
     /// Ouvre la connexion X et prépare les atomes; `None` si pas de serveur.
     pub fn connect() -> Option<Self> {
         let (conn, screen) = x11rb::connect(None).ok()?;
@@ -1379,9 +1490,22 @@ impl X11Backend {
 
     /// Dessine un fond clair avec un dégradé discret, proche des surfaces
     /// d'application de Windows 11. Le contenu GDI invité est posé ensuite.
-    fn paint_theme(&self, w: &XWin) {
+    fn paint_theme(&self, hwnd: usize, w: &XWin) {
         self.before_x11();
-        for &(y, band_h, pixel) in self.theme_bands(w.height).iter() {
+        // Un contrôle enfant est une fenêtre X opaque : il prend le fond uni
+        // de son parent (boîte de dialogue effacée avec COLOR_BTNFACE), sinon
+        // un contrôle transparent montrait un morceau du dégradé du thème,
+        // plus foncé que la boîte autour (« À propos » de Notepad++, #745).
+        let solid = if w.child {
+            crate::dlls::gui::parent_backdrop_color(hwnd).map(|c| self.alloc_color(c))
+        } else {
+            None
+        };
+        let bands = match solid {
+            Some(pixel) => std::sync::Arc::new(vec![(0i16, w.height.max(1), pixel)]),
+            None => self.theme_bands(w.height),
+        };
+        for &(y, band_h, pixel) in bands.iter() {
             let _ = self
                 .conn
                 .change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
@@ -2242,7 +2366,7 @@ impl X11Backend {
                 } else if e.count == 0 {
                     // count > 0 : d'autres Expose suivent, on attend le dernier.
                     if let Some(w) = self.windows.get(&hwnd).copied() {
-                        self.paint_theme(&w);
+                        self.paint_theme(hwnd, &w);
                         let content = self.content.get(&hwnd).cloned().unwrap_or_default();
                         self.paint_cmds(&w, &content);
                         let _ = self.conn.flush();
@@ -3911,6 +4035,10 @@ impl gui::GuiBackend for X11Backend {
         let _ = self
             .conn
             .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+        // Position voulue dès la création : une boîte de message n'est
+        // jamais déplacée ensuite, et openbox la plaçait sinon à sa guise
+        // (« Recharger » de Notepad++ en bas à gauche, #744).
+        self.position_hints(win, x as i32, y as i32, w, h);
 
         let _ = self.conn.flush();
         self.windows.insert(
@@ -4019,13 +4147,13 @@ impl gui::GuiBackend for X11Backend {
                 window: pixmap,
                 ..w
             };
-            self.paint_theme(&target);
+            self.paint_theme(hwnd, &target);
             self.paint_cmds(&target, cmds);
             self.overlay.frame(hwnd);
             self.paint_overlay(&target, hwnd);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
         } else {
-            self.paint_theme(&w);
+            self.paint_theme(hwnd, &w);
             self.paint_cmds(&w, cmds);
             self.overlay.frame(hwnd);
             self.paint_overlay(&w, hwnd);
@@ -4174,25 +4302,10 @@ impl gui::GuiBackend for X11Backend {
             None => return,
         };
         if !child {
-            // Position voulue par le programme (WM_NORMAL_HINTS, USPosition |
-            // USSize | PPosition | PSize | PWinGravity, StaticGravity comme
-            // nos coordonnées, qui sont celles de la zone X) : sans
+            // Position voulue par le programme (WM_NORMAL_HINTS) : sans
             // elle, openbox place la fenêtre à sa guise au moment de
             // l'afficher (« À propos » de Notepad++ en bas à gauche, #706).
-            let mut hints = [0u32; 18];
-            hints[0] = 1 | 2 | 4 | 8 | 0x200;
-            hints[1] = x as u32;
-            hints[2] = y as u32;
-            hints[3] = width as u32;
-            hints[4] = height as u32;
-            hints[17] = 10;
-            let _ = self.conn.change_property32(
-                x11rb::protocol::xproto::PropMode::REPLACE,
-                if frame != 0 { frame } else { window },
-                AtomEnum::WM_NORMAL_HINTS,
-                AtomEnum::WM_SIZE_HINTS,
-                &hints,
-            );
+            self.position_hints(if frame != 0 { frame } else { window }, x, y, width, height);
         }
         let aux = ConfigureWindowAux::new()
             .x(x)

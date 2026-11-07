@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Réglages rapides
+Name[en]=Quick settings
+Name[de]=Schnelleinstellungen
+Name[es]=Configuración rápida
 Exec=/usr/bin/winlux-system-tools quick
 Icon=preferences-system
 Categories=Settings;

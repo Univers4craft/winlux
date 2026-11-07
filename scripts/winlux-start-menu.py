@@ -93,6 +93,7 @@ _TR = {
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Système Linux': ('Linux system', 'Sistema Linux', 'Linux-System'),
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
     'Clavier et souris': ('Keyboard and mouse', 'Teclado y ratón', 'Tastatur und Maus'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
@@ -222,7 +223,8 @@ DEFAULTS = ["winlux-explorer.desktop", "winlux-browser.desktop", "winlux-store.d
 # fondues dans 16, 4 et 21.
 SETTINGS_INDEX = [
     (0, "Système Linux", "systeme linux noyau kernel services system sistema núcleo Kernel Dienste"),
-    (1, "Applications installées", "applications apps installees programmes desinstaller demarrage boutiques logiciels installed uninstall startup stores software aplicaciones desinstalar inicio tiendas installierte deinstallieren Autostart"),
+    (39, "Applications installées", "applications installees logiciels installes programmes desinstaller supprimer taille liste installed apps programs uninstall remove size aplicaciones instaladas programas desinstalar installierte Apps Programme deinstallieren entfernen"),
+    (1, "Gérer les applications", "applications apps gerer demarrage boutiques logiciels par defaut installer manage startup stores software aplicaciones administrar inicio tiendas verwalten Autostart"),
     (2, "Réseau", "reseau ethernet cable proxy vpn ip dns internet network red Netzwerk Kabel"),
     (4, "Clavier et souris", "clavier souris azerty qwerty disposition pave tactile touchpad pointeur keyboard mouse layout teclado raton Tastatur Maus Layout"),
     (7, "Mise à jour OS", "mise a jour os mises a jour winlux systeme exploitation os update operating system actualizacion del so sistema operativo Betriebssystem OS-Update update updates actualizaciones actualizar Aktualisierung Updates"),
@@ -285,8 +287,11 @@ def category(app):
 
 # Services de la session, et Thunar : l'Explorateur Winlux le remplace (« par »
 # proposait « Gestionnaire de fichiers Thunar » juste après Paramètres).
+# « Gestionnaire de fichiers » d'exo (xfce4-file-manager) ouvrait lui aussi
+# l'Explorateur : doublon retiré (#721), même si APT le réinstalle.
 SESSION_SERVICES = {"picom.desktop", "thunar.desktop", "org.xfce.thunar.desktop", "Thunar.desktop",
-                    "Thunar-folder-handler.desktop", "thunar-folder-handler.desktop"}
+                    "Thunar-folder-handler.desktop", "thunar-folder-handler.desktop",
+                    "xfce4-file-manager.desktop"}
 
 # Couleurs du menu Démarrer : texte/fond au moins 4,5:1 (WCAG AA) dans les deux
 # thèmes, vérifié par scripts/test-shell-contrast.py.
