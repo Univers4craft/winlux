@@ -32,6 +32,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import socket
 import struct
 import subprocess
@@ -219,9 +220,17 @@ def run(cmd, timeout=60, env=None):
 
 def atomic_write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # Nom imprévisible (#644) : /run/winlux est collant et ouvert à tous.
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
 
 def field(value, limit=400):
     """Valeur sûre pour une ligne « clé=a|b|c » relue par le shell."""

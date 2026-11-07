@@ -397,10 +397,17 @@ def apply_floor():
 def write_time_state(state):
     try:
         RUN.mkdir(parents=True, exist_ok=True)
-        temporary = TIME_STATE.with_name(TIME_STATE.name + ".new")
-        temporary.write_text(json.dumps(state))
-        os.chmod(temporary, 0o644)
-        temporary.replace(TIME_STATE)
+        # Nom imprévisible (#644) : « time-sync.json.new » créé d'avance par
+        # un compte dans /run/winlux bloquait l'état de l'horloge.
+        fd, temporary = tempfile.mkstemp(prefix=".time-sync.", dir=TIME_STATE.parent)
+        try:
+            with os.fdopen(fd, "w") as out:
+                out.write(json.dumps(state))
+            os.chmod(temporary, 0o644)
+            os.replace(temporary, TIME_STATE)
+        except OSError:
+            os.unlink(temporary)
+            raise
     except OSError:
         pass
 

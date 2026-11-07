@@ -336,7 +336,10 @@ windows_path() {
 
 status() {
     serial=$(( $(cat "$run/shares.serial" 2>/dev/null || echo 0) + 1 ))
-    printf '%s\n' "$serial" > "$run/shares.serial"
+    serial_tmp=$(mktemp "$run/shares.serial.XXXXXX") || return 1
+    printf '%s\n' "$serial" > "$serial_tmp" && chmod 644 "$serial_tmp" && mv "$serial_tmp" "$run/shares.serial"
+    # Nom imprévisible (#644) : pas de fichier créé d'avance par un compte dans /run/winlux.
+    status_tmp=$(mktemp "$out.XXXXXX") || return 1
     {
         if available; then printf 'available=1\n'; else printf 'available=0\n'; fi
         if enabled; then printf 'enabled=1\n'; else printf 'enabled=0\n'; fi
@@ -358,9 +361,9 @@ status() {
         done
         if test -r "$run/share-error"; then printf 'error=%s\n' "$(head -n 1 "$run/share-error")"; fi
         printf 'serial=%s\n' "$serial"
-    } > "$out.tmp.$$"
-    chmod 644 "$out.tmp.$$"
-    mv "$out.tmp.$$" "$out"
+    } > "$status_tmp"
+    chmod 644 "$status_tmp"
+    mv "$status_tmp" "$out"
     rm -f "$run/share-error"
 }
 

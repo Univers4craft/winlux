@@ -980,10 +980,17 @@ if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
     /bin/busybox poweroff -f
     while :; do /bin/busybox sleep 2; done
 fi
+# Mode jeu en cours : seulement le drapeau posé par le démon root. Un
+# gamemode.active créé par un compte (dossier collant) suspendait mises à
+# jour et historique des fichiers pour tout le monde (#643).
+gamemode_active() {
+    test -f /run/winlux/gamemode.active && test ! -L /run/winlux/gamemode.active &&
+        test "$(/bin/busybox stat -c %u /run/winlux/gamemode.active 2>/dev/null)" = 0
+}
 (
     while :; do
         # Pas de mise à jour automatique pendant une partie (mode jeu).
-        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
+        while gamemode_active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
         /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
@@ -992,7 +999,7 @@ fi
 (
     # Historique des fichiers : chaque utilisateur selon sa fréquence.
     while :; do
-        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
+        while gamemode_active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
         /bin/busybox sleep 60
     done

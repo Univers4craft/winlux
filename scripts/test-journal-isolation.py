@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Journal et état Winlux isolés entre comptes (#633).
+"""Journal et état Winlux isolés entre comptes (#633, #643, #644).
 
 Avant : /run/winlux/journal en 1777 avec winlux.log et crash.log en 0666,
 crash-offer, crash-bsod et report-offered communs à tous les comptes,
@@ -80,6 +80,48 @@ with tempfile.TemporaryDirectory() as tmp:
                           str(run / "session-logs")], capture_output=True, text=True)
     ok(out.returncode == 0 and not (run / "session-logs").is_symlink() and (run / "session-logs").is_dir(),
        f"winlux-sessions : un lien posé à la place du dossier est remplacé ({out.stderr})")
+
+# ── #643 : drapeaux qui suspendent mises à jour et sauvegardes ───────────
+ok("while gamemode_active;" in init and "while test -e /run/winlux/gamemode.active" not in init
+   and 'stat -c %u /run/winlux/gamemode.active' in init,
+   "init : gamemode.active n'est cru que s'il est à root")
+update = text("scripts/winlux-update.sh")
+ok("trusted \"$target_root/run/winlux/update-inhibit\"" in update
+   and 'stat -c %u /run/winlux/update-inhibit' in update,
+   "winlux-update --busy : update-inhibit d'un autre compte ignoré")
+apt = text("scripts/winlux-update-apt.py")
+ok('read(RUN / "update-inhibit") if root_file(RUN / "update-inhibit")' in apt,
+   "winlux-update-apt : update-inhibit d'un autre compte ignoré")
+ok("fs::remove_file(root.join(ACTIVE_FLAG));\n    let _ = fs::write(root.join(ACTIVE_FLAG)" in text("runtime/src/gamemode.rs"),
+   "mode jeu : le drapeau de root remplace celui d'un compte")
+with tempfile.TemporaryDirectory() as tmp:
+    module = runpy.run_path(str(ROOT / "scripts/winlux-update-apt.py"), run_name="winlux_update_apt")
+    flag = Path(tmp) / "update-inhibit"
+    ok(not module["root_file"](flag), "winlux-update-apt : drapeau absent")
+    flag.write_text("1\n")
+    ok(module["root_file"](flag), "winlux-update-apt : drapeau de ce compte cru")
+    link = Path(tmp) / "lien"
+    link.symlink_to(flag)
+    ok(module["root_file"](link) == (os.geteuid() == 0), "winlux-update-apt : lien jugé sur lui-même")
+    module["RUN"] = Path(tmp)
+    module["publish_run"].__globals__["RUN"] = Path(tmp)
+    (Path(tmp) / "update-progress.new").write_text("piège\n")
+    module["publish_run"](Path(tmp) / "update-progress", "phase=x\n")
+    ok((Path(tmp) / "update-progress").read_text() == "phase=x\n"
+       and stat.S_IMODE((Path(tmp) / "update-progress").stat().st_mode) == 0o644,
+       "winlux-update-apt : progression publiée par un temporaire imprévisible, 0644")
+
+# ── #644 : plus de temporaire à nom prévisible écrit par root dans /run/winlux
+predictable = re.compile(r'"\$(?:run|out)/[A-Za-z0-9_.-]*\.(?:tmp\.)?\$\$"|"\$out\.tmp\.\$\$"|'
+                         r'"\$run/[a-z-]+\.txt\.tmp\.\$\$"|run/winlux/update-progress\.new')
+for name in ("winlux-control.sh", "winlux-bluetooth.sh", "winlux-fonts.sh", "winlux-remote-config.sh",
+             "winlux-share.sh", "winlux-update.sh", "winlux-sessions.sh"):
+    body = text(f"scripts/{name}")
+    hit = predictable.search(body)
+    ok(hit is None, f"{name} : temporaire à nom prévisible dans /run/winlux ({hit and hit.group(0)})")
+ok('destination.with_suffix(".new")' not in apt, "winlux-update-apt : plus de update-progress.new")
+ok('TIME_STATE.name + ".new"' not in text("scripts/winlux-certificates.py"), "heure : plus de time-sync.json.new")
+ok('path.with_name(f"{path.name}.{os.getpid()}")' not in text("scripts/winlux-store.py"), "boutique : plus de temporaire au PID")
 
 # ── Lecteurs : même dossier par défaut que le runtime ────────────────────
 env = {k: v for k, v in os.environ.items() if k != "WINLUX_JOURNAL_DIR"}
