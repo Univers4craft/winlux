@@ -354,6 +354,8 @@ _TR = {
     "Les programmes Windows (.exe) utilisent ces appareils directement.": ("Windows programs (.exe) use these devices directly.", "Los programas de Windows (.exe) usan estos dispositivos directamente.", "Windows-Programme (.exe) verwenden diese Geräte direkt."),
     # Personnalisation du bureau
     "Arrière-plan": ("Background", "Fondo", "Hintergrund"),
+    "Winlux Aurore": ("Winlux Aurora", "Winlux Aurora", "Winlux Polarlicht"),
+    "Winlux Aurore claire": ("Winlux Aurora light", "Winlux Aurora clara", "Winlux Polarlicht hell"),
     "Winlux Nuit": ("Winlux Night", "Winlux Noche", "Winlux Nacht"),
     "Winlux Aube": ("Winlux Dawn", "Winlux Amanecer", "Winlux Morgenröte"),
     "Classique": ("Classic", "Clásico", "Klassisch"),
@@ -438,7 +440,7 @@ _TR = {
     "Tout installer": ("Install all", "Instalar todo", "Alle installieren"),
     "Recherche ou installation en cours…": ("Checking or installing…", "Buscando o instalando…", "Suche oder Installation läuft…"),
     "Journal": ("Log", "Registro", "Protokoll"),
-    "Les mises à jour de Winlux lui-même sont dans « Mises à jour ».": ("Updates to Winlux itself are under “Updates”.", "Las actualizaciones del propio Winlux están en «Actualizaciones».", "Updates von Winlux selbst finden Sie unter „Updates“."),
+    "Les mises à jour de Winlux lui-même sont dans « Mise à jour OS ».": ("Updates to Winlux itself are under “OS update”.", "Las actualizaciones del propio Winlux están en «Actualización del SO».", "Updates von Winlux selbst finden Sie unter „OS-Update“."),
     # Son avancé
     "Sortie": ("Output", "Salida", "Ausgabe"),
     "Matériel et pilotes": ("Hardware and drivers", "Hardware y controladores", "Hardware und Treiber"),
@@ -1233,12 +1235,38 @@ def pe_pixbuf(module, exe, size=32):
         return None
 
 
+def screen_height():
+    """Plus grande hauteur d'écran en pixels réels, 1080 si inconnue."""
+    try:
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk
+        display = Gdk.Display.get_default()
+        heights = [display.get_monitor(i).get_geometry().height * display.get_monitor(i).get_scale_factor()
+                   for i in range(display.get_n_monitors())]
+        return max(heights) if heights else 1080
+    except Exception:
+        return 1080
+
+
+def wallpaper_variant(path, height=None):
+    """Fond « Aurore » (#596) : définition 1440p ou 4K quand l'écran la vaut
+    et qu'elle est installée, sinon le 1080p au nom court."""
+    height = screen_height() if height is None else height
+    for minimum, suffix in ((1800, "-3840x2160"), (1260, "-2560x1440")):
+        candidate = path.with_name(path.stem + suffix + path.suffix)
+        if height >= minimum and candidate.is_file():
+            return candidate
+    return path
+
+
 def wallpapers():
     found = []
-    for name, title in (("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
+    for name, title in (("wallpapers/winlux-prisme-aurore.png", "Winlux Aurore"),
+                        ("wallpapers/winlux-prisme-aurore-clair.png", "Winlux Aurore claire"),
+                        ("wallpapers/winlux-prisme-nuit.png", "Winlux Nuit"),
                         ("wallpapers/winlux-prisme-aube.png", "Winlux Aube"), ("wallpaper.bmp", "Classique")):
         path = WALLPAPERS / name
-        if path.is_file(): found.append((path, title))
+        if path.is_file(): found.append((wallpaper_variant(path), title))
     return found
 
 
@@ -2035,11 +2063,11 @@ class ExtraPages:
         if verb == "remove" and not self.confirm(_t("Supprimer le lecteur {letter}: ?").format(letter=letter)): return
         self.tool(drives_tool() + [verb, letter])
 
-    # ── Mises à jour système (APT) ──
+    # ── Mise à jour application (APT, page 17) ──
 
     def page_sysupdate(self):
         status = self.status
-        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mises à jour »."))
+        self.hint(_t("Les mises à jour de Winlux lui-même sont dans « Mise à jour OS »."))
         self.section(_t("Logiciels et pilotes Linux"))
         box = self.card()
         busy = status.get("sysupdate_busy") == "1"

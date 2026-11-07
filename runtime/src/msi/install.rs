@@ -30,6 +30,9 @@ pub struct Logger {
 
 impl Logger {
     pub fn log(&mut self, msg: &str) {
+        // Aussi dans la trace (WINLUX_TRACE) : une installation silencieuse
+        // (/quiet) n'affiche rien et doit pouvoir se relire.
+        crate::log_info!("installeur", "{msg}");
         if !self.quiet {
             println!("{msg}");
         }

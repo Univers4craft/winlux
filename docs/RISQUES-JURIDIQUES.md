@@ -318,9 +318,10 @@ code Microsoft entrait dans le dépôt.
 - **Fonds d'écran** : `assets/wallpapers`, propres au projet.
 - **Sons** : les 11 sons de `assets/sounds` sont propres (son de
   démarrage « Prisme ») ; aucun son de Windows.
-- **Icônes** : thème d'icônes « Winlux » généré par
-  `integration/native/icons` (script `render-icons.py`), qui hérite
-  d'Adwaita (GNOME). Les icônes du shell PE sont dessinées par le code.
+- **Icônes** : jeu « Prisme » (thèmes `Winlux` et `Winlux-Sombre` de
+  `integration/native/icons`, scripts `generer-icones.py` et
+  `render-icons.py`), dessiné de zéro sans pack tiers, qui hérite
+  d'Adwaita (GNOME) pour le reste. Les icônes du shell PE sont dessinées par le code.
   Je n'ai pas comparé chaque icône pixel par pixel aux icônes Fluent de
   Microsoft : à vérifier visuellement pour l'Explorateur et les
   Paramètres.

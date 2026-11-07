@@ -11,7 +11,7 @@ The first time you sign in, the **Welcome to Winlux** window opens on the deskto
 - **Choose the keyboard**: opens Settings › Keyboard & mouse.
 - **Set up the network**: opens quick settings, for Wi-Fi.
 - **Personalize the appearance**: opens Settings › Background & colors.
-- **Discover recovery**: opens Settings › Updates, where you can restore the previous version and find what to do if the desktop no longer starts.
+- **Discover recovery**: opens Settings › Updates › OS update, where you can restore the previous version and find what to do if the desktop no longer starts.
 
 ![The Welcome window](img:assistant-bienvenue.jpg "The Welcome window: five shortcuts to the guided tour and the first settings.")
 

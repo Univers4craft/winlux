@@ -416,11 +416,15 @@ fn debug_string(text: String) {
     if text.is_empty() {
         return;
     }
+    let line = format!("winlux[debug]: {text}");
     if std::env::var_os("WINLUX_TRACE").is_some() {
-        eprintln!("winlux[debug]: {text}");
+        eprintln!("{line}");
     } else {
         crate::log_info!("debug", "OutputDebugString : {text}");
     }
+    // Journal d'API (WINLUX_APITRACE) : Crashpad y écrit pourquoi il arrête
+    // un processus.
+    crate::thunks::api_note(&line);
     let mut tail = crate::dlls::lock(&DEBUG_TAIL);
     if tail.len() == DEBUG_TAIL_LEN {
         tail.pop_front();
@@ -1112,6 +1116,17 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texte_de_debogage_accepte() {
+        unsafe {
+            output_debug_string_a(std::ptr::null());
+            output_debug_string_w(std::ptr::null());
+            output_debug_string_a(b"crashpad: dump ok\n\0".as_ptr());
+            let w: Vec<u16> = "Claude\n".encode_utf16().chain(Some(0)).collect();
+            output_debug_string_w(w.as_ptr());
+        }
+    }
 
     #[test]
     fn error_mode_has_process_state_sticky_alignment_and_thread_isolation() {

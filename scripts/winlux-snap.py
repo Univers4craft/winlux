@@ -11,8 +11,10 @@ Windows + flèches suit la logique de Windows :
 Après un ancrage (moitié, quart, case d'une disposition), l'Assistant
 d'ancrage remplit la place encore libre avec les autres fenêtres, en cartes
 (aperçu ou icône, titre) : un clic ou Entrée la place, Échap ferme. Une case
-déjà occupée par une fenêtre ancrée n'est pas proposée. Windows + Z (ou clic droit sur le bouton
-Agrandir) ouvre les dispositions : moitiés, deux tiers / un tiers, trois
+déjà occupée par une fenêtre ancrée n'est pas proposée. Les fenêtres ainsi
+placées forment un groupe d'ancrage : survoler le bouton de l'une d'elles
+dans la barre des tâches montre le groupe, un clic le remet au premier plan.
+Windows + Z (ou clic droit sur le bouton Agrandir) ouvre les dispositions : moitiés, deux tiers / un tiers, trois
 colonnes, quatre quarts.
 
     winlux-snap key left|right|up|down   (Windows + flèche)
@@ -21,6 +23,7 @@ colonnes, quatre quarts.
     winlux-snap zones                    zones connues (tests)
     winlux-snap ontop [FENÊTRE]          Windows + Ctrl + T : toujours au premier plan
     winlux-snap watch                    ancrage à la souris (lancé avec la session)
+    winlux-snap restore-group FENÊTRE    remet le groupe d'ancrage de FENÊTRE au premier plan
 
 À la souris (winlux-snap watch) : une fenêtre glissée par sa barre de titre
 jusqu'au bord gauche ou droit prend la moitié de l'écran, jusqu'à un coin un
@@ -64,6 +67,8 @@ _TR = {
     'Choisissez une fenêtre pour cet emplacement': ('Choose a window for this space', 'Elija una ventana para este espacio', 'Fenster für diesen Bereich auswählen'),
     'Emplacement {n} sur {total} · Échap pour fermer': ('Space {n} of {total} · Esc to close', 'Espacio {n} de {total} · Esc para cerrar', 'Bereich {n} von {total} · Esc zum Schließen'),
     'Sans titre': ('Untitled', 'Sin título', 'Ohne Titel'),
+    'Groupe d’ancrage': ('Snap group', 'Grupo de acoplamiento', 'Andockgruppe'),
+    'Cliquez pour remettre le groupe au premier plan': ('Click to bring the group back', 'Haga clic para restaurar el grupo', 'Klicken, um die Gruppe wiederherzustellen'),
 }
 
 
@@ -309,7 +314,15 @@ def snap(window, zone, area=None):
     _run(["wmctrl", "-i", "-r", window, "-b", "remove,maximized_vert,maximized_horz"])
     x, y, w, h = client_geometry(zone_rect(zone, area), frame_extents(window))
     _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
+    # Changer de case quitte le groupe d'ancrage ; la même case (groupe restauré) le garde.
+    if state != zone: set_prop(window, "_WINLUX_SNAP_GROUP", "")
     set_prop(window, "_WINLUX_SNAP", zone)
+
+
+def leave_snap(window):
+    """Fenêtre décrochée, agrandie ou remise à sa taille : plus ancrée ni groupée."""
+    set_prop(window, "_WINLUX_SNAP", "")
+    set_prop(window, "_WINLUX_SNAP_GROUP", "")
 
 
 def restore(window):
@@ -322,7 +335,7 @@ def restore(window):
     if saved:
         x, y, w, h = client_geometry((x, y, w, h), frame_extents(window))
         _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
-    set_prop(window, "_WINLUX_SNAP", "")
+    leave_snap(window)
 
 
 def other_windows(exclude, desktop=None):
@@ -538,9 +551,10 @@ def snapped_windows(exclude, area):
     for window, _ in other_windows(exclude):
         zone = get_prop(window, "_WINLUX_SNAP")
         if zone not in ZONES or is_maximized(window): continue
-        rect, geometry = zone_rect(zone, area), window_geometry(window)
-        # Encore à sa place (une fenêtre déplacée au clavier garde sa propriété).
-        if geometry and all(abs(a - b) <= 12 for a, b in zip(rect, geometry)): found[window] = rect
+        # Sa place réelle, pas celle de sa case : une fenêtre à largeur minimale
+        # (Paramètres : 720 px) déborde d'une moitié en 1366x768 (#647).
+        geometry = window_geometry(window)
+        if geometry and overlap(geometry, area): found[window] = geometry
     return found
 
 
@@ -554,30 +568,22 @@ def stacking_order():
 def window_icon_values(window):
     """_NET_WM_ICON de la fenêtre (liste de nombres), lue par Xlib."""
     try:
-        x11 = _X()
-        lib = x11.lib
-        lib.XInternAtom.argtypes, lib.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
-        lib.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
-                                           ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
-                                           ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
-                                           ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong))]
-        atom = lib.XInternAtom(x11.display, b"_NET_WM_ICON", 0)
-        kind, fmt, count, after = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong()
-        data = ctypes.POINTER(ctypes.c_ulong)()
-        if lib.XGetWindowProperty(x11.display, window_number(window), atom, 0, 1 << 20, 0, 6, ctypes.byref(kind),
-                                  ctypes.byref(fmt), ctypes.byref(count), ctypes.byref(after), ctypes.byref(data)) != 0 or not data:
-            return []
-        # Format 32 : Xlib rend des « long » natifs (64 bits sur amd64).
-        values = [data[index] & 0xFFFFFFFF for index in range(count.value)] if fmt.value == 32 else []
-        lib.XFree(data)
-        return values
-    except (OSError, AttributeError):
+        return _X().prop(window_number(window), "_NET_WM_ICON") or []
+    except (OSError, AttributeError, TypeError):
         return []
 
 
 def assist(window, wanted, area=None):
     """Assistant d'ancrage : la place libre se remplit de cartes, une par autre
     fenêtre ; la carte choisie va dans la case, puis la case suivante."""
+    area = area or area_of(window)
+    taken = {other: rect for other, rect in snapped_windows(None, area).items() if window_number(other) != window_number(window)}
+    zones = free_zones(wanted, area, list(taken.values()))
+    # Groupe d'ancrage : la fenêtre, celles qui occupent déjà le reste de la
+    # place, puis celles choisies ici.
+    group = [window] + covering(wanted, area, taken)
+    form_group(group)
+    if not zones: return 0
     Gdk, GLib, Gtk = _gtk()
     from gi.repository import GdkPixbuf, Gio
     try:
@@ -585,8 +591,6 @@ def assist(window, wanted, area=None):
         from gi.repository import GdkX11
     except (ValueError, ImportError):
         GdkX11 = None
-    area = area or area_of(window)
-    zones = _still_free(window, wanted, area, snapped_windows(None, area))
     used = [window]
     css = Gtk.CssProvider()
     css.load_from_data(CSS)
@@ -659,12 +663,74 @@ def assist(window, wanted, area=None):
         snap(picked["window"], zone, area)
         _run(["wmctrl", "-i", "-a", picked["window"]])
         used.append(picked["window"])
+        group.append(picked["window"])
+        form_group(group)
     return 0
 
 
-def _still_free(window, zones, area, taken):
-    others = [rect for other, rect in taken.items() if window_number(other) != window_number(window)]
-    return free_zones(zones, area, others)
+def covering(wanted, area, taken):
+    """Fenêtres ancrées qui occupent (aux quatre cinquièmes) une des cases voulues."""
+    found = []
+    for zone in wanted:
+        rect = zone_rect(zone, area)
+        size = max(1, rect[2] * rect[3])
+        for other, other_rect in taken.items():
+            if other not in found and overlap(rect, other_rect) >= 0.8 * size: found.append(other)
+    return found
+
+
+def form_group(windows):
+    """Un même identifiant de groupe sur chaque fenêtre (au moins deux)."""
+    unique = []
+    for item in windows:
+        if window_number(item) not in {window_number(other) for other in unique}: unique.append(item)
+    if len(unique) < 2: return None
+    group = f"{window_number(unique[0]):x}.{os.getpid()}"
+    for item in unique: set_prop(item, "_WINLUX_SNAP_GROUP", group)
+    return group
+
+
+def group_members(window, props):
+    """Fenêtres du groupe de window d'après {fenêtre: (groupe, case)} ; un groupe
+    ne compte que ses fenêtres encore ancrées, et au moins deux."""
+    group, zone = props.get(window, ("", ""))
+    if not group or zone not in ZONES: return []
+    members = [item for item, (other, place) in props.items() if other == group and place in ZONES]
+    return members if len(members) >= 2 else []
+
+
+def group_props(desktop=None):
+    """{fenêtre: (groupe, case)} des fenêtres du bureau courant, réduites comprises."""
+    if desktop is None:
+        current = re.search(r"^(\d+)\s+\*", _run(["wmctrl", "-d"]), re.M)
+        desktop = current.group(1) if current else "0"
+    found = {}
+    for line in _run(["wmctrl", "-l"]).splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 3 or parts[1] not in (desktop, "-1"): continue
+        group = get_prop(parts[0], "_WINLUX_SNAP_GROUP")
+        if group: found[parts[0]] = (group, get_prop(parts[0], "_WINLUX_SNAP"))
+    return found
+
+
+def find_member(window, props):
+    """La clé de props (format wmctrl) qui désigne window (n'importe quel format)."""
+    return next((item for item in props if window_number(item) == window_number(window)), None)
+
+
+def restore_group(window):
+    """Remet tout le groupe de window au premier plan, chaque fenêtre à sa case
+    (réduites comprises) ; window finit active."""
+    props = group_props()
+    key = find_member(window, props)
+    members = group_members(key, props) if key else []
+    if not members: return 1
+    for item in [m for m in members if m != key] + [key]:
+        _run(["wmctrl", "-i", "-a", item])
+    for item in members:
+        snap(item, props[item][1])
+    _run(["wmctrl", "-i", "-a", key])
+    return 0
 
 
 def _card(Gtk, GdkPixbuf, Gio, Gdk, GdkX11, theme, window, name, card_w, card_h, visible):
@@ -741,6 +807,121 @@ def _icons(Gtk, GdkPixbuf, Gio, theme, window, small, large):
 def _sized(image, size):
     image.set_pixel_size(size)
     return image
+
+
+# ── Groupes d'ancrage (survol d'un bouton de la barre des tâches) ─────────
+
+def button_under(point, buttons):
+    """La fenêtre dont le bouton de la barre des tâches (_NET_WM_ICON_GEOMETRY,
+    posé par la barre d'XFCE) est sous la souris : [(fenêtre, rect)] → fenêtre."""
+    px, py = point
+    for window, (x, y, w, h) in buttons:
+        if w > 0 and h > 0 and x <= px < x + w and y <= py < y + h: return window
+    return None
+
+
+def popup_origin(button, size, monitor):
+    """Coin haut gauche de la vignette : au-dessus d'un bouton du bas de l'écran,
+    en dessous d'un bouton du haut, centrée, sans sortir de l'écran."""
+    bx, by, bw, bh = button
+    width, height = size
+    mx, my, mw, mh = monitor
+    x = min(max(mx, bx + bw // 2 - width // 2), mx + mw - width)
+    y = by - height - 8 if by + bh // 2 > my + mh // 2 else by + bh + 8
+    return x, min(max(my, y), my + mh - height)
+
+
+def group_popup(window, button):
+    """Vignette « Groupe d'ancrage » au-dessus du bouton survolé : la disposition
+    avec chaque fenêtre à sa case ; un clic remet le groupe au premier plan."""
+    props = group_props()
+    key = find_member(window, props)
+    members = group_members(key, props) if key else []
+    if not members: return 1
+    Gdk, GLib, Gtk = _gtk()
+    from gi.repository import GdkPixbuf, Gio
+    popup = Gtk.Window(title=_t("Groupe d’ancrage"))
+    popup.set_role("winlux-snap-group")
+    popup.set_accept_focus(False)
+    popup.set_type_hint(Gdk.WindowTypeHint.TOOLTIP)
+    popup.set_decorated(False)
+    popup.set_keep_above(True)
+    popup.set_skip_taskbar_hint(True)
+    popup.get_style_context().add_class("assist")
+    css = Gtk.CssProvider()
+    css.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(popup.get_screen(), css, 600)
+    area = area_of(members[0])
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=10)
+    popup.add(box)
+    heading = Gtk.Label(label=_t("Groupe d’ancrage"), xalign=0)
+    heading.get_style_context().add_class("heading")
+    box.pack_start(heading, False, False, 0)
+    map_w = 260
+    map_h = max(80, round(map_w * area[3] / max(1, area[2])))
+    layout = Gtk.Fixed()
+    layout.get_style_context().add_class("preview")
+    layout.set_size_request(map_w, map_h)
+    box.pack_start(layout, False, False, 0)
+    hint = Gtk.Label(label=_t("Cliquez pour remettre le groupe au premier plan"), xalign=0, ellipsize=3)
+    hint.get_style_context().add_class("subtitle")
+    box.pack_start(hint, False, False, 0)
+    titles = {item: title for item, title in other_windows(None)}
+    for item in members:
+        if item not in titles:
+            titles[item] = _run(["xdotool", "getwindowname", str(window_number(item))]).strip()
+    chosen = {}
+    theme = Gtk.IconTheme.get_default()
+    for item in members:
+        fx, fy, fw, fh = ZONES[props[item][1]]
+        cell = Gtk.Button()
+        cell.get_style_context().add_class("window")
+        cell.set_size_request(max(20, round(fw * map_w) - 4), max(20, round(fh * map_h) - 4))
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
+        small, _ = _icons(Gtk, GdkPixbuf, Gio, theme, item, 20, 32)
+        inner.pack_start(small, False, False, 0)
+        label = Gtk.Label(label=titles.get(item) or _t("Sans titre"), ellipsize=3, max_width_chars=14)
+        label.get_style_context().add_class("card-title")
+        inner.pack_start(label, False, False, 0)
+        cell.add(inner)
+        cell.set_tooltip_text(titles.get(item) or "")
+        cell.connect("clicked", lambda _, it=item: (chosen.setdefault("window", it), Gtk.main_quit()))
+        layout.put(cell, 2 + round(fx * map_w), 2 + round(fy * map_h))
+    popup.connect("key-press-event", lambda _, event: event.keyval == Gdk.KEY_Escape and (Gtk.main_quit() or True))
+    popup.show_all()
+    scale = max(1, popup.get_scale_factor())
+    width, height = popup.get_size()
+    monitor = pick_area([m for m in _monitors()] or [area], (button[0] + button[2] // 2, button[1] + button[3] // 2))
+    x, y = popup_origin(button, (width * scale, height * scale), monitor)
+    popup.move(x // scale, y // scale)
+    popup.present()
+    state = {"away": 0}
+
+    def pointer_left():
+        _, px, py = popup.get_display().get_default_seat().get_pointer().get_position()
+        px, py = px * scale, py * scale
+        ox, oy = popup.get_position()
+        inside = ox * scale - 16 <= px <= (ox + width) * scale + 16 and oy * scale - 16 <= py <= (oy + height) * scale + 16
+        on_button = button[0] <= px < button[0] + button[2] and button[1] - 12 <= py < button[1] + button[3] + 12
+        state["away"] = 0 if inside or on_button else state["away"] + 1
+        if state["away"] >= 3: Gtk.main_quit()
+        return True
+
+    GLib.timeout_add(150, pointer_left)
+    Gtk.main()
+    popup.destroy()
+    if "window" not in chosen: return 0
+    return restore_group(chosen["window"])
+
+
+def _monitors():
+    monitors = []
+    for line in _run(["xrandr", "--listmonitors"]).splitlines()[1:]:
+        match = re.search(r"(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)", line)
+        if match:
+            w, h, x, y = (int(group) for group in match.groups())
+            monitors.append((x, y, w, h))
+    return monitors
 
 
 # ── Ancrage à la souris (winlux-snap watch) ────────────────────────────────
@@ -879,6 +1060,33 @@ class _X:
         if not self.lib.XGetWindowAttributes(self.display, window, ctypes.byref(found)): return None
         return found
 
+    def prop(self, window, name):
+        """Propriété X : liste de nombres (format 32) ou octets (format 8), None si absente."""
+        lib = self.lib
+        if not hasattr(self, "_atoms"):
+            self._atoms = {}
+            lib.XInternAtom.argtypes, lib.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+            lib.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+                                               ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+                                               ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                                               ctypes.POINTER(ctypes.c_void_p)]
+        atom = self._atoms.get(name)
+        if atom is None:
+            atom = self._atoms[name] = lib.XInternAtom(self.display, name.encode(), 0)
+        kind, fmt, count, after, data = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_void_p()
+        if lib.XGetWindowProperty(self.display, window, atom, 0, 1 << 20, 0, 0, ctypes.byref(kind), ctypes.byref(fmt),
+                                  ctypes.byref(count), ctypes.byref(after), ctypes.byref(data)) != 0 or not data.value:
+            return None
+        try:
+            if fmt.value == 32:
+                # Xlib rend des « long » natifs (64 bits sur amd64).
+                values = ctypes.cast(data, ctypes.POINTER(ctypes.c_ulong))
+                return [values[index] & 0xFFFFFFFF for index in range(count.value)]
+            if fmt.value == 8: return ctypes.string_at(data, count.value)
+            return None
+        finally:
+            lib.XFree(data)
+
     def children(self, window):
         root, parent = ctypes.c_ulong(), ctypes.c_ulong()
         items, count = ctypes.POINTER(ctypes.c_ulong)(), ctypes.c_uint()
@@ -937,7 +1145,7 @@ def drop(window, zone, point=None):
             geometry = window_geometry(window)
             if geometry: set_prop(window, "_WINLUX_RESTORE", ",".join(map(str, geometry)))
         _run(["wmctrl", "-i", "-r", window, "-b", "add,maximized_vert,maximized_horz"])
-        set_prop(window, "_WINLUX_SNAP", "")
+        leave_snap(window)
         return 0
     if zone == "float":
         saved = get_prop(window, "_WINLUX_RESTORE")
@@ -948,7 +1156,7 @@ def drop(window, zone, point=None):
             geometry = float_geometry(point or (frame[0] + frame[2] // 2, frame[1]), frame, saved)
             x, y, w, h = client_geometry(geometry, frame_extents(window))
             _run(["wmctrl", "-i", "-r", window, "-e", f"1,{x},{y},{w},{h}"])
-        set_prop(window, "_WINLUX_SNAP", "")
+        leave_snap(window)
         return 0
     area = pick_area(work_areas(), point) if point else None
     snap(window, zone, area)
@@ -1122,9 +1330,28 @@ def watch():
         if state["press"] is not None:
             state["press"] = None
             finish_drag(point)
+        now = time.monotonic()
+        # Survol d'un bouton de la barre des tâches d'une fenêtre groupée
+        # (toutes les 300 ms : lecture de propriétés X, sans programme lancé).
+        state["ticks"] = state.get("ticks", 0) + 1
+        if state["ticks"] % 3 == 0:
+            buttons = []
+            for client in x11.prop(x11.root, "_NET_CLIENT_LIST") or []:
+                if not x11.prop(client, "_WINLUX_SNAP_GROUP"): continue
+                rect = x11.prop(client, "_NET_WM_ICON_GEOMETRY")
+                if rect and len(rect) >= 4: buttons.append((client, tuple(rect[:4])))
+            over = button_under(point, buttons)
+            if over is None:
+                state.update(group_hover=None, group_armed=True)
+            elif state.get("group_hover") != over:
+                state.update(group_hover=over, group_since=now, group_armed=True)
+            elif state.get("group_armed") and now - state["group_since"] >= HOVER_DELAY:
+                state["group_armed"] = False
+                rect = dict(buttons)[over]
+                subprocess.Popen([sys.executable, os.path.abspath(__file__), "group", str(over), *map(str, rect)],
+                                 stdout=subprocess.DEVNULL, start_new_session=True)
         # Survol du bouton Agrandir.
         hovered = hovered_maximize(x11, rank)
-        now = time.monotonic()
         if hovered is None:
             state.update(hover=None, armed=True)
         elif state["hover"] != hovered[0]:
@@ -1160,7 +1387,7 @@ def key(direction):
             geometry = window_geometry(window)
             if geometry: set_prop(window, "_WINLUX_RESTORE", ",".join(map(str, geometry)))
         _run(["wmctrl", "-i", "-r", window, "-b", "add,maximized_vert,maximized_horz"])
-        set_prop(window, "_WINLUX_SNAP", "")
+        leave_snap(window)
     elif action == "minimize":
         _run(["xdotool", "windowminimize", window])
     return 0
@@ -1173,6 +1400,10 @@ def main(argv):
         return layouts_popup(active_window())
     if len(argv) == 5 and argv[1] == "layouts" and argv[3].isdigit() and argv[4].isdigit():
         return layouts_popup(argv[2], (int(argv[3]), int(argv[4])))
+    if len(argv) == 7 and argv[1] == "group" and all(v.lstrip("-").isdigit() for v in argv[3:7]):
+        return group_popup(argv[2], tuple(int(v) for v in argv[3:7]))
+    if len(argv) == 3 and argv[1] == "restore-group":
+        return restore_group(argv[2])
     if len(argv) == 2 and argv[1] == "watch":
         return watch()
     if len(argv) in (4, 6) and argv[1] == "drop" and (argv[3] in ZONES or argv[3] in ("maximize", "float")):

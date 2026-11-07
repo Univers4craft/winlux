@@ -647,3 +647,16 @@ fn proxy_partage_avec_linux() {
         None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
     }
 }
+
+#[test]
+fn cles_reseau_toujours_presentes() {
+    let mut d = Data::empty();
+    overlay_network(&mut d);
+    for key in NETWORK_KEYS {
+        assert!(d.exists(key), "{key}");
+    }
+    assert!(d
+        .subkeys("hklm\\System\\CurrentControlSet\\Services")
+        .iter()
+        .any(|k| k == "Dnscache"));
+}

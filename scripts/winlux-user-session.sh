@@ -120,12 +120,23 @@ fi
 # dépend, pas l'affichage du bureau.
 if test -x /usr/bin/winlux-trust-shortcuts; then (/usr/bin/winlux-trust-shortcuts </dev/null >"$logs/trust-shortcuts.log" 2>&1 &); fi
 if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
-# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur :
+# Winlux-Sombre en mode sombre (le défaut), Winlux en mode clair. Un compte
+# resté sur l'un des deux suit le mode de Personnalisation, sinon celui du
+# système (THEME= de /etc/winlux/preferences.conf).
 # Le défaut XFCE (elementary-xfce-dark) n'est pas livré : un thème configuré
 # mais absent laissait les silhouettes noires d'Adwaita.
 icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
-if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
-    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+icon_wanted=Winlux-Sombre
+if test -f "$HOME/.config/winlux/appearance.json"; then
+    if grep -q '"theme": *"light"' "$HOME/.config/winlux/appearance.json" 2>/dev/null; then icon_wanted=Winlux; fi
+elif grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then
+    icon_wanted=Winlux
+fi
+test -d "/usr/share/icons/$icon_wanted" || icon_wanted=Winlux
+case "$icon_theme" in Winlux|Winlux-Sombre|'') icon_reset=1 ;; *) icon_reset=0; test -d "/usr/share/icons/$icon_theme" || icon_reset=1 ;; esac
+if test -d "/usr/share/icons/$icon_wanted" && test -x /usr/bin/xfconf-query && test "$icon_reset" = 1 && test "$icon_theme" != "$icon_wanted"; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s "$icon_wanted" || true
 fi
 # Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
 # sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
@@ -155,10 +166,20 @@ if test "${WINLUX_LOCK_AT_START:-0}" = 1 && test -x /usr/bin/winlux-lock; then
     (setsid /usr/bin/winlux-lock now >"$logs/lock-start.log" 2>&1 &)
 fi
 # Fond d'écran par écran, fixé avant la barre des tâches : l'identité Winlux, sinon le fond de l'image.
-default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
-test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
+# « Winlux Aurore » (#596) dans la définition la plus proche de chaque écran.
+aurora_wallpaper() {
+    base=/usr/share/winlux/wallpapers/winlux-prisme-aurore
+    picked=$base.png
+    if test "${1:-0}" -ge 1800 && test -f "$base-3840x2160.png"; then picked=$base-3840x2160.png
+    elif test "${1:-0}" -ge 1260 && test -f "$base-2560x1440.png"; then picked=$base-2560x1440.png; fi
+    test -f "$picked" || picked=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+    test -f "$picked" || picked=/usr/share/winlux/wallpaper.bmp
+    echo "$picked"
+}
 if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
-    for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+    /usr/bin/xrandr --query | awk '$2 == "connected" {h = 0; for (i = 3; i <= NF; i++) if (match($i, /^[0-9]+x[0-9]+\+/)) {split($i, d, /[x+]/); h = d[2]; break}; print $1, h}' |
+    while read -r output height; do
+        default_wallpaper=$(aurora_wallpaper "$height")
         property="/backdrop/screen0/monitor$output/workspace0/last-image"
         if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
             /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper" || true

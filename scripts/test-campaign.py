@@ -157,11 +157,12 @@ with patch("os.getuid", return_value=1000), patch("pwd.getpwuid", return_value=e
 state = {"text": "final", "rendered": 0}
 fake = SimpleNamespace(all_apps=False,
                        search=SimpleNamespace(get_text=lambda: state["text"], set_text=lambda text: state.update(text=text)),
-                       render=lambda: state.update(rendered=state["rendered"] + 1))
+                       render=lambda: state.update(rendered=state["rendered"] + 1),
+                       scroll_top=lambda: state.update(top=state.get("top", 0) + 1))
 menu["Start"].toggle_list(fake)
 ok(state["text"] == "" and fake.all_apps is False and state["rendered"] == 1, "« Retour » efface la recherche en cours")
 menu["Start"].toggle_list(fake)
-ok(fake.all_apps is True, "« Toutes les applications » s'ouvre sans recherche")
+ok(fake.all_apps is True and state.get("top") == 2, "« Toutes les applications » s'ouvre sans recherche, liste en haut")
 
 # ── Terminal Winlux : coller ce qui a été copié (signalé par damien) ───────
 with tempfile.TemporaryDirectory() as directory:
@@ -414,6 +415,8 @@ snap_area = (0, 0, 1366, 728)
 ok(snap_tool["free_zones"](snap_tool["following_zones"]("quarter:tr"), snap_area, [snap_tool["zone_rect"]("half:left", snap_area)]) == ["quarter:br"],
    "assistant d'ancrage : après un coin, seule la place encore libre est proposée")
 ok(snap_tool["card_grid"](683, 364, 1, 6)[0] >= 2, "assistant d'ancrage lisible dans un quart en 1366x768")
+ok(snap_tool["group_members"]("a", {"a": ("g", "half:left"), "b": ("g", "half:right")}) == ["a", "b"],
+   "groupe d'ancrage : deux fenêtres ancrées ensemble se restaurent ensemble (#597)")
 
 # ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
 for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
@@ -493,9 +496,41 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
 
+# ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
+tray_source = (SCRIPTS / "winlux-tray.py").read_text()
+ok("def _settled_balance" in tray_source and "taskbar-balance" in tray_source
+   and "test-taskbar-boot-centering.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre centrée : contrepoids mesuré une fois les icônes de droite en place, valeur précédente reprise")
+ok("test-taskbar-live-align.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "*' 13 '*) ;;" not in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre : changement d'alignement en direct suivi d'une relance de la barre (#651)")
+ok("def scroll_top" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-menu-reset.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : chaque ouverture repart en haut de la vue Épinglé (#673)")
+
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
    and 'winlux-run place-menu "$alignment"' in (SCRIPTS / "winlux-control.sh").read_text(),
    "Windows + X : menu au-dessus du bouton Démarrer, pas sous le pointeur, dans chaque compte")
+
+# ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
+icons = NATIVE / "icons"
+ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2
+   and (icons / "Winlux/scalable/apps/winlux.svg").is_file()
+   and "Inherits=Winlux," in (icons / "Winlux-Sombre/index.theme").read_text(),
+   "icônes : applications gardées dans Winlux, Winlux-Sombre hérite de Winlux")
+ok("for icon_theme in Winlux Winlux-Sombre" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "gtk-update-icon-cache" in (SCRIPTS / "stage-apt-root.py").read_text()
+   and "usr/share/icons/Winlux-Sombre/" in (SCRIPTS / "stage-apt-root.py").read_text(),
+   "icônes : les deux thèmes dans winlux-desktop, cache GTK en postinst")
+ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh"))
+   and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
+   "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
+
+# ── Paramètres : « Mise à jour OS » et « Mise à jour application » (#637) ──
+ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and (SCRIPTS / "test-update-page-names.py").exists(),
+   "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

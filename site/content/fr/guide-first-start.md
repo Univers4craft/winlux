@@ -11,7 +11,7 @@ description: La fenêtre Bienvenue vous mène, en un clic, vers la visite guidé
 - **Choisir le clavier** : ouvre Paramètres › Clavier et souris.
 - **Configurer le réseau** : ouvre les réglages rapides, pour le Wi-Fi.
 - **Personnaliser l’apparence** : ouvre Paramètres › Fond d’écran et couleurs.
-- **Découvrir le secours** : ouvre Paramètres › Mises à jour, où se trouvent la restauration de la version précédente et la marche à suivre si le bureau ne démarre plus.
+- **Découvrir le secours** : ouvre Paramètres › Mises à jour › Mise à jour OS, où se trouvent la restauration de la version précédente et la marche à suivre si le bureau ne démarre plus.
 
 ![La fenêtre Bienvenue](img:assistant-bienvenue.jpg "La fenêtre Bienvenue : cinq raccourcis vers la visite guidée et les premiers réglages.")
 
