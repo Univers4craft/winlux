@@ -86,6 +86,13 @@ test "$captured" = "Bonjour depuis un .exe Windows, execute par Winlux !" || {
     exit 1
 }
 echo "OK"
+# Calculatrice sans fenêtre : signe des résultats, touches ± et % (#209).
+printf '\n== calc.exe --selftest ==\n'
+WINLUX_GUI=headless "$runtime" "$testdir/calc.exe" --selftest || {
+    echo "calc.exe : ± ou % ou résultat négatif faux" >&2
+    exit 1
+}
+echo "OK"
 # UAC refusée : uac_suite (requireAdministrator) ne doit pas démarrer.
 # 1223 (ERROR_CANCELLED) devient 199 en code de sortie Linux sur 8 bits.
 # root est toujours administrateur : le refus ne se teste qu'en utilisateur.
