@@ -87,6 +87,10 @@ __declspec(dllimport) BOOL WINAPI EndDialog(HWND, int);
 __declspec(dllimport) BOOL WINAPI IsWindow(HWND);
 __declspec(dllimport) DWORD WINAPI CharUpperBuffW(unsigned short *, DWORD);
 __declspec(dllimport) DWORD WINAPI CharUpperBuffA(char *, DWORD);
+__declspec(dllimport) LRESULT WINAPI SendMessageTimeoutA(HWND, UINT, WPARAM, LPARAM, UINT, UINT, DWORD *);
+__declspec(dllimport) BOOL WINAPI GetScrollBarInfo(HWND, LONG, DWORD *);
+__declspec(dllimport) HGDIOBJ WINAPI CreatePenIndirect(const DWORD *);
+__declspec(dllimport) COLORREF WINAPI SetDCBrushColor(HDC, COLORREF);
 
 __declspec(dllimport) HBRUSH WINAPI CreateSolidBrush(COLORREF);
 __declspec(dllimport) HBRUSH WINAPI CreateBrushIndirect(const LOGBRUSH *);
@@ -399,6 +403,19 @@ void __stdcall entry(void) {
             DispatchMessageA(&m);
         }
     }
+
+    /* Fonctions relevées sur WinSCP 6.7 x86. */
+    DWORD res = 0;
+    CHECK(75, SendMessageTimeoutA(hwnd, WM_USER, 0, (LPARAM)&marker, 2, 1000, &res) && res == 0x1234, res);
+    DWORD sbi[15] = {60};
+    CHECK(76, GetScrollBarInfo(hwnd, -5, sbi) && (sbi[9] & 0x8000), sbi[9]);
+    DWORD lp[4] = {0, 2, 0, RGB(1, 2, 3)};
+    HGDIOBJ pen = CreatePenIndirect(lp);
+    CHECK(77, pen != 0, 0);
+    DeleteObject(pen);
+    HDC sdc = CreateCompatibleDC(0);
+    CHECK(78, SetDCBrushColor(sdc, RGB(9, 9, 9)) == RGB(255, 255, 255) && SetDCBrushColor(sdc, 0) == RGB(9, 9, 9), 0);
+    DeleteDC(sdc);
 
     /* Fin : WM_DESTROY, PostQuitMessage(7), GetMessage rend 0. */
     DestroyWindow(hwnd);
