@@ -371,6 +371,50 @@ pub unsafe extern "win64" fn is_wow64_process2(
     1
 }
 
+/// Wow64DisableWow64FsRedirection : suspend la redirection System32 →
+/// SysWOW64 pour le thread (programme x86 seulement ; un programme 64 bits
+/// reçoit ERROR_INVALID_FUNCTION, comme sous Windows).
+pub unsafe extern "win64" fn wow64_disable_wow64_fs_redirection(old: *mut usize) -> i32 {
+    if !crate::wow32::active() {
+        set_last_error(1);
+        return 0;
+    }
+    let was = crate::wow32::set_fs_redirection(false);
+    if !old.is_null() {
+        *old = was as usize;
+    }
+    1
+}
+
+/// Wow64RevertWow64FsRedirection : rétablit l'état rendu par Disable.
+pub extern "win64" fn wow64_revert_wow64_fs_redirection(old: usize) -> i32 {
+    if !crate::wow32::active() {
+        set_last_error(1);
+        return 0;
+    }
+    crate::wow32::set_fs_redirection(old != 0);
+    1
+}
+
+/// Wow64EnableWow64FsRedirection (BOOLEAN) : ancienne forme de Disable/Revert.
+pub extern "win64" fn wow64_enable_wow64_fs_redirection(enable: u8) -> u8 {
+    if !crate::wow32::active() {
+        set_last_error(1);
+        return 0;
+    }
+    crate::wow32::set_fs_redirection(enable != 0);
+    1
+}
+
+/// GetSystemWow64Directory : `C:\Windows\SysWOW64`, pour les programmes
+/// 32 et 64 bits d'un Windows 64 bits.
+pub unsafe extern "win64" fn get_system_wow64_directory_a(buf: *mut u8, size: u32) -> u32 {
+    crate::dlls::put_a("C:\\Windows\\SysWOW64", buf, size)
+}
+pub unsafe extern "win64" fn get_system_wow64_directory_w(buf: *mut u16, size: u32) -> u32 {
+    crate::dlls::put_w("C:\\Windows\\SysWOW64", buf, size)
+}
+
 /// SetThreadDescription : nomme le thread Linux (15 caractères au plus,
 /// visible dans `top` et les vidages) quand il s'agit du thread courant.
 pub unsafe extern "win64" fn set_thread_description(thread: usize, desc: *const u16) -> i32 {
@@ -419,6 +463,11 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "SetXStateFeaturesMask" => fn set_xstate_features_mask,
         "GetXStateFeaturesMask" => fn get_xstate_features_mask,
         "IsWow64Process2" => fn is_wow64_process2,
+        "Wow64DisableWow64FsRedirection" => fn wow64_disable_wow64_fs_redirection,
+        "Wow64RevertWow64FsRedirection" => fn wow64_revert_wow64_fs_redirection,
+        "Wow64EnableWow64FsRedirection" => fn wow64_enable_wow64_fs_redirection,
+        "GetSystemWow64DirectoryA" => fn get_system_wow64_directory_a,
+        "GetSystemWow64DirectoryW" => fn get_system_wow64_directory_w,
         "SetThreadDescription" => fn set_thread_description,
         "GetTempPath2W" => fn get_temp_path2_w,
     }

@@ -586,11 +586,64 @@ fn hostname() -> Option<String> {
         .filter(|h| !h.is_empty())
 }
 
+/// Sous-dossiers de System32 que le WOW64 de Windows ne redirige pas.
+const WOW64_EXEMPT: [&str; 5] = ["catroot", "catroot2", "driverstore", "logfiles", "spool"];
+
+/// Redirection de fichiers du WOW64 : pour un programme x86, `C:\Windows\System32`
+/// désigne `C:\Windows\SysWOW64` (où les installeurs x86 déposent leurs DLL,
+/// voir `msi::install`) et `C:\Windows\Sysnative` le vrai System32.
+/// Écart volontaire avec Windows : si l'élément n'existe que dans System32
+/// (fichiers fournis par Winlux, qui n'a pas de double 32 bits), il est
+/// rendu tel quel au lieu d'être « introuvable ».
+fn wow64_redirect(comps: &mut [String]) {
+    if comps.len() < 2 || !comps[0].eq_ignore_ascii_case("Windows") {
+        return;
+    }
+    if !crate::wow32::fs_redirection() {
+        return;
+    }
+    if comps[1].eq_ignore_ascii_case("Sysnative") {
+        comps[1] = "System32".into();
+        return;
+    }
+    if !comps[1].eq_ignore_ascii_case("System32") {
+        return;
+    }
+    if let Some(sub) = comps.get(2) {
+        if WOW64_EXEMPT.iter().any(|e| sub.eq_ignore_ascii_case(e))
+            || (sub.eq_ignore_ascii_case("drivers")
+                && comps.get(3).is_some_and(|e| e.eq_ignore_ascii_case("etc")))
+        {
+            return;
+        }
+    }
+    let mut wow = comps.to_vec();
+    wow[1] = "SysWOW64".into();
+    let exists = |c: &[String]| {
+        let mut p = drive_root('C');
+        for x in c {
+            p.push(linux_name(x));
+        }
+        p.symlink_metadata().is_ok() || fix_case(&p).is_some()
+    };
+    if exists(&wow) || !exists(comps) {
+        comps[1] = "SysWOW64".into();
+    }
+}
+
 fn to_linux_inner(w: &str, archives: bool) -> PathBuf {
     if w.trim_end_matches('\0').is_empty() {
         return PathBuf::new();
     }
-    let wp = parse(w);
+    let mut wp = parse(w);
+    let on_c = match wp.root {
+        Root::Drive(l) => l == 'C',
+        Root::CurrentDrive => current_drive() == 'C',
+        _ => false,
+    };
+    if on_c {
+        wow64_redirect(&mut wp.comps);
+    }
     let (base, segs, used): (Option<PathBuf>, Vec<String>, usize) = match &wp.root {
         Root::Device(d) => return PathBuf::from(d),
         Root::Drive(l) => {

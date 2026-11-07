@@ -7,7 +7,9 @@
 //!
 //! Codes d'une case : `i` entier ou pointeur sur 32 bits, `q` entier 64 bits
 //! (deux cases), `d` double (deux cases), `f` float, `c` pointeur de
-//! fonction (rappel), `?` type inconnu ou structure passée par valeur.
+//! fonction (rappel), `p` pointeur vers une case de la taille d'un pointeur
+//! (HANDLE, SIZE_T ou pointeur rendus par l'appelé : 4 octets en x86, 8 en
+//! 64 bits), `?` type inconnu ou structure passée par valeur.
 //! Retour : `v` rien, sinon le même code.
 
 use std::collections::HashMap;
@@ -96,9 +98,31 @@ fn strip_comments(t: &str) -> String {
     out
 }
 
+/// Type de la taille d'un pointeur : `usize`, `isize`, pointeur, ou alias de l'un d'eux.
+fn pointer_sized(t: &str, aliases: &HashMap<String, String>, depth: u32) -> bool {
+    if t.starts_with('*') {
+        return true;
+    }
+    let last = t.rsplit("::").next().unwrap_or(t);
+    match last {
+        "usize" | "isize" => true,
+        _ => match aliases.get(last) {
+            Some(target) if depth < 8 => pointer_sized(target.trim(), aliases, depth + 1),
+            _ => false,
+        },
+    }
+}
+
 fn classify(ty: &str, aliases: &HashMap<String, String>, depth: u32) -> char {
     let t: String = ty.split_whitespace().collect::<Vec<_>>().join(" ");
     let t = t.trim();
+    // Pointeur vers une case de la taille d'un pointeur (`*mut usize`,
+    // `*mut HANDLE`, `*mut *mut u16`…) : 4 octets côté x86, 8 côté 64 bits.
+    if let Some(inner) = t.strip_prefix("*mut ") {
+        if pointer_sized(inner.trim(), aliases, depth) {
+            return 'p';
+        }
+    }
     if t.starts_with('*') || t.starts_with('&') {
         return 'i';
     }
@@ -215,7 +239,7 @@ fn main() {
                         'v'
                     } else {
                         match classify(r, &aliases, 0) {
-                            'c' => 'i',
+                            'c' | 'p' => 'i',
                             k => k,
                         }
                     }

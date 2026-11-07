@@ -60,6 +60,64 @@ clang --target=i686-pc-windows-msvc -O1 -fms-extensions -fasync-exceptions -fno-
     -c "$src/seh32.c" -o "$tmp/seh32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/seh32.obj" "$tmp/kernel32_seh.lib" "$tmp/msvcrt_seh.lib" /out:"$out/seh32.exe"
+# Personnalité WOW64 (#232, étape 7) : kernel32 et advapi32 sans CRT.
+cat >"$tmp/kernel32_wow64.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+GetCommandLineA@0
+lstrlenA@4
+GetCurrentProcess@0
+IsWow64Process@8
+IsWow64Process2@12
+GetSystemInfo@4
+GetNativeSystemInfo@4
+VirtualQuery@12
+GetStartupInfoA@4
+GlobalMemoryStatus@4
+InitializeCriticalSection@4
+InitializeCriticalSectionAndSpinCount@8
+EnterCriticalSection@4
+LeaveCriticalSection@4
+DeleteCriticalSection@4
+InitializeSRWLock@4
+AcquireSRWLockExclusive@4
+ReleaseSRWLockExclusive@4
+InitOnceInitialize@4
+InitOnceBeginInitialize@16
+InitOnceComplete@12
+InitializeSListHead@4
+InterlockedPushEntrySList@8
+InterlockedPopEntrySList@4
+QueryDepthSList@4
+CreatePipe@16
+CloseHandle@4
+GetEnvironmentVariableA@12
+GetSystemWow64DirectoryA@8
+Wow64DisableWow64FsRedirection@4
+Wow64RevertWow64FsRedirection@4
+CreateFileA@28
+CreateProcessA@40
+WaitForSingleObject@8
+GetExitCodeProcess@8
+GetModuleFileNameA@12
+DEF
+cat >"$tmp/advapi32_wow64.def" <<'DEF'
+LIBRARY advapi32.dll
+EXPORTS
+RegCreateKeyExA@36
+RegOpenKeyExA@20
+RegSetValueExA@24
+RegCloseKey@4
+RegDeleteKeyA@8
+DEF
+llvm-dlltool -m i386 -k -d "$tmp/kernel32_wow64.def" -l "$tmp/kernel32_wow64.lib"
+llvm-dlltool -m i386 -k -d "$tmp/advapi32_wow64.def" -l "$tmp/advapi32_wow64.lib"
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wow64.c" -o "$tmp/wow64.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
+    "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" /out:"$out/wow64.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.
