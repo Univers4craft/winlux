@@ -149,6 +149,18 @@ fn jeton_du_processus() {
         let first = std::ptr::read_unaligned(groups.as_ptr().add(8) as *const *const u8);
         assert_eq!(sid_text(sid_at(first).unwrap()).unwrap(), EVERYONE);
 
+        // TokenLogonSid (#747) : un seul groupe, le SID de session S-1-5-5-….
+        let mut logon = vec![0u8; 128];
+        assert_eq!(
+            GetTokenInformation(tok, 28, logon.as_mut_ptr(), 128, &mut need),
+            1
+        );
+        assert_eq!(u32::from_le_bytes(logon[0..4].try_into().unwrap()), 1);
+        let sid = std::ptr::read_unaligned(logon.as_ptr().add(8) as *const *const u8);
+        assert!(sid_text(sid_at(sid).unwrap()).unwrap().starts_with("S-1-5-5-"));
+        let attrs = u32::from_le_bytes(logon[16..20].try_into().unwrap());
+        assert_ne!(attrs & SE_GROUP_LOGON_ID, 0);
+
         let everyone = sid_bytes(EVERYONE).unwrap();
         let admins = sid_bytes(ADMINISTRATORS).unwrap();
         let mut member = 0;

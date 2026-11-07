@@ -214,9 +214,15 @@ fn token_info(class: u32) -> Option<(Vec<u8>, Vec<(usize, usize)>)> {
         1 => one(user, Some(0)), // TokenUser
         4 => one(user, None),    // TokenOwner
         5 => one(sid_bytes(&gid_sid(unsafe { libc::getegid() }))?, None), // TokenPrimaryGroup
-        2 => {
-            // TokenGroups
-            let groups = token_groups();
+        2 | 28 => {
+            // TokenGroups, ou TokenLogonSid (le seul SID de session) : le bac
+            // à sable de Chromium lit ce dernier pour verrouiller la DACL par
+            // défaut des jetons de ses enfants ; une erreur autre que
+            // ERROR_NOT_FOUND y faisait échouer tout lancement (#747).
+            let mut groups = token_groups();
+            if class == 28 {
+                groups.retain(|g| g.1 & SE_GROUP_LOGON_ID != 0);
+            }
             let head = 8 + 16 * groups.len();
             let mut b = vec![0u8; head];
             b[0..4].copy_from_slice(&(groups.len() as u32).to_le_bytes());
