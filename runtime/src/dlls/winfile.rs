@@ -174,6 +174,9 @@ fn split_search_path(path: &str) -> Result<(std::path::PathBuf, String), u32> {
     let separator = path.rfind(['\\', '/']);
     let (directory, pattern) = match separator {
         Some(0) => (&path[..1], &path[1..]),
+        // « C:\* » : la racine du lecteur, pas « C: » (le dossier courant du
+        // lecteur, soit celui du programme) — #707.
+        Some(i) if path[..i].ends_with(':') => (&path[..=i], &path[i + 1..]),
         Some(i) => (&path[..i], &path[i + 1..]),
         None => (".", path),
     };
@@ -393,6 +396,19 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
     use std::ffi::CString;
+    #[test]
+    fn racine_d_un_lecteur_et_non_dossier_courant() {
+        // « Z:\* » liste la racine de Z:, jamais le dossier courant du
+        // processus (7-Zip, boîte Ouvrir de Notepad++ sur « C:\ »).
+        let (dir, pat) = split_search_path("Z:\\*").unwrap();
+        assert_eq!(dir, std::path::PathBuf::from("/"));
+        assert_eq!(pat, "*");
+        let (dir, _) = split_search_path("Z:/*.txt").unwrap();
+        assert_eq!(dir, std::path::PathBuf::from("/"));
+        let (dir, pat) = split_search_path("Z:\\tmp\\*").unwrap();
+        assert_eq!(dir, std::path::PathBuf::from("/tmp"));
+        assert_eq!(pat, "*");
+    }
     #[test]
     fn enumeration_wildcard_est_insensible_a_la_casse_et_retourne_tailles() {
         let dir = std::env::temp_dir().join(format!(
