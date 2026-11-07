@@ -183,6 +183,10 @@ IMP HRESULT WINAPI DirectDrawCreateEx(GUID *, void **, const GUID *, void *);
 IMP HRESULT WINAPI DirectDrawEnumerateA(void *, void *);
 IMP void *WINAPI Direct3DCreate8(UINT);
 IMP void *WINAPI Direct3DCreate9(UINT);
+IMP HRESULT WINAPI DirectSoundCreate8(const GUID *, void **, void *);
+IMP HRESULT WINAPI DirectSoundEnumerateA(void *, void *);
+IMP HANDLE WINAPI CreateEventA(void *, BOOL, BOOL, const char *);
+IMP DWORD WINAPI WaitForSingleObject(HANDLE, DWORD);
 typedef struct { float m[16]; } D3DXMATRIX;
 typedef struct { UINT Width, Height, Depth, MipLevels, Format, ResourceType, ImageFileFormat; } D3DXIMAGE_INFO;
 IMP D3DXMATRIX *WINAPI D3DXMatrixRotationZ(D3DXMATRIX *, float);
@@ -741,6 +745,84 @@ static int d3dx_tests(HWND hwnd) {
     return 0;
 }
 
+/* DirectSound (#778) : tampons, Lock à deux zones, notifications, 3D. */
+typedef struct {
+    DWORD dwSize, dwFlags, dwBufferBytes, dwReserved;
+    WAVEFORMATEX *lpwfxFormat;
+    GUID guid3DAlgorithm;
+} DSBUFFERDESC;
+typedef struct { DWORD dwOffset; HANDLE hEventNotify; } DSBPOSITIONNOTIFY;
+typedef HRESULT(WINAPI *SETPOS3D)(void *, float, float, float, DWORD);
+static const GUID IID_IDirectSoundNotify = {
+    0xb0210783, 0x89cd, 0x11d0, {0xaf, 0x08, 0x00, 0xa0, 0xc9, 0x25, 0xcd, 0x16}};
+static const GUID IID_IDirectSound3DBuffer = {
+    0x279afa86, 0x4981, 0x11ce, {0xa5, 0x21, 0x00, 0x20, 0xaf, 0x0b, 0xe5, 0x60}};
+static int ds_devices;
+static BOOL WINAPI ds_enum(GUID *g, const char *desc, const char *mod, void *ctx) {
+    if (ctx == (void *)9 && desc && desc[0]) ds_devices++;
+    return 1;
+}
+
+static int dsound_tests(HWND hwnd) {
+    void *ds = 0, *buf = 0, *notify = 0, *b3 = 0, *buf3 = 0;
+    WAVEFORMATEX wf;
+    DSBUFFERDESC d;
+    DSBPOSITIONNOTIFY pn;
+    void *p1 = 0, *p2 = 0;
+    DWORD n1 = 0, n2 = 0, play = 0, wr = 0;
+    float v[3] = {0, 0, 0};
+    HANDLE ev;
+    DWORD i;
+
+    CHECK(130, DirectSoundEnumerateA((void *)ds_enum, (void *)9) == 0 && ds_devices == 2);
+    CHECK(131, DirectSoundCreate8(0, &ds, 0) == 0 && ds);
+    CHECK(132, CALL2(ds, 6, hwnd, 2) == 0);
+    zero(&wf, sizeof wf);
+    wf.wFormatTag = 1;
+    wf.nChannels = 2;
+    wf.nSamplesPerSec = 44100;
+    wf.wBitsPerSample = 16;
+    wf.nBlockAlign = 4;
+    wf.nAvgBytesPerSec = 44100 * 4;
+    zero(&d, sizeof d);
+    d.dwSize = sizeof d;
+    d.dwFlags = 0x80 | 0x100 | 0x10000; /* VOLUME | POSITIONNOTIFY | GETCURRENTPOSITION2 */
+    d.dwBufferBytes = 44100 * 4 / 4;
+    d.lpwfxFormat = &wf;
+    CHECK(133, CALL3(ds, 3, &d, &buf, 0) == 0 && buf);
+    CHECK(134, CALL7(buf, 11, 0, 0, &p1, &n1, &p2, &n2, 2) == 0 && p1 && n1 == d.dwBufferBytes &&
+                   p2 == 0 && n2 == 0);
+    for (i = 0; i < n1 / 2; i++) ((short *)p1)[i] = (short)((i & 64) ? 3000 : -3000);
+    CHECK(135, CALL4(buf, 19, p1, n1, 0, 0) == 0);
+    ev = CreateEventA(0, 0, 0, 0);
+    pn.dwOffset = 4000;
+    pn.hEventNotify = ev;
+    CHECK(136, CALL2(buf, 0, &IID_IDirectSoundNotify, &notify) == 0 && notify &&
+                   CALL2(notify, 3, 1, &pn) == 0);
+    CHECK(137, CALL3(buf, 12, 0, 0, 1) == 0); /* DSBPLAY_LOOPING */
+    CHECK(138, WaitForSingleObject(ev, 3000) == 0);
+    CHECK(139, CALL2(buf, 4, &play, &wr) == 0 && play < d.dwBufferBytes);
+    CHECK(140, CALL0(buf, 18) == 0);
+
+    /* Tampon 3D mono : SetPosition passe trois float par la pile x86. */
+    wf.nChannels = 1;
+    wf.nBlockAlign = 2;
+    wf.nAvgBytesPerSec = 44100 * 2;
+    d.dwFlags = 0x10 | 0x80; /* CTRL3D | CTRLVOLUME */
+    d.dwBufferBytes = 8820;
+    CHECK(141, CALL3(ds, 3, &d, &buf3, 0) == 0 && buf3);
+    CHECK(142, CALL2(buf3, 0, &IID_IDirectSound3DBuffer, &b3) == 0 && b3);
+    CHECK(143, ((SETPOS3D)VT(b3)[19])(b3, 1.5f, -2.0f, 3.25f, 0) == 0 && CALL1(b3, 10, v) == 0 &&
+                   v[0] == 1.5f && v[1] == -2.0f && v[2] == 3.25f);
+
+    CALL0(b3, 2);
+    CALL0(buf3, 2);
+    CALL0(notify, 2);
+    CALL0(buf, 2);
+    CHECK(144, CALL0(ds, 2) == 0);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -759,6 +841,8 @@ void entry(void) {
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
     out("Direct3D 9 et D3DX9 : 17 verifications passees\n");
+    dsound_tests(hwnd);
+    out("DirectSound : 15 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

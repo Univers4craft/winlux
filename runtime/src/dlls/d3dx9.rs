@@ -1539,15 +1539,14 @@ impl Rgba {
                             n += 1;
                         }
                     }
-                    if acc[3] == 0 {
-                        [0, 0, 0, 0]
-                    } else {
-                        [
-                            (acc[0] / acc[3]) as u8,
-                            (acc[1] / acc[3]) as u8,
-                            (acc[2] / acc[3]) as u8,
-                            (acc[3] / n) as u8,
-                        ]
+                    match std::num::NonZeroU32::new(acc[3]) {
+                        None => [0, 0, 0, 0],
+                        Some(a) => [
+                            (acc[0] / a) as u8,
+                            (acc[1] / a) as u8,
+                            (acc[2] / a) as u8,
+                            (a.get() / n) as u8,
+                        ],
                     }
                 } else {
                     let fx = r[0] as f32 + (x as f32 + 0.5) * sw as f32 / w as f32 - 0.5;
@@ -1634,7 +1633,7 @@ pub(crate) unsafe fn load(fmt: u32, bits: usize, pitch: i32, w: u32, h: u32) -> 
 // ═══════════════════════════════════════════════════════════════════════
 
 /// D3DXIMAGE_FILEFORMAT.
-fn file_format(d: &[u8], hint: &str) -> u32 {
+fn file_format(d: &[u8]) -> u32 {
     if d.starts_with(b"BM") {
         0
     } else if d.starts_with(&[0xFF, 0xD8]) {
@@ -1645,9 +1644,8 @@ fn file_format(d: &[u8], hint: &str) -> u32 {
         4
     } else if d.starts_with(b"P") && d.len() > 1 && (b'1'..=b'7').contains(&d[1]) {
         5
-    } else if hint == "tga" {
-        2
     } else {
+        // TGA (sans signature) ou format reconnu par le seul décodeur.
         2
     }
 }
@@ -1702,7 +1700,7 @@ struct Decoded {
 }
 
 fn decode_image(d: &[u8], hint: &str) -> Option<Decoded> {
-    let ff = file_format(d, hint);
+    let ff = file_format(d);
     let ext = if hint.is_empty() {
         if ff == 2 {
             "tga"
