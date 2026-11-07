@@ -29,6 +29,8 @@ mod copy;
 mod props;
 #[path = "explorer_icons.rs"]
 mod icons;
+#[path = "explorer_pick.rs"]
+mod pick;
 
 pub const CUSTOM_TITLE: bool = true;
 
@@ -251,6 +253,8 @@ enum Focus {
     Search,
     Address,
     Rename,
+    /// « Nom du fichier » de la boîte Ouvrir / Enregistrer (explorer_pick.rs).
+    FileName,
 }
 static mut FOCUS: Focus = Focus::List;
 static mut ADDRESS: Field = EMPTY_FIELD;
@@ -1140,6 +1144,9 @@ unsafe fn rebuild_view(p: &mut Pane) {
         if e.hidden && !SHOW_HIDDEN {
             continue;
         }
+        if !pick::shows(e.name(), e.dir) {
+            continue;
+        }
         if !p.deep && !filter.is_empty() && !contains_ci(e.name(), filter) {
             continue;
         }
@@ -1269,6 +1276,11 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     let n = item_path(p, index, &mut path);
     if n == 0 {
         notify(tr4(&[b"Chemin trop long pour cette version d'Explorer.", b"Path too long for this version of Explorer.", b"Ruta demasiado larga para esta versi\xF3n del Explorador.", b"Pfad zu lang f\xFCr diese Version des Explorers."]));
+        return;
+    }
+    // Boîte Ouvrir / Enregistrer : un fichier choisi est rendu au programme.
+    if pick::active() && !p.entries[index].dir {
+        pick::choose(p, index);
         return;
     }
     if p.entries[index].kind == Kind::Network {
@@ -1521,6 +1533,18 @@ pub unsafe fn open_at(path: &[u8]) {
     }
     wm::open(wm::APP_EXPLORER);
 }
+/// Boîte Ouvrir / Enregistrer d'un programme .exe (#598) : à lire avant
+/// d'ouvrir le dossier de départ.
+pub unsafe fn init_picker() {
+    pick::init();
+}
+/// Titre de la fenêtre de l'Explorateur (« Ouvrir » dans une boîte Ouvrir).
+pub fn picking() -> bool {
+    pick::active()
+}
+pub fn window_title() -> &'static [u8] {
+    pick::title().unwrap_or_else(|| tr(S_FILE_EXPLORER))
+}
 pub unsafe fn open_home() {
     open_at(HOME);
 }
@@ -1695,7 +1719,8 @@ unsafe fn geo(f: &Frame) -> Geo {
     let c = f.client;
     let toolbar = rect(c.left, c.top, c.right, c.top + TOOLBAR_H);
     let command = rect(c.left, toolbar.bottom, c.right, toolbar.bottom + COMMAND_H);
-    let status = rect(c.left, c.bottom - STATUS_H, c.right, c.bottom);
+    let status_h = if pick::active() { pick::PANEL_H } else { STATUS_H };
+    let status = rect(c.left, c.bottom - status_h, c.right, c.bottom);
     let nav_w = if SHOW_NAV && c.right - c.left > 700 {
         NAV_W
     } else {
@@ -1807,18 +1832,37 @@ unsafe fn item_at(p: &Pane, r: &Rect, x: i32, y: i32) -> Option<usize> {
 }
 
 /// Colonnes de la vue Détails : (x du nom, largeur du nom, x date, x type, x taille).
+///
+/// Fenêtre étroite (#674) : l'ordre Nom, Date, Type, Taille ne change jamais.
+/// Une colonne qui n'a plus sa place disparaît en entier, en partant de la
+/// droite (Taille, puis Type, puis Date), au lieu de se réduire à « … » ou
+/// de passer avant sa voisine. Une colonne masquée est placée au-delà du bord
+/// droit (`x >= r.right`).
 fn detail_cols(r: &Rect) -> (i32, i32, i32, i32, i32) {
+    const WIDTHS: [i32; 3] = [150, 150, 110];
+    const NAME_MIN: i32 = 200;
     let w = r.right - r.left;
-    let name_w = (w * 45 / 100).max(200);
+    let avail = w - 12;
+    let mut shown = WIDTHS.len();
+    while shown > 0 && NAME_MIN + WIDTHS[..shown].iter().sum::<i32>() > avail {
+        shown -= 1;
+    }
+    let rest: i32 = WIDTHS[..shown].iter().sum();
+    let name_w = if shown == WIDTHS.len() {
+        (w * 45 / 100).max(NAME_MIN).min(avail - rest)
+    } else {
+        (avail - rest).max(NAME_MIN)
+    };
+    let off = r.right + 4096;
     let date_x = r.left + name_w + 12;
-    let type_x = date_x + 150;
-    let size_x = type_x + (w - name_w - 150 - 120).max(120);
+    let type_x = date_x + WIDTHS[0];
+    let size_x = (type_x + (w - name_w - 150 - 120).max(120)).min(r.right - 110);
     (
         r.left + 36,
         name_w,
-        date_x,
-        type_x,
-        size_x.min(r.right - 110),
+        if shown >= 1 { date_x } else { off },
+        if shown >= 2 { type_x } else { off + 200 },
+        if shown >= 3 { size_x.max(type_x + 120) } else { off + 400 },
     )
 }
 
@@ -2857,7 +2901,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     tx,
                     ty,
                     type_name(&e, &mut tbuf),
-                    sx - tx - 12,
+                    sx.min(ir.right) - tx - 12,
                 );
                 if let Some((free, total)) = space {
                     let _ = total;
@@ -5018,6 +5062,13 @@ unsafe fn open_terminal() {
     } else {
         p.loc.get()
     };
+    // Session native : le vrai terminal, dans ce dossier (pas Mousepad).
+    if wm::native_session() {
+        if !wm::native_terminal(Some(dir)) {
+            notify(tr4(&[b"Impossible d'ouvrir le terminal.", b"Couldn't open the terminal.", b"No se pudo abrir el terminal.", b"Das Terminal konnte nicht ge\xF6ffnet werden."]));
+        }
+        return;
+    }
     crate::terminal::init_at(dir);
     crate::wm::open(crate::wm::APP_TERMINAL);
 }
@@ -6072,12 +6123,17 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         );
         draw_pane(g, &geo.panes[1], 1);
     }
-    draw_status(g, &geo);
+    if pick::active() {
+        pick::draw(g, &geo.status);
+    } else {
+        draw_status(g, &geo);
+    }
     draw_menu(g, &geo, f);
     copy::draw(g, f);
     props::draw(g, f);
     draw_password(g, f);
     crate::sharing::draw_dialog(g, f);
+    pick::draw_overlay(g, f);
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -6162,6 +6218,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         return true;
     }
     let geo = geo(f);
+    if MENU == Menu::None && pick::mouse(ev, x, y, f, &geo.status) {
+        return true;
+    }
     // Menu ouvert : il capte le clic.
     if matches!(ev, Mouse::Down | Mouse::DoubleClick | Mouse::RightDown) {
         if let Some(hit) = menu_hit(&geo, f, x, y) {
@@ -6294,7 +6353,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         pn.scroll_x -= delta / 120 * 60;
                         let content_w = if VIEW == View::Details {
                             let (_, _, _, _, sx) = detail_cols(&r);
-                            sx + 120 - r.left
+                            if sx < r.right {
+                                sx + 120 - r.left
+                            } else {
+                                r.right - r.left
+                            }
                         } else {
                             r.right - r.left
                         };
@@ -6627,6 +6690,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if copy::dialog_open() {
         return copy::key(vk, ch);
     }
+    if MENU == Menu::None && pick::key(vk, ch) {
+        return true;
+    }
     if ch == 27 && JOB != 0 && FOCUS == Focus::List && MENU == Menu::None {
         cancel_job();
         return true;
@@ -6652,6 +6718,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         Focus::Search => Some(&mut pane().search),
         Focus::Address => Some(&mut *core::ptr::addr_of_mut!(ADDRESS)),
         Focus::Rename => Some(&mut *core::ptr::addr_of_mut!(RENAME)),
+        Focus::FileName => Some(&mut *core::ptr::addr_of_mut!(pick::NAME)),
         Focus::List => None,
     };
     if let Some(fl) = field {
@@ -6826,6 +6893,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                             }
                         }
                         Focus::Rename => commit_rename(),
+                        Focus::FileName => pick::accept(),
                         Focus::Search => {
                             // Entrée : recherche aussi dans les sous-dossiers (3 niveaux).
                             let p = pane();
@@ -7199,6 +7267,22 @@ unsafe fn places_and_hover_checks() {
     };
     VIEW = saved_view;
     check!(in_row, "Details : un clic dans les colonnes Type ou Taille selectionne la ligne");
+    // #674 : fenêtre étroite, l'ordre reste Nom, Date, Type, Taille et les
+    // colonnes sans place disparaissent par la droite.
+    let narrow_ok = [1000, 760, 640, 520, 420, 300].iter().all(|&w| {
+        let r = rect(10, 0, 10 + w, 40);
+        let (nx, nw, dx, tx, sx) = detail_cols(&r);
+        let fits = |x: i32, cw: i32| x >= r.right || x + cw <= r.right + 12;
+        nx < dx && dx < tx && tx < sx && nw >= 200 && fits(dx, 150) && fits(tx, 150) && fits(sx, 110)
+            && (sx >= r.right || tx < r.right)
+            && (tx >= r.right || dx < r.right)
+    });
+    let r452 = rect(0, 0, 410, 40);
+    let (_, _, dx, tx, sx) = detail_cols(&r452);
+    check!(
+        narrow_ok && dx < r452.right && tx >= r452.right && sx >= r452.right,
+        "Details etroit : ordre des colonnes garde, Type et Taille masques entierement"
+    );
     NHOT = 0;
     HOT_FULL = false;
     let b = rect(100, 100, 140, 130);
@@ -7447,6 +7531,7 @@ pub unsafe fn regression_checks() {
     MENU = Menu::None;
     archive_regression(root);
     row_icon_checks();
+    pick::regression();
     places_and_hover_checks();
     props::regression(root);
     icons::regression();
