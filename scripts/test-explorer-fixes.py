@@ -100,6 +100,11 @@ ok("wm::MOUSE_X" not in explorer.replace("inside(r, wm::MOUSE_X, wm::MOUSE_Y)", 
 ok("fn enforce_trash_limit(" in copy and "copy::enforce_trash_limit(since)" in explorer and "taille-max-mo=" in copy,
    "Corbeille : taille maximale (5 % du disque ou taille-max-mo) et purge des plus anciens")
 
+ok("x > ir.left + detail_cols(&ir).1" not in explorer,
+   "vue Détails : un clic dans Date, Type ou Taille sélectionne la ligne")
+ok("fn content_text(" in props and 'b" dossier"' in props and 'b" folder"' in props,
+   "Propriétés : « 1 dossier », « 1 folder » au singulier")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

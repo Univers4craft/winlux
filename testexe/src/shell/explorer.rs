@@ -1778,9 +1778,8 @@ unsafe fn item_at(p: &Pane, r: &Rect, x: i32, y: i32) -> Option<usize> {
     if !inside(&ir, x, y) {
         return None;
     }
-    if VIEW == View::Details && x > ir.left + detail_cols(&ir).1 {
-        return None;
-    }
+    // Vue Détails : toute la ligne est cliquable (Date, Type, Taille), comme
+    // Windows 11 ; seul l'espace sous les lignes reste du vide.
     Some(v)
 }
 
@@ -7149,6 +7148,20 @@ unsafe fn places_and_hover_checks() {
     pane().loc = old_loc;
     reload(pane());
     check!(all, "Accueil : chaque dossier ouvre son propre chemin en fr, en, es et de");
+    // Vue Détails : un clic dans la colonne Type ou Taille vise la ligne.
+    let saved_view = VIEW;
+    VIEW = View::Details;
+    let r = rect(0, 0, 1000, 600);
+    let c = cells(&r);
+    let p = pane();
+    let in_row = p.nview > 0 && {
+        let ir = item_rect(&r, &c, 0, p.scroll);
+        let (_, _, _, type_x, size_x) = detail_cols(&ir);
+        let y = (ir.top + ir.bottom) / 2;
+        item_at(p, &r, type_x + 10, y) == Some(0) && item_at(p, &r, size_x + 10, y) == Some(0)
+    };
+    VIEW = saved_view;
+    check!(in_row, "Details : un clic dans les colonnes Type ou Taille selectionne la ligne");
     NHOT = 0;
     HOT_FULL = false;
     let b = rect(100, 100, 140, 130);
