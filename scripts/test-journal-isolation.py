@@ -63,6 +63,24 @@ ok("meta.uid() == euid" in runtime, "runtime : refuse un dossier qui n'est pas a
 crash = text("runtime/src/crash.rs")
 ok("O_NOFOLLOW" in crash and "signal_paths()" in crash, "runtime : crash.log sans suivre de lien, chemins préparés")
 
+# ── Changement d'utilisateur : journaux du bureau hors de /run/winlux ────
+sessions = text("scripts/winlux-sessions.sh")
+ok('log="$run/session-' not in sessions and '-logfile "$run/Xorg' not in sessions,
+   "winlux-sessions : session-<compte>.log et Xorg.<n>.log plus dans /run/winlux (collant)")
+ok('own_dir "$run/session-logs"' in sessions and '"$out.tmp.$$"' not in sessions,
+   "winlux-sessions : dossier de journaux à root, liste par mktemp")
+with tempfile.TemporaryDirectory() as tmp:
+    run = Path(tmp) / "run/winlux"
+    run.mkdir(parents=True)
+    (run / "session-logs").symlink_to(tmp)
+    script = ROOT / "scripts/winlux-sessions.sh"
+    body = script.read_text(encoding="utf-8")
+    helper = body[body.index("own_dir() {"):body.index("do_list() {")]
+    out = subprocess.run(["sh", "-c", "fail() { echo \"$*\" >&2; exit 1; }\n" + helper + 'own_dir "$1"', "x",
+                          str(run / "session-logs")], capture_output=True, text=True)
+    ok(out.returncode == 0 and not (run / "session-logs").is_symlink() and (run / "session-logs").is_dir(),
+       f"winlux-sessions : un lien posé à la place du dossier est remplacé ({out.stderr})")
+
 # ── Lecteurs : même dossier par défaut que le runtime ────────────────────
 env = {k: v for k, v in os.environ.items() if k != "WINLUX_JOURNAL_DIR"}
 expected = "/run/winlux/journal" if os.geteuid() == 0 else f"/run/winlux/journal-{os.geteuid()}"
