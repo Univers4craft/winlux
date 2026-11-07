@@ -335,13 +335,28 @@ fn toolbar_layout(hwnd: usize, s: &BarState) -> Vec<Rect> {
     let has_text = s.buttons.iter().any(|b| !b.text.is_empty());
     let list = style(hwnd) & TBSTYLE_LIST != 0;
     let vertical = style(hwnd) & CCS_VERT != 0;
-    let mut h = if has_text { lh + 14 } else { s.bitmap.1 + 9 }.max(24);
+    // Taille des images : celle de la liste d'images si elle existe.
+    let (iw, ih) = (s.image_list != 0)
+        .then(|| crate::dlls::icons::list_size(s.image_list))
+        .flatten()
+        .unwrap_or(s.bitmap);
+    // Texte sous l'image (style par défaut) ou à sa droite (TBSTYLE_LIST).
+    let mut h = if !has_text {
+        ih + 9
+    } else if list {
+        lh.max(ih) + 10
+    } else {
+        ih + lh + 12
+    }
+    .max(24);
     let mut uniform = 0;
     let width_of = |b: &Button| -> i32 {
         let w = if b.text.is_empty() {
-            s.bitmap.0 + 9
+            iw + 9
+        } else if list {
+            iw + 4 + measure(font, &b.text).0 + 20
         } else {
-            measure(font, &b.text).0 + if list { 20 } else { 16 }
+            (measure(font, &b.text).0 + 16).max(iw + 9)
         };
         w.max(24)
     };
@@ -515,13 +530,14 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         let size = (list != 0 && b.image >= 0)
             .then(|| crate::dlls::icons::list_size(list))
             .flatten();
+        let text_right = style(hwnd) & TBSTYLE_LIST != 0;
         if let Some((iw, ih)) = size {
-            let x = if b.text.is_empty() {
-                (tr.left + tr.right - iw) / 2
-            } else {
+            let x = if !b.text.is_empty() && text_right {
                 tr.left
+            } else {
+                (tr.left + tr.right - iw) / 2
             };
-            let y = if b.text.is_empty() {
+            let y = if b.text.is_empty() || text_right {
                 (tr.top + tr.bottom - ih) / 2
             } else {
                 tr.top + 3
@@ -540,7 +556,13 @@ fn paint_toolbar(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             } else {
                 crate::dlls::icons::draw_list_image(list, b.image, p.hdc, x, y, bg);
             }
-            if !b.text.is_empty() {
+            if !b.text.is_empty() && text_right {
+                let beside = Rect {
+                    left: x + iw + 4,
+                    ..tr
+                };
+                p.text(beside, &b.text, color, 0);
+            } else if !b.text.is_empty() {
                 let below = Rect { top: y + ih, ..tr };
                 p.text(below, &b.text, color, 1);
             }
