@@ -92,6 +92,8 @@ __declspec(dllimport) BOOL WINAPI EnumCalendarInfoW(BOOL(WINAPI *)(unsigned shor
 __declspec(dllimport) HANDLE WINAPI LoadIconW(HANDLE, const unsigned short *);
 __declspec(dllimport) BOOL WINAPI GetIconInfo(HANDLE, void *);
 __declspec(dllimport) HANDLE WINAPI CreatePopupMenu(void);
+__declspec(dllimport) BOOL WINAPI K32EnumProcessModules(HANDLE, HANDLE *, DWORD, DWORD *);
+__declspec(dllimport) HANDLE WINAPI GetModuleHandleA(const char *);
 __declspec(dllimport) BOOL WINAPI InsertMenuItemW(HANDLE, DWORD, BOOL, const void *);
 __declspec(dllimport) BOOL WINAPI GetMenuItemInfoW(HANDLE, DWORD, BOOL, void *);
 __declspec(dllimport) HANDLE WINAPI CreateCompatibleDC(HANDLE);
@@ -489,6 +491,17 @@ __attribute__((used)) void __stdcall entry(void) {
         HANDLE old = SelectObject(dc, bmp);
         if (!old) fail(70, 1);
         if (SelectObject(dc, old) != bmp) fail(70, 2);
+    }
+
+    /* 71 : K32EnumProcessModules remplit un tableau de HMODULE de 4 octets
+     * (WinSCP lisait « base, 0, base, 0… »). */
+    {
+        HANDLE mods[3] = {0, 0, (HANDLE)GUARD};
+        DWORD need = 0;
+        if (!K32EnumProcessModules(GetCurrentProcess(), mods, 2 * sizeof(HANDLE), &need)) fail(71, 0);
+        if (mods[0] != GetModuleHandleA(0)) fail(71, (DWORD)mods[0]);
+        if (need % 4 != 0 || need < 4 || (need >= 8 && mods[1] == 0)) fail(71, need);
+        if (mods[2] != (HANDLE)GUARD) fail(71, (DWORD)mods[2]);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

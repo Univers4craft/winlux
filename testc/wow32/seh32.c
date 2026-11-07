@@ -21,6 +21,80 @@ __declspec(dllimport) HANDLE WINAPI GetStdHandle(DWORD);
 __declspec(dllimport) int WINAPI WriteFile(HANDLE, const void *, DWORD, DWORD *, void *);
 __declspec(dllimport) char *WINAPI GetCommandLineA(void);
 __declspec(dllimport) TOP_FILTER WINAPI SetUnhandledExceptionFilter(TOP_FILTER);
+__declspec(dllimport) int WINAPI EnumCalendarInfoW(int(WINAPI *)(unsigned short *), DWORD, DWORD, DWORD);
+
+/* Cas 10 (#779) : rappel x86 appelé par du code 64 bits (EnumCalendarInfoW),
+ * qui lève une exception et la rattrape avec un gestionnaire à la Delphi /
+ * C++Builder : RtlUnwind puis saut direct dans le bloc de reprise, sans
+ * revenir au répartiteur. Le rappel rend ensuite la main normalement au
+ * code 64 bits, qui doit retrouver sa propre pile et pas celle de l'appel
+ * abandonné du gestionnaire. */
+volatile DWORD catch_count;
+int WINAPI unwind_callback(unsigned short *);
+__asm__(
+    ".intel_syntax noprefix\n"
+    ".text\n"
+    ".globl _unwind_callback@4\n"
+    "_unwind_callback@4:\n"
+    "    push ebp\n"
+    "    mov ebp, esp\n"
+    "    push ebx\n"
+    "    push esi\n"
+    "    push edi\n"
+    /* Cadre : suivant, gestionnaire, esp et ebp de reprise. */
+    "    sub esp, 16\n"
+    "    mov eax, dword ptr fs:[0]\n"
+    "    mov dword ptr [esp], eax\n"
+    "    mov dword ptr [esp + 4], offset _jump_handler\n"
+    "    mov dword ptr [esp + 8], esp\n"
+    "    mov dword ptr [esp + 12], ebp\n"
+    "    mov dword ptr fs:[0], esp\n"
+    "    push 0\n"
+    "    push 0\n"
+    "    push 0\n"
+    "    push 0xE0000010\n"
+    "    call dword ptr [__imp__RaiseException@16]\n"
+    /* Pas de reprise attendue ici. */
+    "    mov eax, 2\n"
+    "    jmp 1f\n"
+    "_unwind_catch:\n"
+    "    inc dword ptr [_catch_count]\n"
+    "    xor eax, eax\n"
+    "1:\n"
+    "    mov ecx, dword ptr [esp]\n"
+    "    mov dword ptr fs:[0], ecx\n"
+    "    add esp, 16\n"
+    "    pop edi\n"
+    "    pop esi\n"
+    "    pop ebx\n"
+    "    pop ebp\n"
+    "    ret 4\n"
+    /* Gestionnaire (cdecl) : record, cadre, contexte, répartiteur. */
+    "_jump_handler:\n"
+    "    mov eax, dword ptr [esp + 4]\n"
+    "    test dword ptr [eax + 4], 6\n"
+    "    jnz 2f\n"
+    "    cmp dword ptr [eax], 0xE0000010\n"
+    "    jne 2f\n"
+    "    mov ecx, dword ptr [esp + 8]\n"
+    "    push 0\n"
+    "    push eax\n"
+    "    push 0\n"
+    "    push ecx\n"
+    "    call dword ptr [__imp__RtlUnwind@16]\n"
+    "    mov ecx, dword ptr [esp + 8]\n"
+    "    mov ebp, dword ptr [ecx + 12]\n"
+    "    mov esp, dword ptr [ecx + 8]\n"
+    "    jmp _unwind_catch\n"
+    "2:\n"
+    "    mov eax, 1\n"
+    "    ret\n"
+    ".att_syntax\n");
+/* RtlUnwind n'est appelée que depuis l'assembleur : la référence C fait
+ * venir l'import. */
+__declspec(dllimport) void WINAPI RtlUnwind(void *, void *, EXCEPTION_RECORD *, void *);
+void *volatile keep_rtl_unwind = (void *)&RtlUnwind;
+void *volatile keep_raise = (void *)&RaiseException;
 
 static void say(const char *s) {
     DWORD n = 0, len = 0;
@@ -121,6 +195,15 @@ void __stdcall entry(void) {
     ok = 0;
     __try { *(volatile int *)4 = 1; } __except (1) { ok = 9; }
     if (ok != 9) ExitProcess(9);
+    /* 10. Exception levée et rattrapée dans un rappel appelé par le code
+     * 64 bits, gestionnaire qui saute lui-même dans la reprise (#779).
+     * Deux fois, puis une faute ordinaire : tout doit rester en place. */
+    EnumCalendarInfoW(unwind_callback, 0x400, 1, 7);
+    EnumCalendarInfoW(unwind_callback, 0x400, 1, 7);
+    if (catch_count != 2) ExitProcess(10);
+    ok = 0;
+    __try { *(volatile int *)8 = 1; } __except (1) { ok = 11; }
+    if (ok != 11) ExitProcess(11);
     say("SEH 32 bits : tout est correct.\r\n");
     ExitProcess(0);
 }

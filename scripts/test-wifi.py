@@ -696,8 +696,15 @@ def test_page(work, env):
         return False
 
     GLib.timeout_add(300, enterprise_dialog)
-    bureau = next(w for w in walk(panel.network_box, Gtk) if isinstance(w, Gtk.Button)
-                  and w.get_accessible().get_name() == "Se connecter Bureau")
+    # La connexion à « Voisin » relance une actualisation de la liste : tant
+    # qu'elle n'est pas finie, la ligne « Bureau » peut manquer (#764).
+    deadline = time.time() + 20
+    bureau = None
+    while time.time() < deadline and bureau is None:
+        pump(Gtk, 0.1)
+        bureau = next((w for w in walk(panel.network_box, Gtk) if isinstance(w, Gtk.Button)
+                       and w.get_accessible().get_name() == "Se connecter Bureau"), None)
+    assert bureau is not None, "« Bureau » absent de la liste des réseaux après 20 s"
     bureau.clicked()
     pump(Gtk, 0.5)
     ok(enterprise.get("peap"), "boîte Entreprise : identifiant, méthode, authentification interne, certificat du serveur, domaine")

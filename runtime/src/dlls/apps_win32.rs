@@ -907,11 +907,12 @@ unsafe extern "win64" fn extract_icon_ex_w(
     small: *mut usize,
     _n: u32,
 ) -> u32 {
+    // Une case HICON de 4 octets en x86 : write_ptr n'écrit pas au-delà.
     if !large.is_null() {
-        *large = 0;
+        crate::wow32::write_ptr(large as usize, 0);
     }
     if !small.is_null() {
-        *small = 0;
+        crate::wow32::write_ptr(small as usize, 0);
     }
     0
 }
