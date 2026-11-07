@@ -256,8 +256,24 @@ pub fn rasterize(f: &GdiFont, gid: u16) -> Raster {
     let r = (x1 as f32 * s).ceil();
     let b = (y0 as f32 * s).floor();
     let t = (y1 as f32 * s).ceil();
-    let w = ((r - l) as usize).max(1);
-    let h = ((t - b) as usize).max(1);
+    // Taille absurde (police démesurée, boîte de glyphe invalide) : pas de
+    // tracé plutôt qu'une allocation de plusieurs exaoctets qui tuait le
+    // processus (FileZilla au démarrage, #785).
+    let span = |a: f32, b: f32| {
+        let d = b - a;
+        (d.is_finite() && (0.0..=4096.0).contains(&d)).then_some((d as usize).max(1))
+    };
+    let (Some(w), Some(h)) = (span(l, r), span(b, t)) else {
+        crate::trace!("usp10 : glyphe {gid} hors limites (échelle {s}), non dessiné");
+        return Raster {
+            w: 1,
+            h: 1,
+            origin: (0, 0),
+            advance,
+            cov: vec![0],
+            empty: true,
+        };
+    };
     let mut path = Path::default();
     let mut sink = ToPath {
         path: &mut path,

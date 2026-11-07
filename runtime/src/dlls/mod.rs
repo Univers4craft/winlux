@@ -62,6 +62,7 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod filedialog_com;
+pub mod ftp_apps;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
@@ -411,7 +412,17 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ncrypt",
-                exports: ncrypt::exports(),
+                // ncrypt.dll exporte aussi les BCrypt* (FileZilla les y
+                // importe pour BCryptGenRandom).
+                exports: {
+                    let mut e = ncrypt::exports();
+                    for (name, addr) in bcrypt::exports() {
+                        if name.starts_with("BCrypt") {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -890,12 +901,15 @@ fn add_basics(all: &mut [Builtin]) {
     let electron = electron_win32::all();
     // Fonctions communes à Notepad++, Audacity et Claude (common_apps).
     let common = common_apps::all();
+    // Imports de FileZilla (ftp_apps).
+    let ftp = ftp_apps::all();
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
         .chain(apps)
         .chain(electron)
         .chain(common)
+        .chain(ftp)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -1152,7 +1166,13 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
-    matches!(normalized, "msvcp140")
+    // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
+    // couvre que les petits tests C++ ; une appli qui livre la sienne
+    // (FileZilla, wxWidgets…) en a besoin en entier (#783).
+    matches!(
+        normalized,
+        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+    )
 }
 
 pub fn is_builtin(normalized: &str) -> bool {
