@@ -154,6 +154,24 @@ ok('b"folder"' in pick_rs and "fn accept_folder(" in pick_rs,
 ok("while shown > 0 && NAME_MIN" in explorer and "sx.min(ir.right) - tx - 12" in explorer,
    "vue Détails étroite : Type et Taille disparaissent au lieu de « … » ou d'être inversées")
 
+# ── #738 : Accueil en cartes, le défilement ne passe plus sur la barre ────
+order = explorer[explorer.index("pub unsafe fn draw(g: &mut Gfx, f: &Frame)"):]
+order = order[:order.index("\n}\n")]
+ok(order.index("draw_pane(g, &geo.panes[0], 0)") < order.index("draw_toolbar(g, &geo)"),
+   "barre d'adresse et de commandes dessinées après les volets (le GDI ne découpe pas)")
+ok("pane_label(g, &rect(r.left, r.top - 22, r.right, r.bottom), pn, focused)" in explorer,
+   "double volet : l'en-tête du volet redessiné par-dessus les cartes défilées")
+
+# ── #739 : « Compatibilité » d'un .exe ouvre sa carte dans Paramètres ──────
+wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
+settings_rs = (SHELL / "settings.rs").read_text(encoding="utf-8")
+ok("WINLUX_SETTINGS_EXE" in wm_rs and "native_settings(10)" in wm_rs
+   and "crate::wm::native_exe_settings(&z)" in settings_rs,
+   "session native : Programmes Windows (10) avec le chemin du .exe, plus la page Écran")
+settings_py = (ROOT / "scripts/winlux-settings.py").read_text(encoding="utf-8")
+ok('"--linux-path"' in settings_py and '"--linux-path"' in (ROOT / "runtime/src/main.rs").read_text(encoding="utf-8"),
+   "Paramètres convertit le chemin Windows avec les règles du runtime (winlux --linux-path)")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

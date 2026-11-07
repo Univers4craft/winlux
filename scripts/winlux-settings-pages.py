@@ -2418,7 +2418,14 @@ class ExtraPages:
         if not programs:
             self.hint(_t("Aucun programme Windows installé pour l’instant. Double-cliquez sur un installateur .exe pour en ajouter un."), self.programs_box)
         self.program_cards = {}
+        # Ouvert depuis « Compatibilité » de l'Explorateur : ce programme en
+        # premier, même s'il n'est pas dans la liste des programmes installés.
+        wanted, self.pending_exe = getattr(self, "pending_exe", None), None
+        if wanted is not None:
+            name = next((n for e, n in programs if e == wanted), wanted.stem)
+            self.program_card(module, wanted, name, first=True)
         for exe, name in programs:
+            if exe == wanted: continue
             self.program_card(module, exe, name)
         GLib.timeout_add(1500, self.forget_uninstalled, self.programs_box)
 
