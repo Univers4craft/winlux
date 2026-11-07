@@ -346,14 +346,14 @@ pub extern "win64" fn amsg_exit(code: i32) -> ! {
 pub extern "win64" fn abort() -> ! {
     // Qui a demandé l'arrêt (std::bad_variant_access en -fno-exceptions,
     // CHECK…) : sans cette ligne, l'abandon ne laissait aucune trace.
-    let rsp: usize;
-    unsafe { std::arch::asm!("mov {}, rsp", out(reg) rsp) };
-    let calls = crate::dlls::seh::stack_calls(rsp, 10);
+    let calls = crate::dlls::seh::caller_stack(10);
     if !calls.is_empty() {
-        eprintln!(
+        let line = format!(
             "winlux: abort() demandé par l'appli, pile {}",
             calls.join(" ")
         );
+        eprintln!("{line}");
+        crate::thunks::api_note(&line);
     }
     if let Some(h) = signal_handler(SIGABRT) {
         unsafe {
