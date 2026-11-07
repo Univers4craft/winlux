@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory() as directory:
             fake = fake_root / "usr/sbin" / daemon
             fake.write_text(f'#!/bin/sh\necho "{daemon} $*" >> "{log}"\n')
             fake.chmod(0o755)
-        for path in ("/usr/sbin/", "/etc/passwd", "/run/"):
+        for path in ("/usr/sbin/", "/etc/passwd", "/run/", "/var/"):
             script = script.replace(path, f"{fake_root}{path}")
         result = subprocess.run(["sh", "-eu", "-c", script + "\nwait\n"], capture_output=True, text=True, timeout=30,
                                 env={**os.environ, "PATH": "/usr/bin:/bin"})
