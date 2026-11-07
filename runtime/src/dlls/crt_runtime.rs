@@ -362,6 +362,7 @@ pub extern "win64" fn abort() -> ! {
         }
     }
     eprintln!("\nabnormal program termination");
+    crate::dlls::kernel32_misc::print_debug_tail();
     crate::dlls::kernel32::flush_and_exit(3)
 }
 

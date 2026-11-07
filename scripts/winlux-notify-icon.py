@@ -95,12 +95,31 @@ def apply(fields):
         level = {"1": "dialog-information", "2": "dialog-warning", "3": "dialog-error"}.get(str(int(flags or 0) & 3), "dialog-information")
         icon = ICONS.get(key)
         name = icon.get_title() if icon is not None else "Winlux"
-        if shutil.which("notify-send"):
-            try:
-                subprocess.Popen(["notify-send", "--app-name", name, "--icon", level, title or name, text],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                emit(key, "balloon-show")
-            except OSError: pass
+        if show_notification(name, level, title or name, text):
+            emit(key, "balloon-show")
+
+def show_notification(app, icon, title, text):
+    """Bulle par org.freedesktop.Notifications (winlux-notifications), sans
+    dépendre de notify-send, absent de l'image (#630). notify-send reste un
+    repli si aucun serveur ne répond sur le bus."""
+    try:
+        from gi.repository import Gio
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                      "org.freedesktop.Notifications", "Notify",
+                      GLib.Variant("(susssasa{sv}i)", (app, 0, icon, title, text, [], {}, -1)),
+                      None, Gio.DBusCallFlags.NONE, 2000, None)
+        return True
+    except (GLib.Error, ImportError, ValueError):
+        pass
+    if shutil.which("notify-send"):
+        try:
+            subprocess.Popen(["notify-send", "--app-name", app, "--icon", icon, title, text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            pass
+    return False
 
 BUFFER = bytearray()
 

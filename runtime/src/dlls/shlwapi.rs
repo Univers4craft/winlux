@@ -125,7 +125,12 @@ pub unsafe extern "win64" fn path_combine_w(
     } else {
         format!("{}\\{}", d.trim_end_matches(['\\', '/']), f)
     };
-    let w: Vec<u16> = combined.encode_utf16().collect();
+    // Le résultat est canonique (documentation de PathCombine).
+    let units: Vec<u32> = combined.encode_utf16().map(u32::from).collect();
+    let w: Vec<u16> = canonicalize_units(&units)
+        .iter()
+        .map(|&c| c as u16)
+        .collect();
     let n = w.len().min(259);
     std::ptr::copy_nonoverlapping(w.as_ptr(), out, n);
     *out.add(n) = 0;
@@ -454,6 +459,312 @@ pub unsafe extern "win64" fn path_skip_root_w(path: *const u16) -> *const u16 {
     at.map_or(std::ptr::null(), |i| path.add(i))
 }
 
+// --- PathCanonicalize, PathCreateFromUrl, barres obliques finales -----------
+// D'après la documentation publique de shlwapi : « . » et « .. » sont retirés
+// sans toucher au disque, la racine (« C:\ », « \\serveur ») est gardée et un
+// chemin vide devient « \ ». Travail en unités de code pour couvrir A et W.
+
+const BS: u32 = b'\\' as u32;
+
+fn units_w(p: *const u16) -> Vec<u32> {
+    if p.is_null() {
+        return Vec::new();
+    }
+    let mut v = Vec::new();
+    unsafe {
+        let mut i = 0;
+        while *p.add(i) != 0 {
+            v.push(*p.add(i) as u32);
+            i += 1;
+        }
+    }
+    v
+}
+
+fn units_a(p: *const u8) -> Vec<u32> {
+    if p.is_null() {
+        return Vec::new();
+    }
+    let n = unsafe { crate::printf::narrow_len(p) };
+    (0..n).map(|i| unsafe { *p.add(i) } as u32).collect()
+}
+
+/// Longueur de la racine : « C:\ » (3), « C: » (2), « \\serveur\partage\ »,
+/// « \ » (1).
+fn root_len(p: &[u32]) -> usize {
+    if p.len() >= 2 && p[1] == b':' as u32 {
+        return if p.get(2) == Some(&BS) { 3 } else { 2 };
+    }
+    if p.len() >= 2 && p[0] == BS && p[1] == BS {
+        // \serveur\partage : la racine va jusqu'après le partage.
+        let mut seps = 0;
+        for (i, &c) in p.iter().enumerate().skip(2) {
+            if c == BS {
+                seps += 1;
+                if seps == 2 {
+                    return i + 1;
+                }
+            }
+        }
+        return p.len();
+    }
+    usize::from(p.first() == Some(&BS))
+}
+
+pub(crate) fn canonicalize_units(p: &[u32]) -> Vec<u32> {
+    let root_n = root_len(p);
+    let mut root = p[..root_n].to_vec();
+    if root.len() == 2 && root[1] == b':' as u32 {
+        root.push(BS); // « C: » devient « C:\\ »
+    }
+    let mut parts: Vec<&[u32]> = Vec::new();
+    for seg in p[root_n..].split(|&c| c == BS) {
+        if seg == [b'.' as u32] {
+            continue;
+        }
+        if seg == [b'.' as u32, b'.' as u32] {
+            parts.pop();
+            continue;
+        }
+        if !seg.is_empty() {
+            parts.push(seg);
+        }
+    }
+    let mut out = root;
+    for (i, seg) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(BS);
+        }
+        out.extend_from_slice(seg);
+    }
+    // Une barre finale du chemin d'origine est gardée (« C:\a\ »).
+    if !parts.is_empty() && p.last() == Some(&BS) {
+        out.push(BS);
+    }
+    if out.is_empty() {
+        out.push(BS);
+    }
+    out
+}
+
+unsafe fn put_w(out: *mut u16, v: &[u32], cap: usize) -> bool {
+    if v.len() >= cap {
+        *out = 0;
+        return false;
+    }
+    for (i, &c) in v.iter().enumerate() {
+        *out.add(i) = c as u16;
+    }
+    *out.add(v.len()) = 0;
+    true
+}
+
+unsafe fn put_a(out: *mut u8, v: &[u32], cap: usize) -> bool {
+    if v.len() >= cap {
+        *out = 0;
+        return false;
+    }
+    for (i, &c) in v.iter().enumerate() {
+        *out.add(i) = c as u8;
+    }
+    *out.add(v.len()) = 0;
+    true
+}
+
+/// PathCanonicalizeW (tampon de MAX_PATH caractères).
+pub unsafe extern "win64" fn path_canonicalize_w(out: *mut u16, path: *const u16) -> i32 {
+    if out.is_null() || path.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    put_w(out, &canonicalize_units(&units_w(path)), 260) as i32
+}
+
+/// PathCanonicalizeA
+pub unsafe extern "win64" fn path_canonicalize_a(out: *mut u8, path: *const u8) -> i32 {
+    if out.is_null() || path.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    put_a(out, &canonicalize_units(&units_a(path)), 260) as i32
+}
+
+/// « file:///C:/a%20b/c.txt » → « C:\a b\c.txt » ; « file://serveur/x » →
+/// « \\serveur\x ».
+fn path_from_url(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("file:") {
+        return None;
+    }
+    let rest = &url[5..];
+    let rest = rest.strip_prefix("//").unwrap_or(rest);
+    let (unc, rest) = if let Some(local) = rest.strip_prefix('/') {
+        (false, local)
+    } else if rest.len() >= 2 && rest.as_bytes()[1] == b':' || rest.as_bytes().get(1) == Some(&b'|')
+    {
+        (false, rest)
+    } else if let Some(local) = rest.strip_prefix("localhost/") {
+        (false, local)
+    } else {
+        (true, rest)
+    };
+    let mut bytes = Vec::new();
+    let b = rest.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&rest[i + 1..i + 3], 16) {
+                bytes.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        bytes.push(if b[i] == b'/' { b'\\' } else { b[i] });
+        i += 1;
+    }
+    let mut path = String::from_utf8_lossy(&bytes).into_owned();
+    if path.as_bytes().get(1) == Some(&b'|') {
+        path.replace_range(1..2, ":");
+    }
+    Some(if unc { format!("\\\\{path}") } else { path })
+}
+
+/// PathCreateFromUrlW : S_OK, E_INVALIDARG si ce n'est pas une URL file:.
+pub unsafe extern "win64" fn path_create_from_url_w(
+    url: *const u16,
+    out: *mut u16,
+    len: *mut u32,
+    _reserved: u32,
+) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+    const E_POINTER: i32 = 0x8000_4003u32 as i32;
+    if url.is_null() || out.is_null() || len.is_null() {
+        return E_INVALIDARG;
+    }
+    let Some(path) = path_from_url(&crate::dlls::wstr(url)) else {
+        return E_INVALIDARG;
+    };
+    let w: Vec<u16> = path.encode_utf16().collect();
+    if w.len() >= *len as usize {
+        *len = w.len() as u32 + 1;
+        return E_POINTER;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), out, w.len());
+    *out.add(w.len()) = 0;
+    *len = w.len() as u32;
+    0
+}
+
+/// PathCreateFromUrlA
+pub unsafe extern "win64" fn path_create_from_url_a(
+    url: *const u8,
+    out: *mut u8,
+    len: *mut u32,
+    _reserved: u32,
+) -> i32 {
+    const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+    const E_POINTER: i32 = 0x8000_4003u32 as i32;
+    if url.is_null() || out.is_null() || len.is_null() {
+        return E_INVALIDARG;
+    }
+    let text: String = units_a(url).iter().map(|&c| c as u8 as char).collect();
+    let Some(path) = path_from_url(&text) else {
+        return E_INVALIDARG;
+    };
+    let b: Vec<u8> = path
+        .chars()
+        .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' })
+        .collect();
+    if b.len() >= *len as usize {
+        *len = b.len() as u32 + 1;
+        return E_POINTER;
+    }
+    std::ptr::copy_nonoverlapping(b.as_ptr(), out, b.len());
+    *out.add(b.len()) = 0;
+    *len = b.len() as u32;
+    0
+}
+
+/// PathAddBackslashW : renvoie la fin de la chaîne, ou NULL si elle déborde.
+pub unsafe extern "win64" fn path_add_backslash_w(path: *mut u16) -> *mut u16 {
+    if path.is_null() {
+        return path;
+    }
+    let mut v = units_w(path);
+    if !v.is_empty() && v.last() != Some(&BS) {
+        v.push(BS);
+        if !put_w(path, &v, 260) {
+            return std::ptr::null_mut();
+        }
+    }
+    path.add(v.len())
+}
+
+/// PathAddBackslashA
+pub unsafe extern "win64" fn path_add_backslash_a(path: *mut u8) -> *mut u8 {
+    if path.is_null() {
+        return path;
+    }
+    let mut v = units_a(path);
+    if !v.is_empty() && v.last() != Some(&BS) {
+        v.push(BS);
+        if !put_a(path, &v, 260) {
+            return std::ptr::null_mut();
+        }
+    }
+    path.add(v.len())
+}
+
+/// PathRemoveBackslashW : retire la barre finale sauf sur une racine
+/// (« C:\ ») ; renvoie la fin de la chaîne.
+pub unsafe extern "win64" fn path_remove_backslash_w(path: *mut u16) -> *mut u16 {
+    if path.is_null() {
+        return path;
+    }
+    let mut v = units_w(path);
+    if v.last() == Some(&BS) && v.len() > root_len(&v).max(1) {
+        v.pop();
+        *path.add(v.len()) = 0;
+        return path.add(v.len());
+    }
+    path.add(v.len().saturating_sub(1))
+}
+
+/// PathRemoveBackslashA
+pub unsafe extern "win64" fn path_remove_backslash_a(path: *mut u8) -> *mut u8 {
+    if path.is_null() {
+        return path;
+    }
+    let mut v = units_a(path);
+    if v.last() == Some(&BS) && v.len() > root_len(&v).max(1) {
+        v.pop();
+        *path.add(v.len()) = 0;
+        return path.add(v.len());
+    }
+    path.add(v.len().saturating_sub(1))
+}
+
+/// PathIsRootW : « \ », « C:\ », « \\serveur », « \\serveur\partage ».
+pub unsafe extern "win64" fn path_is_root_w(path: *const u16) -> i32 {
+    is_root(&units_w(path)) as i32
+}
+
+/// PathIsRootA
+pub unsafe extern "win64" fn path_is_root_a(path: *const u8) -> i32 {
+    is_root(&units_a(path)) as i32
+}
+
+fn is_root(p: &[u32]) -> bool {
+    if p == [BS] || (p.len() == 3 && p[1] == b':' as u32 && p[2] == BS) {
+        return true;
+    }
+    if p.len() > 2 && p[0] == BS && p[1] == BS {
+        let inner = p[2..].strip_suffix(&[BS]).unwrap_or(&p[2..]);
+        return inner.iter().filter(|&&c| c == BS).count() <= 1 && !inner.is_empty();
+    }
+    false
+}
+
 pub fn exports() -> crate::dlls::Exports {
     let mut m = crate::exports! {
         "PathFileExistsA" => fn path_file_exists_a,
@@ -473,6 +784,16 @@ pub fn exports() -> crate::dlls::Exports {
         "PathRemoveFileSpecA" => fn path_remove_filespec_a,
         "PathRemoveFileSpecW" => fn path_remove_filespec_w,
         "PathRemoveExtensionW" => fn path_remove_extension_w,
+        "PathCanonicalizeA" => fn path_canonicalize_a,
+        "PathCanonicalizeW" => fn path_canonicalize_w,
+        "PathCreateFromUrlA" => fn path_create_from_url_a,
+        "PathCreateFromUrlW" => fn path_create_from_url_w,
+        "PathAddBackslashA" => fn path_add_backslash_a,
+        "PathAddBackslashW" => fn path_add_backslash_w,
+        "PathRemoveBackslashA" => fn path_remove_backslash_a,
+        "PathRemoveBackslashW" => fn path_remove_backslash_w,
+        "PathIsRootA" => fn path_is_root_a,
+        "PathIsRootW" => fn path_is_root_w,
         "StrCmpIW" => fn str_cmp_iw,
         "StrCmpLogicalW" => fn str_cmp_logical_w,
         "PathSkipRootW" => fn path_skip_root_w,
@@ -550,5 +871,60 @@ mod tests {
         let mut buf: Vec<u16> = "C:\\a.b\\app.exe".encode_utf16().chain([0]).collect();
         unsafe { path_remove_extension_w(buf.as_mut_ptr()) };
         assert_eq!(unsafe { crate::dlls::wstr(buf.as_ptr()) }, "C:\\a.b\\app");
+    }
+
+    #[test]
+    fn path_canonicalize_et_url_de_fichier() {
+        let canon = |p: &str| {
+            let w: Vec<u16> = p.encode_utf16().chain([0]).collect();
+            let mut out = [0u16; 260];
+            assert_eq!(
+                unsafe { path_canonicalize_w(out.as_mut_ptr(), w.as_ptr()) },
+                1
+            );
+            unsafe { crate::dlls::wstr(out.as_ptr()) }
+        };
+        assert_eq!(canon(r"C:\a\.\b\..\c.txt"), r"C:\a\c.txt");
+        assert_eq!(canon(r"C:\.."), r"C:\");
+        assert_eq!(canon("C:"), r"C:\");
+        assert_eq!(canon(r"\\srv\part\x\..\y"), r"\\srv\part\y");
+        assert_eq!(canon(r"a\b\..\"), r"a\");
+        assert_eq!(canon(""), r"\");
+        let mut a = [0u8; 260];
+        assert_eq!(
+            unsafe { path_canonicalize_a(a.as_mut_ptr(), b"D:\\x\\..\\y\0".as_ptr()) },
+            1
+        );
+        assert_eq!(&a[..5], b"D:\\y\0");
+
+        let url: Vec<u16> = "file:///C:/Mes%20docs/a.txt"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        let mut out = [0u16; 64];
+        let mut len = 64u32;
+        assert_eq!(
+            unsafe { path_create_from_url_w(url.as_ptr(), out.as_mut_ptr(), &mut len, 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { crate::dlls::wstr(out.as_ptr()) },
+            r"C:\Mes docs\a.txt"
+        );
+        let http: Vec<u16> = "http://x/".encode_utf16().chain([0]).collect();
+        assert!(
+            unsafe { path_create_from_url_w(http.as_ptr(), out.as_mut_ptr(), &mut len, 0) } < 0
+        );
+
+        let mut p: Vec<u16> = r"C:\a".encode_utf16().chain([0; 8]).collect();
+        unsafe { path_add_backslash_w(p.as_mut_ptr()) };
+        assert_eq!(unsafe { crate::dlls::wstr(p.as_ptr()) }, r"C:\a\");
+        unsafe { path_remove_backslash_w(p.as_mut_ptr()) };
+        assert_eq!(unsafe { crate::dlls::wstr(p.as_ptr()) }, r"C:\a");
+        let mut root: Vec<u16> = r"C:\".encode_utf16().chain([0]).collect();
+        unsafe { path_remove_backslash_w(root.as_mut_ptr()) };
+        assert_eq!(unsafe { crate::dlls::wstr(root.as_ptr()) }, r"C:\");
+        assert_eq!(unsafe { path_is_root_w(root.as_ptr()) }, 1);
+        assert_eq!(unsafe { path_is_root_w(p.as_ptr()) }, 0);
     }
 }

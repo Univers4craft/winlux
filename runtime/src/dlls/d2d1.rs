@@ -1,12 +1,14 @@
 //! Direct2D 1.0 (`d2d1.dll`) écrit pour Winlux, en rendu logiciel.
 //!
 //! La fabrique crée des géométries (rectangle, rectangle arrondi, ellipse,
-//! chemin avec son `ID2D1GeometrySink`) et des cibles de rendu sur bitmap
-//! WIC. Une cible dessine avec `d2d_raster` : effacement, rectangles,
-//! ellipses, géométries, lignes, bitmaps, transformations, découpes
-//! alignées sur les axes, pinceaux unis avec opacité. Les dégradés, les
-//! calques, le texte (DirectWrite) et les cibles de fenêtre viendront
-//! ensuite ; ces méthodes répondent E_NOTIMPL ou ne dessinent rien.
+//! chemin avec son `ID2D1GeometrySink`) et des cibles de rendu : bitmap WIC,
+//! fenêtre (`ID2D1HwndRenderTarget`, posée sur la zone client à EndDraw), DC
+//! (`ID2D1DCRenderTarget` et BindDC) et hors écran
+//! (`CreateCompatibleRenderTarget`, `ID2D1BitmapRenderTarget`). Une cible
+//! dessine avec `d2d_raster` : effacement, rectangles, ellipses, géométries,
+//! lignes, bitmaps, texte DirectWrite, transformations, découpes alignées sur
+//! les axes, pinceaux unis avec opacité. Les dégradés et les calques
+//! viendront ensuite ; ces méthodes répondent E_NOTIMPL ou ne dessinent rien.
 
 use super::audio_com::{
     guid, put, Com, VTable, E_INVALIDARG, E_NOINTERFACE, E_POINTER, IID_IUNKNOWN, S_OK,
@@ -34,6 +36,24 @@ const IID_D2D1_RESOURCE: Guid = guid(
 );
 const IID_D2D1_RENDER_TARGET: Guid = guid(
     0x2cd90694,
+    0x12e2,
+    0x11dc,
+    [0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9],
+);
+const IID_D2D1_HWND_RENDER_TARGET: Guid = guid(
+    0x2cd90698,
+    0x12e2,
+    0x11dc,
+    [0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9],
+);
+const IID_D2D1_DC_RENDER_TARGET: Guid = guid(
+    0x1c51bc64,
+    0xde61,
+    0x46fd,
+    [0x98, 0x99, 0x63, 0xa5, 0xd8, 0xf0, 0x39, 0x50],
+);
+const IID_D2D1_BITMAP_RENDER_TARGET: Guid = guid(
+    0x2cd90695,
     0x12e2,
     0x11dc,
     [0x9f, 0xed, 0x00, 0x11, 0x43, 0xa0, 0x55, 0xf9],
@@ -326,11 +346,85 @@ unsafe extern "win64" fn create_wic_render_target(
         h,
         px: vec![0; w as usize * h as usize * 4],
         opaque: fmt == FMT_BGR32,
-        wic: bitmap,
+        out: Output::Wic(bitmap),
         state: TargetState::default(),
         drawing: false,
     };
     put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)))
+}
+
+/// D2D1_HWND_RENDER_TARGET_PROPERTIES.
+#[repr(C)]
+struct HwndProps {
+    hwnd: usize,
+    w: u32,
+    h: u32,
+    present: u32,
+}
+
+unsafe fn new_screen_target(
+    f: *mut FactoryObj,
+    w: u32,
+    h: u32,
+    out_to: Output,
+    vt: *const (),
+    out: *mut *mut c_void,
+) -> i32 {
+    let target = Target {
+        w,
+        h,
+        px: vec![0; w as usize * h as usize * 4],
+        opaque: true,
+        out: out_to,
+        state: TargetState::default(),
+        drawing: false,
+    };
+    put(out, new_res(f, vt, Mutex::new(target)))
+}
+
+/// CreateHwndRenderTarget : rendu logiciel posé sur la fenêtre à EndDraw
+/// (Scintilla de Notepad++ en DirectWrite, #551).
+unsafe extern "win64" fn create_hwnd_render_target(
+    this: *mut FactoryObj,
+    _props: *const c_void,
+    hwnd_props: *const HwndProps,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let Some(hp) = hwnd_props.as_ref() else {
+        return E_INVALIDARG;
+    };
+    let (mut w, mut h) = (hp.w, hp.h);
+    if w == 0 || h == 0 {
+        if let Some(r) = super::gui::window_client_rect(hp.hwnd) {
+            w = r.width().max(0) as u32;
+            h = r.height().max(0) as u32;
+        }
+    }
+    new_screen_target(this, w, h, Output::Hwnd(hp.hwnd), HWND_TARGET_VT.ptr(), out)
+}
+
+/// CreateDCRenderTarget : la taille et le DC viennent de BindDC.
+unsafe extern "win64" fn create_dc_render_target(
+    this: *mut FactoryObj,
+    _props: *const c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    new_screen_target(
+        this,
+        0,
+        0,
+        Output::Dc { hdc: 0, x: 0, y: 0 },
+        DC_TARGET_VT.ptr(),
+        out,
+    )
 }
 
 static FACTORY_VT: VTable<17> = VTable([
@@ -348,9 +442,9 @@ static FACTORY_VT: VTable<17> = VTable([
     not_implemented as *const (), // CreateStrokeStyle
     not_implemented as *const (), // CreateDrawingStateBlock
     create_wic_render_target as *const (),
-    not_implemented as *const (), // CreateHwndRenderTarget
+    create_hwnd_render_target as *const (),
     not_implemented as *const (), // CreateDxgiSurfaceRenderTarget
-    not_implemented as *const (), // CreateDCRenderTarget
+    create_dc_render_target as *const (),
 ]);
 
 // --- Géométries ------------------------------------------------------------------
@@ -826,16 +920,28 @@ struct Target {
     h: u32,
     px: Vec<u8>,
     opaque: bool,
-    /// Bitmap WIC de destination (référence tenue).
-    wic: *mut c_void,
+    /// Destination des pixels à EndDraw.
+    out: Output,
     state: TargetState,
     drawing: bool,
 }
 
+/// Où une cible rend ses pixels.
+enum Output {
+    /// Bitmap WIC (référence tenue), relu à BeginDraw.
+    Wic(*mut c_void),
+    /// ID2D1HwndRenderTarget : la zone client de la fenêtre.
+    Hwnd(usize),
+    /// ID2D1DCRenderTarget : le DC et le rectangle donnés par BindDC.
+    Dc { hdc: usize, x: i32, y: i32 },
+    /// ID2D1BitmapRenderTarget : son ID2D1Bitmap (référence tenue).
+    Bitmap(*mut c_void),
+}
+
 impl Drop for Target {
     fn drop(&mut self) {
-        unsafe {
-            method::<unsafe extern "win64" fn(*mut c_void) -> u32>(self.wic, 2)(self.wic);
+        if let Output::Wic(obj) | Output::Bitmap(obj) = self.out {
+            unsafe { method::<unsafe extern "win64" fn(*mut c_void) -> u32>(obj, 2)(obj) };
         }
     }
 }
@@ -861,19 +967,44 @@ impl Target {
         c.fill(polys, rule, clip, paint);
     }
 
-    /// Copie entre la cible et son bitmap WIC (`to_wic` à EndDraw).
+    /// Copie entre la cible et sa destination (`to_wic` à EndDraw et Flush).
+    /// Les cibles de fenêtre et de DC gardent leurs pixels d'un tracé à
+    /// l'autre et les posent sur l'écran ou le DC, comme D2D le présente.
     unsafe fn sync_wic(&mut self, to_wic: bool) -> i32 {
+        let wic = match self.out {
+            Output::Wic(wic) => wic,
+            Output::Hwnd(hwnd) => {
+                if to_wic {
+                    let hdc = super::user32::get_dc(hwnd);
+                    self.present(hdc, 0, 0);
+                    super::user32::release_dc(hwnd, hdc);
+                }
+                return S_OK;
+            }
+            Output::Dc { hdc, x, y } => {
+                if to_wic && hdc != 0 {
+                    self.present(hdc, x, y);
+                }
+                return S_OK;
+            }
+            Output::Bitmap(bitmap) => {
+                if to_wic {
+                    let b = &Com::get(bitmap as *mut BitmapObj).data;
+                    let mut px = crate::dlls::lock(&b.px);
+                    if px.len() == self.px.len() {
+                        px.copy_from_slice(&self.px);
+                    }
+                }
+                return S_OK;
+            }
+        };
         type Lock =
             unsafe extern "win64" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> i32;
         type Stride = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
         type Data = unsafe extern "win64" fn(*mut c_void, *mut u32, *mut *mut u8) -> i32;
         let mut lock = std::ptr::null_mut();
-        let hr = method::<Lock>(self.wic, 8)(
-            self.wic,
-            std::ptr::null(),
-            if to_wic { 2 } else { 1 },
-            &mut lock,
-        );
+        let hr =
+            method::<Lock>(wic, 8)(wic, std::ptr::null(), if to_wic { 2 } else { 1 }, &mut lock);
         if hr < 0 {
             return hr;
         }
@@ -905,6 +1036,57 @@ impl Target {
     }
 }
 
+impl Target {
+    /// Nouvelle taille : les pixels déjà rendus restent en haut à gauche.
+    fn resize(&mut self, w: u32, h: u32) {
+        if (w, h) == (self.w, self.h) {
+            return;
+        }
+        let mut px = vec![0u8; w as usize * h as usize * 4];
+        let rows = self.h.min(h) as usize;
+        let cols = self.w.min(w) as usize * 4;
+        for y in 0..rows {
+            px[y * w as usize * 4..][..cols]
+                .copy_from_slice(&self.px[y * self.w as usize * 4..][..cols]);
+        }
+        self.px = px;
+        self.w = w;
+        self.h = h;
+    }
+
+    /// Pose les pixels (BGRA prémultipliés, rendus opaques) sur `hdc`.
+    unsafe fn present(&self, hdc: usize, x: i32, y: i32) {
+        if self.w == 0 || self.h == 0 {
+            return;
+        }
+        let mut px = self.px.clone();
+        for p in px.as_chunks_mut::<4>().0 {
+            p[3] = 255;
+        }
+        // BITMAPINFOHEADER 32 bits, lignes de haut en bas (hauteur négative).
+        let mut info = [0u8; 40];
+        info[0..4].copy_from_slice(&40u32.to_le_bytes());
+        info[4..8].copy_from_slice(&(self.w as i32).to_le_bytes());
+        info[8..12].copy_from_slice(&(-(self.h as i32)).to_le_bytes());
+        info[12..14].copy_from_slice(&1u16.to_le_bytes());
+        info[14..16].copy_from_slice(&32u16.to_le_bytes());
+        super::gdi32_ext::set_di_bits_to_device(
+            hdc,
+            x,
+            y,
+            self.w,
+            self.h,
+            0,
+            0,
+            0,
+            self.h,
+            px.as_ptr() as *const c_void,
+            info.as_ptr() as *const c_void,
+            0,
+        );
+    }
+}
+
 unsafe fn target<'a>(this: *mut TargetObj) -> std::sync::MutexGuard<'a, Target> {
     crate::dlls::lock(&Com::get(this).data)
 }
@@ -926,7 +1108,16 @@ unsafe extern "win64" fn target_qi(
         this,
         riid,
         out,
-        &[IID_D2D1_RESOURCE, IID_D2D1_RENDER_TARGET],
+        &[
+            IID_D2D1_RESOURCE,
+            IID_D2D1_RENDER_TARGET,
+            match target(this).out {
+                Output::Hwnd(_) => IID_D2D1_HWND_RENDER_TARGET,
+                Output::Dc { .. } => IID_D2D1_DC_RENDER_TARGET,
+                Output::Bitmap(_) => IID_D2D1_BITMAP_RENDER_TARGET,
+                Output::Wic(_) => IID_D2D1_RENDER_TARGET,
+            },
+        ],
     )
 }
 
@@ -1431,7 +1622,7 @@ unsafe extern "win64" fn is_supported(_this: *mut c_void, _props: *const c_void)
     1
 }
 
-static TARGET_VT: VTable<57> = VTable([
+const TARGET_METHODS: [*const (); 57] = [
     target_qi as *const (),
     add_ref::<Res<Mutex<Target>>> as *const (),
     release::<Res<Mutex<Target>>> as *const (),
@@ -1444,7 +1635,7 @@ static TARGET_VT: VTable<57> = VTable([
     not_implemented as *const (), // CreateGradientStopCollection
     not_implemented as *const (), // CreateLinearGradientBrush
     not_implemented as *const (), // CreateRadialGradientBrush
-    not_implemented as *const (), // CreateCompatibleRenderTarget
+    create_compatible_target as *const (),
     not_implemented as *const (), // CreateLayer
     not_implemented as *const (), // CreateMesh
     draw_line as *const (),
@@ -1489,7 +1680,134 @@ static TARGET_VT: VTable<57> = VTable([
     get_pixel_size as *const (),
     max_bitmap_size as *const (),
     is_supported as *const (),
-]);
+];
+
+static TARGET_VT: VTable<57> = VTable(TARGET_METHODS);
+
+/// Les 57 méthodes d'ID2D1RenderTarget suivies de celles de l'interface
+/// dérivée.
+const fn derived<const N: usize>(extra: &[*const ()]) -> [*const (); N] {
+    let mut out = [std::ptr::null::<()>(); N];
+    let mut i = 0;
+    while i < N {
+        out[i] = if i < 57 {
+            TARGET_METHODS[i]
+        } else {
+            extra[i - 57]
+        };
+        i += 1;
+    }
+    out
+}
+
+/// ID2D1HwndRenderTarget : CheckWindowState, Resize, GetHwnd.
+static HWND_TARGET_VT: VTable<60> = VTable(derived::<60>(&[
+    check_window_state as *const (),
+    hwnd_resize as *const (),
+    get_hwnd as *const (),
+]));
+
+/// ID2D1DCRenderTarget : BindDC.
+static DC_TARGET_VT: VTable<58> = VTable(derived::<58>(&[bind_dc as *const ()]));
+
+/// ID2D1BitmapRenderTarget : GetBitmap.
+static BITMAP_TARGET_VT: VTable<58> = VTable(derived::<58>(&[get_bitmap as *const ()]));
+
+/// CreateCompatibleRenderTarget : cible hors écran dont le bitmap se dessine
+/// ensuite sur la cible d'origine (tampon de ligne de Scintilla, #551).
+unsafe extern "win64" fn create_compatible_target(
+    this: *mut TargetObj,
+    size: *const [f32; 2],
+    pixel_size: *const [u32; 2],
+    _format: *const c_void,
+    _options: u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let (w, h) = if let Some(&[w, h]) = pixel_size.as_ref() {
+        (w, h)
+    } else if let Some(&[w, h]) = size.as_ref() {
+        (w.ceil().max(0.0) as u32, h.ceil().max(0.0) as u32)
+    } else {
+        let t = target(this);
+        (t.w, t.h)
+    };
+    let (w, h) = (w.max(1), h.max(1));
+    if crate::imaging::check_size(w, h).is_err() {
+        return E_INVALIDARG;
+    }
+    let factory = Com::get(this).factory;
+    let bitmap = Bitmap {
+        w,
+        h,
+        px: Mutex::new(vec![0; w as usize * h as usize * 4]),
+    };
+    let bitmap = new_res(factory, BITMAP_VT.ptr(), bitmap) as *mut c_void;
+    let target = Target {
+        w,
+        h,
+        px: vec![0; w as usize * h as usize * 4],
+        opaque: false,
+        out: Output::Bitmap(bitmap),
+        state: TargetState::default(),
+        drawing: false,
+    };
+    put(
+        out,
+        new_res(factory, BITMAP_TARGET_VT.ptr(), Mutex::new(target)),
+    )
+}
+
+unsafe extern "win64" fn get_bitmap(this: *mut TargetObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Output::Bitmap(bitmap) = target(this).out else {
+        *out = std::ptr::null_mut();
+        return E_NOINTERFACE;
+    };
+    Com::add_ref(bitmap as *mut BitmapObj);
+    *out = bitmap;
+    S_OK
+}
+
+unsafe extern "win64" fn check_window_state(_this: *mut TargetObj) -> u32 {
+    0 // D2D1_WINDOW_STATE_NONE
+}
+
+unsafe extern "win64" fn hwnd_resize(this: *mut TargetObj, size: *const [u32; 2]) -> i32 {
+    let Some(&[w, h]) = size.as_ref() else {
+        return E_INVALIDARG;
+    };
+    let mut t = target(this);
+    t.resize(w, h);
+    S_OK
+}
+
+unsafe extern "win64" fn get_hwnd(this: *mut TargetObj) -> usize {
+    match target(this).out {
+        Output::Hwnd(hwnd) => hwnd,
+        _ => 0,
+    }
+}
+
+/// BindDC(hdc, rect) : la cible prend la taille du rectangle et rendra à
+/// son coin haut gauche dans ce DC.
+unsafe extern "win64" fn bind_dc(this: *mut TargetObj, hdc: usize, rect: *const [i32; 4]) -> i32 {
+    let Some(&[l, t, r, b]) = rect.as_ref() else {
+        return E_INVALIDARG;
+    };
+    if hdc == 0 {
+        return E_INVALIDARG;
+    }
+    let mut tg = target(this);
+    tg.resize((r - l).max(0) as u32, (b - t).max(0) as u32);
+    tg.out = Output::Dc { hdc, x: l, y: t };
+    S_OK
+}
 
 // --- Point d'entrée -----------------------------------------------------------------
 
@@ -1942,6 +2260,137 @@ mod tests {
             for o in [g, face, black, layout, dwf, rt, bmp, f] {
                 release_obj(o);
             }
+        }
+    }
+
+    /// Cible hors écran (CreateCompatibleRenderTarget + GetBitmap) dessinée
+    /// sur la cible d'origine, puis cible de DC (BindDC) : chemins de
+    /// Scintilla en DirectWrite (#551).
+    #[test]
+    fn cible_compatible_et_cible_de_dc() {
+        unsafe {
+            let (f, bmp, rt) = setup();
+            type Compat = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 2],
+                *const [u32; 2],
+                *const c_void,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut off = std::ptr::null_mut();
+            assert_eq!(
+                method::<Compat>(rt, 12)(
+                    rt,
+                    &[4.0, 4.0],
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &mut off
+                ),
+                S_OK
+            );
+            let red = ColorF {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            };
+            type Clear = unsafe extern "win64" fn(*mut c_void, *const ColorF);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            method::<Unary>(off, 48)(off);
+            method::<Clear>(off, 47)(off, &red);
+            assert_eq!(
+                method::<End>(off, 49)(off, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let mut b = std::ptr::null_mut();
+            type GetBitmap = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            assert_eq!(method::<GetBitmap>(off, 57)(off, &mut b), S_OK);
+            type DrawBitmap = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const RectF,
+                f32,
+                u32,
+                *const RectF,
+            );
+            method::<Unary>(rt, 48)(rt);
+            method::<Clear>(rt, 47)(
+                rt,
+                &ColorF {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            );
+            let dst = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 4.0,
+                b: 4.0,
+            };
+            method::<DrawBitmap>(rt, 26)(rt, b, &dst, 1.0, 0, std::ptr::null());
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let p = pixels(bmp);
+            assert_eq!(px(&p, 1, 1), [0, 0, 255, 255]);
+            assert_eq!(px(&p, 6, 6), [255, 255, 255, 255]);
+            release_obj(b);
+            release_obj(off);
+
+            // Cible de DC : rendu posé dans le DC lié, à l'emplacement donné.
+            use crate::dlls::gdi32::{self, BitmapInfoHeader};
+            let info = BitmapInfoHeader {
+                size: 40,
+                width: 8,
+                height: -8,
+                planes: 1,
+                bit_count: 32,
+                compression: 0,
+                size_image: 0,
+                x_pels_per_meter: 0,
+                y_pels_per_meter: 0,
+                colors_used: 0,
+                colors_important: 0,
+            };
+            let mut bits = std::ptr::null_mut();
+            let dib = gdi32::create_dib_section(0, &info, 0, &mut bits, 0, 0);
+            let hdc = gdi32::create_compatible_dc(0);
+            gdi32::select_object(hdc, dib);
+            type CreateDc =
+                unsafe extern "win64" fn(*mut c_void, *const c_void, *mut *mut c_void) -> i32;
+            let mut dct = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateDc>(f, 16)(f, std::ptr::null(), &mut dct),
+                S_OK
+            );
+            type Bind = unsafe extern "win64" fn(*mut c_void, usize, *const [i32; 4]) -> i32;
+            assert_eq!(method::<Bind>(dct, 57)(dct, hdc, &[2, 2, 6, 6]), S_OK);
+            method::<Unary>(dct, 48)(dct);
+            method::<Clear>(dct, 47)(
+                dct,
+                &ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            );
+            assert_eq!(
+                method::<End>(dct, 49)(dct, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let at = |x: usize, y: usize| *(bits as *const u32).add(y * 8 + x) & 0xFF_FFFF;
+            assert_eq!(at(3, 3), 0x00_00FF, "bleu dans le rectangle lié");
+            assert_eq!(at(0, 0), 0, "rien hors du rectangle");
+            release_obj(dct);
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
         }
     }
 }
