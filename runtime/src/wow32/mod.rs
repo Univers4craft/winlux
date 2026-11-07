@@ -24,6 +24,7 @@
 
 mod crt;
 mod seh;
+mod user;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1186,7 +1187,9 @@ pub fn override_stub(dll: &str, func: &str) -> Option<usize> {
     let label = format!("{}!{func}", dll.to_ascii_lowercase());
     let (target, sig, fix) = match override_for(dll, func) {
         Some((target, sig)) => (target, sig, crt::Fix::None),
-        None => match crt::override_for(&crate::dlls::normalize(dll), func)? {
+        None => match user::override_for(&crate::dlls::normalize(dll), func)
+            .or_else(|| crt::override_for(&crate::dlls::normalize(dll), func))?
+        {
             crt::Override::Data(addr) => return Some(addr),
             crt::Override::Native { target, sig, fix } => (target, sig, fix),
             crt::Override::Raw { target, aux, pop } => {
