@@ -514,4 +514,10 @@ ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in (
    and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
    "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
 
+# ── Paramètres : « Mise à jour OS » et « Mise à jour application » (#637) ──
+ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and (SCRIPTS / "test-update-page-names.py").exists(),
+   "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

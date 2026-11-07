@@ -344,6 +344,17 @@ pub extern "win64" fn amsg_exit(code: i32) -> ! {
 }
 /// `abort` : code de sortie 3 comme sous Windows, sans exécuter `atexit`.
 pub extern "win64" fn abort() -> ! {
+    // Qui a demandé l'arrêt (std::bad_variant_access en -fno-exceptions,
+    // CHECK…) : sans cette ligne, l'abandon ne laissait aucune trace.
+    let rsp: usize;
+    unsafe { std::arch::asm!("mov {}, rsp", out(reg) rsp) };
+    let calls = crate::dlls::seh::stack_calls(rsp, 10);
+    if !calls.is_empty() {
+        eprintln!(
+            "winlux: abort() demandé par l'appli, pile {}",
+            calls.join(" ")
+        );
+    }
     if let Some(h) = signal_handler(SIGABRT) {
         unsafe {
             let f: extern "win64" fn(i32) = std::mem::transmute(h);

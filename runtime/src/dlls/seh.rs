@@ -1333,19 +1333,27 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
     if rip != rec.address {
         line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));
     }
-    // Adresses de retour probables : les mots de la pile qui tombent dans
-    // un module chargé.
+    let calls = stack_calls(rsp, 8);
+    if !calls.is_empty() {
+        line.push_str(&format!(", pile {}", calls.join(" ")));
+    }
+    line
+}
+
+/// Adresses de retour probables à partir de `rsp` : les mots de la pile du
+/// thread qui tombent dans un module chargé (au plus `max`).
+pub fn stack_calls(rsp: usize, max: usize) -> Vec<String> {
     let teb = crate::process::teb();
     let base = if teb == 0 {
         0
     } else {
         unsafe { *((teb + crate::process::TEB_STACK_BASE) as *const usize) }
     };
+    let mut calls = Vec::new();
     if rsp != 0 && rsp < base {
         let end = base.min(rsp + 64 * 8);
-        let mut calls = Vec::new();
         let mut at = rsp & !7;
-        while at + 8 <= end && calls.len() < 8 {
+        while at + 8 <= end && calls.len() < max {
             let w = unsafe { *(at as *const usize) };
             let d = crate::thunks::describe_site(w);
             if d.contains('+') {
@@ -1353,11 +1361,8 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
             }
             at += 8;
         }
-        if !calls.is_empty() {
-            line.push_str(&format!(", pile {}", calls.join(" ")));
-        }
     }
-    line
+    calls
 }
 
 /// Exception non gérée : filtre de dernier recours du programme, puis arrêt
@@ -1787,6 +1792,8 @@ mod tests {
         rec.nparams = 2;
         rec.info[1] = 0x10;
         let ctx = Context::zeroed();
+        // Pas de pile connue (rsp nul ou hors du thread) : aucune adresse.
+        assert!(stack_calls(0, 8).is_empty());
         let line = describe_for_app_filter(&rec, &ctx);
         assert!(line.contains("0xc0000005"), "{line}");
         assert!(line.contains("filtre de l'appli"), "{line}");

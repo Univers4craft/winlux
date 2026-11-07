@@ -910,9 +910,30 @@ fn sync_proxy(before: &(bool, String, String), data: &Data) {
     let _ = crate::proxy::save(p.as_ref());
 }
 
+/// Clés réseau que Windows a toujours : Chromium (Claude, Electron) les
+/// surveille pour suivre la configuration DNS et renonce sinon (« DNS
+/// registry watch failed to start »).
+const NETWORK_KEYS: [&str; 4] = [
+    "hklm\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters",
+    "hklm\\System\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces",
+    "hklm\\System\\CurrentControlSet\\Services\\Tcpip6\\Parameters",
+    "hklm\\System\\CurrentControlSet\\Services\\Dnscache\\Parameters",
+];
+
+fn overlay_network(data: &mut Data) {
+    for key in NETWORK_KEYS {
+        if data.raw_ensure(key) {
+            if let Some(k) = data.raw_key_mut(key) {
+                k.last_write = 0;
+            }
+        }
+    }
+}
+
 fn load_from_disk(path: &Path) -> Result<Data, i32> {
     let mut data = load_file(path)?;
     overlay_proxy(&mut data);
+    overlay_network(&mut data);
     Ok(data)
 }
 
