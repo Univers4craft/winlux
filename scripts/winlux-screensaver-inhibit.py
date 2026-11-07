@@ -17,6 +17,12 @@ serveur X coupe l'écran par DPMS à son propre délai (Standby/Suspend/Off à
 réaffirmé à chaque réveil au cas où XScreenSaver le remettrait) puis rétabli
 s'il était actif ; une marque dans $XDG_RUNTIME_DIR le rétablit aussi après un
 arrêt brutal du service.
+
+  winlux-screensaver-inhibit                  service D-Bus (activé à la demande)
+  winlux-screensaver-inhibit watch-updates    lancé avec la session : pendant
+      une installation de mise à jour (`winlux-update --busy`, automatique
+      comprise, Paramètres fermé), une demande est tenue : l'écran ne s'éteint
+      pas en pleine installation (#634).
 """
 import os
 from pathlib import Path
@@ -139,7 +145,65 @@ def wake_screen():
                 pass
 
 
+class UpdateWatch:
+    """Une demande tenue tant qu'une installation est en cours."""
+
+    def __init__(self, busy, inhibit, uninhibit):
+        self.busy, self.inhibit, self.uninhibit = busy, inhibit, uninhibit
+        self.cookie = None
+
+    def tick(self):
+        busy = self.busy()
+        try:
+            if busy and self.cookie is None:
+                self.cookie = self.inhibit()
+                print(f"Mise à jour en cours : écran gardé allumé ({self.cookie})", flush=True)
+            elif not busy and self.cookie is not None:
+                cookie, self.cookie = self.cookie, None
+                self.uninhibit(cookie)
+                print("Mise à jour terminée : écran rendu", flush=True)
+        except Exception as error:   # bus absent, service relancé : réessayé au tour suivant
+            print(f"Demande « écran allumé » impossible : {error}", file=sys.stderr, flush=True)
+        return True
+
+
+def update_busy():
+    tool = shutil.which("winlux-update")
+    if tool is None: return False
+    try: return subprocess.run([tool, "--busy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError): return False
+
+
+def watch_updates(interval=None):
+    from gi.repository import Gio, GLib
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    display = "".join(c if c.isalnum() else "_" for c in os.environ.get("DISPLAY", "none"))
+    lock = Path(runtime) / f"winlux-update-screen-{display}.pid"
+    try:
+        if os.path.isdir(f"/proc/{int(lock.read_text().strip())}"): return 0
+    except (OSError, ValueError):
+        pass
+    try: lock.write_text(f"{os.getpid()}\n")
+    except OSError: pass
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def inhibit():
+        reply = bus.call_sync(NAME, PATHS[0], NAME, "Inhibit", GLib.Variant("(ss)", ("Winlux", "Installation des mises à jour")),
+                              GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 10000, None)
+        return reply.unpack()[0]
+
+    def uninhibit(cookie):
+        bus.call_sync(NAME, PATHS[0], NAME, "UnInhibit", GLib.Variant("(u)", (cookie,)), None, Gio.DBusCallFlags.NONE, 10000, None)
+
+    watcher = UpdateWatch(update_busy, inhibit, uninhibit)
+    watcher.tick()
+    GLib.timeout_add_seconds(interval or int(os.environ.get("WINLUX_UPDATE_WATCH_SECONDS", "15")), watcher.tick)
+    GLib.MainLoop().run()
+    return 0
+
+
 def main():
+    if sys.argv[1:] == ["watch-updates"]: return watch_updates()
     from gi.repository import Gio, GLib
     inhibitors = Inhibitors()
     inhibitors.hold.recover()

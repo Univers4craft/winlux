@@ -289,6 +289,8 @@ wait_desktop() {
     if test -x /usr/bin/winlux-ambiance; then start ambiance.log /usr/bin/winlux-ambiance daemon; fi
     # Ancrage à la souris : bords, coins, barre des dispositions, survol d'Agrandir (#460).
     if test -x /usr/bin/winlux-snap; then start snap-watch.log /usr/bin/winlux-snap watch; fi
+    # Écran gardé allumé pendant l'installation d'une mise à jour, même automatique (#634).
+    if test -x /usr/bin/winlux-screensaver-inhibit; then start update-screen.log /usr/bin/winlux-screensaver-inhibit watch-updates; fi
     # Touche Windows seule : ouvre ou ferme Démarrer, sans gêner Windows+Gauche (#605).
     if test -x /usr/bin/winlux-super-key; then start super-key.log /usr/bin/winlux-super-key; fi
     # Verrouillage après inactivité et au retour de veille.
