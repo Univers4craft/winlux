@@ -563,4 +563,15 @@ ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/pr
    and "journal-$journal_uid" in iso_init,
    "journal : un dossier 0700 par compte, protected_regular=2")
 
+# #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
+# économiseur ; la veille de l'écran ne revenait plus de la session.
+with tempfile.TemporaryDirectory() as directory:
+    fresh, old = Path(directory) / "neuf", Path(directory) / "ancien"
+    fresh.mkdir(); old.mkdir()
+    (old / ".xscreensaver").write_text("timeout:        0:10:00\nmode:           one\n")
+    native_config(fresh); native_config(old)
+    ok(all("dpmsEnabled:    True" in (home / ".xscreensaver").read_text() for home in (fresh, old))
+       and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
+       "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
