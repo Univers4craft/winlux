@@ -22,4 +22,9 @@
    à gauche : l'icône débordait à droite. Sans marge, elle est centrée. */
 .xfce4-panel .tasklist button { padding: 0; min-width: 0; min-height: 0; }
 .xfce4-panel .tasklist button image { padding: 0; }
+/* Greffons externes (genmon : contrepoids de la barre centrée, réseau, son,
+   horloge…) : leur fenêtre porte aussi la classe xfce4-panel et redessinait
+   la bordure du haut sous la bordure de la barre. Ce trait doublé formait une
+   « micro-barre » à côté de Démarrer (#645). Seule la barre garde sa bordure. */
+#XfcePanelWindowWrapper { border-top: none; }
 /* End Winlux panel */

@@ -355,6 +355,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           python3 -B scripts/test-second-session-taskbar.py
+          python3 -B scripts/test-panel-tooltips.py
           python3 -B scripts/test-quick-menu-position.py
           python3 -B scripts/test-power.py
           python3 -B scripts/test-power-reboot-guard.py
@@ -518,6 +519,9 @@ jobs:
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: Barre des tâches sans infobulle « (genmon) » ni trait doublé à côté de Démarrer
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-panel-tooltips.py --barre
 
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py

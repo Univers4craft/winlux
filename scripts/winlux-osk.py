@@ -486,7 +486,7 @@ def tray_output():
     """Sortie genmon : l'icône quand elle est voulue, rien sinon (greffon vide)."""
     icon = tray_icon() if icon_wanted() else None
     if icon is None:
-        return "<txt></txt>"
+        return "<txt></txt><tool></tool>"  # sans infobulle « (genmon) » (#645)
     command = "/usr/bin/winlux-osk" if Path("/usr/bin/winlux-osk").exists() else f"python3 {Path(__file__).resolve()}"
     return f"<img>{icon}</img><tool>{_t('Clavier tactile')}</tool><click>{command} toggle</click>"
 
