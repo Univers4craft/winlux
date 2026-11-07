@@ -14,8 +14,12 @@
 //! des installateurs NSIS et Inno : un `.exe` est exécuté par Winlux,
 //! jamais un programme Linux ni un outil système absent.
 //!
-//! Les actions DLL (1, 17), script (5, 6, 21, 22, 37, 38) et les autres
-//! sont notées dans le journal.
+//! Actions DLL de WiX reconnues sans exécuter leur code (comme les
+//! greffons NSIS) : `WixQuietExec`/`CAQuietExec` (et leurs variantes 64
+//! bits et « Silent ») lancent la ligne de commande rangée dans la
+//! propriété du nom de l'action (`CustomActionData` pour une action
+//! différée). Les autres actions DLL (1, 17) et les scripts (5, 6, 21, 22,
+//! 37, 38) sont notés dans le journal.
 
 use super::cond::Context;
 use super::db::Database;
@@ -39,6 +43,26 @@ struct Action {
     kind: i32,
     source: String,
     target: String,
+}
+
+/// Points d'entrée de WiX qui exécutent une commande sans fenêtre.
+const QUIET_EXEC: &[&str] = &[
+    "CAQuietExec",
+    "CAQuietExec64",
+    "WixQuietExec",
+    "WixQuietExec64",
+    "WixSilentExec",
+    "WixSilentExec64",
+];
+
+fn is_quiet_exec(a: &Action) -> bool {
+    a.kind & 0x3F == 1 && QUIET_EXEC.contains(&a.target.as_str())
+}
+
+/// `WixShellExec` : ouvre un fichier ou lance l'application à la fin de
+/// l'interface d'installation ; jamais en installation silencieuse.
+fn is_shell_exec(a: &Action) -> bool {
+    a.kind & 0x3F == 1 && a.target == "WixShellExec"
 }
 
 fn actions(db: &Database) -> HashMap<String, Action> {
@@ -148,14 +172,28 @@ pub fn run_phase(
         .map(|s| s.0)
         .unwrap_or(4000);
     let temp = std::env::temp_dir().join(format!("winlux-msi-ca-{}", std::process::id()));
+    // Les affectations de propriété (51) placées après le calcul des
+    // chemins préparent souvent la ligne de commande d'une action
+    // différée (CustomActionData) : rejouées ici à leur place.
+    let mut ctx = ctx.clone();
+    let ctx = &mut ctx;
     let mut launched = 0;
     for (n, name, cond) in &seq {
         let Some(a) = actions.get(name) else {
             continue;
         };
         let base = a.kind & 0x3F;
-        if !matches!(base, 2 | 18 | 34 | 50) {
-            continue; // propriétés (51, 35) traitées ailleurs, DLL/scripts notés par install
+        let in_phase = match phase {
+            Phase::BeforeFiles => *n < files_at,
+            Phase::AfterFiles | Phase::Uninstall => true,
+        };
+        if base == 51 && in_phase && ctx.eval(cond) {
+            let value = ctx.format(&a.target);
+            ctx.props.insert(a.source.clone(), value);
+            continue;
+        }
+        if !matches!(base, 2 | 18 | 34 | 50) && !is_quiet_exec(a) {
+            continue; // DLL et scripts notés par `unsupported`
         }
         let wanted = match phase {
             Phase::BeforeFiles => *n < files_at && base != 18,
@@ -167,6 +205,22 @@ pub fn run_phase(
         }
         if a.kind & 0x400 != 0 && a.kind & 0x300 != 0 {
             continue; // retour arrière ou validation
+        }
+        if is_quiet_exec(a) {
+            let line = ctx.get(name);
+            if line.trim().is_empty() {
+                continue;
+            }
+            let (outcome, _) = run::command_line(&line, "", true, true);
+            if matches!(outcome, Outcome::Exited(_)) {
+                launched += 1;
+            }
+            log.log(&format!(
+                "Action personnalisée {name} ({}) : {}",
+                a.target,
+                run::describe(line.trim(), &outcome)
+            ));
+            continue;
         }
         let (target, params, dir) = match command(db, ctx, name, a, &temp) {
             Ok(c) => c,
@@ -213,8 +267,11 @@ pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
         .filter_map(|(_, name, cond)| {
             let a = actions.get(&name)?;
             let base = a.kind & 0x3F;
-            if matches!(base, 2 | 18 | 34 | 50 | 51 | 35) || !ctx.eval(&cond) {
+            if matches!(base, 2 | 18 | 34 | 50 | 51 | 35) || is_quiet_exec(a) || !ctx.eval(&cond) {
                 return None;
+            }
+            if is_shell_exec(a) {
+                return Some(format!("{name} (ouverture en fin d'installation)"));
             }
             let what = match base {
                 1 | 17 => "DLL",

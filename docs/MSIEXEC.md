@@ -32,6 +32,7 @@ s'en sert pour les catalogues Windows, et un programme Windows qui lance
 | Fichiers .ini | table `IniFile` : ajout, création si absente, ajout à une liste ; dans le dossier indiqué ou `C:\windows\` |
 | Suppressions | `RemoveFile` (motifs `*`/`?`, dossiers vides, à l'installation et/ou à la désinstallation), `RemoveRegistry` |
 | Actions EXE | actions personnalisées 2 (table `Binary`), 18 (fichier installé), 34 (dossier + ligne de commande), 50 (propriété) de `InstallExecuteSequence`, avec leur condition ; asynchrones (0x80), code ignoré (0x40), différées (0x400) exécutées à leur place, jamais celles de retour arrière ou de validation. Même politique que les installateurs NSIS/Inno (`setup/run.rs`) : un `.exe` passe par Winlux, jamais un programme Linux ni un outil système absent (`cmd`, `powershell`…) |
+| Actions DLL de WiX | `WixQuietExec`, `CAQuietExec`, `WixSilentExec` (et 64 bits) reconnues sans charger la DLL : la ligne de commande rangée dans la propriété de l'action (ou son `CustomActionData` posé par une action 51) est lancée comme une action EXE ; `WixShellExec` (ouverture en fin d'interface) est journalisée |
 | Services | `ServiceInstall` inscrit sous `HKLM\SYSTEM\CurrentControlSet\Services\<Nom>` (`ImagePath`, `Type`, `Start`, `ErrorControl`, `DisplayName`, `Description`, `ObjectName`), lu par le gestionnaire de services de Winlux et retiré à la désinstallation ; le démarrage demandé par `ServiceControl` est laissé au gestionnaire |
 | Désinstallation | journal par produit dans `~/.local/share/winlux/msi/` : fichiers, dossiers créés, valeurs et clés de registre ; le paquet est conservé à côté (`<code>.msi`) quand il a des actions EXE, pour rejouer celles de la désinstallation (`REMOVE="ALL"`, `Installed`) |
 
@@ -46,7 +47,8 @@ les codes de sortie à 8 bits (1605 devient 69).
 
 ## Pas encore pris en charge
 
-Actions personnalisées DLL et script (journalisées puis ignorées, #833),
+Actions personnalisées DLL autres que celles de WiX ci-dessus, et scripts
+(journalisées puis ignorées, #833),
 recherche `CompLocator`, interface graphique d'installation (`/qf`), réparation `/f`
 (traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`,
 compression Quantum.

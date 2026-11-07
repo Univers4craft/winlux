@@ -6,6 +6,7 @@
 #   - type 18 (fichier installé, après InstallFinalize) : outil installé ;
 #   - type 34 à la désinstallation (REMOVE="ALL") : désinstalleur de l'outil
 #     lancé depuis le paquet conservé ;
+#   - WixQuietExec64 (DLL WiX reconnue) : commande de CustomActionData lancée ;
 #   - jamais lancés : un programme Linux (/bin/sh), cmd.exe ;
 #   - service (ServiceInstall) inscrit dans le registre puis retiré ;
 #   - paquet conservé retiré avec l'application.
@@ -21,7 +22,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 echo outil >outil.txt
-for n in Prerequis Outil; do
+for n in Prerequis Outil Silencieux; do
     id=$(printf '%s' "$n" | tr 'A-Z' 'a-z')
     cat >"$id.nsi" <<EOF
 Unicode true
@@ -55,6 +56,7 @@ cat >ca.wxs <<'EOF'
             <File Id="outil" Name="outil.exe" Source="outil.exe" KeyPath="yes">
               <Shortcut Id="raccourci" Directory="ProgramMenuFolder" Name="Outil Demo" Advertise="no"/>
             </File>
+            <File Id="silencieux" Name="silencieux.exe" Source="silencieux.exe"/>
             <ServiceInstall Id="service" Name="WinluxDemoSvc" DisplayName="Service de démonstration" Type="ownProcess"
                             Start="auto" ErrorControl="normal" Arguments="--service" Description="Service du paquet de test"/>
             <ServiceControl Id="controle" Name="WinluxDemoSvc" Start="install" Stop="both" Remove="uninstall"/>
@@ -77,7 +79,9 @@ printf '%s\t%s\t%s\n' \
     Linux 'NOT Installed' 4020 \
     LanceOutil 'NOT Installed' 6610 \
     RetireOutil 'REMOVE="ALL"' 3400 \
-    Nettoie 'REMOVE="ALL"' 3410 >>idt/InstallExecuteSequence.idt
+    Nettoie 'REMOVE="ALL"' 3410 \
+    PrepareSilencieux 'NOT Installed' 4030 \
+    Silencieux 'NOT Installed' 4040 >>idt/InstallExecuteSequence.idt
 {
     printf 'Action\tType\tSource\tTarget\ns72\ti2\tS72\tS255\nCustomAction\tAction\n'
     printf 'InstallePrerequis\t3074\tPrerequis\t/S\n'
@@ -85,8 +89,13 @@ printf '%s\t%s\t%s\n' \
     printf 'LanceOutil\t18\toutil\t/S\n'
     printf 'RetireOutil\t34\tINSTALLDIR\t"[ProgramFiles64Folder]Outil Demo\\uninst.exe" /S\n'
     printf 'Nettoie\t98\tINSTALLDIR\tcmd.exe /c del x\n'
+    # Motif WiX : propriété CustomActionData posée par une action 51, puis
+    # WixQuietExec64 différée dans la DLL WixCA (jamais chargée).
+    printf 'PrepareSilencieux\t51\tSilencieux\t"[#silencieux]" /S\n'
+    printf 'Silencieux\t3073\tWixCA\tWixQuietExec64\n'
 } >idt/CustomAction.idt
-printf 'Name\tData\ns72\tv0\nBinary\tName\nPrerequis\tPrerequis.exe\n' >idt/Binary.idt
+cp prerequis.exe idt/Binary/WixCA.dll
+printf 'Name\tData\ns72\tv0\nBinary\tName\nPrerequis\tPrerequis.exe\nWixCA\tWixCA.dll\n' >idt/Binary.idt
 (cd idt && for t in *.idt; do msibuild ../ca.msi -i "$t"; done)
 
 mkdir home
@@ -98,6 +107,7 @@ run msiexec.exe /i ca.msi /qn >"$work/out.txt" 2>&1 || fail "installation en éc
 test -f "$pf/Winlux Actions/outil.exe" || fail "fichier du paquet absent"
 test -f "$pf/Prerequis Demo/outil.txt" || fail "type 2 (table Binary) : prérequis non installé"
 test -f "$pf/Outil Demo/outil.txt" || fail "type 18 (fichier installé) : outil non installé"
+test -f "$pf/Silencieux Demo/outil.txt" || fail "WixQuietExec64 (CustomActionData) : commande non lancée"
 test ! -e "$work/linux-lance" || fail "un programme Linux a été lancé par une action personnalisée"
 grep -q 'Action personnalisée Linux non lancée' "$work/out.txt" || fail "action Linux non signalée"
 ls "$work/home/.local/share/winlux/msi/"*.msi >/dev/null 2>&1 || fail "paquet non conservé pour la désinstallation"
@@ -113,4 +123,4 @@ test -f "$pf/Prerequis Demo/outil.txt" || fail "le prérequis est parti avec l'a
 grep -q 'Action personnalisée Nettoie non lancée : outil système' "$work/out.txt" || fail "cmd.exe non signalé"
 if run reg.exe query "$svc" >/dev/null 2>&1; then fail "service resté inscrit après désinstallation"; fi
 if ls "$work/home/.local/share/winlux/msi/"*.msi >/dev/null 2>&1; then fail "paquet conservé resté"; fi
-echo "msi-actions : types 2, 18 et 34 lancés (installation et REMOVE=ALL), service inscrit puis retiré, Linux et cmd refusés, paquet conservé puis retiré"
+echo "msi-actions : types 2, 18, 34 et WixQuietExec lancés (installation et REMOVE=ALL), service inscrit puis retiré, Linux et cmd refusés, paquet conservé puis retiré"
