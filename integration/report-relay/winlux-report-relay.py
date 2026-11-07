@@ -30,8 +30,11 @@ REPO = os.environ.get("WINLUX_RELAY_REPO", "Univers4craft/winlux")
 API = "https://api.github.com"
 ALLOWED_LABELS = {"bug", "signalement-utilisateur", "plantage", "fonction-manquante", "à-trier",
                   "compatibilité-windows", "runtime", "bureau", "urgence:1-quotidien",
-                  "urgence:2-confort"}
+                  "urgence:2-confort", "urgence:3-long-terme"}
 REQUIRED_LABEL = "signalement-utilisateur"
+# Toute issue du dépôt porte une urgence : un client ancien qui n'en envoie
+# pas reçoit celle du confort, à revoir au tri.
+DEFAULT_URGENCY = "urgence:2-confort"
 PER_IP_HOUR = int(os.environ.get("WINLUX_RELAY_PER_IP", "5"))
 GLOBAL_HOUR = int(os.environ.get("WINLUX_RELAY_GLOBAL", "60"))
 SIGNATURE = re.compile(r"Signature : `(wlx-[0-9a-f]{12})`")
@@ -86,8 +89,14 @@ def validate(data):
     if not title.startswith("[") or not any(m in body for m in MARKERS) or "### " not in body:
         raise ValueError("ce n'est pas un rapport winlux-report")
     labels = [l for l in data.get("labels") or [] if isinstance(l, str) and l in ALLOWED_LABELS]
+    labels = list(dict.fromkeys(labels))
     if REQUIRED_LABEL not in labels:
         labels.append(REQUIRED_LABEL)
+    urgencies = [l for l in labels if l.startswith("urgence:")]
+    if not urgencies:
+        labels.append(DEFAULT_URGENCY)
+    elif len(urgencies) > 1:
+        labels = [l for l in labels if not l.startswith("urgence:")] + [min(urgencies)]
     issue = data.get("issue")
     if issue is not None and (not isinstance(issue, int) or issue <= 0):
         raise ValueError("issue")

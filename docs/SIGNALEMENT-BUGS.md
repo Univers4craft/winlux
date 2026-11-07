@@ -195,6 +195,22 @@ Les rapports utilisent `bug`, `signalement-utilisateur`, `plantage`,
 `fonction-manquante`, `à-trier`, `compatibilité-windows`, `runtime` et
 `bureau` ; elles existent toutes sur le dépôt (créées le 31/10/2026).
 
+Chaque rapport, manuel ou automatique, porte aussi une urgence (#611) :
+`urgence:1-quotidien` pour un arrêt du système, `urgence:2-confort` sinon, à
+revoir au tri. Selon le chemin d'envoi :
+
+- **Relais ou jeton** : les étiquettes sont posées par l'API GitHub. Le relais
+  ajoute `urgence:2-confort` à un rapport qui n'en a pas et n'en garde qu'une.
+- **Formulaire dans le navigateur** : GitHub n'applique les étiquettes du lien
+  (`&labels=…`) qu'aux membres du dépôt. Le modèle `rapport-winlux.md` pose
+  `bug`, `signalement-utilisateur` et `à-trier` pour tout le monde, et la
+  première ligne du corps (« > Étiquettes / Labels : … ») donne les autres à
+  poser au tri.
+
+Le message « formulaire ouvert » n'apparaît qu'une fois le navigateur lancé :
+`winlux-browser` écrit `ouvert`, `annule` ou `attente` dans le fichier nommé
+par `WINLUX_BROWSER_STATUS` (#612).
+
 ## Tests
 
 `python3 -B scripts/test-report.py` (lancé par la CI) vérifie la lecture du

@@ -45,6 +45,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -92,6 +93,9 @@ T = {
   "searching": "Recherche d'un signalement identique…", "sending": "Envoi en cours…",
   "sent": "Merci ! Signalement envoyé : {url}", "commented": "Merci ! Votre rapport a été ajouté au signalement existant : {url}",
   "opened": "Le formulaire GitHub est ouvert dans le navigateur. Rapport enregistré dans {path}.",
+  "opening": "Ouverture du formulaire GitHub… Choisissez un navigateur s'il vous est demandé. Rapport enregistré dans {path}.",
+  "browser_cancelled": "Aucun navigateur choisi : le formulaire GitHub n'a pas été ouvert. Le lien ci-dessous permet de le rouvrir. Rapport enregistré dans {path}.",
+  "browser_pending": "Aucun navigateur n'est installé : le formulaire GitHub s'ouvrira dès que vous en aurez choisi un dans Paramètres > Navigateurs. Rapport enregistré dans {path}.",
   "copied": "Le rapport complet est trop long pour l'adresse : il a été copié dans le presse-papiers, collez-le dans le formulaire.",
   "saved": "Rapport enregistré dans {path}.", "failed": "L'envoi a échoué : {error}. Le rapport est enregistré dans {path}.",
   "dup_title": "Ce problème a déjà été signalé",
@@ -174,6 +178,9 @@ T = {
   "searching": "Looking for an identical report…", "sending": "Sending…",
   "sent": "Thank you! Report sent: {url}", "commented": "Thank you! Your report was added to the existing issue: {url}",
   "opened": "The GitHub form is open in your browser. Report saved to {path}.",
+  "opening": "Opening the GitHub form… Pick a browser if you are asked to. Report saved to {path}.",
+  "browser_cancelled": "No browser was chosen: the GitHub form was not opened. The link below opens it again. Report saved to {path}.",
+  "browser_pending": "No browser is installed: the GitHub form will open as soon as you choose one in Settings > Browsers. Report saved to {path}.",
   "copied": "The full report is too long for the link: it was copied to the clipboard, paste it into the form.",
   "saved": "Report saved to {path}.", "failed": "Sending failed: {error}. The report is saved to {path}.",
   "dup_title": "This problem was already reported",
@@ -256,6 +263,9 @@ T = {
   "searching": "Buscando un informe idéntico…", "sending": "Enviando…",
   "sent": "¡Gracias! Informe enviado: {url}", "commented": "¡Gracias! Su informe se añadió al existente: {url}",
   "opened": "El formulario de GitHub está abierto en el navegador. Informe guardado en {path}.",
+  "opening": "Abriendo el formulario de GitHub… Elija un navegador si se le pide. Informe guardado en {path}.",
+  "browser_cancelled": "No se eligió ningún navegador: el formulario de GitHub no se abrió. El enlace de abajo permite abrirlo de nuevo. Informe guardado en {path}.",
+  "browser_pending": "No hay ningún navegador instalado: el formulario de GitHub se abrirá en cuanto elija uno en Configuración > Navegadores. Informe guardado en {path}.",
   "copied": "El informe completo es demasiado largo para el enlace: se ha copiado al portapapeles, péguelo en el formulario.",
   "saved": "Informe guardado en {path}.", "failed": "El envío ha fallado: {error}. El informe está guardado en {path}.",
   "dup_title": "Este problema ya se ha informado",
@@ -338,6 +348,9 @@ T = {
   "searching": "Suche nach einer identischen Meldung…", "sending": "Wird gesendet…",
   "sent": "Danke! Meldung gesendet: {url}", "commented": "Danke! Ihr Bericht wurde der bestehenden Meldung hinzugefügt: {url}",
   "opened": "Das GitHub-Formular ist im Browser geöffnet. Bericht gespeichert unter {path}.",
+  "opening": "Das GitHub-Formular wird geöffnet… Wählen Sie einen Browser, falls Sie gefragt werden. Bericht gespeichert unter {path}.",
+  "browser_cancelled": "Es wurde kein Browser gewählt: Das GitHub-Formular wurde nicht geöffnet. Über den Link unten können Sie es erneut öffnen. Bericht gespeichert unter {path}.",
+  "browser_pending": "Es ist kein Browser installiert: Das GitHub-Formular öffnet sich, sobald Sie unter Einstellungen > Browser einen gewählt haben. Bericht gespeichert unter {path}.",
   "copied": "Der vollständige Bericht ist für den Link zu lang: Er wurde in die Zwischenablage kopiert, fügen Sie ihn in das Formular ein.",
   "saved": "Bericht gespeichert unter {path}.", "failed": "Senden fehlgeschlagen: {error}. Der Bericht ist unter {path} gespeichert.",
   "dup_title": "Dieses Problem wurde bereits gemeldet",
@@ -995,6 +1008,10 @@ def winlux_version():
 def session_type():
     if os.environ.get("WINLUX_DESKTOP_DEMO") or Path("/run/winlux/desktop-shell").exists():
         desktop = "Bureau Winlux (shell)"
+    elif os.environ.get("WINLUX_NATIVE_SHELL") == "1" or os.environ.get("XDG_SESSION_DESKTOP") == "winlux":
+        # La session native met XDG_CURRENT_DESKTOP=XFCE pour la compatibilité
+        # des applications : ce n'est pas ce que l'utilisateur a devant lui.
+        desktop = "Session native Winlux"
     else:
         desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "?"
     display = "Wayland" if os.environ.get("WAYLAND_DISPLAY") else "X11" if os.environ.get("DISPLAY") else "console"
@@ -1342,6 +1359,9 @@ class Report:
             labels.append("compatibilité-windows")
         if kind == "internal" or self.component:
             labels.append("runtime" if not self.component else "bureau")
+        # Toute issue doit porter une urgence (règle du dépôt) : un arrêt du
+        # système bloque l'usage quotidien, le reste se trie en confort.
+        labels.append(urgency(kind))
         return labels
 
     def technical(self):
@@ -1379,7 +1399,7 @@ class Report:
             out.append("")
         if self.checks:
             out += [f"### {tr('h_checks', L)}", ""]
-            out += [f"- {'✅' if ok else '⚠️'} {text}" for ok, text in self.checks] + [""]
+            out += [f"- {'✔' if ok else '⚠'} {text}" for ok, text in self.checks] + [""]
         if self.system:
             out += [f"<details><summary>{tr('h_system', L)}</summary>", "", "```"]
             out += [l[:300].replace("```", "'''") for l in self.system["lines"]] + ["```", "", "</details>", ""]
@@ -1488,11 +1508,22 @@ def send_api(conf, title, body, labels, issue=None):
     return http("POST", f"{API}/repos/{REPO}/issues", {"title": title, "body": body, "labels": labels}, token)["html_url"]
 
 
+def labels_line(labels):
+    """Étiquettes voulues, recopiées en tête du corps : GitHub n'applique les
+    étiquettes du lien qu'aux membres du dépôt, on les pose donc à la main au
+    tri (le modèle rapport-winlux.md pose déjà bug, signalement-utilisateur et
+    à-trier pour tout le monde)."""
+    return "> Étiquettes / Labels : " + " ".join(f"`{l}`" for l in labels)
+
+
 def browser_url(title, body, labels, issue=None):
     """Formulaire prérempli. Les étiquettes du lien ne s'appliquent que pour les
-    membres du dépôt ; le modèle rapport-winlux.md les pose pour les autres."""
+    membres du dépôt ; pour les autres, le modèle rapport-winlux.md pose les
+    étiquettes de base et la ligne labels_line() garde les autres pour le tri."""
     if issue:
         return f"https://github.com/{REPO}/issues/{issue}#new_comment_field", False
+    if labels and not body.startswith("> Étiquettes / Labels"):
+        body = labels_line(labels) + "\n\n" + body
     base = f"https://github.com/{REPO}/issues/new?template=rapport-winlux.md&labels=" + \
         urllib.parse.quote(",".join(labels)) + "&title=" + urllib.parse.quote(title) + "&body="
     full = base + urllib.parse.quote(body)
@@ -1514,6 +1545,49 @@ def open_url(url):
             except OSError:
                 continue
     return False
+
+
+BROWSER_STATES = ("ouvert", "annule", "attente")
+
+
+def open_url_watched(url):
+    """Ouvre le lien par winlux-browser en suivant ce qu'il en fait.
+
+    Renvoie une fonction d'état : None tant que rien n'est décidé (fenêtre de
+    choix du navigateur encore ouverte), puis « ouvert », « annule » (choix
+    annulé, rien ne s'ouvre) ou « attente » (aucun navigateur : le lien est
+    gardé jusqu'au choix). Renvoie None si winlux-browser est absent : on ne
+    sait alors rien de plus que « lancé »."""
+    browser = shutil.which("winlux-browser")
+    if not browser:
+        return None
+    fd, status = tempfile.mkstemp(prefix="navigateur-", dir=str(STATE) if STATE.is_dir() else None)
+    os.close(fd)
+    env = dict(os.environ, WINLUX_BROWSER_STATUS=status)
+    try:
+        process = subprocess.Popen([browser, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=True, env=env)
+    except OSError:
+        os.unlink(status)
+        return None
+
+    def state():
+        try:
+            text = Path(status).read_text().strip()
+        except OSError:
+            text = ""
+        if text not in BROWSER_STATES:
+            code = process.poll()
+            if code is None:
+                return None
+            # Sorti sans rien dire (ancien winlux-browser) : ouvert si code 0.
+            text = "ouvert" if code == 0 else "annule"
+        try:
+            os.unlink(status)
+        except OSError:
+            pass
+        return text
+    return state
 
 
 def save_report(title, body):
@@ -1619,7 +1693,7 @@ def enqueue(report, key):
             old.unlink(missing_ok=True)
     description = tr("auto_desc", "fr")
     item = {"key": key, "signature": report.signature, "kind": report.kind(), "created": int(time.time()),
-            "title": report.title(), "labels": report.labels() + [auto_urgency(report)],
+            "title": report.title(), "labels": report.labels(),
             "body": report.body(description, redacted=True),
             "comment": report.body(description, redacted=True, comment=True)}
     name = time.strftime("%Y%m%d-%H%M%S-") + hashlib.sha256(key.encode()).hexdigest()[:8] + ".json"
@@ -1627,8 +1701,9 @@ def enqueue(report, key):
     auto_log(f"en file : {report.signature or key} ({item['kind']})")
 
 
-def auto_urgency(report):
-    return "urgence:1-quotidien" if report.kind() == "system" else "urgence:2-confort"
+def urgency(kind):
+    """Étiquette d'urgence d'un rapport (noms des étiquettes du dépôt)."""
+    return "urgence:1-quotidien" if kind == "system" else "urgence:2-confort"
 
 
 def collect():
@@ -2189,7 +2264,7 @@ def gui(report, conf):
         """Tant que le relais n'est pas en ligne, l'envoi passe par le site
         GitHub : on le dit clairement avant d'ouvrir le navigateur."""
         dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.INFO,
-                                   text=tr("acct_title", L))
+                                   text=tr("acct_title", L), title=tr("window", L))
         notice.set_text("")
         dialog.format_secondary_text(tr("acct_text", L, path=path))
         dialog.add_button(tr("acct_later", L), 0)
@@ -2209,17 +2284,29 @@ def gui(report, conf):
         url, truncated = browser_url(title, body, labels, issue)
         if truncated or issue:
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(body, -1)
-        opened = open_url(url)
-        message = tr("opened", L, path=path) if opened else tr("saved", L, path=path)
-        if error:
-            message = tr("failed", L, error=error, path=path) + " " + message
-        if truncated or issue:
-            message += " " + tr("copied", L)
-        finish(message, url)
+        prefix = tr("failed", L, error=error, path=path) + " " if error else ""
+        suffix = " " + tr("copied", L) if truncated or issue else ""
+        state = open_url_watched(url)
+        if state is None:
+            opened = open_url(url)
+            finish(prefix + (tr("opened", L, path=path) if opened else tr("saved", L, path=path)) + suffix, url)
+            return
+        # La fenêtre de choix du navigateur peut rester ouverte : on n'annonce
+        # le formulaire ouvert qu'une fois le navigateur réellement lancé.
+        finish(prefix + tr("opening", L, path=path) + suffix, url)
+        messages = {"ouvert": "opened", "annule": "browser_cancelled", "attente": "browser_pending"}
+
+        def poll():
+            result = state()
+            if result is None:
+                return True
+            notice.set_text(prefix + tr(messages[result], L, path=path) + suffix)
+            return False
+        GLib.timeout_add(300, poll)
 
     def ask_duplicate(found, issues):
         dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                   text=tr("dup_title", L))
+                                   text=tr("dup_title", L), title=tr("window", L))
         if found == "identical":
             dialog.format_secondary_text(tr("dup_text", L, number=issues[0]["number"], title=issues[0]["title"]))
             choices = issues[:1]
