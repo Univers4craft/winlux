@@ -13,6 +13,7 @@ mod pp;
 
 use crate::dlls::dxbc::{Shader, SigElement, Stage};
 
+pub(crate) use gen::storage_binding;
 pub(crate) use pp::Includer;
 
 /// D3DCOMPILE_PACK_MATRIX_ROW_MAJOR.
@@ -32,6 +33,7 @@ pub(crate) fn stage_of(target: &str) -> Result<Stage, String> {
         Some("vs_") => Ok(Stage::Vertex),
         Some("ps_") => Ok(Stage::Pixel),
         Some("gs_") => Ok(Stage::Geometry),
+        Some("cs_") => Ok(Stage::Compute),
         _ => Err(format!("cible « {target} » non prise en charge")),
     }
 }
