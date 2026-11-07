@@ -762,6 +762,29 @@ pub extern "win64" fn crt_abs64(v: i64) -> i64 {
     v.wrapping_abs()
 }
 
+/// Quotient et reste réunis dans `div_t` / `ldiv_t` (deux `int`), structure
+/// de 8 octets que l'ABI x64 rend dans RAX : quotient en bas, reste en haut.
+fn div_pair(num: i32, den: i32) -> u64 {
+    if den == 0 {
+        return 0;
+    }
+    let q = num.wrapping_div(den);
+    let r = num.wrapping_rem(den);
+    (q as u32 as u64) | ((r as u32 as u64) << 32)
+}
+pub extern "win64" fn crt_div(num: i32, den: i32) -> u64 {
+    div_pair(num, den)
+}
+/// `lldiv_t` fait 16 octets : l'appelant passe l'adresse du résultat en
+/// premier argument caché, rendue telle quelle.
+pub unsafe extern "win64" fn crt_lldiv(out: *mut i64, num: i64, den: i64) -> *mut i64 {
+    if !out.is_null() && den != 0 {
+        *out = num.wrapping_div(den);
+        *out.add(1) = num.wrapping_rem(den);
+    }
+    out
+}
+
 // ---------- Tri et recherche ----------
 
 unsafe extern "win64" fn qsort(base: *mut c_void, num: usize, width: usize, compare: usize) {
@@ -1096,7 +1119,8 @@ pub fn exports() -> crate::dlls::Exports {
         "asin"=>fn asin,"acos"=>fn acos,"atan"=>fn atan,"atan2"=>fn atan2,"exp"=>fn exp,
         "log"=>fn log,"log10"=>fn log10,"pow"=>fn pow,"ceil"=>fn ceil,"floor"=>fn floor,
         "fmod"=>fn fmod,"hypot"=>fn hypot,"sinh"=>fn sinh,"cosh"=>fn cosh,"tanh"=>fn tanh,
-        "abs"=>fn crt_abs,"labs"=>fn crt_labs,"_abs64"=>fn crt_abs64,
+        "abs"=>fn crt_abs,"labs"=>fn crt_labs,"_abs64"=>fn crt_abs64,"llabs"=>fn crt_abs64,"imaxabs"=>fn crt_abs64,
+        "div"=>fn crt_div,"ldiv"=>fn crt_div,"lldiv"=>fn crt_lldiv,"imaxdiv"=>fn crt_lldiv,
         "qsort"=>fn qsort,"bsearch"=>fn bsearch,
         "_snprintf"=>fn snprintf_thunk,"snprintf"=>fn snprintf_c99_thunk,"_snprintf_s"=>fn snprintf_s_thunk,
         "_vsnprintf"=>fn vsnprintf_thunk,"vsnprintf"=>fn vsnprintf_c99_thunk,
@@ -1110,6 +1134,18 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn div_ldiv_lldiv_rendent_quotient_et_reste() {
+        // #746 : VLC (libqt_plugin) appelle msvcrt!div.
+        let v = crt_div(-7, 2);
+        assert_eq!((v as u32 as i32, (v >> 32) as u32 as i32), (-3, -1));
+        assert_eq!(crt_div(5, 0), 0);
+        let mut out = [0i64; 2];
+        let p = unsafe { crt_lldiv(out.as_mut_ptr(), 1 << 40, 3) };
+        assert_eq!(p, out.as_mut_ptr());
+        assert_eq!(out, [(1i64 << 40) / 3, (1i64 << 40) % 3]);
+    }
 
     fn cs(s: &str) -> Vec<u8> {
         let mut v = s.as_bytes().to_vec();
