@@ -14,6 +14,13 @@ from gi.repository import Gio, Gtk, GLib
 _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
 
 
+
+def control_file(name):
+    """Message ou journal d'une action de winlux-control : celui du compte
+    (/run/winlux/control-<uid>, /run/winlux étant collant), sinon le partagé."""
+    mine = f"/run/winlux/control-{os.getuid()}/{name}"
+    return mine if os.path.exists(mine) else f"/run/winlux/{name}"
+
 def fold(text):
     """Recherche sans casse ni accents : « reseau » trouve « Réseau »."""
     text = unicodedata.normalize("NFKD", text.casefold().translate(_LIGATURES))
@@ -1024,7 +1031,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             elif result and action in ("update-check", "update-apply", "update-rollback"):
                 self.show_update_error(action, result)
             elif result:
-                detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
+                detail = read(control_file("action.log")).strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
                 self.show_error(_t("L’opération a échoué"), _t("Code : {code}\n\n{detail}").format(code=result, detail=detail))
             if result == 0 and action and action.startswith(("browser-install-", "browser-default-")):
                 # Lien demandé avant qu'un navigateur soit là : ouvert maintenant,
@@ -1070,10 +1077,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None:
             try:
-                fresh = os.stat("/run/winlux/action.txt").st_mtime >= getattr(self, "page_opened", 0) - 1
+                fresh = os.stat(control_file("action.txt")).st_mtime >= getattr(self, "page_opened", 0) - 1
             except OSError:
                 fresh = False
-            self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()) if fresh else "")
+            self.notice.set_text(localize_update_text(read(control_file("action.txt")).strip()) if fresh else "")
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
         try: percent = int(progress.get("percent", "-1"))
         except ValueError: percent = -1
@@ -1097,7 +1104,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.progress.set_text(item)
         self.progress.set_visible(self.page == 7)
         if self.page == 7:
-            journal = read("/run/winlux/update.log")[-12000:]
+            journal = read(control_file("update.log"))[-12000:]
             if self.details.get_text() != journal: self.details.set_text(journal)
         return True
 
@@ -1109,7 +1116,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         phase = read("/run/winlux/update-error-phase").strip()
         stage = stages.get(phase, phase or {"update-check": _t("Recherche"), "update-apply": _t("Mise à jour"),
                                            "update-rollback": _t("Restauration")}[action])
-        log = read("/run/winlux/update.log").strip()
+        log = read(control_file("update.log")).strip()
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 

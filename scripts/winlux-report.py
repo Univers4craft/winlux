@@ -1188,7 +1188,7 @@ DIAG_DOMAINS = {
                        "/run/winlux/boot-splash.log", "/run/winlux/system-services.log",
                        "/var/lib/winlux/native-boot-failure.log", "/run/winlux/hardware.log"],
              "commands": [["dmesg", "--level=emerg,alert,crit,err"]]},
-    "update": {"files": ["/run/winlux/update.log", "/run/winlux/boot-update.log", "/run/winlux/sysupdate-auto.log",
+    "update": {"files": ["/run/winlux/update.log", f"/run/winlux/control-{os.getuid()}/update.log", "/run/winlux/boot-update.log", "/run/winlux/sysupdate-auto.log",
                          "/run/winlux/updates.txt", "/run/winlux/sysupdates.txt",
                          "/var/log/winlux-first-boot-packages.log", "/var/log/winlux-drivers.log"],
                "commands": []},
