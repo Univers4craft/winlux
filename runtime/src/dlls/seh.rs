@@ -1330,6 +1330,13 @@ pub fn describe_for_app_filter(rec: &ExceptionRecord, ctx: &Context) -> String {
     if n > 0 {
         line.push_str(&format!(" (arguments {:x?})", &rec.info[..n]));
     }
+    if rec.code == 0xC000_0005 && n >= 2 {
+        // Adresse fautive dans un module : « lib.dll+0x… » dit quelle donnée.
+        let at = crate::thunks::describe_site(rec.info[1]);
+        if at.contains('+') {
+            line.push_str(&format!(", adresse {at}"));
+        }
+    }
     if rip != rec.address {
         line.push_str(&format!(", rip {}", crate::thunks::describe_site(rip)));
     }

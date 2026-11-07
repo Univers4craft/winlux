@@ -74,15 +74,17 @@ fn locate(m: &Menus, menu: usize, item: u32, by_pos: bool) -> Option<(usize, usi
     if by_pos {
         return ((item as usize) < list.len()).then_some((menu, item as usize));
     }
-    if let Some(i) = list
-        .iter()
-        .position(|it| it.flags & MF_POPUP == 0 && it.id == item)
-    {
-        return Some((menu, i));
-    }
-    for it in list.iter().filter(|it| it.submenu != 0) {
-        if let Some(found) = locate(m, it.submenu, item, false) {
-            return Some(found);
+    // Parcours dans l'ordre des éléments, en descendant dans chaque
+    // sous-menu à sa place : Notepad++ a « + » (41001) et « × » (41003) au
+    // bout de sa barre, mais « Nouveau » et « Fermer » du menu Fichier,
+    // rencontrés avant, sont ceux que ModifyMenu traduit (#709).
+    for (i, it) in list.iter().enumerate() {
+        if it.submenu != 0 {
+            if let Some(found) = locate(m, it.submenu, item, false) {
+                return Some(found);
+            }
+        } else if it.id == item {
+            return Some((menu, i));
         }
     }
     // Un sous-menu se désigne aussi par son handle.
@@ -257,8 +259,16 @@ unsafe fn modify(menu: usize, pos: u32, flags: u32, id: usize, text: Option<Stri
     let Some((owner, i)) = locate(&m, menu, pos, flags & MF_BYPOSITION != 0) else {
         return 0;
     };
-    let item = make_item(flags, id, text);
+    let mut item = make_item(flags, id, text);
     if let Some(slot) = m.menus.get_mut(&owner).and_then(|l| l.get_mut(i)) {
+        // Sans MF_POPUP, un menu déroulant garde son sous-menu : Notepad++
+        // traduit ainsi les titres de sa barre (ModifyMenu MF_BYPOSITION |
+        // MF_STRING, identifiant 0), qui ne s'ouvraient plus (#709).
+        if flags & MF_POPUP == 0 && slot.submenu != 0 {
+            item.submenu = slot.submenu;
+            item.id = slot.id;
+            item.flags |= MF_POPUP;
+        }
         *slot = item;
     }
     1
@@ -876,6 +886,36 @@ mod tests {
         // Supprimer le sous-menu par position le détruit.
         assert_eq!(delete_menu(root, 0, MF_BYPOSITION), 1);
         assert_eq!(is_menu(sub), 0);
+    }
+
+    /// Notepad++ traduit les titres de sa barre par ModifyMenu sans
+    /// MF_POPUP : chaque titre doit garder son sous-menu (#709).
+    #[test]
+    fn modifier_le_titre_d_un_menu_garde_son_sous_menu() {
+        let root = create();
+        let sub = create();
+        append(sub, 0, 21, Some("Copy".into()));
+        append(root, MF_POPUP, sub, Some("&Edit".into()));
+        let fr: Vec<u16> = "&Édition\0".encode_utf16().collect();
+        assert_eq!(
+            unsafe { modify_menu_w(root, 0, MF_BYPOSITION, 0, fr.as_ptr()) },
+            1
+        );
+        assert_eq!(get_sub_menu(root, 0), sub);
+        assert_eq!(get_menu_item_id(root, 0), u32::MAX);
+        let mut buf = [0u16; 32];
+        let n = unsafe { get_menu_string_w(root, 0, buf.as_mut_ptr(), 32, MF_BYPOSITION) };
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "&Édition");
+
+        // Par commande, l'ordre des éléments décide : le « + » de la barre
+        // (même commande que Fichier > Nouveau) vient après.
+        append(root, 0, 21, Some("+".into()));
+        let copie: Vec<u16> = "Copier\0".encode_utf16().collect();
+        assert_eq!(unsafe { modify_menu_w(root, 21, 0, 21, copie.as_ptr()) }, 1);
+        let n = unsafe { get_menu_string_w(sub, 0, buf.as_mut_ptr(), 32, MF_BYPOSITION) };
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Copier");
+        let n = unsafe { get_menu_string_w(root, 1, buf.as_mut_ptr(), 32, MF_BYPOSITION) };
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "+");
     }
 
     #[test]
