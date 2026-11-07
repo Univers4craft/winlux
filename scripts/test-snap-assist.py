@@ -8,7 +8,9 @@ de disposition ; cases déjà prises ignorées ; cartes lisibles du 4K au
 1366x768 ; icônes _NET_WM_ICON), puis sous openbox : l'assistant remplit la
 place libre, propose d'abord les fenêtres non ancrées, place la carte choisie
 au clavier, enchaîne les quarts libres, ne s'ouvre pas sur un écran plein,
-se ferme avec Échap.
+se ferme avec Échap. Groupes d'ancrage (#597) : formés par l'assistant ou
+quand l'écran est rempli, vignette au survol du bouton de la barre des tâches,
+clic qui restaure le groupe réduit, groupe défait par un agrandissement.
 """
 import os
 from pathlib import Path
@@ -53,6 +55,15 @@ assert snap["order_candidates"]([("a", ""), ("b", ""), ("c", "")], {"a"}) == [("
 assert all(len(row) == 3 and all(row) for row in snap["_TR"].values()), "quatre langues"
 for row in (snap["_TR"]["Emplacement {n} sur {total} · Échap pour fermer"],):
     assert all("{n}" in text and "{total}" in text for text in row)
+# Groupes d'ancrage (#597).
+props = {"a": ("g1", "half:left"), "b": ("g1", "half:right"), "c": ("g1", ""), "d": ("g2", "half:left")}
+assert snap["group_members"]("a", props) == ["a", "b"] and snap["group_members"]("c", props) == []
+assert snap["group_members"]("d", props) == [], "un groupe d'une seule fenêtre ne compte pas"
+buttons = [(7, (100, 728, 150, 40)), (8, (250, 728, 150, 40))]
+assert snap["button_under"]((260, 740), buttons) == 8 and snap["button_under"]((50, 740), buttons) is None
+assert snap["popup_origin"]((100, 728, 150, 40), (300, 200), (0, 0, 1366, 768)) == (25, 520), "au-dessus d'un bouton du bas"
+assert snap["popup_origin"]((0, 0, 150, 27), (300, 200), (0, 0, 1366, 768)) == (0, 35), "en dessous d'un bouton du haut"
+assert snap["popup_origin"]((1300, 728, 60, 40), (300, 200), (0, 0, 1366, 768))[0] == 1066, "sans sortir de l'écran"
 print("assistant d'ancrage (logique) : OK")
 
 if not os.environ.get("DISPLAY") or not all(shutil.which(tool) for tool in ("openbox", "xdotool", "wmctrl", "xwininfo", "xprop")):
@@ -176,6 +187,54 @@ try:
     assert not wait(lambda: assist_window(), 1), "Échap ferme l'assistant"
     placed = [w for w in (two, three) if snap["get_prop"](w, "_WINLUX_SNAP") == "quarter:tr"]
     assert len(placed) == 1 and near(frame(placed[0]), rect("quarter:tr", area)), "la carte choisie va dans le quart haut droit"
+    group = snap["get_prop"](one, "_WINLUX_SNAP_GROUP")
+    assert group and snap["get_prop"](placed[0], "_WINLUX_SNAP_GROUP") == group, "fenêtres placées par l'assistant : un groupe"
+
+    # 5. Groupes d'ancrage (#597) : moitié gauche puis moitié droite → groupe,
+    #    réduites puis restaurées ensemble depuis la vignette du bouton de la barre.
+    for window in (one, two, three):
+        snap["restore"](window)
+    assert not snap["get_prop"](one, "_WINLUX_SNAP_GROUP"), "décrochée : plus dans le groupe"
+    assert subprocess.run(TOOL + ["place", "half:left", one], env=env, timeout=10).returncode == 0
+    assert subprocess.run(TOOL + ["drop", two, "half:right"], env=env, timeout=10).returncode == 0
+    group = snap["get_prop"](one, "_WINLUX_SNAP_GROUP")
+    assert group and snap["get_prop"](two, "_WINLUX_SNAP_GROUP") == group, "écran rempli à la main : un groupe aussi"
+    assert snap["get_prop"](three, "_WINLUX_SNAP_GROUP") != group
+    x("xdotool", "windowminimize", one)
+    x("xdotool", "windowminimize", two)
+    hidden = lambda w: "_NET_WM_STATE_HIDDEN" in x("xprop", "-id", w, "_NET_WM_STATE")
+    assert wait(lambda: hidden(one) and hidden(two)), "fenêtres réduites"
+    # Le bouton de la barre d'XFCE : _NET_WM_ICON_GEOMETRY (posée ici à la main).
+    x("xprop", "-id", one, "-f", "_NET_WM_ICON_GEOMETRY", "32c", "-set", "_NET_WM_ICON_GEOMETRY", "100,720,150,40")
+    start(sys.executable, "-B", str(HERE / "winlux-snap.py"), "watch")
+    time.sleep(1.2)
+    x("xdotool", "mousemove", "170", "740")
+
+    def group_window():
+        found = [w for w in x("xdotool", "search", "--onlyvisible", "--name", "^" + snap["_t"]("Groupe d’ancrage") + "$").split()
+                 if "winlux-snap-group" in x("xprop", "-id", w, "WM_WINDOW_ROLE")]
+        return found[0] if found else None
+
+    card = wait(group_window)
+    assert card, "survol du bouton d'une fenêtre groupée : vignette du groupe attendue"
+    left_, top_, width_, height_ = frame(card)
+    assert top_ + height_ <= 720, f"vignette au-dessus du bouton, {frame(card)}"
+    x("xdotool", "mousemove", str(left_ + width_ // 4), str(top_ + height_ // 2))
+    time.sleep(0.3)
+    x("xdotool", "click", "1")
+    assert wait(lambda: not hidden(one) and not hidden(two)), "clic : les deux fenêtres du groupe reviennent"
+    assert wait(lambda: near(frame(one), rect("half:left", area)) and near(frame(two), rect("half:right", area))), \
+        f"chacune à sa place, {frame(one)} {frame(two)}"
+    assert not group_window(), "la vignette se ferme après le clic"
+    # Restauration au clavier/ligne de commande, et groupe défait par un agrandissement.
+    x("xdotool", "windowminimize", two)
+    assert wait(lambda: hidden(two))
+    assert subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 0
+    assert wait(lambda: not hidden(two)), "restore-group : la fenêtre réduite revient"
+    assert wait(lambda: near(frame(two), rect("half:right", area))), f"restore-group : à sa place, {frame(two)}"
+    assert subprocess.run(TOOL + ["drop", two, "maximize"], env=env, timeout=10).returncode == 0
+    assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP") and subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, \
+        "agrandie : le groupe est défait"
 finally:
     for process in reversed(processes):
         if process.poll() is None: process.terminate()
@@ -185,4 +244,4 @@ finally:
     log = (work / "log").read_text(errors="replace") if (work / "log").exists() else ""
     shutil.rmtree(work, ignore_errors=True)
     if "Traceback" in log or os.environ.get("WINLUX_TEST_VERBOSE"): print(log[-3000:], file=sys.stderr)
-print("assistant d'ancrage (openbox réel) : OK")
+print("assistant et groupes d'ancrage (openbox réel) : OK")
