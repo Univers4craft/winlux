@@ -148,6 +148,76 @@ clang++ --target=i686-pc-windows-msvc -O1 -fexceptions -fcxx-exceptions -fno-bui
     -fno-rtti -c "$src/cxx32.cpp" -o "$tmp/cxx32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/cxx32.obj" "$tmp/kernel32_cxx.lib" "$tmp/msvcrt_cxx.lib" /out:"$out/cxx32.exe"
+# Fenêtres (#232, étape 5) : user32 et gdi32 en x86, toujours sans CRT.
+cat >"$tmp/kernel32_gui.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+GetCommandLineA@0
+lstrlenA@4
+GetModuleHandleA@4
+Sleep@4
+DEF
+cat >"$tmp/user32.def" <<'DEF'
+LIBRARY user32.dll
+EXPORTS
+RegisterClassExA@4
+CreateWindowExA@48
+DefWindowProcA@16
+ShowWindow@8
+UpdateWindow@4
+GetMessageA@16
+PeekMessageA@20
+TranslateMessage@4
+DispatchMessageA@4
+PostMessageA@16
+SendMessageA@16
+PostQuitMessage@4
+DestroyWindow@4
+BeginPaint@8
+EndPaint@8
+FillRect@12
+GetClientRect@8
+GetWindowLongA@8
+SetWindowLongA@12
+CallWindowProcA@20
+GetWindowTextA@12
+SetTimer@16
+KillTimer@8
+InvalidateRect@12
+LoadCursorA@8
+DialogBoxIndirectParamA@20
+EndDialog@8
+IsWindow@4
+CharUpperBuffW@8
+CharUpperBuffA@8
+DEF
+cat >"$tmp/gdi32.def" <<'DEF'
+LIBRARY gdi32.dll
+EXPORTS
+CreateSolidBrush@4
+CreateBrushIndirect@4
+DeleteObject@4
+SelectObject@8
+TextOutA@20
+Rectangle@20
+SetTextColor@8
+SetBkMode@8
+CreateCompatibleDC@4
+DeleteDC@4
+CreateDIBSection@24
+GetObjectA@12
+GetPixel@12
+GdiFlush@0
+DEF
+for lib in kernel32_gui user32 gdi32; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/gui32.c" -o "$tmp/gui32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
+    "$tmp/gui32.obj" "$tmp/kernel32_gui.lib" "$tmp/user32.lib" "$tmp/gdi32.lib" /out:"$out/gui32.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.
@@ -162,6 +232,8 @@ fi
 # et g++ pour le C++.
 if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     i686-w64-mingw32-gcc -O1 "$src/thread32.c" -o "$out/thread32_gcc.exe"
+    # Fibres x86 (étape 7, WinSCP).
+    i686-w64-mingw32-gcc -O1 "$src/fiber32.c" -o "$out/fiber32.exe"
     mingw_clang="clang --target=i686-w64-mingw32 -O1 --sysroot=/usr -fuse-ld=lld"
     $mingw_clang "$src/thread32.c" -o "$out/thread32.exe"
     # Bibliothèque d'import à part : $tmp contient aussi kernel32.lib (sans

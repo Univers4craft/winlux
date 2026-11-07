@@ -52,4 +52,4 @@ sha256sum -c winlux-live-v0.2.19.iso.sha256
 The two checksums must match; otherwise, download the image again.
 
 > [!note]
-> Already have Winlux installed? There is nothing to download here: new versions install from [Settings › Updates](page:guide-updates).
+> Already have Winlux installed? There is nothing to download here: new versions install from [Settings › Updates › OS update](page:guide-updates).

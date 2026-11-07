@@ -475,11 +475,14 @@ perform() {
                     for id in $ids; do set -- "$@" -t int -s "$id"; done
                     xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a "$@" || return
                     # Une barre déjà lancée ne charge pas un greffon ajouté
-                    # après coup : une seule relance, la première fois.
-                    case " $current" in
-                        *' 13 '*) ;;
-                        *) if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then xfce4-panel -r >/dev/null 2>&1 || true; fi ;;
-                    esac
+                    # après coup, et ne déplace pas non plus correctement ceux
+                    # qu'elle a déjà : le contrepoids 13 restait au bout de la
+                    # barre, zone de notification décalée de sa largeur et
+                    # Démarrer au quart de l'écran (#651). Relance dès que l'ordre
+                    # change ; à l'ouverture de session, il est déjà en place.
+                    if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+                        xfce4-panel -r >/dev/null 2>&1 || true
+                    fi
                 fi
                 expand=false; test "$alignment" != center || expand=true
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then

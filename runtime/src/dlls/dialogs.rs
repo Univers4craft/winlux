@@ -80,7 +80,7 @@ fn dialogs() -> &'static Mutex<HashMap<usize, Dialog>> {
     D.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn is_dialog(hwnd: usize) -> bool {
+pub(crate) fn is_dialog(hwnd: usize) -> bool {
     lock(dialogs()).contains_key(&hwnd)
 }
 

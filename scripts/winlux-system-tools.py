@@ -145,7 +145,7 @@ _TR = {
     'En cas de problème, une sauvegarde Winlux peut permettre de revenir à la version précédente. Les documents personnels ne sont pas une sauvegarde système : gardez-en également une copie sur un autre support.': ('If something goes wrong, a Winlux backup can take you back to the previous version. Personal documents are not part of a system backup: keep a copy on another drive too.', 'Si hay un problema, una copia de seguridad de Winlux permite volver a la versión anterior. Los documentos personales no forman parte de la copia del sistema: guarde también una copia en otro soporte.', 'Bei Problemen kann eine Winlux-Sicherung zur vorherigen Version zurückführen. Persönliche Dokumente sind keine Systemsicherung: Bewahren Sie auch eine Kopie auf einem anderen Datenträger auf.'),
     'Sauvegarde précédente détectée.': ('Previous backup found.', 'Se detectó una copia de seguridad anterior.', 'Vorherige Sicherung gefunden.'),
     'Aucune sauvegarde précédente détectée.': ('No previous backup found.', 'No se detectó ninguna copia de seguridad anterior.', 'Keine vorherige Sicherung gefunden.'),
-    'Pour restaurer, ouvrez Mises à jour et choisissez Restaurer. Une confirmation est demandée avant toute modification.': ("To restore, open Updates and choose Restore. You'll be asked to confirm before anything changes.", 'Para restaurar, abra Actualizaciones y elija Restaurar. Se pide confirmación antes de cualquier cambio.', 'Öffnen Sie zum Wiederherstellen Updates und wählen Sie Wiederherstellen. Vor jeder Änderung wird eine Bestätigung angefordert.'),
+    'Pour restaurer, ouvrez Mise à jour OS et choisissez Restaurer. Une confirmation est demandée avant toute modification.': ("To restore, open OS update and choose Restore. You'll be asked to confirm before anything changes.", 'Para restaurar, abra Actualización del SO y elija Restaurar. Se pide confirmación antes de cualquier cambio.', 'Öffnen Sie zum Wiederherstellen OS-Update und wählen Sie Wiederherstellen. Vor jeder Änderung wird eine Bestätigung angefordert.'),
     'Ouvrir les mises à jour': ('Open updates', 'Abrir las actualizaciones', 'Updates öffnen'),
     'Si le bureau ne démarre plus : utilisez l’entrée Winlux secours au démarrage si elle est disponible. Sinon, démarrez sur une clé USB d’installation Winlux. Le menu de secours ne remplace pas une sauvegarde de vos documents.': ('If the desktop no longer starts: use the Winlux recovery entry at boot if available. Otherwise, boot from a Winlux installation USB drive. The recovery menu does not replace a backup of your documents.', 'Si el escritorio ya no arranca: use la entrada de recuperación de Winlux al iniciar si está disponible. Si no, arranque desde una memoria USB de instalación de Winlux. El menú de recuperación no sustituye a una copia de seguridad de sus documentos.', 'Wenn der Desktop nicht mehr startet: Verwenden Sie beim Start den Eintrag „Winlux-Wiederherstellung“, falls vorhanden. Andernfalls starten Sie von einem Winlux-Installations-USB-Stick. Das Wiederherstellungsmenü ersetzt keine Sicherung Ihrer Dokumente.'),
     'Ouvrir le guide d’accueil': ('Open the welcome guide', 'Abrir la guía de bienvenida', 'Willkommensleitfaden öffnen'),
@@ -184,6 +184,10 @@ def message(parent, text):
 class Tools(Gtk.Window):
     def __init__(self, page):
         super().__init__(title=_t("Outils Winlux"))
+        # Même icône que l'entrée du menu Démarrer qui ouvre cette page.
+        self.set_icon_name({"quick": "preferences-system", "notifications": "preferences-system-notifications",
+            "tasks": "utilities-system-monitor", "appearance": "preferences-desktop-theme", "apps": "system-software-install",
+            "files": "system-file-manager", "recovery": "preferences-system"}.get(page, "preferences-system"))
         self.set_default_size(850, 650)
         self.connect("destroy", Gtk.main_quit)
         self.page = page
@@ -512,7 +516,7 @@ class Tools(Gtk.Window):
             name = read("/var/lib/winlux/rollback-current").strip()
             available = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
         self.label(_t("Sauvegarde précédente détectée.") if available else _t("Aucune sauvegarde précédente détectée."))
-        self.label(_t("Pour restaurer, ouvrez Mises à jour et choisissez Restaurer. Une confirmation est demandée avant toute modification."))
+        self.label(_t("Pour restaurer, ouvrez Mise à jour OS et choisissez Restaurer. Une confirmation est demandée avant toute modification."))
         self.button(_t("Ouvrir les mises à jour"), lambda: self.open_settings("7"))
         self.label(_t("Si le bureau ne démarre plus : utilisez l’entrée Winlux secours au démarrage si elle est disponible. Sinon, démarrez sur une clé USB d’installation Winlux. Le menu de secours ne remplace pas une sauvegarde de vos documents."))
         self.button(_t("Ouvrir le guide d’accueil"), lambda: self.command(["winlux-welcome"]))

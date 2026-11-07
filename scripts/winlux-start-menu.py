@@ -84,6 +84,7 @@ _TR = {
     'Souris': ('Mouse', 'Ratón', 'Maus'),
     'Personnalisation fond écran thème': ('Personalization wallpaper theme', 'Personalización fondo pantalla tema', 'Personalisierung Hintergrund Design'),
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
+    'Mise à jour OS': ('OS update', 'Actualización del SO', 'OS-Update'),
     'Écran résolution': ('Display resolution', 'Pantalla resolución', 'Bildschirm Auflösung'),
     'À propos version': ('About version', 'Acerca de versión', 'Info Version'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
@@ -101,7 +102,7 @@ _TR = {
     'Effets visuels': ('Visual effects', 'Efectos visuales', 'Visuelle Effekte'),
     'Heure et langue': ('Time and language', 'Hora e idioma', 'Zeit und Sprache'),
     'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
-    'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemaktualisierungen'),
+    'Mise à jour application': ('Application update', 'Actualización de aplicaciones', 'Anwendungsupdate'),
     'Confidentialité et sécurité': ('Privacy and security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
@@ -184,7 +185,7 @@ SETTINGS_INDEX = [
     (1, "Applications installées", "applications apps installees programmes desinstaller demarrage boutiques logiciels installed uninstall startup stores software aplicaciones desinstalar inicio tiendas installierte deinstallieren Autostart"),
     (2, "Réseau", "reseau ethernet cable proxy vpn ip dns internet network red Netzwerk Kabel"),
     (4, "Clavier et souris", "clavier souris azerty qwerty disposition pave tactile touchpad pointeur keyboard mouse layout teclado raton Tastatur Maus Layout"),
-    (7, "Mises à jour", "mises a jour mise a jour update updates actualizaciones actualizar Aktualisierung Updates"),
+    (7, "Mise à jour OS", "mise a jour os mises a jour winlux systeme exploitation os update operating system actualizacion del so sistema operativo Betriebssystem OS-Update update updates actualizaciones actualizar Aktualisierung Updates"),
     (8, "Écran", "ecran affichage resolution luminosite echelle orientation projeter second ecran moniteur display brightness scale monitor project pantalla brillo escala Bildschirm Anzeige Helligkeit Auflosung Skalierung"),
     (9, "À propos", "a propos version nom du pc informations systeme about pc name specifications acerca de version Info Version Gerätename"),
     (10, "Programmes Windows", "programmes windows exe compatibilite windows programs compatibility programas Windows-Programme Kompatibilitat"),
@@ -194,7 +195,7 @@ SETTINGS_INDEX = [
     (14, "Heure et langue", "langue region date heure fuseau horaire format clavier language time zone date idioma region fecha hora zona horaria Sprache Region Datum Uhrzeit Zeitzone"),
     (15, "Gestionnaire de fichiers", "fichiers explorateur extensions fichiers caches dossiers file explorer hidden files folders archivos explorador ocultos Dateien Explorer versteckte"),
     (16, "Son", "son volume haut parleurs micro microphone casque audio sound speakers headphones sonido volumen altavoces microfono auriculares Ton Lautstarke Lautsprecher Mikrofon Kopfhorer"),
-    (17, "Mises à jour système", "mises a jour systeme paquets noyau system updates packages actualizaciones del sistema paquetes Systemaktualisierungen Pakete"),
+    (17, "Mise à jour application", "mise a jour application applications logiciels mises a jour systeme paquets pilotes noyau app application update updates system packages apps actualizacion de aplicaciones actualizaciones del sistema paquetes Anwendungsupdate Anwendungen Systemaktualisierungen Pakete"),
     (18, "Confidentialité et sécurité", "confidentialite securite verrouillage mot de passe autorisations camera micro pare feu privacy security lock permissions firewall privacidad seguridad bloqueo permisos Datenschutz Sicherheit Sperre Berechtigungen Firewall"),
     (19, "Processeur", "processeur cpu performances frequence processor performance procesador rendimiento Prozessor Leistung"),
     (20, "Lecteurs réseau", "lecteurs reseau partage samba smb nas sftp ftp network drives share unidades de red Netzlaufwerke Freigabe"),
@@ -383,6 +384,12 @@ class Start(Gtk.Application):
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+        # Comme Windows 11, chaque ouverture repart du haut de la liste : la
+        # fenêtre cachée gardait le défilement de la fois précédente, qu'il
+        # fallait remonter à la main (#673). Remis à zéro aussi une fois la
+        # liste dessinée, GTK recalant la position à la nouvelle hauteur.
+        self.scroll_top()
+        GLib.idle_add(self.scroll_top)
 
     def workarea(self):
         display = self.window.get_display()
@@ -522,7 +529,7 @@ class Start(Gtk.Application):
         on_click(self.toggle, self.toggle_list)
         header.pack_end(self.toggle, False, False, 0)
         body.pack_start(header, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
+        scroll = self.scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         scroll.add(self.content)
@@ -546,6 +553,10 @@ class Start(Gtk.Application):
         sinon le thème GTK impose la sienne (Adwaita clair : texte gris foncé des
         boutons et des champs) sur le fond du menu et le texte disparaît."""
         self.css.load_from_data(MENU_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
+
+    def scroll_top(self):
+        self.scroll.get_vadjustment().set_value(0)
+        return False
 
     def hide(self):
         if self.window.has_grab():self.window.grab_remove()
@@ -600,6 +611,8 @@ class Start(Gtk.Application):
         else:
             self.all_apps = not self.all_apps
         self.render()
+        # Changement de vue (Épinglé ↔ Toutes les applications) : en haut.
+        self.scroll_top()
 
     def first_result(self, *_):
         # Même ordre que la liste : applications, Paramètres, fichiers.
@@ -772,15 +785,21 @@ class Start(Gtk.Application):
     def find_files(self, query, generation):
         # Bounded name search in visible personal directories. Never follows
         # directory symlinks or scans the system disks from the UI thread.
+        # Début de mot comme Windows (#607) : « son » trouve « Son.wav », pas
+        # « application-json.png » ni « Personnalisation ». Jusqu'à 300
+        # candidats, puis les 30 meilleurs : nom qui commence par la recherche,
+        # puis un de ses mots, les plus récents d'abord (os.walk seul remplissait
+        # la liste avec le premier dossier parcouru).
         matches, visited = [], 0
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             for name in folders + files:
                 visited += 1
-                if not name.startswith(".") and query in fold(name): matches.append(Path(directory, name))
-                if len(matches) >= 30 or visited >= 30000: break
-            if len(matches) >= 30 or visited >= 30000: break
+                if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
+                if len(matches) >= 300 or visited >= 30000: break
+            if len(matches) >= 300 or visited >= 30000: break
+        matches = sorted(matches, key=lambda path: (rank(path.name, query), -modified(path), fold(path.name)))[:30]
         def deliver():
             if generation == self.file_generation:
                 self.file_results = matches
@@ -893,6 +912,12 @@ def rank(text, query):
     if text.startswith(query): return 0
     if any(word.startswith(query) for word in re.split(r"[\W_]+", text)): return 1
     return 2
+
+
+def modified(path):
+    """Date de modification (0 si le fichier a disparu entre-temps)."""
+    try: return path.stat().st_mtime
+    except OSError: return 0
 
 
 def file_icon(path):

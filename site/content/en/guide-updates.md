@@ -5,14 +5,14 @@ description: New versions of Winlux install from Settings, with a restore point 
 
 ## From Settings
 
-1. Open **Settings › Updates**.
+1. Open **Settings › Updates › OS update**.
 2. Click **“Check”**. The page shows the installed version and the available version.
 3. If a newer version exists, click **“Install”** and follow the progress.
 4. Restart when it suits you: Winlux never forces a restart.
 
-![The Updates page](img:mises-a-jour.jpg "Settings › Updates: installed version, available version, automatic updates.")
+![The OS update page](img:mises-a-jour.jpg "Settings › Updates › OS update: installed version, available version, automatic updates.")
 
-On the same page, **“Automatic updates”** installs new versions without any action from you. The base system packages are updated in **Settings › System updates**.
+On the same page, **“Automatic updates”** installs new versions without any action from you. The base system packages are updated in **Settings › Updates › Application update**.
 
 ## What protects your system
 
