@@ -121,9 +121,10 @@ def near(a, b, slack=14):
     return a and b and all(abs(p - q) <= slack for p, q in zip(a, b))
 
 
-def open_window(title, at):
+def open_window(title, at, minimum=None):
     script = ("import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk;"
               f"w=Gtk.Window(title={title!r}); w.set_default_size(420,260); w.move({at[0]},{at[1]});"
+              + (f"w.set_size_request({minimum[0]},{minimum[1]});" if minimum else "") +
               "w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()")
     start(sys.executable, "-c", script)
     found = wait(lambda: x("xdotool", "search", "--name", f"^{title}$").split()[:1])
@@ -235,6 +236,22 @@ try:
     assert subprocess.run(TOOL + ["drop", two, "maximize"], env=env, timeout=10).returncode == 0
     assert not snap["get_prop"](two, "_WINLUX_SNAP_GROUP") and subprocess.run(TOOL + ["restore-group", one], env=env, timeout=10).returncode == 1, \
         "agrandie : le groupe est défait"
+
+    # 6. Fenêtre plus large que sa moitié (Paramètres : 720 px minimum en
+    #    1366x768, #647) : elle occupe quand même la gauche, aucun quart
+    #    gauche n'est proposé après un coin à droite.
+    for window in (one, two, three):
+        snap["restore"](window)
+    wide = open_window("fenetre-large", (200, 150), (760, 300))
+    time.sleep(0.5)
+    assert subprocess.run(TOOL + ["place", "half:left", wide], env=env, timeout=10).returncode == 0
+    assert subprocess.run(TOOL + ["place", "half:right", two], env=env, timeout=10).returncode == 0
+    time.sleep(0.5)
+    assert frame(wide)[2] > area[2] // 2 + 40, f"la fenêtre large déborde de sa moitié, {frame(wide)}"
+    helper = subprocess.Popen(TOOL + ["drop", three, "quarter:tr"], env=env, stderr=open(work / "log", "a"))
+    processes.append(helper)
+    assert helper.wait(timeout=10) == 0
+    assert not wait(assist_window, 1.5), "gauche occupée par une fenêtre large : pas d'assistant à gauche (#647)"
 finally:
     for process in reversed(processes):
         if process.poll() is None: process.terminate()

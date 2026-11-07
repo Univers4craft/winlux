@@ -551,9 +551,10 @@ def snapped_windows(exclude, area):
     for window, _ in other_windows(exclude):
         zone = get_prop(window, "_WINLUX_SNAP")
         if zone not in ZONES or is_maximized(window): continue
-        rect, geometry = zone_rect(zone, area), window_geometry(window)
-        # Encore à sa place (une fenêtre déplacée au clavier garde sa propriété).
-        if geometry and all(abs(a - b) <= 12 for a, b in zip(rect, geometry)): found[window] = rect
+        # Sa place réelle, pas celle de sa case : une fenêtre à largeur minimale
+        # (Paramètres : 720 px) déborde d'une moitié en 1366x768 (#647).
+        geometry = window_geometry(window)
+        if geometry and overlap(geometry, area): found[window] = geometry
     return found
 
 
