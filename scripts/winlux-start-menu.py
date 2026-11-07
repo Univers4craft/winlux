@@ -453,12 +453,13 @@ class Start(Gtk.Application):
         if keyboard_shown:
             try: subprocess.Popen(["winlux-osk", "hide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             except OSError: pass
-        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
         area = self.workarea()
-        # Comme Windows 11 : barre alignée à gauche, le menu s'ouvre au-dessus
-        # du bouton Démarrer ; barre centrée ou ouverture au clavier, il est
-        # centré.
-        self.menu_left = pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3
+        # Comme Windows 11 : le menu suit l'alignement de la barre, au clic
+        # comme à la touche Windows. Barre à gauche : au-dessus du bouton
+        # Démarrer ; centrée ou en capsule flottante (toujours centrée) : au
+        # milieu. Deviner d'après le pointeur ramenait le menu au centre dès
+        # que le clic tombait dans la zone de travail (#732).
+        self.menu_left = taskbar_on_left()
         self.place(keyboard_shown)
         self.window.show_all()
         self.window.present()
@@ -1465,6 +1466,24 @@ OLD_DOWNLOAD_DAYS = 90
 DOWNLOADS_HEAVY = 2 * 1024 ** 3
 DAY = 86400
 INSTALLER_WORDS = ("setup", "install", "installer", "installeur", "instalador", "einrichtung")
+
+
+def taskbar_on_left():
+    """Barre alignée à gauche (préférence système) et pas en capsule flottante (#732)."""
+    align = "left"
+    try:
+        for line in Path(os.environ.get("WINLUX_PREFERENCES", "/etc/winlux/preferences.conf")).read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN="): align = line.split("=", 1)[1].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    style = "classic"
+    try:
+        conf = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "winlux/taskbar.conf"
+        for line in conf.read_text(encoding="utf-8").splitlines():
+            if line.startswith("STYLE="): style = line.split("=", 1)[1].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    return align == "left" and style != "floating"
 
 
 def for_you_enabled(state):

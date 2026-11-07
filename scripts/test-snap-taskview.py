@@ -113,8 +113,9 @@ panel_file = HERE.parent / "integration/native/config/xfce4/xfconf/xfce-perchann
 panel_root = ET.parse(panel_file).getroot()
 order = [value.get("value") for value in panel_root.find(".//property[@name='plugin-ids']")]
 assert order[order.index("1") + 1: order.index("1") + 3] == ["15", "14"], order  # Rechercher, Vue des tâches
-assert panel_root.find(".//property[@name='plugin-15']/property[@name='items']/value").get("value") \
-    == "/usr/share/applications/winlux-search.desktop"
+# Depuis #703, Rechercher est le genmon `winlux-tray search` (zone ou loupe).
+assert panel_root.find(".//property[@name='plugin-15']").get("value") == "genmon"
+assert "Command=/usr/bin/winlux-tray search" in (panel_file.parents[2] / "panel/genmon-15.rc").read_text(encoding="utf-8")
 assert panel_root.find(".//property[@name='plugin-14']/property[@name='items']/value").get("value") \
     == "/usr/share/applications/winlux-taskview.desktop"
 assert panel_root.find(".//property[@name='plugin-2']/property[@name='all-workspaces']").get("value") == "false"

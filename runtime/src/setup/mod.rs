@@ -797,7 +797,7 @@ fn refresh_launchers() {
 /// que le fichier n'apparaisse. xfdesktop étiquette un fichier par son nom
 /// (« Claude.lnk ») et ne relit pas `.hidden` pour une icône déjà affichée ;
 /// winlux-applications pose ensuite le lanceur « Claude » à sa place.
-fn hide_desktop_link(link: &str) {
+pub(crate) fn hide_desktop_link(link: &str) {
     let desktop = Folders::desktop();
     let Some((dir, name)) = link.rsplit_once('\\') else {
         return;
@@ -1026,8 +1026,18 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     if let Some(code) = burn::launch(exe, args) {
         return Some(code);
     }
-    if !(msix::is_package_name(exe) && msix::is_package(exe)) {
-        detect_file(exe)?;
+    let kind = if msix::is_package_name(exe) && msix::is_package(exe) {
+        Kind::Msix
+    } else {
+        detect_file(exe)?
+    };
+    // Auto-extractible qui lance son propre installateur autour d'un paquet
+    // MSI (Paint.NET) : le MSI est installé directement.
+    let msi = (kind == Kind::SevenZip)
+        .then(|| sevenz::launch_msi(exe, args))
+        .flatten();
+    if let Some(code) = msi {
+        return Some(code);
     }
     let mut cli_args: Vec<String> = args.to_vec();
     cli_args.push(exe.to_string_lossy().into_owned());

@@ -25,6 +25,10 @@ os.environ["HOME"] = str(home)
 os.environ.pop("XDG_CONFIG_HOME", None)
 os.environ["XDG_DATA_HOME"] = str(home / ".local/share")
 os.environ["WINLUX_LANG"] = "fr"
+# Barre centrée : le menu s'ouvre au milieu de l'écran (barre à gauche, au-dessus
+# de Démarrer depuis #732 ; l'ISO livre TASKBAR_ALIGN=left).
+(tmp / "preferences.conf").write_text("TASKBAR_ALIGN=center\n")
+os.environ["WINLUX_PREFERENCES"] = str(tmp / "preferences.conf")
 os.environ["WINLUX_OSK_ROOT"] = str(tmp)
 os.environ["WINLUX_UPDATE_STATE"] = str(tmp / "var")
 os.environ["WINLUX_VERSION_FILE"] = str(tmp / "version")

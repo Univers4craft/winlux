@@ -38,8 +38,24 @@ case "$lang" in
     *)  time="$hour:$minute"; date="$day/$month/$year"; tooltip="$dayname $dayn $monthname $year" ;;
 esac
 
-# #f3f0fa sur le fond de barre #1c1b25 : 16:1.
-color=${WINLUX_CLOCK_COLOR:-#f3f0fa}
+# La barre suit le thème du compte (#703) : texte clair sur barre sombre
+# (#f3f0fa sur #1c1a26 : 16:1), texte foncé sur barre claire (#1d1a24 sur
+# #f3f0f9 : 15:1). Même règle que panel_dark() de winlux-tray.
+theme=${WINLUX_PANEL_THEME:-}
+if test -z "$theme"; then
+    settings=${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/settings.ini
+    name=$(sed -n 's/^gtk-theme-name *= *//p' "$settings" 2>/dev/null | head -n 1 | tr 'A-Z' 'a-z')
+    prefer=$(sed -n 's/^gtk-application-prefer-dark-theme *= *//p' "$settings" 2>/dev/null | head -n 1)
+    case "$name" in
+        winlux-*-dark*|winlux-dark*) theme=dark ;;
+        winlux-*) theme=light ;;
+        *dark*|*inverse*) theme=dark ;;
+        '') theme=dark ;;
+        *) case "$prefer" in 1|true) theme=dark ;; *) theme=light ;; esac ;;
+    esac
+fi
+if test "$theme" = light; then default=#1d1a24; else default=#f3f0fa; fi
+color=${WINLUX_CLOCK_COLOR:-$default}
 popup=/usr/bin/winlux-popup
 test -x "$popup" || popup="python3 $(dirname "$0")/winlux-popup.py"
 printf '<txt><span foreground="%s" size="small">%s\n%s</span></txt>' "$color" "$time" "$date"

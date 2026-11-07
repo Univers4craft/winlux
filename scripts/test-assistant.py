@@ -246,12 +246,13 @@ root = work / "root"
 env = dict(os.environ, WINLUX_CONTROL_ROOT=str(root), WINLUX_CONTROL_TEST_LOG=str(work / "commands"))
 for alignment in ("align-left", "align-center"):
     data = json.loads(store.read_text())
-    data["/panels/panel-1/plugin-ids"] = [3, 1, 2, 8, 10, 4, 5, 6, 9, 7]
+    data["/panels/panel-1/plugin-ids"] = [3, 1, 2, 8, 10, 4, 7, 9]  # ordre d'avant #703
     store.write_text(json.dumps(data))
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)
     # Greffon 13 : contrepoids juste après le séparateur 3 en barre centrée, au bout sinon.
-    expected = [3, 13, 1, 2, 8, 30, 10, 4, 5, 6, 9, 7] if alignment == "align-center" else [3, 1, 2, 8, 30, 10, 4, 5, 6, 9, 7, 13]
+    # Depuis #703 : réseau/son/batterie = genmon 4 seul (5 et 6 absents), l'heure avant la cloche.
+    expected = [3, 13, 1, 2, 8, 30, 10, 4, 7, 9] if alignment == "align-center" else [3, 1, 2, 8, 30, 10, 4, 7, 9, 13]
     assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == expected, alignment
 
 # Avec le bouton Widgets (greffon 11, #293) : les deux restent.
@@ -260,7 +261,7 @@ data["/plugins/plugin-11"] = "genmon"
 store.write_text(json.dumps(data))
 subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), "align-center"], check=True, env=env,
                stdout=subprocess.DEVNULL)
-assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [11, 3, 13, 1, 2, 8, 30, 10, 4, 5, 6, 9, 7]
+assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [11, 3, 13, 1, 2, 8, 30, 10, 4, 7, 9]
 data = json.loads(store.read_text())
 del data["/plugins/plugin-11"]
 data["/panels/panel-1/plugin-ids"].remove(11)
@@ -271,8 +272,8 @@ data = json.loads(store.read_text())
 data["/plugins/plugin-15"] = "launcher"
 data["/plugins/plugin-15/items"] = ["/usr/share/applications/winlux-taskview.desktop"]
 store.write_text(json.dumps(data))
-for alignment, expected in (("align-left", [3, 1, 15, 2, 8, 30, 10, 4, 5, 6, 9, 7, 13]),
-                            ("align-center", [3, 13, 1, 15, 2, 8, 30, 10, 4, 5, 6, 9, 7])):
+for alignment, expected in (("align-left", [3, 1, 15, 2, 8, 30, 10, 4, 7, 9, 13]),
+                            ("align-center", [3, 13, 1, 15, 2, 8, 30, 10, 4, 7, 9])):
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)
     assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == expected, alignment
@@ -282,7 +283,7 @@ data["/plugins/plugin-16"] = "launcher"
 data["/plugins/plugin-16/items"] = ["/usr/share/applications/winlux-search.desktop"]
 store.write_text(json.dumps(data))
 subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), "align-center"], check=True, env=env, stdout=subprocess.DEVNULL)
-assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1, 16, 15, 2, 8, 30, 10, 4, 5, 6, 9, 7]
+assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1, 16, 15, 2, 8, 30, 10, 4, 7, 9]
 data = json.loads(store.read_text())
 for number in (15, 16):
     del data[f"/plugins/plugin-{number}"], data[f"/plugins/plugin-{number}/items"]
@@ -291,13 +292,13 @@ store.write_text(json.dumps(data))
 
 assistant.disable()
 data = json.loads(store.read_text())
-assert data["/panels/panel-1/plugin-ids"] == [3, 13, 1, 2, 8, 10, 4, 5, 6, 9, 7]
+assert data["/panels/panel-1/plugin-ids"] == [3, 13, 1, 2, 8, 10, 4, 7, 9]
 assert not any(key.startswith("/plugins/plugin-30") for key in data)
 assert assistant.read_config() == {"enabled_claude": "0", "enabled_chatgpt": "0"}
 assert assistant.main(["winlux-assistant"]) == 0  # plus aucun assistant : rien ne s'ouvre
 subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), "align-center"], check=True, env=env,
                stdout=subprocess.DEVNULL)
-assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1, 2, 8, 10, 4, 5, 6, 9, 7]
+assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1, 2, 8, 10, 4, 7, 9]
 
 # ── Serveur HTTP de test : faux registre npm, fausse API GitHub, faux Hugging Face ──
 routes = {}

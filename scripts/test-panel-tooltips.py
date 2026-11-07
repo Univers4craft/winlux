@@ -43,7 +43,7 @@ def has_tooltip_tag(output):
 temp = Path(tempfile.mkdtemp(prefix="winlux-tooltips-"))
 env = dict(os.environ, WINLUX_TRAY_DIR=str(temp / "tray"), XDG_CACHE_HOME=str(temp / "cache"),
            HOME=str(temp), WINLUX_LANG="fr")
-for kind in ("balance", "network", "audio", "battery", "notifications"):
+for kind in ("balance", "network", "audio", "battery", "notifications", "status", "search"):
     result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "winlux-tray.py"), kind], env=env,
                             capture_output=True, text=True, timeout=30)
     ok(result.returncode == 0 and has_tooltip_tag(result.stdout),
