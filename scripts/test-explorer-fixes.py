@@ -137,6 +137,10 @@ ok("if app == APP_TERMINAL {" in launch[:400] and "native_terminal(None)" in lau
 ok('b"shell:terminal"' in wm_rs and "wm::native_terminal(Some(dir))" in explorer,
    "Explorateur : Terminal ouvre winlux-terminal dans le dossier affiché")
 
+# ── #674 : Explorateur étroit, colonnes dans l'ordre, masquées par la droite ─
+ok("while shown > 0 && NAME_MIN" in explorer and "sx.min(ir.right) - tx - 12" in explorer,
+   "vue Détails étroite : Type et Taille disparaissent au lieu de « … » ou d'être inversées")
+
 # ── #214 : binfmt en Live, exécuté sur un faux /proc ────────────────────────
 iso = (ROOT / "scripts/build-live-iso.sh").read_text(encoding="utf-8")
 block = iso[iso.index("# binfmt : début"):iso.index("# binfmt : fin")]

@@ -1832,18 +1832,37 @@ unsafe fn item_at(p: &Pane, r: &Rect, x: i32, y: i32) -> Option<usize> {
 }
 
 /// Colonnes de la vue Détails : (x du nom, largeur du nom, x date, x type, x taille).
+///
+/// Fenêtre étroite (#674) : l'ordre Nom, Date, Type, Taille ne change jamais.
+/// Une colonne qui n'a plus sa place disparaît en entier, en partant de la
+/// droite (Taille, puis Type, puis Date), au lieu de se réduire à « … » ou
+/// de passer avant sa voisine. Une colonne masquée est placée au-delà du bord
+/// droit (`x >= r.right`).
 fn detail_cols(r: &Rect) -> (i32, i32, i32, i32, i32) {
+    const WIDTHS: [i32; 3] = [150, 150, 110];
+    const NAME_MIN: i32 = 200;
     let w = r.right - r.left;
-    let name_w = (w * 45 / 100).max(200);
+    let avail = w - 12;
+    let mut shown = WIDTHS.len();
+    while shown > 0 && NAME_MIN + WIDTHS[..shown].iter().sum::<i32>() > avail {
+        shown -= 1;
+    }
+    let rest: i32 = WIDTHS[..shown].iter().sum();
+    let name_w = if shown == WIDTHS.len() {
+        (w * 45 / 100).max(NAME_MIN).min(avail - rest)
+    } else {
+        (avail - rest).max(NAME_MIN)
+    };
+    let off = r.right + 4096;
     let date_x = r.left + name_w + 12;
-    let type_x = date_x + 150;
-    let size_x = type_x + (w - name_w - 150 - 120).max(120);
+    let type_x = date_x + WIDTHS[0];
+    let size_x = (type_x + (w - name_w - 150 - 120).max(120)).min(r.right - 110);
     (
         r.left + 36,
         name_w,
-        date_x,
-        type_x,
-        size_x.min(r.right - 110),
+        if shown >= 1 { date_x } else { off },
+        if shown >= 2 { type_x } else { off + 200 },
+        if shown >= 3 { size_x.max(type_x + 120) } else { off + 400 },
     )
 }
 
@@ -2882,7 +2901,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     tx,
                     ty,
                     type_name(&e, &mut tbuf),
-                    sx - tx - 12,
+                    sx.min(ir.right) - tx - 12,
                 );
                 if let Some((free, total)) = space {
                     let _ = total;
@@ -6334,7 +6353,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         pn.scroll_x -= delta / 120 * 60;
                         let content_w = if VIEW == View::Details {
                             let (_, _, _, _, sx) = detail_cols(&r);
-                            sx + 120 - r.left
+                            if sx < r.right {
+                                sx + 120 - r.left
+                            } else {
+                                r.right - r.left
+                            }
                         } else {
                             r.right - r.left
                         };
@@ -7244,6 +7267,22 @@ unsafe fn places_and_hover_checks() {
     };
     VIEW = saved_view;
     check!(in_row, "Details : un clic dans les colonnes Type ou Taille selectionne la ligne");
+    // #674 : fenêtre étroite, l'ordre reste Nom, Date, Type, Taille et les
+    // colonnes sans place disparaissent par la droite.
+    let narrow_ok = [1000, 760, 640, 520, 420, 300].iter().all(|&w| {
+        let r = rect(10, 0, 10 + w, 40);
+        let (nx, nw, dx, tx, sx) = detail_cols(&r);
+        let fits = |x: i32, cw: i32| x >= r.right || x + cw <= r.right + 12;
+        nx < dx && dx < tx && tx < sx && nw >= 200 && fits(dx, 150) && fits(tx, 150) && fits(sx, 110)
+            && (sx >= r.right || tx < r.right)
+            && (tx >= r.right || dx < r.right)
+    });
+    let r452 = rect(0, 0, 410, 40);
+    let (_, _, dx, tx, sx) = detail_cols(&r452);
+    check!(
+        narrow_ok && dx < r452.right && tx >= r452.right && sx >= r452.right,
+        "Details etroit : ordre des colonnes garde, Type et Taille masques entierement"
+    );
     NHOT = 0;
     HOT_FULL = false;
     let b = rect(100, 100, 140, 130);
