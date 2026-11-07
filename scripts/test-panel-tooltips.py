@@ -120,6 +120,18 @@ def real_panel():
             text = re.sub(r'<property name="plugin-ids" type="array">.*?</property>',
                           '<property name="plugin-ids" type="array">'
                           + "".join(f'<value type="int" value="{i}"/>' for i in ids) + "</property>", text)
+            # genmon 4.2+ lit xfconf, pas les genmon-N.rc : reporter chaque .rc
+            # dans le XML comme le fait winlux-native-config à l'ouverture de session.
+            for rc in sorted((config / "xfce4/panel").glob("genmon-*.rc")):
+                number = rc.stem.split("-")[1]
+                values = dict(line.split("=", 1) for line in rc.read_text(encoding="utf-8").splitlines() if "=" in line)
+                values["Command"] = values["Command"].replace("/usr/bin/winlux-tray", str(tray)).replace(
+                    "/usr/bin/winlux-clock", f"/bin/sh {SCRIPTS / 'winlux-clock.sh'}")
+                props = ("".join(f'<property name="{key}" type="{kind}" value="{value}"/>' for key, kind, value in (
+                    ("command", "string", values["Command"]), ("use-label", "bool", "false"), ("text", "string", ""),
+                    ("update-period", "int", values.get("UpdatePeriod", "2000")), ("font", "string", values.get("Font", "")))))
+                text = text.replace(f'<property name="plugin-{number}" type="string" value="genmon"/>',
+                                    f'<property name="plugin-{number}" type="string" value="genmon">{props}</property>')
         path.write_text(text, encoding="utf-8")
     panel_env = dict(env, HOME=str(home), XDG_CONFIG_HOME=str(config), XDG_CACHE_HOME=str(home / ".cache"),
                      XDG_DATA_HOME=str(home / ".local/share"))
