@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Types de fichiers traduits dans les quatre langues (#591).
+"""Types de fichiers traduits dans les quatre langues (#591) et icônes des .exe (#592).
 
 Construit une base MIME jetable avec freedesktop.org.xml et le paquet
 Winlux (integration/x-ms-dos-executable.xml, livré en
@@ -55,6 +55,14 @@ else:
         folder = comments(ET.parse(Path(tmp, "inode/directory.xml")).getroot())
         if folder.get("fr") != "Dossier":
             failures.append(f"inode/directory en français : {folder.get('fr')!r}")
+
+# Icône du thème Winlux pour chaque type qu'un .exe peut recevoir (#592) :
+# sans elle, Thunar et le bureau prennent l'icône générique d'Adwaita.
+ICONS = ROOT / "integration/native/icons/Winlux/scalable/mimetypes"
+for kind in ("application/x-ms-dos-executable", "application/x-msdownload", "application/x-dosexec",
+             "application/vnd.microsoft.portable-executable", "application/x-ms-ne-executable"):
+    if not (ICONS / (kind.replace("/", "-") + ".svg")).is_file():
+        failures.append(f"{kind} : pas d'icône dans le thème Winlux")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
