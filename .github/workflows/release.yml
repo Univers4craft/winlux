@@ -226,13 +226,13 @@ jobs:
             echo "::warning::Paquet de mise à jour non construit : l'artefact ne contient que l'ISO."
           fi
 
-      - name: Conserver l'ISO de validation (1 jour)
+      - name: Conserver l'ISO de validation (3 jours)
         if: success() && !startsWith(github.ref, 'refs/tags/') && env.SKIP_ISO == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: winlux-iso-validation-${{ github.sha }}
           path: build/iso-validation/
-          retention-days: 1
+          retention-days: 3
           # L'ISO est déjà compressée (squashfs xz) : zip ne gagnerait rien.
           compression-level: 0
           if-no-files-found: error
