@@ -155,6 +155,9 @@ jobs:
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
+      - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
+        run: python3 -B scripts/test-update-page-names.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 
@@ -169,6 +172,9 @@ jobs:
 
       - name: Vérifier qu'aucune marque Microsoft n'est épinglée par défaut
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-no-microsoft-branding.py
+
+      - name: Vérifier les icônes Prisme claires et sombres (thèmes Winlux et Winlux-Sombre)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' sh scripts/test-icones.sh integration/native/icons
 
       - name: Vérifier la fenêtre Bienvenue et sa réouverture depuis le menu Démarrer
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-welcome.py
@@ -191,6 +197,8 @@ jobs:
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
+      - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
+        run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
         run: python3 -B scripts/test-su-sudo.py
       - name: Vérifier « winlux-settings about » et les noms de page
@@ -271,6 +279,9 @@ jobs:
 
       - name: Vérifier le thème automatique, le diaporama et les thèmes partageables
         run: python3 -B scripts/test-appearance-auto.py
+
+      - name: Vérifier le fond « Winlux Aurore » (définitions, choix selon l'écran)
+        run: python3 -B scripts/test-wallpaper-aurore.py
 
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
@@ -568,7 +579,7 @@ jobs:
       - name: Touche Windows seule pour Démarrer sous openbox réel (Win+Gauche, Win+Z intacts)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-super-key.py
 
-      - name: Assistant d'ancrage sous openbox (place libre, quarts, cases prises, clavier)
+      - name: Assistant et groupes d'ancrage sous openbox (place libre, quarts, cases prises, clavier, survol de la barre)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-snap-assist.py
 
       - name: Raccourcis Windows (Win+I/S/R/X/P), boîte Exécuter et menu d'accès rapide

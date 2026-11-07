@@ -414,6 +414,8 @@ snap_area = (0, 0, 1366, 728)
 ok(snap_tool["free_zones"](snap_tool["following_zones"]("quarter:tr"), snap_area, [snap_tool["zone_rect"]("half:left", snap_area)]) == ["quarter:br"],
    "assistant d'ancrage : après un coin, seule la place encore libre est proposée")
 ok(snap_tool["card_grid"](683, 364, 1, 6)[0] >= 2, "assistant d'ancrage lisible dans un quart en 1366x768")
+ok(snap_tool["group_members"]("a", {"a": ("g", "half:left"), "b": ("g", "half:right")}) == ["a", "b"],
+   "groupe d'ancrage : deux fenêtres ancrées ensemble se restaurent ensemble (#597)")
 
 # ── Recherche du menu Démarrer (#461) ─────────────────────────────────────
 for query, page in (("wifi", 35), ("comptes", 33), ("imprimante", 26), ("telephone", 37), ("accessibilite", 12)):
@@ -509,5 +511,25 @@ ok(all(key in shipped_keys for key in ("XF86AudioRaiseVolume", "XF86AudioLowerVo
    "touches de volume du clavier liées à winlux-volume")
 ok("def toast_position" in (SCRIPTS / "winlux-notifications.py").read_text(),
    "bulle de notification en bas à droite, au-dessus de la barre des tâches")
+
+# ── Icônes Prisme claires et sombres (#616) ─────────────────────────────
+icons = NATIVE / "icons"
+ok((icons / "Winlux/index.theme").read_text().count("scalable/apps") >= 2
+   and (icons / "Winlux/scalable/apps/winlux.svg").is_file()
+   and "Inherits=Winlux," in (icons / "Winlux-Sombre/index.theme").read_text(),
+   "icônes : applications gardées dans Winlux, Winlux-Sombre hérite de Winlux")
+ok("for icon_theme in Winlux Winlux-Sombre" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "gtk-update-icon-cache" in (SCRIPTS / "stage-apt-root.py").read_text()
+   and "usr/share/icons/Winlux-Sombre/" in (SCRIPTS / "stage-apt-root.py").read_text(),
+   "icônes : les deux thèmes dans winlux-desktop, cache GTK en postinst")
+ok(all("icon_wanted=Winlux-Sombre" in (SCRIPTS / name).read_text() for name in ("winlux-user-session.sh", "winlux-native-session.sh"))
+   and '"/Net/IconThemeName","Winlux-Sombre" if dark else "Winlux"' in (SCRIPTS / "winlux-personalize.py").read_text(),
+   "icônes : Winlux-Sombre par défaut, suit le mode clair ou sombre de Personnalisation")
+
+# ── Paramètres : « Mise à jour OS » et « Mise à jour application » (#637) ──
+ok('_t("Mise à jour OS")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("Mise à jour application")' in (SCRIPTS / "winlux-settings.py").read_text()
+   and (SCRIPTS / "test-update-page-names.py").exists(),
+   "Paramètres : pages 7 et 17 nommées Mise à jour OS / Mise à jour application (4 langues)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

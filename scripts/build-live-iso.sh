@@ -201,7 +201,7 @@ cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpa
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
-wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
+wallpaper_src="$root/assets/wallpapers/winlux-prisme-aurore.png"
 if test -f "$wallpaper_src"; then
     if command -v convert >/dev/null 2>&1; then
         convert "$wallpaper_src" -filter Lanczos -resize '1920x1080^' -gravity center -extent 1920x1080 -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"

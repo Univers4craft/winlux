@@ -615,9 +615,9 @@ unsafe fn notify_updates() {
         &mut msg,
         n,
         if count == 1 {
-            tr4(&[b" mise \xE0 jour syst\xE8me disponible - Param\xE8tres > Mises \xE0 jour syst\xE8me", b" system update available - Settings > System updates", b" actualizaci\xF3n del sistema disponible - Configuraci\xF3n > Actualizaciones del sistema", b" Systemupdate verf\xFCgbar - Einstellungen > Systemupdates"])
+            tr4(&[b" mise \xE0 jour disponible - Param\xE8tres > Mise \xE0 jour application", b" update available - Settings > Application update", b" actualizaci\xF3n disponible - Configuraci\xF3n > Actualizaci\xF3n de aplicaciones", b" Update verf\xFCgbar - Einstellungen > Anwendungsupdate"])
         } else {
-            tr4(&[b" mises \xE0 jour syst\xE8me disponibles - Param\xE8tres > Mises \xE0 jour syst\xE8me", b" system updates available - Settings > System updates", b" actualizaciones del sistema disponibles - Configuraci\xF3n > Actualizaciones del sistema", b" Systemupdates verf\xFCgbar - Einstellungen > Systemupdates"])
+            tr4(&[b" mises \xE0 jour disponibles - Param\xE8tres > Mise \xE0 jour application", b" updates available - Settings > Application update", b" actualizaciones disponibles - Configuraci\xF3n > Actualizaci\xF3n de aplicaciones", b" Updates verf\xFCgbar - Einstellungen > Anwendungsupdate"])
         },
     );
     crate::desktop::toast(&msg[..n]);
@@ -2772,7 +2772,7 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
     let mut summary = [0u8; 128];
     let mut n = 0;
     if value(b"sysupdate_apt") != b"1" {
-        n = push(&mut summary, n, tr4(&[b"APT absent de cette session Live : seul Winlux est mis \xE0 jour (page Mises \xE0 jour).", b"APT is not in this Live session: only Winlux is updated (Updates page).", b"APT no est\xE1 en esta sesi\xF3n Live: solo se actualiza Winlux (p\xE1gina Actualizaciones).", b"APT fehlt in dieser Live-Sitzung: Nur Winlux wird aktualisiert (Seite Updates)."]));
+        n = push(&mut summary, n, tr4(&[b"APT absent de cette session Live : seul Winlux est mis \xE0 jour (page Mise \xE0 jour OS).", b"APT is not in this Live session: only Winlux is updated (OS update page).", b"APT no est\xE1 en esta sesi\xF3n Live: solo se actualiza Winlux (p\xE1gina Actualizaci\xF3n del SO).", b"APT fehlt in dieser Live-Sitzung: Nur Winlux wird aktualisiert (Seite OS-Update)."]));
     } else if sysupdate_busy() {
         n = push(
             &mut summary,

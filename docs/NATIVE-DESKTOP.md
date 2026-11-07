@@ -20,7 +20,7 @@ Paramètres utilise désormais une fenêtre GTK redimensionnable, une recherche
 de catégories et des pages défilantes. Les opérations de contrôle s'exécutent
 sans bloquer l'interface ; la page des mises à jour affiche progression et
 journal. Les pages Programmes Windows, Accessibilité, Effets visuels,
-Localisation, Gestionnaire de fichiers, Son avancé, Mises à jour système,
+Localisation, Gestionnaire de fichiers, Son avancé, Mise à jour application,
 Lecteurs réseau, Personnalisation du bureau et Bluetooth et appareils viennent
 de `winlux-settings-pages` (installé à côté de `winlux-settings`) et agissent
 sur la session réelle : BlueZ, pactl, winlux-sysupdate, winlux-drives,

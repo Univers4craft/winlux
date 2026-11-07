@@ -98,6 +98,7 @@ _TR = {
     'Souris': ('Mouse', 'Mouse', 'Maus'),
     'Personnalisation': ('Personalization', 'Personalización', 'Personalisierung'),
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
+    'Mise à jour OS': ('OS update', 'Actualización del SO', 'OS-Update'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
     'Logiciel libre (GNU GPL v3). Projet indépendant, ni affilié à Microsoft ni approuvé par elle ; Windows est une marque de Microsoft Corporation.': ('Free software (GNU GPL v3). Independent project, neither affiliated with nor endorsed by Microsoft; Windows is a trademark of Microsoft Corporation.', 'Software libre (GNU GPL v3). Proyecto independiente, no afiliado a Microsoft ni aprobado por ella; Windows es una marca de Microsoft Corporation.', 'Freie Software (GNU GPL v3). Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt; Windows ist eine Marke der Microsoft Corporation.'),
@@ -108,7 +109,7 @@ _TR = {
     'Localisation': ('Language & region', 'Idioma y región', 'Sprache und Region'),
     'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
     'Son avancé': ('Advanced sound', 'Sonido avanzado', 'Erweiterter Sound'),
-    'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemupdates'),
+    'Mise à jour application': ('Application update', 'Actualización de aplicaciones', 'Anwendungsupdate'),
     'Confidentialité': ('Privacy', 'Privacidad', 'Datenschutz'),
     # Confidentialité et sécurité : verrouillage de l'écran.
     'Confidentialité et sécurité': ('Privacy & security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
@@ -323,9 +324,9 @@ def _t(text):
 # Les numéros de page ne changent jamais : barre des tâches, menu Démarrer,
 # assistant d’accueil et Paramètres PE ouvrent une page par son numéro.
 PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t("Son"), _t("Clavier et souris"),
-         _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
+         _t("Souris"), _t("Personnalisation"), _t("Mise à jour OS"), _t("Écran"), _t("À propos"),
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
-         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son"), _t("Mises à jour système"),
+         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son"), _t("Mise à jour application"),
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
