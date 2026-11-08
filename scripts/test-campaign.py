@@ -898,6 +898,11 @@ ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_service
    and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
    and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
    "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
+# #1205 : code de sortie Windows complet (0x780148E0), pas son dernier octet (« code 224 »).
+ok("WINLUX_EXIT_CODE_FILE" in (ROOT / "integration/winlux-open").read_text()
+   and "fn record_exit_code" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "#1205" in (SCRIPTS / "test-integration.sh").read_text(),
+   "message de fin d'un .exe : code de sortie complet en hexadécimal (#1205)")
 # #1188/#1189 : C:\\Users\\<compte> = dossier personnel (raccourcis de Claude pour Windows).
 ok("def account_names" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#1189" in (SCRIPTS / "test-native-catalogue.py").read_text(),
@@ -1310,6 +1315,11 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1155 : libuv (Node d'Electron) pose SetFileCompletionNotificationModes
+# sur chaque socket ; un refus devenait « connect EISDIR ».
+ok("set_completion_modes(h, flags)" in (runtime_dlls / "kernel32_node.rs").read_text(encoding="utf-8")
+   and "mode_sans_paquet_si_fin_immediate_pour_libuv" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Sockets Node/Electron : SetFileCompletionNotificationModes, plus de « connect EISDIR » (#1155)")
 # #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
 # (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
 ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
@@ -1367,6 +1377,12 @@ ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
+ok("GetPhysicallyInstalledSystemMemory" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "memoire_installee_en_kio" in (runtime_dlls / "kernel32_ext.rs").read_text(),
+   "Installeur Creative Cloud 32 bits : GetPhysicallyInstalledSystemMemory (#1205)")
+ok("fn hint_class" in (ROOT / "runtime/src/wow32/comctl.rs").read_text()
+   and "tab_vcl" in (ROOT / "testc/wow32/dlg32.c").read_text(),
+   "WinSCP x86 : TCITEM converti par CallWindowProc vers SysTabControl32 (VCL, #1129)")
 # #1197 : SMBIOS brut pour GetSystemFirmwareTable (Creative Cloud, Photoshop).
 ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls / "apps_win32.rs").read_text(encoding="utf-8")
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
@@ -1382,4 +1398,7 @@ ok("CLSID_WBEM_LOCATOR" in wbem_rs and '"Win32_VideoController"' in wbem_rs
    and "wmi32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
    and "wmi_par_com" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "WMI : WbemLocator, WQL et dix classes Win32_*, en x64 et en x86 (#1198)")
+ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
+   and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
