@@ -1472,6 +1472,8 @@ unsafe fn dispatch(
     const GL_READ_WRITE: u32 = 0x88BA;
     for (u, v) in s.uavs.iter().enumerate() {
         if v.buf != 0 {
+            // Écrit par le compute shader : relu avant un Map (#1184).
+            super::mark_gpu_written(v.buf);
             (g.BindBufferRange)(
                 GL_SHADER_STORAGE_BUFFER,
                 crate::dlls::hlsl::storage_binding(true, u as u32),
@@ -1649,7 +1651,7 @@ pub(super) unsafe extern "win64" fn rs_set_viewports(
 ) {
     let Some(g) = gl_here() else { return };
     let mut st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    let n = n.min(16);
+    let n = if vps.is_null() { 0 } else { n.min(16) };
     for i in 0..n as usize {
         st.viewports[i] = *vps.add(i);
     }

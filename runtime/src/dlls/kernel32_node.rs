@@ -565,7 +565,7 @@ static WAITS: std::sync::Mutex<
 static NEXT_WAIT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x5741_0000);
 
 /// Un thread Winlux prêt à exécuter du code Windows (TEB, GS).
-fn spawn_windows_thread(f: impl FnOnce() + Send + 'static) -> bool {
+pub(super) fn spawn_windows_thread(f: impl FnOnce() + Send + 'static) -> bool {
     std::thread::Builder::new()
         .stack_size(1 << 20)
         .spawn(move || {
@@ -1345,6 +1345,14 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "UnregisterWait" => fn UnregisterWait,
         "UnregisterWaitEx" => fn UnregisterWaitEx,
         "QueueUserWorkItem" => fn QueueUserWorkItem,
+        "CreateTimerQueue" => fn super::timer_queue::create_timer_queue,
+        "CreateTimerQueueTimer" => fn super::timer_queue::create_timer_queue_timer,
+        "SetTimerQueueTimer" => fn super::timer_queue::set_timer_queue_timer,
+        "ChangeTimerQueueTimer" => fn super::timer_queue::change_timer_queue_timer,
+        "DeleteTimerQueueTimer" => fn super::timer_queue::delete_timer_queue_timer,
+        "CancelTimerQueueTimer" => fn super::timer_queue::cancel_timer_queue_timer,
+        "DeleteTimerQueueEx" => fn super::timer_queue::delete_timer_queue_ex,
+        "DeleteTimerQueue" => fn super::timer_queue::delete_timer_queue,
         "CreateJobObjectW" => fn super::jobs::create_job_object_w,
         "CreateJobObjectA" => fn super::jobs::create_job_object_a,
         "AssignProcessToJobObject" => fn super::jobs::assign_process_to_job_object,

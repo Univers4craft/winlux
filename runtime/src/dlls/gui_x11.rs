@@ -971,6 +971,11 @@ pub struct X11Backend {
     pointer_style: (u8, u8),
     /// Gestes du pavé tactile (XInput 2.4) disponibles sur ce serveur.
     gestures: bool,
+    /// Atomes des valuateurs « Abs Pressure », « Abs Tilt X », « Abs Tilt Y »
+    /// (0 si le serveur ne les connaît pas) ; périphériques déjà examinés,
+    /// `None` quand ce n'est pas un stylet (#1199).
+    pen_labels: [u32; 3],
+    pen_devices: HashMap<u16, Option<crate::dlls::pointer::PenAxes>>,
     /// Échelle du pincement au dernier cran de zoom envoyé.
     pinch_last: f32,
     /// Dernier appui (fenêtre, bouton, instant, x, y) pour reconnaître un
@@ -1006,6 +1011,71 @@ impl X11Backend {
         );
     }
 
+    /// Axes de stylet du périphérique `device` (pression au moins), relevés
+    /// une fois par XIQueryDevice.
+    fn pen_axes(&mut self, device: u16) -> Option<crate::dlls::pointer::PenAxes> {
+        if let Some(known) = self.pen_devices.get(&device) {
+            return *known;
+        }
+        use x11rb::protocol::xinput::{ConnectionExt as _, DeviceClassData};
+        let reply = self
+            .conn
+            .xinput_xi_query_device(device)
+            .ok()
+            .and_then(|c| c.reply().ok());
+        let mut axes = crate::dlls::pointer::PenAxes::default();
+        if let Some(info) = reply.as_ref().and_then(|r| r.infos.first()) {
+            let fp = |v: x11rb::protocol::xinput::Fp3232| {
+                v.integral as f64 + v.frac as f64 / 4_294_967_296.0
+            };
+            for class in &info.classes {
+                if let DeviceClassData::Valuator(v) = &class.data {
+                    let axis = Some((v.number, fp(v.min), fp(v.max)));
+                    if v.label == self.pen_labels[0] {
+                        axes.pressure = axis;
+                    } else if v.label != 0 && v.label == self.pen_labels[1] {
+                        axes.tilt_x = axis;
+                    } else if v.label != 0 && v.label == self.pen_labels[2] {
+                        axes.tilt_y = axis;
+                    }
+                }
+            }
+            let name = String::from_utf8_lossy(&info.name).to_lowercase();
+            axes.eraser = name.contains("eraser") || name.contains("gomme");
+        }
+        let found = axes.pressure.is_some().then_some(axes);
+        self.pen_devices.insert(device, found);
+        found
+    }
+
+    /// Événement brut XInput : relève la pression et l'inclinaison d'un
+    /// stylet pour le message souris qui suit (`pointer`, #1199).
+    fn raw_pen_event(
+        &mut self,
+        e: &x11rb::protocol::xinput::RawButtonPressEvent,
+        button: Option<bool>,
+    ) {
+        // Avec XIAllDevices, le maître répète l'événement de l'esclave.
+        if e.deviceid != e.sourceid {
+            return;
+        }
+        let Some(axes) = self.pen_axes(e.sourceid) else {
+            crate::dlls::pointer::note_other_device();
+            return;
+        };
+        let values: Vec<f64> = e
+            .axisvalues
+            .iter()
+            .map(|v| v.integral as f64 + v.frac as f64 / 4_294_967_296.0)
+            .collect();
+        let (pressure, tilt_x, tilt_y) =
+            crate::dlls::pointer::decode_valuators(&axes, &e.valuator_mask, &values);
+        crate::dlls::pointer::note_pen(pressure, tilt_x, tilt_y, axes.eraser);
+        if let Some(down) = button {
+            crate::dlls::pointer::note_pen_button(e.detail, down);
+        }
+    }
+
     /// Ouvre la connexion X et prépare les atomes; `None` si pas de serveur.
     pub fn connect() -> Option<Self> {
         let (conn, screen) = x11rb::connect(None).ok()?;
@@ -1024,13 +1094,41 @@ impl X11Backend {
             None => automatic_scale(screen_density(&conn, scr)),
         };
         // Pincer pour zoomer : XInput 2.4 (Xorg 21.1+, pilote libinput).
-        let gestures = {
+        // Stylet : événements bruts XInput 2.2 sur la racine, qui donnent la
+        // pression et l'inclinaison sans retirer les événements souris (#1199).
+        let xi_version = {
             use x11rb::protocol::xinput::ConnectionExt as _;
             conn.xinput_xi_query_version(2, 4)
                 .ok()
                 .and_then(|c| c.reply().ok())
-                .is_some_and(|v| (v.major_version, v.minor_version) >= (2, 4))
+                .map_or((0, 0), |v| (v.major_version, v.minor_version))
         };
+        let gestures = xi_version >= (2, 4);
+        let pen_labels = [
+            b"Abs Pressure".as_slice(),
+            b"Abs Tilt X".as_slice(),
+            b"Abs Tilt Y".as_slice(),
+        ]
+        .map(|name| {
+            conn.intern_atom(true, name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map_or(0, |r| r.atom)
+        });
+        if xi_version >= (2, 2) && pen_labels[0] != 0 {
+            use x11rb::protocol::xinput::{ConnectionExt as _, EventMask, XIEventMask};
+            let _ = conn.xinput_xi_select_events(
+                scr.root,
+                &[EventMask {
+                    deviceid: 0, // XIAllDevices : chaque périphérique esclave
+                    mask: vec![
+                        XIEventMask::RAW_MOTION
+                            | XIEventMask::RAW_BUTTON_PRESS
+                            | XIEventMask::RAW_BUTTON_RELEASE,
+                    ],
+                }],
+            );
+        }
         let wm_protocols = conn
             .intern_atom(false, b"WM_PROTOCOLS")
             .ok()?
@@ -1075,6 +1173,8 @@ impl X11Backend {
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
             gestures,
+            pen_labels,
+            pen_devices: HashMap::new(),
             pinch_last: 1.0,
             last_click: None,
             xdnd,
@@ -2553,6 +2653,18 @@ impl X11Backend {
                     wparam,
                     lparam,
                 })
+            }
+            Event::XinputRawMotion(e) => {
+                self.raw_pen_event(&e, None);
+                None
+            }
+            Event::XinputRawButtonPress(e) => {
+                self.raw_pen_event(&e, Some(true));
+                None
+            }
+            Event::XinputRawButtonRelease(e) => {
+                self.raw_pen_event(&e, Some(false));
+                None
             }
             Event::XinputGesturePinchBegin(_) => {
                 crate::power::note_activity();
@@ -4108,6 +4220,14 @@ impl gui::GuiBackend for X11Backend {
         self.windows.get(&hwnd).map(|w| w.window as u64)
     }
 
+    fn foreign_size(&mut self, xid: u64) -> Option<(i32, i32)> {
+        let g = self.conn.get_geometry(xid as u32).ok()?.reply().ok()?;
+        Some((
+            self.logical(g.width as i32).max(1),
+            self.logical(g.height as i32).max(1),
+        ))
+    }
+
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         // La géométrie de la racine est relue à chaque appel : après un
         // changement de mode RandR, la valeur du setup initial est périmée.
@@ -4680,6 +4800,46 @@ impl gui::GuiBackend for X11Backend {
             let _ = self.conn.change_window_attributes(Self::top_xwin(w), &aux);
             let _ = self.conn.flush();
         }
+    }
+
+    fn set_shape(&mut self, hwnd: usize, rects: Option<&[Rect]>) {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        if w.frame != 0 {
+            return; // cadre Winlux (barre de menus) : jamais en couches
+        }
+        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
+            Some(list) => list
+                .iter()
+                .map(|r| {
+                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
+                    x11rb::protocol::xproto::Rectangle {
+                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
+                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
+                    }
+                })
+                .collect(),
+            None => vec![x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width: w.width,
+                height: w.height,
+            }],
+        };
+        let _ = self.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            w.window,
+            0,
+            0,
+            &rects,
+        );
+        let _ = self.conn.flush();
     }
 
     fn set_decorations(&mut self, hwnd: usize, level: u8) {

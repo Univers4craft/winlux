@@ -227,7 +227,9 @@ fi
 if test -f "$dir/d3d11_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-d3d11-rendu.sh"
 fi
-# Rendu Direct3D 11 depuis du HLSL source compilé par D3DCompile (#463), bloquant.
+# Rendu Direct3D 11 depuis du HLSL source compilé par D3DCompile (#463), bloquant ;
+# aussi cibles multiples et OMGetRenderTargets (#531), RSGetViewports (#1175),
+# et Map WRITE d'un tampon copié depuis un tampon UAV (#1184).
 if test -f "$dir/hlsl_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-d3d11-rendu.sh" hlsl
 fi
