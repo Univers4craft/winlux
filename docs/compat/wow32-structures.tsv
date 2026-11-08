@@ -225,3 +225,4 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
+ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
