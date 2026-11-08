@@ -10,6 +10,8 @@
 //!   HKCU : polices présentes dans `C:\Windows\Fonts` et le dossier de
 //!   polices de l'utilisateur. Les valeurs écrites par les installateurs
 //!   sont gardées ; Winlux n'ajoute que les fichiers qui manquent.
+//! - `HKLM\Software\Microsoft\TPG\System Recognizers\{BED9A940-…}` :
+//!   chemin du moteur de gestes intégré (mshwgst.dll), lu par WPF (#1132).
 
 use super::{utf16z, Data, REG_BINARY, REG_DWORD, REG_SZ};
 use std::path::{Path, PathBuf};
@@ -255,7 +257,14 @@ fn collect_dirs(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
 
 /// Clés calculées : leurs valeurs ne sont jamais enregistrées sur le disque
 /// (#1046), seulement recalculées au chargement.
-pub const MANAGED: [&str; 5] = [TIME_ZONE, CODE_PAGE, KEYBOARD, FONTS, USER_FONTS];
+pub const MANAGED: [&str; 6] = [
+    TIME_ZONE,
+    CODE_PAGE,
+    KEYBOARD,
+    FONTS,
+    USER_FONTS,
+    crate::dlls::mshwgst::REGISTRY_KEY,
+];
 
 /// Valeurs posées par la vue dynamique : (clé, nom, contenu).
 pub type LiveValues = Vec<(String, String, Vec<u8>)>;
@@ -308,4 +317,13 @@ fn apply(data: &mut Data) {
     for (dir, list) in system_fonts() {
         add_fonts(data, FONTS, &dir, true, list);
     }
+    gesture_recognizer(data);
+}
+
+/// Moteur de gestes intégré : WPF lit ici le chemin de mshwgst.dll et ne
+/// déclare la reconnaissance de gestes disponible que s'il le trouve (#1132).
+pub fn gesture_recognizer(data: &mut Data) {
+    use crate::dlls::mshwgst::{DLL_PATH, REGISTRY_KEY, REGISTRY_VALUE};
+    data.raw_ensure(REGISTRY_KEY);
+    text(data, REGISTRY_KEY, REGISTRY_VALUE, DLL_PATH);
 }

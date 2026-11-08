@@ -798,3 +798,20 @@ fn vue_dynamique_jamais_ecrite_ni_doublee() {
     }
     let _ = std::fs::remove_dir_all(&fonts);
 }
+
+#[test]
+fn moteur_de_gestes_declare_pour_wpf() {
+    // #1132 : WPF ouvre cette clé en majuscules et charge la DLL indiquée.
+    let mut data = Data::empty();
+    live::gesture_recognizer(&mut data);
+    let key = "hklm\\SOFTWARE\\MICROSOFT\\TPG\\SYSTEM RECOGNIZERS\\{BED9A940-7D48-48E3-9A68-F4887A5A1B2E}";
+    let value = data
+        .get(key, "RECOGNIZER DLL")
+        .expect("valeur du moteur de gestes");
+    assert_eq!(
+        string_of(&value.bytes),
+        "C:\\Windows\\System32\\mshwgst.dll"
+    );
+    assert!(live::MANAGED.contains(&crate::dlls::mshwgst::REGISTRY_KEY));
+    assert!(crate::dlls::is_builtin("mshwgst"));
+}
