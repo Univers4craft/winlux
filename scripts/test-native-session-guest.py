@@ -371,6 +371,34 @@ for window in [explorer, settings, editor, terminal, browser]:
 run("wmctrl", "-m")
 print("WINLUX_NATIVE_CLOSE=0", flush=True)
 
+def stream_names():
+    """#1010 : le son d'un ffmpeg auxiliaire (lecteur multimédia, enregistrements)
+    porte le nom du programme dans le mélangeur, jamais « Lavf… » ni « ffmpeg ».
+    Mêmes options et variables que winlux_media (test cargo ligne_de_commande_lecture)."""
+    env = {**os.environ, "LC_ALL": "C",
+           "PULSE_PROP": "application.name='Lecteur multimédia' application.process.binary='mediaplayer.exe'"}
+    sinks = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True, env=env).stdout
+    if not sinks.strip():
+        subprocess.run(["pactl", "load-module", "module-null-sink", "sink_name=winlux_test"], capture_output=True, env=env)
+    player = subprocess.Popen(["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re",
+                               "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                               "-name", "Lecteur multimédia", "-stream_name", "Lecteur multimédia",
+                               "-f", "pulse", "default"], env=env, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 5
+        listing = ""
+        while time.monotonic() < deadline:
+            listing = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, env=env).stdout
+            if "application.name" in listing: break
+            time.sleep(0.2)
+        assert 'application.name = "Lecteur multimédia"' in listing, "flux ffmpeg sans le nom du lecteur : " + listing[-1500:]
+        assert 'application.process.binary = "mediaplayer.exe"' in listing, "flux ffmpeg sans le vrai binaire : " + listing[-1500:]
+        assert "Lavf" not in listing, "flux encore nommé Lavf… : " + listing[-1500:]
+    finally:
+        player.kill()
+        player.wait()
+    print("WINLUX_AUDIO_STREAM_NAMES=0", flush=True)
+
 def system_services():
     """v0.2.13: CUPS answers, PipeWire serves Pulse clients, SMB/NFS modules ship."""
     deadline = time.monotonic() + 30
@@ -386,6 +414,7 @@ def system_services():
             raise AssertionError("PipeWire not serving Pulse clients: " + info.stdout + info.stderr
                                  + Path("/run/winlux/pipewire.log").read_text(errors="replace")[-1500:])
         time.sleep(0.5)
+    stream_names()
     release = os.uname().release
     for module in ["cifs", "nfs", "nfsv4"]:
         run("modprobe", "-n", "-S", release, module)

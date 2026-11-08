@@ -48,6 +48,13 @@ check(re.search(r'format == "pulse".*?"-name"\.to_string\(\),\s*app\.to_string\(
       "les enregistrements (micro, son du système) restent « Lavf… »")
 check(re.search(r"winlux_media::audio_env\(\s*&app", capture), "le ffmpeg d'enregistrement ne reçoit pas le vrai binaire")
 
+# Contrôle réel en VM (release.yml) : ffmpeg joue un son avec les mêmes options
+# et `pactl list sink-inputs` ne doit montrer ni « Lavf… » ni « ffmpeg ».
+guest = (ROOT / "scripts/test-native-session-guest.py").read_text()
+check("def stream_names()" in guest and "stream_names()" in guest[guest.index("def system_services"):]
+      and '"Lavf" not in listing' in guest and 'application.process.binary = \"mediaplayer.exe\"' in guest,
+      "le test en VM ne vérifie plus le nom du flux pendant une lecture")
+
 if failures:
     raise SystemExit("ÉCHEC test-audio-stream-names :\n- " + "\n- ".join(failures))
 print("OK test-audio-stream-names : flux ffmpeg nommés (lecteur multimédia, enregistrements)")
