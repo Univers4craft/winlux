@@ -759,10 +759,23 @@ pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i3
         crate::process::set_last_error(1400); // ERROR_INVALID_HANDLE
         return 0;
     }
-    if width <= 0 || height <= 0 {
+    if width < 0 || height < 0 {
+        crate::trace!("CreateCompatibleBitmap refusée : {width}x{height}");
         crate::process::set_last_error(87);
         return 0;
     }
+    // Largeur ou hauteur nulle : Windows rend une bitmap 1x1 monochrome,
+    // pas une erreur (documentation de CreateCompatibleBitmap, Remarks :
+    // « If either the width or the height of the bitmap is zero,
+    // CreateCompatibleBitmap returns the handle to a 1-by-1 pixel,
+    // monochrome bitmap »). La VCL de Delphi en dépend pour toute TBitmap
+    // vide ; un échec levait EOutOfResources dans WinSCP x86 (#905).
+    // Voir docs/compat/gdi32-comportements.md : ne pas refuser ce cas.
+    let (width, height) = if width == 0 || height == 0 {
+        (1, 1)
+    } else {
+        (width, height)
+    };
     match gui::create_compatible_bitmap(width, height) {
         Some(bitmap) => bitmap,
         None => {
@@ -791,7 +804,9 @@ pub unsafe extern "win64" fn create_dib_section(
         crate::process::set_last_error(1400);
         return 0;
     }
-    if info.is_null() || bits.is_null() {
+    // ppvBits peut être nul : la DIB est créée, ses pixels restent
+    // accessibles par GetDIBits ou un DC mémoire.
+    if info.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -818,6 +833,15 @@ pub unsafe extern "win64" fn create_dib_section(
         || section != 0
         || offset != 0
     {
+        // Diagnostic (WINLUX_TRACE=1) : une DIB refusée fait lever
+        // EOutOfResources aux programmes Delphi sans dire laquelle.
+        crate::trace!(
+            "CreateDIBSection refusée : {}x{} {} bpp, compression {}, usage {usage}, section 0x{section:x}",
+            header.width,
+            header.height,
+            header.bit_count,
+            header.compression
+        );
         crate::process::set_last_error(87);
         return 0;
     }
@@ -830,7 +854,9 @@ pub unsafe extern "win64" fn create_dib_section(
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;
     };
-    std::ptr::write_unaligned(bits, pixel_bits.cast::<c_void>());
+    if !bits.is_null() {
+        std::ptr::write_unaligned(bits, pixel_bits.cast::<c_void>());
+    }
     bitmap
 }
 

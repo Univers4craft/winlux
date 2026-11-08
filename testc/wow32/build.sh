@@ -67,6 +67,7 @@ cat >"$tmp/kernel32_wow64.def" <<'DEF'
 LIBRARY kernel32.dll
 EXPORTS
 GetStdHandle@4
+GetCurrentProcessId@0
 WriteFile@20
 ExitProcess@4
 GetCommandLineA@0
@@ -247,6 +248,7 @@ Rectangle@20
 SetTextColor@8
 SetBkMode@8
 CreateCompatibleDC@4
+CreateCompatibleBitmap@12
 DeleteDC@4
 CreateDIBSection@24
 GetObjectA@12
