@@ -1118,11 +1118,18 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         last_tick = GetTickCount();
                         desktop::tick(hwnd);
                     }
-                } else if wm::native_app().is_some()
-                    && GetTickCount().wrapping_sub(last_tick) >= 500
-                {
-                    last_tick = GetTickCount();
-                    wm::native_tick(hwnd);
+                } else if wm::native_app().is_some() {
+                    if GetTickCount().wrapping_sub(last_tick) >= 500 {
+                        last_tick = GetTickCount();
+                        wm::native_tick(hwnd);
+                    }
+                    // Passage clair/sombre (#891) : la transition se repeint à
+                    // chaque tour jusqu'au bout, sinon la fenêtre restait figée
+                    // sur la première image (fond gris, texte du thème quitté)
+                    // jusqu'au prochain survol.
+                    if gfx::theme_animating() {
+                        InvalidateRect(hwnd, core::ptr::null(), 0);
+                    }
                 }
                 Sleep(if desktop { 4 } else { 10 });
             }
