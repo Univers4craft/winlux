@@ -1493,12 +1493,14 @@ pub extern "win64" fn co_add_ref_server_process() -> u32 {
 
 /// CoReleaseServerProcess : à zéro, le serveur va s'arrêter.
 pub extern "win64" fn co_release_server_process() -> u32 {
-    SERVER_PROCESS_REFS
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-            Some(n.saturating_sub(1))
-        })
-        .map(|n| n.saturating_sub(1))
-        .unwrap_or(0)
+    let mut n = SERVER_PROCESS_REFS.load(Ordering::SeqCst);
+    loop {
+        let next = n.saturating_sub(1);
+        match SERVER_PROCESS_REFS.compare_exchange(n, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return next,
+            Err(actual) => n = actual,
+        }
+    }
 }
 
 /// CoResumeClassObjects / CoSuspendClassObjects : les inscriptions sont
