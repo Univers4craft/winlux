@@ -92,6 +92,11 @@ def glyph(name, color, sw, fill=None):
         "trier": f'<g {s}><path d="M5 13.6V2.4M2.2 5.2 5 2.4l2.8 2.8M11 2.4v11.2M8.2 10.8l2.8 2.8 2.8-2.8"/></g>',
         "afficher": f'<g {s}><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></g>',
         "nouveau": f'<g {s}><path d="M8 2.5v11M2.5 8h11"/></g>',
+        "rechercher": f'<g {s}><circle cx="6.8" cy="6.8" r="4.6"/><path d="M10.2 10.2 14 14"/></g>',
+        "details": f'<g {s}><rect x="1.8" y="2.6" width="12.4" height="10.8" rx="1.6"/><path d="M9.6 2.6v10.8"/></g>',
+        "options": f'<circle cx="3.2" cy="8" r="1.25" {f}/><circle cx="8" cy="8" r="1.25" {f}/><circle cx="12.8" cy="8" r="1.25" {f}/>',
+        "chevron-bas": f'<g {s}><path d="M4 6.2 8 10.2l4-4"/></g>',
+        "double-volet": f'<g {s}><rect x="1.8" y="2.6" width="12.4" height="10.8" rx="1.6"/><path d="M8 2.6v10.8"/></g>',
     }
     return G[name]
 
@@ -374,8 +379,17 @@ EXPLORATEUR = {
     "bureau": "user-desktop", "documents": "folder-documents", "images": "folder-pictures",
     "musique": "folder-music", "videos": "folder-videos", "telechargements": "folder-download",
     "ce-pc": "computer", "accueil": "user-home", "fichier-inconnu": "application-octet-stream",
+    "reseau": "network-workgroup", "lecteur-amovible": "drive-removable-media", "lecteur-reseau": "folder-remote",
+    "type-pdf": "application-pdf", "type-archive": "application-x-archive", "type-audio": "audio-x-generic",
+    "type-video": "video-x-generic", "type-image": "image-x-generic", "type-exe": "application-x-executable",
+    "type-iso": "application-x-cd-image",
+    # types de fichiers (#890) : un motif par famille, choisi à l'extension
+    "type-texte": "text-x-generic", "type-script": "text-x-script", "type-code": "text-x-source",
+    "type-web": "text-html", "type-document": "x-office-document", "type-tableur": "x-office-spreadsheet",
+    "type-presentation": "x-office-presentation", "type-police": "font-x-generic",
 }
-GLYPHES_BARRE = ["couper", "copier", "coller", "renommer", "supprimer", "partager", "trier", "afficher", "nouveau"]
+GLYPHES_BARRE = ["couper", "copier", "coller", "renommer", "supprimer", "partager", "trier", "afficher", "nouveau",
+                 "terminal", "rechercher", "details", "options", "chevron-bas", "double-volet"]
 
 TAILLES_PNG = [16, 20, 24, 32, 48, 64, 96, 128, 256]
 PETIT_MAX = 24  # jusqu'à 24 px on prend le dessin sur grille 16

@@ -211,7 +211,7 @@ Limites honnêtes de la mesure :
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
 | .NET | CLR maison (interpréteur CIL) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) |
-| Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, compilation de shaders et effets D3DX (#834), `d3dcompiler_47` |
+| Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, effets D3DX déjà compilés (fx_2_0 binaire), `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
 | Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison) sur un mixeur PipeWire/Pulse/ALSA | entrée MIDI (`midiIn*`), `msacm32` |
@@ -574,8 +574,8 @@ Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
-DirectPlay 8 (`dpnet`, #863), la compilation de shaders et les effets D3DX
-(#834), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
+DirectPlay 8 (`dpnet`, #863), les effets D3DX livrés déjà compilés
+(fx_2_0 binaire), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
 `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
 toujours en 32 bits (point 3).
 
@@ -590,7 +590,7 @@ objets lisent eux-mêmes la disposition x86 de leurs structures : ils servent
 les jeux 32 bits comme les 64 bits.
 
 Fait ensuite : `d3dx9_24` à `d3dx9_43` (maths, textures depuis fichiers,
-mémoire et ressources, DDS DXT, sprites, polices ; D3DX 8 était une
+mémoire et ressources, DDS DXT, sprites, polices, `D3DXAssembleShader` (vs/ps 1.1 à 3.0), `ID3DXConstantTable` des shaders précompilés, sémantiques, maillages `.x` texte, binaires et MSZIP (`D3DXLoadMeshFromX`, `ID3DXMesh`, `D3DXCreateBox`/`Sphere`/`Cylinder`/`Torus`/`Polygon`, `D3DXComputeNormals`), compilation HLSL (`D3DXCompileShader`, `D3DXPreprocessShader` : préprocesseur, structures, fonctions mises en ligne, boucles déroulées, `if` aplatis, tableaux uniformes indexés pour le skinning, profils vs/ps 1.x à 3.0 produits en 2.0 ou 3.0) et effets `.fx` en texte (`D3DXCreateEffect*`, `ID3DXEffect` : paramètres, annotations, techniques, passes, états de rendu, d'échantillonneur et d'étage, `compile` et `asm { }`) ; D3DX 8 était une
 bibliothèque statique liée dans le jeu, il n'y a pas de DLL à fournir) ;
 Direct3D 9 et DirectSound pour les programmes 32 bits (#778, #859) ;
 DirectShow (`quartz.dll`, #835 : `RenderFile`, contrôle, événements,

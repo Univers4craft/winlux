@@ -257,6 +257,7 @@ _TR = {
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
     'VPN': ('VPN', 'VPN', 'VPN'),
     'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
+    'Contrôle parental': ('Parental controls', 'Control parental', 'Jugendschutz'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -336,18 +337,19 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde"), _t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile")]
+         _t("Sauvegarde"), _t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile"),
+         _t("Contrôle parental")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 41 n’existent que dans les Paramètres natifs.
+# Pages 29 à 42 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
               (_t("Réseau et Internet"), [35, 2, 40, 41, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [39, 1, 10, 11, 15, 30]),
-              (_t("Comptes"), [33, 38]),
+              (_t("Comptes"), [33, 38, 42]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
@@ -1272,7 +1274,8 @@ PAGE_NAMES = {
     "sound": 16, "son": 16, "keyboard": 4, "clavier": 4, "mouse": 5, "souris": 5,
     "personalization": 6, "personnalisation": 6, "windowsupdate": 7, "updates": 7, "mises-a-jour": 7,
     "display": 8, "ecran": 8, "about": 9, "apropos": 9, "a-propos": 9, "browsers": 11, "navigateurs": 11,
-    "defaultapps": 11, "easeofaccess": 12, "accessibility": 12, "accessibilite": 12, "privacy": 18,
+    "defaultapps": 11, "easeofaccess": 12, "accessibility": 12, "accessibilite": 12, "speech": 12, "voix": 12,
+    "easeofaccess-speechrecognition": 12, "easeofaccess-closedcaptioning": 12, "privacy": 18,
     "confidentialite": 18, "bluetooth": 22, "power": 23, "powersleep": 23, "batterysaver": 23,
     "alimentation": 23, "graphics": 24, "graphismes": 24, "printers": 26, "imprimantes": 26,
     "gaming": 29, "jeux": 29, "recovery": 31, "recuperation": 31, "clipboard": 32,
@@ -1284,6 +1287,8 @@ PAGE_NAMES = {
     # VPN et point d’accès sans fil mobile (#660), noms de Windows compris.
     "network-vpn": 40, "vpn": 40, "network-mobilehotspot": 41, "mobilehotspot": 41, "hotspot": 41,
     "point-d-acces": 41, "partage-de-connexion": 41,
+    # ms-settings:family-group : contrôle parental local (#661).
+    "family-group": 42, "family": 42, "parental": 42, "controle-parental": 42,
 }
 
 

@@ -220,6 +220,36 @@ def icon_argb(icon, size):
         obj.g_object_unref.argtypes = [ctypes.c_void_p]
         obj.g_object_unref(pointer)
 
+def window_target(pid, args):
+    """The .exe a `winlux` process runs, as a Linux path (#915).
+
+    The command line may hold a path relative to the process's own directory
+    (`cd ~/t32 && winlux ./WinSCP.exe`) or a Windows path (C:\\…, Z:\\…):
+    both used to be looked up from this process's directory and missed, so the
+    window kept the generic icon while its Start menu entry had the real one."""
+    value = next((os.fsdecode(arg) for arg in args[1:] if arg.lower().endswith(b".exe")), None)
+    if value is None: return None
+    if re.match(r"^[A-Za-z]:[\\/]", value): return windows_path(value, HOME)
+    target = Path(value)
+    if not target.is_absolute():
+        try: target = Path(os.readlink(f"/proc/{pid}/cwd")) / target
+        except OSError: return None
+    return target
+
+def launcher_icon(target):
+    """Icon= of the Start menu launcher made for this same .exe, or None (#915)."""
+    try: wanted = target.resolve()
+    except OSError: return None
+    for desktop in sorted(APPS.glob("winlux-pe-*.desktop")):
+        try: fields = dict(line.split("=", 1) for line in desktop.read_text(errors="replace").splitlines() if "=" in line and not line.startswith("["))
+        except OSError: continue
+        executable, icon = fields.get("X-Winlux-Executable", ""), fields.get("Icon", "")
+        if not executable or not icon.startswith("/") or not Path(icon).is_file(): continue
+        try:
+            if Path(executable).resolve() == wanted: return icon
+        except OSError: continue
+    return None
+
 def window_icons():
     """Publish extracted PE icons to EWMH, where the native tasklist reads them."""
     try:
@@ -237,13 +267,15 @@ def window_icons():
         try:
             args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
             if Path(os.fsdecode(args[0])).name != "winlux": continue
-            target = next((Path(os.fsdecode(arg)) for arg in args[1:] if arg.lower().endswith(b".exe")), None)
+            target = window_target(pid, args)
             regedit = target is None and b"--regedit" in args[1:2]
             if not regedit and (target is None or not target.is_file()): continue
             key = f"{pid}:regedit" if regedit else f"{pid}:{target.stat().st_mtime_ns}"
             current[window] = key
             if known.get(window) == key: continue
             icon = "application-x-executable" if regedit else icon_for(target, hashlib.sha256(str(target).encode()).hexdigest()[:24])
+            if icon == "application-x-executable" and not regedit:
+                icon = launcher_icon(target) or icon
             if icon == "application-x-executable":
                 environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
                 mode = "regedit" if regedit else next((item.split(b"=", 1)[1].decode() for item in environment if item.startswith(b"WINLUX_SHELL_APP=")), "")

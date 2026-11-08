@@ -102,6 +102,7 @@ fake.write_text(f"""#!{sys.executable}
 import json, os, sys
 mode = os.environ.get("FAKE_CLAUDE", "ok")
 if sys.argv[1:3] == ["auth", "status"]:
+    open({str(work / "claude-status-cwd.txt")!r}, "w").write(os.getcwd())
     print(json.dumps({{"loggedIn": mode != "logout", "authMethod": "claude.ai", "email": "damien@example.org"}}))
     sys.exit(0)
 data = sys.stdin.read()
@@ -117,8 +118,14 @@ print(json.dumps({{"type": "result", "is_error": False, "result": json.dumps(ans
 """)
 fake.chmod(0o755)
 os.environ["WINLUX_ASSISTANT_CLAUDE"] = str(fake)
+(home / "Bureau").mkdir()
+previous_cwd = os.getcwd()
+os.chdir(home / "Bureau")  # Paramètres lancés depuis le Bureau (#913)
 status = assistant.auth_status()
+os.chdir(previous_cwd)
 assert status["loggedIn"] and assistant.account_name(status) == "damien@example.org"
+assert (work / "claude-status-cwd.txt").read_text() == str(assistant.WORK), \
+    "claude.exe jamais lancé dans un dossier personnel : la couche PE demanderait l'accès aux fichiers (#913)"
 
 conversation = assistant.Conversation()
 question = "Pourquoi putty.exe ne s'ouvre pas ? Mon dossier secret-perso"
@@ -241,6 +248,15 @@ assistant.disable("chatgpt")
 assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"].count(30) == 1
 assert assistant.current_provider() == "claude"
 
+# Barre flottante (#889) : le bouton reste dans la capsule, avant la réserve du coin droit 45.
+data = json.loads(store.read_text())
+data["/panels/panel-1/plugin-ids"] = [3, 44, 1, 2, 45, 8]
+store.write_text(json.dumps(data))
+assistant.panel_add()
+assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 44, 1, 2, 30, 45, 8]
+data["/panels/panel-1/plugin-ids"] = [3, 1, 2, 8, 30, 10, 4, 5, 6, 9, 7]
+store.write_text(json.dumps(data))
+
 # winlux-control align-* réécrit l'ordre de la barre : le bouton reste.
 root = work / "root"
 env = dict(os.environ, WINLUX_CONTROL_ROOT=str(root), WINLUX_CONTROL_TEST_LOG=str(work / "commands"))
@@ -250,9 +266,9 @@ for alignment in ("align-left", "align-center"):
     store.write_text(json.dumps(data))
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)
-    # Greffon 13 : contrepoids juste après le séparateur 3 en barre centrée, au bout sinon.
+    # Greffon 13 : contrepoids juste après le séparateur 3, dans les deux alignements (#920).
     # Depuis #703 : réseau/son/batterie = genmon 4 seul (5 et 6 absents), l'heure avant la cloche.
-    expected = [3, 13, 1, 2, 8, 30, 10, 4, 7, 9] if alignment == "align-center" else [3, 1, 2, 8, 30, 10, 4, 7, 9, 13]
+    expected = [3, 13, 1, 2, 8, 30, 10, 4, 7, 9] if alignment == "align-center" else [3, 13, 1, 2, 8, 30, 10, 4, 7, 9]
     assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == expected, alignment
 
 # Avec le bouton Widgets (greffon 11, #293) : les deux restent.
@@ -272,7 +288,7 @@ data = json.loads(store.read_text())
 data["/plugins/plugin-15"] = "launcher"
 data["/plugins/plugin-15/items"] = ["/usr/share/applications/winlux-taskview.desktop"]
 store.write_text(json.dumps(data))
-for alignment, expected in (("align-left", [3, 1, 15, 2, 8, 30, 10, 4, 7, 9, 13]),
+for alignment, expected in (("align-left", [3, 13, 1, 15, 2, 8, 30, 10, 4, 7, 9]),
                             ("align-center", [3, 13, 1, 15, 2, 8, 30, 10, 4, 7, 9])):
     subprocess.run(["sh", str(project / "scripts/winlux-control.sh"), alignment], check=True, env=env,
                    stdout=subprocess.DEVNULL)
@@ -302,10 +318,12 @@ assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1,
 
 # ── Serveur HTTP de test : faux registre npm, fausse API GitHub, faux Hugging Face ──
 routes = {}
+accepts = {}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        accepts[self.path] = self.headers.get("Accept")
         body = routes.get(self.path)
         if body is None:
             self.send_response(404)
@@ -344,12 +362,13 @@ codex_tgz = tar_bytes({"package/package.json": b"{}",
                        "package/vendor/x86_64-unknown-linux-musl/codex-path/rg": b"rg",
                        "package/vendor/x86_64-unknown-linux-musl/codex-resources/voice/big.bin": b"v" * 1000,
                        "package/vendor/aarch64-unknown-linux-musl/bin/codex": b"arm"})
-integrity = "sha512-" + base64.b64encode(hashlib.sha512(codex_tgz).digest()).decode()
-routes["/@openai%2fcodex/latest"] = json.dumps({"version": "9.9.9"}).encode()
-routes["/@openai%2fcodex/9.9.9-linux-x64"] = json.dumps(
-    {"dist": {"tarball": f"{base}/codex.tgz", "integrity": integrity}}).encode()
+# Version figée et empreinte écrite dans le code, jamais « latest » du registre (#911).
+assert assistant.CODEX_VERSION == "0.167.0" and set(assistant.CODEX_SHA512) == {"linux-x64", "linux-arm64"}
+assistant.CODEX_VERSION = "9.9.9"
+assistant.CODEX_SHA512 = dict(assistant.CODEX_SHA512, **{"linux-x64": base64.b64encode(hashlib.sha512(codex_tgz).digest()).decode()})
 assistant.NPM_REGISTRY = base
-routes["/codex.tgz"] = codex_tgz[:-1] + bytes([codex_tgz[-1] ^ 1])  # archive altérée
+codex_path = "/@openai/codex/-/codex-9.9.9-linux-x64.tgz"
+routes[codex_path] = codex_tgz[:-1] + bytes([codex_tgz[-1] ^ 1])  # archive altérée
 try:
     chatgpt.install(None, None, lambda index: None)
     raise AssertionError("archive Codex altérée acceptée")
@@ -357,7 +376,7 @@ except RuntimeError as error:
     assert "empreinte" in str(error)
 assert chatgpt.launcher() is None and not assistant.CODEX_DIR.exists()
 assert not list(assistant.DATA.glob("codex*")), "aucun reste du téléchargement refusé"
-routes["/codex.tgz"] = codex_tgz
+routes[codex_path] = codex_tgz
 steps = []
 launcher = chatgpt.install(None, None, steps.append)
 assert steps == [0] and launcher == assistant.CODEX_DIR / "bin/codex" and os.access(launcher, os.X_OK)
@@ -440,22 +459,87 @@ assistant._mem_total_gib = lambda: 2.0
 assert not local.supported(), "moins de 3 Gio de mémoire : option cachée"
 assistant._mem_total_gib = lambda: 3.8
 assert local.supported() and local.launcher() is None and not local.remote
-engine_zip = io.BytesIO()
-with zipfile.ZipFile(engine_zip, "w") as bundle:
-    bundle.writestr("build/bin/llama-server", "#!/bin/sh\n")
-    bundle.writestr("build/bin/libllama.so", "so")
-engine_zip = engine_zip.getvalue()
+# #911 : révisions figées, empreintes écrites dans le code (jamais « latest » de GitHub ni « main »).
+assert assistant.LLAMA_TAG == "b12202" and "/releases/download/b12202" in assistant.LLAMA_RELEASES
+for name, sha256, size in assistant.LLAMA_ENGINES.values():
+    assert assistant.LLAMA_TAG in name and len(sha256) == 64 and size > 0
+for spec in assistant.LOCAL_MODELS.values():
+    assert len(spec["revision"]) == 40 and all(len(sha) == 64 and size > 0 for _, sha, size in spec["files"])
+
+# #928 : modèle et moteur choisis selon le PC, sans rien demander, et dits.
+drm = work / "drm"
+icd = work / "icd"
+assistant.DRM_DIR, assistant.VULKAN_ICD_DIRS = drm, (icd,)
+def fake_card(number, vendor, driver, vram=None):
+    device = work / "pci" / f"card{number}"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text(vendor + "\n")
+    (work / "pci" / driver).mkdir(exist_ok=True)
+    os.symlink(work / "pci" / driver, device / "driver")
+    if vram is not None:
+        (device / "mem_info_vram_total").write_text(str(vram))
+    (drm / f"card{number}").mkdir(parents=True)
+    os.symlink(device, drm / f"card{number}" / "device")
+    (drm / f"card{number}-HDMI-A-1").mkdir()
+drm.mkdir()
+assistant._mem_total_gib = lambda: 7.6
+assert assistant.pc_plan() == {"model": "1.5b", "engine": "cpu", "gpu": None, "ram": 7.6, "vram": 0.0}
+fake_card(1, "0x8086", "i915")  # carte intégrée : processeur
+assert assistant.pc_plan()["engine"] == "cpu"
+assistant._mem_total_gib = lambda: 16.0
+assert assistant.pc_plan()["model"] == "3b", "16 Gio sans carte dédiée : 3B sur le processeur"
+# Portable de damien : GTX 1070 Mobile 8 Go, pilote nvidia, Vulkan ; 7,6 Gio de mémoire.
+(bin_dir / "nvidia-smi").write_text("#!/bin/sh\necho 8192\n")
+(bin_dir / "nvidia-smi").chmod(0o755)
+fake_card(0, "0x10de", "nvidia")
+assistant._mem_total_gib = lambda: 7.6
+assert assistant.pc_plan()["engine"] == "cpu", "sans pilote Vulkan, rien sur la carte"
+icd.mkdir()
+(icd / "nvidia_icd.json").write_text("{}")
+plan = assistant.pc_plan()
+assert plan == {"model": "7b", "engine": "vulkan", "gpu": "NVIDIA", "ram": 7.6, "vram": 8.0}, plan
+text = assistant.plan_text(plan)
+assert "Qwen2.5 7B" in text and "NVIDIA" in text and "carte graphique" in text and "strictement rien" in text
+assert "4,4 Go" in text, text
+(bin_dir / "nvidia-smi").write_text("#!/bin/sh\necho 4096\n")
+assert assistant.pc_plan()["model"] == "3b", "4 Go de VRAM : 3B sur la carte"
+fake_card(2, "0x1002", "amdgpu", vram=16 << 30)
+(icd / "radeon_icd.json").write_text("{}")
+assert assistant.pc_plan()["gpu"] == "AMD" and assistant.pc_plan()["model"] == "7b", "la plus grosse carte"
+assistant._LANG = "en"
+assert "graphics card" in assistant.plan_text(assistant.pc_plan()) and "4.4 GB" in assistant.plan_text(assistant.pc_plan())
+assistant._LANG = "fr"
+shutil_rm = __import__("shutil").rmtree
+shutil_rm(drm)
+drm.mkdir()
+assistant._mem_total_gib = lambda: 3.8
+assert assistant.pc_plan() == {"model": "1.5b", "engine": "cpu", "gpu": None, "ram": 3.8, "vram": 0.0}
+
+def engine_archive(marker):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for name, content in (("llama-b9999/llama-server", b"#!/bin/sh\n# " + marker + b"\n"),
+                              ("llama-b9999/libllama.so.0.9.0", b"so")):
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(content), 0o644
+            tar.addfile(info, io.BytesIO(content))
+        link = tarfile.TarInfo("llama-b9999/libllama.so.0")
+        link.type, link.linkname = tarfile.SYMTYPE, "libllama.so.0.9.0"
+        tar.addfile(link)
+    return buffer.getvalue()
+engine_cpu, engine_vk = engine_archive(b"cpu"), engine_archive(b"vulkan")
 model = b"GGUF" + b"\0" * 4096
-routes["/releases/latest"] = json.dumps({"assets": [
-    {"name": "llama-b9999-bin-win-cpu-x64.zip", "browser_download_url": f"{base}/win.zip", "digest": "sha256:" + "0" * 64},
-    {"name": "llama-b9999-bin-ubuntu-x64.zip", "browser_download_url": f"{base}/engine.zip",
-     "digest": "sha256:" + hashlib.sha256(engine_zip).hexdigest()}]}).encode()
-routes["/engine.zip"] = engine_zip
-routes[f"/api/models/{assistant.LOCAL_MODEL_REPO}/tree/main"] = json.dumps([
-    {"type": "file", "path": "qwen2.5-1.5b-instruct-q8_0.gguf", "lfs": {"oid": "1" * 64}},
-    {"type": "file", "path": assistant.LOCAL_MODEL_FILE, "lfs": {"oid": hashlib.sha256(model).hexdigest()}}]).encode()
-routes[f"/{assistant.LOCAL_MODEL_REPO}/resolve/main/{assistant.LOCAL_MODEL_FILE}"] = model[:-1] + b"X"  # altéré
-assistant.LLAMA_RELEASE_API = f"{base}/releases/latest"
+model_3b = b"GGUF3" + b"\0" * 4096
+assistant.LLAMA_RELEASES = base + "/download"
+assistant.LLAMA_ASSET_API = base + "/api/release"
+assistant.LLAMA_ENGINES = {"cpu": ("llama-b9999-bin-ubuntu-x64.tar.gz", hashlib.sha256(engine_cpu).hexdigest(), 100),
+                           "vulkan": ("llama-b9999-bin-ubuntu-vulkan-x64.tar.gz", hashlib.sha256(engine_vk).hexdigest(), 100)}
+assistant.LOCAL_MODELS["1.5b"]["files"] = (("petit.gguf", hashlib.sha256(model).hexdigest(), len(model)),)
+assistant.LOCAL_MODELS["3b"]["files"] = (("moyen.gguf", hashlib.sha256(model_3b).hexdigest(), len(model_3b)),)
+small = assistant.LOCAL_MODELS["1.5b"]
+model_path = f"/{small['repo']}/resolve/{small['revision']}/petit.gguf"
+routes["/download/llama-b9999-bin-ubuntu-x64.tar.gz"] = engine_cpu
+routes[model_path] = model[:-1] + b"X"  # altéré
 assistant.HF_BASE = base
 progress = []
 try:
@@ -465,10 +549,13 @@ except RuntimeError as error:
     assert "empreinte" in str(error)
 assert local.engine() is not None and os.access(local.engine(), os.X_OK), "le moteur, lui, était bon"
 assert local.model() is None and not list(assistant.LOCAL_DIR.glob("*.part"))
-routes[f"/{assistant.LOCAL_MODEL_REPO}/resolve/main/{assistant.LOCAL_MODEL_FILE}"] = model
+routes[model_path] = model
 steps = []
 assert local.install(lambda f, t: progress.append(t), None, steps.append) == local.engine()
 assert steps == [0, 1] and local.model().read_bytes() == model and progress
+assert (local.engine().parent / "libllama.so.0").is_symlink(), "liens des bibliothèques gardés"
+assert local.engine_kind() == "cpu" and local.gpu_layers() == [] and assistant.read_config()["local_model"] == "1.5b"
+assert assistant.local_model_text() == "Qwen2.5 1,5B, sur le processeur"
 assert local.status() == {"installed": True, "loggedIn": True}
 
 # Faux llama-server : vérifie la clé, répond selon le schéma demandé (comme la grammaire JSON).
@@ -516,6 +603,7 @@ os.environ["WINLUX_ASSISTANT_LLAMA"] = str(llama)
 server = assistant.LocalServer()
 server.start(timeout=30)
 try:
+    assert server.memory() > 0, "mémoire du moteur lue pour l'avertissement (#928)"
     started = json.loads(llama_record.read_text())
     assert started["argv"][started["argv"].index("--host") + 1] == "127.0.0.1", "jamais ouvert au réseau"
     assert started["key"] == server.key and server.key not in " ".join(started["argv"]), "clé hors de ps"
@@ -543,7 +631,31 @@ try:
     assert result["actions"][0][1] == ["winlux-shell-app", "settings", "10"]
 finally:
     server.stop()
-assert not server.running()
+assert not server.running() and server.memory() == 0
+# #928 : panneau ouvert sans question -> moteur arrêté après 2 minutes, relancé à la question suivante.
+panel = (project / "scripts/winlux-assistant.py").read_text(encoding="utf-8")
+assert assistant.LOCAL_IDLE_SECONDS == 120
+assert "self.idle_source = GLib.timeout_add_seconds(LOCAL_IDLE_SECONDS, self.idle_stop)" in panel
+assert "self.server.spawn()" in panel[panel.index("def ask_local"):panel.index("def answered_local")]
+assert "self.arm_idle()" in panel[panel.index("def answered_local"):panel.index("def card(")]
+
+# PC passé à une carte graphique (ou 16 Go) : moteur Vulkan et modèle plus grand ;
+# GitHub en 504 sur l'adresse de téléchargement -> API des fichiers, même empreinte.
+os.environ.pop("WINLUX_ASSISTANT_LLAMA", None)
+assistant.pc_plan = lambda: {"model": "3b", "engine": "vulkan", "gpu": "NVIDIA", "ram": 7.6, "vram": 4.0}
+medium = assistant.LOCAL_MODELS["3b"]
+routes[f"/{medium['repo']}/resolve/{medium['revision']}/moyen.gguf"] = model_3b
+routes["/api/release"] = json.dumps({"assets": [
+    {"name": "llama-b9999-bin-ubuntu-vulkan-x64.tar.gz", "url": f"{base}/api/asset/42"}]}).encode()
+routes["/api/asset/42"] = engine_vk
+steps = []
+assert local.install(None, None, steps.append) == local.engine()
+assert local.engine_kind() == "vulkan" and local.gpu_layers() == ["-ngl", "99"]
+assert b"vulkan" in local.engine().read_bytes() and accepts["/api/asset/42"] == "application/octet-stream"
+assert local.model().name == "moyen.gguf" and not (assistant.LOCAL_DIR / "petit.gguf").exists(), "ancien modèle retiré"
+assert assistant.local_model_text() == "Qwen2.5 3B, sur la carte graphique"
+assert "3B" in " ".join(local.steps())
+os.environ["WINLUX_ASSISTANT_LLAMA"] = str(llama)
 
 # Désactivée : fichiers gardés ; « Supprimer » libère la place.
 assistant.enable("local")
@@ -554,6 +666,41 @@ os.environ.pop("WINLUX_ASSISTANT_LLAMA")
 assert assistant.main(["winlux-assistant", "--supprimer", "local"]) == 0
 assert not assistant.LOCAL_DIR.exists() and not assistant.is_enabled()
 assert assistant.main(["winlux-assistant", "--activer", "inconnu"]) == 2
+
+# Moteur à qui il manque une bibliothèque : dit à l'installation, pas à l'ouverture du panneau.
+broken = work / "broken-llama-server"
+broken.write_text("#!/bin/sh\necho 'llama-server: error while loading shared libraries: libgomp.so.1: cannot open "
+                  "shared object file: No such file or directory' >&2\nexit 127\n")
+broken.chmod(0o755)
+assert assistant.engine_problem(broken) == "libgomp.so.1"
+
+# ── Sans navigateur sur ce PC (#912) : lien pour un autre appareil, rien n'est ouvert ici ──
+browsers = work / "navigateurs"
+assistant.BROWSERS_DIR = browsers
+saved_commands = assistant.BROWSER_COMMANDS
+assistant.BROWSER_COMMANDS = ("navigateur-inexistant-winlux",)
+assert not assistant.has_browser()
+codex_provider = assistant.provider("chatgpt")
+assert codex_provider.login_command(Path("/x/codex"), False) == ["/x/codex", "login", "--device-auth"]
+assert codex_provider.login_command(Path("/x/codex"), True) == ["/x/codex", "login"]
+assert assistant.provider("claude").login_command(Path("/x/claude"), False)[1:] == ["auth", "login", "--claudeai"]
+firefox = browsers / "firefox/root/usr/lib/firefox/firefox"
+firefox.parent.mkdir(parents=True)
+firefox.write_text("#!/bin/sh\n")
+firefox.chmod(0o755)
+assert assistant.has_browser(), "Firefox du catalogue Winlux"
+assistant.BROWSER_COMMANDS = saved_commands
+setup = (project / "scripts/winlux-assistant.py").read_text(encoding="utf-8")
+assert 'WINLUX_BROWSER="true"' in setup and "os.killpg" in setup and "start_new_session=True" in setup
+assert '"settings", "11"' in setup, "Installer un navigateur : page Navigateurs, choix explicite"
+for text in ("Copier le lien", "Installer un navigateur", "Lien copié."):
+    assert text in assistant._TR and len(assistant._TR[text]) == 3, text
+
+# ── Une fenêtre d'activation par assistant (#910), unique : un 2e clic la ramène ──
+assert 'org.winlux.AssistantSetup.{key}' in setup and "app.get_is_remote()" in setup
+pages = (project / "scripts/winlux-settings-pages.py").read_text(encoding="utf-8")
+toggle = pages[pages.index("    def assistant_toggle"):pages.index("    # ── Partage et transfert")]
+assert "assistant_setups" in toggle and "if getattr(self, \"assistant_setup\", None)" not in toggle
 httpd.shutdown()
 
 # ── L'IA parle la langue choisie pour Winlux (Paramètres > Langue, /etc/winlux/locale.conf) ──

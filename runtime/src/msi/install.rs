@@ -5,7 +5,9 @@
 use super::cab::Cabinet;
 use super::cond::Context;
 use super::db::Database;
-use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
+use crate::dlls::advapi32::{
+    apply_registry_edits, registry_key_exists, registry_key_is_empty, RegEdit,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -268,7 +270,7 @@ fn resolve_dirs(db: &Database, ctx: &Context, admin: bool) -> HashMap<String, Di
 
 /// Actions personnalisées sûres : affectation de propriété (51) et de
 /// dossier (35) avant le calcul des chemins.
-fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
+fn run_property_actions(db: &Database, ctx: &mut Context, _log: &mut Logger) {
     let actions: HashMap<String, (i32, String, String)> = db
         .rows("CustomAction")
         .map(|r| {
@@ -306,8 +308,7 @@ fn run_property_actions(db: &Database, ctx: &mut Context, log: &mut Logger) {
                 let value = ctx.format(target);
                 ctx.props.insert(source.clone(), value);
             }
-            51 | 35 => {}
-            _ => log.log(&format!("Action personnalisée ignorée : {action}")),
+            _ => {}
         }
     }
 }
@@ -712,6 +713,18 @@ pub fn package_info(msi: &Path) -> Result<(String, String, String), i32> {
     ))
 }
 
+/// Nom, version et éditeur d'un paquet (assistant d'installation).
+pub fn package_summary(msi: &Path) -> Result<(String, String, String), i32> {
+    let data = std::fs::read(msi).map_err(|_| ERROR_INSTALL_PACKAGE_OPEN_FAILED)?;
+    let db = Database::parse(&data).map_err(|_| ERROR_INSTALL_PACKAGE_INVALID)?;
+    let get = |p: &str| clean(&db.property(p).unwrap_or_default());
+    Ok((
+        get("ProductName"),
+        get("ProductVersion"),
+        get("Manufacturer"),
+    ))
+}
+
 /// Code produit d'un paquet (pour `/x paquet.msi`).
 pub fn product_of(msi: &Path) -> Result<String, i32> {
     package_info(msi).map(|info| info.0)
@@ -831,6 +844,12 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         if let Some(d) = comp_dir.get(c) {
             ctx.components.insert(c.clone(), d.clone());
         }
+    }
+    if !opts.admin {
+        for what in super::actions::unsupported(db, &ctx) {
+            log.log(&format!("Action personnalisée ignorée : {what}"));
+        }
+        super::actions::run_phase(db, &ctx, super::actions::Phase::BeforeFiles, None, log);
     }
     // Fichiers à poser.
     struct Wanted {
@@ -1005,8 +1024,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             "{}\\{}",
             hive(r.int("Root").unwrap_or(-1), all_users),
             ctx.format(&r.str("Key")).trim_matches('\\')
-        )
-        .to_lowercase();
+        );
+        // Casse conservée (`SimonTatham\PuTTY64`) : le registre compare les
+        // noms sans tenir compte de la casse mais les affiche tels qu'écrits.
         let name = ctx.format(&r.str("Name"));
         let value = r.get("Value");
         if matches!(name.as_str(), "+" | "-" | "*") && value.is_null() {
@@ -1082,6 +1102,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     // installé qui les crée, lancé par une action personnalisée que Winlux
     // n'exécute pas (Paint.NET : « paintdotnet.exe /setupActions /install »).
     // Sans ce relais, l'appli serait installée mais absente du menu Démarrer.
+    // Programme qui se configure lui-même : remplacé par le relais
+    // ci-dessous, jamais lancé comme action personnalisée.
+    let mut relayed: Option<String> = None;
     if main_exe.is_empty() {
         if let Some((exe, desktop)) = self_setup_exe(db, &ctx) {
             let label: String = name
@@ -1109,6 +1132,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
                 manifest.files.push(file);
                 log.log(&format!("Raccourci : {link}"));
             }
+            relayed = Some(exe.clone());
             main_exe = exe;
         }
     }
@@ -1118,12 +1142,15 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     let mut ini_dirs = Vec::new();
     super::extra::ini_files(db, &ctx, &comps, &mut manifest, &mut ini_dirs);
     manifest.dirs.extend(ini_dirs);
-    let services = db.rows("ServiceInstall").count();
-    if services > 0 {
-        log.log(&format!(
-            "{services} entrée(s) de services Windows ignorée(s)"
-        ));
-    }
+    super::actions::services(
+        db,
+        &ctx,
+        &comps,
+        &mut edits,
+        &mut manifest.keys,
+        &mut manifest.values,
+        log,
+    );
     // Inscription dans « Programmes installés ».
     if !code.is_empty() {
         let key = uninstall_key(&code);
@@ -1188,13 +1215,46 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
             dword("SystemComponent", 1);
         }
     }
+    // Clés parentes créées par l'installation (`Software\SimonTatham` pour
+    // `Software\SimonTatham\PuTTY64\…`) : retirées à la désinstallation si
+    // elles sont restées vides, comme le fait Windows Installer.
+    let mut created = Vec::new();
+    for key in &manifest.keys {
+        let mut k = key.as_str();
+        while let Some((parent, _)) = k.rsplit_once('\\') {
+            if !parent.contains('\\') || registry_key_exists(parent) {
+                break;
+            }
+            created.push(parent.to_string());
+            k = parent;
+        }
+    }
+    for k in created {
+        if !manifest.keys.iter().any(|m| m.eq_ignore_ascii_case(&k)) {
+            manifest.keys.push(k);
+        }
+    }
     if !apply_registry_edits(&edits) {
         return Err("écriture du registre impossible".into());
+    }
+    if !opts.admin {
+        super::actions::run_phase(
+            db,
+            &ctx,
+            super::actions::Phase::AfterFiles,
+            relayed.as_deref(),
+            log,
+        );
     }
     if !code.is_empty() {
         manifest
             .save()
             .map_err(|e| format!("journal d'installation : {e}"))?;
+        // Paquet conservé, comme le cache de Windows Installer : ses actions
+        // de désinstallation (`REMOVE="ALL"`) seront rejouées.
+        if !opts.admin && has_exe_actions(db) {
+            let _ = std::fs::copy(msi, cached_package(&code));
+        }
     }
     log.log(&format!("{name} est installé."));
     Ok(())
@@ -1214,7 +1274,67 @@ pub fn civil(days: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Copie du paquet gardée pour sa désinstallation.
+fn cached_package(code: &str) -> PathBuf {
+    manifest_path(code).with_extension("msi")
+}
+
+fn has_exe_actions(db: &Database) -> bool {
+    db.rows("CustomAction")
+        .any(|r| matches!(r.int("Type").unwrap_or(0) & 0x3F, 1 | 2 | 17 | 18 | 34 | 50))
+}
+
+/// Actions de désinstallation du paquet conservé : contexte reconstruit
+/// (propriétés, dossiers, fichiers) avec `REMOVE="ALL"` et `Installed`.
+fn run_uninstall_actions(code: &str, log: &mut Logger) {
+    let cached = cached_package(code);
+    let Ok(data) = std::fs::read(&cached) else {
+        return;
+    };
+    let Ok(db) = Database::parse(&data) else {
+        return;
+    };
+    let mut ctx = Context::default();
+    system_props(&mut ctx, &db, &Options::default());
+    for r in db.rows("Property") {
+        ctx.props.insert(r.str("Property"), r.str("Value"));
+    }
+    ctx.props.insert("Installed".into(), "1".into());
+    ctx.props.insert("REMOVE".into(), "ALL".into());
+    run_property_actions(&db, &mut ctx, log);
+    let dirs = resolve_dirs(&db, &ctx, false);
+    for (k, d) in &dirs {
+        ctx.props.insert(k.clone(), d.target.clone());
+    }
+    let comp_dir: HashMap<String, String> = db
+        .rows("Component")
+        .filter_map(|r| {
+            let d = dirs.get(&r.str("Directory_"))?;
+            Some((r.str("Component"), d.target.clone()))
+        })
+        .collect();
+    for r in db.rows("File") {
+        if let Some(dir) = comp_dir.get(&r.str("Component_")) {
+            let name = long_name(&r.str("FileName")).to_string();
+            ctx.files.insert(r.str("File"), format!("{dir}{name}"));
+        }
+    }
+    ctx.components = comp_dir;
+    let own = (db.rows("Shortcut").next().is_none())
+        .then(|| self_setup_exe(&db, &ctx).map(|(exe, _)| exe))
+        .flatten();
+    super::actions::run_phase(
+        &db,
+        &ctx,
+        super::actions::Phase::Uninstall,
+        own.as_deref(),
+        log,
+    );
+}
+
 fn remove_manifest(m: &Manifest, log: &mut Logger) {
+    run_uninstall_actions(&m.product, log);
+    let _ = std::fs::remove_file(cached_package(&m.product));
     for f in &m.files {
         let _ = std::fs::remove_file(f);
     }
@@ -1237,13 +1357,12 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
     let mut keys = m.keys.clone();
     keys.sort_by_key(|k| std::cmp::Reverse(k.matches('\\').count()));
     keys.dedup();
-    let empty: Vec<RegEdit> = keys
-        .into_iter()
-        .filter(|k| registry_key_is_empty(k))
-        .map(RegEdit::DeleteTree)
-        .collect();
-    if !empty.is_empty() {
-        apply_registry_edits(&empty);
+    // Des plus profondes aux plus hautes, une à une : une clé parente ne
+    // devient vide qu'une fois ses sous-clés retirées.
+    for k in keys {
+        if registry_key_is_empty(&k) {
+            apply_registry_edits(&[RegEdit::DeleteTree(k)]);
+        }
     }
     let _ = std::fs::remove_file(manifest_path(&m.product));
     log.log(&format!("{} est désinstallé.", m.name));

@@ -48,6 +48,8 @@ pub struct Font {
     cmap: Option<(usize, u16)>,
     symbol: bool,
     pub metrics: Metrics,
+    /// Table inverse glyphe → caractère, construite au premier besoin.
+    reverse: OnceLock<std::collections::HashMap<u16, u32>>,
 }
 
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
@@ -161,6 +163,7 @@ impl Font {
             cmap,
             symbol,
             metrics: m,
+            reverse: OnceLock::new(),
         })
     }
 
@@ -175,6 +178,23 @@ impl Font {
             return self.lookup(ch | 0xF000);
         }
         g
+    }
+
+    /// Caractère dessiné par le glyphe `gid` (le plus petit point de code
+    /// du plan multilingue de base qui y mène), pour ExtTextOut avec
+    /// ETO_GLYPH_INDEX.
+    pub fn char_of_glyph(&self, gid: u16) -> Option<u32> {
+        let map = self.reverse.get_or_init(|| {
+            let mut m = std::collections::HashMap::new();
+            for ch in (0x20u32..0xD800).chain(0xE000..0x1_0000) {
+                let g = self.glyph_index(ch);
+                if g != 0 {
+                    m.entry(g).or_insert(ch);
+                }
+            }
+            m
+        });
+        map.get(&gid).copied()
     }
 
     fn lookup(&self, ch: u32) -> u16 {

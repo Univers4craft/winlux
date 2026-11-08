@@ -155,6 +155,19 @@ def _balance_log(message):
             pass
 
 
+def _genmon_blank(command):
+    """Vrai si la commande d'un genmon ne produit ni image ni texte."""
+    if not command:
+        return False
+    try:
+        output = subprocess.run(command.split(), capture_output=True, text=True, timeout=1).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    image = re.search(r"<img>\s*\S", output)
+    text = re.search(r"<txt>(.*?)</txt>", output, re.S)
+    return not image and not (text and text.group(1).strip())
+
+
 def _settled_balance(ids, right_ids, left_ids):
     """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
 
@@ -184,11 +197,23 @@ def _settled_balance(ids, right_ids, left_ids):
         except (OSError, subprocess.SubprocessError):
             listing = ""
         genmon = {int(found[1]) for found in re.finditer(r"^/plugins/plugin-(\d+)\s+genmon\s*$", listing, re.M)}
-        expected = (genmon & set(right_ids)) - {13}
+        # Un genmon qui n'affiche rien (clavier tactile sans écran tactile,
+        # greffon 12) garde une largeur de 1 px : l'attendre bloquait la
+        # mesure 4 s à chaque relance et le cache n'était jamais repris.
+        # Ceux-là ne comptent pas dans le bloc de droite (#887).
+        commands = {int(found[1]): found[2].strip() for found in
+                    re.finditer(r"^/plugins/plugin-(\d+)/command\s+(.+)$", listing, re.M)}
+        expected = {plugin for plugin in (genmon & set(right_ids)) - {13}
+                    if not _genmon_blank(commands.get(plugin))}
         try:
             cached = _balance_cache().read_text().split()
         except OSError:
             cached = []
+        # Même écran, même ordre de greffons : la valeur gardée est la bonne,
+        # rendue tout de suite. Attendre que le bloc de droite soit affiché
+        # laissait le groupe centré décalé le temps de la relance de la barre (#887).
+        if len(cached) == 2 and cached[0] == key and cached[1].isdigit():
+            return int(cached[1])
         deadline, previous = time.monotonic() + 4, None
         while screen and expected and time.monotonic() < deadline:
             present = {plugin for plugin, _, width in children if width > 1}
@@ -221,6 +246,71 @@ def _settled_balance(ids, right_ids, left_ids):
 
 
 kind = sys.argv[1]
+
+# Icônes cachées derrière la flèche de la zone de notification : le greffon
+# systray d'XFCE retient chaque icône vue (known-legacy-items pour XEmbed,
+# known-items pour StatusNotifier) et masque celles de hidden-*. Écrit en
+# direct dans xfconf, appliqué sans relancer la barre.
+#   winlux-tray overflow list            → JSON [{name, hidden, kind}]
+#   winlux-tray overflow hide|show NOM
+OVERFLOW_KINDS = (("legacy", "known-legacy-items", "hidden-legacy-items"), ("sni", "known-items", "hidden-items"))
+# Toujours cachées, jamais proposées : nm-applet double l'icône réseau de
+# Winlux ; winlux-notify-icon.py était le nom commun des icônes .exe d'avant.
+OVERFLOW_SKIP = {"nm-applet", "winlux-notify-icon.py", "winlux-notify-icon"}
+
+
+def _overflow_values(prop):
+    try:
+        result = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{prop}"],
+                                capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode:
+        return []
+    lines = result.stdout.splitlines()
+    # « Value is an array with N items: » puis une ligne vide, traduits.
+    return [line.strip() for line in lines[2:] if line.strip()] if lines and ":" in lines[0] else [line.strip() for line in lines if line.strip()]
+
+
+def overflow_list():
+    items = []
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        hidden_names = set(_overflow_values(hidden))
+        for name in _overflow_values(known):
+            if name not in OVERFLOW_SKIP and all(item["name"] != name for item in items):
+                items.append({"name": name, "hidden": name in hidden_names, "kind": kind_name})
+    return items
+
+
+def overflow_set(name, hide):
+    changed = False
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        if name not in _overflow_values(known):
+            continue
+        values = [value for value in _overflow_values(hidden) if value != name] + ([name] if hide else [])
+        args = ["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{hidden}"]
+        if values:
+            command = args + ["-n", "-a"] + [part for value in values for part in ("-t", "string", "-s", value)]
+            if subprocess.run(command, capture_output=True, timeout=3).returncode:
+                subprocess.run(args + ["-a"] + [part for value in values for part in ("-t", "string", "-s", value)],
+                               capture_output=True, timeout=3)
+        else:
+            subprocess.run(args + ["-r"], capture_output=True, timeout=3)
+        changed = True
+    return changed
+
+
+if kind == "overflow":
+    import json as _json
+    action = sys.argv[2] if len(sys.argv) > 2 else "list"
+    if action == "list":
+        print(_json.dumps(overflow_list(), ensure_ascii=False))
+        raise SystemExit(0)
+    if action in ("hide", "show") and len(sys.argv) == 4 and sys.argv[3] not in OVERFLOW_SKIP:
+        raise SystemExit(0 if overflow_set(sys.argv[3], action == "hide") else 1)
+    raise SystemExit(2)
+
+
 def tray_directory():
     """Icônes de la barre : un dossier par compte. /run/winlux est collant et
     /run/winlux/tray appartenait au premier compte (0755) : un second compte
@@ -257,6 +347,23 @@ def taskbar_preferences():
     except (OSError, UnicodeDecodeError):
         pass
     return values
+
+
+def taskbar_alignment():
+    """Alignement choisi (TASKBAR_ALIGN), à défaut l'étirement du séparateur 3."""
+    path = Path(os.environ.get("WINLUX_CONTROL_ROOT", "") + "/etc/winlux/preferences.conf")
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN=") and line[14:].strip() in ("left", "center"):
+                return line[14:].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        expand = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/plugins/plugin-3/expand"],
+                                capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        expand = ""
+    return "left" if expand == "false" else "center"
 
 
 def panel_dark():
@@ -379,6 +486,29 @@ def tunnels():
     return vpns, hotspot
 
 
+def wifi_name(interface):
+    """Nom du réseau Wi-Fi de l'interface : « Wi-Fi : wlo1 » ne disait rien (#914).
+
+    nmcli donne le nom de la connexion active ; sans NetworkManager, iw donne
+    le SSID. À défaut, le nom de l'interface reste affiché."""
+    def nmcli(out):
+        return out.strip()
+
+    def iw(out):
+        return next((line.split(":", 1)[1].strip() for line in out.splitlines()
+                     if line.strip().startswith("SSID:")), "")
+
+    for command, pick in ((["nmcli", "-t", "-g", "GENERAL.CONNECTION", "device", "show", interface], nmcli),
+                          (["iw", "dev", interface, "link"], iw)):
+        try:
+            name = pick(subprocess.run(command, capture_output=True, text=True, timeout=2).stdout)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if name and name != "--":
+            return name
+    return interface
+
+
 def network_part():
     try:
         routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
@@ -392,7 +522,8 @@ def network_part():
     else:
         body = f'<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="1.6"/><path d="M12 16v5m-5 0h10" stroke="{color}" stroke-width="1.6"/>'
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
-    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
+    names = [wifi_name(path.name) if wireless else path.name for path in active]
+    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(names) if active else _t("Réseau déconnecté")
     # VPN actif : petit bouclier sur l'icône réseau, comme Windows 11 ; point
     # d'accès sans fil mobile : ondes en coin et une ligne de l'infobulle.
     vpns, hotspot = tunnels()
@@ -493,6 +624,11 @@ elif kind == "balance":
         ids = []
     # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
     floating = taskbar_preferences()["STYLE"] == "floating"
+    # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
+    # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
+    # greffon, puis seulement étire ou non le séparateur 3.
+    if taskbar_alignment() == "left":
+        floating = True
     if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
         right = set(ids[ids.index(8) + 1:])
         width = _settled_balance(ids, right, set(ids[:ids.index(3)]))

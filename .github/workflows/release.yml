@@ -81,7 +81,7 @@ jobs:
           sudo apt-get install -y -q \
             xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
             linux-image-generic xserver-xorg-core \
-            x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
+            x11-xserver-utils xinput gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
             cpio fakeroot zstd kmod busybox-static mtools cryptsetup-bin \
             xvfb xterm ncurses-base x11-xkb-utils xfonts-base fonts-dejavu-core \
             xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \

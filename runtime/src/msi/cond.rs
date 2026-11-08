@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Context {
     /// Propriétés (noms sensibles à la casse, comme Windows Installer).
     pub props: HashMap<String, String>,
