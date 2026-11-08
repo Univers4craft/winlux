@@ -20,9 +20,19 @@ const CAL_RETURN_NUMBER: u32 = 0x2000_0000;
 const CAL_GREGORIAN: u32 = 1;
 const ENUM_ALL_CALENDARS: u32 = 0xFFFF_FFFF;
 
-/// Locale de l'utilisateur Winlux (même valeur que GetUserDefaultLCID).
-pub const USER_LOCALE: &str = "fr-FR";
-pub const USER_LCID: u32 = 0x040C;
+/// Locale de l'utilisateur Winlux, la même que GetUserDefaultLCID : la
+/// langue de Paramètres (fr, en, es, de) et la région de glibc. Le français
+/// de France sert de repli si la table ne la décrit pas (#1125 : en
+/// allemand, GetUserDefaultLocaleName rendait encore « fr-FR »).
+fn user_locale() -> &'static Locale {
+    let current = crate::intl::locale::current();
+    let all = all_locales();
+    all.iter()
+        .find(|l| l.name.eq_ignore_ascii_case(current.name))
+        .or_else(|| all.iter().find(|l| l.lcid == current.lcid))
+        .or_else(|| all.iter().find(|l| l.name == "fr-FR"))
+        .expect("fr-FR est dans la table")
+}
 
 pub struct Locale {
     pub name: &'static str,
@@ -1054,8 +1064,8 @@ impl Locale {
 /// celle de l'utilisateur.
 pub fn by_name(name: Option<&str>) -> Option<&'static Locale> {
     let n = match name {
-        None => USER_LOCALE.to_string(),
-        Some(n) if n.eq_ignore_ascii_case("!x-sys-default-locale") => USER_LOCALE.to_string(),
+        None => return Some(user_locale()),
+        Some(n) if n.eq_ignore_ascii_case("!x-sys-default-locale") => return Some(user_locale()),
         Some(n) => n.replace('_', "-"),
     };
     all_locales()
@@ -1067,7 +1077,7 @@ pub fn by_name(name: Option<&str>) -> Option<&'static Locale> {
 /// LOCALE_SYSTEM_DEFAULT (0x800) et 0 donnent celle de l'utilisateur.
 pub fn by_lcid(lcid: u32) -> Option<&'static Locale> {
     let lcid = match lcid & 0xFFFF {
-        0 | 0x0400 | 0x0800 => USER_LCID,
+        0 | 0x0400 | 0x0800 => return Some(user_locale()),
         x => x,
     };
     all_locales().iter().find(|l| l.lcid == lcid)
@@ -1344,7 +1354,7 @@ pub unsafe extern "win64" fn get_locale_info_a(
 }
 
 pub unsafe extern "win64" fn get_user_default_locale_name(buf: *mut u16, cap: i32) -> i32 {
-    put_text(USER_LOCALE, buf, cap)
+    put_text(user_locale().name, buf, cap)
 }
 
 pub unsafe extern "win64" fn locale_name_to_lcid(name: *const u16, _flags: u32) -> u32 {
@@ -1488,7 +1498,7 @@ pub unsafe extern "win64" fn get_currency_format_ex(
 }
 
 pub extern "win64" fn get_user_geo_id(_class: u32) -> u32 {
-    by_lcid(USER_LCID).map_or(244, |l| l.geo)
+    user_locale().geo
 }
 
 /// `GetGeoInfoW(geo, type, données, taille, langue)` : pays des locales
@@ -2134,6 +2144,24 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn locale_par_defaut_suit_la_langue_de_la_session() {
+        // #1125 : GetUserDefaultLocaleName et GetLocaleInfoEx(NULL) rendaient
+        // « fr-FR » même dans une session en allemand, anglais ou espagnol.
+        let session = crate::intl::locale::current();
+        assert_eq!(by_name(None).unwrap().name, session.name);
+        assert_eq!(by_lcid(0x0400).unwrap().lcid, session.lcid);
+        let mut buf = [0u16; 85];
+        let n = unsafe { get_user_default_locale_name(buf.as_mut_ptr(), buf.len() as i32) };
+        assert_eq!(
+            String::from_utf16_lossy(&buf[..n as usize - 1]),
+            session.name
+        );
+        for name in ["fr-FR", "en-US", "de-DE", "es-ES"] {
+            assert_eq!(by_name(Some(name)).unwrap().name, name);
+        }
+    }
+
     #[test]
     fn find_string_ordinal_sens_et_casse() {
         let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();

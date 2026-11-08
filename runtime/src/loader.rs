@@ -217,6 +217,39 @@ pub fn find_module_by_path(path: &Path) -> Option<Module> {
         .cloned()
 }
 
+/// Adresse de l'image principale du parent, transmise à un enfant qui
+/// exécute le même .exe (#767). Sous Windows, l'ASLR place une image à la
+/// même adresse dans tous les processus jusqu'au redémarrage, et le bac à
+/// sable de Chromium tue l'enfant suspendu dont l'image n'est pas à la même
+/// adresse que la sienne (il y recopie ses variables au même décalage).
+pub const SAME_BASE_ENV: &str = "WINLUX_BASE_IMAGE";
+static INHERITED_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Lu une fois au démarrage, avant le chargement de l'image principale.
+pub fn take_inherited_base() {
+    if let Some(v) = std::env::var_os(SAME_BASE_ENV) {
+        // SAFETY : appelé au démarrage, avant tout autre thread.
+        unsafe { std::env::remove_var(SAME_BASE_ENV) };
+        let hex = v.to_string_lossy();
+        if let Ok(b) = usize::from_str_radix(hex.trim_start_matches("0x"), 16) {
+            if b != 0 && b % ALLOCATION_GRANULARITY == 0 {
+                INHERITED_BASE.store(b, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// Valeur de `SAME_BASE_ENV` pour un enfant qui lance `exe` : l'adresse de
+/// notre image principale s'il s'agit du même fichier.
+pub fn base_for_child(exe: &Path) -> Option<String> {
+    let main = main_module()?;
+    let same = main.path == exe
+        || std::fs::canonicalize(exe).is_ok_and(|c| c == main.path)
+        || std::fs::canonicalize(&main.path)
+            .is_ok_and(|c| Some(c) == std::fs::canonicalize(exe).ok());
+    same.then(|| format!("{:x}", main.base))
+}
+
 pub fn main_module() -> Option<Module> {
     MODULES.lock().unwrap().first().cloned()
 }
@@ -603,7 +636,11 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
             // général) d'abord, sinon n'importe où sous la limite.
             map_at(pe.image_base as usize, size, true)
         } else if force_reloc && has_relocs {
-            None
+            // Même .exe que le parent : à la même adresse que chez lui.
+            match INHERITED_BASE.swap(0, std::sync::atomic::Ordering::Relaxed) {
+                0 => None,
+                b => map_at(b, size, true),
+            }
         } else {
             map_at(pe.image_base as usize, size, true)
         };
