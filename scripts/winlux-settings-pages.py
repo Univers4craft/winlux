@@ -51,7 +51,7 @@ _TR = {
     'Ethernet': ('Ethernet', 'Ethernet', 'Ethernet'),
     'VPN': ('VPN', 'VPN', 'VPN'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
-    'Partage et transfert': ('Sharing and transfer', 'Uso compartido y transferencia', 'Freigabe und Übertragung'),
+    'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
     'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
     'Renouveler la connexion': ('Renew connection', 'Renovar la conexión', 'Verbindung erneuern'),
     'adresse {address}': ('address {address}', 'dirección {address}', 'Adresse {address}'),

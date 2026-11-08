@@ -924,4 +924,10 @@ ok('self.pause_combo.set_active_id("")' in update_page and "(#1008)" in update_t
    "Mise à jour : liste de pause revenue à « Choisir une durée » après la reprise (#1008)")
 ok("semaine(s)" not in update_page and "def weeks_text" in update_page and "(#1009)" in update_test,
    "Mise à jour : « 1 semaine », « 2 semaines » dans les quatre langues (#1009)")
+# Paramètres : un nom de page a la même traduction en barre latérale, en titre,
+# dans la recherche du menu Démarrer et chez l'assistant (#1039).
+translation_test = (SCRIPTS / "test-translation-keys.py").read_text(encoding="utf-8")
+ok("def inconsistent_page_names" in translation_test and "#1039" in translation_test
+   and "'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir'" in (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8"),
+   "Paramètres : noms de page traduits pareil partout, quatre langues (#1039)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
