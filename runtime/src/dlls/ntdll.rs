@@ -84,6 +84,9 @@ pub extern "win64" fn rtl_nt_status_to_dos_error(status: i32) -> u32 {
         0xC000_0120 => 995,   // STATUS_CANCELLED → ERROR_OPERATION_ABORTED
         0xC000_014B => 109,   // STATUS_PIPE_BROKEN → ERROR_BROKEN_PIPE
         0xC000_020D => 10054, // STATUS_CONNECTION_RESET
+        0xC000_0236 => 1225,  // STATUS_CONNECTION_REFUSED
+        0xC000_023C => 1231,  // STATUS_NETWORK_UNREACHABLE
+        0xC000_023D => 1232,  // STATUS_HOST_UNREACHABLE
         0xC000_0241 => 1236,  // STATUS_CONNECTION_ABORTED
         0xC000_0275 => 4390,  // STATUS_NOT_A_REPARSE_POINT
         0x8000_0005 => 234,   // STATUS_BUFFER_OVERFLOW → ERROR_MORE_DATA
@@ -1382,9 +1385,10 @@ unsafe fn write_info(info: *mut c_void, length: u32, return_length: *mut u32, by
 }
 
 /// `NtQuerySystemInformation` : SystemBasicInformation (0),
-/// SystemProcessorInformation (1), SystemTimeOfDayInformation (3) et
-/// SystemProcessorPerformanceInformation (8), avec les dispositions publiques
-/// de winternl.h.
+/// SystemProcessorInformation (1), SystemTimeOfDayInformation (3),
+/// SystemProcessInformation (5), SystemProcessorPerformanceInformation (8)
+/// et SystemProcessIdInformation (88), avec les dispositions publiques de
+/// winternl.h.
 pub unsafe extern "win64" fn nt_query_system_information(
     info_class: u32,
     info: *mut c_void,
@@ -1474,6 +1478,14 @@ pub unsafe extern "win64" fn nt_query_system_information(
             }
             write_info(info, length, return_length, &b)
         }
+        // Dispositions 64 bits seulement : un programme 32 bits garde
+        // STATUS_NOT_IMPLEMENTED.
+        5 | 88 if crate::wow32::pointer_size() != 8 => STATUS_NOT_IMPLEMENTED,
+        5 => {
+            let b = process_information(info as usize);
+            write_info(info, length, return_length, &b)
+        }
+        88 => process_id_information(info, length, return_length),
         _ => {
             if !return_length.is_null() {
                 *return_length = 0;
@@ -1481,6 +1493,119 @@ pub unsafe extern "win64" fn nt_query_system_information(
             STATUS_NOT_IMPLEMENTED
         }
     }
+}
+
+/// FILETIME (100 ns depuis 1601) du démarrage de la machine (/proc/stat).
+fn boot_filetime() -> i64 {
+    let btime = std::fs::read_to_string("/proc/stat")
+        .unwrap_or_default()
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("btime ")
+                .and_then(|v| v.trim().parse::<i64>().ok())
+        })
+        .unwrap_or(0);
+    btime * 10_000_000 + crate::intl::tz::FILETIME_UNIX_EPOCH
+}
+
+/// SystemProcessInformation (5) : une SYSTEM_PROCESS_INFORMATION de 256
+/// octets par processus (disposition x64 publique, celle que lit
+/// System.Diagnostics.Process de .NET), suivie d'une
+/// SYSTEM_THREAD_INFORMATION de 80 octets par fil, puis du nom en UTF-16.
+/// `base` est l'adresse où le tableau sera copié : ImageName.Buffer pointe
+/// dedans.
+fn process_information(base: usize) -> Vec<u8> {
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as i64;
+    let to_100ns = |ticks: u64| ticks as i64 * 10_000_000 / hz;
+    let boot = boot_filetime();
+    let procs = crate::dlls::kernel32_node::system_processes();
+    let mut b: Vec<u8> = Vec::new();
+    for (index, p) in procs.iter().enumerate() {
+        let start = b.len();
+        let name: Vec<u16> = p.name.encode_utf16().collect();
+        let name_at = 256 + 80 * p.threads.len();
+        let size = (name_at + name.len() * 2 + 2).next_multiple_of(8);
+        b.resize(start + size, 0);
+        let e = &mut b[start..start + size];
+        let put = |e: &mut [u8], at: usize, v: &[u8]| e[at..at + v.len()].copy_from_slice(v);
+        let next = if index + 1 == procs.len() {
+            0
+        } else {
+            size as u32
+        };
+        let created = boot + to_100ns(p.start_ticks);
+        put(e, 0, &next.to_le_bytes()); // NextEntryOffset
+        put(e, 4, &(p.threads.len() as u32).to_le_bytes()); // NumberOfThreads
+        put(e, 32, &created.to_le_bytes()); // CreateTime
+        put(e, 40, &to_100ns(p.user_ticks).to_le_bytes()); // UserTime
+        put(e, 48, &to_100ns(p.kernel_ticks).to_le_bytes()); // KernelTime
+        let bytes = (name.len() * 2) as u16;
+        put(e, 56, &bytes.to_le_bytes()); // ImageName.Length
+        put(e, 58, &(bytes + 2).to_le_bytes()); // ImageName.MaximumLength
+        put(e, 64, &((base + start + name_at) as u64).to_le_bytes()); // ImageName.Buffer
+        put(e, 72, &8i32.to_le_bytes()); // BasePriority (normale)
+        put(e, 80, &(p.pid as u64).to_le_bytes()); // UniqueProcessId
+        put(e, 88, &(p.ppid as u64).to_le_bytes()); // InheritedFromUniqueProcessId
+        put(e, 100, &1u32.to_le_bytes()); // SessionId
+        put(e, 112, &p.virtual_bytes.to_le_bytes()); // PeakVirtualSize
+        put(e, 120, &p.virtual_bytes.to_le_bytes()); // VirtualSize
+        put(e, 136, &p.resident_bytes.to_le_bytes()); // PeakWorkingSetSize
+        put(e, 144, &p.resident_bytes.to_le_bytes()); // WorkingSetSize
+        put(e, 184, &p.virtual_bytes.to_le_bytes()); // PagefileUsage
+        put(e, 192, &p.virtual_bytes.to_le_bytes()); // PeakPagefileUsage
+        put(e, 200, &p.resident_bytes.to_le_bytes()); // PrivatePageCount
+        for (i, tid) in p.threads.iter().enumerate() {
+            let t = 256 + 80 * i;
+            put(e, t + 16, &created.to_le_bytes()); // CreateTime
+            put(e, t + 40, &(p.pid as u64).to_le_bytes()); // ClientId.UniqueProcess
+            put(e, t + 48, &(*tid as u64).to_le_bytes()); // ClientId.UniqueThread
+            put(e, t + 56, &8i32.to_le_bytes()); // Priority
+            put(e, t + 60, &8i32.to_le_bytes()); // BasePriority
+            put(e, t + 68, &5u32.to_le_bytes()); // ThreadState : Waiting
+        }
+        for (i, c) in name.iter().enumerate() {
+            put(e, name_at + 2 * i, &c.to_le_bytes());
+        }
+    }
+    b
+}
+
+/// SystemProcessIdInformation (88) : nom d'un processus par son
+/// identifiant. L'appelant fournit { ProcessId, ImageName } avec son propre
+/// tampon ; trop court, MaximumLength reçoit la taille nécessaire.
+unsafe fn process_id_information(info: *mut c_void, length: u32, return_length: *mut u32) -> i32 {
+    if !return_length.is_null() {
+        *return_length = 24;
+    }
+    if (length as usize) < 24 {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let at = info as *mut u8;
+    let pid = (at as *const u64).read_unaligned() as u32;
+    let Some(p) = crate::dlls::kernel32_node::system_processes()
+        .into_iter()
+        .find(|p| p.pid == pid)
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name: Vec<u16> = p.name.encode_utf16().collect();
+    let bytes = (name.len() * 2) as u16;
+    let max = (at.add(10) as *const u16).read_unaligned();
+    if max < bytes + 2 {
+        (at.add(10) as *mut u16).write_unaligned(bytes + 2);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    let buffer = (at.add(16) as *const usize).read_unaligned() as *mut u16;
+    if buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
+    *buffer.add(name.len()) = 0;
+    (at.add(8) as *mut u16).write_unaligned(bytes);
+    STATUS_SUCCESS
 }
 
 #[cfg(test)]
@@ -2255,6 +2380,97 @@ mod section_tests {
                 ),
                 STATUS_INVALID_PARAMETER
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod process_information_tests {
+    use super::*;
+
+    /// Process.GetProcesses de .NET (#1162) : la liste chaînée contient ce
+    /// processus, ses fils et un nom lisible dans le tampon de l'appelant.
+    #[test]
+    fn liste_des_processus_comme_la_lit_dotnet() {
+        unsafe {
+            let mut needed = 0u32;
+            assert_eq!(
+                nt_query_system_information(5, std::ptr::null_mut(), 0, &mut needed),
+                STATUS_INFO_LENGTH_MISMATCH
+            );
+            assert!(needed >= 256);
+            // Marge : d'autres processus peuvent naître entre les deux appels.
+            let mut buf = vec![0u64; (needed as usize + 65536) / 8];
+            let len = (buf.len() * 8) as u32;
+            let base = buf.as_mut_ptr() as *mut u8;
+            assert_eq!(
+                nt_query_system_information(5, base as *mut c_void, len, &mut needed),
+                STATUS_SUCCESS
+            );
+            let me = libc::getpid() as u64;
+            let mut at = 0usize;
+            let mut mine = None;
+            loop {
+                let e = base.add(at);
+                let pid = (e.add(80) as *const u64).read();
+                let threads = (e.add(4) as *const u32).read();
+                let name_len = (e.add(56) as *const u16).read() as usize;
+                let name_ptr = (e.add(64) as *const usize).read();
+                assert!(name_ptr >= base as usize && name_ptr < base as usize + needed as usize);
+                let name = String::from_utf16_lossy(std::slice::from_raw_parts(
+                    name_ptr as *const u16,
+                    name_len / 2,
+                ));
+                if pid == me {
+                    assert!(threads >= 1);
+                    let tid = (e.add(256 + 48) as *const u64).read();
+                    let pid_of_thread = (e.add(256 + 40) as *const u64).read();
+                    assert_eq!(pid_of_thread, me);
+                    assert!(tid > 0);
+                    assert!(!name.is_empty());
+                    mine = Some(name);
+                }
+                let next = (e as *const u32).read() as usize;
+                if next == 0 {
+                    break;
+                }
+                at += next;
+            }
+            let mine = mine.expect("le processus courant doit être listé");
+
+            // SystemProcessIdInformation : même nom pour le même PID.
+            let mut text = [0u16; 4];
+            let mut q = [0u8; 24];
+            (q.as_mut_ptr() as *mut u64).write_unaligned(me);
+            (q.as_mut_ptr().add(10) as *mut u16).write_unaligned(8);
+            (q.as_mut_ptr().add(16) as *mut usize).write_unaligned(text.as_mut_ptr() as usize);
+            let want = (mine.encode_utf16().count() * 2 + 2) as u16;
+            if want > 8 {
+                assert_eq!(
+                    nt_query_system_information(
+                        88,
+                        q.as_mut_ptr() as *mut c_void,
+                        24,
+                        std::ptr::null_mut()
+                    ),
+                    STATUS_INFO_LENGTH_MISMATCH
+                );
+                assert_eq!((q.as_ptr().add(10) as *const u16).read_unaligned(), want);
+            }
+            let mut big = vec![0u16; want as usize / 2];
+            (q.as_mut_ptr().add(10) as *mut u16).write_unaligned(want);
+            (q.as_mut_ptr().add(16) as *mut usize).write_unaligned(big.as_mut_ptr() as usize);
+            assert_eq!(
+                nt_query_system_information(
+                    88,
+                    q.as_mut_ptr() as *mut c_void,
+                    24,
+                    std::ptr::null_mut()
+                ),
+                STATUS_SUCCESS
+            );
+            let n = (q.as_ptr().add(8) as *const u16).read_unaligned() as usize / 2;
+            assert_eq!(String::from_utf16_lossy(&big[..n]), mine);
         }
     }
 }

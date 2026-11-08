@@ -34,10 +34,10 @@ fn key(obj: *const c_void, g: &Guid) -> Key {
     (obj as usize, b)
 }
 
+/// AddRef (1) ou Release (2) d'une interface tenue, objet du runtime ou
+/// objet du programme, x86 compris (#1090).
 unsafe fn com_call(p: usize, slot: usize) {
-    let vt = *(p as *const *const usize);
-    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vt.add(slot));
-    f(p);
+    crate::dlls::legacy_com::unknown_call(p, slot);
 }
 
 fn drop_value(v: Value) {
@@ -65,7 +65,7 @@ pub(crate) unsafe fn get(
     };
     let bytes: Vec<u8> = match v {
         Value::Bytes(b) => b.clone(),
-        Value::Iface(p) => p.to_le_bytes().to_vec(),
+        Value::Iface(p) => p.to_le_bytes()[..crate::dlls::legacy_com::ptr_size()].to_vec(),
     };
     if data.is_null() {
         *size = bytes.len() as u32;

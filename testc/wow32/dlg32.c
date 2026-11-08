@@ -177,6 +177,63 @@ static void tab_control(void)
     g.cchTextMax = 32;
     CHECK(SendMessageW(tab, TCM_GETITEMW, 1, (LPARAM)&g) != 0, "TCM_GETITEMW");
     CHECK(wcscmp(text, L"Avancé") == 0 && g.lParam == 12, "TCITEM relu");
+    /* Comme la VCL de Delphi (#1129) : seuls mask et lParam sont remplis,
+       pszText et cchTextMax restent non initialisés. */
+    TCITEMW o;
+    memset(&o, 0x77, sizeof o);
+    o.mask = TCIF_PARAM;
+    o.lParam = (LPARAM)0xff946730u;
+    CHECK(SendMessageW(tab, TCM_SETITEMW, 0, (LPARAM)&o) != 0, "TCM_SETITEMW sans TCIF_TEXT");
+    TCITEMW q;
+    memset(&q, 0x77, sizeof q);
+    q.mask = TCIF_PARAM;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&q) != 0 && q.lParam == (LPARAM)0xff946730u,
+          "objet de l'onglet relu (pszText non initialisé)");
+    DestroyWindow(tab);
+}
+
+/* Superclasse sous-classée, comme TPageControl de la VCL (#1129) : classe
+ * enregistrée avec la procédure de SysTabControl32, puis procédure x86 qui
+ * passe tout par CallWindowProcW. Le TCITEM de 28 octets est juste sous
+ * des données de la pile : rien ne doit être écrit au-delà. */
+static WNDPROC page_old;
+static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    return CallWindowProcW(page_old, h, m, w, l);
+}
+
+static void tab_superclass(void)
+{
+    WNDCLASSW wc;
+    CHECK(GetClassInfoW(NULL, WC_TABCONTROLW, &wc), "GetClassInfoW(SysTabControl32)");
+    wc.lpszClassName = L"TPageDeTest";
+    wc.hInstance = GetModuleHandleW(NULL);
+    CHECK(RegisterClassW(&wc) != 0, "superclasse d'onglets");
+    HWND tab = CreateWindowExW(0, L"TPageDeTest", L"", WS_POPUP, 0, 0, 300, 200, NULL, NULL, NULL, NULL);
+    CHECK(tab != NULL, "fenêtre de la superclasse");
+    page_old = (WNDPROC)SetWindowLongPtrW(tab, GWLP_WNDPROC, (LONG_PTR)page_proc);
+    TCITEMW t = {0};
+    t.mask = TCIF_TEXT | TCIF_PARAM;
+    t.pszText = L"Session";
+    t.lParam = 0x1234;
+    CHECK(SendMessageW(tab, TCM_INSERTITEMW, 0, (LPARAM)&t) == 0, "TCM_INSERTITEMW (superclasse)");
+    struct {
+        TCITEMW it;
+        DWORD canary[4];
+    } q;
+    memset(&q, 0x77, sizeof q);
+    q.it.mask = TCIF_PARAM;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&q.it) != 0 && q.it.lParam == 0x1234,
+          "TCM_GETITEMW (superclasse sous-classée)");
+    CHECK(q.canary[0] == 0x77777777u && q.canary[1] == 0x77777777u && q.canary[2] == 0x77777777u,
+          "rien d'écrit après le TCITEM x86");
+    WCHAR text[16] = {0};
+    TCITEMW g = {0};
+    g.mask = TCIF_TEXT;
+    g.pszText = text;
+    g.cchTextMax = 16;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&g) != 0 && wcscmp(text, L"Session") == 0,
+          "texte relu (superclasse)");
     DestroyWindow(tab);
 }
 
@@ -463,6 +520,44 @@ static void winscp(void)
           "ImageList_Read");
     IStream_Release(st);
     ImageList_Destroy(il2);
+    /* Flux « IL » d'un programme Delphi (ButtonImages de WinSCP) : bfSize
+       des BMP réduit aux en-têtes, pixels et masque juste derrière. */
+    static const BYTE ilhead[28] = { 'I', 'L', 1, 1, 1, 0, 4, 0, 4, 0, 2, 0, 2, 0,
+                                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x10, 0xFF, 0xFF,
+                                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    BYTE delphi[28 + 54 + 64 + 62 + 8 + 22] = { 0 };
+    memcpy(delphi, ilhead, 28);
+    BYTE *b = delphi + 28;
+    for (int k = 0; k < 2; k++) {
+        DWORD size = k ? 62 : 54;
+        b[0] = 'B';
+        b[1] = 'M';
+        memcpy(b + 2, &size, 4);
+        memcpy(b + 10, &size, 4);
+        LONG hdr[3] = { 40, 8, 2 };
+        memcpy(b + 14, hdr, 12);
+        b[26] = 1;
+        b[28] = k ? 1 : 32;
+        b[46] = k ? 2 : 0; /* biClrUsed */
+        if (k) {
+            b[58] = b[59] = b[60] = 0xFF; /* palette : noir, blanc */
+            b += 62 + 8;
+        } else {
+            for (int i = 0; i < 16; i++)
+                memcpy(b + 54 + i * 4, "\x10\x20\x30\x00", 4);
+            b += 54 + 64;
+        }
+    }
+    IStream *ds = NULL;
+    CHECK(CreateStreamOnHGlobal(NULL, TRUE, &ds) == S_OK, "flux Delphi");
+    ULONG wrote = 0;
+    IStream_Write(ds, delphi, sizeof delphi, &wrote);
+    IStream_Seek(ds, zero, STREAM_SEEK_SET, NULL);
+    il2 = ImageList_Read(ds);
+    CHECK(il2 != NULL && ImageList_GetImageCount(il2) == 1 && ImageList_GetIconSize(il2, &cx, &cy) && cx == 2,
+          "ImageList_Read (flux Delphi, bfSize réduit aux en-têtes)");
+    IStream_Release(ds);
+    ImageList_Destroy(il2);
     ImageList_Destroy(il);
     DeleteDC(mem);
     DeleteObject(canvas);
@@ -578,6 +673,7 @@ int main(void)
     tree_view();
     tool_bar();
     tab_control();
+    tab_superclass();
     notifications();
     dialogs();
     winscp();

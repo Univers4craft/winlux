@@ -73,6 +73,13 @@ ok("v11::context_view(this, out)" in d2d1 and "winlux_d2d_context_view_vt" in d2
    and ".rept 120" in d2d1_1,
    "anciennes cibles : QueryInterface vers ID2D1DeviceContext6 rend une vue à 120 relais (#1085)")
 
+brush = source("d2d1_brush.rs")
+ok('unsupported!("CreateBitmapBrush")' not in d2d1 and 'unsupported!("CreateBitmapBrush")' not in d2d1_1
+   and 'unsupported!("CreateImageBrush")' not in d2d1_1
+   and 'unsupported!("CreateLinearGradientBrush")' not in d2d1
+   and "fn bitmap_and_gradient_brushes_paint" in d2d1 and "BITMAP_BRUSH_VT: VTable<18>" in brush,
+   "pinceaux bitmap, image et dégradés réels, transformation des pinceaux (#1124, Notepad++)")
+
 dwrite = source("dwrite.rs")
 sets = source("dwrite_sets.rs")
 fallback = source("dwrite_fallback.rs")
@@ -94,6 +101,14 @@ ok("fn raw_table" in source("sfnt.rs") and "raw_table(&tag.to_le_bytes())" in dw
 ok("// CreateCustomFontCollection" in dwrite and "not_implemented as *const (), // CreateCustom" not in dwrite
    and "fn custom_file_reference(" in custom and "fn read_stream(" in custom,
    "DirectWrite : collections et fichiers de polices fournis par l'appli (#1075)")
+
+text = source("dwrite_text.rs")
+ok(vtable(dwrite, "FORMAT_VT") == 43 and vtable(dwrite, "LAYOUT_VT") == 89
+   and "TEXT_FORMAT3" in text and "TEXT_LAYOUT4" in text,
+   "IDWriteTextFormat1-3 et IDWriteTextLayout1-4 servis par CreateTextFormat et CreateTextLayout (#1118)")
+
+ok("fn layout_format_view(" in dwrite and "FORMAT_ON_LAYOUT_VT" in dwrite,
+   "une mise en page répond à IDWriteTextFormat1-3 par une vue (#1158)")
 
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,

@@ -22,7 +22,11 @@ pub struct CabFile {
     pub name: String,
     folder: usize,
     offset: usize,
-    size: usize,
+    pub size: usize,
+    /// Date et heure MS-DOS, attributs (CFFILE).
+    pub date: u16,
+    pub time: u16,
+    pub attribs: u16,
 }
 
 struct Folder {
@@ -79,6 +83,8 @@ impl<'a> Cabinet<'a> {
             let size = u32_at(data, at).ok_or_else(bad)? as usize;
             let offset = u32_at(data, at + 4).ok_or_else(bad)? as usize;
             let folder = u16_at(data, at + 8).ok_or_else(bad)? as usize;
+            let date = u16_at(data, at + 10).ok_or_else(bad)?;
+            let time = u16_at(data, at + 12).ok_or_else(bad)?;
             let attribs = u16_at(data, at + 14).ok_or_else(bad)?;
             let (raw, next) = cstr(data, at + 16).ok_or_else(bad)?;
             let name = if attribs & 0x80 != 0 {
@@ -95,6 +101,9 @@ impl<'a> Cabinet<'a> {
                 folder,
                 offset,
                 size,
+                date,
+                time,
+                attribs,
             });
         }
         Ok(Cabinet {

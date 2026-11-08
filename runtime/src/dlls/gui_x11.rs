@@ -87,6 +87,47 @@ fn focus_is_grab(mode: x11rb::protocol::xproto::NotifyMode) -> bool {
     matches!(mode, NotifyMode::GRAB | NotifyMode::UNGRAB)
 }
 
+/// Touche AltGr : ISO_Level3_Shift ou Mode_switch.
+fn is_altgr_keysym(base: Option<u32>) -> bool {
+    matches!(base, Some(0xFE03 | 0xFF7E))
+}
+
+/// (VK, lParam) des deux messages d'AltGr dans l'ordre d'envoi : Ctrl
+/// gauche (balayage 0x1D) puis Alt droit (0x38 étendu) à l'appui, l'inverse
+/// au relâchement (bits 30 et 31).
+fn altgr_messages(down: bool) -> [(usize, isize); 2] {
+    let up_bits: isize = if down { 0 } else { (1 << 30) | (1 << 31) };
+    let ctrl = (0x11, 1 | (0x1D << 16) | up_bits);
+    let alt = (0x12, 1 | (0x38 << 16) | (1 << 24) | up_bits);
+    if down {
+        [ctrl, alt]
+    } else {
+        [alt, ctrl]
+    }
+}
+
+/// Famille fontconfig d'une police GDI : les noms de police par défaut
+/// (« fixed », vide, police système des boîtes) deviennent Segoe UI (#1054).
+fn xft_family(face: &str) -> &str {
+    match face.to_ascii_lowercase().as_str() {
+        "" | "fixed" | "system" | "ms shell dlg" | "ms shell dlg 2" => "Segoe UI",
+        _ => face,
+    }
+}
+
+/// FocusOut d'un contrôle dont le focus remonte à un ancêtre alors que le
+/// dernier SetFocus de Winlux visait ce contrôle : c'est le gestionnaire de
+/// fenêtres qui a activé la fenêtre de premier niveau (clic dedans), pas le
+/// programme. Le contrôle doit garder le focus Win32 (#1137).
+fn focus_taken_by_wm(
+    detail: x11rb::protocol::xproto::NotifyDetail,
+    asked_focus: u32,
+    xwin: u32,
+    child: bool,
+) -> bool {
+    detail == x11rb::protocol::xproto::NotifyDetail::ANCESTOR && child && asked_focus == xwin
+}
+
 #[derive(Clone, Copy)]
 struct XFont {
     id: u32,
@@ -461,11 +502,12 @@ impl XftRenderer {
         if let Some(font) = self.fonts.get(spec) {
             return Some(*font);
         }
-        let family = if spec.face.is_empty() || spec.face.eq_ignore_ascii_case("fixed") {
-            "Noto Sans"
-        } else {
-            spec.face.as_str()
-        };
+        // Police par défaut (« fixed », vide, police système des boîtes) :
+        // Segoe UI, comme usp10 et les chemins GDI, que fontconfig remplace
+        // par Liberation Sans (métriques d'Arial). « Noto Sans » n'est pas
+        // dans l'ISO : fontconfig retombait sur DejaVu Sans, 15 % plus large,
+        // et le titre de l'accueil d'Audacity débordait à gauche (#1054).
+        let family = xft_family(&spec.face);
         let size = spec.height.saturating_abs().max(9);
         let weight = if spec.weight >= 600 {
             "bold"
@@ -877,6 +919,11 @@ pub struct X11Backend {
     windows: HashMap<usize, XWin>,
     /// Fenêtre X → hwnd (pour router les événements).
     by_xwin: HashMap<u32, usize>,
+    /// Fenêtre X à laquelle Winlux a donné le focus en dernier (SetFocus).
+    /// Le gestionnaire de fenêtres rend le focus à la fenêtre de premier
+    /// niveau à chaque clic ; sous Windows, un clic dans la fenêtre active
+    /// ne retire pas le focus au contrôle qui l'a (#1137).
+    asked_focus: u32,
     /// Événements lus pendant `wait`, consommés par le prochain `pump`.
     pending: Vec<Event>,
     /// Événement supplémentaire issu d'un ConfigureNotify simultanément move/size.
@@ -928,6 +975,9 @@ pub struct X11Backend {
     last_click: Option<(usize, u8, std::time::Instant, i32, i32)>,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
+    /// Fenêtre possédée → propriétaire. openbox ne relève pas un
+    /// transitoire avec sa propriétaire : Winlux le fait lui-même (#1068).
+    owners: HashMap<usize, usize>,
 }
 
 impl X11Backend {
@@ -999,6 +1049,7 @@ impl X11Backend {
             wm_delete,
             windows: HashMap::new(),
             by_xwin: HashMap::new(),
+            asked_focus: 0,
             pending: Vec::new(),
             deferred_events: Vec::new(),
             content: HashMap::new(),
@@ -1023,6 +1074,7 @@ impl X11Backend {
             pinch_last: 1.0,
             last_click: None,
             xdnd,
+            owners: HashMap::new(),
         })
     }
 
@@ -2567,6 +2619,17 @@ impl X11Backend {
                 {
                     return None;
                 }
+                // Focus remonté d'un contrôle à sa fenêtre de premier niveau
+                // sans SetFocus de Winlux : c'est le gestionnaire de fenêtres
+                // (clic pour activer). Le contrôle garde le focus Win32 ; son
+                // FocusOut a déjà rendu le focus X au contrôle (#1137).
+                if e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
+                    && self.asked_focus != e.event
+                    && self.windows.get(&hwnd).is_some_and(|w| !w.child)
+                    && self.focus_kept_by_child()
+                {
+                    return None;
+                }
                 // Virtual / NonlinearVirtual : le focus va à une fenêtre
                 // descendante (un contrôle), qui reçoit son propre FocusIn.
                 // Le traiter rendait le focus au dialogue, qui le redonnait
@@ -2595,6 +2658,31 @@ impl X11Backend {
                 }
                 // Le focus quittait un descendant : celui-ci a son FocusOut.
                 if is_virtual_focus(e.detail) {
+                    return None;
+                }
+                // Le gestionnaire de fenêtres donne le focus à la fenêtre de
+                // premier niveau quand on clique dedans, alors que Winlux
+                // l'avait mis sur ce contrôle. Sous Windows, le contrôle le
+                // garde : le WM_KILLFOCUS refermait la liste déroulante d'une
+                // ComboBox juste après son ouverture, et le choix d'un
+                // élément à la souris restait sans effet (#1137).
+                let child = self.windows.get(&hwnd).is_some_and(|w| w.child);
+                if focus_taken_by_wm(e.detail, self.asked_focus, e.event, child) {
+                    let _ = self.conn.set_input_focus(
+                        x11rb::protocol::xproto::InputFocus::PARENT,
+                        e.event,
+                        0u32,
+                    );
+                    let _ = self.conn.flush();
+                    return None;
+                }
+                // Le focus passe de la fenêtre de premier niveau au contrôle
+                // qui le reprend (voir ci-dessus) : rien ne change côté Win32.
+                if e.detail == x11rb::protocol::xproto::NotifyDetail::INFERIOR
+                    && self.asked_focus != e.event
+                    && self.windows.get(&hwnd).is_some_and(|w| !w.child)
+                    && self.focus_kept_by_child()
+                {
                     return None;
                 }
                 // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
@@ -2647,6 +2735,13 @@ impl X11Backend {
                     }
                     return None;
                 }
+                // AltGr : sous Windows, Ctrl gauche + Alt droit. Vu comme Alt
+                // seul, AltGr+3 (« # ») déclenchait le raccourci Alt+3 de
+                // Notepad++ au lieu du caractère, et une autre combinaison
+                // le fermait (#1151).
+                if is_altgr_keysym(xkb.map(|(b, _, _, _)| b).or(base)) {
+                    return Some(self.altgr_events(hwnd, true));
+                }
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
@@ -2689,10 +2784,17 @@ impl X11Backend {
                 gui::raw_key(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let syms = self.key_syms(e.detail);
-                let vk = self
+                let xkb = self
                     .keyboard
                     .as_ref()
-                    .and_then(|k| k.translate(e.detail, e.state.into()))
+                    .and_then(|k| k.translate(e.detail, e.state.into()));
+                if is_altgr_keysym(
+                    xkb.map(|(b, _, _, _)| b)
+                        .or_else(|| syms.as_deref().and_then(base_keysym)),
+                ) {
+                    return Some(self.altgr_events(hwnd, false));
+                }
+                let vk = xkb
                     .and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
                     .or_else(|| {
                         syms.as_deref().and_then(|s| {
@@ -2724,6 +2826,38 @@ impl X11Backend {
         }
     }
 
+    /// AltGr enfoncé ou relâché : VK_CONTROL (Ctrl gauche) puis VK_MENU
+    /// (Alt droit, étendu), comme le pilote clavier de Windows. Le premier
+    /// message est rendu, le second suit dans le même lot.
+    fn altgr_events(&mut self, hwnd: usize, down: bool) -> PendingEvent {
+        for vk in [0x11, 0xA2, 0x12, 0xA5] {
+            gui::update_async_key_state(vk, down);
+        }
+        let message = if down { gui::WM_KEYDOWN } else { gui::WM_KEYUP };
+        let [first, second] = altgr_messages(down);
+        self.deferred_events.push(PendingEvent {
+            hwnd,
+            message,
+            wparam: second.0,
+            lparam: second.1,
+        });
+        PendingEvent {
+            hwnd,
+            message,
+            wparam: first.0,
+            lparam: first.1,
+        }
+    }
+
+    /// Vrai si le dernier SetFocus de Winlux visait un contrôle (fenêtre X
+    /// enfant) encore connu : c'est lui qui garde le focus Win32.
+    fn focus_kept_by_child(&self) -> bool {
+        self.by_xwin
+            .get(&self.asked_focus)
+            .and_then(|h| self.windows.get(h))
+            .is_some_and(|w| w.child && w.window == self.asked_focus)
+    }
+
     /// Vrai si `xwin` est le cadre (barre de menus) de `hwnd`.
     fn is_frame(&self, hwnd: usize, xwin: Window) -> bool {
         self.windows
@@ -2732,6 +2866,58 @@ impl X11Backend {
     }
 
     /// Fenêtre X qui porte le titre et la taille totale (gestionnaire).
+    /// Fenêtre X affichée (mappée et visible).
+    fn is_viewable(&self, xwin: Window) -> bool {
+        self.conn
+            .get_window_attributes(xwin)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE)
+    }
+
+    /// Demande au gestionnaire de passer la fenêtre au premier plan.
+    fn restack_above(&self, xwin: Window) {
+        let aux = ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+        let _ = self.conn.configure_window(xwin, &aux);
+    }
+
+    /// Relève les fenêtres affichées que possède `owner`, puis les leurs.
+    ///
+    /// WM_TRANSIENT_FOR est aussi reposé : openbox lit ce lien quand il
+    /// prend la boîte en charge, et une propriétaire pas encore affichée à
+    /// ce moment lui est inconnue. Le lien était alors perdu, et un clic sur
+    /// la fenêtre principale la repassait devant sa boîte (#1068).
+    fn raise_owned(&self, owner: usize) {
+        let mut todo = vec![owner];
+        let mut seen = 0;
+        while let Some(o) = todo.pop() {
+            seen += 1;
+            if seen > 64 {
+                break;
+            }
+            let owner_top = match self.windows.get(&o) {
+                Some(w) => Self::top_xwin(w),
+                None => continue,
+            };
+            for (&owned, _) in self.owners.iter().filter(|(_, &ow)| ow == o) {
+                if let Some(w) = self.windows.get(&owned) {
+                    let top = Self::top_xwin(w);
+                    let _ = self.conn.change_property32(
+                        x11rb::protocol::xproto::PropMode::REPLACE,
+                        top,
+                        AtomEnum::WM_TRANSIENT_FOR,
+                        AtomEnum::WINDOW,
+                        &[owner_top],
+                    );
+                    if self.is_viewable(top) {
+                        self.restack_above(top);
+                        todo.push(owned);
+                    }
+                }
+            }
+        }
+    }
+
     fn top_xwin(w: &XWin) -> Window {
         if w.frame != 0 {
             w.frame
@@ -3244,6 +3430,59 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn altgr_est_ctrl_gauche_plus_alt_droit() {
+        assert!(is_altgr_keysym(Some(0xFE03)));
+        assert!(is_altgr_keysym(Some(0xFF7E)));
+        assert!(!is_altgr_keysym(Some(0xFFE9))); // Alt_L
+        let [ctrl, alt] = altgr_messages(true);
+        assert_eq!(ctrl.0, 0x11);
+        assert_eq!(gui::sided_modifier(ctrl.0, ctrl.1), Some(0xA2));
+        assert_eq!(alt.0, 0x12);
+        assert_eq!(gui::sided_modifier(alt.0, alt.1), Some(0xA5));
+        let [first, second] = altgr_messages(false);
+        assert_eq!((first.0, second.0), (0x12, 0x11));
+        assert!(first.1 & (1 << 31) != 0 && second.1 & (1 << 31) != 0);
+        // Ctrl et Alt enfoncés : un raccourci Alt+3 (Notepad++) ne répond
+        // pas à AltGr+3, qui tape « # » sur un clavier français (#1151).
+        let alt_3 = [crate::dlls::accel::Accel {
+            virt: 0x01 | 0x10, // FVIRTKEY | FALT
+            key: 0x33,
+            cmd: 42,
+        }];
+        let mods = (false, true, true);
+        assert_eq!(
+            crate::dlls::accel::match_accel(&alt_3, gui::WM_KEYDOWN, 0x33, mods),
+            None
+        );
+        assert_eq!(
+            crate::dlls::accel::match_accel(&alt_3, gui::WM_KEYDOWN, 0x33, (false, false, true)),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn police_par_defaut_de_wx_rendue_en_segoe_ui() {
+        assert_eq!(xft_family("fixed"), "Segoe UI");
+        assert_eq!(xft_family(""), "Segoe UI");
+        assert_eq!(xft_family("MS Shell Dlg 2"), "Segoe UI");
+        assert_eq!(xft_family("Consolas"), "Consolas");
+    }
+
+    #[test]
+    fn clic_du_gestionnaire_ne_retire_pas_le_focus_au_controle() {
+        use x11rb::protocol::xproto::NotifyDetail;
+        // Le gestionnaire active la fenêtre de premier niveau : le focus
+        // remonte du contrôle que Winlux avait choisi, qui le garde.
+        assert!(focus_taken_by_wm(NotifyDetail::ANCESTOR, 7, 7, true));
+        // Le programme a lui-même donné le focus ailleurs.
+        assert!(!focus_taken_by_wm(NotifyDetail::ANCESTOR, 3, 7, true));
+        // Le focus part vers une autre fenêtre : vraie perte de focus.
+        assert!(!focus_taken_by_wm(NotifyDetail::NONLINEAR, 7, 7, true));
+        // Fenêtre de premier niveau : pas concernée.
+        assert!(!focus_taken_by_wm(NotifyDetail::ANCESTOR, 7, 7, false));
+    }
 
     #[test]
     fn pinch_becomes_ctrl_wheel_steps() {
@@ -4252,6 +4491,8 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
+        self.owners.remove(&hwnd);
+        self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
         self.menu_bars.remove(&hwnd);
         self.overlay.forget(hwnd);
@@ -4276,6 +4517,12 @@ impl gui::GuiBackend for X11Backend {
                 let _ = self.conn.map_window(top);
             } else {
                 let _ = self.conn.unmap_window(top);
+            }
+            if show {
+                // Une propriétaire affichée après ses boîtes (VLC ouvre
+                // « Vie privée / Réseau » avant sa fenêtre principale) passe
+                // dessous ses fenêtres possédées, comme sous Windows (#1068).
+                self.raise_owned(hwnd);
             }
             let _ = self.conn.flush();
         }
@@ -4424,6 +4671,67 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::WM_TRANSIENT_FOR,
             AtomEnum::WINDOW,
             &[owner_top],
+        );
+        self.owners.insert(hwnd, owner);
+        // Propriétaire donné après l'affichage (Qt 5, GWLP_HWNDPARENT) :
+        // la boîte passe tout de suite au-dessus.
+        if self.is_viewable(top) {
+            self.restack_above(top);
+        }
+        let _ = self.conn.flush();
+    }
+
+    fn set_dialog_type(&mut self, hwnd: usize) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        let top = Self::top_xwin(w);
+        let atom = |name: &[u8]| {
+            self.conn
+                .intern_atom(false, name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.atom)
+        };
+        if let (Some(kind), Some(dialog)) = (
+            atom(b"_NET_WM_WINDOW_TYPE"),
+            atom(b"_NET_WM_WINDOW_TYPE_DIALOG"),
+        ) {
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                top,
+                kind,
+                AtomEnum::ATOM,
+                &[dialog],
+            );
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn set_no_initial_focus(&mut self, hwnd: usize) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        if w.child {
+            return;
+        }
+        let top = Self::top_xwin(w);
+        // _NET_WM_USER_TIME = 0 (EWMH) : ne pas donner le focus à
+        // l'affichage. La liste d'auto-complétion de Notepad++ prenait sinon
+        // toutes les frappes destinées à l'éditeur (#1127).
+        let Ok(Ok(atom)) = self
+            .conn
+            .intern_atom(false, b"_NET_WM_USER_TIME")
+            .map(|c| c.reply())
+        else {
+            return;
+        };
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            top,
+            atom.atom,
+            AtomEnum::CARDINAL,
+            &[0],
         );
         let _ = self.conn.flush();
     }
@@ -4597,6 +4905,7 @@ impl gui::GuiBackend for X11Backend {
             let aux =
                 ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
             let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
+            self.raise_owned(hwnd);
             let _ = self.conn.flush();
         }
     }
@@ -4609,6 +4918,7 @@ impl gui::GuiBackend for X11Backend {
         } else {
             return;
         };
+        self.asked_focus = focus;
         let _ = self
             .conn
             .set_input_focus(x11rb::protocol::xproto::InputFocus::PARENT, focus, 0u32);

@@ -358,7 +358,7 @@ static TEXTURE2D_VTABLE: Texture2DVTable = Texture2DVTable {
 
 pub(crate) fn create_backbuffer_texture(gl_tex: gl::GLuint, w: u32, h: u32) -> *mut Texture2D {
     Box::into_raw(Box::new(Texture2D {
-        vtable: &TEXTURE2D_VTABLE,
+        vtable: tex2d_vt(),
         ref_count: AtomicU32::new(1),
         desc: D3D11Texture2DDesc {
             width: w,
@@ -431,7 +431,7 @@ fn create_texture2d(
     }
 
     let t = Box::into_raw(Box::new(Texture2D {
-        vtable: &TEXTURE2D_VTABLE,
+        vtable: tex2d_vt(),
         ref_count: AtomicU32::new(1),
         desc,
         gl_texture: tex,
@@ -788,7 +788,7 @@ fn create_buffer(desc: &D3D11BufferDesc, initial: *const D3D11SubresourceData) -
     }
 
     Box::into_raw(Box::new(Buffer {
-        vtable: &BUFFER_VTABLE,
+        vtable: buffer_vt(),
         ref_count: AtomicU32::new(1),
         desc: *desc,
         gl_buffer: buf,
@@ -887,19 +887,50 @@ unsafe extern "win64" fn view_get_desc(this: *mut SimpleComObj, out: *mut c_void
     }
 }
 
+// Fonction win64 de la méthode, que l'objet porte sa table win64 ou sa
+// table x86 (programme 32 bits, #1090).
 unsafe fn com_addref(p: *mut c_void) -> u32 {
     unsafe {
-        let vt = *(p as *const *const usize);
-        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(1));
+        let f: unsafe extern "win64" fn(*mut c_void) -> u32 =
+            std::mem::transmute(crate::dlls::legacy_com::method(p as usize, 1));
         f(p)
     }
 }
 unsafe fn com_release(p: *mut c_void) -> u32 {
     unsafe {
-        let vt = *(p as *const *const usize);
-        let f: unsafe extern "win64" fn(*mut c_void) -> u32 = std::mem::transmute(*vt.add(2));
+        let f: unsafe extern "win64" fn(*mut c_void) -> u32 =
+            std::mem::transmute(crate::dlls::legacy_com::method(p as usize, 2));
         f(p)
     }
+}
+
+// Tables des objets : win64, ou passerelles x86 dans un programme 32 bits (#1090).
+fn tex2d_vt() -> *const Texture2DVTable {
+    crate::dlls::dx11_x86::abi(&TEXTURE2D_VTABLE, "dlls::d3d11", "Texture2DVTable")
+}
+fn buffer_vt() -> *const BufferVTable {
+    crate::dlls::dx11_x86::abi(&BUFFER_VTABLE, "dlls::d3d11", "BufferVTable")
+}
+fn simple_vt() -> *const SimpleComVTable {
+    crate::dlls::dx11_x86::abi(&SIMPLE_COM_VTABLE, "dlls::d3d11", "SimpleComVTable")
+}
+fn view_vt() -> *const SimpleComVTable {
+    // Même structure que SIMPLE_COM_VTABLE, autre table : clé distincte.
+    crate::dlls::dx11_x86::abi_named(
+        &VIEW_COM_VTABLE,
+        "dlls::d3d11",
+        "SimpleComVTable",
+        "ID3D11View",
+    )
+}
+fn context_vt() -> *const DeviceContextVTable {
+    crate::dlls::dx11_x86::abi(&DEVICE_CONTEXT_VTABLE, "dlls::d3d11", "DeviceContextVTable")
+}
+fn device_vt() -> *const DeviceVTable {
+    crate::dlls::dx11_x86::abi(&DEVICE_VTABLE, "dlls::d3d11", "DeviceVTable")
+}
+fn dxgi_device_vt() -> *const DxgiDeviceVTable {
+    crate::dlls::dx11_x86::abi(&DXGI_DEVICE_VTABLE, "dlls::d3d11", "DxgiDeviceVTable")
 }
 
 #[derive(Clone, Copy)]
@@ -919,7 +950,7 @@ unsafe fn attach_view(
     desc: *const c_void,
 ) {
     unsafe {
-        (*view).vtable = &VIEW_COM_VTABLE;
+        (*view).vtable = view_vt();
         if !resource.is_null() {
             com_addref(resource);
             (*view).view_resource = resource;
@@ -1086,19 +1117,16 @@ unsafe fn vtable_ptr(p: *const c_void) -> *const c_void {
 }
 
 unsafe fn as_buffer(p: *mut c_void) -> Option<*mut Buffer> {
-    (vtable_ptr(p) == &BUFFER_VTABLE as *const BufferVTable as *const c_void)
-        .then_some(p as *mut Buffer)
+    (vtable_ptr(p) == buffer_vt() as *const c_void).then_some(p as *mut Buffer)
 }
 
 unsafe fn as_texture2d(p: *mut c_void) -> Option<*mut Texture2D> {
-    (vtable_ptr(p) == &TEXTURE2D_VTABLE as *const Texture2DVTable as *const c_void)
-        .then_some(p as *mut Texture2D)
+    (vtable_ptr(p) == tex2d_vt() as *const c_void).then_some(p as *mut Texture2D)
 }
 
 unsafe fn as_simple(p: *mut c_void) -> Option<*mut SimpleComObj> {
     let vt = vtable_ptr(p);
-    (vt == &SIMPLE_COM_VTABLE as *const SimpleComVTable as *const c_void
-        || vt == &VIEW_COM_VTABLE as *const SimpleComVTable as *const c_void)
+    (vt == simple_vt() as *const c_void || vt == view_vt() as *const c_void)
         .then_some(p as *mut SimpleComObj)
 }
 
@@ -1235,7 +1263,7 @@ fn create_render_target_view(resource: *mut c_void, desc: *const c_void) -> *mut
     }
 
     Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: fbo,
         resource_tex: tex_gl,
@@ -1396,7 +1424,7 @@ fn create_shader_object(
     let shader = shader.unwrap_or(0);
 
     let obj = Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: shader,
         resource_tex: 0,
@@ -3130,7 +3158,7 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
 
 fn create_device_context() -> *mut DeviceContext {
     Box::into_raw(Box::new(DeviceContext {
-        vtable: &DEVICE_CONTEXT_VTABLE,
+        vtable: context_vt(),
         ref_count: AtomicU32::new(1),
         state: Mutex::new(DeviceContextState::default()),
         device: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
@@ -3674,7 +3702,7 @@ unsafe extern "win64" fn dev_create_srv(
         return E_INVALIDARG;
     }
     let view = Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: 0,
@@ -3712,7 +3740,7 @@ unsafe extern "win64" fn dev_create_uav(
     }
     let tex = as_texture2d(resource).map_or(0, |t| (*t).gl_texture);
     let view = Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: tex,
@@ -3753,7 +3781,7 @@ unsafe extern "win64" fn dev_create_dsv(
         return E_INVALIDARG;
     }
     let view = Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: 0,
@@ -3904,7 +3932,7 @@ unsafe extern "win64" fn dev_create_cl(_: *mut Device, out: *mut *mut c_void) ->
 
 fn create_dummy_com_obj() -> *mut c_void {
     Box::into_raw(Box::new(SimpleComObj {
-        vtable: &SIMPLE_COM_VTABLE,
+        vtable: simple_vt(),
         ref_count: AtomicU32::new(1),
         gl_id: 0,
         resource_tex: 0,
@@ -4155,13 +4183,13 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
     dxgi::ensure_offscreen_context();
     let ctx = create_device_context();
     let dev = Box::into_raw(Box::new(Device {
-        vtable: &DEVICE_VTABLE,
+        vtable: device_vt(),
         ref_count: AtomicU32::new(1),
         context: ctx,
         feature_level: fl,
         flags,
         dxgi: DxgiDevice {
-            vtable: &DXGI_DEVICE_VTABLE,
+            vtable: dxgi_device_vt(),
             owner: std::ptr::null_mut(),
             frame_latency: AtomicU32::new(3),
         },
@@ -4223,7 +4251,14 @@ pub unsafe extern "win64" fn D3D11CreateDeviceAndSwapChain(
     }
 
     if swap_chain_desc != 0 && !swap_chain.is_null() {
-        let desc = &*(swap_chain_desc as *const DxgiSwapChainDesc);
+        // DXGI_SWAP_CHAIN_DESC x86 : 60 octets, HWND sur 4 (#1090).
+        let x86_desc;
+        let desc = if crate::dlls::legacy_com::x86() {
+            x86_desc = crate::dlls::dx11_x86::swap_desc_in(swap_chain_desc);
+            &x86_desc
+        } else {
+            &*(swap_chain_desc as *const DxgiSwapChainDesc)
+        };
         let dev_ptr = if !device.is_null() {
             *device as *mut c_void
         } else {

@@ -62,8 +62,23 @@ pub unsafe extern "win64" fn MiniDumpWriteDump(
 ) -> i32 {
     0
 }
-pub unsafe extern "win64" fn ImageNtHeader(_base: usize) -> usize {
-    0
+/// ImageNtHeader : adresse des en-têtes NT (« PE\0\0 ») d'une image ou
+/// d'un fichier projeté en mémoire, ou NULL. Notepad++ y lit le type de
+/// machine de chaque extension avant de la charger : NULL donnait « Cannot
+/// load 64-bit plugin » pour chacune (#1152).
+pub unsafe extern "win64" fn ImageNtHeader(base: usize) -> usize {
+    if base == 0 || std::ptr::read_unaligned(base as *const u16) != 0x5A4D {
+        return 0;
+    }
+    let lfanew = std::ptr::read_unaligned((base + 0x3C) as *const u32) as usize;
+    if lfanew == 0 || lfanew > 0x1000_0000 {
+        return 0;
+    }
+    let nt = base + lfanew;
+    if std::ptr::read_unaligned(nt as *const u32) != 0x0000_4550 {
+        return 0;
+    }
+    nt
 }
 /// Chemin de recherche des symboles : Winlux ne charge pas de .pdb.
 pub unsafe extern "win64" fn SymSetSearchPath(_proc: usize, _path: *const u8) -> i32 {
@@ -164,5 +179,31 @@ pub fn exports() -> crate::dlls::Exports {
         "ImageNtHeader" => fn ImageNtHeader,
         "SymGetModuleInfo64" => fn SymGetModuleInfo64,
         "SymGetModuleInfoW64" => fn SymGetModuleInfoW64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn en_tetes_nt_d_une_image_projetee() {
+        // #1152 : Notepad++ lit Machine dans les en-têtes rendus ici.
+        let mut img = vec![0u8; 0x200];
+        img[0] = b'M';
+        img[1] = b'Z';
+        img[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        img[0x80..0x84].copy_from_slice(b"PE\0\0");
+        img[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        let base = img.as_ptr() as usize;
+        let nt = unsafe { ImageNtHeader(base) };
+        assert_eq!(nt, base + 0x80);
+        let machine = unsafe { std::ptr::read_unaligned((nt + 4) as *const u16) };
+        assert_eq!(machine, 0x8664);
+        img[0x80] = b'X';
+        assert_eq!(unsafe { ImageNtHeader(img.as_ptr() as usize) }, 0);
+        img[0] = 0;
+        assert_eq!(unsafe { ImageNtHeader(img.as_ptr() as usize) }, 0);
+        assert_eq!(unsafe { ImageNtHeader(0) }, 0);
     }
 }

@@ -737,10 +737,21 @@ pub fn get_async_key_state(vk: usize) -> i16 {
     (((if down { 1u16 } else { 0 }) << 15) | if pressed { 1 } else { 0 }) as i16
 }
 
+/// Boutons de la souris (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1/2) :
+/// leur état suit les messages de souris, pas le focus clavier.
+fn is_mouse_button(vk: usize) -> bool {
+    matches!(vk, 1 | 2 | 4 | 5 | 6)
+}
+
+/// Touches relâchées à la perte du focus clavier. Les boutons de la souris
+/// restent : le clic qui donne le focus (SetFocus de la liste pendant son
+/// WM_LBUTTONDOWN) est toujours tenu, et DragDetect le lit (#1138).
 fn clear_thread_keyboard_state(owner: &ThreadId) {
     if let Some(keys) = lock(thread_keyboard_states()).get_mut(owner) {
-        for byte in keys {
-            *byte &= 0x01; // conserve les états de bascule
+        for (vk, byte) in keys.iter_mut().enumerate() {
+            if !is_mouse_button(vk) {
+                *byte &= 0x01; // conserve les états de bascule
+            }
         }
     }
 }
@@ -757,8 +768,10 @@ pub fn clear_current_thread_keyboard_state() {
 
 pub fn clear_async_key_down_states() {
     let mut state = lock(async_keyboard_state());
-    for byte in &mut state.keys {
-        *byte &= 0x01;
+    for (vk, byte) in state.keys.iter_mut().enumerate() {
+        if !is_mouse_button(vk) {
+            *byte &= 0x01;
+        }
     }
 }
 
@@ -994,6 +1007,57 @@ pub struct DcState {
     pub screen: bool,
 }
 
+/// Pixels d'une DIB section : tampon à nous, ou vue d'une section
+/// (CreateDIBSection avec hSection, #996) que l'appelant partage avec un
+/// autre processus. La vue est rendue à la destruction de la bitmap.
+pub enum DibBits {
+    Owned(Vec<u8>),
+    /// `base` : adresse rendue par MapViewOfFile, `ptr` : premier pixel.
+    View {
+        base: usize,
+        ptr: *mut u8,
+        len: usize,
+    },
+}
+
+// La vue appartient à la bitmap, protégée par le verrou des objets GDI.
+unsafe impl Send for DibBits {}
+
+impl std::ops::Deref for DibBits {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            DibBits::Owned(v) => v,
+            DibBits::View { ptr, len, .. } => unsafe { std::slice::from_raw_parts(*ptr, *len) },
+        }
+    }
+}
+
+impl std::ops::DerefMut for DibBits {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self {
+            DibBits::Owned(v) => v,
+            DibBits::View { ptr, len, .. } => unsafe { std::slice::from_raw_parts_mut(*ptr, *len) },
+        }
+    }
+}
+
+impl Clone for DibBits {
+    fn clone(&self) -> Self {
+        DibBits::Owned(self.to_vec())
+    }
+}
+
+impl Drop for DibBits {
+    fn drop(&mut self) {
+        if let DibBits::View { base, .. } = self {
+            unsafe {
+                crate::dlls::mmap::unmap_view_of_file(*base);
+            }
+        }
+    }
+}
+
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
 #[derive(Clone)]
 pub enum GdiObject {
@@ -1010,7 +1074,7 @@ pub enum GdiObject {
         width: usize,
         height: usize,
         pixels: Vec<u32>,
-        dib_bits: Option<Vec<u8>>,
+        dib_bits: Option<DibBits>,
         dib_bit_count: u16,
         dib_stride: usize,
         top_down: bool,
@@ -1702,7 +1766,20 @@ pub fn create_dib_section_with_palette(
     height: i32,
     bit_count: u16,
     top_down: bool,
+    palette: Vec<u32>,
+) -> Option<(usize, *mut u8)> {
+    create_dib_section_in(width, height, bit_count, top_down, palette, None)
+}
+
+/// Comme `create_dib_section_with_palette`, les pixels pouvant vivre dans
+/// une section (`hSection`, `offset`) projetée pour la durée de la bitmap.
+pub fn create_dib_section_in(
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    top_down: bool,
     mut palette: Vec<u32>,
+    section: Option<(usize, u32)>,
 ) -> Option<(usize, *mut u8)> {
     if width <= 0 || height <= 0 || !matches!(bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
         return None;
@@ -1720,7 +1797,32 @@ pub fn create_dib_section_with_palette(
     }
     let stride = (width as usize * bit_count as usize).div_ceil(32) * 4;
     let bytes = stride.checked_mul(height as usize)?;
-    let mut dib_bits = vec![0u8; bytes];
+    let mut dib_bits = match section {
+        None => DibBits::Owned(vec![0u8; bytes]),
+        Some((handle, offset)) => {
+            // FILE_MAP_READ | FILE_MAP_WRITE ; le contenu de la section est
+            // gardé tel quel, comme sous Windows. L'offset (multiple de 4)
+            // est ramené à la granularité d'allocation de MapViewOfFile.
+            let skip = (offset % 0x1_0000) as usize;
+            let base = unsafe {
+                crate::dlls::mmap::map_view_of_file(
+                    handle,
+                    0x6,
+                    0,
+                    offset - skip as u32,
+                    bytes + skip,
+                )
+            };
+            if base == 0 {
+                return None;
+            }
+            DibBits::View {
+                base,
+                ptr: (base + skip) as *mut u8,
+                len: bytes,
+            }
+        }
+    };
     let bits_ptr = dib_bits.as_mut_ptr();
     {
         let mut palettes = lock(dib_palettes());
@@ -1831,7 +1933,7 @@ fn set_bitmap_color(
     width: usize,
     height: usize,
     pixels: &mut [u32],
-    dib_bits: &mut Option<Vec<u8>>,
+    dib_bits: &mut Option<DibBits>,
     dib_bit_count: u16,
     dib_stride: usize,
     top_down: bool,
@@ -2688,6 +2790,12 @@ pub trait GuiBackend: Send {
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
+    /// Fenêtre possédée avec barre de titre : boîte de dialogue pour le
+    /// gestionnaire (_NET_WM_WINDOW_TYPE_DIALOG).
+    fn set_dialog_type(&mut self, _hwnd: usize) {}
+    /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
+    /// gestionnaire ne doit pas lui donner le focus en l'affichant.
+    fn set_no_initial_focus(&mut self, _hwnd: usize) {}
     /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
     /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
     /// gestionnaire de fenêtres.
@@ -2873,6 +2981,47 @@ fn activate_app(active: bool) {
     }
 }
 
+/// Fenêtre de premier niveau désactivée (propriétaire d'une boîte modale) :
+/// sous Windows, ni elle ni ses filles ne reçoivent clic ou clavier. Une
+/// fille seule désactivée garde le comportement des contrôles.
+fn input_disabled(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    let map = lock(windows());
+    let mut h = hwnd;
+    for _ in 0..64 {
+        let Some(w) = map.get(&h) else {
+            return false;
+        };
+        if w.style & WS_CHILD == 0 || w.parent == 0 {
+            return w.style & WS_DISABLED != 0;
+        }
+        h = w.parent;
+    }
+    false
+}
+
+/// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
+/// active la plus récente (la boîte modale qui l'a désactivée).
+fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    let map = lock(windows());
+    let mut top = hwnd;
+    for _ in 0..64 {
+        match map.get(&top) {
+            Some(w) if w.style & WS_CHILD != 0 && w.parent != 0 => top = w.parent,
+            _ => break,
+        }
+    }
+    map.iter()
+        .filter(|(&h, w)| {
+            h != top && w.parent == top && w.visible && w.style & (WS_CHILD | WS_DISABLED) == 0
+        })
+        .map(|(&h, _)| h)
+        .max()
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
@@ -2888,6 +3037,27 @@ pub fn pump_backend() {
         }
     }
     for e in events {
+        // Fenêtre désactivée par une boîte modale : ni clic ni focus. Un
+        // clic ou une activation ramène la boîte au premier plan, comme sous
+        // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
+        // la boîte Tonalité y laissait un geste à moitié fait, et la piste
+        // générée n'était plus jamais redessinée (#1120).
+        let mouse =
+            (0x0200..=0x020E).contains(&e.message) || (0x00A0..=0x00AD).contains(&e.message);
+        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
+            let press = matches!(
+                e.message,
+                0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
+            );
+            if press || e.message == WM_SETFOCUS {
+                if let Some(popup) = enabled_owned_popup(e.hwnd) {
+                    let mut b = lock(backend());
+                    b.raise_window(popup);
+                    b.set_focus(popup);
+                }
+            }
+            continue;
+        }
         if e.message == WM_SETFOCUS {
             activate_app(true);
             let change = set_focus_from_backend(e.hwnd);
@@ -3635,9 +3805,30 @@ pub fn post_quit(q: &Queue, code: i32) {
 
 // ---------- Défaut ----------
 
+std::thread_local! {
+    /// WM_NCCALCSIZE est passé à DefWindowProc (cadre standard demandé).
+    static DEFAULT_NCCALCSIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Indicateur « WM_NCCALCSIZE laissé à DefWindowProc » du thread : remis à
+/// zéro avant l'envoi du message, lu après (#1131).
+pub fn reset_default_nccalcsize() {
+    DEFAULT_NCCALCSIZE.with(|c| c.set(false));
+}
+pub fn default_nccalcsize_seen() -> bool {
+    DEFAULT_NCCALCSIZE.with(|c| c.get())
+}
+
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     match message {
+        // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
+        // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le
+        // rectangle proposé reste donc la zone cliente.
+        0x0083 => {
+            DEFAULT_NCCALCSIZE.with(|c| c.set(true));
+            0
+        }
         // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH : le titre de la fenêtre,
         // en A ou en W selon la fonction qui a envoyé le message.
         0x000C => {
@@ -3735,6 +3926,38 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             }
             0
         }
+        // Menu contextuel (#1139) : DefWindowProc le demande au relâchement
+        // du bouton droit (coordonnées écran), à Maj+F10 et à la touche
+        // Applications (-1 : au clavier). Une fenêtre enfant qui ne le traite
+        // pas le passe à son parent.
+        WM_RBUTTONUP => {
+            let x = lparam as u32 as u16 as i16 as i32;
+            let y = (lparam as u32 >> 16) as u16 as i16 as i32;
+            let (ox, oy) = screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            send_context_menu(hwnd, hwnd, pack_point(x + ox, y + oy));
+            0
+        }
+        0x00A5 => {
+            // WM_NCRBUTTONUP : déjà en coordonnées écran.
+            send_context_menu(hwnd, hwnd, lparam);
+            0
+        }
+        WM_KEYDOWN | 0x0104 if wparam == 0x79 && get_key_state(0x10) < 0 => {
+            send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        0x0101 if wparam == 0x5D => {
+            send_context_menu(hwnd, hwnd, -1);
+            0
+        }
+        WM_CONTEXTMENU => {
+            let child = window_style(hwnd).is_some_and(|s| s & 0x4000_0000 != 0);
+            let parent = window_parent(hwnd).unwrap_or(0);
+            if child && parent != 0 {
+                send_context_menu(parent, wparam, lparam);
+            }
+            0
+        }
         // WM_NCCREATE : accepter la création (FALSE l'annulerait).
         0x0081 => 1,
         // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
@@ -3753,6 +3976,16 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
         }
         _ => 0,
     }
+}
+
+pub const WM_CONTEXTMENU: u32 = 0x007B;
+
+fn pack_point(x: i32, y: i32) -> isize {
+    (((y as u16 as u32) << 16) | x as u16 as u32) as i32 as isize
+}
+
+fn send_context_menu(target: usize, hwnd: usize, lparam: isize) {
+    unsafe { crate::dlls::user32::send_message_w(target, WM_CONTEXTMENU, hwnd, lparam) };
 }
 
 // ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
@@ -4391,6 +4624,21 @@ mod tests {
         assert_eq!(mouse_button_transition(0x0200, 0), None);
     }
 
+    /// Le clic qui donne le focus reste tenu : SetFocus pendant
+    /// WM_LBUTTONDOWN ne relâche pas VK_LBUTTON (DragDetect, #1138).
+    #[test]
+    fn perte_du_focus_garde_les_boutons_de_souris() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        observe_key_message(&Msg::new(0, 0x0201, 1, 0));
+        update_thread_key_state(0x41, true);
+        clear_current_thread_keyboard_state();
+        clear_async_key_down_states();
+        assert!(get_key_state(1) < 0, "VK_LBUTTON encore pressé");
+        assert!(get_key_state(0x41) >= 0, "la touche A est relâchée");
+        observe_key_message(&Msg::new(0, 0x0202, 0, 0));
+        assert!(get_key_state(1) >= 0);
+    }
+
     /// Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis : Ctrl+O sans
     /// côté gauche/droit restait une simple frappe de « o ».
     #[test]
@@ -4947,6 +5195,31 @@ mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn une_fenetre_desactivee_par_une_boite_modale_renvoie_a_la_boite() {
+        // #1120 : la fenêtre principale d'Audacity, désactivée par la boîte
+        // Tonalité, ne doit recevoir ni clic ni focus.
+        let main = fenetre_de_test();
+        let boite = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(boite, main);
+        set_window_parent(fille, main);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert!(!input_disabled(fille));
+        set_window_style(main, 0x0800_0000); // WS_DISABLED (EnableWindow FALSE)
+        assert!(input_disabled(main));
+        assert!(
+            input_disabled(fille),
+            "une fille suit sa fenêtre principale"
+        );
+        assert!(!input_disabled(boite));
+        assert_eq!(enabled_owned_popup(fille), Some(boite));
+        set_window_style(main, 0);
+        for h in [fille, boite, main] {
+            destroy_window(h);
+        }
     }
 
     #[test]

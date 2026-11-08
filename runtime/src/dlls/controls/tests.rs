@@ -9,6 +9,8 @@ static SERIAL: StdMutex<()> = StdMutex::new(());
 static NOTIFY: StdMutex<Vec<i32>> = StdMutex::new(Vec::new());
 /// URL des NM_CLICK de SysLink reçus par la fenêtre parente.
 static LINK_URLS: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
+/// WM_CONTEXTMENU reçus par la fenêtre parente : (fenêtre, lParam).
+static CONTEXT: StdMutex<Vec<(usize, isize)>> = StdMutex::new(Vec::new());
 /// WM_DRAWITEM reçus par la fenêtre parente : (type de contrôle, élément, donnée).
 static DRAWN: StdMutex<Vec<(u32, u32, usize)>> = StdMutex::new(Vec::new());
 
@@ -28,11 +30,19 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
         }
         return 1;
     }
+    if msg == 0x007B {
+        CONTEXT.lock().unwrap().push((wp, lp));
+        return 0;
+    }
     if msg == 0x004E && lp != 0 {
-        let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
+        let code = unsafe { ((lp as *const u8).add(16) as *const i32).read_unaligned() };
         NOTIFY.lock().unwrap().push(code);
+        if code == -176 {
+            // LVN_ENDLABELEDITW : nouveau nom accepté.
+            return 1;
+        }
         if code == -2
-            && crate::dlls::gui::window_class(unsafe { *(lp as *const usize) })
+            && crate::dlls::gui::window_class(unsafe { (lp as *const usize).read_unaligned() })
                 .is_some_and(|c| c.eq_ignore_ascii_case("SysLink"))
         {
             // NMLINK : szUrl à 24 + 112.
@@ -1507,10 +1517,221 @@ fn colonnes_ajustees_jamais_negatives_ni_chevauchees() {
     sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
     sendw(lv, 0x101E, 0, -1);
     assert!(sendw(lv, 0x101D, 0, 0) > w0, "ajustée au texte de la ligne");
-    sendw(lv, 0x101E, 1, -2);
+    // Comme la macro ListView_SetColumnWidth : MAKELPARAM(-2, 0) = 0xFFFE.
+    sendw(lv, 0x101E, 1, 0xFFFE);
     assert_eq!(
         sendw(lv, 0x101D, 1, 0),
         w1,
         "colonne vide : ajustée à l'en-tête"
     );
+}
+
+#[test]
+fn glisser_depuis_une_liste_ou_une_arborescence() {
+    // #1138 : FileZilla (wxWidgets) lance DoDragDrop sur LVN_BEGINDRAG ;
+    // sans cette notification, tirer un fichier ne faisait que le
+    // sélectionner.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 54, (0, 0, 300, 200));
+    let t = w("Nom");
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 200,
+        text: t.as_ptr(),
+        text_max: 0,
+        sub_item: 0,
+    };
+    sendw(lv, 0x1061, 0, &mut col as *mut LvColumnW as isize);
+    let name = w("rapport.txt");
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 0,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: name.as_ptr(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
+    let y = (0..150)
+        .find(|&y| {
+            let mut hit = [10i32, y, 0, -1, 0, 0];
+            sendw(lv, 0x1012, 0, hit.as_mut_ptr() as isize) == 0
+        })
+        .expect("ligne 0 visible");
+    let at = ((y as isize) << 16) | 10;
+    // Pointeur déplacé de 20 px bouton tenu : LVN_BEGINDRAG, pas de NM_CLICK.
+    notify_codes();
+    unsafe { user32::post_message_w(lv, 0x0200, 1, ((y as isize + 20) << 16) | 30) };
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-109), "LVN_BEGINDRAG : {codes:?}");
+    assert!(!codes.contains(&-2), "pas de NM_CLICK : {codes:?}");
+    // Simple clic : NM_CLICK, pas de glisser.
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-2) && !codes.contains(&-109), "{codes:?}");
+    // Déplacement sous le seuil (SM_CXDRAG) : toujours un clic.
+    unsafe { user32::post_message_w(lv, 0x0200, 1, ((y as isize) << 16) | 11) };
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-2) && !codes.contains(&-109), "{codes:?}");
+    gui::destroy_window(p);
+
+    // Arborescence : TVN_BEGINDRAGW.
+    let p = parent_window();
+    let tv = child(p, "SysTreeView32", "", 0x7, 55, (0, 0, 200, 200));
+    let h = tv_insert(tv, 0xFFFF_FFFF_FFFF_0000, "Documents", 1);
+    let mut r = [0i32; 4];
+    unsafe { *(r.as_mut_ptr() as *mut usize) = h };
+    assert_eq!(sendw(tv, 0x1104, 1, r.as_mut_ptr() as isize), 1);
+    let (x, y) = (100, (r[1] + r[3]) / 2);
+    notify_codes();
+    unsafe { user32::post_message_w(tv, 0x0200, 1, ((y as isize + 30) << 16) | x as isize) };
+    sendw(tv, WM_LBUTTONDOWN, 1, ((y as isize) << 16) | x as isize);
+    let codes = notify_codes();
+    assert!(codes.contains(&-456), "TVN_BEGINDRAGW : {codes:?}");
+    gui::destroy_window(p);
+}
+
+#[test]
+fn clic_droit_menu_contextuel_et_renommage_dans_une_liste() {
+    // #1139 : FileZilla attend NM_RCLICK puis WM_CONTEXTMENU sur un clic
+    // droit, et renomme par LVM_EDITLABEL (LVN_BEGIN/ENDLABELEDIT).
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1 | 0x200, 56, (0, 0, 300, 200));
+    let t = w("Nom");
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 200,
+        text: t.as_ptr(),
+        text_max: 0,
+        sub_item: 0,
+    };
+    sendw(lv, 0x1061, 0, &mut col as *mut LvColumnW as isize);
+    for (i, n) in ["essai.txt", "retour.txt"].iter().enumerate() {
+        let name = w(n);
+        let mut it = LvItemW {
+            mask: 0x1,
+            item: i as i32,
+            sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            text: name.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 0,
+        };
+        sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
+    }
+    let y = (0..150)
+        .find(|&y| {
+            let mut hit = [10i32, y, 0, -1, 0, 0];
+            sendw(lv, 0x1012, 0, hit.as_mut_ptr() as isize) == 1
+        })
+        .expect("ligne 1 visible");
+    notify_codes();
+    CONTEXT.lock().unwrap().clear();
+    let at = ((y as isize) << 16) | 10;
+    sendw(lv, 0x0204, 2, at);
+    sendw(lv, 0x0205, 0, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-5), "NM_RCLICK : {codes:?}");
+    // LVM_GETITEMSTATE(1, LVIS_SELECTED)
+    assert_eq!(sendw(lv, 0x102C, 1, 0x2), 0x2, "ligne visée sélectionnée");
+    let menus = std::mem::take(&mut *CONTEXT.lock().unwrap());
+    assert_eq!(menus.len(), 1, "un seul WM_CONTEXTMENU : {menus:?}");
+    assert_eq!(menus[0].0, lv);
+    let origin = gui::screen_rect(lv).unwrap();
+    assert_eq!((menus[0].1 >> 16) as i16 as i32, y + origin.top);
+    // LVM_GETITEMRECT (LVIR_BOUNDS) : où 7-Zip ouvre le menu au clavier.
+    let mut r = [0i32; 4];
+    assert_eq!(sendw(lv, 0x100E, 1, r.as_mut_ptr() as isize), 1);
+    assert!(r[1] <= y && y < r[3] && r[2] > r[0], "{r:?}");
+    // Touche Applications : WM_CONTEXTMENU au clavier (lParam = -1),
+    // remonté au parent par DefWindowProc.
+    sendw(lv, 0x0101, 0x5D, 0);
+    assert_eq!(*CONTEXT.lock().unwrap(), vec![(lv, -1)]);
+    // Renommage en place.
+    let edit = sendw(lv, 0x1076, 1, 0) as usize;
+    assert_ne!(edit, 0);
+    assert_eq!(sendw(lv, 0x1018, 0, 0) as usize, edit);
+    let nouveau = w("nouveau.txt");
+    sendw(edit, WM_SETTEXT, 0, nouveau.as_ptr() as isize);
+    sendw(lv, 0x10F0, 1, 0);
+    let codes = notify_codes();
+    assert!(codes.contains(&-175) && codes.contains(&-176), "{codes:?}");
+    assert_eq!(sendw(lv, 0x1018, 0, 0), 0, "champ fermé");
+    let mut buf = [0u16; 64];
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 1,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: buf.as_mut_ptr() as *const u16,
+        text_max: 64,
+        image: 0,
+        param: 0,
+    };
+    let n = sendw(lv, 0x1073, 1, &mut it as *mut LvItemW as isize) as usize;
+    assert_eq!(String::from_utf16_lossy(&buf[..n]), "nouveau.txt");
+    gui::destroy_window(p);
+}
+
+#[test]
+fn cases_a_cocher_des_lignes_d_une_liste() {
+    // #1153 : la boîte de récupération d'Audacity active LVS_EX_CHECKBOXES
+    // et lit l'image d'état (1 décochée, 2 cochée) de chaque projet.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 57, (0, 0, 300, 200));
+    let name = w("projet");
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 0,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: name.as_ptr(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
+    assert_eq!(sendw(lv, 0x1036, 0x4, 0x4), 0);
+    assert_eq!(sendw(lv, 0x1037, 0, 0), 0x4);
+    assert_eq!(sendw(lv, 0x102C, 0, 0xF000), 0x1000, "décochée");
+    let y = (0..150)
+        .find(|&y| {
+            let mut hit = [10i32, y, 0, -1, 0, 0];
+            sendw(lv, 0x1012, 0, hit.as_mut_ptr() as isize) == 0
+        })
+        .expect("ligne 0 visible");
+    notify_codes();
+    sendw(lv, WM_LBUTTONDOWN, 1, ((y as isize) << 16) | 10);
+    assert_eq!(sendw(lv, 0x102C, 0, 0xF000), 0x2000, "cochée au clic");
+    assert!(notify_codes().contains(&-101), "LVN_ITEMCHANGED");
+    sendw(lv, WM_KEYDOWN, 0x20, 0);
+    assert_eq!(sendw(lv, 0x102C, 0, 0xF000), 0x1000, "Espace décoche");
+    gui::destroy_window(p);
+}
+
+#[test]
+fn superclasse_retrouve_le_controle_d_origine() {
+    // #1129 : TThemePageControl de WinSCP reprend la procédure de
+    // SysTabControl32 ; la conversion x86 doit la reconnaître.
+    let tab = super::builtin_class("SysTabControl32").unwrap();
+    assert_eq!(super::builtin_class_of_proc(tab), Some("systabcontrol32"));
+    let lv = super::builtin_class("SysListView32").unwrap();
+    assert_eq!(super::builtin_class_of_proc(lv), Some("syslistview32"));
+    assert_eq!(super::builtin_class_of_proc(0), None);
+    let button = super::builtin_class("Button").unwrap();
+    assert_eq!(super::builtin_class_of_proc(button), None);
 }

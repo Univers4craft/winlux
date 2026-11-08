@@ -374,6 +374,9 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
+                if style & 0x00C0_0000 == 0x00C0_0000 {
+                    b.set_dialog_type(hwnd);
+                }
             }
         }
     });
@@ -866,6 +869,11 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
     }
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
+    // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
+    // fenêtre s'affiche sans prendre le focus (#1127).
+    if matches!(cmd, 4 | 7 | 8) && !was {
+        with_backend(|b| b.set_no_initial_focus(hwnd));
+    }
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
@@ -1114,6 +1122,10 @@ pub unsafe extern "win64" fn set_window_pos(
         with_backend(|backend| backend.show_window(hwnd, false));
     }
 
+    if flags & SWP_FRAMECHANGED != 0 {
+        frame_changed(hwnd, rect, flags);
+    }
+
     if flags & SWP_NOREDRAW == 0
         && gui::window_rect(hwnd).is_some()
         && (moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0)
@@ -1124,6 +1136,68 @@ pub unsafe extern "win64" fn set_window_pos(
         }
     }
     1
+}
+
+/// Fenêtres dont le cadre du gestionnaire a été retiré par `frame_changed`.
+static OWN_FRAME: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+#[repr(C)]
+struct WindowPos {
+    hwnd: usize,
+    insert_after: usize,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+}
+
+#[repr(C)]
+struct NcCalcSizeParams {
+    rects: [Rect; 3],
+    pos: *mut WindowPos,
+}
+
+/// SetWindowPos(SWP_FRAMECHANGED) : WM_NCCALCSIZE est envoyé, comme sous
+/// Windows. Une fenêtre qui y répond elle-même, sans DefWindowProc, en
+/// gardant tout le rectangle pour sa zone cliente dessine sa propre barre de
+/// titre (WindowChrome de WPF, ScreenToGif) : le cadre du gestionnaire de
+/// fenêtres est alors retiré, sinon deux barres de titre se superposent
+/// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
+unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
+    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
+    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    let mut pos = WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: rect.left,
+        y: rect.top,
+        cx: rect.width(),
+        cy: rect.height(),
+        flags,
+    };
+    let mut params = NcCalcSizeParams {
+        rects: [rect, rect, rect],
+        pos: &mut pos,
+    };
+    gui::reset_default_nccalcsize();
+    send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
+    let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
+    let had = list.contains(&hwnd);
+    if own && !had {
+        list.push(hwnd);
+        drop(list);
+        with_backend(|b| b.set_decorations(hwnd, 0));
+    } else if !own && had {
+        list.retain(|&h| h != hwnd);
+        drop(list);
+        let style = gui::window_style(hwnd).unwrap_or(0);
+        let level = popup_decorations(style).unwrap_or(2);
+        with_backend(|b| b.set_decorations(hwnd, level));
+    }
 }
 
 /// Déplace/redimensionne une fenêtre (raccourci Win32 de `SetWindowPos`).
@@ -1325,6 +1399,7 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         19 => 1,                              // SM_MOUSEPRESENT
         23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
         36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        68 | 69 => 4,                         // SM_CXDRAG / SM_CYDRAG (#1138)
         43 => 3,                              // SM_CMOUSEBUTTONS
         75 => 1,                              // SM_MOUSEWHEELPRESENT
         // Icônes : 32 px, petite icône 16 px.
@@ -1496,6 +1571,7 @@ const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const GWL_USERDATA: i32 = -21;
 const GWL_ID: i32 = -12;
+const GWLP_HWNDPARENT: i32 = -8;
 const _GWLP_WNDPROC: i32 = -4;
 const _GWLP_HINSTANCE: i32 = -6;
 const _GWLP_USERDATA: i32 = -21;
@@ -1540,6 +1616,11 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
         GWL_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
         GWL_HINSTANCE => 0x0040_0000_isize,
+        // Parent d'une fille, propriétaire d'une fenêtre de premier niveau.
+        GWLP_HWNDPARENT => lock(user_data_map())
+            .get(&(hwnd, index))
+            .copied()
+            .unwrap_or_else(|| gui::window_parent(hwnd).unwrap_or(0) as isize),
         // GWLP_USERDATA, GWLP_ID et index positifs : données de la fenêtre
         // (cbWndExtra ; DWLP_MSGRESULT 0, DWLP_DLGPROC 8, DWLP_USER 16 en x64).
         GWL_USERDATA | GWL_ID => lock(user_data_map())
@@ -1568,6 +1649,23 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
         }
         GWL_USERDATA | GWL_ID => {
             lock(user_data_map()).insert((hwnd, index), value);
+        }
+        // Qt 5 donne son propriétaire à une boîte après la création, par
+        // SetWindowLongPtr(GWLP_HWNDPARENT) : la boîte « Vie privée » de VLC
+        // doit alors rester au-dessus de la fenêtre principale (#1068).
+        GWLP_HWNDPARENT if gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD == 0) => {
+            lock(user_data_map()).insert((hwnd, index), value);
+            let owner = owner_top_level(value as usize);
+            if owner != 0 && owner != hwnd {
+                let captioned =
+                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                with_backend(|b| {
+                    b.set_owner(hwnd, owner);
+                    if captioned {
+                        b.set_dialog_type(hwnd);
+                    }
+                });
+            }
         }
         _ => {
             if index >= 0 {
@@ -1913,6 +2011,64 @@ pub extern "win64" fn set_capture(hwnd: usize) -> usize {
 pub extern "win64" fn release_capture() -> i32 {
     gui::release_capture();
     1
+}
+
+/// Détection d'un glisser (DragDetect, et la liste ou l'arborescence avant
+/// LVN_BEGINDRAG / TVN_BEGINDRAG, #1138) : vrai dès que le pointeur sort,
+/// bouton gauche tenu, du rectangle SM_CXDRAG × SM_CYDRAG centré sur `x`,
+/// `y` (coordonnées écran) ; faux au relâchement, à un autre clic ou à
+/// Échap. Les déplacements sont consommés, les clics restent dans la file.
+pub unsafe fn drag_detect_at(hwnd: usize, x: i32, y: i32) -> bool {
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_MOUSELAST: u32 = 0x020E;
+    let cx = get_system_metrics(68).max(1); // SM_CXDRAG
+    let cy = get_system_metrics(69).max(1); // SM_CYDRAG
+    let previous = gui::set_capture(hwnd);
+    let started = std::time::Instant::now();
+    let mut dragged = false;
+    loop {
+        let mut m: Msg = std::mem::zeroed();
+        if peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSELAST, 0) != 0 {
+            if m.message != WM_MOUSEMOVE {
+                break;
+            }
+            peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSEMOVE, 1);
+            let mut p = Point {
+                x: m.lparam as u16 as i16 as i32,
+                y: (m.lparam >> 16) as u16 as i16 as i32,
+            };
+            client_to_screen(m.hwnd, &mut p);
+            if (p.x - x).abs() > cx / 2 || (p.y - y).abs() > cy / 2 {
+                dragged = true;
+                break;
+            }
+            continue;
+        }
+        if gui::get_async_key_state(0x1B) < 0 {
+            break;
+        }
+        // Bouton déjà relâché sans message en attente (clic envoyé par
+        // SendMessage, automate) : pas de glisser.
+        let held = gui::get_key_state(1) < 0 || gui::get_async_key_state(1) < 0;
+        if !held || !gui::backend_is_interactive() {
+            break;
+        }
+        // Garde-fou : un bouton « tenu » que le serveur X ne relâche jamais.
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    gui::release_capture();
+    if previous != 0 && previous != hwnd {
+        gui::set_capture(previous);
+    }
+    dragged
+}
+
+/// DragDetect(HWND, POINT) : le POINT (8 octets) arrive dans un registre.
+pub unsafe extern "win64" fn drag_detect(hwnd: usize, pt: u64) -> i32 {
+    drag_detect_at(hwnd, pt as u32 as i32, (pt >> 32) as u32 as i32) as i32
 }
 
 pub extern "win64" fn get_capture() -> usize {
@@ -2994,7 +3150,25 @@ pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPl
     1
 }
 
-pub extern "win64" fn set_window_placement(_hwnd: usize, _wp: *const c_void) -> i32 {
+/// SetWindowPlacement : place la fenêtre sur rcNormalPosition puis l'affiche
+/// selon showCmd, comme ShowWindow. 7-Zip ne montre sa fenêtre principale
+/// que par cet appel : sans affichage, elle restait invisible dès que
+/// GetWindowPlacement a réussi (#1159).
+pub unsafe extern "win64" fn set_window_placement(hwnd: usize, wp: *const WindowPlacement) -> i32 {
+    if wp.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if gui::screen_rect(hwnd).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    let p = std::ptr::read_unaligned(wp);
+    let r = p.normal;
+    if r.right > r.left && r.bottom > r.top {
+        move_window(hwnd, r.left, r.top, r.right - r.left, r.bottom - r.top, 1);
+    }
+    show_window(hwnd, p.show_cmd as i32);
     1
 }
 
@@ -3817,7 +3991,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
         "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
-        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
+        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture, "DragDetect"=>fn drag_detect,
         "GetCapture"=>fn get_capture,
         "GetCursorPos"=>fn get_cursor_pos, "SetCursorPos"=>fn set_cursor_pos,
         "LoadCursorA"=>fn load_cursor_a, "LoadCursorW"=>fn load_cursor_w,
@@ -4238,6 +4412,84 @@ mod tests {
         }
     }
 
+    unsafe extern "win64" fn proc_cadre_maison(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        // WindowChrome de WPF : WM_NCCALCSIZE traité sans DefWindowProc,
+        // toute la fenêtre reste zone cliente.
+        if msg == 0x0083 {
+            return 0;
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    unsafe extern "win64" fn proc_cadre_standard(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1131 : le cadre du gestionnaire est retiré d'une fenêtre qui dessine
+    /// sa propre barre de titre, et seulement d'elle.
+    #[test]
+    fn wm_nccalcsize_traite_par_l_appli_retire_le_cadre() {
+        unsafe {
+            let mut fenetres = Vec::new();
+            for (nom, proc_) in [
+                ("Winlux1131Maison", proc_cadre_maison as *const () as usize),
+                (
+                    "Winlux1131Standard",
+                    proc_cadre_standard as *const () as usize,
+                ),
+            ] {
+                let name: Vec<u16> = nom.encode_utf16().chain([0]).collect();
+                let wc = gui::WndClassA {
+                    style: 0,
+                    wnd_proc: proc_,
+                    cls_extra: 0,
+                    wnd_extra: 0,
+                    instance: 0,
+                    icon: 0,
+                    cursor: 0,
+                    background: 0,
+                    menu_name: std::ptr::null(),
+                    class_name: name.as_ptr().cast(),
+                };
+                assert_ne!(register_class_w(&wc), 0);
+                let hwnd = create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0x00CF_0000, // WS_OVERLAPPEDWINDOW
+                    10,
+                    10,
+                    320,
+                    200,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                );
+                assert_ne!(hwnd, 0);
+                assert_eq!(
+                    set_window_pos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED
+                    ),
+                    1
+                );
+                fenetres.push(hwnd);
+            }
+            let own = |h: usize| OWN_FRAME.lock().unwrap().contains(&h);
+            assert!(own(fenetres[0]));
+            assert!(!own(fenetres[1]));
+            for h in fenetres {
+                destroy_window(h);
+            }
+        }
+    }
+
     #[test]
     fn peek_message_rend_wm_timer_comme_get_message() {
         unsafe {
@@ -4496,6 +4748,77 @@ mod tests_messages {
                 0
             );
             destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn placement_de_fenetre_deplace_et_affiche() {
+        // #1159 : 7-Zip ne montre sa fenêtre que par SetWindowPlacement.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0x00CF_0000,
+                0,
+                0,
+                100,
+                50,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            assert!(!gui::is_window_visible(hwnd));
+            let mut wp = std::mem::zeroed::<WindowPlacement>();
+            assert_eq!(get_window_placement(hwnd, &mut wp), 1);
+            wp.show_cmd = 1; // SW_SHOWNORMAL
+            wp.normal = Rect {
+                left: 40,
+                top: 30,
+                right: 340,
+                bottom: 230,
+            };
+            assert_eq!(set_window_placement(hwnd, &wp), 1);
+            assert!(gui::is_window_visible(hwnd));
+            let r = gui::window_rect(hwnd).unwrap();
+            assert_eq!((r.width(), r.height()), (300, 200));
+            assert_eq!(set_window_placement(hwnd, std::ptr::null()), 0);
+            destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn proprietaire_donne_apres_creation_par_gwlp_hwndparent() {
+        // #1068 : Qt 5 rattache sa boîte à la fenêtre principale après coup.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    100,
+                    50,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x00CF_0000);
+            let dialog = make(0x80C8_0000);
+            assert_ne!(main, 0);
+            assert_ne!(dialog, 0);
+            assert_eq!(set_window_long_ptr_w(dialog, -8, main as isize), 0);
+            assert_eq!(get_window_long_ptr_w(dialog, -8), main as isize);
+            destroy_window(dialog);
+            destroy_window(main);
         }
     }
 

@@ -311,7 +311,7 @@ extern "C" {
     static winlux_d2d_context_view_vt: [*const (); 120];
 }
 
-fn view_vt() -> *const () {
+pub(super) fn view_vt() -> *const () {
     std::ptr::addr_of!(winlux_d2d_context_view_vt) as *const ()
 }
 
@@ -1546,7 +1546,7 @@ pub(super) struct Img {
 
 /// Pixels d'une image (bitmap ou sortie d'effet). `hint` : taille de la
 /// cible, qui borne les sorties sans limite.
-unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32)) -> Option<Img> {
+pub(super) unsafe fn image_img(image: *mut c_void, depth: u32, hint: (u32, u32)) -> Option<Img> {
     if image.is_null() || depth > 32 {
         return None;
     }
@@ -1986,67 +1986,67 @@ pub(super) unsafe extern "win64" fn gradient_stops(
 // --- Table du contexte d'appareil -----------------------------------------------------
 
 const DC_EXTRA: [*const (); 63] = [
-    dc_create_bitmap as *const (),                    // 57 CreateBitmap
-    dc_bitmap_from_wic as *const (),                  // 58 CreateBitmapFromWicBitmap
-    dc_color_context as *const (),                    // 59 CreateColorContext
-    dc_color_context_file as *const (),               // 60 CreateColorContextFromFilename
-    dc_color_context_wic as *const (),                // 61 CreateColorContextFromWicColorContext
-    dc_bitmap_from_dxgi as *const (),                 // 62 CreateBitmapFromDxgiSurface
-    dc_create_effect as *const (),                    // 63 CreateEffect
-    dc_gradient_stops1 as *const (),                  // 64 CreateGradientStopCollection
-    unsupported!("CreateImageBrush"),                 // 65
-    unsupported!("CreateBitmapBrush"),                // 66
-    unsupported!("CreateCommandList"),                // 67
-    dc_format_supported as *const (),                 // 68 IsDxgiFormatSupported
-    dc_precision_supported as *const (),              // 69 IsBufferPrecisionSupported
-    dc_image_local_bounds as *const (),               // 70 GetImageLocalBounds
-    dc_image_world_bounds as *const (),               // 71 GetImageWorldBounds
-    unsupported!("GetGlyphRunWorldBounds"),           // 72
-    dc_get_device as *const (),                       // 73 GetDevice
-    dc_set_target as *const (),                       // 74 SetTarget
-    dc_get_target as *const (),                       // 75 GetTarget
-    dc_set_controls as *const (),                     // 76 SetRenderingControls
-    dc_get_controls as *const (),                     // 77 GetRenderingControls
-    dc_set_blend as *const (),                        // 78 SetPrimitiveBlend
-    dc_get_blend as *const (),                        // 79 GetPrimitiveBlend
-    dc_set_unit as *const (),                         // 80 SetUnitMode
-    dc_get_unit as *const (),                         // 81 GetUnitMode
-    dc_draw_glyph_run as *const (),                   // 82 DrawGlyphRun
-    dc_draw_image as *const (),                       // 83 DrawImage
-    nothing as *const (),                             // 84 DrawGdiMetafile
-    dc_draw_bitmap as *const (),                      // 85 DrawBitmap
-    push_layer as *const (),                          // 86 PushLayer
-    dc_ok as *const (),                               // 87 InvalidateEffectInputRectangle
-    dc_invalid_count as *const (),                    // 88 GetEffectInvalidRectangleCount
-    dc_ok as *const (),                               // 89 GetEffectInvalidRectangles
-    dc_ok as *const (),                               // 90 GetEffectRequiredInputRectangles
-    nothing as *const (),                             // 91 FillOpacityMask
-    unsupported!("CreateFilledGeometryRealization"),  // 92
-    unsupported!("CreateStrokedGeometryRealization"), // 93
-    nothing as *const (),                             // 94 DrawGeometryRealization
-    unsupported!("CreateInk"),                        // 95
-    unsupported!("CreateInkStyle"),                   // 96
-    unsupported!("CreateGradientMesh"),               // 97
-    unsupported!("CreateImageSourceFromWic"),         // 98
-    unsupported!("CreateLookupTable3D"),              // 99
-    unsupported!("CreateImageSourceFromDxgi"),        // 100
-    unsupported!("GetGradientMeshWorldBounds"),       // 101
-    nothing as *const (),                             // 102 DrawInk
-    nothing as *const (),                             // 103 DrawGradientMesh
-    nothing as *const (),                             // 104 DrawGdiMetafile
-    unsupported!("CreateTransformedImageSource"),     // 105
-    unsupported!("CreateSpriteBatch"),                // 106
-    nothing as *const (),                             // 107 DrawSpriteBatch
-    unsupported!("CreateSvgGlyphStyle"),              // 108
-    dc_draw_text4 as *const (),                       // 109 DrawText
-    dc_draw_layout4 as *const (),                     // 110 DrawTextLayout
-    nothing as *const (),                             // 111 DrawColorBitmapGlyphRun
-    nothing as *const (),                             // 112 DrawSvgGlyphRun
-    unsupported!("GetColorBitmapGlyphImage"),         // 113
-    unsupported!("GetSvgGlyphImage"),                 // 114
-    unsupported!("CreateSvgDocument"),                // 115
-    nothing as *const (),                             // 116 DrawSvgDocument
-    dc_color_context_dxgi as *const (),               // 117 CreateColorContextFromDxgiColorSpace
+    dc_create_bitmap as *const (),                     // 57 CreateBitmap
+    dc_bitmap_from_wic as *const (),                   // 58 CreateBitmapFromWicBitmap
+    dc_color_context as *const (),                     // 59 CreateColorContext
+    dc_color_context_file as *const (),                // 60 CreateColorContextFromFilename
+    dc_color_context_wic as *const (),                 // 61 CreateColorContextFromWicColorContext
+    dc_bitmap_from_dxgi as *const (),                  // 62 CreateBitmapFromDxgiSurface
+    dc_create_effect as *const (),                     // 63 CreateEffect
+    dc_gradient_stops1 as *const (),                   // 64 CreateGradientStopCollection
+    super::brushes::create_image_brush as *const (),   // 65 CreateImageBrush
+    super::brushes::create_bitmap_brush1 as *const (), // 66 CreateBitmapBrush
+    unsupported!("CreateCommandList"),                 // 67
+    dc_format_supported as *const (),                  // 68 IsDxgiFormatSupported
+    dc_precision_supported as *const (),               // 69 IsBufferPrecisionSupported
+    dc_image_local_bounds as *const (),                // 70 GetImageLocalBounds
+    dc_image_world_bounds as *const (),                // 71 GetImageWorldBounds
+    unsupported!("GetGlyphRunWorldBounds"),            // 72
+    dc_get_device as *const (),                        // 73 GetDevice
+    dc_set_target as *const (),                        // 74 SetTarget
+    dc_get_target as *const (),                        // 75 GetTarget
+    dc_set_controls as *const (),                      // 76 SetRenderingControls
+    dc_get_controls as *const (),                      // 77 GetRenderingControls
+    dc_set_blend as *const (),                         // 78 SetPrimitiveBlend
+    dc_get_blend as *const (),                         // 79 GetPrimitiveBlend
+    dc_set_unit as *const (),                          // 80 SetUnitMode
+    dc_get_unit as *const (),                          // 81 GetUnitMode
+    dc_draw_glyph_run as *const (),                    // 82 DrawGlyphRun
+    dc_draw_image as *const (),                        // 83 DrawImage
+    nothing as *const (),                              // 84 DrawGdiMetafile
+    dc_draw_bitmap as *const (),                       // 85 DrawBitmap
+    push_layer as *const (),                           // 86 PushLayer
+    dc_ok as *const (),                                // 87 InvalidateEffectInputRectangle
+    dc_invalid_count as *const (),                     // 88 GetEffectInvalidRectangleCount
+    dc_ok as *const (),                                // 89 GetEffectInvalidRectangles
+    dc_ok as *const (),                                // 90 GetEffectRequiredInputRectangles
+    nothing as *const (),                              // 91 FillOpacityMask
+    unsupported!("CreateFilledGeometryRealization"),   // 92
+    unsupported!("CreateStrokedGeometryRealization"),  // 93
+    nothing as *const (),                              // 94 DrawGeometryRealization
+    unsupported!("CreateInk"),                         // 95
+    unsupported!("CreateInkStyle"),                    // 96
+    unsupported!("CreateGradientMesh"),                // 97
+    unsupported!("CreateImageSourceFromWic"),          // 98
+    unsupported!("CreateLookupTable3D"),               // 99
+    unsupported!("CreateImageSourceFromDxgi"),         // 100
+    unsupported!("GetGradientMeshWorldBounds"),        // 101
+    nothing as *const (),                              // 102 DrawInk
+    nothing as *const (),                              // 103 DrawGradientMesh
+    nothing as *const (),                              // 104 DrawGdiMetafile
+    unsupported!("CreateTransformedImageSource"),      // 105
+    unsupported!("CreateSpriteBatch"),                 // 106
+    nothing as *const (),                              // 107 DrawSpriteBatch
+    unsupported!("CreateSvgGlyphStyle"),               // 108
+    dc_draw_text4 as *const (),                        // 109 DrawText
+    dc_draw_layout4 as *const (),                      // 110 DrawTextLayout
+    nothing as *const (),                              // 111 DrawColorBitmapGlyphRun
+    nothing as *const (),                              // 112 DrawSvgGlyphRun
+    unsupported!("GetColorBitmapGlyphImage"),          // 113
+    unsupported!("GetSvgGlyphImage"),                  // 114
+    unsupported!("CreateSvgDocument"),                 // 115
+    nothing as *const (),                              // 116 DrawSvgDocument
+    dc_color_context_dxgi as *const (),                // 117 CreateColorContextFromDxgiColorSpace
     dc_color_context_simple as *const (), // 118 CreateColorContextFromSimpleColorProfile
     dc_blend_image as *const (),          // 119 BlendImage
 ];
@@ -2256,6 +2256,19 @@ unsafe extern "win64" fn gradient_qi(
         ],
     )
 }
+/// Arrêts (position, couleur RVBA non prémultipliée) et mode d'extension
+/// d'une ID2D1GradientStopCollection Winlux, pour les pinceaux dégradés.
+pub(super) unsafe fn gradient_of(obj: *mut c_void) -> Option<(Vec<(f32, [f32; 4])>, u32)> {
+    if obj.is_null() || *(obj as *const *const ()) != GRADIENT_VT.ptr() {
+        return None;
+    }
+    let g = &Com::get(obj as *mut GradientObj).data;
+    Some((
+        g.stops.iter().map(|s| (s.position, s.color)).collect(),
+        g.extend,
+    ))
+}
+
 unsafe extern "win64" fn gradient_count(this: *mut GradientObj) -> u32 {
     Com::get(this).data.stops.len() as u32
 }

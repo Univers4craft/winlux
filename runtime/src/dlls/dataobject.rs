@@ -636,6 +636,33 @@ fn pick(top: usize) -> Option<(usize, Option<usize>)> {
     (ex & WS_EX_ACCEPTFILES != 0).then_some((top, None))
 }
 
+/// Cible sous le point écran : la fenêtre la plus profonde, puis ses
+/// parents jusqu'au premier qui a une cible OLE ou accepte les fichiers.
+/// Un programme qui a plusieurs cibles dans une même fenêtre (les deux
+/// listes de FileZilla, #1138) reçoit le dépôt dans celle visée.
+fn pick_at(top: usize, screen: (i32, i32)) -> Option<(usize, Option<usize>)> {
+    let wfp = super::lookup("user32", "WindowFromPoint")?;
+    let wfp: unsafe extern "win64" fn(u64) -> usize = unsafe { std::mem::transmute(wfp) };
+    let mut h = unsafe { wfp(pointl(screen)) };
+    let r = lock(registry());
+    for _ in 0..64 {
+        if h == 0 {
+            break;
+        }
+        let belongs = h == top || r.roots.get(&h) == Some(&top) || root_of(h) == top;
+        if belongs {
+            if let Some(t) = r.targets.get(&h) {
+                return Some((h, Some(*t)));
+            }
+            if r.files.contains_key(&h) {
+                return Some((h, None));
+            }
+        }
+        h = super::gui::window_parent(h).unwrap_or(0);
+    }
+    None
+}
+
 type DragFn = extern "win64" fn(usize, usize, u32, u64, *mut u32) -> i32;
 type OverFn = extern "win64" fn(usize, u32, u64, *mut u32) -> i32;
 
@@ -668,7 +695,7 @@ pub fn deliver(
     client: (i32, i32),
     allowed: u32,
 ) -> u32 {
-    let Some((target_hwnd, target)) = pick(top) else {
+    let Some((target_hwnd, target)) = pick_at(top, screen).or_else(|| pick(top)) else {
         return DROPEFFECT_NONE;
     };
     let first = |e: u32| -> u32 {

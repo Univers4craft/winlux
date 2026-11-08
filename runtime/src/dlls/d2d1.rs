@@ -31,6 +31,16 @@ pub(crate) fn unsupported_call(name: &'static str) -> i32 {
 #[path = "d2d1_1.rs"]
 mod v11;
 
+#[path = "d2d1_brush.rs"]
+mod brushes;
+
+/// Table de 120 relais « this = [this + 8], saut vers ([this + 16])[i] »
+/// pour les vues d'interface (ID2D1DeviceContext d'une ancienne cible,
+/// IDWriteTextFormat3 d'une mise en page).
+pub(crate) fn tear_off_vt() -> *const () {
+    v11::view_vt()
+}
+
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 const D2DERR_WRONG_STATE: i32 = 0x8899_0001u32 as i32;
 const D2DERR_UNSUPPORTED_PIXEL_FORMAT: i32 = 0x8898_2F80u32 as i32;
@@ -789,15 +799,12 @@ static SINK_VT: VTable<15> = VTable([
 struct Brush {
     color: Mutex<ColorF>,
     opacity: Mutex<f32>,
+    /// D2D1_BRUSH_PROPERTIES::transform (SetTransform).
+    transform: Mutex<Matrix>,
+    /// Pinceau à motif, dégradé ou image ; `Solid` pour le pinceau uni.
+    kind: Mutex<brushes::Kind>,
 }
 type BrushObj = Com<Res<Brush>>;
-
-impl Brush {
-    fn premul(&self) -> Color {
-        let c = *crate::dlls::lock(&self.color);
-        premul(c.r, c.g, c.b, c.a * *crate::dlls::lock(&self.opacity))
-    }
-}
 
 unsafe extern "win64" fn brush_qi(
     this: *mut BrushObj,
@@ -829,11 +836,6 @@ unsafe extern "win64" fn brush_get_color(this: *mut BrushObj, out: *mut ColorF) 
     }
     out
 }
-unsafe extern "win64" fn get_identity_transform(_this: *mut c_void, m: *mut Matrix) {
-    if !m.is_null() {
-        *m = Matrix::IDENTITY;
-    }
-}
 
 static BRUSH_VT: VTable<10> = VTable([
     brush_qi as *const (),
@@ -841,9 +843,9 @@ static BRUSH_VT: VTable<10> = VTable([
     release::<Res<Brush>> as *const (),
     get_factory::<Brush> as *const (),
     brush_set_opacity as *const (),
-    nothing as *const (), // SetTransform
+    brushes::set_transform as *const (),
     brush_get_opacity as *const (),
-    get_identity_transform as *const (),
+    brushes::get_transform as *const (),
     brush_set_color as *const (),
     brush_get_color as *const (),
 ]);
@@ -1194,14 +1196,6 @@ unsafe fn target<'a>(this: *mut TargetObj) -> std::sync::MutexGuard<'a, Target> 
     crate::dlls::lock(&Com::get(this).data)
 }
 
-/// Couleur d'un pinceau Winlux (les pinceaux étrangers n'existent pas en D2D).
-unsafe fn brush_color(brush: *mut c_void) -> Option<Color> {
-    if brush.is_null() || *(brush as *const *const ()) != BRUSH_VT.ptr() {
-        return None;
-    }
-    Some(Com::get(brush as *mut BrushObj).data.premul())
-}
-
 unsafe extern "win64" fn target_qi(
     this: *mut TargetObj,
     riid: *const Guid,
@@ -1299,35 +1293,34 @@ unsafe extern "win64" fn target_bitmap_from_wic(
 unsafe extern "win64" fn target_solid_brush(
     this: *mut TargetObj,
     c: *const ColorF,
-    props: *const f32,
+    props: *const brushes::BrushProps,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() || c.is_null() {
         return E_INVALIDARG;
     }
-    let b = Brush {
-        color: Mutex::new(*c),
-        opacity: Mutex::new(if props.is_null() {
-            1.0
-        } else {
-            (*props).clamp(0.0, 1.0)
-        }),
-    };
+    let b = brushes::new_brush(*c, props, brushes::Kind::Solid);
     put(out, new_res(Com::get(this).factory, BRUSH_VT.ptr(), b))
 }
 
+/// La peinture est préparée avant de verrouiller la cible : un pinceau
+/// peut lire un bitmap ou calculer un effet.
 unsafe fn fill_path(this: *mut TargetObj, path: &Path, rule: FillRule, brush: *mut c_void) {
-    let Some(c) = brush_color(brush) else { return };
-    let mut t = target(this);
-    let polys = path.fill_polys(&t.transform());
-    t.fill(&polys, rule, &|_, _| c);
+    let world = target(this).transform();
+    let Some(paint) = brushes::paint(brush, &world) else {
+        return;
+    };
+    let polys = path.fill_polys(&world);
+    target(this).fill(&polys, rule, &*paint);
 }
 
 unsafe fn stroke_path(this: *mut TargetObj, path: &Path, brush: *mut c_void, width: f32) {
-    let Some(c) = brush_color(brush) else { return };
-    let mut t = target(this);
-    let polys = path.stroke_polys(&t.transform(), width);
-    t.fill(&polys, FillRule::NonZero, &|_, _| c);
+    let world = target(this).transform();
+    let Some(paint) = brushes::paint(brush, &world) else {
+        return;
+    };
+    let polys = path.stroke_polys(&world, width);
+    target(this).fill(&polys, FillRule::NonZero, &*paint);
 }
 
 // --- Texte (DirectWrite maison) ----------------------------------------------------
@@ -1753,11 +1746,11 @@ const TARGET_METHODS: [*const (); 57] = [
     target_create_bitmap as *const (),
     target_bitmap_from_wic as *const (),
     unsupported!("CreateSharedBitmap"),
-    unsupported!("CreateBitmapBrush"),
+    brushes::create_bitmap_brush as *const (),
     target_solid_brush as *const (),
     v11::gradient_stops as *const (),
-    unsupported!("CreateLinearGradientBrush"),
-    unsupported!("CreateRadialGradientBrush"),
+    brushes::create_linear_brush as *const (),
+    brushes::create_radial_brush as *const (),
     create_compatible_target as *const (),
     unsupported!("CreateLayer"),
     unsupported!("CreateMesh"),
@@ -2161,6 +2154,148 @@ mod tests {
             S_OK
         );
         b
+    }
+
+    /// #1124 : pinceau bitmap répété (motif de Scintilla), transformation
+    /// du pinceau, dégradé linéaire.
+    #[test]
+    fn bitmap_and_gradient_brushes_paint() {
+        unsafe {
+            let (f, bmp, rt) = setup();
+            method::<Unary>(rt, 48)(rt);
+            // Motif 2×2 : rouge, bleu / bleu, rouge (BGRA prémultiplié).
+            let (r, b) = ([0u8, 0, 255, 255], [255u8, 0, 0, 255]);
+            let src: Vec<u8> = [r, b, b, r].concat();
+            type CreateBitmap = unsafe extern "win64" fn(
+                *mut c_void,
+                u64,
+                *const u8,
+                u32,
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut pattern = std::ptr::null_mut();
+            assert_eq!(
+                method::<CreateBitmap>(rt, 4)(
+                    rt,
+                    2 | 2 << 32,
+                    src.as_ptr(),
+                    8,
+                    std::ptr::null(),
+                    &mut pattern
+                ),
+                S_OK
+            );
+            type BitmapBrush = unsafe extern "win64" fn(
+                *mut c_void,
+                *mut c_void,
+                *const [u32; 3],
+                *const c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut brush = std::ptr::null_mut();
+            let wrap = [1u32, 1, 0];
+            assert_eq!(
+                method::<BitmapBrush>(rt, 7)(rt, pattern, &wrap, std::ptr::null(), &mut brush),
+                S_OK
+            );
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let mut bb1 = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(brush, 0)(brush, &brushes_iid_bitmap1(), &mut bb1),
+                S_OK
+            );
+            release_obj(bb1);
+            type FillRect = unsafe extern "win64" fn(*mut c_void, *const RectF, *mut c_void);
+            let all = RectF {
+                l: 0.0,
+                t: 0.0,
+                r: 8.0,
+                b: 8.0,
+            };
+            method::<FillRect>(rt, 17)(rt, &all, brush);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            let p = pixels(bmp);
+            assert_eq!(px(&p, 0, 0), r);
+            assert_eq!(px(&p, 1, 0), b);
+            assert_eq!(px(&p, 6, 7), b);
+            assert_eq!(px(&p, 7, 7), r);
+            // SetTransform décale le motif d'un pixel.
+            let shift = Matrix {
+                dx: 1.0,
+                ..Matrix::IDENTITY
+            };
+            type SetTransform = unsafe extern "win64" fn(*mut c_void, *const Matrix);
+            method::<SetTransform>(brush, 5)(brush, &shift);
+            method::<Unary>(rt, 48)(rt);
+            method::<FillRect>(rt, 17)(rt, &all, brush);
+            method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut());
+            let p = pixels(bmp);
+            assert_eq!(px(&p, 0, 0), b);
+            assert_eq!(px(&p, 1, 0), r);
+            release_obj(brush);
+            release_obj(pattern);
+
+            // Dégradé linéaire noir → blanc de x = 0 à x = 8.
+            let stops: [f32; 10] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+            type Stops = unsafe extern "win64" fn(
+                *mut c_void,
+                *const f32,
+                u32,
+                u32,
+                u32,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut coll = std::ptr::null_mut();
+            assert_eq!(
+                method::<Stops>(rt, 9)(rt, stops.as_ptr(), 2, 0, 0, &mut coll),
+                S_OK
+            );
+            type Linear = unsafe extern "win64" fn(
+                *mut c_void,
+                *const [f32; 4],
+                *const c_void,
+                *mut c_void,
+                *mut *mut c_void,
+            ) -> i32;
+            let mut lin = std::ptr::null_mut();
+            let ends = [0.0f32, 0.0, 8.0, 0.0];
+            assert_eq!(
+                method::<Linear>(rt, 10)(rt, &ends, std::ptr::null(), coll, &mut lin),
+                S_OK
+            );
+            method::<Unary>(rt, 48)(rt);
+            method::<FillRect>(rt, 17)(rt, &all, lin);
+            method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut());
+            let p = pixels(bmp);
+            let grey: Vec<u8> = (0..8).map(|x| px(&p, x, 3)[1]).collect();
+            assert!(grey[0] < 24 && grey[7] > 230, "{grey:?}");
+            assert!(grey.windows(2).all(|w| w[0] < w[1]), "{grey:?}");
+            // Le pinceau rend sa collection.
+            type GetStops = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void);
+            let mut back = std::ptr::null_mut();
+            method::<GetStops>(lin, 12)(lin, &mut back);
+            assert_eq!(back, coll);
+            release_obj(back);
+            release_obj(lin);
+            release_obj(coll);
+            release_obj(rt);
+            release_obj(bmp);
+            release_obj(f);
+        }
+    }
+
+    fn brushes_iid_bitmap1() -> Guid {
+        guid(
+            0x41343a53,
+            0xe41a,
+            0x49a2,
+            [0x91, 0xcd, 0x21, 0x79, 0x3b, 0xbb, 0x62, 0xe5],
+        )
     }
 
     #[test]

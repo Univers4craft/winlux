@@ -1339,46 +1339,68 @@ pub unsafe extern "win64" fn image_list_write(himl: usize, stream: usize) -> i32
     stream_io(stream, true, d.as_mut_ptr(), d.len()) as i32
 }
 
-/// Lit un BMP complet du flux (en-tête de fichier compris).
+/// Lit un BMP complet du flux (en-tête de fichier compris). La taille
+/// lue vient de l'en-tête BITMAPINFOHEADER et non de bfSize : les flux
+/// écrits par les programmes Delphi mettent dans bfSize la seule taille
+/// des en-têtes (54 ou 62 octets), les pixels suivant quand même.
 unsafe fn read_bmp(stream: usize) -> Option<Image> {
     let mut fh = [0u8; 14];
     if !stream_io(stream, false, fh.as_mut_ptr(), 14) || &fh[..2] != b"BM" {
         return None;
     }
-    let total = rd32(&fh, 2)? as usize;
-    if !(14 + 40..=64 << 20).contains(&total) {
-        return None;
-    }
-    let mut d = vec![0u8; total - 14];
-    if !stream_io(stream, false, d.as_mut_ptr(), d.len()) {
-        return None;
-    }
-    // decode_dib attend les couleurs juste après les en-têtes : bfOffBits
-    // compte depuis le début du fichier.
     let off = rd32(&fh, 10)? as usize;
-    let hsize = rd32(&d, 0)? as usize;
+    let mut hs = [0u8; 4];
+    if !stream_io(stream, false, hs.as_mut_ptr(), 4) {
+        return None;
+    }
+    let hsize = rd32(&hs, 0)? as usize;
+    if !(40..=124).contains(&hsize) {
+        return None;
+    }
+    let mut d = vec![0u8; hsize];
+    d[..4].copy_from_slice(&hs);
+    if !stream_io(stream, false, d.as_mut_ptr().add(4), hsize - 4) {
+        return None;
+    }
+    let w = rd32(&d, 4)? as i32;
+    let h = (rd32(&d, 8)? as i32).unsigned_abs() as usize;
     let bpp = rd16(&d, 14)? as usize;
+    let comp = rd32(&d, 16)?;
+    let size_image = rd32(&d, 20)? as usize;
     let used = rd32(&d, 32)? as usize;
+    if w <= 0 || w > 1 << 16 || h == 0 || h > 1 << 16 {
+        return None;
+    }
     let pal = if bpp <= 8 {
         if used != 0 {
-            used
+            used.min(256)
         } else {
             1 << bpp
         }
     } else {
         0
     };
-    let masks = if rd32(&d, 16)? == 3 && hsize == 40 {
-        12
+    let masks = if comp == 3 && hsize == 40 { 12 } else { 0 };
+    let natural = 14 + hsize + masks + pal * 4;
+    let pixels = match comp {
+        0 | 3 => (w as usize * bpp).div_ceil(32) * 4 * h,
+        _ => size_image,
+    };
+    if pixels == 0 || pixels > 64 << 20 {
+        return None;
+    }
+    // Couleurs (et masques), puis un éventuel trou jusqu'à bfOffBits.
+    let gap = if off > natural && off - natural <= 4096 {
+        off - natural
     } else {
         0
     };
-    let natural = 14 + hsize + masks + pal * 4;
-    if off > natural && off - 14 <= d.len() {
-        let mut v = d[..natural - 14].to_vec();
-        v.extend(&d[off - 14..]);
-        d = v;
+    let mut rest = vec![0u8; masks + pal * 4 + gap + pixels];
+    if !stream_io(stream, false, rest.as_mut_ptr(), rest.len()) {
+        return None;
     }
+    d.extend(&rest[..masks + pal * 4]);
+    d.extend(&rest[masks + pal * 4 + gap..]);
     decode_dib(&d, false)
 }
 
@@ -1680,6 +1702,88 @@ pub fn comctl32_overrides() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Flux « IL » tel qu'un programme Delphi l'enregistre (#1165) : bfSize
+    /// des deux BMP ne compte que les en-têtes, drapeaux 0x10FF, pixels
+    /// 32 bits sans alpha, masque 1 bit, puis des octets de bourrage.
+    fn flux_il_delphi() -> Vec<u8> {
+        let (cx, n) = (4usize, 3usize);
+        let w = cx * 4;
+        let mut d = Vec::new();
+        for v in [0x4C49u16, 0x0101, n as u16, 8, 4, cx as u16, cx as u16] {
+            d.extend(v.to_le_bytes());
+        }
+        d.extend(CLR_NONE.to_le_bytes());
+        d.extend(0x10FFu16.to_le_bytes());
+        d.extend([0xFFu8; 8]);
+        let bmp_header = |d: &mut Vec<u8>, size: u32, bpp: u16, colors: u32| {
+            d.extend(b"BM");
+            d.extend(size.to_le_bytes());
+            d.extend(0u32.to_le_bytes());
+            d.extend(size.to_le_bytes());
+            d.extend(40u32.to_le_bytes());
+            d.extend((w as i32).to_le_bytes());
+            d.extend((cx as i32).to_le_bytes());
+            d.extend(1u16.to_le_bytes());
+            d.extend(bpp.to_le_bytes());
+            d.extend([0u8; 12]);
+            d.extend(0u32.to_le_bytes());
+            d.extend(colors.to_le_bytes());
+            d.extend(0u32.to_le_bytes());
+        };
+        bmp_header(&mut d, 54, 32, 0);
+        // Image k : couleur unie 0x00RRGGBB = k+1 en bleu (alpha nul).
+        for _y in 0..cx {
+            for x in 0..w {
+                d.extend([(x / cx) as u8 + 1, 0x20, 0x40, 0]);
+            }
+        }
+        bmp_header(&mut d, 62, 1, 2);
+        d.extend([0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0]);
+        // Masque : pixel (0,0) de chaque image transparent (ligne du haut,
+        // dernière en bas à haut), le reste opaque.
+        for y in 0..cx {
+            let mut row = [0u8; 4];
+            if y == cx - 1 {
+                row[0] = 0b1000_1000;
+                row[1] = 0b1000_0000;
+            }
+            d.extend(row);
+        }
+        d.extend([0u8; 22]);
+        d
+    }
+
+    #[test]
+    fn image_list_read_flux_delphi() {
+        let blob = flux_il_delphi();
+        unsafe {
+            let mut st: *mut std::ffi::c_void = std::ptr::null_mut();
+            assert_eq!(
+                crate::dlls::ole32::create_stream_on_hglobal(0, 1, &mut st),
+                0
+            );
+            let st = st as usize;
+            let mut b = blob.clone();
+            assert!(stream_io(st, true, b.as_mut_ptr(), b.len()));
+            let vt = *(st as *const *const usize);
+            let seek: unsafe extern "win64" fn(usize, i64, u32, *mut u64) -> i32 =
+                std::mem::transmute(*vt.add(5));
+            assert_eq!(seek(st, 0, 0, std::ptr::null_mut()), 0);
+            let himl = image_list_read(st);
+            assert_ne!(himl, 0, "flux Delphi refusé");
+            assert_eq!(image_list_get_image_count(himl), 3);
+            for k in 0..3 {
+                let img = list_image(himl, k).unwrap();
+                assert_eq!((img.w, img.h), (4, 4));
+                // (0,0) transparent par le masque, (1,1) opaque.
+                assert_eq!(img.px[0] >> 24, 0, "image {k}");
+                assert_eq!(img.px[5], 0xFF00_2040 | (k as u32 + 1) << 16, "image {k}");
+            }
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vt.add(2));
+            release(st);
+        }
+    }
 
     /// Icône DIB 2×2, 32 bits sans alpha, avec masque ET.
     fn dib_icon() -> Vec<u8> {

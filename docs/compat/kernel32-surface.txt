@@ -111,6 +111,7 @@ EnumCalendarInfoW
 EnumDateFormatsExEx
 EnumResourceLanguagesW
 EnumResourceNamesW
+EnumSystemFirmwareTables
 EnumSystemLocalesA
 EnumSystemLocalesEx
 EnumSystemLocalesW
@@ -345,6 +346,7 @@ GetSystemDefaultLocaleName
 GetSystemDefaultUILanguage
 GetSystemDirectoryA
 GetSystemDirectoryW
+GetSystemFirmwareTable
 GetSystemInfo
 GetSystemPowerStatus
 GetSystemPreferredUILanguages
@@ -429,6 +431,7 @@ HeapUnlock
 HeapValidate
 HeapWalk
 IdnToAscii
+IdnToUnicode
 InitAtomTable
 InitOnceBeginInitialize
 InitOnceComplete

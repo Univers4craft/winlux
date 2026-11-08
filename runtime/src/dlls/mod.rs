@@ -24,6 +24,7 @@ pub mod advapi32_services;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod cabinet_lz;
 pub mod chromium_win32;
 pub mod clipboard;
 pub mod com_local;
@@ -50,6 +51,7 @@ pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_raster;
+pub mod d3d10;
 pub mod d3d11;
 pub mod d3d12;
 pub mod d3d8;
@@ -82,6 +84,7 @@ pub mod dwmapi;
 pub mod dwrite;
 pub mod dwrite_analyzer;
 pub mod dwrite_glyphs;
+pub(crate) mod dx11_x86;
 pub mod dxbc;
 pub mod dxgi;
 pub(crate) mod dxgi_private;
@@ -144,6 +147,7 @@ pub mod mouse;
 pub mod mpr;
 pub mod msacm32;
 pub mod mscoree;
+pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
 pub mod msxml;
@@ -152,6 +156,7 @@ pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod nls;
+pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
@@ -406,6 +411,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(normaliz::kernel32_exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -547,6 +553,18 @@ fn builtins() -> &'static Vec<Builtin> {
                 name: "version",
                 exports: version::exports(),
                 handle: 0,
+            },
+            // Noms de domaine internationaux : SslStream de .NET (#1183).
+            Builtin {
+                name: "normaliz",
+                exports: normaliz::exports(),
+                handle: fake_module(),
+            },
+            // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
+            Builtin {
+                name: "mshwgst",
+                exports: mshwgst::exports(),
+                handle: fake_module(),
             },
             Builtin {
                 name: "shell32",
@@ -744,6 +762,16 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: 0,
             },
             Builtin {
+                name: "d3d10",
+                exports: d3d10::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "d3d10_1",
+                exports: d3d10::exports_1(),
+                handle: 0,
+            },
+            Builtin {
                 name: "d3d11",
                 exports: d3d11::exports(),
                 handle: 0,
@@ -908,6 +936,17 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "fontsub",
                 exports: absent_devices::fontsub_exports(),
+                handle: 0,
+            },
+            // Décompression de cabinets (FDI) et de fichiers SZDD (#26).
+            Builtin {
+                name: "cabinet",
+                exports: cabinet_lz::cabinet_exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "lz32",
+                exports: cabinet_lz::lz32_exports(),
                 handle: 0,
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
@@ -1993,6 +2032,12 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            (
+                "api-ms-win-core-com-l1-1-0.dll",
+                "ole32",
+                "CoDecrementMTAUsage",
+            ),
+            ("combase.dll", "ole32", "CoIncrementMTAUsage"),
             ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
