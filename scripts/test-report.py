@@ -331,5 +331,13 @@ except ValueError as error:
 assert g["device_poll"]("Iv1.0123456789", "dc") == "gho_x"
 assert g["client_id"]({"GITHUB_CLIENT_ID": "Iv1.0123456789"}) == "Iv1.0123456789"
 assert g["client_id"]({"GITHUB_CLIENT_ID": "x y"}) == g["GITHUB_CLIENT_ID"]
+# Application « Winlux OS » : identifiant public par défaut, aucun secret.
+assert g["client_id"]({}) == "Iv23liGAitONmE9ke1ZT"
+sent = []
+g["form_post"] = lambda url, fields: sent.append(fields) or {"device_code": "d", "user_code": "ABCD-1234"}
+g["device_start"]("Iv23liGAitONmE9ke1ZT")
+g["form_post"] = lambda url, fields: sent.append(fields) or {"error": "authorization_pending"}
+g["device_poll"]("Iv23liGAitONmE9ke1ZT", "d")
+assert all("client_secret" not in f for f in sent) and sent[0] == {"client_id": "Iv23liGAitONmE9ke1ZT"}, sent
 g["http"] = real_http
 print("winlux-report : tests OK")

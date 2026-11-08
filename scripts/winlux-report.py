@@ -591,9 +591,10 @@ def token_path(conf):
 # le sien, gardé dans son compte en 0600 ; rien n'est livré dans l'ISO.
 ACCOUNT = Path(os.environ.get("WINLUX_REPORT_ACCOUNT")
                or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "winlux/github-account.json")
-# Identifiant public d'une application GitHub (flux « device », sans secret) :
-# tant qu'il est vide, la connexion se fait avec un jeton personnel.
-GITHUB_CLIENT_ID = ""
+# Identifiant public de l'application GitHub « Winlux OS » (winlux-os) pour le
+# flux « device » : aucun secret n'existe ni n'est attendu. GITHUB_CLIENT_ID=
+# dans report.conf le remplace ; le jeton personnel reste possible.
+GITHUB_CLIENT_ID = "Iv23liGAitONmE9ke1ZT"
 GITHUB_WEB = os.environ.get("WINLUX_GITHUB_WEB", "https://github.com")
 SIGNUP_URL = "https://github.com/signup"
 ACCOUNT_TOKEN_URL = ("https://github.com/settings/tokens/new?scopes=public_repo"
@@ -615,8 +616,10 @@ def account():
 
 def client_id(conf=None):
     conf = conf or config()
-    value = conf.get("GITHUB_CLIENT_ID", "") or GITHUB_CLIENT_ID
-    return value if re.fullmatch(r"[A-Za-z0-9.]{8,64}", value) else ""
+    for value in (conf.get("GITHUB_CLIENT_ID", ""), GITHUB_CLIENT_ID):
+        if re.fullmatch(r"[A-Za-z0-9.]{8,64}", value or ""):
+            return value
+    return ""
 
 
 def account_login(token):
