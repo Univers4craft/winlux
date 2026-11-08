@@ -403,6 +403,8 @@ ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"a
 ok('"-stream_name"' in (ROOT / "runtime/src/dlls/winlux_media.rs").read_text()
    and '"Lecteur multimédia"' in (ROOT / "runtime/src/audio/backend.rs").read_text(),
    "mélangeur : le son du lecteur s'appelle « Lecteur multimédia », plus « Lavf… » de ffmpeg (#1010)")
+ok("WinluxMediaControl(SESSION, 2, volume)" in (ROOT / "testexe/src/shell/mediaplayer.rs").read_text(),
+   "lecteur : pause et volume sans fermer le flux audio, plus de trou ni de clic (#1013)")
 
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
