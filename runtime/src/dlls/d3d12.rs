@@ -15,14 +15,18 @@
 //! - `ExecuteCommandLists` rejoue les commandes de façon synchrone : une
 //!   barrière de clôture signalée par la file est donc atteinte dès le
 //!   retour, ce qui rend `SetEventOnCompletion` immédiat ;
-//! - les shaders DXBC/DXIL ne sont pas encore traduits : les dessins
-//!   utilisent des shaders passe-plat (position et couleur de sommet),
-//!   comme le chemin Direct3D 11 ;
+//! - sur OpenGL, les shaders DXBC sont traduits par `dxbc.rs` et leurs
+//!   tampons de constantes liés d'après la signature racine
+//!   (`d3d12_shader.rs`, #1177) ; ailleurs, ou pour du DXIL, les dessins
+//!   utilisent des shaders passe-plat (position et couleur de sommet) ;
 //! - garde-fous : sans Vulkan utilisable, OpenGL prend le relais ; sans
 //!   OpenGL (pas d'affichage), l'appareil fonctionne sur le processeur
 //!   (effacements, copies, lectures) sans rien afficher. Aucun cas ne fait
 //!   échouer `D3D12CreateDevice` ni ne plante.
 #![allow(non_snake_case, dead_code, clippy::missing_safety_doc)]
+
+#[path = "d3d12_shader.rs"]
+mod shader;
 
 use crate::dlls::dxgi::{DxgiModeDesc, DxgiSampleDesc, DxgiSwapChainDesc, GlContext};
 use crate::dlls::gl_bindings as gl;
@@ -383,7 +387,7 @@ enum Kind {
     List(Box<Mutex<List>>),
     Fence(Box<Fence>),
     DescHeap(Box<DescHeap>),
-    RootSig(Vec<u8>),
+    RootSig(Box<shader::RootLayout>),
     Pso(Box<Pso>),
     Resource(Box<Res>),
     Heap(u64, HeapProperties),
@@ -484,6 +488,10 @@ struct Pso {
     layout: Vec<(u32, u32, u32)>,
     rt_format: u32,
     topology_type: u32,
+    /// Shaders DXBC traduits en GLSL et disposition d'entrée complète
+    /// (chemin OpenGL, #1177).
+    shaders: Option<std::sync::Arc<shader::Translated>>,
+    elements: Vec<shader::Element>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -502,6 +510,9 @@ struct List {
     open: bool,
     cmds: Vec<Cmd>,
     st: ListState,
+    /// Signature racine graphique et ses arguments (#1177).
+    root: Option<std::sync::Arc<shader::RootLayout>>,
+    root_args: Vec<shader::RootArg>,
 }
 
 #[derive(Clone, Copy)]
@@ -522,6 +533,10 @@ struct DrawCall {
     first: u32,
     base: i32,
     first_instance: u32,
+    /// Shaders traduits, disposition d'entrée et tampons de constantes.
+    shaders: Option<std::sync::Arc<shader::Translated>>,
+    elements: Vec<shader::Element>,
+    cbs: Vec<shader::CbBinding>,
 }
 
 enum Cmd {
@@ -573,8 +588,9 @@ fn va_lookup(addr: u64) -> Option<(*mut Obj, u64)> {
         .map(|(b, _, o)| (*o as *mut Obj, addr - b))
 }
 
-fn heap_registry() -> &'static Mutex<Vec<(usize, usize)>> {
-    static R: OnceLock<Mutex<Vec<(usize, usize)>>> = OnceLock::new();
+/// Tas de descripteurs : début et fin des poignées CPU, adresse GPU.
+fn heap_registry() -> &'static Mutex<Vec<(usize, usize, u64)>> {
+    static R: OnceLock<Mutex<Vec<(usize, usize, u64)>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -583,10 +599,21 @@ fn heap_registry() -> &'static Mutex<Vec<(usize, usize)>> {
 fn descriptor_at(handle: usize) -> Option<*mut Descriptor> {
     let r = lock(heap_registry());
     r.iter()
-        .find(|(s, e)| {
+        .find(|(s, e, _)| {
             handle >= *s && handle < *e && (handle - s).is_multiple_of(DESC_SIZE as usize)
         })
         .map(|_| handle as *mut Descriptor)
+}
+
+/// Descripteur pointé par une poignée GPU d'un tas visible des shaders.
+fn descriptor_from_gpu(handle: u64) -> Option<Descriptor> {
+    let r = lock(heap_registry());
+    let (s, e, gpu) = *r
+        .iter()
+        .find(|(s, e, gpu)| *gpu != 0 && handle >= *gpu && handle < *gpu + (e - s) as u64)?;
+    let off = (handle - gpu) as usize;
+    (off.is_multiple_of(DESC_SIZE as usize) && s + off < e)
+        .then(|| unsafe { *((s + off) as *const Descriptor) })
 }
 
 fn descriptor_resource(handle: usize) -> *mut Obj {
@@ -736,6 +763,11 @@ vtable!(
         (21, f!(list_viewports)),
         (25, f!(list_set_pso)),
         (26, f!(list_barrier)),
+        (30, f!(list_root_sig)),
+        (32, f!(list_root_table)),
+        (34, f!(list_root_constant)),
+        (36, f!(list_root_constants)),
+        (38, f!(list_root_cbv)),
         (43, f!(list_ib)),
         (44, f!(list_vbs)),
         (46, f!(list_om_rts)),
@@ -1105,6 +1137,34 @@ unsafe fn semantic(e: &InputElement) -> String {
         .to_ascii_uppercase()
 }
 
+/// Disposition d'entrée complète (sémantiques, décalages résolus), pour les
+/// shaders traduits.
+unsafe fn input_elements(elems: *const InputElement, n: u32) -> Vec<shader::Element> {
+    let mut out = Vec::new();
+    if elems.is_null() {
+        return out;
+    }
+    let mut next = [0u32; 32];
+    for i in 0..n.min(32) as usize {
+        let e = &*elems.add(i);
+        let slot = (e.slot as usize).min(31);
+        let offset = if e.offset == 0xffff_ffff {
+            next[slot]
+        } else {
+            e.offset
+        };
+        next[slot] = offset + fmt_block(e.format).map(|b| b.0).unwrap_or(0);
+        out.push(shader::Element {
+            name: semantic(e),
+            index: e.semantic_index,
+            format: e.format,
+            slot: slot as u32,
+            offset,
+        });
+    }
+    out
+}
+
 /// Disposition des sommets retenue pour les shaders passe-plat.
 unsafe fn parse_input_layout(elems: *const InputElement, n: u32) -> Vec<(u32, u32, u32)> {
     let mut out = Vec::new();
@@ -1157,6 +1217,17 @@ unsafe extern "win64" fn dev_create_gfx_pso(
     let rd = |o: usize| std::ptr::read_unaligned(desc.add(o) as *const u32);
     let elems = std::ptr::read_unaligned(desc.add(PSO_INPUT_LAYOUT) as *const *const InputElement);
     let count = rd(PSO_INPUT_LAYOUT + 8);
+    // D3D12_SHADER_BYTECODE { pShaderBytecode, BytecodeLength } du VS (8)
+    // et du PS (24).
+    let code = |o: usize| {
+        let p = std::ptr::read_unaligned(desc.add(o) as *const *const u8);
+        let n = std::ptr::read_unaligned(desc.add(o + 8) as *const usize);
+        if p.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(p, n.min(1 << 24))
+        }
+    };
     let pso = Pso {
         compute: false,
         layout: parse_input_layout(elems, count),
@@ -1166,6 +1237,8 @@ unsafe extern "win64" fn dev_create_gfx_pso(
             0
         },
         topology_type: rd(PSO_TOPOLOGY_TYPE),
+        shaders: shader::translate(code(8), code(24)).map(std::sync::Arc::new),
+        elements: input_elements(elems, count),
     };
     hand_out(
         new_obj(pso_vtable(), this, Kind::Pso(Box::new(pso))),
@@ -1188,6 +1261,8 @@ unsafe extern "win64" fn dev_create_compute_pso(
         layout: Vec::new(),
         rt_format: 0,
         topology_type: 0,
+        shaders: None,
+        elements: Vec::new(),
     };
     hand_out(
         new_obj(pso_vtable(), this, Kind::Pso(Box::new(pso))),
@@ -1214,6 +1289,8 @@ unsafe extern "win64" fn dev_create_list(
             topology: 0,
             ..Default::default()
         },
+        root: None,
+        root_args: Vec::new(),
     };
     hand_out(
         new_obj(list_vtable(), this, Kind::List(Box::new(Mutex::new(list)))),
@@ -1347,11 +1424,13 @@ unsafe extern "win64" fn dev_create_desc_heap(
     let mem = vec![empty; (*desc).count as usize].into_boxed_slice();
     let start = mem.as_ptr() as usize;
     let end = start + mem.len() * DESC_SIZE as usize;
-    lock(heap_registry()).push((start, end));
+    let gpu_base = va_alloc((*desc).count as u64 * DESC_SIZE as u64);
+    let visible = (*desc).flags & 1 != 0;
+    lock(heap_registry()).push((start, end, if visible { gpu_base } else { 0 }));
     let heap = DescHeap {
         desc: *desc,
         mem,
-        gpu_base: va_alloc((*desc).count as u64 * DESC_SIZE as u64),
+        gpu_base,
     };
     hand_out(
         new_obj(desc_heap_vtable(), this, Kind::DescHeap(Box::new(heap))),
@@ -1375,9 +1454,10 @@ unsafe extern "win64" fn dev_create_root_sig(
     if blob.is_null() || len == 0 {
         return E_INVALIDARG;
     }
-    let bytes = std::slice::from_raw_parts(blob, len.min(1 << 20)).to_vec();
+    let bytes = std::slice::from_raw_parts(blob, len.min(1 << 20));
+    let layout = shader::parse_root(bytes);
     hand_out(
-        new_obj(root_sig_vtable(), this, Kind::RootSig(bytes)),
+        new_obj(root_sig_vtable(), this, Kind::RootSig(Box::new(layout))),
         iid,
         out,
     )
@@ -2185,6 +2265,8 @@ unsafe extern "win64" fn list_reset(this: *mut Obj, _alloc: *mut Obj, pso: *mut 
         pso: pso as usize,
         ..Default::default()
     };
+    l.root = None;
+    l.root_args.clear();
     S_OK
 }
 unsafe extern "win64" fn list_clear_state(this: *mut Obj, pso: *mut Obj) {
@@ -2193,6 +2275,8 @@ unsafe extern "win64" fn list_clear_state(this: *mut Obj, pso: *mut Obj) {
             pso: pso as usize,
             ..Default::default()
         };
+        l.root = None;
+        l.root_args.clear();
     }
 }
 
@@ -2215,9 +2299,15 @@ unsafe fn push_draw(
         return;
     }
     let pso = st.pso as *mut Obj;
-    let layout = match (!pso.is_null()).then(|| &(*pso).kind) {
-        Some(Kind::Pso(p)) if !p.compute => p.layout.clone(),
+    let (layout, shaders, elements) = match (!pso.is_null()).then(|| &(*pso).kind) {
+        Some(Kind::Pso(p)) if !p.compute => {
+            (p.layout.clone(), p.shaders.clone(), p.elements.clone())
+        }
         _ => return,
+    };
+    let cbs = match (&shaders, &l.root) {
+        (Some(_), Some(root)) => shader::constant_buffers(root, &l.root_args),
+        _ => Vec::new(),
     };
     let target = st.rt as *mut Obj;
     let Some(r) = res_of(target) else { return };
@@ -2241,7 +2331,69 @@ unsafe fn push_draw(
         first,
         base,
         first_instance,
+        shaders,
+        elements,
+        cbs,
     })));
+}
+
+// ── Signature racine et arguments (#1177) ──────────────────────────────────
+
+unsafe fn root_arg(this: *mut Obj, index: u32, f: impl FnOnce(&mut shader::RootArg)) {
+    if let Some(mut l) = list_of(this) {
+        let i = index.min(63) as usize;
+        if l.root_args.len() <= i {
+            l.root_args.resize(i + 1, shader::RootArg::None);
+        }
+        f(&mut l.root_args[i]);
+    }
+}
+unsafe extern "win64" fn list_root_sig(this: *mut Obj, sig: *mut Obj) {
+    if let Some(mut l) = list_of(this) {
+        l.root = match (!sig.is_null()).then(|| &(*sig).kind) {
+            Some(Kind::RootSig(r)) => Some(std::sync::Arc::new((**r).clone())),
+            _ => None,
+        };
+        l.root_args.clear();
+    }
+}
+unsafe extern "win64" fn list_root_table(this: *mut Obj, index: u32, base: u64) {
+    root_arg(this, index, |a| *a = shader::RootArg::Table(base));
+}
+unsafe extern "win64" fn list_root_cbv(this: *mut Obj, index: u32, va: u64) {
+    root_arg(this, index, |a| *a = shader::RootArg::Va(va));
+}
+unsafe fn set_constants(a: &mut shader::RootArg, values: &[u32], dest: u32) {
+    if !matches!(a, shader::RootArg::Constants(_)) {
+        *a = shader::RootArg::Constants(Vec::new());
+    }
+    if let shader::RootArg::Constants(v) = a {
+        let end = (dest as usize + values.len()).min(64);
+        if v.len() < end {
+            v.resize(end, 0);
+        }
+        for (k, x) in values.iter().enumerate() {
+            if let Some(slot) = v.get_mut(dest as usize + k) {
+                *slot = *x;
+            }
+        }
+    }
+}
+unsafe extern "win64" fn list_root_constant(this: *mut Obj, index: u32, value: u32, dest: u32) {
+    root_arg(this, index, |a| set_constants(a, &[value], dest));
+}
+unsafe extern "win64" fn list_root_constants(
+    this: *mut Obj,
+    index: u32,
+    n: u32,
+    data: *const u32,
+    dest: u32,
+) {
+    if data.is_null() {
+        return;
+    }
+    let values = std::slice::from_raw_parts(data, n.min(64) as usize).to_vec();
+    root_arg(this, index, |a| set_constants(a, &values, dest));
 }
 
 unsafe extern "win64" fn list_draw(
@@ -2962,6 +3114,8 @@ struct GlBackend {
     programs: [u32; 2],
     vbo: u32,
     ibo: u32,
+    /// Programmes traduits depuis DXBC et leurs tampons uniformes (#1177).
+    shaders: shader::GlShaders,
 }
 
 unsafe impl Send for GlBackend {}
@@ -2983,6 +3137,7 @@ impl GlBackend {
             programs: [0; 2],
             vbo: 0,
             ibo: 0,
+            shaders: shader::GlShaders::default(),
         })
     }
 
@@ -3062,8 +3217,14 @@ impl GlBackend {
             _ => return false,
         };
         let with_color = dc.layout.iter().any(|a| a.0 == 1 && gl_attr(a.1).is_some());
-        let Some(prog) = self.program(with_color) else {
-            return false;
+        // Shaders du programme quand ils sont traduits, sinon passe-plat.
+        let passthrough = if dc.shaders.is_some() {
+            0
+        } else {
+            match self.program(with_color) {
+                Some(p) => p,
+                None => return false,
+            }
         };
         let Some(g) = gl::gl() else { return false };
         if self.vbo == 0 {
@@ -3081,7 +3242,6 @@ impl GlBackend {
         ] {
             (g.Disable)(cap);
         }
-        (g.UseProgram)(prog);
         (g.BindBuffer)(gl::GL_ARRAY_BUFFER, self.vbo);
         (g.BufferData)(
             gl::GL_ARRAY_BUFFER,
@@ -3095,7 +3255,22 @@ impl GlBackend {
             0
         };
         let mut enabled = Vec::new();
-        for &(loc, f, off) in &dc.layout {
+        if let Some(t) = &dc.shaders {
+            match self
+                .shaders
+                .bind(g, t, &dc.elements, dc.vb.2, base, &dc.cbs)
+            {
+                Some(e) => enabled = e,
+                None => {
+                    (g.BindBuffer)(gl::GL_ARRAY_BUFFER, 0);
+                    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
+                    return false;
+                }
+            }
+        } else {
+            (g.UseProgram)(passthrough);
+        }
+        for &(loc, f, off) in dc.layout.iter().filter(|_| dc.shaders.is_none()) {
             let Some((n, ty, norm)) = gl_attr(f) else {
                 continue;
             };
@@ -3710,16 +3885,8 @@ pub unsafe extern "win64" fn D3D12GetInterface(
     E_NOINTERFACE
 }
 
-/// Sérialise une signature racine dans un format maison (« WLRS ») : elle
-/// n'est relue que par `CreateRootSignature`, qui accepte aussi les blobs
-/// produits par le compilateur Microsoft.
-fn root_blob(version: u32, params: u32) -> Vec<u8> {
-    let mut v = b"WLRS".to_vec();
-    v.extend(version.to_le_bytes());
-    v.extend(params.to_le_bytes());
-    v
-}
-
+/// Sérialise une signature racine en `RTS0` dans un conteneur DXBC, le
+/// format du compilateur : `CreateRootSignature` relit l'un comme l'autre.
 pub unsafe extern "win64" fn D3D12SerializeRootSignature(
     desc: *const u32,
     version: u32,
@@ -3732,7 +3899,8 @@ pub unsafe extern "win64" fn D3D12SerializeRootSignature(
     if desc.is_null() || blob.is_null() {
         return E_INVALIDARG;
     }
-    *blob = new_blob(root_blob(version, *desc));
+    let _ = version;
+    *blob = new_blob(shader::serialize_root(desc as *const u8, false));
     S_OK
 }
 
@@ -3747,7 +3915,12 @@ pub unsafe extern "win64" fn D3D12SerializeVersionedRootSignature(
     if desc.is_null() || blob.is_null() {
         return E_INVALIDARG;
     }
-    *blob = new_blob(root_blob(*desc, *desc.add(2)));
+    // D3D12_VERSIONED_ROOT_SIGNATURE_DESC : Version (1 = 1.0, 2 = 1.1),
+    // puis la description à l'octet 8.
+    *blob = new_blob(shader::serialize_root(
+        (desc as *const u8).add(8),
+        *desc == 2,
+    ));
     S_OK
 }
 
@@ -4068,6 +4241,237 @@ mod tests {
         assert_eq!(px(&p, 3, 7), [0, 0, 255, 255]);
     }
 
+    /// Shaders HLSL (conteneur du compilateur maison) avec trois sources de
+    /// tampons de constantes : CBV racine (b0, sommets), constantes 32 bits
+    /// (b1) et table de descripteurs CBV (b2, pixels). Rend les pixels.
+    unsafe fn scenario_shaders(gpu: Gpu) -> Vec<u8> {
+        const SRC: &str = "cbuffer Off : register(b0) { float4 off; };\n\
+            cbuffer Col : register(b1) { float4 col; };\n\
+            cbuffer Tint : register(b2) { float4 tint; };\n\
+            float4 vs_main(float3 p : POSITION) : SV_Position {\n\
+                return float4(p.xy + off.xy, p.z, 1.0);\n\
+            }\n\
+            float4 ps_main() : SV_Target { return col * tint; }\n";
+        let compile = |entry: &str, target: &str| {
+            let mut inc = |_: &str, _: bool| None;
+            let c = crate::dlls::hlsl::compile(SRC, &[], &mut inc, entry, target, 0)
+                .expect("HLSL compilé");
+            crate::dlls::hlsl::container(&c)
+        };
+        let (vs, ps) = (compile("vs_main", "vs_5_0"), compile("ps_main", "ps_5_0"));
+
+        let dev = new_device(gpu);
+        let q: *mut Obj = create(
+            |i, o| dev_create_queue(dev, &QueueDesc::default(), i, o),
+            0x0ec8_70a6,
+        );
+        let alloc: *mut Obj = create(|i, o| dev_create_allocator(dev, 0, i, o), 0x6102_dee4);
+        let list: *mut Obj = create(
+            |i, o| dev_create_list(dev, 0, 0, alloc, std::ptr::null_mut(), i, o),
+            0x5b16_0d0f,
+        );
+        let rtv_heap: *mut Obj = create(
+            |i, o| {
+                let d = HeapDesc {
+                    ty: 2,
+                    count: 1,
+                    flags: 0,
+                    node_mask: 0,
+                };
+                dev_create_desc_heap(dev, &d, i, o)
+            },
+            0x8efb_471d,
+        );
+        let cbv_heap: *mut Obj = create(
+            |i, o| {
+                let d = HeapDesc {
+                    ty: 0,
+                    count: 4,
+                    flags: 1,
+                    node_mask: 0,
+                };
+                dev_create_desc_heap(dev, &d, i, o)
+            },
+            0x8efb_471d,
+        );
+        let mut rtv = 0usize;
+        heap_cpu_start(rtv_heap, &mut rtv);
+        let def = HeapProperties {
+            ty: HEAP_DEFAULT,
+            ..Default::default()
+        };
+        let mut rt_desc = tex(8, 8, 1, 28);
+        rt_desc.flags = FLAG_RENDER_TARGET;
+        let rt: *mut Obj = create(
+            |i, o| dev_create_committed(dev, &def, 0, &rt_desc, 0, std::ptr::null(), i, o),
+            0x6964_42be,
+        );
+        dev_create_rtv(dev, rt, std::ptr::null(), rtv);
+        let up = HeapProperties {
+            ty: HEAP_UPLOAD,
+            ..Default::default()
+        };
+        // Sommets (36 octets) puis deux tampons de constantes à 256 et 512.
+        let ub: *mut Obj = create(
+            |i, o| dev_create_committed(dev, &up, 0, &buffer(1024), 0, std::ptr::null(), i, o),
+            0x6964_42be,
+        );
+        let verts: [f32; 9] = [-1.0, 0.0, 0.0, 3.0, 0.0, 0.0, -1.0, 4.0, 0.0];
+        let off: [f32; 4] = [0.0, -1.0, 0.0, 0.0];
+        let tint: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+        let mut p: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(ub, 0, std::ptr::null(), &mut p), S_OK);
+        std::ptr::copy_nonoverlapping(verts.as_ptr() as *const u8, p, 36);
+        std::ptr::copy_nonoverlapping(off.as_ptr() as *const u8, p.add(256), 16);
+        std::ptr::copy_nonoverlapping(tint.as_ptr() as *const u8, p.add(512), 16);
+        res_unmap(ub, 0, std::ptr::null());
+        let va = res_va(ub);
+        // CBV b2 dans le deuxième descripteur du tas visible.
+        let mut cpu = 0usize;
+        heap_cpu_start(cbv_heap, &mut cpu);
+        let cbv: [u64; 2] = [va + 512, 256];
+        dev_create_cbv(dev, cbv.as_ptr(), cpu + DESC_SIZE as usize);
+        let mut gpu_start = 0u64;
+        heap_gpu_start(cbv_heap, &mut gpu_start);
+        let rbp = HeapProperties {
+            ty: HEAP_READBACK,
+            ..Default::default()
+        };
+        let rb: *mut Obj = create(
+            |i, o| dev_create_committed(dev, &rbp, 0, &buffer(256 * 8), 0, std::ptr::null(), i, o),
+            0x6964_42be,
+        );
+
+        // Signature racine : CBV b0 (sommets), 4 constantes b1, table b2.
+        let range: [u32; 5] = [2, 1, 2, 0, u32::MAX];
+        let mut params = [0u8; 96];
+        let put = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(&mut params, 0, 2);
+        put(&mut params, 24, 1);
+        put(&mut params, 32, 1);
+        put(&mut params, 40, 1);
+        put(&mut params, 48, 4);
+        put(&mut params, 64, 0);
+        put(&mut params, 72, 1);
+        params[80..88].copy_from_slice(&(range.as_ptr() as u64).to_le_bytes());
+        put(&mut params, 88, 5);
+        let mut rs_desc = [0u8; 40];
+        put(&mut rs_desc, 0, 3);
+        rs_desc[8..16].copy_from_slice(&(params.as_ptr() as u64).to_le_bytes());
+        let mut blob: *mut Obj = std::ptr::null_mut();
+        assert_eq!(
+            D3D12SerializeRootSignature(
+                rs_desc.as_ptr().cast(),
+                1,
+                &mut blob,
+                std::ptr::null_mut()
+            ),
+            S_OK
+        );
+        let sig: *mut Obj = create(
+            |i, o| dev_create_root_sig(dev, 0, blob_ptr(blob), blob_size(blob), i, o),
+            0xc54a_6b66,
+        );
+
+        let elem = InputElement {
+            semantic: c"POSITION".as_ptr(),
+            semantic_index: 0,
+            format: 6,
+            slot: 0,
+            offset: 0,
+            class: 0,
+            step: 0,
+        };
+        let mut pso_desc = [0u8; 656];
+        let w = |d: &mut [u8; 656], o: usize, v: u64| {
+            d[o..o + 8].copy_from_slice(&v.to_le_bytes());
+        };
+        w(&mut pso_desc, 0, sig as u64);
+        w(&mut pso_desc, 8, vs.as_ptr() as u64);
+        w(&mut pso_desc, 16, vs.len() as u64);
+        w(&mut pso_desc, 24, ps.as_ptr() as u64);
+        w(&mut pso_desc, 32, ps.len() as u64);
+        w(
+            &mut pso_desc,
+            PSO_INPUT_LAYOUT,
+            &elem as *const InputElement as u64,
+        );
+        put(&mut pso_desc, PSO_INPUT_LAYOUT + 8, 1);
+        put(&mut pso_desc, PSO_TOPOLOGY_TYPE, 3);
+        put(&mut pso_desc, PSO_NUM_RT, 1);
+        put(&mut pso_desc, PSO_RT_FORMATS, 28);
+        let pso: *mut Obj = create(
+            |i, o| dev_create_gfx_pso(dev, pso_desc.as_ptr(), i, o),
+            0x765a_30f3,
+        );
+
+        list_om_rts(list, 1, &rtv, 0, std::ptr::null());
+        list_clear_rtv(list, rtv, &[0.0, 0.0, 1.0, 1.0], 0, std::ptr::null());
+        list_set_pso(list, pso);
+        list_root_sig(list, sig);
+        list_root_cbv(list, 0, va + 256);
+        let col: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+        list_root_constants(list, 1, 4, col.as_ptr().cast(), 0);
+        list_root_table(list, 2, gpu_start + DESC_SIZE as u64);
+        list_topology(list, 4);
+        list_viewports(list, 1, &[0.0, 0.0, 8.0, 8.0, 0.0, 1.0]);
+        let view = VertexBufferView {
+            location: va,
+            size: 36,
+            stride: 12,
+        };
+        list_vbs(list, 0, 1, &view);
+        list_draw(list, 3, 1, 0, 0);
+        let dst = CopyLocation {
+            resource: rb,
+            ty: 1,
+            placed: PlacedFootprint {
+                offset: 0,
+                footprint: Footprint {
+                    format: 28,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            },
+        };
+        let src = CopyLocation {
+            resource: rt,
+            ty: 0,
+            placed: PlacedFootprint::default(),
+        };
+        list_copy_texture(list, &dst, 0, 0, 0, &src, std::ptr::null());
+        assert_eq!(list_close(list), S_OK);
+        queue_execute(q, 1, &list);
+        let mut out: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(rb, 0, std::ptr::null(), &mut out), S_OK);
+        let pixels = std::slice::from_raw_parts(out, 256 * 8).to_vec();
+        for o in [
+            pso, sig, blob, rb, ub, rt, cbv_heap, rtv_heap, list, alloc, q,
+        ] {
+            obj_release(o);
+        }
+        assert_eq!(obj_release(dev), 0, "toutes les références rendues");
+        pixels
+    }
+
+    /// #1177 : le dessin suit les shaders du programme et ses tampons de
+    /// constantes. Avec le shader passe-plat, le triangle restait blanc sur
+    /// la moitié haute.
+    #[test]
+    fn shaders_traduits_et_constantes_racine_opengl() {
+        if !gpu_caps::caps().opengl {
+            return;
+        }
+        let Some(b) = GlBackend::create() else { return };
+        let p = unsafe { scenario_shaders(Gpu::Gl(Mutex::new(b))) };
+        // Décalé d'une demi-hauteur vers le bas par b0 : le bas est couvert.
+        // Couleur : constantes racine (1, 1, 0) × table b2 (1, 0, 1) = rouge.
+        assert_eq!(px(&p, 3, 7), [255, 0, 0, 255], "bas de l'image");
+        assert_eq!(px(&p, 0, 0), [255, 0, 0, 255], "haut à gauche");
+    }
+
     #[test]
     fn capacites_et_sondage() {
         unsafe {
@@ -4116,7 +4520,7 @@ mod tests {
                 D3D12SerializeRootSignature(rs.as_ptr(), 1, &mut blob, std::ptr::null_mut()),
                 S_OK
             );
-            assert_eq!(blob_size(blob), 12);
+            assert_eq!(blob_size(blob), 68); // conteneur (44) + en-tête RTS0 (24)
             let sig: *mut Obj = create(
                 |i, o| dev_create_root_sig(dev, 0, blob_ptr(blob), blob_size(blob), i, o),
                 0xc54a_6b66,

@@ -1282,4 +1282,11 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1177 : Direct3D 12 sur OpenGL, shaders DXBC traduits et tampons de
+# constantes liés d'après la signature racine (RTS0).
+d3d12_shader_rs = (runtime_dlls / "d3d12_shader.rs").read_text(encoding="utf-8")
+ok("fn parse_root(" in d3d12_shader_rs and "fn constant_buffers(" in d3d12_shader_rs
+   and "list_root_constants" in (runtime_dlls / "d3d12.rs").read_text(encoding="utf-8")
+   and "shaders_traduits_et_constantes_racine_opengl" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine et tampons de constantes (#1177)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
