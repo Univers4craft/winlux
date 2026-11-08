@@ -155,6 +155,7 @@ pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod nls;
+pub mod normaliz;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
@@ -409,6 +410,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(normaliz::kernel32_exports());
                     for (name, addr) in kernel32_legacy::exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -550,6 +552,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 name: "version",
                 exports: version::exports(),
                 handle: 0,
+            },
+            // Noms de domaine internationaux : SslStream de .NET (#1183).
+            Builtin {
+                name: "normaliz",
+                exports: normaliz::exports(),
+                handle: fake_module(),
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
             Builtin {
