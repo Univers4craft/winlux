@@ -138,6 +138,7 @@ unsafe fn register_class_common(
     wnd_proc: usize,
     background: usize,
     instance: usize,
+    cursor: usize,
 ) -> usize {
     if name.is_empty() || wnd_proc == 0 {
         crate::process::set_last_error(87);
@@ -146,6 +147,7 @@ unsafe fn register_class_common(
     // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
     // classe ; on rend son atome.
     gui::set_class_style(&name, style);
+    gui::set_class_cursor(&name, cursor);
     gui::register_class(
         &name,
         ClassInfo {
@@ -165,7 +167,14 @@ pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
@@ -177,7 +186,14 @@ pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16 {
@@ -188,7 +204,14 @@ pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16 {
@@ -199,7 +222,14 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 // ---------- Création de fenêtres ----------
@@ -594,6 +624,26 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
     r
 }
 
+/// WM_SETCURSOR, que Windows envoie quand il retire de la file un message
+/// souris de la zone cliente, la souris n'étant pas capturée : l'application
+/// y choisit son curseur (barre en I sur le texte de Sumatra PDF, #1253).
+/// Sans lui, le pointeur restait une flèche partout.
+unsafe fn send_set_cursor(m: &Msg) {
+    const HTCLIENT: isize = 1;
+    if m.hwnd == 0 || gui::get_capture() != 0 {
+        return;
+    }
+    if !matches!(m.message, 0x0200 | 0x0201 | 0x0204 | 0x0207 | 0x020B) {
+        return;
+    }
+    send_message_w(
+        m.hwnd,
+        0x0020,
+        m.hwnd,
+        ((m.message as isize) << 16) | HTCLIENT,
+    );
+}
+
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
@@ -613,6 +663,7 @@ unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i
                 return 0;
             }
             gui::observe_key_message(&m);
+            send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
         }
@@ -700,6 +751,7 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
                 return 1;
             }
             gui::observe_key_message(&m);
+            send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
         }
