@@ -1,0 +1,41 @@
+# Temporaire (#662) : la dictée sur une vraie voix française (enregistrements
+# libres de Wikimedia Commons), modèles base et small. Retiré avant la fusion.
+name: speech-french-check
+on:
+  push:
+    branches: [claude/project-thread-xvfub4]
+jobs:
+  french:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Moteur et modèles
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q whisper.cpp ffmpeg jq
+          mkdir -p "$RUNNER_TEMP/models"
+          for name in ggml-base-q5_1.bin ggml-small-q5_1.bin; do
+            curl -sSL --fail -o "$RUNNER_TEMP/models/$name" "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/$name"
+          done
+      - name: Voix humaines françaises (Commons)
+        run: |
+          export WINLUX_SPEECH_MODEL_DIR="$RUNNER_TEMP/models"
+          ua="winlux-ci/1.0 (https://github.com/Univers4craft/winlux)"
+          for cat in "Category:Spoken_Wikipedia_-_French" "Category:Lingua_Libre_pronunciation-fra"; do
+            curl -sS -A "$ua" "https://commons.wikimedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtype=file&cmlimit=6&cmtitle=$cat" | jq -r '.query.categorymembers[].title' | head -3
+          done > titres.txt
+          cat titres.txt
+          n=0
+          while IFS= read -r title; do
+            n=$((n+1))
+            info=$(curl -sS -A "$ua" --get "https://commons.wikimedia.org/w/api.php" --data-urlencode "titles=$title" -d action=query -d format=json -d prop=imageinfo -d iiprop=url\|sha1\|size\|extmetadata)
+            url=$(echo "$info" | jq -r '.query.pages[].imageinfo[0].url')
+            echo "== $title"; echo "$url"; echo "$info" | jq -r '.query.pages[].imageinfo[0].extmetadata.LicenseShortName.value'
+            curl -sS -A "$ua" -L -o "src$n" "$url" || continue
+            ffmpeg -v quiet -y -i "src$n" -t 45 -ac 1 -ar 16000 "fr$n.wav" || continue
+            sha256sum "src$n" "fr$n.wav"
+            for model in base small; do
+              python3 -I scripts/winlux-speech.py set model $model
+              echo "-- $model"; /usr/bin/time -f "%e s" python3 -I scripts/winlux-speech.py transcribe "fr$n.wav" fr
+            done
+          done < titres.txt

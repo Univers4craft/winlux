@@ -615,6 +615,18 @@ def _gtk():
     return Gdk, GLib, Gtk, colors
 
 
+def _on_sigterm(GLib, callback):
+    """Arrêt propre sur SIGTERM (second Windows + H). unix_signal_add de GLib est
+    déprécié depuis PyGObject 3.52 (#1003) : GLibUnix.signal_add s'il existe."""
+    import gi
+    try:
+        gi.require_version("GLibUnix", "2.0")
+        from gi.repository import GLibUnix
+        return GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, callback)
+    except (ImportError, ValueError, AttributeError):
+        return GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, callback)
+
+
 def _floating(Gdk, Gtk, title):
     window = Gtk.Window(title=title)
     # Jamais le clavier : le texte dicté va dans la fenêtre où l'on écrivait.
@@ -788,7 +800,7 @@ def dictate():
         box.pack_end(_download_button(Gtk, GLib, status_label, listen), False, False, 0)
     GLib.timeout_add(100, lambda: (window.queue_draw(), True)[1])
     window.connect("destroy", finish)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: window.destroy() or False)
+    _on_sigterm(GLib, lambda: window.destroy() or False)
     area = _workarea(Gdk)
     window.set_default_size(min(520, area.width - 32), -1)
     window.show_all()
@@ -884,7 +896,7 @@ def captions(action="toggle"):
         Gtk.main_quit()
 
     window.connect("destroy", finish)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: window.destroy() or False)
+    _on_sigterm(GLib, lambda: window.destroy() or False)
     area = _workarea(Gdk)
     width = min(area.width - 48, 1100)
     # Largeur fixée pour que la hauteur soit celle de deux lignes à cette largeur.
