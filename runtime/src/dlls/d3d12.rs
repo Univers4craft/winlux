@@ -2991,9 +2991,14 @@ unsafe fn ensure_cpu(dev: &Device, r: &Res) {
                 if r.desc.format == 45 {
                     // Aspect profondeur seul : l'octet de stencil reste celui
                     // de la copie CPU.
-                    for (d4, s4) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-                        let z = u32::from_le_bytes([s4[0], s4[1], s4[2], s4[3]]) & 0x00FF_FFFF;
-                        let old = u32::from_le_bytes([d4[0], d4[1], d4[2], d4[3]]);
+                    let pairs = dst
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(src.as_chunks::<4>().0.iter());
+                    for (d4, s4) in pairs {
+                        let z = u32::from_le_bytes(*s4) & 0x00FF_FFFF;
+                        let old = u32::from_le_bytes(*d4);
                         d4.copy_from_slice(&((old & 0xFF00_0000) | z).to_le_bytes());
                     }
                 } else {
@@ -3445,15 +3450,13 @@ fn gl_depth_attachment(f: u32) -> u32 {
 /// D24_UNORM_S8_UINT : Direct3D range la profondeur dans les 24 bits bas et
 /// le stencil dans l'octet haut ; GL_UNSIGNED_INT_24_8 fait l'inverse.
 fn d24s8_to_gl(texels: &mut [u8]) {
-    for c in texels.chunks_exact_mut(4) {
-        let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]).rotate_left(8);
-        c.copy_from_slice(&v.to_le_bytes());
+    for c in texels.as_chunks_mut::<4>().0 {
+        *c = u32::from_le_bytes(*c).rotate_left(8).to_le_bytes();
     }
 }
 fn d24s8_from_gl(texels: &mut [u8]) {
-    for c in texels.chunks_exact_mut(4) {
-        let v = u32::from_le_bytes([c[0], c[1], c[2], c[3]]).rotate_right(8);
-        c.copy_from_slice(&v.to_le_bytes());
+    for c in texels.as_chunks_mut::<4>().0 {
+        *c = u32::from_le_bytes(*c).rotate_right(8).to_le_bytes();
     }
 }
 
