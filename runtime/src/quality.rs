@@ -323,7 +323,7 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
 
         let fd = libc::open(
             path_buf.as_ptr() as *const i8,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
             0o644,
         );
 

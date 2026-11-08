@@ -1217,6 +1217,9 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+ok("TEXT_FORMAT3" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8")
+   and "format3_and_layout4_answer_and_keep_their_settings" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 et IDWriteTextLayout4 (Paint.NET 5.1, #1118)")
 ok("fn create_bitmap_brush(" in (runtime_dlls / "d2d1_brush.rs").read_text(encoding="utf-8")
    and "bitmap_and_gradient_brushes_paint" in (runtime_dlls / "d2d1.rs").read_text(encoding="utf-8"),
    "Direct2D : CreateBitmapBrush, CreateImageBrush et dégradés (Notepad++ / Scintilla, #1124)")
@@ -1257,4 +1260,12 @@ ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
    and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
    and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
    "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
+# #1138 : glisser-déposer OLE depuis une liste (FileZilla) : DragDetect,
+# LVN_BEGINDRAG / TVN_BEGINDRAGW, puis dépôt sur la cible OLE sous le pointeur.
+controls_rs = (runtime_dlls / "controls/comctl.rs").read_text(encoding="utf-8")
+ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
+   and '"DragDetect"=>fn drag_detect' in (runtime_dlls / "user32.rs").read_text(encoding="utf-8")
+   and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
+   and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

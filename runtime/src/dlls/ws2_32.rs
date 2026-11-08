@@ -2821,7 +2821,7 @@ pub unsafe extern "win64" fn wsa_connect(
 
 // ── WSA Event API ───────────────────────────────────────────────────────
 pub extern "win64" fn wsa_create_event() -> usize {
-    let fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK) };
+    let fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
     if fd < 0 {
         set_error(last_error());
         return WSA_INVALID_EVENT;

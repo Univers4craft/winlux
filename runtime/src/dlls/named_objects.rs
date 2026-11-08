@@ -398,7 +398,23 @@ mod tests {
         retain(SYNC, &key);
         drop(other);
         release(SYNC, &key);
-        assert!(!first.path.exists());
+        // Un test parallèle qui lance un processus (fork puis exec) peut
+        // tenir, le temps de son exec, une copie du verrou partagé : le
+        // fichier reste alors, mais en orphelin que plus personne ne tient
+        // (#1140). Il ne doit jamais rester tenu.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while first.path.exists() {
+            let left = File::open(&first.path);
+            if left.is_ok_and(|f| flock(&f, libc::LOCK_EX | libc::LOCK_NB)) {
+                let _ = std::fs::remove_file(&first.path);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "objet encore tenu après le dernier release"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(open(SYNC, &key, None).is_none());
     }
 

@@ -112,6 +112,10 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 # OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
 step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur
 
+# Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
+# DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
+step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

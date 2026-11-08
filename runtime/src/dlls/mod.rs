@@ -297,15 +297,23 @@ pub fn shadowed_exports() -> Vec<String> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let module_of = |name: &str, addr: usize| {
-        definitions
+    // En build optimisé, l'éditeur de liens peut fusionner deux fonctions
+    // identiques de modules différents à la même adresse (#1145) : tous les
+    // modules qui la définissent sont alors servis.
+    let modules_of = |name: &str, addr: usize| {
+        let found: Vec<&str> = definitions
             .iter()
-            .find(|&&(n, a, _)| n == name && a == addr)
+            .filter(|&&(n, a, _)| n == name && a == addr)
             .map(|&(_, _, m)| {
                 m.trim_start_matches("winlux::")
                     .trim_start_matches("dlls::")
             })
-            .unwrap_or("hors exports!")
+            .collect();
+        if found.is_empty() {
+            vec!["hors exports!"]
+        } else {
+            found
+        }
     };
     let mut lines = BTreeSet::new();
     for &(name, addr, module) in &definitions {
@@ -314,7 +322,8 @@ pub fn shadowed_exports() -> Vec<String> {
         }
         let winners: BTreeSet<&str> = tables
             .iter()
-            .filter_map(|b| b.exports.get(name).map(|&a| module_of(name, a)))
+            .filter_map(|b| b.exports.get(name).map(|&a| modules_of(name, a)))
+            .flatten()
             .collect();
         let module = module
             .trim_start_matches("winlux::")
@@ -1825,9 +1834,29 @@ mod tests {
         let frozen = std::fs::read_to_string(&path).unwrap_or_default();
         let known: std::collections::HashSet<&str> =
             frozen.lines().filter(|l| !l.starts_with('#')).collect();
+        // Une ligne est connue si la liste figée a la même copie masquée et
+        // que ses modules servis en font partie : en build optimisé, des
+        // fonctions identiques fusionnées ajoutent des modules servis (#1145).
+        let split = |l: &str| {
+            let (head, served) = l.split_once("  ←  ")?;
+            let served: std::collections::BTreeSet<String> =
+                served.split(", ").map(str::to_string).collect();
+            Some((head.to_string(), served))
+        };
+        let known_split: Vec<_> = known.iter().filter_map(|l| split(l)).collect();
         let new: Vec<&String> = lines
             .iter()
-            .filter(|l| !known.contains(l.as_str()))
+            .filter(|l| {
+                if known.contains(l.as_str()) {
+                    return false;
+                }
+                let Some((head, served)) = split(l) else {
+                    return true;
+                };
+                !known_split
+                    .iter()
+                    .any(|(h, s)| *h == head && s.is_subset(&served))
+            })
             .collect();
         assert!(
             new.is_empty(),
