@@ -904,6 +904,12 @@ ok((runtime_dlls / "thread_ctl.rs").exists()
    and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
    ".NET autonome et WinForms : suspension de threads, contexte, WaitMessage, page de garde de pile")
 
+# #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
+   and '"Deprecat" not in out.stderr' in (SCRIPTS / "test-speech.py").read_text(),
+   "voix : arrêt sur SIGTERM sans avertissement de dépréciation de PyGObject")
+
 # Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
 # politique effective quand display_policy= est vide.
 ok("def display_policy" in settings_source and "display_policy(screens)" in settings_source
