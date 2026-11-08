@@ -48,6 +48,8 @@ crypt32.rs	SimpleChain	a-verifier
 crypt32.rs	SslExtraPara	a-verifier	
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
+d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
+d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d3d11.rs	Buffer	a-verifier	
 d3d11.rs	BufferVTable	a-verifier	
 d3d11.rs	D3D11InputElementDesc	a-verifier	
@@ -61,6 +63,12 @@ d3d11.rs	DxgiDevice	a-verifier
 d3d11.rs	DxgiDeviceVTable	a-verifier	
 d3d11.rs	Texture2D	a-verifier	
 d3d11.rs	Texture2DVTable	a-verifier	
+d3d11_ext.rs	ContextExt	a-verifier	vtable ID3D11DeviceContext1-4
+d3d11_ext.rs	DeviceExt	a-verifier	vtable ID3D11Device1-5
+d3d11_ext.rs	Fence	a-verifier	
+d3d11_ext.rs	FenceVTable	a-verifier	
+d3d11_ext.rs	Multithread	a-verifier	
+d3d11_ext.rs	MultithreadVTable	a-verifier	
 d3d12.rs	Barrier	a-verifier	
 d3d12.rs	CopyLocation	a-verifier	
 d3d12.rs	Descriptor	a-verifier	
