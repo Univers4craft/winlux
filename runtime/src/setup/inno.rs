@@ -1258,8 +1258,9 @@ pub fn install(
         if r.flag("Options", "DeleteKey") {
             inst.reg_delete_tree(&key);
         }
-        if r.flag("Options", "UninsDeleteEntireKey") && !inst.manifest.trees.contains(&key) {
-            inst.manifest.trees.push(key.clone());
+        let tree = key.to_lowercase();
+        if r.flag("Options", "UninsDeleteEntireKey") && !inst.manifest.trees.contains(&tree) {
+            inst.manifest.trees.push(tree);
         }
         let name = ctx.expand(&r.s("ValueName"));
         if r.flag("Options", "DeleteValue") {
@@ -1376,8 +1377,8 @@ pub fn install(
         };
         if create_key {
             let key = format!(
-                "hklm\\software\\microsoft\\windows\\currentversion\\uninstall\\{}",
-                inst.manifest.id.to_lowercase()
+                "hklm\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}",
+                inst.manifest.id
             );
             inst.manifest.uninstall_key = key.clone();
             let display = {
