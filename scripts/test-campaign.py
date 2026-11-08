@@ -1352,4 +1352,16 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+# ── Contrôles déposés dans scripts/campagne.d/ ──────────────────────────────
+# Un fichier par contrôle, nommé d'après l'issue (« 1234-sujet.py ») : deux PR
+# n'ajoutent plus leur contrôle à la même fin de fichier, donc ne sont plus en
+# conflit entre elles. Chaque fichier voit les noms de ce script (ok, ROOT,
+# SCRIPTS, NATIVE, runtime_dlls, Path…) ; ils passent dans l'ordre des noms.
+CAMPAGNE_D = SCRIPTS / "campagne.d"
+loaded = sorted(CAMPAGNE_D.glob("*.py"))
+before = checks
+for extra in loaded:
+    runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
+ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
+   f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
