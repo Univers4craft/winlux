@@ -99,6 +99,13 @@ check('button.connect("clicked", lambda _, value=action: self.execute(value))' i
       and settings.count("def confirm_browser(") == 1 and settings.count("\nBROWSER_PUBLISHERS = ") == 1
       and "self.browser_confirmed = \"browser-install-\" + ident" in settings,
       "« Installer … » demande confirmation, refus possible, avant tout téléchargement (une seule boîte)")
+_box = settings[settings.index("def confirm_browser(self, ident):"):]
+_box = _box[:_box.index("dialog.show_all()")]
+check("dialog.set_default_response(Gtk.ResponseType.CANCEL)" in _box and "install.set_sensitive(False)" in _box,
+      "confirmation : Annuler par défaut, Installer grisé tant que l'index n'est pas lu")
+for key in ("Installer", "Recherche de la version chez l’éditeur…",
+            "Version : connue au téléchargement (index de l’éditeur injoignable pour l’instant)", "Taille : {size} Mo"):
+    check(len(tr.get(key, ())) == 3, f"« {key} » sans ses traductions")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
