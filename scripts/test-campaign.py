@@ -957,6 +957,14 @@ ok("def display_policy" in settings_source and "display_policy(screens)" in sett
    and "Jamais de menu vide (#998)" in settings_source
    and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
    "Paramètres : menus Écran et Alimentation jamais vides (#998)")
+# ── Débordement de pile (#15) : rattrapé sur le thread principal, et sinon
+# rapport EXCEPTION_STACK_OVERFLOW (0xC00000FD) au lieu d'une faute dans Winlux.
+ok("fn resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh.rs").read_text()
+   and "resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh_hw.rs").read_text()
+   and "reported == 0xC000_00FD" in (ROOT / "runtime/src/quality.rs").read_text()
+   and "t_main_overflow" in (ROOT / "testc/msvc/hwexc_msvc.c").read_text()
+   and "overflow-thread" in (SCRIPTS / "test-hw-exceptions.sh").read_text(),
+   "débordement de pile : rattrapé sur tout thread, sinon rapport EXCEPTION_STACK_OVERFLOW (#15)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
