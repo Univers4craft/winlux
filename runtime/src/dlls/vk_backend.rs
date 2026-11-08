@@ -70,6 +70,8 @@ unsafe impl Send for VkImageAlloc {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PipelineKey {
     pub color_format: u32,
+    /// Profondeur (#1179) : format Vulkan, VkCompareOp, écriture.
+    pub depth: Option<(u32, u32, bool)>,
     /// (location, format Vulkan, offset) ; binding 0 seulement.
     pub attributes: Vec<(u32, u32, u32)>,
     pub with_color: bool,
@@ -88,10 +90,29 @@ pub(crate) fn dxgi_to_vk(format: u32) -> u32 {
         41 => VK_FORMAT_R32_SFLOAT,
         42 => VK_FORMAT_R32_UINT,
         45 => VK_FORMAT_D24_UNORM_S8_UINT,
+        55 => VK_FORMAT_D16_UNORM,
         57 => VK_FORMAT_R16_UINT,
         87 => VK_FORMAT_B8G8R8A8_UNORM,
         91 => VK_FORMAT_B8G8R8A8_SRGB,
         _ => VK_FORMAT_UNDEFINED,
+    }
+}
+
+/// Format Vulkan de profondeur.
+pub(crate) fn is_depth(format: u32) -> bool {
+    matches!(
+        format,
+        VK_FORMAT_D16_UNORM | VK_FORMAT_D32_SFLOAT | VK_FORMAT_D24_UNORM_S8_UINT
+    )
+}
+
+/// Aspect des copies entre tampon et image : la profondeur seule pour une
+/// image de profondeur (le stencil a sa propre disposition).
+fn copy_aspect(img: &VkImageAlloc) -> u32 {
+    if img.depth {
+        VK_IMAGE_ASPECT_DEPTH_BIT
+    } else {
+        VK_IMAGE_ASPECT_COLOR_BIT
     }
 }
 
@@ -403,7 +424,7 @@ impl VkContext {
         if format == VK_FORMAT_UNDEFINED || width == 0 || height == 0 {
             return None;
         }
-        let depth = matches!(format, VK_FORMAT_D32_SFLOAT | VK_FORMAT_D24_UNORM_S8_UINT);
+        let depth = is_depth(format);
         let aspect = if depth {
             VK_IMAGE_ASPECT_DEPTH_BIT
                 | if format == VK_FORMAT_D24_UNORM_S8_UINT {
@@ -680,7 +701,7 @@ impl VkContext {
             bufferRowLength: row_pixels,
             bufferImageHeight: 0,
             imageSubresource: VkImageSubresourceLayers {
-                aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                aspectMask: copy_aspect(img),
                 mipLevel: 0,
                 baseArrayLayer: 0,
                 layerCount: 1,
@@ -717,7 +738,7 @@ impl VkContext {
             bufferRowLength: row_pixels,
             bufferImageHeight: 0,
             imageSubresource: VkImageSubresourceLayers {
-                aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                aspectMask: copy_aspect(img),
                 mipLevel: 0,
                 baseArrayLayer: 0,
                 layerCount: 1,
@@ -929,8 +950,26 @@ impl VkContext {
                 viewMask: 0,
                 colorAttachmentCount: 1,
                 pColorAttachmentFormats: &key.color_format,
-                depthAttachmentFormat: VK_FORMAT_UNDEFINED,
-                stencilAttachmentFormat: VK_FORMAT_UNDEFINED,
+                depthAttachmentFormat: key.depth.map(|d| d.0).unwrap_or(VK_FORMAT_UNDEFINED),
+                stencilAttachmentFormat: match key.depth {
+                    Some((f, ..)) if f == VK_FORMAT_D24_UNORM_S8_UINT => f,
+                    _ => VK_FORMAT_UNDEFINED,
+                },
+            };
+            let (_, compare, write) = key.depth.unwrap_or((0, 7, false));
+            let depth_state = VkPipelineDepthStencilStateCreateInfo {
+                sType: VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                pNext: std::ptr::null(),
+                flags: 0,
+                depthTestEnable: 1,
+                depthWriteEnable: write as u32,
+                depthCompareOp: compare,
+                depthBoundsTestEnable: 0,
+                stencilTestEnable: 0,
+                front: VkStencilOpState::default(),
+                back: VkStencilOpState::default(),
+                minDepthBounds: 0.0,
+                maxDepthBounds: 1.0,
             };
             let info = VkGraphicsPipelineCreateInfo {
                 sType: VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -944,7 +983,11 @@ impl VkContext {
                 pViewportState: &vp,
                 pRasterizationState: &rs,
                 pMultisampleState: &ms,
-                pDepthStencilState: std::ptr::null(),
+                pDepthStencilState: if key.depth.is_some() {
+                    &depth_state as *const _ as *const c_void
+                } else {
+                    std::ptr::null()
+                },
                 pColorBlendState: &cb,
                 pDynamicState: &ds,
                 layout: self.pipeline_layout,
@@ -983,6 +1026,7 @@ impl VkContext {
         vertex: (VkBuffer, u64, u64),
         index: Option<(VkBuffer, u64, u32)>,
         counts: (u32, u32, u32, i32, u32),
+        depth: Option<&VkImageAlloc>,
     ) {
         unsafe {
             let attachment = VkRenderingAttachmentInfo {
@@ -1006,6 +1050,28 @@ impl VkContext {
                     height: target.height,
                 },
             };
+            // Tampon de profondeur gardé d'un dessin à l'autre (#1179).
+            let depth_attachment = depth.map(|d| VkRenderingAttachmentInfo {
+                sType: VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                pNext: std::ptr::null(),
+                imageView: d.view,
+                imageLayout: VK_IMAGE_LAYOUT_GENERAL,
+                resolveMode: 0,
+                resolveImageView: 0,
+                resolveImageLayout: 0,
+                loadOp: VK_ATTACHMENT_LOAD_OP_LOAD,
+                storeOp: VK_ATTACHMENT_STORE_OP_STORE,
+                clearValue: VkClearValue {
+                    color: VkClearColorValue { float32: [0.0; 4] },
+                },
+            });
+            let depth_ptr = depth_attachment
+                .as_ref()
+                .map_or(std::ptr::null(), |a| a as *const VkRenderingAttachmentInfo);
+            let stencil_ptr = match depth {
+                Some(d) if d.format == VK_FORMAT_D24_UNORM_S8_UINT => depth_ptr,
+                _ => std::ptr::null(),
+            };
             let info = VkRenderingInfo {
                 sType: VK_STRUCTURE_TYPE_RENDERING_INFO,
                 pNext: std::ptr::null(),
@@ -1015,8 +1081,8 @@ impl VkContext {
                 viewMask: 0,
                 colorAttachmentCount: 1,
                 pColorAttachments: &attachment,
-                pDepthAttachment: std::ptr::null(),
-                pStencilAttachment: std::ptr::null(),
+                pDepthAttachment: depth_ptr,
+                pStencilAttachment: stencil_ptr,
             };
             (self.dev13.cmd_begin_rendering)(cmd, &info);
             (self.dev.cmd_bind_pipeline)(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -1411,6 +1477,7 @@ mod tests {
         let rb = ctx.create_buffer(16 * 16 * 4, true).expect("rb");
         let key = PipelineKey {
             color_format: VK_FORMAT_R8G8B8A8_UNORM,
+            depth: None,
             attributes: vec![(0, VK_FORMAT_R32G32B32_SFLOAT, 0)],
             with_color: false,
         };
@@ -1441,6 +1508,7 @@ mod tests {
                 (vb.buffer, 0, 12),
                 None,
                 (3, 1, 0, 0, 0),
+                None,
             );
             ctx.memory_barrier(cmd);
             ctx.copy_image_to_buffer(cmd, &img, rb.buffer, 0, 16);

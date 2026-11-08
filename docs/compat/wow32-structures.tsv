@@ -216,6 +216,7 @@ vk_bindings.rs	VkMemoryBarrier	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceDynamicRenderingFeatures	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceExtendedDynamicStateFeaturesEXT	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineColorBlendStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineDepthStencilStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineDynamicStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineInputAssemblyStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineLayoutCreateInfo	interne	liaison Vulkan côté hôte
