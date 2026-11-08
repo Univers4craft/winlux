@@ -1377,4 +1377,7 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
+   and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
