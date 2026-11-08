@@ -208,9 +208,10 @@ impl Stream {
                 return None;
             }
             let app = quote(app);
+            let binary = quote(&super::backend::process_binary());
             let props = format!(
                 "media.type=Audio media.category={} media.role={} \
-                 application.name=\"{app}\" application.process.binary=\"{app}\" \
+                 application.name=\"{app}\" application.process.binary=\"{binary}\" \
                  node.name=\"{app}\" node.description=\"{app}\" \
                  node.latency={PERIOD}/{RATE}",
                 if capture { "Capture" } else { "Playback" },

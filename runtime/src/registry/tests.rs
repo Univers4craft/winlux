@@ -660,3 +660,70 @@ fn cles_reseau_toujours_presentes() {
         .iter()
         .any(|k| k == "Dnscache"));
 }
+
+#[test]
+fn vue_dynamique_fuseau_pages_clavier_polices() {
+    let mut data = Data::empty();
+    let paris = crate::intl::tz::parse_posix("CET-1CEST,M3.5.0,M10.5.0/3").unwrap();
+    live::time_zone(&mut data, &paris);
+    let dword = |d: &Data, k: &str, n: &str| {
+        let v = d.get(k, n).unwrap();
+        u32::from_le_bytes(v.bytes[..4].try_into().unwrap()) as i32
+    };
+    assert_eq!(dword(&data, live::TIME_ZONE, "Bias"), -60);
+    assert_eq!(dword(&data, live::TIME_ZONE, "DaylightBias"), -60);
+    let start = &data.get(live::TIME_ZONE, "DaylightStart").unwrap().bytes;
+    // Mars, dernier dimanche (semaine 5), 2 h.
+    assert_eq!(start.len(), 16);
+    assert_eq!((start[2], start[6], start[8]), (3, 5, 2));
+
+    live::code_page(&mut data, 1252, 850);
+    let acp = data.get(live::CODE_PAGE, "ACP").unwrap();
+    assert_eq!(string_of(&acp.bytes), "1252");
+    assert_eq!(
+        string_of(&data.get(live::CODE_PAGE, "OEMCP").unwrap().bytes),
+        "850"
+    );
+
+    let azerty = crate::intl::keyboard::from_xkb("fr", "").unwrap();
+    live::keyboard(&mut data, azerty);
+    assert_eq!(
+        string_of(&data.get(live::KEYBOARD, "1").unwrap().bytes),
+        "0000040c"
+    );
+
+    // Polices : un fichier présent est ajouté, la valeur d'un installateur
+    // est gardée, un fichier qui n'est pas une police est ignoré.
+    let dir = std::env::temp_dir().join(format!("winlux-fonts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.is_file());
+    std::fs::write(dir.join("lisezmoi.txt"), "pas une police").unwrap();
+    data.raw_ensure(live::FONTS);
+    data.set(
+        live::FONTS,
+        "Bidule (TrueType)",
+        REG_SZ,
+        utf16z("bidule.ttf"),
+    );
+    if let Some(src) = source {
+        std::fs::copy(src, dir.join("dejavu.ttf")).unwrap();
+    }
+    live::fonts(&mut data, live::FONTS, &dir, false);
+    let values = data.values(live::FONTS);
+    assert!(values.iter().any(|v| v.name == "Bidule (TrueType)"));
+    assert!(!values.iter().any(|v| string_of(&v.bytes) == "lisezmoi.txt"));
+    if source.is_some() {
+        assert!(
+            values
+                .iter()
+                .any(|v| v.name.ends_with("(TrueType)") && string_of(&v.bytes) == "dejavu.ttf"),
+            "{:?}",
+            values.iter().map(|v| &v.name).collect::<Vec<_>>()
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
