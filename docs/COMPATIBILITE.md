@@ -225,7 +225,7 @@ Limites honnêtes de la mesure :
 | Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, effets D3DX déjà compilés (fx_2_0 binaire), `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
-| Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison, `midiIn*` sur les claviers branchés) sur un mixeur PipeWire/Pulse/ALSA | `msacm32` |
+| Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison, `midiIn*` sur les claviers branchés), `msacm32` (conversions PCM) sur un mixeur PipeWire/Pulse/ALSA | codecs compressés de `msacm32` (ADPCM…) |
 | Vidéo | MP3/AAC décodés, DXVA2 H.264, DirectShow (graphe de lecture `CLSID_FilterGraph` sur le moteur multimédia) | chaîne Media Foundation (#23), filtres DirectShow fournis par le programme, `avicap32`, `evr` |
 | Réseau | Winsock TCP/UDP de base, DirectPlay 4 et 8 (`dplayx`, `dpnet`, parties entre PC Winlux), WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
 | Sécurité et crypto | bcrypt, une partie de crypt32, jetons simplifiés | CryptoAPI ancienne (`CryptAcquireContext`…), `ncrypt`, magasins de certificats, ACL réelles |
@@ -586,7 +586,7 @@ Ampleur : **M**. Suivi : #271.
 ### 12. Anciens DirectX et multimédia
 
 Les effets D3DX livrés déjà compilés (fx_2_0 binaire, #909), la chaîne Media Foundation de lecture (#23),
-`msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
+les codecs compressés de `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
 toujours en 32 bits (point 3).
 
 Fait (#237) : `ddraw.dll` maison (DirectDraw 1, 2, 4 et 7 : surfaces 8, 16,
@@ -597,7 +597,8 @@ textures, tampons, blocs d'états, déclarations et shaders vs.1.1 / ps.1.x) ;
 `midiOut*` et `midiStream*` jouent sur un synthétiseur General MIDI maison
 (128 instruments par familles, percussions sur le canal 10, 64 voix) ;
 `midiIn*` lit les claviers et interfaces MIDI branchés (/dev/snd/midiC*D*,
-statut courant, temps réel, système exclusif dans les tampons). Ces
+statut courant, temps réel, système exclusif dans les tampons) ; `msacm32`
+convertit le PCM (8, 16, 24, 32 bits, flottant, canaux, fréquence). Ces
 objets lisent eux-mêmes la disposition x86 de leurs structures : ils servent
 les jeux 32 bits comme les 64 bits.
 
