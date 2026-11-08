@@ -194,6 +194,95 @@ pub unsafe extern "win64" fn get_volume_path_name_w(
     1
 }
 
+/// Nom de volume `\\?\Volume{GUID}\` de la racine d'un lecteur : GUID
+/// stable, tiré de la lettre et du périphérique Linux qui porte le lecteur.
+fn volume_name_for_root(root: &str) -> Result<String, u32> {
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
+    const ERROR_INVALID_NAME: u32 = 123;
+    const ERROR_NOT_A_REPARSE_POINT: u32 = 4390;
+    if !root.ends_with('\\') {
+        return Err(ERROR_INVALID_NAME);
+    }
+    let up = root.to_ascii_uppercase();
+    if up.starts_with("\\\\?\\VOLUME{") && up.ends_with("}\\") && root.len() == 49 {
+        return Ok(root.to_string());
+    }
+    let b = up.as_bytes();
+    let target = crate::paths::to_linux(root);
+    let meta = std::fs::metadata(&target).map_err(|_| ERROR_FILE_NOT_FOUND)?;
+    // Seules les racines de lecteur sont des points de montage ici.
+    if b.len() != 3 || !b[0].is_ascii_uppercase() || b[1] != b':' {
+        return Err(ERROR_NOT_A_REPARSE_POINT);
+    }
+    use std::os::unix::fs::MetadataExt;
+    // FNV-1a 64 bits de la lettre et du numéro de périphérique.
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    for byte in [b[0]].into_iter().chain(meta.dev().to_le_bytes()) {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    Ok(format!(
+        "\\\\?\\Volume{{{:08x}-{:04x}-{:04x}-{:04x}-{:012x}}}\\",
+        0x5749_4E4Cu32, // « WINL »
+        (h >> 48) as u16,
+        0x4000 | ((h >> 32) as u16 & 0x0FFF),
+        0x8000 | ((h >> 16) as u16 & 0x3FFF),
+        (h & 0xFFFF) << 32 | u64::from(b[0]),
+    ))
+}
+
+/// GetVolumeNameForVolumeMountPointW (#1112, diagnostic de Paint.NET).
+pub unsafe extern "win64" fn get_volume_name_for_volume_mount_point_w(
+    mount_point: *const u16,
+    out: *mut u16,
+    len: u32,
+) -> i32 {
+    if mount_point.is_null() || out.is_null() {
+        set_last_error(87);
+        return 0;
+    }
+    match volume_name_for_root(&wstr(mount_point)) {
+        Ok(name) if (len as usize) > name.len() => {
+            crate::dlls::put_w(&name, out, len);
+            1
+        }
+        Ok(_) => {
+            set_last_error(206); // ERROR_FILENAME_EXCED_RANGE
+            0
+        }
+        Err(e) => {
+            set_last_error(e);
+            0
+        }
+    }
+}
+
+pub unsafe extern "win64" fn get_volume_name_for_volume_mount_point_a(
+    mount_point: *const u8,
+    out: *mut u8,
+    len: u32,
+) -> i32 {
+    if mount_point.is_null() || out.is_null() {
+        set_last_error(87);
+        return 0;
+    }
+    match volume_name_for_root(&cstr(mount_point)) {
+        Ok(name) if (len as usize) > name.len() => {
+            std::ptr::copy_nonoverlapping(name.as_ptr(), out, name.len());
+            *out.add(name.len()) = 0;
+            1
+        }
+        Ok(_) => {
+            set_last_error(206);
+            0
+        }
+        Err(e) => {
+            set_last_error(e);
+            0
+        }
+    }
+}
+
 /// QueryFullProcessImageNameW : chemin Windows du programme d'un processus.
 pub unsafe extern "win64" fn query_full_process_image_name_w(
     process: usize,
@@ -1772,6 +1861,8 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "GetLogicalDriveStringsA" => fn get_logical_drive_strings_a,
         "GetLogicalDriveStringsW" => fn get_logical_drive_strings_w,
         "GetVolumePathNameW" => fn get_volume_path_name_w,
+        "GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w,
+        "GetVolumeNameForVolumeMountPointA" => fn get_volume_name_for_volume_mount_point_a,
         "QueryFullProcessImageNameA" => fn query_full_process_image_name_a,
         "QueryFullProcessImageNameW" => fn query_full_process_image_name_w,
         "GetCommState" => fn get_comm_state,
@@ -1889,6 +1980,41 @@ pub fn crt_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nom_de_volume_d_une_racine_de_lecteur() {
+        let w = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let mut out = [0u16; 50];
+        let ok = unsafe {
+            get_volume_name_for_volume_mount_point_w(w("C:\\").as_ptr(), out.as_mut_ptr(), 50)
+        };
+        assert_eq!(ok, 1);
+        let n = out.iter().position(|&c| c == 0).unwrap();
+        let name = String::from_utf16_lossy(&out[..n]);
+        assert!(name.starts_with("\\\\?\\Volume{5749"), "{name}");
+        assert!(name.ends_with("}\\") && name.len() == 49, "{name}");
+        // Stable, et rendu tel quel quand on le repasse.
+        assert_eq!(volume_name_for_root("C:\\"), Ok(name.clone()));
+        assert_eq!(volume_name_for_root(&name), Ok(name.clone()));
+        // Barre oblique finale exigée ; un dossier n'est pas un point de montage.
+        assert_eq!(volume_name_for_root("C:"), Err(123));
+        let dir = crate::paths::to_linux("C:\\volume_1112");
+        let _ = std::fs::create_dir_all(&dir);
+        assert_eq!(volume_name_for_root("C:\\volume_1112\\"), Err(4390));
+        let _ = std::fs::remove_dir(&dir);
+        assert_eq!(volume_name_for_root("C:\\absent_1112\\"), Err(2));
+        // Tampon trop court.
+        let r = unsafe {
+            get_volume_name_for_volume_mount_point_w(w("C:\\").as_ptr(), out.as_mut_ptr(), 20)
+        };
+        assert_eq!(r, 0);
+        let mut a = [0u8; 50];
+        let r = unsafe {
+            get_volume_name_for_volume_mount_point_a(c"C:\\".as_ptr().cast(), a.as_mut_ptr(), 50)
+        };
+        assert_eq!(r, 1);
+        assert_eq!(&a[..49], name.as_bytes());
+    }
 
     #[test]
     fn mul_div_rounds_like_windows() {
