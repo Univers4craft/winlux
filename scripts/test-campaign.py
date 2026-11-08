@@ -817,6 +817,22 @@ ok("let is_path = value.contains(" in (ROOT / "runtime/src/dlls/kernel32.rs").re
    and (ROOT / "testexe/src/bin/loadlib_search.rs").exists()
    and "test-loadlibrary-personal-cwd.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "LoadLibraryExW d'une DLL système depuis le Bureau sans demande d'autorisation (#1019)")
+# #1033-#1036 : IA locale 1,5B en VM. Pas de réglage pour « Bonjour », pas de dossier
+# que la question ne nomme pas, Programmes Windows toujours proposé pour un .exe,
+# bouton par défaut mis en évidence dans « Arrêter l'activation ? ».
+ok("def setting_relevant" in assistant_source and "def mentions_setting" in assistant_source
+   and "FOLDER_WORDS = {" in assistant_source and 'page = "10" if program else' in assistant_source
+   and 'keep.get_style_context().add_class("suggested-action")' in assistant_source,
+   "IA locale : aucune action hors sujet, page Programmes Windows pour un .exe, choix par défaut visible (#1033-#1036)")
+# #1042 : ReadFile de zéro octet sur un tube attend des données (libuv) : sinon
+# `claude.exe auth login` relançait sa lecture en boucle, 300 Mo par seconde.
+ok("fn wait_pipe_readable" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "fn zero_byte_read_on_a_pipe_waits_for_data" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "tube : lecture de zéro octet bloquante comme sous Windows, plus de boucle de Claude Code (#1042)")
+# #1038 : demande d'autorisation sans affichage joignable -> refus pour cette fois, rien de mémorisé.
+ok("Gtk.init_check(sys.argv)[0]" in (SCRIPTS / "winlux-permission.py").read_text()
+   and "#1038" in (SCRIPTS / "test-permission.py").read_text(),
+   "autorisations : affichage injoignable jamais enregistré comme un refus (#1038)")
 # #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
 ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
    "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")
