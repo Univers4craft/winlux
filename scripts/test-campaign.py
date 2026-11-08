@@ -147,6 +147,10 @@ ok("SYSTEM_TOOLS" in setup_run and "is_linux_program" in setup_run and "WINLUX_S
 ok((ROOT / "scripts/test-setup-run.sh").is_file()
    and "scripts/test-setup-run.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "test des programmes lancés par un installateur NSIS en CI (#179)")
+setup_mod = (ROOT / "runtime/src/setup/mod.rs").read_text()
+ok('format!("{root}\\\\{sub}")\n' in setup_mod
+   and "Software\\\\DemoApp\\\\Réglages" in (ROOT / "scripts/test-setup-run.sh").read_text(),
+   "installateurs NSIS/Inno : les noms de clés de registre gardent leur casse (#830)")
 msi_actions = (ROOT / "runtime/src/msi/actions.rs").read_text()
 ok("Phase::Uninstall" in msi_actions and "ServiceInstall" in msi_actions and "setup::run" in msi_actions,
    "msiexec : actions personnalisées EXE (installation et désinstallation) et services (#833)")
