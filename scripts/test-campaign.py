@@ -1329,4 +1329,9 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+# #1199 : stylet (pression, inclinaison) pour Photoshop : WM_POINTER et wintab32.
+ok('"GetPointerPenInfo" => fn get_pointer_pen_info' in (runtime_dlls / "pointer.rs").read_text(encoding="utf-8")
+   and 'name: "wintab32"' in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
+   and "stylet_en_messages_pointeur_avec_pression" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Stylet : WM_POINTER avec pression et inclinaison, wintab32.dll maison (#1199)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
