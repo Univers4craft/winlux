@@ -1352,6 +1352,9 @@ ok("fn parse_root(" in d3d12_shader_rs and "fn constant_buffers(" in d3d12_shade
 ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
    and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
    "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
+ok("unsafe fn has_own_caption" in (runtime_dlls / "user32.rs").read_text()
+   and "cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre" in (SCRIPTS / "test-all.sh").read_text(),
+   "Fenêtre sans barre de titre à elle (Electron sans page) : cadre du gestionnaire gardé, toujours fermable (#1211)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
@@ -1388,11 +1391,29 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
    and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
+# #1198 : WMI en lecture (WbemLocator, ROOT\\CIMV2, WQL, classes Win32_*),
+# CoInitializeSecurity / CoSetProxyBlanket, en 64 et en 32 bits.
+wbem_rs = (runtime_dlls / "wbem.rs").read_text(encoding="utf-8")
+ok("CLSID_WBEM_LOCATOR" in wbem_rs and '"Win32_VideoController"' in wbem_rs
+   and '"CoSetProxyBlanket"=>fn' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
+   and "IWBEMCLASSOBJECT" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "wmi_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "wmi32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
+   and "wmi_par_com" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "WMI : WbemLocator, WQL et dix classes Win32_*, en x64 et en x86 (#1198)")
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
-# #1195 : SSE 4.2 et voisins annoncés comme CPUID les voit (Photoshop).
-ok('38 => f("sse4.2")' in (runtime_dlls / "kernel32_misc.rs").read_text(encoding="utf-8")
-   and "instructions_sse4_et_avx512_suivent_cpuid" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2 et AVX-512F selon CPUID (#1195)")
+# ── Contrôles déposés dans scripts/campagne.d/ ──────────────────────────────
+# Un fichier par contrôle, nommé d'après l'issue (« 1234-sujet.py ») : deux PR
+# n'ajoutent plus leur contrôle à la même fin de fichier, donc ne sont plus en
+# conflit entre elles. Chaque fichier voit les noms de ce script (ok, ROOT,
+# SCRIPTS, NATIVE, runtime_dlls, Path…) ; ils passent dans l'ordre des noms.
+CAMPAGNE_D = SCRIPTS / "campagne.d"
+loaded = sorted(CAMPAGNE_D.glob("*.py"))
+before = checks
+for extra in loaded:
+    runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
+ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
+   f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
