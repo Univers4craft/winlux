@@ -104,6 +104,10 @@ step "Volume et DLL intégrées vues par Paint.NET (#1112, #1113)" cargo test -q
 # dossiers sans point, locale par nom de la session, SetThread*UILanguage(s).
 step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" cargo test -q -p winlux -- etoile_point_etoile_liste_aussi_les_noms_sans_point locale_par_defaut_suit_la_langue_de_la_session langue_d_interface_du_thread_et_langues_preferees
 
+# Programme Windows absent (#1133) : CreateProcess rend FALSE et
+# ERROR_FILE_NOT_FOUND, sans runtime enfant qui écrit sur stderr.
+step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- programme_windows_absent_echoue_sans_lancer_de_runtime
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

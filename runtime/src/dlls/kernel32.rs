@@ -5517,6 +5517,21 @@ pub unsafe extern "win64" fn create_pipe(
     1
 }
 
+/// Nom de programme Windows (`.exe`, `.com`) : sans fichier, CreateProcess échoue.
+fn is_windows_program_name(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"))
+}
+
+/// ERROR_PATH_NOT_FOUND si le dossier du programme manque, sinon
+/// ERROR_FILE_NOT_FOUND.
+fn missing_program_error(path: &std::path::Path) -> u32 {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() && !dir.is_dir() => 3,
+        _ => 2,
+    }
+}
+
 unsafe fn create_process_common(
     application: Option<String>,
     command_line: *const u8,
@@ -5587,9 +5602,12 @@ unsafe fn create_process_common(
             args = argv;
         }
     }
+    // msiexec.exe, reg.exe et regedit.exe intégrés : pas de fichier sur disque.
+    let mut builtin_tool = false;
     if !host_path.exists() && crate::msi::is_msiexec(&host_path) {
         // msiexec.exe est intégré au runtime : `winlux msiexec.exe …`.
         host_path = std::path::PathBuf::from("msiexec.exe");
+        builtin_tool = true;
     }
     if !host_path.exists()
         && (crate::registry::cli::is_reg(&host_path)
@@ -5606,6 +5624,15 @@ unsafe fn create_process_common(
             format!("{name}.exe")
         };
         host_path = std::path::PathBuf::from(name);
+        builtin_tool = true;
+    }
+    // Programme Windows introuvable (Powershell.exe lancé par ScreenToGif) :
+    // échec rendu à l'appelant, comme sous Windows, au lieu de lancer un
+    // runtime qui écrit « lecture impossible » sur stderr (#1133).
+    if !builtin_tool && !host_path.exists() && is_windows_program_name(&host_path) {
+        crate::trace!("CreateProcess : {exe:?} introuvable");
+        crate::process::set_last_error(missing_program_error(&host_path));
+        return 0;
     }
     // Un « .exe » qui est en réalité un programme Linux (ELF ou script
     // « #! », par exemple un lien bash.exe → /usr/bin/bash) s'exécute
@@ -9800,6 +9827,41 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn programme_windows_absent_echoue_sans_lancer_de_runtime() {
+        // #1133 : ScreenToGif lance Powershell.exe ; CreateProcess doit
+        // rendre FALSE avec ERROR_FILE_NOT_FOUND, sans processus enfant.
+        let _teb = crate::process::test_teb();
+        for (line, code) in [
+            ("Programme_absent_1133.exe -NoProfile\0", 2),
+            ("C:\\dossier_absent_1133\\outil.exe\0", 3),
+        ] {
+            let mut info = ProcessInformation {
+                process: 0,
+                thread: 0,
+                process_id: 0,
+                thread_id: 0,
+            };
+            set_last_error(0);
+            let ok = unsafe {
+                create_process_a(
+                    std::ptr::null(),
+                    line.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut info,
+                )
+            };
+            assert_eq!(ok, 0, "{line}");
+            assert_eq!(get_last_error(), code, "{line}");
+            assert_eq!(info.process, 0);
+        }
+    }
     /// GetTickCount64 compte depuis le démarrage du système, pas depuis son
     /// premier appel (#534) : la valeur suit /proc/uptime dès le départ.
     #[test]
