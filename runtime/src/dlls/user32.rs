@@ -785,6 +785,19 @@ pub unsafe extern "win64" fn def_window_proc_w(
 pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
+    // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
+    // (fenêtres de premier niveau seulement).
+    if gui::window_parent(hwnd).unwrap_or(0) == 0 {
+        let state = match cmd {
+            2 | 6 | 7 | 11 => Some(gui::WINDOW_MINIMIZED),
+            3 => Some(gui::WINDOW_MAXIMIZED),
+            9 => Some(gui::WINDOW_NORMAL),
+            _ => None,
+        };
+        if let Some(state) = state {
+            with_backend(|b| b.set_window_state(hwnd, state));
+        }
+    }
     if cmd != gui::SW_HIDE {
         gui::request_paint(hwnd);
     }
@@ -1618,12 +1631,16 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
     was_disabled as i32
 }
 
-pub unsafe extern "win64" fn is_iconic(_hwnd: usize) -> i32 {
-    0 // Pas de minimisation dans Winlux pour l'instant
+pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
+    let mut state = gui::WINDOW_NORMAL;
+    with_backend(|b| state = b.window_state(hwnd));
+    (state == gui::WINDOW_MINIMIZED) as i32
 }
 
-pub unsafe extern "win64" fn is_zoomed(_hwnd: usize) -> i32 {
-    0
+pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {
+    let mut state = gui::WINDOW_NORMAL;
+    with_backend(|b| state = b.window_state(hwnd));
+    (state == gui::WINDOW_MAXIMIZED) as i32
 }
 
 // =====================================================================

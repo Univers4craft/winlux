@@ -2397,6 +2397,10 @@ pub struct MenuBarItem {
 
 /// Rendu et événements hôte. `headless` n'affiche rien ; X11 traduit les
 /// événements du serveur en messages Win32.
+pub const WINDOW_NORMAL: u8 = 0;
+pub const WINDOW_MINIMIZED: u8 = 1;
+pub const WINDOW_MAXIMIZED: u8 = 2;
+
 pub trait GuiBackend: Send {
     /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
     fn pump(&mut self) -> Vec<PendingEvent> {
@@ -2437,6 +2441,18 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
+    /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
+    /// gestionnaire de fenêtres.
+    fn set_window_state(&mut self, _hwnd: usize, _state: u8) {}
+    /// État actuel vu du gestionnaire (IsIconic, IsZoomed).
+    fn window_state(&mut self, _hwnd: usize) -> u8 {
+        WINDOW_NORMAL
+    }
+    /// Déplacement (`edge` = HTCAPTION) ou redimensionnement (HTLEFT…
+    /// HTBOTTOMRIGHT) mené par le gestionnaire de fenêtres à la souris, comme
+    /// la boucle modale de DefWindowProc sur WM_NCLBUTTONDOWN.
+    fn begin_move_resize(&mut self, _hwnd: usize, _edge: u32) {}
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
@@ -3386,6 +3402,35 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
                         crate::dlls::user32::send_message_w(hwnd, 0x0318, wparam, lparam & 0x4)
                     };
                 }
+            }
+            0
+        }
+        // WM_NCLBUTTONDOWN sur la légende ou un bord (fenêtre sans cadre qui
+        // dessine sa propre barre de titre) : le gestionnaire de fenêtres
+        // déplace ou redimensionne, comme la boucle modale de Windows.
+        0x00A1 if wparam == 2 || (10..=17).contains(&wparam) => {
+            with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
+            0
+        }
+        // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
+        0x0112 => {
+            match wparam & 0xFFF0 {
+                0xF020 => with_backend(|b| b.set_window_state(hwnd, WINDOW_MINIMIZED)),
+                0xF030 => with_backend(|b| b.set_window_state(hwnd, WINDOW_MAXIMIZED)),
+                0xF120 => with_backend(|b| b.set_window_state(hwnd, WINDOW_NORMAL)),
+                0xF010 => with_backend(|b| b.begin_move_resize(hwnd, 2)),
+                0xF000 => {
+                    let edge = (wparam & 0xF) as u32;
+                    // SC_SIZE + WMSZ_* (1 gauche … 8 bas-droite) → HT*.
+                    let ht = [0, 10, 11, 12, 13, 14, 15, 16, 17];
+                    if let Some(&h) = ht.get(edge as usize).filter(|&&h| h != 0) {
+                        with_backend(|b| b.begin_move_resize(hwnd, h));
+                    }
+                }
+                0xF060 => unsafe {
+                    crate::dlls::user32::post_message_w(hwnd, 0x0010, 0, 0);
+                },
+                _ => {}
             }
             0
         }

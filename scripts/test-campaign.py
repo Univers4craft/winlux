@@ -271,6 +271,10 @@ for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)
     ok(marker in explorer, f"Explorateur : {label}")
 ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
    "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("fn native_frameless" in (ROOT / "testexe/src/shell/wm.rs").read_text()
+   and "fn begin_move_resize" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "Explorateur : onglets dans la barre de titre, fenêtre sans cadre déplaçable (#888)")
+ok('b" GB", b" TB"' in explorer, "Explorateur : unités et dates dans la langue de la session (#916)")
 ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
    "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
