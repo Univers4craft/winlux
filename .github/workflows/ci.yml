@@ -505,6 +505,9 @@ jobs:
       - name: Mémoire au lancement d'un gros .exe (#997)
         run: python3 -B scripts/test-image-memory.py
 
+      - name: DLL système chargée depuis le Bureau sans demande (#1019)
+        run: sh scripts/test-loadlibrary-personal-cwd.sh
+
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
 
