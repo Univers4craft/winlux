@@ -760,6 +760,15 @@ perform() {
         power-screen-ac|power-screen-dc|power-sleep-ac|power-sleep-dc)
             winlux --power set "${action#power-}" next ;;
         power-lid) winlux --power set lid next ;;
+        # Valeur choisie dans un menu déroulant (#895) : revalidée par winlux --power.
+        power-set-screen-ac-[0-9]*|power-set-screen-dc-[0-9]*|power-set-sleep-ac-[0-9]*|power-set-sleep-dc-[0-9]*)
+            setting=${action#power-set-}; value=${setting##*-}
+            case "$value" in *[!0-9]*|'') return 1 ;; esac
+            winlux --power set "${setting%-*}" "$value" ;;
+        power-set-lid-nothing|power-set-lid-sleep|power-set-lid-hibernate|power-set-lid-shutdown|power-set-lid-display-off)
+            winlux --power set lid "${action#power-set-lid-}" ;;
+        power-set-button-nothing|power-set-button-sleep|power-set-button-hibernate|power-set-button-shutdown|power-set-button-display-off)
+            winlux --power set button "${action#power-set-button-}" ;;
         power-button) winlux --power set button next ;;
         # Même chemin que les réglages rapides et les touches (winlux-brightness).
         power-brightness-up)

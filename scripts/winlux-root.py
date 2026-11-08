@@ -86,6 +86,7 @@ CONTROL_POLICY = (
     (r"drivers-(install-[a-z-]+|remove-nvidia|firmware-update)", "admin"),
     (r"display-[a-z0-9x-]+", "user"),
     (r"power-hibernate-setup", "admin"),
+    (r"power-set-(screen|sleep)-(ac|dc)-[0-9]{1,5}", "user"),
     (r"power-[a-z-]+", "user"),
     (r"update-(check|apply|auto-on|auto-off|resume|pause-[1-5])", "user"),
     (r"update-hours-[0-9]{1,2}-[0-9]{1,2}", "user"),

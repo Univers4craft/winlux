@@ -49,6 +49,15 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Alimentation : menus déroulants (actions du capot et du bouton, délais)
+    "Ne rien faire": ("Do nothing", "No hacer nada", "Nichts unternehmen"),
+    "Mettre en veille prolongée": ("Hibernate", "Hibernar", "Ruhezustand"),
+    "Arrêter": ("Shut down", "Apagar", "Herunterfahren"),
+    "Éteindre l'écran": ("Turn off the display", "Apagar la pantalla", "Bildschirm ausschalten"),
+    "Écran et veille": ("Screen and sleep", "Pantalla y suspensión", "Bildschirm und Energiesparmodus"),
+    "Boutons et capot": ("Buttons and lid", "Botones y tapa", "Tasten und Deckel"),
+    "{count} h": ("{count} h", "{count} h", "{count} Std."),
+    "{count} min": ("{count} min", "{count} min", "{count} Min."),
     'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Révision : {value}': ('Revision: {value}', 'Revisión: {value}', 'Revision: {value}'),
     'Compilée le : {value}': ('Built on: {value}', 'Compilada el: {value}', 'Erstellt am: {value}'),
@@ -209,6 +218,7 @@ _TR = {
     'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
     'Définition recommandée': ('Recommended resolution', 'Resolución recomendada', 'Empfohlene Auflösung'),
     'Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).': ('Virtual machine detected ({name}): display adapted to the VM (software cursor).', 'Máquina virtual detectada ({name}): pantalla adaptada a la VM (cursor por software).', 'Virtuelle Maschine erkannt ({name}): Anzeige an die VM angepasst (Software-Cursor).'),
+    "Adaptation à l'écran": ('Fit to screen', 'Ajuste a la pantalla', 'An Bildschirm anpassen'),
     'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
     'Échelle −': ('Scale −', 'Escala −', 'Skalierung −'),
     'Automatique': ('Automatic', 'Automática', 'Automatisch'),
@@ -417,9 +427,8 @@ _VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware",
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
-    23: [(_t("Batterie"), "battery"), (_t("Mode"), "power_profile"), (_t("Écran éteint après"), "power_screen_now"),
-         (_t("Veille après"), "power_sleep_now"), (_t("Capot"), "power_lid"), (_t("Bouton d'alimentation"), "power_button"),
-         (_t("Luminosité (%)"), "power_brightness")],
+    # Mode, délais, capot et bouton : leurs menus déroulants montrent la valeur (#895).
+    23: [(_t("Batterie"), "battery"), (_t("Luminosité (%)"), "power_brightness")],
     8: [(_t("Définition"), "display_current"), (_t("Échelle"), "display_scale")],
     9: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     11: [(_t("Navigateur par défaut"), "browser_default")],
@@ -618,7 +627,20 @@ def _update_page():
 
 UPDATE_PAGE = 7
 # Mode d'alimentation lu (power-profiles) → nom affiché, comme ses boutons.
-POWER_PROFILE_NAMES = {"performance": "Performances maximales", "balanced": "Équilibré", "power-saver": "Économie d'énergie"}
+POWER_PROFILE_NAMES = {"performance": "Performances maximales", "balanced": "Équilibré", "saver": "Économie d'énergie",
+                       "power-saver": "Économie d'énergie"}
+# Mêmes listes que winlux --power (runtime/src/power/mod.rs : DELAYS, Action::ALL).
+POWER_DELAYS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 0)
+POWER_BUTTON_ACTIONS = (("nothing", "Ne rien faire"), ("sleep", "Mettre en veille"), ("hibernate", "Mettre en veille prolongée"),
+                        ("shutdown", "Arrêter"), ("display-off", "Éteindre l'écran"))
+# Boutons qui faisaient défiler une valeur : un menu déroulant à la place (#895).
+POWER_CHOICES = ("power-profile-", "power-screen-", "power-sleep-", "power-lid", "power-button")
+
+
+def delay_text(seconds):
+    if not seconds: return _t("Jamais")
+    if seconds >= 3600: return _t("{count} h").format(count=seconds // 3600)
+    return _t("{count} min").format(count=seconds // 60)
 
 
 def _power_modes():
@@ -907,6 +929,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.state_extra.set_no_show_all(True)
             card.pack_start(self.state_extra, False, False, 0)
             self.body.pack_start(card, False, False, 0)
+            self.state_card = card
         actions = list(ACTIONS.get(self.page, []))
         if self.page == 23:
             # Modes Économie / Normal / Turbo : seulement ceux que la machine sait appliquer.
@@ -914,6 +937,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
             _, actions = power_page_items([], actions, power_hardware())
+            choices = [(title, action) for title, action in actions if action.startswith(POWER_CHOICES)]
+            actions = [(title, action) for title, action in actions if not action.startswith(POWER_CHOICES)]
         if self.page == 11:
             # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
@@ -922,6 +947,19 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                        for verb, action in (("Installer {name}", "install"), ("Définir {name} par défaut", "default"), ("Ouvrir {name}", "launch"))]
         # Boutons à leur largeur naturelle, à la ligne quand la place manque
         # (allemand, petit écran) ; plus de grandes cases étirées.
+        if self.page == 8:
+            screens = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+            if screens.get("display_1_name"):
+                # Les écrans détaillés ont leurs menus (définition, fréquence, échelle) :
+                # plus de boutons « Échelle − / + » en double (#895). Reste le choix
+                # suivre la fenêtre de la VM / définition fixe, en menu lui aussi.
+                follow = [(action[len("display-"):], title) for title, action in actions if action in ("display-follow", "display-fixed")]
+                actions = []
+                if follow and screens.get("display_count", "1") == "1":
+                    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+                    card.get_style_context().add_class("card")
+                    self.choice_row(card, _t("Adaptation à l'écran"), follow, screens.get("display_policy", "follow"), "display-")
+                    self.body.pack_start(card, False, False, 0)
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
                            row_spacing=8, column_spacing=8, homogeneous=False)
         self.body.pack_start(flow, False, False, 0)
@@ -951,6 +989,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
         if extra: self.extra_page(self.page)
+        if self.page == 23: self.power_controls(choices)
         if self.page == UPDATE_PAGE:
             # Carte d'état, étapes, nouveautés et « Plus d'options » (#875-#882).
             colors = {"palette": EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0")),
@@ -973,6 +1012,55 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
             self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
+
+    def choice_row(self, parent, title, items, active, prefix):
+        """Une ligne « titre … menu déroulant » qui lance prefix + valeur choisie."""
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label=title, xalign=0, wrap=True), True, True, 0)
+        combo = Gtk.ComboBoxText(valign=Gtk.Align.CENTER)
+        for key, label in items: combo.append(str(key), label)
+        combo.set_active_id(str(active))
+        combo.connect("changed", lambda widget: widget.get_active_id() not in (None, str(active))
+                      and self.execute(prefix + widget.get_active_id()))
+        row.pack_start(combo, False, False, 0)
+        parent.pack_start(row, False, False, 0)
+        return combo
+
+    def power_controls(self, choices):
+        """Alimentation : mode, délais, capot et bouton en menus déroulants."""
+        if not choices: return
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        names = dict((action, title) for title, action in choices)
+        profiles = [(action[len("power-profile-"):], _t(POWER_PROFILE_NAMES.get(action[len("power-profile-"):], title)))
+                    for title, action in choices if action.startswith("power-profile-")]
+        if profiles:
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            card.get_style_context().add_class("card")
+            current = status.get("power_profile", "balanced")
+            if current == "power-saver": current = "saver"
+            self.choice_row(card, _t("Mode"), profiles, current, "power-profile-")
+            self.body.pack_start(card, False, False, 0)
+        delays = [(seconds, delay_text(seconds)) for seconds in POWER_DELAYS]
+        rows = [(f"power-{kind}", f"power_{kind.replace('-', '_')}") for kind in ("screen-ac", "screen-dc", "sleep-ac", "sleep-dc")]
+        if any(action in names for action, _ in rows):
+            self.label(_t("Écran et veille"), "section")
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            card.get_style_context().add_class("card")
+            for action, key in rows:
+                if action not in names: continue
+                value = status.get(key, "")
+                value = int(value) if value.isdigit() else 600
+                self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-")
+            self.body.pack_start(card, False, False, 0)
+        if "power-lid" in names or "power-button" in names:
+            self.label(_t("Boutons et capot"), "section")
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            card.get_style_context().add_class("card")
+            items = [(key, _t(label)) for key, label in POWER_BUTTON_ACTIONS]
+            for action, key in (("power-lid", "power_lid"), ("power-button", "power_button")):
+                if action in names:
+                    self.choice_row(card, names[action], items, status.get(key, "sleep"), f"power-set-{action[len('power-'):]}-")
+            self.body.pack_start(card, False, False, 0)
 
     def privacy_controls(self):
         """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
@@ -1180,6 +1268,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         """Lignes nom/valeur de la carte d'état ; le texte brut reste pour les résumés."""
         grid = getattr(self, "state_grid", None)
         if grid is None: return
+        # Rien à dire (ordinateur de bureau sur la page Alimentation) : pas de carte vide.
+        self.state_card.set_no_show_all(True)
+        self.state_card.set_visible(bool(rows) or bool(self.state.get_text().strip()))
         self.state.set_visible(not rows)
         grid.set_visible(bool(rows))
         self.state_extra.set_visible(bool(rows and extra))

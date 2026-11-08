@@ -64,6 +64,23 @@ check('if not power_hardware()[0]: PAGES[23] = _t("Alimentation")' in source, "t
 check("power_page_items(fields, [], power_hardware())" in source and "power_page_items([], actions, power_hardware())" in source,
       "page 23 filtrée à l'affichage")
 
+# Menus déroulants plutôt que des boutons qui font défiler la valeur (#895).
+delay_text = settings["delay_text"]
+check(delay_text(300) == "5 min" and delay_text(3600) == "1 h" and delay_text(0) == "Jamais", "délais lisibles")
+check(all(a.startswith(settings["POWER_CHOICES"]) for _, a in actions if a.startswith(("power-screen", "power-sleep", "power-lid", "power-button"))),
+      "délais, capot et bouton en menus")
+check("self.power_controls(choices)" in source and 'f"power-set-' in source, "page 23 en menus déroulants")
+import re as _re
+root_policy = runpy.run_path(str(HERE / "winlux-root.py"), run_name="power_root")["CONTROL_POLICY"]
+def allowed(action):
+    return any(_re.fullmatch(pattern, action) for pattern, _ in root_policy)
+check(allowed("power-set-screen-ac-300") and allowed("power-set-lid-sleep") and not allowed("power-set-screen-ac-3;x"),
+      "relais root : valeurs choisies acceptées, le reste refusé")
+control = (HERE / "winlux-control.sh").read_text()
+check('winlux --power set "${setting%-*}" "$value"' in control and 'winlux --power set lid "${action#power-set-lid-}"' in control,
+      "winlux-control applique la valeur choisie")
+check('"display-"' in source and "Adaptation à l'écran" in source, "page Écran : définition en menu")
+
 # Aucun texte public qui se compare à Windows 11.
 welcome = (ROOT / "testexe/src/shell/welcome.rs").read_text(encoding="latin-1")
 check("Windows 11" not in welcome, "« Windows 11 » dans la visite guidée")
