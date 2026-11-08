@@ -4428,6 +4428,34 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn set_no_initial_focus(&mut self, hwnd: usize) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        if w.child {
+            return;
+        }
+        let top = Self::top_xwin(w);
+        // _NET_WM_USER_TIME = 0 (EWMH) : ne pas donner le focus à
+        // l'affichage. La liste d'auto-complétion de Notepad++ prenait sinon
+        // toutes les frappes destinées à l'éditeur (#1127).
+        let Ok(Ok(atom)) = self
+            .conn
+            .intern_atom(false, b"_NET_WM_USER_TIME")
+            .map(|c| c.reply())
+        else {
+            return;
+        };
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            top,
+            atom.atom,
+            AtomEnum::CARDINAL,
+            &[0],
+        );
+        let _ = self.conn.flush();
+    }
+
     fn set_window_state(&mut self, hwnd: usize, state: u8) {
         let Some(w) = self.windows.get(&hwnd) else {
             return;

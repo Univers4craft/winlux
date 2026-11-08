@@ -2688,6 +2688,9 @@ pub trait GuiBackend: Send {
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
+    /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
+    /// gestionnaire ne doit pas lui donner le focus en l'affichant.
+    fn set_no_initial_focus(&mut self, _hwnd: usize) {}
     /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
     /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
     /// gestionnaire de fenêtres.
