@@ -390,6 +390,21 @@ void entry(void) {
         if (CALL(ctx, 14, Map, readraw, 0, 1, 0, &o) < 0 || !o.data) ExitProcess(79);
         if (*(const u32 *)o.data != SIZE * SIZE) ExitProcess(80);
         CALL(ctx, 15, Unmap, readraw, 0);
+        // #1184 : tampon STAGING copié depuis le tampon UAV, puis modifié
+        // par Map WRITE (qui garde le contenu). Unmap renvoyait la copie
+        // processeur périmée (des zéros) par-dessus le résultat du GPU.
+        BufferDesc rwb = {sizeof init, 3, 0, 0x30000 /* READ | WRITE */, 0, 0};
+        void *rw = 0;
+        if (CALL(dev, 3, CreateBuffer, &rwb, 0, &rw) < 0 || !rw) ExitProcess(81);
+        CALL(ctx, 47, Copy, rw, outbuf);
+        Mapped w = {0};
+        if (CALL(ctx, 14, Map, rw, 0, 2 /* WRITE */, 0, &w) < 0 || !w.data) ExitProcess(82);
+        ((u32 *)w.data)[0] = 0xABCD;
+        CALL(ctx, 15, Unmap, rw, 0);
+        if (CALL(ctx, 14, Map, rw, 0, 1, 0, &w) < 0 || !w.data) ExitProcess(83);
+        const u32 *rv = w.data;
+        if (rv[0] != 0xABCD || rv[5] != 6 * 3 + (63 - 5)) ExitProcess(84);
+        CALL(ctx, 15, Unmap, rw, 0);
         CALL(ctx, 69, SetShader, 0, 0, 0);
     }
 

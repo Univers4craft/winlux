@@ -1472,6 +1472,8 @@ unsafe fn dispatch(
     const GL_READ_WRITE: u32 = 0x88BA;
     for (u, v) in s.uavs.iter().enumerate() {
         if v.buf != 0 {
+            // Écrit par le compute shader : relu avant un Map (#1184).
+            super::mark_gpu_written(v.buf);
             (g.BindBufferRange)(
                 GL_SHADER_STORAGE_BUFFER,
                 crate::dlls::hlsl::storage_binding(true, u as u32),
