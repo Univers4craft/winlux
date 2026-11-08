@@ -1285,4 +1285,10 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
+# instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
+ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
+   and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
+   and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
