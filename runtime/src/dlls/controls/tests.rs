@@ -1468,3 +1468,45 @@ fn statique_ss_icon_garde_et_dessine_son_icone() {
     }
     assert_eq!(static_image(st), 0);
 }
+
+#[test]
+fn colonnes_ajustees_jamais_negatives_ni_chevauchees() {
+    // #1055 : wxWidgets insère ses colonnes avec cx = -2 (LVSCW_AUTOSIZE_USEHEADER)
+    // puis les règle par LVM_SETCOLUMNWIDTH -1 / -2.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 52, (0, 0, 400, 200));
+    for (i, name) in ["Nom du projet", "Date"].iter().enumerate() {
+        let t = w(name);
+        let mut col = LvColumnW {
+            mask: 0x2 | 0x4,
+            fmt: 0,
+            cx: -2,
+            text: t.as_ptr(),
+            text_max: 0,
+            sub_item: 0,
+        };
+        sendw(lv, 0x1061, i, &mut col as *mut LvColumnW as isize);
+    }
+    let w0 = sendw(lv, 0x101D, 0, 0);
+    let w1 = sendw(lv, 0x101D, 1, 0);
+    assert!(w0 > 0 && w1 > 0, "largeurs {w0} {w1}");
+    assert!(w0 > w1, "l'en-tête plus long donne la colonne plus large");
+    let t = w("un nom de projet vraiment très long");
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 0,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: t.as_ptr(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
+    sendw(lv, 0x101E, 0, -1);
+    assert!(sendw(lv, 0x101D, 0, 0) > w0, "ajustée au texte de la ligne");
+    sendw(lv, 0x101E, 1, -2);
+    assert_eq!(sendw(lv, 0x101D, 1, 0), w1, "colonne vide : ajustée à l'en-tête");
+}
