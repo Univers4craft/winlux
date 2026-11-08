@@ -194,6 +194,8 @@ if test -f "$out/com32.exe"; then
     echo "msxml32 : DOMDocument MSXML en x86 (VARIANT par valeur, nœuds, XPath, save/load)"
     check accprop32 'AccPropServices : tout est correct'
     echo "accprop32 : annotations d'accessibilité en x86 (MSAAPROPID et VARIANT par valeur, IAccPropServer)"
+    check wmi32 'WMI : tout est correct'
+    echo "wmi32 : WMI en x86 (WbemLocator, ExecQuery, VARIANT, CIMTYPE, SAFEARRAY de noms)"
 fi
 
 gui() {

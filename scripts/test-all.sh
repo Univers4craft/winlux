@@ -131,6 +131,7 @@ step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- ic
 step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
 step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
 step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l_icone_pour_get_rect
+step "WMI : WQL, classes Win32_*, parcours COM (#1198)" cargo test -q -p winlux -- wql_selection_et_filtres wmi_classes_du_systeme wmi_par_com
 
 # Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
