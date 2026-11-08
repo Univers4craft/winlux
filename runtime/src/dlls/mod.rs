@@ -24,6 +24,7 @@ pub mod advapi32_services;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod cabinet_lz;
 pub mod chromium_win32;
 pub mod clipboard;
 pub mod com_local;
@@ -145,6 +146,7 @@ pub mod mouse;
 pub mod mpr;
 pub mod msacm32;
 pub mod mscoree;
+pub mod mshwgst;
 pub mod msvcp140;
 pub mod msvcrt;
 pub mod msxml;
@@ -549,6 +551,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: version::exports(),
                 handle: 0,
             },
+            // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
+            Builtin {
+                name: "mshwgst",
+                exports: mshwgst::exports(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "shell32",
                 exports: {
@@ -909,6 +917,17 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "fontsub",
                 exports: absent_devices::fontsub_exports(),
+                handle: 0,
+            },
+            // Décompression de cabinets (FDI) et de fichiers SZDD (#26).
+            Builtin {
+                name: "cabinet",
+                exports: cabinet_lz::cabinet_exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "lz32",
+                exports: cabinet_lz::lz32_exports(),
                 handle: 0,
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).

@@ -2701,6 +2701,9 @@ pub trait GuiBackend: Send {
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
+    /// Fenêtre possédée avec barre de titre : boîte de dialogue pour le
+    /// gestionnaire (_NET_WM_WINDOW_TYPE_DIALOG).
+    fn set_dialog_type(&mut self, _hwnd: usize) {}
     /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
     /// gestionnaire ne doit pas lui donner le focus en l'affichant.
     fn set_no_initial_focus(&mut self, _hwnd: usize) {}
