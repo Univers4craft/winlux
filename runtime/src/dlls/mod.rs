@@ -168,6 +168,7 @@ pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
 pub mod pe_image;
+pub mod pointer;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -232,6 +233,7 @@ pub mod winmm_midi;
 pub mod winmm_midi_in;
 pub mod winmm_waveout;
 pub mod winspool;
+pub mod wintab32;
 pub mod wintrust;
 pub mod winusb;
 pub mod wpf_native;
@@ -489,6 +491,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     for (name, addr) in wpf_native::user32_exports() {
                         e.entry(name).or_insert(addr);
                     }
+                    // Stylet : API WM_POINTER et GetMessageExtraInfo (#1199).
+                    e.extend(pointer::user32_exports());
                     e
                 },
                 handle: 0,
@@ -559,6 +563,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "normaliz",
                 exports: normaliz::exports(),
+                handle: fake_module(),
+            },
+            // Tablette graphique WinTab (#1199).
+            Builtin {
+                name: "wintab32",
+                exports: wintab32::exports(),
                 handle: fake_module(),
             },
             // Reconnaissance de gestes de l'encre (WPF InkCanvas, #1132).
