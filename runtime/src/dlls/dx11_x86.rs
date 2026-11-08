@@ -760,6 +760,20 @@ unsafe extern "win64" fn sc_get_desc(this: usize, out: usize) -> i32 {
     hr
 }
 
+/// IDXGISwapChain1::GetHwnd(hwnd) : un HWND fait 4 octets en x86 (#1244).
+unsafe extern "win64" fn sc_get_hwnd(this: usize, out: usize) -> i32 {
+    if out == 0 {
+        return E_INVALIDARG;
+    }
+    let mut h = 0usize;
+    let f: unsafe extern "win64" fn(usize, *mut usize) -> i32 = std::mem::transmute(orig(this, 20));
+    let hr = f(this, &mut h);
+    if hr >= 0 {
+        wr32(out, h as u32);
+    }
+    hr
+}
+
 /// DXGI_ADAPTER_DESC à DESC3 : les trois SIZE_T font 4 octets en x86.
 /// `x86_size` : 292 (DESC), 296 (DESC1), 304 (DESC2 et DESC3).
 unsafe fn adapter_desc<const I: usize, const X86_SIZE: usize>(this: usize, out: usize) -> i32 {
@@ -817,6 +831,7 @@ fn override_for(name: &str, i: usize) -> Option<(usize, &'static str)> {
         ("DxgiDeviceVTable", 9) => o!(residency, "iii>i"),
         ("DxgiFactoryVTable", 10) => o!(fac_create_sc, "iii>i"),
         ("DxgiSwapChainVTable", 12) => o!(sc_get_desc, "i>i"),
+        ("DxgiSwapChainVTable", 20) => o!(sc_get_hwnd, "i>i"),
         ("DxgiAdapterVTable", 8) => o!(adapter_desc0, "i>i"),
         ("DxgiAdapterVTable", 10) => o!(adapter_desc1, "i>i"),
         ("DxgiAdapterVTable", 11) => o!(adapter_desc2, "i>i"),
@@ -926,7 +941,7 @@ mod tests {
             ("dlls::d3d11", "SimpleComVTable", 9),
             ("dlls::d3d11", "DxgiDeviceVTable", 20),
             ("dlls::dxgi", "DxgiAdapterVTable", 19),
-            ("dlls::dxgi", "DxgiSwapChainVTable", 18),
+            ("dlls::dxgi", "DxgiSwapChainVTable", 29),
             ("dlls::dxgi", "DxgiFactoryVTable", 32),
         ] {
             let s = crate::wow32::vtable_sigs(module, name).expect(name);

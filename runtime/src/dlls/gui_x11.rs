@@ -1093,6 +1093,7 @@ impl X11Backend {
             Some(scale) => dpi_scale(96.0, Some(scale)),
             None => automatic_scale(screen_density(&conn, scr)),
         };
+        gui::set_display_scale(scale);
         // Pincer pour zoomer : XInput 2.4 (Xorg 21.1+, pilote libinput).
         // Stylet : événements bruts XInput 2.2 sur la racine, qui donnent la
         // pression et l'inclinaison sans retirer les événements souris (#1199).
