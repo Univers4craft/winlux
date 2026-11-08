@@ -1189,6 +1189,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
 
     def execute(self, action, *extra):
         if self.process is not None or self.busy: return
+        if action.startswith("browser-install-"):
+            # Confirmé dans la fenêtre d'éditeur et de version (#923), sinon demandé.
+            if getattr(self, "browser_confirmed", None) != action:
+                self.confirm_browser(action[len("browser-install-"):])
+                return
+            self.browser_confirmed = None
         if action in ("reboot", "poweroff", "restart-session", "update-rollback"):
             dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
                                        text=_t("Confirmer cette opération ?"), secondary_text=_t("Enregistrez vos documents avant de continuer."))
@@ -1203,6 +1209,35 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.active_action = action
         self.notice.set_text(_t("Opération en cours…"))
         self.buttons.set_sensitive(False)
+
+    def confirm_browser(self, ident):
+        """Éditeur, version et source montrés avant d'installer un navigateur ;
+        on confirme ou on refuse (#923). L'index est lu en arrière-plan."""
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   text=_t("Installer {name} ?").format(name=BROWSER_NAMES[ident]))
+        dialog.format_secondary_text(_t("Recherche de la version chez l’éditeur…"))
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        install = dialog.add_button(_t("Installer"), Gtk.ResponseType.OK)
+        install.set_sensitive(False)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        self.browser_dialog = dialog
+        def filled(details):
+            if dialog.get_mapped() or dialog.get_visible():
+                title, text = browser_confirmation(ident, details)
+                dialog.set_property("text", title)
+                dialog.format_secondary_text(text)
+                install.set_sensitive(True)
+            return False
+        import threading
+        threading.Thread(target=lambda: GLib.idle_add(filled, browser_details(ident)), daemon=True).start()
+        def answered(window, response):
+            window.destroy()
+            self.browser_dialog = None
+            if response == Gtk.ResponseType.OK:
+                self.browser_confirmed = "browser-install-" + ident
+                self.execute(self.browser_confirmed)
+        dialog.connect("response", answered)
+        dialog.show_all()
 
     def show_browser_buttons(self, status):
         for action, button in getattr(self, "browser_buttons", {}).items():
@@ -1394,6 +1429,50 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
 
 # Ordre alphabétique : aucun navigateur mis en avant.
 BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+# Montré avant l'installation (#923) : l'éditeur, et le site d'où vient le
+# paquet (le même que SOURCES de winlux-browser-fetch, vérifié par le test).
+BROWSER_PUBLISHERS = {"chrome": "Google LLC", "edge": "Microsoft Corporation", "firefox": "Mozilla Corporation"}
+BROWSER_HOSTS = {"chrome": "dl.google.com", "edge": "packages.microsoft.com", "firefox": "packages.mozilla.org"}
+
+
+def browser_fetch_program():
+    for candidate in (os.environ.get("WINLUX_BROWSER_FETCH", ""), "/usr/lib/winlux/winlux-browser-fetch",
+                      "/usr/share/winlux/winlux-browser-fetch", str(Path(__file__).resolve().parent / "prepare-browser-packages.py")):
+        if candidate and os.access(candidate, os.X_OK): return candidate
+    return None
+
+
+def browser_details(ident, timeout=25):
+    """Version, adresse, empreinte et taille lues dans l'index de l'éditeur ; {} hors ligne."""
+    program = browser_fetch_program()
+    if program is None: return {}
+    try:
+        output = subprocess.run([program, "--info", ident], capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+
+
+def browser_confirmation(ident, details):
+    """(titre, texte) de la confirmation d'installation (#923), dans la langue de l'interface."""
+    from urllib.parse import urlparse
+    name = BROWSER_NAMES[ident]
+    host = urlparse(details.get("source", "")).hostname or BROWSER_HOSTS[ident]
+    lines = [_t("Éditeur : {publisher}").format(publisher=BROWSER_PUBLISHERS[ident])]
+    if details.get("version"):
+        lines.append(_t("Version : {version}").format(version=details["version"]))
+    else:
+        lines.append(_t("Version : connue au téléchargement (index de l’éditeur injoignable pour l’instant)"))
+    lines.append(_t("Source : https://{host}").format(host=host))
+    if details.get("size", "").isdigit():
+        lines.append(_t("Taille : {size} Mo").format(size=max(1, round(int(details["size"]) / 1_000_000))))
+    if details.get("sha256"):
+        lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 {digest}…).").format(digest=details["sha256"][:16]))
+    else:
+        lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 publiée par l’éditeur)."))
+    return _t("Installer {name} ?").format(name=name), "\n".join(lines)
+
+
 # Éditeur et dépôt officiel de chaque navigateur, les mêmes que le
 # téléchargeur (prepare-browser-packages.py, SOURCES) : vérifié par test.
 BROWSER_PUBLISHERS = {"chrome": ("Google", "https://dl.google.com/linux/chrome/deb/"),
