@@ -594,7 +594,7 @@ jobs:
       - name: Touches de volume du clavier sous openbox réel (pas de 2 %, sourdine, micro, indicateur)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-volume-keys.py
 
-      - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
+      - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, VPN, point d'accès, langues)
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-brightness.py
@@ -604,6 +604,10 @@ jobs:
           /usr/bin/python3 -B scripts/test-ecran-veille-retour.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-wifi.py
+          # VPN et point d'accès sans fil mobile (#660) : services, relais, pages GTK.
+          /usr/bin/python3 -B scripts/test-vpn-hotspot.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-vpn-hotspot.py
+          xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-vpn-hotspot.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
 
       - name: Navigation au clavier (menu Démarrer, réglages rapides)
