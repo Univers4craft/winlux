@@ -1310,6 +1310,26 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
+# (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
+ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
+   and "icone_standard_par_son_emplacement" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Icônes standard : SHGetStockIconInfo + SHDefExtractIcon rendent une vraie icône (#1169)")
+# #1170 : Themes\Personalize présent (Flow Launcher, Theme.ColorizeWindow).
+ok("fn personalize" in (ROOT / "runtime/src/registry/live.rs").read_text(encoding="utf-8")
+   and "vue_dynamique_personnalisation_presente" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Registre : Themes\\Personalize (AppsUseLightTheme…) toujours présent (#1170)")
+# #1168 : RegisterHotKey prend vraiment la combinaison (XGrabKey sur la racine),
+# WM_HOTKEY, refus ERROR_HOTKEY_ALREADY_REGISTERED si openbox la tient.
+ok("fn grab_hotkey" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
+   and "gui::register_hotkey" in (runtime_dlls / "electron_win32.rs").read_text(encoding="utf-8")
+   and "raccourci_global_unique_et_wm_hotkey" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "RegisterHotKey : prise réelle, WM_HOTKEY, refus si la combinaison est déjà tenue (#1168)")
+# #1191 : Chromium cherche Shell_NotifyIconGetRect au clic droit sur l'icône
+# de notification et s'arrête (CHECK) si shell32 ne l'exporte pas.
+ok('"Shell_NotifyIconGetRect"=>fn' in (runtime_dlls / "shell32.rs").read_text(encoding="utf-8")
+   and "rectangle_de_l_icone_pour_get_rect" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Zone de notification : Shell_NotifyIconGetRect exportée (clic droit de Claude pour Windows, #1191)")
 # #1177 : Direct3D 12 sur OpenGL, shaders DXBC traduits et tampons de
 # constantes liés d'après la signature racine (RTS0).
 d3d12_shader_rs = (runtime_dlls / "d3d12_shader.rs").read_text(encoding="utf-8")
