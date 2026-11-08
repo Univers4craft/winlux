@@ -2876,6 +2876,47 @@ fn activate_app(active: bool) {
     }
 }
 
+/// Fenêtre de premier niveau désactivée (propriétaire d'une boîte modale) :
+/// sous Windows, ni elle ni ses filles ne reçoivent clic ou clavier. Une
+/// fille seule désactivée garde le comportement des contrôles.
+fn input_disabled(hwnd: usize) -> bool {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    let map = lock(windows());
+    let mut h = hwnd;
+    for _ in 0..64 {
+        let Some(w) = map.get(&h) else {
+            return false;
+        };
+        if w.style & WS_CHILD == 0 || w.parent == 0 {
+            return w.style & WS_DISABLED != 0;
+        }
+        h = w.parent;
+    }
+    false
+}
+
+/// Boîte active d'une fenêtre désactivée : la fenêtre possédée, visible et
+/// active la plus récente (la boîte modale qui l'a désactivée).
+fn enabled_owned_popup(hwnd: usize) -> Option<usize> {
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_DISABLED: u32 = 0x0800_0000;
+    let map = lock(windows());
+    let mut top = hwnd;
+    for _ in 0..64 {
+        match map.get(&top) {
+            Some(w) if w.style & WS_CHILD != 0 && w.parent != 0 => top = w.parent,
+            _ => break,
+        }
+    }
+    map.iter()
+        .filter(|(&h, w)| {
+            h != top && w.parent == top && w.visible && w.style & (WS_CHILD | WS_DISABLED) == 0
+        })
+        .map(|(&h, _)| h)
+        .max()
+}
+
 /// Interroge le backend et publie les messages traduits dans les files cibles.
 pub fn pump_backend() {
     let events = {
@@ -2891,6 +2932,27 @@ pub fn pump_backend() {
         }
     }
     for e in events {
+        // Fenêtre désactivée par une boîte modale : ni clic ni focus. Un
+        // clic ou une activation ramène la boîte au premier plan, comme sous
+        // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
+        // la boîte Tonalité y laissait un geste à moitié fait, et la piste
+        // générée n'était plus jamais redessinée (#1120).
+        let mouse =
+            (0x0200..=0x020E).contains(&e.message) || (0x00A0..=0x00AD).contains(&e.message);
+        if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
+            let press = matches!(
+                e.message,
+                0x0201 | 0x0204 | 0x0207 | 0x00A1 | 0x00A4 | 0x00A7
+            );
+            if press || e.message == WM_SETFOCUS {
+                if let Some(popup) = enabled_owned_popup(e.hwnd) {
+                    let mut b = lock(backend());
+                    b.raise_window(popup);
+                    b.set_focus(popup);
+                }
+            }
+            continue;
+        }
         if e.message == WM_SETFOCUS {
             activate_app(true);
             let change = set_focus_from_backend(e.hwnd);
@@ -4950,6 +5012,31 @@ mod tests {
         assert!(pending_paint(hwnd, 0, 0).is_none());
         destroy_window(hwnd);
         assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn une_fenetre_desactivee_par_une_boite_modale_renvoie_a_la_boite() {
+        // #1120 : la fenêtre principale d'Audacity, désactivée par la boîte
+        // Tonalité, ne doit recevoir ni clic ni focus.
+        let main = fenetre_de_test();
+        let boite = fenetre_de_test();
+        let fille = fenetre_de_test();
+        set_window_parent(boite, main);
+        set_window_parent(fille, main);
+        set_window_style(fille, 0x4000_0000); // WS_CHILD
+        assert!(!input_disabled(fille));
+        set_window_style(main, 0x0800_0000); // WS_DISABLED (EnableWindow FALSE)
+        assert!(input_disabled(main));
+        assert!(
+            input_disabled(fille),
+            "une fille suit sa fenêtre principale"
+        );
+        assert!(!input_disabled(boite));
+        assert_eq!(enabled_owned_popup(fille), Some(boite));
+        set_window_style(main, 0);
+        for h in [fille, boite, main] {
+            destroy_window(h);
+        }
     }
 
     #[test]
