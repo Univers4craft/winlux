@@ -16,7 +16,10 @@
 //   9. PeekMessage(PM_NOREMOVE) voit un WM_TIMER échu et WaitMessage rend
 //      la main quand il l'est ;
 //  10. VirtualAlloc(MEM_WRITE_WATCH), GetWriteWatch et ResetWriteWatch
-//      (#965) : les pages écrites sont rendues, jamais une page non engagée.
+//      (#965) : les pages écrites sont rendues, jamais une page non engagée ;
+//  11. GetNetworkParams, GetIfTable, GetAdaptersInfo (#1048) : un tampon trop
+//      petit donne la taille à allouer, et le second appel réussit (.NET
+//      boucle sans fin sur une taille 0).
 // Code de sortie : 0 si tout passe, sinon le numéro du premier test raté.
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -49,6 +52,9 @@ __declspec(dllimport) int __stdcall WaitMessage(void);
 __declspec(dllimport) void *__stdcall CreateCompatibleDC(void *);
 __declspec(dllimport) u32 __stdcall GetObjectType(void *);
 __declspec(dllimport) int __stdcall DeleteDC(void *);
+__declspec(dllimport) u32 __stdcall GetNetworkParams(void *, u32 *);
+__declspec(dllimport) u32 __stdcall GetIfTable(void *, u32 *, int);
+__declspec(dllimport) u32 __stdcall GetAdaptersInfo(void *, u32 *);
 
 void *memset(void *d, int c, u64 n) {
     unsigned char *o = d;
@@ -196,12 +202,30 @@ static int write_watch(void) {
     return saw3 && saw5 ? 0 : 10;
 }
 
+static __declspec(align(16)) unsigned char netbuf[64 * 1024];
+
+// Comme .NET : demander la taille, allouer, recommencer. Deux appels au plus.
+static int net_params(void) {
+    u32 size = 0;
+    if (GetNetworkParams(0, &size) != 111 || size < 600 || size > sizeof netbuf) return 11;
+    if (GetNetworkParams(netbuf, &size) != 0 || netbuf[0] == 0) return 11;
+    size = 0;
+    if (GetIfTable(0, &size, 1) != 122 || size < 4 + 860 || size > sizeof netbuf) return 11;
+    if (GetIfTable(netbuf, &size, 1) != 0 || *(u32 *)netbuf == 0) return 11;
+    size = 0;
+    u32 r = GetAdaptersInfo(0, &size);
+    if (r == 232) return 0; // ERROR_NO_DATA : boucle locale seule
+    if (r != 111 || size < 704 || size > sizeof netbuf) return 11;
+    return GetAdaptersInfo(netbuf, &size) == 0 ? 0 : 11;
+}
+
 void entry(void) {
     u32 r = suspend_tests();
     if (!r) r = stack_guard();
     if (!r) r = wx_view();
     if (!r) r = messages();
     if (!r) r = write_watch();
+    if (!r) r = net_params();
     stop = 1;
     ExitProcess(r);
 }

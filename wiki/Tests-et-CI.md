@@ -53,6 +53,7 @@ bash scripts/build-tests.sh && bash scripts/test-runtime.sh
 | Partage, transfert | `sh scripts/test-share.sh`, `sh scripts/test-share-clients.sh`, `sh scripts/test-transfer.sh` |
 | Sessions, sauvegarde, bureau à distance | `sh scripts/test-sessions.sh`, `sh scripts/test-backup.sh`, `sh scripts/test-remote.sh` |
 | Store | `python3 -B scripts/test-store.py` |
+| Démarrage réel (GRUB, DHCP/DNS/HTTPS, persistance sur deux démarrages) | `sh scripts/test-system-vm.sh disque-jetable.qcow2 [iso]`, sur un disque jetable seulement : il écrit dans `/etc/winlux` |
 | Site web | `python3 -B site/build.py` (construit dans `build/site/`), `python3 -B scripts/test-site.py --render` (Node.js et Playwright pour le rendu) |
 | Menu Démarrer, fenêtres | `python3 -B scripts/test-start-icon.py`, `test-shell-popups.py`, `test-window-performance.py` |
 | Codecs audio réels | `ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux winmm::codecs -- --include-ignored` |

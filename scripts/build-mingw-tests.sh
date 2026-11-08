@@ -15,6 +15,8 @@ for src in "$root"/testc/*.c; do
     # games_suite : DLL système des jeux (hid, dnsapi, winhttp…).
     test "$name" = games_suite && libs="-lhid -ldnsapi -lwinhttp -lshell32 -ladvapi32 -luser32"
     test "$name" = gdiplus_suite && libs="-lgdiplus -lgdi32"
+    # service_suite : vrai service Windows en Unicode (wmain), #17.
+    test "$name" = service_suite && libs="-municode -ladvapi32"
     # shellcheck disable=SC2086
     "$cc" -O2 -Wall -Werror -o "$out/$name.exe" "$src" $libs
 done

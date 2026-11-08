@@ -111,12 +111,14 @@ pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
 pub mod icons;
+pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
+pub mod jumplist_com;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
@@ -141,6 +143,7 @@ pub mod mpr;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
+pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod nls;
@@ -149,6 +152,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
 pub mod powrprof;
@@ -230,7 +234,14 @@ macro_rules! exports {
     ($($name:literal => $kind:ident $val:expr),* $(,)?) => {{
         #[allow(unused_mut)]
         let mut m: $crate::dlls::Exports = std::collections::HashMap::new();
-        $( m.insert($name, $crate::exports!(@addr $kind $val)); )*
+        $( {
+            let a = $crate::exports!(@addr $kind $val);
+            // Tests seulement : chaque copie d'un export, pour repérer celles
+            // qu'aucune DLL ne sert (exports_masques, docs/compat/exports-masques.txt).
+            #[cfg(test)]
+            $crate::dlls::note_definition($name, a, module_path!());
+            m.insert($name, a);
+        } )*
         m
     }};
     (@addr fn $f:expr) => {{
@@ -240,6 +251,71 @@ macro_rules! exports {
         a
     }};
     (@addr data $v:expr) => { std::ptr::addr_of!($v) as usize };
+}
+
+/// Copies d'exports déclarées (nom, adresse, module), relevées en test.
+#[cfg(test)]
+static DEFINITIONS: std::sync::Mutex<Vec<(&'static str, usize, &'static str)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub fn note_definition(name: &'static str, addr: usize, module: &'static str) {
+    DEFINITIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((name, addr, module));
+}
+
+/// Copies masquées : un export défini dans un module mais qu'aucune DLL
+/// intégrée ne sert sous ce nom, parce qu'une autre copie l'a remplacé lors
+/// de l'assemblage (`extend`, le dernier gagne). Corriger ces copies-là ne
+/// change rien : c'est la copie servie qu'il faut corriger. Lignes triées
+/// « nom  module masqué  ←  module servi ».
+#[cfg(test)]
+pub fn shadowed_exports() -> Vec<String> {
+    use std::collections::{BTreeSet, HashSet};
+    let tables = builtins();
+    let served: HashSet<(&str, usize)> = tables
+        .iter()
+        .flat_map(|b| b.exports.iter().map(|(&n, &a)| (n, a)))
+        .collect();
+    let definitions = DEFINITIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let module_of = |name: &str, addr: usize| {
+        definitions
+            .iter()
+            .find(|&&(n, a, _)| n == name && a == addr)
+            .map(|&(_, _, m)| {
+                m.trim_start_matches("winlux::")
+                    .trim_start_matches("dlls::")
+            })
+            .unwrap_or("hors exports!")
+    };
+    let mut lines = BTreeSet::new();
+    for &(name, addr, module) in &definitions {
+        if served.contains(&(name, addr)) {
+            continue;
+        }
+        let winners: BTreeSet<&str> = tables
+            .iter()
+            .filter_map(|b| b.exports.get(name).map(|&a| module_of(name, a)))
+            .collect();
+        let module = module
+            .trim_start_matches("winlux::")
+            .trim_start_matches("dlls::");
+        if winners.contains(module) {
+            continue; // même fonction déclarée deux fois dans le même module
+        }
+        let winners = if winners.is_empty() {
+            "jamais servi".to_string()
+        } else {
+            winners.into_iter().collect::<Vec<_>>().join(", ")
+        };
+        lines.insert(format!("{name}  {module}  ←  {winners}"));
+    }
+    lines.into_iter().collect()
 }
 
 struct Builtin {
@@ -581,7 +657,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "oleaut32",
-                exports: oleaut32::exports(),
+                exports: {
+                    let mut e = oleaut32::exports();
+                    e.extend(oleaut32_var::exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -1029,7 +1109,7 @@ fn add_basics(all: &mut [Builtin]) {
         ("rpcrt4", games_win32::rpcrt4_exports()),
     ];
     // Fonctions relevées sur de vrais logiciels (apps_win32), en complément.
-    let apps: [(&str, Exports); 10] = [
+    let apps: [(&str, Exports); 11] = [
         ("winmm", apps_win32::winmm_exports()),
         ("gdi32", usp10::gdi32_exports()),
         ("kernel32", apps_win32::kernel32_exports()),
@@ -1037,6 +1117,7 @@ fn add_basics(all: &mut [Builtin]) {
         ("user32", apps_win32::user32_exports()),
         ("comctl32", apps_win32::comctl32_exports()),
         ("shell32", apps_win32::shell32_exports()),
+        ("shell32", image_list_com::shell32_exports()),
         ("advapi32", apps_win32::advapi32_exports()),
         ("msvcrt", apps_win32::crt_exports()),
         ("ucrtbase", apps_win32::crt_exports()),
@@ -1648,6 +1729,52 @@ pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{lookup, normalize, put_text_a, put_text_w};
+
+    /// Copies d'exports masquées, figées dans docs/compat/exports-masques.txt.
+    /// Une nouvelle copie masquée fait échouer le test : corriger la copie
+    /// servie et retirer l'autre, ou, si c'est voulu, régénérer la liste avec
+    /// WINLUX_EXPORTS_MASQUES=ecrire cargo test exports_masques.
+    #[test]
+    fn exports_masques() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/compat/exports-masques.txt");
+        let lines = super::shadowed_exports();
+        let text = format!(
+            "# Exports définis dans un module mais remplacés par une autre copie à\n\
+             # l'assemblage des DLL (runtime/src/dlls/mod.rs) : ces copies ne sont\n\
+             # jamais appelées. Format : nom  module masqué  ←  module(s) servi(s).\n\
+             # Régénérer : cd runtime && WINLUX_EXPORTS_MASQUES=ecrire cargo test exports_masques\n{}{}",
+            lines.join("\n"),
+            if lines.is_empty() { "" } else { "\n" }
+        );
+        if std::env::var("WINLUX_EXPORTS_MASQUES").as_deref() == Ok("ecrire") {
+            std::fs::write(&path, &text).unwrap();
+            return;
+        }
+        let frozen = std::fs::read_to_string(&path).unwrap_or_default();
+        let known: std::collections::HashSet<&str> =
+            frozen.lines().filter(|l| !l.starts_with('#')).collect();
+        let new: Vec<&String> = lines
+            .iter()
+            .filter(|l| !known.contains(l.as_str()))
+            .collect();
+        assert!(
+            new.is_empty(),
+            "{} nouvelle(s) copie(s) d'export masquée(s) : la copie corrigée n'est pas celle qui est servie.\n{}",
+            new.len(),
+            new.iter().map(|l| l.as_str()).collect::<Vec<_>>().join("\n")
+        );
+        // Une copie retirée laisse une ligne en trop : sans conséquence, la
+        // liste se régénère au passage (le test n'échoue que pour une copie
+        // masquée nouvelle).
+        if lines.len() != known.len() {
+            eprintln!(
+                "docs/compat/exports-masques.txt : {} copies masquées au lieu de {}, liste à régénérer.",
+                lines.len(),
+                known.len()
+            );
+        }
+    }
 
     #[test]
     fn get_proc_address_kernel32_colle_a_windows() {

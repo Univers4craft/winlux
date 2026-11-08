@@ -393,7 +393,9 @@ def stream_names():
         listing = ""
         while time.monotonic() < deadline:
             listing = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, env=env).stdout
-            if "application.name" in listing: break
+            # Attendre le flux de ffmpeg lui-même : un autre son de la session
+            # (notification.wav joué par pw-play) peut être listé avant lui.
+            if "mediaplayer.exe" in listing or "Lavf" in listing or "ffmpeg" in listing: break
             time.sleep(0.2)
         assert 'application.name = "Lecteur multimédia"' in listing, "flux ffmpeg sans le nom du lecteur : " + listing[-1500:]
         assert 'application.process.binary = "mediaplayer.exe"' in listing, "flux ffmpeg sans le vrai binaire : " + listing[-1500:]
