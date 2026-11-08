@@ -153,13 +153,13 @@ unsafe extern "win64" fn rpc_string_free(text: *mut *mut c_void) -> u32 {
 
 // ---------- kernel32 : noms de domaine internationaux ----------
 
-const IDN_BASE: u32 = 36;
-const IDN_TMIN: u32 = 1;
-const IDN_TMAX: u32 = 26;
+pub(crate) const IDN_BASE: u32 = 36;
+pub(crate) const IDN_TMIN: u32 = 1;
+pub(crate) const IDN_TMAX: u32 = 26;
 const IDN_SKEW: u32 = 38;
 const IDN_DAMP: u32 = 700;
 
-fn idn_adapt(mut delta: u32, points: u32, first: bool) -> u32 {
+pub(crate) fn idn_adapt(mut delta: u32, points: u32, first: bool) -> u32 {
     delta /= if first { IDN_DAMP } else { 2 };
     delta += delta / points;
     let mut k = 0;
@@ -244,7 +244,7 @@ pub fn idn_to_ascii(name: &str) -> Option<String> {
 
 /// `IdnToAscii(dwFlags, lpUnicodeCharStr, cchUnicodeChar, lpASCIICharStr,
 /// cchASCIIChar)` : nombre de caractères écrits (ou nécessaires).
-unsafe extern "win64" fn idn_to_ascii_w(
+pub(crate) unsafe extern "win64" fn idn_to_ascii_w(
     _flags: u32,
     input: *const u16,
     count: i32,

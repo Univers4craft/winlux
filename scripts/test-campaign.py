@@ -1036,6 +1036,12 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
    and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
    "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
 
+# #1190 : une méthode de base pas encore écrite lève MissingMethodException.
+ok("fn missing(class: &str, method: &str)" in (clr / "bcl.rs").read_text()
+   and "non implémenté\", method)" not in (clr / "bcl.rs").read_text()
+   and "une_methode_de_base_absente_leve_missing_method" in (clr / "tests.rs").read_text(),
+   "CLR : un appel de BCL absent lève MissingMethodException au lieu de rendre null (#1190)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'argv[1] == "overflow"' in (SCRIPTS / "winlux-tray.py").read_text()
@@ -1307,10 +1313,18 @@ ok("fn grab_hotkey" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
 ok('"Shell_NotifyIconGetRect"=>fn' in (runtime_dlls / "shell32.rs").read_text(encoding="utf-8")
    and "rectangle_de_l_icone_pour_get_rect" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Zone de notification : Shell_NotifyIconGetRect exportée (clic droit de Claude pour Windows, #1191)")
+ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
+   and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
+   "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+# #1183 : SslStream de .NET normalise le nom d'hôte par Normaliz.dll!IdnToAscii.
+ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
+   and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
+   and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
