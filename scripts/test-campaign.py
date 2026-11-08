@@ -727,6 +727,15 @@ ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in setti
    and (SCRIPTS / "test-settings-redesign.py").exists(),
    "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
 
+# #847 : WPF dessine son texte par IDWriteGlyphRunAnalysis et choisit le thème
+# Aero2 (styles visuels actifs), sans thémer les fenêtres Win32 classiques.
+uxtheme = (runtime_dlls / "uxtheme.rs").read_text()
+ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
+   and (runtime_dlls / "dwrite_glyphs.rs").exists()
+   and "fn IsThemeActive() -> i32 {\n    1\n}" in uxtheme
+   and "fn IsAppThemed() -> i32 {\n    0\n}" in uxtheme
+   and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
