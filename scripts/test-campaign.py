@@ -898,4 +898,16 @@ ok("def display_policy" in settings_source and "display_policy(screens)" in sett
    and "Jamais de menu vide (#998)" in settings_source
    and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
    "Paramètres : menus Écran et Alimentation jamais vides (#998)")
+
+# Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
+# pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
+update_apt = (SCRIPTS / "winlux-update-apt.py").read_text(encoding="utf-8")
+update_page = (SCRIPTS / "winlux-update-page.py").read_text(encoding="utf-8")
+update_test = (SCRIPTS / "test-update-page.py").read_text(encoding="utf-8")
+ok("def server_error" in update_apt and '"--max-time", "30"' in update_apt and '"--retry"' in update_apt
+   and "recherche en 503" in update_test, "Mise à jour : GitHub en panne n'est pas « aucune version publiée » (#1007)")
+ok('self.pause_combo.set_active_id("")' in update_page and "(#1008)" in update_test,
+   "Mise à jour : liste de pause revenue à « Choisir une durée » après la reprise (#1008)")
+ok("semaine(s)" not in update_page and "def weeks_text" in update_page and "(#1009)" in update_test,
+   "Mise à jour : « 1 semaine », « 2 semaines » dans les quatre langues (#1009)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
