@@ -1668,11 +1668,6 @@ pub unsafe extern "win64" fn is_accelerator(
     0
 }
 
-/// OleDraw : pas d'objet incorporé à dessiner (OLE_E_BLANK).
-pub extern "win64" fn ole_draw(_unk: usize, _aspect: u32, _hdc: usize, _rect: usize) -> i32 {
-    0x8004_0007u32 as i32
-}
-
 /// OleRegEnumVerbs : aucun verbe OLE enregistré (OLEOBJ_E_NOVERBS).
 pub unsafe extern "win64" fn ole_reg_enum_verbs(_clsid: *const Guid, out: *mut usize) -> i32 {
     if !out.is_null() {
@@ -1740,8 +1735,8 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
         "ProgIDFromCLSID"=>fn prog_id_from_clsid,"CLSIDFromProgID"=>fn clsid_from_prog_id,
         "CoGetMalloc"=>fn co_get_malloc,
-        "CoLockObjectExternal"=>fn ole_s_ok,"OleLockRunning"=>fn ole_s_ok,"OleRun"=>fn ole_s_ok,
-        "OleSetContainedObject"=>fn ole_s_ok,
+        "CoLockObjectExternal"=>fn ole_s_ok,
+        // OleRun, OleLockRunning, OleSetContainedObject, OleDraw : ole32_embed.rs.
         "CoMarshalInterThreadInterfaceInStream"=>fn co_marshal_inter_thread_interface_in_stream,
         "CoGetInterfaceAndReleaseStream"=>fn co_get_interface_and_release_stream,
         "OleSetClipboard"=>fn ole_set_clipboard,"OleGetClipboard"=>fn ole_get_clipboard,"OleFlushClipboard"=>fn ole_flush_clipboard,
@@ -1759,7 +1754,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,
         "CoAddRefServerProcess"=>fn co_add_ref_server_process,"CoReleaseServerProcess"=>fn co_release_server_process,
         "CoResumeClassObjects"=>fn co_resume_class_objects,"CoSuspendClassObjects"=>fn co_resume_class_objects,"CreateBindCtx"=>fn create_bind_ctx,
-        "IsAccelerator"=>fn is_accelerator,"OleDraw"=>fn ole_draw,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
+        "IsAccelerator"=>fn is_accelerator,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
         "OleSetMenuDescriptor"=>fn ole_set_menu_descriptor,
         "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
         "GetErrorInfo"=>fn super::errorinfo::get_error_info,
