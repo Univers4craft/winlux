@@ -145,6 +145,7 @@ FindResourceA
 FindResourceExA
 FindResourceExW
 FindResourceW
+FindStringOrdinal
 FindVolumeClose
 FlsAlloc
 FlsFree
@@ -534,6 +535,7 @@ QueryPerformanceCounter
 QueryPerformanceFrequency
 QueryProcessCycleTime
 QueryThreadCycleTime
+QueryUnbiasedInterruptTime
 QueueUserAPC
 QueueUserWorkItem
 RaiseException
@@ -722,6 +724,8 @@ UnregisterWait
 UnregisterWaitEx
 UpdateProcThreadAttribute
 UpdateResourceW
+VerLanguageNameA
+VerLanguageNameW
 VerSetConditionMask
 VerifyVersionInfoA
 VerifyVersionInfoW
