@@ -18,6 +18,30 @@ use super::ole32::Guid;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
+/// Méthode absente : rend E_NOTIMPL et le note une fois dans le journal, avec
+/// son nom, pour savoir ce qu'une application attend encore.
+macro_rules! unsupported {
+    ($name:literal) => {{
+        unsafe extern "win64" fn f() -> i32 {
+            $crate::dlls::d2d1::unsupported_call($name)
+        }
+        f as *const ()
+    }};
+}
+
+pub(crate) fn unsupported_call(name: &'static str) -> i32 {
+    static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut seen = crate::dlls::lock(&SEEN);
+    if !seen.contains(&name) {
+        seen.push(name);
+        crate::log_warn!("d2d1", "{} non pris en charge (E_NOTIMPL)", name);
+    }
+    E_NOTIMPL
+}
+
+#[path = "d2d1_1.rs"]
+mod v11;
+
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 const D2DERR_WRONG_STATE: i32 = 0x8899_0001u32 as i32;
 const D2DERR_UNSUPPORTED_PIXEL_FORMAT: i32 = 0x8898_2F80u32 as i32;
@@ -236,6 +260,12 @@ unsafe extern "win64" fn factory_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    if !out.is_null() && !riid.is_null() && v11::is_multithread_iid(&*riid) {
+        return v11::multithread(out);
+    }
+    if !riid.is_null() && v11::is_factory_n_iid(&*riid) {
+        return qi_list(this, riid, out, &[*riid]);
+    }
     qi_list(this, riid, out, &[IID_D2D1_FACTORY])
 }
 
@@ -349,6 +379,7 @@ unsafe extern "win64" fn create_wic_render_target(
         out: Output::Wic(bitmap),
         state: TargetState::default(),
         drawing: false,
+        ext: Default::default(),
     };
     put(out, new_res(this, TARGET_VT.ptr(), Mutex::new(target)))
 }
@@ -378,6 +409,7 @@ unsafe fn new_screen_target(
         out: out_to,
         state: TargetState::default(),
         drawing: false,
+        ext: Default::default(),
     };
     put(out, new_res(f, vt, Mutex::new(target)))
 }
@@ -427,24 +459,42 @@ unsafe extern "win64" fn create_dc_render_target(
     )
 }
 
-static FACTORY_VT: VTable<17> = VTable([
+static FACTORY_VT: VTable<33> = VTable([
     factory_qi as *const (),
     add_ref::<Factory> as *const (),
     release::<Factory> as *const (),
-    not_implemented as *const (), // ReloadSystemMetrics
+    unsupported!("ReloadSystemMetrics"),
     factory_desktop_dpi as *const (),
     create_rect_geometry as *const (),
     create_rounded_rect_geometry as *const (),
     create_ellipse_geometry as *const (),
-    not_implemented as *const (), // CreateGeometryGroup
-    not_implemented as *const (), // CreateTransformedGeometry
+    unsupported!("CreateGeometryGroup"),
+    unsupported!("CreateTransformedGeometry"),
     create_path_geometry as *const (),
-    not_implemented as *const (), // CreateStrokeStyle
-    not_implemented as *const (), // CreateDrawingStateBlock
+    v11::factory_stroke_style as *const (),
+    v11::factory_state_block as *const (),
     create_wic_render_target as *const (),
     create_hwnd_render_target as *const (),
-    not_implemented as *const (), // CreateDxgiSurfaceRenderTarget
+    unsupported!("CreateDxgiSurfaceRenderTarget"),
     create_dc_render_target as *const (),
+    // ID2D1Factory1 (17-26)
+    v11::factory_create_device as *const (),
+    v11::factory_stroke_style1 as *const (),
+    create_path_geometry as *const (), // ID2D1PathGeometry1
+    v11::factory_state_block1 as *const (),
+    unsupported!("CreateGdiMetafile"),
+    v11::factory_register_stream as *const (),
+    v11::factory_register_string as *const (),
+    v11::factory_unregister as *const (),
+    v11::factory_registered as *const (),
+    unsupported!("GetEffectProperties"),
+    // ID2D1Factory2 à 7 : CreateDevice rend ID2D1Device1 à 6.
+    v11::factory_create_device as *const (),
+    v11::factory_create_device as *const (),
+    v11::factory_create_device as *const (),
+    v11::factory_create_device as *const (),
+    v11::factory_create_device as *const (),
+    v11::factory_create_device as *const (),
 ]);
 
 // --- Géométries ------------------------------------------------------------------
@@ -478,11 +528,23 @@ unsafe extern "win64" fn geometry_qi(
         GeomKind::Ellipse => IID_D2D1_ELLIPSE_GEOMETRY,
         GeomKind::Path => IID_D2D1_PATH_GEOMETRY,
     };
+    // ID2D1PathGeometry1 (62baa2d2) prolonge ID2D1PathGeometry.
+    const IID_PATH1: Guid = guid(
+        0x62baa2d2,
+        0xab54,
+        0x41b7,
+        [0xb8, 0x72, 0x78, 0x7e, 0x01, 0x06, 0xa4, 0x21],
+    );
+    let path1 = if own == IID_D2D1_PATH_GEOMETRY {
+        IID_PATH1
+    } else {
+        own
+    };
     qi_list(
         this,
         riid,
         out,
-        &[IID_D2D1_RESOURCE, IID_D2D1_GEOMETRY, own],
+        &[IID_D2D1_RESOURCE, IID_D2D1_GEOMETRY, own, path1],
     )
 }
 
@@ -573,28 +635,29 @@ unsafe extern "win64" fn path_figure_count(this: *mut GeometryObj, n: *mut u32) 
 
 /// Table commune : ID2D1Geometry (17 entrées) puis, pour un chemin,
 /// Open, Stream, GetSegmentCount et GetFigureCount.
-static GEOMETRY_VT: VTable<21> = VTable([
+static GEOMETRY_VT: VTable<22> = VTable([
     geometry_qi as *const (),
     add_ref::<Res<Geometry>> as *const (),
     release::<Res<Geometry>> as *const (),
     get_factory::<Geometry> as *const (),
     geometry_bounds as *const (),
-    not_implemented as *const (), // GetWidenedBounds
-    not_implemented as *const (), // StrokeContainsPoint
+    unsupported!("GetWidenedBounds"),
+    unsupported!("StrokeContainsPoint"),
     geometry_fill_contains as *const (),
-    not_implemented as *const (),   // CompareWithGeometry
-    not_implemented as *const (),   // Simplify
-    not_implemented as *const (),   // Tessellate
-    not_implemented as *const (),   // CombineWithGeometry
-    not_implemented as *const (),   // Outline
-    not_implemented as *const (),   // ComputeArea
-    not_implemented as *const (),   // ComputeLength
-    not_implemented as *const (),   // ComputePointAtLength
-    not_implemented as *const (),   // Widen
-    path_open as *const (),         // ou GetRect / GetRoundedRect / GetEllipse
-    not_implemented as *const (),   // Stream
+    unsupported!("CompareWithGeometry"),
+    unsupported!("Simplify"),
+    unsupported!("Tessellate"),
+    unsupported!("CombineWithGeometry"),
+    unsupported!("Outline"),
+    unsupported!("ComputeArea"),
+    unsupported!("ComputeLength"),
+    unsupported!("ComputePointAtLength"),
+    unsupported!("Widen"),
+    path_open as *const (), // ou GetRect / GetRoundedRect / GetEllipse
+    unsupported!("Stream"),
     path_figure_count as *const (), // GetSegmentCount (approché)
     path_figure_count as *const (),
+    unsupported!("ComputePointAndSegmentAtLength"), // ID2D1PathGeometry1
 ]);
 
 // --- Puits de géométrie ------------------------------------------------------------
@@ -803,6 +866,34 @@ struct Bitmap {
     h: u32,
     /// BGRA prémultiplié, sans marge.
     px: Mutex<Vec<u8>>,
+    /// D2D1_BITMAP_OPTIONS (ID2D1Bitmap1::GetOptions).
+    options: u32,
+    /// Texture D3D11 sous-jacente (CreateBitmapFromDxgiSurface), tenue.
+    surface: *mut c_void,
+}
+
+impl Bitmap {
+    fn new(w: u32, h: u32, px: Vec<u8>) -> Bitmap {
+        Bitmap {
+            w,
+            h,
+            px: Mutex::new(px),
+            options: 0,
+            surface: std::ptr::null_mut(),
+        }
+    }
+}
+
+impl Drop for Bitmap {
+    fn drop(&mut self) {
+        if !self.surface.is_null() {
+            unsafe {
+                method::<unsafe extern "win64" fn(*mut c_void) -> u32>(self.surface, 2)(
+                    self.surface,
+                )
+            };
+        }
+    }
 }
 type BitmapObj = Com<Res<Bitmap>>;
 
@@ -815,7 +906,12 @@ unsafe extern "win64" fn bitmap_qi(
         this,
         riid,
         out,
-        &[IID_D2D1_RESOURCE, IID_D2D1_IMAGE, IID_D2D1_BITMAP],
+        &[
+            IID_D2D1_RESOURCE,
+            IID_D2D1_IMAGE,
+            IID_D2D1_BITMAP,
+            v11::IID_D2D1_BITMAP1,
+        ],
     )
 }
 unsafe extern "win64" fn bitmap_size(this: *mut BitmapObj, out: *mut [f32; 2]) -> *mut [f32; 2] {
@@ -892,7 +988,7 @@ unsafe extern "win64" fn bitmap_copy_from_memory(
     S_OK
 }
 
-static BITMAP_VT: VTable<11> = VTable([
+static BITMAP_VT: VTable<16> = VTable([
     bitmap_qi as *const (),
     add_ref::<Res<Bitmap>> as *const (),
     release::<Res<Bitmap>> as *const (),
@@ -901,9 +997,15 @@ static BITMAP_VT: VTable<11> = VTable([
     bitmap_pixel_size as *const (),
     pixel_format as *const (),
     dpi_96 as *const (),
-    not_implemented as *const (), // CopyFromBitmap
-    not_implemented as *const (), // CopyFromRenderTarget
+    unsupported!("CopyFromBitmap"),
+    unsupported!("CopyFromRenderTarget"),
     bitmap_copy_from_memory as *const (),
+    // ID2D1Bitmap1
+    v11::bitmap_color_context as *const (),
+    v11::bitmap_options as *const (),
+    v11::bitmap_surface as *const (),
+    v11::bitmap_map as *const (),
+    v11::bitmap_unmap as *const (),
 ]);
 
 // --- Cible de rendu -------------------------------------------------------------------
@@ -924,6 +1026,8 @@ struct Target {
     out: Output,
     state: TargetState,
     drawing: bool,
+    /// Réglages du contexte d'appareil Direct2D 1.1.
+    ext: v11::TargetExt,
 }
 
 /// Où une cible rend ses pixels.
@@ -934,8 +1038,11 @@ enum Output {
     Hwnd(usize),
     /// ID2D1DCRenderTarget : le DC et le rectangle donnés par BindDC.
     Dc { hdc: usize, x: i32, y: i32 },
-    /// ID2D1BitmapRenderTarget : son ID2D1Bitmap (référence tenue).
+    /// ID2D1BitmapRenderTarget : son ID2D1Bitmap (référence tenue), ou
+    /// bitmap choisi par ID2D1DeviceContext::SetTarget.
     Bitmap(*mut c_void),
+    /// Contexte d'appareil sans cible.
+    None,
 }
 
 impl Drop for Target {
@@ -988,15 +1095,22 @@ impl Target {
                 return S_OK;
             }
             Output::Bitmap(bitmap) => {
-                if to_wic {
-                    let b = &Com::get(bitmap as *mut BitmapObj).data;
-                    let mut px = crate::dlls::lock(&b.px);
-                    if px.len() == self.px.len() {
+                let b = &Com::get(bitmap as *mut BitmapObj).data;
+                let mut px = crate::dlls::lock(&b.px);
+                if px.len() == self.px.len() {
+                    if to_wic {
                         px.copy_from_slice(&self.px);
+                    } else {
+                        self.px.copy_from_slice(&px);
                     }
+                }
+                drop(px);
+                if to_wic {
+                    v11::flush_surface(bitmap);
                 }
                 return S_OK;
             }
+            Output::None => return S_OK,
         };
         type Lock =
             unsafe extern "win64" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> i32;
@@ -1104,6 +1218,11 @@ unsafe extern "win64" fn target_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    if v11::is_device_context(this) {
+        let mut iids = vec![IID_D2D1_RESOURCE, IID_D2D1_RENDER_TARGET];
+        iids.extend_from_slice(v11::context_iids());
+        return qi_list(this, riid, out, &iids);
+    }
     qi_list(
         this,
         riid,
@@ -1115,7 +1234,7 @@ unsafe extern "win64" fn target_qi(
                 Output::Hwnd(_) => IID_D2D1_HWND_RENDER_TARGET,
                 Output::Dc { .. } => IID_D2D1_DC_RENDER_TARGET,
                 Output::Bitmap(_) => IID_D2D1_BITMAP_RENDER_TARGET,
-                Output::Wic(_) => IID_D2D1_RENDER_TARGET,
+                Output::Wic(_) | Output::None => IID_D2D1_RENDER_TARGET,
             },
         ],
     )
@@ -1137,11 +1256,7 @@ unsafe extern "win64" fn target_create_bitmap(
     if w == 0 || h == 0 || crate::imaging::check_size(w, h).is_err() {
         return E_INVALIDARG;
     }
-    let b = Bitmap {
-        w,
-        h,
-        px: Mutex::new(vec![0; w as usize * h as usize * 4]),
-    };
+    let b = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
     let obj = new_res(Com::get(this).factory, BITMAP_VT.ptr(), b);
     if !src.is_null() {
         bitmap_copy_from_memory(obj, std::ptr::null(), src, pitch);
@@ -1185,11 +1300,7 @@ unsafe extern "win64" fn target_bitmap_from_wic(
     if hr < 0 {
         return hr;
     }
-    let b = Bitmap {
-        w,
-        h,
-        px: Mutex::new(px),
-    };
+    let b = Bitmap::new(w, h, px);
     put(out, new_res(Com::get(this).factory, BITMAP_VT.ptr(), b))
 }
 
@@ -1422,6 +1533,7 @@ unsafe extern "win64" fn draw_bitmap(
         return;
     }
     let b = &Com::get(bitmap as *mut BitmapObj).data;
+    let px = crate::dlls::lock(&b.px).clone();
     let (bw, bh) = (b.w as f32, b.h as f32);
     let s = src.as_ref().copied().unwrap_or(RectF {
         l: 0.0,
@@ -1435,16 +1547,35 @@ unsafe extern "win64" fn draw_bitmap(
         r: s.r - s.l,
         b: s.b - s.t,
     });
-    if d.r == d.l || d.b == d.t || s.r == s.l || s.b == s.t {
+    draw_bitmap_pixels(this, &px, b.w, b.h, &d, opacity, interpolation, &s);
+}
+
+/// Dessine des pixels BGRA prémultipliés `w`×`h` : la zone `s` de l'image
+/// vers le rectangle `d`, sous la transformation courante.
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_bitmap_pixels(
+    this: *mut TargetObj,
+    px: &[u8],
+    w: u32,
+    h: u32,
+    d: &RectF,
+    opacity: f32,
+    interpolation: u32,
+    s: &RectF,
+) {
+    let (d, s) = (*d, *s);
+    if d.r == d.l || d.b == d.t || s.r == s.l || s.b == s.t || w == 0 || h == 0 {
         return;
     }
-    let px = crate::dlls::lock(&b.px).clone();
+    if px.len() < w as usize * h as usize * 4 {
+        return;
+    }
     let mut t = target(this);
     let m = t.transform();
     let Some(inv) = m.invert() else { return };
     let polys = Path::rect(d.l, d.t, d.r, d.b).fill_polys(&m);
     let (sx, sy) = ((s.r - s.l) / (d.r - d.l), (s.b - s.t) / (d.b - d.t));
-    let (w, h) = (b.w as i32, b.h as i32);
+    let (w, h) = (w as i32, h as i32);
     let at = |x: i32, y: i32| -> [f32; 4] {
         let (x, y) = (x.clamp(0, w - 1), y.clamp(0, h - 1));
         let o = (y * w + x) as usize * 4;
@@ -1629,15 +1760,15 @@ const TARGET_METHODS: [*const (); 57] = [
     get_factory::<Mutex<Target>> as *const (),
     target_create_bitmap as *const (),
     target_bitmap_from_wic as *const (),
-    not_implemented as *const (), // CreateSharedBitmap
-    not_implemented as *const (), // CreateBitmapBrush
+    unsupported!("CreateSharedBitmap"),
+    unsupported!("CreateBitmapBrush"),
     target_solid_brush as *const (),
-    not_implemented as *const (), // CreateGradientStopCollection
-    not_implemented as *const (), // CreateLinearGradientBrush
-    not_implemented as *const (), // CreateRadialGradientBrush
+    v11::gradient_stops as *const (),
+    unsupported!("CreateLinearGradientBrush"),
+    unsupported!("CreateRadialGradientBrush"),
     create_compatible_target as *const (),
-    not_implemented as *const (), // CreateLayer
-    not_implemented as *const (), // CreateMesh
+    unsupported!("CreateLayer"),
+    unsupported!("CreateMesh"),
     draw_line as *const (),
     draw_rect as *const (),
     fill_rect as *const (),
@@ -1663,19 +1794,19 @@ const TARGET_METHODS: [*const (); 57] = [
     nothing as *const (),  // GetTextRenderingParams
     set_tags as *const (),
     get_tags as *const (),
-    nothing as *const (), // PushLayer
-    nothing as *const (), // PopLayer
+    v11::push_layer as *const (),
+    v11::pop_layer as *const (),
     flush as *const (),
-    nothing as *const (), // SaveDrawingState
-    nothing as *const (), // RestoreDrawingState
+    v11::save_state as *const (),
+    v11::restore_state as *const (),
     push_clip as *const (),
     pop_clip as *const (),
     clear as *const (),
     begin_draw as *const (),
     end_draw as *const (),
     pixel_format as *const (),
-    nothing as *const (), // SetDpi
-    dpi_96 as *const (),
+    v11::set_dpi as *const (),
+    v11::get_dpi as *const (),
     get_size as *const (),
     get_pixel_size as *const (),
     max_bitmap_size as *const (),
@@ -1740,11 +1871,7 @@ unsafe extern "win64" fn create_compatible_target(
         return E_INVALIDARG;
     }
     let factory = Com::get(this).factory;
-    let bitmap = Bitmap {
-        w,
-        h,
-        px: Mutex::new(vec![0; w as usize * h as usize * 4]),
-    };
+    let bitmap = Bitmap::new(w, h, vec![0; w as usize * h as usize * 4]);
     let bitmap = new_res(factory, BITMAP_VT.ptr(), bitmap) as *mut c_void;
     let target = Target {
         w,
@@ -1754,6 +1881,7 @@ unsafe extern "win64" fn create_compatible_target(
         out: Output::Bitmap(bitmap),
         state: TargetState::default(),
         drawing: false,
+        ext: Default::default(),
     };
     put(
         out,
@@ -1893,6 +2021,8 @@ pub unsafe extern "win64" fn invert_matrix(m: *mut Matrix) -> i32 {
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "D2D1CreateFactory" => fn d2d1_create_factory,
+        "D2D1CreateDevice" => fn v11::d2d1_create_device,
+        "D2D1CreateDeviceContext" => fn v11::d2d1_create_device_context,
         "D2D1MakeRotateMatrix" => fn make_rotate_matrix,
         "D2D1MakeSkewMatrix" => fn make_skew_matrix,
         "D2D1IsMatrixInvertible" => fn is_matrix_invertible,

@@ -647,6 +647,7 @@ impl DxgiAdapter {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             // L'adaptateur tient une référence sur sa fabrique (create_adapter).
             let adapter = Box::from_raw(this);
             if !adapter.factory.is_null() {
@@ -659,27 +660,27 @@ impl DxgiAdapter {
 }
 
 unsafe extern "win64" fn adapter_stub3(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn adapter_stub2(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn adapter_get_priv(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 
 unsafe extern "win64" fn adapter_get_parent(
@@ -926,6 +927,7 @@ impl DxgiSwapChain {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let _ = Box::from_raw(this);
             return 0;
         }
@@ -934,23 +936,27 @@ impl DxgiSwapChain {
 }
 
 unsafe extern "win64" fn sc_stub3(
-    _: *mut DxgiSwapChain,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
-unsafe extern "win64" fn sc_stub2(_: *mut DxgiSwapChain, _: *const Guid, _: *const c_void) -> i32 {
-    S_OK
+unsafe extern "win64" fn sc_stub2(
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    iface: *const c_void,
+) -> i32 {
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn sc_get_priv(
-    _: *mut DxgiSwapChain,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn sc_get_parent(
     _: *mut DxgiSwapChain,
@@ -1249,6 +1255,7 @@ impl DxgiFactory {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let _ = Box::from_raw(this);
             return 0;
         }
@@ -1257,23 +1264,27 @@ impl DxgiFactory {
 }
 
 unsafe extern "win64" fn fac_stub3(
-    _: *mut DxgiFactory,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
-unsafe extern "win64" fn fac_stub2(_: *mut DxgiFactory, _: *const Guid, _: *const c_void) -> i32 {
-    S_OK
+unsafe extern "win64" fn fac_stub2(
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    iface: *const c_void,
+) -> i32 {
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn fac_get_priv(
-    _: *mut DxgiFactory,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn fac_get_parent(
     _: *mut DxgiFactory,

@@ -62,6 +62,7 @@ pub mod dwmapi;
 pub mod dwrite;
 pub mod dxbc;
 pub mod dxgi;
+pub(crate) mod dxgi_private;
 pub mod dxva2;
 pub mod electron_win32;
 pub mod errorinfo;
