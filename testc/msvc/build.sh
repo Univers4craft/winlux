@@ -141,6 +141,12 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/display_msvc.c" -o "$tmp/display_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/display_msvc.obj" \
     "$tmp/kernel32_display.lib" "$tmp/user32_display.lib" "$tmp/gdi32_display.lib" /out:"$out/display_msvc.exe"
+# Annulation des E/S, handles et tampons invalides (#18).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateNamedPipeW\nCreateFileW\nReadFile\nWriteFile\nGetOverlappedResult\nCancelIo\nCancelIoEx\nCancelSynchronousIo\nGetCurrentThread\nCreateEventW\nWaitForSingleObject\nCloseHandle\nGetLastError\nVirtualAlloc\nDeleteFileW\n' >"$tmp/kernel32_io.def"
+llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_io.def" -l "$tmp/kernel32_io.lib"
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/io_msvc.c" -o "$tmp/io_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/io_msvc.obj" \
+    "$tmp/kernel32_io.lib" /out:"$out/io_msvc.exe"
 # Suspension de threads et contexte, ce qu'il faut au ramasse-miettes de
 # coreclr (#269) : SuspendThread, Get/SetThreadContext, page de garde de la
 # pile, vue exécutable W^X, messages enregistrés, WM_TIMER en PM_NOREMOVE,
