@@ -35,9 +35,10 @@ modifie pendant qu'il est arrêté (`GetThreadContext`, `SetThreadContext`,
 `runtime/src/dlls/thread_ctl.rs`, test `scripts/test-thread-control.sh`).
 C'est ce que fait le ramasse-miettes de coreclr : les applis .NET
 autonomes (vérifié avec .NET 8), console et WinForms, tournent (exceptions managées, fenêtre,
-minuteur, fermeture, message clair sur une exception non gérée). Restent
-`QueueUserAPC2` avec APC spéciale et `MEM_WRITE_WATCH` (#965) ; WPF a son
-propre chantier (#268).
+minuteur, fermeture, message clair sur une exception non gérée). `MEM_WRITE_WATCH` et
+`GetWriteWatch` suivent les pages écrites par le bit soft-dirty du noyau
+(#965). `QueueUserAPC2` reste absente, comme dans Windows 10 22H2. WPF a
+son propre chantier (#268).
 
 Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
 par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :

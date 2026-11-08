@@ -190,6 +190,7 @@ pub mod winspool;
 pub mod wintrust;
 pub mod winusb;
 pub mod wpf_native;
+pub mod write_watch;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;

@@ -386,6 +386,7 @@ GetVolumeInformationW
 GetVolumePathNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
+GetWriteWatch
 GetXStateFeaturesMask
 GlobalAddAtomA
 GlobalAddAtomW
@@ -602,6 +603,7 @@ RemoveVectoredContinueHandler
 RemoveVectoredExceptionHandler
 ReplaceFileW
 ResetEvent
+ResetWriteWatch
 ResizePseudoConsole
 ResolveLocaleName
 ResumeThread

@@ -14,7 +14,9 @@
 //   7. RegisterWindowMessage : un numéro par nom ;
 //   8. GetObjectType reconnaît un DC mémoire ;
 //   9. PeekMessage(PM_NOREMOVE) voit un WM_TIMER échu et WaitMessage rend
-//      la main quand il l'est.
+//      la main quand il l'est ;
+//  10. VirtualAlloc(MEM_WRITE_WATCH), GetWriteWatch et ResetWriteWatch
+//      (#965) : les pages écrites sont rendues, jamais une page non engagée.
 // Code de sortie : 0 si tout passe, sinon le numéro du premier test raté.
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -35,6 +37,8 @@ __declspec(dllimport) int __stdcall GetExitCodeThread(void *, u32 *);
 __declspec(dllimport) void __stdcall Sleep(u32);
 __declspec(dllimport) u64 __stdcall VirtualQuery(const void *, void *, u64);
 __declspec(dllimport) void *__stdcall VirtualAlloc(void *, u64, u32, u32);
+__declspec(dllimport) u32 __stdcall GetWriteWatch(u32, void *, u64, void **, u64 *, u32 *);
+__declspec(dllimport) u32 __stdcall ResetWriteWatch(void *, u64);
 __declspec(dllimport) void *__stdcall CreateFileMappingW(void *, void *, u32, u32, u32, const u16 *);
 __declspec(dllimport) void *__stdcall MapViewOfFileEx(void *, u32, u32, u32, u64, void *);
 __declspec(dllimport) u32 __stdcall RegisterWindowMessageW(const u16 *);
@@ -171,11 +175,33 @@ static int messages(void) {
     return 0;
 }
 
+static int write_watch(void) {
+    const u64 size = 16 * 4096;
+    // MEM_RESERVE | MEM_WRITE_WATCH, puis 8 pages engagées.
+    unsigned char *p = VirtualAlloc(0, size, 0x2000 | 0x200000, 0x04);
+    if (!p || VirtualAlloc(p, 8 * 4096, 0x1000, 0x04) != p) return 10;
+    if (ResetWriteWatch(p, size) != 0) return 10;
+    p[3 * 4096] = 1;
+    p[5 * 4096] = 1;
+    void *pages[16];
+    u64 n = 16;
+    u32 gran = 0;
+    if (GetWriteWatch(0, p, size, pages, &n, &gran) != 0 || gran != 4096) return 10;
+    int saw3 = 0, saw5 = 0;
+    for (u64 i = 0; i < n; i++) {
+        if (pages[i] == p + 3 * 4096) saw3 = 1;
+        if (pages[i] == p + 5 * 4096) saw5 = 1;
+        if ((unsigned char *)pages[i] >= p + 8 * 4096) return 10;
+    }
+    return saw3 && saw5 ? 0 : 10;
+}
+
 void entry(void) {
     u32 r = suspend_tests();
     if (!r) r = stack_guard();
     if (!r) r = wx_view();
     if (!r) r = messages();
+    if (!r) r = write_watch();
     stop = 1;
     ExitProcess(r);
 }

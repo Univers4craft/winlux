@@ -3560,8 +3560,16 @@ pub unsafe extern "win64" fn virtual_alloc(
     const MEM_COMMIT: u32 = 0x1000;
     const MEM_RESERVE: u32 = 0x2000;
     const MEM_RESET: u32 = 0x80000;
+    const MEM_WRITE_WATCH: u32 = 0x20_0000;
     const PAGE: usize = 4096;
     const GRANULARITY: usize = 65536;
+    // MEM_WRITE_WATCH : seulement avec MEM_RESERVE, comme Windows (#965).
+    let watch = _kind & MEM_WRITE_WATCH != 0;
+    if watch && _kind & MEM_RESERVE == 0 {
+        crate::process::set_last_error(87);
+        return std::ptr::null_mut();
+    }
+    let _kind = _kind & !MEM_WRITE_WATCH;
     if size == 0
         || !valid_win_prot(prot)
         || _kind & !(MEM_COMMIT | MEM_RESERVE | MEM_RESET) != 0
@@ -3722,7 +3730,31 @@ pub unsafe extern "win64" fn virtual_alloc(
             kind: 0x20000,
         },
     );
+    if watch {
+        crate::dlls::write_watch::register(p, mapped_size);
+    }
     p as *mut c_void
+}
+
+/// Pages engagées (indices) de la région réservée à `base`, dans
+/// [first, end) : pour GetWriteWatch.
+pub(crate) fn committed_pages(base: usize, first: usize, end: usize) -> Vec<usize> {
+    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some(r) = maps.get(&base) else {
+        return Vec::new();
+    };
+    let end = end.min(r.size / 4096);
+    let mut out = Vec::new();
+    let mut page = first;
+    while page < end {
+        let (_, run_end) = r.pages.run_bounds(page);
+        let stop = run_end.min(end);
+        if r.pages.committed(page) {
+            out.extend(page..stop);
+        }
+        page = stop;
+    }
+    out
 }
 pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: u32) -> i32 {
     const MEM_DECOMMIT: u32 = 0x4000;
@@ -3752,6 +3784,8 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
             return 0;
         }
         maps.remove(&p);
+        drop(maps);
+        crate::dlls::write_watch::unregister(p);
         return 1;
     }
     if kind == MEM_DECOMMIT {
@@ -8985,7 +9019,7 @@ pub fn exports() -> crate::dlls::Exports {
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
-      "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
+      "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch,"ResetWriteWatch"=>fn crate::dlls::write_watch::reset_write_watch,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
      "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
      "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetLocalTime"=>fn get_local_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
       "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
