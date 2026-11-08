@@ -119,6 +119,14 @@ GetLogicalProcessorInformation@8
 EnumCalendarInfoW@16
 K32EnumProcessModules@16
 GetModuleHandleA@4
+FindResourceW@12
+LoadResource@8
+SizeofResource@8
+LockResource@4
+CreateFileW@28
+DeleteFileW@4
+SetLastError@4
+GetLastError@0
 DEF
 printf 'LIBRARY msvcrt.dll\nEXPORTS\n_adjust_fdiv DATA\n_controlfp\n_ftol\n' >"$tmp/msvcrt_wow64.def"
 llvm-dlltool -m i386 -d "$tmp/msvcrt_wow64.def" -l "$tmp/msvcrt_wow64.lib"
@@ -145,10 +153,23 @@ printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC@4\nCreateCompatibleBitmap
 llvm-dlltool -m i386 -k -d "$tmp/gdi32_wow64.def" -l "$tmp/gdi32_wow64.lib"
 llvm-dlltool -m i386 -k -d "$tmp/user32_wow64.def" -l "$tmp/user32_wow64.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wow64.c" -o "$tmp/wow64.obj"
+# Ressource RT_RCDATA nommée « WINLUX » (« TPF0winlux ») écrite à la main
+# au format .res, sans llvm-rc : vérification 78.
+python3 -B - "$tmp/wow64.res" <<'PY'
+import struct, sys
+def entry(typ, name, data):
+    hdr = struct.pack("<HH", 0xFFFF, typ) + "".join(name).encode("utf-16-le") + b"\0\0"
+    hdr += b"\0" * (-len(hdr) % 4)
+    hdr += struct.pack("<IHHII", 0, 0x30, 0x0409, 0, 0)
+    out = struct.pack("<II", len(data), 8 + len(hdr)) + hdr + data
+    return out + b"\0" * (-len(out) % 4)
+empty = struct.pack("<IIHHHHIHHII", 0, 32, 0xFFFF, 0, 0xFFFF, 0, 0, 0, 0, 0, 0)
+open(sys.argv[1], "wb").write(empty + entry(10, "WINLUX", b"TPF0winlux"))
+PY
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" "$tmp/msvcrt_wow64.lib" \
     "$tmp/oleaut32_wow64.lib" "$tmp/ws2_32_wow64.lib" "$tmp/user32_wow64.lib" \
-    "$tmp/gdi32_wow64.lib" "$tmp/winhttp_wow64.lib" /out:"$out/wow64.exe"
+    "$tmp/gdi32_wow64.lib" "$tmp/winhttp_wow64.lib" "$tmp/wow64.res" /out:"$out/wow64.exe"
 # Exceptions C++ MSVC x86 (#232, étape 7) : tables de clang en cible
 # i686-pc-windows-msvc, msvcrt!__CxxFrameHandler3 et _CxxThrowException.
 cat >"$tmp/kernel32_cxx.def" <<'DEF'

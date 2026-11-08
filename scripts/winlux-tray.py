@@ -404,6 +404,29 @@ def tunnels():
     return vpns, hotspot
 
 
+def wifi_name(interface):
+    """Nom du réseau Wi-Fi de l'interface : « Wi-Fi : wlo1 » ne disait rien (#914).
+
+    nmcli donne le nom de la connexion active ; sans NetworkManager, iw donne
+    le SSID. À défaut, le nom de l'interface reste affiché."""
+    def nmcli(out):
+        return out.strip()
+
+    def iw(out):
+        return next((line.split(":", 1)[1].strip() for line in out.splitlines()
+                     if line.strip().startswith("SSID:")), "")
+
+    for command, pick in ((["nmcli", "-t", "-g", "GENERAL.CONNECTION", "device", "show", interface], nmcli),
+                          (["iw", "dev", interface, "link"], iw)):
+        try:
+            name = pick(subprocess.run(command, capture_output=True, text=True, timeout=2).stdout)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if name and name != "--":
+            return name
+    return interface
+
+
 def network_part():
     try:
         routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
@@ -417,7 +440,8 @@ def network_part():
     else:
         body = f'<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="1.6"/><path d="M12 16v5m-5 0h10" stroke="{color}" stroke-width="1.6"/>'
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
-    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
+    names = [wifi_name(path.name) if wireless else path.name for path in active]
+    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(names) if active else _t("Réseau déconnecté")
     # VPN actif : petit bouclier sur l'icône réseau, comme Windows 11 ; point
     # d'accès sans fil mobile : ondes en coin et une ligne de l'infobulle.
     vpns, hotspot = tunnels()
