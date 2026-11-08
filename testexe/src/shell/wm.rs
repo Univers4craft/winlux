@@ -243,7 +243,8 @@ static mut NATIVE_SHOWN_AT: u32 = 0;
 /// la seconde qui suit l'ouverture, on la ramène entière dans la zone de
 /// travail, cadre compris ; ensuite l'utilisateur la place où il veut.
 pub unsafe fn native_keep_visible(hwnd: Handle) {
-    const TITLE: i32 = 34;
+    // Barre de titre du gestionnaire, absente pour l'Explorateur sans cadre.
+    let title: i32 = if native_frameless() { 0 } else { 34 };
     const BOTTOM: i32 = 6;
     if NATIVE_SHOWN_AT == 0 {
         NATIVE_SHOWN_AT = now().max(1);
@@ -259,9 +260,9 @@ pub unsafe fn native_keep_visible(hwnd: Handle) {
         return;
     }
     let w = (r.right - r.left).min(area.right - area.left);
-    let h = (r.bottom - r.top).min(area.bottom - area.top - TITLE - BOTTOM);
+    let h = (r.bottom - r.top).min(area.bottom - area.top - title - BOTTOM);
     let x = r.left.min(area.right - w).max(area.left);
-    let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + TITLE);
+    let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + title);
     if (x, y, w, h) != (r.left, r.top, r.right - r.left, r.bottom - r.top) {
         SetWindowPos(
             hwnd,
@@ -274,14 +275,94 @@ pub unsafe fn native_keep_visible(hwnd: Handle) {
         );
     }
 }
+/// Explorateur de la session native : sans barre de titre du gestionnaire
+/// de fenêtres, ses onglets forment la barre de titre et il dessine lui-même
+/// Réduire, Agrandir et Fermer, comme la maquette Prisme (#888).
+pub unsafe fn native_frameless() -> bool {
+    NATIVE_APP == APP_EXPLORER
+}
+/// Bouton de légende survolé (0 réduire, 1 agrandir, 2 fermer) ou -1.
+static mut NATIVE_CAPTION_HOVER: i32 = -1;
+/// Bouton enfoncé, déclenché au relâcher dessus.
+static mut NATIVE_CAPTION_PRESSED: i32 = -1;
+/// Hauteur des boutons de légende de l'Explorateur sans cadre.
+const NATIVE_CAPTION_H: i32 = 32;
+/// Bande des bords où un clic redimensionne la fenêtre sans cadre.
+const NATIVE_EDGE: i32 = 5;
+
+fn native_caption_rect(outer: &Rect, i: i32) -> Rect {
+    let right = outer.right - (2 - i) * CAPTION_W;
+    rect(right - CAPTION_W, outer.top, right, outer.top + NATIVE_CAPTION_H)
+}
+
+/// Bord sous le pointeur : code HT* de WM_NCLBUTTONDOWN (HTLEFT 10 …
+/// HTBOTTOMRIGHT 17), sinon None.
+pub fn native_edge(outer: &Rect, x: i32, y: i32) -> Option<usize> {
+    let (l, r) = (x < outer.left + NATIVE_EDGE, x >= outer.right - NATIVE_EDGE);
+    let (t, b) = (y < outer.top + NATIVE_EDGE, y >= outer.bottom - NATIVE_EDGE);
+    Some(match (l, r, t, b) {
+        (true, _, true, _) => 13,
+        (_, true, true, _) => 14,
+        (true, _, _, true) => 16,
+        (_, true, _, true) => 17,
+        (true, ..) => 10,
+        (_, true, ..) => 11,
+        (_, _, true, _) => 12,
+        (_, _, _, true) => 15,
+        _ => return None,
+    })
+}
+
+unsafe fn native_caption(hwnd: Handle, i: i32) {
+    match i {
+        0 => {
+            ShowWindow(hwnd, 6); // SW_MINIMIZE
+        }
+        1 => {
+            ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { 9 } else { 3 });
+        }
+        _ => {
+            PostMessageA(hwnd, 0x0010, 0, 0); // WM_CLOSE
+        }
+    }
+}
+
 unsafe fn native_frame(hwnd: Handle) -> Frame {
     let mut outer = rect(0, 0, 900, 620);
     GetClientRect(hwnd, &mut outer);
     let title_h = if NATIVE_APP == APP_EXPLORER { 40 } else { 0 };
+    let title_right = if native_frameless() { outer.right - 3 * CAPTION_W } else { outer.right };
     Frame {
         outer,
-        title: rect(0, 0, outer.right, title_h),
+        title: rect(0, 0, title_right, title_h),
         client: rect(0, title_h, outer.right, outer.bottom),
+    }
+}
+
+/// Boutons de légende de l'Explorateur sans cadre, dans sa rangée d'onglets.
+unsafe fn native_draw_caption(g: &mut Gfx, hwnd: Handle, f: &Frame) {
+    let p = pal();
+    let zoomed = IsZoomed(hwnd) != 0;
+    for i in 0..3 {
+        let r = native_caption_rect(&f.outer, i);
+        let hover = NATIVE_CAPTION_HOVER == i;
+        let bg = match (hover, i) {
+            (true, 2) => rgb(0xC4, 0x2B, 0x1C),
+            (true, _) => p.hover,
+            _ => p.mica,
+        };
+        if hover {
+            fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, bg);
+        }
+        let gl = match i {
+            0 => Glyph::Minimize,
+            1 if zoomed => Glyph::Restore,
+            1 => Glyph::Maximize,
+            _ => Glyph::Close,
+        };
+        set_glyph_bg(Some(bg));
+        glyph(g.hdc, g.b, g.f, gl, (r.left + r.right) / 2 - 7, (r.top + r.bottom) / 2 - 7, 14);
+        set_glyph_bg(None);
     }
 }
 static mut CACHED_FONTS: Option<Fonts> = None;
@@ -303,15 +384,15 @@ pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
         f.outer.bottom,
         pal().window,
     );
-    app_draw(
-        NATIVE_APP,
-        &mut Gfx {
-            hdc,
-            b: &mut brushes,
-            f: &fonts,
-        },
-        &f,
-    );
+    let mut g = Gfx {
+        hdc,
+        b: &mut brushes,
+        f: &fonts,
+    };
+    app_draw(NATIVE_APP, &mut g, &f);
+    if native_frameless() {
+        native_draw_caption(&mut g, hwnd, &f);
+    }
     brushes.release();
 }
 pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
@@ -330,10 +411,82 @@ pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
             LAST_CLICK_Y = y;
         }
     }
+    if native_frameless() && native_chrome_mouse(hwnd, ev, x, y) {
+        return;
+    }
     if app_mouse(NATIVE_APP, ev, x, y, &native_frame(hwnd)) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
+
+/// Souris sur le cadre dessiné par l'Explorateur : boutons de légende,
+/// bords (redimensionner), rangée d'onglets hors des onglets (déplacer,
+/// double-clic pour agrandir). Vrai si l'événement est consommé.
+unsafe fn native_chrome_mouse(hwnd: Handle, ev: Mouse, x: i32, y: i32) -> bool {
+    let f = native_frame(hwnd);
+    let hit = (0..3)
+        .find(|&i| inside(&native_caption_rect(&f.outer, i), x, y))
+        .unwrap_or(-1);
+    if hit != NATIVE_CAPTION_HOVER && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        NATIVE_CAPTION_HOVER = hit;
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+    match ev {
+        Mouse::Down | Mouse::DoubleClick if hit >= 0 => {
+            NATIVE_CAPTION_PRESSED = hit;
+            true
+        }
+        Mouse::Up if NATIVE_CAPTION_PRESSED >= 0 => {
+            let pressed = NATIVE_CAPTION_PRESSED;
+            NATIVE_CAPTION_PRESSED = -1;
+            if pressed == hit {
+                NATIVE_CAPTION_HOVER = -1;
+                native_caption(hwnd, hit);
+            }
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+            true
+        }
+        Mouse::Down | Mouse::DoubleClick => {
+            NATIVE_DRAG = None;
+            if IsZoomed(hwnd) == 0 {
+                if let Some(edge) = native_edge(&f.outer, x, y) {
+                    NATIVE_DRAG = Some((x, y, edge));
+                    return true;
+                }
+            }
+            if !inside(&f.title, x, y) || crate::explorer::title_hit(x, y, &f) {
+                return false;
+            }
+            if ev == Mouse::DoubleClick {
+                native_caption(hwnd, 1);
+            } else {
+                NATIVE_DRAG = Some((x, y, 2)); // HTCAPTION : déplacer
+            }
+            true
+        }
+        // Le gestionnaire ne prend la main qu'une fois le pointeur parti de
+        // quelques pixels, bouton tenu : un simple clic (ou le premier d'un
+        // double-clic) relâché avant lui laissait la fenêtre collée au pointeur.
+        Mouse::Move => match NATIVE_DRAG {
+            Some((x0, y0, ht)) if (x - x0).abs() + (y - y0).abs() > 3 => {
+                NATIVE_DRAG = None;
+                ReleaseCapture();
+                DefWindowProcA(hwnd, 0x00A1, ht, 0);
+                true
+            }
+            Some(_) => true,
+            None => false,
+        },
+        Mouse::Up if NATIVE_DRAG.is_some() => {
+            NATIVE_DRAG = None;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Clic tenu sur la rangée d'onglets ou un bord : (x, y, code HT*).
+static mut NATIVE_DRAG: Option<(i32, i32, usize)> = None;
 pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
     if app_key(NATIVE_APP, vk, ch) {
         InvalidateRect(hwnd, core::ptr::null(), 0);

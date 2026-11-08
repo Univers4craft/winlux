@@ -31,7 +31,11 @@ s'en sert pour les catalogues Windows, et un programme Windows qui lance
 | Environnement | table `Environment` : `HKCU\Environment` ou, avec `*`, celui du système ; création, `+` si absente, `!` retrait, ajout en tête ou en queue (`[~];valeur`). Les `.exe` lancés par Winlux reçoivent ces variables (sauf `PATH`) |
 | Fichiers .ini | table `IniFile` : ajout, création si absente, ajout à une liste ; dans le dossier indiqué ou `C:\windows\` |
 | Suppressions | `RemoveFile` (motifs `*`/`?`, dossiers vides, à l'installation et/ou à la désinstallation), `RemoveRegistry` |
-| Désinstallation | journal par produit dans `~/.local/share/winlux/msi/` : fichiers, dossiers créés, valeurs et clés de registre |
+| Actions EXE | actions personnalisées 2 (table `Binary`), 18 (fichier installé), 34 (dossier + ligne de commande), 50 (propriété) de `InstallExecuteSequence`, avec leur condition ; asynchrones (0x80), code ignoré (0x40), différées (0x400) exécutées à leur place, jamais celles de retour arrière ou de validation. Même politique que les installateurs NSIS/Inno (`setup/run.rs`) : un `.exe` passe par Winlux, jamais un programme Linux ni un outil système absent (`cmd`, `powershell`…) |
+| Actions DLL de WiX | `WixQuietExec`, `CAQuietExec`, `WixSilentExec` (et 64 bits) reconnues sans charger la DLL : la ligne de commande rangée dans la propriété de l'action (ou son `CustomActionData` posé par une action 51) est lancée comme une action EXE ; `WixShellExec` (ouverture en fin d'interface) est journalisée |
+| Actions DLL | types 1 (table `Binary`) et 17 (DLL installée), x86 et x64 : la DLL est chargée dans un processus à part (`winlux --msi-dll-action DLL ENTREE`) et son point d'entrée reçoit une session qui répond aux fonctions publiques de msi.dll (`MsiGetProperty`, `MsiSetProperty`, `MsiGetMode`, `MsiProcessMessage`, enregistrements, `MsiFormatRecord`, `MsiEvaluateCondition`, `MsiGetTargetPath`, états de composant et de fonctionnalité). Une action immédiate peut poser des propriétés pour la suite ; une action différée lit son `CustomActionData`. Une action immédiate lit la base du paquet en SQL (`MsiGetActiveDatabase`, `MsiDatabaseOpenView`, `MsiViewExecute`, `MsiViewFetch`, `MsiViewGetColumnInfo`, `MsiDatabaseIsTablePersistent` : `SELECT [DISTINCT] … FROM t1, t2 WHERE … ORDER BY …`, paramètres `?`), en lecture seule (`MsiViewModify` refusé) ; une action différée n'a pas de base, comme sous Windows. `MsiDoAction` d'une action personnalisée la lance au retour de la DLL (motif « Sched… » de WiX : propriété posée puis action différée demandée). Un échec est journalisé, l'installation continue |
+| Services | `ServiceInstall` inscrit sous `HKLM\SYSTEM\CurrentControlSet\Services\<Nom>` (`ImagePath`, `Type`, `Start`, `ErrorControl`, `DisplayName`, `Description`, `ObjectName`), lu par le gestionnaire de services de Winlux et retiré à la désinstallation ; le démarrage demandé par `ServiceControl` est laissé au gestionnaire |
+| Désinstallation | journal par produit dans `~/.local/share/winlux/msi/` : fichiers, dossiers créés, valeurs et clés de registre ; le paquet est conservé à côté (`<code>.msi`) quand il a des actions EXE, pour rejouer celles de la désinstallation (`REMOVE="ALL"`, `Installed`) |
 
 Dossiers standard : `C:\` est le dossier personnel ; `ProgramFiles64Folder`
 = `C:\Program Files`, `ProgramFilesFolder` = `C:\Program Files (x86)`,
@@ -42,9 +46,21 @@ Codes de retour : 0, 1603 (échec), 1605 (produit inconnu), 1619 (paquet
 introuvable), 1620 (paquet invalide), 1639 (ligne de commande). Linux tronque
 les codes de sortie à 8 bits (1605 devient 69).
 
+## Assistant au double-clic
+
+Un double-clic sur un `.msi` (ou sur un installateur NSIS ou Inno Setup
+reconnu par `winlux --setup --info`) ouvre `winlux-setup-wizard` : accueil
+avec nom, version et éditeur (dossier modifiable et raccourci sur le Bureau
+pour NSIS et Inno), progression, puis fin avec le journal en cas d'échec,
+en français, anglais, allemand et espagnol. L'installation elle-même reste
+silencieuse (`--msiexec /i … /qn` ou `--setup … [/D=…] [/nodesktop]`).
+Sans session graphique, ou si des arguments sont passés (`/S`, `/qn`…),
+`winlux-open` installe sans l'assistant. Test : `scripts/test-setup-wizard.sh`.
+
 ## Pas encore pris en charge
 
-Actions personnalisées DLL, EXE ou script (journalisées puis ignorées),
-services Windows, recherche `CompLocator`, interface graphique d'installation (`/qf`), réparation `/f`
+Écritures d'une action DLL dans la base (`MsiViewModify`, lignes temporaires),
+flux binaires lus par `MsiRecordReadStream`, scripts VBScript/JScript (journalisés puis ignorés, #833),
+recherche `CompLocator`, boîtes de dialogue propres au paquet (table `Dialog`), réparation `/f`
 (traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`,
 compression Quantum.

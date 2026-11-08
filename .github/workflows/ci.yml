@@ -152,6 +152,9 @@ jobs:
       - name: Vérifier la liste des sources GPL de l'ISO et l'offre écrite de NOTICES
         run: python3 -B scripts/test-gpl-sources.py
 
+      - name: Vérifier les notices et licences du paquet winlux-desktop (#33)
+        run: python3 -B scripts/test-notices.py
+
       - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
         run: python3 -B scripts/test-image-identity.py
 
@@ -255,6 +258,8 @@ jobs:
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
         run: python3 -B scripts/test-root.py
+      - name: Vérifier le contrôle parental (le compte surveillé ne lève pas sa restriction, #661)
+        run: python3 -B scripts/test-parental.py
       - name: Vérifier que le Xorg de l'init a sa session (changement d'utilisateur, VT)
         run: python3 -B scripts/test-xorg-session.py
       - name: Vérifier que l'arrêt et le redémarrage par l'init ne restent jamais bloqués
@@ -493,6 +498,21 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Programmes lancés par les installeurs NSIS (#179)
+        run: |
+          sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
+          sh scripts/test-setup-run.sh
+
+      - name: Actions personnalisées et services msiexec (#833)
+        run: |
+          sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
+          sh scripts/test-msi-actions.sh
+
+      - name: Assistant d'installation au double-clic (#833)
+        run: |
+          sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
+          sh scripts/test-setup-wizard.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
@@ -578,6 +598,9 @@ jobs:
       - name: Alignement de la barre appliqué en direct, sans relance manuelle
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-live-align.py
 
+      - name: Icônes cachées une par une derrière la flèche de la zone de notification
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-tray-overflow.py
+
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
@@ -594,6 +617,12 @@ jobs:
 
       - name: Version précédente conservée (même avis partout) et session hors des applications
         run: xvfb-run -a /usr/bin/python3 -B scripts/test-update-previous-version.py
+
+      - name: Page Mise à jour OS (carte d'état, pause, heures d'activité, historique, notes, notification, 4 langues)
+        run: /usr/bin/python3 -B scripts/test-update-page.py
+
+      - name: Paramètres Réseau, Comptes et Personnalisation refaits (carte de connexion, compte ouvert, aperçu du bureau)
+        run: /usr/bin/python3 -B scripts/test-settings-redesign.py
 
       - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py
@@ -628,6 +657,12 @@ jobs:
 
       - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
+
+      - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
+
+      - name: Navigateurs, éditeur, version et source montrés avant l'installation (#923)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-browser-confirm.py
 
       - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
         run: |

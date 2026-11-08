@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Contrôle de compte d'utilisateur Winlux, au style de Windows 11.
+"""Contrôle de compte d'utilisateur Winlux.
 
 Usage : winlux-uac [--elevate] --app NOM [--path CHEMIN_WINDOWS]
 

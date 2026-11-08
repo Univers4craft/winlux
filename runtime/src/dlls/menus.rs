@@ -163,6 +163,15 @@ pub fn insert(menu: usize, pos: u32, flags: u32, id: usize, text: Option<String>
     }
 }
 
+/// Ramène un menu à ses `len` premiers éléments, sans détruire les
+/// sous-menus retirés : sert à retirer l'entrée ajoutée le temps d'un
+/// menu surgissant (« Ranger dans les icônes cachées », #927).
+pub fn truncate(menu: usize, len: usize) {
+    if let Some(list) = lock(menus()).menus.get_mut(&menu) {
+        list.truncate(len);
+    }
+}
+
 /// Retire un élément ; `destroy` détruit aussi son sous-menu (DeleteMenu).
 pub fn remove(menu: usize, pos: u32, flags: u32, destroy: bool) -> bool {
     let mut m = lock(menus());

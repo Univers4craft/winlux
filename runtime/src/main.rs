@@ -38,6 +38,7 @@ mod profiles;
 mod proxy;
 pub mod quality;
 mod registry;
+mod sandbox_fallback;
 mod setup;
 mod tasks;
 mod thunks;
@@ -203,6 +204,9 @@ fn main() {
     }
     // Installateurs NSIS / Inno Setup et leurs désinstalleurs : pris en
     // charge par Winlux lui-même (module setup), sans exécuter leur code.
+    if exe.as_os_str() == "--msi-dll-action" {
+        msi_dll_action(&rest);
+    }
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
     }
@@ -294,7 +298,9 @@ fn main() {
     }
     dlls::kernel32::init();
     dlls::inherit::adopt();
+    dlls::handle_broker::adopt();
     process::init_process(&image, &launch::windows_args(&rest));
+    process::stop_if_suspended();
     process::run(image);
 }
 
@@ -338,6 +344,43 @@ fn gpu_command(flag: &std::ffi::OsStr, args: &mut std::env::ArgsOs) -> Option<i3
         }
         _ => None,
     }
+}
+
+/// `winlux --msi-dll-action DLL ENTREE` : action personnalisée DLL d'un
+/// paquet MSI (#833), lancée par le msiexec intégré dans ce processus à
+/// part. Propriétés de la session : fichier `WINLUX_MSI_SESSION`.
+fn msi_dll_action(args: &[String]) -> ! {
+    let (Some(dll), Some(entry)) = (args.first(), args.get(1)) else {
+        eprintln!("usage : winlux --msi-dll-action DLL ENTREE");
+        std::process::exit(1639);
+    };
+    let path = std::path::PathBuf::from(dll);
+    let source = std::fs::read(&path).unwrap_or_default();
+    let x86 = pe::PeImage::parse(&source).is_ok_and(|pe| pe.x86);
+    if x86 {
+        wow32::reexec_if_needed();
+    }
+    paths::install_windows_env();
+    wow32::apply_env(x86);
+    if let Ok(pe) = pe::PeImage::parse(&source) {
+        if pe.x86 {
+            wow32::init(pe.characteristics & 0x0020 != 0);
+        }
+    }
+    let image = match loader::load(&path, true) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("DLL {dll} non chargée : {e}");
+            std::process::exit(1603);
+        }
+    };
+    let Some(export) = loader::export_by_name(&image, entry) else {
+        eprintln!("point d'entrée {entry} absent de {dll}");
+        std::process::exit(1603);
+    };
+    dlls::kernel32::init();
+    process::init_process(&image, &[]);
+    process::run_dll_export(image, export, msi::session::SESSION_HANDLE)
 }
 
 /// Vrai si le fichier existe et commence par la signature MZ d'un PE.

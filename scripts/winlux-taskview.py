@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Vue des tâches (Windows + Tab) et bureaux virtuels, comme Windows 11.
+"""Vue des tâches (Windows + Tab) et bureaux virtuels.
 
 En haut, les fenêtres ouvertes du bureau virtuel courant, avec leur aperçu ;
 un clic l'affiche, la croix la ferme, un clic droit la déplace vers un autre

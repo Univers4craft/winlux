@@ -97,7 +97,8 @@ def check():
                         assert row.get_child_visible() == expected, (title, module["PAGES"][key])
                 labels = [w for w in window.body.get_children() if isinstance(w, Gtk.Label)]
                 assert title in [w.get_text() for w in labels[:2]], title
-                assert window.progress.get_visible() == (index == 7)
+                # Page 7 refaite (#875-#882) : sa carte d'état, plus de barre ni de rapport brut.
+                assert (window.update_panel is not None) == (index == 7), title
                 # Plus aucune fenêtre séparée : ni « Réglages avancés » ni outils à part.
                 buttons = [w.get_label() for w in walk(window.body) if isinstance(w, Gtk.Button) and w.get_label()]
                 assert module["_t"]("Réglages avancés") not in buttons, title
@@ -138,28 +139,41 @@ def check():
         assert window.process is None, "Navigation launched a system action"
         namespace = window.poll.__globals__
         original_read = namespace["read"]
+        panel_module = None
         try:
-            namespace["read"] = lambda path: "Winlux est à jour.\n" if path == "/run/winlux/updates.txt" else original_read(path)
             window.open_page(7)
-            window.poll()
-            assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
-            if not Path(module["PREVIOUS_PACKAGE"]).is_file():
-                assert not window.rollback_button.get_parent().get_visible(), "Restore shown without a previous version"
-            # #636 : une mise à jour termine pendant que la page est ouverte ;
-            # « Secours et restauration » suit l'encadré sans rouvrir la page.
-            kept = module["EXTRA"].previous_version_kept
-            kept_globals = kept.__globals__
-            original_pages_read = kept_globals["read"]
-            listing = "Version installée : v0.2.20\nWinlux est à jour.\nVersion précédente conservée : v0.2.19\n"
-            try:
-                kept_globals["read"] = lambda path: {"/usr/share/winlux/update-backend": "apt\n", "/run/winlux/updates.txt": listing}.get(path, original_pages_read(path))
-                namespace["read"] = lambda path: listing if path == "/run/winlux/updates.txt" else original_read(path)
-                assert window.recovery_label is not None, "Secours et restauration absent de la page 7"
-                window.poll()
-                assert window.recovery_label.get_text() == "Conservée : le bouton Restaurer ci-dessus y revient.", window.recovery_label.get_text()
-                assert window.rollback_button.get_parent().get_visible(), "Restaurer caché alors qu'une version est conservée"
-            finally:
-                kept_globals["read"] = original_pages_read
+            panel = window.update_panel
+            panel_globals = panel.refresh.__globals__
+            panel_module = panel_globals
+            original_panel_read = panel_globals["read"]
+            files = {}
+            panel_globals["read"] = lambda path: files.get(str(path), "")
+            run = str(panel_globals["RUN"])
+            # À jour : un bouton « Rechercher », pas d'installation ni de barre (#877, #879).
+            files[run + "/update-state.txt"] = "installed=v0.2.20\nlast_check=1\nprevious=\n"
+            panel.refresh({"update_busy": "0"})
+            assert panel.kind == "uptodate" and panel.action == "check", panel.kind
+            assert not panel.bar.get_visible() and not panel.steps.get_visible(), "barre visible au repos"
+            assert not panel.rollback_row.get_visible(), "Revenir proposé sans version précédente"
+            # #636 : une version conservée apparaît sans rouvrir la page.
+            files[run + "/update-state.txt"] = "installed=v0.2.20\nlast_check=1\nprevious=v0.2.19\n"
+            panel.refresh({"update_busy": "0"})
+            assert panel.rollback_row.get_visible() and "v0.2.19" in panel.recovery_label.get_text()
+            # Disponible : « Télécharger et installer », taille lisible (#875).
+            files[run + "/update-state.txt"] = "installed=v0.2.20\navailable=v0.2.21\ndownload_bytes=485490688\nlast_check=1\n"
+            panel.refresh({"update_busy": "0"})
+            assert panel.action == "install" and "463" in panel.subtitle.get_text() and "octets" not in panel.subtitle.get_text()
+            # En cours : barre et étapes, pas de bouton.
+            files[run + "/update-progress"] = "phase=downloading\npercent=37\nunit=bytes\ndone=180000000\ntotal=485490688\n"
+            panel.refresh({"update_busy": "1"})
+            assert panel.kind == "running" and panel.bar.get_visible() and panel.steps.get_visible()
+            assert not panel.primary.get_visible()
+            # Échec : la carte le dit, « Réessayer » et « Afficher les détails ».
+            files.pop(run + "/update-progress")
+            panel.failed("update-apply", "downloading")
+            assert panel.kind == "error" and panel.action == "retry" and panel.details_button.get_visible()
+            window.update_failed = None
+            panel_globals["read"] = original_panel_read
             # #634 : l'écran ne s'éteint pas pendant une installation lancée ici.
             calls = []
 
@@ -181,6 +195,7 @@ def check():
                 namespace["read"] = original_read
         finally:
             namespace["read"] = original_read
+            if panel_module is not None: panel_module["read"] = original_panel_read
         window.show_update_error("update-apply", 1)
         dialogs = [widget for widget in Gtk.Window.list_toplevels() if isinstance(widget, Gtk.MessageDialog)]
         assert len(dialogs) == 1, "Update error dialog was not displayed"

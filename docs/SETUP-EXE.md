@@ -30,6 +30,7 @@ script interprété.
 | Compression | LZMA, LZMA2, zlib, stocké ; filtre d'appels x86 (versions 1 à 3) ; blocs à CRC |
 | Logique | constantes (`{app}`, `{pf}`, `{group}`, `{cm:…}`, `{%VAR\|défaut}`, `{reg:…}`, `{code:…}` → valeur par défaut), type par défaut, composants et tâches, expressions `Check` (`IsComponentSelected`, `IsTaskSelected`, `Is64BitInstallMode`, `not`/`and`/`or`…), versions minimales de Windows, mode 64 bits |
 | Actions | fichiers, dossiers, raccourcis `.lnk`, fichiers `.ini`, registre (chaînes, entiers, binaire, multi-chaînes, suppression), `UninstallDelete`, clé `Uninstall\<AppId>_is1` complète, `unins000.exe` |
+| Programmes lancés | `[Run]` comme une installation silencieuse (`nowait`, `shellexec`, `skipifdoesntexist` ; `skipifsilent` et cases décochées non lancées), avec les fichiers de `{tmp}` extraits puis effacés (prérequis `vc_redist`…) ; `[UninstallRun]` au début de la désinstallation |
 | Non pris en charge | installateurs protégés par mot de passe (chiffrés), données dans des fichiers `.bin` séparés, bzip2, script Pascal (`[Code]`) : les fonctions inconnues prennent leur valeur par défaut |
 
 ## NSIS 3
@@ -39,8 +40,23 @@ script interprété.
 | Conteneur | en-tête `NullsoftInst`, flux solide ou blocs séparés, LZMA (avec ou sans filtre BCJ) et deflate ; ANSI et Unicode |
 | Interpréteur | toutes les instructions du script : variables, piles, sauts, comparaisons, chaînes, fichiers, `SetOutPath`, `File`, `CreateShortcut`, registre, `.ini`, `WriteUninstaller`, `.onInit`, sections cochées, tables de langue (langue de l'utilisateur, sinon anglais) |
 | Réponses | `MessageBox` renvoie la réponse `/SD` prévue pour le mode silencieux, sinon une réponse positive |
-| Ignoré (journalisé) | appels de plugins (`System::Call`, `nsDialogs`, `UserInfo`…), `Exec`/`ExecWait`/`ExecShell` de programmes externes |
+| Programmes lancés | `Exec`, `ExecWait` (code de sortie rendu au script), `ExecShell` d'un `.exe` ou d'un `.msi`, `nsExec::Exec`/`ExecToLog`/`ExecToStack` (sortie capturée) : prérequis transportés, désinstalleur de la version précédente (`_?=$INSTDIR`), outils de l'application |
+| Ignoré (journalisé) | `System::Call` et greffons inconnus |
 | Non pris en charge | NSIS 2 et versions modifiées de l'exehead, bzip2 |
+
+## Programmes lancés par un installateur
+
+`runtime/src/setup/run.rs`. Un `.exe` est exécuté par Winlux lui-même (qui
+reconnaît à son tour un installateur, un bundle Burn ou un désinstalleur),
+`msiexec`, `reg` et `regedit` sont ceux intégrés au runtime. Jamais lancés,
+et notés dans le journal comme réussis pour que le script continue : un
+programme Linux (même nommé `.exe`, ou un homonyme du `PATH` comme
+`timeout`), les outils système Windows absents de Winlux (`cmd`,
+`powershell`, `netsh`, `sc`, `schtasks`, `regsvr32`…), les documents et
+adresses web ouverts à la fin. L'attente d'un programme est bornée à
+600 s (`WINLUX_SETUP_RUN_TIMEOUT`), trois installateurs imbriqués au plus ;
+`WINLUX_SETUP_RUN=0` désactive tout lancement. Test :
+`scripts/test-setup-run.sh` (vrais installateurs fabriqués par `makensis`).
 
 ## Désinstallation et « Programmes installés »
 

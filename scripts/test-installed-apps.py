@@ -81,11 +81,15 @@ for package, files in {"vlc": ["/usr/share/applications/vlc.desktop", "/usr/bin/
                        "mousepad": ["/usr/share/applications/org.xfce.mousepad.desktop"],
                        "libreoffice-common": ["/usr/share/applications/libreoffice-startcenter.desktop",
                                               "/usr/share/applications/libreoffice-xsltfilter.desktop"],
-                       "exo-utils:amd64": ["/usr/share/applications/xfce4-file-manager.desktop"]}.items():
+                       "exo-utils:amd64": ["/usr/share/applications/xfce4-file-manager.desktop"],
+                       "winlux-desktop": ["/usr/share/applications/winlux-3d-pipes.desktop",
+                                          "/usr/share/applications/winlux-apps-autostart.desktop"]}.items():
     write(dpkg / f"info/{package}.list", "\n".join(files) + "\n")
 old = time.mktime((2026, 10, 1, 12, 0, 0, 0, 0, -1))
 os.utime(dpkg / "info/vlc.list", (old, old))
 apps = root / "usr/share/applications"
+write(apps / "winlux-3d-pipes.desktop", "[Desktop Entry]\nType=Application\nName=3D-Rohre \u2014 Bildschirmschoner\nIcon=pipes\nExec=x\n")
+write(apps / "winlux-apps-autostart.desktop", "[Desktop Entry]\nType=Application\nName=Apps und Autostart\nExec=x\n")
 write(apps / "vlc.desktop", "[Desktop Entry]\nType=Application\nName=VLC media player\nName[de]=VLC Media Player\nIcon=vlc\nExec=vlc %U\n")
 write(apps / "org.xfce.mousepad.desktop", "[Desktop Entry]\nType=Application\nName=Mousepad\nIcon=org.xfce.mousepad\nExec=mousepad\n")
 write(apps / "libreoffice-startcenter.desktop", "[Desktop Entry]\nType=Application\nName=LibreOffice\nExec=libreoffice\n")
@@ -154,6 +158,10 @@ check(vlc and vlc["name"] == "VLC media player" and vlc["size"] == 4096 * 1024 a
 check(vlc and time.localtime(vlc["date"])[:3] == (2026, 10, 1), "date d'installation = liste dpkg du paquet")
 check(found.get("apt:mousepad", {}).get("system") and not found["apt:mousepad"]["removable"],
       "dépendance de winlux-desktop : composant du système, non désinstallable")
+system = found.get("apt:winlux-desktop")
+check(system and system["name"] == "Winlux" and system["icon"].endswith("/usr/share/winlux/brand/winlux-logo-64.png")
+      and system["system"] and not system["removable"] and system["launch"] is None and "3D-Rohre \u2014 Bildschirmschoner" in system["also"],
+      f"paquet Winlux sous son nom, pas celui de son premier lanceur (#906) : {system}")
 office = found.get("apt:libreoffice-common")
 check(office and office["name"] == "LibreOffice" and office["also"] == [], "lanceur caché (NoDisplay) non compté")
 check(not any("Gestionnaire" in name or name == "File Manager" for name in names), "#721 : « Gestionnaire de fichiers » absent")

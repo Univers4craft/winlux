@@ -141,6 +141,28 @@ ok("def forget_uninstalled" in pages_source and "timeout_add(1500, self.forget_u
 programs_source = (ROOT / "testexe/src/shell/programs.rs").read_text()
 ok('b"squirrel" => b"Squirrel"' in programs_source and 'b" application Windows"' in programs_source,
    "Applications installées : type Squirrel affiché, « 1 application Windows » au singulier")
+setup_run = (ROOT / "runtime/src/setup/run.rs").read_text()
+ok("SYSTEM_TOOLS" in setup_run and "is_linux_program" in setup_run and "WINLUX_SETUP_DEPTH" in setup_run,
+   "installateurs NSIS/Inno : programmes lancés (prérequis, ancien désinstalleur), jamais un programme Linux (#179)")
+ok((ROOT / "scripts/test-setup-run.sh").is_file()
+   and "scripts/test-setup-run.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "test des programmes lancés par un installateur NSIS en CI (#179)")
+msi_actions = (ROOT / "runtime/src/msi/actions.rs").read_text()
+ok("Phase::Uninstall" in msi_actions and "ServiceInstall" in msi_actions and "setup::run" in msi_actions,
+   "msiexec : actions personnalisées EXE (installation et désinstallation) et services (#833)")
+ok("winlux-setup-wizard" in (ROOT / "integration/winlux-open").read_text()
+   and "winlux-setup-wizard.py:winlux-setup-wizard" in (SCRIPTS / "stage-desktop-components.sh").read_text()
+   and "scripts/test-setup-wizard.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "assistant d'installation au double-clic (.msi, NSIS, Inno) en quatre langues, testé en CI (#833)")
+msi_session = (ROOT / "runtime/src/msi/session.rs").read_text()
+ok("MsiGetPropertyW" in msi_session and "MsiProcessMessage" in msi_session
+   and "--msi-dll-action" in (ROOT / "runtime/src/main.rs").read_text()
+   and "i686-w64-mingw32-gcc" in (SCRIPTS / "test-msi-actions.sh").read_text(),
+   "msiexec : actions personnalisées DLL x86 et x64 (types 1 et 17) avec session msi.dll (#833)")
+msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
+ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
+   and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -271,6 +293,10 @@ for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)
     ok(marker in explorer, f"Explorateur : {label}")
 ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
    "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("fn native_frameless" in (ROOT / "testexe/src/shell/wm.rs").read_text()
+   and "fn begin_move_resize" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "Explorateur : onglets dans la barre de titre, fenêtre sans cadre déplaçable (#888)")
+ok('b" GB", b" TB"' in explorer, "Explorateur : unités et dates dans la langue de la session (#916)")
 ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
    "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
@@ -463,7 +489,7 @@ with tempfile.TemporaryDirectory() as directory:
 
 # ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
 backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
-ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38' in settings,
    "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
 ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
    "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
@@ -596,6 +622,20 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
+broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
+ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
+   and "stop_if_suspended" in (ROOT / "runtime/src/main.rs").read_text()
+   and (SCRIPTS / "test-duplication.sh").exists(),
+   "Electron : handles copiés entre processus, enfant suspendu une fois chargé")
+permission_tool = (SCRIPTS / "winlux-permission.py").read_text(encoding="utf-8")
+ok('"sandbox"' in permission_tool and "Lancer « {app} » sans son isolation ?" in permission_tool
+   and '"sandbox": "Lancer sans isolation (Chromium, Electron)"' in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+   "Electron : bac à sable impossible → proposition claire, choix visible dans Paramètres")
+ok((SCRIPTS / "winlux-webview.py").exists() and (SCRIPTS / "test-webview2.sh").exists()
+   and "winlux-webview" in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")
+   and '"webview2loader"' in (ROOT / "runtime/src/dlls/mod.rs").read_text(encoding="utf-8"),
+   "WebView2 : WebView2Loader.dll maison, moteur WebKitGTK livré à la demande")
 # #662 : dictée vocale (Windows + H) et sous-titres en direct (Windows + Ctrl + L),
 # modèle local vérifié par empreinte ; un compte existant reçoit les deux raccourcis.
 with tempfile.TemporaryDirectory() as directory:
@@ -625,13 +665,29 @@ root_relay = (SCRIPTS / "winlux-root.py").read_text()
 ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exists()
    and (SCRIPTS / "test-vpn-hotspot.py").exists()
    and 'if tool == "winlux-vpn":' in root_relay and 'if tool == "winlux-hotspot":' in root_relay
-   and '_t("VPN"), _t("Point d’accès sans fil mobile")]' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("VPN"), _t("Point d’accès sans fil mobile")' in (SCRIPTS / "winlux-settings.py").read_text()
    and "def tunnels():" in (SCRIPTS / "winlux-tray.py").read_text()
    and '"vpn": side_available("winlux-vpn")' in (SCRIPTS / "winlux-popup.py").read_text(),
    "Paramètres > VPN et Point d'accès sans fil mobile, relais root, zone de notification, Réglages rapides")
 # #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
 ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
    "Paramètres : interrupteurs activés à la couleur d'accent")
+# #661 : contrôle parental. Le compte surveillé ne lit ni ne modifie ses
+# réglages par le relais root, et ne déverrouille pas hors du temps permis.
+parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py")], capture_output=True, text=True,
+                          timeout=600)
+ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
+   and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
+   "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #815 / #816 : copie renommée d'une application bloquée, VPN ou proxy hors du DNS filtrant.
+ok(parental.returncode == 0 and "copie renommée sans VERSIONINFO fermée par son empreinte (#815)" in parental.stdout
+   and "copie renommée d'un .exe bloqué fermée (nom d'origine, #815)" in parental.stdout
+   and "adresse du site ouverte au compte avant la réponse (#816)" in parental.stdout
+   and "seules les adresses données par le filtre, #816" in parental.stdout,
+   "contrôle parental : copie renommée reconnue, VPN et proxy hors du filtre refusés")
+# #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
+ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
+   "relais root : vrai code de retour malgré SIGCHLD ignoré")
 # #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
 # en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
 runtime_dlls = ROOT / "runtime/src/dlls"
@@ -639,12 +695,47 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and (runtime_dlls / "d3d8.rs").exists()
    and (runtime_dlls / "d3dx9.rs").exists() and (runtime_dlls / "dsound_x86.rs").exists()
    and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
-   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (runtime_dlls / "d3dx9_asm.rs").exists() and (runtime_dlls / "d3dx9_shader.rs").exists()
+   and (runtime_dlls / "d3dx9_mesh.rs").exists()
+   and (runtime_dlls / "d3dx9_hlsl.rs").exists() and (runtime_dlls / "d3dx9_effect.rs").exists()
+   and (runtime_dlls / "dpnet.rs").exists()
+   and "DirectPlay 4 et 8" in (SCRIPTS / "test-wow32.sh").read_text()
    and (ROOT / "runtime/src/audio/synth.rs").exists()
    and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
-   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
+
+# Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
+# boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
+update_page = (SCRIPTS / "winlux-update-page.py").read_text()
+settings_source = (SCRIPTS / "winlux-settings.py").read_text()
+ok('"update-auto-on"), (_t("Désactiver"), "update-auto-off")' not in settings_source
+   and "Redémarrer après installation" not in settings_source
+   and "UpdatePanel(self" in settings_source
+   and all(word in update_page for word in ("update-pause-", "update-resume", "update-hours-", "load_history", "notes_markup", "def notify"))
+   and (SCRIPTS / "test-update-page.py").exists(),
+   "page Mise à jour OS : carte d'état, pause, heures d'activité, historique, notes, notification (#875-#882)")
+
+# Écran et Alimentation en menus (#895) ; Réseau, Comptes et Personnalisation
+# refaits (#898) : plus d'interface réseau brute, carte du compte, aperçu.
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in settings_source
+   and '(_t("Connexion"), "network")' not in settings_source
+   and "def network_summary" in pages_source and "def desktop_preview" in pages_source
+   and 'self.hero("user", name, detail' in pages_source
+   and (SCRIPTS / "test-settings-redesign.py").exists(),
+   "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
+
+# #847 : WPF dessine son texte par IDWriteGlyphRunAnalysis et choisit le thème
+# Aero2 (styles visuels actifs), sans thémer les fenêtres Win32 classiques.
+uxtheme = (runtime_dlls / "uxtheme.rs").read_text()
+ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
+   and (runtime_dlls / "dwrite_glyphs.rs").exists()
+   and "fn IsThemeActive() -> i32 {\n    1\n}" in uxtheme
+   and "fn IsAppThemed() -> i32 {\n    0\n}" in uxtheme
+   and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
@@ -680,5 +771,46 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #925 : menu Démarrer, déplacer une application épinglée.
+ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "def pin_drag" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-pin-move.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : épingle déplacée par clic droit (Déplacer) et glisser-déposer, ordre gardé (#925)")
+
+# #712 : boîtes non modales Rechercher et Remplacer (FindText, ReplaceText).
+_find = (ROOT / "runtime/src/dlls/comdlg32_find.rs").read_text()
+ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
+   and "fn find32" in (ROOT / "runtime/src/wow32/comdlg.rs").read_text()
+   and "registered_id" in (ROOT / "runtime/src/dlls/user32.rs").read_text()
+   and "find_replace()" in (ROOT / "testexe/src/bin/commdlg_suite.rs").read_text()
+   and "find_replace32()" in (ROOT / "testc/wow32/dlg32.c").read_text(),
+   "Rechercher/Remplacer : boîte non modale, FINDMSGSTRING au propriétaire, x86 et crochet (#712)")
+ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
+   "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
+
+# ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
+ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
+   and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "FLOAT_MARGIN" in (SCRIPTS / "winlux-personalize.py").read_text()
+   and "deux capsules" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre flottante : capsule centrale et capsule d'état en bas à droite, marge transparente, retour au classique sans perte (#889)")
+
+# ── Bascule gauche ↔ centre sans relancer la barre (#920) ──────────────────
+ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
+   "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+# #923 : Paramètres > Navigateurs, éditeur, version et source avant l'installation.
+ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
+   and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
+   and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
+
+# ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
+ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
+   and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
+   and "def tray_icon_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
