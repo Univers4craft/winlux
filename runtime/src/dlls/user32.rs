@@ -1493,6 +1493,7 @@ const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const GWL_USERDATA: i32 = -21;
 const GWL_ID: i32 = -12;
+const GWLP_HWNDPARENT: i32 = -8;
 const _GWLP_WNDPROC: i32 = -4;
 const _GWLP_HINSTANCE: i32 = -6;
 const _GWLP_USERDATA: i32 = -21;
@@ -1537,6 +1538,11 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
         GWL_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
         GWL_HINSTANCE => 0x0040_0000_isize,
+        // Parent d'une fille, propriétaire d'une fenêtre de premier niveau.
+        GWLP_HWNDPARENT => lock(user_data_map())
+            .get(&(hwnd, index))
+            .copied()
+            .unwrap_or_else(|| gui::window_parent(hwnd).unwrap_or(0) as isize),
         // GWLP_USERDATA, GWLP_ID et index positifs : données de la fenêtre
         // (cbWndExtra ; DWLP_MSGRESULT 0, DWLP_DLGPROC 8, DWLP_USER 16 en x64).
         GWL_USERDATA | GWL_ID => lock(user_data_map())
@@ -1565,6 +1571,16 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
         }
         GWL_USERDATA | GWL_ID => {
             lock(user_data_map()).insert((hwnd, index), value);
+        }
+        // Qt 5 donne son propriétaire à une boîte après la création, par
+        // SetWindowLongPtr(GWLP_HWNDPARENT) : la boîte « Vie privée » de VLC
+        // doit alors rester au-dessus de la fenêtre principale (#1068).
+        GWLP_HWNDPARENT if gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD == 0) => {
+            lock(user_data_map()).insert((hwnd, index), value);
+            let owner = owner_top_level(value as usize);
+            if owner != 0 && owner != hwnd {
+                with_backend(|b| b.set_owner(hwnd, owner));
+            }
         }
         _ => {
             if index >= 0 {
@@ -4484,6 +4500,38 @@ mod tests_messages {
                 0
             );
             destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn proprietaire_donne_apres_creation_par_gwlp_hwndparent() {
+        // #1068 : Qt 5 rattache sa boîte à la fenêtre principale après coup.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    100,
+                    50,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x00CF_0000);
+            let dialog = make(0x80C8_0000);
+            assert_ne!(main, 0);
+            assert_ne!(dialog, 0);
+            assert_eq!(set_window_long_ptr_w(dialog, -8, main as isize), 0);
+            assert_eq!(get_window_long_ptr_w(dialog, -8), main as isize);
+            destroy_window(dialog);
+            destroy_window(main);
         }
     }
 
