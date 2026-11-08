@@ -36,6 +36,9 @@ CompareStringEx
 CompareStringOrdinal
 CompareStringW
 ConnectNamedPipe
+ConvertFiberToThread
+ConvertThreadToFiber
+ConvertThreadToFiberEx
 CopyContext
 CopyFileA
 CopyFileExW
@@ -48,6 +51,8 @@ CreateDirectoryW
 CreateEventA
 CreateEventExW
 CreateEventW
+CreateFiber
+CreateFiberEx
 CreateFileA
 CreateFileMappingA
 CreateFileMappingW
@@ -87,6 +92,7 @@ DebugBreak
 DecodePointer
 DeleteAtom
 DeleteCriticalSection
+DeleteFiber
 DeleteFileA
 DeleteFileW
 DeleteProcThreadAttributeList
@@ -145,6 +151,7 @@ FindResourceA
 FindResourceExA
 FindResourceExW
 FindResourceW
+FindStringOrdinal
 FindVolumeClose
 FlsAlloc
 FlsFree
@@ -386,6 +393,7 @@ GetVolumeInformationW
 GetVolumePathNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
+GetWriteWatch
 GetXStateFeaturesMask
 GlobalAddAtomA
 GlobalAddAtomW
@@ -453,13 +461,32 @@ IsValidLocale
 IsValidLocaleName
 IsWow64Process
 IsWow64Process2
+K32EmptyWorkingSet
+K32EnumDeviceDrivers
+K32EnumPageFilesA
+K32EnumPageFilesW
 K32EnumProcessModules
 K32EnumProcessModulesEx
+K32EnumProcesses
+K32GetDeviceDriverBaseNameA
+K32GetDeviceDriverBaseNameW
+K32GetDeviceDriverFileNameA
+K32GetDeviceDriverFileNameW
+K32GetMappedFileNameA
+K32GetMappedFileNameW
+K32GetModuleBaseNameA
 K32GetModuleBaseNameW
+K32GetModuleFileNameExA
 K32GetModuleFileNameExW
 K32GetModuleInformation
 K32GetPerformanceInfo
+K32GetProcessImageFileNameA
+K32GetProcessImageFileNameW
 K32GetProcessMemoryInfo
+K32GetWsChanges
+K32GetWsChangesEx
+K32InitializeProcessForWsWatch
+K32QueryWorkingSet
 K32QueryWorkingSetEx
 LCIDToLocaleName
 LCMapStringA
@@ -534,6 +561,7 @@ QueryPerformanceCounter
 QueryPerformanceFrequency
 QueryProcessCycleTime
 QueryThreadCycleTime
+QueryUnbiasedInterruptTime
 QueueUserAPC
 QueueUserWorkItem
 RaiseException
@@ -602,6 +630,7 @@ RemoveVectoredContinueHandler
 RemoveVectoredExceptionHandler
 ReplaceFileW
 ResetEvent
+ResetWriteWatch
 ResizePseudoConsole
 ResolveLocaleName
 ResumeThread
@@ -694,6 +723,7 @@ SleepConditionVariableSRW
 SleepEx
 SubmitThreadpoolWork
 SuspendThread
+SwitchToFiber
 SwitchToThread
 SystemTimeToFileTime
 SystemTimeToTzSpecificLocalTime
@@ -722,6 +752,8 @@ UnregisterWait
 UnregisterWaitEx
 UpdateProcThreadAttribute
 UpdateResourceW
+VerLanguageNameA
+VerLanguageNameW
 VerSetConditionMask
 VerifyVersionInfoA
 VerifyVersionInfoW
@@ -785,6 +817,7 @@ WinluxJobPoll
 WinluxJobStats
 WinluxMediaCanonical
 WinluxMediaClose
+WinluxMediaControl
 WinluxMediaError
 WinluxMediaFormats
 WinluxMediaFrame

@@ -227,10 +227,11 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
+for name in hello exitcode p1_suite dll_import dll_deps delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+cp "$root/target/x86_64-pc-windows-msvc/release/testdll2.dll" "$stage/opt/winlux/tests/testdll2.dll"
 # Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
 # quand le compilateur MinGW-w64 est présent sur la machine de construction.
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
@@ -577,6 +578,16 @@ fi
 /bin/busybox awk '$2 == "/run" {mounted=1} END {exit !mounted}' /proc/mounts || /bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
 /bin/busybox mkdir -p /run/winlux
+# Mises à jour A/B (#31) : la version préparée dans /.winlux-ab/b remplace
+# celle-ci, ou la réserve revient (essai jamais validé, retour demandé), avant
+# que quoi que ce soit ne tourne. Code 10 : /init a changé, on le relance.
+if test -f /.winlux-ab/state && test -x /usr/bin/winlux; then
+    /usr/bin/winlux --ab-boot >>/run/winlux/ab-boot.log 2>&1
+    if test $? = 10; then
+        /bin/busybox umount /tmp /dev/pts /dev/shm 2>/dev/null || true
+        exec /init
+    fi
+fi
 # Temps de démarrage : chaque étape note l'instant écoulé depuis l'allumage du
 # noyau (Paramètres > Processeur, `winlux --boot-time`).
 boot_mark() {
@@ -1349,6 +1360,9 @@ INIT
 chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
+    # Notices, licence GPL et licences des bibliothèques Rust dans le paquet
+    # winlux-desktop (#33) ; échoue si NOTICES oublie une bibliothèque.
+    python3 "$root/scripts/stage-notices.py" "$stage"
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
     # Nom et logos Winlux à la place de ceux d'Ubuntu (politique de Canonical).
     sh "$root/scripts/winlux-brand-image.sh" "$stage"

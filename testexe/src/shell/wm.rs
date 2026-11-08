@@ -243,7 +243,8 @@ static mut NATIVE_SHOWN_AT: u32 = 0;
 /// la seconde qui suit l'ouverture, on la ramène entière dans la zone de
 /// travail, cadre compris ; ensuite l'utilisateur la place où il veut.
 pub unsafe fn native_keep_visible(hwnd: Handle) {
-    const TITLE: i32 = 34;
+    // Barre de titre du gestionnaire, absente pour l'Explorateur sans cadre.
+    let title: i32 = if native_frameless() { 0 } else { 34 };
     const BOTTOM: i32 = 6;
     if NATIVE_SHOWN_AT == 0 {
         NATIVE_SHOWN_AT = now().max(1);
@@ -259,9 +260,9 @@ pub unsafe fn native_keep_visible(hwnd: Handle) {
         return;
     }
     let w = (r.right - r.left).min(area.right - area.left);
-    let h = (r.bottom - r.top).min(area.bottom - area.top - TITLE - BOTTOM);
+    let h = (r.bottom - r.top).min(area.bottom - area.top - title - BOTTOM);
     let x = r.left.min(area.right - w).max(area.left);
-    let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + TITLE);
+    let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + title);
     if (x, y, w, h) != (r.left, r.top, r.right - r.left, r.bottom - r.top) {
         SetWindowPos(
             hwnd,
@@ -274,14 +275,94 @@ pub unsafe fn native_keep_visible(hwnd: Handle) {
         );
     }
 }
+/// Explorateur de la session native : sans barre de titre du gestionnaire
+/// de fenêtres, ses onglets forment la barre de titre et il dessine lui-même
+/// Réduire, Agrandir et Fermer, comme la maquette Prisme (#888).
+pub unsafe fn native_frameless() -> bool {
+    NATIVE_APP == APP_EXPLORER
+}
+/// Bouton de légende survolé (0 réduire, 1 agrandir, 2 fermer) ou -1.
+static mut NATIVE_CAPTION_HOVER: i32 = -1;
+/// Bouton enfoncé, déclenché au relâcher dessus.
+static mut NATIVE_CAPTION_PRESSED: i32 = -1;
+/// Hauteur des boutons de légende de l'Explorateur sans cadre.
+const NATIVE_CAPTION_H: i32 = 32;
+/// Bande des bords où un clic redimensionne la fenêtre sans cadre.
+const NATIVE_EDGE: i32 = 5;
+
+fn native_caption_rect(outer: &Rect, i: i32) -> Rect {
+    let right = outer.right - (2 - i) * CAPTION_W;
+    rect(right - CAPTION_W, outer.top, right, outer.top + NATIVE_CAPTION_H)
+}
+
+/// Bord sous le pointeur : code HT* de WM_NCLBUTTONDOWN (HTLEFT 10 …
+/// HTBOTTOMRIGHT 17), sinon None.
+pub fn native_edge(outer: &Rect, x: i32, y: i32) -> Option<usize> {
+    let (l, r) = (x < outer.left + NATIVE_EDGE, x >= outer.right - NATIVE_EDGE);
+    let (t, b) = (y < outer.top + NATIVE_EDGE, y >= outer.bottom - NATIVE_EDGE);
+    Some(match (l, r, t, b) {
+        (true, _, true, _) => 13,
+        (_, true, true, _) => 14,
+        (true, _, _, true) => 16,
+        (_, true, _, true) => 17,
+        (true, ..) => 10,
+        (_, true, ..) => 11,
+        (_, _, true, _) => 12,
+        (_, _, _, true) => 15,
+        _ => return None,
+    })
+}
+
+unsafe fn native_caption(hwnd: Handle, i: i32) {
+    match i {
+        0 => {
+            ShowWindow(hwnd, 6); // SW_MINIMIZE
+        }
+        1 => {
+            ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { 9 } else { 3 });
+        }
+        _ => {
+            PostMessageA(hwnd, 0x0010, 0, 0); // WM_CLOSE
+        }
+    }
+}
+
 unsafe fn native_frame(hwnd: Handle) -> Frame {
     let mut outer = rect(0, 0, 900, 620);
     GetClientRect(hwnd, &mut outer);
     let title_h = if NATIVE_APP == APP_EXPLORER { 40 } else { 0 };
+    let title_right = if native_frameless() { outer.right - 3 * CAPTION_W } else { outer.right };
     Frame {
         outer,
-        title: rect(0, 0, outer.right, title_h),
+        title: rect(0, 0, title_right, title_h),
         client: rect(0, title_h, outer.right, outer.bottom),
+    }
+}
+
+/// Boutons de légende de l'Explorateur sans cadre, dans sa rangée d'onglets.
+unsafe fn native_draw_caption(g: &mut Gfx, hwnd: Handle, f: &Frame) {
+    let p = pal();
+    let zoomed = IsZoomed(hwnd) != 0;
+    for i in 0..3 {
+        let r = native_caption_rect(&f.outer, i);
+        let hover = NATIVE_CAPTION_HOVER == i;
+        let bg = match (hover, i) {
+            (true, 2) => rgb(0xC4, 0x2B, 0x1C),
+            (true, _) => p.hover,
+            _ => p.mica,
+        };
+        if hover {
+            fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, bg);
+        }
+        let gl = match i {
+            0 => Glyph::Minimize,
+            1 if zoomed => Glyph::Restore,
+            1 => Glyph::Maximize,
+            _ => Glyph::Close,
+        };
+        set_glyph_bg(Some(bg));
+        glyph(g.hdc, g.b, g.f, gl, (r.left + r.right) / 2 - 7, (r.top + r.bottom) / 2 - 7, 14);
+        set_glyph_bg(None);
     }
 }
 static mut CACHED_FONTS: Option<Fonts> = None;
@@ -303,15 +384,15 @@ pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
         f.outer.bottom,
         pal().window,
     );
-    app_draw(
-        NATIVE_APP,
-        &mut Gfx {
-            hdc,
-            b: &mut brushes,
-            f: &fonts,
-        },
-        &f,
-    );
+    let mut g = Gfx {
+        hdc,
+        b: &mut brushes,
+        f: &fonts,
+    };
+    app_draw(NATIVE_APP, &mut g, &f);
+    if native_frameless() {
+        native_draw_caption(&mut g, hwnd, &f);
+    }
     brushes.release();
 }
 pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
@@ -330,10 +411,82 @@ pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
             LAST_CLICK_Y = y;
         }
     }
+    if native_frameless() && native_chrome_mouse(hwnd, ev, x, y) {
+        return;
+    }
     if app_mouse(NATIVE_APP, ev, x, y, &native_frame(hwnd)) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
+
+/// Souris sur le cadre dessiné par l'Explorateur : boutons de légende,
+/// bords (redimensionner), rangée d'onglets hors des onglets (déplacer,
+/// double-clic pour agrandir). Vrai si l'événement est consommé.
+unsafe fn native_chrome_mouse(hwnd: Handle, ev: Mouse, x: i32, y: i32) -> bool {
+    let f = native_frame(hwnd);
+    let hit = (0..3)
+        .find(|&i| inside(&native_caption_rect(&f.outer, i), x, y))
+        .unwrap_or(-1);
+    if hit != NATIVE_CAPTION_HOVER && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        NATIVE_CAPTION_HOVER = hit;
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+    match ev {
+        Mouse::Down | Mouse::DoubleClick if hit >= 0 => {
+            NATIVE_CAPTION_PRESSED = hit;
+            true
+        }
+        Mouse::Up if NATIVE_CAPTION_PRESSED >= 0 => {
+            let pressed = NATIVE_CAPTION_PRESSED;
+            NATIVE_CAPTION_PRESSED = -1;
+            if pressed == hit {
+                NATIVE_CAPTION_HOVER = -1;
+                native_caption(hwnd, hit);
+            }
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+            true
+        }
+        Mouse::Down | Mouse::DoubleClick => {
+            NATIVE_DRAG = None;
+            if IsZoomed(hwnd) == 0 {
+                if let Some(edge) = native_edge(&f.outer, x, y) {
+                    NATIVE_DRAG = Some((x, y, edge));
+                    return true;
+                }
+            }
+            if !inside(&f.title, x, y) || crate::explorer::title_hit(x, y, &f) {
+                return false;
+            }
+            if ev == Mouse::DoubleClick {
+                native_caption(hwnd, 1);
+            } else {
+                NATIVE_DRAG = Some((x, y, 2)); // HTCAPTION : déplacer
+            }
+            true
+        }
+        // Le gestionnaire ne prend la main qu'une fois le pointeur parti de
+        // quelques pixels, bouton tenu : un simple clic (ou le premier d'un
+        // double-clic) relâché avant lui laissait la fenêtre collée au pointeur.
+        Mouse::Move => match NATIVE_DRAG {
+            Some((x0, y0, ht)) if (x - x0).abs() + (y - y0).abs() > 3 => {
+                NATIVE_DRAG = None;
+                ReleaseCapture();
+                DefWindowProcA(hwnd, 0x00A1, ht, 0);
+                true
+            }
+            Some(_) => true,
+            None => false,
+        },
+        Mouse::Up if NATIVE_DRAG.is_some() => {
+            NATIVE_DRAG = None;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Clic tenu sur la rangée d'onglets ou un bord : (x, y, code HT*).
+static mut NATIVE_DRAG: Option<(i32, i32, usize)> = None;
 pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
     if app_key(NATIVE_APP, vk, ch) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
@@ -781,7 +934,20 @@ fn custom_title(app: usize) -> bool {
     }
 }
 
+/// Cadre de chaque fenêtre à son dernier dessin : un clic simulé au clavier
+/// (#28) en a besoin.
+static mut LAST_FRAME: [Option<Frame>; 32] = [None; 32];
+
 unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
+    if app < 32 {
+        LAST_FRAME[app] = Some(*f);
+    }
+    crate::gfx::focus_begin(app);
+    app_draw_inner(app, g, f);
+    crate::gfx::focus_end(g.hdc, g.b);
+}
+
+unsafe fn app_draw_inner(app: usize, g: &mut Gfx, f: &Frame) {
     match app {
         APP_EXPLORER => crate::explorer::draw(g, f),
         APP_SETTINGS => crate::settings::draw(g, f),
@@ -806,6 +972,13 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
     }
 }
 unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        crate::gfx::focus_mouse_down(app, x, y);
+    }
+    app_mouse_inner(app, ev, x, y, f)
+}
+
+unsafe fn app_mouse_inner(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::mouse(ev, x, y, f),
         APP_SETTINGS => crate::settings::mouse(ev, x, y, f),
@@ -829,7 +1002,28 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
+/// Clavier d'une fenêtre : Tab, Maj+Tab, Entrée et Espace passent d'abord
+/// par le focus entre contrôles (#28), sauf dans l'Éditeur et le Terminal
+/// où Tab s'écrit.
 unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
+    if app_key_uses_focus(app) {
+        match crate::gfx::focus_key(app, vk, ch) {
+            crate::gfx::FocusKey::Pass => {}
+            crate::gfx::FocusKey::Moved => return true,
+            crate::gfx::FocusKey::Click(x, y) => {
+                if let Some(f) = LAST_FRAME.get(app).copied().flatten() {
+                    app_mouse_inner(app, Mouse::Move, x, y, &f);
+                    app_mouse_inner(app, Mouse::Down, x, y, &f);
+                    app_mouse_inner(app, Mouse::Up, x, y, &f);
+                }
+                return true;
+            }
+        }
+    }
+    app_key_inner(app, vk, ch)
+}
+
+unsafe fn app_key_inner(app: usize, vk: u32, ch: u16) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::key(vk, ch),
         APP_SETTINGS => crate::settings::key(vk, ch),
@@ -2676,4 +2870,114 @@ pub unsafe fn tick() -> bool {
         crate::explorer::background_tick();
     }
     repaint
+}
+
+/// Navigation Tab entre les contrôles (#28), sans affichage : exécuté par
+/// `explorer_regression.exe`.
+#[doc(hidden)]
+pub unsafe fn focus_regression_checks() {
+    use crate::gfx::{focus_begin, focus_count, focus_end, focus_field, focus_key, focus_modal, focus_mouse_down, focus_state, focus_zone, FocusKey};
+    let (w, h) = (1000, 700);
+    let info = BitmapInfoHeader {
+        size: 40,
+        width: w,
+        height: -h,
+        planes: 1,
+        bit_count: 32,
+        compression: 0,
+        size_image: 0,
+        x_pels_per_meter: 0,
+        y_pels_per_meter: 0,
+        colors_used: 0,
+        colors_important: 0,
+    };
+    let dc = CreateCompatibleDC(core::ptr::null_mut());
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let bmp = CreateDIBSection(dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
+    if dc.is_null() || bmp.is_null() {
+        check!(false, "Focus clavier : bitmap de test");
+        return;
+    }
+    let old = SelectObject(dc, bmp);
+    let mut b = crate::gfx::Brushes::new();
+    let fonts = crate::gfx::Fonts::new();
+    let f = Frame {
+        outer: rect(0, 0, w, h),
+        title: rect(0, 0, w, 40),
+        client: rect(0, 40, w, h),
+    };
+
+    // Logique seule : une boîte modale ne laisse atteindre que ses contrôles,
+    // un champ reçoit un clic simulé, Entrée active le contrôle courant.
+    const T: usize = 31;
+    let draw = |b: &mut crate::gfx::Brushes| {
+        focus_begin(T);
+        focus_zone(&rect(10, 10, 60, 40));
+        focus_zone(&rect(70, 10, 120, 40));
+        focus_modal();
+        focus_zone(&rect(10, 100, 60, 130));
+        focus_field(&rect(70, 100, 220, 130));
+        focus_end(dc, b);
+    };
+    draw(&mut b);
+    check!(focus_count(T) == 2, "Focus clavier : une boite modale garde Tab pour elle");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T) == (0, true), "Focus clavier : Tab montre le cadre sur le premier controle");
+    check!(matches!(focus_key(T, 0, 9), FocusKey::Moved), "Focus clavier : le caractere Tab ne va pas a l'application");
+    check!(matches!(focus_key(T, 0x0D, 0), FocusKey::Click(35, 115)), "Focus clavier : Entree active le controle courant");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Click(145, 115)), "Focus clavier : Tab sur un champ y place le curseur");
+    check!(matches!(focus_key(T, 0x20, 0), FocusKey::Pass), "Focus clavier : Espace s'ecrit dans un champ");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T).0 == 0, "Focus clavier : Tab revient au premier controle apres le dernier");
+    draw(&mut b);
+    let px = core::slice::from_raw_parts(bits as *const u32, (w * h) as usize);
+    let accent = crate::gfx::pal().accent;
+    let at = |x: i32, y: i32| px[(y * w + x) as usize] & 0xFF_FFFF;
+    let bgr = |c: u32| (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF);
+    check!(at(9, 99) == bgr(accent) || at(9, 99) == accent & 0xFF_FFFF, "Focus clavier : cadre a la couleur d'accent autour du controle");
+    focus_mouse_down(T, 150, 110);
+    check!(focus_state(T) == (1, false), "Focus clavier : un clic efface le cadre et deplace le focus");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T) == (0, true), "Focus clavier : apres un clic, Tab repart du controle clique");
+    check!(matches!(focus_key(T, 0x1B, 0), FocusKey::Pass) && !focus_state(T).1, "Focus clavier : Echap efface le cadre");
+
+    // Chaque fenêtre du shell déclare ses contrôles en se dessinant.
+    let apps: [(usize, usize, &str); 15] = [
+        (APP_EXPLORER, 8, "Focus clavier : Explorateur (onglets, barre d'adresse, recherche, commandes)"),
+        (APP_SETTINGS, 6, "Focus clavier : Parametres"),
+        (APP_TASKMGR, 4, "Focus clavier : Gestionnaire des taches"),
+        (APP_CLEANUP, 1, "Focus clavier : Nettoyage de disque"),
+        (APP_DISKMGR, 3, "Focus clavier : Gestion des disques"),
+        (APP_EVENTVIEWER, 2, "Focus clavier : Observateur d'evenements"),
+        (APP_RESTORE, 1, "Focus clavier : Restauration"),
+        (APP_WELCOME, 2, "Focus clavier : Bienvenue"),
+        (APP_TASKSCHD, 2, "Focus clavier : Planificateur de taches"),
+        (APP_FIREWALL, 2, "Focus clavier : Pare-feu"),
+        (APP_STORE, 2, "Focus clavier : Logiciels"),
+        (APP_FONTS, 2, "Focus clavier : Polices"),
+        (APP_FILEHISTORY, 2, "Focus clavier : Historique des fichiers"),
+        (APP_REGEDIT, 2, "Focus clavier : Editeur du Registre"),
+        (APP_PROGRAMS, 2, "Focus clavier : Programmes"),
+    ];
+    for (app, min, label) in apps {
+        let mut g = Gfx { hdc: dc, b: &mut b, f: &fonts };
+        app_draw(app, &mut g, &f);
+        check!(focus_count(app) >= min, label);
+    }
+    // Paramètres : Tab avance, Maj n'est pas enfoncée, Échap efface.
+    let mut g = Gfx { hdc: dc, b: &mut b, f: &fonts };
+    app_draw(APP_SETTINGS, &mut g, &f);
+    app_key(APP_SETTINGS, 0x09, 0);
+    app_key(APP_SETTINGS, 0, 9);
+    app_key(APP_SETTINGS, 0x09, 0);
+    check!(focus_state(APP_SETTINGS) == (1, true), "Focus clavier : Parametres, deux Tab menent au deuxieme controle");
+    // L'Éditeur garde Tab pour le texte.
+    check!(focus_count(APP_NOTEPAD) == 0 || !app_key_uses_focus(APP_NOTEPAD), "Focus clavier : l'Editeur ecrit la tabulation");
+    SelectObject(dc, old);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    b.release();
+    fonts.release();
+}
+
+/// Vrai si Tab dans `app` passe par le focus entre contrôles.
+fn app_key_uses_focus(app: usize) -> bool {
+    app != APP_NOTEPAD && app != APP_TERMINAL
 }

@@ -2,6 +2,11 @@
 """Cache official amd64 browser DEBs; verify publisher-index SHA256 hashes.
 
     prepare-browser-packages.py [--only edge,chrome,firefox] [SORTIE]
+    prepare-browser-packages.py --info edge|chrome|firefox
+
+--info lit seulement l'index de l'éditeur, sans rien télécharger d'autre, et
+écrit version=, source=, sha256= et size= : Paramètres les montre avant
+l'installation, pour qu'on la confirme ou la refuse (#923).
 
 Aucun navigateur n'est fourni dans l'ISO (docs/BROWSERS.md) : les licences
 d'Edge (« you will not ... share, publish, distribute, or lend the Software »,
@@ -100,8 +105,28 @@ def checksum(path):
             digest.update(chunk)
     return digest.hexdigest()
 
+def info(browser):
+    """Version, adresse exacte, empreinte et taille annoncées par l'index (#923)."""
+    if browser not in SOURCES:
+        raise SystemExit(f"navigateur inconnu : {browser}")
+    package, base, index = SOURCES[browser]
+    base = MIRROR or base
+    with tempfile.TemporaryDirectory(prefix="winlux-browser-info-") as work:
+        path = pathlib.Path(work) / "Packages"
+        fetch_index(base + index, path)
+        fields = select(path.read_bytes(), package)
+    size = fields.get("Size", "")
+    print(f"version={fields['Version']}")
+    print(f"source={urllib.parse.urljoin(base, fields['Filename'])}")
+    print(f"sha256={fields['SHA256']}")
+    print(f"size={size if size.isdigit() else ''}")
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--info"] and len(args) == 2:
+        info(args[1])
+        return
     only = list(SOURCES)
     if args[:1] == ["--only"] and len(args) >= 2:
         only = [name for name in args[1].split(",") if name]

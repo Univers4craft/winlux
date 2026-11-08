@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Sélecteur d'emojis et de symboles, comme Windows 11 (Windows + . ou Windows + ;).
+"""Sélecteur d'emojis et de symboles (Windows + . ou Windows + ;).
 
 Trois onglets : emojis (par catégorie, récemment utilisés, recherche dans la
 langue de l'interface et en anglais), kaomojis, symboles (ponctuation,

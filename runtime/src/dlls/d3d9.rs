@@ -255,7 +255,9 @@ unsafe impl Send for Obj {}
 unsafe impl Sync for Obj {}
 
 enum Kind {
-    D3D9 { ex: bool },
+    D3D9 {
+        ex: bool,
+    },
     Device(Box<Mutex<Dev>>),
     Surface(Mutex<SurfaceData>),
     Texture(Mutex<TexData>),
@@ -269,6 +271,15 @@ enum Kind {
     Query(u32),
     StateBlock(Mutex<Option<Box<Settable>>>),
     SwapChain,
+    /// Chaîne d'échange supplémentaire (CreateAdditionalSwapChain) : son
+    /// propre tampon arrière, présenté dans sa propre fenêtre.
+    AddSwapChain(Mutex<AddSwapChain>),
+}
+
+struct AddSwapChain {
+    pp: PresentParams,
+    backbuffer: *mut Obj,
+    presents: u32,
 }
 
 pub(crate) struct SurfaceData {
@@ -395,6 +406,12 @@ unsafe fn destroy(this: *mut Obj) {
             free_gl(s.gl_tex, s.gl_rb);
         }
         Kind::Texture(t) | Kind::Cube(t) => free_gl(lock(t).gl_tex, 0),
+        Kind::AddSwapChain(sc) => {
+            let bb = lock(sc).backbuffer;
+            if !bb.is_null() {
+                obj_release(bb);
+            }
+        }
         Kind::Device(d) => {
             let mut d = lock(d);
             d.release_bindings();
@@ -463,7 +480,7 @@ fn supports(kind: &Kind, iid: &Guid) -> bool {
         Kind::PixelShader(_) => d1 == 0x6d3bdbdc,
         Kind::Query(_) => d1 == 0xd9771460,
         Kind::StateBlock(_) => d1 == 0xb07c4fe5,
-        Kind::SwapChain => d1 == 0x794950f2 || d1 == 0x91886caf,
+        Kind::SwapChain | Kind::AddSwapChain(_) => d1 == 0x794950f2 || d1 == 0x91886caf,
     }
 }
 
@@ -715,7 +732,10 @@ pub(crate) fn fill_caps(out: *mut u32) {
     let mut c = [0u32; 76];
     c[0] = 1; // D3DDEVTYPE_HAL
     c[2] = 0x20000; // Caps : READ_SCANLINE
-    c[3] = 0x6002_0000; // Caps2 : CANAUTOGENMIPMAP | DYNAMICTEXTURES | FULLSCREENGAMMA
+                    // Caps2 : CANSHARERESOURCE | CANAUTOGENMIPMAP | DYNAMICTEXTURES |
+                    // FULLSCREENGAMMA. CANSHARERESOURCE marque un pilote du modèle récent
+                    // (appareil 9Ex) : WPF n'accélère qu'à cette condition (#931).
+    c[3] = 0xE002_0000;
     c[4] = 0x320; // Caps3
     c[5] = 0x8000_0001; // PresentationIntervals
     c[6] = 1; // CursorCaps
@@ -845,6 +865,22 @@ unsafe extern "win64" fn d3d_create_device(
     }
     *out = std::ptr::null_mut();
     let ex = matches!((*this).kind, Kind::D3D9 { ex: true });
+    if trace_enabled() {
+        let p = &*pp;
+        eprintln!(
+            "[d3d9-trace] CreateDevice{} type={} focus={:#x} fenêtre={:#x} {}x{} fmt={} fenêtré={} swap={} comportement={:#x}",
+            if ex { "Ex" } else { "" },
+            _ty,
+            focus,
+            p.device_window,
+            p.width,
+            p.height,
+            p.format,
+            p.windowed,
+            p.swap_effect,
+            _behavior
+        );
+    }
     match create_device(this, focus, &mut *pp, ex) {
         Some(d) => {
             *out = d;
@@ -1087,6 +1123,7 @@ fn rs_defaults(auto_depth: bool) -> Box<[u32; 256]> {
     set(&mut rs, 190, 0xf);
     set(&mut rs, 191, 0xf);
     set(&mut rs, 192, 0xf);
+    set(&mut rs, 193, 0xffff_ffff); // BLENDFACTOR blanc opaque
     set(&mut rs, 207, 2);
     set(&mut rs, 208, 1);
     set(&mut rs, 209, 1);
@@ -2428,6 +2465,176 @@ macro_rules! dev {
     };
 }
 
+// ── Chaînes d'échange supplémentaires ─────────────────────────────────────
+//
+// IDirect3DDevice9::CreateAdditionalSwapChain : un appareil, plusieurs
+// fenêtres. WPF crée un appareil par carte graphique (fenêtre de 1×1) et
+// une chaîne d'échange par fenêtre d'application ; sans elle, il renonce
+// à Direct3D et dessine en logiciel.
+
+unsafe fn add_sc(this: *mut Obj) -> Option<&'static Mutex<AddSwapChain>> {
+    match &(*this).kind {
+        Kind::AddSwapChain(m) => Some(&*(m as *const Mutex<AddSwapChain>)),
+        _ => None,
+    }
+}
+
+unsafe extern "win64" fn dev_create_add_sc(
+    this: *mut Obj,
+    pp: *mut PresentParams,
+    out: *mut *mut Obj,
+) -> i32 {
+    if pp.is_null() || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = dev!(this);
+    let pp = &mut *pp;
+    if trace_enabled() {
+        eprintln!(
+            "[d3d9-trace] CreateAdditionalSwapChain fenêtre {:#x} {}x{} fmt={}",
+            pp.device_window, pp.width, pp.height, pp.format
+        );
+    }
+    if pp.device_window == 0 {
+        pp.device_window = d.window;
+    }
+    let (ww, wh) = window_size(pp.device_window);
+    if pp.width == 0 {
+        pp.width = ww;
+    }
+    if pp.height == 0 {
+        pp.height = wh;
+    }
+    if pp.format == D3DFMT_UNKNOWN {
+        pp.format = D3DFMT_X8R8G8B8;
+    }
+    pp.count = pp.count.max(1);
+    pp.width = pp.width.clamp(1, MAX_SURFACE_DIM);
+    pp.height = pp.height.clamp(1, MAX_SURFACE_DIM);
+    let bb = make_surface(
+        &d,
+        this,
+        pp.width,
+        pp.height,
+        pp.format,
+        D3DUSAGE_RENDERTARGET,
+        D3DPOOL_DEFAULT,
+    );
+    if bb.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    drop(d);
+    *out = new_obj(
+        add_swapchain_vtable(),
+        this,
+        Kind::AddSwapChain(Mutex::new(AddSwapChain {
+            pp: *pp,
+            backbuffer: bb,
+            presents: 0,
+        })),
+    );
+    S_OK
+}
+
+unsafe extern "win64" fn asc_present(
+    this: *mut Obj,
+    _src: *const Rect32,
+    _dst: *const Rect32,
+    wnd: usize,
+    _dirty: *const c_void,
+    _flags: u32,
+) -> i32 {
+    let Some(m) = add_sc(this) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let (bb, window) = {
+        let mut sc = lock(m);
+        sc.presents += 1;
+        let w = if wnd != 0 { wnd } else { sc.pp.device_window };
+        (sc.backbuffer, w)
+    };
+    let d = dev!((*this).device);
+    present_surface(&d, bb, window);
+    S_OK
+}
+unsafe extern "win64" fn asc_back_buffer(
+    this: *mut Obj,
+    i: u32,
+    _ty: u32,
+    out: *mut *mut Obj,
+) -> i32 {
+    let Some(m) = add_sc(this) else {
+        return D3DERR_INVALIDCALL;
+    };
+    let sc = lock(m);
+    if out.is_null() || i >= sc.pp.count {
+        return D3DERR_INVALIDCALL;
+    }
+    obj_addref(sc.backbuffer);
+    *out = sc.backbuffer;
+    S_OK
+}
+unsafe extern "win64" fn asc_raster_status(_: *mut Obj, out: *mut RasterStatus) -> i32 {
+    dev_raster_status(std::ptr::null_mut(), 0, out)
+}
+unsafe extern "win64" fn asc_present_params(this: *mut Obj, out: *mut PresentParams) -> i32 {
+    let Some(m) = add_sc(this) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    *out = lock(m).pp;
+    S_OK
+}
+unsafe extern "win64" fn asc_last_present_count(this: *mut Obj, out: *mut u32) -> i32 {
+    let Some(m) = add_sc(this) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    *out = lock(m).presents;
+    S_OK
+}
+unsafe extern "win64" fn asc_display_mode_ex(_: *mut Obj, out: *mut u8, rotation: *mut u32) -> i32 {
+    if out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    write_mode_ex(out, &desktop_mode());
+    if !rotation.is_null() {
+        *rotation = 1; // D3DDISPLAYROTATION_IDENTITY
+    }
+    S_OK
+}
+
+fn add_swapchain_vtable() -> &'static [usize] {
+    static V: OnceLock<usize> = OnceLock::new();
+    let p = *V.get_or_init(|| {
+        build(
+            13,
+            f!(stub_invalid),
+            &[
+                (0, f!(obj_qi)),
+                (1, f!(obj_addref)),
+                (2, f!(obj_release)),
+                (3, f!(asc_present)),
+                (4, f!(stub_invalid)), // GetFrontBufferData
+                (5, f!(asc_back_buffer)),
+                (6, f!(asc_raster_status)),
+                (7, f!(sc_display_mode)),
+                (8, f!(obj_get_device)),
+                (9, f!(asc_present_params)),
+                (10, f!(asc_last_present_count)),
+                (11, f!(stub_invalid)), // GetPresentStats
+                (12, f!(asc_display_mode_ex)),
+            ],
+        )
+        .as_ptr() as usize
+    });
+    unsafe { std::slice::from_raw_parts(p as *const usize, 13) }
+}
+
 unsafe extern "win64" fn dev_test_coop(_: *mut Obj) -> i32 {
     S_OK
 }
@@ -2571,22 +2778,52 @@ unsafe extern "win64" fn dev_present(
     this: *mut Obj,
     _src: *const Rect32,
     _dst: *const Rect32,
-    _wnd: usize,
+    wnd: usize,
     _dirty: *const c_void,
 ) -> i32 {
     let mut d = dev!(this);
     d.present_count += 1;
-    let Some(gs) = d.gl.as_ref() else {
-        return S_OK;
-    };
+    // hDestWindowOverride : autre fenêtre que celle de l'appareil.
+    let window = if wnd != 0 { wnd } else { d.window };
+    present_surface(&d, d.backbuffer, window);
+    S_OK
+}
+
+/// Copie `surface` (cible de rendu de l'appareil) dans la fenêtre `window`
+/// et échange ses tampons. Le contexte GL de l'appareil est rendu courant
+/// sur la fenêtre X de destination (même visuel 24 bits pour toutes les
+/// fenêtres Winlux), puis rendu à sa fenêtre d'origine.
+unsafe fn present_surface(d: &Dev, surface: *mut Obj, window: usize) {
+    if trace_enabled() {
+        eprintln!(
+            "[d3d9-trace] Present {:p} -> fenêtre 0x{:x}",
+            surface, window
+        );
+    }
+    let Some(gs) = d.gl.as_ref() else { return };
     let (Some(g), Some(glx)) = (gl::gl(), gl::glx()) else {
-        return S_OK;
+        return;
     };
-    let Kind::Surface(m) = &(*d.backbuffer).kind else {
-        return S_OK;
+    if surface.is_null() {
+        return;
+    }
+    let Kind::Surface(m) = &(*surface).kind else {
+        return;
     };
     let s = lock(m);
     gs.make_current();
+    let drawable = if window == d.window {
+        gs.ctx.drawable
+    } else {
+        match crate::dlls::gui::native_window(window) {
+            Some(x) => x,
+            None => return,
+        }
+    };
+    let other = drawable != gs.ctx.drawable;
+    if other && (glx.MakeCurrent)(gs.ctx.display, drawable, gs.ctx.context) == 0 {
+        return;
+    }
     (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, gs.fbo);
     (g.FramebufferTexture2D)(
         gl::GL_READ_FRAMEBUFFER,
@@ -2597,7 +2834,7 @@ unsafe extern "win64" fn dev_present(
     );
     (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
     (g.Disable)(gl::GL_SCISSOR_TEST);
-    let (w, h) = window_size(d.window);
+    let (w, h) = window_size(window);
     // Rendu stocké tête en bas (ligne 0 = haut) : on inverse à la copie.
     (g.BlitFramebuffer)(
         0,
@@ -2611,9 +2848,11 @@ unsafe extern "win64" fn dev_present(
         gl::GL_COLOR_BUFFER_BIT,
         gl::GL_LINEAR as u32,
     );
-    (glx.SwapBuffers)(gs.ctx.display, gs.ctx.drawable);
+    (glx.SwapBuffers)(gs.ctx.display, drawable);
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
-    S_OK
+    if other {
+        (glx.MakeCurrent)(gs.ctx.display, gs.ctx.drawable, gs.ctx.context);
+    }
 }
 
 unsafe extern "win64" fn dev_present_ex(
@@ -2943,17 +3182,78 @@ unsafe extern "win64" fn dev_update_surface(
     dst: *mut Obj,
     _dp: *const c_void,
 ) -> i32 {
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] dev_update_surface");
+    }
     if src.is_null() || dst.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    let Some((_, _, _, _, data)) = surface_bytes(src) else {
+    let Some((sw, sh, sf, sp, data)) = surface_bytes(src) else {
         return D3DERR_INVALIDCALL;
     };
-    surface_write(dst, &data);
+    let Some((dw, dh, df, dpitch, mut out)) = surface_bytes(dst) else {
+        return D3DERR_INVALIDCALL;
+    };
+    if sf != df {
+        return D3DERR_INVALIDCALL;
+    }
+    // Rectangle source et point de destination (#931 : WPF range les
+    // glyphes de chaque texte à leur place dans une texture partagée).
+    let r = if _sr.is_null() {
+        Rect32 {
+            left: 0,
+            top: 0,
+            right: sw as i32,
+            bottom: sh as i32,
+        }
+    } else {
+        std::ptr::read_unaligned(_sr)
+    };
+    let (px, py) = if _dp.is_null() {
+        (0, 0)
+    } else {
+        let p = _dp.cast::<i32>();
+        (p.read_unaligned(), p.add(1).read_unaligned())
+    };
+    if r.left < 0
+        || r.top < 0
+        || r.right > sw as i32
+        || r.bottom > sh as i32
+        || r.right <= r.left
+        || r.bottom <= r.top
+        || px < 0
+        || py < 0
+        || px + (r.right - r.left) > dw as i32
+        || py + (r.bottom - r.top) > dh as i32
+    {
+        return D3DERR_INVALIDCALL;
+    }
+    copy_rect(&data, sp, &mut out, dpitch, sf, &r, px, py);
+    surface_write(dst, &out);
     S_OK
 }
 
+/// Copie le rectangle `r` d'un tampon vers (`px`, `py`) d'un autre, même format.
+#[allow(clippy::too_many_arguments)]
+fn copy_rect(src: &[u8], sp: u32, dst: &mut [u8], dp: u32, f: u32, r: &Rect32, px: i32, py: i32) {
+    let block = format_info(f).is_some_and(|fi| fi.block != 0);
+    let step = if block { 4 } else { 1 };
+    let row_bytes = texel_offset(f, sp, r.right, r.top) - texel_offset(f, sp, r.left, r.top);
+    let mut y = 0;
+    while y < r.bottom - r.top {
+        let so = texel_offset(f, sp, r.left, r.top + y);
+        let doff = texel_offset(f, dp, px, py + y);
+        if so + row_bytes <= src.len() && doff + row_bytes <= dst.len() {
+            dst[doff..doff + row_bytes].copy_from_slice(&src[so..so + row_bytes]);
+        }
+        y += step;
+    }
+}
+
 unsafe extern "win64" fn dev_update_texture(_this: *mut Obj, src: *mut Obj, dst: *mut Obj) -> i32 {
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] dev_update_texture");
+    }
     let (Some(sm), Some(dm)) = (tex_data(src), tex_data(dst)) else {
         return D3DERR_INVALIDCALL;
     };
@@ -2990,6 +3290,9 @@ unsafe extern "win64" fn dev_stretch_rect(
     dr: *const Rect32,
     _filter: u32,
 ) -> i32 {
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] dev_stretch_rect");
+    }
     if src.is_null() || dst.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -3061,6 +3364,9 @@ unsafe extern "win64" fn dev_color_fill(
     rect: *const Rect32,
     color: u32,
 ) -> i32 {
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] dev_color_fill");
+    }
     if surf.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -3140,6 +3446,9 @@ unsafe extern "win64" fn dev_set_rt(this: *mut Obj, i: u32, surf: *mut Obj) -> i
     let mut d = dev!(this);
     if i >= 4 || (i == 0 && surf.is_null()) {
         return D3DERR_INVALIDCALL;
+    }
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] SetRenderTarget {} {:p}", i, surf);
     }
     rebind(&mut d.rts[i as usize], surf);
     if i == 0 && !surf.is_null() {
@@ -3300,6 +3609,15 @@ unsafe extern "win64" fn dev_clear(
     z: f32,
     stencil: u32,
 ) -> i32 {
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] dev_clear");
+    }
+    if trace_enabled() {
+        eprintln!(
+            "[d3d9-trace] Clear n={} flags={:x} couleur={:08x}",
+            count, flags, color
+        );
+    }
     let d = dev!(this);
     let Some(g) = gl::gl() else { return S_OK };
     let Some(gs) = d.gl.as_ref() else { return S_OK };
@@ -3696,6 +4014,14 @@ unsafe extern "win64" fn dev_get_fvf(this: *mut Obj, out: *mut u32) -> i32 {
 
 unsafe fn create_shader(this: *mut Obj, func: *const u32, out: *mut *mut Obj, pixel: bool) -> i32 {
     if func.is_null() || out.is_null() {
+        return D3DERR_INVALIDCALL;
+    }
+    // Le premier jeton est la version (0xFFFE pour un vertex shader,
+    // 0xFFFF pour un pixel shader) : tout autre code est refusé, comme le
+    // fait Direct3D 9. WPF tente d'abord des blobs DXBC (Shader Model 4+)
+    // et se replie sur ses shaders 2.0 quand l'appareil les refuse.
+    let kind = (*func >> 16) & 0xFFFF;
+    if kind != if pixel { 0xFFFF } else { 0xFFFE } {
         return D3DERR_INVALIDCALL;
     }
     let n = d3d9_shader::token_len(func, 1 << 20);
@@ -4186,6 +4512,15 @@ unsafe fn apply_render_states(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy) {
         };
         (g.BlendFunc)(s, dd);
     }
+    // D3DRS_BLENDFACTOR (ARGB) : couleur de D3DBLEND_BLENDFACTOR ; WPF y
+    // passe la couleur du texte (#931).
+    let bf = rs[193];
+    (g.BlendColor)(
+        ((bf >> 16) & 0xff) as f32 / 255.0,
+        ((bf >> 8) & 0xff) as f32 / 255.0,
+        (bf & 0xff) as f32 / 255.0,
+        (bf >> 24) as f32 / 255.0,
+    );
     (l.BlendEquation)(match rs[171] {
         2 => glc::GL_FUNC_SUBTRACT,
         3 => glc::GL_FUNC_REVERSE_SUBTRACT,
@@ -4708,6 +5043,145 @@ unsafe fn setup_arrays(
     (pretransformed, has_color, has_normal)
 }
 
+/// `WINLUX_D3D9_TRACE=1` : chaque dessin écrit son état sur la sortie
+/// d'erreur (shaders, états de rendu et d'étages, textures, sommets).
+fn trace_enabled() -> bool {
+    static T: OnceLock<bool> = OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("WINLUX_D3D9_TRACE").is_some())
+}
+
+unsafe fn trace_draw(
+    d: &Dev,
+    prog: Option<u32>,
+    vs_active: bool,
+    ps_active: bool,
+    base_vertex: i32,
+    up: Option<(*const u8, u32)>,
+) {
+    static SEEN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    let mut out = String::new();
+    use std::fmt::Write;
+    for (name, sh) in [("vs", d.s.vs), ("ps", d.s.ps)] {
+        if sh.is_null() {
+            continue;
+        }
+        let (Kind::VertexShader(s) | Kind::PixelShader(s)) = &(*sh).kind else {
+            continue;
+        };
+        let _ = write!(
+            out,
+            "{}={:p}{} ",
+            name,
+            sh,
+            if s.translated.is_some() {
+                ""
+            } else {
+                "(non traduit)"
+            }
+        );
+        let mut seen = lock(&SEEN);
+        if !seen.contains(&(sh as usize)) {
+            seen.push(sh as usize);
+            let toks: Vec<String> = s.tokens.iter().map(|t| format!("{t:08x}")).collect();
+            eprintln!("[d3d9-trace] {} {:p} jetons {}", name, sh, toks.join(" "));
+            if let Some(t) = &s.translated {
+                eprintln!("[d3d9-trace] {} {:p} GLSL :\n{}", name, sh, t.glsl);
+            }
+        }
+    }
+    let _ = write!(
+        out,
+        "prog={:?} vs_actif={} ps_actif={} ",
+        prog, vs_active, ps_active
+    );
+    let rs = &d.s.rs;
+    let _ = write!(
+        out,
+        "blend={} src={} dst={} sep={} srcA={} dstA={} op={} write={:x} atest={} cull={} z={} stencil={} scissor={} srgb={} ",
+        rs[27], rs[19], rs[20], rs[206], rs[207], rs[208], rs[171], rs[168], rs[15], rs[22], rs[7], rs[52], rs[174], rs[194]
+    );
+    for st in 0..4 {
+        let t = &d.s.tss[st];
+        let _ = write!(
+            out,
+            "| t{} c{}({:x},{:x}) a{}({:x},{:x}) tci={:x} ttf={} ",
+            st, t[1], t[2], t[3], t[4], t[5], t[6], t[11], t[24]
+        );
+        let tex = d.s.textures[st];
+        if !tex.is_null() {
+            if let Kind::Texture(m) = &(*tex).kind {
+                let td = lock(m);
+                let l0 = &td.levels[0];
+                let nz = l0.data.iter().filter(|&&b| b != 0).count();
+                let _ = write!(
+                    out,
+                    "tex fmt={} {}x{} non-nuls={} pool={} ",
+                    td.format, l0.width, l0.height, nz, td.pool
+                );
+            }
+            let sp = &d.s.samp[st];
+            let _ = write!(
+                out,
+                "addr={},{} filt={},{},{} ",
+                sp[1], sp[2], sp[5], sp[6], sp[7]
+            );
+        }
+    }
+    let _ = write!(out, "| fvf={:x} ", d.s.fvf);
+    let elems = if !d.s.decl.is_null() {
+        match &(*d.s.decl).kind {
+            Kind::Decl(e) => e.clone(),
+            _ => Vec::new(),
+        }
+    } else {
+        fvf_to_decl(d.s.fvf).0
+    };
+    for e in &elems {
+        let _ = write!(
+            out,
+            "[s{} +{} t{} u{}.{}] ",
+            e.stream, e.offset, e.ty, e.usage, e.usage_index
+        );
+    }
+    // Premier sommet en flottants (au plus 12 mots du flux 0, sans sortir
+    // du tampon).
+    let base: Option<(*const u8, usize)> = match up {
+        Some((p, stride)) => Some((p, (stride as usize * 4).min(160))),
+        None => {
+            let (vb, off, stride, _) = d.s.streams[0];
+            if vb.is_null() {
+                None
+            } else {
+                buf_data(vb).and_then(|m| {
+                    let b = lock(m);
+                    let start = off as usize + (base_vertex.max(0) as usize) * stride as usize;
+                    (start < b.data.len())
+                        .then(|| (b.data.as_ptr().add(start), (b.data.len() - start).min(160)))
+                })
+            }
+        }
+    };
+    if let Some((p, len)) = base {
+        let w: Vec<String> = (0..len / 4)
+            .map(|i| {
+                let v = p.add(4 * i).cast::<u32>().read_unaligned();
+                format!("{:.3}/{:08x}", f32::from_bits(v), v)
+            })
+            .collect();
+        let _ = write!(out, "v0 {}", w.join(" "));
+    }
+    let used: Vec<String> = d.s.ps_f[..8]
+        .iter()
+        .map(|c| format!("({:.3},{:.3},{:.3},{:.3})", c[0], c[1], c[2], c[3]))
+        .collect();
+    let _ = write!(out, " psc0-7 {}", used.join(" "));
+    let _ = write!(out, " vp={:?}", d.s.viewport);
+    for t in [2u32, 3, 256] {
+        let _ = write!(out, " T{}={:?}", t, d.s.transform(t));
+    }
+    eprintln!("[d3d9-trace] draw {}", out);
+}
+
 /// Prépare tout l'état GL d'un dessin ; `None` en mode sans rendu.
 unsafe fn prepare_draw(d: &mut Dev, base_vertex: i32, up: Option<(*const u8, u32)>) -> Option<()> {
     let g = gl::gl()?;
@@ -4730,6 +5204,9 @@ unsafe fn prepare_draw(d: &mut Dev, base_vertex: i32, up: Option<(*const u8, u32
         && matches!(&(*d.s.ps).kind, Kind::PixelShader(s) if s.gl_shader != 0);
     bind_samplers(d, g, l, !ps_active);
     let (pre, color, normal) = setup_arrays(d, l, prog, base_vertex, up);
+    if trace_enabled() {
+        trace_draw(d, prog, vs_active, ps_active, base_vertex, up);
+    }
     if !vs_active {
         apply_fixed_function(d, l, pre, color, normal);
     }
@@ -4743,6 +5220,26 @@ unsafe extern "win64" fn dev_draw(this: *mut Obj, ty: u32, start: u32, prims: u3
     };
     if prims == 0 {
         return S_OK;
+    }
+    if trace_enabled() {
+        eprintln!("[d3d9-trace] DrawPrimitive type={ty} début={start} primitives={prims}");
+        let (vb, off, stride, _) = d.s.streams[0];
+        if let Some(m) = buf_data(vb) {
+            let b = lock(m);
+            for k in 0..(count as usize).min(6) {
+                let at = off as usize + (start as usize + k) * stride as usize;
+                if at + 12 <= b.data.len() {
+                    let f = |i: usize| {
+                        f32::from_le_bytes(b.data[at + 4 * i..at + 4 * i + 4].try_into().unwrap())
+                    };
+                    let w: Vec<String> = (0..(stride as usize / 4).min(8))
+                        .filter(|i| at + 4 * i + 4 <= b.data.len())
+                        .map(|i| format!("{:.3}", f(i)))
+                        .collect();
+                    eprintln!("[d3d9-trace]   sommet {k} : {}", w.join(" "));
+                }
+            }
+        }
     }
     if prepare_draw(&mut d, 0, None).is_some() {
         if let Some(g) = gl::gl() {
@@ -4885,7 +5382,7 @@ fn device_vtable() -> &'static [usize] {
                 (10, f!(stub_ok)),
                 (11, f!(stub_ok)),
                 (12, f!(stub_zero)),
-                (13, f!(stub_invalid)),
+                (13, f!(dev_create_add_sc)),
                 (14, f!(dev_get_swapchain)),
                 (15, f!(dev_num_swapchains)),
                 (16, f!(dev_reset)),
@@ -5128,6 +5625,40 @@ mod tests {
     {
         let vt = (*obj).vtbl;
         std::mem::transmute_copy::<usize, F>(&*vt.add(idx))
+    }
+
+    /// WPF n'accélère que si l'appareil se dit du modèle de pilote récent
+    /// (D3DCAPS2_CANSHARERESOURCE), et lit BLENDFACTOR blanc par défaut (#931).
+    #[test]
+    fn caps_wpf_modele_recent_et_facteur_de_melange() {
+        let mut c = [0u32; 76];
+        fill_caps(c.as_mut_ptr());
+        assert_ne!(c[3] & 0x8000_0000, 0, "D3DCAPS2_CANSHARERESOURCE");
+        assert!(c[51] >= 0xffff_0200 && c[49] >= 0xfffe_0200, "PS/VS 2.0");
+        assert!(c[37] >= 2 && c[38] >= 2);
+    }
+
+    /// UpdateSurface : seul le rectangle source est copié, au point demandé
+    /// (WPF range ses glyphes dans une texture A8 de 2048×16, #931).
+    #[test]
+    fn copie_d_un_rectangle_au_point_demande() {
+        let (sw, sh, dw, dh) = (4u32, 3u32, 8u32, 4u32);
+        let (sp, _) = level_layout(D3DFMT_A8, sw, sh);
+        let (dp, dsize) = level_layout(D3DFMT_A8, dw, dh);
+        let src: Vec<u8> = (0..sp * sh).map(|i| i as u8 + 1).collect();
+        let mut dst = vec![0u8; dsize];
+        let r = Rect32 {
+            left: 1,
+            top: 1,
+            right: 3,
+            bottom: 3,
+        };
+        copy_rect(&src, sp, &mut dst, dp, D3DFMT_A8, &r, 5, 2);
+        let at = |x: u32, y: u32| dst[(y * dp + x) as usize];
+        assert_eq!(at(5, 2), src[(sp + 1) as usize]);
+        assert_eq!(at(6, 3), src[(2 * sp + 2) as usize]);
+        assert_eq!(dst.iter().filter(|&&b| b != 0).count(), 4);
+        assert_eq!(at(0, 0), 0);
     }
 
     #[test]

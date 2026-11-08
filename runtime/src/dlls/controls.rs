@@ -495,19 +495,12 @@ fn wrap(font: usize, text: &str, width: i32) -> Vec<String> {
         let mut line = String::new();
         for word in raw.split_inclusive(' ') {
             let candidate = format!("{line}{word}");
-            if measure(font, candidate.trim_end()).0 <= width || line.is_empty() {
-                if measure(font, candidate.trim_end()).0 > width && line.is_empty() {
-                    // Mot plus large que la zone : coupe au caractère.
-                    for ch in word.chars() {
-                        let next = format!("{line}{ch}");
-                        if measure(font, &next).0 > width && !line.is_empty() {
-                            lines.push(std::mem::take(&mut line));
-                        }
-                        line.push(ch);
-                    }
-                } else {
-                    line = candidate;
-                }
+            // Un mot plus large que la zone reste entier sur sa ligne, comme
+            // DrawText(DT_WORDBREAK) : le couper renvoyait son dernier
+            // caractère sur une ligne invisible (empreinte SHA256 tronquée de
+            // FileZilla, #951).
+            if line.is_empty() || measure(font, candidate.trim_end()).0 <= width {
+                line = candidate;
             } else {
                 lines.push(line.trim_end().to_string());
                 line = word.to_string();
@@ -1140,7 +1133,8 @@ fn paint_static(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
         0x10 => p.line(r.left, r.top, r.right, r.top, CONTROL_BORDER, 1), // SS_ETCHEDHORZ
         0x11 => p.line(r.left, r.top, r.left, r.bottom, CONTROL_BORDER, 1), // SS_ETCHEDVERT
         0x12 => p.frame(r, CONTROL_BORDER), // SS_ETCHEDFRAME
-        0x03 | 0x0E | 0x0F => {}           // icône, bitmap, métafichier
+        0x03 | 0x0E => paint_static_image(hwnd, p, r, kind == 0x03, s), // icône, bitmap
+        0x0F => {}                         // métafichier
         _ => {
             let raw = title(hwnd);
             let text = if s & 0x80 != 0 {
@@ -1203,8 +1197,71 @@ unsafe fn static_proc_impl(hwnd: usize, msg: u32, _wp: usize, _lp: isize) -> Opt
             notify(hwnd, 1); // STN_DBLCLK
             Some(0)
         }
-        0x0170..=0x0173 => Some(0), // STM_SETICON, GETICON, SETIMAGE, GETIMAGE
+        // STM_SETICON, STM_GETICON, STM_SETIMAGE, STM_GETIMAGE : l'image
+        // (icône ou bitmap) que les statiques SS_ICON et SS_BITMAP dessinent
+        // (icône des boîtes wxWidgets : FileZilla, Audacity).
+        0x0170 => Some(set_static_image(hwnd, _wp) as isize),
+        0x0171 => Some(static_image(hwnd) as isize),
+        0x0172 => Some(set_static_image(hwnd, _lp as usize) as isize),
+        0x0173 => Some(static_image(hwnd) as isize),
         _ => None,
+    }
+}
+
+fn static_images() -> &'static Mutex<HashMap<usize, usize>> {
+    static I: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+    I.get_or_init(Default::default)
+}
+
+fn static_image(hwnd: usize) -> usize {
+    lock(static_images()).get(&hwnd).copied().unwrap_or(0)
+}
+
+/// Pose l'image d'un statique et renvoie la précédente.
+fn set_static_image(hwnd: usize, image: usize) -> usize {
+    let old = if image == 0 {
+        lock(static_images()).remove(&hwnd)
+    } else {
+        lock(static_images()).insert(hwnd, image)
+    };
+    unsafe {
+        user32::invalidate_rect(hwnd, std::ptr::null(), 1);
+    }
+    old.unwrap_or(0)
+}
+
+/// SS_ICON et SS_BITMAP : l'image en haut à gauche, ou centrée avec
+/// SS_CENTERIMAGE, à sa taille réelle.
+fn paint_static_image(hwnd: usize, p: &Painter, r: Rect, icon: bool, style: u32) {
+    let image = static_image(hwnd);
+    if image == 0 {
+        return;
+    }
+    let (w, h) = if icon {
+        super::icons::icon_image(image)
+            .map(|i| (i.w as i32, i.h as i32))
+            .unwrap_or((32, 32))
+    } else {
+        let mut bm = [0u8; 32];
+        if unsafe { gdi32::get_object_w(image, 32, bm.as_mut_ptr() as *mut _) } == 0 {
+            return;
+        }
+        let at = |o: usize| i32::from_le_bytes(bm[o..o + 4].try_into().unwrap());
+        (at(4), at(8).abs())
+    };
+    let (x, y) = if style & 0x200 != 0 {
+        (r.left + (r.width() - w) / 2, r.top + (r.height() - h) / 2)
+    } else {
+        (r.left, r.top)
+    };
+    if icon {
+        super::icons::draw_icon_ex(p.hdc, x, y, image, 0, 0, 0, 0, 3);
+    } else {
+        let mem = gdi32::create_compatible_dc(p.hdc);
+        let old = gdi32::select_object(mem, image);
+        gdi32::bit_blt(p.hdc, x, y, w, h, mem, 0, 0, 0x00CC_0020);
+        gdi32::select_object(mem, old);
+        gdi32::delete_dc(mem);
     }
 }
 
@@ -3427,6 +3484,7 @@ unsafe fn control_proc_impl(kind: Kind, hwnd: usize, msg: u32, wp: usize, lp: is
         }
         WM_NCDESTROY => {
             lock(state()).remove(&hwnd);
+            lock(static_images()).remove(&hwnd);
             comctl::forget(hwnd);
             bars::forget(hwnd);
             return 0;

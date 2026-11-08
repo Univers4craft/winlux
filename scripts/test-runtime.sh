@@ -9,6 +9,7 @@ test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
 # Binaires GUI autonomes – ne peuvent pas tourner en CI headless,
 # mais doivent être mentionnés ici pour satisfaire le contrôle d'hygiène :
 # audioplayer calc imageviewer mediaplayer pdfviewer postit screenshot sysinfo taskmgr
+# loadlib_search : lancé depuis un Bureau factice par test-loadlibrary-personal-cwd.sh (#1019).
 
 # Faux sysfs pour power_api : batterie à 75 %, 30 Wh restants à 10 W.
 power_root="${TMPDIR:-/tmp}/winlux-power-test.$$"
@@ -43,7 +44,7 @@ cat >/dev/null
 HELPER
 chmod 755 "$notify_helper"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite controls_suite comctl_suite bars_suite commdlg_suite menu_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite; do
+for name in hello exitcode p1_suite dll_import dll_deps delay_import findfiles winpaths uac_suite crt_suite gui_suite controls_suite comctl_suite bars_suite commdlg_suite menu_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"

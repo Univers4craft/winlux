@@ -858,6 +858,19 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // DirectPlay 8 (dpnet.dll, #863).
+        if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
+        // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
+        if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
+        crate::log_warn!(
+            "com",
+            "CoCreateInstance : classe {} inconnue (REGDB_E_CLASSNOTREG)",
+            guid_text(&guid)
+        );
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
@@ -901,6 +914,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
+        crate::log_warn!(
+            "com",
+            "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG)",
+            guid_text(&guid)
+        );
         return REGDB_E_CLASSNOTREG;
     };
     let entry = Arc::clone(entry);
@@ -1389,8 +1407,42 @@ pub extern "win64" fn ole_set_menu_descriptor(
     S_OK
 }
 
+thread_local! {
+    /// Filtre de messages COM du thread (CoRegisterMessageFilter).
+    static MESSAGE_FILTER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `CoRegisterMessageFilter(nouveau, &ancien)` : un filtre par thread. Le
+/// nouveau est gardé (AddRef) et l'ancien rendu à l'appelant, qui en devient
+/// propriétaire ; sans pointeur de retour, l'ancien est relâché. WinForms
+/// l'appelle avant sa boucle de messages pour trouver un gestionnaire de
+/// composants Office (#666).
+pub unsafe extern "win64" fn co_register_message_filter(
+    filter: usize,
+    previous: *mut usize,
+) -> i32 {
+    unsafe fn call_slot(obj: usize, slot: usize) {
+        let vtbl = *(obj as *const *const usize);
+        let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtbl.add(slot));
+        f(obj);
+    }
+    if filter != 0 {
+        call_slot(filter, 1); // AddRef
+    }
+    let old = MESSAGE_FILTER.with(|m| m.replace(filter));
+    if previous.is_null() {
+        if old != 0 {
+            call_slot(old, 2); // Release
+        }
+    } else {
+        *previous = old;
+    }
+    S_OK
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "CoRegisterMessageFilter"=>fn co_register_message_filter,
         "CoInitialize"=>fn co_initialize,"CoInitializeEx"=>fn co_initialize_ex,"CoUninitialize"=>fn co_uninitialize,
         "OleInitialize"=>fn ole_initialize,"OleUninitialize"=>fn ole_uninitialize,
         "CoTaskMemAlloc"=>fn co_task_mem_alloc,"CoTaskMemRealloc"=>fn co_task_mem_realloc,"CoTaskMemFree"=>fn co_task_mem_free,

@@ -29,6 +29,17 @@ deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
 blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
 `scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
 
+Depuis la deuxième partie de #269, un thread se suspend (`SuspendThread`,
+`ResumeThread` avec le compteur de Windows) et son contexte se lit et se
+modifie pendant qu'il est arrêté (`GetThreadContext`, `SetThreadContext`,
+`runtime/src/dlls/thread_ctl.rs`, test `scripts/test-thread-control.sh`).
+C'est ce que fait le ramasse-miettes de coreclr : les applis .NET
+autonomes (vérifié avec .NET 8), console et WinForms, tournent (exceptions managées, fenêtre,
+minuteur, fermeture, message clair sur une exception non gérée). `MEM_WRITE_WATCH` et
+`GetWriteWatch` suivent les pages écrites par le bit soft-dirty du noyau
+(#965). `QueueUserAPC2` reste absente, comme dans Windows 10 22H2. WPF a
+son propre chantier (#268).
+
 Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
 par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
 empreintes du block map vérifiées avant toute écriture, installation dans
@@ -210,13 +221,13 @@ Limites honnêtes de la mesure :
 | Fenêtres et GDI (`user32`, `gdi32`) | 287 + 154 fonctions, backend X11, Xft | rectangles, icônes, fenêtres en couches, régions, chemins GDI, transformations, entrée brute, écrans |
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
-| .NET | CLR maison (interpréteur CIL) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) |
+| .NET | CLR maison (interpréteur CIL, DLL .NET privées de l'appli chargées depuis #926) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) ; plan en 9 étapes dans [compat/dotnet-framework.md](compat/dotnet-framework.md) |
 | Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, effets D3DX déjà compilés (fx_2_0 binaire), `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |
 | Son | waveOut, DirectSound (32 et 64 bits), WASAPI, XAudio2, MIDI (`midiOut*`, `midiStream*` sur un synthétiseur General MIDI maison) sur un mixeur PipeWire/Pulse/ALSA | entrée MIDI (`midiIn*`), `msacm32` |
 | Vidéo | MP3/AAC décodés, DXVA2 H.264, DirectShow (graphe de lecture `CLSID_FilterGraph` sur le moteur multimédia) | chaîne Media Foundation (#23), filtres DirectShow fournis par le programme, `avicap32`, `evr` |
-| Réseau | Winsock TCP/UDP de base, DirectPlay 4 (`dplayx`, parties entre PC Winlux), WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
+| Réseau | Winsock TCP/UDP de base, DirectPlay 4 et 8 (`dplayx`, `dpnet`, parties entre PC Winlux), WinHTTP synchrone via curl, iphlpapi | `WSARecvFrom/WSASendTo`, `mswsock`, `dnsapi`, WinINet, `urlmon`, SSPI/Schannel |
 | Sécurité et crypto | bcrypt, une partie de crypt32, jetons simplifiés | CryptoAPI ancienne (`CryptAcquireContext`…), `ncrypt`, magasins de certificats, ACL réelles |
 | Impression | winspool → PDF → CUPS (IPP) | pilotes, XPS, polices de l'appli dans le PDF |
 | Installeurs | NSIS, Inno Setup, MSI maison | plugins NSIS, actions MSI en DLL, WiX Burn, InstallShield (#179) |
@@ -574,8 +585,7 @@ Ampleur : **M**. Suivi : #271.
 
 ### 12. Anciens DirectX et multimédia
 
-DirectPlay 8 (`dpnet`, #863), les effets D3DX livrés déjà compilés
-(fx_2_0 binaire), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
+Les effets D3DX livrés déjà compilés (fx_2_0 binaire, #909), la chaîne Media Foundation de lecture (#23), l'entrée MIDI,
 `msacm32`. Ce sont les jeux et lecteurs des années 2000–2015, presque
 toujours en 32 bits (point 3).
 
@@ -596,10 +606,14 @@ Direct3D 9 et DirectSound pour les programmes 32 bits (#778, #859) ;
 DirectShow (`quartz.dll`, #835 : `RenderFile`, contrôle, événements,
 fenêtre vidéo, volume, position, sur le moteur multimédia de Winlux) ;
 DirectPlay 4 (`dplayx.dll`/`dplay.dll`, #836 : fournisseur TCP/IP, recherche
-et création de parties, joueurs, groupes, messages). DirectPlay passe par un
-protocole propre à Winlux (annonce UDP sur le port 47624, jeu en TCP via
-l'hôte) : deux PC Winlux jouent ensemble, un PC Windows ne voit pas ces
-parties. Test : `scripts/test-wow32.sh` (`jeux32.exe` et `jeux64.exe`).
+et création de parties, joueurs, groupes, messages) ; DirectPlay 8
+(`dpnet.dll`/`dpnaddr.dll`, #863 : `IDirectPlay8Peer`, `Client`, `Server`,
+`IDirectPlay8Address` et ses URL `x-directplay:/`, recherche de parties,
+connexion acceptée ou refusée par l'hôte, joueurs, groupes, messages,
+informations, fin de partie). DirectPlay passe par un protocole propre à
+Winlux (annonce UDP sur le port 47624 pour DirectPlay 4, sur le port de la
+partie et le 6073 pour DirectPlay 8, jeu en TCP via l'hôte) : deux PC Winlux
+jouent ensemble, un PC Windows ne voit pas ces parties. Test : `scripts/test-wow32.sh` (`jeux32.exe` et `jeux64.exe`).
 
 Ampleur : **L**. Suivi : #237, et #23 pour la vidéo.
 

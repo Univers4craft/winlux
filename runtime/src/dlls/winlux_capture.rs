@@ -446,6 +446,7 @@ pub fn record_args(
     flags: u32,
     audio: AudioServer,
     output: &Path,
+    app: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = ["-hide_banner", "-loglevel", "error", "-y"]
         .iter()
@@ -470,6 +471,11 @@ pub fn record_args(
     ]);
     let mut audio_inputs = 0;
     let mut push_audio = |args: &mut Vec<String>, format: &str, device: &str| {
+        if format == "pulse" && !app.is_empty() {
+            // Nom du flux d'entrée : le programme qui enregistre, pas
+            // « Lavf… » de libavformat (#1010).
+            args.extend(["-name".to_string(), app.to_string()]);
+        }
         args.extend(
             ["-thread_queue_size", "512", "-f", format, "-i", device]
                 .iter()
@@ -594,12 +600,14 @@ pub unsafe extern "win64" fn winlux_record_start(
     if let Some(dir) = output.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    let app = crate::audio::backend::app_name();
     let args = record_args(
         &display.to_string_lossy(),
         Rect::from_size(x, y, width, height),
         flags,
         detect_audio(),
         &output,
+        &app,
     );
     let log = crate::paths::data_dir()
         .map(|d| d.join("screen-recorder.log"))
@@ -609,6 +617,10 @@ pub unsafe extern "win64" fn winlux_record_start(
         });
     let stderr = log.map(Stdio::from).unwrap_or_else(Stdio::null);
     match Command::new(ffmpeg_binary())
+        .envs(super::winlux_media::audio_env(
+            &app,
+            &crate::audio::backend::process_binary(),
+        ))
         .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -823,13 +835,15 @@ mod tests {
             RECORD_MIC | RECORD_SYSTEM_AUDIO,
             AudioServer::Pulse,
             Path::new("/home/u/Vidéos/a.mp4"),
+            "Outil Capture",
         );
         let joined = args.join(" ");
         assert!(joined.contains("-f x11grab"));
         assert!(joined.contains("-video_size 800x600"), "{joined}");
         assert!(joined.contains("-i :0+10,20"));
-        assert!(joined.contains("-f pulse -i default"));
-        assert!(joined.contains("-f pulse -i @DEFAULT_MONITOR@"));
+        assert!(joined.contains("-name Outil Capture -thread_queue_size 512 -f pulse -i default"));
+        assert!(joined
+            .contains("-name Outil Capture -thread_queue_size 512 -f pulse -i @DEFAULT_MONITOR@"));
         assert!(joined.contains("amix=inputs=2"));
         assert!(joined.contains("-c:v libx264"));
         assert!(joined.contains("-c:a aac"));
@@ -844,6 +858,7 @@ mod tests {
             RECORD_WEBM,
             AudioServer::Pulse,
             Path::new("/tmp/b.webm"),
+            "Outil Capture",
         );
         let joined = args.join(" ");
         assert!(joined.contains("-c:v libvpx-vp9"));
@@ -855,9 +870,14 @@ mod tests {
             RECORD_MIC | RECORD_SYSTEM_AUDIO | RECORD_WEBM,
             AudioServer::Alsa,
             Path::new("/tmp/c.webm"),
+            "Outil Capture",
         )
         .join(" ");
         assert!(alsa.contains("-f alsa -i default"));
+        assert!(
+            !alsa.contains("-name"),
+            "-name est propre au démultiplexeur pulse"
+        );
         assert!(!alsa.contains("amix"));
         assert!(alsa.contains("-c:a libopus"));
     }

@@ -10,11 +10,99 @@ use std::thread::ThreadId;
 static PROCESS_HEAP: AtomicUsize = AtomicUsize::new(0);
 struct VmRegion {
     size: usize,
-    committed: Vec<bool>,
-    protection: Vec<u32>,
+    /// Protection Windows de chaque page, 0 pour une page réservée mais non
+    /// engagée.
+    pages: PageMap,
     allocation_protection: u32,
     kind: u32,
 }
+
+/// Protections des pages d'une région, rangées par plages contiguës de même
+/// valeur : le ramasse-miettes de .NET réserve 256 Gio d'un coup, soit 67
+/// millions de pages qu'un tableau par page faisait payer ~335 Mio de RAM
+/// (#665).
+#[derive(Clone)]
+pub(crate) struct PageMap {
+    /// Début de chaque plage -> valeur ; plages voisines toujours distinctes.
+    runs: std::collections::BTreeMap<usize, u32>,
+    len: usize,
+}
+
+impl PageMap {
+    pub(crate) fn new(len: usize, value: u32) -> Self {
+        let mut runs = std::collections::BTreeMap::new();
+        runs.insert(0, value);
+        PageMap { runs, len }
+    }
+    fn from_pages(values: &[u32]) -> Self {
+        let mut runs = std::collections::BTreeMap::new();
+        let mut last = None;
+        for (i, &v) in values.iter().enumerate() {
+            if last != Some(v) {
+                runs.insert(i, v);
+                last = Some(v);
+            }
+        }
+        if runs.is_empty() {
+            runs.insert(0, 0);
+        }
+        PageMap {
+            runs,
+            len: values.len(),
+        }
+    }
+    pub(crate) fn get(&self, page: usize) -> u32 {
+        self.runs.range(..=page).next_back().map_or(0, |(_, &v)| v)
+    }
+    fn committed(&self, page: usize) -> bool {
+        self.get(page) != 0
+    }
+    /// Toutes les pages de [first, first + count) sont-elles engagées ?
+    fn all_committed(&self, first: usize, count: usize) -> bool {
+        if count == 0 {
+            return true;
+        }
+        self.get(first) != 0
+            && self
+                .runs
+                .range(first + 1..first + count)
+                .all(|(_, &v)| v != 0)
+    }
+    /// Donne la valeur `value` aux pages [first, first + count).
+    pub(crate) fn fill(&mut self, first: usize, count: usize, value: u32) {
+        let end = (first + count).min(self.len);
+        if first >= end {
+            return;
+        }
+        let after = self.get(end);
+        let inner: Vec<usize> = self.runs.range(first..end).map(|(&k, _)| k).collect();
+        for k in inner {
+            self.runs.remove(&k);
+        }
+        if end < self.len {
+            self.runs.insert(end, after);
+        }
+        self.runs.insert(first, value);
+        // Fusion avec les voisines de même valeur.
+        if end < self.len && after == value {
+            self.runs.remove(&end);
+        }
+        if first > 0 && self.get(first - 1) == value {
+            self.runs.remove(&first);
+        }
+    }
+    /// Plage [début, fin) de même valeur qui contient `page`.
+    fn run_bounds(&self, page: usize) -> (usize, usize) {
+        let start = self.runs.range(..=page).next_back().map_or(0, |(&k, _)| k);
+        let end = self
+            .runs
+            .range(page + 1..)
+            .next()
+            .map_or(self.len, |(&k, _)| k);
+        (start, end)
+    }
+}
+
 /// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
 pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     let pages = protection.len();
@@ -22,8 +110,7 @@ pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
         base,
         VmRegion {
             size: pages * 4096,
-            committed: vec![true; pages],
-            protection,
+            pages: PageMap::from_pages(&protection),
             allocation_protection: 0x80,
             kind: 0x1000000,
         },
@@ -170,6 +257,9 @@ struct ThreadState {
     /// GetCurrentThreadId dans le thread) ; 0 tant que le thread n'a pas pris
     /// la main une première fois.
     win_tid: u32,
+    /// Le thread a quitté son attente de démarrage : la suspension passe
+    /// désormais par `slot` (signal), plus par `suspend_count`.
+    running: bool,
 }
 pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
@@ -183,6 +273,31 @@ pub(crate) struct ThreadObject {
     /// y saute pour terminer le thread proprement sans dérouler les trames
     /// Windows, qui n'ont pas d'informations de déroulement Linux.
     exit_jump: Mutex<Box<[u64; 8]>>,
+    /// Suspension d'un thread démarré (SuspendThread, GetThreadContext…).
+    pub(crate) slot: super::thread_ctl::SuspendSlot,
+    /// Thread Rust correspondant (file d'APC de QueueUserAPC).
+    pub(crate) rust_id: OnceLock<ThreadId>,
+}
+
+impl ThreadObject {
+    fn new(suspended: bool) -> Self {
+        ThreadObject {
+            state: Mutex::new(ThreadState {
+                finished: false,
+                exit_code: 259,
+                suspend_count: usize::from(suspended),
+                win_tid: 0,
+                running: false,
+            }),
+            changed: Condvar::new(),
+            os_tid: AtomicI32::new(0),
+            pending_cpus: Mutex::new(None),
+            priority: AtomicI32::new(0),
+            exit_jump: Mutex::new(Box::new([0; 8])),
+            slot: super::thread_ctl::SuspendSlot::new(),
+            rust_id: OnceLock::new(),
+        }
+    }
 }
 
 core::arch::global_asm!(
@@ -2911,10 +3026,20 @@ unsafe fn load_library_str(name: &str) -> usize {
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
     if let Some(h) = crate::dlls::module_handle(n).filter(|_| !real_first) {
-        {
+        // Une DLL réelle libérée par FreeLibrary (DLL_PROCESS_DETACH déjà
+        // reçu) puis rechargée : Windows la reprojette et rappelle son
+        // DllMain ; ses objets globaux C++ détruits sont reconstruits.
+        let reattach = {
             let mut mods = crate::loader::MODULES.lock().unwrap();
-            if let Some(m) = mods.iter_mut().find(|m| m.base == h) {
+            mods.iter_mut().find(|m| m.base == h).and_then(|m| {
                 m.refcount = m.refcount.saturating_add(1);
+                (!m.initialized).then(|| m.clone())
+            })
+        };
+        if let Some(m) = reattach {
+            if !initialize_with_dependencies(&m, &[]) {
+                crate::process::set_last_error(1114);
+                return 0;
             }
         }
         return h;
@@ -2927,9 +3052,15 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(126);
         return 0;
     };
+    let before: Vec<usize> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.base)
+        .collect();
     match crate::loader::load(&path, false) {
         Ok(m) => {
-            if crate::process::initialize_dynamic_module(&m) {
+            if initialize_with_dependencies(&m, &before) {
                 m.base
             } else {
                 crate::process::set_last_error(1114);
@@ -2941,6 +3072,36 @@ unsafe fn load_library_str(name: &str) -> usize {
             0
         }
     }
+}
+/// DllMain (et rappels TLS) de `m` et des DLL réelles que son chargement a
+/// amenées, dépendances d'abord, comme le chargeur de Windows. Sans cela, une
+/// DLL chargée seulement comme dépendance d'un LoadLibrary n'était jamais
+/// initialisée : ses objets globaux C++ restaient à zéro. C'était le
+/// plantage d'Audacity au premier lancement (#691) : la clé de
+/// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
+/// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
+fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
+    // Les dépendances sont projetées après le module qui les importe : à
+    // rebours, chacune passe avant ceux qui l'utilisent.
+    let pending: Vec<crate::loader::Module> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|x| x.base != m.base && !x.initialized && x.refcount > 0)
+        .filter(|x| !before.is_empty() && !before.contains(&x.base))
+        .cloned()
+        .collect();
+    for dep in pending.iter().rev() {
+        if !crate::process::initialize_dynamic_module(dep) {
+            crate::trace!(
+                "DllMain de {} (dépendance de {}) a échoué",
+                dep.name,
+                m.name
+            );
+            return false;
+        }
+    }
+    crate::process::initialize_dynamic_module(m)
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {
@@ -2973,6 +3134,8 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
+    // Nom et drapeaux demandés, pour WINLUX_TRACE=1 (#1019).
+    crate::trace!("LoadLibraryEx({value}, 0x{flags:x})");
     // LOAD_IGNORE_CODE_AUTHZ_LEVEL : sans effet.
     let flags = flags & !0x10;
     if flags == 0 {
@@ -2996,15 +3159,29 @@ unsafe fn load_library_ex_inner(name: *const u8, file: usize, flags: u32) -> usi
         crate::process::set_last_error(87);
         return 0;
     }
-    let path = crate::paths::to_linux(&value);
     let mut directories = Vec::new();
     if flags & (8 | 0x100) != 0 {
-        if !path.is_absolute() {
-            crate::process::set_last_error(87);
-            return 0;
-        }
-        if let Some(parent) = path.parent() {
-            directories.push(parent.to_path_buf());
+        // Converti seulement ici, où le nom doit être un chemin absolu : un
+        // simple nom de DLL (« api-ms-win-core-synch-l1-2-0 » demandé par la
+        // CRT avec LOAD_LIBRARY_SEARCH_SYSTEM32) devenait un chemin relatif
+        // au dossier courant. Lancé depuis le Bureau, claude.exe attendait
+        // alors l'autorisation « fichiers personnels » avant même son main
+        // (#1019).
+        let is_path = value.contains(['\\', '/']) || value.as_bytes().get(1) == Some(&b':');
+        let path = is_path.then(|| crate::paths::to_linux(&value));
+        match path {
+            Some(path) if path.is_absolute() => {
+                if let Some(parent) = path.parent() {
+                    directories.push(parent.to_path_buf());
+                }
+            }
+            // LOAD_WITH_ALTERED_SEARCH_PATH avec un simple nom : recherche
+            // standard, comme Windows.
+            None if flags & 0x100 == 0 => {}
+            _ => {
+                crate::process::set_last_error(87);
+                return 0;
+            }
         }
     }
     if flags & (8 | 0x200 | 0x1000) != 0 {
@@ -3445,8 +3622,16 @@ pub unsafe extern "win64" fn virtual_alloc(
     const MEM_COMMIT: u32 = 0x1000;
     const MEM_RESERVE: u32 = 0x2000;
     const MEM_RESET: u32 = 0x80000;
+    const MEM_WRITE_WATCH: u32 = 0x20_0000;
     const PAGE: usize = 4096;
     const GRANULARITY: usize = 65536;
+    // MEM_WRITE_WATCH : seulement avec MEM_RESERVE, comme Windows (#965).
+    let watch = _kind & MEM_WRITE_WATCH != 0;
+    if watch && _kind & MEM_RESERVE == 0 {
+        crate::process::set_last_error(87);
+        return std::ptr::null_mut();
+    }
+    let _kind = _kind & !MEM_WRITE_WATCH;
     if size == 0
         || !valid_win_prot(prot)
         || _kind & !(MEM_COMMIT | MEM_RESERVE | MEM_RESET) != 0
@@ -3524,8 +3709,7 @@ pub unsafe extern "win64" fn virtual_alloc(
             crate::process::set_last_error(8);
             return std::ptr::null_mut();
         }
-        r.committed[start..start + count].fill(true);
-        r.protection[start..start + count].fill(prot);
+        r.pages.fill(start, count, prot);
         return page_base as *mut c_void;
     }
     let page_base = if addr.is_null() {
@@ -3603,13 +3787,36 @@ pub unsafe extern "win64" fn virtual_alloc(
         p,
         VmRegion {
             size: mapped_size,
-            committed: vec![_kind & MEM_COMMIT != 0; pages],
-            protection: vec![if _kind & MEM_COMMIT != 0 { prot } else { 1 }; pages],
+            pages: PageMap::new(pages, if _kind & MEM_COMMIT != 0 { prot } else { 0 }),
             allocation_protection: prot,
             kind: 0x20000,
         },
     );
+    if watch {
+        crate::dlls::write_watch::register(p, mapped_size);
+    }
     p as *mut c_void
+}
+
+/// Pages engagées (indices) de la région réservée à `base`, dans
+/// [first, end) : pour GetWriteWatch.
+pub(crate) fn committed_pages(base: usize, first: usize, end: usize) -> Vec<usize> {
+    let maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some(r) = maps.get(&base) else {
+        return Vec::new();
+    };
+    let end = end.min(r.size / 4096);
+    let mut out = Vec::new();
+    let mut page = first;
+    while page < end {
+        let (_, run_end) = r.pages.run_bounds(page);
+        let stop = run_end.min(end);
+        if r.pages.committed(page) {
+            out.extend(page..stop);
+        }
+        page = stop;
+    }
+    out
 }
 pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: u32) -> i32 {
     const MEM_DECOMMIT: u32 = 0x4000;
@@ -3639,6 +3846,8 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
             return 0;
         }
         maps.remove(&p);
+        drop(maps);
+        crate::dlls::write_watch::unregister(p);
         return 1;
     }
     if kind == MEM_DECOMMIT {
@@ -3671,8 +3880,7 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
         }
         let first = (start - base) / PAGE;
         let count = (end - start) / PAGE;
-        region.committed[first..first + count].fill(false);
-        region.protection[first..first + count].fill(1);
+        region.pages.fill(first, count, 0);
         return 1;
     }
     crate::process::set_last_error(87);
@@ -3752,17 +3960,17 @@ pub unsafe extern "win64" fn virtual_protect(
     };
     let first = (start - base) / PAGE;
     let count = (end - start) / PAGE;
-    if r.committed[first..first + count].iter().any(|c| !*c) {
+    if !r.pages.all_committed(first, count) {
         crate::process::set_last_error(487);
         return 0;
     }
-    let previous = r.protection[first];
+    let previous = r.pages.get(first);
     if libc::mprotect(start as *mut c_void, end - start, win_prot(prot)) != 0 {
         crate::process::set_last_error(8);
         return 0;
     }
     *old = previous;
-    r.protection[first..first + count].fill(prot);
+    r.pages.fill(first, count, prot);
     1
 }
 /// Pour le gestionnaire de fautes (contexte de signal : jamais de verrou
@@ -3778,9 +3986,8 @@ pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
     Some(maps.iter().any(|(&b, r)| {
         addr >= b
             && addr < b + r.size
-            && r.committed[(addr - b) / PAGE]
             && matches!(
-                r.protection[(addr - b) / PAGE] & 0xFF,
+                r.pages.get((addr - b) / PAGE) & 0xFF,
                 0x10 | 0x20 | 0x40 | 0x80
             )
     }))
@@ -3802,15 +4009,15 @@ pub(crate) fn clear_guard_page(addr: usize) -> bool {
         return false;
     };
     let index = (addr - base) / PAGE;
-    if !r.committed[index] || r.protection[index] & PAGE_GUARD == 0 {
+    if !r.pages.committed(index) || r.pages.get(index) & PAGE_GUARD == 0 {
         return false;
     }
-    let prot = r.protection[index] & !PAGE_GUARD;
+    let prot = r.pages.get(index) & !PAGE_GUARD;
     let page = base + index * PAGE;
     if unsafe { libc::mprotect(page as *mut c_void, PAGE, win_prot(prot)) } != 0 {
         return false;
     }
-    r.protection[index] = prot;
+    r.pages.fill(index, 1, prot);
     true
 }
 
@@ -3823,10 +4030,7 @@ pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
     };
     let maps = table.try_lock().ok()?;
     Some(maps.iter().any(|(&b, r)| {
-        addr >= b
-            && addr < b + r.size
-            && r.committed[(addr - b) / PAGE]
-            && r.protection[(addr - b) / PAGE] & PAGE_GUARD != 0
+        addr >= b && addr < b + r.size && r.pages.get((addr - b) / PAGE) & PAGE_GUARD != 0
     }))
 }
 
@@ -3834,6 +4038,40 @@ pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
 /// thread courant, décrite comme une pile Windows (AllocationBase au bas de
 /// la réservation, ce que lit coreclr pour borner sa pile), ou une
 /// projection de `/proc/self/maps` (image, tas, piles des autres threads).
+/// Pile du thread vue par `VirtualQuery`, découpée comme sous Windows : en
+/// bas une page réservée, puis une page de garde (PAGE_GUARD), puis la partie
+/// validée jusqu'au sommet. coreclr cherche cette page de garde quand une
+/// exception n'est pas gérée : sans elle, il conclut à un débordement de
+/// pile et s'arrête sur « Stack overflow. » au lieu d'afficher l'exception.
+fn stack_region(address: usize, limit: usize, base: usize) -> MemoryBasicInformation {
+    const PAGE: usize = 4096;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    const MEM_PRIVATE: u32 = 0x20000;
+    const PAGE_READWRITE: u32 = 4;
+    const PAGE_GUARD: u32 = 0x100;
+    let page = address & !(PAGE - 1);
+    let guard = limit + PAGE;
+    let committed = (limit + 2 * PAGE).min(base);
+    let (lo, hi, state, protect) = if page < guard {
+        (limit, guard, MEM_RESERVE, 0)
+    } else if page < committed {
+        (guard, committed, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD)
+    } else {
+        (committed, base, MEM_COMMIT, PAGE_READWRITE)
+    };
+    MemoryBasicInformation {
+        base_address: page.max(lo) as *mut c_void,
+        allocation_base: limit as *mut c_void,
+        allocation_protect: PAGE_READWRITE,
+        partition_id: 0,
+        region_size: hi - page.max(lo),
+        state,
+        protect,
+        kind: MEM_PRIVATE,
+    }
+}
+
 fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
     const PAGE: usize = 4096;
     const MEM_COMMIT: u32 = 0x1000;
@@ -3849,16 +4087,7 @@ fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
             )
         };
         if limit < base && address >= limit && address < base {
-            return Some(MemoryBasicInformation {
-                base_address: page as *mut c_void,
-                allocation_base: limit as *mut c_void,
-                allocation_protect: 4,
-                partition_id: 0,
-                region_size: base - page,
-                state: MEM_COMMIT,
-                protect: 4,
-                kind: MEM_PRIVATE,
-            });
+            return Some(stack_region(address, limit, base));
         }
     }
     let text = std::fs::read_to_string("/proc/self/maps").ok()?;
@@ -3926,22 +4155,9 @@ pub unsafe extern "win64" fn virtual_query(
         .find(|(base, r)| address >= **base && address < **base + r.size);
     let result = if let Some((&base, r)) = region {
         let idx = (page - base) / PAGE;
-        let committed = r.committed[idx];
-        let protect = if committed { r.protection[idx] } else { 1 };
-        let mut first = idx;
-        let mut last = idx + 1;
-        while first > 0
-            && r.committed[first - 1] == committed
-            && (!committed || r.protection[first - 1] == protect)
-        {
-            first -= 1;
-        }
-        while last < r.committed.len()
-            && r.committed[last] == committed
-            && (!committed || r.protection[last] == protect)
-        {
-            last += 1;
-        }
+        let committed = r.pages.committed(idx);
+        let protect = if committed { r.pages.get(idx) } else { 1 };
+        let (first, last) = r.pages.run_bounds(idx);
         MemoryBasicInformation {
             base_address: (base + first * PAGE) as *mut c_void,
             allocation_base: base as *mut c_void,
@@ -4467,21 +4683,8 @@ pub unsafe extern "win64" fn create_thread(
         return 0;
     }
     let seq = NEXT_THREAD.fetch_add(1, Ordering::Relaxed);
-    let state = Arc::new(ThreadObject {
-        state: Mutex::new(ThreadState {
-            finished: false,
-            exit_code: 259,
-            suspend_count: usize::from(flags & 4 != 0),
-            win_tid: 0,
-        }),
-        changed: Condvar::new(),
-        os_tid: AtomicI32::new(0),
-        pending_cpus: Mutex::new(None),
-        priority: AtomicI32::new(0),
-        exit_jump: Mutex::new(Box::new([0; 8])),
-    });
+    let state = Arc::new(ThreadObject::new(flags & 4 != 0));
     let handle = add_sync(SyncHandle::Thread(state.clone()), None);
-    let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(start);
     let mut builder = std::thread::Builder::new().name(format!("win-thread-{seq}"));
     if stack != 0 {
         builder = builder.stack_size(stack.max(64 * 1024));
@@ -4490,6 +4693,9 @@ pub unsafe extern "win64" fn create_thread(
     if builder
         .spawn(move || {
             let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+            let _ = thread.rust_id.set(std::thread::current().id());
+            super::thread_ctl::register(os_tid, &thread.slot);
+            register_thread_object(os_tid, &thread);
             let mut s = lock(&thread.state);
             // L'identifiant rendu par CreateThread est celui que
             // GetCurrentThreadId donnera dans le thread : le créateur attend
@@ -4502,6 +4708,7 @@ pub unsafe extern "win64" fn create_thread(
                     .wait(s)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
+            s.running = true;
             drop(s);
             {
                 // Même verrou que SetThreadAffinityMask/SetThreadPriority :
@@ -4522,7 +4729,7 @@ pub unsafe extern "win64" fn create_thread(
             // Second retour (valeur 1) : ExitThread a déjà enregistré le code
             // et signalé le handle ; le thread se termine simplement ici.
             if winlux_thread_setjmp(jump) == 0 {
-                let code = f(param);
+                let code = super::thread_ctl::root_call(start, param);
                 finish_current_thread(code);
             }
             std::hint::black_box(&thread);
@@ -4554,6 +4761,208 @@ thread_local! {
     /// principal et les threads Rust internes).
     static CURRENT_THREAD: std::cell::RefCell<Option<Arc<ThreadObject>>> =
         const { std::cell::RefCell::new(None) };
+    /// Objet de thread créé pour un thread qui ne vient pas de CreateThread
+    /// (thread principal, threads de Winlux qui exécutent du code invité) :
+    /// marqué terminé à la fin du thread.
+    static ADOPTED: AdoptedThread = const { AdoptedThread(std::cell::RefCell::new(None)) };
+}
+
+struct AdoptedThread(std::cell::RefCell<Option<Arc<ThreadObject>>>);
+impl Drop for AdoptedThread {
+    fn drop(&mut self) {
+        if let Some(thread) = self.0.borrow_mut().take() {
+            let tid = thread.os_tid.load(Ordering::Acquire);
+            super::thread_ctl::unregister(tid, &thread.slot);
+            unregister_thread_object(tid);
+            let mut s = lock(&thread.state);
+            s.exit_code = 0;
+            s.finished = true;
+            thread.changed.notify_all();
+        }
+    }
+}
+
+/// Threads Win32 vivants par tid Linux (OpenThread).
+static THREADS_BY_TID: OnceLock<Mutex<HashMap<i32, std::sync::Weak<ThreadObject>>>> =
+    OnceLock::new();
+fn register_thread_object(tid: i32, t: &Arc<ThreadObject>) {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).insert(tid, Arc::downgrade(t));
+}
+fn unregister_thread_object(tid: i32) {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).remove(&tid);
+}
+fn thread_object_by_tid(tid: i32) -> Option<Arc<ThreadObject>> {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&tid)
+        .and_then(std::sync::Weak::upgrade)
+}
+
+/// Objet de thread Win32 du thread courant, créé au besoin (thread
+/// principal, threads internes) : DuplicateHandle(GetCurrentThread()) en
+/// donne un vrai handle, que coreclr passe ensuite à SuspendThread depuis
+/// le thread du ramasse-miettes.
+pub(crate) fn current_thread_object() -> Arc<ThreadObject> {
+    if let Some(t) = CURRENT_THREAD
+        .try_with(|c| c.borrow().clone())
+        .ok()
+        .flatten()
+    {
+        return t;
+    }
+    if let Some(t) = ADOPTED.try_with(|a| a.0.borrow().clone()).ok().flatten() {
+        return t;
+    }
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
+    let t = Arc::new(ThreadObject::new(false));
+    {
+        let mut s = lock(&t.state);
+        s.win_tid = tid as u32;
+        s.running = true;
+    }
+    t.os_tid.store(tid, Ordering::Release);
+    let _ = t.rust_id.set(std::thread::current().id());
+    if ADOPTED
+        .try_with(|a| *a.0.borrow_mut() = Some(t.clone()))
+        .is_ok()
+    {
+        super::thread_ctl::register(tid, &t.slot);
+        register_thread_object(tid, &t);
+    }
+    t
+}
+
+/// Thread visé par un handle : pseudo-handle, handle de thread, ou rien.
+fn thread_object_of(h: usize) -> Option<Arc<ThreadObject>> {
+    if h == get_current_thread() {
+        return Some(current_thread_object());
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => Some(t),
+        _ => None,
+    }
+}
+
+fn is_current(t: &ThreadObject) -> bool {
+    t.os_tid.load(Ordering::Acquire) == unsafe { libc::syscall(libc::SYS_gettid) as i32 }
+}
+
+/// tid d'un thread démarré (None s'il attend encore son démarrage).
+fn running_tid(t: &ThreadObject) -> Option<i32> {
+    let s = lock(&t.state);
+    s.running.then_some(s.win_tid as i32)
+}
+
+/// `SuspendThread`.
+pub extern "win64" fn suspend_thread(h: usize) -> u32 {
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return u32::MAX;
+    };
+    {
+        let mut s = lock(&t.state);
+        if s.finished {
+            crate::process::set_last_error(5);
+            return u32::MAX;
+        }
+        if !s.running {
+            // Pas encore démarré : il attend que le compte retombe à 0.
+            let prev = s.suspend_count as u32;
+            if prev >= super::thread_ctl::MAXIMUM_SUSPEND_COUNT {
+                crate::process::set_last_error(super::thread_ctl::ERROR_SIGNAL_REFUSED);
+                return u32::MAX;
+            }
+            s.suspend_count += 1;
+            return prev;
+        }
+    }
+    let Some(tid) = running_tid(&t) else {
+        return 0;
+    };
+    match super::thread_ctl::suspend(&t.slot, tid) {
+        Ok(prev) => prev,
+        Err(e) => {
+            crate::process::set_last_error(e);
+            u32::MAX
+        }
+    }
+}
+
+/// `GetThreadContext`.
+pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
+    if ctx.is_null() {
+        crate::process::set_last_error(998);
+        return 0;
+    }
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    if is_current(&t) {
+        super::thread_ctl::get_own_context(ctx);
+        return 1;
+    }
+    let Some(tid) = running_tid(&t) else {
+        // Créé suspendu, jamais démarré : pas encore de registres.
+        crate::process::set_last_error(31);
+        return 0;
+    };
+    if super::thread_ctl::get_context(&t.slot, tid, ctx) {
+        1
+    } else {
+        crate::process::set_last_error(5);
+        0
+    }
+}
+
+/// `SetThreadContext`.
+pub unsafe extern "win64" fn set_thread_context(h: usize, ctx: *const u8) -> i32 {
+    if ctx.is_null() {
+        crate::process::set_last_error(998);
+        return 0;
+    }
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    if is_current(&t) {
+        let flags = (ctx.add(0x30) as *const u32).read_unaligned();
+        if flags & 0x1 != 0 {
+            let mut copy = seh_context_copy(ctx);
+            super::seh::rtl_restore_context(copy.as_mut_ptr(), std::ptr::null_mut());
+        }
+        return 1;
+    }
+    let Some(tid) = running_tid(&t) else {
+        crate::process::set_last_error(31);
+        return 0;
+    };
+    if super::thread_ctl::set_context(&t.slot, tid, ctx) {
+        1
+    } else {
+        crate::process::set_last_error(5);
+        0
+    }
+}
+
+unsafe fn seh_context_copy(ctx: *const u8) -> Vec<u8> {
+    std::slice::from_raw_parts(ctx, super::seh::CONTEXT_SIZE).to_vec()
+}
+
+/// `OpenThread` : handle vers un thread de ce processus par son identifiant.
+pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize {
+    let me = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+    let t = if tid == me {
+        Some(current_thread_object())
+    } else {
+        thread_object_by_tid(tid as i32)
+    };
+    let Some(t) = t else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let h = add_sync(SyncHandle::Thread(t), None);
+    crate::dlls::inherit::set(h, inherit != 0);
+    h
 }
 
 /// Termine le thread Win32 courant : rappels DLL_THREAD_DETACH, libération
@@ -4583,6 +4992,9 @@ pub(crate) fn finish_current_thread(code: u32) {
         .ok()
         .flatten();
     if let Some(thread) = thread {
+        let tid = thread.os_tid.load(Ordering::Acquire);
+        super::thread_ctl::unregister(tid, &thread.slot);
+        unregister_thread_object(tid);
         let _gate = sync_gate();
         let mut s = lock(&thread.state);
         s.exit_code = code;
@@ -4918,7 +5330,11 @@ unsafe fn create_process_common(
                 .map(std::ffi::OsString::from),
         );
     }
-    let mut cmd = if suspended {
+    // Programme Windows suspendu : il se fige lui-même une fois chargé
+    // (image, DLL et PEB en place, aucun code du programme exécuté),
+    // comme sous Windows. Le bac à sable de Chromium lit puis écrit alors
+    // sa mémoire (ReadProcessMemory, WriteProcessMemory) avant ResumeThread.
+    let mut cmd = if suspended && !is_pe {
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
             .arg("kill -STOP $$; exec \"$@\"")
@@ -5007,12 +5423,46 @@ unsafe fn create_process_common(
         cmd.env("WINLUX_COMMAND_LINE", &line);
     }
     cmd.env_remove(crate::dlls::inherit::ENV);
+    cmd.env_remove(crate::process::SUSPENDED_ENV);
+    if suspended && is_pe {
+        cmd.env(crate::process::SUSPENDED_ENV, "1");
+    }
     if let Some(p) = passed.as_ref().filter(|p| !p.env.is_empty()) {
         cmd.env(crate::dlls::inherit::ENV, &p.env);
+    }
+    // Guichet de handles de l'enfant (DuplicateHandle vers lui, même
+    // suspendu) : ouvert ici, hérité, renommé d'après son PID.
+    cmd.env_remove(crate::dlls::handle_broker::ENV);
+    let desk = if is_pe {
+        crate::dlls::handle_broker::prepare_child()
+    } else {
+        None
+    };
+    if let Some(d) = desk.as_ref() {
+        cmd.env(crate::dlls::handle_broker::ENV, d.env());
     }
     let spawned = cmd.spawn();
     // Les copies héritables restent chez l'enfant ; le parent les ferme.
     drop(passed);
+    if let (Some(d), Ok(c)) = (desk, spawned.as_ref()) {
+        d.launched(c.id());
+    }
+    if let (true, Ok(c)) = (suspended && is_pe, spawned.as_ref()) {
+        crate::sandbox_fallback::note_child(c.id(), &line);
+        // Sous Windows, CreateProcess rend la main avec l'enfant déjà figé.
+        // Ici l'enfant se fige lui-même (SIGSTOP) : attendre qu'il le soit,
+        // sinon un ResumeThread trop rapide envoie SIGCONT avant le SIGSTOP
+        // et l'enfant reste figé pour toujours.
+        wait_until_stopped(c.id());
+    }
+    // Gestionnaire de plantage de crashpad (Chromium, Electron) : il lit
+    // notre mémoire pour écrire son rapport. Linux (Yama) ne laisse un
+    // enfant lire son parent que si celui-ci l'a désigné.
+    if let Ok(c) = spawned.as_ref() {
+        if is_pe && line.contains("--type=crashpad-handler") {
+            libc::prctl(libc::PR_SET_PTRACER, c.id() as libc::c_ulong, 0, 0, 0);
+        }
+    }
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
@@ -5061,6 +5511,8 @@ unsafe fn create_process_common(
     });
     let process_handle = add_sync(SyncHandle::Process(object.clone()), None);
     let thread_handle = add_sync(SyncHandle::Process(object), None);
+    // Lancé par un membre d'un job : l'enfant le rejoint (#19).
+    crate::dlls::jobs::on_child_created(pid as i32, process_handle, creation_flags);
     std::ptr::write(
         info,
         ProcessInformation {
@@ -5257,6 +5709,16 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         crate::process::set_last_error(6);
         return 0;
     };
+    // Enfant de Chromium tué avant d'avoir démarré : son bac à sable n'a
+    // pas pu être préparé (voir sandbox_fallback). La question est posée
+    // avant de verrouiller le processus.
+    let (child_pid, still_suspended) = {
+        let s = lock(&p.state);
+        (s.child.as_ref().map(|c| c.id() as i32), s.suspended)
+    };
+    if let Some(pid) = child_pid {
+        crate::sandbox_fallback::on_terminate(pid, still_suspended);
+    }
     let mut s = lock(&p.state);
     let target = s
         .foreign
@@ -5285,6 +5747,7 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         crate::process::set_last_error(5);
         return 0;
     };
+    crate::dlls::handle_broker::forget_pid(child.id() as i32);
     if child.kill().is_err() {
         crate::process::set_last_error(5);
         return 0;
@@ -5330,6 +5793,10 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
             if s.finished {
                 crate::process::set_last_error(6);
                 return u32::MAX;
+            }
+            if s.running {
+                drop(s);
+                return super::thread_ctl::resume(&t.slot);
             }
             let old = s.suspend_count;
             if old > 0 {
@@ -5406,9 +5873,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
     crate::dlls::inherit::set(handle, false);
-    if crate::dlls::kernel32_node::close_snapshot(handle)
-        || crate::dlls::kernel32_node::close_job(handle)
-    {
+    if crate::dlls::kernel32_node::close_snapshot(handle) || crate::dlls::jobs::close(handle) {
         return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -6410,9 +6875,28 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryUnbiasedInterruptTime : temps depuis le démarrage en unités de
+/// 100 ns, hors veille (horloge CLOCK_MONOTONIC de Linux, qui s'arrête
+/// pendant la suspension). Utilisé par .NET (Flow Launcher, #953).
+pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+        *out = ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100;
+    }
+    1
+}
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -6421,8 +6905,11 @@ pub fn terminate_self(code: u32) -> ! {
 }
 
 pub fn flush_and_exit(code: i32) -> ! {
+    // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
+    crate::dlls::jobs::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
+    crate::dlls::handle_broker::forget();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     std::process::exit(code)
 }
@@ -7337,13 +7824,17 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
             *out.add(21) = u8::from(is_dir);
         }
         2 => {
-            let Some(p) = path else {
-                crate::process::set_last_error(6);
-                return 0;
+            let wide: Vec<u16> = if let Some(name) = crate::dlls::named_pipes::file_name(handle) {
+                name
+            } else {
+                let Some(p) = path else {
+                    crate::process::set_last_error(6);
+                    return 0;
+                };
+                let win = crate::paths::to_windows(&p);
+                let rest = win.get(2..).unwrap_or(&win);
+                rest.encode_utf16().collect()
             };
-            let win = crate::paths::to_windows(&p);
-            let rest = win.get(2..).unwrap_or(&win);
-            let wide: Vec<u16> = rest.encode_utf16().collect();
             if out.is_null() || size < 4 {
                 crate::process::set_last_error(24);
                 return 0;
@@ -7515,6 +8006,15 @@ pub unsafe extern "win64" fn queue_user_apc(func: usize, thread: usize, param: u
     if thread == get_current_thread() {
         queue_apc(std::thread::current().id(), Apc::User(func, param));
         return 1;
+    }
+    // Autre thread : l'APC tourne à sa prochaine attente alertable.
+    if let Some(SyncHandle::Thread(t)) = lookup_sync(thread) {
+        if let Some(id) = t.rust_id.get() {
+            if !lock(&t.state).finished {
+                queue_apc(*id, Apc::User(func, param));
+                return 1;
+            }
+        }
     }
     crate::process::set_last_error(6);
     0
@@ -8228,10 +8728,135 @@ pub unsafe extern "win64" fn get_handle_information(h: usize, flags: *mut u32) -
     }
     1
 }
+/// Processus désigné par un handle, vu de DuplicateHandle : nous-mêmes, ou
+/// un autre processus (PID Linux, et s'il est encore suspendu).
+enum DupSide {
+    Me,
+    Other(i32, bool),
+    Invalid,
+}
+fn dup_side(process: usize) -> DupSide {
+    // 0 : toléré comme le processus courant (anciens appelants internes).
+    if process == 0 || is_current_process_handle(process) {
+        return DupSide::Me;
+    }
+    match lookup_sync(process) {
+        Some(SyncHandle::Process(p)) => {
+            let s = lock(&p.state);
+            match s.child.as_ref().map(|c| c.id() as i32).or(s.foreign) {
+                Some(pid) => DupSide::Other(pid, s.suspended),
+                None => DupSide::Invalid,
+            }
+        }
+        _ => DupSide::Invalid,
+    }
+}
+
+/// DuplicateHandle : copie d'un handle d'un processus dans un autre (#236).
+/// Entre deux processus distincts, la copie passe par leur guichet
+/// (`handle_broker`) ; Chromium et Electron s'en servent pour donner
+/// mémoire partagée, événements et fichiers à leurs enfants.
 pub unsafe extern "win64" fn duplicate_handle(
-    _src_process: usize,
+    src_process: usize,
     src_handle: usize,
-    _dst_process: usize,
+    dst_process: usize,
+    dst_handle: *mut usize,
+    access: u32,
+    inherit: i32,
+    options: u32,
+) -> i32 {
+    let src = dup_side(src_process);
+    // Sans destination, seul DUPLICATE_CLOSE_SOURCE a un sens : fermer le
+    // handle chez la source.
+    let dst = if dst_process == 0 && options & 1 != 0 {
+        None
+    } else {
+        Some(dup_side(dst_process))
+    };
+    let fail = |code: u32| {
+        if !dst_handle.is_null() {
+            *dst_handle = 0;
+        }
+        crate::process::set_last_error(code);
+        0
+    };
+    let done = |h: usize| {
+        if !dst_handle.is_null() {
+            *dst_handle = h;
+        }
+        1
+    };
+    use crate::dlls::handle_broker as broker;
+    match (src, dst) {
+        (DupSide::Invalid, _) | (_, Some(DupSide::Invalid)) => fail(6),
+        (DupSide::Me, Some(DupSide::Me)) => {
+            duplicate_local(src_handle, dst_handle, access, inherit, options)
+        }
+        (DupSide::Me, None) => {
+            close_handle(src_handle);
+            1
+        }
+        (DupSide::Other(pid, _), None) => match broker::close_remote(pid, src_handle) {
+            Ok(()) => 1,
+            Err(code) => fail(code),
+        },
+        (DupSide::Me, Some(DupSide::Other(pid, suspended))) => {
+            // Copie locale aux droits demandés, envoyée puis fermée.
+            let mut copy = 0usize;
+            if duplicate_local(src_handle, &mut copy, access, 0, options & !1) == 0 {
+                let code = crate::process::last_error();
+                if options & 1 != 0 {
+                    close_handle(src_handle);
+                }
+                return fail(code);
+            }
+            let sent = broker::put(pid, copy, inherit != 0, suspended);
+            if copy != src_handle {
+                close_handle(copy);
+            }
+            if options & 1 != 0 {
+                close_handle(src_handle);
+            }
+            crate::trace!("DuplicateHandle({src_handle:#x}) vers le processus {pid} : {sent:?}");
+            match sent {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+        (DupSide::Other(pid, _), Some(DupSide::Me)) => {
+            let got = broker::get(pid, src_handle, access, options, inherit != 0);
+            crate::trace!("DuplicateHandle({src_handle:#x}) depuis le processus {pid} : {got:?}");
+            match got {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+        (DupSide::Other(from, _), Some(DupSide::Other(to, suspended))) => {
+            let r = if from == to {
+                // Copie à l'intérieur d'un même autre processus.
+                broker::forward(from, src_handle, to, access, options, inherit != 0, false)
+            } else {
+                broker::forward(
+                    from,
+                    src_handle,
+                    to,
+                    access,
+                    options,
+                    inherit != 0,
+                    suspended,
+                )
+            };
+            match r {
+                Ok(h) => done(h),
+                Err(code) => fail(code),
+            }
+        }
+    }
+}
+
+/// DuplicateHandle à l'intérieur du processus courant.
+unsafe fn duplicate_local(
+    src_handle: usize,
     dst_handle: *mut usize,
     access: u32,
     inherit: i32,
@@ -8282,6 +8907,11 @@ pub unsafe extern "win64" fn duplicate_handle(
         let h = next_handle();
         insert_sync_at(h, foreign_process(std::process::id() as i32));
         Some(h)
+    } else if src_handle == get_current_thread() {
+        // Vrai handle vers le thread courant : coreclr le garde pour
+        // suspendre ce thread depuis le ramasse-miettes ; le pseudo-handle
+        // y désignerait le thread du ramasse-miettes lui-même.
+        Some(add_sync(SyncHandle::Thread(current_thread_object()), None))
     } else if pseudo {
         Some(src_handle)
     } else if let Some(fd) = std_fd.filter(|&fd| libc::isatty(fd) == 1) {
@@ -8651,7 +9281,7 @@ pub fn exports() -> crate::dlls::Exports {
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
-      "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
+      "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch,"ResetWriteWatch"=>fn crate::dlls::write_watch::reset_write_watch,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
      "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
      "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetLocalTime"=>fn get_local_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
       "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
@@ -8660,6 +9290,7 @@ pub fn exports() -> crate::dlls::Exports {
      "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
      "WriteConsoleW"=>fn write_console_w,
     "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
+     "QueryUnbiasedInterruptTime"=>fn query_unbiased_interrupt_time,
      "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
      "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
      "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w,
@@ -10405,5 +11036,61 @@ mod surveillance_de_dossiers {
             usize::MAX
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod pile_virtual_query {
+    #[test]
+    fn la_pile_a_une_page_de_garde_comme_sous_windows() {
+        let (limit, base) = (0x10_0000usize, 0x20_0000usize);
+        let bas = super::stack_region(limit + 10, limit, base);
+        assert_eq!((bas.state, bas.allocation_base as usize), (0x2000, limit));
+        let garde = super::stack_region(limit + 4096, limit, base);
+        assert_eq!(garde.state, 0x1000);
+        assert_eq!(garde.protect, 0x104, "PAGE_READWRITE | PAGE_GUARD");
+        assert_eq!(garde.region_size, 4096);
+        let haut = super::stack_region(base - 8, limit, base);
+        assert_eq!((haut.state, haut.protect), (0x1000, 4));
+        assert_eq!(haut.base_address as usize + haut.region_size, base);
+        assert_eq!(haut.allocation_base as usize, limit);
+    }
+}
+
+/// Attend (au plus 30 s) que le processus `pid` soit arrêté par SIGSTOP,
+/// ou qu'il ait disparu. Lit l'état dans /proc/<pid>/stat sans le récolter.
+fn wait_until_stopped(pid: u32) {
+    let path = format!("/proc/{pid}/stat");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let state = std::fs::read_to_string(&path).ok().and_then(|t| {
+            t.rsplit_once(')')
+                .and_then(|(_, r)| r.trim_start().chars().next())
+        });
+        match state {
+            Some('T') | Some('t') | Some('Z') | Some('X') | None => return,
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            crate::trace!("CreateProcess suspendu : l'enfant {pid} ne s'est pas figé");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod interrupt_time_tests {
+    #[test]
+    fn query_unbiased_interrupt_time_avance_en_100_ns() {
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(super::query_unbiased_interrupt_time(&mut a), 1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(super::query_unbiased_interrupt_time(&mut b), 1);
+        assert!(b - a >= 150_000 && b - a < 50_000_000, "{a} {b}");
+        assert_eq!(
+            super::query_unbiased_interrupt_time(std::ptr::null_mut()),
+            0
+        );
     }
 }

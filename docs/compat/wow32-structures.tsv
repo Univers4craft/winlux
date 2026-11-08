@@ -48,6 +48,8 @@ crypt32.rs	SimpleChain	a-verifier
 crypt32.rs	SslExtraPara	a-verifier	
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
+d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
+d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d3d11.rs	Buffer	a-verifier	
 d3d11.rs	BufferVTable	a-verifier	
 d3d11.rs	D3D11InputElementDesc	a-verifier	
@@ -61,6 +63,14 @@ d3d11.rs	DxgiDevice	a-verifier
 d3d11.rs	DxgiDeviceVTable	a-verifier	
 d3d11.rs	Texture2D	a-verifier	
 d3d11.rs	Texture2DVTable	a-verifier	
+d3d11_ext.rs	Annotation	a-verifier	
+d3d11_ext.rs	AnnotationVTable	a-verifier	
+d3d11_ext.rs	ContextExt	a-verifier	vtable ID3D11DeviceContext1-4
+d3d11_ext.rs	DeviceExt	a-verifier	vtable ID3D11Device1-5
+d3d11_ext.rs	Fence	a-verifier	
+d3d11_ext.rs	FenceVTable	a-verifier	
+d3d11_ext.rs	Multithread	a-verifier	
+d3d11_ext.rs	MultithreadVTable	a-verifier	
 d3d12.rs	Barrier	a-verifier	
 d3d12.rs	CopyLocation	a-verifier	
 d3d12.rs	Descriptor	a-verifier	
@@ -92,7 +102,10 @@ dinput8.rs	DiObj	a-verifier
 dpapi.rs	DataBlob	a-verifier	
 dplayx.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 170-192 (IDirectPlay4A)
 dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 174-176 (IDirectPlayLobby3A)
+dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 223-236 (IDirectPlay8Address)
+dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
+dwrite_fallback.rs	Source	interne	test unitaire
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
 dxgi.rs	DxgiAdapterVTable	a-verifier	
@@ -103,6 +116,7 @@ dxgi.rs	DxgiSwapChainDesc	a-verifier
 dxgi.rs	DxgiSwapChainVTable	a-verifier	
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
+fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 games_win32.rs	WsaBuf	a-verifier	
 gdi32.rs	BitmapObject	a-verifier	
 gdi32.rs	LogBrush	a-verifier	
@@ -152,6 +166,7 @@ shlwapi_reg.rs	StreamVtbl	a-verifier
 taskschd.rs	Obj	a-verifier	
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
+url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte
@@ -189,6 +204,7 @@ vk_bindings.rs	VkSwapchainCreateInfoKHR	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
 vulkan1.rs	Callback	a-verifier	
 vulkan1.rs	Xlib	a-verifier	
+webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
 winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)

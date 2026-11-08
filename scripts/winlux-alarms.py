@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Horloge : alarmes, minuteurs, chronomètre, horloges du monde et concentration.
 
-Comme l'application Horloge de Windows 11. Les alarmes, les minuteurs et la
+Horloge Winlux. Les alarmes, les minuteurs et la
 fin d'une session de concentration sonnent même quand la fenêtre est fermée
 (et même écran verrouillé) : un petit processus de la session s'en charge.
 Une session de concentration active « Ne pas déranger » pendant sa durée.

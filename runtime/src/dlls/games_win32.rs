@@ -93,6 +93,66 @@ extern "win64" fn Module32FirstW(_snap: usize, _entry: *mut c_void) -> i32 {
     set_error(18);
     0
 }
+/// Read/WriteProcessMemory dans un autre processus (#236) : par
+/// /proc/<pid>/mem, qui comme Windows écrit aussi dans une page protégée
+/// en écriture (code, données en lecture seule). Linux l'autorise envers un
+/// descendant (le bac à sable de Chromium et son enfant suspendu) ou un
+/// processus qui nous a désignés (crashpad, voir `allow_crash_handler`).
+unsafe fn foreign_memory(
+    p: usize,
+    addr: usize,
+    buf: *mut u8,
+    n: usize,
+    done: *mut usize,
+    write: bool,
+) -> i32 {
+    use std::os::unix::fs::FileExt;
+    if !done.is_null() {
+        *done = 0;
+    }
+    let Some(pid) = crate::dlls::kernel32::process_os_pid(p) else {
+        set_error(6);
+        return 0;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(write)
+        .open(format!("/proc/{pid}/mem"));
+    let file = match file {
+        Ok(f) => f,
+        Err(e) => {
+            crate::trace!("mémoire du processus {pid} inaccessible : {e}");
+            set_error(if e.kind() == std::io::ErrorKind::NotFound {
+                6
+            } else {
+                5
+            });
+            return 0;
+        }
+    };
+    let slice = std::slice::from_raw_parts_mut(buf, n);
+    let mut total = 0usize;
+    while total < n {
+        let r = if write {
+            file.write_at(&slice[total..], (addr + total) as u64)
+        } else {
+            file.read_at(&mut slice[total..], (addr + total) as u64)
+        };
+        match r {
+            Ok(0) | Err(_) => break,
+            Ok(k) => total += k,
+        }
+    }
+    if !done.is_null() {
+        *done = total;
+    }
+    if total == n {
+        1
+    } else {
+        set_error(299); // ERROR_PARTIAL_COPY
+        0
+    }
+}
 unsafe extern "win64" fn ReadProcessMemory(
     p: usize,
     addr: *const u8,
@@ -101,8 +161,7 @@ unsafe extern "win64" fn ReadProcessMemory(
     done: *mut usize,
 ) -> i32 {
     if !is_current_process(p) {
-        set_error(5);
-        return 0;
+        return foreign_memory(p, addr as usize, buf, n, done, false);
     }
     // process_vm_readv refuse proprement une adresse non lisible.
     let local = libc::iovec {
@@ -132,8 +191,7 @@ unsafe extern "win64" fn WriteProcessMemory(
     done: *mut usize,
 ) -> i32 {
     if !is_current_process(p) {
-        set_error(5);
-        return 0;
+        return foreign_memory(p, addr as usize, buf as *mut u8, n, done, true);
     }
     let local = libc::iovec {
         iov_base: buf as *mut c_void,
@@ -266,7 +324,7 @@ pub fn kernel32_exports() -> Exports {
         "CopyFileExW" => fn CopyFileExW,
         "SetProcessShutdownParameters" => fn ok1, "GetProcessShutdownParameters" => fn GetProcessShutdownParameters,
         "Wow64GetThreadContext" => fn not_supported, "Wow64SetThreadContext" => fn not_supported,
-        "SetThreadContext" => fn not_supported,
+        "SetThreadContext" => fn crate::dlls::kernel32::set_thread_context,
         "GetSystemTimeAdjustment" => fn GetSystemTimeAdjustment,
         "SetSystemTime" => fn privilege_not_held, "SetLocalTime" => fn privilege_not_held,
         "SetSystemTimeAdjustment" => fn privilege_not_held,

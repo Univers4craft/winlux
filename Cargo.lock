@@ -162,6 +162,10 @@ name = "winlux-testdll"
 version = "0.2.12"
 
 [[package]]
+name = "winlux-testdll2"
+version = "0.2.12"
+
+[[package]]
 name = "winlux-testexe"
 version = "0.2.12"
 

@@ -67,6 +67,26 @@ _TR = {
     'Encore une fois : posez puis levez le même doigt.': ('Once more: place and lift the same finger.', 'Otra vez: ponga y levante el mismo dedo.', 'Noch einmal: Denselben Finger auflegen und anheben.'),
     'Empreinte enregistrée. Posez ce doigt sur le lecteur pour vous connecter.': ('Fingerprint saved. Place this finger on the reader to sign in.', 'Huella guardada. Ponga este dedo en el lector para iniciar sesión.', 'Fingerabdruck gespeichert. Legen Sie diesen Finger auf den Leser, um sich anzumelden.'),
     'Fermer': ('Close', 'Cerrar', 'Schließen'),
+    # Personnalisation : aperçu (#898)
+    'Couleur unie': ('Solid color', 'Color sólido', 'Volltonfarbe'),
+    # Comptes : carte d'en-tête (#898)
+    'Compte local': ('Local account', 'Cuenta local', 'Lokales Konto'),
+    'Paramètres associés': ('Related settings', 'Configuración relacionada', 'Verwandte Einstellungen'),
+    'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'Copier vos documents sur un disque ou un dossier partagé.': ('Copy your documents to a drive or a shared folder.', 'Copiar sus documentos en un disco o una carpeta compartida.', 'Ihre Dokumente auf ein Laufwerk oder in einen freigegebenen Ordner kopieren.'),
+    # Réseau : carte de connexion et pages voisines (#898)
+    'Ethernet': ('Ethernet', 'Ethernet', 'Ethernet'),
+    'VPN': ('VPN', 'VPN', 'VPN'),
+    'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
+    'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
+    'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
+    'Renouveler la connexion': ('Renew connection', 'Renovar la conexión', 'Verbindung erneuern'),
+    'adresse {address}': ('address {address}', 'dirección {address}', 'Adresse {address}'),
+    'Aucune connexion. Branchez un câble réseau ou choisissez un réseau Wi-Fi.': ('No connection. Plug in a network cable or choose a Wi-Fi network.', 'Sin conexión. Conecte un cable de red o elija una red Wi-Fi.', 'Keine Verbindung. Schließen Sie ein Netzwerkkabel an oder wählen Sie ein WLAN.'),
+    'Ajouter, connecter et déconnecter un VPN.': ('Add, connect and disconnect a VPN.', 'Agregar, conectar y desconectar una VPN.', 'VPN hinzufügen, verbinden und trennen.'),
+    'Partager la connexion de ce PC en Wi-Fi.': ('Share this PC’s connection over Wi-Fi.', 'Compartir la conexión de este PC por Wi-Fi.', 'Die Verbindung dieses PCs per WLAN teilen.'),
+    'Dossiers partagés d’autres PC, ouverts dans l’Explorateur.': ('Shared folders from other PCs, opened in Explorer.', 'Carpetas compartidas de otros PC, abiertas en el Explorador.', 'Freigegebene Ordner anderer PCs, im Explorer geöffnet.'),
+    'Partager un dossier, envoyer des fichiers à un PC proche.': ('Share a folder, send files to a nearby PC.', 'Compartir una carpeta, enviar archivos a un PC cercano.', 'Einen Ordner freigeben, Dateien an einen PC in der Nähe senden.'),
     # Voix : dictée et sous-titres en direct (#662)
     'Voix': ('Speech', 'Voz', 'Sprache'),
     'La reconnaissance vocale tourne entièrement sur ce PC : aucun son n’est envoyé en ligne.': ('Speech recognition runs entirely on this PC: no audio is sent online.', 'El reconocimiento de voz funciona por completo en este PC: no se envía ningún audio en línea.', 'Die Spracherkennung läuft vollständig auf diesem PC: Es wird kein Ton online gesendet.'),
@@ -661,6 +681,9 @@ _TR = {
     # Widgets (Windows + W)
     'Widgets': ('Widgets', 'Widgets', 'Widgets'),
     'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
+    'Autres icônes de la barre d’état système': ('Other system tray icons', 'Otros iconos de la bandeja del sistema', 'Weitere Symbole im Infobereich'),
+    'Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici.': ('None yet: every program that shows an icon next to the clock appears here.', 'Ninguno por ahora: cada programa que muestra un icono junto a la hora aparece aquí.', 'Noch keine: Jedes Programm, das ein Symbol neben der Uhr anzeigt, erscheint hier.'),
+    'Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre.': ('When off, the icon goes behind the arrow next to the network icon. Click the arrow to show it.', 'Desactivado, el icono se guarda tras la flecha, junto a la red. Un clic en la flecha lo muestra.', 'Ausgeschaltet wandert das Symbol hinter den Pfeil neben dem Netzwerksymbol. Ein Klick auf den Pfeil zeigt es.'),
     'Bouton Widgets dans la barre des tâches': ('Widgets button on the taskbar', 'Botón Widgets en la barra de tareas', 'Widgets-Schaltfläche in der Taskleiste'),
     'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
     'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
@@ -685,12 +708,10 @@ _TR = {
     'Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.': ('A small AI that runs on this PC, with no account or Internet. Three agents: find a file and open it in File Explorer, change a setting, help with a program.', 'Una pequeña IA que funciona en este equipo, sin cuenta ni Internet. Tres agentes: encontrar un archivo y abrirlo en el Explorador, cambiar un ajuste, ayudar con un programa.', 'Eine kleine KI, die auf diesem PC läuft, ohne Konto und ohne Internet. Drei Agenten: eine Datei finden und im Explorer öffnen, eine Einstellung ändern, bei einem Programm helfen.'),
     'À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…).': ('When you turn it on, Claude Code is downloaded if needed (about 300 MB), then you sign in to your Claude account (Google, email…).', 'Al activarlo, se descarga Claude Code si falta (unos 300 MB) y luego inicia sesión en su cuenta de Claude (Google, correo…).', 'Beim Aktivieren wird Claude Code bei Bedarf heruntergeladen (etwa 300 MB), dann melden Sie sich bei Ihrem Claude-Konto an (Google, E-Mail…).'),
     'À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…).': ('When you turn it on, Codex, OpenAI’s official tool, is downloaded (about 170 MB), then you sign in to your ChatGPT account (Google, email…).', 'Al activarlo, se descarga Codex, la herramienta oficial de OpenAI (unos 170 MB), y luego inicia sesión en su cuenta de ChatGPT (Google, correo…).', 'Beim Aktivieren wird Codex, das offizielle Werkzeug von OpenAI, heruntergeladen (etwa 170 MB), dann melden Sie sich bei Ihrem ChatGPT-Konto an (Google, E-Mail…).'),
-    'À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert.': ('When you turn it on, the llama.cpp engine (about 30 MB) and the Qwen2.5 1.5B model (about 1.1 GB) are downloaded. It only runs while its panel is open.', 'Al activarla, se descargan el motor llama.cpp (unos 30 MB) y el modelo Qwen2.5 1,5B (unos 1,1 GB). Solo funciona mientras su panel está abierto.', 'Beim Aktivieren werden die llama.cpp-Engine (etwa 30 MB) und das Modell Qwen2.5 1,5B (etwa 1,1 GB) heruntergeladen. Sie läuft nur, solange ihr Fenster geöffnet ist.'),
     'Compte {name}': ('{name} account', 'Cuenta de {name}', '{name}-Konto'),
     'Modèle': ('Model', 'Modelo', 'Modell'),
     'Supprimer l’IA locale': ('Remove the local AI', 'Eliminar la IA local', 'Lokale KI entfernen'),
     'Pas encore téléchargé': ('Not downloaded yet', 'Aún no descargado', 'Noch nicht heruntergeladen'),
-    'Qwen2.5 1,5B, sur ce PC': ('Qwen2.5 1.5B, on this PC', 'Qwen2.5 1,5B, en este equipo', 'Qwen2.5 1,5B, auf diesem PC'),
     'Terminer l’installation': ('Finish installing', 'Terminar la instalación', 'Installation abschließen'),
     'Vérification de la connexion…': ('Checking the sign-in…', 'Comprobando el inicio de sesión…', 'Anmeldung wird geprüft…'),
     'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
@@ -923,6 +944,64 @@ def readable(color, background, minimum=4.5):
     return color if contrast(color, background) >= minimum else target
 
 
+# Pictogrammes Prisme (trait, grille 24) pour les cartes d'en-tête et les lignes de navigation.
+GLYPHS = {
+    "ethernet": '<rect x="5" y="4" width="14" height="11" rx="1.5"/><path d="M9 15v3h6v-3M12 18v3M8.5 8h7"/>',
+    "wifi": '<path d="M3 9.5a13 13 0 0 1 18 0M6 13a8.5 8.5 0 0 1 12 0M9 16.5a4 4 0 0 1 6 0"/><circle cx="12" cy="19.5" r=".6"/>',
+    "offline": '<path d="M3 9.5a13 13 0 0 1 18 0M6 13a8.5 8.5 0 0 1 12 0"/><path d="M4 4l16 16"/>',
+    "vpn": '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
+    "hotspot": '<circle cx="12" cy="12" r="1.8"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.5 5.5a9.5 9.5 0 0 0 0 13M18.5 5.5a9.5 9.5 0 0 1 0 13"/>',
+    "drive": '<rect x="3" y="12" width="18" height="7" rx="1.5"/><path d="M6 12l2-7h8l2 7M7 15.5h2"/>',
+    "share": '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.2 11l7.6-4M8.2 13l7.6 4"/>',
+    "user": '<circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.5-4 4.3-6 7.5-6s6 2 7.5 6"/>',
+    "users": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 19c1.2-3.5 3.6-5.2 6.5-5.2s5.3 1.7 6.5 5.2"/><path d="M15 4.8a3.5 3.5 0 0 1 0 6.4M17.5 14c2 .7 3.3 2.4 4 5"/>',
+    "key": '<circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2M14 9l2 2"/>',
+    "backup": '<path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v4h4"/><path d="M12 8v4l3 2"/>',
+    "palette": '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.8 0-1.3-1-1.6-1-2.7 0-1 .8-1.6 1.8-1.6H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7" r="1"/>',
+}
+
+
+def line_svg(glyph, color):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" '
+            f'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{GLYPHS[glyph]}</svg>')
+
+
+def tile_svg(glyph, top, bottom):
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs>'
+            f'<linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop stop-color="{top}"/><stop offset="1" stop-color="{bottom}"/></linearGradient>'
+            '<linearGradient id="h" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff" stop-opacity=".28"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>'
+            '<rect x="7" y="10" width="50" height="50" rx="12" fill="#000" opacity=".16"/>'
+            '<rect x="6" y="6" width="52" height="52" rx="12" fill="url(#t)"/><rect x="6" y="6" width="52" height="52" rx="12" fill="url(#h)"/>'
+            '<g transform="translate(14 14) scale(1.5)" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" '
+            f'stroke-linejoin="round">{GLYPHS[glyph]}</g></svg>')
+
+
+def svg_pixbuf(svg, size):
+    loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
+    loader.set_size(size, size)
+    loader.write(svg.encode())
+    loader.close()
+    return loader.get_pixbuf()
+
+
+def svg_image(svg, size):
+    return Gtk.Image.new_from_pixbuf(svg_pixbuf(svg, size))
+
+
+def network_summary(status, net=Path("/sys/class/net")):
+    """(titre, phrase, pictogramme) de la connexion, sans nom d'interface brut
+    (« enp0s3 10.0.2.15/24 » s'affichait tel quel, #898)."""
+    words = (status.get("network") or "").split()
+    if status.get("network_connected") != "1" or not words:
+        return (_t("Hors ligne"), _t("Aucune connexion. Branchez un câble réseau ou choisissez un réseau Wi-Fi."), "offline")
+    iface = words[0]
+    address = words[1].split("/")[0] if len(words) > 1 else ""
+    wifi = iface.startswith("wl") or (net / iface / "wireless").exists()
+    title = _t("Wi-Fi") if wifi else _t("Ethernet")
+    subtitle = _t("Connecté") + (" · " + _t("adresse {address}").format(address=address) if address else "")
+    return title, subtitle, "wifi" if wifi else "ethernet"
+
+
 def settings_palette(dark, accent="#6a3df0"):
     """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
     if dark:
@@ -934,6 +1013,8 @@ def settings_palette(dark, accent="#6a3df0"):
              "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
              "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
     p["accent"] = accent
+    # Bord discret des cartes, à mi-chemin entre la carte et le contour des champs.
+    p["card_border"] = mix(p["card"], p["border"], 0.5)
     # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
     p["selected"] = mix(p["side"], accent, 0.45)
     p["selected_fg"] = text_on(p["selected"])
@@ -1419,6 +1500,33 @@ def wallpaper_variant(path, height=None):
         if height >= minimum and candidate.is_file():
             return candidate
     return path
+
+
+def _rgba(color, alpha=255):
+    r, g, b = _rgb(color)
+    return (r << 24) | (g << 16) | (b << 8) | alpha
+
+
+def desktop_preview(path, dark, accent, width=240, height=135):
+    """Aperçu du bureau (#898) : le fond choisi, une fenêtre et la barre des
+    tâches aux couleurs du mode et de l'accentuation."""
+    base = pixbuf_file(path, width * 2, height * 2) if path else None
+    if base is not None:
+        base = base.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
+    else:
+        base = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, width, height)
+        base.fill(_rgba(mix(accent, "#000000", 0.45)))
+    surface, title = ("#2b2b33", "#202027") if dark else ("#fbfbfd", "#eceef3")
+    window = base.new_subpixbuf(width // 4, height // 6, width // 2, height // 2)
+    window.fill(_rgba(surface))
+    window.new_subpixbuf(0, 0, width // 2, 10).fill(_rgba(title))
+    window.new_subpixbuf(10, 18, width // 5, 6).fill(_rgba(accent))
+    taskbar = base.new_subpixbuf(0, height - 14, width, 14)
+    taskbar.fill(_rgba(title))
+    for n in range(4):
+        icon = base.new_subpixbuf(width // 2 - 30 + n * 16, height - 11, 9, 8)
+        icon.fill(_rgba(accent if n == 0 else mix(title, "#888888", 0.6)))
+    return base
 
 
 def wallpapers():
@@ -1942,6 +2050,50 @@ class ExtraPages:
         self.row(parent, title, widget, subtitle)
         return widget
 
+    def tile_image(self, glyph, size=64):
+        """Tuile Prisme : dégradé de la couleur d'accentuation, pictogramme blanc."""
+        accent = appearance().get("accent", "#6a3df0")
+        return svg_image(tile_svg(glyph, mix(accent, "#ffffff", 0.3), accent), size)
+
+    def hero(self, glyph, title, subtitle, buttons=()):
+        """Carte d'en-tête : tuile, titre, phrase d'état et un ou deux boutons."""
+        box = Gtk.Box(spacing=18)
+        box.get_style_context().add_class("card")
+        box.get_style_context().add_class("hero")
+        box.pack_start(self.tile_image(glyph), False, False, 0)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
+        heading = Gtk.Label(label=title, xalign=0, wrap=True)
+        heading.get_style_context().add_class("hero-title")
+        texts.pack_start(heading, False, False, 0)
+        line = Gtk.Label(label=subtitle, xalign=0, wrap=True)
+        line.get_style_context().add_class("subtitle")
+        texts.pack_start(line, False, False, 0)
+        box.pack_start(texts, True, True, 0)
+        if buttons:
+            actions = self.actions(box, buttons)
+            actions.set_valign(Gtk.Align.CENTER)
+        self.body.pack_start(box, False, False, 0)
+        return box, (heading, line)
+
+    def nav_row(self, parent, glyph, title, subtitle, page):
+        """Ligne cliquable vers une autre page : pictogramme, titre, phrase, chevron."""
+        button = Gtk.Button(relief=Gtk.ReliefStyle.NONE)
+        button.get_style_context().add_class("nav-row")
+        line = Gtk.Box(spacing=14)
+        icon = Gtk.Image.new_from_pixbuf(svg_pixbuf(line_svg(glyph, appearance().get("accent", "#6a3df0")), 24))
+        line.pack_start(icon, False, False, 0)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+        texts.pack_start(Gtk.Label(label=title, xalign=0), False, False, 0)
+        hint = Gtk.Label(label=subtitle, xalign=0, ellipsize=3)
+        hint.get_style_context().add_class("subtitle")
+        texts.pack_start(hint, False, False, 0)
+        line.pack_start(texts, True, True, 0)
+        line.pack_start(Gtk.Label(label="›"), False, False, 0)
+        button.add(line)
+        button.connect("clicked", lambda *_: GLib.idle_add(self.open_page, page))
+        parent.pack_start(button, False, False, 0)
+        return button
+
     def actions(self, parent, buttons):
         line = Gtk.Box(spacing=8)
         for title, callback, *rest in buttons:
@@ -2081,15 +2233,38 @@ class ExtraPages:
                 self.tool(tool + ["set", key, value], refresh=False, after=lambda: self.tool(args))
             else:
                 self.tool(args)
+        current = prefs.get("wallpaper", "")
+        accent = prefs.get("accent", "#6a3df0")
+        dark = prefs.get("theme", "dark") != "light"
+        # Aperçu en tête de page (#898) : fond, mode et accentuation d'un coup d'œil.
+        named = dict((str(path), title) for path, title in wallpapers())
+        preview = Gtk.Box(spacing=20)
+        preview.get_style_context().add_class("card")
+        preview.get_style_context().add_class("hero")
+        preview.pack_start(Gtk.Image.new_from_pixbuf(desktop_preview(current if Path(current).is_file() else None, dark, accent)),
+                           False, False, 0)
+        texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, valign=Gtk.Align.CENTER)
+        heading = Gtk.Label(label=_t(named[current]) if current in named else (Path(current).name if current else _t("Couleur unie")),
+                            xalign=0, ellipsize=3)
+        heading.get_style_context().add_class("hero-title")
+        texts.pack_start(heading, False, False, 0)
+        mode_name = _t("Automatique") if moods.get("theme_auto") == "on" else (_t("Sombre") if dark else _t("Clair"))
+        line = Gtk.Label(label=_t("Mode de couleur") + " : " + mode_name + " · " + _t("Couleur d’accentuation") + " " + accent.upper(),
+                         xalign=0, wrap=True)
+        line.get_style_context().add_class("subtitle")
+        texts.pack_start(line, False, False, 0)
+        preview.pack_start(texts, True, True, 0)
+        self.body.pack_start(preview, False, False, 0)
         self.section(_t("Arrière-plan"))
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, row_spacing=10, column_spacing=10)
-        current = prefs.get("wallpaper", "")
         for path, title in wallpapers():
             button = Gtk.Button()
+            # Fond en place : liseré de l'accentuation plutôt qu'une coche dans le texte.
+            if str(path) == current: button.get_style_context().add_class("chosen")
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             pixbuf = pixbuf_file(path, 176, 99)
             if pixbuf: inner.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
-            inner.pack_start(Gtk.Label(label=("✓ " if str(path) == current else "") + _t(title)), False, False, 0)
+            inner.pack_start(Gtk.Label(label=_t(title)), False, False, 0)
             button.add(inner)
             button.connect("clicked", lambda *_, p=path: fixed_then(["winlux-personalize", "wallpaper", str(p)]))
             flow.add(button)
@@ -2114,12 +2289,13 @@ class ExtraPages:
         self.section(_t("Couleur d’accentuation"))
         palette = Gtk.Box(spacing=8)
         for color in ACCENTS:
-            swatch = Gtk.Button(label="✓" if prefs.get("accent", "").lower() == color else " ")
+            swatch = Gtk.Button(label="✓" if accent.lower() == color else " ")
             swatch.set_size_request(44, 36)
+            if accent.lower() == color: swatch.get_style_context().add_class("chosen")
             provider = Gtk.CssProvider()
             # Coche noire ou blanche selon la teinte (blanc sur turquoise : 2,6:1).
-            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; "
-                                    f"border-color: {color}; }}".encode())
+            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; font-weight: bold; "
+                                    f"border-color: {color}; }} button.chosen {{ box-shadow: 0 0 0 2px {text_on(color)} inset; }}".encode())
             swatch.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
             swatch.connect("clicked", lambda *_, c=color: self.tool(["winlux-personalize", "accent", c]))
             palette.pack_start(swatch, False, False, 0)
@@ -2147,6 +2323,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.tray_icon_settings()
         self.start_menu_settings()
         self.theme_files()
         if have("winlux-widgets"):
@@ -2170,6 +2347,29 @@ class ExtraPages:
             # « Aligner les icônes sur la grille » de Windows : seul le
             # rangement automatique est proposé.
             self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
+
+    def tray_icon_settings(self):
+        """Icônes cachées derrière la flèche, à côté du réseau : une par
+        programme, comme « Autres icônes de la barre d’état système » de
+        Windows 11. winlux-tray overflow lit et écrit la liste du greffon
+        systray d'XFCE, appliquée en direct."""
+        if not have("winlux-tray"):
+            return
+        try:
+            listing = subprocess.run(["winlux-tray", "overflow", "list"], capture_output=True, text=True, timeout=5).stdout
+            items = json.loads(listing or "[]")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            items = []
+        self.section(_t("Autres icônes de la barre d’état système"))
+        box = self.card()
+        if not items:
+            self.hint(_t("Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici."), box)
+            return
+        for item in items:
+            name = str(item.get("name", ""))
+            self.switch(box, name[:1].upper() + name[1:], not item.get("hidden"),
+                        lambda on, n=name: self.tool(["winlux-tray", "overflow", "show" if on else "hide", n], refresh=False))
+        self.hint(_t("Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre."), box)
 
     def start_menu_settings(self):
         """Menu Démarrer (#685) : volet « Pour vous » et historique local.
@@ -3033,31 +3233,39 @@ class ExtraPages:
 
         def kind(account):
             return _t("Administrateur") if account["admin"] else _t("Standard")
-        self.hint(_t("Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer."))
         mine = next((a for a in everyone if a["name"] == me), None)
         if mine:
-            self.section(_t("Votre compte"))
-            box = self.card()
-            title = f"{mine['fullname']} ({me})" if mine["fullname"] and mine["fullname"] != me else me
-            self.row(box, title, None, kind(mine))
-            self.actions(box, [(_t("Changer le mot de passe"), lambda: self.change_password(me))])
-            self.sections_signin(me)
+            # Carte d'en-tête du compte ouvert (#898) : nom, type, compte local.
+            name = mine["fullname"] if mine["fullname"] and mine["fullname"] != me else me
+            detail = " · ".join(part for part in (me if name != me else "", kind(mine), _t("Compte local")) if part)
+            self.hero("user", name, detail, [(_t("Changer le mot de passe"), lambda: self.change_password(me))])
+        self.hint(_t("Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer."))
+        if mine: self.sections_signin(me)
         self.section(_t("Autres utilisateurs"))
         box = self.card()
-        self.row(box, _t("Ajouter un autre utilisateur à ce PC"), None)
-        self.actions(box, [(_t("Ajouter un compte"), self.add_account)])
+        add = Gtk.Button(label=_t("Ajouter un compte"))
+        add.connect("clicked", lambda *_: self.add_account())
+        self.row(box, _t("Ajouter un autre utilisateur à ce PC"), add)
         others = [a for a in everyone if a["name"] != me]
         if not others:
             self.hint(_t("Aucun autre compte sur ce PC."), box)
+        accent = appearance().get("accent", "#6a3df0")
         for account in others:
-            box = self.card()
+            box.pack_start(Gtk.Separator(), False, False, 0)
             title = f"{account['fullname']} ({account['name']})" if account["fullname"] and account["fullname"] != account["name"] else account["name"]
             subtitle = kind(account) + (" · " + _t("Session ouverte") if account["name"] in open_sessions else "")
-            self.row(box, title, None, subtitle)
+            line = self.row(box, title, None, subtitle)
+            line.pack_start(Gtk.Image.new_from_pixbuf(svg_pixbuf(line_svg("user", accent), 28)), False, False, 0)
+            line.reorder_child(line.get_children()[-1], 0)
             self.actions(box, [(_t("Changer le type de compte"), lambda a=account: self.change_type(a)),
                                (_t("Changer le mot de passe"), lambda n=account["name"]: self.change_password(n)),
                                (_t("Supprimer"), lambda a=account: self.remove_account(a),
-                                account["name"] not in open_sessions)])
+                                account["name"] not in open_sessions)]).set_margin_start(40)
+        if PAGE_BACKUP not in self.hidden_pages and page_available(PAGE_BACKUP):
+            self.section(_t("Paramètres associés"))
+            box = self.card()
+            box.set_spacing(0)
+            self.nav_row(box, "backup", _t("Sauvegarde"), _t("Copier vos documents sur un disque ou un dossier partagé."), PAGE_BACKUP)
 
     # ── Comptes : options de connexion (code PIN, empreinte digitale, #659) ──
 
@@ -3409,15 +3617,30 @@ class ExtraPages:
                 "soft": _t("Cet écran n’a pas de rétroéclairage pilotable : Winlux assombrit l’image.")}.get(state["method"])
         self.row(box, _t("Luminosité"), scale, hint)
 
-    # ── Réseau : renvoi vers la page Wi-Fi, seulement avec une carte Wi-Fi ──
+    # ── Réseau : carte de connexion et accès aux pages voisines (#898) ──
 
     def sections_network(self):
-        if not page_available(PAGE_WIFI): return
-        self.section(_t("Wi-Fi"))
+        title, subtitle, glyph = network_summary(self.status)
+        _, self.network_hero = self.hero(glyph, title, subtitle,
+                                         [(_t("Renouveler la connexion"), lambda: self.execute("network-renew"))])
+        rows = [(PAGE_WIFI, "wifi", _t("Wi-Fi"), _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.")),
+                (PAGE_VPN, "vpn", _t("VPN"), _t("Ajouter, connecter et déconnecter un VPN.")),
+                (PAGE_HOTSPOT, "hotspot", _t("Point d’accès sans fil mobile"), _t("Partager la connexion de ce PC en Wi-Fi.")),
+                (PAGE_NETDRIVES, "drive", _t("Lecteurs réseau"), _t("Dossiers partagés d’autres PC, ouverts dans l’Explorateur.")),
+                (PAGE_SHARING, "share", _t("Partage et transfert"), _t("Partager un dossier, envoyer des fichiers à un PC proche."))]
+        rows = [row for row in rows if row[0] not in self.hidden_pages and page_available(row[0], self.status)]
+        if not rows: return
         box = self.card()
-        button = Gtk.Button(label=_t("Réseaux Wi-Fi…"))
-        button.connect("clicked", lambda *_: GLib.idle_add(self.open_page, PAGE_WIFI))
-        self.row(box, _t("Wi-Fi"), button, _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion."))
+        box.set_spacing(0)
+        for page, icon, name, text in rows:
+            self.nav_row(box, icon, name, text, page)
+
+    def refresh_network_hero(self, status):
+        title, subtitle, glyph = network_summary(status)
+        labels = getattr(self, "network_hero", None)
+        if labels and (labels[0].get_label(), labels[1].get_label()) != (title, subtitle):
+            labels[0].set_label(title)
+            labels[1].set_label(subtitle)
 
     # ── VPN (winlux-vpn) et point d’accès sans fil mobile (winlux-hotspot), #660 ──
 
@@ -3448,23 +3671,17 @@ class ExtraPages:
     # ── Mises à jour : secours et restauration, dans la page ──
 
     def sections_recovery(self):
+        # Vue Historique de la page Mises à jour : pas de secours en dessous.
+        if getattr(self, "update_view", "main") == "history": return
         self.section(_t("Secours et restauration"))
         box = self.card()
-        line = self.row(box, _t("Version précédente"), None, recovery_text(previous_version_kept()))
-        # Relue à chaque rafraîchissement de la page (#636) : après une mise à
-        # jour, l'encadré du haut changeait et cette ligne restait à l'état
-        # d'ouverture de la page (« Aucune version précédente conservée »).
-        self.recovery_label = line.get_children()[0].get_children()[1]
+        # La version précédente est sur la ligne « Revenir à la version
+        # précédente » de la page (winlux-update-page), relue à chaque relevé
+        # avec la carte d'état : un seul avis (#636).
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
         if page_available(PAGE_RECOVERY):
             self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
-
-    def refresh_recovery(self):
-        label = getattr(self, "recovery_label", None)
-        if label is None: return
-        text = recovery_text(previous_version_kept())
-        if label.get_text() != text: label.set_text(text)
 
     # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
 
@@ -3663,7 +3880,7 @@ class ExtraPages:
          "À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…)."),
         ("local", "IA locale",
          "Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.",
-         "À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert."),
+         ""),
     )
 
     def page_assistant(self):
@@ -3684,7 +3901,8 @@ class ExtraPages:
                 self.actions(box, [(_t("Afficher la fenêtre d’activation"), lambda k=key: self.assistant_toggle(k, True))])
                 continue
             if not enabled:
-                self.hint(_t(before), box)
+                # IA locale : modèle choisi pour ce PC et ce qu'il coûte (#928).
+                self.hint(module.plan_text(backend.plan()) if not backend.remote else _t(before), box)
                 continue
             account = Gtk.Label(label=_t("Vérification de la connexion…"), xalign=0)
             account.get_style_context().add_class("subtitle")
@@ -3699,7 +3917,7 @@ class ExtraPages:
 
             def checked(status, account=account, buttons=buttons, key=key, backend=backend):
                 if not status.get("installed"): text = _t("Pas encore téléchargé")
-                elif not backend.remote: text = _t("Qwen2.5 1,5B, sur ce PC")
+                elif not backend.remote: text = module.local_model_text()
                 elif status.get("loggedIn"):
                     who = module.account_name(status)
                     text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté au compte")

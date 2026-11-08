@@ -19,6 +19,17 @@ cat "$work/sortie.txt"
 test "$status" -eq 0 || { echo "mingw_suite.exe : code $status" >&2; exit 1; }
 grep -q '^atexit exécuté$' "$work/sortie.txt" || { echo "les fonctions atexit n'ont pas été exécutées" >&2; exit 1; }
 
+# Fibres des programmes 64 bits (#654) : ConvertThreadToFiber, CreateFiber(Ex),
+# SwitchToFiber aller-retour, pile propre, fin de routine = fin du thread.
+test -f "$dir/fiber_suite.exe" || { echo "fiber_suite.exe absent" >&2; exit 1; }
+set +e
+WINLUX_GUI=headless "$runtime" "$dir/fiber_suite.exe" >"$work/fibres.txt" 2>&1
+fiber_status=$?
+set -e
+cat "$work/fibres.txt"
+test "$fiber_status" -eq 0 || { echo "fiber_suite.exe : échec $fiber_status" >&2; exit 1; }
+grep -q '^Fibres 64 bits : tout est correct$' "$work/fibres.txt" || { echo "fiber_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }
@@ -77,6 +88,11 @@ if test -f "$dir/hwexc_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hw-exceptions.sh"
 fi
 
+# Suspension de threads et contexte pour coreclr (#269), bloquant.
+if test -f "$dir/threadctl_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-thread-control.sh"
+fi
+
 # Manettes et périphériques HID (#271), bloquant.
 if test -f "$dir/hid_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
@@ -105,6 +121,14 @@ fi
 # Héritage des handles entre processus (crashpad), bloquant.
 if test -f "$dir/inherit_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-heritage.sh"
+fi
+# DuplicateHandle et mémoire entre processus, enfant suspendu (#236), bloquant.
+if test -f "$dir/dupx_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-duplication.sh"
+fi
+# WebView2 maison sur WebKitGTK (#236), bloquant (sauté sans WebKitGTK).
+if test -f "$dir/webview2_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-webview2.sh"
 fi
 # Fonctions vérifiées au démarrage par Chromium et Electron (#236), bloquant.
 if test -f "$dir/chromium_msvc.exe"; then

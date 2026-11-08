@@ -855,6 +855,8 @@ extern "system" {
     pub fn WinluxMediaFrame(handle: usize, out: *mut u8, cap: u32) -> u32;
     pub fn WinluxMediaError(handle: usize, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaClose(handle: usize) -> i32;
+    /// Pause (1, valeur 1/0) ou volume (2, 0 à 200) sans fermer le flux audio.
+    pub fn WinluxMediaControl(handle: usize, cmd: u32, value: u32) -> i32;
     pub fn WinluxMediaThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaPreview(path: *const u16, at_ms: u32, w: u32, h: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaGetResume(path: *const u16) -> u32;
@@ -1079,6 +1081,7 @@ extern "C" {
     pub fn SendMessageW(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn PostQuitMessage(code: i32);
     pub fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
+    pub fn IsZoomed(hwnd: Handle) -> i32;
     pub fn UpdateWindow(hwnd: Handle) -> i32;
     pub fn DestroyWindow(hwnd: Handle) -> i32;
     pub fn IsWindow(hwnd: Handle) -> i32;

@@ -140,6 +140,10 @@ impl Path {
     fn is(&self, s: &[u8]) -> bool {
         self.get() == s
     }
+    /// Emplacement sans dossier réel : Accueil, Ce PC, Réseau.
+    fn virt(&self) -> bool {
+        self.is(HOME) || self.is(PC) || self.is(NET)
+    }
 }
 
 /// Champ de saisie d'une ligne (recherche, adresse, renommage).
@@ -287,6 +291,8 @@ enum Menu {
     View,
     Sort,
     New,
+    /// « … » de la barre de commandes : double volet, volet, terminal.
+    More,
     Context { x: i32, y: i32, on_item: bool },
 }
 static mut MENU: Menu = Menu::None;
@@ -307,6 +313,12 @@ static mut CLIP_SEQ: u32 = 0;
 
 const HOME: &[u8] = b"::home";
 const PC: &[u8] = b"::pc";
+/// Réseau (#888) : lecteurs réseau connectés, et « Connecter un lecteur réseau ».
+const NET: &[u8] = b"::net";
+
+fn net_label() -> &'static [u8] {
+    t4([b"R\xE9seau", b"Network", b"Red", b"Netzwerk"])
+}
 
 // ---------- Chaînes et chemins ----------
 
@@ -450,6 +462,9 @@ fn last_component(path: &[u8]) -> &[u8] {
     }
     if path == PC {
         return tr(S_THIS_PC);
+    }
+    if path == NET {
+        return net_label();
     }
     // Onglet et titre « Corbeille », pas « files ».
     if path == TRASH {
@@ -900,7 +915,14 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
 
 /// Taille lisible : « 12,4 Ko », « 3,1 Mo »…
 fn size_text(size: u64, out: &mut [u8; 24]) -> usize {
-    let units: [&[u8]; 5] = [b" octets", b" Ko", b" Mo", b" Go", b" To"];
+    // Unités et virgule de la langue (« 33,0 GB » en allemand, pas « Go »).
+    let units: [&[u8]; 5] = match lang() {
+        0 => [b" octets", b" Ko", b" Mo", b" Go", b" To"],
+        1 => [b" bytes", b" KB", b" MB", b" GB", b" TB"],
+        2 => [b" bytes", b" KB", b" MB", b" GB", b" TB"],
+        _ => [b" Bytes", b" KB", b" MB", b" GB", b" TB"],
+    };
+    let comma = if lang() == 1 { b'.' } else { b',' };
     let mut u = 0;
     let mut whole = size;
     let mut tenth = 0;
@@ -911,7 +933,7 @@ fn size_text(size: u64, out: &mut [u8; 24]) -> usize {
     }
     let mut n = write_num(out, 0, whole);
     if u > 0 && whole < 100 {
-        out[n] = b',';
+        out[n] = comma;
         out[n + 1] = b'0' + tenth as u8;
         n += 2;
     }
@@ -963,12 +985,18 @@ fn date_text(ft: u64, out: &mut [u8; 24]) -> usize {
         let secs = (ft / 10_000_000) as i64 - 11_644_473_600 + TZ_OFFSET;
         let (y, m, d) = civil_from_days(secs.div_euclid(86400));
         let rem = secs.rem_euclid(86400);
-        let parts = [d as u64, m as u64];
+        // Format de date de la langue : 08.11.2026 (de), 11/08/2026 (en),
+        // 08/11/2026 (fr, es), comme l'horloge de la barre des tâches.
+        let (parts, sep) = match lang() {
+            1 => ([m as u64, d as u64], b'/'),
+            3 => ([d as u64, m as u64], b'.'),
+            _ => ([d as u64, m as u64], b'/'),
+        };
         let mut n = 0;
         for p in parts {
             out[n] = b'0' + (p / 10) as u8;
             out[n + 1] = b'0' + (p % 10) as u8;
-            out[n + 2] = b'/';
+            out[n + 2] = sep;
             n += 3;
         }
         n = write_num(out, n, y as u64);
@@ -1145,7 +1173,7 @@ unsafe fn reload(p: &mut Pane) {
     p.deep = false;
     p.sel = [0; MAX_ENTRIES / 64];
     let loc = p.loc;
-    if !loc.is(HOME) && !loc.is(PC) {
+    if !loc.virt() {
         maybe_commit(loc.get());
     }
     if loc.is(HOME) {
@@ -1183,6 +1211,13 @@ unsafe fn reload(p: &mut Pane) {
                 Kind::Removable
             };
             add_entry(p, drive_label(i), true, false, 0, 0, Some(kind));
+        }
+    } else if loc.is(NET) {
+        refresh_drives();
+        for i in 0..NDRIVES {
+            if DRIVES[i].network {
+                add_entry(p, drive_label(i), true, false, 0, 0, Some(Kind::Network));
+            }
         }
     } else {
         read_dir(p, loc.get(), b"", b"", 0);
@@ -1308,7 +1343,7 @@ unsafe fn go_forward() {
 }
 unsafe fn go_up() {
     let loc = pane().loc;
-    if loc.is(HOME) || loc.is(PC) {
+    if loc.virt() {
         return;
     }
     match parent(loc.get()) {
@@ -2026,10 +2061,15 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
             Glyph::Home
         } else if loc.is(PC) {
             Glyph::Computer
+        } else if loc.is(NET) {
+            Glyph::NetDrive
         } else {
             Glyph::Folder
         };
-        glyph(g.hdc, g.b, g.f, gl, r.left + 12, r.top + 9, 16);
+        match (loc.is(NET), gl) {
+            (true, _) if icons::draw(g.hdc, icons::Icon::Globe, r.left + 12, r.top + 9, 16, 0) => {}
+            _ => glyph(g.hdc, g.b, g.f, gl, r.left + 12, r.top + 9, 16),
+        }
         text_fit(
             g.hdc,
             g.f.caption,
@@ -2189,36 +2229,66 @@ enum Cmd {
     Copy,
     Paste,
     Rename,
+    Share,
     Delete,
     Sort,
     View,
-    Dual,
-    Nav,
-    Terminal,
+    More,
 }
-const COMMANDS: [(Cmd, Glyph, Tr4, i32); 11] = [
-    (Cmd::New, Glyph::Plus, [b"Nouveau", b"New", b"Nuevo", b"Neu"], 112),
-    (Cmd::Cut, Glyph::Cut, [b"", b"", b"", b""], 38),
-    (Cmd::Copy, Glyph::Copy, [b"", b"", b"", b""], 38),
-    (Cmd::Paste, Glyph::Paste, [b"", b"", b"", b""], 38),
-    (Cmd::Rename, Glyph::Rename, [b"", b"", b"", b""], 38),
-    (Cmd::Delete, Glyph::Delete, [b"", b"", b"", b""], 38),
-    (Cmd::Sort, Glyph::Sort, [b"Trier", b"Sort", b"Ordenar", b"Sortieren"], 84),
-    (Cmd::View, Glyph::View, [b"Afficher", b"View", b"Ver", b"Anzeigen"], 104),
-    (Cmd::Dual, Glyph::Split, [b"Double volet", b"Dual pane", b"Doble panel", b"Doppelansicht"], 130),
-    (Cmd::Nav, Glyph::Details, [b"Volet", b"Pane", b"Panel", b"Bereich"], 76),
-    (Cmd::Terminal, Glyph::Terminal, [b"Terminal", b"Terminal", b"Terminal", b"Terminal"], 102),
+/// Barre de commandes de la maquette Prisme (#888) : Nouveau ▾, icônes
+/// Couper/Copier/Coller/Renommer/Partager/Supprimer, Trier ▾, l'affichage
+/// courant ▾ (Mosaïques…), « … » (double volet, volet, terminal), et
+/// Détails à droite. Largeur 0 : calculée d'après le libellé.
+const COMMANDS: [(Cmd, Glyph, Tr4, i32); 10] = [
+    (Cmd::New, Glyph::Plus, [b"Nouveau", b"New", b"Nuevo", b"Neu"], 0),
+    (Cmd::Cut, Glyph::Cut, [b"", b"", b"", b""], 36),
+    (Cmd::Copy, Glyph::Copy, [b"", b"", b"", b""], 36),
+    (Cmd::Paste, Glyph::Paste, [b"", b"", b"", b""], 36),
+    (Cmd::Rename, Glyph::Rename, [b"", b"", b"", b""], 36),
+    (Cmd::Share, Glyph::Rename, [b"", b"", b"", b""], 36),
+    (Cmd::Delete, Glyph::Delete, [b"", b"", b"", b""], 36),
+    (Cmd::Sort, Glyph::Sort, [b"Trier", b"Sort", b"Ordenar", b"Sortieren"], 0),
+    (Cmd::View, Glyph::View, [b"", b"", b"", b""], 0),
+    (Cmd::More, Glyph::Rename, [b"", b"", b"", b""], 36),
 ];
+const CMD_NEW: usize = 0;
+const CMD_SORT: usize = 7;
+const CMD_VIEW: usize = 8;
+const CMD_MORE: usize = 9;
 
-fn command_rects(g: &Geo) -> [Rect; 11] {
-    let mut out = [rect(0, 0, 0, 0); 11];
+/// Nom de l'affichage courant, sur le bouton d'affichage (« Mosaïques »).
+unsafe fn view_label() -> &'static [u8] {
+    item_label(Item::View(VIEW))
+}
+
+/// Libellé d'une commande (l'affichage courant pour le bouton d'affichage).
+unsafe fn cmd_label(i: usize) -> &'static [u8] {
+    if COMMANDS[i].0 == Cmd::View {
+        view_label()
+    } else {
+        tr4(&COMMANDS[i].2)
+    }
+}
+
+/// Icône Prisme d'une commande sans glyphe du shell (Partager, « … »).
+fn cmd_icon(cmd: Cmd) -> Option<icons::Icon> {
+    match cmd {
+        Cmd::Share => Some(icons::Icon::Share),
+        Cmd::More => Some(icons::Icon::More),
+        _ => None,
+    }
+}
+
+unsafe fn command_rects(g: &Geo) -> [Rect; 10] {
+    let mut out = [rect(0, 0, 0, 0); 10];
     let mut x = g.command.left + 10;
     for (i, c) in COMMANDS.iter().enumerate() {
-        if i == 1 || i == 6 {
-            x += 12;
+        if i == 1 || i == CMD_SORT {
+            x += 13; // séparateur
         }
-        out[i] = rect(x, g.command.top + 7, x + c.3, g.command.top + 39);
-        x += c.3 + 4;
+        let w = if c.3 > 0 { c.3 } else { 32 + text_width(cmd_label(i), 13) + 26 };
+        out[i] = rect(x, g.command.top + 7, x + w, g.command.top + 39);
+        x += w + 4;
     }
     out
 }
@@ -2286,7 +2356,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         g,
         &nb[2],
         Glyph::Up,
-        !pn.loc.is(HOME) && !pn.loc.is(PC),
+        !pn.loc.virt(),
         false,
     );
     icon_button(g, &nb[3], Glyph::Refresh, true, false);
@@ -2418,7 +2488,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         geo.command.top + 1,
         p.border,
     );
-    let has_sel = sel_count(pn) > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC);
+    let has_sel = sel_count(pn) > 0 && !pn.loc.virt();
     let rects = command_rects(geo);
     let extract = extract_rect(geo);
     let db = details_button(geo);
@@ -2450,25 +2520,37 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         set_glyph_bg(None);
         text(g.hdc, g.f.caption, p.text, r.left + 30, r.top + 9, extract_label());
     }
-    for (i, (cmd, gl, label, _)) in COMMANDS.iter().enumerate() {
-        let label = tr4(label);
+    for (i, (cmd, gl, _, _)) in COMMANDS.iter().enumerate() {
+        let label = cmd_label(i);
         let r = rects[i];
         if r.right > limit {
             break;
         }
+        if i == 1 || i == CMD_SORT {
+            fill(g.hdc, g.b, r.left - 9, r.top + 8, r.left - 8, r.bottom - 8, p.border);
+        }
         let enabled = match cmd {
             Cmd::Cut | Cmd::Copy | Cmd::Rename | Cmd::Delete => has_sel,
-            Cmd::Paste => can_paste() && !pn.loc.is(HOME) && !pn.loc.is(PC),
-            Cmd::New => !pn.loc.is(HOME) && !pn.loc.is(PC),
+            Cmd::Paste => can_paste() && !pn.loc.virt(),
+            Cmd::New => !pn.loc.virt(),
+            Cmd::Share => share_target().is_some(),
             _ => true,
         };
         let on = match cmd {
-            Cmd::Dual => tab().dual,
-            Cmd::Nav => SHOW_NAV,
             Cmd::View => MENU == Menu::View,
             Cmd::Sort => MENU == Menu::Sort,
+            Cmd::More => MENU == Menu::More,
             _ => false,
         };
+        if let Some(ic) = cmd_icon(*cmd) {
+            let bg = if on { p.selected } else if enabled && hovered(&r) { p.hover } else { p.window };
+            if bg != p.window {
+                round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, bg);
+            }
+            let fg = if enabled { p.text } else { p.text3 };
+            icons::draw(g.hdc, ic, (r.left + r.right) / 2 - 8, (r.top + r.bottom) / 2 - 8, 16, fg);
+            continue;
+        }
         if label.is_empty() {
             icon_button(g, &r, *gl, enabled, on);
             continue;
@@ -2477,7 +2559,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         let prim = *cmd == Cmd::New && enabled;
         let bg = if prim {
             if hovered(&r) { mix(p.accent, p.text, 1, 8) } else { p.accent }
-        } else if on {
+        } else if on || (*cmd == Cmd::View && hovered(&r)) {
             p.selected
         } else if hovered(&r) && enabled {
             p.hover
@@ -2491,29 +2573,23 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         if prim {
             set_glyph_fg(Some(p.on_accent));
         }
-        glyph(g.hdc, g.b, g.f, *gl, r.left + 10, r.top + 8, 16);
+        let gl = if *cmd == Cmd::View { view_glyph(VIEW) } else { *gl };
+        glyph(g.hdc, g.b, g.f, gl, r.left + 10, r.top + 8, 16);
         set_glyph_bg(None);
-        text(
+        let fg = if prim { p.on_accent } else if enabled { p.text } else { p.text3 };
+        text_fit(
             g.hdc,
             if prim { g.f.semibold } else { g.f.caption },
-            if prim { p.on_accent } else if enabled { p.text } else { p.text3 },
-            r.left + 34,
+            12,
+            fg,
+            r.left + 32,
             r.top + 9,
             label,
+            r.right - r.left - 54,
         );
-        if matches!(cmd, Cmd::Sort | Cmd::View | Cmd::New) && r.right - r.left > 80 {
-            set_glyph_bg(Some(bg));
-            glyph(
-                g.hdc,
-                g.b,
-                g.f,
-                Glyph::ChevronDown,
-                r.right - 18,
-                r.top + 12,
-                9,
-            );
-            set_glyph_bg(None);
-        }
+        // Chevron ▾ des boutons à menu, à sa place (il chevauchait
+        // « Nouveau »).
+        icons::draw(g.hdc, icons::Icon::ChevronDown, r.right - 20, r.top + 10, 12, fg);
         set_glyph_fg(None);
     }
     fill(
@@ -2557,7 +2633,9 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
         Glyph::Folder
     };
     set_glyph_bg(Some(if hovered(a) { p.hover } else { p.surface }));
-    glyph(g.hdc, g.b, g.f, gl, x, a.top + 8, 16);
+    if !(loc == NET && icons::draw(g.hdc, icons::Icon::Globe, x, a.top + 8, 16, 0)) {
+        glyph(g.hdc, g.b, g.f, gl, x, a.top + 8, 16);
+    }
     x += 26;
     // Segments : Ce PC > lecteur > dossiers…
     let mut segs: [(&[u8], usize); 24] = [(b"", 0); 24];
@@ -2567,6 +2645,9 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
         n = 1;
     } else if loc == PC {
         segs[0] = (tr(S_THIS_PC), 0);
+        n = 1;
+    } else if loc == NET {
+        segs[0] = (net_label(), 0);
         n = 1;
     } else if loc == TRASH {
         segs[0] = (tr(S_TRASH), loc.len());
@@ -2659,12 +2740,13 @@ unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); NAV_MAX]) -> u
         };
         push(drive_label(i), gl, &[d.letter, b':', b'\\'], 1);
     }
+    push(net_label(), Glyph::NetDrive, NET, 0);
     push(tr(S_TRASH), Glyph::Trash, TRASH, 0);
     n
 }
 fn nav_row(geo: &Geo, i: usize) -> Rect {
     // Séparateurs après Accueil et après les dossiers personnels.
-    let trash = 10 + unsafe { NDRIVES };
+    let trash = 11 + unsafe { NDRIVES }; // Réseau, puis séparateur et Corbeille
     let gap =
         if i >= 1 { 13 } else { 0 } + if i >= 7 { 13 } else { 0 } + if i >= trash { 13 } else { 0 };
     let y = geo.nav.top + 10 + i as i32 * 32 + gap;
@@ -2730,7 +2812,8 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         }
         let x = r.left + 14 + indent * 18;
         set_glyph_bg(Some(bg));
-        match place_icon(path.get()) {
+        let ic = if path.is(NET) { Some(icons::Icon::Globe) } else { place_icon(path.get()) };
+        match ic {
             Some(ic) if icons::draw(g.hdc, ic, x, r.top + 7, 16, 0) => {}
             _ => glyph(g.hdc, g.b, g.f, gl, x, r.top + 7, 16),
         }
@@ -2745,7 +2828,7 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
             label,
             r.right - x - 34,
         );
-        if i == 0 || i == 6 || i == 9 + NDRIVES {
+        if i == 0 || i == 6 || i == 10 + NDRIVES {
             let sy = r.bottom + 6;
             fill(
                 g.hdc,
@@ -2822,6 +2905,13 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     if pn.nview == 0 {
         let msg: &[u8] = if pn.missing {
             tr4(&[b"Ce dossier est introuvable.", b"This folder can't be found.", b"No se encuentra esta carpeta.", b"Dieser Ordner wurde nicht gefunden."])
+        } else if pn.loc.is(NET) {
+            t4([
+                b"Aucun lecteur r\xE9seau. Clic droit : Connecter un lecteur r\xE9seau...",
+                b"No network drives. Right-click: Map network drive...",
+                b"Ninguna unidad de red. Clic derecho: Conectar unidad de red...",
+                b"Keine Netzlaufwerke. Rechtsklick: Netzlaufwerk verbinden...",
+            ])
         } else if pn.search.len > 0 {
             tr4(&[b"Aucun \xE9l\xE9ment ne correspond \xE0 votre recherche.", b"No items match your search.", b"Ning\xFAn elemento coincide con la b\xFAsqueda.", b"Keine Elemente entsprechen Ihrer Suche."])
         } else {
@@ -2975,6 +3065,9 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 let ty = ir.top + 14 + s;
                 if renaming {
                     draw_rename(g, rect(ir.left + 4, ty - 3, ir.right - 4, ty + 19));
+                } else if ty + 34 <= ir.bottom {
+                    // Nom sur deux lignes, comme la maquette Prisme (#888).
+                    center_wrap(g, (ir.left + ir.right) / 2, ty, name, ir.right - ir.left - 12, p.text);
                 } else {
                     center_fit(
                         g,
@@ -3138,6 +3231,40 @@ unsafe fn center_fit(g: &mut Gfx, cx: i32, y: i32, s: &[u8], max_w: i32, color: 
     text_fit(g.hdc, g.f.caption, 12, color, cx - w / 2, y, s, max_w);
 }
 
+/// Coupure d'un nom trop long pour une ligne : longueur de la première
+/// ligne, de préférence après une espace, un tiret, un soulignement ou un
+/// point (« video- / anniversaire.mp4 »), sinon au dernier caractère qui tient.
+fn wrap_cut(s: &[u8], max_w: i32) -> usize {
+    if text_width(s, 12) <= max_w {
+        return s.len();
+    }
+    let mut cut = 0;
+    for i in 1..=s.len() {
+        if text_width(&s[..i], 12) > max_w {
+            break;
+        }
+        cut = i;
+    }
+    let soft = s[..cut]
+        .iter()
+        .rposition(|&c| matches!(c, b' ' | b'-' | b'_' | b'.'))
+        .filter(|&b| b + 1 > cut / 3);
+    soft.map_or(cut, |b| b + 1).max(1)
+}
+
+/// Nom centré sur deux lignes au plus, la seconde terminée par « … ».
+unsafe fn center_wrap(g: &mut Gfx, cx: i32, y: i32, s: &[u8], max_w: i32, color: u32) {
+    let cut = wrap_cut(s, max_w);
+    let first = &s[..cut];
+    let first = first.strip_suffix(b" ").unwrap_or(first);
+    center_fit(g, cx, y, first, max_w, color);
+    let rest = &s[cut..];
+    let rest = rest.strip_prefix(b" ").unwrap_or(rest);
+    if !rest.is_empty() {
+        center_fit(g, cx, y + 16, rest, max_w, color);
+    }
+}
+
 unsafe fn draw_rename(g: &mut Gfx, r: Rect) {
     let p = pal();
     fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.accent);
@@ -3283,6 +3410,8 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
 enum Item {
     Sep,
     View(View),
+    /// Double volet (dans « … »).
+    Dual,
     Compact,
     Hidden,
     Ext,
@@ -3333,6 +3462,7 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Compact => tr4(&[b"Mode compact", b"Compact view", b"Vista compacta", b"Kompakte Ansicht"]),
         Item::Hidden => tr4(&[b"\xC9l\xE9ments masqu\xE9s", b"Hidden items", b"Elementos ocultos", b"Ausgeblendete Elemente"]),
         Item::Ext => tr4(&[b"Extensions de noms de fichiers", b"File name extensions", b"Extensiones de nombre de archivo", b"Dateinamenerweiterungen"]),
+        Item::Dual => t4([b"Double volet", b"Dual pane", b"Doble panel", b"Doppelansicht"]),
         Item::Nav => tr4(&[b"Volet de navigation", b"Navigation pane", b"Panel de navegaci\xF3n", b"Navigationsbereich"]),
         Item::Sort(SortKey::Name) => tr(S_NAME),
         Item::Sort(SortKey::Date) => tr(S_DATE),
@@ -3438,6 +3568,7 @@ fn item_checked(i: Item) -> bool {
             Item::Hidden => SHOW_HIDDEN,
             Item::Ext => SHOW_EXT,
             Item::Nav => SHOW_NAV,
+            Item::Dual => tab().dual,
             Item::Sort(k) => SORT == k,
             Item::Desc => SORT_DESC,
             Item::Asc => !SORT_DESC,
@@ -3474,6 +3605,15 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Desc,
         ],
         Menu::New => &[Item::NewFolder, Item::NewText],
+        Menu::More => &[
+            Item::Dual,
+            Item::Nav,
+            Item::Terminal,
+            Item::Sep,
+            Item::Hidden,
+            Item::Ext,
+            Item::Compact,
+        ],
         Menu::Context { on_item: true, .. } => &[
             Item::Restore,
             Item::Open,
@@ -3545,7 +3685,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::CompressZip | Item::CompressZipPw => !in_pc && !in_home && formats & 1 != 0,
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
-            Item::ConnectNet => in_pc,
+            Item::ConnectNet => in_pc || p.loc.is(NET),
             Item::Restore => p.loc.is(TRASH),
             Item::Properties => sel_count(p) == 1 && !p.loc.is(TRASH),
             Item::EmptyTrash => p.loc.is(TRASH) && p.count > 0,
@@ -3591,9 +3731,10 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
 unsafe fn menu_origin(geo: &Geo) -> (i32, i32) {
     let rects = command_rects(geo);
     match MENU {
-        Menu::View => (rects[7].left, rects[7].bottom + 4),
-        Menu::Sort => (rects[6].left, rects[6].bottom + 4),
-        Menu::New => (rects[0].left, rects[0].bottom + 4),
+        Menu::View => (rects[CMD_VIEW].left, rects[CMD_VIEW].bottom + 4),
+        Menu::Sort => (rects[CMD_SORT].left, rects[CMD_SORT].bottom + 4),
+        Menu::New => (rects[CMD_NEW].left, rects[CMD_NEW].bottom + 4),
+        Menu::More => (rects[CMD_MORE].left, rects[CMD_MORE].bottom + 4),
         Menu::Context { x, y, .. } => (x, y),
         Menu::None => (0, 0),
     }
@@ -3708,7 +3849,8 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::Terminal => Some(Glyph::Terminal),
             Item::Open | Item::OpenWith => Some(Glyph::Forward),
             Item::OpenTab => Some(Glyph::Plus),
-            Item::Nav => Some(Glyph::Split),
+            Item::Nav => Some(Glyph::Details),
+            Item::Dual => Some(Glyph::Split),
             Item::ExtractAll | Item::ExtractHere => Some(Glyph::Archive),
             Item::CompressZip | Item::Compress7z | Item::CompressTarGz | Item::CompressZipPw => {
                 Some(Glyph::Archive)
@@ -3812,7 +3954,7 @@ unsafe fn select_named(p: &mut Pane, name: &[u8]) -> Option<usize> {
 
 unsafe fn new_item(folder: bool) {
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) {
+    if p.loc.virt() {
         return;
     }
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
@@ -4299,7 +4441,7 @@ unsafe fn can_paste() -> bool {
 
 unsafe fn paste() {
     let p = pane();
-    if NCLIP == 0 || p.loc.is(HOME) || p.loc.is(PC) {
+    if NCLIP == 0 || p.loc.virt() {
         return;
     }
     // Sources déjà déplacées ailleurs (collées sur le bureau, par exemple) :
@@ -4376,7 +4518,7 @@ pub unsafe fn cancel_file_drag() {
 
 pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) {
+    if p.loc.virt() {
         cancel_file_drag();
         return;
     }
@@ -4626,7 +4768,7 @@ unsafe fn drop_on_desktop(do_copy: bool) {
 /// appli (WM_DROPFILES) : déplacés dans le dossier affiché, copiés avec Ctrl.
 pub unsafe fn drop_paths_here(paths: &[u8]) {
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) || p.loc.is(TRASH) {
+    if p.loc.virt() || p.loc.is(TRASH) {
         return;
     }
     let saved = (NCLIP, CLIP_CUT, CLIP);
@@ -4659,7 +4801,7 @@ pub unsafe fn drag_glyph() -> Glyph {
 /// Chemins des éléments sélectionnés (glisser-déposer vers une application).
 pub unsafe fn for_each_selected(f: &mut dyn FnMut(&[u8])) {
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) {
+    if p.loc.virt() {
         return;
     }
     for v in 0..p.nview {
@@ -4687,7 +4829,7 @@ static mut PURGE_ARMED_UNTIL: u32 = 0;
 
 unsafe fn delete_selection() {
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) {
+    if p.loc.virt() {
         // Lecteurs et dossiers d'Accueil : rien à supprimer, mais on le dit (#209).
         if sel_count(p) > 0 {
             notify(tr4(&[
@@ -5090,6 +5232,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             save_folder_options();
         }
         Item::Nav => SHOW_NAV = !SHOW_NAV,
+        Item::Dual => toggle_dual(),
         Item::Sort(k) => {
             SORT = k;
             resort_all();
@@ -5189,7 +5332,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             }
         }
         Item::Share => {
-            if let Some(i) = first_sel(p) {
+            if let Some(i) = share_target() {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = item_path(p, i, &mut b);
                 if n > 0 {
@@ -5212,7 +5355,7 @@ unsafe fn resort_all() {
 
 unsafe fn open_terminal() {
     let p = pane();
-    let dir: &[u8] = if p.loc.is(HOME) || p.loc.is(PC) {
+    let dir: &[u8] = if p.loc.virt() {
         b"C:\\"
     } else {
         p.loc.get()
@@ -5228,12 +5371,35 @@ unsafe fn open_terminal() {
     crate::wm::open(crate::wm::APP_TERMINAL);
 }
 
+/// Dossier sélectionné à partager (Samba présent), comme « Partager ce
+/// dossier… » du menu contextuel.
+unsafe fn share_target() -> Option<usize> {
+    let p = pane();
+    first_sel(p).filter(|&i| {
+        p.entries[i].dir && !p.loc.is(PC) && !p.loc.is(HOME) && crate::sharing::available()
+    })
+}
+
+/// Glyphe d'un mode d'affichage (bouton d'affichage, menus).
+fn view_glyph(v: View) -> Glyph {
+    match v {
+        View::Details => Glyph::Details,
+        View::List => Glyph::List,
+        View::Tiles => Glyph::Tiles,
+        _ => Glyph::Grid,
+    }
+}
+
 unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
     MENU = match (cmd, MENU) {
-        (Cmd::View, Menu::View) | (Cmd::Sort, Menu::Sort) | (Cmd::New, Menu::New) => Menu::None,
+        (Cmd::View, Menu::View)
+        | (Cmd::Sort, Menu::Sort)
+        | (Cmd::New, Menu::New)
+        | (Cmd::More, Menu::More) => Menu::None,
         (Cmd::View, _) => Menu::View,
         (Cmd::Sort, _) => Menu::Sort,
         (Cmd::New, _) => Menu::New,
+        (Cmd::More, _) => Menu::More,
         _ => Menu::None,
     };
     match cmd {
@@ -5246,9 +5412,7 @@ unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
             }
         }
         Cmd::Delete => delete_selection(),
-        Cmd::Dual => toggle_dual(),
-        Cmd::Nav => SHOW_NAV = !SHOW_NAV,
-        Cmd::Terminal => open_terminal(),
+        Cmd::Share => run_item(Item::Share, geo),
         _ => {}
     }
     let _ = geo;
@@ -5610,7 +5774,7 @@ unsafe fn compress_selection(ext: &[u8], password: Option<&[u8]>) {
         return;
     }
     let p = pane();
-    if p.loc.is(HOME) || p.loc.is(PC) {
+    if p.loc.virt() {
         return;
     }
     let mut sources = [0u16; 8192];
@@ -6294,6 +6458,54 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     draw_password(g, f);
     crate::sharing::draw_dialog(g, f);
     pick::draw_overlay(g, f);
+    focus_zones(&geo, f);
+}
+
+/// Contrôles atteignables par Tab (#28), dans l'ordre de Windows : onglets,
+/// Précédent/Suivant/Parent/Actualiser, adresse, recherche, barre de
+/// commandes, Détails, puis le volet de navigation. La liste des fichiers se
+/// parcourt aux flèches. Menu ou boîte ouverte : rien derrière.
+unsafe fn focus_zones(geo: &Geo, f: &Frame) {
+    focus_modal();
+    if MENU != Menu::None
+        || PASSWORD_OPEN
+        || copy::dialog_open()
+        || props::dialog_open()
+        || crate::sharing::dialog_open()
+        || pick::active()
+    {
+        return;
+    }
+    let t = f.title;
+    let w = ((t.right - t.left - 60) / NTABS.max(1) as i32)
+        .min(TAB_W)
+        .max(90);
+    for i in 0..NTABS {
+        let x = t.left + 8 + i as i32 * w;
+        focus_zone(&rect(x, t.top + 6, x + w - 32, t.bottom));
+    }
+    let x = t.left + 8 + NTABS as i32 * w;
+    focus_zone(&rect(x + 4, t.top + 8, x + 36, t.bottom - 4));
+    for r in nav_buttons(geo) {
+        focus_zone(&r);
+    }
+    focus_field(&address_rect(geo));
+    focus_field(&search_rect(geo));
+    for r in command_rects(geo) {
+        if r.right <= geo.command.right {
+            focus_zone(&r);
+        }
+    }
+    focus_zone(&details_button(geo));
+    let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
+    let n = nav_items(&mut items);
+    for i in 0..n {
+        let r = nav_row(geo, i);
+        if r.bottom > geo.nav.bottom || geo.nav.right <= geo.nav.left {
+            break;
+        }
+        focus_zone(&r);
+    }
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -6328,7 +6540,7 @@ unsafe fn drop_target(geo: &Geo, x: i32, y: i32) -> Option<(Path, Option<(usize,
                 return None;
             }
         }
-        if which != t.focus && !pn.loc.is(HOME) && !pn.loc.is(PC) {
+        if which != t.focus && !pn.loc.virt() {
             return Some((pn.loc, None));
         }
         return None;
@@ -6338,7 +6550,7 @@ unsafe fn drop_target(geo: &Geo, x: i32, y: i32) -> Option<(Path, Option<(usize,
         let n = nav_items(&mut items);
         for i in 0..n {
             let path = items[i].2;
-            if inside(&nav_row(geo, i), x, y) && !path.is(HOME) && !path.is(PC) && !path.is(pane().loc.get()) {
+            if inside(&nav_row(geo, i), x, y) && !path.virt() && !path.is(pane().loc.get()) {
                 return Some((path, None));
             }
         }
@@ -6542,6 +6754,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
 }
 
+/// Vrai si (x, y) tombe sur un onglet ou sur « + » de la rangée d'onglets ;
+/// ailleurs, la rangée sert de barre de titre (déplacer la fenêtre, #888).
+pub unsafe fn title_hit(x: i32, y: i32, f: &Frame) -> bool {
+    let t = f.title;
+    if !inside(&t, x, y) || y < t.top + 6 {
+        return false;
+    }
+    let w = ((t.right - t.left - 60) / NTABS.max(1) as i32).min(TAB_W).max(90);
+    let end = t.left + 8 + NTABS as i32 * w + 40;
+    x >= t.left + 8 && x < end
+}
+
 unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
     if FOCUS == Focus::Rename {
         commit_rename();
@@ -6594,6 +6818,8 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
             ADDRESS.set(tr(S_HOME));
         } else if loc.is(PC) {
             ADDRESS.set(tr(S_THIS_PC));
+        } else if loc.is(NET) {
+            ADDRESS.set(net_label());
         } else {
             ADDRESS.set(loc.get());
         }
@@ -6832,6 +7058,8 @@ unsafe fn focus_address() {
         tr(S_HOME)
     } else if loc.is(PC) {
         tr(S_THIS_PC)
+    } else if loc.is(NET) {
+        net_label()
     } else {
         loc.get()
     });
@@ -7084,7 +7312,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                         Focus::Search => {
                             // Entrée : recherche aussi dans les sous-dossiers (3 niveaux).
                             let p = pane();
-                            if !p.loc.is(HOME) && !p.loc.is(PC) && p.search.len > 0 {
+                            if !p.loc.virt() && p.search.len > 0 {
                                 let filter = p.search;
                                 let loc = p.loc;
                                 p.count = 0;
@@ -7173,12 +7401,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 open_item(p, i, false)
             }
         }
-        0x09 => {
+        0x09 | 0x75 => {
             let t = tab();
             if t.dual {
                 t.focus = 1 - t.focus;
             }
-        } // Tab : change de volet
+        } // F6 (ou Ctrl+Tab) : change de volet ; Tab seul va de contrôle en contrôle (#28)
         0x26 | 0x28 | 0x25 | 0x27 if p.nview > 0 => {
             let step = if VIEW == View::Details {
                 1
@@ -7239,7 +7467,7 @@ unsafe fn watch_folders() -> bool {
     for which in 0..if t.dual { 2 } else { 1 } {
         let pn = &mut t.panes[which];
         let loc = pn.loc;
-        if loc.get().is_empty() || loc.is(HOME) || loc.is(PC) {
+        if loc.get().is_empty() || loc.virt() {
             continue;
         }
         let key = crate::cliphist::fnv_hash(loc.get());
@@ -7406,6 +7634,8 @@ unsafe fn row_icon_checks() {
         buf[..n].starts_with(b"25,0 Go") && buf[..n].ends_with(b"251 Go"),
         "Ce PC : texte \"25,0 Go libres sur 251 Go\" sous la barre"
     );
+    formats_regression();
+    layout_regression();
     let mut folder = drive;
     folder.kind = Kind::Folder;
     check!(drive_space(&folder).is_none(), "Ce PC : pas de barre d'occupation sur un dossier");
@@ -7485,6 +7715,66 @@ unsafe fn places_and_hover_checks() {
     check!(hot_changed((10, 10), (11, 10)), "Survol : trop de zones relevees, on repeint toujours");
     HOT_FULL = false;
     NHOT = 0;
+}
+
+/// Unités et dates dans la langue de la session (#899).
+#[inline(never)]
+unsafe fn formats_regression() {
+    // Unités et dates dans la langue de la session (allemand : GB, 08.11.2026).
+    let saved = crate::locale::CURRENT_LANG;
+    crate::locale::CURRENT_LANG = crate::locale::Lang::De;
+    set_ui_lang(3);
+    let mut buf = [0u8; 64];
+    let n = space_text(33 << 30, 38 << 30, &mut buf);
+    let de_size = &buf[..n] == b"33,0 GB frei von 38,0 GB";
+    let mut d = [0u8; 24];
+    // 8 novembre 2026, 12 h UTC.
+    let ft = (1_794_139_200u64 + 11_644_473_600) * 10_000_000;
+    let dn = date_text(ft, &mut d);
+    let de_date = dn >= 10 && d[2] == b'.' && d[5] == b'.' && &d[6..10] == b"2026";
+    crate::locale::CURRENT_LANG = crate::locale::Lang::En;
+    let dn = date_text(ft, &mut d);
+    let en_date = dn >= 10 && &d[..6] == b"11/08/";
+    crate::locale::CURRENT_LANG = saved;
+    set_ui_lang(saved as usize);
+    check!(de_size && de_date && en_date, "Langues : GB et 08.11.2026 en allemand, 11/08/2026 en anglais");
+}
+
+/// Maquette Prisme (#888) : noms sur deux lignes, Réseau dans le volet,
+/// barre de commandes compacte, bords et rangée d'onglets de la fenêtre
+/// sans cadre.
+#[inline(never)]
+unsafe fn layout_regression() {
+    let long = b"video-anniversaire.mp4";
+    let cut = wrap_cut(long, text_width(b"video-anniversa", 12));
+    check!(&long[..cut] == b"video-", "Mosaiques : nom coupe apres le tiret, sur deux lignes (#888)");
+    check!(wrap_cut(b"notes.txt", 200) == 9, "Mosaiques : nom court sur une seule ligne");
+    let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
+    let n = nav_items(&mut items);
+    check!(
+        n >= 2 && items[n - 2].2.is(NET) && items[n - 1].2.is(TRASH),
+        "Volet de navigation : Reseau avant la Corbeille (#888)"
+    );
+    check!(
+        COMMANDS.iter().any(|c| c.0 == Cmd::Share)
+            && COMMANDS.iter().any(|c| c.0 == Cmd::More)
+            && COMMANDS[CMD_VIEW].0 == Cmd::View,
+        "Barre de commandes : Partager, affichage courant et \"...\" (#888)"
+    );
+    let outer = rect(0, 0, 980, 650);
+    check!(
+        crate::wm::native_edge(&outer, 2, 300) == Some(10)
+            && crate::wm::native_edge(&outer, 978, 648) == Some(17)
+            && crate::wm::native_edge(&outer, 400, 300).is_none(),
+        "Fenetre sans cadre : bords de redimensionnement (#888)"
+    );
+    let f = Frame { outer, title: rect(0, 0, 980 - 138, 40), client: rect(0, 40, 980, 650) };
+    let saved = NTABS;
+    NTABS = 1;
+    let on_tab = title_hit(60, 20, &f);
+    let empty = !title_hit(600, 20, &f);
+    NTABS = saved;
+    check!(on_tab && empty, "Onglets dans la barre de titre : vide = deplacer la fenetre (#888)");
 }
 
 pub unsafe fn regression_checks() {

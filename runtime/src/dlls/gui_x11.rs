@@ -2650,6 +2650,9 @@ impl X11Backend {
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
+                if let Some(side) = gui::sided_modifier(vk, lparam) {
+                    gui::update_async_key_state(side, true);
+                }
                 // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
                 // produit pas de caractère (raccourci clavier).
                 // AltGr peut être encodé Ctrl+Alt par le serveur : XKB indique
@@ -2701,11 +2704,15 @@ impl X11Backend {
                     })
                     .unwrap_or(e.detail as usize);
                 gui::update_async_key_state(vk, false);
+                let lparam = key_lparam(e.detail, true, vk_is_extended(vk));
+                if let Some(side) = gui::sided_modifier(vk, lparam) {
+                    gui::update_async_key_state(side, false);
+                }
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KEYUP,
                     wparam: vk,
-                    lparam: key_lparam(e.detail, true, vk_is_extended(vk)),
+                    lparam,
                 })
             }
             Event::MappingNotify(_) => {
@@ -4403,6 +4410,137 @@ impl gui::GuiBackend for X11Backend {
             atom.atom,
             &[2, 0, decorations, 0, 0],
         );
+        let _ = self.conn.flush();
+    }
+
+    fn set_window_state(&mut self, hwnd: usize, state: u8) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        if w.child {
+            return;
+        }
+        let top = Self::top_xwin(w);
+        let root = self.conn.setup().roots[self.screen].root;
+        let atom = |c: &RustConnection, name: &[u8]| {
+            c.intern_atom(false, name)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .map(|r| r.atom)
+        };
+        let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+            | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+        let send = |c: &RustConnection, kind: Atom, data: [u32; 5]| {
+            let ev = x11rb::protocol::xproto::ClientMessageEvent::new(32, top, kind, data);
+            let _ = c.send_event(false, root, mask, ev);
+        };
+        if state == gui::WINDOW_MINIMIZED {
+            // ICCCM : WM_CHANGE_STATE vers IconicState (3).
+            if let Some(change) = atom(&self.conn, b"WM_CHANGE_STATE") {
+                send(&self.conn, change, [3, 0, 0, 0, 0]);
+            }
+        } else if let (Some(net_state), Some(vert), Some(horz)) = (
+            atom(&self.conn, b"_NET_WM_STATE"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_VERT"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_HORZ"),
+        ) {
+            // EWMH : 1 ajoute, 0 retire ; source 1 (application).
+            let add = u32::from(state == gui::WINDOW_MAXIMIZED);
+            send(&self.conn, net_state, [add, vert, horz, 1, 0]);
+            let _ = self.conn.map_window(top);
+        }
+        let _ = self.conn.flush();
+    }
+
+    fn window_state(&mut self, hwnd: usize) -> u8 {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return gui::WINDOW_NORMAL;
+        };
+        let top = Self::top_xwin(w);
+        let atom = |c: &RustConnection, name: &[u8]| {
+            c.intern_atom(false, name)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .map(|r| r.atom)
+        };
+        let read = |c: &RustConnection, prop: Atom| -> Vec<u32> {
+            c.get_property(false, top, prop, AtomEnum::ANY, 0, 64)
+                .ok()
+                .and_then(|r| r.reply().ok())
+                .and_then(|r| r.value32().map(|v| v.collect()))
+                .unwrap_or_default()
+        };
+        if let Some(wm_state) = atom(&self.conn, b"WM_STATE") {
+            if read(&self.conn, wm_state).first() == Some(&3) {
+                return gui::WINDOW_MINIMIZED;
+            }
+        }
+        if let (Some(net_state), Some(vert), Some(horz)) = (
+            atom(&self.conn, b"_NET_WM_STATE"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_VERT"),
+            atom(&self.conn, b"_NET_WM_STATE_MAXIMIZED_HORZ"),
+        ) {
+            let states = read(&self.conn, net_state);
+            if states.contains(&vert) && states.contains(&horz) {
+                return gui::WINDOW_MAXIMIZED;
+            }
+        }
+        gui::WINDOW_NORMAL
+    }
+
+    fn begin_move_resize(&mut self, hwnd: usize, edge: u32) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        if w.child {
+            return;
+        }
+        // HT* de Win32 → direction _NET_WM_MOVERESIZE (EWMH).
+        let direction = match edge {
+            2 => 8,
+            10 => 7,
+            11 => 3,
+            12 => 1,
+            13 => 0,
+            14 => 2,
+            15 => 5,
+            16 => 6,
+            17 => 4,
+            _ => return,
+        };
+        let top = Self::top_xwin(w);
+        let root = self.conn.setup().roots[self.screen].root;
+        let Some(pointer) = self
+            .conn
+            .query_pointer(root)
+            .ok()
+            .and_then(|r| r.reply().ok())
+        else {
+            return;
+        };
+        let Some(kind) = self
+            .conn
+            .intern_atom(false, b"_NET_WM_MOVERESIZE")
+            .ok()
+            .and_then(|r| r.reply().ok())
+            .map(|r| r.atom)
+        else {
+            return;
+        };
+        // Le clic tient une saisie implicite du pointeur : le gestionnaire ne
+        // peut prendre la main qu'une fois relâchée.
+        let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+        let data = [
+            pointer.root_x as i32 as u32,
+            pointer.root_y as i32 as u32,
+            direction,
+            1,
+            1,
+        ];
+        let ev = x11rb::protocol::xproto::ClientMessageEvent::new(32, top, kind, data);
+        let mask = x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+            | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+        let _ = self.conn.send_event(false, root, mask, ev);
         let _ = self.conn.flush();
     }
 

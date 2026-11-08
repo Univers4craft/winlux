@@ -2,6 +2,17 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+/// Méthode absente : rend E_NOTIMPL et le note une fois dans le journal, avec
+/// son nom, pour savoir ce qu'une application attend encore.
+macro_rules! unsupported {
+    ($name:literal) => {{
+        unsafe extern "win64" fn f() -> i32 {
+            $crate::dlls::d2d1::unsupported_call($name)
+        }
+        f as *const ()
+    }};
+}
+
 pub mod a11y;
 pub mod absent_devices;
 pub mod accel;
@@ -18,6 +29,7 @@ pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
 pub mod comdlg32_files;
+pub mod comdlg32_find;
 pub mod comdlg32_ui;
 pub mod common_apps;
 pub mod comobj;
@@ -62,17 +74,21 @@ pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
+pub mod dpnet;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dwrite_analyzer;
+pub mod dwrite_glyphs;
 pub mod dxbc;
 pub mod dxgi;
+pub(crate) mod dxgi_private;
 pub mod dxva2;
 pub mod electron_win32;
 pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
+pub mod fiber64;
 pub mod filedialog_com;
 pub mod ftp_apps;
 pub mod games_win32;
@@ -89,6 +105,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod handle_broker;
 pub mod hid;
 pub mod hlsl;
 pub mod hostcall;
@@ -99,6 +116,7 @@ pub mod inherit;
 pub mod inifile;
 pub mod iphlpapi;
 pub mod ipp;
+pub(crate) mod jobs;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
@@ -136,6 +154,7 @@ pub mod pdh;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
+pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
 pub mod resource;
@@ -158,8 +177,11 @@ pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod thread_ctl;
 pub mod threadpool;
+pub(crate) mod uianimation;
 pub mod uiautomationcore;
+pub mod url_moniker;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
@@ -172,6 +194,8 @@ pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
 pub mod vulkan1;
+pub mod webview2;
+pub mod webview2_iids;
 pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
@@ -188,6 +212,7 @@ pub mod winspool;
 pub mod wintrust;
 pub mod winusb;
 pub mod wpf_native;
+pub mod write_watch;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;
@@ -293,6 +318,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
+                    e.extend(fiber64::kernel32_exports());
+                    e.extend(psapi_k32::kernel32_exports());
                     e.extend(console_input::exports());
                     // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
                     e.extend(serial::exports());
@@ -568,6 +595,16 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "dpnet",
+                exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpnaddr",
+                exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "quartz",
                 exports: quartz::exports(),
                 handle: fake_module(),
@@ -645,6 +682,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "webview2loader",
+                exports: webview2::exports(),
                 handle: fake_module(),
             },
             Builtin {

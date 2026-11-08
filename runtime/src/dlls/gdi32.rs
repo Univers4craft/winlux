@@ -759,10 +759,23 @@ pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i3
         crate::process::set_last_error(1400); // ERROR_INVALID_HANDLE
         return 0;
     }
-    if width <= 0 || height <= 0 {
+    if width < 0 || height < 0 {
+        crate::trace!("CreateCompatibleBitmap refusée : {width}x{height}");
         crate::process::set_last_error(87);
         return 0;
     }
+    // Largeur ou hauteur nulle : Windows rend une bitmap 1x1 monochrome,
+    // pas une erreur (documentation de CreateCompatibleBitmap, Remarks :
+    // « If either the width or the height of the bitmap is zero,
+    // CreateCompatibleBitmap returns the handle to a 1-by-1 pixel,
+    // monochrome bitmap »). La VCL de Delphi en dépend pour toute TBitmap
+    // vide ; un échec levait EOutOfResources dans WinSCP x86 (#905).
+    // Voir docs/compat/gdi32-comportements.md : ne pas refuser ce cas.
+    let (width, height) = if width == 0 || height == 0 {
+        (1, 1)
+    } else {
+        (width, height)
+    };
     match gui::create_compatible_bitmap(width, height) {
         Some(bitmap) => bitmap,
         None => {
@@ -791,7 +804,9 @@ pub unsafe extern "win64" fn create_dib_section(
         crate::process::set_last_error(1400);
         return 0;
     }
-    if info.is_null() || bits.is_null() {
+    // ppvBits peut être nul : la DIB est créée, ses pixels restent
+    // accessibles par GetDIBits ou un DC mémoire.
+    if info.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -812,25 +827,52 @@ pub unsafe extern "win64" fn create_dib_section(
         || header.height == 0
         || header.height == i32::MIN
         || header.planes != 1
-        || !matches!(header.bit_count, 24 | 32)
+        || !matches!(header.bit_count, 1 | 4 | 8 | 16 | 24 | 32)
         || (header.compression != 0 && !bitfields_ok) // BI_RGB ou BI_BITFIELDS BGRX
         || usage != 0 // DIB_RGB_COLORS
         || section != 0
         || offset != 0
     {
+        // Diagnostic (WINLUX_TRACE=1) : une DIB refusée fait lever
+        // EOutOfResources aux programmes Delphi sans dire laquelle.
+        crate::trace!(
+            "CreateDIBSection refusée : {}x{} {} bpp, compression {}, usage {usage}, section 0x{section:x}",
+            header.width,
+            header.height,
+            header.bit_count,
+            header.compression
+        );
         crate::process::set_last_error(87);
         return 0;
     }
-    let Some((bitmap, pixel_bits)) = gui::create_dib_section(
+    // Table de couleurs (RGBQUAD : bleu, vert, rouge, réservé) après
+    // l'en-tête pour 1, 4 et 8 bits ; biClrUsed nul = 2^bits entrées.
+    let mut palette = Vec::new();
+    if header.bit_count <= 8 {
+        let max = 1usize << header.bit_count;
+        let count = match header.colors_used as usize {
+            0 => max,
+            n => n.min(max),
+        };
+        let table = (info as *const u8).add(header.size as usize);
+        for i in 0..count {
+            let q = std::ptr::read_unaligned(table.add(i * 4) as *const [u8; 4]);
+            palette.push(u32::from(q[0]) << 16 | u32::from(q[1]) << 8 | u32::from(q[2]));
+        }
+    }
+    let Some((bitmap, pixel_bits)) = gui::create_dib_section_with_palette(
         header.width,
         header.height.abs(),
         header.bit_count,
         header.height < 0,
+        palette,
     ) else {
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;
     };
-    std::ptr::write_unaligned(bits, pixel_bits.cast::<c_void>());
+    if !bits.is_null() {
+        std::ptr::write_unaligned(bits, pixel_bits.cast::<c_void>());
+    }
     bitmap
 }
 

@@ -7,12 +7,15 @@ use super::metadata::ExceptionClause;
 use super::types;
 
 const CLAUSE_EXCEPTION: u32 = 0x0000;
+const CLAUSE_FILTER: u32 = 0x0001;
 const CLAUSE_FINALLY: u32 = 0x0002;
 const CLAUSE_FAULT: u32 = 0x0004;
 
 /// Le message d'une exception est rangé dans le premier emplacement de l'objet,
 /// réservé par le runtime pour tous les types (voir `clr::load_types`).
 pub const MESSAGE_SLOT: usize = 0;
+/// Exception interne (`InnerException`), juste après le message.
+pub const INNER_SLOT: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClrException {
@@ -95,44 +98,45 @@ impl std::fmt::Display for ClrException {
     }
 }
 
-#[derive(Debug)]
-pub enum Handler {
-    Catch(usize),
-    Finally(usize),
+/// Le `try` de `clause` couvre-t-il `ip` ?
+pub fn try_covers(clause: &ExceptionClause, ip: usize) -> bool {
+    let start = clause.try_offset as usize;
+    ip >= start && ip < start + clause.try_length as usize
 }
 
-/// Premier gestionnaire applicable à `ip`. Les clauses sont rangées de la plus
-/// interne à la plus externe (ECMA-335 §II.19), donc un finally interne passe
-/// avant un catch externe.
-pub fn find_handler(
+/// Le gestionnaire de `clause` contient-il `ip` ?
+pub fn handler_covers(clause: &ExceptionClause, ip: usize) -> bool {
+    let start = clause.handler_offset as usize;
+    ip >= start && ip < start + clause.handler_length as usize
+}
+
+pub fn is_catch(clause: &ExceptionClause) -> bool {
+    matches!(clause.flags, CLAUSE_EXCEPTION | CLAUSE_FILTER)
+}
+
+pub fn is_filter(clause: &ExceptionClause) -> bool {
+    clause.flags == CLAUSE_FILTER
+}
+
+pub fn is_finally(clause: &ExceptionClause) -> bool {
+    matches!(clause.flags, CLAUSE_FINALLY | CLAUSE_FAULT)
+}
+
+/// Gestionnaire le plus interne contenant `ip` parmi les clauses retenues
+/// par `kind`. Les clauses sont rangées de la plus interne à la plus
+/// externe (ECMA-335 §II.19).
+pub fn enclosing_handler(
     clauses: &[ExceptionClause],
     ip: usize,
-    catches: impl Fn(u32) -> bool,
-) -> Option<Handler> {
-    for clause in clauses {
-        let start = clause.try_offset as usize;
-        if ip < start || ip >= start + clause.try_length as usize {
-            continue;
-        }
-        match clause.flags {
-            CLAUSE_EXCEPTION if catches(clause.class_token_or_filter) => {
-                return Some(Handler::Catch(clause.handler_offset as usize));
-            }
-            CLAUSE_FINALLY | CLAUSE_FAULT => {
-                return Some(Handler::Finally(clause.handler_offset as usize));
-            }
-            _ => {}
-        }
-    }
-    None
+    kind: impl Fn(&ExceptionClause) -> bool,
+) -> Option<&ExceptionClause> {
+    clauses.iter().find(|c| kind(c) && handler_covers(c, ip))
 }
 
 /// Bloc finally à exécuter avant qu'un `leave` depuis `ip` atteigne `target`.
 pub fn find_leave_target(clauses: &[ExceptionClause], ip: usize, target: usize) -> Option<usize> {
     clauses.iter().find_map(|clause| {
-        let start = clause.try_offset as usize;
-        let end = start + clause.try_length as usize;
-        let leaves = ip >= start && ip < end && (target < start || target >= end);
+        let leaves = try_covers(clause, ip) && !try_covers(clause, target);
         (clause.flags == CLAUSE_FINALLY && leaves).then_some(clause.handler_offset as usize)
     })
 }

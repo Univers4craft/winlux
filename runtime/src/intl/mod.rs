@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod codepage;
+pub mod dbcs;
 pub mod keyboard;
 pub mod keymap;
 pub mod locale;

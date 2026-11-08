@@ -79,6 +79,25 @@ llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_inherit.def" -l "$tmp/kernel32_inh
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/inherit_msvc.c" -o "$tmp/inherit_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/inherit_msvc.obj" \
     "$tmp/kernel32_inherit.lib" /out:"$out/inherit_msvc.exe"
+# DuplicateHandle et mémoire entre processus, enfant suspendu (#236).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateEventW\nSetEvent\nWaitForSingleObject\nDuplicateHandle\nGetCurrentProcess\nGetCurrentProcessId\nOpenProcess\nCreateProcessW\nResumeThread\nGetExitCodeProcess\nGetModuleFileNameW\nGetModuleHandleW\nGetCommandLineW\nCreateFileMappingW\nMapViewOfFile\nReadProcessMemory\nWriteProcessMemory\nCloseHandle\nTerminateProcess\n' >"$tmp/kernel32_dupx.def"
+printf 'LIBRARY ntdll.dll\nEXPORTS\nNtQueryInformationProcess\n' >"$tmp/ntdll_dupx.def"
+for d in kernel32_dupx ntdll_dupx; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/dupx_msvc.c" -o "$tmp/dupx_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/dupx_msvc.obj" \
+    "$tmp/kernel32_dupx.lib" "$tmp/ntdll_dupx.lib" /out:"$out/dupx_msvc.exe"
+# WebView2 maison sur WebKitGTK (#236).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nGetTickCount64\nSleep\nLoadLibraryW\nGetProcAddress\nGetCommandLineW\n' >"$tmp/kernel32_wv2.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nRegisterClassW\nCreateWindowExW\nDefWindowProcW\nPeekMessageW\nTranslateMessage\nDispatchMessageW\n' >"$tmp/user32_wv2.def"
+printf 'LIBRARY ole32.dll\nEXPORTS\nCoTaskMemFree\n' >"$tmp/ole32_wv2.def"
+for d in kernel32_wv2 user32_wv2 ole32_wv2; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fshort-wchar -c "$src/webview2_msvc.c" -o "$tmp/webview2_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:windows /nodefaultlib "$tmp/webview2_msvc.obj" \
+    "$tmp/kernel32_wv2.lib" "$tmp/user32_wv2.lib" "$tmp/ole32_wv2.lib" /out:"$out/webview2_msvc.exe"
 # Fonctions vérifiées au démarrage par Chromium et Electron (#236).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nLoadLibraryA\nLoadLibraryExA\nGetProcAddress\nGetCurrentProcess\n' >"$tmp/kernel32_chromium.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_chromium.def" -l "$tmp/kernel32_chromium.lib"
@@ -122,3 +141,15 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/display_msvc.c" -o "$tmp/display_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/display_msvc.obj" \
     "$tmp/kernel32_display.lib" "$tmp/user32_display.lib" "$tmp/gdi32_display.lib" /out:"$out/display_msvc.exe"
+# Suspension de threads et contexte, ce qu'il faut au ramasse-miettes de
+# coreclr (#269) : SuspendThread, Get/SetThreadContext, page de garde de la
+# pile, vue exécutable W^X, messages enregistrés, WM_TIMER en PM_NOREMOVE.
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nExitThread\nCreateThread\nSuspendThread\nResumeThread\nGetThreadContext\nSetThreadContext\nGetCurrentThread\nGetCurrentProcess\nDuplicateHandle\nWaitForSingleObject\nGetExitCodeThread\nSleep\nVirtualQuery\nVirtualAlloc\nCreateFileMappingW\nMapViewOfFileEx\nGetWriteWatch\nResetWriteWatch\n' >"$tmp/kernel32_threadctl.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nRegisterWindowMessageW\nSetTimer\nKillTimer\nPeekMessageW\nWaitMessage\n' >"$tmp/user32_threadctl.def"
+printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC\nGetObjectType\nDeleteDC\n' >"$tmp/gdi32_threadctl.def"
+for d in kernel32_threadctl user32_threadctl gdi32_threadctl; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/threadctl_msvc.c" -o "$tmp/threadctl_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/threadctl_msvc.obj" \
+    "$tmp/kernel32_threadctl.lib" "$tmp/user32_threadctl.lib" "$tmp/gdi32_threadctl.lib" /out:"$out/threadctl_msvc.exe"

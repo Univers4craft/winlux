@@ -38,6 +38,42 @@ pub const DLL_THREAD_DETACH: u32 = 3;
 
 static PEB: AtomicUsize = AtomicUsize::new(0);
 
+/// Adresse fixe du PEB dans chaque processus Windows de Winlux : un autre
+/// processus (bac à sable de Chromium, crashpad) la reçoit de
+/// NtQueryInformationProcess et y lit l'image du programme.
+pub const PEB_FIXED: usize = 0x5FFE_0000_0000;
+
+/// Variable posée par CreateProcess(CREATE_SUSPENDED) : le processus se
+/// fige (SIGSTOP) une fois chargé, avant tout code du programme.
+pub const SUSPENDED_ENV: &str = "WINLUX_SUSPENDU";
+
+/// PEB à son adresse fixe, ou ailleurs si elle est prise.
+fn alloc_peb() -> usize {
+    unsafe {
+        let p = libc::mmap(
+            PEB_FIXED as *mut libc::c_void,
+            0x1000,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+            -1,
+            0,
+        );
+        if p != libc::MAP_FAILED && p as usize == PEB_FIXED {
+            return PEB_FIXED;
+        }
+    }
+    alloc_zeroed(0x1000)
+}
+
+/// CREATE_SUSPENDED : se figer jusqu'au ResumeThread du parent.
+pub fn stop_if_suspended() {
+    if std::env::var_os(SUSPENDED_ENV).is_some() {
+        std::env::remove_var(SUSPENDED_ENV);
+        trace!("processus créé suspendu : attente de ResumeThread");
+        unsafe { libc::raise(libc::SIGSTOP) };
+    }
+}
+
 pub struct ProcessInfo {
     pub command_line_w: Vec<u16>,
     pub command_line_a: Vec<u8>,
@@ -281,12 +317,15 @@ pub fn init_process(exe: &Module, args: &[String]) {
     if !chromium_child && chromium_sandbox_refused(&exe_win, &cmd) {
         cmd.push_str(" --no-sandbox");
     }
+    // Bac à sable refusé en cours de route (appli non reconnue au départ,
+    // #236) : l'appli repart sans, comme l'utilisateur l'a accepté.
+    crate::sandbox_fallback::apply_at_start(&mut cmd, chromium_child);
     crate::launch::provide_git_bash();
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
 
-    let peb = alloc_zeroed(0x1000);
+    let peb = alloc_peb();
     let params = alloc_zeroed(0x1000);
     unsafe {
         *((peb + PEB_IMAGE_BASE) as *mut usize) = exe.base;
@@ -669,6 +708,7 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     }
     run_tls_callbacks(m, DLL_PROCESS_ATTACH);
     if let Some(entry) = m.entry() {
+        trace!("DllMain de {} (chargement dynamique)", m.name);
         let dllmain =
             |base: usize, reason: u32, reserved: usize| call_dllmain(entry, base, reason, reserved);
         if dllmain(m.base, DLL_PROCESS_ATTACH, 0) == 0 {
@@ -771,8 +811,47 @@ fn start(exe: Module) -> u32 {
     if crate::wow32::active() {
         return crate::wow32::call32(entry, &[]) as u32;
     }
-    let f: extern "win64" fn() -> u32 = unsafe { std::mem::transmute(entry) };
-    f()
+    // Thread principal : objet de thread Win32 (OpenThread, suspension par
+    // le ramasse-miettes de .NET) et racine de pile Windows.
+    let _ = crate::dlls::kernel32::current_thread_object();
+    crate::dlls::thread_ctl::root_call(entry, 0)
+}
+
+/// Action personnalisée DLL de Windows Installer (#833) : la DLL est le
+/// module principal ; ses dépendances puis elle-même sont initialisées
+/// (rappels TLS, DllMain), puis `UINT Entree(MSIHANDLE)` est appelée.
+pub fn run_dll_export(dll: Module, export: usize, arg: u32) -> ! {
+    let h = std::thread::Builder::new()
+        .name("win-main".into())
+        .stack_size(8 << 20)
+        .spawn(move || {
+            init_thread();
+            crate::crash::install();
+            crate::wow32::wrap_fault_handlers();
+            let mods = loader::MODULES.lock().unwrap().clone();
+            for m in mods.iter().rev() {
+                if !loader::mark_initialized(m.base) {
+                    continue;
+                }
+                run_tls_callbacks(m, DLL_PROCESS_ATTACH);
+                if let Some(e) = m.entry() {
+                    if call_dllmain(e, m.base, DLL_PROCESS_ATTACH, 0) == 0 {
+                        eprintln!("winlux: l'initialisation de {} a échoué", m.name);
+                        return 1603;
+                    }
+                }
+            }
+            let _ = &dll;
+            if crate::wow32::active() {
+                return crate::wow32::call32(export, &[arg]) as u32;
+            }
+            let f: extern "win64" fn(u32) -> u32 = unsafe { std::mem::transmute(export) };
+            f(arg)
+        })
+        .expect("création du thread principal");
+    let code = h.join().unwrap_or(1603);
+    crate::msi::session::save(code);
+    crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 
 /// DllMain d'un module réel, x86 (wow32) ou x64.

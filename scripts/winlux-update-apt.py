@@ -26,6 +26,20 @@ RESTORE_POINT = STATE / "update-restore-point"
 TRIAL_BOOTS = 2
 RESTORE_PREFIX = "Avant Winlux "
 RESTORE_KEEP = 3
+# Page Mises à jour (#875-#882) : historique, date de la dernière recherche,
+# notes de version et avis pour la notification du bureau. Lisibles par le
+# compte (0644), écrits seulement ici, en root.
+HISTORY = STATE / "update-history"
+HISTORY_KEEP = 50
+LAST_CHECK = STATE / "update-last-check"
+NOTES = STATE / "notes"
+NOTES_KEEP = 10
+NOTES_MAX = 24576
+NOTICE = RUN / "update-notice"
+# Suspension : 1 à 5 semaines, comme le menu de la page. Heures d'activité :
+# aucune installation automatique entre début et fin (8 h – 18 h par défaut).
+PAUSE_WEEKS = (1, 2, 3, 4, 5)
+ACTIVE_HOURS = (8, 18)
 # Droits spéciaux de l'Ubuntu Base (ubuntu-base-26.04.1, `tar tv`). La
 # construction de l'image les efface (chown -R 0:0 avant APT) : passwd, chfn
 # ou gpasswd sans setuid, unix_chkpwd et /etc/shadow sans le groupe shadow,
@@ -181,14 +195,140 @@ def busy():
             except (BlockingIOError, PermissionError): return True
     return False
 
+def public_write(path, text):
+    """Fichier d'état lisible par le compte, remplacé d'un coup."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as out: out.write(text)
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        try: os.unlink(temporary)
+        except OSError: pass
+        raise
+
+def config_values():
+    return fields(read(CONFIG))
+
+def set_config(key, value):
+    """Une clé de update.conf (auto=, pause_until=, active_hours=…) ; None l'efface."""
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    lines = [line for line in read(CONFIG).splitlines() if line.strip() and not line.startswith(key + "=")]
+    if value is not None: lines.append(f"{key}={value}")
+    CONFIG.write_text("\n".join(lines) + "\n")
+
+def record(result, version, previous="", detail=""):
+    """Une ligne d'historique : installée, échec, restaurée (à la main ou toute seule)."""
+    entry = {"date": int(time.time()), "version": version or "?", "from": previous or "", "result": result}
+    if detail: entry["detail"] = " ".join(str(detail).split())[:300]
+    lines = [line for line in read(HISTORY).splitlines() if line.strip()][-(HISTORY_KEEP - 1):]
+    try: public_write(HISTORY, "\n".join(lines + [json.dumps(entry, ensure_ascii=False)]) + "\n")
+    except OSError as error: print(f"Historique non écrit : {error}", file=sys.stderr)
+
+def notice(kind, version):
+    """Avis lu par la session (notification « disponible » ou « redémarrez »)."""
+    try: publish_run(NOTICE, f"kind={kind}\nversion={version}\ndate={int(time.time())}\n")
+    except OSError as error: print(f"Avis non publié : {error}", file=sys.stderr)
+
+def paused_until(now=None):
+    value = config_values().get("pause_until", "")
+    until = int(value) if value.isdigit() else 0
+    return until if until > (now or time.time()) else 0
+
+def active_hours():
+    match = re.fullmatch(r"([0-9]{1,2})-([0-9]{1,2})", config_values().get("active_hours", ""))
+    if match and int(match.group(1)) < 24 and int(match.group(2)) < 24:
+        return int(match.group(1)), int(match.group(2))
+    return ACTIVE_HOURS
+
+def in_active_hours(hour=None, hours=None):
+    start, end = hours or active_hours()
+    hour = time.localtime().tm_hour if hour is None else hour
+    if start == end: return False
+    return start <= hour < end if start < end else (hour >= start or hour < end)
+
+def save_notes(work, data):
+    """Notes de version (docs/releases/<v>.md) : fichier publié et vérifié
+    (notes_asset + notes_sha256), sinon le texte de la release GitHub.
+    Jamais bloquant : sans notes, la mise à jour reste installable."""
+    version = data["version"]
+    target = NOTES / f"{version}.md"
+    if target.is_file(): return
+    text = ""
+    try:
+        asset, digest = data.get("notes_asset", ""), data.get("notes_sha256", "")
+        local = local_manifest()
+        if asset and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", asset) and re.fullmatch(r"[0-9a-f]{64}", digest):
+            notes = work / "notes"
+            if local: shutil.copyfile(local_asset(local, asset), notes)
+            else: download(f"https://github.com/{REPOSITORY}/releases/download/{version}/{asset}", notes)
+            import hashlib
+            if hashlib.sha256(notes.read_bytes()).hexdigest() != digest:
+                raise ValueError("SHA-256 des notes incorrect")
+            text = notes.read_text(errors="replace")
+        elif not local:
+            body = work / "release-body"
+            if not body.is_file():
+                listing_file = work / "release-notes.json"
+                download(RELEASE_API, listing_file, "application/vnd.github+json")
+                release = json.loads(listing_file.read_text())
+                if release.get("tag_name") == version: body.write_text(release.get("body") or "")
+            if body.is_file(): text = body.read_text(errors="replace")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"Notes de version indisponibles : {error}", file=sys.stderr)
+        return
+    if not text.strip(): return
+    NOTES.mkdir(parents=True, exist_ok=True); NOTES.chmod(0o755)
+    public_write(target, text[:NOTES_MAX])
+    for old in sorted(NOTES.glob("*.md"), key=lambda path: path.stat().st_mtime)[:-NOTES_KEEP]:
+        old.unlink(missing_ok=True)
+
+def state():
+    """État lisible par la page Mises à jour : une clé=valeur par ligne."""
+    installed = read("/usr/share/winlux/version")
+    values = {"installed": installed}
+    cached = read(STATE / "available-manifest")
+    if cached:
+        try:
+            data = manifest(cached)
+            if data["version"] != installed:
+                values.update(available=data["version"], download_bytes=data["download_bytes"],
+                              unpacked_kib=data["unpacked_kib"])
+                if (NOTES / f"{data['version']}.md").is_file(): values["notes"] = data["version"]
+        except ValueError: pass
+    if (NOTES / f"{installed}.md").is_file(): values["installed_notes"] = installed
+    values["last_check"] = read(LAST_CHECK) or "0"
+    config = config_values()
+    values["auto"] = "enabled" if config.get("auto") == "enabled" else "disabled"
+    values["paused_until"] = str(paused_until())
+    values["active_hours"] = "%d-%d" % active_hours()
+    values["blocked"] = read(BLOCKED)
+    rolled = fields(read(ROLLED_BACK))
+    values["rolled_failed"], values["rolled_restored"] = rolled.get("failed", ""), rolled.get("restored", "")
+    values["trial"] = fields(read(TRIAL)).get("version", "")
+    values["restore_point"] = fields(read(RESTORE_POINT)).get("date", "")
+    previous = package_version(CACHE / "previous.deb")
+    values["previous"] = "v" + previous if previous else ""
+    values["reboot"] = "1" if read(RUN / "update-action") == "reboot" else "0"
+    for key, value in values.items(): print(f"{key}={value}")
+
 def phase(name, percent, item):
     publish_run(RUN / "update-progress", f"phase={name}\npercent={percent}\ndone=0\ntotal=0\nitem={item}\n")
 
+# Petits fichiers (manifeste, release, notes, empreinte) demandés depuis un
+# bouton de la page : délai court et quelques tentatives sur les erreurs
+# passagères (5xx, 429, délai), jamais quinze minutes d'attente (#1007).
+DOWNLOAD_LIMITS = ["--connect-timeout", "10", "--max-time", "30",
+                   "--retry", "3", "--retry-delay", "2", "--retry-max-time", "60"]
+
+
 def download(url, destination, accept=None):
     command = ["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https",
-               "--connect-timeout", "20", "--max-time", "900", "--output", str(destination)]
+               *DOWNLOAD_LIMITS, "--write-out", "%{http_code}", "--output", str(destination)]
     if accept: command += ["--header", "Accept: " + accept]
-    run(*command, url)
+    # Code HTTP sur la sortie (error.stdout) ; le message de curl reste au journal.
+    return subprocess.run([*command, url], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
 
 MANIFEST_URL = f"https://github.com/{REPOSITORY}/releases/latest/download/winlux-update-manifest.txt"
 RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -209,9 +349,25 @@ def certificate_error(error, url=MANIFEST_URL):
         return None
     return RuntimeError(text) if text else None
 
+def http_status(error):
+    try: return int((getattr(error, "stdout", None) or "").strip()[-3:])
+    except ValueError: return 0
+
+
+def server_error(error):
+    """GitHub qui répond 5xx ou 429 : panne passagère du serveur, pas « aucune version » (#1007)."""
+    status = http_status(error)
+    if error.returncode == 22 and (status >= 500 or status == 429):
+        return RuntimeError(f"GitHub ne répond pas pour l’instant (erreur {status} du serveur). "
+                            "Ce n’est pas un problème de ce PC : réessayez dans quelques minutes.")
+    return None
+
+
 def offline_error(error):
     explained = certificate_error(error)
     if explained: return explained
+    busy = server_error(error)
+    if busy: return busy
     reason = OFFLINE_CODES.get(error.returncode)
     if reason is None: return None
     return RuntimeError("GitHub est injoignable (" + reason + ") : vérifiez la connexion réseau puis relancez la recherche.")
@@ -255,22 +411,58 @@ def local_asset(manifest_path, asset):
     if not source.is_file(): raise RuntimeError(f"Paquet local introuvable : {source}")
     return source
 
+# Clé publique Ed25519 des mises à jour (#31). Tant qu'elle est absente de
+# l'image, les manifestes ne sont pas vérifiés ; dès qu'elle y est, un
+# manifeste sans signature valide est refusé.
+PUBLIC_KEY = Path(os.environ.get("WINLUX_UPDATE_PUBLIC_KEY") or "/usr/share/winlux/update-signing.pub")
+
+def signature_tool():
+    import runpy
+    for candidate in (Path("/usr/bin/winlux-signature"), Path(__file__).resolve().with_name("winlux-signature.py")):
+        if candidate.is_file(): return runpy.run_path(str(candidate))
+    raise RuntimeError("Outil de vérification des signatures introuvable (winlux-signature)")
+
+def check_signature(metadata, signature):
+    """Vérifie metadata (manifeste téléchargé) avec le fichier signature."""
+    if not PUBLIC_KEY.is_file():
+        return False
+    if not signature.is_file():
+        raise RuntimeError("Le manifeste de mise à jour n’est pas signé : mise à jour refusée par sécurité.")
+    try: good = signature_tool()["verify_file"](PUBLIC_KEY, metadata, signature)
+    except ValueError: good = False
+    if not good:
+        raise RuntimeError("La signature du manifeste de mise à jour est invalide : mise à jour refusée par sécurité.")
+    print("Signature Ed25519 du manifeste vérifiée.", flush=True)
+    return True
+
 def release_metadata(work):
     """Manifeste de la dernière release, ou repli sur l'API GitHub s'il n'a pas été publié."""
     metadata = work / "manifest"
+    signature = work / "manifest.sig"
     local = local_manifest()
     if local:
         print(f"Manifeste local utilisé : {local}", flush=True)
         text = local.read_text()
         data = manifest(text)
         metadata.write_text(text)
+        local_signature = local.with_name(local.name + ".sig")
+        if local_signature.is_file(): shutil.copyfile(local_signature, signature)
+        check_signature(metadata, signature)
         return data, text
     try:
         download(MANIFEST_URL, metadata)
+        if PUBLIC_KEY.is_file():
+            try: download(MANIFEST_URL + ".sig", signature)
+            except subprocess.CalledProcessError as error:
+                offline = offline_error(error)
+                if offline: raise offline from None
+        check_signature(metadata, signature)
         return manifest(metadata.read_text()), metadata.read_text()
     except subprocess.CalledProcessError as error:
         offline = offline_error(error)
         if offline: raise offline from None
+    if PUBLIC_KEY.is_file():
+        raise RuntimeError("La dernière version ne publie pas de manifeste signé : mise à jour refusée par sécurité.")
     print("Manifeste absent de la dernière version : informations lues dans la release GitHub.", flush=True)
     listing_file = work / "release.json"
     try: download(RELEASE_API, listing_file, "application/vnd.github+json")
@@ -392,17 +584,62 @@ def rollback_offline(reason):
     BLOCKED.write_text(trial.get("version", failed) + "\n")
     write_fields(ROLLED_BACK, {"failed": trial.get("version", failed), "restored": installed_version(), "reason": reason})
     TRIAL.unlink(missing_ok=True)
+    record("auto-restored", installed_version(), trial.get("version", failed), reason)
     print(f"Retour automatique : {failed} -> {installed_version()} ({reason})")
     return True
 
+# Mises à jour A/B (#31) : la version est installée dans l'emplacement B
+# (winlux-ab prepare) et /init bascule au démarrage ; l'ancienne version reste
+# en réserve. Sans winlux-ab, ou si le paquet demande un paquet Ubuntu absent,
+# installation APT sur place comme avant.
+AB_TOOL = os.environ.get("WINLUX_AB_TOOL", "/usr/bin/winlux-ab")
+AB_NEEDS_APT = 3
+
+def ab_state():
+    if not os.access(AB_TOOL, os.X_OK): return {}
+    output = subprocess.run([AB_TOOL, "status"], capture_output=True, text=True).stdout
+    return fields(output)
+
+def ab(*args):
+    return subprocess.run([AB_TOOL, *args], capture_output=True, text=True)
+
+def ab_prepare(package, version):
+    """Vrai si la mise à jour est prête dans l'emplacement B ; faux s'il faut APT."""
+    if not os.access(AB_TOOL, os.X_OK) or not Path("/init").is_file(): return False
+    phase("installing", -1, "Préparation de la nouvelle version à côté du système actuel")
+    result = ab("prepare", str(package), version)
+    if result.returncode == AB_NEEDS_APT:
+        print("Paquet Ubuntu nouveau requis : installation APT sur place", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or "Préparation A/B impossible")
+    return True
+
+def ab_rolled_back():
+    """/init est revenu sur la réserve : noter l'échec une seule fois."""
+    state = ab_state()
+    if state.get("state") != "rolled-back" or read(STATE / "ab-recorded") == state.get("version", ""): return
+    failed = state.get("version", "")
+    BLOCKED.write_text(failed + "\n")
+    write_fields(ROLLED_BACK, {"failed": failed, "restored": installed_version(), "reason": state.get("reason", "boot")})
+    record("rolled-back" if state.get("reason") != "manual" else "restored", installed_version(), failed)
+    (STATE / "ab-recorded").write_text(failed + "\n")
+
 def confirm_boot():
     """Le bureau a tenu : la version à l'essai devient la version de référence."""
+    if ab_state().get("state") == "trial":
+        ab("confirm")
+        print("Mise à jour validée : " + installed_version())
     if fields(read(TRIAL)).get("version") == installed_version():
         TRIAL.unlink(missing_ok=True)
         print("Mise à jour validée : " + installed_version())
 
 def session_failed():
     """Le bureau n'a pas pu s'ouvrir : retour immédiat si la version est à l'essai."""
+    if ab_state().get("state") == "trial":
+        if ab("rollback", "session").returncode != 0: return False
+        restart()
+        return True
     if not fields(read(TRIAL)).get("version") or fields(read(TRIAL))["version"] != installed_version(): return False
     if not rollback_offline("session"): return False
     restart()
@@ -511,12 +748,21 @@ def main():
     if args == ["--busy"]: return 0 if busy() else 1
     if args == ["--auto", "status"]: print("enabled" if "auto=enabled" in read(CONFIG).splitlines() else "disabled"); return 0
     if args == ["--list"]: listing(); return 0
+    if args == ["--state"]: state(); return 0
     automatic = args == ["--auto-run"]
     if automatic:
         if "auto=enabled" not in read(CONFIG).splitlines(): return 0
+        # Suspendues, ou pendant les heures d'activité : rien ne s'installe tout seul.
+        if paused_until(): return 0
+        if in_active_hours(): return 0
         args = ["--apply"]
     allowed = [["--check"], ["--apply"], ["--rollback"], ["--boot"], ["--auto", "enable"], ["--auto", "disable"],
-               ["--confirm-boot"], ["--boot-failed"]]
+               ["--confirm-boot"], ["--boot-failed"], ["--resume"]]
+    if len(args) == 2 and args[0] == "--pause" and args[1].isdigit() and int(args[1]) in PAUSE_WEEKS:
+        allowed.append(args)
+    if len(args) == 3 and args[0] == "--active-hours" and all(value.isdigit() and int(value) < 24 for value in args[1:]) \
+            and args[1] != args[2]:
+        allowed.append(args)
     if args not in allowed: raise ValueError("Arguments de mise à jour invalides")
     # dpkg et les caches (MIME, icônes, applications) doivent rester lisibles
     # par le bureau, qui tourne sous le compte de l'utilisateur.
@@ -525,14 +771,20 @@ def main():
     with (STATE / "apt-update.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if args[0] == "--auto":
-            CONFIG.parent.mkdir(parents=True, exist_ok=True)
-            CONFIG.write_text("\n".join(line for line in read(CONFIG).splitlines() if not line.startswith("auto="))
-                              + "\nauto=" + ("enabled" if args[1] == "enable" else "disabled") + "\n")
+            set_config("auto", "enabled" if args[1] == "enable" else "disabled")
             return 0
+        if args[0] == "--pause":
+            # Fin de la suspension à minuit, au bout de N semaines.
+            day = time.localtime(time.time() + int(args[1]) * 7 * 86400)
+            set_config("pause_until", int(time.mktime((day.tm_year, day.tm_mon, day.tm_mday, 23, 59, 59, 0, 0, -1))))
+            return 0
+        if args == ["--resume"]: set_config("pause_until", None); return 0
+        if args[0] == "--active-hours": set_config("active_hours", f"{int(args[1])}-{int(args[2])}"); return 0
         if args == ["--confirm-boot"]: confirm_boot(); return 0
         if args == ["--boot-failed"]: return 0 if session_failed() else 1
         if args == ["--boot"]:
             step = time.monotonic()
+            ab_rolled_back()
             boot_guard()
             step = timed("Version à l'essai", step)
             restored = STATE / "apt-base-permissions-restored"
@@ -580,7 +832,12 @@ def main():
             with tempfile.TemporaryDirectory(prefix="apt-update-", dir=STATE) as temporary:
                 work = Path(temporary)
                 cache = CACHE; cache.mkdir(parents=True, exist_ok=True)
-                if args == ["--rollback"]:
+                if args == ["--rollback"] and ab_state().get("reserve") == "yes":
+                    phase("restoring", -1, "Retour à la version de réserve au prochain démarrage")
+                    result = ab("rollback")
+                    if result.returncode != 0: raise RuntimeError(result.stderr.strip())
+                    BLOCKED.write_text(installed_version() + "\n")
+                elif args == ["--rollback"]:
                     if not (cache / "previous.deb").is_file(): raise RuntimeError("Aucune sauvegarde du paquet précédent n’est disponible")
                     phase("restoring", -1, "Restauration du paquet précédent")
                     left = installed_version()
@@ -588,6 +845,7 @@ def main():
                     # La mise à jour automatique ne doit pas réinstaller la version quittée.
                     BLOCKED.write_text(left + "\n")
                     TRIAL.unlink(missing_ok=True)
+                    record("restored", installed_version(), left)
                     previous = cache / "previous.deb"
                     shutil.copy2(cache / "installed.deb", work / "current.deb")
                     cache_copy(previous, cache / "installed.deb")
@@ -596,6 +854,12 @@ def main():
                     phase("checking", 0, "Recherche de la mise à jour Winlux")
                     data, _ = release_metadata(work)
                     shutil.copy2(work / "manifest", STATE / "available-manifest")
+                    public_write(LAST_CHECK, str(int(time.time())) + "\n")
+                    if data["version"] != read("/usr/share/winlux/version"):
+                        save_notes(work, data)
+                        published = fields(read(NOTICE))
+                        if (published.get("kind"), published.get("version")) != ("available", data["version"]):
+                            notice("available", data["version"])
                     listing()
                     if args == ["--check"] or data["version"] == read("/usr/share/winlux/version"):
                         phase("idle", 100, "Recherche terminée")
@@ -627,13 +891,15 @@ def main():
                         raise ValueError("Empreinte SHA-256 incorrecte : le paquet téléchargé a été supprimé")
                     restore_point(data["version"])
                     previous = installed_version()
-                    phase("installing", -1, "Installation du paquet Winlux avec APT ; consultez le journal pour les détails")
-                    install(package, version=data["version"])
+                    prepared = ab_prepare(package, data["version"])
+                    if not prepared:
+                        phase("installing", -1, "Installation du paquet Winlux avec APT ; consultez le journal pour les détails")
+                        install(package, version=data["version"])
                     if (cache / "installed.deb").exists(): cache_copy(cache / "installed.deb", cache / "previous.deb")
                     cache_copy(package, cache / "installed.deb")
                     package.unlink()
                     phase("verifying", -1, "Vérification des fichiers installés")
-                    if verify_installed():
+                    if not prepared and verify_installed():
                         # Une seule réparation (réinstallation) avant d'abandonner la version.
                         install(cache / "installed.deb", version=data["version"])
                         problems = verify_installed()
@@ -645,7 +911,12 @@ def main():
                             raise RuntimeError("Fichiers installés incorrects, version précédente remise en place :\n"
                                                + "\n".join(problems[:20]))
                     BLOCKED.unlink(missing_ok=True); ROLLED_BACK.unlink(missing_ok=True)
-                    write_fields(TRIAL, {"version": data["version"], "previous": previous, "boots": "0"})
+                    # En A/B, c'est /init qui compte les démarrages à l'essai.
+                    if not prepared:
+                        write_fields(TRIAL, {"version": data["version"], "previous": previous, "boots": "0"})
+                    (STATE / "ab-recorded").unlink(missing_ok=True)
+                    record("installed", data["version"], previous)
+                    notice("reboot", data["version"])
                 publish_run(RUN / "update-action", "reboot\n")
                 phase("ready", 100, "Winlux installé ; redémarrage conseillé")
         except Exception:
@@ -653,6 +924,9 @@ def main():
             current_phase = next((line[6:] for line in current.splitlines() if line.startswith("phase=")), "")
             publish_run(RUN / "update-error-phase", current_phase + "\n")
             phase("error", 0, "Échec : consulter le journal")
+            if args == ["--apply"] and current_phase not in ("", "checking", "idle"):
+                failed = fields(read(STATE / "available-manifest")).get("version", "")
+                record("failed", failed, installed_version(), current_phase + " : " + str(sys.exc_info()[1]))
             raise
         finally:
             (RUN / "update-inhibit").unlink(missing_ok=True)

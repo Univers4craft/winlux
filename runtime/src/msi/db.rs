@@ -42,6 +42,9 @@ impl Value {
 pub struct Table {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
+    /// Colonnes de flux binaire (`v0`) : la valeur vaut 1 si le flux
+    /// `Table.clé` existe.
+    pub binary: Vec<bool>,
 }
 
 impl Table {
@@ -74,6 +77,7 @@ impl Row<'_> {
     }
 }
 
+#[derive(Default)]
 pub struct Database {
     pub tables: HashMap<String, Table>,
     pub streams: HashMap<String, Vec<u8>>,
@@ -307,6 +311,10 @@ impl Database {
             tables.insert(
                 name,
                 Table {
+                    binary: cols
+                        .iter()
+                        .map(|c| c.kind & !MSITYPE_NULLABLE == MSITYPE_STRING | MSITYPE_VALID)
+                        .collect(),
                     columns: cols.into_iter().map(|c| c.name).collect(),
                     rows,
                 },

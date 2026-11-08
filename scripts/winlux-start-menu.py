@@ -89,12 +89,12 @@ _TR = {
     'Luminosité écran': ('Screen brightness', 'Brillo de la pantalla', 'Bildschirmhelligkeit'),
     'Certificats sécurité': ('Security certificates', 'Certificados de seguridad', 'Sicherheitszertifikate'),
     'Date et heure': ('Date & time', 'Fecha y hora', 'Datum und Uhrzeit'),
-    'Bluetooth et appareils': ('Bluetooth and devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
+    'Bluetooth et appareils': ('Bluetooth & devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
     'Son': ('Sound', 'Sonido', 'Sound'),
     'Clavier tactile': ('Touch keyboard', 'Teclado táctil', 'Bildschirmtastatur'),
     'Alimentation batterie veille': ('Power battery sleep', 'Energía batería suspensión', 'Energie Akku Standby'),
     'Clavier': ('Keyboard', 'Teclado', 'Tastatur'),
-    'Souris': ('Mouse', 'Ratón', 'Maus'),
+    'Souris': ('Mouse', 'Mouse', 'Maus'),
     'Personnalisation fond écran thème': ('Personalization wallpaper theme', 'Personalización fondo pantalla tema', 'Personalisierung Hintergrund Design'),
     'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
     'Mise à jour OS': ('OS update', 'Actualización del SO', 'OS-Update'),
@@ -109,25 +109,25 @@ _TR = {
     'Contrôle parental': ('Parental controls', 'Control parental', 'Jugendschutz'),
     'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
-    'Clavier et souris': ('Keyboard and mouse', 'Teclado y ratón', 'Tastatur und Maus'),
+    'Clavier et souris': ('Keyboard & mouse', 'Teclado y mouse', 'Tastatur und Maus'),
     'Écran': ('Display', 'Pantalla', 'Bildschirm'),
     'À propos': ('About', 'Acerca de', 'Info'),
     'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
     'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
     'Effets visuels': ('Visual effects', 'Efectos visuales', 'Visuelle Effekte'),
-    'Heure et langue': ('Time and language', 'Hora e idioma', 'Zeit und Sprache'),
+    'Heure et langue': ('Time & language', 'Hora e idioma', 'Zeit und Sprache'),
     'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
     'Mise à jour application': ('Application update', 'Actualización de aplicaciones', 'Anwendungsupdate'),
-    'Confidentialité et sécurité': ('Privacy and security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
+    'Confidentialité et sécurité': ('Privacy & security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
-    'Fond d’écran et couleurs': ('Wallpaper and colours', 'Fondo y colores', 'Hintergrund und Farben'),
+    'Fond d’écran et couleurs': ('Background & colors', 'Fondo y colores', 'Hintergrund und Farben'),
     'Bluetooth': ('Bluetooth', 'Bluetooth', 'Bluetooth'),
-    'Alimentation et batterie': ('Power and battery', 'Energía y batería', 'Energie und Akku'),
+    'Alimentation et batterie': ('Power & battery', 'Energía y batería', 'Energie und Akku'),
     'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
     'Imprimantes et scanners': ('Printers and scanners', 'Impresoras y escáneres', 'Drucker und Scanner'),
-    'Bureau à distance': ('Remote desktop', 'Escritorio remoto', 'Remotedesktop'),
+    'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
     'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
@@ -136,7 +136,7 @@ _TR = {
     'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
     'Wi-Fi': ('Wi-Fi', 'Wi-Fi', 'WLAN'),
     'Certificats': ('Certificates', 'Certificados', 'Zertifikate'),
-    'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobilgeräte'),
+    'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobile Geräte'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
     'VPN': ('VPN', 'VPN', 'VPN'),
     'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
@@ -174,6 +174,11 @@ _TR = {
     'Ouvrir': ('Open', 'Abrir', 'Öffnen'),
     'Détacher du menu Démarrer': ('Unpin from Start', 'Desanclar de Inicio', 'Von Start lösen'),
     'Épingler au menu Démarrer': ('Pin to Start', 'Anclar a Inicio', 'An Start anheften'),
+    'Déplacer': ('Move', 'Mover', 'Verschieben'),
+    'Au début': ('Move to front', 'Mover al principio', 'An den Anfang'),
+    'Vers la gauche': ('Move left', 'Mover a la izquierda', 'Nach links'),
+    'Vers la droite': ('Move right', 'Mover a la derecha', 'Nach rechts'),
+    'À la fin': ('Move to end', 'Mover al final', 'Ans Ende'),
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
@@ -294,7 +299,7 @@ def listed(app):
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""
-    if (app.get_id() or "").startswith("winlux-pe-"): return _t("Programmes Windows")
+    if (app.get_id() or "").startswith(("winlux-pe-", "winlux-link-")): return _t("Programmes Windows")
     categories = set((app.get_categories() or "").split(";")) if hasattr(app, "get_categories") else set()
     for key, label in [("Settings", _t("Paramètres")), ("Network", "Internet"),
                        ("Office", _t("Bureautique")), ("Graphics", _t("Graphisme")),
@@ -340,6 +345,8 @@ MENU_CSS = Template("""
   #winlux-start .app-name { font-size: 9pt; }
   #winlux-start label.dim { color: $dim; font-size: 8.5pt; }
   #winlux-start label.accent { color: $accent; font-weight: bold; }
+  #winlux-start button.pin-target { background: $chip; box-shadow: inset 0 0 0 2px $accent; border-radius: 8px; }
+  #winlux-start button.pin-dragged { opacity: 0.4; }
   #winlux-start label.letter { color: $accent; font-weight: bold; font-size: 11pt; }
   #winlux-start button.link { background: $chip; padding: 6px 12px; }
   #winlux-start button.link:hover { background: $hover; }
@@ -363,6 +370,9 @@ MENU_CSS = Template("""
   menu.winlux-menu menuitem { color: $fg; padding: 8px 18px 8px 12px; border-radius: 4px; min-width: 150px; }
   menu.winlux-menu menuitem label, menu.winlux-menu menuitem image { color: $fg; -gtk-icon-shadow: none; }
   menu.winlux-menu menuitem:hover { background: $hover; }
+  /* Choix sans effet (Déplacer, #925) : grisés pour de vrai, flèche du sous-menu lisible. */
+  menu.winlux-menu menuitem:disabled label { color: $dim; opacity: 0.6; }
+  menu.winlux-menu menuitem arrow { color: $fg; min-width: 16px; min-height: 16px; }
 """)
 
 
@@ -782,6 +792,7 @@ class Start(Gtk.Application):
         elif self.file_results:self.open_file(self.file_results[0])
 
     def launch(self, app):
+        if getattr(self, "pin_dragging", False): return  # lâcher d'un glisser-déposer (#925)
         try:
             app.launch([], self.window.get_display().get_app_launch_context())
             self.state["recent"] = ([app.get_id()] + [value for value in self.state.get("recent", []) if value != app.get_id()])[:6]
@@ -797,7 +808,7 @@ class Start(Gtk.Application):
             dialog.run()
             dialog.destroy()
 
-    def app_button(self, app, grid=False, badge=False):
+    def app_button(self, app, grid=False, badge=False, pinned=False):
         button = Gtk.Button()
         if grid: button.set_size_request(80, 82)  # six colonnes tiennent dans 560 px (1366x768)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if grid else Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -825,7 +836,7 @@ class Start(Gtk.Application):
         button.add(box)
         button.set_tooltip_text(app.get_display_name())
         on_click(button, lambda: self.launch(app))
-        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app))
+        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app, pinned))
         return button
 
     def result_button(self, title, icon, tooltip, subtitle=None):
@@ -931,7 +942,10 @@ class Start(Gtk.Application):
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
-            for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
+            for index, app in enumerate(pinned):
+                button = self.app_button(app, True, pinned=True)
+                self.pin_drag(button, app)
+                grid.attach(button, index % 6, index // 6, 1, 1)
             # Clavier tactile ouvert : la place manque, les épinglés seuls (le
             # titre « Recommandations » était coupé par le bas de la liste).
             if self.keyboard_open():
@@ -1271,6 +1285,9 @@ class Start(Gtk.Application):
         for directory, folders, files in os.walk(Path.home(), followlinks=False):
             if generation != self.file_generation: return
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
+            # Raccourcis du menu Démarrer : déjà sous « Applications » (#992).
+            if "/Start Menu/Programs" in directory + "/":
+                files = [name for name in files if not name.lower().endswith((".lnk", ".url"))]
             for name in folders + files:
                 visited += 1
                 if not name.startswith(".") and found_in(query, name): matches.append(Path(directory, name))
@@ -1298,7 +1315,20 @@ class Start(Gtk.Application):
                 row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
             row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
             item.add(row)
-            item.connect("activate", lambda _, action=callback: action())
+            if isinstance(callback, list):
+                # Sous-menu (Déplacer, #925) ; une entrée sans action est grisée.
+                submenu = Gtk.Menu()
+                submenu.get_style_context().add_class("winlux-menu")
+                for label, action in callback:
+                    child = Gtk.MenuItem(label=label)
+                    child.set_sensitive(action is not None)
+                    if action is not None: child.connect("activate", lambda _, action=action: action())
+                    submenu.append(child)
+                item.set_submenu(submenu)
+            elif callback is None:
+                item.set_sensitive(False)
+            else:
+                item.connect("activate", lambda _, action=callback: action())
             menu.append(item)
         def deactivate(*_):
             self.context=None
@@ -1308,7 +1338,46 @@ class Start(Gtk.Application):
         if event: menu.popup_at_pointer(event)
         else: menu.popup_at_widget(widget, Gdk.Gravity.NORTH_EAST, Gdk.Gravity.SOUTH_EAST, None)
 
-    def app_context(self, widget, event, app):
+    def move_pin(self, identifier, target):
+        """Nouvel ordre des épingles enregistré dans start.json et affiché (#925)."""
+        pins = move_pin(self.state.get("pins", DEFAULTS), identifier, target, self.apps)
+        if pins is None: return False
+        self.state["pins"] = pins
+        self.save()
+        self.render()
+        return True
+
+    def pin_drag(self, button, app):
+        """Glisser-déposer d'une épingle sur une autre : elle prend sa place (#925)."""
+        targets = [Gtk.TargetEntry.new("application/x-winlux-pin", Gtk.TargetFlags.SAME_APP, 0)]
+        button.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, targets, Gdk.DragAction.MOVE)
+        button.drag_source_set_icon_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        button.drag_dest_set(Gtk.DestDefaults.ALL, targets, Gdk.DragAction.MOVE)
+        button.connect("drag-data-get", lambda _w, _c, data, _i, _time: data.set(data.get_target(), 8, app.get_id().encode()))
+        def received(_widget, context, _x, _y, data, _info, stamp):
+            dragged = bytes(data.get_data() or b"").decode(errors="replace")
+            shown = [pin for pin in self.state.get("pins", DEFAULTS) if pin in self.apps]
+            moved = dragged != app.get_id() and app.get_id() in shown and self.move_pin(dragged, shown.index(app.get_id()))
+            context.finish(bool(moved), False, stamp)
+        button.connect("drag-data-received", received)
+        # Pendant le glisser : épingle d'origine estompée, place visée entourée
+        # d'accent ; aucun lancement au lâcher (#925).
+        def begin(*_):
+            self.pin_dragging = app.get_id()
+            button.get_style_context().add_class("pin-dragged")
+        def end(*_):
+            button.get_style_context().remove_class("pin-dragged")
+            GLib.timeout_add(300, lambda: setattr(self, "pin_dragging", False) or False)
+        def motion(widget, *_):
+            if getattr(self, "pin_dragging", False) != app.get_id():  # pas la tuile de départ
+                widget.get_style_context().add_class("pin-target")
+            return False  # Gtk.DestDefaults.MOTION répond au glisser
+        button.connect("drag-begin", begin)
+        button.connect("drag-end", end)
+        button.connect("drag-motion", motion)
+        button.connect("drag-leave", lambda widget, *_: widget.get_style_context().remove_class("pin-target"))
+
+    def app_context(self, widget, event, app, pinned=False):
         if event.button != 3: return False
         identifier = app.get_id()
         def pin():
@@ -1338,9 +1407,17 @@ class Start(Gtk.Application):
         # « Nouvelle fenêtre »…), comme la liste de raccourcis de Windows.
         actions = [(app.get_action_name(name), lambda name=name: action(name))
                    for name in (app.list_actions() if hasattr(app, "list_actions") else [])]
-        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
-                                 (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin),
-                                 (_t("Créer un raccourci sur le bureau"), shortcut)])
+        entries = [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
+                   (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin)]
+        # Dans la grille Épinglé seulement : Déplacer au début, à gauche, à
+        # droite, à la fin (#925) ; les choix sans effet sont grisés (None).
+        if pinned and identifier in self.state.get("pins", DEFAULTS):
+            pins = self.state.get("pins", DEFAULTS)
+            labels = {"first": _t("Au début"), "left": _t("Vers la gauche"), "right": _t("Vers la droite"), "last": _t("À la fin")}
+            entries.append((_t("Déplacer"), [(labels[where], (lambda where=where: self.move_pin(identifier, where))
+                                              if move_pin(pins, identifier, where, self.apps) is not None else None)
+                                             for where in PIN_MOVES]))
+        self.menu(widget, event, entries + [(_t("Créer un raccourci sur le bureau"), shortcut)])
         return True
 
     def power(self, widget):
@@ -1459,6 +1536,26 @@ def auto_pin(state, apps):
     state["auto_pinned"] = done
     return True
 
+
+PIN_MOVES = ("first", "left", "right", "last")
+
+def move_pin(pins, identifier, target, shown):
+    """Épingles réordonnées (#925), ou None si rien ne bouge.
+
+    target : « first », « left », « right », « last » (clic droit > Déplacer)
+    ou la place voulue dans la grille (glisser-déposer), comptée parmi les
+    épingles affichées. Une épingle d'une application absente (désinstallée,
+    pas encore installée) garde sa place relative derrière les autres."""
+    visible = [pin for pin in pins if pin in shown]
+    if identifier not in visible: return None
+    index = visible.index(identifier)
+    if isinstance(target, str):
+        target = {"first": 0, "left": index - 1, "right": index + 1, "last": len(visible) - 1}.get(target, index)
+    target = max(0, min(int(target), len(visible) - 1))
+    if target == index: return None
+    visible.insert(target, visible.pop(index))
+    order = iter(visible)
+    return [next(order) if pin in shown else pin for pin in pins]
 
 def migrate_pins(pins):
     """Épingles enregistrées, anciennes épingles par défaut remplacées, sans doublon."""

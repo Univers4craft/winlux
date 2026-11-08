@@ -180,7 +180,7 @@ fn signatures(name: &str) -> Vec<&'static str> {
         "IDirect3DVertexDeclaration9" | "IDirect3DShader9" => with(&UNKNOWN, &["p", "ii"]),
         "IDirect3DQuery9" => with(&UNKNOWN, &["p", "", "", "i", "iii"]),
         "IDirect3DStateBlock9" => with(&UNKNOWN, &["p", "", ""]),
-        "IDirect3DSwapChain9" => with(
+        "IDirect3DSwapChain9" | "IDirect3DSwapChain9Ex" => with(
             &UNKNOWN,
             &["iiiii", "i", "iip", "i", "i", "p", "i", "i", "i", "ii"],
         ),
@@ -275,6 +275,26 @@ unsafe extern "win64" fn reset(this: *mut Obj, pp: usize) -> i32 {
     pp_out(pp, &v);
     hr
 }
+unsafe extern "win64" fn create_add_sc(this: *mut Obj, pp: usize, out: *mut *mut Obj) -> i32 {
+    if pp == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let mut v = pp_in(pp);
+    let hr = dev_create_add_sc(this, &mut v, out);
+    pp_out(pp, &v);
+    hr
+}
+unsafe extern "win64" fn asc_pp(this: *mut Obj, out: usize) -> i32 {
+    if out == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let mut v = PresentParams::default();
+    let hr = asc_present_params(this, &mut v);
+    if hr >= 0 {
+        pp_out(out, &v);
+    }
+    hr
+}
 unsafe extern "win64" fn reset_ex(this: *mut Obj, pp: usize, _mode: usize) -> i32 {
     reset(this, pp)
 }
@@ -364,9 +384,11 @@ fn override_for(name: &str, i: usize) -> Option<usize> {
         ("IDirect3D9", 16) => f(create_device as *const ()),
         ("IDirect3D9", 20) => f(create_device_ex as *const ()),
         ("IDirect3DDevice9", 9) => f(creation_params as *const ()),
+        ("IDirect3DDevice9", 13) => f(create_add_sc as *const ()),
         ("IDirect3DDevice9", 16) => f(reset as *const ()),
         ("IDirect3DDevice9", 132) => f(reset_ex as *const ()),
         ("IDirect3DSwapChain9", 9) => f(present_params as *const ()),
+        ("IDirect3DSwapChain9Ex", 9) => f(asc_pp as *const ()),
         ("IDirect3DSurface9", 13) => f(surf_lock as *const ()),
         ("IDirect3DTexture9", 19) => f(tex_lock as *const ()),
         ("IDirect3DCubeTexture9", 19) => f(cube_lock as *const ()),
@@ -376,7 +398,7 @@ fn override_for(name: &str, i: usize) -> Option<usize> {
 
 /// Nom d'interface d'une table win64 de ce module.
 fn name_of(t: *const usize) -> Option<&'static str> {
-    let known: [(&'static [usize], &'static str); 11] = [
+    let known: [(&'static [usize], &'static str); 12] = [
         (d3d9_vtable(), "IDirect3D9"),
         (device_vtable(), "IDirect3DDevice9"),
         (surface_vtable(), "IDirect3DSurface9"),
@@ -388,6 +410,7 @@ fn name_of(t: *const usize) -> Option<&'static str> {
         (query_vtable(), "IDirect3DQuery9"),
         (stateblock_vtable(), "IDirect3DStateBlock9"),
         (swapchain_vtable(), "IDirect3DSwapChain9"),
+        (add_swapchain_vtable(), "IDirect3DSwapChain9Ex"),
     ];
     known.iter().find(|(v, _)| v.as_ptr() == t).map(|(_, n)| *n)
 }
