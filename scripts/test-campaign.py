@@ -898,6 +898,11 @@ ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_service
    and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
    and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
    "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
+# #1168 : Alt+Espace laissé aux applications (RegisterHotKey), plus pris par openbox.
+ok('key="A-space"' not in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
+   and '"A-space"' in (SCRIPTS / "winlux-native-config.py").read_text()
+   and "#1168" in (SCRIPTS / "test-force-close.py").read_text(),
+   "openbox : Alt+Espace rendu aux applications, copies des comptes migrées (#1168)")
 # #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
 ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
