@@ -52,6 +52,11 @@ d2d1.rs	HwndProps	a-verifier
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
 d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
+d3d10.rs	Dev	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
+d3d10.rs	Mapped	interne	D3D11_MAPPED_SUBRESOURCE rendu par Direct3D 11 (disposition 64 bits) ; recopié en x86 par tex2d_map, d3d1032.c n° 10-13
+d3d10.rs	Obj	x86	objet COM : table x86 par legacy_com::vtable_sig ; d3d1032.c
+d3d10.rs	SoEntry11	interne	D3D11_SO_DECLARATION_ENTRY passé à Direct3D 11 ; lu depuis 12 octets x86 / 16 x64
+d3d10.rs	SubData	interne	D3D11_SUBRESOURCE_DATA passé à Direct3D 11 ; lu depuis 12 octets en x86, d3d1032.c n° 4-13
 d3d11.rs	Buffer	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11.rs	BufferVTable	x86	objet COM : passerelles x86 tirées des signatures (dx11_x86.rs) ; d3d1132.c
 d3d11.rs	D3D11InputElementDesc	x86	28 octets en x86, converti par dx11_x86::create_il

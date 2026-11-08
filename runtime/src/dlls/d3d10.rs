@@ -754,6 +754,10 @@ struct Dev {
     level: u32,
     flags: u32,
     filter: Mutex<(u32, u32)>,
+    /// Fenêtres et rectangles de découpe tels que donnés (D3D10_VIEWPORT de
+    /// 24 octets, D3D10_RECT de 16), rendus par RSGetViewports et
+    /// RSGetScissorRects.
+    raster: Mutex<(Vec<[u8; 24]>, Vec<[u8; 16]>)>,
 }
 
 static DEVICES: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
@@ -1054,9 +1058,24 @@ unsafe extern "win64" fn rs_set_viewports(d: *mut Dev, n: u32, vps: usize) {
         }
     }
     call!(dev(d).ctx11, 44, fn(u32, *const [f32; 6]), n, v.as_ptr());
+    dev(d).raster.lock().unwrap_or_else(|e| e.into_inner()).0 = if vps == 0 {
+        Vec::new()
+    } else {
+        (0..n as usize)
+            .map(|i| std::ptr::read_unaligned((vps + i * 24) as *const [u8; 24]))
+            .collect()
+    };
 }
 unsafe extern "win64" fn rs_set_scissors(d: *mut Dev, n: u32, rects: usize) {
+    let n = n.min(16);
     call!(dev(d).ctx11, 45, fn(u32, usize), n, rects);
+    dev(d).raster.lock().unwrap_or_else(|e| e.into_inner()).1 = if rects == 0 {
+        Vec::new()
+    } else {
+        (0..n as usize)
+            .map(|i| std::ptr::read_unaligned((rects + i * 16) as *const [u8; 16]))
+            .collect()
+    };
 }
 #[allow(clippy::too_many_arguments)]
 unsafe extern "win64" fn copy_region(
@@ -1284,38 +1303,33 @@ unsafe extern "win64" fn rs_get_state(d: *mut Dev, out: usize) {
         call!(p, 2, fn() -> u32,);
     }
 }
+/// RSGetViewports : sans tableau, rend le nombre de fenêtres en place.
 unsafe extern "win64" fn rs_get_viewports(d: *mut Dev, n: *mut u32, vps: usize) {
     if n.is_null() {
         return;
     }
-    let mut count = (*n).min(16);
-    let mut v = [[0f32; 6]; 16];
-    call!(
-        dev(d).ctx11,
-        95,
-        fn(*mut u32, *mut [f32; 6]),
-        &mut count,
-        if vps == 0 {
-            std::ptr::null_mut()
-        } else {
-            v.as_mut_ptr()
-        }
-    );
-    if vps != 0 {
-        for (i, o) in v.iter().take(count.min(*n) as usize).enumerate() {
-            let p = vps + i * 24;
-            wr32(p, o[0] as i32 as u32);
-            wr32(p + 4, o[1] as i32 as u32);
-            wr32(p + 8, o[2] as u32);
-            wr32(p + 12, o[3] as u32);
-            wr32(p + 16, o[4].to_bits());
-            wr32(p + 20, o[5].to_bits());
-        }
-    }
-    *n = count;
+    let r = dev(d).raster.lock().unwrap_or_else(|e| e.into_inner());
+    *n = read_back(&r.0, *n, vps);
 }
-unsafe extern "win64" fn rs_get_scissors(d: *mut Dev, n: usize, rects: usize) {
-    call!(dev(d).ctx11, 96, fn(usize, usize), n, rects);
+/// RSGetScissorRects : même convention.
+unsafe extern "win64" fn rs_get_scissors(d: *mut Dev, n: *mut u32, rects: usize) {
+    if n.is_null() {
+        return;
+    }
+    let r = dev(d).raster.lock().unwrap_or_else(|e| e.into_inner());
+    *n = read_back(&r.1, *n, rects);
+}
+/// Recopie au plus `room` entrées de `kept` dans `out` (cases au-delà mises
+/// à zéro), ou rend seulement leur nombre quand `out` est nul.
+unsafe fn read_back<const N: usize>(kept: &[[u8; N]], room: u32, out: usize) -> u32 {
+    if out == 0 {
+        return kept.len() as u32;
+    }
+    for i in 0..room as usize {
+        let e = kept.get(i).copied().unwrap_or([0; N]);
+        std::ptr::write_unaligned((out + i * N) as *mut [u8; N], e);
+    }
+    kept.len().min(room as usize) as u32
 }
 unsafe extern "win64" fn get_removed_reason(d: *mut Dev) -> i32 {
     call!(dev(d).dev11, 39, fn() -> i32,)
@@ -1351,6 +1365,7 @@ unsafe extern "win64" fn dev_set_private_iface(d: *mut Dev, g: usize, iface: usi
 }
 unsafe extern "win64" fn clear_state(d: *mut Dev) {
     call!(dev(d).ctx11, 110, fn(),);
+    *dev(d).raster.lock().unwrap_or_else(|e| e.into_inner()) = (Vec::new(), Vec::new());
 }
 unsafe extern "win64" fn flush(d: *mut Dev) {
     call!(dev(d).ctx11, 111, fn(),);
@@ -2001,6 +2016,7 @@ unsafe fn create_device(flags: u32, level: u32) -> Result<*mut Dev, i32> {
         level,
         flags,
         filter: Mutex::new((0, 0)),
+        raster: Mutex::new((Vec::new(), Vec::new())),
     }));
     DEVICES
         .lock()

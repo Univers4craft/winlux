@@ -112,6 +112,11 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
 
+# Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
+# structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
+# passent par scripts/test-wow32.sh.
+step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_descs_round_trip mip_chain_counts so_entry_has_the_d3d11_layout device_table_has_101_methods
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
