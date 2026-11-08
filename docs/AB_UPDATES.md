@@ -1,9 +1,58 @@
 # Architecture des mises à jour signées et système A/B
 
-> **État : conception préliminaire.** Ce document décrit l'architecture cible
-> pour les mises à jour résistantes aux coupures d'alimentation. L'implémentation
-> actuelle utilise une mise à jour transactionnelle avec retour arrière et des
-> manifestes signés (Ed25519), mais pas encore de véritable schéma A/B.
+> **État : en service (#31).** Manifestes signés en Ed25519 et deux
+> emplacements système sur la partition racine, avec une seule version
+> précédente gardée en réserve, bascule et retour automatique au démarrage.
+> Le retour par `previous.deb` reste en place pour les mises à jour installées
+> par APT sur place (voir « Repli »).
+
+## Mise en œuvre de l'A/B
+
+| Élément | Rôle |
+|---------|------|
+| `scripts/winlux-ab.py` (`/usr/bin/winlux-ab`) | `prepare` installe la mise à jour dans `/.winlux-ab/b` ; `confirm`, `rollback`, `discard`, `status` |
+| `runtime/src/abslots.rs` (`winlux --ab-boot`) | appelé par `/init` avant tout autre programme : bascule, compte les essais, retour |
+| `scripts/winlux-update-apt.py` | prépare en A/B, sinon APT sur place ; validation du bureau, échec du bureau et retour manuel passent par `winlux-ab` |
+
+**Emplacements.** Le système actif est la racine ; l'emplacement B
+(`/.winlux-ab/b`, dossier 0700 sur la même partition) contient soit la mise à
+jour préparée, soit la version précédente. Sont échangés `/usr`,
+`/var/lib/dpkg`, `/opt/winlux` et `/init`, plus les fichiers du paquet sous
+`/etc`. `/home`, les comptes, le registre, `/var/lib/winlux` et le noyau
+restent communs. Aucun repartitionnement : un PC déjà installé passe en A/B
+dès que la version qui contient `winlux-ab` est installée (cette mise à
+jour-là se fait encore sur place, par l'ancien client).
+
+**Préparation** (système en marche, jamais modifié) : `/usr` et `/opt/winlux`
+sont recopiés en liens physiques, `/var/lib/dpkg` et `/init` en vraie copie,
+puis `dpkg --root=/.winlux-ab/b --force-script-chrootless` installe le paquet
+(ses scripts respectent `DPKG_ROOT`). dpkg remplace chaque fichier par
+renommage, donc les fichiers partagés avec l'emplacement actif ne bougent
+pas. Coût disque : la taille décompressée du paquet plus `/var/lib/dpkg`,
+environ 200 Mo pour la 0.2.20 ; le système complet (6,6 Go mesurés sur un
+portable) n'est jamais recopié. Caches du bureau régénérés, puis
+`dpkg --verify`.
+
+**Bascule** (`/init`, au démarrage suivant) : `renameat2(RENAME_EXCHANGE)`
+échange chaque paire de façon atomique. Chaque échange se reconnaît au numéro
+d'inode noté à la préparation, donc une coupure de courant au milieu reprend
+au démarrage suivant. `/init` se relance ensuite (code 10). Si des paquets ont
+été installés entre la préparation et le redémarrage, la préparation est
+abandonnée (`state=stale`) et la mise à jour sera refaite.
+
+**Essai et retour.** La nouvelle version reste à l'essai jusqu'à ce que le
+bureau tienne une minute (`--confirm-boot`, puis `winlux-ab confirm`). Au 3e
+démarrage interactif sans validation, ou tout de suite si le bureau échoue,
+`/init` échange de nouveau : la réserve revient et la version quittée est
+bloquée pour la mise à jour automatique. « Revenir à la version précédente »
+dans Paramètres demande le même échange au prochain démarrage.
+
+**Repli.** Un paquet qui demande un paquet Ubuntu absent ne peut pas
+s'installer dans l'emplacement B, faute de réseau pour dpkg. Le client
+l'installe alors avec APT sur place, avec point de restauration et
+`previous.deb` comme avant.
+
+## Conception d'origine
 
 ## Objectif
 
@@ -108,7 +157,7 @@ L'outil `winlux-update` :
       sur l'API GitHub aussi. Tests : `scripts/test-update-signature.py`.
 
 Audit du 25 octobre 2026 : `scripts/test-updater.sh` couvre les transactions et
-retours arrière. Les cases A/B ci-dessous restent une conception cible.
+retours arrière ; `scripts/test-ab-update.py` couvre l'A/B.
 
 ### Mise en service de la clé
 
@@ -118,12 +167,12 @@ retours arrière. Les cases A/B ci-dessous restent une conception cible.
 3. Committer la clé publique dans `integration/native/keys/update-signing.pub`.
    À partir de là, `release.yml` échoue si le secret manque ou ne correspond pas.
 
-### À implémenter (P1)
+### A/B (P1)
 
-- [ ] Partitionnement A/B réel avec deux slots sur le disque
-- [ ] Bascule atomique dans la configuration GRUB
-- [ ] Validation automatique du slot après démarrage réussi
-- [ ] Retour arrière automatique par le chargeur si le démarrage échoue
+- [x] Deux emplacements sur la partition racine (dossiers, sans repartitionnement)
+- [x] Bascule atomique au démarrage (`renameat2` RENAME_EXCHANGE, reprise après coupure)
+- [x] Validation automatique après un démarrage réussi (bureau tenu une minute)
+- [x] Retour automatique si le démarrage échoue (3e démarrage ou bureau en échec)
 
 ### À implémenter (P2)
 

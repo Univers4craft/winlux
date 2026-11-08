@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod abslots;
 mod admin;
 mod archive;
 mod audio;
@@ -120,6 +121,10 @@ fn main() {
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
+    }
+    if exe == "--ab-boot" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(abslots::cli(&rest));
     }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();

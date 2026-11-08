@@ -54,7 +54,7 @@ if test -f "$project/integration/native/keys/update-signing.pub"; then
     mkdir -p "$stage/usr/share/winlux"
     install -m 644 "$project/integration/native/keys/update-signing.pub" "$stage/usr/share/winlux/update-signing.pub"
 fi
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-signature winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-vpn winlux-hotspot winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-parental winlux-screensaver-inhibit; do
+for name in winlux-ab winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-signature winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-vpn winlux-hotspot winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-parental winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done

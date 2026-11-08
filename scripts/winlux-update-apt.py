@@ -564,14 +564,58 @@ def rollback_offline(reason):
     print(f"Retour automatique : {failed} -> {installed_version()} ({reason})")
     return True
 
+# Mises à jour A/B (#31) : la version est installée dans l'emplacement B
+# (winlux-ab prepare) et /init bascule au démarrage ; l'ancienne version reste
+# en réserve. Sans winlux-ab, ou si le paquet demande un paquet Ubuntu absent,
+# installation APT sur place comme avant.
+AB_TOOL = os.environ.get("WINLUX_AB_TOOL", "/usr/bin/winlux-ab")
+AB_NEEDS_APT = 3
+
+def ab_state():
+    if not os.access(AB_TOOL, os.X_OK): return {}
+    output = subprocess.run([AB_TOOL, "status"], capture_output=True, text=True).stdout
+    return fields(output)
+
+def ab(*args):
+    return subprocess.run([AB_TOOL, *args], capture_output=True, text=True)
+
+def ab_prepare(package, version):
+    """Vrai si la mise à jour est prête dans l'emplacement B ; faux s'il faut APT."""
+    if not os.access(AB_TOOL, os.X_OK) or not Path("/init").is_file(): return False
+    phase("installing", -1, "Préparation de la nouvelle version à côté du système actuel")
+    result = ab("prepare", str(package), version)
+    if result.returncode == AB_NEEDS_APT:
+        print("Paquet Ubuntu nouveau requis : installation APT sur place", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or "Préparation A/B impossible")
+    return True
+
+def ab_rolled_back():
+    """/init est revenu sur la réserve : noter l'échec une seule fois."""
+    state = ab_state()
+    if state.get("state") != "rolled-back" or read(STATE / "ab-recorded") == state.get("version", ""): return
+    failed = state.get("version", "")
+    BLOCKED.write_text(failed + "\n")
+    write_fields(ROLLED_BACK, {"failed": failed, "restored": installed_version(), "reason": state.get("reason", "boot")})
+    record("rolled-back" if state.get("reason") != "manual" else "restored", installed_version(), failed)
+    (STATE / "ab-recorded").write_text(failed + "\n")
+
 def confirm_boot():
     """Le bureau a tenu : la version à l'essai devient la version de référence."""
+    if ab_state().get("state") == "trial":
+        ab("confirm")
+        print("Mise à jour validée : " + installed_version())
     if fields(read(TRIAL)).get("version") == installed_version():
         TRIAL.unlink(missing_ok=True)
         print("Mise à jour validée : " + installed_version())
 
 def session_failed():
     """Le bureau n'a pas pu s'ouvrir : retour immédiat si la version est à l'essai."""
+    if ab_state().get("state") == "trial":
+        if ab("rollback").returncode != 0: return False
+        restart()
+        return True
     if not fields(read(TRIAL)).get("version") or fields(read(TRIAL))["version"] != installed_version(): return False
     if not rollback_offline("session"): return False
     restart()
@@ -716,6 +760,7 @@ def main():
         if args == ["--boot-failed"]: return 0 if session_failed() else 1
         if args == ["--boot"]:
             step = time.monotonic()
+            ab_rolled_back()
             boot_guard()
             step = timed("Version à l'essai", step)
             restored = STATE / "apt-base-permissions-restored"
@@ -763,7 +808,12 @@ def main():
             with tempfile.TemporaryDirectory(prefix="apt-update-", dir=STATE) as temporary:
                 work = Path(temporary)
                 cache = CACHE; cache.mkdir(parents=True, exist_ok=True)
-                if args == ["--rollback"]:
+                if args == ["--rollback"] and ab_state().get("reserve") == "yes":
+                    phase("restoring", -1, "Retour à la version de réserve au prochain démarrage")
+                    result = ab("rollback")
+                    if result.returncode != 0: raise RuntimeError(result.stderr.strip())
+                    BLOCKED.write_text(installed_version() + "\n")
+                elif args == ["--rollback"]:
                     if not (cache / "previous.deb").is_file(): raise RuntimeError("Aucune sauvegarde du paquet précédent n’est disponible")
                     phase("restoring", -1, "Restauration du paquet précédent")
                     left = installed_version()
@@ -817,13 +867,15 @@ def main():
                         raise ValueError("Empreinte SHA-256 incorrecte : le paquet téléchargé a été supprimé")
                     restore_point(data["version"])
                     previous = installed_version()
-                    phase("installing", -1, "Installation du paquet Winlux avec APT ; consultez le journal pour les détails")
-                    install(package, version=data["version"])
+                    prepared = ab_prepare(package, data["version"])
+                    if not prepared:
+                        phase("installing", -1, "Installation du paquet Winlux avec APT ; consultez le journal pour les détails")
+                        install(package, version=data["version"])
                     if (cache / "installed.deb").exists(): cache_copy(cache / "installed.deb", cache / "previous.deb")
                     cache_copy(package, cache / "installed.deb")
                     package.unlink()
                     phase("verifying", -1, "Vérification des fichiers installés")
-                    if verify_installed():
+                    if not prepared and verify_installed():
                         # Une seule réparation (réinstallation) avant d'abandonner la version.
                         install(cache / "installed.deb", version=data["version"])
                         problems = verify_installed()
@@ -835,7 +887,10 @@ def main():
                             raise RuntimeError("Fichiers installés incorrects, version précédente remise en place :\n"
                                                + "\n".join(problems[:20]))
                     BLOCKED.unlink(missing_ok=True); ROLLED_BACK.unlink(missing_ok=True)
-                    write_fields(TRIAL, {"version": data["version"], "previous": previous, "boots": "0"})
+                    # En A/B, c'est /init qui compte les démarrages à l'essai.
+                    if not prepared:
+                        write_fields(TRIAL, {"version": data["version"], "previous": previous, "boots": "0"})
+                    (STATE / "ab-recorded").unlink(missing_ok=True)
                     record("installed", data["version"], previous)
                     notice("reboot", data["version"])
                 publish_run(RUN / "update-action", "reboot\n")
