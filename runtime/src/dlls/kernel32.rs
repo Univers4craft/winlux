@@ -3152,6 +3152,9 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
             None => {
                 crate::trace!("GetProcAddress: {dll}!{symbol} non disponible");
                 crate::thunks::api_trace_missing(dll, &symbol);
+                if let Some(stub) = crate::thunks::getproc_stub(dll, &symbol) {
+                    return stub;
+                }
                 crate::process::set_last_error(127);
                 0
             }

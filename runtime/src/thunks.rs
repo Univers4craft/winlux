@@ -86,6 +86,30 @@ pub fn missing_stub(dll: &str, func: &str) -> usize {
     alloc_code(&code)
 }
 
+/// Diagnostic `WINLUX_GETPROC_STUBS=1` : GetProcAddress rend, pour une
+/// fonction absente d'une DLL intégrée, le même bouchon journalisé qu'un
+/// import statique absent au lieu de NULL. Un programme empaqueté qui
+/// résout ses imports à la main et s'arrête au premier NULL (installeur
+/// Creative Cloud, #1205, #1226) liste ainsi toutes ses fonctions
+/// manquantes en une passe ; il ne s'arrête qu'en appelant l'une d'elles.
+/// Désactivé par défaut : sans la variable, GetProcAddress rend NULL.
+pub fn getproc_stub(dll: &str, func: &str) -> Option<usize> {
+    if std::env::var("WINLUX_GETPROC_STUBS").as_deref() != Ok("1") {
+        return None;
+    }
+    static STUBS: Mutex<Option<std::collections::HashMap<String, usize>>> = Mutex::new(None);
+    let label = format!("{}!{}", dll.to_ascii_lowercase(), func);
+    let mut m = STUBS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = m.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(&s) = m.get(&label) {
+        return Some(s);
+    }
+    eprintln!("winlux: GetProcAddress {label} absente : bouchon rendu (WINLUX_GETPROC_STUBS=1)");
+    let stub = missing_stub(dll, func);
+    m.insert(label, stub);
+    Some(stub)
+}
+
 struct Traced {
     label: String,
 }
