@@ -149,9 +149,7 @@ unsafe fn annotation_value(id: &[u8], prop: &Guid, out: *mut c_void) -> bool {
         })
     });
     match v {
-        Some(v) => {
-            super::oleaut32::variant_copy(out, v.as_ptr().cast()) >= 0
-        }
+        Some(v) => super::oleaut32::variant_copy(out, v.as_ptr().cast()) >= 0,
         None => false,
     }
 }
@@ -187,7 +185,11 @@ unsafe fn props(p: *const Guid, n: i32) -> Option<Vec<Guid>> {
     if n < 0 || (n > 0 && p.is_null()) {
         return None;
     }
-    Some((0..n as usize).map(|i| std::ptr::read_unaligned(p.add(i))).collect())
+    Some(
+        (0..n as usize)
+            .map(|i| std::ptr::read_unaligned(p.add(i)))
+            .collect(),
+    )
 }
 
 unsafe fn give_id(id: [u8; ID_LEN], out: *mut *mut u8, len: *mut u32) -> i32 {
@@ -543,7 +545,10 @@ mod tests {
     #[test]
     fn identites_aller_retour() {
         let id = compose(KIND_HWND, 0x1234_5678_9abc, 0xFFFF_FFFC, 7);
-        assert_eq!(decompose(&id, KIND_HWND), Some((0x1234_5678_9abc, 0xFFFF_FFFC, 7)));
+        assert_eq!(
+            decompose(&id, KIND_HWND),
+            Some((0x1234_5678_9abc, 0xFFFF_FFFC, 7))
+        );
         assert_eq!(decompose(&id, KIND_HMENU), None);
         assert_eq!(decompose(&id[..19], KIND_HWND), None);
     }
@@ -553,7 +558,10 @@ mod tests {
         unsafe {
             let name: Vec<u16> = "Valider\0".encode_utf16().collect();
             let id = hwnd_id(0x4242, 0xFFFF_FFFC, 0);
-            assert_eq!(set_hwnd_prop_str(0, 0x4242, 0xFFFF_FFFC, 0, &PROP, name.as_ptr()), S_OK);
+            assert_eq!(
+                set_hwnd_prop_str(0, 0x4242, 0xFFFF_FFFC, 0, &PROP, name.as_ptr()),
+                S_OK
+            );
             assert_eq!(annotation_count(&id), 1);
             let mut v = [0u64; 3];
             assert!(annotation_value(&id, &PROP, v.as_mut_ptr().cast()));
@@ -561,7 +569,10 @@ mod tests {
             super::super::oleaut32::variant_clear(v.as_mut_ptr().cast());
             assert_eq!(clear_hwnd_props(0, 0x4242, 0xFFFF_FFFC, 0, &PROP, 1), S_OK);
             assert_eq!(annotation_count(&id), 0);
-            assert_eq!(set_prop_value(0, std::ptr::null(), 0, &PROP, v.as_ptr().cast()), E_INVALIDARG);
+            assert_eq!(
+                set_prop_value(0, std::ptr::null(), 0, &PROP, v.as_ptr().cast()),
+                E_INVALIDARG
+            );
         }
     }
 }

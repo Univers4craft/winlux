@@ -443,7 +443,9 @@ unsafe fn variant_text(v: *const u8) -> Option<String> {
     if super::oleaut32_var::change_type(tmp.as_mut_ptr().cast(), v.cast(), 0x409, 0, VT_BSTR) < 0 {
         return None;
     }
-    let s = read_bstr(std::ptr::read_unaligned(tmp.as_ptr().add(8) as *const *const u16));
+    let s = read_bstr(std::ptr::read_unaligned(
+        tmp.as_ptr().add(8) as *const *const u16
+    ));
     super::oleaut32::variant_clear(tmp.as_mut_ptr().cast());
     Some(s)
 }
