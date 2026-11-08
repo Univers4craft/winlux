@@ -1198,6 +1198,22 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+# #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
+# vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
+msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in msxml_rs and "msxml::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IXMLDOMDOCUMENT3" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "msxml_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "msxml32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "MSXML : DOMDocument intégré, x64 et x86 (#1084)")
+# #1114 : annotations d'accessibilité (CLSID_AccPropServices) de la VCL,
+# vérifiées par accprop_suite.exe (test-mingw.sh) et accprop32.exe (test-wow32.sh).
+accprop_rs = (ROOT / "runtime/src/dlls/oleacc_props.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in accprop_rs and "oleacc_props::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IACCPROPSERVICES" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "accprop_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "accprop32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "AccPropServices : annotations d'accessibilité, x64 et x86 (#1114)")
 ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w'
    in (runtime_dlls / "win32_basics.rs").read_text()
    and "GetVolumeNameForVolumeMountPointW" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(),
