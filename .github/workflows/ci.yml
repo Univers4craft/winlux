@@ -222,6 +222,10 @@ jobs:
 
       - name: Vérifier le réseau depuis le compte (resolv.conf lisible, règle polkit posée)
         run: python3 -B scripts/test-network-perms.py
+      - name: Barre, infobulle Wi-Fi au nom du réseau (#914)
+        run: python3 -B scripts/test-tray-wifi-name.py
+      - name: Fenêtres .exe, icône trouvée pour un chemin relatif ou Windows (#915)
+        run: python3 -B scripts/test-window-icon-target.py
       - name: Vérifier Bluetooth (rfkill), OpenGL et bus d'accessibilité dans l'image
         run: python3 -B scripts/test-session-plumbing.py
       - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
