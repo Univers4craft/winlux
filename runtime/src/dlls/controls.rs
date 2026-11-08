@@ -921,10 +921,12 @@ fn paint_button(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             }
         }
         let tr = if left_text {
-            Rect { right: bx - 6, ..r }
+            Rect { right: bx - 4, ..r }
         } else {
+            // Écart de Windows entre la case et le libellé : les programmes
+            // réservent largeur du texte + case + un caractère (#801, #842).
             Rect {
-                left: bx + size + 8,
+                left: bx + size + 4,
                 ..r
             }
         };

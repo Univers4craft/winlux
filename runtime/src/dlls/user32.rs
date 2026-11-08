@@ -1226,8 +1226,12 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
         43 => 3,                              // SM_CMOUSEBUTTONS
         75 => 1,                              // SM_MOUSEWHEELPRESENT
-        90 => 96,                             // LOGPIXELSX
-        91 => 96,                             // LOGPIXELSY
+        // SM_CXMENUCHECK / SM_CYMENUCHECK : taille de la case des cases à
+        // cocher et boutons radio à 96 ppp. wxWidgets l'ajoute à la largeur
+        // du libellé ; à 0, ses libellés finissaient en « … » (#842).
+        71 | 72 => 15,
+        90 => 96, // LOGPIXELSX
+        91 => 96, // LOGPIXELSY
         _ => 0,
     }
 }
@@ -3515,6 +3519,14 @@ fn popup_decorations(style: u32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
+    /// de cases à cocher ; à 0, ils étaient tronqués.
+    #[test]
+    fn taille_des_cases_a_cocher() {
+        assert_eq!(get_system_metrics(71), 15);
+        assert_eq!(get_system_metrics(72), 15);
+    }
 
     /// #797 : lfMessageFont de NONCLIENTMETRICSW est une vraie police (Segoe
     /// UI, ni barrée ni soulignée), pas le contenu non initialisé du tampon.
