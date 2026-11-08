@@ -1404,19 +1404,16 @@ ok("CLSID_WBEM_LOCATOR" in wbem_rs and '"Win32_VideoController"' in wbem_rs
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
-# #1221 : winmm!mmioOpenW et la famille mmio* (RIFF, fichiers en mémoire).
-ok('"mmioOpenW"' in (runtime_dlls / "winmm_mmio.rs").read_text(encoding="utf-8")
-   and "winmm_mmio::exports()" in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
-   and "mmio_fichier_en_memoire" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "winmm : mmioOpenW, mmioDescend/Ascend/CreateChunk, fichiers en mémoire (#1221)")
-# #1222 : menu WS_POPUP outil non activable (Chromium) hors gestionnaire de fenêtres.
-ok("fn floating_popup(" in (runtime_dlls / "user32.rs").read_text(encoding="utf-8")
-   and "menu_dessine_par_le_programme_hors_gestionnaire" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "Menu de l'icône de Claude : ni recentré ni dans la barre des tâches (#1222)")
-# #1220 : UpdateLayeredWindow avec alpha par pixel ou couleur clé, forme X.
-ok("fn layered_shape(" in (runtime_dlls / "win32_basics.rs").read_text(encoding="utf-8")
-   and "fn set_shape(" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
-   and "fn layered_without_caption(" in (runtime_dlls / "user32.rs").read_text(encoding="utf-8")
-   and "forme_d_une_fenetre_en_couches" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "Fenêtre en couches (Flow Launcher) : sans cadre openbox, fond transparent découpé, plus de noir (#1220)")
+# ── Contrôles déposés dans scripts/campagne.d/ ──────────────────────────────
+# Un fichier par contrôle, nommé d'après l'issue (« 1234-sujet.py ») : deux PR
+# n'ajoutent plus leur contrôle à la même fin de fichier, donc ne sont plus en
+# conflit entre elles. Chaque fichier voit les noms de ce script (ok, ROOT,
+# SCRIPTS, NATIVE, runtime_dlls, Path…) ; ils passent dans l'ordre des noms.
+CAMPAGNE_D = SCRIPTS / "campagne.d"
+loaded = sorted(CAMPAGNE_D.glob("*.py"))
+before = checks
+for extra in loaded:
+    runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
+ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
+   f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
