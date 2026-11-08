@@ -311,7 +311,7 @@ extern "C" {
     static winlux_d2d_context_view_vt: [*const (); 120];
 }
 
-fn view_vt() -> *const () {
+pub(super) fn view_vt() -> *const () {
     std::ptr::addr_of!(winlux_d2d_context_view_vt) as *const ()
 }
 
