@@ -264,6 +264,15 @@ for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un 
                       ("RENAME_ALL", "Ctrl+A en renommage"),
                       ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
     ok(marker in explorer, f"Explorateur : {label}")
+# #886/#890/#891 : icônes Prisme par type, Terminal au trait, thème suivi en direct.
+for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)"),
+                      ("fn windows_program", "pastille Windows réservée aux .exe/.msi (#890)"),
+                      ("Kind::Script", "scripts shell à part des programmes (#890)")):
+    ok(marker in explorer, f"Explorateur : {label}")
+ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
+   "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
+   "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
 # ── Widgets Windows+W (#293, passage en VM) ────────────────────────────────
 widgets = (SCRIPTS / "winlux-widgets.py").read_text()
@@ -587,6 +596,29 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #662 : dictée vocale (Windows + H) et sous-titres en direct (Windows + Ctrl + L),
+# modèle local vérifié par empreinte ; un compte existant reçoit les deux raccourcis.
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    rc = home / ".config/openbox/rc.xml"
+    text = rc.read_text()
+    ok("winlux-speech dictate" in text and "winlux-speech captions" in text, "compte neuf : Windows + H et Windows + Ctrl + L")
+    tree = ET.parse(rc)
+    keyboard = tree.getroot().find(f"{OB}keyboard")
+    for binding in [b for b in keyboard if b.get("key") in ("W-h", "W-C-l")]: keyboard.remove(binding)
+    tree.write(rc)
+    (rc.parent / "winlux-raccourcis-proposes.txt").write_text("W-h\nW-C-l\n")
+    native_config(home)
+    keys = {b.get("key") for b in ET.parse(rc).getroot().iter(f"{OB}keybind")}
+    ok({"W-h", "W-C-l"} <= keys, "compte existant : la dictée et les sous-titres arrivent avec la mise à jour")
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok('"sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"' in speech
+   and "digest.hexdigest() != info[\"sha256\"]" in speech and (SCRIPTS / "test-speech.py").exists(),
+   "voix : modèle Whisper base téléchargé à la demande, empreinte SHA-256 vérifiée, rien dans l'ISO")
+pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("if not mic and not output: return" in pages and '"LC_ALL": "C"' not in speech and 'LC_ALL="C"' in speech,
+   "voix : section masquée sans micro ni sortie audio ; pactl et parec en locale C")
 # #660 : pages VPN (40) et Point d'accès sans fil mobile (41), travail root
 # par le relais, état dans la zone de notification et les Réglages rapides.
 root_relay = (SCRIPTS / "winlux-root.py").read_text()
@@ -634,4 +666,13 @@ ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in setti
    and 'self.hero("user", name, detail' in pages_source
    and (SCRIPTS / "test-settings-redesign.py").exists(),
    "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
+
+# ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
+ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre centrée : Vue des tâches et Rechercher reconnus à leur lanceur recopié (#885)")
+ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -563,6 +563,16 @@ perform() {
                         *winlux-search.desktop*) search=$number ;;
                         *winlux-taskview.desktop*) taskview=$number ;;
                     esac
+                    # La barre recopie souvent le lanceur sous un nom numéroté
+                    # (launcher-15/17941231871.desktop) : Vue des tâches et
+                    # Rechercher se reconnaissent alors à leur fichier source (#885).
+                    for launcher in "${XDG_CONFIG_HOME:-$HOME/.config}/xfce4/panel/launcher-$number"/*.desktop; do
+                        test -f "$launcher" || continue
+                        case "$(sed -n 's/^\(X-XFCE-Source\|Exec\)=//p' "$launcher" 2>/dev/null)" in
+                            *winlux-taskview*) taskview=$number ;;
+                            *winlux-search*) search=$number ;;
+                        esac
+                    done
                     case "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$number/command" 2>/dev/null)" in
                         *'winlux-tray search'*) search=$number ;;
                     esac
