@@ -984,6 +984,10 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1085 : une cible Direct2D 1.0 répond aussi à ID2D1DeviceContext à 6.
+ok("fn context_view(" in (ROOT / "runtime/src/dlls/d2d1_1.rs").read_text()
+   and "v11::context_view(this, out)" in (ROOT / "runtime/src/dlls/d2d1.rs").read_text(),
+   "Direct2D : HwndRenderTarget, DCRenderTarget et BitmapRenderTarget servent ID2D1DeviceContext6 (#1085)")
 # #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
 ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()

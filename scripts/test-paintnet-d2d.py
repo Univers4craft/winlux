@@ -67,6 +67,10 @@ ok("IID_ANNOTATION" in source("d3d11_ext.rs") and "ext::annotation_for" in sourc
 ok("DXGI_ADAPTER_DESC2_SIZE: usize = 320" in source("dxgi.rs"),
    "IDXGIAdapter4::GetDesc3 écrit 320 octets, pas 324")
 
+ok("v11::context_view(this, out)" in d2d1 and "winlux_d2d_context_view_vt" in d2d1_1
+   and ".rept 120" in d2d1_1,
+   "anciennes cibles : QueryInterface vers ID2D1DeviceContext6 rend une vue à 120 relais (#1085)")
+
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,
    "GdipImageForceValidation (Image.FromStream avec validation) ne répond plus NotImplemented")
