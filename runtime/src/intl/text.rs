@@ -123,7 +123,7 @@ pub fn to_windows(data: &[u8], ansi_cp: u32, target: Target) -> (Vec<u8>, usize)
         Target::Ansi(cp) => {
             let lost = text
                 .chars()
-                .filter(|&c| codepage::encode_char(cp, c).is_none())
+                .filter(|&c| !codepage::can_encode(cp, c))
                 .count();
             let enc = codepage::encode(cp, &text, b'?', true).unwrap_or(codepage::Encoded {
                 bytes: Vec::new(),
