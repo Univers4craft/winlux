@@ -81,6 +81,18 @@ cat "$work/com-local.txt"
 test "$com_local_status" -eq 0 || { echo "com_local_suite.exe : code $com_local_status" >&2; exit 1; }
 grep -q '^COM hors processus : tout est correct$' "$work/com-local.txt" || { echo "com_local_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# MSXML intégré (#1084) : DOMDocument 2.6 à 6.0, loadXML, parseError, XPath,
+# construction, save/load d'un fichier.
+test -f "$dir/msxml_suite.exe" || { echo "msxml_suite.exe absent" >&2; exit 1; }
+mkdir -p "$work/msxml"
+set +e
+(cd "$work/msxml" && WINLUX_GUI=headless timeout 120 "$runtime" "$dir/msxml_suite.exe") >"$work/msxml.txt" 2>&1
+msxml_status=$?
+set -e
+cat "$work/msxml.txt"
+test "$msxml_status" -eq 0 || { echo "msxml_suite.exe : code $msxml_status" >&2; exit 1; }
+grep -q '^MSXML : tout est correct$' "$work/msxml.txt" || { echo "msxml_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }

@@ -184,6 +184,8 @@ if test -f "$out/com32.exe"; then
     echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
+    check msxml32 'MSXML : tout est correct'
+    echo "msxml32 : DOMDocument MSXML en x86 (VARIANT par valeur, nœuds, XPath, save/load)"
 fi
 
 gui() {

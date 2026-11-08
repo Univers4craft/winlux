@@ -1165,4 +1165,12 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+# #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
+# vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
+msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in msxml_rs and "msxml::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IXMLDOMDOCUMENT3" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "msxml_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "msxml32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "MSXML : DOMDocument intégré, x64 et x86 (#1084)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

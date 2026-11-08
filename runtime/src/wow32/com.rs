@@ -56,6 +56,9 @@ pub(super) enum A {
     Stat,
     /// VARIANT* lu et écrit (16 octets en x86, 24 en x64).
     Var,
+    /// VARIANT passé par valeur : 16 octets sur la pile x86, adresse
+    /// d'une copie de 24 octets en x64.
+    VarIn,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -306,6 +309,254 @@ pub(super) static ICUSTOMDESTINATIONLIST: Iface = Iface {
     ],
 };
 
+// ── MSXML (#1084) : interfaces DOM, d'après msxml2.h de mingw-w64 ──
+
+use crate::dlls::msxml as mx;
+
+const fn xml_iid(g: crate::dlls::ole32::Guid) -> Guid {
+    let a = g.data1.to_le_bytes();
+    let b = g.data2.to_le_bytes();
+    let c = g.data3.to_le_bytes();
+    let d = g.data4;
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d[0], d[1], d[2], d[3], d[4], d[5], d[6],
+        d[7],
+    ]
+}
+
+/// Méthodes d'IXMLDOMNode, après IDispatch.
+static XML_NODE_METHODS: [Option<&[A]>; 36] = [
+    Some(&[OutPtr]),                                                // get_nodeName
+    Some(&[Var]),                                                   // get_nodeValue
+    Some(&[VarIn]),                                                 // put_nodeValue
+    Some(&[I]),                                                     // get_nodeType
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_parentNode
+    Some(&[Out(&IXMLDOMNODELIST)]),                                 // get_childNodes
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_firstChild
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_lastChild
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_previousSibling
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_nextSibling
+    Some(&[Out(&IXMLDOMNAMEDNODEMAP)]),                             // get_attributes
+    Some(&[In(&IXMLDOMNODE), VarIn, Out(&IXMLDOMNODE)]),            // insertBefore
+    Some(&[In(&IXMLDOMNODE), In(&IXMLDOMNODE), Out(&IXMLDOMNODE)]), // replaceChild
+    Some(&[In(&IXMLDOMNODE), Out(&IXMLDOMNODE)]),                   // removeChild
+    Some(&[In(&IXMLDOMNODE), Out(&IXMLDOMNODE)]),                   // appendChild
+    Some(&[I]),                                                     // hasChildNodes
+    Some(&[Out(&IXMLDOMDOCUMENT)]),                                 // get_ownerDocument
+    Some(&[I, Out(&IXMLDOMNODE)]),                                  // cloneNode
+    Some(&[OutPtr]),                                                // get_nodeTypeString
+    Some(&[OutPtr]),                                                // get_text
+    Some(&[I]),                                                     // put_text
+    Some(&[I]),                                                     // get_specified
+    Some(&[Out(&IXMLDOMNODE)]),                                     // get_definition
+    Some(&[Var]),                                                   // get_nodeTypedValue
+    Some(&[VarIn]),                                                 // put_nodeTypedValue
+    Some(&[Var]),                                                   // get_dataType
+    Some(&[I]),                                                     // put_dataType
+    Some(&[OutPtr]),                                                // get_xml
+    Some(&[In(&IXMLDOMNODE), OutPtr]),                              // transformNode
+    Some(&[I, Out(&IXMLDOMNODELIST)]),                              // selectNodes
+    Some(&[I, Out(&IXMLDOMNODE)]),                                  // selectSingleNode
+    Some(&[I]),                                                     // get_parsed
+    Some(&[OutPtr]),                                                // get_namespaceURI
+    Some(&[OutPtr]),                                                // get_prefix
+    Some(&[OutPtr]),                                                // get_baseName
+    Some(&[In(&IXMLDOMNODE), VarIn]),                               // transformNodeToObject
+];
+
+pub(super) static IXMLDOMNODE: Iface = Iface {
+    name: "IXMLDOMNode",
+    iid: xml_iid(mx::IID_IXMLDOMNODE),
+    parent: Some(&IDISPATCH),
+    methods: &XML_NODE_METHODS,
+};
+
+pub(super) static IXMLDOMDOCUMENT: Iface = Iface {
+    name: "IXMLDOMDocument",
+    iid: xml_iid(mx::IID_IXMLDOMDOCUMENT),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[
+        Some(&[Out(&IXMLDOMNODE)]),                        // get_doctype
+        Some(&[OutPtr]),                                   // get_implementation
+        Some(&[Out(&IXMLDOMELEMENT)]),                     // get_documentElement
+        Some(&[In(&IXMLDOMELEMENT)]),                      // putref_documentElement
+        Some(&[I, Out(&IXMLDOMELEMENT)]),                  // createElement
+        Some(&[Out(&IXMLDOMDOCUMENTFRAGMENT)]),            // createDocumentFragment
+        Some(&[I, Out(&IXMLDOMTEXT)]),                     // createTextNode
+        Some(&[I, Out(&IXMLDOMCOMMENT)]),                  // createComment
+        Some(&[I, Out(&IXMLDOMCDATASECTION)]),             // createCDATASection
+        Some(&[I, I, Out(&IXMLDOMPROCESSINGINSTRUCTION)]), // createProcessingInstruction
+        Some(&[I, Out(&IXMLDOMATTRIBUTE)]),                // createAttribute
+        Some(&[I, OutPtr]),                                // createEntityReference
+        Some(&[I, Out(&IXMLDOMNODELIST)]),                 // getElementsByTagName
+        Some(&[VarIn, I, I, Out(&IXMLDOMNODE)]),           // createNode
+        Some(&[I, Out(&IXMLDOMNODE)]),                     // nodeFromID
+        Some(&[VarIn, I]),                                 // load
+        Some(&[I]),                                        // get_readyState
+        Some(&[Out(&IXMLDOMPARSEERROR)]),                  // get_parseError
+        Some(&[OutPtr]),                                   // get_url
+        Some(&[I]),                                        // get_async
+        Some(&[I]),                                        // put_async
+        Some(&[]),                                         // abort
+        Some(&[I, I]),                                     // loadXML
+        Some(&[VarIn]),                                    // save
+        Some(&[I]),                                        // get_validateOnParse
+        Some(&[I]),                                        // put_validateOnParse
+        Some(&[I]),                                        // get_resolveExternals
+        Some(&[I]),                                        // put_resolveExternals
+        Some(&[I]),                                        // get_preserveWhiteSpace
+        Some(&[I]),                                        // put_preserveWhiteSpace
+        Some(&[VarIn]),                                    // put_onreadystatechange
+        Some(&[VarIn]),                                    // put_ondataavailable
+        Some(&[VarIn]),                                    // put_ontransformnode
+    ],
+};
+
+pub(super) static IXMLDOMDOCUMENT2: Iface = Iface {
+    name: "IXMLDOMDocument2",
+    iid: xml_iid(mx::IID_IXMLDOMDOCUMENT2),
+    parent: Some(&IXMLDOMDOCUMENT),
+    methods: &[
+        Some(&[OutPtr]),                  // get_namespaces
+        Some(&[Var]),                     // get_schemas
+        Some(&[VarIn]),                   // putref_schemas
+        Some(&[Out(&IXMLDOMPARSEERROR)]), // validate
+        Some(&[I, VarIn]),                // setProperty
+        Some(&[I, Var]),                  // getProperty
+    ],
+};
+
+pub(super) static IXMLDOMDOCUMENT3: Iface = Iface {
+    name: "IXMLDOMDocument3",
+    iid: xml_iid(mx::IID_IXMLDOMDOCUMENT3),
+    parent: Some(&IXMLDOMDOCUMENT2),
+    methods: &[
+        Some(&[In(&IXMLDOMNODE), Out(&IXMLDOMPARSEERROR)]), // validateNode
+        Some(&[In(&IXMLDOMNODE), I, Out(&IXMLDOMNODE)]),    // importNode
+    ],
+};
+
+pub(super) static IXMLDOMELEMENT: Iface = Iface {
+    name: "IXMLDOMElement",
+    iid: xml_iid(mx::IID_IXMLDOMELEMENT),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[
+        Some(&[OutPtr]),                                        // get_tagName
+        Some(&[I, Var]),                                        // getAttribute
+        Some(&[I, VarIn]),                                      // setAttribute
+        Some(&[I]),                                             // removeAttribute
+        Some(&[I, Out(&IXMLDOMATTRIBUTE)]),                     // getAttributeNode
+        Some(&[In(&IXMLDOMATTRIBUTE), Out(&IXMLDOMATTRIBUTE)]), // setAttributeNode
+        Some(&[In(&IXMLDOMATTRIBUTE), Out(&IXMLDOMATTRIBUTE)]), // removeAttributeNode
+        Some(&[I, Out(&IXMLDOMNODELIST)]),                      // getElementsByTagName
+        Some(&[]),                                              // normalize
+    ],
+};
+
+pub(super) static IXMLDOMATTRIBUTE: Iface = Iface {
+    name: "IXMLDOMAttribute",
+    iid: xml_iid(mx::IID_IXMLDOMATTRIBUTE),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[Some(&[OutPtr]), Some(&[Var]), Some(&[VarIn])],
+};
+
+pub(super) static IXMLDOMCHARACTERDATA: Iface = Iface {
+    name: "IXMLDOMCharacterData",
+    iid: xml_iid(mx::IID_IXMLDOMCHARACTERDATA),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[
+        Some(&[OutPtr]),       // get_data
+        Some(&[I]),            // put_data
+        Some(&[I]),            // get_length
+        Some(&[I, I, OutPtr]), // substringData
+        Some(&[I]),            // appendData
+        Some(&[I, I]),         // insertData
+        Some(&[I, I]),         // deleteData
+        Some(&[I, I, I]),      // replaceData
+    ],
+};
+
+pub(super) static IXMLDOMTEXT: Iface = Iface {
+    name: "IXMLDOMText",
+    iid: xml_iid(mx::IID_IXMLDOMTEXT),
+    parent: Some(&IXMLDOMCHARACTERDATA),
+    methods: &[Some(&[I, Out(&IXMLDOMTEXT)])], // splitText
+};
+
+pub(super) static IXMLDOMCOMMENT: Iface = Iface {
+    name: "IXMLDOMComment",
+    iid: xml_iid(mx::IID_IXMLDOMCOMMENT),
+    parent: Some(&IXMLDOMCHARACTERDATA),
+    methods: &[],
+};
+
+pub(super) static IXMLDOMCDATASECTION: Iface = Iface {
+    name: "IXMLDOMCDATASection",
+    iid: xml_iid(mx::IID_IXMLDOMCDATASECTION),
+    parent: Some(&IXMLDOMTEXT),
+    methods: &[],
+};
+
+pub(super) static IXMLDOMPROCESSINGINSTRUCTION: Iface = Iface {
+    name: "IXMLDOMProcessingInstruction",
+    iid: xml_iid(mx::IID_IXMLDOMPROCESSINGINSTRUCTION),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[Some(&[OutPtr]), Some(&[OutPtr]), Some(&[I])],
+};
+
+pub(super) static IXMLDOMDOCUMENTFRAGMENT: Iface = Iface {
+    name: "IXMLDOMDocumentFragment",
+    iid: xml_iid(mx::IID_IXMLDOMDOCUMENTFRAGMENT),
+    parent: Some(&IXMLDOMNODE),
+    methods: &[],
+};
+
+pub(super) static IXMLDOMNODELIST: Iface = Iface {
+    name: "IXMLDOMNodeList",
+    iid: xml_iid(mx::IID_IXMLDOMNODELIST),
+    parent: Some(&IDISPATCH),
+    methods: &[
+        Some(&[I, Out(&IXMLDOMNODE)]), // get_item
+        Some(&[I]),                    // get_length
+        Some(&[Out(&IXMLDOMNODE)]),    // nextNode
+        Some(&[]),                     // reset
+        Some(&[OutPtr]),               // get__newEnum
+    ],
+};
+
+pub(super) static IXMLDOMNAMEDNODEMAP: Iface = Iface {
+    name: "IXMLDOMNamedNodeMap",
+    iid: xml_iid(mx::IID_IXMLDOMNAMEDNODEMAP),
+    parent: Some(&IDISPATCH),
+    methods: &[
+        Some(&[I, Out(&IXMLDOMNODE)]),                // getNamedItem
+        Some(&[In(&IXMLDOMNODE), Out(&IXMLDOMNODE)]), // setNamedItem
+        Some(&[I, Out(&IXMLDOMNODE)]),                // removeNamedItem
+        Some(&[I, Out(&IXMLDOMNODE)]),                // get_item
+        Some(&[I]),                                   // get_length
+        Some(&[I, I, Out(&IXMLDOMNODE)]),             // getQualifiedItem
+        Some(&[I, I, Out(&IXMLDOMNODE)]),             // removeQualifiedItem
+        Some(&[Out(&IXMLDOMNODE)]),                   // nextNode
+        Some(&[]),                                    // reset
+        Some(&[OutPtr]),                              // get__newEnum
+    ],
+};
+
+pub(super) static IXMLDOMPARSEERROR: Iface = Iface {
+    name: "IXMLDOMParseError",
+    iid: xml_iid(mx::IID_IXMLDOMPARSEERROR),
+    parent: Some(&IDISPATCH),
+    methods: &[
+        Some(&[I]),      // get_errorCode
+        Some(&[OutPtr]), // get_url
+        Some(&[OutPtr]), // get_reason
+        Some(&[OutPtr]), // get_srcText
+        Some(&[I]),      // get_line
+        Some(&[I]),      // get_linepos
+        Some(&[I]),      // get_filepos
+    ],
+};
+
 static ALL: &[&Iface] = &[
     &IUNKNOWN,
     &ICLASSFACTORY,
@@ -324,6 +575,21 @@ static ALL: &[&Iface] = &[
     &IOBJECTARRAY,
     &IOBJECTCOLLECTION,
     &ICUSTOMDESTINATIONLIST,
+    &IXMLDOMNODE,
+    &IXMLDOMDOCUMENT,
+    &IXMLDOMDOCUMENT2,
+    &IXMLDOMDOCUMENT3,
+    &IXMLDOMELEMENT,
+    &IXMLDOMATTRIBUTE,
+    &IXMLDOMCHARACTERDATA,
+    &IXMLDOMTEXT,
+    &IXMLDOMCOMMENT,
+    &IXMLDOMCDATASECTION,
+    &IXMLDOMPROCESSINGINSTRUCTION,
+    &IXMLDOMDOCUMENTFRAGMENT,
+    &IXMLDOMNODELIST,
+    &IXMLDOMNAMEDNODEMAP,
+    &IXMLDOMPARSEERROR,
 ];
 
 fn by_iid(iid: &Guid) -> Option<&'static Iface> {
@@ -451,7 +717,11 @@ fn vtable32(iface: &'static Iface) -> u32 {
 fn slots(kinds: &[A]) -> usize {
     kinds
         .iter()
-        .map(|k| if matches!(k, Q) { 2 } else { 1 })
+        .map(|k| match k {
+            Q => 2,
+            VarIn => 4,
+            _ => 1,
+        })
         .sum()
 }
 
@@ -749,6 +1019,14 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
             }
             InQ => slots.push(to64(v, by_iid(&iid))),
             In(f) => slots.push(to64(v, Some(f))),
+            VarIn => {
+                // Le VARIANT occupe quatre cases de la pile x86.
+                temps.push([0; 10]);
+                let t = temps.last_mut().unwrap().as_mut_ptr() as *mut u8;
+                variant64(p - 4, t);
+                p += 12;
+                slots.push(t as u64);
+            }
             OutQ | Out(_) | OutPtr | Stat | Var => {
                 if v == 0 {
                     slots.push(0);
@@ -876,6 +1154,16 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                 }
                 InQ => a.push(to32_borrowed(v, by_iid(&iid), &iid)),
                 In(f) => a.push(to32_borrowed(v, Some(f), &f.iid)),
+                VarIn => {
+                    // Case basse : variant32 écrit à une adresse 32 bits.
+                    temps.push([0; 10]);
+                    let t = temps.last_mut().unwrap().as_mut_ptr();
+                    if v != 0 {
+                        variant32(v as usize as *const u8, t as usize as u32);
+                    }
+                    let x = std::slice::from_raw_parts(t as *const u32, 4);
+                    a.extend_from_slice(x);
+                }
                 OutQ | Out(_) | OutPtr | Stat | Var => {
                     if v == 0 {
                         a.push(0);
