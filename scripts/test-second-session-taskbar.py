@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory() as directory:
 # être remplacé par camille, winlux-control s'arrêtait sur « Opération en
 # cours… » avant d'agir, et la barre restait avec 13 au bout.
 control = (ROOT / "scripts/winlux-control.sh").read_text()
-ok('mine="$run/control-$(id -u)"' in control and 'log="$mine/action.log"' in control
+ok('mine="$run/control-$uid"' in control and 'log="$mine/action.log"' in control
    and 'mkdir "$mine/control.lock"' in control, "winlux-control : message, journal et verrou par compte")
 ok('control_tmp=$(fresh "$run/control.txt")' in control and 'publish "$control_tmp" "$run/control.txt"' in control,
    "relevé partagé : un compte qui ne peut pas le remplacer n'échoue pas")
