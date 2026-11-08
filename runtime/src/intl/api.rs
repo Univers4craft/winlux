@@ -381,7 +381,7 @@ pub unsafe extern "win64" fn is_text_unicode(buf: *const u8, len: i32, result: *
 // ---------------------------------------------------------------------
 
 /// LCID → locale (LOCALE_USER_DEFAULT, LOCALE_SYSTEM_DEFAULT… compris).
-fn resolve_lcid(lcid: u32) -> Option<&'static Locale> {
+pub(crate) fn resolve_lcid(lcid: u32) -> Option<&'static Locale> {
     match lcid & 0xFFFF {
         0 | 0x0400 | 0x0800 | 0x0C00 | 0x1000 => Some(locale::current()),
         0x1400 => Some(locale::ui_locale()),

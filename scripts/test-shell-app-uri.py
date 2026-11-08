@@ -45,6 +45,14 @@ ok(resolve("file:///tmp/a%00b")[0] != 0, "Octet nul refusé")
 desktop = (Path(__file__).resolve().parent.parent / "integration/native/applications/winlux-explorer.desktop").read_text()
 ok("winlux-shell-app explorer %f" in desktop, "Le lanceur de l'Explorateur passe par winlux-shell-app")
 
+# #1027 : le Bloc-notes du shell PE s'ouvre seul, avec un fichier facultatif.
+script = SCRIPT.read_text(encoding="utf-8")
+notepad = script[script.index("    notepad)"):script.index("    editor)")]
+ok("export WINLUX_SHELL_APP=notepad" in notepad and 'shell_path "$2"' in notepad
+   and "gui_demo.exe" in notepad, "winlux-shell-app notepad ouvre le Bloc-notes du shell PE (#1027)")
+wm = (SCRIPT.parent.parent / "testexe/src/shell/wm.rs").read_text(encoding="utf-8")
+ok('b"notepad"' in wm and "notepad::load_file_into_active" in wm, "WINLUX_SHELL_APP=notepad reconnu par le shell PE (#1027)")
+
 if failures:
     sys.exit(f"test-shell-app-uri : {failures} échec(s)")
-print(f"test-shell-app-uri : {len(CASES) + 5} vérifications OK")
+print(f"test-shell-app-uri : {len(CASES) + 7} vérifications OK")
