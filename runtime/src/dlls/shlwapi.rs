@@ -367,15 +367,6 @@ pub unsafe extern "win64" fn str_str_iw(haystack: *const u16, needle: *const u16
     std::ptr::null()
 }
 
-/// SHCreateStreamOnFileA (IStream sur un fichier — stub)
-pub unsafe extern "win64" fn sh_create_stream_on_file_a(
-    _path: *const u8,
-    _mode: u32,
-    _out: *mut usize,
-) -> i32 {
-    0x8000_4005u32 as i32 // E_NOTIMPL
-}
-
 /// StrCmpLogicalW : ordre de l'Explorateur, sans casse, les suites de
 /// chiffres comparées comme des nombres (« 2 » avant « 10 »).
 pub unsafe extern "win64" fn str_cmp_logical_w(s1: *const u16, s2: *const u16) -> i32 {
@@ -799,7 +790,6 @@ pub fn exports() -> crate::dlls::Exports {
         "PathSkipRootW" => fn path_skip_root_w,
         "StrCmpNIW" => fn str_cmp_niw,
         "StrStrIW" => fn str_str_iw,
-        "SHCreateStreamOnFileA" => fn sh_create_stream_on_file_a,
     };
     // SHGetValue, SHRegGetUSValue, AssocQueryString… : voir shlwapi_reg.rs.
     m.extend(super::shlwapi_reg::exports());

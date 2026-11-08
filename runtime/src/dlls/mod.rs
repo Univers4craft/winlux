@@ -161,6 +161,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod uiautomationcore;
+pub mod url_moniker;
 pub mod user32;
 pub mod user32_ext;
 pub mod user32_more;
