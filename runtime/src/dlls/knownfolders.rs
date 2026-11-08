@@ -208,7 +208,7 @@ pub fn csidl_path(csidl: i32) -> Option<String> {
     Some(path)
 }
 
-fn guid_text(p: *const u8) -> Option<String> {
+pub(crate) fn guid_text(p: *const u8) -> Option<String> {
     if p.is_null() {
         return None;
     }

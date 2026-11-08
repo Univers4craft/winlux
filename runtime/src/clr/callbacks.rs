@@ -36,6 +36,12 @@ pub fn with_interpreter<T>(interp: &mut Interpreter, f: impl FnOnce() -> T) -> T
     r
 }
 
+/// Rend `interp` joignable par les rappels natifs de ce fil ; renvoie le
+/// précédent.
+pub fn set_current(interp: *mut Interpreter) -> *mut Interpreter {
+    CURRENT.with(|c| c.replace(interp))
+}
+
 /// Délégués confiés au code natif, racines du ramasse-miettes.
 pub fn roots() -> Vec<usize> {
     SLOTS.lock().unwrap().iter().map(|s| s.delegate).collect()
@@ -240,7 +246,12 @@ fn dispatch(index: usize, raw: [usize; 8]) -> usize {
             }
         })
         .collect();
-    match interp.invoke_delegate(delegate as *mut u8, args) {
+    // Le fil a rendu le verrou global pendant l'appel natif : il le
+    // reprend le temps du rappel.
+    super::threads::gil_acquire();
+    let result = interp.invoke_delegate(delegate as *mut u8, args);
+    super::threads::gil_release();
+    match result {
         Ok(v) => v.as_i64() as usize,
         Err(e) => {
             crate::log_warn!("clr-interop", "exception dans un rappel natif : {e}");

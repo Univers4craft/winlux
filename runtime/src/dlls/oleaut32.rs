@@ -10,10 +10,8 @@ use std::sync::{Mutex, OnceLock};
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 #[allow(dead_code)]
 const E_OUTOFMEMORY: i32 = 0x8007_000eu32 as i32;
-const DISP_E_TYPEMISMATCH: i32 = 0x8002_0012u32 as i32;
 const DISP_E_BADINDEX: i32 = 0x8002_000bu32 as i32;
 
-const VT_EMPTY: u16 = 0;
 const VT_I2: u16 = 2;
 const VT_I4: u16 = 3;
 const VT_BSTR: u16 = 8;
@@ -173,91 +171,15 @@ pub unsafe extern "win64" fn variant_copy(dest: *mut c_void, src: *const c_void)
     0
 }
 
+/// VariantChangeType : toutes les conversions de base (oleaut32_var.rs),
+/// avec la langue de l'utilisateur.
 pub unsafe extern "win64" fn variant_change_type(
     dest: *mut c_void,
     src: *const c_void,
-    _flags: u16,
+    flags: u16,
     target_vt: u16,
 ) -> i32 {
-    if dest.is_null() || src.is_null() {
-        return E_INVALIDARG;
-    }
-    let src_vt = *(src as *const u16);
-    if src_vt == target_vt {
-        if !std::ptr::eq(dest, src) {
-            return variant_copy(dest, src);
-        }
-        return 0;
-    }
-
-    match (src_vt, target_vt) {
-        (VT_EMPTY, VT_BSTR) => {
-            variant_clear(dest);
-            let empty: [u16; 1] = [0];
-            let bstr = sys_alloc_string(empty.as_ptr());
-            *(dest as *mut u16) = VT_BSTR;
-            set_variant_bstr(dest, bstr);
-            0
-        }
-        (VT_I4, VT_BSTR) | (VT_I2, VT_BSTR) => {
-            let val = if src_vt == VT_I4 {
-                *((src as *const u8).add(8) as *const i32)
-            } else {
-                *((src as *const u8).add(8) as *const i16) as i32
-            };
-            let text = val.to_string();
-            let wide: Vec<u16> = text.encode_utf16().collect();
-            variant_clear(dest);
-            let bstr = sys_alloc_string_len(wide.as_ptr(), wide.len() as u32);
-            *(dest as *mut u16) = VT_BSTR;
-            set_variant_bstr(dest, bstr);
-            0
-        }
-        (VT_BSTR, VT_I4) => {
-            let bstr = variant_bstr(src) as *const u16;
-            let s = if bstr.is_null() {
-                String::new()
-            } else {
-                let len = sys_string_len(bstr) as usize;
-                String::from_utf16_lossy(std::slice::from_raw_parts(bstr, len))
-            };
-            let val: i32 = match s.trim().parse() {
-                Ok(v) => v,
-                Err(_) => return DISP_E_TYPEMISMATCH,
-            };
-            variant_clear(dest);
-            *(dest as *mut u16) = VT_I4;
-            *((dest as *mut u8).add(8) as *mut i32) = val;
-            0
-        }
-        (VT_BOOL, VT_I4) => {
-            let val = *((src as *const u8).add(8) as *const i16);
-            variant_clear(dest);
-            *(dest as *mut u16) = VT_I4;
-            *((dest as *mut u8).add(8) as *mut i32) = if val != 0 { 1 } else { 0 };
-            0
-        }
-        (VT_I4, VT_BOOL) | (VT_I2, VT_BOOL) => {
-            let val = if src_vt == VT_I4 {
-                *((src as *const u8).add(8) as *const i32)
-            } else {
-                *((src as *const u8).add(8) as *const i16) as i32
-            };
-            variant_clear(dest);
-            *(dest as *mut u16) = VT_BOOL;
-            // VARIANT_TRUE = -1 (0xFFFF), VARIANT_FALSE = 0
-            *((dest as *mut u8).add(8) as *mut i16) = if val != 0 { -1 } else { 0 };
-            0
-        }
-        (VT_UI1, VT_I4) => {
-            let val = *((src as *const u8).add(8));
-            variant_clear(dest);
-            *(dest as *mut u16) = VT_I4;
-            *((dest as *mut u8).add(8) as *mut i32) = val as i32;
-            0
-        }
-        _ => DISP_E_TYPEMISMATCH,
-    }
+    super::oleaut32_var::change_type(dest, src, 0x400, flags, target_vt)
 }
 
 // ── SafeArray ──────────────────────────────────────────────────────

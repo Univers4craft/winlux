@@ -12,7 +12,7 @@ use super::tables::TableId;
 use super::types::TypeId;
 
 /// Ce que le runtime retient d'une assembly chargée.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AsmInfo {
     /// Nom simple, en minuscules (comparaison sans casse, comme Windows).
     pub name: String,
