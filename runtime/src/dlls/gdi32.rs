@@ -189,6 +189,53 @@ pub extern "win64" fn delete_object(obj: usize) -> i32 {
     gui::delete_object(obj) as i32
 }
 
+/// Taille d'un DIBSECTION en x64 : BITMAP (32), BITMAPINFOHEADER (40),
+/// dsBitfields (12), dshSection (aligné, 8) et dsOffset (4, puis 4 de
+/// remplissage).
+const DIBSECTION_SIZE: usize = 104;
+
+/// Remplit un DIBSECTION : la hauteur de dsBmih est négative pour une DIB
+/// haut-bas, comme à sa création.
+unsafe fn write_dib_section(
+    out: *mut u8,
+    obj: usize,
+    width: usize,
+    height: usize,
+    width_bytes: usize,
+    bits_per_pixel: u16,
+    bits: usize,
+) {
+    std::ptr::write_bytes(out, 0, DIBSECTION_SIZE);
+    std::ptr::write_unaligned(
+        out.cast::<BitmapObject>(),
+        BitmapObject {
+            bm_type: 0,
+            bm_width: width as i32,
+            bm_height: height as i32,
+            bm_width_bytes: width_bytes as i32,
+            bm_planes: 1,
+            bm_bits_pixel: bits_per_pixel,
+            bm_bits: bits as *mut c_void,
+        },
+    );
+    let top_down = gui::dib_top_down(obj).unwrap_or(false);
+    let put = |off: usize, v: u32| (out.add(off) as *mut u32).write_unaligned(v);
+    put(32, 40); // biSize
+    put(36, width as u32);
+    put(
+        40,
+        if top_down {
+            (height as i32).wrapping_neg() as u32
+        } else {
+            height as u32
+        },
+    );
+    (out.add(44) as *mut u16).write_unaligned(1); // biPlanes
+    (out.add(46) as *mut u16).write_unaligned(bits_per_pixel);
+    put(48, 0); // BI_RGB
+    put(52, (width_bytes * height) as u32); // biSizeImage
+}
+
 pub unsafe extern "win64" fn get_object_a(obj: usize, size: i32, out: *mut c_void) -> i32 {
     get_object_common(obj, size, out, false)
 }
@@ -210,6 +257,17 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
             } else {
                 core::mem::size_of::<LogFontA>()
             }
+        }
+        // DIBSECTION (104 octets) quand le tampon le permet et que la bitmap
+        // en est une : wxWidgets n'utilise les pixels d'une DIB section
+        // qu'après ce test, sinon il les recopie par GetDIBits (#793).
+        gui::GdiObjectInfo::Bitmap { bits, .. }
+            if *bits != 0
+                && size >= DIBSECTION_SIZE as i32
+                && !out.is_null()
+                && !gui::is_device_dependent(obj) =>
+        {
+            DIBSECTION_SIZE
         }
         gui::GdiObjectInfo::Bitmap { .. } => core::mem::size_of::<BitmapObject>(),
         // GetObject ne décrit pas les régions (GetRgnBox s'en charge).
@@ -258,6 +316,18 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
             bits_per_pixel,
             bits,
         } => {
+            if needed == DIBSECTION_SIZE {
+                write_dib_section(
+                    out.cast::<u8>(),
+                    obj,
+                    width,
+                    height,
+                    width_bytes,
+                    bits_per_pixel,
+                    bits,
+                );
+                return needed as i32;
+            }
             std::ptr::write_unaligned(
                 out.cast::<BitmapObject>(),
                 BitmapObject {
@@ -267,7 +337,12 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
                     bm_width_bytes: width_bytes as i32,
                     bm_planes: 1,
                     bm_bits_pixel: bits_per_pixel,
-                    bm_bits: bits as *mut c_void,
+                    // Une DDB n'expose pas ses pixels (bmBits nul).
+                    bm_bits: if gui::is_device_dependent(obj) {
+                        std::ptr::null_mut()
+                    } else {
+                        bits as *mut c_void
+                    },
                 },
             );
         }
@@ -922,7 +997,11 @@ fn resolve_icon_path(request: &str) -> Option<PathBuf> {
         return Some(direct);
     }
     let icon = icon.strip_suffix(".png").unwrap_or(&icon);
+    // Le thème d'icônes de Winlux d'abord (/usr/share/icons/Winlux sur
+    // l'ISO) : sans lui, la liste d'images système retombait sur l'icône de
+    // fenêtre par défaut pour les dossiers et les fichiers (#794).
     let themes = [
+        "Winlux",
         "Mint-L",
         "Mint-Y",
         "Mint-X",

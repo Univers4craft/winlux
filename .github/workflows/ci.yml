@@ -114,6 +114,9 @@ jobs:
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
 
+      - name: Inventaire des structures à taille x86 (#232)
+        run: python3 -B scripts/test-wow32-structures.py
+
       - name: Vérifier les fonctions importées par les vrais jeux (docs/jeux/imports-jeux.tsv)
         run: python3 -B scripts/test-games-imports.py
 
