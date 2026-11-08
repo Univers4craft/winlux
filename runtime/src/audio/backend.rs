@@ -139,9 +139,8 @@ pub trait Input: Send {
     fn read(&mut self, stereo: &mut [f32]) -> bool;
 }
 
-/// Nom d'application présenté au serveur son (visible dans le mixeur par
-/// application) : le nom du .exe.
-pub fn app_name() -> String {
+/// Nom du fichier .exe principal (`application.process.binary`).
+pub fn process_binary() -> String {
     let name = crate::loader::main_module()
         .and_then(|m| {
             std::path::Path::new(&m.path)
@@ -149,9 +148,84 @@ pub fn app_name() -> String {
                 .map(|n| n.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "winlux".into());
+    clean(&name)
+}
+
+fn clean(name: &str) -> String {
     name.chars()
         .filter(|c| !c.is_control() && *c != '"' && *c != '\\')
         .collect()
+}
+
+/// Applications livrées avec Winlux (/opt/winlux/apps) : nom affiché dans le
+/// mélangeur par application, dans la langue de l'interface (fr, en, es, de).
+const OWN_APPS: &[(&str, [&str; 4])] = &[
+    (
+        "mediaplayer.exe",
+        [
+            "Lecteur multimédia",
+            "Media Player",
+            "Reproductor multimedia",
+            "Medienwiedergabe",
+        ],
+    ),
+    (
+        "voicerecorder.exe",
+        [
+            "Enregistreur vocal",
+            "Voice Recorder",
+            "Grabadora de voz",
+            "Sprachrekorder",
+        ],
+    ),
+    (
+        "snip.exe",
+        [
+            "Outil Capture",
+            "Snipping Tool",
+            "Recortes",
+            "Snipping Tool",
+        ],
+    ),
+];
+
+/// Nom lisible d'un .exe pour le serveur son : celui de l'application
+/// Winlux traduit, sinon le nom du fichier du programme invité.
+pub fn display_name(path: &str, binary: &str, lang: &str) -> String {
+    let own = path
+        .replace('\\', "/")
+        .to_ascii_lowercase()
+        .starts_with("/opt/winlux/apps/");
+    if own {
+        let column = match lang {
+            "en" => 1,
+            "es" => 2,
+            "de" => 3,
+            _ => 0,
+        };
+        if let Some((_, names)) = OWN_APPS
+            .iter()
+            .find(|(exe, _)| exe.eq_ignore_ascii_case(binary))
+        {
+            return names[column].to_string();
+        }
+    }
+    clean(binary)
+}
+
+/// Nom d'application présenté au serveur son (`application.name`, visible
+/// dans le mélangeur par application et clé de la restauration du volume) :
+/// le nom du .exe, ou le nom traduit d'une application de Winlux. Le son
+/// décodé par FFmpeg (lecteur multimédia, #1010) porte le même nom.
+pub fn app_name() -> String {
+    let path = crate::loader::main_module()
+        .map(|m| m.path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    display_name(
+        &path,
+        &process_binary(),
+        crate::intl::locale::current().lang.iso639,
+    )
 }
 
 pub fn open_output() -> Box<dyn Output> {
@@ -472,6 +546,39 @@ impl Input for Alsa {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nom_du_flux_dans_le_melangeur() {
+        // #1010 : le lecteur de Winlux est nommé dans la langue de l'interface.
+        let player = "/opt/winlux/apps/mediaplayer.exe";
+        assert_eq!(
+            display_name(player, "mediaplayer.exe", "fr"),
+            "Lecteur multimédia"
+        );
+        assert_eq!(
+            display_name(player, "mediaplayer.exe", "en"),
+            "Media Player"
+        );
+        assert_eq!(
+            display_name(player, "mediaplayer.exe", "es"),
+            "Reproductor multimedia"
+        );
+        assert_eq!(
+            display_name(player, "mediaplayer.exe", "de"),
+            "Medienwiedergabe"
+        );
+        assert_eq!(
+            display_name(player, "MediaPlayer.EXE", "xx"),
+            "Lecteur multimédia"
+        );
+        // Un .exe invité garde son propre nom, même s'il s'appelle pareil.
+        assert_eq!(
+            display_name("/home/u/Jeux/mediaplayer.exe", "mediaplayer.exe", "fr"),
+            "mediaplayer.exe"
+        );
+        assert_eq!(display_name("/home/u/vlc.exe", "vlc.exe", "fr"), "vlc.exe");
+        assert_eq!(display_name("/x/a\"b.exe", "a\"b.exe", "fr"), "ab.exe");
+    }
 
     #[test]
     fn detection_suit_les_serveurs_presents() {

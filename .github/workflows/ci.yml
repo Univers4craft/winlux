@@ -176,6 +176,12 @@ jobs:
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
+      - name: Vérifier les mises à jour signées Ed25519 (#31)
+        run: python3 -B scripts/test-update-signature.py
+
+      - name: Vérifier les mises à jour A/B (emplacement B, bascule et réserve)
+        run: python3 -B scripts/test-ab-update.py
+
       - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
         run: python3 -B scripts/test-update-page-names.py
 
@@ -231,6 +237,8 @@ jobs:
         run: python3 -B scripts/test-window-icon-target.py
       - name: Vérifier Bluetooth (rfkill), OpenGL et bus d'accessibilité dans l'image
         run: python3 -B scripts/test-session-plumbing.py
+      - name: Son du lecteur multimédia et des enregistrements nommé dans le mélangeur (#1010)
+        run: python3 -B scripts/test-audio-stream-names.py
       - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
         run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
@@ -510,6 +518,11 @@ jobs:
         run: |
           sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
           sh scripts/test-msi-actions.sh
+
+      - name: Actions personnalisées VBScript et JScript (#973)
+        run: |
+          sudo apt-get install -y -q wixl msitools || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools; }
+          sh scripts/test-msi-scripts.sh
 
       - name: Assistant d'installation au double-clic (#833)
         run: |
