@@ -40,6 +40,9 @@ DPKG = Path(ROOT + "/var/lib/dpkg")
 # composants du système (APT refuserait de toute façon de les retirer).
 SYSTEM_ROOTS = {"winlux-desktop", "winlux-kernel"}
 # Services de la session et doublons de l'Explorateur, comme le menu Démarrer.
+# Paquets de Winlux lui-même → nom affiché ; logo de la marque posé par l'image.
+WINLUX_PACKAGES = {"winlux-desktop": "Winlux", "winlux": "Winlux"}
+WINLUX_LOGO = ROOT + "/usr/share/winlux/brand/winlux-logo-64.png"
 HIDDEN_IDS = {"picom.desktop", "thunar.desktop", "org.xfce.thunar.desktop", "Thunar.desktop",
               "Thunar-folder-handler.desktop", "thunar-folder-handler.desktop", "xfce4-file-manager.desktop"}
 TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+.:~_-]{0,200}$")
@@ -513,14 +516,21 @@ def collect():
                                      (item[2].get("Name") or item[0]).casefold()))
         ident, path, fields = items[0]
         info = packages.get(package, {})
+        name = fields.get("Name") or package
+        icon, launch, also = fields.get("Icon"), str(path), items[1:]
+        if package in WINLUX_PACKAGES and not named(ident):
+            # Le paquet du système lui-même : « Winlux » et son logo, pas le nom
+            # du premier lanceur qu'il installe (« Tuyaux 3D — économiseur », #906).
+            # Rien à « ouvrir » : ses lanceurs sont tous listés dans « Comprend aussi ».
+            name, icon, launch, also = WINLUX_PACKAGES[package], WINLUX_LOGO, None, items
         try: size = int(info.get("Installed-Size", "0")) * 1024
         except ValueError: size = 0
         is_system = package in system or package.startswith("winlux")
-        apps.append({"id": "apt:" + package, "name": fields.get("Name") or package, "kind": "apt",
+        apps.append({"id": "apt:" + package, "name": name, "kind": "apt",
                      "version": upstream_version(info.get("Version", "")), "publisher": publisher_of(info.get("Maintainer")),
-                     "size": size, "date": install_date(package), "icon": fields.get("Icon"), "pe_icon": None,
-                     "location": None, "launch": str(path), "removable": not is_system, "system": is_system,
-                     "detail": package, "also": [item[2].get("Name") or item[0] for item in items[1:]]})
+                     "size": size, "date": install_date(package), "icon": icon, "pe_icon": None,
+                     "location": None, "launch": launch, "removable": not is_system, "system": is_system,
+                     "detail": package, "also": [item[2].get("Name") or item[0] for item in also]})
     for ident, path, fields in local:
         mine = path.is_relative_to(DATA)
         winlux = ident.startswith("winlux") or not mine
