@@ -294,6 +294,7 @@ unsafe fn create_window_common(
             ex_style,
             pending: Vec::new(),
             menu_bar: 0,
+            painting: false,
         },
     );
 
@@ -790,13 +791,27 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     was as i32
 }
 
+/// `UpdateWindow` : si la fenêtre a une zone invalidée, WM_PAINT lui est
+/// envoyé tout de suite, hors file, comme sous Windows ; sinon rien. Avant
+/// (#796), on invalidait toujours la fenêtre et on attendait la file : le
+/// « Refresh(); Update(); » que FileZilla fait dans le WM_PAINT de ses
+/// listes de chemins (avec un drapeau anti-réentrance) relançait alors une
+/// peinture à chaque tour, sans fin, et les minuteurs n'étaient plus servis.
 pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
-    if gui::wnd_proc_of(hwnd).is_some() {
-        gui::request_paint(hwnd);
-        1
-    } else {
-        0
+    thread_local! {
+        static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
+    if gui::wnd_proc_of(hwnd).is_none() {
+        return 0;
+    }
+    // Une peinture qui se relance elle-même sans garde ne doit pas épuiser
+    // la pile : au-delà de quelques niveaux, la file prend le relais.
+    if gui::paint_pending_here(hwnd) && DEPTH.with(|d| d.get()) < 4 {
+        DEPTH.with(|d| d.set(d.get() + 1));
+        send_message_w(hwnd, gui::WM_PAINT, 0, 0);
+        DEPTH.with(|d| d.set(d.get() - 1));
+    }
+    1
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
@@ -1126,7 +1141,7 @@ pub unsafe extern "win64" fn release_dc(hwnd: usize, hdc: usize) -> i32 {
         return 0;
     }
     gui::free_dc(hdc);
-    gui::flush_paint(hwnd);
+    gui::flush_paint_over(hwnd);
     1
 }
 
@@ -2290,13 +2305,26 @@ pub unsafe extern "win64" fn get_update_rgn(_hwnd: usize, _rgn: usize, _erase: i
     1 // SIMPLEREGION
 }
 
+/// `RedrawWindow` : RDW_VALIDATE (sans RDW_INVALIDATE) valide la fenêtre,
+/// sinon elle est invalidée comme avant ; RDW_UPDATENOW peint tout de suite.
 pub unsafe extern "win64" fn redraw_window(
     hwnd: usize,
     _rect: *const Rect,
     _rgn: usize,
-    _flags: u32,
+    flags: u32,
 ) -> i32 {
-    gui::request_paint(hwnd);
+    const RDW_INVALIDATE: u32 = 0x1;
+    const RDW_INTERNALPAINT: u32 = 0x2;
+    const RDW_VALIDATE: u32 = 0x8;
+    const RDW_UPDATENOW: u32 = 0x100;
+    if flags & RDW_VALIDATE != 0 && flags & (RDW_INVALIDATE | RDW_INTERNALPAINT) == 0 {
+        gui::validate_window(hwnd);
+    } else {
+        gui::request_paint(hwnd);
+    }
+    if flags & RDW_UPDATENOW != 0 {
+        update_window(hwnd);
+    }
     1
 }
 
@@ -2333,13 +2361,156 @@ pub unsafe extern "win64" fn map_window_points(
 // System / Misc
 // =====================================================================
 
+/// Police système des métriques de SystemParametersInfo (Segoe UI 9 pt à
+/// 96 ppp, comme Windows 10/11). Écrite en LOGFONTW (92 octets) ou LOGFONTA
+/// (60 octets) à `out`.
+unsafe fn write_system_logfont(out: *mut u8, wide: bool, weight: i32) {
+    let face = "Segoe UI";
+    if wide {
+        let mut f = [0u16; 32];
+        for (d, c) in f.iter_mut().zip(face.encode_utf16()) {
+            *d = c;
+        }
+        std::ptr::write_unaligned(
+            out.cast::<crate::dlls::gdi32::LogFontW>(),
+            crate::dlls::gdi32::LogFontW {
+                height: -12,
+                width: 0,
+                escapement: 0,
+                orientation: 0,
+                weight,
+                italic: 0,
+                underline: 0,
+                strikeout: 0,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 5, // CLEARTYPE_QUALITY
+                pitch_and_family: 0,
+                face: f,
+            },
+        );
+    } else {
+        let mut f = [0u8; 32];
+        f[..face.len()].copy_from_slice(face.as_bytes());
+        std::ptr::write_unaligned(
+            out.cast::<crate::dlls::gdi32::LogFontA>(),
+            crate::dlls::gdi32::LogFontA {
+                height: -12,
+                width: 0,
+                escapement: 0,
+                orientation: 0,
+                weight,
+                italic: 0,
+                underline: 0,
+                strikeout: 0,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 5,
+                pitch_and_family: 0,
+                face: f,
+            },
+        );
+    }
+}
+
+/// SPI_GETNONCLIENTMETRICS, SPI_GETICONTITLELOGFONT et SPI_GETICONMETRICS :
+/// structures qui contiennent des LOGFONT. Sans elles, l'appli lit une
+/// police non initialisée (wxWidgets prend lfMessageFont : texte barré,
+/// souligné, échelle démesurée, #797). Mêmes dispositions en x86 et x64
+/// (aucun pointeur dedans).
+unsafe fn system_parameters_fonts(
+    action: u32,
+    param: u32,
+    data: *mut c_void,
+    wide: bool,
+) -> Option<i32> {
+    let lf = if wide { 92usize } else { 60 };
+    let out = data.cast::<u8>();
+    match action {
+        // SPI_GETICONTITLELOGFONT : uiParam = taille du LOGFONT.
+        0x001F => {
+            if data.is_null() || (param != 0 && (param as usize) < lf) {
+                return Some(0);
+            }
+            write_system_logfont(out, wide, 400);
+            Some(1)
+        }
+        // SPI_GETNONCLIENTMETRICS : cbSize en tête (avec ou sans
+        // iPaddedBorderWidth, ajouté par Vista).
+        0x0029 => {
+            if data.is_null() {
+                return Some(0);
+            }
+            let full = 4 + 5 * 4 + lf + 2 * 4 + lf + 2 * 4 + 3 * lf;
+            let cb = *data.cast::<u32>() as usize;
+            if cb != full && cb != full + 4 {
+                crate::process::set_last_error(87);
+                return Some(0);
+            }
+            std::ptr::write_bytes(out.add(4), 0, cb - 4);
+            let ints = |o: usize, v: &[i32]| {
+                for (k, x) in v.iter().enumerate() {
+                    std::ptr::write_unaligned(out.add(o + 4 * k).cast::<i32>(), *x);
+                }
+            };
+            // Valeurs de Windows 10 à 96 ppp : iBorderWidth, iScrollWidth,
+            // iScrollHeight, iCaptionWidth, iCaptionHeight.
+            ints(4, &[1, 17, 17, 36, 23]);
+            let mut o = 24;
+            write_system_logfont(out.add(o), wide, 400); // lfCaptionFont
+            o += lf;
+            ints(o, &[22, 22]); // iSmCaptionWidth/Height
+            o += 8;
+            write_system_logfont(out.add(o), wide, 400); // lfSmCaptionFont
+            o += lf;
+            ints(o, &[19, 19]); // iMenuWidth/Height
+            o += 8;
+            for _ in 0..3 {
+                // lfMenuFont, lfStatusFont, lfMessageFont
+                write_system_logfont(out.add(o), wide, 400);
+                o += lf;
+            }
+            if cb == full + 4 {
+                ints(o, &[4]); // iPaddedBorderWidth
+            }
+            Some(1)
+        }
+        // SPI_GETICONMETRICS : cbSize, iHorzSpacing, iVertSpacing,
+        // iTitleWrap, lfFont.
+        0x002D => {
+            if data.is_null() || *data.cast::<u32>() as usize != 16 + lf {
+                return Some(0);
+            }
+            for (k, v) in [75i32, 75, 1].iter().enumerate() {
+                std::ptr::write_unaligned(out.add(4 + 4 * k).cast::<i32>(), *v);
+            }
+            write_system_logfont(out.add(16), wide, 400);
+            Some(1)
+        }
+        _ => None,
+    }
+}
+
 pub unsafe extern "win64" fn system_parameters_info_a(
     action: u32,
     param: u32,
     data: *mut c_void,
+    update: u32,
+) -> i32 {
+    if let Some(r) = system_parameters_fonts(action, param, data, false) {
+        return r;
+    }
+    system_parameters_info_common(action, param, data, update)
+}
+
+unsafe fn system_parameters_info_common(
+    action: u32,
+    _param: u32,
+    data: *mut c_void,
     _update: u32,
 ) -> i32 {
-    let _ = (action, param, data);
     let a11y = crate::dlls::a11y::current();
     match action {
         // SPI_GETHIGHCONTRAST : HIGHCONTRAST { cbSize, dwFlags, lpszDefaultScheme }.
@@ -2386,9 +2557,12 @@ pub unsafe extern "win64" fn system_parameters_info_w(
     action: u32,
     param: u32,
     data: *mut c_void,
-    _update: u32,
+    update: u32,
 ) -> i32 {
-    system_parameters_info_a(action, param, data, _update)
+    if let Some(r) = system_parameters_fonts(action, param, data, true) {
+        return r;
+    }
+    system_parameters_info_common(action, param, data, update)
 }
 
 pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut u32) -> u32 {
@@ -3341,6 +3515,86 @@ fn popup_decorations(style: u32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #797 : lfMessageFont de NONCLIENTMETRICSW est une vraie police (Segoe
+    /// UI, ni barrée ni soulignée), pas le contenu non initialisé du tampon.
+    #[test]
+    fn nonclientmetrics_donne_une_police_propre() {
+        let mut buf = vec![0xAAu8; 504];
+        buf[..4].copy_from_slice(&504u32.to_le_bytes());
+        let r = unsafe { system_parameters_info_w(0x29, 504, buf.as_mut_ptr().cast(), 0) };
+        assert_eq!(r, 1);
+        let msg = 408;
+        assert_eq!(
+            i32::from_le_bytes(buf[msg..msg + 4].try_into().unwrap()),
+            -12
+        );
+        assert_eq!(&buf[msg + 20..msg + 23], &[0, 0, 0]); // italique, souligné, barré
+        let face: Vec<u16> = buf[msg + 28..msg + 44]
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(String::from_utf16_lossy(&face), "Segoe UI");
+        assert_eq!(i32::from_le_bytes(buf[500..504].try_into().unwrap()), 4);
+        // Version A : 344 octets, lfMessageFont à 280.
+        let mut a = vec![0xAAu8; 344];
+        a[..4].copy_from_slice(&344u32.to_le_bytes());
+        assert_eq!(
+            unsafe { system_parameters_info_a(0x29, 344, a.as_mut_ptr().cast(), 0) },
+            1
+        );
+        assert_eq!(&a[280 + 28..280 + 36], b"Segoe UI");
+        assert_eq!(&a[280 + 20..280 + 23], &[0, 0, 0]);
+    }
+
+    /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
+    /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
+    #[test]
+    fn nonclientmetrics_et_police_des_icones_remplies() {
+        unsafe {
+            let mut w = vec![0u8; 504];
+            w[..4].copy_from_slice(&504u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 504, w.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 92 + 8 + 92 + 8 + 92 + 92;
+            assert_eq!(
+                i32::from_le_bytes(w[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(
+                u16::from_le_bytes([w[lf_message + 28], w[lf_message + 29]]),
+                b'S' as u16
+            );
+            assert_eq!(i32::from_le_bytes(w[20..24].try_into().unwrap()), 23);
+            let mut a = vec![0u8; 340];
+            a[..4].copy_from_slice(&340u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_a(0x29, 340, a.as_mut_ptr().cast(), 0),
+                1
+            );
+            let lf_message = 24 + 60 + 8 + 60 + 8 + 60 + 60;
+            assert_eq!(
+                i32::from_le_bytes(a[lf_message..lf_message + 4].try_into().unwrap()),
+                -12
+            );
+            assert_eq!(a[lf_message + 28], b'S');
+            // Taille inconnue : refusée.
+            let mut bad = vec![0u8; 64];
+            bad[..4].copy_from_slice(&64u32.to_le_bytes());
+            assert_eq!(
+                system_parameters_info_w(0x29, 64, bad.as_mut_ptr().cast(), 0),
+                0
+            );
+            let mut lf = [0u8; 92];
+            assert_eq!(
+                system_parameters_info_w(0x1F, 92, lf.as_mut_ptr().cast(), 0),
+                1
+            );
+            assert_eq!(i32::from_le_bytes(lf[..4].try_into().unwrap()), -12);
+        }
+    }
 
     /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de
     /// wParam 0, pas le wParam d'un message précédent (code de sortie au

@@ -14,6 +14,10 @@ mod wm;
 #[no_mangle]
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
+        let line = core::ffi::CStr::from_ptr(GetCommandLineA()).to_bytes();
+        if line.windows(10).any(|w| w == b"--selftest") {
+            ExitProcess(if calc::selftest() { 0 } else { 1 });
+        }
         let class = WNDCLASSA {
             style: 0,
             lpfnWndProc: Some(wndproc),

@@ -3334,6 +3334,13 @@ pub(crate) fn lookup_global_memory(handle: usize) -> Option<Arc<Mutex<GlobalMemo
         .get(&handle)
         .cloned()
 }
+/// Handle d'un bloc GMEM_MOVEABLE à partir du pointeur que rend GlobalLock.
+pub(crate) fn global_handle_of_pointer(ptr: usize) -> Option<usize> {
+    lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())))
+        .iter()
+        .find(|(_, m)| lock(m).bytes.as_ptr() as usize == ptr)
+        .map(|(h, _)| *h)
+}
 pub(crate) fn free_global_memory(handle: usize) -> bool {
     lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)

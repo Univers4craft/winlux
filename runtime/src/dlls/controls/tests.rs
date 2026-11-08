@@ -1224,3 +1224,96 @@ fn tabulations_des_statiques_deviennent_des_espaces() {
     );
     assert_eq!(expand_tabs("sans"), "sans");
 }
+
+/// #795 : un RichEdit (RICHEDIT50W) se crée, répond aux messages RichEdit
+/// et ne défile pas au-delà de la dernière page (journal de FileZilla).
+#[test]
+fn richedit_journal_qui_defile_jusqu_a_la_derniere_page() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    // ES_MULTILINE | ES_READONLY | WS_VSCROLL, 5 lignes de haut environ.
+    let e = child(
+        p,
+        "RICHEDIT50W",
+        "",
+        0x4 | 0x800 | 0x0020_0000,
+        11,
+        (10, 10, 300, 90),
+    );
+    assert_eq!(kind_of(e), Some(Kind::Edit));
+    for i in 0..30 {
+        let n = title(e).chars().count();
+        sendw(e, 0x00B1, n, n as isize); // fin
+        let line = w(&format!("Status:\tligne {i}\n"));
+        sendw(e, 0x00C2, 0, line.as_ptr() as isize);
+    }
+    // EM_GETTEXTLENGTHEX (GETTEXTLENGTHEX par défaut).
+    let gtl = [0u32, 1200];
+    let len = sendw(e, 0x045F, gtl.as_ptr() as usize, gtl.as_ptr() as isize);
+    assert_eq!(len as usize, title(e).encode_utf16().count());
+    // EM_EXSETSEL / EM_EXGETSEL.
+    let range = [3i32, 9];
+    sendw(e, 0x0437, 0, range.as_ptr() as isize);
+    let mut got = [0i32; 2];
+    sendw(e, 0x0434, 0, got.as_mut_ptr() as isize);
+    assert_eq!(got, [3, 9]);
+    // EM_GETTEXTRANGE.
+    let mut buf = [0u16; 16];
+    #[repr(C)]
+    struct TextRange {
+        min: i32,
+        max: i32,
+        text: *mut u16,
+    }
+    let tr = TextRange {
+        min: 0,
+        max: 6,
+        text: buf.as_mut_ptr(),
+    };
+    let n = sendw(e, 0x044B, 0, &tr as *const TextRange as isize);
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Status");
+    // EM_SETEVENTMASK renvoie l'ancien masque.
+    assert_eq!(sendw(e, 0x0445, 0, 0x1), 0);
+    assert_eq!(sendw(e, 0x043B, 0, 0), 1);
+    // ShowPosition de wxWidgets : EM_LINESCROLL jusqu'à la dernière ligne.
+    let last = sendw(e, 0x00C9, title(e).chars().count(), 0);
+    let first = sendw(e, 0x00CE, 0, 0);
+    sendw(e, 0x00B6, 0, last - first);
+    let top = sendw(e, 0x00CE, 0, 0);
+    assert!(
+        top > 0 && top < last,
+        "dernière page pleine, pas une ligne seule : {top}/{last}"
+    );
+    // L'EDIT ordinaire garde son comportement (dernière ligne en haut).
+    let plain = child(p, "EDIT", "", 0x4 | 0x0020_0000, 12, (10, 110, 300, 90));
+    let t = w("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+    unsafe { user32::set_window_text_w(plain, t.as_ptr()) };
+    sendw(plain, 0x00B6, 0, 100);
+    assert_eq!(sendw(plain, 0x00CE, 0, 0), 9);
+    unsafe {
+        user32::destroy_window(e);
+        user32::destroy_window(plain);
+        user32::destroy_window(p);
+    }
+}
+
+/// #802 : Ctrl+A dans un champ sélectionne tout ; la frappe suivante remplace.
+#[test]
+fn ctrl_a_selectionne_tout_le_champ() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "EDIT", "22", WS_BORDER | 0x80, 13, (10, 10, 120, 24));
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYDOWN, 0x11, 0));
+    sendw(e, gui::WM_KEYDOWN, 0x41, 0);
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYUP, 0x11, 0));
+    let r = sendw(e, 0x00B0, 0, 0);
+    assert_eq!((r & 0xFFFF, r >> 16), (0, 2));
+    for ch in "2222".chars() {
+        sendw(e, WM_CHAR, ch as usize, 0);
+    }
+    assert_eq!(text_of(e), "2222");
+    unsafe {
+        user32::destroy_window(e);
+        user32::destroy_window(p);
+    }
+}

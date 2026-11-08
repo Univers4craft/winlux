@@ -200,7 +200,9 @@ cp "$root"/assets/brand/winlux-logo*.svg "$root"/assets/brand/winlux-logo-*.png 
 cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpapers/"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
-# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
+# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell et
+# l'écran de verrouillage. Seul un fond maison Prisme (render-brand.py) est
+# livré : l'ancien « Fond ecran.png » évoquait le logo Windows (#590).
 wallpaper_src="$root/assets/wallpapers/winlux-prisme-aurore.png"
 if test -f "$wallpaper_src"; then
     if command -v convert >/dev/null 2>&1; then
@@ -225,7 +227,7 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"

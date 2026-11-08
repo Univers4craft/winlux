@@ -51,6 +51,31 @@ save() {
     mv "$tmp" "$file"
 }
 have() { command -v "$1" >/dev/null 2>&1; }
+# Relance de la barre des tâches (xfce4-panel -r). Le panneau relancé
+# abandonne (« There is already a running instance ») s'il trouve encore
+# l'ancien sur le bus de session : sur une machine chargée, la barre
+# disparaissait jusqu'à la session suivante (#848). On attend qu'un nouveau
+# panneau tienne une seconde, sinon on en lance un.
+restart_panel() {
+    uid=$(id -u)
+    old=" $(pgrep -u "$uid" -x xfce4-panel | tr '\n' ' ') "
+    xfce4-panel -r >/dev/null 2>&1 || true
+    last= stable=0
+    for attempt in $(seq 1 50); do
+        sleep 0.2
+        alive=
+        for pid in $(pgrep -u "$uid" -x xfce4-panel); do
+            case "$old" in *" $pid "*) continue ;; esac
+            case "$(ps -o stat= -p "$pid" 2>/dev/null)" in Z*|'') continue ;; esac
+            alive=$pid
+        done
+        if test -n "$alive" && test "$alive" = "$last"; then stable=$((stable + 1)); else stable=0; fi
+        last=$alive
+        # Toujours là une seconde après : il a passé le contrôle d'instance.
+        test "$stable" -ge 5 && return 0
+    done
+    setsid -f xfce4-panel --disable-wm-check </dev/null >/dev/null 2>&1 || true
+}
 trust_desktop() {
     chmod 755 "$1" || return
     if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
@@ -566,7 +591,7 @@ perform() {
                     # Démarrer au quart de l'écran (#651). Relance dès que l'ordre
                     # change ; à l'ouverture de session, il est déjà en place.
                     if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
-                        xfce4-panel -r >/dev/null 2>&1 || true
+                        restart_panel
                     fi
                 fi
                 expand=false; test "$alignment" != center || expand=true

@@ -301,6 +301,9 @@ pub struct Window {
     pub paint_queued: bool,
     /// Commandes GDI accumulées depuis le dernier `EndPaint`.
     pub pending: Vec<DrawCmd>,
+    /// Entre `BeginPaint` et `EndPaint` : les dessins faits par un autre DC
+    /// (`GetDC`) attendent `EndPaint` pour partir avec la peinture complète.
+    pub painting: bool,
     /// Hauteur de la barre de menus (0 sans menu) : elle est au-dessus de
     /// la zone client, dans le rectangle de la fenêtre.
     pub menu_bar: i32,
@@ -1024,6 +1027,228 @@ pub fn create_dc(hwnd: usize) -> usize {
 /// Retire un DC (`ReleaseDC`, fin de `BeginPaint`).
 pub fn free_dc(hdc: usize) {
     lock(dcs()).remove(&hdc);
+    lock(clips()).remove(&hdc);
+}
+
+// ---------- Découpage (clipping) des DC ----------
+
+/// Zone de découpage de chaque DC qui en a une : une liste de rectangles
+/// disjoints, en coordonnées logiques du DC. Absent = pas de découpage
+/// (toute la surface). `IntersectClipRect`, `ExcludeClipRect`,
+/// `SelectClipRgn` et `ETO_CLIPPED` la remplissent ; `record` l'applique.
+fn clips() -> &'static Mutex<HashMap<usize, Vec<Rect>>> {
+    static C: OnceLock<Mutex<HashMap<usize, Vec<Rect>>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Surface « illimitée » d'un DC sans découpage.
+const CLIP_ALL: Rect = Rect {
+    left: -0x4000_0000,
+    top: -0x4000_0000,
+    right: 0x4000_0000,
+    bottom: 0x4000_0000,
+};
+
+pub fn intersect_rects(a: &Rect, b: &Rect) -> Option<Rect> {
+    let r = Rect {
+        left: a.left.max(b.left),
+        top: a.top.max(b.top),
+        right: a.right.min(b.right),
+        bottom: a.bottom.min(b.bottom),
+    };
+    (r.left < r.right && r.top < r.bottom).then_some(r)
+}
+
+/// `a` privé de `b` : au plus quatre rectangles disjoints.
+pub fn subtract_rect(a: &Rect, b: &Rect) -> Vec<Rect> {
+    let Some(i) = intersect_rects(a, b) else {
+        return vec![*a];
+    };
+    let mut out = Vec::new();
+    let mut push = |r: Rect| {
+        if r.left < r.right && r.top < r.bottom {
+            out.push(r);
+        }
+    };
+    push(Rect {
+        bottom: i.top,
+        ..*a
+    });
+    push(Rect {
+        top: i.bottom,
+        ..*a
+    });
+    push(Rect {
+        top: i.top,
+        bottom: i.bottom,
+        right: i.left,
+        ..*a
+    });
+    push(Rect {
+        top: i.top,
+        bottom: i.bottom,
+        left: i.right,
+        ..*a
+    });
+    out
+}
+
+/// Code de complexité Win32 d'une zone : NULLREGION, SIMPLEREGION ou
+/// COMPLEXREGION.
+fn clip_complexity(rects: &[Rect]) -> i32 {
+    match rects.len() {
+        0 => 1,
+        1 => 2,
+        _ => 3,
+    }
+}
+
+/// Zone de découpage actuelle du DC (`None` : aucune).
+pub fn dc_clip(hdc: usize) -> Option<Vec<Rect>> {
+    lock(clips()).get(&hdc).cloned()
+}
+
+/// Remplace la zone de découpage (`None` l'enlève) ; renvoie sa complexité.
+pub fn set_dc_clip(hdc: usize, rects: Option<Vec<Rect>>) -> i32 {
+    let mut map = lock(clips());
+    match rects {
+        Some(r) => {
+            let code = clip_complexity(&r);
+            map.insert(hdc, r);
+            code
+        }
+        None => {
+            map.remove(&hdc);
+            2
+        }
+    }
+}
+
+/// `IntersectClipRect`.
+pub fn intersect_dc_clip(hdc: usize, r: Rect) -> i32 {
+    let current = dc_clip(hdc).unwrap_or_else(|| vec![CLIP_ALL]);
+    let next: Vec<Rect> = current
+        .iter()
+        .filter_map(|c| intersect_rects(c, &r))
+        .collect();
+    set_dc_clip(hdc, Some(next))
+}
+
+/// `ExcludeClipRect`.
+pub fn exclude_dc_clip(hdc: usize, r: Rect) -> i32 {
+    let current = dc_clip(hdc).unwrap_or_else(|| vec![CLIP_ALL]);
+    let next: Vec<Rect> = current.iter().flat_map(|c| subtract_rect(c, &r)).collect();
+    set_dc_clip(hdc, Some(next))
+}
+
+/// Boîte englobante de la zone de découpage (`GetClipBox`).
+pub fn dc_clip_box(hdc: usize) -> Option<Rect> {
+    let rects = dc_clip(hdc)?;
+    let mut it = rects.iter();
+    let first = *it.next()?;
+    Some(it.fold(first, |a, r| Rect {
+        left: a.left.min(r.left),
+        top: a.top.min(r.top),
+        right: a.right.max(r.right),
+        bottom: a.bottom.max(r.bottom),
+    }))
+}
+
+/// Les quatre bandes d'un cadre, pour les découper comme des remplissages.
+fn frame_bands(rect: &Rect, width: i32) -> [Rect; 4] {
+    let w = width.max(1);
+    [
+        Rect {
+            bottom: (rect.top + w).min(rect.bottom),
+            ..*rect
+        },
+        Rect {
+            top: (rect.bottom - w).max(rect.top),
+            ..*rect
+        },
+        Rect {
+            top: rect.top + w,
+            bottom: rect.bottom - w,
+            right: (rect.left + w).min(rect.right),
+            ..*rect
+        },
+        Rect {
+            top: rect.top + w,
+            bottom: rect.bottom - w,
+            left: (rect.right - w).max(rect.left),
+            ..*rect
+        },
+    ]
+}
+
+/// Boîte approximative d'une commande, pour écarter ce qui tombe hors zone.
+fn cmd_bounds(cmd: &DrawCmd) -> Option<Rect> {
+    Some(match cmd {
+        DrawCmd::FillRect { rect, .. }
+        | DrawCmd::FrameRect { rect, .. }
+        | DrawCmd::Ellipse { rect, .. }
+        | DrawCmd::PatternRect { rect, .. }
+        | DrawCmd::Bitmap { rect, .. }
+        | DrawCmd::RoundRect { rect, .. } => *rect,
+        DrawCmd::Blit { destination, .. } => *destination,
+        DrawCmd::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            width,
+            ..
+        } => {
+            let w = (*width as i32).max(1);
+            Rect {
+                left: (*x1).min(*x2) - w,
+                top: (*y1).min(*y2) - w,
+                right: (*x1).max(*x2) + w + 1,
+                bottom: (*y1).max(*y2) + w + 1,
+            }
+        }
+        DrawCmd::Text {
+            x, y, text, font, ..
+        } => {
+            let (w, h) = measure_text(font, text);
+            Rect::from_size(*x, *y, w.max(1), h.max(1))
+        }
+    })
+}
+
+/// Applique une zone de découpage à une commande : les remplissages et
+/// cadres sont coupés exactement, le reste est gardé s'il touche la zone et
+/// écarté sinon (approximation suffisante pour le texte des terminaux et
+/// les bordures peintes autour d'eux, comme PuTTY).
+pub fn clip_cmd(cmd: DrawCmd, clip: &[Rect]) -> Vec<DrawCmd> {
+    match cmd {
+        DrawCmd::FillRect { rect, color } => clip
+            .iter()
+            .filter_map(|c| intersect_rects(c, &rect))
+            .map(|rect| DrawCmd::FillRect { rect, color })
+            .collect(),
+        DrawCmd::PatternRect { rect, color, rop } => clip
+            .iter()
+            .filter_map(|c| intersect_rects(c, &rect))
+            .map(|rect| DrawCmd::PatternRect { rect, color, rop })
+            .collect(),
+        DrawCmd::FrameRect { rect, color, width } => {
+            // Entièrement visible : le cadre reste un cadre.
+            if clip.iter().any(|c| intersect_rects(c, &rect) == Some(rect)) {
+                return vec![DrawCmd::FrameRect { rect, color, width }];
+            }
+            frame_bands(&rect, width as i32)
+                .iter()
+                .filter(|b| b.left < b.right && b.top < b.bottom)
+                .flat_map(|b| clip.iter().filter_map(move |c| intersect_rects(c, b)))
+                .map(|rect| DrawCmd::FillRect { rect, color })
+                .collect()
+        }
+        other => match cmd_bounds(&other) {
+            Some(b) if !clip.iter().any(|c| intersect_rects(c, &b).is_some()) => Vec::new(),
+            _ => vec![other],
+        },
+    }
 }
 
 /// Fenêtre cible d'un HDC, `None` si l'invalide.
@@ -1482,13 +1707,51 @@ pub fn bitmap_pixels(handle: usize) -> Option<(usize, usize, Vec<u32>, bool)> {
     Some((w, h, out, alpha))
 }
 
-/// Crée une DIB section 32 bits haut-bas à partir de pixels COLORREF dont
+/// Bitmaps que Winlux garde en mémoire comme des DIB mais présente comme
+/// des bitmaps dépendantes du périphérique (DDB) : celles de GetIconInfo,
+/// comme sous Windows. wxWidgets en tire une DIB à lui puis supprime
+/// l'originale ; s'il la voyait comme une DIB section, il supprimait sa
+/// propre copie (#793).
+fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+/// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
+pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
+    let h = bitmap_from_pixels(width, height, pixels)?;
+    lock(device_dependent()).insert(h);
+    Some(h)
+}
+
+/// Vrai pour une bitmap présentée comme DDB (voir `ddb_from_pixels`).
+pub fn is_device_dependent(handle: usize) -> bool {
+    lock(device_dependent()).contains(&handle)
+}
+
+/// Sens d'une DIB section : `Some(true)` haut-bas, `Some(false)` bas-haut,
+/// `None` pour une bitmap qui n'est pas une DIB section.
+pub fn dib_top_down(handle: usize) -> Option<bool> {
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Bitmap {
+            dib_bits: Some(_),
+            top_down,
+            ..
+        }) => Some(*top_down),
+        _ => None,
+    }
+}
+
+/// Crée une DIB section 32 bits bas-haut à partir de pixels COLORREF dont
 /// l'octet haut est l'alpha.
 pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     if pixels.len() < width * height {
         return None;
     }
-    let (handle, _) = create_dib_section(width as i32, height as i32, 32, true)?;
+    // Bas-haut, comme les DIB que Windows rend pour une icône : wxWidgets
+    // refuse de convertir une DIB haut-bas (image vide, puis écriture à
+    // l'adresse -1 dans wxImageList::Add, #793).
+    let (handle, _) = create_dib_section(width as i32, height as i32, 32, false)?;
     let mut objects = lock(objects());
     if let Some(GdiObject::Bitmap {
         pixels: store,
@@ -1497,10 +1760,12 @@ pub fn bitmap_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option
     }) = objects.get_mut(&handle)
     {
         for (i, &c) in pixels[..width * height].iter().enumerate() {
-            bytes[i * 4] = (c >> 16) as u8;
-            bytes[i * 4 + 1] = (c >> 8) as u8;
-            bytes[i * 4 + 2] = c as u8;
-            bytes[i * 4 + 3] = (c >> 24) as u8;
+            let (x, y) = (i % width, i / width);
+            let o = ((height - 1 - y) * width + x) * 4;
+            bytes[o] = (c >> 16) as u8;
+            bytes[o + 1] = (c >> 8) as u8;
+            bytes[o + 2] = c as u8;
+            bytes[o + 3] = (c >> 24) as u8;
             store[i] = c & 0x00FF_FFFF;
         }
     }
@@ -1651,7 +1916,10 @@ pub fn delete_object(obj: usize) -> bool {
     let mut map = lock(objects());
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
-        Some(_) => map.remove(&obj).is_some(),
+        Some(_) => {
+            lock(device_dependent()).remove(&obj);
+            map.remove(&obj).is_some()
+        }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
     }
 }
@@ -1703,13 +1971,24 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
         Some(d) => (d.hwnd, d.bitmap),
         None => return false,
     };
+    let cmds = match dc_clip(hdc) {
+        Some(clip) => clip_cmd(cmd, &clip),
+        None => vec![cmd],
+    };
     if target == 0 {
-        return bitmap != 0 && draw_to_bitmap(bitmap, &cmd);
+        if bitmap == 0 {
+            return false;
+        }
+        let mut ok = true;
+        for cmd in &cmds {
+            ok &= draw_to_bitmap(bitmap, cmd);
+        }
+        return ok;
     }
     let mut map = lock(windows());
     match map.get_mut(&target) {
         Some(w) => {
-            w.pending.push(cmd);
+            w.pending.extend(cmds);
             true
         }
         None => false,
@@ -2174,6 +2453,11 @@ pub trait GuiBackend: Send {
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
     /// ignore le rendu.
     fn draw(&mut self, _hwnd: usize, _cmds: &[DrawCmd]) {}
+    /// Pose des commandes par-dessus le contenu actuel de la fenêtre (dessin
+    /// hors `WM_PAINT`) ; par défaut, comme `draw`.
+    fn draw_over(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        self.draw(hwnd, cmds)
+    }
     /// Attend des événements hôte pendant `timeout_ms`; renvoie `true` si le
     /// backend peut en produire (X11) et `false` s'il est headless, auquel cas
     /// une boucle `GetMessage` vide doit se terminer.
@@ -2479,11 +2763,15 @@ pub fn request_paint(hwnd: usize) {
                 lparam: 0,
                 time: 0,
                 pt: Point::default(),
-                l_private: 0,
+                l_private: SYSTEM_PAINT,
             },
         );
     }
 }
+
+/// Marque des WM_PAINT mis en file par Winlux lui-même (et non postés par
+/// l'appli) : seuls ceux-là sont abandonnés une fois la fenêtre peinte.
+const SYSTEM_PAINT: u32 = 0x5750;
 
 pub fn destroy_window(hwnd: usize) -> bool {
     // Capture du wndproc et du parent avant retrait de la table.
@@ -2830,6 +3118,7 @@ pub fn begin_paint(hwnd: usize) -> Option<(usize, Rect)> {
         let w = map.get_mut(&hwnd)?;
         w.needs_paint = false;
         w.paint_queued = false;
+        w.painting = true;
         (w.client_rect(), w.background)
     };
     let hdc = create_dc(hwnd);
@@ -2895,22 +3184,59 @@ fn has_control_children(hwnd: usize) -> bool {
 }
 
 /// Clôt le cycle : libère le DC et rejoue les commandes GDI chez le backend.
-pub fn end_paint(_hwnd: usize, hdc: usize) -> bool {
+pub fn end_paint(hwnd: usize, hdc: usize) -> bool {
     if hdc != 0 {
         free_dc(hdc);
     }
-    flush_paint(_hwnd);
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        w.painting = false;
+    }
+    flush_paint(hwnd);
     true
+}
+
+/// Fin d'un dessin fait hors `WM_PAINT` (`GetDC` … `ReleaseDC`) : sous
+/// Windows, ces pixels s'ajoutent à ce que la fenêtre montre déjà. Les
+/// commandes sont donc posées par-dessus le contenu actuel, sans repeindre
+/// le fond ni effacer le reste (le terminal de PuTTY ne redessine que les
+/// lignes qui changent). Pendant un `BeginPaint`, elles attendent `EndPaint`.
+pub fn flush_paint_over(hwnd: usize) {
+    let cmds = {
+        let mut map = lock(windows());
+        let Some(w) = map.get_mut(&hwnd) else {
+            return;
+        };
+        if w.painting {
+            return;
+        }
+        std::mem::take(&mut w.pending)
+    };
+    if cmds.is_empty() {
+        return;
+    }
+    with_backend(|b| b.draw_over(hwnd, &cmds));
 }
 
 // ---------- File : prise / dépôt ----------
 
 /// Retire et renvoie le premier message correspondant au filtre.
 pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
-    let taken = {
-        let mut items = lock(&q.items);
-        let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
-        items.remove(idx)?
+    let taken = loop {
+        let m = {
+            let mut items = lock(&q.items);
+            let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+            items.remove(idx)?
+        };
+        // Un WM_PAINT dont la fenêtre a déjà été peinte entre-temps (BeginPaint
+        // via UpdateWindow, ValidateRect) n'existe plus sous Windows : le
+        // délivrer relançait une peinture de trop (#796).
+        if m.message == WM_PAINT
+            && m.l_private == SYSTEM_PAINT
+            && lock(windows()).get(&m.hwnd).is_some_and(|w| !w.needs_paint)
+        {
+            continue;
+        }
+        break m;
     };
     if taken.message == WM_PAINT {
         // Le WM_PAINT n'est plus en file ; la zone reste invalidée tant que
@@ -2938,6 +3264,14 @@ pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
             .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
     })?;
     Some(Msg::new(target, WM_PAINT, 0, 0))
+}
+
+/// Zone invalidée d'une fenêtre visible du thread appelant (UpdateWindow).
+pub fn paint_pending_here(hwnd: usize) -> bool {
+    let tid = std::thread::current().id();
+    lock(windows())
+        .get(&hwnd)
+        .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint)
 }
 
 /// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
@@ -3468,6 +3802,7 @@ pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -3493,6 +3828,7 @@ mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    painting: false,
                 },
             );
             h
@@ -3532,6 +3868,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                painting: false,
             },
         );
         let q = current_queue();
@@ -3681,6 +4018,44 @@ mod tests {
         0
     }
 
+    static PEINTURES: AtomicUsize = AtomicUsize::new(0);
+
+    extern "win64" fn wnd_proc_compte_peintures(
+        hwnd: usize,
+        msg: u32,
+        _wparam: usize,
+        _lparam: isize,
+    ) -> isize {
+        if msg == WM_PAINT {
+            PEINTURES.fetch_add(1, Ordering::SeqCst);
+            validate_window(hwnd);
+        }
+        0
+    }
+
+    /// #796 : UpdateWindow peint tout de suite une fenêtre invalidée, ne fait
+    /// rien sur une fenêtre valide, et le WM_PAINT resté en file n'est plus
+    /// délivré une seconde fois.
+    #[test]
+    fn update_window_peint_tout_de_suite_et_une_seule_fois() {
+        let hwnd = fenetre_de_test();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize =
+            wnd_proc_compte_peintures;
+        lock(windows()).get_mut(&hwnd).unwrap().wnd_proc = proc_addr as usize;
+        let q = current_queue();
+        PEINTURES.store(0, Ordering::SeqCst);
+        request_paint(hwnd);
+        assert_eq!(unsafe { crate::dlls::user32::update_window(hwnd) }, 1);
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_none());
+        unsafe { crate::dlls::user32::update_window(hwnd) };
+        assert_eq!(PEINTURES.load(Ordering::SeqCst), 1);
+        // Un WM_PAINT posté par l'appli elle-même reste délivré.
+        post_to_thread(std::thread::current().id(), Msg::new(hwnd, WM_PAINT, 0, 0));
+        assert!(take_message(&q, hwnd, WM_PAINT, WM_PAINT).is_some());
+        destroy_window(hwnd);
+    }
+
     fn fenetre_de_test() -> usize {
         let hwnd = alloc_hwnd();
         let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
@@ -3701,6 +4076,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                painting: false,
             },
         );
         hwnd
@@ -3762,6 +4138,7 @@ mod tests {
                 ex_style: 0,
                 pending: Vec::new(),
                 menu_bar: 0,
+                painting: false,
             },
         );
         let dc = create_dc(0);
@@ -3868,6 +4245,72 @@ mod tests {
         free_dc(hdc);
         assert_eq!(dc_window(hdc), None);
         destroy_window(hwnd);
+    }
+
+    #[test]
+    fn le_decoupage_retire_la_zone_exclue_des_remplissages() {
+        // Bordure de PuTTY : IntersectClipRect(rcPaint), ExcludeClipRect(grille),
+        // puis Rectangle(rcPaint) : seule la bordure est peinte (#771).
+        let hwnd = fenetre_de_test();
+        let hdc = create_dc(hwnd);
+        let all = Rect::from_size(0, 0, 100, 50);
+        let grid = Rect::from_size(2, 2, 96, 46);
+        assert_eq!(intersect_dc_clip(hdc, all), 2);
+        assert_eq!(exclude_dc_clip(hdc, grid), 3);
+        let _ = take_pending(hwnd);
+        assert!(record(
+            hdc,
+            DrawCmd::FillRect {
+                rect: all,
+                color: 0
+            }
+        ));
+        let cmds = take_pending(hwnd);
+        let area: i32 = cmds
+            .iter()
+            .map(|c| match c {
+                DrawCmd::FillRect { rect, .. } => {
+                    assert!(intersect_rects(rect, &grid).is_none());
+                    rect.width() * rect.height()
+                }
+                _ => panic!("remplissage attendu"),
+            })
+            .sum();
+        assert_eq!(area, 100 * 50 - 96 * 46);
+        // Un texte entièrement dans la zone exclue disparaît.
+        assert!(record(
+            hdc,
+            DrawCmd::Text {
+                x: 40,
+                y: 20,
+                text: "x".into(),
+                color: 0,
+                bk: None,
+                font: FontSpec::default(),
+            }
+        ));
+        assert!(take_pending(hwnd).is_empty());
+        // SelectClipRgn(NULL) : plus de découpage.
+        assert_eq!(set_dc_clip(hdc, None), 2);
+        assert!(record(
+            hdc,
+            DrawCmd::FillRect {
+                rect: all,
+                color: 0
+            }
+        ));
+        assert_eq!(take_pending(hwnd).len(), 1);
+        free_dc(hdc);
+        destroy_window(hwnd);
+    }
+
+    #[test]
+    fn soustraction_de_rectangles() {
+        let a = Rect::from_size(0, 0, 10, 10);
+        assert_eq!(subtract_rect(&a, &Rect::from_size(20, 20, 5, 5)), vec![a]);
+        assert!(subtract_rect(&a, &Rect::from_size(-1, -1, 12, 12)).is_empty());
+        let pieces = subtract_rect(&a, &Rect::from_size(0, 0, 10, 5));
+        assert_eq!(pieces, vec![Rect::from_size(0, 5, 10, 5)]);
     }
 
     #[test]
@@ -4066,6 +4509,7 @@ mod tests {
                     ex_style: 0,
                     pending: Vec::new(),
                     menu_bar: 0,
+                    painting: false,
                 },
             );
             h
