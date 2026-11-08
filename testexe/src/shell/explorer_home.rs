@@ -735,12 +735,12 @@ pub(super) unsafe fn draw_details(g: &mut Gfx, d: &Rect) {
         }
         None => {
             // Rien ou plusieurs éléments : le dossier courant.
-            let ic = place_icon(pn.loc.get()).or(if pn.loc.is(HOME) { icons::of_glyph(Glyph::Home) } else if pn.loc.is(PC) { icons::of_glyph(Glyph::Computer) } else { icons::of_glyph(Glyph::Folder) });
+            let ic = place_icon(pn.loc.get()).or(if pn.loc.is(HOME) { icons::of_glyph(Glyph::Home) } else if pn.loc.is(PC) { icons::of_glyph(Glyph::Computer) } else if pn.loc.is(NET) { Some(icons::Icon::Globe) } else { icons::of_glyph(Glyph::Folder) });
             if !ic.is_some_and(|ic| icons::draw(g.hdc, ic, gx, gy, s, 0)) {
                 glyph(g.hdc, g.b, g.f, Glyph::Folder, gx, gy, s);
             }
             set_glyph_bg(None);
-            let name = if pn.loc.is(HOME) { tr(S_HOME) } else if pn.loc.is(PC) { tr(S_THIS_PC) } else { last_component(pn.loc.get()) };
+            let name = if pn.loc.is(HOME) { tr(S_HOME) } else { last_component(pn.loc.get()) };
             text_fit(g.hdc, g.f.title, 15, p.text, x, pv.bottom + 14, name, w);
             let k = sel_count(pn);
             let (count, word): (usize, &[u8]) = if k > 1 {
@@ -854,6 +854,7 @@ pub(super) unsafe fn regression() {
 /// #890 et #886 : chaque famille de fichiers a son icône Prisme et un
 /// libellé lisible ; la pastille « Windows » reste aux seuls .exe/.msi ;
 /// les pictogrammes Terminal et loupe sont des glyphes Prisme au trait.
+#[inline(never)]
 unsafe fn types_regression() {
     let entry = |name: &[u8]| {
         let mut e = EMPTY_ENTRY;
