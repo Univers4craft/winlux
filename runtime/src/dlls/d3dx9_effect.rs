@@ -5,8 +5,10 @@
 //! (valeurs, annotations, éléments de tableau), techniques et passes,
 //! états de rendu, d'échantillonneur et d'étage de texture, shaders
 //! compilés par `d3dx9_hlsl` (`compile vs_2_0 f()`) ou assemblés (`asm { }`).
-//! Les effets déjà compilés (fx_2_0 binaire) ne sont pas lus.
+//! Les effets déjà compilés (fx_2_0 binaire, .fxo) sont lus par `binaire` (#909).
 #![allow(clippy::too_many_arguments)]
+
+mod binaire;
 
 use super::d3dx9_hlsl::{self as hlsl, Base, Expr, Program, StateAssign, Ty, VarDecl};
 use super::legacy_com::{get_ptr, ptr_size, put_ptr, rd32, vtable_sig, wr32};
@@ -117,6 +119,14 @@ const RENDER_STATES: &[(&str, u32, Cat)] = &[
     ("wrap5", 133, Cat::Num),
     ("wrap6", 134, Cat::Num),
     ("wrap7", 135, Cat::Num),
+    ("wrap8", 198, Cat::Num),
+    ("wrap9", 199, Cat::Num),
+    ("wrap10", 200, Cat::Num),
+    ("wrap11", 201, Cat::Num),
+    ("wrap12", 202, Cat::Num),
+    ("wrap13", 203, Cat::Num),
+    ("wrap14", 204, Cat::Num),
+    ("wrap15", 205, Cat::Num),
     ("clipping", 136, Cat::Bool),
     ("lighting", 137, Cat::Bool),
     ("ambient", 139, Cat::Num),
@@ -139,14 +149,25 @@ const RENDER_STATES: &[(&str, u32, Cat)] = &[
     ("pointscale_c", 160, Cat::Float),
     ("multisampleantialias", 161, Cat::Bool),
     ("multisamplemask", 162, Cat::Num),
+    ("patchedgestyle", 163, Cat::Num),
+    ("debugmonitortoken", 165, Cat::Num),
     ("pointsize_max", 166, Cat::Float),
     ("indexedvertexblendenable", 167, Cat::Bool),
     ("colorwriteenable", 168, Cat::Cw),
     ("tweenfactor", 170, Cat::Float),
     ("blendop", 171, Cat::BlendOp),
+    ("positiondegree", 172, Cat::Num),
+    ("normaldegree", 173, Cat::Num),
     ("scissortestenable", 174, Cat::Bool),
     ("slopescaledepthbias", 175, Cat::Float),
     ("antialiasedlineenable", 176, Cat::Bool),
+    ("mintessellationlevel", 178, Cat::Float),
+    ("maxtessellationlevel", 179, Cat::Float),
+    ("adaptivetess_x", 180, Cat::Float),
+    ("adaptivetess_y", 181, Cat::Float),
+    ("adaptivetess_z", 182, Cat::Float),
+    ("adaptivetess_w", 183, Cat::Float),
+    ("enableadaptivetessellation", 184, Cat::Bool),
     ("twosidedstencilmode", 185, Cat::Bool),
     ("ccw_stencilfail", 186, Cat::StencilOp),
     ("ccw_stencilzfail", 187, Cat::StencilOp),
@@ -758,12 +779,20 @@ pub(crate) unsafe fn load(
     dir: Option<std::path::PathBuf>,
     flags: u32,
 ) -> Result<usize, String> {
-    if src.len() >= 4 && rd32(src.as_ptr() as usize) == 0xFEFF_0901 {
-        return Err(
-            "effet déjà compilé (fx_2_0 binaire) : format non pris en charge, \
-                    il faut le source .fx"
-                .into(),
-        );
+    if src.len() >= 4 && matches!(rd32(src.as_ptr() as usize), binaire::MAGIC | 0xBCF0_0BCF) {
+        // Effet déjà compilé (fx_2_0 binaire, .fxo) (#909).
+        let (params, top, mut techs) = binaire::read(src)?;
+        for t in techs.iter_mut() {
+            for p in t.passes.iter_mut() {
+                if let Some(Some(x)) = p.vs.as_mut() {
+                    create_device_shader(dev, x, false);
+                }
+                if let Some(Some(x)) = p.ps.as_mut() {
+                    create_device_shader(dev, x, true);
+                }
+            }
+        }
+        return Ok(finish(dev, params, top, techs, src, defines, dir, flags));
     }
     let text = String::from_utf8_lossy(src);
     let text = text.trim_end_matches('\0').to_string();
@@ -801,32 +830,7 @@ pub(crate) unsafe fn load(
         params.push(p);
         let idx = params.len() - 1;
         top.push(idx);
-        // Éléments de tableau : leurs propres poignées.
-        let n = params[idx].elements;
-        for e in 0..n as usize {
-            let root = &params[idx];
-            let el = Param {
-                name: root.name.clone(),
-                semantic: root.semantic.clone(),
-                class: root.class,
-                ptype: root.ptype,
-                rows: root.rows,
-                cols: root.cols,
-                elements: 0,
-                flags: root.flags,
-                elem_of: Some((idx, e)),
-                elems: Vec::new(),
-                annotations: Vec::new(),
-                data: Vec::new(),
-                obj: 0,
-                string: Vec::new(),
-                sampler: root.sampler.clone(),
-                shader: None,
-            };
-            params.push(el);
-            let k = params.len() - 1;
-            params[idx].elems.push(k);
-        }
+        push_elements(&mut params, idx);
     }
     let mut techs = Vec::new();
     let mut errors = Vec::new();
@@ -882,6 +886,49 @@ pub(crate) unsafe fn load(
     for e in &errors {
         crate::log_warn!("d3dx9", "effet : technique écartée : {e}");
     }
+    Ok(finish(dev, params, top, techs, src, defines, dir, flags))
+}
+
+/// Éléments de tableau : leurs propres poignées.
+fn push_elements(params: &mut Vec<Param>, idx: usize) {
+    let n = params[idx].elements;
+    for e in 0..n as usize {
+        let root = &params[idx];
+        let el = Param {
+            name: root.name.clone(),
+            semantic: root.semantic.clone(),
+            class: root.class,
+            ptype: root.ptype,
+            rows: root.rows,
+            cols: root.cols,
+            elements: 0,
+            flags: root.flags,
+            elem_of: Some((idx, e)),
+            elems: Vec::new(),
+            annotations: Vec::new(),
+            data: Vec::new(),
+            obj: 0,
+            string: Vec::new(),
+            sampler: root.sampler.clone(),
+            shader: None,
+        };
+        params.push(el);
+        let k = params.len() - 1;
+        params[idx].elems.push(k);
+    }
+}
+
+/// Objet effet à partir de ses paramètres et techniques.
+unsafe fn finish(
+    dev: usize,
+    params: Vec<Param>,
+    top: Vec<usize>,
+    techs: Vec<Tech>,
+    src: &[u8],
+    defines: Vec<(String, String)>,
+    dir: Option<std::path::PathBuf>,
+    flags: u32,
+) -> usize {
     let nh = params.len() + techs.len() + techs.iter().map(|t| t.passes.len()).sum::<usize>();
     com_call!(dev, DEV_ADDREF, fn() -> u32);
     let cur = techs.iter().position(|t| t.valid).unwrap_or(0);
@@ -903,11 +950,11 @@ pub(crate) unsafe fn load(
         creator: cstring("Winlux D3DX9"),
         state_manager: 0,
     };
-    Ok(Box::into_raw(Box::new(Effect {
+    Box::into_raw(Box::new(Effect {
         vtbl: effect_vtable(),
         refs: AtomicU32::new(1),
         st,
-    })) as usize)
+    })) as usize
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -932,6 +979,8 @@ impl State {
                 0
             }
             Expr::Bin("|", a, b) => self.state_value(cat, a) | self.state_value(cat, b),
+            // Entier littéral : ses 32 bits exacts (couleurs 0xAARRGGBB).
+            Expr::Num(v, false) if !float && *v >= 0.0 && *v <= u32::MAX as f64 => *v as u32,
             e => match eval_const(e, &self.params, &self.top) {
                 Some(v) => num(v.first().copied().unwrap_or(0.0)),
                 None => 0,
