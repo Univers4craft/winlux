@@ -17,7 +17,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 manifest=${1:-build/winlux-update-manifest.txt}
 required=0
 test "${2:-}" = "--obligatoire" && required=1
-public="$root/integration/native/keys/update-signing.pub"
+# WINLUX_UPDATE_PUBLIC_KEY_FILE : autre clé publique (tests).
+public=${WINLUX_UPDATE_PUBLIC_KEY_FILE:-$root/integration/native/keys/update-signing.pub}
 test -f "$public" && required=1
 test -f "$manifest" || { echo "Manifeste introuvable : $manifest" >&2; exit 1; }
 

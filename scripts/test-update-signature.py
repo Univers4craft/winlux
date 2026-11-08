@@ -60,12 +60,23 @@ with tempfile.TemporaryDirectory() as temp:
     manifest.write_text(MANIFEST)
     script = project / "scripts/sign-update-manifest.sh"
     env = {k: v for k, v in os.environ.items() if k != "WINLUX_UPDATE_SIGNING_KEY"}
+    # Clé publique du test, pas celle du dépôt (absente pour le cas facultatif).
+    env["WINLUX_UPDATE_PUBLIC_KEY_FILE"] = str(temp / "absente.pub")
     unsigned = subprocess.run(["sh", str(script), str(manifest)], capture_output=True, text=True, env=env)
     ok(unsigned.returncode == 0 and not Path(str(manifest) + ".sig").exists(), "sans secret : avertissement, pas de signature")
     required = subprocess.run(["sh", str(script), str(manifest), "--obligatoire"], capture_output=True, text=True, env=env)
     ok(required.returncode == 1, "sans secret mais signature obligatoire : échec")
+    repo_key = subprocess.run(["sh", str(script), str(manifest)], capture_output=True, text=True,
+                              env={k: v for k, v in env.items() if k != "WINLUX_UPDATE_PUBLIC_KEY_FILE"})
+    ok(repo_key.returncode == 1, "clé publique du dépôt présente et pas de secret : échec")
+    wrong = subprocess.run(["sh", str(script), str(manifest)], capture_output=True, text=True,
+                           env=dict({k: v for k, v in env.items() if k != "WINLUX_UPDATE_PUBLIC_KEY_FILE"},
+                                    WINLUX_UPDATE_SIGNING_KEY=seed_hex))
+    ok(wrong.returncode == 1 and not Path(str(manifest) + ".sig").exists(),
+       "graine qui ne correspond pas à la clé du dépôt : refusée")
     signed = subprocess.run(["sh", str(script), str(manifest)], capture_output=True, text=True,
-                            env=dict(env, WINLUX_UPDATE_SIGNING_KEY=seed_hex))
+                            env=dict(env, WINLUX_UPDATE_SIGNING_KEY=seed_hex,
+                                     WINLUX_UPDATE_PUBLIC_KEY_FILE=str(public_file)))
     signature = Path(str(manifest) + ".sig")
     ok(signed.returncode == 0 and signature.is_file(), f"avec le secret : manifeste signé ({signed.stderr.strip()})")
     check = subprocess.run([sys.executable, "-B", str(tool_path), "verify", str(public_file), str(manifest), str(signature)])
@@ -101,6 +112,8 @@ with tempfile.TemporaryDirectory() as temp:
 
 stage = (project / "scripts/stage-desktop-components.sh").read_text()
 ok("winlux-signature" in stage and "update-signing.pub" in stage, "l'image embarque winlux-signature et la clé publique")
+repo_public = (project / "integration/native/keys/update-signing.pub").read_text().strip()
+ok(len(bytes.fromhex(repo_public)) == 32, "clé publique du dépôt présente (32 octets)")
 release = (project / ".github/workflows/release.yml").read_text()
 ok(release.count("sign-update-manifest.sh") >= 2 and "winlux-update-manifest.txt.sig" in release,
    "release.yml signe et publie le manifeste")
