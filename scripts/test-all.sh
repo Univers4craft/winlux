@@ -93,6 +93,7 @@ fi
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 step "scripts/test-notices.py" python3 -B scripts/test-notices.py
+step "scripts/test-native-catalogue.py (raccourcis du menu, #992)" python3 -B scripts/test-native-catalogue.py
 
 # Applis WinForms et WPF .NET autonomes (#664–#666, #268) : télécharge une fois le runtime
 # .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.
