@@ -49,6 +49,7 @@ fixée, secondes depuis 1970), WINLUX_PARENTAL_NFT (faux nft),
 WINLUX_PARENTAL_UPSTREAM_PORT (port du faux résolveur amont).
 """
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,17 @@ WARN_AT = (5, 1)
 TABLE = "winlux_parental"
 DNS_BASE = 54000
 TAMPER_FREEZE = 2
+# #815 : empreinte d'un programme (taille, 4 Mo du début, 1 Mo de la fin) pour
+# reconnaître une copie renommée d'une application bloquée.
+PRINT_HEAD = 4 << 20
+PRINT_TAIL = 1 << 20
+PRINTS_KEEP = 4000
+# #816 : adresses obtenues par le DNS filtrant, seules joignables par le compte.
+ADDRESS_TIMEOUT = 3 * 3600
+ADDRESS_REFRESH = 2 * 3600
+LOCAL_IPV4 = ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "224.0.0.0/4",
+              "255.255.255.255")
+LOCAL_IPV6 = ("::1", "fe80::/10", "fc00::/7", "ff00::/8")
 
 # Programmes du bureau lui-même : jamais bloqués, jamais comptés comme application.
 PROTECTED = {"xorg", "openbox", "picom", "xfce4-panel", "xfdesktop", "xfconfd", "xfsettingsd", "dbus-daemon",
@@ -110,6 +122,17 @@ DOH_IPV6 = ("2606:4700:4700::1111", "2606:4700:4700::1001", "2001:4860:4860::888
             "2620:119:53::53", "2a07:a8c0::/32", "2a07:a8c1::/32")
 
 # Recherches filtrées : noms publics documentés par chaque moteur.
+# VPN et proxys web grand public (#816) : refusés dès que le filtre web est
+# actif, comme les DoH connus. Les adresses que le DNS filtrant n'a pas données
+# sont de toute façon injoignables par le compte.
+VPN_HOSTS = ("nordvpn.com", "nordvpn.net", "expressvpn.com", "protonvpn.com", "protonvpn.ch", "surfshark.com",
+             "cyberghostvpn.com", "privateinternetaccess.com", "windscribe.com", "windscribe.net", "hide.me",
+             "tunnelbear.com", "hotspotshield.com", "ipvanish.com", "vyprvpn.com", "purevpn.com", "hola.org",
+             "urban-vpn.com", "browsec.com", "zenmate.com", "psiphon.ca", "psiphon3.com", "torproject.org",
+             "hidemy.name", "hidester.com", "proxysite.com", "kproxy.com", "croxyproxy.com", "croxyproxy.rocks",
+             "4everproxy.com", "vpnbook.com", "betternet.co", "tuxlervpn.com", "planetvpn.com", "privadovpn.com",
+             "atlasvpn.com", "mullvad.net", "ivpn.net", "airvpn.org", "warp.plus", "cloudflarewarp.com")
+
 SAFE_TARGETS = (
     (re.compile(r"^(www\.)?google\.(com|[a-z]{2}|com?\.[a-z]{2})$"), "forcesafesearch.google.com"),
     (re.compile(r"^(www\.)?bing\.com$"), "strict.bing.com"),
@@ -691,6 +714,100 @@ def app_of(exe, cmdline):
     return "bin:" + base if base else None
 
 
+def app_file(pid, exe, cmdline):
+    """Fichier qui fait l'application d'un processus (#815) : le .exe lancé par
+    winlux, le script d'un interpréteur, sinon le programme lui-même."""
+    base = os.path.basename(exe or "")
+    wanted = None
+    if base.startswith("winlux"):
+        wanted = next((arg for arg in cmdline[1:] if arg.lower().endswith(".exe")), None)
+    elif base.startswith("python") or base in ("sh", "bash", "dash", "perl"):
+        wanted = next((arg for arg in cmdline[1:] if not arg.startswith("-")), None)
+    if wanted is None:
+        return f"/proc/{pid}/exe"
+    if "\\" not in wanted and not re.match(r"^[A-Za-z]:", wanted):
+        if not wanted.startswith("/"):
+            try:
+                wanted = os.path.join(os.readlink(f"/proc/{pid}/cwd"), wanted)
+            except OSError:
+                return None
+        return wanted
+    # Chemin Windows : le fichier projeté en mémoire qui porte ce nom.
+    name = re.split(r"[\\/]", wanted)[-1].lower()
+    try:
+        with open(f"/proc/{pid}/maps", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                path = line.rstrip("\n").split(None, 5)[-1] if line.count(" ") >= 5 else ""
+                if path.startswith("/") and os.path.basename(path).lower() == name:
+                    return path
+    except OSError:
+        pass
+    return None
+
+
+def file_sample(path):
+    """(clé du fichier, début, fin) d'un fichier ordinaire, sinon None."""
+    # Chemin donné par le compte surveillé, ouvert en root : O_PATH d'abord, qui
+    # n'ouvre pas un périphérique, puis lecture seulement d'un fichier ordinaire.
+    try:
+        fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
+    except (OSError, ValueError):
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat_regular(st.st_mode):
+            return None
+        with open(f"/proc/self/fd/{fd}", "rb") as handle:
+            head = handle.read(PRINT_HEAD)
+            tail = b""
+            if st.st_size > PRINT_HEAD:
+                handle.seek(max(PRINT_HEAD, st.st_size - PRINT_TAIL))
+                tail = handle.read(PRINT_TAIL)
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns), head, tail
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def stat_regular(mode):
+    return (mode & 0o170000) == 0o100000
+
+
+def fingerprint(key, head, tail):
+    digest = hashlib.sha256(str(key[2]).encode() + b"\0" + head + b"\0" + tail)
+    return digest.hexdigest()[:40]
+
+
+ORIGINAL_NAME = "OriginalFilename".encode("utf-16-le") + b"\0\0"
+
+
+def pe_original_name(data):
+    """Nom d'origine inscrit dans la ressource VERSIONINFO d'un .exe (« jeu.exe »),
+    qui ne change pas quand on renomme le fichier."""
+    if data[:2] != b"MZ":
+        return None
+    start = 0
+    while True:
+        index = data.find(ORIGINAL_NAME, start)
+        if index < 0:
+            return None
+        start = index + 2
+        if index % 2:
+            continue
+        offset = (index + len(ORIGINAL_NAME) + 3) & ~3
+        end = offset
+        while end + 1 < len(data) and data[end:end + 2] != b"\0\0" and end - offset < 520:
+            end += 2
+        try:
+            value = data[offset:end].decode("utf-16-le").strip()
+        except UnicodeDecodeError:
+            continue
+        value = re.split(r"[\\/]", value)[-1].lower()
+        if value.endswith(".exe") and 4 < len(value) <= 128:
+            return value
+
+
 def proc_uid(pid):
     try:
         return os.stat(f"/proc/{pid}").st_uid
@@ -783,7 +900,7 @@ def under(name, domains):
 def dns_decision(name, web):
     """block | forward | safe:CIBLE pour un nom demandé par le compte surveillé."""
     name = name.lower().rstrip(".")
-    if under(name, DOH_HOSTS):
+    if under(name, DOH_HOSTS) or under(name, VPN_HOSTS):
         return "block"
     mode = web.get("mode", "off")
     if mode == "block" and under(name, web.get("blocked", [])):
@@ -948,10 +1065,25 @@ class DnsFilter:
                 records = answer_records(response) if response else []
             except (ValueError, struct.error):
                 records = []
+            records = [record for record in records if record[0] == qtype]
+            self.opened(records)
             body = b"".join(b"\xc0\x0c" + struct.pack("!HHIH", rtype, 1, min(ttl, 300), len(data)) + data
-                            for rtype, ttl, data in records if rtype == qtype)
-            return reply_with(packet, end, 0, body, sum(1 for record in records if record[0] == qtype))
-        return ask_upstream(packet, tcp) or (tcp and ask_upstream(packet)) or reply_with(packet, end, 2)
+                            for rtype, ttl, data in records)
+            return reply_with(packet, end, 0, body, len(records))
+        response = ask_upstream(packet, tcp) or (tcp and ask_upstream(packet))
+        if not response:
+            return reply_with(packet, end, 2)
+        try:
+            self.opened(answer_records(response))
+        except (ValueError, struct.error, IndexError):
+            pass
+        return response
+
+    def opened(self, records):
+        """Ouvre au compte les adresses de la réponse avant qu'il ne la reçoive (#816)."""
+        resolved = getattr(self.daemon, "resolved", None)
+        if resolved and records:
+            resolved(self.user, records)
 
     def serve_udp(self, sock):
         while True:
@@ -994,11 +1126,15 @@ def dns_port(uid):
 
 
 def nft_ruleset(filtered):
-    """Règles nftables pour {uid: port} : DNS redirigé, DNS chiffré refusé."""
+    """Règles nftables pour {uid: port} : DNS redirigé, DNS chiffré refusé et,
+    hors du réseau local, seules les adresses données par le DNS filtrant (#816)."""
     if not filtered:
         return ""
-    lines = [f"table inet {TABLE} {{",
-             "  chain dns {", "    type nat hook output priority -100; policy accept;"]
+    lines = [f"table inet {TABLE} {{"]
+    for uid in sorted(filtered):
+        lines += [f"  set ok4_{uid} {{ type ipv4_addr; flags timeout; }}",
+                  f"  set ok6_{uid} {{ type ipv6_addr; flags timeout; }}"]
+    lines += ["  chain dns {", "    type nat hook output priority -100; policy accept;"]
     for uid, port in sorted(filtered.items()):
         lines += [f"    meta skuid {uid} udp dport 53 redirect to :{port}",
                   f"    meta skuid {uid} tcp dport 53 redirect to :{port}"]
@@ -1011,8 +1147,39 @@ def nft_ruleset(filtered):
                   f"    meta skuid {uid} ip daddr {{ {v4} }} udp dport 443 reject",
                   f"    meta skuid {uid} ip6 daddr {{ {v6} }} tcp dport 443 reject with tcp reset",
                   f"    meta skuid {uid} ip6 daddr {{ {v6} }} udp dport 443 reject"]
+    local4, local6 = ", ".join(LOCAL_IPV4), ", ".join(LOCAL_IPV6)
+    for uid in sorted(filtered):
+        # VPN, proxy, DoH inconnu ou adresse écrite en dur : rien n'est joignable
+        # que le DNS filtrant n'ait donné (#816). Le réseau local reste ouvert.
+        lines += [f"    meta skuid {uid} ct state established,related accept",
+                  f"    meta skuid {uid} oifname \"lo\" accept",
+                  f"    meta skuid {uid} ip daddr {{ {local4} }} accept",
+                  f"    meta skuid {uid} ip6 daddr {{ {local6} }} accept",
+                  f"    meta skuid {uid} ip daddr @ok4_{uid} accept",
+                  f"    meta skuid {uid} ip6 daddr @ok6_{uid} accept",
+                  f"    meta skuid {uid} meta l4proto tcp reject with tcp reset",
+                  f"    meta skuid {uid} reject"]
     lines += ["  }", "}"]
     return "\n".join(lines) + "\n"
+
+
+def address_script(uid, addresses):
+    """Commandes nft qui ouvrent ces adresses {adresse: secondes} au compte."""
+    out = []
+    for family, prefix in ((socket.AF_INET, "ok4"), (socket.AF_INET6, "ok6")):
+        items = [f"{address} timeout {max(60, int(seconds))}s" for address, seconds in sorted(addresses.items())
+                 if (":" in address) == (family == socket.AF_INET6)]
+        if items:
+            out.append(f"add element inet {TABLE} {prefix}_{uid} {{ {', '.join(items)} }}")
+    return "\n".join(out) + ("\n" if out else "")
+
+
+def run_nft(script):
+    try:
+        result = subprocess.run([NFT, "-f", "-"], input=script, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as error:
+        return str(error)
+    return result.stderr.strip() if result.returncode else ""
 
 
 def apply_nft(rules):
@@ -1136,6 +1303,12 @@ class Daemon:
         self.names_at = 0
         self.site_notes = {}
         self.lock = threading.Lock()
+        self.filtered = {}
+        self.addresses = {}
+        self.address_lock = threading.Lock()
+        self.prints = {}
+        self.samples = {}
+        self.seen = {}
 
     def log(self, text):
         print(time.strftime("%H:%M:%S"), text, flush=True)
@@ -1153,6 +1326,29 @@ class Daemon:
             for display, _vt in session_displays(user):
                 notify(user, display, _t("Contrôle parental"), _t("Le site {name} est bloqué par le contrôle parental.").format(name=site))
 
+    def resolved(self, user, records):
+        """Adresses A/AAAA données par le DNS filtrant : joignables par le compte."""
+        uid = uid_of(user)
+        if uid not in self.filtered:
+            return
+        now = time.monotonic()
+        todo = {}
+        with self.address_lock:
+            known = self.addresses.setdefault(uid, {})
+            for rtype, _ttl, data in records:
+                try:
+                    address = socket.inet_ntop(socket.AF_INET if rtype == 1 else socket.AF_INET6, data)
+                except (OSError, ValueError):
+                    continue
+                if known.get(address, 0) - now > ADDRESS_REFRESH:
+                    continue
+                known[address] = now + ADDRESS_TIMEOUT
+                todo[address] = ADDRESS_TIMEOUT
+            if todo:
+                error = run_nft(address_script(uid, todo))
+                if error:
+                    self.log(f"nftables : {error}")
+
     def reload(self):
         configs = supervised_accounts()
         with self.lock:
@@ -1167,13 +1363,29 @@ class Daemon:
                 if user not in self.filters:
                     self.filters[user] = DnsFilter(self, user, port)
                 filtered[uid] = port
+        self.filtered = filtered
         rules = nft_ruleset(filtered)
-        if rules != self.rules:
-            error = apply_nft(rules)
-            if error:
-                self.log(f"nftables : {error}")
-            else:
-                self.rules = rules
+        now = time.monotonic()
+        with self.address_lock:
+            for uid in list(self.addresses):
+                kept = {a: t for a, t in self.addresses[uid].items() if t > now and uid in filtered}
+                if kept:
+                    self.addresses[uid] = kept
+                else:
+                    del self.addresses[uid]
+            if rules != self.rules:
+                error = apply_nft(rules)
+                if error:
+                    self.log(f"nftables : {error}")
+                else:
+                    self.rules = rules
+                    # Table recréée : les adresses déjà données restent joignables.
+                    script = "".join(address_script(uid, {a: t - now for a, t in known.items()})
+                                     for uid, known in self.addresses.items())
+                    if script:
+                        run_nft(script)
+        for user, cfg in configs.items():
+            self.learn_installed(user, cfg)
         for user in list(self.screens):
             if user[0] not in configs:
                 self.close_screen(user)
@@ -1204,11 +1416,15 @@ class Daemon:
             exe, cmdline = proc_info(pid)
             ident = app_of(exe, cmdline)
             user, blocked = by_uid[uid]
-            if ident in blocked:
+            match = self.identify(user, pid, exe, cmdline, ident, blocked)
+            if match:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
                     continue
+                if match != ident:
+                    self.log(f"{user} : copie de {match} lancée sous le nom {ident}, fermée")
+                ident = match
                 key = (uid, ident)
                 alive.add(key)
                 if key not in self.killed:
@@ -1221,6 +1437,81 @@ class Daemon:
                                _t("« {name} » est bloquée par le contrôle parental.").format(name=name))
         # Une nouvelle tentative, plus tard, compte à nouveau.
         self.killed &= alive | {key for key in self.killed if key[0] not in by_uid}
+        live = set(pids_of(set(by_uid))) if self.seen else set()
+        for pid in [pid for pid in self.seen if pid not in live]:
+            del self.seen[pid]
+
+    def prints_of(self, user):
+        """{empreinte: [identifiants]} des programmes vus pour ce compte (root, 0600)."""
+        if user not in self.prints:
+            data = read_json(DATA_DIR / user / "fingerprints.json") or {}
+            self.prints[user] = {k: list(v) for k, v in data.items()
+                                 if isinstance(v, list) and all(isinstance(i, str) for i in v)}
+        return self.prints[user]
+
+    def remember(self, user, mark, ident):
+        prints = self.prints_of(user)
+        idents = prints.setdefault(mark, [])
+        if ident in idents:
+            return
+        idents.append(ident)
+        while len(prints) > PRINTS_KEEP:
+            del prints[next(iter(prints))]
+        try:
+            write_private(DATA_DIR / user / "fingerprints.json", prints)
+        except OSError as error:
+            self.log(f"empreintes de {user} : {error}")
+
+    def sample(self, path):
+        """(empreinte, nom d'origine du .exe) d'un fichier, mis en cache par inode."""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        key = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+        if key not in self.samples:
+            got = file_sample(path)
+            if got is None:
+                return None
+            real_key, head, tail = got
+            if len(self.samples) > 4096:
+                self.samples.clear()
+            self.samples[key] = (fingerprint(real_key, head, tail), pe_original_name(head) or pe_original_name(tail))
+        return self.samples[key]
+
+    def identify(self, user, pid, exe, cmdline, ident, blocked):
+        """Application bloquée que ce processus fait tourner, même renommée (#815)."""
+        cache_key = (exe, tuple(cmdline))
+        cached = self.seen.get(pid)
+        fresh = not cached or cached[0] != cache_key
+        if fresh:
+            path = app_file(pid, exe, cmdline) if ident else None
+            got = self.sample(path) if path else None
+            cached = (cache_key,) + (got or (None, None))
+            self.seen[pid] = cached
+        _key, mark, original = cached
+        found = ident if ident in blocked else None
+        if mark:
+            if found is None:
+                found = next((known for known in self.prints_of(user).get(mark, []) if known in blocked), None)
+            if found is None and original and ident and ident.startswith("exe:") and "exe:" + original in blocked:
+                found = "exe:" + original
+            if fresh and ident and not protected(ident):
+                self.remember(user, mark, found or ident)
+                self.remember(user, mark, ident)
+        return found
+
+    def learn_installed(self, user, cfg):
+        """Empreinte des applications Linux bloquées, telles qu'installées : une
+        copie est reconnue dès son premier lancement."""
+        for app in cfg.get("apps", []):
+            kind, _, name = app["id"].partition(":")
+            if kind != "bin" or protected(app["id"]):
+                continue
+            path = shutil.which(name, path=ROOT + "/usr/local/bin:" + ROOT + "/usr/bin:" + ROOT + "/usr/games:" + ROOT + "/bin")
+            got = self.sample(path) if path else None
+            if got:
+                self.remember(user, got[0], app["id"])
 
     def sessions(self):
         """[(compte, uid, écran, active)] des sessions des comptes surveillés."""

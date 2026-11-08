@@ -657,6 +657,12 @@ parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py
 ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
    and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
    "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #815 / #816 : copie renommée d'une application bloquée, VPN ou proxy hors du DNS filtrant.
+ok(parental.returncode == 0 and "copie renommée sans VERSIONINFO fermée par son empreinte (#815)" in parental.stdout
+   and "copie renommée d'un .exe bloqué fermée (nom d'origine, #815)" in parental.stdout
+   and "adresse du site ouverte au compte avant la réponse (#816)" in parental.stdout
+   and "seules les adresses données par le filtre, #816" in parental.stdout,
+   "contrôle parental : copie renommée reconnue, VPN et proxy hors du filtre refusés")
 # #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
 ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
    "relais root : vrai code de retour malgré SIGCHLD ignoré")
