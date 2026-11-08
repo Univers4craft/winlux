@@ -1060,4 +1060,11 @@ ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testex
    "Shell PE : WINLUX_LANG choisit la langue (#1026)")
 ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
    "Shell PE : winlux-shell-app notepad (#1027)")
+# #16 : activation COM depuis le registre (InprocServer32 → DllGetClassObject),
+# CoCreateInstanceEx, CoFreeUnusedLibraries ; vérifiée par com_suite.exe.
+com_registry = (ROOT / "runtime/src/dlls/com_registry.rs").read_text(encoding="utf-8")
+ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
+   and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
