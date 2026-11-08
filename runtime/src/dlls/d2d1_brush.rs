@@ -321,7 +321,7 @@ impl Ramp {
             _ => t,
         };
         let s = &self.stops;
-        if !(t > s[0].0) {
+        if t.is_nan() || t <= s[0].0 {
             return s[0].1;
         }
         for w in s.windows(2) {
