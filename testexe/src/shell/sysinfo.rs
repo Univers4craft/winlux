@@ -2454,7 +2454,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             continue;
         }
         let row = &rows[idx as usize];
-        let hover = h.add(rr, ID_ROW + slot as u16);
+        let hover = h.row(rr, ID_ROW + slot as u16);
         if row.head {
             fill(
                 g.hdc,
