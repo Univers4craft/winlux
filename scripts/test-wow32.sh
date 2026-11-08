@@ -186,6 +186,10 @@ if test -f "$out/com32.exe"; then
     echo "com32 : COM x86 (IStream du runtime, CopyTo vers un flux x86, fabrique x86, VARIANT, IErrorInfo)"
     check dlg32 'boîtes communes 32 bits, .* Tout est correct'
     echo "dlg32 : liste, arbre, barre d'outils, onglets, Ouvrir, Enregistrer, Couleur, Police, Imprimer en x86"
+    check msxml32 'MSXML : tout est correct'
+    echo "msxml32 : DOMDocument MSXML en x86 (VARIANT par valeur, nœuds, XPath, save/load)"
+    check accprop32 'AccPropServices : tout est correct'
+    echo "accprop32 : annotations d'accessibilité en x86 (MSAAPROPID et VARIANT par valeur, IAccPropServer)"
 fi
 
 gui() {
@@ -231,7 +235,7 @@ for name in jeux32 jeux64; do
         jeux "$name" xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
     fi
 done
-echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux, entrée), msacm32 (conversions PCM), timeSetEvent et waveOut avec rappels, x86 et x64"
+echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux, entrée), msacm32 (conversions PCM, décodeurs ADPCM), timeSetEvent et waveOut avec rappels, x86 et x64"
 
 # Direct3D 11 et DXGI (#1090) : il faut un contexte OpenGL, donc Xvfb.
 if command -v xvfb-run >/dev/null 2>&1; then

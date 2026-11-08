@@ -21,6 +21,10 @@ for src in "$root"/testc/*.c; do
     test "$name" = com_suite && libs="-lole32 -luuid -ladvapi32"
     # automation_suite : IDispatch standard et objets actifs (#16).
     test "$name" = automation_suite && libs="-loleaut32 -lole32 -luuid"
+    # msxml_suite : DOMDocument intégré (#1084).
+    test "$name" = msxml_suite && libs="-lole32 -loleaut32 -luuid -lmsxml2"
+    # accprop_suite : annotations d'accessibilité AccPropServices (#1114).
+    test "$name" = accprop_suite && libs="-lole32 -loleaut32 -luuid"
     # com_local_suite : serveur COM hors processus, LocalServer32 (#16).
     test "$name" = com_local_suite && libs="-loleaut32 -lole32 -luuid -ladvapi32"
     # shellcheck disable=SC2086
