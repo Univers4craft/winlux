@@ -17,7 +17,8 @@ pub struct ObjHeader {
     pub type_id: u32,
     pub flags: u32,
     pub size: u32,
-    _pad: u32,
+    /// Type des éléments d'un tableau (0 : références).
+    pub extra: u32,
 }
 
 pub struct GcHeap {
@@ -57,6 +58,13 @@ impl GcHeap {
         unsafe {
             *(ptr as *mut u64) = length as u64;
         }
+        ptr
+    }
+
+    /// Tableau dont les éléments sont du type `elem` (taille `elem_size`).
+    pub fn alloc_array_of(&mut self, elem: u32, elem_size: usize, length: usize) -> *mut u8 {
+        let ptr = self.alloc_array(super::types::TYPE_ARRAY, elem_size, length);
+        unsafe { (*(ptr.sub(HEADER) as *mut ObjHeader)).extra = elem };
         ptr
     }
 

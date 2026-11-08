@@ -1052,6 +1052,13 @@ fn decode_type_depth(blob: &[u8], off: &mut usize, depth: u32) -> ElementType {
             ElementType::MVar(idx)
         }
         0x41 => ElementType::Sentinel,
+        // Modificateurs (CMOD_REQD / CMOD_OPT + type) et PINNED : ils ne
+        // changent pas le type rangé, on lit le type qui suit.
+        0x1F | 0x20 => {
+            decode_compressed_u32(blob, off);
+            decode_type(blob, off)
+        }
+        0x45 => decode_type(blob, off),
         _ => ElementType::Object,
     }
 }

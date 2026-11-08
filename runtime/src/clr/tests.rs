@@ -193,3 +193,344 @@ fn le_constructeur_statique_ne_tourne_qu_une_fois() {
     );
     assert_eq!(lancer(&b.build(main), None), 12);
 }
+
+// ── Étape 2 : nouveau cœur d'exécution (#945, #946) ──
+
+const STLOC0: u8 = 0x0A;
+const STLOC1: u8 = 0x0B;
+const LDLOC0: u8 = 0x06;
+const LDLOC1: u8 = 0x07;
+const LDARG1: u8 = 0x03;
+
+impl Il {
+    fn ldloca(mut self, i: u8) -> Il {
+        self.0.extend_from_slice(&[0x12, i]);
+        self
+    }
+    fn ldarga(mut self, i: u8) -> Il {
+        self.0.extend_from_slice(&[0x0F, i]);
+        self
+    }
+    fn prefix(mut self, op: u8, token: u32) -> Il {
+        self.0.extend_from_slice(&[0xFE, op]);
+        self.0.extend_from_slice(&token.to_le_bytes());
+        self
+    }
+}
+
+fn avec_locaux(il: Il, locaux: Vec<Vec<u8>>) -> Body {
+    let mut body = il.body();
+    body.locals = locaux;
+    body
+}
+
+/// `ref`/`out` et largeurs des accès indirects : `Fixe(out int x)` puis un
+/// octet lu par `ldelema` + `ldind.u1`.
+#[test]
+fn ref_out_et_acces_indirects() {
+    let mut b = Builder::new("RefOut");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let byte = b.type_ref(Scope::Assembly(mscorlib), "System", "Byte");
+    b.type_def(PUBLIC, "RefOut", "P", 0);
+    let fixe = b.method(
+        M_PUBLIC | M_STATIC,
+        "Fixe",
+        &method_sig(false, &[T_VOID], &[&[0x10, T_I4]]),
+        Some(Il::default().ldarg0().i4(7).op(0x54).ret().body()),
+    );
+    let code = Il::default()
+        .ldloca(0)
+        .call(fixe)
+        .i4(3)
+        .tok(0x8D, byte)
+        .op(STLOC1)
+        .op(LDLOC1)
+        .i4(1)
+        .i4(200)
+        .op(0x9C) // stelem.i1
+        .op(LDLOC1)
+        .i4(1)
+        .tok(0x8F, byte) // ldelema
+        .op(0x47) // ldind.u1
+        .op(LDLOC0)
+        .op(ADD)
+        .ret();
+    // byte[] : SZARRAY U1.
+    let byte_array = vec![0x1D, 0x05];
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(code, vec![vec![T_I4], byte_array])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 207);
+}
+
+/// Un type valeur se copie : `b = a` puis modifier `b` ne touche pas `a`,
+/// une méthode qui modifie `this` agit sur la variable, le boxing copie.
+#[test]
+fn les_structures_se_copient() {
+    let mut b = Builder::new("Structs");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let value_type_ref = b.type_ref(Scope::Assembly(mscorlib), "System", "ValueType");
+    let point = b.type_def(PUBLIC, "Structs", "Point", value_type_ref);
+    let x = b.field(F_PUBLIC, "X", &[T_I4]);
+    b.field(F_PUBLIC, "Y", &[T_I4]);
+    let decale = b.method(
+        M_PUBLIC | M_HIDEBYSIG,
+        "Decale",
+        &method_sig(true, &[T_VOID], &[&[T_I4]]),
+        Some(
+            Il::default()
+                .ldarg0()
+                .ldarg0()
+                .ldfld(x)
+                .op(LDARG1)
+                .op(ADD)
+                .stfld(x)
+                .ret()
+                .body(),
+        ),
+    );
+    b.type_def(PUBLIC, "Structs", "P", 0);
+    let code = Il::default()
+        .ldloca(0)
+        .i4(1)
+        .stfld(x)
+        .op(LDLOC0)
+        .op(STLOC1) // b = a
+        .ldloca(1)
+        .i4(5)
+        .stfld(x) // b.X = 5
+        .ldloca(1)
+        .i4(100)
+        .call(decale) // b.X = 105
+        .op(LDLOC0)
+        .ldfld(x) // a.X = 1
+        .i4(1000)
+        .op(MUL)
+        .ldloca(1)
+        .ldfld(x)
+        .op(ADD) // 1105
+        .op(LDLOC0)
+        .tok(0x8C, point) // box
+        .tok(0xA5, point) // unbox.any
+        .op(STLOC1)
+        .ldloca(1)
+        .ldfld(x)
+        .op(ADD) // 1106
+        .ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(
+            code,
+            vec![value_type(point), value_type(point)],
+        )),
+    );
+    assert_eq!(lancer(&b.build(main), None), 1106);
+}
+
+/// Génériques : `Boite<T>` (champ T, statique par instanciation, box/unbox
+/// de T, `constrained.`), méthodes génériques et `ldelem !!0`.
+#[test]
+fn les_generiques_sont_instancies() {
+    let mut b = Builder::new("Generiques");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let string = b.type_ref(Scope::Assembly(mscorlib), "System", "String");
+    let int32 = b.type_ref(Scope::Assembly(mscorlib), "System", "Int32");
+    let object_ctor = b.member_ref(object, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let to_string = b.member_ref(object, "ToString", &method_sig(true, &[T_STRING], &[]));
+    let length = b.member_ref(string, "get_Length", &method_sig(true, &[T_I4], &[]));
+    let t = b.type_spec(&var(0));
+    let mt = b.type_spec(&mvar(0));
+
+    let boite = b.type_def(PUBLIC, "Generiques", "Boite`1", object);
+    b.generic_param(boite, 0, "T");
+    b.field(F_PUBLIC, "Valeur", &var(0));
+    b.field(F_PUBLIC | F_STATIC, "Compte", &[T_I4]);
+    b.method(
+        M_CTOR,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[]),
+        Some(Il::default().ldarg0().call(object_ctor).ret().body()),
+    );
+    b.method(
+        M_PUBLIC | M_HIDEBYSIG,
+        "Emballer",
+        &method_sig(true, &[T_OBJECT], &[&var(0)]),
+        Some(Il::default().op(LDARG1).tok(0x8C, t).ret().body()),
+    );
+    b.method(
+        M_PUBLIC | M_HIDEBYSIG,
+        "Texte",
+        &method_sig(true, &[T_STRING], &[&var(0)]),
+        Some(
+            Il::default()
+                .ldarga(1)
+                .prefix(0x16, t)
+                .callvirt(to_string)
+                .ret()
+                .body(),
+        ),
+    );
+
+    b.type_def(PUBLIC, "Generiques", "P", object);
+    let identite = b.method(
+        M_PUBLIC | M_STATIC,
+        "Identite",
+        &generic_method_sig(1, false, &mvar(0), &[&mvar(0)]),
+        Some(Il::default().ldarg0().ret().body()),
+    );
+    b.generic_param(identite, 0, "T");
+    let mut tableau_t = vec![0x1D];
+    tableau_t.extend_from_slice(&mvar(0));
+    let lire = b.method(
+        M_PUBLIC | M_STATIC,
+        "Lire",
+        &generic_method_sig(1, false, &mvar(0), &[&tableau_t, &[T_I4]]),
+        Some(Il::default().ldarg0().op(LDARG1).tok(0xA3, mt).ret().body()),
+    );
+    b.generic_param(lire, 0, "T");
+
+    let boite_int_sig = generic_inst(false, boite, &[&[T_I4]]);
+    let boite_int = b.type_spec(&boite_int_sig);
+    let boite_str = b.type_spec(&generic_inst(false, boite, &[&[T_STRING]]));
+    let ctor = b.member_ref(boite_int, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let emballer = b.member_ref(
+        boite_int,
+        "Emballer",
+        &method_sig(true, &[T_OBJECT], &[&var(0)]),
+    );
+    let texte = b.member_ref(
+        boite_int,
+        "Texte",
+        &method_sig(true, &[T_STRING], &[&var(0)]),
+    );
+    let valeur = b.member_ref(boite_int, "Valeur", &[&[0x06u8][..], &var(0)].concat());
+    let compte_int = b.member_ref(boite_int, "Compte", &[0x06, T_I4]);
+    let compte_str = b.member_ref(boite_str, "Compte", &[0x06, T_I4]);
+    let identite_int = b.method_spec(identite, &[&[T_I4]]);
+    let lire_int = b.method_spec(lire, &[&[T_I4]]);
+
+    let code = Il::default()
+        .newobj(ctor)
+        .op(STLOC0)
+        .op(LDLOC0)
+        .i4(41)
+        .call(emballer)
+        .tok(0xA5, int32) // 41
+        .op(LDLOC0)
+        .i4(2)
+        .stfld(valeur)
+        .op(LDLOC0)
+        .ldfld(valeur)
+        .op(ADD) // 43
+        .i4(1)
+        .stsfld(compte_int)
+        .i4(50)
+        .stsfld(compte_str)
+        .ldsfld(compte_int)
+        .op(ADD) // 44
+        .op(LDLOC0)
+        .i4(12345)
+        .callvirt(texte)
+        .callvirt(length)
+        .i4(100)
+        .op(MUL)
+        .op(ADD) // 544
+        .i4(9)
+        .call(identite_int)
+        .i4(1000)
+        .op(MUL)
+        .op(ADD) // 9544
+        .i4(3)
+        .tok(0x8D, int32)
+        .op(DUP)
+        .i4(2)
+        .i4(7)
+        .op(0x9E) // stelem.i4
+        .i4(2)
+        .call(lire_int)
+        .i4(10000)
+        .op(MUL)
+        .op(ADD) // 79544
+        .ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(code, vec![boite_int_sig.clone()])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 79544);
+}
+
+/// Arithmétique : comparaisons de flottants, NaN, décalages 64 bits,
+/// conversions non signées et débordement contrôlé.
+#[test]
+fn arithmetique_conforme() {
+    let mut b = Builder::new("Arith");
+    b.type_def(PUBLIC, "Arith", "P", 0);
+    let mut il = Il::default();
+    // 2.5 > 2.25 (comparaison flottante, pas entière) → 1
+    il.0.push(0x23);
+    il.0.extend_from_slice(&2.5f64.to_le_bytes());
+    il.0.push(0x23);
+    il.0.extend_from_slice(&2.25f64.to_le_bytes());
+    il.0.extend_from_slice(&[0xFE, 0x02]); // cgt
+                                           // NaN == NaN → 0 ; (NaN < 1).un → 1
+    il.0.push(0x23);
+    il.0.extend_from_slice(&f64::NAN.to_le_bytes());
+    il.0.push(0x23);
+    il.0.extend_from_slice(&1.0f64.to_le_bytes());
+    il.0.extend_from_slice(&[0xFE, 0x05]); // clt.un → 1
+    il.0.push(0x58); // 2
+                     // (1L << 40) >> 38 = 4
+    il.0.push(0x21);
+    il.0.extend_from_slice(&1i64.to_le_bytes());
+    il = il.i4(40).op(0x62); // shl
+    il = il.i4(38).op(0x63); // shr
+    il = il.op(0x69); // conv.i4
+    il = il.i4(10).op(MUL).op(ADD); // 42
+                                    // conv.u8 de -1 (int32) = 0xFFFFFFFF, >> 31 = 1
+    il = il
+        .i4(-1)
+        .op(0x6E)
+        .i4(31)
+        .op(0x64)
+        .op(0x69)
+        .i4(100)
+        .op(MUL)
+        .op(ADD); // 142
+    il = il.ret();
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(il.body()));
+    assert_eq!(lancer(&b.build(main), None), 142);
+}
+
+#[test]
+fn conv_ovf_leve_overflow_exception() {
+    let mut b = Builder::new("Ovf");
+    b.type_def(PUBLIC, "Ovf", "P", 0);
+    let il = Il::default().i4(300).op(0x86).ret(); // conv.ovf.u1.un
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(il.body()));
+    assert_eq!(lancer(&b.build(main), None), 0xE0434352u32 as i32);
+}
+
+#[test]
+fn ldloca_puis_ldind_relit_la_variable() {
+    let mut b = Builder::new("Sonde");
+    b.type_def(PUBLIC, "Sonde", "P", 0);
+    let mut body = Il::default()
+        .i4(5)
+        .op(0x0A) // stloc.0
+        .op(0x12)
+        .op(0x00) // ldloca.s 0
+        .op(0x4A) // ldind.i4
+        .ret()
+        .body();
+    body.locals = vec![vec![T_I4]];
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(body));
+    assert_eq!(lancer(&b.build(main), None), 5);
+}

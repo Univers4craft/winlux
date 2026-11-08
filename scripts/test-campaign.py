@@ -707,4 +707,13 @@ ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text(
    and "execute_assembly_in" in (ROOT / "runtime/src/main.rs").read_text(),
    "CLR : DLL .NET privées du dossier de l'appli chargées, appels, héritage, champs et .cctor entre assemblies (#926)")
 
+# ── Moteur .NET Framework, étape 2 (#945, #946) : cœur d'exécution, génériques ──
+ok("fn ensure_layout" in (clr / "typesys.rs").read_text()
+   and "fn instantiate" in (clr / "typesys.rs").read_text()
+   and "O::Constrained" in (clr / "il.rs").read_text()
+   and "les_generiques_sont_instancies" in (clr / "tests.rs").read_text()
+   and "ref_out_et_acces_indirects" in (clr / "tests.rs").read_text()
+   and "les_structures_se_copient" in (clr / "tests.rs").read_text(),
+   "CLR : ref/out, structures copiées, génériques instanciés (box/unbox de T, statiques, constrained., ldelem T) (#945, #946)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

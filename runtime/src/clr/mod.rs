@@ -12,8 +12,10 @@ pub mod il;
 pub mod metadata;
 pub mod opcodes;
 pub mod pinvoke;
+pub mod resolve;
 pub mod tables;
 pub mod types;
+pub mod typesys;
 
 use il::{ExecResult, Interpreter, Value};
 use metadata::Assembly;
@@ -55,6 +57,7 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
         load_types(&assemblies[idx], idx, &mut infos[idx]);
     }
     let mut interp = Interpreter::new(assemblies, infos);
+    interp.link_types();
 
     let row = Token(entry).rid();
     let sig = interp.assembly.get_method_def(row).signature;
@@ -86,11 +89,22 @@ fn unhandled(exc: &exceptions::ClrException) -> i32 {
     0xE0434352u32 as i32
 }
 
-/// Enregistre les types de l'assembly : parents, méthodes (pour la
-/// répartition virtuelle) et disposition des champs d'instance.
+/// Inscrit les types de l'assembly (noms, définition, méthodes). Parents,
+/// disposition des champs et instanciations génériques sont calculés par
+/// l'interpréteur, qui voit toutes les assemblies du domaine.
 fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo) {
     let count = assembly.row_count(TableId::TypeDef);
     let mut ids: Vec<Option<TypeId>> = vec![None; count as usize + 1];
+    let mut generic_params = vec![0u32; count as usize + 1];
+    for g in 1..=assembly.row_count(TableId::GenericParam) {
+        let (table, owner) =
+            CodedIndex::TypeOrMethodDef.decode(assembly.get_generic_param(g).owner);
+        if table == Some(TableId::TypeDef) {
+            if let Some(n) = generic_params.get_mut(owner as usize) {
+                *n += 1;
+            }
+        }
+    }
 
     for row in 1..=count {
         let td = assembly.get_type_def(row);
@@ -98,23 +112,6 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
         if name == "<Module>" {
             continue;
         }
-        let info = types::TypeInfo {
-            name: name.to_string(),
-            namespace: assembly.get_string(td.namespace).to_string(),
-            parent: types::TYPE_OBJECT,
-            fields: Vec::new(),
-            methods: Vec::new(),
-            instance_size: 0,
-        };
-        ids[row as usize] = Some(types::with_types(|reg| reg.register(info)));
-    }
-
-    for row in 1..=count {
-        let Some(id) = ids[row as usize] else {
-            continue;
-        };
-        let td = assembly.get_type_def(row);
-        let parent = resolve_type(assembly, td.extends, &ids).unwrap_or(0);
         let methods = assembly
             .type_methods(row)
             .map(|m| {
@@ -130,65 +127,20 @@ fn load_types(assembly: &Assembly, asm_index: usize, info: &mut domain::AsmInfo)
                 }
             })
             .collect();
-        types::with_types(|reg| {
-            let ti = reg.get_mut(id).unwrap();
-            ti.parent = parent;
-            ti.methods = methods;
-        });
-    }
-
-    let mut done = vec![false; count as usize + 1];
-    for row in 1..=count {
-        layout(assembly, row, &ids, &mut done);
+        let info = types::TypeInfo {
+            name: name.to_string(),
+            namespace: assembly.get_string(td.namespace).to_string(),
+            parent: types::TYPE_OBJECT,
+            methods,
+            def: Some((asm_index, row)),
+            generic_params: generic_params[row as usize],
+            is_interface: td.is_interface(),
+            ..types::TypeInfo::default()
+        };
+        ids[row as usize] = Some(types::with_types(|reg| reg.register(info)));
     }
     crate::log_debug!("clr", "{} types enregistrés", ids.iter().flatten().count());
     info.type_ids = ids;
-}
-
-/// Chaque champ d'instance occupe 8 octets à la suite de ceux du parent ; le
-/// premier emplacement de tout objet est réservé au runtime (message d'exception).
-fn layout(assembly: &Assembly, row: u32, ids: &[Option<TypeId>], done: &mut [bool]) {
-    let Some(id) = ids[row as usize] else { return };
-    if done[row as usize] {
-        return;
-    }
-    done[row as usize] = true;
-    let parent = types::with_types(|reg| reg.get(id).unwrap().parent);
-    if let Some(parent_row) = ids.iter().position(|&i| i == Some(parent)) {
-        layout(assembly, parent_row as u32, ids, done);
-    }
-    let base = types::with_types(|reg| reg.get(parent).map_or(8, |p| p.instance_size.max(8)));
-
-    let mut fields = Vec::new();
-    let mut offset = base;
-    for f in assembly.type_fields(row) {
-        if !assembly.get_field(f).is_static() {
-            fields.push(types::FieldInfo {
-                offset,
-                metadata_row: f,
-            });
-            offset += 8;
-        }
-    }
-    types::with_types(|reg| {
-        let ti = reg.get_mut(id).unwrap();
-        ti.fields = fields;
-        ti.instance_size = offset;
-    });
-}
-
-fn resolve_type(assembly: &Assembly, coded: u32, ids: &[Option<TypeId>]) -> Option<TypeId> {
-    let (table, row) = CodedIndex::TypeDefOrRef.decode(coded);
-    match table {
-        Some(TableId::TypeDef) => ids.get(row as usize).copied().flatten(),
-        Some(TableId::TypeRef) => {
-            let tr = assembly.get_type_ref(row);
-            let ns = assembly.get_string(tr.namespace);
-            let name = assembly.get_string(tr.name);
-            Some(types::with_types(|reg| reg.ensure_external(ns, name)))
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

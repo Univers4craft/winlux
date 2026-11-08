@@ -21,6 +21,9 @@ const MEMBER_REF: usize = 0x0A;
 const STANDALONE_SIG: usize = 0x11;
 const ASSEMBLY: usize = 0x20;
 const ASSEMBLY_REF: usize = 0x23;
+const TYPE_SPEC: usize = 0x1B;
+const GENERIC_PARAM: usize = 0x2A;
+const METHOD_SPEC: usize = 0x2B;
 
 pub const PUBLIC: u32 = 0x0001;
 pub const ABSTRACT: u32 = 0x0080;
@@ -85,6 +88,9 @@ pub struct Builder {
     member_refs: Vec<(u32, u32, u32)>,
     sigs: Vec<u32>,
     assembly_refs: Vec<u32>,
+    type_specs: Vec<u32>,
+    generic_params: Vec<(u16, u32, u32)>,
+    method_specs: Vec<(u32, u32)>,
 }
 
 /// Portée d'une référence de type.
@@ -108,6 +114,9 @@ impl Builder {
             member_refs: Vec::new(),
             sigs: Vec::new(),
             assembly_refs: Vec::new(),
+            type_specs: Vec::new(),
+            generic_params: Vec::new(),
+            method_specs: Vec::new(),
         };
         b.type_def(0, "", "<Module>", 0);
         b
@@ -205,11 +214,39 @@ impl Builder {
             0x02 => (parent & 0xFF_FFFF) << 3,
             0x01 => ((parent & 0xFF_FFFF) << 3) | 1,
             0x06 => ((parent & 0xFF_FFFF) << 3) | 3,
+            0x1B => ((parent & 0xFF_FFFF) << 3) | 4,
             _ => 0,
         };
         let (n, s) = (self.string(name), self.blob(sig));
         self.member_refs.push((class, n, s));
         0x0A00_0000 | self.member_refs.len() as u32
+    }
+
+    /// Type construit (jeton 0x1B…) d'après sa signature (`generic_inst`…).
+    pub fn type_spec(&mut self, sig: &[u8]) -> u32 {
+        let b = self.blob(sig);
+        self.type_specs.push(b);
+        0x1B00_0000 | self.type_specs.len() as u32
+    }
+
+    /// Paramètre générique `number` d'un type (0x02…) ou d'une méthode (0x06…).
+    pub fn generic_param(&mut self, owner: u32, number: u16, name: &str) {
+        let coded = ((owner & 0xFF_FFFF) << 1) | u32::from(owner >> 24 == 0x06);
+        let n = self.string(name);
+        self.generic_params.push((number, coded, n));
+    }
+
+    /// Instanciation d'une méthode générique (jeton 0x2B…).
+    pub fn method_spec(&mut self, method: u32, args: &[&[u8]]) -> u32 {
+        let coded = ((method & 0xFF_FFFF) << 1) | u32::from(method >> 24 == 0x0A);
+        let mut sig = vec![0x0A];
+        compress(&mut sig, args.len() as u32);
+        for a in args {
+            sig.extend_from_slice(a);
+        }
+        let b = self.blob(&sig);
+        self.method_specs.push((coded, b));
+        0x2B00_0000 | self.method_specs.len() as u32
     }
 
     /// Assemble le fichier PE ; `entry` est le jeton du point d'entrée (0 pour une DLL).
@@ -385,6 +422,13 @@ impl Builder {
         });
         rows.push((STANDALONE_SIG, ss.collect()));
 
+        let ts = self.type_specs.iter().map(|&b| {
+            let mut r = Vec::new();
+            w16(&mut r, b);
+            r
+        });
+        rows.push((TYPE_SPEC, ts.collect()));
+
         let mut a = Vec::new();
         w32(&mut a, 0x8004);
         for v in [1, 0, 0, 0] {
@@ -409,6 +453,27 @@ impl Builder {
             r
         });
         rows.push((ASSEMBLY_REF, ar.collect()));
+
+        // GenericParam est trié par propriétaire (§II.22).
+        let mut gp = self.generic_params.clone();
+        gp.sort_by_key(|&(number, owner, _)| (owner, number));
+        let gp = gp.iter().map(|&(number, owner, n)| {
+            let mut r = Vec::new();
+            w16(&mut r, number as u32);
+            w16(&mut r, 0);
+            w16(&mut r, owner);
+            w16(&mut r, n);
+            r
+        });
+        rows.push((GENERIC_PARAM, gp.collect()));
+
+        let ms = self.method_specs.iter().map(|&(m, b)| {
+            let mut r = Vec::new();
+            w16(&mut r, m);
+            w16(&mut r, b);
+            r
+        });
+        rows.push((METHOD_SPEC, ms.collect()));
 
         rows.retain(|(_, r)| !r.is_empty());
         let mut tables = Vec::new();
@@ -555,4 +620,46 @@ impl Il {
     pub fn body(self) -> Body {
         Body::new(self.0)
     }
+}
+
+/// Signature `GENERICINST CLASS|VALUETYPE type<args>`.
+pub fn generic_inst(value_type: bool, def: u32, args: &[&[u8]]) -> Vec<u8> {
+    let mut v = vec![0x15];
+    let mut inner = class(def);
+    if value_type {
+        inner[0] = 0x11;
+    }
+    v.extend_from_slice(&inner);
+    compress(&mut v, args.len() as u32);
+    for a in args {
+        v.extend_from_slice(a);
+    }
+    v
+}
+
+/// Type valeur (`VALUETYPE` + TypeDefOrRefEncoded).
+pub fn value_type(token: u32) -> Vec<u8> {
+    let mut v = class(token);
+    v[0] = 0x11;
+    v
+}
+
+/// `!n` (paramètre du type) et `!!n` (paramètre de la méthode).
+pub fn var(n: u8) -> Vec<u8> {
+    vec![0x13, n]
+}
+pub fn mvar(n: u8) -> Vec<u8> {
+    vec![0x1E, n]
+}
+
+/// Signature de méthode générique (`GENERIC`, nombre de paramètres de type).
+pub fn generic_method_sig(generics: u32, has_this: bool, ret: &[u8], params: &[&[u8]]) -> Vec<u8> {
+    let mut v = vec![0x10 | if has_this { 0x20 } else { 0x00 }];
+    compress(&mut v, generics);
+    compress(&mut v, params.len() as u32);
+    v.extend_from_slice(ret);
+    for p in params {
+        v.extend_from_slice(p);
+    }
+    v
 }

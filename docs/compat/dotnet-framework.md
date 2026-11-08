@@ -58,7 +58,7 @@ utile, `MissingMethodException System.OperatingSystem::get_Version`.
 | # | Étape | Témoin | État |
 |---|---|---|---|
 | 1 | Chargeur multi-assemblies, appels, héritage, champs et constructeurs statiques entre assemblies | `clr::tests` (Outils.dll + Programme) ; SetupDownloader charge Newtonsoft.Json | fait (#926) |
-| 2 | Génériques (TypeSpec, MethodSpec, `constrained.`) | collections | à faire |
+| 2 | Nouveau cœur d'exécution : disposition mémoire réelle, `ref`/`out`, structures copiées, génériques (TypeSpec, MethodSpec, `constrained.`), arithmétique ECMA | `clr::tests` (ref/out, structures, `Boite<T>`, arithmétique) | fait (#945, #946) |
 | 3 | Délégués, événements, lambdas (`ldftn`, `ldvirtftn`) | LINQ, `EventHandler` | à faire |
 | 4 | Exceptions complètes (filtres, finally, rethrow) | | à faire |
 | 5 | Threads, `async/await`, `Task` (recoupe #269) | | à faire |
@@ -72,3 +72,16 @@ leur type (ECMA-335 §II.10.5.3) et non plus tous au démarrage.
 SetupDownloader charge Newtonsoft.Json depuis son dossier, ne s'arrête plus sur
 `OperatingSystem::get_Version` et va jusqu'à `MessageBox::Show`, qui relève de
 l'étape 8.
+
+## Cœur d'exécution (depuis l'étape 2)
+
+- Arguments et variables locales vivent dans une zone propre à chaque appel,
+  qui ne bouge pas : `ldloca`/`ldarga` donnent de vraies adresses.
+- Chaque valeur est rangée selon son type (`Kind`) : entiers sur leur largeur,
+  références sur 8 octets, types valeur en place. Champs sur des emplacements
+  multiples de 8 octets (le ramasse-miettes parcourt la mémoire par mots).
+- Sur la pile d'évaluation, un type valeur est une copie temporaire dans le
+  tas, recopiée à chaque rangement.
+- Génériques : code IL partagé, contexte (`!0`, `!!0`) propre à chaque appel ;
+  chaque instanciation est un type avec sa disposition et ses statiques.
+- Tableaux : éléments à leur taille naturelle (`byte[]` = 1 octet par élément).
