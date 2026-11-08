@@ -159,6 +159,10 @@ ok("MsiGetPropertyW" in msi_session and "MsiProcessMessage" in msi_session
    and "--msi-dll-action" in (ROOT / "runtime/src/main.rs").read_text()
    and "i686-w64-mingw32-gcc" in (SCRIPTS / "test-msi-actions.sh").read_text(),
    "msiexec : actions personnalisées DLL x86 et x64 (types 1 et 17) avec session msi.dll (#833)")
+msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
+ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
+   and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
