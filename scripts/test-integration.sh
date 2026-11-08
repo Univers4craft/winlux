@@ -210,6 +210,40 @@ set -e
 test ! -s "$work/dialogue.log" || fail "bureau PE : boîte en double avec l'écran bleu"
 ok "plantage d'un .exe graphique ouvert depuis l'Explorateur : message affiché"
 
+# Code de sortie Windows complet (#1205) : le runtime l'écrit dans
+# WINLUX_EXIT_CODE_FILE ; le message montre 0x780148E0, pas « code 224 ».
+codebin="$work/code-bin"
+mkdir -p "$codebin"
+cat >"$codebin/winlux" <<FIN
+#!/bin/sh
+if [ "\$1" = --inspect ]; then echo gui; exit 0; fi
+test -n "\${WINLUX_EXIT_CODE_FILE:-}" || exit 99
+cat "$work/code-voulu" >"\$WINLUX_EXIT_CODE_FILE"
+exit "\$(cat "$work/statut-voulu")"
+FIN
+chmod +x "$codebin/winlux"
+cp "$apps/fenetre.exe" "$apps/installeur.exe"
+code_launch() {
+    printf '%s\n' "$1" >"$work/code-voulu"; printf '%s' "$2" >"$work/statut-voulu"
+    : >"$work/dialogue.log"
+    env PATH="$fake:$PATH" DISPLAY=:99 XDG_STATE_HOME="$work/state" WINLUX_RUNTIME="$codebin/winlux" \
+        WINLUX_JOURNAL_DIR="$journal" "$open" "$apps/installeur.exe" </dev/null >"$work/sortie.log" 2>&1
+}
+set +e
+code_launch 0x780148E0 224; status=$?
+set -e
+test "$status" -eq 224 || fail "code complet : statut $status au lieu de 224"
+grep -q 'code 0x780148E0' "$work/dialogue.log" || fail "code complet absent du message : $(cat "$work/dialogue.log")"
+if grep -q 'code 224' "$work/dialogue.log"; then fail "octet de poids faible encore affiché"; fi
+set +e
+code_launch 0x00000100 0; status=$?
+set -e
+test "$status" -ne 0 || fail "0x100 (statut Linux 0) pris pour un succès"
+grep -q 'code 0x00000100' "$work/dialogue.log" || fail "0x100 : aucun message"
+code_launch 0x00000000 0 || fail "succès pris pour un échec"
+test ! -s "$work/dialogue.log" || fail "succès : boîte affichée"
+ok "code de sortie Windows complet en hexadécimal (#1205)"
+
 # Installateur 32 bits que le runtime déroule lui-même (WiX Burn comme
 # vc_redist.x64.exe, NSIS, Inno Setup) : --inspect répond « setup » et le
 # double-clic l'installe au lieu de refuser un programme 32 bits.
