@@ -804,7 +804,7 @@ unsafe fn draw_rules(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         let i = VISIBLE[k];
         let rule = &RULES[i];
         let row = rect(x - 8, y, a.right - 16, y + ROW_H - 2);
-        let hover = h.add(row, ID_ROW + i as u16);
+        let hover = h.row(row, ID_ROW + i as u16);
         if i == SELECTED {
             round_rect(
                 g.hdc, g.b, row.left, row.top, row.right, row.bottom, 4, p.selected,

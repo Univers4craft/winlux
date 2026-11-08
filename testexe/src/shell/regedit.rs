@@ -1622,7 +1622,7 @@ unsafe fn draw_tree(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         let node = NODES[i];
         let y = a.top + 4 + row as i32 * ROW_H;
         let r = rect(a.left + 4, y, a.right - 4, y + ROW_H - 2);
-        let hover = h.add(r, ID_TREE + row as u16);
+        let hover = h.row(r, ID_TREE + row as u16);
         let selected = i == SEL;
         let bg = if selected {
             if FOCUS_VALUES {
@@ -1653,7 +1653,7 @@ unsafe fn draw_tree(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         let indent = a.left + 10 + node.depth as i32 * 16;
         set_glyph_bg(Some(bg));
         if node.children {
-            h.add(
+            h.row(
                 rect(indent - 2, y, indent + 16, y + ROW_H - 2),
                 ID_TOGGLE + row as u16,
             );
@@ -1763,7 +1763,7 @@ unsafe fn draw_values(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         let v = &VALUES[i];
         let y = first + row as i32 * ROW_H;
         let r = rect(a.left + 6, y, a.right - 8, y + ROW_H - 2);
-        let hover = h.add(r, ID_VAL + i as u16);
+        let hover = h.row(r, ID_VAL + i as u16);
         let selected = i == VSEL;
         let bg = if selected && FOCUS_VALUES {
             p.selected
@@ -1842,7 +1842,7 @@ unsafe fn draw_menu(g: &mut Gfx, h: &mut Hits, x: i32, y: i32) {
         + 48;
     let ht = MENU_ITEMS.len() as i32 * 32 + 8 + 9;
     panel(g.hdc, g.b, x, y, x + w, y + ht, 8, p.surface, p.border);
-    h.add(rect(x, y, x + w, y + ht), 0xFFFE);
+    h.modal(rect(x, y, x + w, y + ht), 0xFFFE);
     let mut iy = y + 4;
     for (k, t) in MENU_ITEMS.iter().enumerate() {
         let r = rect(x + 4, iy, x + w - 4, iy + 30);
@@ -2313,7 +2313,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         0x71 => start_rename(), // F2
         0x74 => refresh_all(),  // F5
         0x2E => ask_delete(),   // Suppr
-        0x09 => FOCUS_VALUES = !FOCUS_VALUES,
+        0x09 | 0x75 => FOCUS_VALUES = !FOCUS_VALUES, // F6 ou Ctrl+Tab (#28)
         0x26 | 0x28 => {
             let down = vk == 0x28;
             if FOCUS_VALUES {

@@ -515,7 +515,8 @@ pub fn is_bundle_file(path: &Path) -> bool {
     if !meta.is_file() || meta.len() < 4096 {
         return false;
     }
-    std::fs::read(path).is_ok_and(|d| find_section(&d).is_some())
+    // Projeté, pas lu : lancer claude.exe (300 Mo) en faisait une copie (#997).
+    crate::loader::ImageFile::open(path).is_ok_and(|d| find_section(&d).is_some())
 }
 
 /// Écrit les fichiers d'un paquet dans `dir`, chemins relatifs conservés

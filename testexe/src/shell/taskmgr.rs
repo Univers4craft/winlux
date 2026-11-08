@@ -579,7 +579,7 @@ unsafe fn columns(
     for (i, (label, w, total)) in cols.iter().enumerate() {
         let cw = if i + 1 == cols.len() { right - cx } else { *w };
         let r = rect(cx, y, cx + cw, y + hh);
-        if h.add(r, ID_COL + i as u16) {
+        if h.row(r, ID_COL + i as u16) {
             fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.hover);
         }
         if i > 0 {
@@ -959,7 +959,7 @@ unsafe fn draw_proc_row(
     let p = pal();
     let row_h = 32;
     let r = rect(x, y, right - 10, y + row_h);
-    let hover = h.add(r, ID_ROW + slot as u16);
+    let hover = h.row(r, ID_ROW + slot as u16);
     let cx = x + name_w;
     heat(g, cx + col_w, y, col_w, row_h, pr.cpu);
     let mem_pm = if sm::MEM_TOTAL_KB > 0 {
@@ -1050,7 +1050,7 @@ unsafe fn draw_menu(g: &mut Gfx, h: &mut Hits, client: &Rect) {
     let x = MENU_X.min(client.right - w - 4).max(client.left);
     let y = MENU_Y.min(client.bottom - ht - 4).max(client.top);
     // Un clic hors du menu le ferme.
-    h.add(*client, ID_MENU + 50);
+    h.modal(*client, ID_MENU + 50);
     panel(g.hdc, g.b, x, y, x + w, y + ht, 8, p.surface2, p.border);
     let mut iy = y + 6;
     for i in 0..items {
@@ -2191,7 +2191,7 @@ unsafe fn draw_history(g: &mut Gfx, h: &mut Hits, c: &Rect) {
     let mut t = T::new();
     for (i, a) in list.iter().enumerate().skip(SCROLL).take(VISIBLE_ROWS) {
         let r = rect(c.left, y, c.right - 10, y + row_h);
-        let hover = h.add(r, ID_ROW + (i - SCROLL) as u16);
+        let hover = h.row(r, ID_ROW + (i - SCROLL) as u16);
         row_bg(g, &r, false, hover);
         let kind = if a.exe { Glyph::Exe } else { Glyph::Terminal };
         glyph(g.hdc, g.b, g.f, kind, c.left + 20, y + 8, 16);
@@ -2306,7 +2306,7 @@ unsafe fn draw_startup(g: &mut Gfx, h: &mut Hits, c: &Rect) {
         .take(VISIBLE_ROWS)
     {
         let r = rect(c.left, y, c.right - 10, y + row_h);
-        let hover = h.add(r, ID_ROW + (i - SCROLL) as u16);
+        let hover = h.row(r, ID_ROW + (i - SCROLL) as u16);
         row_bg(g, &r, SELECTED_ITEM == i, hover);
         let mut x = c.left;
         text_fit(
@@ -2635,7 +2635,7 @@ unsafe fn draw_details(g: &mut Gfx, h: &mut Hits, c: &Rect) {
         let pr = &procs[i as usize];
         rows[slot] = pr.pid;
         let r = rect(c.left, y, c.right - 10, y + row_h);
-        let hover = h.add(r, ID_ROW + slot as u16);
+        let hover = h.row(r, ID_ROW + slot as u16);
         row_bg(g, &r, SELECTED_PID == pr.pid, hover);
         let ty = y + 6;
         let mut x = c.left;
@@ -2779,7 +2779,7 @@ unsafe fn draw_services(g: &mut Gfx, h: &mut Hits, c: &Rect) {
         .take(VISIBLE_ROWS)
     {
         let r = rect(c.left, y, c.right - 10, y + row_h);
-        let hover = h.add(r, ID_ROW + (i - SCROLL) as u16);
+        let hover = h.row(r, ID_ROW + (i - SCROLL) as u16);
         row_bg(g, &r, false, hover);
         let ty = y + 6;
         let mut x = c.left;
@@ -3183,6 +3183,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             true
         }
         0x09 if DIALOG == Dialog::None => {
+            // Ctrl+Tab : onglet suivant ; Tab seul va de contrôle en contrôle (#28).
             let mut next = (TAB + 1) % TAB_COUNT;
             while !tab_visible(next) {
                 next = (next + 1) % TAB_COUNT;
