@@ -166,6 +166,12 @@ ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
 ok("fn msi_view_modify" in msi_views and "MsiRecordReadStream" in (ROOT / "runtime/src/msi/session.rs").read_text()
    and "MSIMODIFY_INSERT_TEMPORARY" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
    "msiexec : une action DLL écrit dans la base (MsiViewModify) et lit les flux de la table Binary (#833)")
+msi_script = (ROOT / "runtime/src/msi/script/mod.rs").read_text()
+ok("--msi-script-action" in (ROOT / "runtime/src/main.rs").read_text()
+   and "fn status_code" in msi_script and (ROOT / "runtime/src/msi/script/vbs.rs").exists()
+   and (ROOT / "runtime/src/msi/script/js.rs").exists()
+   and "scripts/test-msi-scripts.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "msiexec : actions personnalisées VBScript et JScript (types 5, 6, 21, 22, 37, 38, 53, 54) avec l'objet Session (#973)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
