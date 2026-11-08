@@ -92,6 +92,8 @@ dinput8.rs	DiObj	a-verifier
 dpapi.rs	DataBlob	a-verifier	
 dplayx.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 170-192 (IDirectPlay4A)
 dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 174-176 (IDirectPlayLobby3A)
+dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 223-236 (IDirectPlay8Address)
+dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	

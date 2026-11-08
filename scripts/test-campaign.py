@@ -642,12 +642,13 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and (runtime_dlls / "d3dx9_asm.rs").exists() and (runtime_dlls / "d3dx9_shader.rs").exists()
    and (runtime_dlls / "d3dx9_mesh.rs").exists()
    and (runtime_dlls / "d3dx9_hlsl.rs").exists() and (runtime_dlls / "d3dx9_effect.rs").exists()
-   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (runtime_dlls / "dpnet.rs").exists()
+   and "DirectPlay 4 et 8" in (SCRIPTS / "test-wow32.sh").read_text()
    and (ROOT / "runtime/src/audio/synth.rs").exists()
    and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
-   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
 
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
