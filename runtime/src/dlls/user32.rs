@@ -363,6 +363,12 @@ unsafe fn create_window_inner(
             }
         } else {
             b.create_window(hwnd, &title, rect);
+            if style & 0x8000_0000 != 0 {
+                crate::thunks::api_note(&format!(
+                    "CreateWindowEx {hwnd:#x} {class:?} : style {style:#x}, ex {ex_style:#x}, parent {parent:#x}, hors gestionnaire {} (#1222)",
+                    floating_popup(style, ex_style)
+                ));
+            }
             if class.eq_ignore_ascii_case(super::controls::popup::CLASS)
                 || floating_popup(style, ex_style)
             {
@@ -4210,19 +4216,27 @@ fn owner_top_level(mut hwnd: usize) -> usize {
 }
 
 /// Fenêtre surgissante qui n'est ni une boîte ni une fenêtre d'application :
-/// WS_POPUP sans barre de titre, WS_EX_TOOLWINDOW (absente de la barre des
-/// tâches) et jamais activée (WS_EX_NOACTIVATE). C'est la forme d'un menu
-/// dessiné par le programme lui-même, comme le menu de l'icône de Claude
-/// (Chromium, #1222) : le gestionnaire de fenêtres ne doit ni la recentrer
-/// ni lui donner un bouton dans la barre des tâches.
+/// WS_POPUP sans barre de titre, ni en couches ni WS_EX_APPWINDOW, et
+/// marquée outil (WS_EX_TOOLWINDOW), jamais activée (WS_EX_NOACTIVATE) ou
+/// toujours au premier plan (WS_EX_TOPMOST). C'est la forme d'un menu ou
+/// d'une bulle dessinés par le programme, comme le menu de l'icône de
+/// Claude (Chromium, #1222) : le gestionnaire de fenêtres ne doit ni la
+/// recentrer ni lui donner un bouton dans la barre des tâches. La première
+/// version exigeait outil ET non activable, ce que ce menu n'a pas.
+/// Une fenêtre en couches (Flow Launcher) reste gérée : elle prend le
+/// clavier.
 fn floating_popup(style: u32, ex_style: u32) -> bool {
     const WS_POPUP: u32 = 0x8000_0000;
     const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_EX_TOPMOST: u32 = 0x0000_0008;
     const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_APPWINDOW: u32 = 0x0004_0000;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
     const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
     style & WS_POPUP != 0
         && style & WS_CAPTION != WS_CAPTION
-        && ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) == WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        && ex_style & (WS_EX_LAYERED | WS_EX_APPWINDOW) == 0
+        && ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) != 0
 }
 
 /// Fenêtre en couches (WS_EX_LAYERED) sans barre de titre Win32 : tout son
@@ -4303,8 +4317,15 @@ mod tests {
     #[test]
     fn menu_dessine_par_le_programme_hors_gestionnaire() {
         assert!(floating_popup(0x8000_0000, 0x0800_0080));
-        assert!(floating_popup(0x8000_0000, 0x0808_0088));
-        assert!(!floating_popup(0x8000_0000, 0x0000_0080));
+        assert!(floating_popup(0x8000_0000, 0x0000_0080));
+        assert!(floating_popup(0x8600_0000, 0x0000_0008));
+        assert!(floating_popup(0x8000_0000, 0x0800_0000));
+        assert!(
+            !floating_popup(0x8000_0000, 0x0008_0088),
+            "en couches : Flow"
+        );
+        assert!(!floating_popup(0x8000_0000, 0x0004_0080), "WS_EX_APPWINDOW");
+        assert!(!floating_popup(0x8000_0000, 0));
         assert!(!floating_popup(0x80C0_0000, 0x0800_0080));
         assert!(!floating_popup(0x0000_0000, 0x0800_0080));
     }
