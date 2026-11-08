@@ -39,6 +39,8 @@ def windows():
             result[fields[0]] = (tuple(map(int, fields[2:6])), fields[7])
     return result
 
+# Titre de l'Explorateur dans la langue de la session (#888).
+EXPLORER_TITLES = ("Explorateur de fichiers", "File Explorer", "Explorador de archivos", "Datei-Explorer")
 # The Settings window title follows the interface language since #145.
 SETTINGS_TITLES = ("Paramètres", "Settings", "Configuración", "Einstellungen", "Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
                    "Configuración de Winlux", "Winlux-Einstellungen")
