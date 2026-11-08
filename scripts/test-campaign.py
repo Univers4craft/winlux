@@ -966,6 +966,13 @@ ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
    and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
 
+# #1056 : logiciels publiés pour Linux par leur éditeur (Claude, ChatGPT…) dans le Store.
+ok("class Editeur(Source)" in (SCRIPTS / "winlux-store.py").read_text()
+   and "set_default_response(Gtk.ResponseType.CANCEL)" in (SCRIPTS / "winlux-store-confirm.py").read_text()
+   and '"winlux-store-repos"' in (SCRIPTS / "winlux-root.py").read_text()
+   and "test-store-editeurs.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "Store : logiciels des éditeurs, confirmation (Annuler par défaut), SHA-256, purge et dépôt retiré (#1056)")
+
 # ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
 clr = ROOT / "runtime/src/clr"
 ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text()
