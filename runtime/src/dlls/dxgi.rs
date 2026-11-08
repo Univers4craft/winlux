@@ -591,6 +591,8 @@ struct DxgiAdapterVTable {
     set_video_memory_reservation: unsafe extern "win64" fn() -> i32,
     register_budget: unsafe extern "win64" fn() -> i32,
     unregister_budget: unsafe extern "win64" fn() -> i32,
+    // IDXGIAdapter4
+    get_desc3: unsafe extern "win64" fn(*mut DxgiAdapter, *mut DxgiAdapterDesc1) -> i32,
 }
 
 /// DXGI_ADAPTER_DESC1/2 : DESC + Flags (+ champs DESC2 laissés à zéro).
@@ -618,16 +620,24 @@ impl DxgiAdapter {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        // IDXGIAdapter1 (29038f61), 2 (0aa1ae0a), 3 (645967a4), IDXGIObject.
+        // IDXGIAdapter1 (29038f61), 2 (0aa1ae0a), 3 (645967a4), 4 (3c8d99d1),
+        // IDXGIObject.
         if *riid == IID_IUNKNOWN
             || *riid == IID_IDXGI_ADAPTER
-            || [0x2903_8f61, 0x0aa1_ae0a, 0x6459_67a4, 0xaec2_2fb8].contains(&riid.data1)
+            || [
+                0x2903_8f61,
+                0x0aa1_ae0a,
+                0x6459_67a4,
+                0x3c8d_99d1,
+                0xaec2_2fb8,
+            ]
+            .contains(&riid.data1)
         {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (adaptateur)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -730,7 +740,10 @@ unsafe extern "win64" fn adapter_get_desc1(
     );
     S_OK
 }
-/// DESC2 ajoute 12 octets (granularités, zéro) : on les efface d'abord.
+/// DESC2 (et DESC3) ajoutent les deux granularités de préemption après
+/// Flags : 316 octets, 320 avec l'alignement. Elles restent à zéro.
+const DXGI_ADAPTER_DESC2_SIZE: usize = 320;
+
 unsafe extern "win64" fn adapter_get_desc2(
     this: *mut DxgiAdapter,
     out: *mut DxgiAdapterDesc1,
@@ -738,11 +751,7 @@ unsafe extern "win64" fn adapter_get_desc2(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    std::ptr::write_bytes(
-        out as *mut u8,
-        0,
-        std::mem::size_of::<DxgiAdapterDesc1>() + 12,
-    );
+    std::ptr::write_bytes(out as *mut u8, 0, DXGI_ADAPTER_DESC2_SIZE);
     adapter_get_desc1(this, out)
 }
 unsafe extern "win64" fn adapter_notimpl() -> i32 {
@@ -790,6 +799,8 @@ static ADAPTER_VTABLE: DxgiAdapterVTable = DxgiAdapterVTable {
     set_video_memory_reservation: adapter_ok,
     register_budget: adapter_notimpl,
     unregister_budget: adapter_ok,
+    // DXGI_ADAPTER_DESC3 a la même disposition que DESC2.
+    get_desc3: adapter_get_desc2,
 };
 
 /// Description de l'adaptateur : le vrai GPU quand Vulkan le connaît.
@@ -905,7 +916,7 @@ impl DxgiSwapChain {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (chaîne d'échange)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1228,7 +1239,7 @@ impl DxgiFactory {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (fabrique)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1619,5 +1630,16 @@ mod refcount_tests {
             assert_eq!(DxgiFactory::release(parent.cast()), 1);
             assert_eq!(DxgiAdapter::release(a), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod adapter_desc_tests {
+    #[test]
+    fn adapter_desc_sizes_match_windows() {
+        // DXGI_ADAPTER_DESC 304 octets, DESC1 312 ; DESC2/3 = 320.
+        assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc>(), 304);
+        assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc1>(), 312);
+        assert!(super::DXGI_ADAPTER_DESC2_SIZE >= 312 + 8);
     }
 }

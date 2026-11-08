@@ -13,6 +13,8 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
+#[path = "d3d11_ext.rs"]
+mod ext;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
 
@@ -44,6 +46,12 @@ const IID_ID3D11_DEVICE_CONTEXT: Guid = Guid {
     data2: 0xe089,
     data3: 0x44fb,
     data4: [0x8e, 0xaf, 0x26, 0xf8, 0x79, 0x61, 0x90, 0xda],
+};
+const IID_ID3D11_DEVICE_CHILD: Guid = Guid {
+    data1: 0x1841e5c8,
+    data2: 0x16b0,
+    data3: 0x489b,
+    data4: [0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae],
 };
 const IID_ID3D11_TEXTURE2D: Guid = Guid {
     data1: 0x6f15aaf2,
@@ -261,12 +269,17 @@ impl Texture2D {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_TEXTURE2D {
+        // ID3D11Resource (dc8e63f3) et ID3D11DeviceChild en sont la base.
+        if *riid == IID_IUNKNOWN
+            || *riid == IID_ID3D11_TEXTURE2D
+            || *riid == IID_ID3D11_DEVICE_CHILD
+            || riid.data1 == 0xdc8e_63f3
+        {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("d3d11", riid);
+        crate::dlls::comobj::log_no_interface("d3d11 (texture 2D)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -640,7 +653,7 @@ impl Buffer {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("d3d11", riid);
+        crate::dlls::comobj::log_no_interface("d3d11 (tampon)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1736,6 +1749,8 @@ struct DeviceContextVTable {
     get_type_ctx: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 112
     get_context_flags: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 113
     finish_command_list: unsafe extern "win64" fn(*mut DeviceContext, i32, *mut *mut c_void) -> i32, // 114
+    /// ID3D11DeviceContext1 à 4 (115-148).
+    ext: ext::ContextExt,
 }
 
 #[repr(C)]
@@ -1743,6 +1758,8 @@ pub(crate) struct DeviceContext {
     vtable: *const DeviceContextVTable,
     ref_count: AtomicU32,
     state: Mutex<DeviceContextState>,
+    /// Appareil qui a créé ce contexte (sans référence : il vit plus longtemps).
+    device: std::sync::atomic::AtomicPtr<Device>,
 }
 
 unsafe impl Send for DeviceContext {}
@@ -1758,12 +1775,21 @@ unsafe extern "win64" fn ctx_qi(
         return E_INVALIDARG;
     }
     let riid = &*riid;
-    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE_CONTEXT {
+    if *riid == IID_IUNKNOWN
+        || *riid == IID_ID3D11_DEVICE_CONTEXT
+        || *riid == IID_ID3D11_DEVICE_CHILD
+        || ext::is_context_n_iid(riid)
+    {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
         return S_OK;
     }
-    crate::dlls::comobj::log_no_interface("d3d11", riid);
+    // ID3D10Multithread se demande aussi au contexte immédiat.
+    let dev = (*this).device.load(Ordering::Acquire);
+    if *riid == ext::IID_MULTITHREAD && !dev.is_null() {
+        return dev_qi(dev, riid, out);
+    }
+    crate::dlls::comobj::log_no_interface("d3d11 (contexte)", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
@@ -1778,7 +1804,16 @@ unsafe extern "win64" fn ctx_release(this: *mut DeviceContext) -> u32 {
     }
     prev - 1
 }
-unsafe extern "win64" fn ctx_get_device(_: *mut DeviceContext, _: *mut *mut c_void) {}
+unsafe extern "win64" fn ctx_get_device(this: *mut DeviceContext, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let dev = (*this).device.load(Ordering::Acquire);
+    if !dev.is_null() {
+        dev_addref(dev);
+    }
+    *out = dev.cast();
+}
 unsafe extern "win64" fn ctx_get_priv(
     _: *mut DeviceContext,
     _: *const Guid,
@@ -3076,6 +3111,7 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     get_type_ctx: ctx_get_type,
     get_context_flags: ctx_get_flags,
     finish_command_list: ctx_finish_cl,
+    ext: ext::CONTEXT_EXT,
 };
 
 fn create_device_context() -> *mut DeviceContext {
@@ -3083,6 +3119,7 @@ fn create_device_context() -> *mut DeviceContext {
         vtable: &DEVICE_CONTEXT_VTABLE,
         ref_count: AtomicU32::new(1),
         state: Mutex::new(DeviceContextState::default()),
+        device: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
     }))
 }
 
@@ -3232,6 +3269,8 @@ struct DeviceVTable {
     get_immediate_context: unsafe extern "win64" fn(*mut Device, *mut *mut c_void),
     set_exception_mode: unsafe extern "win64" fn(*mut Device, u32) -> i32,
     get_exception_mode: unsafe extern "win64" fn(*mut Device) -> u32,
+    /// ID3D11Device1 à 5 (43-68).
+    ext: ext::DeviceExt,
 }
 
 #[repr(C)]
@@ -3240,7 +3279,10 @@ struct Device {
     ref_count: AtomicU32,
     context: *mut DeviceContext,
     feature_level: u32,
+    /// D3D11_CREATE_DEVICE_FLAG passés à la création (GetCreationFlags).
+    flags: u32,
     dxgi: DxgiDevice,
+    multithread: ext::Multithread,
 }
 
 unsafe impl Send for Device {}
@@ -3490,9 +3532,14 @@ unsafe extern "win64" fn dev_qi(
         return E_INVALIDARG;
     }
     let riid = &*riid;
-    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE {
+    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE || ext::is_device_n_iid(riid) {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
+        return S_OK;
+    }
+    if *riid == ext::IID_MULTITHREAD {
+        (*this).ref_count.fetch_add(1, Ordering::Relaxed);
+        *out = std::ptr::addr_of_mut!((*this).multithread).cast();
         return S_OK;
     }
     if is_dxgi_device_iid(riid) {
@@ -3500,7 +3547,7 @@ unsafe extern "win64" fn dev_qi(
         *out = std::ptr::addr_of_mut!((*this).dxgi).cast();
         return S_OK;
     }
-    crate::dlls::comobj::log_no_interface("d3d11", riid);
+    crate::dlls::comobj::log_no_interface("d3d11 (appareil)", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
@@ -3879,12 +3926,56 @@ unsafe extern "win64" fn dev_check_counter(
     E_NOTIMPL
 }
 
+/// CheckFeatureSupport : la structure demandée est toujours remplie ; ce que
+/// la couche OpenGL ne sait pas faire y reste à zéro.
 unsafe extern "win64" fn dev_check_feature(
-    _: *mut Device,
-    _feature: u32,
-    _data: *mut c_void,
-    _size: u32,
+    this: *mut Device,
+    feature: u32,
+    data: *mut c_void,
+    size: u32,
 ) -> i32 {
+    if data.is_null() || size == 0 {
+        return E_INVALIDARG;
+    }
+    // D3D11_FEATURE_FORMAT_SUPPORT : { InFormat, OutFormatSupport }.
+    if feature == 2 {
+        if size != 8 {
+            return E_INVALIDARG;
+        }
+        let d = data as *mut u32;
+        return dev_check_format(this, *d, d.add(1));
+    }
+    let keep_format = feature == 3 && size >= 4;
+    let format = if keep_format {
+        *(data as *const u32)
+    } else {
+        0
+    };
+    std::ptr::write_bytes(data as *mut u8, 0, size as usize);
+    let b = data as *mut i32;
+    let n = size as usize / 4;
+    let set = |i: usize| {
+        if i < n {
+            *b.add(i) = 1;
+        }
+    };
+    match feature {
+        // D3D11_FEATURE_THREADING : créations concurrentes, pas de listes.
+        0 => set(0),
+        // D3D10_X_HARDWARE_OPTIONS : tampons bruts et structurés en calcul.
+        4 => set(0),
+        // D3D11_OPTIONS : ignorés/indications (Discard, Update/Copy), ClearView,
+        // mise à jour partielle et décalage des tampons de constantes,
+        // NO_OVERWRITE sur tampons de constantes dynamiques.
+        5 => {
+            for i in [2, 3, 4, 6, 7, 8] {
+                set(i);
+            }
+        }
+        // FORMAT_SUPPORT2 : rien d'atomique.
+        3 => *(data as *mut u32) = format,
+        _ => {}
+    }
     S_OK
 }
 
@@ -3915,8 +4006,8 @@ unsafe extern "win64" fn dev_set_priv_iface(
 unsafe extern "win64" fn dev_get_feature_level(this: *mut Device) -> u32 {
     (*this).feature_level
 }
-unsafe extern "win64" fn dev_get_creation_flags(_: *mut Device) -> u32 {
-    0
+unsafe extern "win64" fn dev_get_creation_flags(this: *mut Device) -> u32 {
+    (*this).flags
 }
 unsafe extern "win64" fn dev_get_removed_reason(_: *mut Device) -> i32 {
     S_OK
@@ -3980,7 +4071,19 @@ static DEVICE_VTABLE: DeviceVTable = DeviceVTable {
     get_immediate_context: dev_get_immediate_context,
     set_exception_mode: dev_set_exception_mode,
     get_exception_mode: dev_get_exception_mode,
+    ext: ext::DEVICE_EXT,
 };
+
+/// Premier niveau demandé que la couche OpenGL sait tenir (11_1 au plus) ;
+/// une liste qui n'en offre aucun garde son plus bas niveau.
+pub(super) fn pick_feature_level(levels: &[u32]) -> u32 {
+    levels
+        .iter()
+        .copied()
+        .find(|&l| l <= D3D_FEATURE_LEVEL_11_1)
+        .or_else(|| levels.iter().copied().min())
+        .unwrap_or(D3D_FEATURE_LEVEL_11_0)
+}
 
 // ────────────────────── Entry points ──────────────────────
 
@@ -3988,7 +4091,7 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
     _adapter: usize,
     _driver_type: u32,
     _software: usize,
-    _flags: u32,
+    flags: u32,
     feature_levels: *const u32,
     num_levels: u32,
     _sdk_version: u32,
@@ -3997,7 +4100,10 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
     context: *mut usize,
 ) -> i32 {
     let fl = if !feature_levels.is_null() && num_levels > 0 {
-        *feature_levels
+        pick_feature_level(std::slice::from_raw_parts(
+            feature_levels,
+            num_levels as usize,
+        ))
     } else {
         D3D_FEATURE_LEVEL_11_0
     };
@@ -4009,13 +4115,17 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         ref_count: AtomicU32::new(1),
         context: ctx,
         feature_level: fl,
+        flags,
         dxgi: DxgiDevice {
             vtable: &DXGI_DEVICE_VTABLE,
             owner: std::ptr::null_mut(),
             frame_latency: AtomicU32::new(3),
         },
+        multithread: ext::Multithread::new(),
     }));
     (*dev).dxgi.owner = dev;
+    (*dev).multithread.set_owner(dev);
+    (*ctx).device.store(dev, Ordering::Release);
     LAST_DEVICE.store(dev, Ordering::Release);
 
     if !device.is_null() {
