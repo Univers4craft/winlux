@@ -84,10 +84,17 @@ if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev
     step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
     step "scripts/test-thread-control.sh" sh scripts/test-thread-control.sh
 fi
+# DuplicateHandle et mémoire entre processus (Chromium, Electron, #236) :
+# lancé en CI par test-mingw.sh ; ici aussi dès que clang est là.
+if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
+    step "scripts/test-duplication.sh" sh scripts/test-duplication.sh
+    step "scripts/test-webview2.sh" sh scripts/test-webview2.sh
+fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
+step "scripts/test-notices.py" python3 -B scripts/test-notices.py
 
 # Applis WinForms et WPF .NET autonomes (#664–#666, #268) : télécharge une fois le runtime
 # .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.

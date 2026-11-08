@@ -309,10 +309,22 @@ status() {
         if winlux-update --list > "$updates_tmp" 2>/dev/null; then
             publish "$updates_tmp" "$run/updates.txt"
         else rm -f "$updates_tmp"; fi
+        # Rien à décrire sans rapport (moteur absent ou muet) : pas de second programme.
+        if test -s "$run/updates.txt"; then update_state; fi
     fi
+}
+# État de la page Mises à jour (clé=valeur, #875-#882) : refait avec updates.txt.
+update_state() {
+    have winlux-update || return 0
+    state_tmp=$(fresh "$run/update-state.txt") || return 0
+    # Ancien moteur sans --state : un état minimal, pour ne pas relancer
+    # --list à chaque relevé (le fichier manquant le redemanderait).
+    winlux-update --state > "$state_tmp" 2>/dev/null || printf 'backend=legacy\n' > "$state_tmp"
+    publish "$state_tmp" "$run/update-state.txt"
 }
 updates_current() {
     test -s "$run/updates.txt" || return 1
+    test -s "$run/update-state.txt" || ! have winlux-update || return 1
     for source in "$root/usr/share/winlux/version" "$root/var/lib/winlux" "$root/var/cache/winlux" \
         "$root/var/lib/winlux/available-manifest" "$root/var/lib/winlux/update-trial"; do
         test -e "$source" || continue
@@ -777,10 +789,18 @@ perform() {
             winlux-update --check || return
             updates_tmp=$(fresh "$run/updates.txt") || return
             winlux-update --list > "$updates_tmp" || { rm -f "$updates_tmp"; return 1; }
-            publish "$updates_tmp" "$run/updates.txt" ;;
-        update-apply) winlux-update --apply ;;
-        update-rollback) winlux-update --rollback ;;
-        update-auto-on) winlux-update --auto enable ;;
+            publish "$updates_tmp" "$run/updates.txt"
+            update_state ;;
+        update-apply) if winlux-update --apply; then code=0; else code=$?; fi; update_state; return $code ;;
+        update-rollback) if winlux-update --rollback; then code=0; else code=$?; fi; update_state; return $code ;;
+        update-auto-on) winlux-update --auto enable && update_state ;;
+        update-pause-1|update-pause-2|update-pause-3|update-pause-4|update-pause-5)
+            winlux-update --pause "${action#update-pause-}" && update_state ;;
+        update-resume) winlux-update --resume && update_state ;;
+        # Heures d'activité « update-hours-8-18 » : début et fin revalidés par winlux-update.
+        update-hours-[0-9]-[0-9]|update-hours-[0-9]-[0-9][0-9]|update-hours-[0-9][0-9]-[0-9]|update-hours-[0-9][0-9]-[0-9][0-9])
+            hours=${action#update-hours-}
+            winlux-update --active-hours "${hours%-*}" "${hours#*-}" && update_state ;;
         sysupdate-mode-auto|sysupdate-mode-manual|sysupdate-mode-scheduled)
             winlux-sysupdate --mode "${action#sysupdate-mode-}" || return
             # Le mode s'applique aussi aux mises a jour de Winlux lui-meme.
@@ -803,7 +823,7 @@ perform() {
         lock-resume-on) save "$config/lock.conf" LOCK_ON_RESUME 1 && chmod 644 "$config/lock.conf" ;;
         lock-resume-off) save "$config/lock.conf" LOCK_ON_RESUME 0 && chmod 644 "$config/lock.conf" ;;
         privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
-        update-auto-off) winlux-update --auto disable ;;
+        update-auto-off) winlux-update --auto disable && update_state ;;
         report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
         report-redact-on|report-redact-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "redact=${action#report-redact-}" ;;
         report-mode-auto|report-mode-browser|report-mode-file) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "mode=${action#report-mode-}" ;;
@@ -824,6 +844,15 @@ perform() {
         power-screen-ac|power-screen-dc|power-sleep-ac|power-sleep-dc)
             winlux --power set "${action#power-}" next ;;
         power-lid) winlux --power set lid next ;;
+        # Valeur choisie dans un menu déroulant (#895) : revalidée par winlux --power.
+        power-set-screen-ac-[0-9]*|power-set-screen-dc-[0-9]*|power-set-sleep-ac-[0-9]*|power-set-sleep-dc-[0-9]*)
+            setting=${action#power-set-}; value=${setting##*-}
+            case "$value" in *[!0-9]*|'') return 1 ;; esac
+            winlux --power set "${setting%-*}" "$value" ;;
+        power-set-lid-nothing|power-set-lid-sleep|power-set-lid-hibernate|power-set-lid-shutdown|power-set-lid-display-off)
+            winlux --power set lid "${action#power-set-lid-}" ;;
+        power-set-button-nothing|power-set-button-sleep|power-set-button-hibernate|power-set-button-shutdown|power-set-button-display-off)
+            winlux --power set button "${action#power-set-button-}" ;;
         power-button) winlux --power set button next ;;
         # Même chemin que les réglages rapides et les touches (winlux-brightness).
         power-brightness-up)

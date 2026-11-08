@@ -90,8 +90,10 @@ CONTROL_POLICY = (
     (r"drivers-(install-[a-z-]+|remove-nvidia|firmware-update)", "admin"),
     (r"display-[a-z0-9x-]+", "user"),
     (r"power-hibernate-setup", "admin"),
+    (r"power-set-(screen|sleep)-(ac|dc)-[0-9]{1,5}", "user"),
     (r"power-[a-z-]+", "user"),
-    (r"update-(check|apply|auto-on|auto-off)", "user"),
+    (r"update-(check|apply|auto-on|auto-off|resume|pause-[1-5])", "user"),
+    (r"update-hours-[0-9]{1,2}-[0-9]{1,2}", "user"),
     (r"update-rollback", "admin"),
     (r"sysupdate-[a-z-]+", "user"),
     (r"journal-(status|list|errors|crashes|export)", "user"),
@@ -584,7 +586,7 @@ def run_command(command, fds, extra, env, peer_uid, cwd="/"):
 
 # Fichiers d'état écrits pendant une action relayée et réécrits ensuite par
 # le bureau : ils sont rendus au compte (le dossier /run/winlux est collant).
-GIVE_BACK = ("updates.txt", "networks.txt", "cpu.txt", "control.txt", "action.txt", "sessions.txt",
+GIVE_BACK = ("updates.txt", "update-state.txt", "networks.txt", "cpu.txt", "control.txt", "action.txt", "sessions.txt",
              "update-error-phase", "browser.log", "sysupdate.txt", "remote-state.txt", "drivers.txt",
              "drivers.log")
 

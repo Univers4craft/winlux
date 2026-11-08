@@ -25,14 +25,17 @@ assert kept("Version installée : v0.2.19\nWinlux est à jour.\n") == "", "liste
 files["/usr/share/winlux/update-backend"] = ""
 files["/var/lib/winlux/rollback-current"] = "pas-une-sauvegarde"
 assert kept() == "", "ancien installateur sans sauvegarde"
-source = (HERE / "winlux-settings-pages.py").read_text(encoding="utf-8")
-recovery = source[source.index("    def sections_recovery(self):"):]
+# Page refaite (#875-#882) : la version précédente n'est plus dite qu'à un
+# endroit, la ligne « Revenir à la version précédente », relue à chaque relevé
+# avec la carte d'état (une seule source : update-state.txt de root).
+page = (HERE / "winlux-update-page.py").read_text(encoding="utf-8")
+refresh = page[page.index("    def refresh(self, status=None):"):]
+assert 'state.get("previous"' in refresh and "self.rollback_row.set_visible(bool(previous))" in refresh
+assert "self.recovery_label" in refresh, "ligne relue à chaque rafraîchissement (test-settings-native.py le vérifie en vrai)"
+pages_source = (HERE / "winlux-settings-pages.py").read_text(encoding="utf-8")
+recovery = pages_source[pages_source.index("    def sections_recovery(self):"):]
 recovery = recovery[:recovery.index("\n    # ──")]
-assert "recovery_text(previous_version_kept())" in recovery and "is_file()" not in recovery
-assert "self.recovery_label" in recovery, "ligne relue à chaque rafraîchissement (test-settings-native.py le vérifie en vrai)"
-settings = (HERE / "winlux-settings.py").read_text(encoding="utf-8")
-assert settings.count("set_visible(bool(EXTRA.previous_version_kept()))") == 2 and "set_visible(Path(PREVIOUS_PACKAGE)" not in settings, \
-    "bouton Restaurer : même avis que l'encadré"
+assert "Version précédente" not in recovery, "plus de second avis dans « Secours et restauration »"
 print("#636 : encadré, bouton Restaurer et « Secours et restauration » disent la même chose, relus ensemble")
 
 # ── #635 ─────────────────────────────────────────────────────────────────────

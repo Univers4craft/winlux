@@ -608,6 +608,8 @@ fn transition_key_state(byte: &mut u8, vk: usize, down: bool) {
 /// Met à jour l'état Win32 du thread quand il retire WM_KEYDOWN/WM_KEYUP.
 /// Ainsi `GetKeyState` reflète l'événement actuellement traité, même si X11 a
 /// déjà livré la pression et le relâchement dans un seul tour de boucle.
+/// Les boutons de la souris suivent la même règle (VK_LBUTTON…) : Qt (VLC)
+/// lit l'état des boutons au moment du clic et ignorait sinon tout clic.
 pub fn observe_key_message(msg: &Msg) {
     // Messages souris : MK_* de wParam donne l'état des boutons (VK_LBUTTON…)
     // que WPF relit par GetKeyState pendant WM_LBUTTONDOWN (#268).
@@ -625,6 +627,10 @@ pub fn observe_key_message(msg: &Msg) {
                 update_thread_key_state(vk, down);
             }
         }
+        // Le bouton du message lui-même, même si wParam ne le porte pas.
+        if let Some((vk, down)) = mouse_button_transition(msg.message, msg.wparam) {
+            update_thread_key_state(vk, down);
+        }
         return;
     }
     if msg.wparam >= KEY_STATE_COUNT {
@@ -635,6 +641,22 @@ pub fn observe_key_message(msg: &Msg) {
         WM_KEYUP => update_thread_key_state(msg.wparam, false),
         _ => {}
     }
+}
+
+/// Touche virtuelle d'un message de bouton de souris et son nouvel état.
+pub fn mouse_button_transition(message: u32, wparam: usize) -> Option<(usize, bool)> {
+    let xbutton = if (wparam >> 16) & 0xFFFF == 2 { 6 } else { 5 };
+    Some(match message {
+        0x0201 | 0x0203 => (1, true),
+        0x0202 => (1, false),
+        0x0204 | 0x0206 => (2, true),
+        0x0205 => (2, false),
+        0x0207 | 0x0209 => (4, true),
+        0x0208 => (4, false),
+        0x020B | 0x020D => (xbutton, true),
+        0x020C => (xbutton, false),
+        _ => return None,
+    })
 }
 
 fn update_thread_key_state(vk: usize, down: bool) {
@@ -685,8 +707,12 @@ pub fn get_async_key_state(vk: usize) -> i16 {
     if vk >= KEY_STATE_COUNT {
         return 0;
     }
+    // Boutons de la souris : un clic d'automate (pression et relâchement
+    // dans le même lot X11) doit encore se lire pressé pendant que le
+    // programme traite son WM_xBUTTONDOWN.
+    let held = matches!(vk, 1 | 2 | 4 | 5 | 6) && get_key_state(vk) as u16 & 0x8000 != 0;
     let mut state = lock(async_keyboard_state());
-    let down = state.keys[vk] & 0x80 != 0;
+    let down = held || state.keys[vk] & 0x80 != 0;
     let pressed = std::mem::replace(&mut state.pressed_since_query[vk], false);
     (((if down { 1u16 } else { 0 }) << 15) | if pressed { 1 } else { 0 }) as i16
 }
@@ -2662,6 +2688,11 @@ pub fn pump_backend() {
     // Un FocusOut suivi d'un FocusIn dans le même lot : le focus change de
     // fenêtre sans quitter le programme.
     let refocused = events.iter().any(|e| e.message == WM_SETFOCUS);
+    for e in &events {
+        if let Some((vk, down)) = mouse_button_transition(e.message, e.wparam) {
+            update_async_key_state(vk, down);
+        }
+    }
     for e in events {
         if e.message == WM_SETFOCUS {
             activate_app(true);
@@ -4130,6 +4161,24 @@ mod tests {
         assert_eq!(focused_window(), hwnd);
         destroy_window(hwnd);
         assert_eq!(focused_window(), 0);
+    }
+
+    /// Qt lit GetAsyncKeyState(VK_LBUTTON) en traitant WM_LBUTTONDOWN : un
+    /// clic dont pression et relâchement sont arrivés ensemble doit encore
+    /// s'y lire pressé, puis relâché au WM_LBUTTONUP.
+    #[test]
+    fn bouton_de_souris_lu_presse_pendant_son_message() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        update_async_key_state(1, true);
+        update_async_key_state(1, false);
+        observe_key_message(&Msg::new(0, 0x0201, 1, 0));
+        assert_ne!(get_async_key_state(1) as u16 & 0x8000, 0);
+        assert_ne!(get_key_state(1) as u16 & 0x8000, 0);
+        observe_key_message(&Msg::new(0, 0x0202, 0, 0));
+        assert_eq!(get_async_key_state(1) as u16 & 0x8000, 0);
+        assert_eq!(mouse_button_transition(0x020B, 2 << 16), Some((6, true)));
+        assert_eq!(mouse_button_transition(0x0204, 2), Some((2, true)));
+        assert_eq!(mouse_button_transition(0x0200, 0), None);
     }
 
     #[test]
