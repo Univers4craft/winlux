@@ -2956,12 +2956,6 @@ pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPl
     1
 }
 
-/// AllowSetForegroundWindow (#1074) : Winlux ne restreint pas le passage au premier
-/// plan entre processus, l'autorisation est donc toujours accordée.
-pub extern "win64" fn allow_set_foreground_window(_pid: u32) -> i32 {
-    1
-}
-
 pub extern "win64" fn set_window_placement(_hwnd: usize, _wp: *const c_void) -> i32 {
     1
 }
@@ -3726,7 +3720,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetActiveWindow"=>fn get_active_window, "SetActiveWindow"=>fn set_active_window,
         "GetForegroundWindow"=>fn get_foreground_window,
         "SetForegroundWindow"=>fn set_foreground_window,
-        "AllowSetForegroundWindow"=>fn allow_set_foreground_window,
         "BringWindowToTop"=>fn bring_window_to_top,
         "GetDesktopWindow"=>fn get_desktop_window,
         "GetLastActivePopup"=>fn get_last_active_popup,
@@ -3901,7 +3894,6 @@ mod tests {
             let mut wp = WindowPlacement::default();
             assert_eq!(get_window_placement(0x7fff_0001, &mut wp), 0);
         }
-        assert_eq!(allow_set_foreground_window(u32::MAX), 1);
     }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
