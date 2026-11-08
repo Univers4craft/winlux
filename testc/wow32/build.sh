@@ -325,6 +325,8 @@ D3DXCreateBox@24
 D3DXCreateSphere@24
 D3DXComputeNormals@8
 D3DXLoadMeshFromXInMemory@36
+D3DXCompileShader@40
+D3DXCreateEffect@36
 DEF
 cat >"$tmp/jeux_winmm.def" <<'DEF'
 LIBRARY winmm.dll

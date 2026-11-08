@@ -4,6 +4,7 @@
 //! D3DXGetShaderConstantTable(Ex) rend un ID3DXConstantTable construit sur
 //! le commentaire CTAB que les compilateurs placent dans le bytecode, ce qui
 //! sert aux jeux livrés avec des shaders déjà compilés.
+#![allow(clippy::too_many_arguments)]
 
 use super::d3dx9_asm::{self, ConstantTable};
 use super::legacy_com::{get_ptr, ptr_size, put_ptr, rd32, vtable_sig, wr32};
@@ -37,7 +38,7 @@ const TYPE_INT: u16 = 2;
 // ═══════════════════════════════════════════════════════════════════════
 
 /// D3DXMACRO[] { Name, Definition } terminé par un nom nul.
-unsafe fn read_defines(p: usize) -> Vec<(String, String)> {
+pub(crate) unsafe fn read_defines(p: usize) -> Vec<(String, String)> {
     let mut v = Vec::new();
     if p == 0 {
         return v;
@@ -149,7 +150,7 @@ pub unsafe extern "win64" fn assemble_shader_from_file_w(
     assemble_path(p, defines, include, shader, errors)
 }
 
-unsafe fn resource(module: usize, name: usize, wide: bool) -> Option<Vec<u8>> {
+pub(crate) unsafe fn resource(module: usize, name: usize, wide: bool) -> Option<Vec<u8>> {
     use super::resource::*;
     let h = if wide {
         find_resource_w(module, name as *const u16, 10usize as *const u16)
@@ -907,6 +908,217 @@ pub unsafe extern "win64" fn get_shader_constant_table(f: *const u32, out: usize
     get_shader_constant_table_ex(f, 0, out)
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Compilation HLSL
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Résolution des #include : à côté du fichier source, puis dossier courant.
+pub(crate) fn include_resolver(dir: Option<std::path::PathBuf>) -> impl Fn(&str) -> Option<String> {
+    move |name: &str| {
+        let rel = crate::paths::to_linux(name);
+        let mut cands = Vec::new();
+        if let Some(d) = &dir {
+            cands.push(d.join(name.replace('\\', "/")));
+        }
+        cands.push(rel);
+        cands.push(std::path::PathBuf::from(name.replace('\\', "/")));
+        cands
+            .into_iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .map(|d| String::from_utf8_lossy(&d).into_owned())
+    }
+}
+
+pub(crate) unsafe fn compile_bytes(
+    src: &[u8],
+    dir: Option<std::path::PathBuf>,
+    defines: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    put_ptr(shader, 0);
+    put_ptr(errors, 0);
+    put_ptr(table, 0);
+    if func == 0 || profile == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let text = String::from_utf8_lossy(src);
+    let text = text.trim_end_matches('\0');
+    let entry = super::cstr(func as *const u8);
+    let prof = super::cstr(profile as *const u8);
+    let inc = include_resolver(dir);
+    match super::d3dx9_hlsl::compile(text, &read_defines(defines), &inc, &entry, &prof, flags) {
+        Ok(c) => {
+            let bytes: Vec<u8> = c.tokens.iter().flat_map(|t| t.to_le_bytes()).collect();
+            if table != 0 {
+                if let Some(t) = d3dx9_asm::constant_table(&c.tokens) {
+                    put_ptr(table, new_constant_table(t, c.tokens[0] >> 16 == 0xFFFF));
+                }
+            }
+            put_ptr(shader, super::d3dx9::new_buffer(bytes));
+            S_OK
+        }
+        Err(e) => {
+            crate::log_warn!("d3dx9", "D3DXCompileShader ({entry}, {prof}) : {e}");
+            super::d3dx9::error_buffer(errors, &format!("memory{e}\n"));
+            E_FAIL
+        }
+    }
+}
+
+/// D3DXCompileShader(pSrcData, SrcDataLen, pDefines, pInclude,
+/// pFunctionName, pProfile, Flags, ppShader, ppErrorMsgs, ppConstantTable).
+pub unsafe extern "win64" fn compile_shader(
+    src: usize,
+    len: u32,
+    defines: usize,
+    _include: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    if src == 0 || shader == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = std::slice::from_raw_parts(src as *const u8, len as usize);
+    compile_bytes(
+        d, None, defines, func, profile, flags, shader, errors, table,
+    )
+}
+
+unsafe fn compile_path(
+    p: Option<std::path::PathBuf>,
+    defines: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    let Some(p) = p else {
+        return D3DERR_INVALIDCALL;
+    };
+    match std::fs::read(&p) {
+        Ok(d) => {
+            let dir = p.parent().map(|x| x.to_path_buf());
+            compile_bytes(
+                &d, dir, defines, func, profile, flags, shader, errors, table,
+            )
+        }
+        Err(_) => {
+            crate::log_warn!("d3dx9", "shader introuvable : {}", p.display());
+            put_ptr(shader, 0);
+            0x8007_0002u32 as i32
+        }
+    }
+}
+pub unsafe extern "win64" fn compile_shader_from_file_a(
+    path: *const u8,
+    defines: usize,
+    _include: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    let p = (!path.is_null()).then(|| crate::paths::to_linux(&super::cstr(path)));
+    compile_path(p, defines, func, profile, flags, shader, errors, table)
+}
+pub unsafe extern "win64" fn compile_shader_from_file_w(
+    path: *const u16,
+    defines: usize,
+    _include: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    let p = (!path.is_null()).then(|| crate::paths::to_linux(&super::wstr(path)));
+    compile_path(p, defines, func, profile, flags, shader, errors, table)
+}
+pub unsafe extern "win64" fn compile_shader_from_resource_a(
+    module: usize,
+    name: usize,
+    defines: usize,
+    _include: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    match resource(module, name, false) {
+        Some(d) => compile_bytes(
+            &d, None, defines, func, profile, flags, shader, errors, table,
+        ),
+        None => D3DXERR_INVALIDDATA,
+    }
+}
+pub unsafe extern "win64" fn compile_shader_from_resource_w(
+    module: usize,
+    name: usize,
+    defines: usize,
+    _include: usize,
+    func: usize,
+    profile: usize,
+    flags: u32,
+    shader: usize,
+    errors: usize,
+    table: usize,
+) -> i32 {
+    match resource(module, name, true) {
+        Some(d) => compile_bytes(
+            &d, None, defines, func, profile, flags, shader, errors, table,
+        ),
+        None => D3DXERR_INVALIDDATA,
+    }
+}
+
+/// D3DXPreprocessShader(pSrcData, SrcDataSize, pDefines, pInclude,
+/// ppShaderText, ppErrorMsgs).
+pub unsafe extern "win64" fn preprocess_shader(
+    src: usize,
+    len: u32,
+    defines: usize,
+    _include: usize,
+    out: usize,
+    errors: usize,
+) -> i32 {
+    put_ptr(out, 0);
+    put_ptr(errors, 0);
+    if src == 0 || out == 0 {
+        return D3DERR_INVALIDCALL;
+    }
+    let d = std::slice::from_raw_parts(src as *const u8, len as usize);
+    let text = String::from_utf8_lossy(d);
+    let inc = include_resolver(None);
+    match super::d3dx9_hlsl::preprocess(text.trim_end_matches('\0'), &read_defines(defines), &inc) {
+        Ok(t) => {
+            let mut b = t.into_bytes();
+            b.push(0);
+            put_ptr(out, super::d3dx9::new_buffer(b));
+            S_OK
+        }
+        Err(e) => {
+            super::d3dx9::error_buffer(errors, &format!("memory{e}\n"));
+            E_FAIL
+        }
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "D3DXAssembleShader" => fn assemble_shader,
@@ -919,6 +1131,12 @@ pub fn exports() -> crate::dlls::Exports {
         "D3DXGetShaderInputSemantics" => fn get_shader_input_semantics,
         "D3DXGetShaderOutputSemantics" => fn get_shader_output_semantics,
         "D3DXGetShaderSamplers" => fn get_shader_samplers,
+        "D3DXCompileShader" => fn compile_shader,
+        "D3DXCompileShaderFromFileA" => fn compile_shader_from_file_a,
+        "D3DXCompileShaderFromFileW" => fn compile_shader_from_file_w,
+        "D3DXCompileShaderFromResourceA" => fn compile_shader_from_resource_a,
+        "D3DXCompileShaderFromResourceW" => fn compile_shader_from_resource_w,
+        "D3DXPreprocessShader" => fn preprocess_shader,
     }
 }
 

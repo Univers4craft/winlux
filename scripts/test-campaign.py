@@ -596,6 +596,7 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
    and (runtime_dlls / "d3dx9_asm.rs").exists() and (runtime_dlls / "d3dx9_shader.rs").exists()
    and (runtime_dlls / "d3dx9_mesh.rs").exists()
+   and (runtime_dlls / "d3dx9_hlsl.rs").exists() and (runtime_dlls / "d3dx9_effect.rs").exists()
    and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
    and (ROOT / "runtime/src/audio/synth.rs").exists()
    and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()

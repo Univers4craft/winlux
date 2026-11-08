@@ -209,6 +209,16 @@ IMP HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *, DWORD *, UINT *);
 IMP HRESULT WINAPI D3DXCreateBox(void *, float, float, float, void **, void **);
 IMP HRESULT WINAPI D3DXCreateSphere(void *, float, UINT, UINT, void **, void **);
 IMP HRESULT WINAPI D3DXComputeNormals(void *, const DWORD *);
+IMP HRESULT WINAPI D3DXCompileShader(const char *, UINT, void *, void *, const char *, const char *,
+    DWORD, void **, void **, void **);
+IMP HRESULT WINAPI D3DXCreateEffect(void *, const void *, UINT, void *, void *, DWORD, void *, void **,
+    void **);
+typedef void *(WINAPI *GETH1)(void *, const char *);
+typedef HRESULT(WINAPI *SETFLOATFX)(void *, void *, float);
+typedef struct {
+    const char *Name, *Semantic;
+    UINT Class, Type, Rows, Columns, Elements, Annotations, StructMembers, Flags, Bytes;
+} D3DXPARAMETER_DESC;
 IMP HRESULT WINAPI D3DXLoadMeshFromXInMemory(const void *, DWORD, DWORD, void *, void **, void **,
     void **, DWORD *, void **);
 typedef void *(WINAPI *GETBYNAME)(void *, void *, const char *);
@@ -845,6 +855,77 @@ static int d3dx_tests(HWND hwnd) {
         CALL0(box, 2);
     }
 
+    /* Compilation HLSL et effets (#834). */
+    {
+        static const char vs[] = "float4x4 WVP;\nfloat Scale;\n"
+                                 "struct O { float4 p : POSITION; float2 t : TEXCOORD0; };\n"
+                                 "O main(float4 p : POSITION, float2 t : TEXCOORD0) {\n"
+                                 "  O o; o.p = mul(p, WVP); o.t = t * Scale; return o; }\n";
+        static const char ps[] = "sampler2D S;\n"
+                                 "float4 main(float2 uv : TEXCOORD0) : COLOR {\n"
+                                 "  float4 c = tex2D(S, uv);\n"
+                                 "  if (c.a < 0.1) discard;\n"
+                                 "  return saturate(c * 2); }\n";
+        static const char fxsrc[] =
+            "float4x4 WVP;\n"
+            "float Intensity < string UIName = \"Intensite\"; > = 1.0;\n"
+            "float4 VS(float4 p : POSITION) : POSITION { return mul(p, WVP); }\n"
+            "float4 PS() : COLOR { return float4(Intensity, Intensity, Intensity, 1); }\n"
+            "technique Rendu {\n"
+            "  pass P0 { VertexShader = compile vs_2_0 VS(); PixelShader = compile ps_2_0 PS();\n"
+            "            AlphaBlendEnable = TRUE; SrcBlend = SrcAlpha; }\n"
+            "}\n";
+        void *code = 0, *err = 0, *ct = 0, *vsh = 0, *psh = 0, *fx = 0, *h, *hw, *t, *a;
+        D3DXCONSTANT_DESC desc;
+        D3DXPARAMETER_DESC pd;
+        UINT n = 1, np = 0;
+        DWORD rs = 0;
+        float got[4] = {0, 0, 0, 0}, fv = 0;
+        const char *str = 0;
+
+        CHECK(209, D3DXCompileShader(vs, sizeof vs - 1, 0, 0, "main", "vs_2_0", 0, &code, &err, &ct) == 0 &&
+                       code && ct && !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
+        CHECK(210, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        h = ((GETBYNAME)VT(ct)[9])(ct, 0, "Scale");
+        zero(&desc, sizeof desc);
+        CHECK(211, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 4 &&
+                       ((SETFLOATCT)VT(ct)[17])(ct, dev, h, 2.5f) == 0 &&
+                       CALL3(dev, 95, 4, got, 1) == 0 && got[0] == 2.5f);
+        CALL0(ct, 2);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(212, D3DXCompileShader(ps, sizeof ps - 1, 0, 0, "main", "ps_2_0", 0, &code, 0, 0) == 0 &&
+                       code && CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
+        CALL0(code, 2);
+        code = 0;
+        CHECK(213, D3DXCompileShader("float4 main() : COLOR { return x; }", 34, 0, 0, "main", "ps_2_0",
+                                     0, &code, &err, 0) != 0 &&
+                       !code && err && ((char *)BUFPTR(err))[0] != 0);
+        CALL0(err, 2);
+        err = 0;
+        CHECK(214, D3DXCreateEffect(dev, fxsrc, sizeof fxsrc - 1, 0, 0, 0, 0, &fx, &err) == 0 && fx && !err);
+        t = ((GETH1)VT(fx)[13])(fx, "Rendu");
+        CHECK(215, t && CALL1(fx, 58, t) == 0);
+        h = ((GETBYNAME)VT(fx)[9])(fx, 0, "Intensity");
+        CHECK(216, h && ((SETFLOATFX)VT(fx)[30])(fx, h, 0.75f) == 0 && CALL2(fx, 31, h, &fv) == 0 &&
+                       fv == 0.75f);
+        hw = ((GETBYNAME)VT(fx)[9])(fx, 0, "WVP");
+        zero(&pd, sizeof pd);
+        CHECK(217, hw && CALL2(fx, 4, hw, &pd) == 0 && pd.Rows == 4 && pd.Columns == 4 &&
+                       pd.Class == 3 && pd.Type == 3 && pd.Name[0] == 'W');
+        a = ((GETBYNAME)VT(fx)[19])(fx, h, "UIName");
+        CHECK(218, a && CALL2(fx, 51, a, &str) == 0 && str && str[0] == 'I');
+        CHECK(219, CALL2(fx, 63, &np, 0) == 0 && np == 1 && CALL1(fx, 64, 0) == 0 &&
+                       CALL2(dev, 58, 27, &rs) == 0 && rs == 1);
+        CHECK(220, CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.75f &&
+                       ((SETFLOATFX)VT(fx)[30])(fx, h, 0.5f) == 0 && CALL0(fx, 65) == 0 &&
+                       CALL3(dev, 110, 0, got, 1) == 0 && got[0] == 0.5f);
+        CHECK(221, CALL0(fx, 66) == 0 && CALL0(fx, 67) == 0 && CALL2(dev, 58, 27, &rs) == 0 && rs == 0);
+        CHECK(222, CALL0(fx, 2) == 0);
+        CALL0(psh, 2);
+        CALL0(vsh, 2);
+    }
+
     CALL0(buf, 2);
     CALL0(font, 2);
     CALL0(sp, 2);
@@ -1117,7 +1198,7 @@ void entry(void) {
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
-    out("Direct3D 9 et D3DX9 : 33 verifications passees\n");
+    out("Direct3D 9 et D3DX9 : 47 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();
