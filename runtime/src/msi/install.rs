@@ -1301,6 +1301,8 @@ fn run_uninstall_actions(code: &str, log: &mut Logger) {
     }
     ctx.props.insert("Installed".into(), "1".into());
     ctx.props.insert("REMOVE".into(), "ALL".into());
+    ctx.props
+        .insert("OriginalDatabase".into(), crate::paths::to_windows(&cached));
     run_property_actions(&db, &mut ctx, log);
     let dirs = resolve_dirs(&db, &ctx, false);
     for (k, d) in &dirs {

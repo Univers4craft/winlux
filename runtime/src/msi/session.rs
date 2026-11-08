@@ -31,7 +31,7 @@ const INSTALLSTATE_LOCAL: i32 = 3;
 
 /// Champ d'un enregistrement MSI.
 #[derive(Clone, Debug, PartialEq)]
-enum Field {
+pub(super) enum Field {
     Null,
     Int(i32),
     Str(String),
@@ -113,6 +113,36 @@ pub fn decode(text: &str) -> HashMap<String, String> {
 /// Clé du fichier de session qui porte le code rendu par l'action (Linux
 /// tronque les codes de sortie à 8 bits : 1603 deviendrait 67).
 pub const CODE_KEY: &str = "\u{1}code";
+/// Clé des actions demandées par MsiDoAction, une par ligne.
+pub const DO_KEY: &str = "\u{1}do";
+
+pub(super) fn property(name: &str) -> Option<String> {
+    with(|s| s.props.get(name).cloned())
+}
+
+/// Action différée (`MSIRUNMODE_SCHEDULED`).
+pub(super) fn scheduled() -> bool {
+    flag("WINLUX_MSI_SCHEDULED")
+}
+
+/// Nouvelle poignée (enregistrement ou vue).
+pub(super) fn new_handle() -> u32 {
+    with(|s| {
+        let h = s.next;
+        s.next += 1;
+        h
+    })
+}
+
+pub(super) fn new_record(fields: Vec<Field>) -> u32 {
+    let h = new_handle();
+    with(|s| s.records.insert(h, fields));
+    h
+}
+
+pub(super) fn record_fields(h: u32) -> Option<Vec<Field>> {
+    with(|s| s.records.get(&h).cloned())
+}
 
 /// Réécrit le fichier de session (fin de l'action) avec son code.
 pub fn save(code: u32) {
@@ -256,10 +286,6 @@ pub extern "win64" fn msi_get_language(h: usize) -> u32 {
     })
 }
 
-pub extern "win64" fn msi_get_active_database(_h: usize) -> u32 {
-    0
-}
-
 /// MsiGetComponentState / MsiGetFeatureState : présent et laissé présent
 /// pendant l'installation, présent puis retiré pendant la désinstallation.
 pub extern "win64" fn msi_get_state(
@@ -299,18 +325,39 @@ pub extern "win64" fn msi_set_state(h: usize, _name: usize, _state: i32) -> u32 
     }
 }
 
-/// MsiDoAction / MsiSequence : les actions standard sont faites par le
-/// msiexec lui-même, avant ou après l'action personnalisée.
-pub extern "win64" fn msi_do_action(h: usize, _action: usize) -> u32 {
+/// MsiDoAction : l'action demandée est notée et lancée par le msiexec
+/// au retour de l'action DLL (une action personnalisée, souvent différée,
+/// préparée par l'appelant) ; les actions standard sont déjà faites par
+/// le msiexec lui-même.
+fn do_action(h: usize, action: usize, wide: bool) -> u32 {
+    if !is_session(h) {
+        return ERROR_INVALID_HANDLE;
+    }
+    let name = unsafe { text(action, wide) };
+    if name.is_empty() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    with(|s| {
+        let list = s.props.entry(DO_KEY.into()).or_default();
+        list.push_str(&name);
+        list.push('\n');
+    });
+    ERROR_SUCCESS
+}
+
+pub extern "win64" fn msi_do_action_w(h: usize, action: usize) -> u32 {
+    do_action(h, action, true)
+}
+pub extern "win64" fn msi_do_action_a(h: usize, action: usize) -> u32 {
+    do_action(h, action, false)
+}
+
+pub extern "win64" fn msi_sequence(h: usize, _table: usize, _mode: i32) -> u32 {
     if is_session(h) {
         ERROR_SUCCESS
     } else {
         ERROR_INVALID_HANDLE
     }
-}
-
-pub extern "win64" fn msi_sequence(h: usize, _table: usize, _mode: i32) -> u32 {
-    msi_do_action(h, 0)
 }
 
 fn path_property(h: usize, folder: usize, buf: usize, pcch: usize, wide: bool) -> u32 {
@@ -484,6 +531,7 @@ pub extern "win64" fn msi_close_handle(h: usize) -> u32 {
     with(|s| {
         s.records.remove(&(h as u32));
     });
+    super::session_db::close(h as u32);
     ERROR_SUCCESS
 }
 
@@ -573,7 +621,6 @@ pub fn exports() -> crate::dlls::Exports {
         "MsiGetMode" => fn msi_get_mode,
         "MsiSetMode" => fn msi_set_mode,
         "MsiGetLanguage" => fn msi_get_language,
-        "MsiGetActiveDatabase" => fn msi_get_active_database,
         "MsiGetComponentStateW" => fn msi_get_state,
         "MsiGetComponentStateA" => fn msi_get_state,
         "MsiGetFeatureStateW" => fn msi_get_state,
@@ -582,8 +629,8 @@ pub fn exports() -> crate::dlls::Exports {
         "MsiSetComponentStateA" => fn msi_set_state,
         "MsiSetFeatureStateW" => fn msi_set_state,
         "MsiSetFeatureStateA" => fn msi_set_state,
-        "MsiDoActionW" => fn msi_do_action,
-        "MsiDoActionA" => fn msi_do_action,
+        "MsiDoActionW" => fn msi_do_action_w,
+        "MsiDoActionA" => fn msi_do_action_a,
         "MsiSequenceW" => fn msi_sequence,
         "MsiSequenceA" => fn msi_sequence,
         "MsiGetTargetPathW" => fn msi_get_target_path_w,
