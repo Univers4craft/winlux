@@ -11,6 +11,7 @@ pub mod backend;
 pub mod dsp;
 pub mod format;
 mod pipewire;
+pub mod synth;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
