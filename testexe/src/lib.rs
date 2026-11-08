@@ -855,6 +855,8 @@ extern "system" {
     pub fn WinluxMediaFrame(handle: usize, out: *mut u8, cap: u32) -> u32;
     pub fn WinluxMediaError(handle: usize, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaClose(handle: usize) -> i32;
+    /// Pause (1, valeur 1/0) ou volume (2, 0 à 200) sans fermer le flux audio.
+    pub fn WinluxMediaControl(handle: usize, cmd: u32, value: u32) -> i32;
     pub fn WinluxMediaThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaPreview(path: *const u16, at_ms: u32, w: u32, h: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaGetResume(path: *const u16) -> u32;

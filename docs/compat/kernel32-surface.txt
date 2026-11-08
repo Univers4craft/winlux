@@ -815,6 +815,7 @@ WinluxJobPoll
 WinluxJobStats
 WinluxMediaCanonical
 WinluxMediaClose
+WinluxMediaControl
 WinluxMediaError
 WinluxMediaFormats
 WinluxMediaFrame

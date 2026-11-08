@@ -239,6 +239,8 @@ jobs:
         run: python3 -B scripts/test-session-plumbing.py
       - name: Son du lecteur multimédia et des enregistrements nommé dans le mélangeur (#1010)
         run: python3 -B scripts/test-audio-stream-names.py
+      - name: Lecteur multimédia, un seul flux audio par lecture (#1013)
+        run: python3 -B scripts/test-media-one-stream.py
       - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
         run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
