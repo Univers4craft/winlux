@@ -927,6 +927,15 @@ ok("fn call_win64" in (clr / "pinvoke.rs").read_text()
    and "p_invoke_structures_et_derniere_erreur" in (clr / "tests.rs").read_text(),
    "CLR : P/Invoke Win64 (flottants, pile, structures C par valeur, rappels natifs, SetLastError) (#994)")
 
+# ── Moteur .NET Framework, étape 5 (#1066) : fils managés ──
+ok("fn gil_acquire" in (clr / "threads.rs").read_text()
+   and "fn monitor_wait" in (clr / "threads.rs").read_text()
+   and "threads::gil_yield()" in (clr / "il.rs").read_text()
+   and "threads::wait_foreground()" in (clr / "mod.rs").read_text()
+   and "quatre_fils_sous_verrou" in (clr / "tests.rs").read_text()
+   and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
+   "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
