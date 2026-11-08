@@ -369,6 +369,12 @@ unsafe fn create_window_inner(
             } else if let Some(level) = popup_decorations(style) {
                 b.set_decorations(hwnd, level);
             }
+            // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
+            // sous Windows (boîte « Vie privée » de VLC, #1068).
+            let owner = owner_top_level(parent);
+            if owner != 0 {
+                b.set_owner(hwnd, owner);
+            }
         }
     });
 
@@ -3809,6 +3815,24 @@ pub fn exports() -> crate::dlls::Exports {
     }
 }
 
+/// Fenêtre de premier niveau qui contient `hwnd` (un propriétaire désigné
+/// par une fenêtre enfant est remplacé par sa fenêtre principale).
+fn owner_top_level(mut hwnd: usize) -> usize {
+    for _ in 0..64 {
+        let Some(style) = gui::window_style(hwnd) else {
+            return 0;
+        };
+        if style & WS_CHILD == 0 {
+            return hwnd;
+        }
+        match gui::window_parent(hwnd) {
+            Some(p) if p != 0 => hwnd = p,
+            _ => return 0,
+        }
+    }
+    0
+}
+
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
@@ -4289,6 +4313,49 @@ mod tests_messages {
     unsafe extern "win64" fn crochet_suivant(_code: i32, w: usize, _l: isize) -> isize {
         VUS.with(|v| v.borrow_mut().push((w, 0xFFFF)));
         0
+    }
+
+    /// Une boîte possédée reste au-dessus de la fenêtre principale qui
+    /// contient son propriétaire, même désigné par un enfant (#1068).
+    #[test]
+    fn proprietaire_ramene_a_sa_fenetre_principale() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let top = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                50,
+                50,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            let child = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_CHILD,
+                0,
+                0,
+                10,
+                10,
+                top,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(top, 0);
+            assert_ne!(child, 0);
+            assert_eq!(owner_top_level(child), top);
+            assert_eq!(owner_top_level(top), top);
+            assert_eq!(owner_top_level(0x7777_0000), 0);
+            destroy_window(top);
+        }
     }
 
     #[test]

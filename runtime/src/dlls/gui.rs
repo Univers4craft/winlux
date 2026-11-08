@@ -2661,6 +2661,9 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
+    /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
+    fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
     /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
     /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
     /// gestionnaire de fenêtres.

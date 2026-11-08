@@ -4413,6 +4413,21 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.flush();
     }
 
+    fn set_owner(&mut self, hwnd: usize, owner: usize) {
+        let (Some(w), Some(o)) = (self.windows.get(&hwnd), self.windows.get(&owner)) else {
+            return;
+        };
+        let (top, owner_top) = (Self::top_xwin(w), Self::top_xwin(o));
+        let _ = self.conn.change_property32(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            top,
+            AtomEnum::WM_TRANSIENT_FOR,
+            AtomEnum::WINDOW,
+            &[owner_top],
+        );
+        let _ = self.conn.flush();
+    }
+
     fn set_window_state(&mut self, hwnd: usize, state: u8) {
         let Some(w) = self.windows.get(&hwnd) else {
             return;
