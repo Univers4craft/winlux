@@ -266,6 +266,33 @@ pub(super) static ITYPELIB: Iface = Iface {
     methods: &[None, None, None, None, None, None, None, None, None, None],
 };
 
+/// IObjectArray : tableau d'objets (éléments retirés d'une liste de
+/// raccourcis, tâches de la barre des tâches).
+pub(super) static IOBJECTARRAY: Iface = Iface {
+    name: "IObjectArray",
+    iid: crate::dlls::jumplist_com::IID_IOBJECT_ARRAY,
+    parent: Some(&IUNKNOWN),
+    methods: &[Some(&[I]), Some(&[I, Iid, OutQ])],
+};
+
+/// ICustomDestinationList : listes de raccourcis de la barre des tâches.
+pub(super) static ICUSTOMDESTINATIONLIST: Iface = Iface {
+    name: "ICustomDestinationList",
+    iid: crate::dlls::jumplist_com::IID_ICUSTOM_DESTINATION_LIST,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I]),                    // SetAppID
+        Some(&[I, Iid, OutQ]),         // BeginList
+        Some(&[I, In(&IOBJECTARRAY)]), // AppendCategory
+        Some(&[I]),                    // AppendKnownCategory
+        Some(&[In(&IOBJECTARRAY)]),    // AddUserTasks
+        Some(&[]),                     // CommitList
+        Some(&[Iid, OutQ]),            // GetRemovedDestinations
+        Some(&[I]),                    // DeleteList
+        Some(&[]),                     // AbortList
+    ],
+};
+
 static ALL: &[&Iface] = &[
     &IUNKNOWN,
     &ICLASSFACTORY,
@@ -281,6 +308,8 @@ static ALL: &[&Iface] = &[
     &ICREATEERRORINFO,
     &IDISPATCH,
     &ITYPELIB,
+    &IOBJECTARRAY,
+    &ICUSTOMDESTINATIONLIST,
 ];
 
 fn by_iid(iid: &Guid) -> Option<&'static Iface> {

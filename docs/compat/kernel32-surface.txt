@@ -364,6 +364,7 @@ GetThreadContext
 GetThreadDescription
 GetThreadErrorMode
 GetThreadGroupAffinity
+GetThreadIOPendingFlag
 GetThreadId
 GetThreadLocale
 GetThreadPreferredUILanguages
@@ -534,6 +535,8 @@ OpenJobObjectW
 OpenMutexA
 OpenMutexW
 OpenProcess
+OpenSemaphoreA
+OpenSemaphoreW
 OpenThread
 OutputDebugStringA
 OutputDebugStringW

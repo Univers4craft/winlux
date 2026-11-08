@@ -812,7 +812,7 @@ static FACTORY_VT: VTable<29> = VTable([
     create_decoder_from_filename as *const (),
     create_decoder_from_stream as *const (),
     create_decoder_from_file_handle as *const (),
-    unsupported!("CreateComponentInfo"),
+    create_component_info as *const (),
     create_decoder as *const (),
     unsupported!("CreateEncoder"),
     unsupported!("CreatePalette"),
@@ -960,7 +960,7 @@ static DECODER_VT: VTable<14> = VTable([
     decoder_query_capability as *const (),
     decoder_initialize as *const (),
     decoder_container as *const (),
-    unsupported!("GetDecoderInfo"),
+    decoder_info as *const (),
     palette_unavailable as *const (),
     unsupported_operation as *const (), // GetMetadataQueryReader
     unsupported_operation as *const (), // GetPreview
@@ -969,6 +969,424 @@ static DECODER_VT: VTable<14> = VTable([
     decoder_frame_count as *const (),
     decoder_frame as *const (),
 ]);
+
+// --- Informations de codec (IWICBitmapDecoderInfo) ----------------------------------
+//
+// WPF demande à chaque décodeur ses informations (GetDecoderInfo) pour lire
+// le format de conteneur et les types MIME avant de choisir sa classe de
+// décodeur (#1063). Ordre des méthodes et identifiants : wincodec.idl des
+// en-têtes publics mingw-w64.
+
+const IID_COMPONENT_INFO: Guid = guid(
+    0x23bc3f0a,
+    0x698b,
+    0x4357,
+    [0x88, 0x6b, 0xf2, 0x4d, 0x50, 0x67, 0x13, 0x34],
+);
+const IID_BITMAP_CODEC_INFO: Guid = guid(
+    0xe87a44c4,
+    0xb76e,
+    0x4c47,
+    [0x8b, 0x09, 0x29, 0x8e, 0xb1, 0x2a, 0x27, 0x14],
+);
+const IID_BITMAP_DECODER_INFO: Guid = guid(
+    0xd8cd007f,
+    0xd08f,
+    0x4191,
+    [0x9b, 0xfc, 0x23, 0x6e, 0xa7, 0xf0, 0xe4, 0xb5],
+);
+/// Identifiant de fournisseur des codecs intégrés, que des applis comparent.
+const GUID_VENDOR_BUILTIN: Guid = guid(
+    0xf0e749ca,
+    0xedef,
+    0x4589,
+    [0xa7, 0x3a, 0xee, 0x0e, 0x62, 0x6a, 0x2a, 0x2b],
+);
+const WIC_DECODER: u32 = 1;
+const WIC_COMPONENT_SIGNED: u32 = 1;
+const ERROR_INSUFFICIENT_BUFFER_HR: i32 = 0x8007_007Au32 as i32;
+
+struct CodecDesc {
+    container: Guid,
+    clsid: Guid,
+    name: &'static str,
+    mimes: &'static str,
+    exts: &'static str,
+    multiframe: bool,
+    animation: bool,
+    lossless: bool,
+}
+
+const CODECS: [CodecDesc; 7] = [
+    CodecDesc {
+        container: CONTAINER_BMP,
+        clsid: guid(
+            0x6b462062,
+            0x7cbf,
+            0x400d,
+            [0x9f, 0xdb, 0x81, 0x3d, 0xd1, 0x0f, 0x27, 0x78],
+        ),
+        name: "BMP Decoder",
+        mimes: "image/bmp",
+        exts: ".bmp,.dib,.rle",
+        multiframe: false,
+        animation: false,
+        lossless: true,
+    },
+    CodecDesc {
+        container: CONTAINER_PNG,
+        clsid: guid(
+            0x389ea17b,
+            0x5078,
+            0x4cde,
+            [0xb6, 0xef, 0x25, 0xc1, 0x51, 0x75, 0xc7, 0x51],
+        ),
+        name: "PNG Decoder",
+        mimes: "image/png",
+        exts: ".png",
+        multiframe: false,
+        animation: false,
+        lossless: true,
+    },
+    CodecDesc {
+        container: CONTAINER_JPEG,
+        clsid: guid(
+            0x9456a480,
+            0xe88b,
+            0x43ea,
+            [0x9e, 0x73, 0x0b, 0x2d, 0x9b, 0x71, 0xb1, 0xca],
+        ),
+        name: "JPEG Decoder",
+        mimes: "image/jpeg,image/jpe,image/jpg",
+        exts: ".jpeg,.jpe,.jpg,.jfif,.exif",
+        multiframe: false,
+        animation: false,
+        lossless: false,
+    },
+    CodecDesc {
+        container: CONTAINER_GIF,
+        clsid: guid(
+            0x381dda3c,
+            0x9ce9,
+            0x4834,
+            [0xa2, 0x3e, 0x1f, 0x98, 0xf8, 0xfc, 0x52, 0xbe],
+        ),
+        name: "GIF Decoder",
+        mimes: "image/gif",
+        exts: ".gif",
+        multiframe: true,
+        animation: true,
+        lossless: true,
+    },
+    CodecDesc {
+        container: CONTAINER_TIFF,
+        clsid: guid(
+            0xb54e85d9,
+            0xfe23,
+            0x499f,
+            [0x8b, 0x88, 0x6a, 0xce, 0xa7, 0x13, 0x75, 0x2b],
+        ),
+        name: "TIFF Decoder",
+        mimes: "image/tiff,image/tif",
+        exts: ".tiff,.tif",
+        multiframe: true,
+        animation: false,
+        lossless: true,
+    },
+    CodecDesc {
+        container: CONTAINER_WEBP,
+        clsid: guid(
+            0x7693e886,
+            0x51c9,
+            0x4070,
+            [0x84, 0x19, 0x9f, 0x70, 0x73, 0x8e, 0xc8, 0xfa],
+        ),
+        name: "WebP Decoder",
+        mimes: "image/webp",
+        exts: ".webp",
+        multiframe: false,
+        animation: false,
+        lossless: false,
+    },
+    CodecDesc {
+        container: CONTAINER_DDS,
+        clsid: guid(
+            0x9053699f,
+            0xa341,
+            0x429d,
+            [0x9e, 0x90, 0xee, 0x43, 0x7c, 0xf8, 0x0c, 0x73],
+        ),
+        name: "DDS Decoder",
+        mimes: "image/vnd.ms-dds",
+        exts: ".dds",
+        multiframe: true,
+        animation: false,
+        lossless: false,
+    },
+];
+
+type InfoObj = Com<usize>;
+
+unsafe fn new_codec_info(index: usize, out: *mut *mut c_void) -> i32 {
+    put(out, Com::create(CODEC_INFO_VT.ptr(), index))
+}
+
+/// Informations du décodeur intégré pour un format de conteneur.
+unsafe fn codec_info_for_container(container: &Guid, out: *mut *mut c_void) -> i32 {
+    match CODECS.iter().position(|c| c.container == *container) {
+        Some(i) => new_codec_info(i, out),
+        None => WINCODEC_ERR_COMPONENTNOTFOUND,
+    }
+}
+
+unsafe fn codec(this: *mut InfoObj) -> &'static CodecDesc {
+    &CODECS[*Com::get(this)]
+}
+
+/// Chaîne WIC : (taille du tampon en caractères, tampon, taille réelle).
+/// Tampon nul et taille 0 : seule la taille nécessaire est rendue.
+unsafe fn wic_string(s: &str, cch: u32, buf: *mut u16, actual: *mut u32) -> i32 {
+    let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    *actual = w.len() as u32;
+    if buf.is_null() {
+        return if cch == 0 { S_OK } else { E_INVALIDARG };
+    }
+    if (cch as usize) < w.len() {
+        return ERROR_INSUFFICIENT_BUFFER_HR;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    S_OK
+}
+
+unsafe fn put_value<T>(out: *mut T, v: T) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = v;
+    S_OK
+}
+
+unsafe extern "win64" fn info_qi(
+    this: *mut InfoObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_COMPONENT_INFO,
+            IID_BITMAP_CODEC_INFO,
+            IID_BITMAP_DECODER_INFO,
+        ],
+    )
+}
+unsafe extern "win64" fn info_component_type(_this: *mut InfoObj, out: *mut u32) -> i32 {
+    put_value(out, WIC_DECODER)
+}
+unsafe extern "win64" fn info_clsid(this: *mut InfoObj, out: *mut Guid) -> i32 {
+    put_value(out, codec(this).clsid)
+}
+unsafe extern "win64" fn info_signing(_this: *mut InfoObj, out: *mut u32) -> i32 {
+    put_value(out, WIC_COMPONENT_SIGNED)
+}
+unsafe extern "win64" fn info_author(
+    _this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string("Winlux", cch, buf, actual)
+}
+unsafe extern "win64" fn info_vendor(_this: *mut InfoObj, out: *mut Guid) -> i32 {
+    put_value(out, GUID_VENDOR_BUILTIN)
+}
+unsafe extern "win64" fn info_version(
+    _this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string("1.0.0.0", cch, buf, actual)
+}
+unsafe extern "win64" fn info_friendly_name(
+    this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string(codec(this).name, cch, buf, actual)
+}
+unsafe extern "win64" fn info_container(this: *mut InfoObj, out: *mut Guid) -> i32 {
+    put_value(out, codec(this).container)
+}
+/// Les décodeurs rendent des images en BGRA 32 bits.
+unsafe extern "win64" fn info_pixel_formats(
+    _this: *mut InfoObj,
+    count: u32,
+    formats: *mut Guid,
+    actual: *mut u32,
+) -> i32 {
+    if actual.is_null() {
+        return E_INVALIDARG;
+    }
+    *actual = 1;
+    if count == 0 || formats.is_null() {
+        return S_OK;
+    }
+    *formats = FMT_BGRA32;
+    S_OK
+}
+unsafe extern "win64" fn info_empty_string(
+    _this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string("", cch, buf, actual)
+}
+unsafe extern "win64" fn info_mime_types(
+    this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string(codec(this).mimes, cch, buf, actual)
+}
+unsafe extern "win64" fn info_extensions(
+    this: *mut InfoObj,
+    cch: u32,
+    buf: *mut u16,
+    actual: *mut u32,
+) -> i32 {
+    wic_string(codec(this).exts, cch, buf, actual)
+}
+unsafe extern "win64" fn info_animation(this: *mut InfoObj, out: *mut i32) -> i32 {
+    put_value(out, codec(this).animation as i32)
+}
+unsafe extern "win64" fn info_chromakey(this: *mut InfoObj, out: *mut i32) -> i32 {
+    put_value(out, (codec(this).container == CONTAINER_GIF) as i32)
+}
+unsafe extern "win64" fn info_lossless(this: *mut InfoObj, out: *mut i32) -> i32 {
+    put_value(out, codec(this).lossless as i32)
+}
+unsafe extern "win64" fn info_multiframe(this: *mut InfoObj, out: *mut i32) -> i32 {
+    put_value(out, codec(this).multiframe as i32)
+}
+unsafe extern "win64" fn info_matches_mime(
+    this: *mut InfoObj,
+    mime: *const u16,
+    out: *mut i32,
+) -> i32 {
+    if mime.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let wanted = crate::dlls::wstr(mime);
+    *out = codec(this)
+        .mimes
+        .split(',')
+        .any(|m| m.eq_ignore_ascii_case(wanted.trim())) as i32;
+    S_OK
+}
+/// Pas de motifs d'en-tête publiés : la reconnaissance passe par MatchesPattern.
+unsafe extern "win64" fn info_patterns(
+    _this: *mut InfoObj,
+    _size: u32,
+    _patterns: *mut c_void,
+    count: *mut u32,
+    actual: *mut u32,
+) -> i32 {
+    if count.is_null() || actual.is_null() {
+        return E_INVALIDARG;
+    }
+    *count = 0;
+    *actual = 0;
+    S_OK
+}
+unsafe extern "win64" fn info_matches_pattern(
+    this: *mut InfoObj,
+    stream: *mut c_void,
+    out: *mut i32,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    match read_stream(stream) {
+        Ok(bytes) => {
+            *out = (container_of(&bytes) == codec(this).container) as i32;
+            S_OK
+        }
+        Err(hr) => hr,
+    }
+}
+unsafe extern "win64" fn info_create_instance(this: *mut InfoObj, out: *mut *mut c_void) -> i32 {
+    let container = codec(this).container;
+    create_decoder(std::ptr::null_mut(), &container, std::ptr::null(), out)
+}
+
+static CODEC_INFO_VT: VTable<26> = VTable([
+    info_qi as *const (),
+    add_ref::<usize> as *const (),
+    release::<usize> as *const (),
+    info_component_type as *const (),
+    info_clsid as *const (),
+    info_signing as *const (),
+    info_author as *const (),
+    info_vendor as *const (),
+    info_version as *const (),
+    info_version as *const (), // GetSpecVersion
+    info_friendly_name as *const (),
+    info_container as *const (),
+    info_pixel_formats as *const (),
+    info_version as *const (),      // GetColorManagementVersion
+    info_empty_string as *const (), // GetDeviceManufacturer
+    info_empty_string as *const (), // GetDeviceModels
+    info_mime_types as *const (),
+    info_extensions as *const (),
+    info_animation as *const (),
+    info_chromakey as *const (),
+    info_lossless as *const (),
+    info_multiframe as *const (),
+    info_matches_mime as *const (),
+    info_patterns as *const (),
+    info_matches_pattern as *const (),
+    info_create_instance as *const (),
+]);
+
+unsafe extern "win64" fn decoder_info(this: *mut DecoderObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let container = match &*crate::dlls::lock(Com::get(this)) {
+        Some(d) => d.container,
+        None => return WINCODEC_ERR_NOTINITIALIZED,
+    };
+    codec_info_for_container(&container, out)
+}
+
+/// IWICImagingFactory::CreateComponentInfo, pour les décodeurs intégrés.
+unsafe extern "win64" fn create_component_info(
+    _this: *mut c_void,
+    clsid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if clsid.is_null() {
+        return E_INVALIDARG;
+    }
+    match CODECS.iter().position(|c| c.clsid == *clsid) {
+        Some(i) => new_codec_info(i, out),
+        None => WINCODEC_ERR_COMPONENTNOTFOUND,
+    }
+}
 
 // --- Sources : image décodée, bitmap, convertisseur, transformations ----------
 
@@ -1735,11 +2153,14 @@ pub unsafe extern "win64" fn wic_convert_bitmap_source(
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut m = crate::exports! {
         "WICCreateImagingFactory_Proxy" => fn wic_create_imaging_factory_proxy,
         "WICConvertBitmapSource" => fn wic_convert_bitmap_source,
         "DllGetClassObject" => fn dll_get_class_object,
-    }
+    };
+    // Relais `Interface_Méthode_Proxy` importés par WPF (#1063).
+    m.extend(super::windowscodecs_proxy::exports());
+    m
 }
 
 #[cfg(test)]
@@ -1780,6 +2201,55 @@ mod tests {
         f
     }
 
+    /// #1063 : PresentationCore appelle WIC par les fonctions exportées
+    /// `Interface_Method_Proxy` ; elles doivent atteindre la bonne case de la
+    /// table de l'objet.
+    #[test]
+    fn fonctions_proxy_exportees_vers_l_objet() {
+        use super::super::windowscodecs_proxy as px;
+        unsafe {
+            let f = factory();
+            let mut bmp: *mut c_void = std::ptr::null_mut();
+            let fmt = FMT_PBGRA32;
+            assert_eq!(
+                px::p_iwicimaging_factory_create_bitmap(
+                    f,
+                    5,
+                    4,
+                    &fmt as *const Guid as usize,
+                    0,
+                    &mut bmp as *mut *mut c_void as usize,
+                    0,
+                    0
+                ),
+                S_OK
+            );
+            let (mut w, mut h) = (0u32, 0u32);
+            assert_eq!(
+                px::p_iwicbitmap_source_get_size(
+                    bmp,
+                    &mut w as *mut u32 as usize,
+                    &mut h as *mut u32 as usize,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                ),
+                S_OK
+            );
+            assert_eq!((w, h), (5, 4));
+            assert_eq!(
+                px::p_iwicbitmap_source_get_size(std::ptr::null_mut(), 0, 0, 0, 0, 0, 0, 0),
+                0x8000_4003u32 as i32
+            );
+            let noms = px::exports();
+            assert!(noms.contains_key("IWICImagingFactory_CreateDecoderFromFileHandle_Proxy"));
+            assert!(noms.contains_key("WICCreateColorContext_Proxy"));
+            release_obj(bmp);
+        }
+    }
+
     #[test]
     fn decode_un_bmp_depuis_un_flux_memoire() {
         unsafe {
@@ -1808,6 +2278,50 @@ mod tests {
             type GetGuid = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
             assert_eq!(method::<GetGuid>(dec, 5)(dec, &mut container), S_OK);
             assert_eq!(container, CONTAINER_BMP);
+            // #1063 : WPF lit le format et les types MIME par GetDecoderInfo.
+            let mut info = std::ptr::null_mut();
+            assert_eq!(method::<Create>(dec, 6)(dec, &mut info), S_OK);
+            let mut c2 = Guid::default();
+            assert_eq!(method::<GetGuid>(info, 11)(info, &mut c2), S_OK);
+            assert_eq!(c2, CONTAINER_BMP);
+            type GetStr = unsafe extern "win64" fn(*mut c_void, u32, *mut u16, *mut u32) -> i32;
+            let mut len = 0u32;
+            assert_eq!(
+                method::<GetStr>(info, 16)(info, 0, std::ptr::null_mut(), &mut len),
+                S_OK
+            );
+            assert_eq!(len, 10);
+            let mut buf = vec![0u16; len as usize];
+            assert_eq!(
+                method::<GetStr>(info, 16)(info, len, buf.as_mut_ptr(), &mut len),
+                S_OK
+            );
+            assert_eq!(String::from_utf16_lossy(&buf[..9]), "image/bmp");
+            let mut clsid = Guid::default();
+            assert_eq!(method::<GetGuid>(info, 4)(info, &mut clsid), S_OK);
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let mut same = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(info, 0)(info, &IID_BITMAP_DECODER_INFO, &mut same),
+                S_OK
+            );
+            release_obj(same);
+            release_obj(info);
+            // La fabrique rend les mêmes informations à partir du CLSID.
+            type ById = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let mut info2 = std::ptr::null_mut();
+            assert_eq!(method::<ById>(f, 6)(f, &clsid, &mut info2), S_OK);
+            let mut c3 = Guid::default();
+            assert_eq!(method::<GetGuid>(info2, 11)(info2, &mut c3), S_OK);
+            assert_eq!(c3, CONTAINER_BMP);
+            let mut dec2 = std::ptr::null_mut();
+            assert_eq!(method::<Create>(info2, 25)(info2, &mut dec2), S_OK);
+            release_obj(dec2);
+            release_obj(info2);
+            assert_eq!(
+                method::<ById>(f, 6)(f, &Guid::default(), &mut std::ptr::null_mut()),
+                WINCODEC_ERR_COMPONENTNOTFOUND
+            );
             type GetFrame = unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
             let mut frame = std::ptr::null_mut();
             assert_eq!(method::<GetFrame>(dec, 13)(dec, 0, &mut frame), S_OK);

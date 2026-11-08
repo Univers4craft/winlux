@@ -103,6 +103,33 @@ la saisie est bloquée trente secondes.
   (gui_demo.exe) garde son propre écran de connexion (`login.rs`).
 - Test hors affichage : `python3 -B scripts/test-lock.py`.
 
+### Code PIN et empreinte digitale (#659)
+
+- Paramètres > Comptes > Options de connexion : « Code PIN » (4 à 32
+  chiffres, ni répétés ni qui se suivent) et, seulement si un lecteur est
+  détecté et fprintd installé (Paramètres > Matériel), « Reconnaissance
+  d’empreinte digitale ». Créer ou effacer demande le mot de passe du compte ;
+  un compte sans mot de passe n’a ni l’un ni l’autre.
+- Écran de connexion et de verrouillage : le champ propose le code PIN
+  d’office, « Options de connexion » ramène le mot de passe. Un doigt
+  enregistré déverrouille dès qu’il est posé, même sur l’horloge ; cinq
+  doigts refusés de suite et seul le clavier reste. « Changer d’utilisateur »
+  accepte aussi le code et le doigt de l’autre compte. Le Contrôle de compte
+  d’utilisateur garde le mot de passe.
+- Sécurité : le code est haché (scrypt, sel aléatoire) dans
+  `/var/lib/winlux/signin/COMPTE.pin`, lisible par root seul ; le relais
+  `winlux-root` compare, et cinq codes faux le bloquent jusqu’au prochain
+  mot de passe juste. fprintd tourne en root et ouvre lui-même le lecteur :
+  aucun droit sur le périphérique n’est donné aux comptes, et la règle polkit
+  `49-winlux-fprint.rules` ne laisse parler à fprintd que root, donc le
+  relais (`winlux-signin`). Supprimer un compte efface son code et ses
+  empreintes.
+- Sans lecteur (VM) : `winlux-signin simulate on` (root) simule un lecteur,
+  puis `winlux-signin simulate match` pose un bon doigt et `nomatch` un
+  mauvais ; `simulate off` l’enlève.
+- Tests : `python3 -B scripts/test-signin.py` (relais, lecteur simulé),
+  `test-lock-signin.py` et `test-signin-page.py` sous xvfb-run.
+
 ## Autorisations des applications Windows
 
 Comme sous Windows 11, une application `.exe` demande la première fois

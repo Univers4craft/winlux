@@ -98,7 +98,8 @@ with tempfile.TemporaryDirectory() as directory:
        "openbox laisse le clic droit à xfdesktop (Renommer, Supprimer, Copier sur un fichier)")
     ok(desktop.find(f"{OB}mousebind/{OB}action/{OB}desktop") is not None,
        "un clic donne le clavier au bureau (focus <desktop>yes</desktop>)")
-    ok(contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "root-menu", "menu Winlux gardé sur la racine")
+    ok(contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "winlux-desktop-menu",
+       "menu du bureau traduit sur la racine (#787)")
     keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}command") for bind in rc.find(f"{OB}keyboard")}
     ok(keys.get("C-A-t") == "winlux-terminal", "Ctrl+Alt+T ouvre le terminal Winlux par openbox")
     uca = (home / ".config/Thunar/uca.xml").read_text()
@@ -113,6 +114,7 @@ with tempfile.TemporaryDirectory() as directory:
     old = (NATIVE / "config/openbox/rc.xml").read_text()
     old = old.split("<!-- Bureau :")[0] + '<context name="Desktop"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>\n  </mouse>' + old.split("</mouse>", 1)[1]
     old = old.replace('    <keybind key="C-A-t">', '    <keybind key="X-unused">')
+    old = old.replace("<menu>winlux-desktop-menu</menu>", "<menu>root-menu</menu>")
     (home / ".config/openbox/rc.xml").write_text(old)
     (home / ".config/Thunar").mkdir(parents=True)
     (home / ".config/Thunar/uca.xml").write_text("<actions>\n<action>\n\t<name>Open Terminal Here</name>\n</action>\n</actions>\n")
@@ -121,6 +123,14 @@ with tempfile.TemporaryDirectory() as directory:
     contexts = {item.get("name"): item for item in rc.find(f"{OB}mouse")}
     ok(not any(bind.get("button") == "Right" for bind in contexts["Desktop"]) and "Root" in contexts,
        "profil existant : ancien clic droit d'openbox sur le bureau migré")
+    keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}menu") for bind in rc.find(f"{OB}keyboard")}
+    ok(keys.get("W-F10") == "winlux-desktop-menu"
+       and contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "winlux-desktop-menu",
+       "profil existant : Windows + F10 et la racine ouvrent le menu du bureau traduit (#787)")
+    for lang, word in (("en", "Open Explorer"), ("es", "Abrir Explorer"), ("de", "Explorer öffnen"), ("fr", "Ouvrir Explorer")):
+        menu = subprocess.run([sys.executable, str(SCRIPTS / "winlux-run.py"), "desktop-menu"], capture_output=True, text=True,
+                              env={**os.environ, "WINLUX_LANG": lang}).stdout
+        ok(word in menu and "<openbox_pipe_menu>" in menu, f"menu du bureau en {lang} (#787)")
     ok("Ouvrir dans le terminal" in (home / ".config/Thunar/uca.xml").read_text(), "profil existant : action Thunar traduite")
 
 # ── Barre des tâches : icône nm-applet en double ───────────────────────────
@@ -651,6 +661,15 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #659 : code PIN et empreinte à la connexion, vérifiés par le relais root.
+signin_tool = (SCRIPTS / "winlux-signin.py").read_text()
+ok("hashlib.scrypt" in signin_tool and "MAX_PIN_TRIES = 5" in signin_tool
+   and "def signin_prepare" in (SCRIPTS / "winlux-root.py").read_text()
+   and "def submit_pin" in (SCRIPTS / "winlux-lock.py").read_text()
+   and "def sections_signin" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and all((SCRIPTS / name).exists() for name in ("test-signin.py", "test-lock-signin.py", "test-signin-page.py")),
+   "options de connexion : code PIN (scrypt, 5 essais) et empreinte par le relais, écran et Paramètres testés")
+
 # #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
 broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
 ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
@@ -900,6 +919,22 @@ ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object
    and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
 
+# #20 : objets nommés partagés entre processus du même compte (sections, événements, mutex, sémaphores).
+_named = (ROOT / "runtime/src/dlls/named_objects.rs").read_text()
+ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_au_compte" in _named
+   and "meta.uid() == uid()" in _named and "winlux-objets-{}" in _named
+   and "fn sections_nommees_de_ntdll_et_de_kernel32" in (ROOT / "runtime/src/dlls/ntdll.rs").read_text()
+   and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
+
+# #24 : FreeLibrary décharge vraiment (démappage, index TLS rendu, dépendances relâchées).
+_deps = (ROOT / "testexe/src/bin/dll_deps.rs").read_text()
+ok("image neuve après rechargement" in _deps and "la DLL et sa dépendance sont toutes deux déchargées" in _deps
+   and "fn unload(" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "fn release_module_tls(" in (ROOT / "runtime/src/process.rs").read_text()
+   and "dll_deps" in (ROOT / "scripts/test-runtime.sh").read_text(),
+   "FreeLibrary : DLL démappée, TLS libéré, dépendances relâchées, rechargement à neuf (#24)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
@@ -979,7 +1014,7 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
-   and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
+   and 'argv[1] == "overflow"' in (SCRIPTS / "winlux-tray.py").read_text()
    and "def tray_icon_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
@@ -1014,6 +1049,12 @@ ok("const FIXED_INFO_SIZE: usize = 600;" in iphlp and "const IFROW_SIZE: usize =
    and "fn parametres_reseau_taille_puis_contenu" in iphlp
    and "net_params()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
    "iphlpapi : paramètres réseau et table des interfaces sans boucle sans fin (#1048)")
+
+# #1072 : le pool de threads de .NET 9 appelle GetThreadIOPendingFlag.
+ok('"GetThreadIOPendingFlag"=>fn get_thread_io_pending_flag' in (runtime_dlls / "kernel32.rs").read_text()
+   and "GetThreadIOPendingFlag" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "io_pending()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
+   "kernel32 : GetThreadIOPendingFlag pour le pool de threads de .NET 9 (#1072)")
 
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
@@ -1082,4 +1123,11 @@ gui_source = (runtime_dlls / "gui.rs").read_text()
 ok("fn la_fenetre_existe_encore_pendant_wm_destroy" in gui_source
    and "la_fenetre_existe_encore_pendant_wm_destroy" in (SCRIPTS / "test-all.sh").read_text(),
    "DestroyWindow : la fenêtre et son fil restent connus pendant WM_DESTROY et WM_NCDESTROY (#1079, Paint.NET)")
+# #16 : activation COM depuis le registre (InprocServer32 → DllGetClassObject),
+# CoCreateInstanceEx, CoFreeUnusedLibraries ; vérifiée par com_suite.exe.
+com_registry = (ROOT / "runtime/src/dlls/com_registry.rs").read_text(encoding="utf-8")
+ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
+   and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

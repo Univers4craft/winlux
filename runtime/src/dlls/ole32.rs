@@ -862,9 +862,19 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Listes de raccourcis de la barre des tâches (WinSCP, #905).
+        if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
         if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
             return hr;
+        }
+        // Serveur en processus inscrit au registre (InprocServer32, #16).
+        if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
+            if let Some(hr) = create_from_registry(&guid, &iid, out) {
+                return hr;
+            }
         }
         crate::log_warn!(
             "com",
@@ -882,6 +892,70 @@ pub unsafe extern "win64" fn co_create_instance(
     let result = create(punk, outer, &iid, out);
     drop(entry);
     result
+}
+
+/// MULTI_QI de CoCreateInstanceEx.
+#[repr(C)]
+pub struct MultiQi {
+    iid: *const Guid,
+    itf: *mut c_void,
+    hr: i32,
+}
+
+/// CoCreateInstanceEx : création locale (le nom de machine distante n'est
+/// pas pris en charge) puis QueryInterface pour chaque MULTI_QI.
+pub unsafe extern "win64" fn co_create_instance_ex(
+    rclsid: *const Guid,
+    outer: usize,
+    ctx: u32,
+    server: *const usize,
+    count: u32,
+    results: *mut MultiQi,
+) -> i32 {
+    if count == 0 || results.is_null() {
+        return E_INVALIDARG;
+    }
+    let results = std::slice::from_raw_parts_mut(results, count as usize);
+    for r in results.iter_mut() {
+        r.itf = std::ptr::null_mut();
+        r.hr = E_NOINTERFACE;
+    }
+    // COSERVERINFO : pwszName en deuxième champ ; seule la machine locale.
+    if !server.is_null() && *server.add(1) != 0 {
+        let name = read_wide_string(*server.add(1) as *const u16).unwrap_or_default();
+        if !name.is_empty() && name != "." && !name.eq_ignore_ascii_case("localhost") {
+            return 0x8007_06bau32 as i32; // RPC_S_SERVER_UNAVAILABLE
+        }
+    }
+    let mut unknown: *mut c_void = std::ptr::null_mut();
+    let hr = co_create_instance(rclsid, outer, ctx, &IID_IUNKNOWN, &mut unknown);
+    if hr < 0 {
+        for r in results.iter_mut() {
+            r.hr = hr;
+        }
+        return hr;
+    }
+    let vtable = *(unknown as *const *const usize);
+    let qi: unsafe extern "win64" fn(usize, *const Guid, *mut *mut c_void) -> i32 =
+        std::mem::transmute(*vtable);
+    let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
+    let mut found = 0;
+    for r in results.iter_mut() {
+        if r.iid.is_null() {
+            r.hr = E_INVALIDARG;
+            continue;
+        }
+        r.hr = qi(unknown as usize, r.iid, &mut r.itf);
+        if r.hr >= 0 {
+            found += 1;
+        }
+    }
+    release(unknown as usize);
+    match found {
+        0 => E_NOINTERFACE,
+        n if n == results.len() => S_OK,
+        _ => 0x0008_0012, // CO_S_NOTALLINTERFACES
+    }
 }
 
 // ---------- CoGetClassObject ----------
@@ -914,6 +988,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
+        if ctx & super::com_registry::CLSCTX_INPROC_SERVER != 0 {
+            if let Some(hr) = super::com_registry::class_object(&guid, &iid, out) {
+                return hr;
+            }
+        }
         crate::log_warn!(
             "com",
             "CoGetClassObject : classe {} inconnue (REGDB_E_CLASSNOTREG)",
@@ -933,6 +1012,29 @@ pub unsafe extern "win64" fn co_get_class_object(
 }
 
 const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154u32 as i32;
+const IID_ICLASSFACTORY: Guid = Guid {
+    data1: 0x0000_0001,
+    data2: 0,
+    data3: 0,
+    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+};
+
+/// CoCreateInstance par la fabrique d'un serveur inscrit au registre :
+/// IClassFactory::CreateInstance puis Release de la fabrique.
+unsafe fn create_from_registry(guid: &Guid, iid: &Guid, out: *mut *mut c_void) -> Option<i32> {
+    let mut factory: *mut c_void = std::ptr::null_mut();
+    let hr = super::com_registry::class_object(guid, &IID_ICLASSFACTORY, &mut factory)?;
+    if hr < 0 || factory.is_null() {
+        return Some(if hr < 0 { hr } else { E_NOINTERFACE });
+    }
+    let vtable = *(factory as *const *const usize);
+    let create: unsafe extern "win64" fn(usize, usize, *const Guid, *mut *mut c_void) -> i32 =
+        std::mem::transmute(*vtable.add(3));
+    let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
+    let result = create(factory as usize, 0, iid, out);
+    release(factory as usize);
+    Some(result)
+}
 
 // ---------- CoCreateFreeThreadedMarshaler ----------
 
@@ -1357,8 +1459,18 @@ pub extern "win64" fn co_disconnect_object(_unk: usize, _reserved: u32) -> i32 {
     S_OK
 }
 
-/// CoFreeUnusedLibraries : les serveurs COM sont intégrés au runtime.
-pub extern "win64" fn co_free_unused_libraries() {}
+/// CoFreeUnusedLibraries : décharge les serveurs en processus chargés
+/// depuis le registre dont `DllCanUnloadNow` rend S_OK.
+pub extern "win64" fn co_free_unused_libraries() {
+    unsafe {
+        super::com_registry::free_unused();
+    }
+}
+
+/// CoFreeUnusedLibrariesEx : le délai demandé n'est pas observé.
+pub extern "win64" fn co_free_unused_libraries_ex(_delay: u32, _reserved: u32) {
+    co_free_unused_libraries();
+}
 
 /// CreateBindCtx : les monikers ne sont pas encore pris en charge.
 pub unsafe extern "win64" fn create_bind_ctx(_reserved: u32, out: *mut usize) -> i32 {
@@ -1449,7 +1561,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateGuid"=>fn co_create_guid,"CLSIDFromString"=>fn clsid_from_string,"IIDFromString"=>fn clsid_from_string,
         "StringFromGUID2"=>fn string_from_guid2,"StringFromCLSID"=>fn string_from_clsid,"StringFromIID"=>fn string_from_clsid,
         "CreateStreamOnHGlobal"=>fn create_stream_on_hglobal,"GetHGlobalFromStream"=>fn get_hglobal_from_stream,
-        "CoCreateInstance"=>fn co_create_instance,
+        "CoCreateInstance"=>fn co_create_instance,"CoCreateInstanceEx"=>fn co_create_instance_ex,
         "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object,
         "CoGetClassObject"=>fn co_get_class_object,
         "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
@@ -1468,7 +1580,7 @@ pub fn exports() -> crate::dlls::Exports {
         // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
         // (MinGW les importe d'ole32).
     "IsEqualGUID"=>fn is_equal_guid,"CoDisconnectObject"=>fn co_disconnect_object,
-        "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CreateBindCtx"=>fn create_bind_ctx,
+        "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,"CreateBindCtx"=>fn create_bind_ctx,
         "IsAccelerator"=>fn is_accelerator,"OleDraw"=>fn ole_draw,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
         "OleSetMenuDescriptor"=>fn ole_set_menu_descriptor,
         "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
