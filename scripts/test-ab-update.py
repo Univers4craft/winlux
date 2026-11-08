@@ -20,12 +20,14 @@ def ok(condition, message):
         failures.append(message)
 
 
-def deb(work, version, depends=None, extra=b"meme contenu\n"):
+def deb(work, version, depends=None, extra=b"meme contenu\n", size=None):
     tree = work / f"pkg-{version}-{len(list(work.glob('pkg-*')))}"
     (tree / "DEBIAN").mkdir(parents=True)
     control = f"Package: winlux-desktop\nVersion: {version}\nArchitecture: all\nMaintainer: Winlux <winlux@localhost>\nDescription: test\n"
     if depends:
         control += f"Depends: {depends}\n"
+    if size:
+        control += f"Installed-Size: {size}\n"
     (tree / "DEBIAN/control").write_text(control)
     (tree / "DEBIAN/conffiles").write_text("/etc/apt/apt.conf.d/90winlux-desktop\n")
     files = {"usr/share/winlux/version": f"v{version}\n", "usr/share/winlux/stable": extra.decode(),
@@ -70,6 +72,10 @@ with tempfile.TemporaryDirectory() as temp:
     missing = ab(root, "prepare", deb(work, "0.3.1", depends="paquet-ubuntu-absent"), "v0.3.1")
     ok(missing.returncode == 3 and not (root / ".winlux-ab/b").exists(),
        f"dépendance Ubuntu absente : code 3, emplacement B retiré ({missing.returncode})")
+
+    full = ab(root, "prepare", deb(work, "0.3.1", size=2**40), "v0.3.1")
+    ok(full.returncode == 1 and "Espace insuffisant" in full.stderr and not (root / ".winlux-ab/b").exists(),
+       f"espace insuffisant : refus clair, rien n'est écrit ({full.stderr.strip()[:120]})")
 
     prepared = ab(root, "prepare", deb(work, "0.3.1"), "v0.3.1")
     ok(prepared.returncode == 0, f"mise à jour préparée ({prepared.stderr.strip()[-300:]})")

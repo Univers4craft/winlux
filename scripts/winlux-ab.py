@@ -139,7 +139,32 @@ def refresh_caches():
             subprocess.run(tool, capture_output=True)
 
 
+def tree_bytes(path):
+    total = 0
+    for folder, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def check_space(package):
+    """Place nécessaire : le paquet décompressé, la copie de /var/lib/dpkg et
+    une marge de 256 Mio. Refus clair plutôt qu'un emplacement B à moitié écrit."""
+    field = subprocess.run(["dpkg-deb", "-f", str(package), "Installed-Size"],
+                           capture_output=True, text=True).stdout.strip()
+    unpacked = int(field) * 1024 if field.isdigit() else package.stat().st_size * 4
+    needed = unpacked + tree_bytes(ROOT / "var/lib/dpkg") + 256 * 1024 * 1024
+    free = shutil.disk_usage(ROOT).free
+    if free < needed:
+        raise RuntimeError(f"Espace insuffisant pour préparer la mise à jour : {needed // 1048576} Mio "
+                           f"nécessaires, {free // 1048576} Mio libres. Rien n’a été modifié.")
+
+
 def prepare(package, version):
+    check_space(package)
     state = read_state()
     if state.get("state") == "trial":
         raise RuntimeError("La version précédente est encore à l’essai : redémarrez et attendez sa validation.")
