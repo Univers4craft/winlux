@@ -315,8 +315,10 @@ fn build(blob: &[u8]) -> Option<Reflection> {
             b"PCSG" | b"PSG1" => r.patch = parse_signature(data, &tag),
             b"SHDR" | b"SHEX" => {
                 let tokens: Vec<u32> = data
-                    .chunks_exact(4)
-                    .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|x| u32::from_le_bytes(*x))
                     .collect();
                 r.version = tokens.first().copied().unwrap_or(0);
                 count_program(&tokens, &mut r.counts);
