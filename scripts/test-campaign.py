@@ -163,6 +163,9 @@ msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
 ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
    and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
    "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
+ok("fn msi_view_modify" in msi_views and "MsiRecordReadStream" in (ROOT / "runtime/src/msi/session.rs").read_text()
+   and "MSIMODIFY_INSERT_TEMPORARY" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL écrit dans la base (MsiViewModify) et lit les flux de la table Binary (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -757,6 +760,26 @@ ok("def pc_plan" in assistant_source and '"vulkan": (f"llama-{LLAMA_TAG}-bin-ubu
    and "LOCAL_IDLE_SECONDS = 120" in assistant_source and "def idle_stop" in assistant_source
    and "def memory(self)" in assistant_source and "def plan_text" in assistant_source,
    "IA locale : modèle adapté au PC, zéro ressource sans question, ressources affichées")
+# #997 : claude.exe (300 Mo) tué faute de mémoire : le .exe est projeté, pas copié,
+# la copie de main.rs est libérée avant le chargement, grande section projetée du disque.
+loader_source = (ROOT / "runtime/src/loader.rs").read_text()
+main_source = (ROOT / "runtime/src/main.rs").read_text()
+ok("struct ImageFile" in loader_source and "fn map_pages" in loader_source
+   and "let file = ImageFile::open(path)" in loader_source and "drop(source);" in main_source
+   and "loader::ImageFile::open(&exe)" in main_source
+   and "image_file_is_mapped_and_sections_are_private_copies" in loader_source
+   and "def login_failure" in assistant_source
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/mod.rs").read_text()
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/burn.rs").read_text()
+   and "scripts/test-image-memory.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and (ROOT / "docs/compat/memoire-au-lancement.md").exists(),
+   "claude.exe : image projetée sans copie du fichier, connexion tuée faute de mémoire dite clairement (#997)")
+# #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
+ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
+   "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")
+# #1002 : « Où est mon fichier » va à l'agent fichiers ; pas de page sans rapport.
+ok("FILE_WORDS = re.compile" in assistant_source and "def page_relevant" in assistant_source,
+   "IA locale : demande de fichier reconnue, aucune page des Paramètres hors sujet (#1002)")
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
    and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),

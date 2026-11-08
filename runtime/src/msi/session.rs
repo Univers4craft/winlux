@@ -35,6 +35,8 @@ pub(super) enum Field {
     Null,
     Int(i32),
     Str(String),
+    /// Flux binaire et position de lecture (MsiRecordReadStream).
+    Stream(Vec<u8>, usize),
 }
 
 #[derive(Default)]
@@ -468,6 +470,7 @@ fn field_text(f: &Field) -> String {
         Field::Null => String::new(),
         Field::Int(i) => i.to_string(),
         Field::Str(s) => s.clone(),
+        Field::Stream(..) => String::new(),
     }
 }
 
@@ -499,9 +502,87 @@ pub extern "win64" fn msi_record_get_integer(rec: usize, field: u32) -> i32 {
     field_mut(rec, field, |f| match f {
         Field::Int(i) => *i,
         Field::Str(s) => s.trim().parse().unwrap_or(MSI_NULL_INTEGER),
-        Field::Null => MSI_NULL_INTEGER,
+        Field::Null | Field::Stream(..) => MSI_NULL_INTEGER,
     })
     .unwrap_or(MSI_NULL_INTEGER)
+}
+
+/// MsiRecordReadStream(enregistrement, champ, tampon, *taille) : lit la
+/// suite du flux ; tampon nul = octets restants dans `*taille`.
+pub extern "win64" fn msi_record_read_stream(
+    rec: usize,
+    field: u32,
+    buf: usize,
+    size: usize,
+) -> u32 {
+    if size == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let want = unsafe { *(size as *const u32) } as usize;
+    let got = field_mut(rec, field, |f| match f {
+        Field::Stream(data, pos) => {
+            let rest = data.len().saturating_sub(*pos);
+            if buf == 0 {
+                return Ok(rest);
+            }
+            let n = rest.min(want);
+            unsafe { std::ptr::copy_nonoverlapping(data[*pos..].as_ptr(), buf as *mut u8, n) };
+            *pos += n;
+            Ok(n)
+        }
+        // ERROR_DATATYPE_MISMATCH
+        _ => Err(1629u32),
+    });
+    match got {
+        Some(Ok(n)) => {
+            unsafe { *(size as *mut u32) = n as u32 };
+            ERROR_SUCCESS
+        }
+        Some(Err(e)) => e,
+        None => ERROR_INVALID_HANDLE,
+    }
+}
+
+/// MsiRecordSetStream(enregistrement, champ, fichier) : le flux est lu
+/// depuis le fichier ; chemin nul = remise à zéro de la lecture.
+fn record_set_stream(rec: usize, field: u32, path: usize, wide: bool) -> u32 {
+    if path == 0 {
+        return match field_mut(rec, field, |f| {
+            if let Field::Stream(_, pos) = f {
+                *pos = 0;
+            }
+        }) {
+            Some(()) => ERROR_SUCCESS,
+            None => ERROR_INVALID_HANDLE,
+        };
+    }
+    let path = unsafe { text(path, wide) };
+    let Ok(data) = std::fs::read(crate::paths::to_linux(&path)) else {
+        return 2; // ERROR_FILE_NOT_FOUND
+    };
+    match field_mut(rec, field, |f| *f = Field::Stream(data, 0)) {
+        Some(()) => ERROR_SUCCESS,
+        None => ERROR_INVALID_PARAMETER,
+    }
+}
+
+pub extern "win64" fn msi_record_set_stream_w(rec: usize, field: u32, path: usize) -> u32 {
+    record_set_stream(rec, field, path, true)
+}
+pub extern "win64" fn msi_record_set_stream_a(rec: usize, field: u32, path: usize) -> u32 {
+    record_set_stream(rec, field, path, false)
+}
+
+/// MsiRecordDataSize : octets d'un flux, caractères d'une chaîne, 4 pour
+/// un entier, 0 pour un champ nul.
+pub extern "win64" fn msi_record_data_size(rec: usize, field: u32) -> u32 {
+    field_mut(rec, field, |f| match f {
+        Field::Null => 0,
+        Field::Int(_) => 4,
+        Field::Str(s) => s.encode_utf16().count() as u32,
+        Field::Stream(d, _) => d.len() as u32,
+    })
+    .unwrap_or(0)
 }
 
 pub extern "win64" fn msi_record_get_field_count(rec: usize) -> u32 {
@@ -648,6 +729,10 @@ pub fn exports() -> crate::dlls::Exports {
         "MsiRecordGetStringA" => fn msi_record_get_string_a,
         "MsiRecordSetInteger" => fn msi_record_set_integer,
         "MsiRecordGetInteger" => fn msi_record_get_integer,
+        "MsiRecordReadStream" => fn msi_record_read_stream,
+        "MsiRecordSetStreamW" => fn msi_record_set_stream_w,
+        "MsiRecordSetStreamA" => fn msi_record_set_stream_a,
+        "MsiRecordDataSize" => fn msi_record_data_size,
         "MsiRecordGetFieldCount" => fn msi_record_get_field_count,
         "MsiRecordIsNull" => fn msi_record_is_null,
         "MsiRecordClearData" => fn msi_record_clear_data,
