@@ -49,6 +49,7 @@ crypt32.rs	SslExtraPara	a-verifier
 cxx_eh.rs	ExceptionPointers	a-verifier	
 d2d1.rs	HwndProps	a-verifier	
 d2d1_1.rs	BitmapProps1	a-verifier	D2D1_BITMAP_PROPERTIES1 (contexte de couleur)
+d2d1_1.rs	ContextView	a-verifier	
 d2d1_1.rs	MappedRect	a-verifier	D2D1_MAPPED_RECT (pointeur de pixels)
 d3d11.rs	Buffer	a-verifier	
 d3d11.rs	BufferVTable	a-verifier	
@@ -228,3 +229,6 @@ ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
+oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
+oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
+com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)

@@ -1032,6 +1032,10 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1085 : une cible Direct2D 1.0 répond aussi à ID2D1DeviceContext à 6.
+ok("fn context_view(" in (ROOT / "runtime/src/dlls/d2d1_1.rs").read_text()
+   and "v11::context_view(this, out)" in (ROOT / "runtime/src/dlls/d2d1.rs").read_text(),
+   "Direct2D : HwndRenderTarget, DCRenderTarget et BitmapRenderTarget servent ID2D1DeviceContext6 (#1085)")
 # #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
 ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
@@ -1170,4 +1174,17 @@ ok('info.get("firewall_profile") == "public"' in pages_src,
    "Partage et transfert : avertissement en profil Public (#1104)")
 ok("fn closed_pipe_ends_output_quietly" in (ROOT / "runtime/src/firewall.rs").read_text(encoding="utf-8"),
    "winlux --firewall status | head : plus de panique sur Broken pipe (#1105)")
+# #16 : OLE Automation (IDispatch standard, DispCallFunc, objets actifs) ;
+# vérifiée par automation_suite.exe.
+oleaut_disp = (ROOT / "runtime/src/dlls/oleaut32_disp.rs").read_text(encoding="utf-8")
+ok("fn create_std_dispatch" in oleaut_disp and "fn disp_call_func" in oleaut_disp
+   and "fn register_active_object" in oleaut_disp
+   and "automation_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : automatisation (CreateStdDispatch, DispInvoke, DispCallFunc, objets actifs) (#16)")
+# #16 : serveurs COM hors processus (LocalServer32, mandataire IDispatch) ;
+# vérifiés par com_local_suite.exe.
+com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
+ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
+   and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
