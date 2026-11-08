@@ -898,6 +898,15 @@ ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_service
    and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
    and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
    "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
+# #1188/#1189 : C:\\Users\\<compte> = dossier personnel (raccourcis de Claude pour Windows).
+ok("def account_names" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "#1189" in (SCRIPTS / "test-native-catalogue.py").read_text(),
+   "raccourcis : C:\\Users\\<compte> traduit en dossier personnel, Claude trouvé par Démarrer (#1188, #1189)")
+# #1168 : Alt+Espace laissé aux applications (RegisterHotKey), plus pris par openbox.
+ok('key="A-space"' not in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
+   and '"A-space"' in (SCRIPTS / "winlux-native-config.py").read_text()
+   and "#1168" in (SCRIPTS / "test-force-close.py").read_text(),
+   "openbox : Alt+Espace rendu aux applications, copies des comptes migrées (#1168)")
 # #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
 ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
@@ -1035,6 +1044,12 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
    and "quatre_fils_sous_verrou" in (clr / "tests.rs").read_text()
    and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
    "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
+
+# #1190 : une méthode de base pas encore écrite lève MissingMethodException.
+ok("fn missing(class: &str, method: &str)" in (clr / "bcl.rs").read_text()
+   and "non implémenté\", method)" not in (clr / "bcl.rs").read_text()
+   and "une_methode_de_base_absente_leve_missing_method" in (clr / "tests.rs").read_text(),
+   "CLR : un appel de BCL absent lève MissingMethodException au lieu de rendre null (#1190)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
@@ -1278,6 +1293,14 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+# #1090, étape 2 : d3d10.dll et d3d10_1.dll sur Direct3D 11, x86 et x64.
+d3d10_rs = (runtime_dlls / "d3d10.rs").read_text(encoding="utf-8")
+ok("fn D3D10CreateDeviceAndSwapChain1" in d3d10_rs and "fn device_table" in d3d10_rs
+   and '"d3d10_1"' in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
+   and "d3d10::wrap_backbuffer" in (runtime_dlls / "dxgi.rs").read_text(encoding="utf-8")
+   and "d3d1032" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
+   and "device_table_has_101_methods" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Direct3D 10 et 10.1 sur Direct3D 11, x86 et x64 (#1090, étape 2)")
 ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
    "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")

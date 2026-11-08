@@ -116,7 +116,7 @@ def offline_checks():
     check(names == ["Close", "Execute"] and commands == ["winlux-close-watch $wid"], f"croix : {names} {commands}")
     keys = {item.get("key"): item for item in root.find(f"{NS}keyboard")}
     check("winlux-close-watch $wid" in ET.tostring(keys["A-F4"], encoding="unicode"), "Alt+F4 sans winlux-close-watch")
-    check(keys.get("A-space") is not None and keys["A-space"].findtext(f"{NS}action/{NS}menu") == "winlux-window-menu", "Alt+Espace")
+    check("A-space" not in keys, "Alt+Espace pris par openbox : les applications ne le reçoivent pas (#1168)")
     menus = [item.text for item in root.iter(f"{NS}menu") if item.text]
     check("winlux-window-menu" in menus and "client-menu" not in menus, f"menu de la barre de titre : {menus}")
     files = [item.text for item in root.find(f"{NS}menu").findall(f"{NS}file")]
@@ -133,7 +133,8 @@ def offline_checks():
                 or (isinstance(node, ast.FunctionDef) and node.name == "migrate_openbox"):
             exec(compile(ast.Module([node], []), "winlux-native-config", "exec"), namespace)
     old = """<?xml version="1.0"?><openbox_config xmlns="http://openbox.org/3.4/rc"><keyboard>
-<keybind key="A-F4"><action name="Close"/></keybind></keyboard><mouse>
+<keybind key="A-F4"><action name="Close"/></keybind>
+<keybind key="A-space"><action name="ShowMenu"><menu>client-menu</menu></action></keybind></keyboard><mouse>
 <context name="Titlebar"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>client-menu</menu></action></mousebind></context>
 <context name="Close"><mousebind button="Left" action="Click"><action name="Close"/></mousebind></context></mouse>
 <menu><file>~/.config/openbox/menu.xml</file><hideDelay>200</hideDelay></menu></openbox_config>"""
@@ -143,11 +144,17 @@ def offline_checks():
         namespace["migrate_openbox"](user, shipped)
         text = user.read_text(encoding="utf-8")
         check(text.count("winlux-close-watch $wid") == 2, "migration : croix et Alt+F4")
-        check("client-menu" not in text and text.count("winlux-window-menu") >= 2, "migration : menu de fenêtre")
+        check("client-menu" not in text and text.count("winlux-window-menu") == 1, "migration : menu de fenêtre (barre de titre)")
         check("window-menu.xml" in text, "migration : fichier de menu")
+        check('key="A-space"' not in text, "migration : Alt+Espace rendu aux applications (#1168)")
         before = user.read_bytes()
         namespace["migrate_openbox"](user, shipped)
         check(user.read_bytes() == before, "migration : deuxième passage sans changement")
+        # Alt+Espace personnel (une commande) : gardé.
+        user.write_text(old.replace('<action name="ShowMenu"><menu>client-menu</menu></action></keybind></keyboard>',
+                                    '<action name="Execute"><command>mon-lanceur</command></action></keybind></keyboard>'))
+        namespace["migrate_openbox"](user, shipped)
+        check('key="A-space"' in user.read_text(encoding="utf-8"), "migration : Alt+Espace personnel gardé")
 
 
 def other_user_pid():
