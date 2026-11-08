@@ -861,6 +861,9 @@ unsafe fn button_in(g: &mut Gfx, c: &Rect, r: Rect, label: &[u8], id: i32) {
     }
     let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4)
         || PAGE == PAGE_SYSUPDATE && sysupdate_busy() && id >= 18;
+    if !disabled {
+        crate::gfx::focus_zone(&r);
+    }
     let selected = match (PAGE, id) {
         (5, 0) => unsafe { MOUSE_SPEED == 25 },
         (5, 1) => unsafe { MOUSE_SPEED == 50 },
@@ -1169,6 +1172,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let current = category_of(PAGE);
     for (pos, &entry) in rows[..count].iter().enumerate() {
         let r = nav_rect(f, pos, count);
+        crate::gfx::focus_zone(&r);
         let (name, indent, selected, font, size) = match entry {
             Nav::Category(k) => {
                 let open = k == current;

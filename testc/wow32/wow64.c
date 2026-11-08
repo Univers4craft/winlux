@@ -105,6 +105,7 @@ __declspec(dllimport) BOOL WINAPI GetIconInfo(HANDLE, void *);
 __declspec(dllimport) HANDLE WINAPI CreatePopupMenu(void);
 __declspec(dllimport) BOOL WINAPI K32EnumProcessModules(HANDLE, HANDLE *, DWORD, DWORD *);
 __declspec(dllimport) HANDLE WINAPI GetModuleHandleA(const char *);
+__declspec(dllimport) unsigned WINAPI GetCurrentProcessId(void);
 __declspec(dllimport) BOOL WINAPI InsertMenuItemW(HANDLE, DWORD, BOOL, const void *);
 __declspec(dllimport) BOOL WINAPI GetMenuItemInfoW(HANDLE, DWORD, BOOL, void *);
 __declspec(dllimport) HANDLE WINAPI CreateCompatibleDC(HANDLE);
@@ -597,6 +598,32 @@ __attribute__((used)) void __stdcall entry(void) {
         if (h == (HANDLE)-1 || GetLastError() != 183) fail(79, GetLastError());
         CloseHandle(h);
         DeleteFileW(f);
+    }
+
+    /* 80 : psapi en x86 (WinSCP) : EnumProcesses voit le processus
+     * courant ; GetModuleBaseNameA nomme l'exe ; GetMappedFileNameA rend
+     * un chemin natif pour une adresse de l'image. */
+    {
+        typedef int(WINAPI * enum_fn)(unsigned *, unsigned, unsigned *);
+        typedef unsigned(WINAPI * name_fn)(HANDLE, HANDLE, char *, unsigned);
+        typedef unsigned(WINAPI * mapped_fn)(HANDLE, void *, char *, unsigned);
+        HANDLE ps = LoadLibraryA("psapi.dll");
+        enum_fn en = (enum_fn)GetProcAddress(ps, "EnumProcesses");
+        name_fn bn = (name_fn)GetProcAddress(ps, "GetModuleBaseNameA");
+        mapped_fn mf = (mapped_fn)GetProcAddress(ps, "GetMappedFileNameA");
+        if (!en || !bn || !mf) fail(80, 1);
+        static unsigned ids[4096];
+        unsigned needed = 0, me = GetCurrentProcessId(), seen = 0;
+        if (!en(ids, sizeof ids, &needed) || needed == 0 || needed % 4) fail(80, 2);
+        for (unsigned i = 0; i < needed / 4; i++)
+            if (ids[i] == me) seen = 1;
+        if (!seen) fail(80, 3);
+        char name[64];
+        unsigned n = bn((HANDLE)-1, 0, name, sizeof name);
+        if (n != 9 || name[0] != 'w' || name[5] != '.') fail(80, 4);
+        char path[260];
+        n = mf((HANDLE)-1, (void *)GetModuleHandleA(0), path, sizeof path);
+        if (n < 10 || path[0] != '\\') fail(80, 5);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");

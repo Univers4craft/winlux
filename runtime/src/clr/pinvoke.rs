@@ -2,10 +2,6 @@
 //! des DLL intégrées de Winlux (`dlls::lookup`) puis appelé avec la convention
 //! Win64, exactement comme le ferait un programme natif.
 
-use super::bcl;
-use super::il::Value;
-use super::metadata::ElementType;
-
 pub struct Import<'a> {
     pub module: &'a str,
     pub name: &'a str,
@@ -13,13 +9,30 @@ pub struct Import<'a> {
     pub unicode: bool,
 }
 
-/// Appelle la fonction native. L'erreur nomme l'exception .NET à lever.
-pub fn call(
-    import: &Import,
-    args: &[Value],
-    params: &[ElementType],
-    ret: &ElementType,
-) -> Result<Value, (&'static str, String)> {
+/// Argument déjà préparé par l'interpréteur.
+#[derive(Debug, Clone)]
+pub enum Arg {
+    /// Entier, pointeur, booléen, structure de 1, 2, 4 ou 8 octets.
+    Word(u64),
+    F32(f32),
+    F64(f64),
+    /// Chaîne copiée dans un tampon natif le temps de l'appel.
+    Str(String),
+}
+
+/// Valeur de retour brute : RAX et XMM0.
+pub struct Raw {
+    pub int: u64,
+    pub float: u64,
+}
+
+thread_local! {
+    /// Dernière erreur Win32 relevée après un appel `SetLastError = true`.
+    pub static LAST_ERROR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Adresse de la fonction native d'un `[DllImport]`.
+pub fn resolve(import: &Import) -> Result<usize, (&'static str, String)> {
     let dll = crate::dlls::normalize(import.module);
     if !crate::dlls::is_builtin(&dll) {
         return Err((
@@ -28,33 +41,29 @@ pub fn call(
         ));
     }
     let suffixed = format!("{}{}", import.name, if import.unicode { 'W' } else { 'A' });
-    let Some(addr) =
-        crate::dlls::lookup(&dll, import.name).or_else(|| crate::dlls::lookup(&dll, &suffixed))
-    else {
-        return Err((
+    crate::dlls::lookup(&dll, import.name)
+        .or_else(|| crate::dlls::lookup(&dll, &suffixed))
+        .ok_or((
             "EntryPointNotFoundException",
             format!(
                 "Unable to find an entry point named '{}' in DLL '{}'",
                 import.name, import.module
             ),
-        ));
-    };
+        ))
+}
 
-    // Les tampons des chaînes marshalées doivent vivre jusqu'au retour.
+/// Appelle `addr` avec la convention Win64. Les chaînes vivent dans des
+/// tampons jusqu'au retour.
+pub fn call(addr: usize, args: &[Arg], unicode: bool, last_error: bool) -> Raw {
     let mut buffers: Vec<Vec<u8>> = Vec::new();
-    let mut raw = Vec::with_capacity(args.len());
-    for (i, arg) in args.iter().enumerate() {
-        let param = params.get(i);
-        if matches!(param, Some(ElementType::R4 | ElementType::R8)) {
-            return Err((
-                "NotSupportedException",
-                format!("{} : paramètre flottant non pris en charge", import.name),
-            ));
-        }
-        let word = match (arg, param) {
-            (Value::Ref(p), Some(ElementType::String)) => {
-                let text = bcl::read_managed_string(*p);
-                let buf = if import.unicode {
+    let words: Vec<u64> = args
+        .iter()
+        .map(|a| match a {
+            Arg::Word(w) => *w,
+            Arg::F32(f) => f.to_bits() as u64,
+            Arg::F64(f) => f.to_bits(),
+            Arg::Str(text) => {
+                let buf: Vec<u8> = if unicode {
                     text.encode_utf16()
                         .chain([0])
                         .flat_map(u16::to_le_bytes)
@@ -63,126 +72,82 @@ pub fn call(
                     text.bytes().chain([0]).collect()
                 };
                 buffers.push(buf);
-                buffers.last().unwrap().as_ptr() as usize
+                buffers.last().unwrap().as_ptr() as u64
             }
-            // Tableau de valeurs blittables : on passe l'adresse du premier élément.
-            (Value::Ref(p), Some(ElementType::SzArray(_))) if !p.is_null() => *p as usize + 8,
-            (Value::Null, _) => 0,
-            (v, _) => v.as_i64() as usize,
-        };
-        raw.push(word);
-    }
-
-    crate::trace!("P/Invoke {}!{} {:x?}", dll, import.name, raw);
-    let r = unsafe { invoke(addr, &raw) }.ok_or((
-        "NotSupportedException",
-        format!("{} : trop d'arguments ({})", import.name, raw.len()),
-    ))?;
-
-    Ok(match ret {
-        ElementType::Void => Value::Null,
-        ElementType::I8
-        | ElementType::U8
-        | ElementType::IntPtr
-        | ElementType::UIntPtr
-        | ElementType::Ptr(_) => Value::I64(r as i64),
-        ElementType::String if r != 0 => {
-            let text = if import.unicode {
-                let p = r as *const u16;
-                let len = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
-                String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, len) })
-            } else {
-                unsafe { std::ffi::CStr::from_ptr(r as *const std::ffi::c_char) }
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            bcl::alloc_managed_string(&text)
+        })
+        .collect();
+    crate::trace!("P/Invoke {:#x} {:x?}", addr, words);
+    let raw = unsafe { call_win64(addr, &words) };
+    if last_error {
+        if let Some(get) = crate::dlls::lookup("kernel32", "GetLastError") {
+            let get: extern "win64" fn() -> u32 = unsafe { std::mem::transmute(get) };
+            LAST_ERROR.with(|e| e.set(get()));
         }
-        ElementType::String => Value::Null,
-        _ => Value::I32(r as i32),
-    })
+    }
+    drop(buffers);
+    raw
 }
 
-unsafe fn invoke(addr: usize, a: &[usize]) -> Option<usize> {
-    type F0 = extern "win64" fn() -> usize;
-    type F1 = extern "win64" fn(usize) -> usize;
-    type F2 = extern "win64" fn(usize, usize) -> usize;
-    type F3 = extern "win64" fn(usize, usize, usize) -> usize;
-    type F4 = extern "win64" fn(usize, usize, usize, usize) -> usize;
-    type F5 = extern "win64" fn(usize, usize, usize, usize, usize) -> usize;
-    type F6 = extern "win64" fn(usize, usize, usize, usize, usize, usize) -> usize;
-    type F7 = extern "win64" fn(usize, usize, usize, usize, usize, usize, usize) -> usize;
-    type F8 = extern "win64" fn(usize, usize, usize, usize, usize, usize, usize, usize) -> usize;
-    type F9 =
-        extern "win64" fn(usize, usize, usize, usize, usize, usize, usize, usize, usize) -> usize;
-    type F10 = extern "win64" fn(
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-    ) -> usize;
-    type F11 = extern "win64" fn(
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-    ) -> usize;
-    type F12 = extern "win64" fn(
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
-    ) -> usize;
-    let p = addr as *const ();
-    Some(match *a {
-        [] => std::mem::transmute::<*const (), F0>(p)(),
-        [a0] => std::mem::transmute::<*const (), F1>(p)(a0),
-        [a0, a1] => std::mem::transmute::<*const (), F2>(p)(a0, a1),
-        [a0, a1, a2] => std::mem::transmute::<*const (), F3>(p)(a0, a1, a2),
-        [a0, a1, a2, a3] => std::mem::transmute::<*const (), F4>(p)(a0, a1, a2, a3),
-        [a0, a1, a2, a3, a4] => std::mem::transmute::<*const (), F5>(p)(a0, a1, a2, a3, a4),
-        [a0, a1, a2, a3, a4, a5] => std::mem::transmute::<*const (), F6>(p)(a0, a1, a2, a3, a4, a5),
-        [a0, a1, a2, a3, a4, a5, a6] => {
-            std::mem::transmute::<*const (), F7>(p)(a0, a1, a2, a3, a4, a5, a6)
-        }
-        [a0, a1, a2, a3, a4, a5, a6, a7] => {
-            std::mem::transmute::<*const (), F8>(p)(a0, a1, a2, a3, a4, a5, a6, a7)
-        }
-        [a0, a1, a2, a3, a4, a5, a6, a7, a8] => {
-            std::mem::transmute::<*const (), F9>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8)
-        }
-        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9] => {
-            std::mem::transmute::<*const (), F10>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9)
-        }
-        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10] => {
-            std::mem::transmute::<*const (), F11>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
-        }
-        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11] => {
-            std::mem::transmute::<*const (), F12>(p)(
-                a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11,
-            )
-        }
-        _ => return None,
-    })
+/// Chaîne native terminée par un zéro.
+pub fn read_native_string(ptr: u64, unicode: bool) -> String {
+    if ptr == 0 {
+        return String::new();
+    }
+    if unicode {
+        let p = ptr as *const u16;
+        let len = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
+        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, len) })
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(ptr as *const std::ffi::c_char) }
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+/// Appel Win64 générique : les quatre premiers arguments vont à la fois
+/// dans RCX, RDX, R8, R9 et dans XMM0 à XMM3 (l'appelé lit le registre de
+/// son type), les suivants sur la pile après les 32 octets réservés.
+///
+/// # Safety
+/// `addr` doit être une fonction Win64 qui accepte ces arguments.
+pub unsafe fn call_win64(addr: usize, args: &[u64]) -> Raw {
+    let mut regs = [0u64; 4];
+    for (r, a) in regs.iter_mut().zip(args) {
+        *r = *a;
+    }
+    // Zone réservée (4 mots) puis arguments de pile.
+    let mut stack = vec![0u64; 4];
+    stack.extend(args.iter().skip(4));
+    let int: u64;
+    let float: u64;
+    std::arch::asm!(
+        "mov r12, rsp",
+        "mov rax, rcx",
+        "shl rax, 3",
+        "sub rsp, rax",
+        "and rsp, -16",
+        "mov rdi, rsp",
+        "rep movsq",
+        "mov rcx, [r13]",
+        "mov rdx, [r13 + 8]",
+        "mov r8, [r13 + 16]",
+        "mov r9, [r13 + 24]",
+        "movq xmm0, rcx",
+        "movq xmm1, rdx",
+        "movq xmm2, r8",
+        "movq xmm3, r9",
+        "call r14",
+        "mov rsp, r12",
+        "movq rdx, xmm0",
+        inout("rcx") stack.len() => _,
+        inout("rsi") stack.as_ptr() => _,
+        out("rdi") _,
+        out("r12") _,
+        in("r13") regs.as_ptr(),
+        in("r14") addr,
+        out("rax") int,
+        out("rdx") float,
+        clobber_abi("win64"),
+    );
+    Raw { int, float }
 }
