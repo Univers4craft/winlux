@@ -1285,4 +1285,10 @@ ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.
 ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
    and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
    "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
+# #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
+# instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
+ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
+   and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
+   and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

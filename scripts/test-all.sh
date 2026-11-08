@@ -127,6 +127,9 @@ step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux
 # Barre de titre dessinée par l'appli (#1131) : WM_NCCALCSIZE traité sans
 # DefWindowProc retire le cadre du gestionnaire (WindowChrome de WPF).
 step "Cadre retiré pour une barre de titre maison (#1131)" cargo test -q -p winlux -- wm_nccalcsize_traite_par_l_appli_retire_le_cadre
+# Liste des processus pour .NET (#1162) : NtQuerySystemInformation 5 et 88,
+# d'où Process.GetProcesses et le contrôle d'instance unique.
+step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_des_processus_comme_la_lit_dotnet
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
