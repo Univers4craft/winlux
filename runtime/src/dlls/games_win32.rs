@@ -237,6 +237,104 @@ extern "win64" fn privilege_not_held() -> i32 {
     set_error(1314);
     0
 }
+/// VirtualAllocEx dans un enfant encore suspendu (bac à sable de Chromium,
+/// #767) ; refusé pour tout autre processus.
+unsafe fn foreign_alloc(p: usize, addr: usize, size: usize, kind: u32, prot: u32) -> *mut c_void {
+    use crate::dlls::{kernel32 as k, remote_vm};
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    if size == 0 || !k::valid_page_prot(prot) || kind & (MEM_COMMIT | MEM_RESERVE) == 0 {
+        set_error(87);
+        return std::ptr::null_mut();
+    }
+    let page = 4096usize;
+    let r = k::with_suspended_child(p, |pid| {
+        if kind & MEM_RESERVE == 0 && addr != 0 {
+            // Pages déjà réservées : seule la protection change.
+            let base = addr & !(page - 1);
+            let end = (addr + size + page - 1) & !(page - 1);
+            remote_vm::protect(pid, base, end - base, k::linux_prot(prot)).map(|()| base)
+        } else {
+            let base = addr & !0xffff;
+            let len = (size + (addr - base) + page - 1) & !(page - 1);
+            // MEM_RESERVE seul : pages inaccessibles jusqu'au MEM_COMMIT.
+            let lp = if kind & MEM_COMMIT == 0 {
+                libc::PROT_NONE
+            } else {
+                k::linux_prot(prot)
+            };
+            remote_vm::map(pid, base, len, lp)
+        }
+    });
+    match r {
+        Some(Ok(a)) => {
+            crate::trace!("VirtualAllocEx dans l'enfant suspendu : {a:#x} ({size} octets)");
+            a as *mut c_void
+        }
+        Some(Err(code)) => {
+            set_error(code);
+            std::ptr::null_mut()
+        }
+        None => {
+            set_error(5);
+            std::ptr::null_mut()
+        }
+    }
+}
+unsafe fn foreign_protect(p: usize, addr: usize, size: usize, prot: u32, old: *mut u32) -> i32 {
+    use crate::dlls::{kernel32 as k, remote_vm};
+    if size == 0 || !k::valid_page_prot(prot) {
+        set_error(87);
+        return 0;
+    }
+    let page = 4096usize;
+    let base = addr & !(page - 1);
+    let end = (addr + size + page - 1) & !(page - 1);
+    let r = k::with_suspended_child(p, |pid| {
+        let before = remote_vm::current_prot(pid, base);
+        remote_vm::protect(pid, base, end - base, k::linux_prot(prot)).map(|()| before)
+    });
+    match r {
+        Some(Ok(before)) => {
+            if !old.is_null() {
+                *old = before.map_or(0x01, remote_vm::win_prot_of);
+            }
+            1
+        }
+        Some(Err(code)) => {
+            set_error(code);
+            0
+        }
+        None => {
+            set_error(5);
+            0
+        }
+    }
+}
+/// VirtualFreeEx(MEM_RELEASE) dans un enfant encore suspendu (#767).
+pub(crate) unsafe fn foreign_free(p: usize, addr: usize, size: usize, kind: u32) -> Option<i32> {
+    use crate::dlls::remote_vm;
+    const MEM_DECOMMIT: u32 = 0x4000;
+    const MEM_RELEASE: u32 = 0x8000;
+    crate::dlls::kernel32::with_suspended_child(p, |pid| {
+        let r = if kind == MEM_RELEASE {
+            // Taille de la région : celle de la projection dans /proc/<pid>/maps.
+            remote_vm::region_len(pid, addr)
+                .map_or(Err(487), |len| remote_vm::unmap(pid, addr, len))
+        } else if kind == MEM_DECOMMIT && size != 0 {
+            remote_vm::protect(pid, addr & !4095, (size + 4095) & !4095, libc::PROT_NONE)
+        } else {
+            Err(87)
+        };
+        match r {
+            Ok(()) => 1,
+            Err(code) => {
+                set_error(code);
+                0
+            }
+        }
+    })
+}
 unsafe extern "win64" fn VirtualAllocEx(
     p: usize,
     addr: *mut c_void,
@@ -245,8 +343,7 @@ unsafe extern "win64" fn VirtualAllocEx(
     prot: u32,
 ) -> *mut c_void {
     if !is_current_process(p) {
-        set_error(5);
-        return std::ptr::null_mut();
+        return foreign_alloc(p, addr as usize, size, kind, prot);
     }
     crate::dlls::kernel32::virtual_alloc(addr, size, kind, prot)
 }
@@ -258,8 +355,7 @@ unsafe extern "win64" fn VirtualProtectEx(
     old: *mut u32,
 ) -> i32 {
     if !is_current_process(p) {
-        set_error(5);
-        return 0;
+        return foreign_protect(p, addr as usize, size, prot, old);
     }
     crate::dlls::kernel32::virtual_protect(addr, size, prot, old)
 }

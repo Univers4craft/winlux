@@ -414,6 +414,10 @@ unsafe extern "win64" fn VirtualFreeEx(
     kind: u32,
 ) -> i32 {
     if !is_self(process) {
+        if let Some(r) = crate::dlls::games_win32::foreign_free(process, addr as usize, size, kind)
+        {
+            return r;
+        }
         set_last_error(ERROR_NOT_SUPPORTED);
         return 0;
     }

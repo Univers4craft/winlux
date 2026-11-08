@@ -6,6 +6,8 @@
 //!   en donne un sans DISPLAY à son processus GPU.
 //! - #767 : un enfant qui exécute le même .exe le charge à la même adresse,
 //!   comme sous Windows ; le bac à sable de Chromium tue sinon l'enfant.
+//! - #767 : VirtualAllocEx, WriteProcessMemory, VirtualProtectEx et
+//!   VirtualFreeEx dans un enfant créé suspendu (préparation du bac à sable).
 
 #![no_std]
 #![no_main]
@@ -21,6 +23,23 @@ extern "system" {
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     fn GetModuleFileNameA(module: Handle, buf: *mut c_char, size: u32) -> u32;
+    fn VirtualAllocEx(p: Handle, addr: *mut u8, size: usize, kind: u32, prot: u32) -> *mut u8;
+    fn VirtualProtectEx(p: Handle, addr: *mut u8, size: usize, prot: u32, old: *mut u32) -> i32;
+    fn VirtualFreeEx(p: Handle, addr: *mut u8, size: usize, kind: u32) -> i32;
+    fn WriteProcessMemory(
+        p: Handle,
+        addr: *mut u8,
+        buf: *const u8,
+        n: usize,
+        done: *mut usize,
+    ) -> i32;
+    fn ReadProcessMemory(
+        p: Handle,
+        addr: *const u8,
+        buf: *mut u8,
+        n: usize,
+        done: *mut usize,
+    ) -> i32;
 }
 
 unsafe fn env_is(name: &core::ffi::CStr, expected: &[u8]) -> bool {
@@ -127,6 +146,58 @@ pub extern "C" fn mainCRTStartup() -> ! {
             );
             CloseHandle(child.thread);
             CloseHandle(child.process);
+        }
+
+        // Enfant suspendu : mémoire allouée, écrite, relue, protégée, libérée.
+        let mut child: ProcessInformation = core::mem::zeroed();
+        let launched = CreateProcessA(
+            path.as_ptr(),
+            c"chromium_compat.exe @enfant".as_ptr(),
+            null,
+            null,
+            0,
+            4, // CREATE_SUSPENDED
+            core::ptr::null(),
+            core::ptr::null(),
+            &startup,
+            &mut child,
+        ) != 0;
+        check!(launched, "CreateProcessA suspendu");
+        if launched {
+            let p = child.process;
+            let mem = VirtualAllocEx(p, core::ptr::null_mut(), 8192, 0x3000, 0x04);
+            check!(!mem.is_null(), "VirtualAllocEx dans l'enfant suspendu");
+            if !mem.is_null() {
+                let data = *b"bac a sable";
+                let mut n = 0usize;
+                let wrote = WriteProcessMemory(p, mem, data.as_ptr(), data.len(), &mut n) != 0
+                    && n == data.len();
+                let mut back = [0u8; 11];
+                let read = ReadProcessMemory(p, mem, back.as_mut_ptr(), 11, &mut n) != 0;
+                check!(
+                    wrote && read && back == data,
+                    "WriteProcessMemory puis ReadProcessMemory dans cette mémoire"
+                );
+                let mut old = 0u32;
+                check!(
+                    VirtualProtectEx(p, mem, 4096, 0x20, &mut old) != 0 && old == 0x04,
+                    "VirtualProtectEx rend l'ancienne protection (lecture-écriture)"
+                );
+                check!(
+                    VirtualFreeEx(p, mem, 0, 0x8000) != 0,
+                    "VirtualFreeEx(MEM_RELEASE) dans l'enfant"
+                );
+            }
+            // L'enfant n'a pas souffert : relancé, il se termine normalement.
+            ResumeThread(child.thread);
+            let mut code = 99u32;
+            let done = WaitForSingleObject(p, 20_000) == 0 && GetExitCodeProcess(p, &mut code) != 0;
+            check!(
+                done && code != 99,
+                "l'enfant relancé se termine normalement"
+            );
+            CloseHandle(child.thread);
+            CloseHandle(p);
         }
     }
     finish()

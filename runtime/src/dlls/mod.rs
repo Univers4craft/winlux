@@ -145,6 +145,7 @@ pub mod propsys;
 pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
+pub mod remote_vm;
 pub mod resource;
 pub mod rpcrt4;
 pub mod rtti;

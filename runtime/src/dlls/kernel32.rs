@@ -279,6 +279,28 @@ pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
         _ => None,
     }
 }
+/// Appelle `f` avec le PID d'un enfant encore suspendu (CREATE_SUSPENDED),
+/// son état verrouillé : personne ne l'attend ni ne le relance pendant
+/// l'opération (`remote_vm`, #767).
+pub(crate) fn with_suspended_child<R>(h: usize, f: impl FnOnce(i32) -> R) -> Option<R> {
+    match lookup_sync(h)? {
+        SyncHandle::Process(p) => {
+            let s = lock(&p.state);
+            match s.child.as_ref() {
+                Some(c) if s.suspended => Some(f(c.id() as i32)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+/// Protection Linux d'une protection Windows (PAGE_*).
+pub(crate) fn linux_prot(p: u32) -> i32 {
+    win_prot(p)
+}
+pub(crate) fn valid_page_prot(p: u32) -> bool {
+    valid_win_prot(p)
+}
 struct ProcessState {
     child: Option<Child>,
     /// Processus ouvert par `OpenProcess` sans en être le parent (Gestionnaire

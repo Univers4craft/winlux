@@ -903,5 +903,8 @@ ok("Some(d) if d.screen" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
 ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
    and "#767" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
    "même .exe dans un enfant : même adresse d'image, exigée par le bac à sable de Chromium (#767)")
+ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
+   and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
