@@ -173,6 +173,192 @@ unsafe extern "win64" fn get_at(
     E_INVALIDARG
 }
 
+// ── CLSID_EnumerableObjectCollection ────────────────────────────────
+//
+// IObjectCollection : tableau d'objets COM qu'un programme remplit avant
+// AddUserTasks/AppendCategory (WinSCP x86, #905). Chaque objet ajouté est
+// retenu (AddRef) et rendu par GetAt après QueryInterface.
+
+pub const CLSID_ENUMERABLE_OBJECT_COLLECTION: Guid = guid(
+    0x2D34_68C1,
+    0x36A7,
+    0x43B6,
+    [0xAC, 0x24, 0xD3, 0xF0, 0x2F, 0xD9, 0x60, 0x7A],
+);
+pub const IID_IOBJECT_COLLECTION: Guid = guid(
+    0x5632_B1A4,
+    0xE38A,
+    0x400A,
+    [0x92, 0x8A, 0xD4, 0xCD, 0x63, 0x23, 0x02, 0x95],
+);
+
+#[repr(C)]
+struct Coll {
+    vtbl: *const (),
+    refs: std::sync::atomic::AtomicU32,
+    items: std::sync::Mutex<Vec<usize>>,
+}
+
+static COLL_VT: VTable<9> = VTable([
+    coll_qi as *const (),
+    coll_add_ref as *const (),
+    coll_release as *const (),
+    coll_get_count as *const (),
+    coll_get_at as *const (),
+    coll_add_object as *const (),
+    coll_add_from_array as *const (),
+    coll_remove_at as *const (),
+    coll_clear as *const (),
+]);
+
+type Qi = unsafe extern "win64" fn(usize, *const Guid, *mut *mut c_void) -> i32;
+type Ref = unsafe extern "win64" fn(usize) -> u32;
+
+unsafe fn method(obj: usize, index: usize) -> usize {
+    *(*(obj as *const *const usize)).add(index)
+}
+
+unsafe fn com_add_ref(obj: usize) {
+    let f: Ref = std::mem::transmute(method(obj, 1));
+    f(obj);
+}
+
+unsafe fn com_release(obj: usize) {
+    let f: Ref = std::mem::transmute(method(obj, 2));
+    f(obj);
+}
+
+fn new_collection() -> *mut Coll {
+    Box::into_raw(Box::new(Coll {
+        vtbl: &COLL_VT as *const _ as *const (),
+        refs: std::sync::atomic::AtomicU32::new(1),
+        items: std::sync::Mutex::new(Vec::new()),
+    }))
+}
+
+fn items(c: &Coll) -> std::sync::MutexGuard<'_, Vec<usize>> {
+    c.items.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+unsafe extern "win64" fn coll_qi(this: *mut Coll, iid: *const Guid, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if iid.is_null() {
+        return E_INVALIDARG;
+    }
+    if *iid == IID_IUNKNOWN || *iid == IID_IOBJECT_ARRAY || *iid == IID_IOBJECT_COLLECTION {
+        coll_add_ref(this);
+        *out = this.cast();
+        return S_OK;
+    }
+    E_NOINTERFACE
+}
+
+unsafe extern "win64" fn coll_add_ref(this: *mut Coll) -> u32 {
+    (*this)
+        .refs
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1
+}
+
+unsafe extern "win64" fn coll_release(this: *mut Coll) -> u32 {
+    let n = (*this)
+        .refs
+        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+        - 1;
+    if n == 0 {
+        let b = Box::from_raw(this);
+        let list = std::mem::take(&mut *items(&b));
+        drop(b);
+        for o in list {
+            com_release(o);
+        }
+    }
+    n
+}
+
+unsafe extern "win64" fn coll_get_count(this: *mut Coll, count: *mut u32) -> i32 {
+    if count.is_null() {
+        return E_POINTER;
+    }
+    *count = items(&*this).len() as u32;
+    S_OK
+}
+
+unsafe extern "win64" fn coll_get_at(
+    this: *mut Coll,
+    index: u32,
+    iid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let Some(obj) = items(&*this).get(index as usize).copied() else {
+        return E_INVALIDARG;
+    };
+    let qi: Qi = std::mem::transmute(method(obj, 0));
+    qi(obj, iid, out)
+}
+
+unsafe extern "win64" fn coll_add_object(this: *mut Coll, obj: usize) -> i32 {
+    if obj == 0 {
+        return E_INVALIDARG;
+    }
+    com_add_ref(obj);
+    items(&*this).push(obj);
+    S_OK
+}
+
+/// AddFromArray : chaque élément d'un autre IObjectArray, en IUnknown.
+unsafe extern "win64" fn coll_add_from_array(this: *mut Coll, array: usize) -> i32 {
+    if array == 0 {
+        return E_INVALIDARG;
+    }
+    let count: unsafe extern "win64" fn(usize, *mut u32) -> i32 =
+        std::mem::transmute(method(array, 3));
+    let get_at: unsafe extern "win64" fn(usize, u32, *const Guid, *mut *mut c_void) -> i32 =
+        std::mem::transmute(method(array, 4));
+    let mut n = 0u32;
+    let hr = count(array, &mut n);
+    if hr < 0 {
+        return hr;
+    }
+    for i in 0..n {
+        let mut o: *mut c_void = std::ptr::null_mut();
+        let hr = get_at(array, i, &IID_IUNKNOWN, &mut o);
+        if hr < 0 {
+            return hr;
+        }
+        // GetAt a déjà compté la référence : elle passe à la collection.
+        items(&*this).push(o as usize);
+    }
+    S_OK
+}
+
+unsafe extern "win64" fn coll_remove_at(this: *mut Coll, index: u32) -> i32 {
+    let removed = {
+        let mut l = items(&*this);
+        if (index as usize) >= l.len() {
+            return E_INVALIDARG;
+        }
+        l.remove(index as usize)
+    };
+    com_release(removed);
+    S_OK
+}
+
+unsafe extern "win64" fn coll_clear(this: *mut Coll) -> i32 {
+    let list = std::mem::take(&mut *items(&*this));
+    for o in list {
+        com_release(o);
+    }
+    S_OK
+}
+
 /// Classe intégrée pour CoCreateInstance.
 pub unsafe fn create_builtin(
     clsid: &super::ole32::Guid,
@@ -182,6 +368,12 @@ pub unsafe fn create_builtin(
     // Même disposition (16 octets) que le Guid d'ole32.
     let clsid = &*(clsid as *const _ as *const Guid);
     let iid = &*(iid as *const _ as *const Guid);
+    if *clsid == CLSID_ENUMERABLE_OBJECT_COLLECTION {
+        let c = new_collection();
+        let hr = coll_qi(c, iid, out);
+        coll_release(c);
+        return Some(hr);
+    }
     if *clsid != CLSID_DESTINATION_LIST {
         return None;
     }
@@ -238,6 +430,39 @@ mod tests {
                 Some(E_NOINTERFACE)
             );
             assert_eq!(create_builtin(g(&other), g(&IID_IUNKNOWN), &mut list), None);
+
+            // Collection : la liste elle-même y entre (objet COM quelconque).
+            let mut coll: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                create_builtin(
+                    g(&CLSID_ENUMERABLE_OBJECT_COLLECTION),
+                    g(&IID_IOBJECT_COLLECTION),
+                    &mut coll
+                ),
+                Some(S_OK)
+            );
+            let c = coll as *mut Coll;
+            let list = &LIST as *const Obj as *mut c_void;
+            assert_eq!(coll_add_object(c, list as usize), S_OK);
+            assert_eq!(coll_add_object(c, removed as usize), S_OK);
+            let mut n = 0;
+            coll_get_count(c, &mut n);
+            assert_eq!(n, 2);
+            let mut back: *mut c_void = std::ptr::null_mut();
+            assert_eq!(coll_get_at(c, 1, &IID_IOBJECT_ARRAY, &mut back), S_OK);
+            assert_eq!(back, removed);
+            assert_eq!(coll_get_at(c, 5, &IID_IUNKNOWN, &mut back), E_INVALIDARG);
+            // Une seconde collection reprend la première.
+            let other_coll = new_collection();
+            assert_eq!(coll_add_from_array(other_coll, coll as usize), S_OK);
+            coll_get_count(other_coll, &mut n);
+            assert_eq!(n, 2);
+            assert_eq!(coll_remove_at(other_coll, 0), S_OK);
+            assert_eq!(coll_clear(c), S_OK);
+            coll_get_count(c, &mut n);
+            assert_eq!(n, 0);
+            assert_eq!(coll_release(other_coll), 0);
+            assert_eq!(coll_release(c), 0);
         }
     }
 }
