@@ -36,7 +36,7 @@
 | 22 | **Bluetooth et appareils** | Appairage BlueZ, manettes, caméras, micros, périphériques d'entrée. |
 | 23 | **Alimentation et batterie** | Mise en veille, écran, plans d'alimentation, batterie (affichée seulement si présente). |
 | 24 | **Graphismes** | GPU (y compris hybrides), Direct3D 9/12 et backend Vulkan, décodage vidéo matériel, overlay de performances. |
-| 25 | **Signaler un problème** (catégorie à part, au-dessus de Confidentialité et sécurité) | Nouveau signalement, dernier plantage, rapports enregistrés ; section « Compte GitHub » : se connecter (rapports envoyés directement sous son nom), se déconnecter, créer un compte GitHub gratuitement. |
+| 25 | **Signaler un problème** (catégorie à part, au-dessus de Confidentialité et sécurité) | Nouveau signalement, dernier plantage, rapports enregistrés ; section « Compte GitHub » : se connecter (rapports envoyés directement sous son nom, après une confirmation de ce qui part et où), se déconnecter (le jeton est révoqué chez GitHub), créer un compte GitHub gratuitement ; « Mes signalements » avec leur état ; plantages en attente envoyés avec son compte sur confirmation. |
 | 26 | **Imprimantes et scanners** | Ajout d'imprimantes CUPS, page de test, imprimer en PDF. |
 | 27 | **Bureau à distance** | Serveur RFB/VNC de la session. |
 | 28 | **Partage et transfert** | Dossiers partagés (Samba) et transfert des réglages par fichier `.wlxprofile`. |

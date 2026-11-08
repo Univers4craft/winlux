@@ -408,13 +408,15 @@ pub struct Installer {
     pub log: Logger,
 }
 
-/// Clé de registre normalisée (`hklm\software\…`).
+/// Clé de registre sous sa racine (`hklm\Software\…`). La casse des
+/// sous-clés est gardée telle que le programme l'écrit : le registre la
+/// conserve et la compare sans en tenir compte (#830).
 pub fn reg_key(root: &str, sub: &str) -> String {
     let sub = sub.trim_matches('\\');
     if sub.is_empty() {
         root.to_string()
     } else {
-        format!("{root}\\{sub}").to_lowercase()
+        format!("{root}\\{sub}")
     }
 }
 
@@ -514,16 +516,15 @@ impl Installer {
 
     /// Écrit une valeur de registre (type Windows, octets bruts).
     pub fn reg_set(&mut self, key: &str, name: &str, kind: u32, bytes: Vec<u8>, track: bool) {
-        let key = key.to_lowercase();
-        self.reg_note_key(&key);
+        self.reg_note_key(key);
         if track {
-            let v = (key.clone(), name.to_lowercase());
+            let v = (key.to_lowercase(), name.to_lowercase());
             if !self.manifest.values.contains(&v) {
                 self.manifest.values.push(v);
             }
         }
         self.edits.push(RegEdit::Set {
-            key,
+            key: key.into(),
             name: name.into(),
             kind,
             bytes,
@@ -541,26 +542,26 @@ impl Installer {
     /// Retient les clés créées par l'installation (la clé et ses parents
     /// qui n'existaient pas) : retirées à la désinstallation si vides.
     pub fn reg_note_key(&mut self, key: &str) {
-        let key = key.to_lowercase();
-        let parts: Vec<&str> = key.split('\\').collect();
+        let lower = key.to_lowercase();
+        let parts: Vec<&str> = lower.split('\\').collect();
         for n in 2..=parts.len() {
             let k = parts[..n].join("\\");
             if !self.manifest.keys.contains(&k) && !crate::dlls::advapi32::registry_key_exists(&k) {
                 self.manifest.keys.push(k);
             }
         }
-        self.edits.push(RegEdit::Key(key));
+        self.edits.push(RegEdit::Key(key.into()));
     }
 
     pub fn reg_delete_value(&mut self, key: &str, name: &str) {
         self.edits.push(RegEdit::DeleteValue {
-            key: key.to_lowercase(),
+            key: key.into(),
             name: name.into(),
         });
     }
 
     pub fn reg_delete_tree(&mut self, key: &str) {
-        self.edits.push(RegEdit::DeleteTree(key.to_lowercase()));
+        self.edits.push(RegEdit::DeleteTree(key.into()));
     }
 
     /// Applique les écritures en attente (le registre est relu par les
@@ -585,8 +586,8 @@ impl Installer {
         }
         if self.manifest.uninstall_key.is_empty() {
             let key = format!(
-                "hklm\\software\\microsoft\\windows\\currentversion\\uninstall\\{}",
-                self.manifest.id.to_lowercase()
+                "hklm\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}",
+                self.manifest.id
             );
             self.manifest.uninstall_key = key.clone();
             let m = &self.manifest;

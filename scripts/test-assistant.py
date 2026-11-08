@@ -572,15 +572,20 @@ def answer(schema, text):
     props = schema["properties"]
     low = text.lower()
     if "agent" in props:
+        # « bonjour » envoyé aux réglages, comme le modèle 1,5B en VM (#1033).
         return {{"agent": "fichiers" if "trouve" in low or "ouvre mes" in low else
-                 "reglages" if "thème" in low or "theme" in low else "aide"}}
+                 "reglages" if "thème" in low or "theme" in low or "bonjour" in low else "aide"}}
     if "terme" in props:
         if "ouvre mes images" in low:
             return {{"terme": "", "dossier": "images"}}
+        if "où est mon fichier" in low:  # dossier inventé par le modèle 1,5B (#1034)
+            return {{"terme": "", "dossier": "documents"}}
         return {{"terme": low.split()[-1], "dossier": "aucun"}}
     if "reglage" in props:
         return {{"reglage": "theme_sombre", "page": "aucune"}}
-    return {{"reponse": "Il manque imm32.dll." if "imm32" in text else "Je ne sais pas.", "page": "10"}}
+    # Le modèle 1,5B ne choisit pas la page Programmes Windows (#1035).
+    return {{"reponse": "Il manque imm32.dll." if "imm32" in text else "Je ne sais pas.",
+             "page": "aucune" if "putty" in low else "10"}}
 
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -638,6 +643,14 @@ try:
     assert result["agent"] == "aide" and result["actions"] == [], "page 10 sans .exe nommé : rien proposé"
     assert assistant.page_relevant(2, "Mon wifi ne marche plus") and not assistant.page_relevant(2, "Bonjour")
     assert assistant.page_relevant(26, "Mon imprimante n'imprime rien")
+    # #1033 : une salutation ne propose aucun réglage, même routée vers les réglages.
+    result = helper.handle("Bonjour")
+    assert result["agent"] == "aide" and result["actions"] == [], result
+    assert not assistant.setting_relevant("mode_economie", "Bonjour")
+    assert assistant.setting_relevant("mode_economie", "Passe en mode économie d'énergie")
+    assert assistant.setting_relevant("theme_sombre", "Mets le thème sombre")
+    assert assistant.setting_relevant("son_plus", "Monte le volume")
+    assert not assistant.mentions_setting("Comment ça va ?")
 finally:
     server.stop()
 assert not server.running() and server.memory() == 0
@@ -712,6 +725,7 @@ assert "code 1" in assistant.login_failure(1)
 assert 'win.connect("delete-event", lambda *_: not stop_confirmed())' in setup
 assert 'close.connect("clicked", request_close)' in setup
 assert "dialog.set_default_response(Gtk.ResponseType.ACCEPT)" in setup
+assert 'keep.get_style_context().add_class("suggested-action")' in setup and "keep.grab_focus()" in setup, "#1036"
 for text in ("Le système a arrêté la connexion faute de mémoire. Fermez des applications, puis réessayez.",
              "Tant que l'activation n'est pas terminée, {name} reste désactivé. Fermer cette fenêtre l'arrête.",
              "Arrêter l'activation de {name} ?", "Continuer l'activation", "Arrêter",

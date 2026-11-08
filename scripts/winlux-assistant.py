@@ -1670,6 +1670,43 @@ FILE_WORDS = re.compile(r"\b(fichiers?|documents?|dossiers?|photos?|files?|folde
 GENERIC_TERMS = {"fichier", "fichiers", "document", "documents", "mon fichier", "file", "my file", "datei",
                  "meine datei", "archivo", "mi archivo", "documento", "dossier", "folder", "ordner", "carpeta"}
 
+# Mots de chaque famille de réglages (texte sans accents, quatre langues). Le
+# petit modèle choisissait un réglage même pour « Bonjour » (#1033) : un réglage
+# n'est proposé que si la question en parle.
+SETTING_WORDS = {
+    "theme": r"\b(theme|themes|sombre|clair|dark|light|dunkel|hell|oscuro|claro|tema)\b",
+    "barre": r"\b(barre|taskbar|taskleiste|barra)\b",
+    "son": r"\b(son|sons|volume|sound|ton|lautstarke|sonido|muet|mute|stumm|silencio|audio)\b",
+    "bluetooth": r"\bbluetooth\b",
+    "reseau": r"\b(reseau|wifi|wi-fi|internet|network|netzwerk|red|connexion|connection|verbindung|conexion)\b",
+    "verrouiller": r"\b(verrouill\w*|lock|sperr\w*|bloque\w*)\b",
+    "echelle": r"\b(texte|taille|echelle|scale|zoom|text|grosse|schrift|tamano|letra|agrandi\w*|redui\w*)\b",
+    "mode": r"\b(mode|energie|batterie|performances?|economie|power|battery|akku|energy|energia|bateria|rendimiento)\b",
+    "mises": r"\b(mises? a jour|update\w*|aktualis\w*|actualiz\w*)\b",
+}
+_SETTING_FAMILY = {"theme_": "theme", "barre_": "barre", "son_": "son", "bluetooth_": "bluetooth",
+                   "reseau_": "reseau", "verrouiller": "verrouiller", "echelle_": "echelle", "mode_": "mode",
+                   "mises_": "mises"}
+# Mots qui désignent chaque dossier connu (#1034 : « Où est mon fichier » ouvrait Documents).
+FOLDER_WORDS = {"documents": r"\b(documents?|dokumente|documentos?)\b",
+                "images": r"\b(images?|photos?|pictures?|bilder|imagenes|fotos?)\b",
+                "musique": r"\b(musique|music|musik|musica)\b", "videos": r"\b(videos?)\b",
+                "telechargements": r"\b(telecharg\w*|downloads?|descargas?)\b",
+                "bureau": r"\b(bureau|desktop|schreibtisch|escritorio)\b"}
+
+
+def setting_relevant(key, question):
+    """Le réglage choisi par le modèle a-t-il un rapport avec la question ?"""
+    family = next((f for prefix, f in _SETTING_FAMILY.items() if key.startswith(prefix)), None)
+    return family is not None and re.search(SETTING_WORDS[family], fold(question)) is not None
+
+
+def mentions_setting(question):
+    text = fold(question)
+    return any(re.search(words, text) for words in SETTING_WORDS.values()) or \
+        re.search(r"\b(parametres?|reglages?|settings|einstellungen|configuracion|ajustes)\b", text) is not None
+
+
 AGENTS = ("fichiers", "reglages", "aide")
 assert len(AGENTS) <= MAX_AGENTS
 ROUTER_SCHEMA = {"type": "object", "properties": {"agent": {"type": "string", "enum": list(AGENTS)}},
@@ -1736,6 +1773,8 @@ class LocalAssistant:
             agent = self.server.chat(system, question, ROUTER_SCHEMA, max_tokens=20).get("agent")
         except (OSError, ValueError, KeyError, IndexError):
             agent = None
+        if agent == "reglages" and not mentions_setting(question):
+            return "aide"  # « Bonjour » ne propose aucun réglage (#1033)
         return agent if agent in AGENTS else "aide"
 
     def handle(self, question):
@@ -1756,6 +1795,8 @@ class LocalAssistant:
         if fold(term) in GENERIC_TERMS:
             term = ""
         folder = answer.get("dossier")
+        if folder in FOLDERS and not re.search(FOLDER_WORDS[folder], fold(question)):
+            folder = None  # dossier que la question ne nomme pas (#1034)
         if folder in FOLDERS and not term:
             action = describe_action("ouvrir_dossier", str(user_folder(folder)))
             if action:
@@ -1785,8 +1826,10 @@ class LocalAssistant:
                   + ". S'il n'y en a pas, « reglage » vaut aucun et « page » est la page des Paramètres la plus "
                   "proche : " + pages + " ; sinon « page » vaut aucune.")
         answer = self.server.chat(system, question, SETTINGS_SCHEMA, max_tokens=40)
-        action = describe_action("reglage", str(answer.get("reglage")))
-        if action is None and str(answer.get("page")).isdigit():
+        key = str(answer.get("reglage"))
+        action = describe_action("reglage", key) if setting_relevant(key, question) else None
+        if action is None and str(answer.get("page")).isdigit() and \
+                page_relevant(int(answer["page"]), question):
             action = describe_action("ouvrir_parametres", str(answer.get("page")))
         if action:
             result["actions"].append(action)
@@ -1811,8 +1854,11 @@ class LocalAssistant:
         user = question + (f"\n\nJournal :\n{data[-3000:]}" if data else "")
         answer = self.server.chat(system, user, HELP_SCHEMA, max_tokens=300)
         result["reply"] = str(answer.get("reponse") or "").strip() or _t("Je ne sais pas.")
-        if str(answer.get("page")).isdigit() and page_relevant(int(answer["page"]), question, bool(program)):
-            action = describe_action("ouvrir_parametres", str(answer.get("page")))
+        # Un .exe nommé : la page Programmes Windows est toujours proposée, quel
+        # que soit le choix du modèle (#1035) ; sinon seulement une page en rapport.
+        page = "10" if program else str(answer.get("page"))
+        if page.isdigit() and page_relevant(int(page), question, bool(program)):
+            action = describe_action("ouvrir_parametres", page)
             if action:
                 result["actions"].append(action)
 
@@ -2122,8 +2168,12 @@ def run_setup(key="claude"):
         dialog.format_secondary_text(_t("{name} restera désactivé. Vous pourrez le réactiver plus tard dans "
                                         "Paramètres > Assistant IA.", name=name))
         dialog.add_button(_t("Arrêter"), Gtk.ResponseType.REJECT)
-        dialog.add_button(_t("Continuer l'activation"), Gtk.ResponseType.ACCEPT)
+        keep = dialog.add_button(_t("Continuer l'activation"), Gtk.ResponseType.ACCEPT)
+        # Le choix par défaut se voit : bouton violet Prisme, focus clavier (#1036).
+        keep.get_style_context().add_class("suggested-action")
+        keep.set_can_default(True)
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+        keep.grab_focus()
         answer = dialog.run()
         dialog.destroy()
         return answer == Gtk.ResponseType.REJECT

@@ -142,6 +142,7 @@ pub mod mpr;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
+pub(crate) mod named_objects;
 pub mod named_pipes;
 pub mod ncrypt;
 pub mod nls;
