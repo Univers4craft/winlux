@@ -113,6 +113,8 @@ jobs:
 
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
+      - name: Pages de code asiatiques, modules gconv gardés dans l'ISO (#183)
+        run: python3 -B scripts/test-dbcs-gconv.py
 
       - name: Inventaire des structures à taille x86 (#232)
         run: python3 -B scripts/test-wow32-structures.py
@@ -239,6 +241,10 @@ jobs:
         run: python3 -B scripts/test-paintnet-d2d.py
       - name: Vérifier Bluetooth (rfkill), OpenGL et bus d'accessibilité dans l'image
         run: python3 -B scripts/test-session-plumbing.py
+      - name: Son du lecteur multimédia et des enregistrements nommé dans le mélangeur (#1010)
+        run: python3 -B scripts/test-audio-stream-names.py
+      - name: Lecteur multimédia, un seul flux audio par lecture (#1013)
+        run: python3 -B scripts/test-media-one-stream.py
       - name: Imprimantes du réseau (avahi-daemon lancé avant CUPS)
         run: python3 -B scripts/test-avahi-printers.py
       - name: su et sudo (droits de la base Ubuntu, su par sudo)
@@ -503,6 +509,9 @@ jobs:
       - name: Mémoire au lancement d'un gros .exe (#997)
         run: python3 -B scripts/test-image-memory.py
 
+      - name: DLL système chargée depuis le Bureau sans demande (#1019)
+        run: sh scripts/test-loadlibrary-personal-cwd.sh
+
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
 
@@ -518,6 +527,11 @@ jobs:
         run: |
           sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
           sh scripts/test-msi-actions.sh
+
+      - name: Actions personnalisées VBScript et JScript (#973)
+        run: |
+          sudo apt-get install -y -q wixl msitools || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools; }
+          sh scripts/test-msi-scripts.sh
 
       - name: Assistant d'installation au double-clic (#833)
         run: |

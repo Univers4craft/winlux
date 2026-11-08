@@ -15,6 +15,7 @@
 //!   et de HKLM\Software\Classes ; rien n'est stocké sous HKCR lui-même.
 
 pub mod cli;
+pub mod live;
 pub mod regfile;
 
 use std::collections::HashMap;
@@ -934,6 +935,7 @@ fn load_from_disk(path: &Path) -> Result<Data, i32> {
     let mut data = load_file(path)?;
     overlay_proxy(&mut data);
     overlay_network(&mut data);
+    live::overlay(&mut data);
     Ok(data)
 }
 

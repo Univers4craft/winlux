@@ -29,6 +29,17 @@ deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
 blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
 `scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
 
+Depuis la deuxième partie de #269, un thread se suspend (`SuspendThread`,
+`ResumeThread` avec le compteur de Windows) et son contexte se lit et se
+modifie pendant qu'il est arrêté (`GetThreadContext`, `SetThreadContext`,
+`runtime/src/dlls/thread_ctl.rs`, test `scripts/test-thread-control.sh`).
+C'est ce que fait le ramasse-miettes de coreclr : les applis .NET
+autonomes (vérifié avec .NET 8), console et WinForms, tournent (exceptions managées, fenêtre,
+minuteur, fermeture, message clair sur une exception non gérée). `MEM_WRITE_WATCH` et
+`GetWriteWatch` suivent les pages écrites par le bit soft-dirty du noyau
+(#965). `QueueUserAPC2` reste absente, comme dans Windows 10 22H2. WPF a
+son propre chantier (#268).
+
 Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
 par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
 empreintes du block map vérifiées avant toute écriture, installation dans
