@@ -1514,11 +1514,23 @@ fn create_input_layout(descs: *const D3D11InputElementDesc, count: u32) -> *mut 
 
 static LAYOUT_STORE: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
+/// D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT.
+const MAX_RTVS: usize = 8;
+
 // ────────────────────── ID3D11DeviceContext ──────────────────────
 
 struct DeviceContextState {
     current_rtv: *mut SimpleComObj,
     current_dsv: *mut SimpleComObj,
+    /// Toutes les vues couleur liées par OMSetRenderTargets (cases vides
+    /// comprises) ; `current_rtv` est la première (#531).
+    rtvs: [*mut SimpleComObj; MAX_RTVS],
+    num_rtvs: u32,
+    /// Cadre des cibles multiples (G-buffer), créé à la demande : chaque vue
+    /// en GL_COLOR_ATTACHMENT0 + i (#531).
+    mrt_fbo: gl::GLuint,
+    /// Les cibles courantes passent par `mrt_fbo`.
+    mrt: bool,
     /// Cadre propre aux passes « profondeur seule » (OMSetRenderTargets sans
     /// cible couleur, ex. cascades d'ombre), créé à la demande (#530).
     depth_fbo: gl::GLuint,
@@ -1540,6 +1552,10 @@ impl Default for DeviceContextState {
         Self {
             current_rtv: std::ptr::null_mut(),
             current_dsv: std::ptr::null_mut(),
+            rtvs: [std::ptr::null_mut(); MAX_RTVS],
+            num_rtvs: 0,
+            mrt_fbo: 0,
+            mrt: false,
             depth_fbo: 0,
             current_vs: 0,
             current_ps: 0,
@@ -1983,8 +1999,9 @@ unsafe extern "win64" fn ctx_get_predication(
         zero_u32(value.cast());
     }
 }
+/// OMGetRenderTargets : les vues liées, chacune avec une référence en plus.
 unsafe extern "win64" fn ctx_get_render_targets(
-    _: *mut DeviceContext,
+    this: *mut DeviceContext,
     n: u32,
     rtv: *mut *mut c_void,
     dsv: *mut *mut c_void,
@@ -1992,6 +2009,21 @@ unsafe extern "win64" fn ctx_get_render_targets(
     unsafe {
         zero_ptrs(rtv, n);
         zero_ptrs(dsv, 1);
+        let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+        let held = |v: *mut SimpleComObj| {
+            if !v.is_null() {
+                com_addref(v.cast());
+            }
+            v.cast::<c_void>()
+        };
+        if !rtv.is_null() {
+            for i in 0..(n as usize).min(s.num_rtvs as usize) {
+                *rtv.add(i) = held(s.rtvs[i]);
+            }
+        }
+        if !dsv.is_null() {
+            *dsv = held(s.current_dsv);
+        }
     }
 }
 unsafe extern "win64" fn ctx_get_rt_uav(
@@ -2039,6 +2071,28 @@ unsafe extern "win64" fn ctx_get_ptr_u32(
 }
 unsafe extern "win64" fn ctx_get_so(_: *mut DeviceContext, n: u32, out: *mut *mut c_void) {
     unsafe { zero_ptrs(out, n) };
+}
+/// RSGetViewports : sans tableau, le nombre de fenêtres liées ; sinon
+/// au plus `*count` fenêtres recopiées, et leur nombre.
+unsafe extern "win64" fn ctx_rs_get_viewports(
+    this: *mut DeviceContext,
+    count: *mut u32,
+    vps: *mut c_void,
+) {
+    if count.is_null() {
+        return;
+    }
+    let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    if vps.is_null() {
+        *count = s.num_viewports;
+        return;
+    }
+    let n = (*count).min(s.num_viewports);
+    let out = vps as *mut D3D11Viewport;
+    for i in 0..n as usize {
+        *out.add(i) = s.viewports[i];
+    }
+    *count = n;
 }
 unsafe extern "win64" fn ctx_get_count(_: *mut DeviceContext, count: *mut u32, _: *mut c_void) {
     unsafe { zero_u32(count) };
@@ -2600,13 +2654,24 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
     let Some(g) = gl_here() else { return };
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
 
-    s.current_rtv = if count > 0 && !rtvs.is_null() {
-        as_simple(*rtvs).unwrap_or(std::ptr::null_mut())
+    let n = if rtvs.is_null() {
+        0
     } else {
-        std::ptr::null_mut()
+        (count as usize).min(MAX_RTVS)
     };
+    s.rtvs = [std::ptr::null_mut(); MAX_RTVS];
+    for i in 0..n {
+        s.rtvs[i] = as_simple(*rtvs.add(i)).unwrap_or(std::ptr::null_mut());
+    }
+    s.num_rtvs = n as u32;
+    s.current_rtv = s.rtvs[0];
+    // Une vue au-delà de la première : cadre des cibles multiples (#531).
+    s.mrt = s.rtvs[1..].iter().any(|v| !v.is_null());
+    if s.mrt {
+        bind_mrt(g, &mut s);
+    }
     s.current_dsv = as_simple(dsv).unwrap_or(std::ptr::null_mut());
-    if s.current_rtv.is_null() && !s.current_dsv.is_null() && s.depth_fbo == 0 {
+    if !s.mrt && s.current_rtv.is_null() && !s.current_dsv.is_null() && s.depth_fbo == 0 {
         let mut fbo = 0;
         (g.GenFramebuffers)(1, &mut fbo);
         (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, fbo);
@@ -2626,13 +2691,56 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
 /// « profondeur seule » quand seule une vue de profondeur est liée (une
 /// passe d'ombre partait dans la fenêtre, #530), sinon la fenêtre.
 unsafe fn target_fbo(s: &DeviceContextState) -> gl::GLuint {
-    if !s.current_rtv.is_null() {
+    if s.mrt {
+        s.mrt_fbo
+    } else if !s.current_rtv.is_null() {
         (*s.current_rtv).gl_id
     } else if !s.current_dsv.is_null() {
         s.depth_fbo
     } else {
         0
     }
+}
+
+/// Niveau et tranche visés par une vue de cible de rendu, d'après son
+/// D3D11_RENDER_TARGET_VIEW_DESC (Format, ViewDimension, MipSlice,
+/// FirstArraySlice pour un tableau).
+fn rtv_mip_layer(d: &[u32; 6]) -> (u32, u32) {
+    match d[1] {
+        4 => (d[2], 0),
+        5 => (d[2], d[3]),
+        _ => (0, 0),
+    }
+}
+
+/// Lie le cadre des cibles multiples : la vue i en GL_COLOR_ATTACHMENT0 + i,
+/// glDrawBuffers sur toutes les sorties (GL_NONE pour une case vide), comme
+/// D3D11 qui écrit SV_Target<i> dans la vue i (#531).
+unsafe fn bind_mrt(g: &gl::GlFunctions, s: &mut DeviceContextState) {
+    if s.mrt_fbo == 0 {
+        (g.GenFramebuffers)(1, &mut s.mrt_fbo);
+    }
+    (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, s.mrt_fbo);
+    let mut bufs = [0u32; MAX_RTVS];
+    for (i, v) in s.rtvs.iter().enumerate() {
+        let point = gl::GL_COLOR_ATTACHMENT0 + i as u32;
+        let tex = if v.is_null() {
+            None
+        } else {
+            as_texture2d((**v).view_resource)
+        };
+        match tex {
+            Some(t) => {
+                let (mip, layer) = rtv_mip_layer(&(**v).view_desc);
+                attach_texture(g, point, &*t, mip, layer);
+                bufs[i] = point;
+            }
+            None => {
+                (g.FramebufferTexture2D)(gl::GL_FRAMEBUFFER, point, gl::GL_TEXTURE_2D, 0, 0);
+            }
+        }
+    }
+    (g.DrawBuffers)(s.num_rtvs.max(1) as i32, bufs.as_ptr());
 }
 
 unsafe extern "win64" fn ctx_om_set_rt_uav(
@@ -2670,7 +2778,7 @@ unsafe extern "win64" fn ctx_clear_rtv(
         (g.Clear)(gl::GL_COLOR_BUFFER_BIT);
     });
     let st = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    if st.current_rtv == obj {
+    if !st.mrt && st.current_rtv == obj {
         pipeline::attach_depth(g, st.current_dsv);
     }
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, target_fbo(&st));
@@ -2976,7 +3084,11 @@ unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_vo
 unsafe extern "win64" fn ctx_clear_state(this: *mut DeviceContext) {
     let Some(g) = gl_here() else { return };
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    // Les cadres GL propres au contexte servent encore après ClearState.
+    let (mrt_fbo, depth_fbo) = (s.mrt_fbo, s.depth_fbo);
     *s = DeviceContextState::default();
+    s.mrt_fbo = mrt_fbo;
+    s.depth_fbo = depth_fbo;
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
     (g.UseProgram)(0);
 }
@@ -3133,7 +3245,7 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     om_get_depth_stencil_state: ctx_get_ptr_u32,
     so_get_targets: ctx_get_so,
     rs_get_state: ctx_get_one,
-    rs_get_viewports: ctx_get_count,
+    rs_get_viewports: ctx_rs_get_viewports,
     rs_get_scissor_rects: ctx_get_count,
     hs_get_shader_resources: ctx_get_array,
     hs_get_shader: ctx_get_shader,
