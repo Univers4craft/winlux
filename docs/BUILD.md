@@ -207,6 +207,7 @@ Winlux utilise un système de logs structurés configurable.
 | `WINLUX_LOG=trace` ou `WINLUX_TRACE=1` | Traces complètes du chargeur |
 | `WINLUX_WOW32_HISTORY=1` (avec `WINLUX_TRACE=1`) | Programmes 32 bits : à chaque faute, les 64 derniers passages du fil entre le code x86 et le runtime (fonction, esp, adresse de retour, quatre premiers arguments ; rappels x86 compris) |
 | `WINLUX_WOW32_STEP=Fonction[:message]` (avec `WINLUX_TRACE=1`) | Programmes 32 bits : au retour de chaque appel de la passerelle dont le nom contient `Fonction` (deuxième argument égal à `message`, en hexadécimal), le code x86 est suivi pas à pas sur 200 000 instructions ; une faute écrit les 1 024 derniers EIP/ESP |
+| `WINLUX_GETPROC_STUBS=1` | Diagnostic : `GetProcAddress` rend, pour une fonction absente d'une DLL intégrée, un bouchon journalisé (`manquants.log`, stderr) au lieu de NULL. Un programme empaqueté qui résout ses imports à la main liste ainsi toutes ses fonctions manquantes en une passe ; il ne s'arrête qu'en appelant l'une d'elles. Désactivé par défaut |
 | `WINLUX_LOG=debug,json` | Format JSON structuré |
 | `WINLUX_LOG=json` | JSON en mode debug |
 
