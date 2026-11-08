@@ -1241,6 +1241,43 @@ pub extern "win64" fn do_drag_drop(
     DRAGDROP_S_DROP
 }
 
+// ---------- CoIncrementMTAUsage / CoDecrementMTAUsage ----------
+
+/// Utilisations du MTA posées par CoIncrementMTAUsage et pas encore rendues.
+static MTA_USAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Prochain jeton (CO_MTA_USAGE_COOKIE), jamais nul.
+static MTA_COOKIE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+/// `CoIncrementMTAUsage` (combaseapi.h, Windows 8) : garde le MTA du
+/// processus en vie sans CoInitializeEx sur le thread. Le runtime .NET
+/// (CsWinRT) l'appelle avant d'activer une classe WinRT et rend le jeton
+/// dans un finaliseur (#1147 : Flow Launcher). Ici le MTA implicite existe
+/// toujours : le compteur suit seulement les appels.
+pub unsafe extern "win64" fn co_increment_mta_usage(cookie: *mut usize) -> i32 {
+    if cookie.is_null() {
+        return E_INVALIDARG;
+    }
+    MTA_USAGE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *cookie = MTA_COOKIE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    S_OK
+}
+
+/// `CoDecrementMTAUsage` : rend un jeton de CoIncrementMTAUsage.
+pub extern "win64" fn co_decrement_mta_usage(cookie: usize) -> i32 {
+    if cookie == 0 {
+        return E_INVALIDARG;
+    }
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut n = MTA_USAGE.load(SeqCst);
+    while n > 0 {
+        match MTA_USAGE.compare_exchange(n, n - 1, SeqCst, SeqCst) {
+            Ok(_) => break,
+            Err(now) => n = now,
+        }
+    }
+    S_OK
+}
+
 // ---------- CoWaitForMultipleHandles ----------
 
 /// `CoWaitForMultipleHandles` : attente des handles (COWAIT_WAITALL = 1) ;
@@ -1625,6 +1662,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
+        "CoIncrementMTAUsage"=>fn co_increment_mta_usage,"CoDecrementMTAUsage"=>fn co_decrement_mta_usage,
         "CoGetObjectContext"=>fn co_get_object_context,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
         // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
@@ -1645,6 +1683,22 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utilisation_du_mta_par_jetons() {
+        // CsWinRT (.NET) : jeton pris à l'activation, rendu par un finaliseur.
+        unsafe {
+            let mut a = 0usize;
+            let mut b = 0usize;
+            assert_eq!(co_increment_mta_usage(&mut a), S_OK);
+            assert_eq!(co_increment_mta_usage(&mut b), S_OK);
+            assert!(a != 0 && b != 0 && a != b);
+            assert_eq!(co_decrement_mta_usage(b), S_OK);
+            assert_eq!(co_decrement_mta_usage(a), S_OK);
+            assert_eq!(co_increment_mta_usage(std::ptr::null_mut()), E_INVALIDARG);
+            assert_eq!(co_decrement_mta_usage(0), E_INVALIDARG);
+        }
+    }
 
     #[test]
     fn guid_round_trip_and_uuid_version() {

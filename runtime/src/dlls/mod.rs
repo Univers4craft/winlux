@@ -2001,6 +2001,12 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            (
+                "api-ms-win-core-com-l1-1-0.dll",
+                "ole32",
+                "CoDecrementMTAUsage",
+            ),
+            ("combase.dll", "ole32", "CoIncrementMTAUsage"),
             ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",

@@ -33,6 +33,8 @@ pub(crate) mod fallback;
 /// IDWriteFactory3 à 7, jeux de polices et interfaces de niveau 1 à 6 (#984).
 #[path = "dwrite_sets.rs"]
 mod sets;
+#[path = "dwrite_text.rs"]
+mod text_ext;
 
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const DWRITE_E_FILEFORMAT: i32 = 0x8898_5000u32 as i32;
@@ -1750,6 +1752,8 @@ pub struct Format {
     tab: Option<f32>,
     trimming: [u32; 3],
     line_spacing: (u32, f32, f32),
+    /// Réglages de IDWriteTextFormat1 à 3 et IDWriteTextLayout1 à 4 (#1118).
+    ext: text_ext::FormatExt,
 }
 
 impl Default for Format {
@@ -1769,6 +1773,7 @@ impl Default for Format {
             tab: None,
             trimming: [0; 3],
             line_spacing: (0, 0.0, 0.0),
+            ext: text_ext::FormatExt::default(),
         }
     }
 }
@@ -2203,14 +2208,36 @@ unsafe extern "win64" fn format_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_TEXT_FORMAT])
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_TEXT_FORMAT,
+            text_ext::IID_TEXT_FORMAT1,
+            text_ext::IID_TEXT_FORMAT2,
+            text_ext::IID_TEXT_FORMAT3,
+        ],
+    )
 }
 unsafe extern "win64" fn layout_qi(
     this: *mut TextObj,
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_TEXT_FORMAT, IID_TEXT_LAYOUT])
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_TEXT_FORMAT,
+            IID_TEXT_LAYOUT,
+            text_ext::IID_TEXT_LAYOUT1,
+            text_ext::IID_TEXT_LAYOUT2,
+            text_ext::IID_TEXT_LAYOUT3,
+            text_ext::IID_TEXT_LAYOUT4,
+        ],
+    )
 }
 
 macro_rules! setter {
@@ -2336,7 +2363,8 @@ unsafe extern "win64" fn get_locale(this: *mut TextObj, buf: *mut u16, size: u32
     put_wide(&l, buf, size)
 }
 
-static FORMAT_VT: VTable<28> = VTable([
+// IDWriteTextFormat (0-27), puis 1 (28-35), 2 (36-37) et 3 (38-42).
+static FORMAT_VT: VTable<43> = VTable([
     format_qi as *const (),
     add_ref::<Mutex<Text>> as *const (),
     release::<Mutex<Text>> as *const (),
@@ -2365,6 +2393,21 @@ static FORMAT_VT: VTable<28> = VTable([
     get_size as *const (),
     get_locale_len as *const (),
     get_locale as *const (),
+    text_ext::set_vertical as *const (),
+    text_ext::get_vertical as *const (),
+    text_ext::set_last_line as *const (),
+    text_ext::get_last_line as *const (),
+    text_ext::set_optical as *const (),
+    text_ext::get_optical as *const (),
+    text_ext::set_fallback as *const (),
+    text_ext::get_fallback as *const (),
+    text_ext::set_spacing2 as *const (),
+    text_ext::get_spacing2 as *const (),
+    text_ext::format_set_axes as *const (),
+    text_ext::format_axis_count as *const (),
+    text_ext::format_get_axes as *const (),
+    text_ext::get_automatic_axes as *const (),
+    text_ext::set_automatic_axes as *const (),
 ]);
 
 // Méthodes propres à IDWriteTextLayout.
@@ -3003,7 +3046,8 @@ unsafe extern "win64" fn layout_hit_range(
     S_OK
 }
 
-static LAYOUT_VT: VTable<67> = VTable([
+// IDWriteTextLayout (0-66), puis 1 (67-70), 2 (71-79), 3 (80-83) et 4 (84-88).
+static LAYOUT_VT: VTable<89> = VTable([
     layout_qi as *const (),
     add_ref::<Mutex<Text>> as *const (),
     release::<Mutex<Text>> as *const (),
@@ -3072,6 +3116,28 @@ static LAYOUT_VT: VTable<67> = VTable([
     layout_hit_point as *const (),
     layout_hit_position as *const (),
     layout_hit_range as *const (),
+    text_ext::set_pair_kerning as *const (),
+    text_ext::get_pair_kerning as *const (),
+    text_ext::set_char_spacing as *const (),
+    text_ext::get_char_spacing as *const (),
+    text_ext::layout_metrics1 as *const (),
+    text_ext::set_vertical as *const (),
+    text_ext::get_vertical as *const (),
+    text_ext::set_last_line as *const (),
+    text_ext::get_last_line as *const (),
+    text_ext::set_optical as *const (),
+    text_ext::get_optical as *const (),
+    text_ext::set_fallback as *const (),
+    text_ext::get_fallback as *const (),
+    text_ext::invalidate_layout as *const (),
+    text_ext::set_spacing2 as *const (),
+    text_ext::get_spacing2 as *const (),
+    text_ext::layout_line_metrics1 as *const (),
+    text_ext::layout_set_axes as *const (),
+    text_ext::layout_axis_count as *const (),
+    text_ext::layout_get_axes as *const (),
+    text_ext::get_automatic_axes as *const (),
+    text_ext::set_automatic_axes as *const (),
 ]);
 
 // --- Point d'entrée -------------------------------------------------------------------

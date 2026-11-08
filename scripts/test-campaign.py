@@ -1217,6 +1217,9 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+ok("TEXT_FORMAT3" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8")
+   and "format3_and_layout4_answer_and_keep_their_settings" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 et IDWriteTextLayout4 (Paint.NET 5.1, #1118)")
 ok("fn create_bitmap_brush(" in (runtime_dlls / "d2d1_brush.rs").read_text(encoding="utf-8")
    and "bitmap_and_gradient_brushes_paint" in (runtime_dlls / "d2d1.rs").read_text(encoding="utf-8"),
    "Direct2D : CreateBitmapBrush, CreateImageBrush et dégradés (Notepad++ / Scintilla, #1124)")
@@ -1263,4 +1266,8 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+# #1147 : CoIncrementMTAUsage / CoDecrementMTAUsage (WinRT côté .NET, Flow Launcher).
+ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
+   and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
