@@ -991,4 +991,42 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn rectangle_sans_plume_commence_au_coin_haut_gauche() {
+        // #1239 : sans plume, Rectangle remplit de (left, top) à
+        // (right - 1, bottom - 1) exclus ; rogner aussi le haut et la gauche
+        // laissait le noir d'une bitmap neuve au bord des vumètres d'Audacity.
+        type Dc = unsafe extern "win64" fn(usize) -> usize;
+        type Sel = unsafe extern "win64" fn(usize, usize) -> usize;
+        type Stock = unsafe extern "win64" fn(i32) -> usize;
+        type Brush = unsafe extern "win64" fn(u32) -> usize;
+        type Rect = unsafe extern "win64" fn(usize, i32, i32, i32, i32) -> i32;
+        let f = |name: &str| crate::dlls::lookup("gdi32", name).unwrap();
+        unsafe {
+            let dc: Dc = std::mem::transmute(f("CreateCompatibleDC"));
+            let select: Sel = std::mem::transmute(f("SelectObject"));
+            let stock: Stock = std::mem::transmute(f("GetStockObject"));
+            let brush: Brush = std::mem::transmute(f("CreateSolidBrush"));
+            let rectangle: Rect = std::mem::transmute(f("Rectangle"));
+            let bmp = super::super::gui::bitmap_from_pixels(4, 4, &[0; 16]).unwrap();
+            let hdc = dc(0);
+            select(hdc, bmp);
+            select(hdc, stock(8)); // NULL_PEN
+            select(hdc, brush(0x00FF_FFFF));
+            assert_eq!(rectangle(hdc, 0, 0, 4, 4), 1);
+            let px: Vec<u32> = super::super::gui::bitmap_pixels(bmp)
+                .unwrap()
+                .2
+                .iter()
+                .map(|p| p & 0x00FF_FFFF)
+                .collect();
+            let w = 0x00FF_FFFF;
+            assert_eq!(
+                px,
+                vec![w, w, w, 0, w, w, w, 0, w, w, w, 0, 0, 0, 0, 0],
+                "3x3 rempli depuis (0, 0)"
+            );
+        }
+    }
 }

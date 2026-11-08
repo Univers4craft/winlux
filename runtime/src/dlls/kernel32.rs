@@ -2134,8 +2134,16 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
     }
-    let f = match o.open(p) {
+    let f = match o.open(&p) {
         Ok(f) => f,
+        // CREATE_NEW sur un fichier existant : ERROR_FILE_EXISTS (80), pas
+        // ERROR_ALREADY_EXISTS (183), réservé à CREATE_ALWAYS/OPEN_ALWAYS
+        // (documentation de CreateFile). Sumatra PDF portable en dépend
+        // pour savoir si son dossier est inscriptible (#1252).
+        Err(e) if creation == 1 && e.kind() == std::io::ErrorKind::AlreadyExists => {
+            crate::process::set_last_error(80);
+            return usize::MAX;
+        }
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
             return usize::MAX;
@@ -2153,7 +2161,19 @@ unsafe fn create_file_opened(
     if _flags & 0x4000_0000 != 0 {
         lock(overlapped_handles()).insert(h);
     }
+    if _flags & FILE_FLAG_DELETE_ON_CLOSE != 0 {
+        lock(delete_on_close()).insert(h, p);
+    }
     h
+}
+
+/// FILE_FLAG_DELETE_ON_CLOSE : le fichier disparaît à la fermeture de son
+/// handle (documentation de CreateFile, #1252).
+const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+
+fn delete_on_close() -> &'static Mutex<HashMap<usize, std::path::PathBuf>> {
+    static S: OnceLock<Mutex<HashMap<usize, std::path::PathBuf>>> = OnceLock::new();
+    S.get_or_init(Default::default)
 }
 pub unsafe extern "win64" fn get_file_size(h: usize, high: *mut u32) -> u32 {
     let f = {
@@ -6349,6 +6369,9 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
         lock(overlapped_handles()).remove(&handle);
         forget_dir_watcher(handle);
+        if let Some(path) = lock(delete_on_close()).remove(&handle) {
+            let _ = std::fs::remove_file(path);
+        }
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
         remove_waitable_timer(handle);
@@ -11145,6 +11168,36 @@ mod audit_tests {
             *(param as *mut u32) = get_current_thread_id();
         }
         super::super::kernel32_misc::exit_thread(7)
+    }
+
+    #[test]
+    fn fichier_supprime_a_la_fermeture_et_create_new_sur_existant() {
+        // #1252 : Sumatra PDF portable teste son dossier avec CREATE_NEW et
+        // FILE_FLAG_DELETE_ON_CLOSE ; le fichier doit disparaître à la
+        // fermeture, et un CREATE_NEW sur un fichier existant rend 80.
+        init();
+        crate::process::init_thread();
+        let path = format!(
+            "Z:\\tmp\\winlux-delete-on-close-{}-{}.tmp",
+            std::process::id(),
+            next_handle()
+        );
+        let host = crate::paths::to_linux(&path);
+        let c = std::ffi::CString::new(path).unwrap();
+        let open = |flags: u32| unsafe {
+            create_file_a(c.as_ptr() as *const u8, 0xC000_0000, 0, 0, 1, flags, 0)
+        };
+        let h = open(0x0400_0080);
+        assert_ne!(h, usize::MAX);
+        assert!(host.exists(), "visible tant que le handle est ouvert");
+        assert_eq!(close_handle(h), 1);
+        assert!(!host.exists(), "supprimé à la fermeture du handle");
+        let h = open(0x80);
+        assert_ne!(h, usize::MAX);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(open(0x80), usize::MAX);
+        assert_eq!(crate::process::last_error(), 80, "ERROR_FILE_EXISTS");
+        let _ = std::fs::remove_file(host);
     }
 
     #[test]
