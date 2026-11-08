@@ -677,7 +677,14 @@ POWER_BUTTON_ACTIONS = (("nothing", "Ne rien faire"), ("sleep", "Mettre en veill
 POWER_CHOICES = ("power-profile-", "power-screen-", "power-sleep-", "power-lid", "power-button")
 
 
+def display_policy(status):
+    """Politique d'affichage lue (display_policy=) : vide tant que rien n'a été
+    choisi, et le runtime suit alors l'écran (POLICY != fixed) : « follow »."""
+    return "fixed" if status.get("display_policy") == "fixed" else "follow"
+
+
 def delay_text(seconds):
+    seconds = int(seconds)
     if not seconds: return _t("Jamais")
     if seconds >= 3600: return _t("{count} h").format(count=seconds // 3600)
     return _t("{count} min").format(count=seconds // 60)
@@ -1005,7 +1012,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 if follow and screens.get("display_count", "1") == "1":
                     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
                     card.get_style_context().add_class("card")
-                    self.choice_row(card, _t("Adaptation à l'écran"), follow, screens.get("display_policy", "follow"), "display-")
+                    self.choice_row(card, _t("Adaptation à l'écran"), follow, display_policy(screens), "display-")
                     self.body.pack_start(card, False, False, 0)
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
                            row_spacing=8, column_spacing=8, homogeneous=False)
@@ -1065,11 +1072,18 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.rollback_button is not None:
             self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
 
-    def choice_row(self, parent, title, items, active, prefix):
-        """Une ligne « titre … menu déroulant » qui lance prefix + valeur choisie."""
+    def choice_row(self, parent, title, items, active, prefix, label_of=None):
+        """Une ligne « titre … menu déroulant » qui lance prefix + valeur choisie.
+        Jamais de menu vide (#998) : une valeur absente de la liste y est
+        ajoutée avec son libellé (label_of), sinon le premier choix s'affiche."""
         row = Gtk.Box(spacing=12)
         row.pack_start(Gtk.Label(label=title, xalign=0, wrap=True), True, True, 0)
         combo = Gtk.ComboBoxText(valign=Gtk.Align.CENTER)
+        items = list(items)
+        keys = [str(key) for key, _ in items]
+        if str(active) not in keys:
+            if label_of is not None and str(active): items.append((active, label_of(active)))
+            elif items: active = items[0][0]
         for key, label in items: combo.append(str(key), label)
         combo.set_active_id(str(active))
         combo.connect("changed", lambda widget: widget.get_active_id() not in (None, str(active))
@@ -1088,7 +1102,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if profiles:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             card.get_style_context().add_class("card")
-            current = status.get("power_profile", "balanced")
+            current = status.get("power_profile") or "balanced"
             if current == "power-saver": current = "saver"
             self.choice_row(card, _t("Mode"), profiles, current, "power-profile-")
             self.body.pack_start(card, False, False, 0)
@@ -1102,7 +1116,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 if action not in names: continue
                 value = status.get(key, "")
                 value = int(value) if value.isdigit() else 600
-                self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-")
+                self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-", delay_text)
             self.body.pack_start(card, False, False, 0)
         if "power-lid" in names or "power-button" in names:
             self.label(_t("Boutons et capot"), "section")
@@ -1111,7 +1125,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             items = [(key, _t(label)) for key, label in POWER_BUTTON_ACTIONS]
             for action, key in (("power-lid", "power_lid"), ("power-button", "power_button")):
                 if action in names:
-                    self.choice_row(card, names[action], items, status.get(key, "sleep"), f"power-set-{action[len('power-'):]}-")
+                    self.choice_row(card, names[action], items, status.get(key) or "sleep", f"power-set-{action[len('power-'):]}-")
             self.body.pack_start(card, False, False, 0)
 
     def privacy_controls(self):

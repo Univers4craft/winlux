@@ -102,6 +102,30 @@ check('button.connect("clicked", lambda _, value=action: self.confirm_browser(va
       and "if response == Gtk.ResponseType.OK: self.execute(action)" in settings,
       "« Installer … » demande confirmation, refus possible, avant tout téléchargement")
 
+# Menus jamais vides (#998) : politique d'affichage non choisie (display_policy=
+# vide) = « follow » ; délai hors liste ajouté avec son libellé ; 4 langues.
+check(settings_module["display_policy"]({"display_policy": ""}) == "follow"
+      and settings_module["display_policy"]({}) == "follow"
+      and settings_module["display_policy"]({"display_policy": "fixed"}) == "fixed", "politique d'affichage effective")
+import os, subprocess
+probe = r"""
+import os, runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="probe")
+Gtk = m["Gtk"]
+box = Gtk.Box()
+w = m["Settings"].__new__(m["Settings"])
+combo = m["Settings"].choice_row(w, box, "x", [("follow", m["_t"]("Suivre la taille de la VM")), ("fixed", m["_t"]("Définition fixe"))], m["display_policy"]({"display_policy": ""}), "display-")
+empty = m["Settings"].choice_row(w, box, "x", [("a", "A"), ("b", "B")], "", "p-")
+delay = m["Settings"].choice_row(w, box, "x", [(s, m["delay_text"](s)) for s in m["POWER_DELAYS"]], 1200, "p-", m["delay_text"])
+print(combo.get_active_text() or "", "|", empty.get_active_text() or "", "|", delay.get_active_text() or "")
+"""
+for lang in ("fr", "en", "es", "de"):
+    env = dict(os.environ, WINLUX_LANG=lang, LANG=f"{lang}_FR.UTF-8" if lang == "fr" else "C.UTF-8", NO_AT_BRIDGE="1")
+    out = subprocess.run([sys.executable, "-c", probe, str(HERE / "winlux-settings.py")], env=env,
+                         capture_output=True, text=True, timeout=60).stdout.strip().splitlines()
+    parts = [p.strip() for p in (out[-1] if out else "").split("|")]
+    check(len(parts) == 3 and all(parts), f"menu vide en {lang} : {parts}")
+
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
     sys.exit(1)

@@ -813,4 +813,10 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
+# politique effective quand display_policy= est vide.
+ok("def display_policy" in settings_source and "display_policy(screens)" in settings_source
+   and "Jamais de menu vide (#998)" in settings_source
+   and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
+   "Paramètres : menus Écran et Alimentation jamais vides (#998)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
