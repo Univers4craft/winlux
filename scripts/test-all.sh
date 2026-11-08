@@ -116,6 +116,10 @@ step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q 
 # OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
 step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur mode_sans_paquet_si_fin_immediate_pour_libuv
 
+# Listes : clic droit, Maj+F10, renommage en place (#1139) ; 7-Zip montré
+# par SetWindowPlacement (#1159) ; extensions de Notepad++ (#1152) ;
+# cases à cocher des lignes (#1153) ; longue boîte de message (#1161).
+step "Menu contextuel et renommage des listes, SetWindowPlacement, ImageNtHeader, boîte de message (#1139, #1159, #1152, #1153, #1161)" cargo test -q -p winlux -- longue_boite_de_message_tient_dans_l_ecran clic_droit_menu_contextuel_et_renommage_dans_une_liste cases_a_cocher_des_lignes_d_une_liste placement_de_fenetre_deplace_et_affiche en_tetes_nt_d_une_image_projetee
 # Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
 # TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
 step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- reconnaissance_de_gestes_disponible_sans_geste_reconnu moteur_de_gestes_declare_pour_wpf
@@ -123,6 +127,10 @@ step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- r
 # Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux -- glisser_depuis_une_liste_ou_une_arborescence perte_du_focus_garde_les_boutons_de_souris
+step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- icone_standard_par_son_emplacement
+step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
+step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
+step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l_icone_pour_get_rect
 
 # Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
@@ -132,6 +140,13 @@ step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_desc
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
+
+# Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine et
+# tampons de constantes (#1177). Le rendu demande un affichage : xvfb-run.
+step "Direct3D 12 : signature racine et tampons de constantes (#1177)" cargo test -q -p winlux -- root_signature_round_trip root_arguments_become_constant_buffers echantillonneurs_des_tables_et_statiques
+if command -v xvfb-run >/dev/null 2>&1; then
+    step "Direct3D 12 : shaders traduits sur OpenGL (#1177)" xvfb-run -a cargo test -q -p winlux -- shaders_traduits_et_constantes_racine_opengl texture_et_echantillonneur_statique_opengl
+fi
 
 # Barre de titre dessinée par l'appli (#1131) : WM_NCCALCSIZE traité sans
 # DefWindowProc retire le cadre du gestionnaire (WindowChrome de WPF).
@@ -143,6 +158,9 @@ step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_de
 # HTTPS des applications .NET (#1183) : normaliz.dll, IdnToAscii et
 # IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
 step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
+# SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
+# EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
+step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
