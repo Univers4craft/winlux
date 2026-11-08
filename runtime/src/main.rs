@@ -217,7 +217,8 @@ fn main() {
     }
     // Variables d'environnement Windows écrites par les installateurs.
     msi::extra::apply_registry_environment();
-    let source = match std::fs::read(&exe) {
+    // Projeté plutôt que lu : rien n'est copié en mémoire (#997).
+    let source = match loader::ImageFile::open(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("winlux: lecture impossible de {} : {error}", exe.display());
@@ -247,7 +248,15 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let code = clr::execute_assembly(&assembly);
+        let app_dir = std::fs::canonicalize(&exe)
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
+        // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
+        if process::teb() == 0 {
+            process::init_thread();
+        }
+        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),
@@ -257,6 +266,9 @@ fn main() {
             wow32::init(pe.characteristics & 0x0020 != 0);
         }
     }
+    // La copie lue du fichier ne sert plus : sans ce drop, elle restait en
+    // mémoire toute la vie du programme (300 Mo pour claude.exe, #997).
+    drop(source);
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {

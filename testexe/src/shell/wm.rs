@@ -934,7 +934,20 @@ fn custom_title(app: usize) -> bool {
     }
 }
 
+/// Cadre de chaque fenêtre à son dernier dessin : un clic simulé au clavier
+/// (#28) en a besoin.
+static mut LAST_FRAME: [Option<Frame>; 32] = [None; 32];
+
 unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
+    if app < 32 {
+        LAST_FRAME[app] = Some(*f);
+    }
+    crate::gfx::focus_begin(app);
+    app_draw_inner(app, g, f);
+    crate::gfx::focus_end(g.hdc, g.b);
+}
+
+unsafe fn app_draw_inner(app: usize, g: &mut Gfx, f: &Frame) {
     match app {
         APP_EXPLORER => crate::explorer::draw(g, f),
         APP_SETTINGS => crate::settings::draw(g, f),
@@ -959,6 +972,13 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
     }
 }
 unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        crate::gfx::focus_mouse_down(app, x, y);
+    }
+    app_mouse_inner(app, ev, x, y, f)
+}
+
+unsafe fn app_mouse_inner(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::mouse(ev, x, y, f),
         APP_SETTINGS => crate::settings::mouse(ev, x, y, f),
@@ -982,7 +1002,28 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
+/// Clavier d'une fenêtre : Tab, Maj+Tab, Entrée et Espace passent d'abord
+/// par le focus entre contrôles (#28), sauf dans l'Éditeur et le Terminal
+/// où Tab s'écrit.
 unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
+    if app_key_uses_focus(app) {
+        match crate::gfx::focus_key(app, vk, ch) {
+            crate::gfx::FocusKey::Pass => {}
+            crate::gfx::FocusKey::Moved => return true,
+            crate::gfx::FocusKey::Click(x, y) => {
+                if let Some(f) = LAST_FRAME.get(app).copied().flatten() {
+                    app_mouse_inner(app, Mouse::Move, x, y, &f);
+                    app_mouse_inner(app, Mouse::Down, x, y, &f);
+                    app_mouse_inner(app, Mouse::Up, x, y, &f);
+                }
+                return true;
+            }
+        }
+    }
+    app_key_inner(app, vk, ch)
+}
+
+unsafe fn app_key_inner(app: usize, vk: u32, ch: u16) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::key(vk, ch),
         APP_SETTINGS => crate::settings::key(vk, ch),
@@ -2829,4 +2870,114 @@ pub unsafe fn tick() -> bool {
         crate::explorer::background_tick();
     }
     repaint
+}
+
+/// Navigation Tab entre les contrôles (#28), sans affichage : exécuté par
+/// `explorer_regression.exe`.
+#[doc(hidden)]
+pub unsafe fn focus_regression_checks() {
+    use crate::gfx::{focus_begin, focus_count, focus_end, focus_field, focus_key, focus_modal, focus_mouse_down, focus_state, focus_zone, FocusKey};
+    let (w, h) = (1000, 700);
+    let info = BitmapInfoHeader {
+        size: 40,
+        width: w,
+        height: -h,
+        planes: 1,
+        bit_count: 32,
+        compression: 0,
+        size_image: 0,
+        x_pels_per_meter: 0,
+        y_pels_per_meter: 0,
+        colors_used: 0,
+        colors_important: 0,
+    };
+    let dc = CreateCompatibleDC(core::ptr::null_mut());
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let bmp = CreateDIBSection(dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
+    if dc.is_null() || bmp.is_null() {
+        check!(false, "Focus clavier : bitmap de test");
+        return;
+    }
+    let old = SelectObject(dc, bmp);
+    let mut b = crate::gfx::Brushes::new();
+    let fonts = crate::gfx::Fonts::new();
+    let f = Frame {
+        outer: rect(0, 0, w, h),
+        title: rect(0, 0, w, 40),
+        client: rect(0, 40, w, h),
+    };
+
+    // Logique seule : une boîte modale ne laisse atteindre que ses contrôles,
+    // un champ reçoit un clic simulé, Entrée active le contrôle courant.
+    const T: usize = 31;
+    let draw = |b: &mut crate::gfx::Brushes| {
+        focus_begin(T);
+        focus_zone(&rect(10, 10, 60, 40));
+        focus_zone(&rect(70, 10, 120, 40));
+        focus_modal();
+        focus_zone(&rect(10, 100, 60, 130));
+        focus_field(&rect(70, 100, 220, 130));
+        focus_end(dc, b);
+    };
+    draw(&mut b);
+    check!(focus_count(T) == 2, "Focus clavier : une boite modale garde Tab pour elle");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T) == (0, true), "Focus clavier : Tab montre le cadre sur le premier controle");
+    check!(matches!(focus_key(T, 0, 9), FocusKey::Moved), "Focus clavier : le caractere Tab ne va pas a l'application");
+    check!(matches!(focus_key(T, 0x0D, 0), FocusKey::Click(35, 115)), "Focus clavier : Entree active le controle courant");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Click(145, 115)), "Focus clavier : Tab sur un champ y place le curseur");
+    check!(matches!(focus_key(T, 0x20, 0), FocusKey::Pass), "Focus clavier : Espace s'ecrit dans un champ");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T).0 == 0, "Focus clavier : Tab revient au premier controle apres le dernier");
+    draw(&mut b);
+    let px = core::slice::from_raw_parts(bits as *const u32, (w * h) as usize);
+    let accent = crate::gfx::pal().accent;
+    let at = |x: i32, y: i32| px[(y * w + x) as usize] & 0xFF_FFFF;
+    let bgr = |c: u32| (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF);
+    check!(at(9, 99) == bgr(accent) || at(9, 99) == accent & 0xFF_FFFF, "Focus clavier : cadre a la couleur d'accent autour du controle");
+    focus_mouse_down(T, 150, 110);
+    check!(focus_state(T) == (1, false), "Focus clavier : un clic efface le cadre et deplace le focus");
+    check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T) == (0, true), "Focus clavier : apres un clic, Tab repart du controle clique");
+    check!(matches!(focus_key(T, 0x1B, 0), FocusKey::Pass) && !focus_state(T).1, "Focus clavier : Echap efface le cadre");
+
+    // Chaque fenêtre du shell déclare ses contrôles en se dessinant.
+    let apps: [(usize, usize, &str); 15] = [
+        (APP_EXPLORER, 8, "Focus clavier : Explorateur (onglets, barre d'adresse, recherche, commandes)"),
+        (APP_SETTINGS, 6, "Focus clavier : Parametres"),
+        (APP_TASKMGR, 4, "Focus clavier : Gestionnaire des taches"),
+        (APP_CLEANUP, 1, "Focus clavier : Nettoyage de disque"),
+        (APP_DISKMGR, 3, "Focus clavier : Gestion des disques"),
+        (APP_EVENTVIEWER, 2, "Focus clavier : Observateur d'evenements"),
+        (APP_RESTORE, 1, "Focus clavier : Restauration"),
+        (APP_WELCOME, 2, "Focus clavier : Bienvenue"),
+        (APP_TASKSCHD, 2, "Focus clavier : Planificateur de taches"),
+        (APP_FIREWALL, 2, "Focus clavier : Pare-feu"),
+        (APP_STORE, 2, "Focus clavier : Logiciels"),
+        (APP_FONTS, 2, "Focus clavier : Polices"),
+        (APP_FILEHISTORY, 2, "Focus clavier : Historique des fichiers"),
+        (APP_REGEDIT, 2, "Focus clavier : Editeur du Registre"),
+        (APP_PROGRAMS, 2, "Focus clavier : Programmes"),
+    ];
+    for (app, min, label) in apps {
+        let mut g = Gfx { hdc: dc, b: &mut b, f: &fonts };
+        app_draw(app, &mut g, &f);
+        check!(focus_count(app) >= min, label);
+    }
+    // Paramètres : Tab avance, Maj n'est pas enfoncée, Échap efface.
+    let mut g = Gfx { hdc: dc, b: &mut b, f: &fonts };
+    app_draw(APP_SETTINGS, &mut g, &f);
+    app_key(APP_SETTINGS, 0x09, 0);
+    app_key(APP_SETTINGS, 0, 9);
+    app_key(APP_SETTINGS, 0x09, 0);
+    check!(focus_state(APP_SETTINGS) == (1, true), "Focus clavier : Parametres, deux Tab menent au deuxieme controle");
+    // L'Éditeur garde Tab pour le texte.
+    check!(focus_count(APP_NOTEPAD) == 0 || !app_key_uses_focus(APP_NOTEPAD), "Focus clavier : l'Editeur ecrit la tabulation");
+    SelectObject(dc, old);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+    b.release();
+    fonts.release();
+}
+
+/// Vrai si Tab dans `app` passe par le focus entre contrôles.
+fn app_key_uses_focus(app: usize) -> bool {
+    app != APP_NOTEPAD && app != APP_TERMINAL
 }

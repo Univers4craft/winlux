@@ -141,6 +141,7 @@ pub mod pdh;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
+pub mod psapi_k32;
 pub mod quartz;
 pub mod rawinput;
 pub mod resource;
@@ -304,6 +305,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(threadpool::exports());
                     e.extend(kernel32_node::kernel32_exports());
                     e.extend(fiber64::kernel32_exports());
+                    e.extend(psapi_k32::kernel32_exports());
                     e.extend(console_input::exports());
                     // Ports série : remplace le QueryDosDeviceW « non géré » de kernel32_node.
                     e.extend(serial::exports());

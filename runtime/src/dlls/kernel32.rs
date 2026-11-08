@@ -6813,6 +6813,24 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryUnbiasedInterruptTime : temps depuis le démarrage en unités de
+/// 100 ns, hors veille (horloge CLOCK_MONOTONIC de Linux, qui s'arrête
+/// pendant la suspension). Utilisé par .NET (Flow Launcher, #953).
+pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+        *out = ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100;
+    }
+    1
+}
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
@@ -9203,6 +9221,7 @@ pub fn exports() -> crate::dlls::Exports {
      "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
      "WriteConsoleW"=>fn write_console_w,
     "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
+     "QueryUnbiasedInterruptTime"=>fn query_unbiased_interrupt_time,
      "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
      "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
      "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w,
@@ -10988,5 +11007,21 @@ fn wait_until_stopped(pid: u32) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod interrupt_time_tests {
+    #[test]
+    fn query_unbiased_interrupt_time_avance_en_100_ns() {
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(super::query_unbiased_interrupt_time(&mut a), 1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(super::query_unbiased_interrupt_time(&mut b), 1);
+        assert!(b - a >= 150_000 && b - a < 50_000_000, "{a} {b}");
+        assert_eq!(
+            super::query_unbiased_interrupt_time(std::ptr::null_mut()),
+            0
+        );
     }
 }

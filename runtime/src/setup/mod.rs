@@ -90,7 +90,8 @@ pub fn detect_file(path: &Path) -> Option<Kind> {
     if !meta.is_file() || meta.len() < 4096 {
         return None;
     }
-    let data = std::fs::read(path).ok()?;
+    // Projeté, pas lu : lancer claude.exe (300 Mo) en faisait une copie (#997).
+    let data = crate::loader::ImageFile::open(path).ok()?;
     detect(&data)
 }
 

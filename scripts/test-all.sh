@@ -66,7 +66,7 @@ while IFS= read -r command; do
         *xvfb-run*) command -v xvfb-run >/dev/null 2>&1 || { skip "$script" "xvfb-run absent"; continue; } ;;
     esac
     case "$script" in
-        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-integration.sh|scripts/test-mingw.sh)
+        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-image-memory.py|scripts/test-integration.sh|scripts/test-mingw.sh)
             if test "$quick" = 1; then skip "$script" "mode rapide"; continue; fi
             test -d target/x86_64-pc-windows-msvc/release || { skip "$script" "programmes PE non compilés"; continue; } ;;
     esac

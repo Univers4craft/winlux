@@ -1999,8 +1999,109 @@ pub unsafe extern "win64" fn is_nls_defined_string(
     )
 }
 
+/// Nom d'une langue pour VerLanguageName : nom affichable de la locale du
+/// LCID, sinon « langue neutre » dans la langue de l'utilisateur (comme
+/// Windows pour 0 et les LCID inconnus). Utilisé par
+/// FileVersionInfo.Language de .NET (Flow Launcher, #953).
+fn ver_language_name(lang: u32) -> String {
+    match lang & 0xFFFF {
+        0 => None,
+        x => all_locales().iter().find(|l| l.lcid == x),
+    }
+    .map(|l| l.display(false))
+    .unwrap_or_else(|| {
+        match by_lcid(0).map(|l| l.lang2).unwrap_or("en") {
+            "fr" => "Langue neutre",
+            "de" => "Sprachneutral",
+            "es" => "Idioma neutral",
+            _ => "Language Neutral",
+        }
+        .to_string()
+    })
+}
+
+/// VerLanguageNameW(wLang, szLang, cchLang) : longueur du nom sans le nul ;
+/// sans tampon, la longueur nécessaire ; sinon le nombre de caractères
+/// copiés (tronqué à cchLang - 1).
+unsafe extern "win64" fn ver_language_name_w(lang: u32, out: *mut u16, cch: u32) -> u32 {
+    let w: Vec<u16> = ver_language_name(lang).encode_utf16().collect();
+    if out.is_null() || cch == 0 {
+        return w.len() as u32;
+    }
+    let n = w.len().min(cch as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), out, n);
+    *out.add(n) = 0;
+    n as u32
+}
+
+unsafe extern "win64" fn ver_language_name_a(lang: u32, out: *mut u8, cch: u32) -> u32 {
+    let a: Vec<u8> = ver_language_name(lang)
+        .chars()
+        .map(|c| if (c as u32) < 0x100 { c as u8 } else { b'?' })
+        .collect();
+    if out.is_null() || cch == 0 {
+        return a.len() as u32;
+    }
+    let n = a.len().min(cch as usize - 1);
+    std::ptr::copy_nonoverlapping(a.as_ptr(), out, n);
+    *out.add(n) = 0;
+    n as u32
+}
+
+/// Majuscule ordinale d'une unité UTF-16 (correspondance simple, comme la
+/// table de casse de Windows ; les demi-paires restent telles quelles).
+fn upper_unit(u: u16) -> u16 {
+    if (0xD800..0xE000).contains(&u) {
+        return u;
+    }
+    let c = char::from_u32(u as u32).unwrap_or('\u{FFFD}');
+    let mut up = c.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(x), None) if (x as u32) <= 0xFFFF => x as u16,
+        _ => u,
+    }
+}
+
+/// FindStringOrdinal(dwFindStringOrdinalFlags, lpStringSource, cchSource,
+/// lpStringValue, cchValue, bIgnoreCase) : position (en unités UTF-16) de
+/// `value` dans `source`, comparaison ordinale, ou -1. Utilisé par .NET
+/// pour IndexOf/StartsWith en OrdinalIgnoreCase (Flow Launcher, #953).
+pub unsafe extern "win64" fn find_string_ordinal(
+    flags: u32,
+    source: *const u16,
+    n_source: i32,
+    value: *const u16,
+    n_value: i32,
+    ignore_case: i32,
+) -> i32 {
+    const FIND_FROMSTART: u32 = 0x0040_0000;
+    let modes = flags & (FIND_FROMSTART | FIND_FROMEND | FIND_STARTSWITH | FIND_ENDSWITH);
+    if source.is_null() || value.is_null() || modes.count_ones() != 1 {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+    let (src, val) = (slice_of(source, n_source), slice_of(value, n_value));
+    let eq = |a: u16, b: u16| a == b || (ignore_case != 0 && upper_unit(a) == upper_unit(b));
+    let at = |i: usize| val.iter().enumerate().all(|(k, &v)| eq(src[i + k], v));
+    set_last_error(0);
+    if val.len() > src.len() {
+        return -1;
+    }
+    let last = src.len() - val.len();
+    let found = match modes {
+        FIND_STARTSWITH => at(0).then_some(0),
+        FIND_ENDSWITH => at(last).then_some(last),
+        FIND_FROMEND => (0..=last).rev().find(|&i| at(i)),
+        _ => (0..=last).find(|&i| at(i)),
+    };
+    found.map_or(-1, |i| i as i32)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "FindStringOrdinal" => fn find_string_ordinal,
+        "VerLanguageNameW" => fn ver_language_name_w,
+        "VerLanguageNameA" => fn ver_language_name_a,
         "GetLocaleInfoA" => fn get_locale_info_a,
         "GetLocaleInfoW" => fn get_locale_info_w,
         "GetLocaleInfoEx" => fn get_locale_info_ex,
@@ -2033,6 +2134,49 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn find_string_ordinal_sens_et_casse() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        let (src, v) = (w("Flow.Launcher.Plugin.flow"), w("FLOW"));
+        let f = |flags: u32, ic: i32| unsafe {
+            super::find_string_ordinal(flags, src.as_ptr(), src.len() as i32, v.as_ptr(), 4, ic)
+        };
+        assert_eq!(f(0x0040_0000, 0), -1);
+        assert_eq!(f(0x0040_0000, 1), 0);
+        assert_eq!(f(0x0080_0000, 1), 21);
+        assert_eq!(f(0x0010_0000, 1), 0);
+        assert_eq!(f(0x0020_0000, 1), 21);
+        // Une seule option de recherche à la fois.
+        assert_eq!(f(0x0040_0000 | 0x0080_0000, 1), -1);
+        let e = w("é");
+        let big_e = w("É");
+        assert_eq!(
+            unsafe { super::find_string_ordinal(0x0040_0000, e.as_ptr(), 1, big_e.as_ptr(), 1, 1) },
+            0
+        );
+    }
+
+    #[test]
+    fn ver_language_name_nom_de_langue_et_langue_neutre() {
+        unsafe {
+            let mut buf = [0u16; 64];
+            let n = super::ver_language_name_w(0x040C, buf.as_mut_ptr(), 64);
+            let s = String::from_utf16_lossy(&buf[..n as usize]);
+            assert!(s.to_lowercase().starts_with("fran"), "{s}");
+            // Sans tampon : longueur nécessaire ; tampon court : tronqué.
+            assert_eq!(
+                super::ver_language_name_w(0x040C, std::ptr::null_mut(), 0),
+                n
+            );
+            assert_eq!(super::ver_language_name_w(0x040C, buf.as_mut_ptr(), 4), 3);
+            assert_eq!(buf[3], 0);
+            let n0 = super::ver_language_name_w(0, buf.as_mut_ptr(), 64);
+            assert!(n0 > 0);
+            let mut a = [0u8; 64];
+            assert!(super::ver_language_name_a(0x0409, a.as_mut_ptr(), 64) > 0);
+        }
+    }
+
     use super::*;
 
     fn w(s: &str) -> Vec<u16> {

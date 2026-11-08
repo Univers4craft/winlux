@@ -286,6 +286,90 @@ pub fn free_data(handle: usize) -> Option<()> {
     Some(())
 }
 
+/// Taille à partir de laquelle une section est projetée depuis le fichier
+/// plutôt que copiée (#997).
+const FILE_BACKED_MIN: usize = 1 << 20;
+
+/// Fichier PE projeté en lecture seule. Ses pages restent dans le cache du
+/// noyau au lieu d'occuper la mémoire du processus (#997).
+pub(crate) struct ImageFile {
+    file: std::fs::File,
+    ptr: *const u8,
+    len: usize,
+}
+
+impl ImageFile {
+    pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        let file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len() as usize;
+        let ptr = if len == 0 {
+            std::ptr::NonNull::<u8>::dangling().as_ptr() as *const u8
+        } else {
+            let p = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ,
+                    libc::MAP_PRIVATE,
+                    file.as_raw_fd(),
+                    0,
+                )
+            };
+            if p == libc::MAP_FAILED {
+                return Err(std::io::Error::last_os_error());
+            }
+            p as *const u8
+        };
+        Ok(ImageFile { file, ptr, len })
+    }
+
+    /// Projette `len` octets du fichier (depuis `offset`) à l'adresse `at`
+    /// de l'image, en copie privée inscriptible. Rend le nombre d'octets
+    /// projetés : 0 si la projection échoue (l'appelant copie alors).
+    fn map_pages(&self, at: usize, offset: usize, len: usize) -> usize {
+        use std::os::fd::AsRawFd;
+        if len == 0
+            || !offset.is_multiple_of(PAGE)
+            || !at.is_multiple_of(PAGE)
+            || offset + len > self.len
+        {
+            return 0;
+        }
+        let p = unsafe {
+            libc::mmap(
+                at as *mut _,
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_FIXED,
+                self.file.as_raw_fd(),
+                offset as libc::off_t,
+            )
+        };
+        if p == libc::MAP_FAILED || p as usize != at {
+            return 0;
+        }
+        len
+    }
+}
+
+impl std::ops::Deref for ImageFile {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl Drop for ImageFile {
+    fn drop(&mut self) {
+        if self.len != 0 {
+            unsafe {
+                libc::munmap(self.ptr as *mut _, self.len);
+            }
+        }
+    }
+}
+
 fn round_up(v: usize, a: usize) -> usize {
     (v + a - 1) & !(a - 1)
 }
@@ -404,7 +488,9 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
 /// Projette l'image et l'ajoute à MODULES ; la liaison (imports, protections)
 /// reste à faire par `load`.
 fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
-    let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    // Projection du fichier, pas une copie en mémoire (#997) : claude.exe
+    // pèse 300 Mo, et la copie s'ajoutait à l'image elle-même.
+    let file = ImageFile::open(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse_il_only(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     if !pe.il_only32 && pe.x86 != crate::wow32::active() {
         return Err(format!(
@@ -489,7 +575,18 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
                     s.name
                 ));
             }
-            dst[d..d + n].copy_from_slice(&file[start..start + n]);
+            // Grande section alignée sur la page dans le fichier (le code
+            // JavaScript embarqué de claude.exe, 170 Mo) : ses pages sont
+            // projetées depuis le fichier, comme le fait Windows pour une
+            // image. Le noyau ne les lit qu'au besoin et peut les rendre sous
+            // pression mémoire ; une écriture en fait une copie privée.
+            let mapped =
+                if n >= FILE_BACKED_MIN && d.is_multiple_of(PAGE) && start.is_multiple_of(PAGE) {
+                    file.map_pages(base + d, start, n / PAGE * PAGE)
+                } else {
+                    0
+                };
+            dst[d + mapped..d + n].copy_from_slice(&file[start + mapped..start + n]);
         }
     }
 
@@ -1112,6 +1209,40 @@ pub fn mark_initialized(base: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #997 : le fichier PE est projeté, pas copié, et une grande section
+    /// alignée est projetée depuis le disque en copie privée.
+    #[test]
+    fn image_file_is_mapped_and_sections_are_private_copies() {
+        let path =
+            std::env::temp_dir().join(format!("winlux-image-file-{}.bin", std::process::id()));
+        let bytes: Vec<u8> = (0..3 * PAGE + 100).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let file = ImageFile::open(&path).unwrap();
+        assert_eq!(&file[..], &bytes[..]);
+        unsafe {
+            let region = map_aligned(4 * PAGE).unwrap();
+            // Pas aligné : rien n'est projeté, l'appelant copie.
+            assert_eq!(file.map_pages(region + 1, 0, PAGE), 0);
+            assert_eq!(
+                file.map_pages(region, PAGE, 3 * PAGE),
+                0,
+                "au-delà du fichier"
+            );
+            assert_eq!(file.map_pages(region, PAGE, 2 * PAGE), 2 * PAGE);
+            let mapped = std::slice::from_raw_parts_mut(region as *mut u8, 2 * PAGE);
+            assert_eq!(&mapped[..], &bytes[PAGE..3 * PAGE]);
+            // Une écriture (relocation) reste privée : le fichier ne change pas.
+            mapped[0] ^= 0xff;
+            libc::munmap(region as *mut _, 4 * PAGE);
+        }
+        drop(file);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(ImageFile::open(&path.with_extension("absent")).is_err());
+        std::fs::write(&path, b"").unwrap();
+        assert!(ImageFile::open(&path).unwrap().is_empty());
+        std::fs::remove_file(&path).unwrap();
+    }
 
     #[test]
     fn restricted_dll_search_does_not_fall_back_and_restores_scope() {

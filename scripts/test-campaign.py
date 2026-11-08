@@ -163,6 +163,9 @@ msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
 ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
    and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
    "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
+ok("fn msi_view_modify" in msi_views and "MsiRecordReadStream" in (ROOT / "runtime/src/msi/session.rs").read_text()
+   and "MSIMODIFY_INSERT_TEMPORARY" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL écrit dans la base (MsiViewModify) et lit les flux de la table Binary (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -754,6 +757,26 @@ ok("def pc_plan" in assistant_source and '"vulkan": (f"llama-{LLAMA_TAG}-bin-ubu
    and "LOCAL_IDLE_SECONDS = 120" in assistant_source and "def idle_stop" in assistant_source
    and "def memory(self)" in assistant_source and "def plan_text" in assistant_source,
    "IA locale : modèle adapté au PC, zéro ressource sans question, ressources affichées")
+# #997 : claude.exe (300 Mo) tué faute de mémoire : le .exe est projeté, pas copié,
+# la copie de main.rs est libérée avant le chargement, grande section projetée du disque.
+loader_source = (ROOT / "runtime/src/loader.rs").read_text()
+main_source = (ROOT / "runtime/src/main.rs").read_text()
+ok("struct ImageFile" in loader_source and "fn map_pages" in loader_source
+   and "let file = ImageFile::open(path)" in loader_source and "drop(source);" in main_source
+   and "loader::ImageFile::open(&exe)" in main_source
+   and "image_file_is_mapped_and_sections_are_private_copies" in loader_source
+   and "def login_failure" in assistant_source
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/mod.rs").read_text()
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/burn.rs").read_text()
+   and "scripts/test-image-memory.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and (ROOT / "docs/compat/memoire-au-lancement.md").exists(),
+   "claude.exe : image projetée sans copie du fichier, connexion tuée faute de mémoire dite clairement (#997)")
+# #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
+ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
+   "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")
+# #1002 : « Où est mon fichier » va à l'agent fichiers ; pas de page sans rapport.
+ok("FILE_WORDS = re.compile" in assistant_source and "def page_relevant" in assistant_source,
+   "IA locale : demande de fichier reconnue, aucune page des Paramètres hors sujet (#1002)")
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
    and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
@@ -788,6 +811,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
 
+# #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
+_wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
+ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
+   and "wm::focus_regression_checks();" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text()
+   and "#28" in (ROOT / "scripts/test-explorer-fixes.py").read_text(),
+   "Tab entre les contrôles : cadre d'accent, boîtes modales, champs, quinze fenêtres du shell (#28)")
+
 # ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
 ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
    and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
@@ -805,6 +835,49 @@ ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
    and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
    and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
+
+# ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
+clr = ROOT / "runtime/src/clr"
+ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text()
+   and "fn resolve_type_ref_in" in (clr / "typesys.rs").read_text()
+   and "fn ensure_initialized" in (clr / "il.rs").read_text()
+   and "une_bibliotheque_livree_avec_le_programme_est_chargee" in (clr / "tests.rs").read_text()
+   and "execute_assembly_in" in (ROOT / "runtime/src/main.rs").read_text(),
+   "CLR : DLL .NET privées du dossier de l'appli chargées, appels, héritage, champs et .cctor entre assemblies (#926)")
+
+# ── Moteur .NET Framework, étape 2 (#945, #946) : cœur d'exécution, génériques ──
+ok("fn ensure_layout" in (clr / "typesys.rs").read_text()
+   and "fn instantiate" in (clr / "typesys.rs").read_text()
+   and "O::Constrained" in (clr / "il.rs").read_text()
+   and "les_generiques_sont_instancies" in (clr / "tests.rs").read_text()
+   and "ref_out_et_acces_indirects" in (clr / "tests.rs").read_text()
+   and "les_structures_se_copient" in (clr / "tests.rs").read_text(),
+   "CLR : ref/out, structures copiées, génériques instanciés (box/unbox de T, statiques, constrained., ldelem T) (#945, #946)")
+
+# ── Moteur .NET Framework, étape 3 (#971) : délégués, événements, lambdas ──
+ok((clr / "delegates.rs").exists()
+   and "fn invoke_delegate" in (clr / "delegates.rs").read_text()
+   and "O::Ldvirtftn" in (clr / "il.rs").read_text()
+   and "les_delegues_appellent_leur_methode" in (clr / "tests.rs").read_text()
+   and "ldvirtftn_func_et_evenements" in (clr / "tests.rs").read_text(),
+   "CLR : ldftn/ldvirtftn, Invoke, délégués multicast, Combine/Remove, Interlocked des événements (#971)")
+
+# ── Moteur .NET Framework, étape 4 (#972) : filtres, finally imbriqués, rethrow ──
+ok("fn run_filter" in (clr / "il.rs").read_text()
+   and "O::Endfilter" in (clr / "il.rs").read_text()
+   and "INNER_SLOT" in (clr / "exceptions.rs").read_text()
+   and "filtres_finally_et_rethrow" in (clr / "tests.rs").read_text()
+   and "le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse" in (clr / "tests.rs").read_text(),
+   "CLR : filtres when, finally imbriqués traversés par leave et par une exception, rethrow, InnerException (#972)")
+
+# ── Moteur .NET Framework, étape 6 (#994) : P/Invoke complet ──
+ok("fn call_win64" in (clr / "pinvoke.rs").read_text()
+   and "fn callback_for" in (clr / "callbacks.rs").read_text()
+   and "fn call_pinvoke" in (clr / "interop.rs").read_text()
+   and "fn field_offset_of" in (clr / "metadata.rs").read_text()
+   and "p_invoke_rappel_vers_un_delegue" in (clr / "tests.rs").read_text()
+   and "p_invoke_structures_et_derniere_erreur" in (clr / "tests.rs").read_text(),
+   "CLR : P/Invoke Win64 (flottants, pile, structures C par valeur, rappels natifs, SetLastError) (#994)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
@@ -831,4 +904,10 @@ ok((runtime_dlls / "thread_ctl.rs").exists()
    and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
    ".NET autonome et WinForms : suspension de threads, contexte, WaitMessage, page de garde de pile")
 
+# Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
+# politique effective quand display_policy= est vide.
+ok("def display_policy" in settings_source and "display_policy(screens)" in settings_source
+   and "Jamais de menu vide (#998)" in settings_source
+   and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
+   "Paramètres : menus Écran et Alimentation jamais vides (#998)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
