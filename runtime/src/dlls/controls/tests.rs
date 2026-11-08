@@ -35,14 +35,14 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
         return 0;
     }
     if msg == 0x004E && lp != 0 {
-        let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
+        let code = unsafe { ((lp as *const u8).add(16) as *const i32).read_unaligned() };
         NOTIFY.lock().unwrap().push(code);
         if code == -176 {
             // LVN_ENDLABELEDITW : nouveau nom accepté.
             return 1;
         }
         if code == -2
-            && crate::dlls::gui::window_class(unsafe { *(lp as *const usize) })
+            && crate::dlls::gui::window_class(unsafe { (lp as *const usize).read_unaligned() })
                 .is_some_and(|c| c.eq_ignore_ascii_case("SysLink"))
         {
             // NMLINK : szUrl à 24 + 112.

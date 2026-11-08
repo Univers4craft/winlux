@@ -29,10 +29,13 @@ struct NmHdr {
 fn notify_struct<T>(hwnd: usize, code: i32, data: &mut T) -> isize {
     let hdr = data as *mut T as *mut NmHdr;
     let id = user32::control_id(hwnd) as usize;
+    // NMLVKEYDOWN est compacté (pshpack1) : son NMHDR n'est pas forcément
+    // aligné sur 8, d'où des écritures non alignées et champ par champ (une
+    // écriture du NMHDR entier déborderait sur wVKey par son remplissage).
     unsafe {
-        (*hdr).hwnd_from = hwnd;
-        (*hdr).id_from = id;
-        (*hdr).code = code;
+        std::ptr::addr_of_mut!((*hdr).hwnd_from).write_unaligned(hwnd);
+        std::ptr::addr_of_mut!((*hdr).id_from).write_unaligned(id);
+        std::ptr::addr_of_mut!((*hdr).code).write_unaligned(code);
     }
     send(parent(hwnd), WM_NOTIFY, id, data as *mut T as isize)
 }
