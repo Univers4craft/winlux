@@ -848,6 +848,7 @@ pub fn renders_itself(imports: &[String]) -> bool {
         let n = name.to_ascii_lowercase();
         n.starts_with("d3d")
             || n.starts_with("dxgi")
+            || n == "ddraw.dll"
             || n == "opengl32.dll"
             || n.starts_with("vulkan-1")
             || n.starts_with("sdl2")
