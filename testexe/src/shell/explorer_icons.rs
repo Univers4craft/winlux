@@ -52,6 +52,10 @@ pub(super) fn of_glyph(g: Glyph) -> Option<Icon> {
         Glyph::Rename => Icon::Rename,
         Glyph::Sort => Icon::Sort,
         Glyph::View => Icon::View,
+        Glyph::Terminal => Icon::Terminal,
+        Glyph::Search => Icon::Search,
+        Glyph::Split => Icon::Split,
+        Glyph::ChevronDown => Icon::ChevronDown,
         _ => return None,
     })
 }
