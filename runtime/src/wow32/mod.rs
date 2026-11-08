@@ -1974,6 +1974,7 @@ fn callback_args(dll: &str, func: &str) -> u32 {
         | "EnumCalendarInfoExW"
         | "EnumWindows" => bit(0),
         "InitOnceExecuteOnce"
+        | "SetTimerQueueTimer"
         | "CreateFiber"
         | "CreateThreadpoolIo"
         | "EnumResourceTypesA"
