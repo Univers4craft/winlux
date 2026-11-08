@@ -191,6 +191,12 @@ const CONTAINER_WEBP: Guid = guid(
     0x45b3,
     [0xb0, 0xea, 0x11, 0x53, 0x37, 0xca, 0x7c, 0xf3],
 );
+const CONTAINER_ICO: Guid = guid(
+    0xa3a860c4,
+    0x338f,
+    0x4c17,
+    [0x91, 0x9a, 0xfb, 0xa4, 0xb5, 0x62, 0x8f, 0x21],
+);
 const CONTAINER_DDS: Guid = guid(
     0x9967cb95,
     0x2e85,
@@ -515,6 +521,12 @@ fn container_of(d: &[u8]) -> Guid {
         CONTAINER_WEBP
     } else if d.starts_with(b"DDS ") {
         CONTAINER_DDS
+    } else if d.len() > 6
+        && (d.starts_with(&[0, 0, 1, 0]) || d.starts_with(&[0, 0, 2, 0]))
+        && d[4..6] != [0, 0]
+    {
+        // Icône (type 1) ou curseur (type 2) : le décodeur ICO lit les deux.
+        CONTAINER_ICO
     } else {
         Guid::default()
     }
@@ -644,6 +656,7 @@ unsafe extern "win64" fn create_decoder(
         CONTAINER_TIFF,
         CONTAINER_WEBP,
         CONTAINER_DDS,
+        CONTAINER_ICO,
     ];
     if container.is_null() || !known.contains(&*container) {
         return WINCODEC_ERR_COMPONENTNOTFOUND;
@@ -815,7 +828,7 @@ static FACTORY_VT: VTable<29> = VTable([
     create_component_info as *const (),
     create_decoder as *const (),
     unsupported!("CreateEncoder"),
-    unsupported!("CreatePalette"),
+    create_palette as *const (),
     create_format_converter as *const (),
     create_bitmap_scaler as *const (),
     create_bitmap_clipper as *const (),
@@ -943,14 +956,43 @@ unsafe extern "win64" fn decoder_frame(
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    let pix = match &*crate::dlls::lock(Com::get(this)) {
+    let (pix, icon) = match &*crate::dlls::lock(Com::get(this)) {
         Some(d) => match d.frames.get(index as usize) {
-            Some(p) => p.clone(),
+            Some(p) => (p.clone(), d.container == CONTAINER_ICO),
             None => return WINCODEC_ERR_FRAMEMISSING,
         },
         None => return WINCODEC_ERR_NOTINITIALIZED,
     };
+    if icon {
+        return put(
+            out,
+            Com::create(
+                ICON_FRAME_VT.ptr(),
+                Source {
+                    kind: Kind::Frame,
+                    pix: Mutex::new(Some(pix)),
+                    locked: Mutex::new(false),
+                },
+            ),
+        );
+    }
     new_source(Kind::Frame, Some(pix), out)
+}
+
+/// GetThumbnail d'une image d'icône (#1099) : comme le décodeur ICO de
+/// Windows, chaque image a pour vignette elle-même. WPF lit la profondeur
+/// de couleur des icônes sur cette vignette (IconHelper.GetBestMatch) et
+/// s'arrête sur une référence nulle sans elle.
+unsafe extern "win64" fn icon_frame_thumbnail(this: *mut SourceObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let pix = crate::dlls::lock(&Com::get(this).pix).clone();
+    match pix {
+        Some(p) => new_source(Kind::Bitmap, Some(p), out),
+        None => WINCODEC_ERR_NOTINITIALIZED,
+    }
 }
 
 static DECODER_VT: VTable<14> = VTable([
@@ -1017,7 +1059,22 @@ struct CodecDesc {
     lossless: bool,
 }
 
-const CODECS: [CodecDesc; 7] = [
+const CODECS: [CodecDesc; 8] = [
+    CodecDesc {
+        container: CONTAINER_ICO,
+        clsid: guid(
+            0xc61bfcdf,
+            0x2e0f,
+            0x4aad,
+            [0xa8, 0xd7, 0xe0, 0x6b, 0xaf, 0xeb, 0xcd, 0xfe],
+        ),
+        name: "ICO Decoder",
+        mimes: "image/ico,image/x-icon",
+        exts: ".ico,.icon",
+        multiframe: true,
+        animation: false,
+        lossless: true,
+    },
     CodecDesc {
         container: CONTAINER_BMP,
         clsid: guid(
@@ -1388,6 +1445,306 @@ unsafe extern "win64" fn create_component_info(
     }
 }
 
+// --- Palette (IWICPalette) ------------------------------------------------------
+//
+// WPF crée une palette pour chaque vignette d'image décodée
+// (BitmapPalette.CreateInternalPalette, puis CopyPalette) : sans
+// CreatePalette, toute icône échoue (#1110). Ordre des méthodes et
+// valeurs de WICBitmapPaletteType : wincodec.idl des en-têtes mingw-w64.
+
+const IID_PALETTE: Guid = guid(
+    0x00000040,
+    0xa8f2,
+    0x4877,
+    [0xba, 0x0a, 0xfd, 0x2b, 0x66, 0x45, 0xfb, 0x94],
+);
+const PALETTE_CUSTOM: u32 = 0;
+const PALETTE_MEDIAN_CUT: u32 = 1;
+const PALETTE_FIXED_BW: u32 = 2;
+
+#[derive(Default)]
+struct Palette {
+    kind: u32,
+    /// Couleurs 0xAARRGGBB (WICColor).
+    colors: Vec<u32>,
+}
+
+type PaletteObj = Com<Mutex<Option<Palette>>>;
+
+/// Couleurs des palettes prédéfinies : noir et blanc, gris réguliers, ou
+/// cube de couleurs (niveaux par canal rouge, vert, bleu).
+fn predefined_colors(kind: u32) -> Option<Vec<u32>> {
+    let ramp = |n: u32| -> Vec<u32> {
+        (0..n)
+            .map(|i| {
+                let v = i * 255 / (n - 1);
+                0xFF00_0000 | (v << 16) | (v << 8) | v
+            })
+            .collect()
+    };
+    let cube = |r: u32, g: u32, b: u32| -> Vec<u32> {
+        let mut out = Vec::with_capacity((r * g * b) as usize);
+        for ri in 0..r {
+            for gi in 0..g {
+                for bi in 0..b {
+                    let c = |i: u32, n: u32| i * 255 / (n - 1);
+                    out.push(0xFF00_0000 | (c(ri, r) << 16) | (c(gi, g) << 8) | c(bi, b));
+                }
+            }
+        }
+        out
+    };
+    Some(match kind {
+        PALETTE_FIXED_BW => ramp(2),
+        3 => cube(2, 2, 2),
+        4 => cube(3, 3, 3),
+        5 => cube(4, 4, 4),
+        6 => cube(5, 5, 5),
+        7 => cube(6, 6, 6),
+        8 => cube(6, 7, 6),
+        9 => cube(8, 8, 4),
+        10 => ramp(4),
+        11 => ramp(16),
+        12 => ramp(256),
+        _ => return None,
+    })
+}
+
+unsafe fn new_palette(out: *mut *mut c_void) -> i32 {
+    put(
+        out,
+        Com::create(PALETTE_VT.ptr(), Mutex::<Option<Palette>>::new(None)),
+    )
+}
+
+unsafe extern "win64" fn create_palette(_this: *mut c_void, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    new_palette(out)
+}
+
+unsafe fn set_palette(this: *mut PaletteObj, p: Palette) -> i32 {
+    *crate::dlls::lock(Com::get(this)) = Some(p);
+    S_OK
+}
+
+unsafe fn with_palette<R>(this: *mut PaletteObj, f: impl FnOnce(&Palette) -> R) -> Result<R, i32> {
+    match &*crate::dlls::lock(Com::get(this)) {
+        Some(p) => Ok(f(p)),
+        None => Err(WINCODEC_ERR_NOTINITIALIZED),
+    }
+}
+
+unsafe extern "win64" fn palette_qi(
+    this: *mut PaletteObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_PALETTE])
+}
+
+unsafe extern "win64" fn palette_init_predefined(
+    this: *mut PaletteObj,
+    kind: u32,
+    add_transparent: i32,
+) -> i32 {
+    let Some(mut colors) = predefined_colors(kind) else {
+        return E_INVALIDARG;
+    };
+    if add_transparent != 0 && colors.len() < 256 {
+        colors.push(0);
+    }
+    set_palette(this, Palette { kind, colors })
+}
+
+unsafe extern "win64" fn palette_init_custom(
+    this: *mut PaletteObj,
+    colors: *const u32,
+    count: u32,
+) -> i32 {
+    if count > 256 || (colors.is_null() && count != 0) {
+        return E_INVALIDARG;
+    }
+    let colors = if count == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(colors, count as usize).to_vec()
+    };
+    set_palette(
+        this,
+        Palette {
+            kind: PALETTE_CUSTOM,
+            colors,
+        },
+    )
+}
+
+/// Palette tirée d'une image : ses couleurs distinctes, dans l'ordre où
+/// elles apparaissent, jusqu'au nombre demandé.
+unsafe extern "win64" fn palette_init_from_bitmap(
+    this: *mut PaletteObj,
+    src: *mut c_void,
+    count: u32,
+    add_transparent: i32,
+) -> i32 {
+    if !(2..=256).contains(&count) {
+        return E_INVALIDARG;
+    }
+    let pix = match read_source(src) {
+        Ok(p) => p,
+        Err(hr) => return hr,
+    };
+    if bytes_per_pixel(&pix.fmt) != Some(4) {
+        return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
+    }
+    let limit = count as usize - (add_transparent != 0) as usize;
+    let mut colors: Vec<u32> = Vec::new();
+    for px in pix.data.as_chunks::<4>().0 {
+        let c = 0xFF00_0000 | u32::from_le_bytes([px[0], px[1], px[2], 0]);
+        if !colors.contains(&c) {
+            colors.push(c);
+            if colors.len() == limit {
+                break;
+            }
+        }
+    }
+    if add_transparent != 0 {
+        colors.push(0);
+    }
+    set_palette(
+        this,
+        Palette {
+            kind: PALETTE_MEDIAN_CUT,
+            colors,
+        },
+    )
+}
+
+unsafe extern "win64" fn palette_init_from_palette(
+    this: *mut PaletteObj,
+    other: *mut c_void,
+) -> i32 {
+    if other.is_null() {
+        return E_INVALIDARG;
+    }
+    type GetType = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+    type GetCount = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+    type GetColors = unsafe extern "win64" fn(*mut c_void, u32, *mut u32, *mut u32) -> i32;
+    let (mut kind, mut n) = (0u32, 0u32);
+    let hr = method::<GetType>(other, 7)(other, &mut kind);
+    if hr < 0 {
+        return hr;
+    }
+    let hr = method::<GetCount>(other, 8)(other, &mut n);
+    if hr < 0 {
+        return hr;
+    }
+    let mut colors = vec![0u32; n.min(256) as usize];
+    let mut got = 0u32;
+    let hr =
+        method::<GetColors>(other, 9)(other, colors.len() as u32, colors.as_mut_ptr(), &mut got);
+    if hr < 0 {
+        return hr;
+    }
+    colors.truncate(got as usize);
+    set_palette(this, Palette { kind, colors })
+}
+
+unsafe extern "win64" fn palette_type(this: *mut PaletteObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    match with_palette(this, |p| p.kind) {
+        Ok(k) => put_value(out, k),
+        Err(hr) => hr,
+    }
+}
+
+unsafe extern "win64" fn palette_count(this: *mut PaletteObj, out: *mut u32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    match with_palette(this, |p| p.colors.len() as u32) {
+        Ok(n) => put_value(out, n),
+        Err(hr) => hr,
+    }
+}
+
+unsafe extern "win64" fn palette_colors(
+    this: *mut PaletteObj,
+    count: u32,
+    colors: *mut u32,
+    actual: *mut u32,
+) -> i32 {
+    if actual.is_null() || (colors.is_null() && count != 0) {
+        return E_INVALIDARG;
+    }
+    match with_palette(this, |p| {
+        let n = p.colors.len().min(count as usize);
+        if n > 0 {
+            std::ptr::copy_nonoverlapping(p.colors.as_ptr(), colors, n);
+        }
+        n as u32
+    }) {
+        Ok(n) => put_value(actual, n),
+        Err(hr) => hr,
+    }
+}
+
+unsafe extern "win64" fn palette_black_white(this: *mut PaletteObj, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    match with_palette(this, |p| p.kind == PALETTE_FIXED_BW) {
+        Ok(b) => put_value(out, b as i32),
+        Err(hr) => hr,
+    }
+}
+
+unsafe extern "win64" fn palette_grayscale(this: *mut PaletteObj, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let gray = |c: &u32| {
+        let [b, g, r, _] = c.to_le_bytes();
+        r == g && g == b
+    };
+    match with_palette(this, |p| {
+        matches!(p.kind, PALETTE_FIXED_BW | 10..=12)
+            || (p.kind == PALETTE_CUSTOM && p.colors.iter().all(gray))
+    }) {
+        Ok(b) => put_value(out, b as i32),
+        Err(hr) => hr,
+    }
+}
+
+unsafe extern "win64" fn palette_has_alpha(this: *mut PaletteObj, out: *mut i32) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    match with_palette(this, |p| p.colors.iter().any(|c| c >> 24 != 0xFF)) {
+        Ok(b) => put_value(out, b as i32),
+        Err(hr) => hr,
+    }
+}
+
+static PALETTE_VT: VTable<13> = VTable([
+    palette_qi as *const (),
+    add_ref::<Mutex<Option<Palette>>> as *const (),
+    release::<Mutex<Option<Palette>>> as *const (),
+    palette_init_predefined as *const (),
+    palette_init_custom as *const (),
+    palette_init_from_bitmap as *const (),
+    palette_init_from_palette as *const (),
+    palette_type as *const (),
+    palette_count as *const (),
+    palette_colors as *const (),
+    palette_black_white as *const (),
+    palette_grayscale as *const (),
+    palette_has_alpha as *const (),
+]);
+
 // --- Sources : image décodée, bitmap, convertisseur, transformations ----------
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1732,6 +2089,15 @@ source_vtable!(
     FRAME_VT,
     11,
     [unsupported_operation, no_color_contexts, no_thumbnail]
+);
+source_vtable!(
+    ICON_FRAME_VT,
+    11,
+    [
+        unsupported_operation,
+        no_color_contexts,
+        icon_frame_thumbnail
+    ]
 );
 source_vtable!(
     BITMAP_VT,
@@ -2247,6 +2613,100 @@ mod tests {
             assert!(noms.contains_key("IWICImagingFactory_CreateDecoderFromFileHandle_Proxy"));
             assert!(noms.contains_key("WICCreateColorContext_Proxy"));
             release_obj(bmp);
+        }
+    }
+
+    /// Icône 1×1 en 32 bits : en-tête ICO, une entrée, DIB double hauteur.
+    fn ico_1x1() -> Vec<u8> {
+        let mut d = vec![0, 0, 1, 0, 1, 0];
+        let dib_len = 40u32 + 4 + 4;
+        d.extend_from_slice(&[1, 1, 0, 0, 1, 0, 32, 0]);
+        d.extend_from_slice(&dib_len.to_le_bytes());
+        d.extend_from_slice(&22u32.to_le_bytes());
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&1i32.to_le_bytes());
+        d.extend_from_slice(&2i32.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&32u16.to_le_bytes());
+        d.extend_from_slice(&[0; 24]);
+        d.extend_from_slice(&[255, 0, 0, 255]); // bleu opaque
+        d.extend_from_slice(&[0; 4]); // masque ET
+        d
+    }
+
+    /// #1099 : WPF refuse une image dont le décodeur n'a pas d'informations :
+    /// les icônes (.ico) des ressources XAML doivent en avoir.
+    #[test]
+    fn icone_reconnue_avec_ses_informations() {
+        unsafe {
+            let bytes = ico_1x1();
+            assert_eq!(container_of(&bytes), CONTAINER_ICO);
+            let dec = decoder_from_bytes(&bytes).unwrap();
+            assert_eq!(dec.container, CONTAINER_ICO);
+            let mut obj = std::ptr::null_mut();
+            assert_eq!(new_decoder(dec, &mut obj), S_OK);
+            let mut info = std::ptr::null_mut();
+            assert_eq!(method::<Create>(obj, 6)(obj, &mut info), S_OK);
+            type GetGuid = unsafe extern "win64" fn(*mut c_void, *mut Guid) -> i32;
+            let mut c = Guid::default();
+            assert_eq!(method::<GetGuid>(info, 11)(info, &mut c), S_OK);
+            assert_eq!(c, CONTAINER_ICO);
+            release_obj(info);
+            // Chaque image d'icône a une vignette de même taille.
+            type GetFrame = unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
+            let mut frame = std::ptr::null_mut();
+            assert_eq!(method::<GetFrame>(obj, 13)(obj, 0, &mut frame), S_OK);
+            let mut thumb = std::ptr::null_mut();
+            assert_eq!(method::<Create>(frame, 10)(frame, &mut thumb), S_OK);
+            let pix = read_source(thumb).unwrap();
+            assert_eq!((pix.w, pix.h), (1, 1));
+            release_obj(thumb);
+            release_obj(frame);
+            release_obj(obj);
+        }
+    }
+
+    /// #1110 : palettes WIC, prédéfinies, personnalisées et copiées.
+    #[test]
+    fn palettes_wic() {
+        unsafe {
+            let f = factory();
+            let mut pal = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 9)(f, &mut pal), S_OK);
+            type Count = unsafe extern "win64" fn(*mut c_void, *mut u32) -> i32;
+            type Flag = unsafe extern "win64" fn(*mut c_void, *mut i32) -> i32;
+            type Colors = unsafe extern "win64" fn(*mut c_void, u32, *mut u32, *mut u32) -> i32;
+            let mut n = 0u32;
+            assert_eq!(
+                method::<Count>(pal, 8)(pal, &mut n),
+                WINCODEC_ERR_NOTINITIALIZED
+            );
+            type Pre = unsafe extern "win64" fn(*mut c_void, u32, i32) -> i32;
+            assert_eq!(method::<Pre>(pal, 3)(pal, 7, 1), S_OK);
+            assert_eq!(method::<Count>(pal, 8)(pal, &mut n), S_OK);
+            assert_eq!(n, 217);
+            let mut alpha = 0;
+            assert_eq!(method::<Flag>(pal, 12)(pal, &mut alpha), S_OK);
+            assert_eq!(alpha, 1);
+            type Custom = unsafe extern "win64" fn(*mut c_void, *const u32, u32) -> i32;
+            let gris = [0xFF00_0000u32, 0xFF80_8080, 0xFFFF_FFFF];
+            assert_eq!(method::<Custom>(pal, 4)(pal, gris.as_ptr(), 3), S_OK);
+            let mut g = 0;
+            assert_eq!(method::<Flag>(pal, 11)(pal, &mut g), S_OK);
+            assert_eq!(g, 1);
+            let mut copie = std::ptr::null_mut();
+            assert_eq!(method::<Create>(f, 9)(f, &mut copie), S_OK);
+            type FromPal = unsafe extern "win64" fn(*mut c_void, *mut c_void) -> i32;
+            assert_eq!(method::<FromPal>(copie, 6)(copie, pal), S_OK);
+            let mut out = [0u32; 4];
+            let mut got = 0u32;
+            assert_eq!(
+                method::<Colors>(copie, 9)(copie, 4, out.as_mut_ptr(), &mut got),
+                S_OK
+            );
+            assert_eq!(&out[..got as usize], &gris);
+            release_obj(copie);
+            release_obj(pal);
         }
     }
 
