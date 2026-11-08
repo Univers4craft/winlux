@@ -27,7 +27,10 @@ les Mac (`smb://NOM-DU-PC`) et les autres Linux.
 - **Sécurité** : SMB1 désactivé (`server min protocol = SMB2_10`), NTLMv2
   seulement. Le pare-feu Winlux ouvre 445/5357 (TCP) et 3702/5353 (UDP) sur
   les profils Privé et Domaine uniquement (règles 9445 et 9446) ; sur un
-  réseau public la page l'indique.
+  réseau public, la page Partage et transfert l'indique et propose de passer
+  en privé (#1104). Le type de réseau se choisit dans **Paramètres > Réseau
+  et Internet** (« Type de profil réseau », #1103) : passer en Public est
+  libre, passer en Privé demande un administrateur.
 - **Découverte** : `wsdd` (WS-Discovery) fait apparaître le PC dans le
   panneau Réseau de l'Explorateur Windows ; Avahi, s'il est présent, l'annonce
   au Finder ; le module `fruit` de Samba gère les métadonnées macOS.

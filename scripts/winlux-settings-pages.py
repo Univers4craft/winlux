@@ -395,6 +395,12 @@ _TR = {
     'Une touche légère vaut un clic.': ('A light tap counts as a click.', 'Un toque ligero equivale a un clic.', 'Leichtes Tippen gilt als Klick.'),
     'Ventilateurs': ('Fans', 'Ventiladores', 'Lüfter'),
     'Version précédente': ('Previous version', 'Versión anterior', 'Vorherige Version'),
+    'Type de profil réseau': ('Network profile type', 'Tipo de perfil de red', 'Netzwerkprofiltyp'),
+    'Réseau privé': ('Private network', 'Red privada', 'Privates Netzwerk'),
+    'Réseau public': ('Public network', 'Red pública', 'Öffentliches Netzwerk'),
+    'Public : ce PC n’est pas visible des autres et ses dossiers partagés sont inaccessibles (café, gare, hôtel). Privé : réseau de confiance, à la maison ou au travail.': ('Public: this PC is hidden from others and its shared folders are unreachable (café, station, hotel). Private: a trusted network, at home or at work.', 'Pública: este equipo no es visible para los demás y sus carpetas compartidas no son accesibles (cafetería, estación, hotel). Privada: una red de confianza, en casa o en el trabajo.', 'Öffentlich: Dieser PC ist für andere unsichtbar und seine freigegebenen Ordner sind nicht erreichbar (Café, Bahnhof, Hotel). Privat: ein vertrauenswürdiges Netzwerk, zu Hause oder bei der Arbeit.'),
+    'Ce PC est sur un réseau public : vos dossiers partagés ne sont pas accessibles depuis les autres PC.': ('This PC is on a public network: your shared folders cannot be reached from other PCs.', 'Este equipo está en una red pública: sus carpetas compartidas no son accesibles desde otros equipos.', 'Dieser PC ist in einem öffentlichen Netzwerk: Ihre freigegebenen Ordner sind von anderen PCs aus nicht erreichbar.'),
+    'Passer en réseau privé': ('Switch to private network', 'Cambiar a red privada', 'Zu privatem Netzwerk wechseln'),
     'Visibles des autres PC (Windows, Mac, Linux) du réseau privé.': ('Visible to other PCs (Windows, Mac, Linux) on the private network.', 'Visibles para los demás equipos (Windows, Mac, Linux) de la red privada.', 'Für andere PCs (Windows, Mac, Linux) im privaten Netzwerk sichtbar.'),
     'Vitesse du curseur': ('Cursor speed', 'Velocidad del cursor', 'Cursorgeschwindigkeit'),
     'Vitesse du pointeur': ('Pointer speed', 'Velocidad del puntero', 'Zeigergeschwindigkeit'),
@@ -851,6 +857,16 @@ def update_start_menu_state(**changes):
     temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     temporary.replace(START_STATE)
 RUN = Path(os.environ.get("WINLUX_RUN_DIR", "/run/winlux"))
+
+
+def firewall_profile():
+    """Profil du réseau (« private » ou « public », #1103) : profile= de
+    /etc/winlux/firewall.conf, sinon le relevé du partage, sinon privé."""
+    for line in read(Path(os.environ.get("WINLUX_FIREWALL_CONF", "/etc/winlux/firewall.conf"))).splitlines():
+        if line.startswith("profile=") and line[8:].strip() in ("private", "public", "domain"):
+            profile = line[8:].strip()
+            return "private" if profile == "domain" else profile
+    return "public" if keyvals(read(RUN / "shares.txt")).get("firewall_profile") == "public" else "private"
 
 
 def run_file(name):
@@ -3625,6 +3641,7 @@ class ExtraPages:
         title, subtitle, glyph = network_summary(self.status)
         _, self.network_hero = self.hero(glyph, title, subtitle,
                                          [(_t("Renouveler la connexion"), lambda: self.execute("network-renew"))])
+        self.network_profile_card()
         rows = [(PAGE_WIFI, "wifi", _t("Wi-Fi"), _t("Choisir un réseau, entrer sa clé, WPS, réseaux cachés et mode avion.")),
                 (PAGE_VPN, "vpn", _t("VPN"), _t("Ajouter, connecter et déconnecter un VPN.")),
                 (PAGE_HOTSPOT, "hotspot", _t("Point d’accès sans fil mobile"), _t("Partager la connexion de ce PC en Wi-Fi.")),
@@ -3636,6 +3653,16 @@ class ExtraPages:
         box.set_spacing(0)
         for page, icon, name, text in rows:
             self.nav_row(box, icon, name, text, page)
+
+    def network_profile_card(self):
+        """Réseau public ou privé (#1103), comme Windows 11 : le pare-feu,
+        le partage de dossiers et la découverte en dépendent."""
+        current = firewall_profile()
+        box = self.card()
+        self.combo(box, _t("Type de profil réseau"),
+                   [("private", _t("Réseau privé")), ("public", _t("Réseau public"))], current,
+                   lambda value: value != firewall_profile() and self.execute(f"firewall-profile-{value}"),
+                   _t("Public : ce PC n’est pas visible des autres et ses dossiers partagés sont inaccessibles (café, gare, hôtel). Privé : réseau de confiance, à la maison ou au travail."))
 
     def refresh_network_hero(self, status):
         title, subtitle, glyph = network_summary(status)
@@ -4196,6 +4223,11 @@ class ExtraPages:
         info = keyvals(shares)
         if info.get("available") == "1":
             self.section(_t("Dossiers partagés"), _t("Visibles des autres PC (Windows, Mac, Linux) du réseau privé."))
+            if info.get("firewall_profile") == "public":
+                # Pare-feu en profil Public (#1104) : partage fermé, on le dit.
+                warn = self.card()
+                self.hint(_t("Ce PC est sur un réseau public : vos dossiers partagés ne sont pas accessibles depuis les autres PC."), warn)
+                self.actions(warn, [(_t("Passer en réseau privé"), lambda: self.execute("firewall-profile-private"))])
             box = self.card()
             self.switch(box, _t("Partage de fichiers"), info.get("enabled") == "1",
                         lambda on: self.execute("share-enable" if on else "share-disable"))

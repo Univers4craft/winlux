@@ -908,6 +908,15 @@ perform() {
                 printf 'rule=9448\tTelephone connecte Winlux (UDP)\tin\tallow\tudp\t1716\t\tprivate,domain\t1\n' >> "$tmp"
             fi
             mv "$tmp" "$fw"; chmod 644 "$fw" ;;
+        # Type de réseau (#1103) : Public ferme le partage et la découverte,
+        # Privé les rouvre ; profile= de firewall.conf, lu par le pare-feu.
+        firewall-profile-private|firewall-profile-public)
+            fw="$config/firewall.conf" tmp="$config/firewall.conf.$$"
+            if test -r "$fw"; then grep -v '^profile=' "$fw" > "$tmp" || true; else : > "$tmp"; fi
+            printf 'profile=%s\n' "${action#firewall-profile-}" >> "$tmp"
+            mv "$tmp" "$fw"; chmod 644 "$fw"
+            if have winlux; then winlux --firewall apply || true; fi
+            if have winlux-share; then winlux-share status >/dev/null 2>&1 || true; fi ;;
         # Comptes locaux (Paramètres › Comptes) ; mot de passe sur l'entrée standard.
         account-add|account-password|account-role|account-remove) shift; winlux-accounts "${action#account-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
