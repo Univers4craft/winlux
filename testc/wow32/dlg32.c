@@ -475,6 +475,44 @@ static void winscp(void)
           "ImageList_Read");
     IStream_Release(st);
     ImageList_Destroy(il2);
+    /* Flux « IL » d'un programme Delphi (ButtonImages de WinSCP) : bfSize
+       des BMP réduit aux en-têtes, pixels et masque juste derrière. */
+    static const BYTE ilhead[28] = { 'I', 'L', 1, 1, 1, 0, 4, 0, 4, 0, 2, 0, 2, 0,
+                                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x10, 0xFF, 0xFF,
+                                     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    BYTE delphi[28 + 54 + 64 + 62 + 8 + 22] = { 0 };
+    memcpy(delphi, ilhead, 28);
+    BYTE *b = delphi + 28;
+    for (int k = 0; k < 2; k++) {
+        DWORD size = k ? 62 : 54;
+        b[0] = 'B';
+        b[1] = 'M';
+        memcpy(b + 2, &size, 4);
+        memcpy(b + 10, &size, 4);
+        LONG hdr[3] = { 40, 8, 2 };
+        memcpy(b + 14, hdr, 12);
+        b[26] = 1;
+        b[28] = k ? 1 : 32;
+        b[46] = k ? 2 : 0; /* biClrUsed */
+        if (k) {
+            b[58] = b[59] = b[60] = 0xFF; /* palette : noir, blanc */
+            b += 62 + 8;
+        } else {
+            for (int i = 0; i < 16; i++)
+                memcpy(b + 54 + i * 4, "\x10\x20\x30\x00", 4);
+            b += 54 + 64;
+        }
+    }
+    IStream *ds = NULL;
+    CHECK(CreateStreamOnHGlobal(NULL, TRUE, &ds) == S_OK, "flux Delphi");
+    ULONG wrote = 0;
+    IStream_Write(ds, delphi, sizeof delphi, &wrote);
+    IStream_Seek(ds, zero, STREAM_SEEK_SET, NULL);
+    il2 = ImageList_Read(ds);
+    CHECK(il2 != NULL && ImageList_GetImageCount(il2) == 1 && ImageList_GetIconSize(il2, &cx, &cy) && cx == 2,
+          "ImageList_Read (flux Delphi, bfSize réduit aux en-têtes)");
+    IStream_Release(ds);
+    ImageList_Destroy(il2);
     ImageList_Destroy(il);
     DeleteDC(mem);
     DeleteObject(canvas);
