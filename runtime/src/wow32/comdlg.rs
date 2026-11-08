@@ -194,10 +194,42 @@ extern "win64" fn dlg32(args: u32, aux: usize) -> u64 {
     call_with_struct(d.target, d.layout, rd(args))
 }
 
+/// FindText / ReplaceText (#712) : la boîte est non modale et prévient le
+/// programme avec un pointeur sur SA structure. Pas de copie 64 bits : la
+/// boîte lit et écrit directement la FINDREPLACE x86 (40 octets), et la
+/// procédure crochet x86 passe par une passerelle 64 bits.
+extern "win64" fn find32(args: u32, aux: usize) -> u64 {
+    use crate::dlls::comdlg32_find::{open, FR_ENABLEHOOK, LAYOUT32};
+    let (wide, replace) = (aux & 1 != 0, aux & 2 != 0);
+    let fr = rd(args) as usize;
+    unsafe {
+        let hook = if fr != 0 && LAYOUT32.flags(fr) & FR_ENABLEHOOK != 0 {
+            super::user::wndproc64(LAYOUT32.ptr_at(fr, LAYOUT32.hook) as u32)
+        } else {
+            0
+        };
+        open(fr, LAYOUT32, wide, replace, hook) as u64
+    }
+}
+
 /// Passerelle x86 des boîtes communes de comdlg32.
 pub(super) fn override_for(dll: &str, func: &str) -> Option<super::crt::Override> {
     if dll != "comdlg32" {
         return None;
+    }
+    let find = match func {
+        "FindTextA" => Some(0),
+        "FindTextW" => Some(1),
+        "ReplaceTextA" => Some(2),
+        "ReplaceTextW" => Some(3),
+        _ => None,
+    };
+    if let Some(aux) = find {
+        return Some(super::crt::Override::Raw {
+            target: find32 as *const () as usize,
+            aux,
+            pop: Some(4),
+        });
     }
     let layout = layout_of(func)?;
     let target = crate::dlls::lookup(dll, func)?;

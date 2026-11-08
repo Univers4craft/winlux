@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Modes d'alimentation réellement disponibles sur cette machine.
 
-Trois modes, comme Windows 11 : « saver » (économie), « balanced » (normal) et
+Trois modes : « saver » (économie), « balanced » (normal) et
 « performance » (turbo). Chaque mode n'est proposé que si la plomberie Linux
 présente sait l'appliquer, dans cet ordre :
 

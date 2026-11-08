@@ -858,6 +858,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dplayx::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // DirectPlay 8 (dpnet.dll, #863).
+        if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
         if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
             return hr;
@@ -1214,6 +1218,18 @@ pub unsafe extern "win64" fn co_get_context_token(token: *mut usize) -> i32 {
     S_OK
 }
 
+/// `CoGetObjectContext` : interface `riid` du contexte du thread (même objet
+/// que `CoGetContextToken`). Le runtime .NET la demande dès qu'un objet COM
+/// traverse le code managé (#268 : clic sur un bouton WPF).
+pub unsafe extern "win64" fn co_get_object_context(riid: *const u8, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let mut token = 0usize;
+    co_get_context_token(&mut token);
+    context_qi(token as *mut c_void, riid, out)
+}
+
 // ---------- PropVariantClear ----------
 
 pub unsafe extern "win64" fn prop_variant_clear(v: *mut c_void) -> i32 {
@@ -1413,6 +1429,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
+        "CoGetObjectContext"=>fn co_get_object_context,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
         // ole32 exporte aussi les fonctions d'IErrorInfo d'oleaut32
         // (MinGW les importe d'ole32).
@@ -1461,6 +1478,28 @@ mod tests {
                 E_INVALIDARG
             );
             crate::dlls::kernel32::close_handle(e);
+        }
+    }
+
+    #[test]
+    fn contexte_d_objet_du_thread() {
+        unsafe {
+            const IID_IUNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+            let mut token = 0usize;
+            co_get_context_token(&mut token);
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(co_get_object_context(IID_IUNKNOWN.as_ptr(), &mut ctx), S_OK);
+            assert_eq!(ctx as usize, token);
+            let other = [1u8; 16];
+            assert_eq!(
+                co_get_object_context(other.as_ptr(), &mut ctx),
+                E_NOINTERFACE
+            );
+            assert!(ctx.is_null());
+            assert_eq!(
+                co_get_object_context(IID_IUNKNOWN.as_ptr(), std::ptr::null_mut()),
+                E_POINTER
+            );
         }
     }
 

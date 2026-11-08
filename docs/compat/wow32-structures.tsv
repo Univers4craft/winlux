@@ -78,6 +78,10 @@ d3dcompiler.rs	BlobVTable	a-verifier
 d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
 d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
 d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
+d3dx9_effect.rs	Effect	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 214-222 (ID3DXEffect)
+d3dx9_effect.rs	Pool	x86	objet COM : le programme ne lit que sa table (ID3DXEffectPool)
+d3dx9_mesh.rs	Mesh	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 202-208 (ID3DXMesh)
+d3dx9_shader.rs	Ct	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 198-201 (ID3DXConstantTable)
 dataobject.rs	DataObject	a-verifier	
 dataobject.rs	EnumFormat	a-verifier	
 dataobject.rs	FormatEtc	a-verifier	
@@ -88,6 +92,8 @@ dinput8.rs	DiObj	a-verifier
 dpapi.rs	DataBlob	a-verifier	
 dplayx.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 170-192 (IDirectPlay4A)
 dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 174-176 (IDirectPlayLobby3A)
+dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 223-236 (IDirectPlay8Address)
+dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
@@ -185,6 +191,7 @@ vk_bindings.rs	VkSwapchainCreateInfoKHR	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
 vulkan1.rs	Callback	a-verifier	
 vulkan1.rs	Xlib	a-verifier	
+webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
 winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)
@@ -192,6 +199,7 @@ winlux_media.rs	OpenOptions	a-verifier
 winmm_waveout.rs	WaveHdr	a-verifier	
 winusb.rs	Bulk	a-verifier	
 winusb.rs	Ctrl	a-verifier	
+wpf_native.rs	RtlBitmap	a-verifier	RTL_BITMAP : 8 octets en x86 ; utilisée seulement par les DLL natives de WPF 64 bits (#268)
 ws2_32.rs	WinAddrInfoA	x86	wow64.c n° 73 (ADDRINFOA de 32 octets)
 ws2_32.rs	WinAddrInfoW	x86	ADDRINFOW de 32 octets, même conversion que n° 73
 ws2_32.rs	WinFdSet	x86	wow64.c n° 75 (fd_set à SOCKET de 4 octets)

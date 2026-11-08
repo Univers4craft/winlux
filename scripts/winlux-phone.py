@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Téléphone connecté : relier Winlux à un téléphone Android.
 
-Comme « Lien avec un téléphone » sous Windows 11 : notifications du téléphone
+Téléphone connecté : notifications du téléphone
 sur le PC, SMS lus et envoyés depuis le PC, fichiers échangés dans les deux
 sens, batterie et « Faire sonner ». Côté téléphone, l'application libre
 KDE Connect (F-Droid ou Google Play) sert de client : Winlux parle son

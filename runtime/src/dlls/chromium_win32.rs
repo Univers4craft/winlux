@@ -503,6 +503,39 @@ pub extern "win64" fn GetWindowDpiAwarenessContext(_hwnd: usize) -> isize {
     PROCESS_CONTEXT.load(Ordering::Relaxed)
 }
 
+/// IsProcessDPIAware : vrai dès que le processus n'est plus « non conscient »
+/// (SetProcessDPIAware, SetProcessDpiAwareness(Context)). WPF le lit (#268).
+pub extern "win64" fn IsProcessDPIAware() -> i32 {
+    i32::from(awareness(PROCESS_CONTEXT.load(Ordering::Relaxed)) > 0)
+}
+
+// DPI_HOSTING_BEHAVIOR : -1 invalide, 0 par défaut, 1 mixte. WinForms .NET 8
+// le lit au démarrage par GetProcAddress (#666).
+const DPI_HOSTING_DEFAULT: i32 = 0;
+const DPI_HOSTING_MIXED: i32 = 1;
+thread_local! {
+    static THREAD_HOSTING: std::cell::Cell<i32> = const { std::cell::Cell::new(DPI_HOSTING_DEFAULT) };
+}
+
+pub extern "win64" fn GetThreadDpiHostingBehavior() -> i32 {
+    THREAD_HOSTING.with(|t| t.get())
+}
+
+/// Rend l'ancien comportement, ou -1 (invalide) si `value` est inconnu.
+pub extern "win64" fn SetThreadDpiHostingBehavior(value: i32) -> i32 {
+    if !(DPI_HOSTING_DEFAULT..=DPI_HOSTING_MIXED).contains(&value) {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+    THREAD_HOSTING.with(|t| t.replace(value))
+}
+
+/// Les fenêtres Winlux ne mémorisent pas le comportement de leur thread de
+/// création : on rend celui du thread appelant, presque toujours le même.
+pub extern "win64" fn GetWindowDpiHostingBehavior(_hwnd: usize) -> i32 {
+    GetThreadDpiHostingBehavior()
+}
+
 pub extern "win64" fn GetAwarenessFromDpiAwarenessContext(ctx: isize) -> i32 {
     awareness(ctx)
 }
@@ -561,6 +594,10 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "GetThreadDpiAwarenessContext" => fn GetThreadDpiAwarenessContext,
         "SetThreadDpiAwarenessContext" => fn SetThreadDpiAwarenessContext,
         "GetWindowDpiAwarenessContext" => fn GetWindowDpiAwarenessContext,
+        "GetThreadDpiHostingBehavior" => fn GetThreadDpiHostingBehavior,
+        "IsProcessDPIAware" => fn IsProcessDPIAware,
+        "SetThreadDpiHostingBehavior" => fn SetThreadDpiHostingBehavior,
+        "GetWindowDpiHostingBehavior" => fn GetWindowDpiHostingBehavior,
         "GetAwarenessFromDpiAwarenessContext" => fn GetAwarenessFromDpiAwarenessContext,
         "AreDpiAwarenessContextsEqual" => fn AreDpiAwarenessContextsEqual,
         "IsValidDpiAwarenessContext" => fn IsValidDpiAwarenessContext,
@@ -659,6 +696,22 @@ mod tests {
         assert_eq!(scale_factor(96), 100);
         assert_eq!(scale_factor(144), 150);
         assert_eq!(scale_factor(120), 125);
+    }
+
+    #[test]
+    fn comportement_d_hebergement_dpi() {
+        assert_eq!(GetThreadDpiHostingBehavior(), DPI_HOSTING_DEFAULT);
+        assert_eq!(
+            SetThreadDpiHostingBehavior(DPI_HOSTING_MIXED),
+            DPI_HOSTING_DEFAULT
+        );
+        assert_eq!(GetThreadDpiHostingBehavior(), DPI_HOSTING_MIXED);
+        assert_eq!(GetWindowDpiHostingBehavior(0), DPI_HOSTING_MIXED);
+        assert_eq!(SetThreadDpiHostingBehavior(7), -1);
+        assert_eq!(
+            SetThreadDpiHostingBehavior(DPI_HOSTING_DEFAULT),
+            DPI_HOSTING_MIXED
+        );
     }
 
     #[test]

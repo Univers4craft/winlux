@@ -217,6 +217,60 @@ fn unhex(s: &str) -> Option<String> {
     String::from_utf8(bytes?).ok()
 }
 
+/// Description texte d'un handle transmissible à un autre processus, et
+/// les descripteurs à joindre. Dans le texte, le i-ème descripteur est noté
+/// `#i` ; l'appelant le remplace par son numéro (héritage) ou l'envoie par
+/// SCM_RIGHTS (DuplicateHandle vers un autre processus, `handle_broker`).
+///
+/// `move_pipe` : une instance de tube nommé quitte ce processus (héritage,
+/// DUPLICATE_CLOSE_SOURCE) ; sinon elle part comme simple descripteur.
+pub(crate) fn describe(h: usize, move_pipe: bool) -> Option<(String, Vec<OwnedFd>)> {
+    let dup = |fd: i32| -> Option<OwnedFd> {
+        let c = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        (c >= 0).then(|| unsafe { OwnedFd::from_raw_fd(c) })
+    };
+    let ov = u8::from(crate::dlls::kernel32::is_overlapped_handle(h));
+    let pipe = if move_pipe {
+        crate::dlls::named_pipes::export(h)
+    } else {
+        None
+    };
+    if let Some((name, client, connected)) = pipe {
+        // Instance de tube nommé : l'autre processus la reprend.
+        let server = dup(crate::dlls::kernel32::fd_of_handle(h)?)?;
+        let mut fds = vec![server];
+        let client = match client.and_then(dup) {
+            Some(c) => {
+                fds.push(c);
+                "#1".to_string()
+            }
+            None => "-".to_string(),
+        };
+        crate::dlls::named_pipes::release(h);
+        return Some((
+            format!(
+                "n,{h:x},#0,{client},{},{ov},{}",
+                u8::from(connected),
+                hex(&name)
+            ),
+            fds,
+        ));
+    }
+    if let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) {
+        return Some((format!("f,{h:x},#0,{ov}"), vec![dup(fd)?]));
+    }
+    if let Some((fd, manual)) = crate::dlls::kernel32::share_event(h) {
+        return Some((format!("e,{h:x},#0,{}", u8::from(manual)), vec![dup(fd)?]));
+    }
+    if let Some((fd, size, access)) = crate::dlls::mmap::export(h) {
+        return Some((format!("m,{h:x},#0,{size},{access:x}"), vec![dup(fd)?]));
+    }
+    if let Some(pid) = crate::dlls::kernel32::inheritable_process_pid(h) {
+        return Some((format!("p,{h:x},{pid}"), Vec::new()));
+    }
+    None
+}
+
 /// Handles à transmettre : tous les héritables, ou seulement ceux de
 /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (qui doivent eux aussi l'être).
 pub(crate) fn prepare(list: Option<&[usize]>) -> Passed {
@@ -228,45 +282,95 @@ pub(crate) fn prepare(list: Option<&[usize]>) -> Passed {
     let mut fds = Vec::new();
     let mut parts = Vec::new();
     for h in handles {
-        let ov = u8::from(crate::dlls::kernel32::is_overlapped_handle(h));
-        if let Some((name, client, connected)) = crate::dlls::named_pipes::export(h) {
-            // Instance de tube nommé : l'enfant la reprend.
-            let Some(fd) = crate::dlls::kernel32::fd_of_handle(h)
-                .and_then(|fd| inheritable_copy(fd, &mut fds))
-            else {
-                continue;
-            };
-            let client = client
-                .and_then(|c| inheritable_copy(c, &mut fds))
-                .map_or("-".to_string(), |c| c.to_string());
-            parts.push(format!(
-                "n,{h:x},{fd},{client},{},{ov},{}",
-                u8::from(connected),
-                hex(&name)
-            ));
-            crate::dlls::named_pipes::release(h);
-        } else if let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) {
-            if let Some(c) = inheritable_copy(fd, &mut fds) {
-                parts.push(format!("f,{h:x},{c},{ov}"));
-            }
-        } else if let Some((fd, manual)) = crate::dlls::kernel32::share_event(h) {
-            if let Some(c) = inheritable_copy(fd, &mut fds) {
-                parts.push(format!("e,{h:x},{c},{}", u8::from(manual)));
-            }
-        } else if let Some((fd, size, access)) = crate::dlls::mmap::export(h) {
-            if let Some(c) = inheritable_copy(fd, &mut fds) {
-                parts.push(format!("m,{h:x},{c},{size},{access:x}"));
-            }
-        } else if let Some(pid) = crate::dlls::kernel32::inheritable_process_pid(h) {
-            parts.push(format!("p,{h:x},{pid}"));
-        } else {
+        let Some((text, own)) = describe(h, true) else {
             crate::trace!("handle {h:#x} héritable mais pas transmissible à l'enfant");
+            continue;
+        };
+        // Chaque `#i` devient le numéro d'une copie héritable.
+        let mut numbers = Vec::new();
+        for fd in &own {
+            match inheritable_copy(fd.as_raw_fd(), &mut fds) {
+                Some(n) => numbers.push(n),
+                None => break,
+            }
         }
+        if numbers.len() != own.len() {
+            continue;
+        }
+        parts.push(substitute(&text, |i| numbers.get(i).map(|n| n.to_string())));
     }
     Passed {
         env: parts.join(";"),
         _fds: fds,
     }
+}
+
+/// Remplace les champs `#i` d'une description.
+pub(crate) fn substitute(text: &str, mut f: impl FnMut(usize) -> Option<String>) -> String {
+    text.split(',')
+        .map(|field| {
+            field
+                .strip_prefix('#')
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(&mut f)
+                .unwrap_or_else(|| field.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Recrée un handle décrit par `describe`. `fd` donne le descripteur d'un
+/// champ ; `at` impose le numéro du handle (0 : celui de la description,
+/// ou un numéro neuf si elle porte 0). Rend le numéro du handle créé.
+pub(crate) fn adopt_one(
+    part: &str,
+    at: usize,
+    mut fd: impl FnMut(&str) -> Option<OwnedFd>,
+) -> Option<usize> {
+    let f: Vec<&str> = part.split(',').collect();
+    let described = f.get(1).and_then(|h| usize::from_str_radix(h, 16).ok())?;
+    let h = match (at, described) {
+        (0, 0) => crate::dlls::kernel32::new_handle_number(),
+        (0, d) => d,
+        (a, _) => a,
+    };
+    let flag = |i: usize| f.get(i) == Some(&"1");
+    let mut field = |i: usize| f.get(i).and_then(|s| fd(s));
+    match f[0] {
+        "f" => {
+            let file = field(2)?;
+            crate::dlls::kernel32::insert_file_at(h, std::fs::File::from(file), flag(3));
+        }
+        "n" => {
+            let server = field(2)?;
+            let client = field(3);
+            let name = unhex(f.get(6)?)?;
+            crate::dlls::kernel32::insert_file_at(h, std::fs::File::from(server), flag(5));
+            crate::dlls::named_pipes::adopt(h, &name, client, flag(4));
+        }
+        "e" => {
+            let w = SharedWord::map(field(2)?)?;
+            crate::dlls::kernel32::insert_sync_at(
+                h,
+                crate::dlls::kernel32::EventObject::adopt(flag(3), w),
+            );
+        }
+        "m" => {
+            let file = field(2)?;
+            let size = f.get(3)?.parse::<u64>().ok()?;
+            let access = f
+                .get(4)
+                .and_then(|a| u32::from_str_radix(a, 16).ok())
+                .unwrap_or(crate::dlls::mmap::SECTION_ALL_ACCESS);
+            crate::dlls::mmap::adopt(h, file, size, access);
+        }
+        "p" => {
+            let pid = f.get(2)?.parse::<i32>().ok()?;
+            crate::dlls::kernel32::insert_sync_at(h, crate::dlls::kernel32::foreign_process(pid));
+        }
+        _ => return None,
+    }
+    Some(h)
 }
 
 /// Au démarrage d'un processus Windows : recrée les handles hérités.
@@ -278,12 +382,8 @@ pub(crate) fn adopt() {
     std::env::remove_var(ENV);
     let mut highest = 0usize;
     for part in text.split(';').filter(|p| !p.is_empty()) {
-        let f: Vec<&str> = part.split(',').collect();
-        let Some(h) = f.get(1).and_then(|h| usize::from_str_radix(h, 16).ok()) else {
-            continue;
-        };
-        let fd = |i: usize| -> Option<OwnedFd> {
-            let n: i32 = f.get(i)?.parse().ok()?;
+        let inherited = |s: &str| -> Option<OwnedFd> {
+            let n: i32 = s.parse().ok()?;
             unsafe {
                 if libc::fcntl(n, libc::F_SETFD, libc::FD_CLOEXEC) != 0 {
                     return None;
@@ -291,47 +391,13 @@ pub(crate) fn adopt() {
                 Some(OwnedFd::from_raw_fd(n))
             }
         };
-        let flag = |i: usize| f.get(i) == Some(&"1");
-        let ok = match f[0] {
-            "f" => fd(2).map(|fd| {
-                crate::dlls::kernel32::insert_file_at(h, std::fs::File::from(fd), flag(3));
-            }),
-            "n" => fd(2).and_then(|server| {
-                let client = fd(3);
-                let name = unhex(f.get(6)?)?;
-                crate::dlls::kernel32::insert_file_at(h, std::fs::File::from(server), flag(5));
-                crate::dlls::named_pipes::adopt(h, &name, client, flag(4));
-                Some(())
-            }),
-            "e" => fd(2).and_then(SharedWord::map).map(|w| {
-                crate::dlls::kernel32::insert_sync_at(
-                    h,
-                    crate::dlls::kernel32::EventObject::adopt(flag(3), w),
-                );
-            }),
-            "m" => fd(2).and_then(|fd| {
-                let size = f.get(3)?.parse::<u64>().ok()?;
-                let access = f
-                    .get(4)
-                    .and_then(|a| u32::from_str_radix(a, 16).ok())
-                    .unwrap_or(crate::dlls::mmap::SECTION_ALL_ACCESS);
-                crate::dlls::mmap::adopt(h, fd, size, access);
-                Some(())
-            }),
-            "p" => f.get(2).and_then(|p| p.parse::<i32>().ok()).map(|pid| {
-                crate::dlls::kernel32::insert_sync_at(
-                    h,
-                    crate::dlls::kernel32::foreign_process(pid),
-                );
-            }),
-            _ => None,
-        };
-        if ok.is_some() {
-            set(h, true);
-            highest = highest.max(h);
-            crate::trace!("handle hérité {part}");
-        } else {
-            crate::log_warn!("process", "handle hérité illisible : {part}");
+        match adopt_one(part, 0, inherited) {
+            Some(h) => {
+                set(h, true);
+                highest = highest.max(h);
+                crate::trace!("handle hérité {part}");
+            }
+            None => crate::log_warn!("process", "handle hérité illisible : {part}"),
         }
     }
     crate::dlls::kernel32::reserve_handles_up_to(highest);
@@ -346,6 +412,15 @@ mod tests {
         let n = "crashpad_42_ABC\\é";
         assert_eq!(unhex(&hex(n)).as_deref(), Some(n));
         assert_eq!(unhex("4"), None);
+    }
+
+    #[test]
+    fn descripteurs_numerotes() {
+        assert_eq!(
+            substitute("n,1c,#0,#1,1,0,6162", |i| Some((40 + i).to_string())),
+            "n,1c,40,41,1,0,6162"
+        );
+        assert_eq!(substitute("p,8,1234", |_| None), "p,8,1234");
     }
 
     #[test]

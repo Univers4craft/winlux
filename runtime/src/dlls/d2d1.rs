@@ -188,6 +188,9 @@ pub(super) unsafe extern "win64" fn add_ref<T>(this: *mut Com<T>) -> u32 {
 pub(super) unsafe extern "win64" fn release<T>(this: *mut Com<T>) -> u32 {
     Com::release(this)
 }
+pub(super) unsafe extern "win64" fn not_implemented() -> i32 {
+    E_NOTIMPL
+}
 pub(super) unsafe extern "win64" fn nothing() {}
 
 pub(super) unsafe fn qi_list<T>(

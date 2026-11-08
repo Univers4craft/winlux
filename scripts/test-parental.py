@@ -120,6 +120,22 @@ rules = lib.nft_ruleset({1002: 54002})
 check("meta skuid 1002 udp dport 53 redirect to :54002" in rules and "tcp dport 853 reject" in rules
       and "1.1.1.1" in rules and "2606:4700:4700::1111" in rules, "nftables : DNS du compte redirigé, DoT et DoH refusés")
 check(lib.nft_ruleset({}) == "", "aucun compte filtré : aucune règle")
+# #816 : hors du réseau local, le compte ne joint que les adresses du DNS filtrant.
+check("set ok4_1002 { type ipv4_addr; flags timeout; }" in rules and "meta skuid 1002 ip daddr @ok4_1002 accept" in rules
+      and "meta skuid 1002 ip6 daddr @ok6_1002 accept" in rules and "192.168.0.0/16" in rules
+      and rules.index("@ok4_1002 accept") < rules.index("meta skuid 1002 meta l4proto tcp reject with tcp reset")
+      < rules.index("meta skuid 1002 reject\n"),
+      "nftables : VPN, proxy ou DoH inconnu injoignables (seules les adresses données par le filtre, #816)")
+check(lib.address_script(1002, {"10.0.0.1": 10800, "2001:db8::1": 30}) ==
+      "add element inet winlux_parental ok4_1002 { 10.0.0.1 timeout 10800s }\n"
+      "add element inet winlux_parental ok6_1002 { 2001:db8::1 timeout 60s }\n", "nftables : adresses ouvertes au compte")
+if shutil.which("nft"):
+    probe_nft = subprocess.run(["nft", "-c", "-f", "-"], input=rules + lib.address_script(1002, {"10.0.0.1": 60}),
+                               capture_output=True, text=True)
+    if "Operation not permitted" not in probe_nft.stderr:
+        check(probe_nft.returncode == 0, f"nftables accepte les règles ({probe_nft.stderr.strip()})")
+for site in ("nordvpn.com", "www.protonvpn.com", "torproject.org", "www.croxyproxy.com"):
+    check(lib.dns_decision(site, web) == "block", f"VPN ou proxy grand public refusé : {site}")
 check(lib.dns_port(1002) == 54002 and lib.dns_port(999) is None, "port DNS propre au compte")
 
 # Faux résolveur amont : répond 10.0.0.<n> à tout nom.
@@ -150,6 +166,10 @@ lib.upstreams = lambda: ["127.0.0.1"]
 
 class FakeDaemon:
     blocked = []
+    opened = []
+
+    def resolved(self, user, records):
+        self.opened.extend((user, socket.inet_ntop(socket.AF_INET, data)) for _type, _ttl, data in records)
 
     def web_of(self, user):
         return web
@@ -180,10 +200,13 @@ def ask(name, tcp=False):
 
 
 answer = ask("jeux.example")
-check(answer[3] & 0x0F == 3 and daemon.blocked == ["jeux.example"], "site bloqué : NXDOMAIN, tentative notée")
+check(answer[3] & 0x0F == 3 and daemon.blocked == ["jeux.example"] and not daemon.opened,
+      "site bloqué : NXDOMAIN, tentative notée, aucune adresse ouverte")
 answer = ask("wikipedia.org")
 check(answer[3] & 0x0F == 0 and lib.answer_records(answer)[0][2][:3] == bytes([10, 0, 0]) and asked[-1] == "wikipedia.org",
       "autre site : réponse du résolveur amont")
+check(daemon.opened == [("bob", "10.0.0." + str(len(asked)))],
+      "adresse du site ouverte au compte avant la réponse (#816)")
 answer = ask("www.google.com", tcp=True)
 records = lib.answer_records(answer)
 check(asked[-1] == "forcesafesearch.google.com" and records and lib.read_name(answer, 12)[0] == "www.google.com",
@@ -339,6 +362,81 @@ daemon.enforce_apps()
 check(victim.wait(timeout=5) == -signal.SIGKILL, "application bloquée fermée aussitôt")
 usage = lib.load_usage("bob", datetime.date.today())
 check(usage["blocked_apps"].get("exe:jeu.exe") == 1, "tentative notée dans l'activité")
+
+# #815 : une copie renommée d'une application bloquée est reconnue.
+apps_dir = work / "home/bob/Documents"
+apps_dir.mkdir(parents=True)
+name_utf16 = "OriginalFilename".encode("utf-16-le") + b"\0\0"
+# Structure String de VERSIONINFO : en-tête de 6 octets aligné sur 4, clé, valeur alignée.
+game = (b"MZ" + b"\0" * 62 + os.urandom(5000) + struct.pack("<HHH", 52, 8, 1) + name_utf16
+        + "jeu.exe".encode("utf-16-le") + b"\0\0" + os.urandom(3000))
+check(lib.pe_original_name(game) == "jeu.exe", "nom d'origine lu dans la ressource VERSIONINFO")
+check(lib.pe_original_name(b"MZ" + os.urandom(4000)) is None, "pas de VERSIONINFO : pas de nom d'origine")
+(apps_dir / "jeu.exe").write_bytes(game)
+shutil.copy(apps_dir / "jeu.exe", apps_dir / "devoirs.exe")
+(apps_dir / "maths.exe").write_bytes(game.replace(name_utf16, b"X\0" * (len(name_utf16) // 2)))
+shutil.copy(apps_dir / "maths.exe", apps_dir / "calcul.exe")
+(apps_dir / "dessin.exe").write_bytes(game + b"modifie")
+(apps_dir / "lecture.exe").write_bytes(b"MZ" + os.urandom(9000))
+check(lib.app_file(os.getpid(), "/usr/bin/winlux", ["winlux", str(apps_dir / "devoirs.exe")]) == str(apps_dir / "devoirs.exe")
+      and lib.app_file(os.getpid(), "/usr/bin/winlux", ["winlux", "devoirs.exe"]) == os.path.join(os.getcwd(), "devoirs.exe")
+      and lib.app_file(123, "/usr/bin/firefox", ["firefox"]) == "/proc/123/exe", "fichier de l'application d'un processus")
+check(lib.file_sample("/dev/null") is None and lib.file_sample(str(apps_dir)) is None,
+      "empreinte : jamais un périphérique ni un dossier ouvert en root")
+lib.app_of = lambda exe, cmdline: "exe:" + os.path.basename(cmdline[-1]).lower() if cmdline and cmdline[-1].endswith(".exe") else None
+lib.app_file = lambda pid, exe, cmdline: cmdline[-1]
+
+
+def run_as_bob(name):
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(apps_dir / name)])
+    # Attendre la fin de l'exec : avant, /proc/PID/cmdline est encore celui du parent ou vide.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            if name.encode() in Path(f"/proc/{process.pid}/cmdline").read_bytes():
+                break
+        except OSError:
+            pass
+        time.sleep(0.01)
+    lib.pids_of = lambda uids: {process.pid: os.getuid()} if os.getuid() in uids else {}
+    daemon.enforce_apps()
+    try:
+        return process.wait(timeout=1) == -signal.SIGKILL
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        return False
+    finally:
+        lib.pids_of = lambda uids: {}
+        daemon.enforce_apps()
+
+
+check(run_as_bob("devoirs.exe"), "copie renommée d'un .exe bloqué fermée (nom d'origine, #815)")
+check(not run_as_bob("maths.exe"), "programme non bloqué laissé ouvert")
+daemon.configs["bob"]["apps"].append({"id": "exe:maths.exe", "name": "Maths"})
+check(run_as_bob("maths.exe"), "programme bloqué ensuite : fermé par son nom")
+check(run_as_bob("calcul.exe"), "copie renommée sans VERSIONINFO fermée par son empreinte (#815)")
+check(run_as_bob("dessin.exe"), "copie modifiée gardant son nom d'origine fermée (#815)")
+check(not run_as_bob("lecture.exe"), "autre .exe sans rapport laissé ouvert")
+prints_file = work / "var/lib/winlux/parental/bob/fingerprints.json"
+check(prints_file.stat().st_mode & 0o777 == 0o600 and "exe:maths.exe" in prints_file.read_text(),
+      "empreintes gardées par root (0600)")
+usage = lib.load_usage("bob", datetime.date.today())
+check(usage["blocked_apps"].get("exe:maths.exe", 0) >= 2 and "exe:calcul.exe" not in usage["blocked_apps"],
+      "tentative avec une copie notée sous le nom de l'application bloquée")
+fresh = lib.Daemon()
+mark = fresh.sample(str(apps_dir / "calcul.exe"))[0]
+check("exe:maths.exe" in fresh.prints_of("bob").get(mark, []), "empreintes relues au redémarrage du service")
+# Application Linux : empreinte prise sur le programme installé, copie reconnue
+# dès son premier lancement.
+(work / "usr/bin").mkdir(parents=True, exist_ok=True)
+(work / "usr/bin/jeu-linux").write_bytes(b"\x7fELF" + os.urandom(6000))
+(work / "usr/bin/jeu-linux").chmod(0o755)
+shutil.copy(work / "usr/bin/jeu-linux", apps_dir / "devoirs-linux")
+fresh.learn_installed("bob", {"apps": [{"id": "bin:jeu-linux", "name": "Jeu Linux"}]})
+lib.app_file = lambda pid, exe, cmdline: str(apps_dir / "devoirs-linux")
+check(fresh.identify("bob", 99999, "/x", ["devoirs-linux"], "bin:devoirs-linux", {"bin:jeu-linux": "Jeu Linux"})
+      == "bin:jeu-linux", "copie renommée d'une application Linux bloquée reconnue dès le premier lancement")
 lib.app_of, lib.pids_of = real_app_of, real_pids
 
 opened, frozen = [], []
