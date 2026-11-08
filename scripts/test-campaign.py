@@ -610,5 +610,18 @@ ok('"sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
 pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
 ok("if not mic and not output: return" in pages and '"LC_ALL": "C"' not in speech and 'LC_ALL="C"' in speech,
    "voix : section masquée sans micro ni sortie audio ; pactl et parec en locale C")
+# #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
+# en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
+runtime_dlls = ROOT / "runtime/src/dlls"
+ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exists()
+   and (runtime_dlls / "d3d8.rs").exists()
+   and (runtime_dlls / "d3dx9.rs").exists() and (runtime_dlls / "dsound_x86.rs").exists()
+   and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
+   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (ROOT / "runtime/src/audio/synth.rs").exists()
+   and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
+   and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
