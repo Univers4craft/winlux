@@ -1644,15 +1644,20 @@ pub unsafe extern "win64" fn poly_bezier_to(
 // RoundRect
 // =====================================================================
 
+/// RoundRect : `width` et `height` sont la largeur et la hauteur de l'ellipse
+/// des coins (documentation de RoundRect) ; DrawCmd::RoundRect attend des
+/// rayons. Sans la division, les coins étaient deux fois trop ronds et la
+/// case à cocher de FileZilla devenait un disque (#866).
 pub unsafe extern "win64" fn round_rect(
     hdc: usize,
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
-    rx: i32,
-    ry: i32,
+    width: i32,
+    height: i32,
 ) -> i32 {
+    let (rx, ry) = (width.max(0) / 2, height.max(0) / 2);
     let brush = gui::dc_brush(hdc);
     let color = gui::object_color(brush).unwrap_or(0);
     let rect = Rect {
