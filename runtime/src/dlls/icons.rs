@@ -923,7 +923,12 @@ pub fn draw_list_image(himl: usize, i: i32, hdc: usize, x: i32, y: i32, bg: Opti
 }
 
 pub fn create_list(cx: usize, cy: usize, flags: u32) -> usize {
-    let h = gui::next_handle(0x0021_0000);
+    create_list_with(gui::next_handle(0x0021_0000), cx, cy, flags)
+}
+
+/// Liste d'images sous un handle donné (liste système : l'adresse de son
+/// objet IImageList, voir image_list_com.rs).
+pub fn create_list_with(h: usize, cx: usize, cy: usize, flags: u32) -> usize {
     lock(lists()).insert(
         h,
         ImageList {
@@ -1540,12 +1545,20 @@ pub const SYS_TEXT: i32 = 6;
 /// Liste d'images système (une par taille), remplie avec les icônes du
 /// thème Linux : dossier, fichier, disque, archive, programme, image, texte.
 pub fn system_list(small: bool) -> usize {
-    static LISTS: Mutex<[usize; 2]> = Mutex::new([0, 0]);
-    let mut l = lock(&LISTS);
-    let i = small as usize;
-    if l[i] == 0 {
-        let px = system_icon_size(small);
-        let himl = create_list(px, px, 0x20 | ILC_MASK);
+    system_list_px(system_icon_size(small))
+}
+
+/// Liste d'images système d'une taille donnée (SHGetImageList : 16, 32,
+/// 48 ou 256 pixels). Son handle est aussi un objet IImageList, comme sous
+/// Windows où HIMAGELIST et IImageList* sont interchangeables.
+pub fn system_list_px(px: usize) -> usize {
+    static LISTS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+    let mut l = lock(LISTS.get_or_init(|| Mutex::new(HashMap::new())));
+    if let Some(&h) = l.get(&px) {
+        return h;
+    }
+    {
+        let himl = create_list_with(super::image_list_com::new_object(), px, px, 0x20 | ILC_MASK);
         let names: [&[&str]; 7] = [
             &["folder", "inode-directory"],
             &["text-x-generic", "unknown", "application-x-generic"],
@@ -1570,9 +1583,9 @@ pub fn system_list(small: bool) -> usize {
                 .unwrap_or_else(|| system_icon(px));
             list_add(himl, img);
         }
-        l[i] = himl;
+        l.insert(px, himl);
+        himl
     }
-    l[i]
 }
 
 /// Icône de la liste système pour un nom de fichier (ou un dossier).
