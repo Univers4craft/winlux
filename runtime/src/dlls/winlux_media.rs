@@ -19,7 +19,7 @@
 //!   de plantage du shell.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
@@ -766,6 +766,9 @@ pub struct PlayPlan {
     pub hw: Vec<String>,
     /// Sortie audio FFmpeg (`-f <format> <périphérique>`).
     pub audio_out: (String, String),
+    /// Nom présenté au serveur son (`application.name`, #1010) : celui du
+    /// .exe qui lit, pas « Lavf… » de libavformat.
+    pub audio_app: String,
 }
 
 /// Chaîne `atempo` couvrant 0,25× à 4× (chaque étage accepte 0,5 à 2).
@@ -789,9 +792,10 @@ pub fn atempo_chain(speed_pct: u32) -> Vec<String> {
 /// Ligne de commande ffmpeg d'une session de lecture.
 pub fn build_play_args(p: &PlayPlan) -> Vec<String> {
     let speed = p.speed_pct.clamp(25, 400) as f64 / 100.0;
+    // Pas de -nostdin : l'entrée standard (un tube) porte les commandes en
+    // direct (volume, #1013) ; ffmpeg ne la lit pas comme une console.
     let mut a: Vec<String> = [
         "-hide_banner",
-        "-nostdin",
         "-loglevel",
         "error",
         "-nostats",
@@ -859,19 +863,51 @@ pub fn build_play_args(p: &PlayPlan) -> Vec<String> {
     if let Some(index) = p.audio {
         let mut filters = vec!["asetpts=PTS-STARTPTS".to_string()];
         filters.extend(atempo_chain(p.speed_pct));
+        // Filtre nommé « vol » : son volume se règle en direct (#1013).
         filters.push(format!(
-            "volume={:.2}",
+            "volume@vol={:.2}",
             p.volume_pct.min(200) as f64 / 100.0
         ));
         a.push("-map".into());
         a.push(format!("0:{index}"));
         a.push("-af".into());
         a.push(filters.join(","));
+        if p.audio_out.0 == "pulse" && !p.audio_app.is_empty() {
+            // Options du muxer pulse : nom du client et du flux (#1010).
+            a.extend([
+                "-name".into(),
+                p.audio_app.clone(),
+                "-stream_name".into(),
+                p.audio_app.clone(),
+            ]);
+        }
         a.push("-f".into());
         a.push(p.audio_out.0.clone());
         a.push(p.audio_out.1.clone());
     }
     a
+}
+
+/// Propriétés du flux audio d'un FFmpeg auxiliaire (#1010) : libpulse lit
+/// PULSE_PROP (application.process.binary, que `-name` ne règle pas), le
+/// greffon ALSA de PipeWire lit PIPEWIRE_PROPS.
+pub fn audio_env(app: &str, binary: &str) -> Vec<(String, String)> {
+    let clean = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_control() && !matches!(c, '"' | '\'' | '\\' | '{' | '}'))
+            .collect()
+    };
+    let (app, binary) = (clean(app), clean(binary));
+    vec![
+        (
+            "PULSE_PROP".into(),
+            format!("application.name='{app}' application.process.binary='{binary}'"),
+        ),
+        (
+            "PIPEWIRE_PROPS".into(),
+            format!("{{ application.name=\"{app}\" application.process.binary=\"{binary}\" node.description=\"{app}\" }}"),
+        ),
+    ]
 }
 
 fn audio_output() -> Option<(String, String)> {
@@ -985,7 +1021,23 @@ struct Shared {
     audio_active: AtomicBool,
     frames: AtomicU64,
     error: Mutex<String>,
+    /// Entrée standard du ffmpeg en cours : commandes en direct (#1013).
+    stdin: Mutex<Option<std::process::ChildStdin>>,
+    /// Lecture suspendue (SIGSTOP) : le flux audio reste ouvert.
+    paused: AtomicBool,
+    /// Volume réglé en direct depuis l'ouverture (u32::MAX : jamais).
+    live_volume: AtomicU32,
 }
+
+/// Commande ffmpeg (touche « c » puis une ligne) qui règle le filtre
+/// `volume@vol` sans relancer la lecture.
+pub fn volume_command(pct: u32) -> String {
+    format!("cvolume@vol -1 volume {:.2}\n", pct.min(200) as f64 / 100.0)
+}
+
+/// Commandes de `WinluxMediaControl`.
+pub const CONTROL_PAUSE: u32 = 1;
+pub const CONTROL_VOLUME: u32 = 2;
 
 struct Session {
     shared: Arc<Shared>,
@@ -1007,7 +1059,7 @@ impl Session {
             .map(|t| t.elapsed().as_millis().min(250) as u64)
             .unwrap_or(0);
         let status = s.status.load(Ordering::Relaxed);
-        let played = if status == 1 {
+        let played = if status == 1 && !s.paused.load(Ordering::Relaxed) {
             out_us / 1000 + extra_ms
         } else {
             out_us / 1000
@@ -1024,6 +1076,56 @@ impl Session {
             reserved: 0,
         }
     }
+    /// Pause, reprise ou volume sans fermer le flux audio (#1013) : 1 si
+    /// appliqué en direct, 0 si l'appelant doit relancer la lecture.
+    fn control(&self, cmd: u32, value: u32) -> i32 {
+        let s = &self.shared;
+        let pid = s.pid.load(Ordering::SeqCst);
+        if pid <= 0 || s.stop.load(Ordering::SeqCst) {
+            return 0;
+        }
+        match cmd {
+            CONTROL_PAUSE => {
+                // Sans son, rien ne cadence ffmpeg à la reprise (-readrate
+                // rattraperait la pause) : l'appelant relance.
+                if !s.audio_active.load(Ordering::Relaxed) {
+                    return 0;
+                }
+                let pause = value != 0;
+                if pause == s.paused.load(Ordering::SeqCst) {
+                    return 1;
+                }
+                let sig = if pause { libc::SIGSTOP } else { libc::SIGCONT };
+                if unsafe { libc::kill(pid, sig) } != 0 {
+                    return 0;
+                }
+                s.paused.store(pause, Ordering::SeqCst);
+                if let Ok(mut g) = s.progress_at.lock() {
+                    *g = Some(Instant::now());
+                }
+                1
+            }
+            CONTROL_VOLUME => {
+                let Ok(mut guard) = s.stdin.lock() else {
+                    return 0;
+                };
+                let Some(stdin) = guard.as_mut() else {
+                    return 0;
+                };
+                if stdin
+                    .write_all(volume_command(value).as_bytes())
+                    .and_then(|_| stdin.flush())
+                    .is_err()
+                {
+                    return 0;
+                }
+                s.live_volume.store(value.min(200), Ordering::SeqCst);
+                1
+            }
+            _ => 0,
+        }
+    }
+
     fn close(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         let pid = self.shared.pid.load(Ordering::SeqCst);
@@ -1053,9 +1155,13 @@ struct Attempt {
 
 fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>) -> bool {
     let mut cmd = Command::new(ffmpeg);
+    cmd.envs(audio_env(
+        &crate::audio::backend::app_name(),
+        &crate::audio::backend::process_binary(),
+    ));
     die_with_parent(&mut cmd)
         .args(&at.args)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(if frame_size > 0 {
             Stdio::piped()
         } else {
@@ -1070,6 +1176,17 @@ fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>)
         let _ = child.kill();
         let _ = child.wait();
         return true;
+    }
+    sh.paused.store(false, Ordering::SeqCst);
+    if let Some(mut stdin) = child.stdin.take() {
+        // Essai de repli après un réglage en direct : même volume.
+        let live = sh.live_volume.load(Ordering::SeqCst);
+        if live != u32::MAX {
+            let _ = stdin.write_all(volume_command(live).as_bytes());
+        }
+        if let Ok(mut g) = sh.stdin.lock() {
+            *g = Some(stdin);
+        }
     }
     let started = Arc::new(AtomicBool::new(false));
     let stderr = child.stderr.take();
@@ -1117,6 +1234,9 @@ fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>)
     });
     let status = child.wait();
     sh.pid.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = sh.stdin.lock() {
+        *g = None;
+    }
     let _ = err_thread.join();
     if let Some(r) = reader {
         let _ = r.join();
@@ -1223,6 +1343,7 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
         subtitle,
         hw: Vec::new(),
         audio_out: ("alsa".into(), "default".into()),
+        audio_app: crate::audio::backend::app_name(),
     };
     let hw = if o.flags & 2 == 0 && video.is_some() {
         c.hw_args(&hw_policy())
@@ -1265,6 +1386,9 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
         audio_active: AtomicBool::new(false),
         frames: AtomicU64::new(0),
         error: Mutex::new(String::new()),
+        stdin: Mutex::new(None),
+        paused: AtomicBool::new(false),
+        live_volume: AtomicU32::new(u32::MAX),
     });
     let sh = shared.clone();
     let supervisor = std::thread::Builder::new()
@@ -1685,6 +1809,13 @@ pub unsafe extern "win64" fn winlux_media_error(h: usize, out: *mut u8, cap: u32
     copy_out(&msg, out, cap)
 }
 
+/// Pause (cmd 1, valeur 1/0) ou volume (cmd 2, 0 à 200 %) sans relancer la
+/// lecture (#1013) : 1 si appliqué, 0 si l'appelant doit rouvrir la session.
+pub unsafe extern "win64" fn winlux_media_control(h: usize, cmd: u32, value: u32) -> i32 {
+    let Ok(m) = sessions().lock() else { return 0 };
+    m.get(&h).map(|s| s.control(cmd, value)).unwrap_or(0)
+}
+
 pub unsafe extern "win64" fn winlux_media_close(h: usize) -> i32 {
     let s = sessions().lock().ok().and_then(|mut m| m.remove(&h));
     match s {
@@ -1846,6 +1977,7 @@ pub fn exports() -> crate::dlls::Exports {
         "WinluxMediaFrame" => fn winlux_media_frame,
         "WinluxMediaError" => fn winlux_media_error,
         "WinluxMediaClose" => fn winlux_media_close,
+        "WinluxMediaControl" => fn winlux_media_control,
         "WinluxMediaThumbnail" => fn winlux_media_thumbnail,
         "WinluxMediaPreview" => fn winlux_media_preview,
         "WinluxMediaGetResume" => fn winlux_media_get_resume,
@@ -2018,6 +2150,7 @@ format.tags.title="Film"
             },
             hw: vec!["-hwaccel".into(), "vaapi".into()],
             audio_out: ("pulse".into(), "default".into()),
+            audio_app: "Lecteur multimédia".into(),
         };
         let a = build_play_args(&plan);
         let joined = a.join(" ");
@@ -2026,8 +2159,25 @@ format.tags.title="Film"
         assert!(joined.contains("setpts=(PTS-STARTPTS)/1.5000,scale=w=1280:h=720"));
         assert!(joined.contains("-map [vout] -f rawvideo -pix_fmt bgra pipe:1"));
         assert!(joined.contains(
-            "-map 0:2 -af asetpts=PTS-STARTPTS,atempo=1.5000,volume=0.80 -f pulse default"
+            "-map 0:2 -af asetpts=PTS-STARTPTS,atempo=1.5000,volume@vol=0.80 -name Lecteur multimédia -stream_name Lecteur multimédia -f pulse default"
         ));
+        // #1010 : le flux porte le nom du lecteur, pas « Lavf… » ; option
+        // propre au muxer pulse, jamais passée à ALSA.
+        let name_at = a.iter().position(|x| x == "-name").expect("-name absent");
+        assert_eq!(a[name_at + 1], "Lecteur multimédia");
+        let alsa = PlayPlan {
+            audio_out: ("alsa".into(), "default".into()),
+            ..plan.clone()
+        };
+        assert!(!build_play_args(&alsa).contains(&"-name".to_string()));
+        let env = audio_env("Lecteur multimédia", "mediaplayer.exe");
+        assert!(env.iter().any(|(k, v)| k == "PULSE_PROP"
+            && v.contains("application.process.binary='mediaplayer.exe'")
+            && v.contains("application.name='Lecteur multimédia'")));
+        assert!(env.iter().any(|(k, v)| k == "PIPEWIRE_PROPS"
+            && v.contains("application.process.binary=\"mediaplayer.exe\"")));
+        let hostile = audio_env("a'b\"c{d}", "x.exe");
+        assert!(hostile[0].1.contains("application.name='abcd'"));
 
         let audio_only = PlayPlan {
             video: None,
@@ -2050,6 +2200,77 @@ format.tags.title="Film"
         };
         let joined = build_play_args(&text_sub).join(" ");
         assert!(joined.contains("[0:0]subtitles=filename=/v/film.mkv:si=0,setpts"));
+    }
+
+    #[test]
+    fn volume_en_direct_sans_relancer() {
+        // #1013 : la commande que ffmpeg lit sur son entrée standard.
+        assert_eq!(volume_command(35), "cvolume@vol -1 volume 0.35\n");
+        assert_eq!(volume_command(900), "cvolume@vol -1 volume 2.00\n");
+        let plan = PlayPlan {
+            input: "/v/a.mp3".into(),
+            start_ms: 0,
+            video: None,
+            audio: Some(0),
+            volume_pct: 100,
+            speed_pct: 100,
+            subtitle: Subtitle::None,
+            hw: Vec::new(),
+            audio_out: ("pulse".into(), "default".into()),
+            audio_app: "Lecteur multimédia".into(),
+        };
+        let a = build_play_args(&plan);
+        assert!(
+            !a.iter().any(|x| x == "-nostdin"),
+            "l'entrée standard doit rester lisible"
+        );
+        assert!(a.iter().any(|x| x.contains("volume@vol=1.00")));
+        // Avec un vrai ffmpeg : le volume change en cours de lecture, sans
+        // nouveau processus (le son passe de pleine échelle à 10 %).
+        let Some(ff) = find_tool("ffmpeg") else {
+            return;
+        };
+        let out = std::env::temp_dir().join(format!("winlux-vol-{}.wav", std::process::id()));
+        let mut child = Command::new(ff)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-re",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=440:duration=2")
+            .args(["-af", "volume@vol=1.00", "-y"])
+            .arg(&out)
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("ffmpeg");
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(volume_command(10).as_bytes()).unwrap();
+        stdin.flush().unwrap();
+        assert!(child.wait().unwrap().success());
+        let wav = std::fs::read(&out).unwrap();
+        let _ = std::fs::remove_file(&out);
+        let samples: Vec<i16> = wav[44..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let peak = |from: usize| {
+            samples[from..from + 4410]
+                .iter()
+                .map(|v| v.unsigned_abs())
+                .max()
+                .unwrap()
+        };
+        let (before, after) = (peak(44_100 / 5), peak(44_100 * 3 / 2));
+        assert!(
+            after * 5 < before,
+            "volume non appliqué en direct : {before} puis {after}"
+        );
     }
 
     #[test]

@@ -947,7 +947,27 @@ impl Hits {
             self.ids[self.n] = id;
             self.n += 1;
         }
+        // Toute zone cliquable est aussi atteignable par Tab (#28), sauf le
+        // voile des boîtes de dialogue.
+        if id != 0xFFFF {
+            unsafe { focus_zone(&r) };
+        }
         inside(&r, self.mx, self.my)
+    }
+    /// Ligne de liste : cliquable, mais pas un arrêt de tabulation (la liste
+    /// se parcourt aux flèches, comme sous un vrai contrôle liste).
+    pub fn row(&mut self, r: Rect, id: u16) -> bool {
+        if self.n < MAX_HITS {
+            self.rects[self.n] = r;
+            self.ids[self.n] = id;
+            self.n += 1;
+        }
+        inside(&r, self.mx, self.my)
+    }
+    /// Fond d'un menu ou d'une boîte modale : Tab reste dans ce qui suit.
+    pub fn modal(&mut self, r: Rect, id: u16) -> bool {
+        unsafe { focus_modal() };
+        self.row(r, id)
     }
     /// Zone sous le point (la dernière dessinée l'emporte).
     pub fn find(&self, x: i32, y: i32) -> Option<u16> {
@@ -1226,6 +1246,9 @@ pub unsafe fn button(
 ) {
     let p = pal();
     let hover = h.add(r, id) && enabled;
+    if !enabled {
+        focus_unzone(&r);
+    }
     if primary && enabled {
         let c = if hover {
             mix(p.accent, p.text, 1, 8)
@@ -1327,6 +1350,7 @@ pub unsafe fn input(
 ) {
     let p = pal();
     h.add(r, id);
+    focus_field(&r);
     panel(
         g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.surface, p.border,
     );
@@ -1429,8 +1453,9 @@ pub unsafe fn nav_item(
 /// Carte de boîte de dialogue centrée sur la zone cliente.
 pub unsafe fn dialog(g: &mut Gfx, h: &mut Hits, c: &Rect, w: i32, ht: i32, title: &[u8]) -> Rect {
     let p = pal();
-    // Voile : un clic hors de la carte ne traverse pas.
+    // Voile : un clic hors de la carte ne traverse pas, Tab non plus.
     h.add(*c, 0xFFFF);
+    focus_modal();
     let veil = mix(p.window, p.shadow, 4, 10);
     fill(g.hdc, g.b, c.left, c.top, c.right, c.bottom, veil);
     let w = w.min(c.right - c.left - 24);

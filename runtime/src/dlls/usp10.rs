@@ -520,17 +520,6 @@ unsafe extern "win64" fn get_outline_text_metrics_w(hdc: usize, size: u32, out: 
     n as u32
 }
 
-/// SetDIBColorTable : l'affichage est en couleurs vraies ; la palette d'une
-/// DIB à 8 bits n'est pas encore appliquée au rendu.
-extern "win64" fn set_dib_color_table(
-    _hdc: usize,
-    _start: u32,
-    count: u32,
-    _rgb: *const u8,
-) -> u32 {
-    count
-}
-
 // ── Uniscribe ───────────────────────────────────────────────────────────
 
 /// SCRIPT_CACHE : un numéro qui retient la police résolue.
@@ -1092,7 +1081,6 @@ pub fn gdi32_exports() -> crate::dlls::Exports {
         "GetFontLanguageInfo" => fn get_font_language_info,
         "GetGlyphIndicesW" => fn get_glyph_indices_w,
         "GetGlyphOutlineW" => fn get_glyph_outline_w,
-        "SetDIBColorTable" => fn set_dib_color_table,
     }
 }
 

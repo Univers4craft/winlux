@@ -29,6 +29,17 @@ deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
 blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
 `scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
 
+Depuis la deuxième partie de #269, un thread se suspend (`SuspendThread`,
+`ResumeThread` avec le compteur de Windows) et son contexte se lit et se
+modifie pendant qu'il est arrêté (`GetThreadContext`, `SetThreadContext`,
+`runtime/src/dlls/thread_ctl.rs`, test `scripts/test-thread-control.sh`).
+C'est ce que fait le ramasse-miettes de coreclr : les applis .NET
+autonomes (vérifié avec .NET 8), console et WinForms, tournent (exceptions managées, fenêtre,
+minuteur, fermeture, message clair sur une exception non gérée). `MEM_WRITE_WATCH` et
+`GetWriteWatch` suivent les pages écrites par le bit soft-dirty du noyau
+(#965). `QueueUserAPC2` reste absente, comme dans Windows 10 22H2. WPF a
+son propre chantier (#268).
+
 Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
 par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
 empreintes du block map vérifiées avant toute écriture, installation dans
@@ -210,7 +221,7 @@ Limites honnêtes de la mesure :
 | Fenêtres et GDI (`user32`, `gdi32`) | 287 + 154 fonctions, backend X11, Xft | rectangles, icônes, fenêtres en couches, régions, chemins GDI, transformations, entrée brute, écrans |
 | Contrôles et shell | `comctl32` (19), `shell32` (19), `comdlg32` (7), `uxtheme` | ListView/TreeView complets, `SHFileOperation`, `SHGetFileInfo`, dialogues fichiers W |
 | COM/OLE | appartements, `IStream`, fabriques en processus | activation depuis le registre, hors processus, automatisation (#16) |
-| .NET | CLR maison (interpréteur CIL) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) |
+| .NET | CLR maison (interpréteur CIL, DLL .NET privées de l'appli chargées depuis #926) ; coreclr embarqué par l'appli lancé tel quel | génériques BCL, délégués, LINQ, WinForms, WPF (#22, #138) ; plan en 9 étapes dans [compat/dotnet-framework.md](compat/dotnet-framework.md) |
 | Direct3D | D3D8 (traduit sur D3D9), D3D9 (shaders SM1–3 traduits, programmes 32 et 64 bits), D3DX9 (`d3dx9_24` à `d3dx9_43` : maths, textures, sprites, polices, assembleur de shaders, table des constantes, maillages `.x` et `ID3DXMesh`, compilation HLSL vers vs/ps 2.0 et 3.0, effets `.fx` en texte), D3D11/12 sur GL/Vulkan, DirectDraw 1–7, DXGI, DXVA2 H.264 | shaders DXBC/DXIL (#137), D3D10, effets D3DX déjà compilés (fx_2_0 binaire), `d3dcompiler_47` |
 | 2D et images | Direct2D, DirectWrite, WIC (COM) | GDI+ (`gdiplus.dll`), `msimg32`, Uniscribe (`usp10`) |
 | OpenGL / Vulkan | uniquement en interne (backends de D3D) | `opengl32.dll` + WGL, `vulkan-1.dll` pour les applis |

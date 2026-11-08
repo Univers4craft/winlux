@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod abslots;
 mod admin;
 mod archive;
 mod audio;
@@ -122,6 +123,10 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
     }
+    if exe == "--ab-boot" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(abslots::cli(&rest));
+    }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(bootsplash::cli(&rest));
@@ -207,6 +212,9 @@ fn main() {
     if exe.as_os_str() == "--msi-dll-action" {
         msi_dll_action(&rest);
     }
+    if exe.as_os_str() == "--msi-script-action" {
+        msi_script_action(&rest);
+    }
     if exe.as_os_str() == "--setup" {
         std::process::exit(setup::cli(&rest));
     }
@@ -217,7 +225,8 @@ fn main() {
     }
     // Variables d'environnement Windows écrites par les installateurs.
     msi::extra::apply_registry_environment();
-    let source = match std::fs::read(&exe) {
+    // Projeté plutôt que lu : rien n'est copié en mémoire (#997).
+    let source = match loader::ImageFile::open(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("winlux: lecture impossible de {} : {error}", exe.display());
@@ -247,7 +256,15 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let code = clr::execute_assembly(&assembly);
+        let app_dir = std::fs::canonicalize(&exe)
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
+        // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
+        if process::teb() == 0 {
+            process::init_thread();
+        }
+        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),
@@ -257,6 +274,9 @@ fn main() {
             wow32::init(pe.characteristics & 0x0020 != 0);
         }
     }
+    // La copie lue du fichier ne sert plus : sans ce drop, elle restait en
+    // mémoire toute la vie du programme (300 Mo pour claude.exe, #997).
+    drop(source);
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {
@@ -381,6 +401,21 @@ fn msi_dll_action(args: &[String]) -> ! {
     dlls::kernel32::init();
     process::init_process(&image, &[]);
     process::run_dll_export(image, export, msi::session::SESSION_HANDLE)
+}
+
+/// `winlux --msi-script-action LANGAGE FICHIER [FONCTION]` : action
+/// personnalisée VBScript ou JScript d'un paquet MSI (#973), avec l'objet
+/// Session ; le code Windows Installer revient par le fichier de session.
+fn msi_script_action(args: &[String]) -> ! {
+    let (Some(lang), Some(file)) = (args.first(), args.get(1)) else {
+        eprintln!("usage : winlux --msi-script-action JScript|VBScript FICHIER [FONCTION]");
+        std::process::exit(1639);
+    };
+    paths::install_windows_env();
+    let function = args.get(2).map(String::as_str).unwrap_or("");
+    let code = msi::script::msi_action(lang, file, function);
+    msi::session::save(code);
+    std::process::exit(code as i32)
 }
 
 /// Vrai si le fichier existe et commence par la signature MZ d'un PE.

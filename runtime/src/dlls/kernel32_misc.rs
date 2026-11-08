@@ -235,11 +235,11 @@ pub extern "win64" fn set_console_text_attribute(h: usize, _attr: u16) -> i32 {
 // ---------- Pages de code ----------
 
 // GetACP, GetOEMCP, IsValidCodePage, GetCPInfo : voir crate::intl::api.
-pub extern "win64" fn is_dbcs_lead_byte(_b: u8) -> i32 {
-    0
+pub extern "win64" fn is_dbcs_lead_byte(b: u8) -> i32 {
+    is_dbcs_lead_byte_ex(0, b)
 }
-pub extern "win64" fn is_dbcs_lead_byte_ex(_cp: u32, _b: u8) -> i32 {
-    0
+pub extern "win64" fn is_dbcs_lead_byte_ex(cp: u32, b: u8) -> i32 {
+    crate::intl::dbcs::is_lead_byte(crate::intl::codepage::resolve(cp), b) as i32
 }
 // ---------- Environnement en un bloc ----------
 

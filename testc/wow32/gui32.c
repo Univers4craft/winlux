@@ -101,6 +101,7 @@ __declspec(dllimport) BOOL WINAPI Rectangle(HDC, int, int, int, int);
 __declspec(dllimport) COLORREF WINAPI SetTextColor(HDC, COLORREF);
 __declspec(dllimport) int WINAPI SetBkMode(HDC, int);
 __declspec(dllimport) HDC WINAPI CreateCompatibleDC(HDC);
+__declspec(dllimport) HBITMAP WINAPI CreateCompatibleBitmap(HDC, int, int);
 __declspec(dllimport) BOOL WINAPI DeleteDC(HDC);
 __declspec(dllimport) HBITMAP WINAPI CreateDIBSection(HDC, const void *, UINT, void **, HANDLE, DWORD);
 __declspec(dllimport) int WINAPI GetObjectA(HGDIOBJ, int, void *);
@@ -412,6 +413,23 @@ void __stdcall entry(void) {
     HBITMAP copy = CreateDIBSection(mem, &ds.dsBmih, 0, &bits2, 0, 0);
     CHECK(59, copy != 0 && bits2 != 0, copy);
     DeleteObject(copy);
+    /* 48 : taille nulle → bitmap 1x1 (documentation de
+     * CreateCompatibleBitmap) ; la VCL en crée une pour chaque TBitmap
+     * vide (listes d'images de WinSCP, #905). */
+    HBITMAP empty = CreateCompatibleBitmap(mem, 0, 0);
+    BITMAP eb = {0};
+    CHECK(48, empty != 0 && GetObjectA(empty, sizeof eb, &eb) == sizeof eb && eb.bmWidth == 1 &&
+                  eb.bmHeight == 1,
+          empty);
+    DeleteObject(empty);
+    /* 49 : DIB 16x16 en 1 bit par pixel avec sa palette (masques des
+     * listes d'images de la VCL, #905). */
+    struct { BITMAPINFOHEADER h; DWORD colors[2]; } mono = {
+        {sizeof(BITMAPINFOHEADER), 16, -16, 1, 1, 0, 0, 0, 0, 0, 0}, {0, 0xFFFFFF}};
+    void *mbits = 0;
+    HBITMAP mask = CreateDIBSection(mem, &mono, 0, &mbits, 0, 0);
+    CHECK(49, mask != 0 && mbits != 0, mask);
+    DeleteObject(mask);
     DeleteObject(red);
     DeleteDC(mem);
     DeleteObject(bmp);

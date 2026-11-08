@@ -62,7 +62,7 @@ _TR = {
     'Réseaux Wi-Fi disponibles': ('Available Wi-Fi networks', 'Redes Wi-Fi disponibles', 'Verfügbare WLAN-Netzwerke'),
     'Réseaux Wi-Fi…': ('Wi-Fi networks…', 'Redes Wi-Fi…', 'WLAN-Netzwerke…'),
     'Paramètres réseau…': ('Network settings…', 'Configuración de red…', 'Netzwerkeinstellungen…'),
-    'Bluetooth et appareils…': ('Bluetooth and devices…', 'Bluetooth y dispositivos…', 'Bluetooth und Geräte…'),
+    'Bluetooth et appareils…': ('Bluetooth & devices…', 'Bluetooth y dispositivos…', 'Bluetooth und Geräte…'),
     'Actualiser la recherche Wi-Fi': ('Refresh Wi-Fi search', 'Actualizar la búsqueda Wi-Fi', 'WLAN-Suche aktualisieren'),
     'État des cartes Ethernet et Wi-Fi': ('Ethernet and Wi-Fi adapter status', 'Estado de las tarjetas Ethernet y Wi-Fi', 'Status der Ethernet- und WLAN-Adapter'),
     'Wi-Fi : activer': ('Wi-Fi: turn on', 'Wi-Fi: activar', 'WLAN: einschalten'),

@@ -24,6 +24,10 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+/// IDWriteFactory1/2 et police de repli du système (#672).
+#[path = "dwrite_fallback.rs"]
+pub(crate) mod fallback;
+
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const DWRITE_E_FILEFORMAT: i32 = 0x8898_5000u32 as i32;
 const DWRITE_E_FILENOTFOUND: i32 = 0x8898_5003u32 as i32;
@@ -441,7 +445,16 @@ unsafe extern "win64" fn factory_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_DWRITE_FACTORY])
+    qi_list(
+        this,
+        riid,
+        out,
+        &[
+            IID_DWRITE_FACTORY,
+            fallback::IID_DWRITE_FACTORY1,
+            fallback::IID_DWRITE_FACTORY2,
+        ],
+    )
 }
 
 unsafe extern "win64" fn system_collection(
@@ -629,7 +642,8 @@ unsafe extern "win64" fn gdi_compatible_layout(
     create_text_layout(this, text, len, format, max_w, max_h, out)
 }
 
-static FACTORY_VT: VTable<24> = VTable([
+// IDWriteFactory, puis IDWriteFactory1 (24-25) et IDWriteFactory2 (26-30).
+static FACTORY_VT: VTable<31> = VTable([
     factory_qi as *const (),
     add_ref::<()> as *const (),
     release::<()> as *const (),
@@ -654,6 +668,13 @@ static FACTORY_VT: VTable<24> = VTable([
     super::dwrite_analyzer::create_text_analyzer as *const (), // CreateTextAnalyzer
     super::dwrite_analyzer::create_number_substitution as *const (), // CreateNumberSubstitution
     super::dwrite_glyphs::create_glyph_run_analysis as *const (), // CreateGlyphRunAnalysis
+    fallback::eudc_collection as *const (), // IDWriteFactory1::GetEudcFontCollection
+    fallback::custom_params1 as *const (), // IDWriteFactory1::CreateCustomRenderingParams
+    fallback::system_fallback as *const (), // IDWriteFactory2::GetSystemFontFallback
+    fallback::fallback_builder as *const (), // IDWriteFactory2::CreateFontFallbackBuilder
+    fallback::translate_color as *const (), // IDWriteFactory2::TranslateColorGlyphRun
+    fallback::custom_params2 as *const (), // IDWriteFactory2::CreateCustomRenderingParams
+    fallback::glyph_run_analysis2 as *const (), // IDWriteFactory2::CreateGlyphRunAnalysis
 ]);
 
 // Paramètres de rendu : valeurs par défaut de Windows.

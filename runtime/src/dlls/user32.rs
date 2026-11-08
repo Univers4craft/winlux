@@ -362,6 +362,10 @@ unsafe fn create_window_common(
         forget_window_longs(hwnd);
         return 0;
     }
+    // Procédure actuelle de la fenêtre, pas celle de la classe : WinForms
+    // sous-classe la fenêtre (SetWindowLongPtr(GWLP_WNDPROC)) dès le
+    // premier message et refuse d'en recevoir un second par la procédure de
+    // classe (« Le handle de fenêtre existe déjà », #666).
     let created = crate::dlls::gui::call_wndproc(
         current_proc(),
         hwnd,
@@ -512,6 +516,14 @@ unsafe fn write_msg(out: *mut Msg, m: &Msg) {
 }
 
 pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
+    let r = get_message_inner(out, hwnd, min, max);
+    // GetMessage retire toujours le message : les crochets WH_GETMESSAGE le
+    // voient avec PM_REMOVE, y compris WM_QUIT.
+    call_get_message_hooks(out, PM_REMOVE);
+    r
+}
+
+unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
         super::ws2_32::pump_async();
@@ -593,6 +605,14 @@ pub unsafe extern "win64" fn peek_message_a(
     max: u32,
     remove: u32,
 ) -> i32 {
+    let r = peek_message_inner(out, hwnd, min, max, remove);
+    if r != 0 {
+        call_get_message_hooks(out, (remove & PM_REMOVE as u32) as usize);
+    }
+    r
+}
+
+unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
     gui::pump_backend();
     super::ws2_32::pump_async();
     let q = gui::current_queue();
@@ -624,11 +644,14 @@ pub unsafe extern "win64" fn peek_message_a(
     // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
     // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
     // vide sa file par PeekMessage tournerait sans fin (PuTTY).
-    if remove & 0x1 != 0 {
-        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
-            write_msg(out, &m);
-            return 1;
-        }
+    let timer = if remove & 0x1 != 0 {
+        gui::due_timer(hwnd, min, max, false)
+    } else {
+        gui::peek_due_timer(hwnd, min, max)
+    };
+    if let Some(m) = timer {
+        write_msg(out, &m);
+        return 1;
     }
     0
 }
@@ -2696,28 +2719,102 @@ pub extern "win64" fn set_foreground_window(hwnd: usize) -> i32 {
 // Hooks stubs
 // =====================================================================
 
+const WH_GETMESSAGE: i32 = 3;
+const PM_REMOVE: usize = 1;
+
+/// Crochet installé par SetWindowsHookEx. Seul WH_GETMESSAGE est appelé :
+/// Qt 5 y relance la livraison de ses événements différés (clics, touches,
+/// repeints) ; sans lui, une fenêtre Qt s'affiche mais ne réagit plus (#938).
+#[derive(Clone, Copy)]
+struct Hook {
+    handle: usize,
+    id: i32,
+    proc_: usize,
+    /// Fil visé ; 0 : tous les fils du processus.
+    thread: u32,
+}
+
+fn hooks() -> &'static Mutex<Vec<Hook>> {
+    static H: OnceLock<Mutex<Vec<Hook>>> = OnceLock::new();
+    H.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+thread_local! {
+    /// Crochet en cours d'exécution sur ce fil : CallNextHookEx part de lui.
+    static CURRENT_HOOK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub unsafe extern "win64" fn set_windows_hook_ex_a(
-    _id: i32,
-    _proc: usize,
+    id: i32,
+    proc_: usize,
     _module: usize,
-    _thread: u32,
+    thread: u32,
 ) -> usize {
-    // Handle de hook factice
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00F0_0000);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    let handle = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if id == WH_GETMESSAGE && proc_ != 0 {
+        // Le plus récent passe en premier, comme sous Windows.
+        hooks().lock().unwrap_or_else(|e| e.into_inner()).insert(
+            0,
+            Hook {
+                handle,
+                id,
+                proc_,
+                thread,
+            },
+        );
+    }
+    handle
 }
 
 pub unsafe extern "win64" fn set_windows_hook_ex_w(
-    _id: i32,
-    _proc: usize,
-    _module: usize,
-    _thread: u32,
+    id: i32,
+    proc_: usize,
+    module: usize,
+    thread: u32,
 ) -> usize {
-    set_windows_hook_ex_a(_id, _proc, _module, _thread)
+    set_windows_hook_ex_a(id, proc_, module, thread)
 }
 
-pub extern "win64" fn unhook_windows_hook_ex(_hook: usize) -> i32 {
+pub extern "win64" fn unhook_windows_hook_ex(hook: usize) -> i32 {
+    hooks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|h| h.handle != hook);
     1
+}
+
+/// Crochet de type `id` qui suit `after` (0 : le premier) pour ce fil.
+fn next_hook(id: i32, after: usize) -> Option<Hook> {
+    let tid = super::kernel32::get_current_thread_id();
+    let list = hooks().lock().unwrap_or_else(|e| e.into_inner());
+    let mine = list
+        .iter()
+        .filter(|h| h.id == id && (h.thread == 0 || h.thread == tid));
+    if after == 0 {
+        return mine.copied().next();
+    }
+    mine.skip_while(|h| h.handle != after).nth(1).copied()
+}
+
+unsafe fn run_hook(h: Hook, code: i32, wparam: usize, lparam: isize) -> isize {
+    let f: extern "win64" fn(i32, usize, isize) -> isize = std::mem::transmute(h.proc_);
+    let prev = CURRENT_HOOK.with(|c| c.replace(h.handle));
+    let r = f(code, wparam, lparam);
+    CURRENT_HOOK.with(|c| c.set(prev));
+    r
+}
+
+/// Passe le message que GetMessage/PeekMessage va rendre aux crochets
+/// WH_GETMESSAGE du fil (HC_ACTION, wParam = PM_REMOVE ou PM_NOREMOVE).
+/// Le crochet peut modifier le MSG en place.
+unsafe fn call_get_message_hooks(msg: *mut Msg, remove: usize) {
+    if msg.is_null() {
+        return;
+    }
+    if let Some(h) = next_hook(WH_GETMESSAGE, 0) {
+        run_hook(h, 0, remove, msg as isize);
+    }
 }
 
 pub unsafe extern "win64" fn call_next_hook_ex(
@@ -2726,8 +2823,22 @@ pub unsafe extern "win64" fn call_next_hook_ex(
     wparam: usize,
     lparam: isize,
 ) -> isize {
-    let _ = (code, wparam, lparam);
-    0
+    // Le paramètre hhk est ignoré par Windows : la chaîne repart du crochet
+    // en cours d'exécution sur ce fil.
+    let current = CURRENT_HOOK.with(|c| c.get());
+    if current == 0 {
+        return 0;
+    }
+    let id = hooks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|h| h.handle == current)
+        .map(|h| h.id);
+    match id.and_then(|id| next_hook(id, current)) {
+        Some(h) => run_hook(h, code, wparam, lparam),
+        None => 0,
+    }
 }
 
 // =====================================================================
@@ -2987,8 +3098,31 @@ pub extern "win64" fn in_send_message() -> i32 {
     0
 }
 
+/// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
+/// minuteur soit disponible. Répondre tout de suite faisait tourner à 100 %
+/// la boucle `PeekMessage(PM_NOREMOVE)` / `WaitMessage` de WinForms.
 pub extern "win64" fn wait_message() -> i32 {
-    1
+    loop {
+        gui::pump_backend();
+        super::ws2_32::pump_async();
+        let q = gui::current_queue();
+        if gui::peek_message(&q, 0, 0, 0).is_some()
+            || gui::pending_paint(0, 0, 0).is_some()
+            || gui::peek_due_timer(0, 0, 0).is_some()
+        {
+            return 1;
+        }
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(0).map_or(cap, |ms| ms.min(cap));
+        if !gui::wait_backend(wait) {
+            // Sans affichage, rien ne viendra : rendre la main.
+            return 1;
+        }
+    }
 }
 
 pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
@@ -4076,5 +4210,84 @@ mod tests_messages {
             );
             assert_eq!(call_window_proc(0, 1, 2, 3, 4), 0);
         }
+    }
+
+    thread_local! {
+        static VUS: std::cell::RefCell<Vec<(usize, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "win64" fn crochet(code: i32, w: usize, l: isize) -> isize {
+        let m = &mut *(l as *mut Msg);
+        VUS.with(|v| v.borrow_mut().push((w, m.message)));
+        m.wparam = 77; // un crochet peut modifier le MSG
+        call_next_hook_ex(0, code, w, l)
+    }
+
+    unsafe extern "win64" fn crochet_suivant(_code: i32, w: usize, _l: isize) -> isize {
+        VUS.with(|v| v.borrow_mut().push((w, 0xFFFF)));
+        0
+    }
+
+    #[test]
+    fn crochet_getmessage_voit_chaque_message_retire() {
+        // Qt 5 relance ses événements différés depuis ce crochet (#938).
+        unsafe {
+            let tid = crate::dlls::kernel32::get_current_thread_id();
+            let q = gui::current_queue();
+            let h2 = set_windows_hook_ex_w(3, crochet_suivant as *const () as usize, 0, tid);
+            let h1 = set_windows_hook_ex_w(3, crochet as *const () as usize, 0, tid);
+            gui::post_to_thread(std::thread::current().id(), Msg::new(0, 0x8001, 5, 0));
+            let mut m: Msg = std::mem::zeroed();
+            assert_eq!(peek_message_w(&mut m, 0, 0x8001, 0x8001, 0), 1);
+            assert_eq!(peek_message_w(&mut m, 0, 0x8001, 0x8001, 1), 1);
+            assert_eq!(m.wparam, 77);
+            assert_eq!(
+                VUS.with(|v| v.borrow().clone()),
+                vec![(0, 0x8001), (0, 0xFFFF), (1, 0x8001), (1, 0xFFFF)]
+            );
+            assert_eq!(unhook_windows_hook_ex(h1), 1);
+            assert_eq!(unhook_windows_hook_ex(h2), 1);
+            gui::post_to_thread(std::thread::current().id(), Msg::new(0, 0x8001, 5, 0));
+            assert_eq!(peek_message_w(&mut m, 0, 0x8001, 0x8001, 1), 1);
+            assert_eq!(m.wparam, 5);
+            assert_eq!(VUS.with(|v| v.borrow().len()), 4);
+            drop(q);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_winforms {
+    use super::*;
+
+    #[test]
+    fn messages_enregistres_distincts_et_stables() {
+        let w = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain([0]).collect();
+            unsafe { register_window_message_w(v.as_ptr()) }
+        };
+        let a = w("WinFormsUnSubclass");
+        let b = w("WindowsForms12_ThreadCallbackMessage");
+        assert!((0xC000..=0xFFFF).contains(&a) && (0xC000..=0xFFFF).contains(&b));
+        assert_ne!(a, b, "deux noms, deux messages");
+        assert_eq!(a, w("winformsunsubclass"), "sans casse");
+        assert_eq!(a, unsafe {
+            register_window_message_a(c"WinFormsUnSubclass".as_ptr().cast())
+        });
+        assert_eq!(w(""), 0);
+    }
+
+    #[test]
+    fn get_class_info_ex_classe_predefinie_et_inconnue() {
+        let mut wc = [0u8; 80];
+        wc[..4].copy_from_slice(&80u32.to_le_bytes());
+        let name: Vec<u16> = "BUTTON".encode_utf16().chain([0]).collect();
+        let atom = unsafe { get_class_info_ex_w(0, name.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_ne!(atom, 0);
+        let proc_ = usize::from_le_bytes(wc[8..16].try_into().unwrap());
+        assert_ne!(proc_, 0, "lpfnWndProc rempli");
+        let unknown: Vec<u16> = "PasUneClasse_269".encode_utf16().chain([0]).collect();
+        let r = unsafe { get_class_info_ex_w(0, unknown.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_eq!(r, 0);
     }
 }
