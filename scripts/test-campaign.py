@@ -1391,4 +1391,8 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
+# #1195 : SSE 4.2 et voisins annoncés comme CPUID les voit (Photoshop).
+ok('38 => f("sse4.2")' in (runtime_dlls / "kernel32_misc.rs").read_text(encoding="utf-8")
+   and "instructions_sse4_et_avx512_suivent_cpuid" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2 et AVX-512F selon CPUID (#1195)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
