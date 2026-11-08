@@ -1363,9 +1363,31 @@ pub unsafe fn run_builtin(
     proc_addr: usize,
     init: isize,
 ) -> isize {
+    let out = builtin_template(caption, w, h, 0);
+    dialog_box(0, Some(&out), owner, proc_addr, init, true)
+}
+
+/// Boîte non modale propre à Winlux (Rechercher, Remplacer) : même cadre que
+/// [`run_builtin`], visible dès sa création, rendue sans attendre. Le
+/// programme la fait vivre dans sa propre boucle de messages.
+pub unsafe fn create_builtin(
+    owner: usize,
+    caption: &str,
+    w: i32,
+    h: i32,
+    proc_addr: usize,
+    init: isize,
+) -> usize {
+    let out = builtin_template(caption, w, h, 0x1000_0000); // WS_VISIBLE
+    let owner = if owner != 0 { top_level(owner) } else { 0 };
+    create_indirect(0, &out, owner, proc_addr, init, true)
+}
+
+/// DLGTEMPLATE sans élément : cadre de `w` × `h` pixels de zone cliente.
+fn builtin_template(caption: &str, w: i32, h: i32, extra_style: u32) -> Vec<u8> {
     let base = base_units(super::gdi32::get_stock_object(17));
     let mut out: Vec<u8> = Vec::new();
-    out.extend_from_slice(&(0x80C8_0000 | DS_CENTER | 0x80).to_le_bytes());
+    out.extend_from_slice(&(0x80C8_0000 | DS_CENTER | 0x80 | extra_style).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes()); // aucun élément
     let du_w = (w * 4 + base.0 - 1) / base.0;
@@ -1377,7 +1399,7 @@ pub unsafe fn run_builtin(
     for u in caption.encode_utf16().chain([0]) {
         out.extend_from_slice(&u.to_le_bytes());
     }
-    dialog_box(0, Some(&out), owner, proc_addr, init, true)
+    out
 }
 
 /// Contrôle enfant d'une boîte de Winlux, placé en pixels, avec la police
