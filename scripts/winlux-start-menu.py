@@ -173,6 +173,12 @@ _TR = {
     'Ouvrir': ('Open', 'Abrir', 'Öffnen'),
     'Détacher du menu Démarrer': ('Unpin from Start', 'Desanclar de Inicio', 'Von Start lösen'),
     'Épingler au menu Démarrer': ('Pin to Start', 'Anclar a Inicio', 'An Start anheften'),
+    # Réordonner les épinglés (#925) : sous-menu « Déplacer » et glisser-déposer.
+    'Déplacer': ('Move', 'Mover', 'Verschieben'),
+    'Au début': ('To the front', 'Al principio', 'An den Anfang'),
+    'Vers la gauche': ('Left', 'A la izquierda', 'Nach links'),
+    'Vers la droite': ('Right', 'A la derecha', 'Nach rechts'),
+    'À la fin': ('To the end', 'Al final', 'An das Ende'),
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
@@ -361,6 +367,13 @@ MENU_CSS = Template("""
   menu.winlux-menu menuitem { color: $fg; padding: 8px 18px 8px 12px; border-radius: 4px; min-width: 150px; }
   menu.winlux-menu menuitem label, menu.winlux-menu menuitem image { color: $fg; -gtk-icon-shadow: none; }
   menu.winlux-menu menuitem:hover { background: $hover; }
+  menu.winlux-menu menuitem:disabled label { color: $dim; opacity: 0.6; }
+  menu.winlux-menu menuitem arrow { color: $fg; min-width: 16px; min-height: 16px; }
+  menu.winlux-menu separator { background: $border; min-height: 1px; margin: 4px 6px; }
+  /* Glisser-déposer des épinglés (#925) : l'icône prise s'estompe, la place
+     visée est entourée de l'accent. */
+  #winlux-start button.pin-dragging { opacity: 0.35; }
+  #winlux-start button.pin-drop { background: $chip; box-shadow: inset 0 0 0 2px $accent; }
 """)
 
 
@@ -390,12 +403,14 @@ def on_click(button, callback):
         return False
     def released(widget, event):
         inside = 0 <= event.x < widget.get_allocated_width() and 0 <= event.y < widget.get_allocated_height()
+        if getattr(widget, "winlux_dragged", False): return False
         if event.button == 1 and inside and not pending:
             # Après le traitement GTK : un « clicked » émis entre-temps est ignoré.
             pending.append(True)
             GLib.idle_add(run)
         return False
-    def clicked(*_):
+    def clicked(widget):
+        if getattr(widget, "winlux_dragged", False): return
         if not pending: callback()
     button.connect("button-release-event", released)
     button.connect("clicked", clicked)
@@ -430,6 +445,7 @@ class Start(Gtk.Application):
         # Toutes les applications : catégorie dépliée, et volet « Pour vous »
         # calculé en arrière-plan à chaque ouverture (#685).
         self.open_category = None
+        self.dragging = None
         self.side_generation = 0
         self.side_data = None
         try: self.state = json.loads(STATE.read_text())
@@ -586,6 +602,10 @@ class Start(Gtk.Application):
         self.window.connect("key-press-event", self.key)
         self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.window.connect("button-press-event", self.outside_click)
+        # Glisser d'un épinglé (#925) : mouvements et relâchement entre deux tuiles.
+        self.window.add_events(Gdk.EventMask.BUTTON_MOTION_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK)
+        self.window.connect("motion-notify-event", self.drag_motion)
+        self.window.connect("button-release-event", self.drag_release)
         # La saisie du pointeur n'aboutit que sur une fenêtre réellement
         # visible ; openbox mappe d'abord la fenêtre dans un cadre encore
         # caché (NOT_VIEWABLE), d'où quelques nouvelles tentatives.
@@ -795,8 +815,11 @@ class Start(Gtk.Application):
             dialog.run()
             dialog.destroy()
 
-    def app_button(self, app, grid=False, badge=False):
+    def app_button(self, app, grid=False, badge=False, pinned=False):
         button = Gtk.Button()
+        if pinned:
+            # Avant on_click : un relâchement qui termine un glisser ne lance rien.
+            self.pin_drag(button, app.get_id())
         if grid: button.set_size_request(80, 82)  # six colonnes tiennent dans 560 px (1366x768)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if grid else Gtk.Orientation.HORIZONTAL, spacing=6)
         icon = app.get_icon() or Gio.ThemedIcon.new("application-x-executable")
@@ -823,7 +846,7 @@ class Start(Gtk.Application):
         button.add(box)
         button.set_tooltip_text(app.get_display_name())
         on_click(button, lambda: self.launch(app))
-        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app))
+        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app, pinned))
         return button
 
     def result_button(self, title, icon, tooltip, subtitle=None):
@@ -929,7 +952,7 @@ class Start(Gtk.Application):
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
-            for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
+            for index, app in enumerate(pinned): grid.attach(self.app_button(app, True, pinned=True), index % 6, index // 6, 1, 1)
             # Clavier tactile ouvert : la place manque, les épinglés seuls (le
             # titre « Recommandations » était coupé par le bas de la liste).
             if self.keyboard_open():
@@ -1285,19 +1308,8 @@ class Start(Gtk.Application):
     def menu(self, widget, event, actions):
         if self.window.has_grab():self.window.grab_remove()
         self.window.get_display().get_default_seat().ungrab()
-        menu = Gtk.Menu()
-        menu.get_style_context().add_class("winlux-menu")
+        menu = self.menu_items(actions)
         self.context = menu
-        for entry in actions:
-            title, callback = entry[0], entry[1]
-            item = Gtk.MenuItem()
-            row = Gtk.Box(spacing=12)
-            if len(entry) > 2:
-                row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
-            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
-            item.add(row)
-            item.connect("activate", lambda _, action=callback: action())
-            menu.append(item)
         def deactivate(*_):
             self.context=None
             GLib.idle_add(self.grab_pointer)
@@ -1306,7 +1318,124 @@ class Start(Gtk.Application):
         if event: menu.popup_at_pointer(event)
         else: menu.popup_at_widget(widget, Gdk.Gravity.NORTH_EAST, Gdk.Gravity.SOUTH_EAST, None)
 
-    def app_context(self, widget, event, app):
+    def menu_items(self, actions):
+        """Menu contextuel : (titre, action[, icône]). Une action None grise
+        l'entrée, une liste d'entrées en fait un sous-menu, None seul sépare."""
+        menu = Gtk.Menu()
+        menu.get_style_context().add_class("winlux-menu")
+        for entry in actions:
+            if entry is None:
+                menu.append(Gtk.SeparatorMenuItem())
+                continue
+            title, callback = entry[0], entry[1]
+            item = Gtk.MenuItem()
+            row = Gtk.Box(spacing=12)
+            if len(entry) > 2:
+                row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
+            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
+            item.add(row)
+            if isinstance(callback, list):
+                item.set_submenu(self.menu_items(callback))
+                item.set_sensitive(any(child and child[1] is not None for child in callback))
+            elif callback is None:
+                item.set_sensitive(False)
+            else:
+                item.connect("activate", lambda _, action=callback: action())
+            menu.append(item)
+        return menu
+
+    def visible_pins(self):
+        return [ident for ident in self.state.get("pins", DEFAULTS) if ident in self.apps]
+
+    def move_pin(self, identifier, where):
+        """Déplace un épinglé (#925) et enregistre l'ordre aussitôt."""
+        pins = move_pin(self.state.get("pins", list(DEFAULTS)), identifier, where, self.apps)
+        if pins == self.state.get("pins"): return
+        self.state["pins"] = pins
+        self.save()
+        self.render()
+
+    def move_actions(self, identifier):
+        """Entrées du sous-menu « Déplacer », grisées quand elles ne changent rien."""
+        shown = self.visible_pins()
+        index = shown.index(identifier) if identifier in shown else -1
+        last = len(shown) - 1
+        def entry(title, where, possible):
+            return (_t(title), (lambda: self.move_pin(identifier, where)) if possible and index >= 0 else None)
+        return [entry("Au début", "first", index > 0), entry("Vers la gauche", "previous", index > 0),
+                entry("Vers la droite", "next", index < last), entry("À la fin", "last", index < last)]
+
+    def pin_drag(self, button, identifier):
+        """Glisser-déposer d'un épinglé dans sa grille (#925).
+
+        Fait à la main, sans le protocole XDND : le menu tient déjà la saisie
+        du pointeur (owner_events), si bien que les mouvements et le
+        relâchement arrivent à la tuile ou à la fenêtre sous le pointeur, pas
+        à la tuile prise. L'état du glisser est donc partagé (self.dragging)
+        et tout se calcule en coordonnées d'écran. Au relâchement l'icône
+        prend la place visée, sans lancer d'application."""
+        button.winlux_pin = identifier
+        button.add_events(Gdk.EventMask.BUTTON_MOTION_MASK)
+        def pressed(_, event):
+            button.winlux_dragged = False
+            self.dragging = {"ident": identifier, "button": button, "start": (event.x_root, event.y_root),
+                             "active": False, "target": None} if event.button == 1 else None
+            return False
+        button.connect("button-press-event", pressed)
+        button.connect("motion-notify-event", self.drag_motion)
+        button.connect("button-release-event", self.drag_release)
+
+    def pin_tile_at(self, grid, x_root, y_root):
+        for child in grid.get_children():
+            window = child.get_window()
+            if window is None or not child.get_mapped(): continue
+            area = child.get_allocation()
+            left, top = window.get_root_coords(area.x, area.y)
+            if left <= x_root < left + area.width and top <= y_root < top + area.height:
+                return child
+        return None
+
+    def drag_motion(self, _, event):
+        drag = getattr(self, "dragging", None)
+        if not drag or not event.state & Gdk.ModifierType.BUTTON1_MASK: return False
+        button = drag["button"]
+        grid = button.get_parent()
+        if not isinstance(grid, Gtk.Grid): return False
+        if not drag["active"]:
+            threshold = Gtk.Settings.get_default().get_property("gtk-dnd-drag-threshold") or 8
+            if abs(event.x_root - drag["start"][0]) < threshold and abs(event.y_root - drag["start"][1]) < threshold:
+                return False
+            drag["active"] = True
+            button.winlux_dragged = True
+            button.get_style_context().add_class("pin-dragging")
+            window = self.window.get_window()
+            if window: window.set_cursor(Gdk.Cursor.new_from_name(window.get_display(), "grabbing"))
+        target = self.pin_tile_at(grid, event.x_root, event.y_root) or drag["target"]
+        if target is not drag["target"]:
+            if drag["target"] is not None: drag["target"].get_style_context().remove_class("pin-drop")
+            drag["target"] = target
+            if target is not button: target.get_style_context().add_class("pin-drop")
+        return True
+
+    def drag_release(self, _, event):
+        drag = getattr(self, "dragging", None)
+        if event.button != 1 or not drag: return False
+        self.dragging = None
+        if not drag["active"]: return False
+        window = self.window.get_window()
+        if window: window.set_cursor(None)
+        where = getattr(drag["target"], "winlux_pin", None)
+        # La grille est reconstruite (ordre nouveau ou non) : aucune tuile ne
+        # reste marquée ni enfoncée. Relâchement gardé : rien ne se lance.
+        def drop():
+            shown = self.visible_pins()
+            if where in shown and where != drag["ident"]: self.move_pin(drag["ident"], shown.index(where))
+            else: self.render()
+            return False
+        GLib.idle_add(drop)
+        return True
+
+    def app_context(self, widget, event, app, in_pins=False):
         if event.button != 3: return False
         identifier = app.get_id()
         def pin():
@@ -1338,6 +1467,8 @@ class Start(Gtk.Application):
                    for name in (app.list_actions() if hasattr(app, "list_actions") else [])]
         self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
                                  (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin),
+                                 # Grille des épinglés : les ranger dans l'ordre voulu (#925).
+                                 *([(_t("Déplacer"), self.move_actions(identifier))] if in_pins else []),
                                  (_t("Créer un raccourci sur le bureau"), shortcut)])
         return True
 
@@ -1456,6 +1587,23 @@ def auto_pin(state, apps):
     if done == state.get("auto_pinned"): return False
     state["auto_pinned"] = done
     return True
+
+
+def move_pin(pins, identifier, where, shown=None):
+    """Nouvel ordre des épinglés (#925) : identifier mis « first », « last »,
+    « previous », « next » ou à la place n (0 = première) parmi les épinglés
+    affichés (présents dans shown). Les épingles d'applications absentes,
+    cachées dans la grille, gardent leur rang dans la liste enregistrée."""
+    pins = list(pins)
+    visible = [pin for pin in pins if shown is None or pin in shown]
+    if identifier not in visible: return pins
+    index = visible.index(identifier)
+    target = {"first": 0, "last": len(visible) - 1, "previous": index - 1, "next": index + 1}.get(where, where)
+    if not isinstance(target, int): return pins
+    target = max(0, min(len(visible) - 1, target))
+    visible.insert(target, visible.pop(index))
+    order = iter(visible)
+    return [next(order) if shown is None or pin in shown else pin for pin in pins]
 
 
 def migrate_pins(pins):

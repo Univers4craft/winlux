@@ -625,6 +625,11 @@ jobs:
       - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
 
+      - name: Menu Démarrer, épinglés rangés dans l'ordre voulu (clic droit « Déplacer », glisser-déposer) (#925)
+        run: |
+          /usr/bin/python3 -B scripts/test-start-pin-order.py
+          xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-order.py
+
       - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
         run: |
           /usr/bin/python3 -B scripts/test-start-for-you.py

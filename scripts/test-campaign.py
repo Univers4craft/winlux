@@ -535,6 +535,10 @@ ok("def render_side" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "def start_menu_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
    and "test-start-for-you.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer à deux volets : « Pour vous » calculé sur le PC, coupable dans Paramètres, recentré (#685)")
+ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "def pin_drag" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-pin-order.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : épinglés déplacés par clic droit « Déplacer » ou glisser-déposer, ordre gardé (#925)")
 
 # ── Windows + X au-dessus du bouton Démarrer (#574) ───────────────────────
 ok("<position><x>0</x><y>-40</y></position>" in (ROOT / "integration/native/config/openbox/rc.xml").read_text()
