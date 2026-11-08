@@ -134,7 +134,7 @@ step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l
 step "WMI : WQL, classes Win32_*, parcours COM (#1198)" cargo test -q -p winlux -- wql_selection_et_filtres wmi_classes_du_systeme wmi_par_com
 step "winmm mmio* : fichiers RIFF et fichiers en mémoire (#1221)" cargo test -q -p winlux -- mmio_lit_et_ecrit_un_wav mmio_fichier_en_memoire
 step "Menu dessiné par le programme hors gestionnaire de fenêtres (#1222)" cargo test -q -p winlux -- menu_dessine_par_le_programme_hors_gestionnaire
-step "Fenêtre en couches : fond transparent découpé (#1220)" cargo test -q -p winlux -- forme_d_une_fenetre_en_couches
+step "Fenêtre en couches : fond transparent découpé (#1220)" cargo test -q -p winlux -- forme_d_une_fenetre_en_couches fenetre_en_couches_sans_cadre
 
 # Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
