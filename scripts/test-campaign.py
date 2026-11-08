@@ -1293,6 +1293,14 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+# #1090, étape 2 : d3d10.dll et d3d10_1.dll sur Direct3D 11, x86 et x64.
+d3d10_rs = (runtime_dlls / "d3d10.rs").read_text(encoding="utf-8")
+ok("fn D3D10CreateDeviceAndSwapChain1" in d3d10_rs and "fn device_table" in d3d10_rs
+   and '"d3d10_1"' in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
+   and "d3d10::wrap_backbuffer" in (runtime_dlls / "dxgi.rs").read_text(encoding="utf-8")
+   and "d3d1032" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
+   and "device_table_has_101_methods" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Direct3D 10 et 10.1 sur Direct3D 11, x86 et x64 (#1090, étape 2)")
 ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
    "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
