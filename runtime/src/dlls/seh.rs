@@ -293,6 +293,62 @@ pub(crate) unsafe fn resume(ctx: &Context) -> ! {
 
 pub const CTX_EFLAGS: usize = 0x44;
 
+/// Reprise d'une instruction qui a épuisé la pile (#15) : `load_context`
+/// poserait RIP et EFLAGS sous la pile cible, dans la page qui vient de
+/// fauter, et la faute retomberait dans Winlux. Ici rien n'est écrit sous la
+/// pile : RIP passe par une case globale et EFLAGS n'est pas rechargé. Ce
+/// chemin ne sert qu'à rejouer la faute pour le rapport de plantage.
+pub(crate) unsafe fn resume_on_exhausted_stack(ctx: &Context) -> ! {
+    REPLAY_RIP.store(
+        ctx.get(CTX_RIP) as usize,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    load_context_jmp(ctx.0.as_ptr())
+}
+
+static REPLAY_RIP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[unsafe(naked)]
+unsafe extern "win64" fn load_context_jmp(_ctx: *const u8) -> ! {
+    core::arch::naked_asm!(
+        "movdqu xmm0, [rcx + 0x1A0]",
+        "movdqu xmm1, [rcx + 0x1B0]",
+        "movdqu xmm2, [rcx + 0x1C0]",
+        "movdqu xmm3, [rcx + 0x1D0]",
+        "movdqu xmm4, [rcx + 0x1E0]",
+        "movdqu xmm5, [rcx + 0x1F0]",
+        "movdqu xmm6, [rcx + 0x200]",
+        "movdqu xmm7, [rcx + 0x210]",
+        "movdqu xmm8, [rcx + 0x220]",
+        "movdqu xmm9, [rcx + 0x230]",
+        "movdqu xmm10, [rcx + 0x240]",
+        "movdqu xmm11, [rcx + 0x250]",
+        "movdqu xmm12, [rcx + 0x260]",
+        "movdqu xmm13, [rcx + 0x270]",
+        "movdqu xmm14, [rcx + 0x280]",
+        "movdqu xmm15, [rcx + 0x290]",
+        "ldmxcsr [rcx + 0x34]",
+        "mov rdx, [rcx + 0x88]",
+        "mov rbx, [rcx + 0x90]",
+        "mov rsp, [rcx + 0x98]",
+        "mov rbp, [rcx + 0xA0]",
+        "mov rsi, [rcx + 0xA8]",
+        "mov rdi, [rcx + 0xB0]",
+        "mov r8, [rcx + 0xB8]",
+        "mov r9, [rcx + 0xC0]",
+        "mov r10, [rcx + 0xC8]",
+        "mov r11, [rcx + 0xD0]",
+        "mov r12, [rcx + 0xD8]",
+        "mov r13, [rcx + 0xE0]",
+        "mov r14, [rcx + 0xE8]",
+        "mov r15, [rcx + 0xF0]",
+        "mov rax, [rcx + 0x78]",
+        "mov rcx, [rcx + 0x80]",
+        "jmp qword ptr [rip + {slot}]",
+        slot = sym REPLAY_RIP,
+    )
+}
+
 /// Comme `load_context`, mais reprend par `iretq` (RIP, CS, RFLAGS, RSP,
 /// SS posés sous la pile cible) : un drapeau TF prend effet après la
 /// première instruction reprise.

@@ -529,6 +529,9 @@ unsafe extern "C" fn hw_dispatch(frame: *mut HwFrame) -> ! {
             // plantage complet par crash.rs, avec les registres d'origine.
             let rip = f.orig.get(seh::CTX_RIP) as usize;
             REFIRE.with(|r| r.set(rip));
+            if code == STATUS_STACK_OVERFLOW {
+                seh::resume_on_exhausted_stack(&f.orig)
+            }
             seh::resume(&f.orig)
         }
     }
