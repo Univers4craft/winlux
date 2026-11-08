@@ -827,7 +827,7 @@ pub unsafe extern "win64" fn create_dib_section(
         || header.height == 0
         || header.height == i32::MIN
         || header.planes != 1
-        || !matches!(header.bit_count, 24 | 32)
+        || !matches!(header.bit_count, 1 | 4 | 8 | 16 | 24 | 32)
         || (header.compression != 0 && !bitfields_ok) // BI_RGB ou BI_BITFIELDS BGRX
         || usage != 0 // DIB_RGB_COLORS
         || section != 0
@@ -845,11 +845,27 @@ pub unsafe extern "win64" fn create_dib_section(
         crate::process::set_last_error(87);
         return 0;
     }
-    let Some((bitmap, pixel_bits)) = gui::create_dib_section(
+    // Table de couleurs (RGBQUAD : bleu, vert, rouge, réservé) après
+    // l'en-tête pour 1, 4 et 8 bits ; biClrUsed nul = 2^bits entrées.
+    let mut palette = Vec::new();
+    if header.bit_count <= 8 {
+        let max = 1usize << header.bit_count;
+        let count = match header.colors_used as usize {
+            0 => max,
+            n => n.min(max),
+        };
+        let table = (info as *const u8).add(header.size as usize);
+        for i in 0..count {
+            let q = std::ptr::read_unaligned(table.add(i * 4) as *const [u8; 4]);
+            palette.push(u32::from(q[0]) << 16 | u32::from(q[1]) << 8 | u32::from(q[2]));
+        }
+    }
+    let Some((bitmap, pixel_bits)) = gui::create_dib_section_with_palette(
         header.width,
         header.height.abs(),
         header.bit_count,
         header.height < 0,
+        palette,
     ) else {
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;

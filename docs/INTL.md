@@ -7,8 +7,14 @@ polices avec lui sans casser les accents. Tout est écrit de zéro dans
 ## Encodages (`codepage.rs`, `text.rs`)
 
 - Pages de code : Windows-1252 (ANSI), 850 et 858 (OEM d'Europe de l'Ouest),
-  437, ISO 8859-1 et 8859-15, ASCII et UTF-8. `CP_ACP`/`CP_OEMCP` prennent la
-  page de la locale.
+  437, ISO 8859-1 et 8859-15, ASCII et UTF-8, plus 1250, 1251, 852, 866,
+  KOI8-R, ISO 8859-2/5. `CP_ACP`/`CP_OEMCP` prennent la page de la locale.
+- Pages asiatiques à deux octets (`dbcs.rs`) : 932 (japonais), 936 (chinois
+  simplifié), 949 (coréen), 950 (chinois traditionnel). Les correspondances
+  viennent d'`iconv` de la glibc (modules gconv du paquet libc6), Winlux ne
+  décide que des octets de tête (`GetCPInfo`, `IsDBCSLeadByteEx`). Sans le
+  module gconv, `IsValidCodePage` renvoie FALSE au lieu de produire du texte
+  faux.
 - `MultiByteToWideChar` / `WideCharToMultiByte` : `MB_ERR_INVALID_CHARS`,
   `WC_ERR_INVALID_CHARS`, caractère par défaut et `lpUsedDefaultChar`,
   substitution « meilleur ajustement » de Windows (Ł → L) sauf avec
@@ -70,9 +76,12 @@ clavier, fuseau).
   UI, Tahoma, MS Shell Dlg, Calibri, Cambria, Consolas… vers les polices
   libres installées (paquet `fonts-liberation`).
 
-## Reste à faire
+## Registre en vue dynamique (`registry/live.rs`)
 
-- Clés de registre `TimeZoneInformation`, `Nls\CodePage`, `Keyboard Layout` et
-  `Fonts` en vue dynamique.
-- `ToUnicode`, `VkKeyScan` et `MapVirtualKey` selon la disposition réelle.
-- Pages 1250, 1251, 866 et pages asiatiques à plusieurs octets.
+Recalculées à chaque chargement du registre d'après les réglages Linux :
+`HKLM\System\CurrentControlSet\Control\TimeZoneInformation` (biais, noms,
+dates de changement d'heure au format SYSTEMTIME), `…\Control\Nls\CodePage`
+(ACP, OEMCP), `HKCU\Keyboard Layout\Preload` (disposition XKB) et
+`HKLM`/`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts` (polices
+de `C:\Windows\Fonts` et du dossier de l'utilisateur ; les valeurs écrites
+par les installateurs sont gardées).
