@@ -77,10 +77,12 @@ while IFS= read -r command; do
     step "$script" sh -c "$command"
 done <"$logs/steps.txt"
 
-# Fautes matérielles en exceptions SEH (#269) : lancé en CI par test-mingw.sh ;
+# Fautes matérielles en exceptions SEH et suspension de threads (#269) :
+# lancés en CI par test-mingw.sh ;
 # ici aussi sans MinGW, dès que clang et le runtime compilé sont là.
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
     step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
+    step "scripts/test-thread-control.sh" sh scripts/test-thread-control.sh
 fi
 # DuplicateHandle et mémoire entre processus (Chromium, Electron, #236) :
 # lancé en CI par test-mingw.sh ; ici aussi dès que clang est là.

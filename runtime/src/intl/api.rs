@@ -67,7 +67,7 @@ pub extern "win64" fn is_valid_code_page(cp: u32) -> i32 {
 }
 
 /// CPINFO : taille maximale d'un caractère, caractère par défaut, octets de
-/// tête (aucun : Winlux ne décrit que des pages à un octet et UTF-8).
+/// tête (plages par paires, seulement pour les pages asiatiques).
 pub unsafe extern "win64" fn get_cp_info(cp: u32, info: *mut u8) -> i32 {
     let cp = codepage::resolve(cp);
     if info.is_null() || !codepage::is_valid(cp) {
@@ -75,8 +75,19 @@ pub unsafe extern "win64" fn get_cp_info(cp: u32, info: *mut u8) -> i32 {
         return 0;
     }
     std::ptr::write_bytes(info, 0, 20);
-    (info as *mut u32).write_unaligned(if cp == CP_UTF8 { 4 } else { 1 });
+    let max = if cp == CP_UTF8 {
+        4
+    } else if super::dbcs::is_dbcs(cp) {
+        2
+    } else {
+        1
+    };
+    (info as *mut u32).write_unaligned(max);
     *info.add(4) = b'?';
+    for (i, &(lo, hi)) in super::dbcs::lead_ranges(cp).iter().enumerate() {
+        *info.add(6 + 2 * i) = lo;
+        *info.add(7 + 2 * i) = hi;
+    }
     1
 }
 
@@ -96,6 +107,10 @@ fn code_page_name(cp: u32) -> String {
         20866 => "(Russian - KOI8)",
         28592 => "(ISO 8859-2 Central Europe)",
         28595 => "(ISO 8859-5 Cyrillic)",
+        932 => "(ANSI/OEM - Japanese Shift-JIS)",
+        936 => "(ANSI/OEM - Simplified Chinese GBK)",
+        949 => "(ANSI/OEM - Korean)",
+        950 => "(ANSI/OEM - Traditional Chinese Big5)",
         65001 => "(UTF-8)",
         _ => "",
     };
@@ -109,7 +124,7 @@ pub unsafe extern "win64" fn get_cp_info_ex_w(cp: u32, _flags: u32, info: *mut u
         return 0;
     }
     std::ptr::write_bytes(info.add(20), 0, 548 - 20);
-    (info.add(20) as *mut u16).write_unaligned(0x3F);
+    (info.add(20) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
     (info.add(24) as *mut u32).write_unaligned(cp);
     let name: Vec<u16> = code_page_name(cp).encode_utf16().take(259).collect();
     std::ptr::copy_nonoverlapping(name.as_ptr() as *const u8, info.add(28), name.len() * 2);
@@ -123,7 +138,7 @@ pub unsafe extern "win64" fn get_cp_info_ex_a(cp: u32, flags: u32, info: *mut u8
     }
     let _ = flags;
     std::ptr::write_bytes(info.add(20), 0, 288 - 20);
-    (info.add(20) as *mut u16).write_unaligned(0x3F);
+    (info.add(20) as *mut u16).write_unaligned(super::dbcs::unicode_default(cp));
     (info.add(24) as *mut u32).write_unaligned(cp);
     let name = code_page_name(cp);
     let n = name.len().min(259);
@@ -1122,7 +1137,7 @@ fn current_bias_ticks(now: i64) -> i64 {
     tz::current().bias_at_utc(unix_seconds(now)) as i64 * tz::TICKS_PER_MINUTE
 }
 
-fn rule_to_systemtime(r: Option<Rule>) -> SystemTime {
+pub(crate) fn rule_to_systemtime(r: Option<Rule>) -> SystemTime {
     match r {
         None => SystemTime::default(),
         Some(r) => {
@@ -1192,7 +1207,7 @@ unsafe fn read_tzi(p: *const u8) -> Zone {
     z
 }
 
-fn zone_state(z: &Zone) -> u32 {
+pub(crate) fn zone_state(z: &Zone) -> u32 {
     if !z.has_dst() {
         0 // TIME_ZONE_ID_UNKNOWN
     } else if z.is_dst_utc(unix_seconds(now_filetime())) {

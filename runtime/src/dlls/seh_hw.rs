@@ -148,7 +148,6 @@ pub(crate) unsafe fn context_from_ucontext(uc: *const libc::ucontext_t, ctx: &mu
 
 /// Écrit dans le `ucontext` d'un thread arrêté les registres d'un CONTEXT,
 /// selon ses drapeaux (CONTROL, INTEGER, FLOATING_POINT).
-#[allow(dead_code)] // SetThreadContext (#269, deuxième partie)
 pub(crate) unsafe fn context_to_ucontext(ctx: &Context, uc: *mut libc::ucontext_t) {
     let p = ctx.0.as_ptr();
     let flags = (p.add(0x30) as *const u32).read_unaligned();
@@ -217,6 +216,12 @@ unsafe fn is_guest_code(rip: usize) -> bool {
         libc::sched_yield();
     }
     false
+}
+
+/// `is_guest_code` pour les autres gestionnaires de signal (suspension de
+/// threads, thread_ctl.rs).
+pub(crate) unsafe fn is_guest_code_pub(rip: usize) -> bool {
+    is_guest_code(rip)
 }
 
 /// Octet de code à `addr` (le code invité est lisible : il vient d'être
