@@ -309,7 +309,8 @@ status() {
         if winlux-update --list > "$updates_tmp" 2>/dev/null; then
             publish "$updates_tmp" "$run/updates.txt"
         else rm -f "$updates_tmp"; fi
-        update_state
+        # Rien à décrire sans rapport (moteur absent ou muet) : pas de second programme.
+        if test -s "$run/updates.txt"; then update_state; fi
     fi
 }
 # État de la page Mises à jour (clé=valeur, #875-#882) : refait avec updates.txt.

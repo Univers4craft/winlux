@@ -187,6 +187,9 @@ with tempfile.TemporaryDirectory() as folder:
 control = (HERE / "winlux-control.sh").read_text(encoding="utf-8")
 ok("update-pause-1|update-pause-2|update-pause-3|update-pause-4|update-pause-5)" in control and "update-resume)" in control
    and 'winlux-update --active-hours "${hours%-*}" "${hours#*-}"' in control, "winlux-control : pause, reprise, heures")
+# #894 : la version précédente est relue juste après l'installation, avant tout redémarrage.
+ok("update-apply) if winlux-update --apply; then code=0; else code=$?; fi; update_state; return $code ;;" in control,
+   "état relu aussitôt après l'installation (#894)")
 ok("winlux-update --state" in control and 'test -s "$run/update-state.txt"' in control, "winlux-control publie update-state.txt")
 root = runpy.run_path(str(HERE / "winlux-root.py"), run_name="update_root_test")
 patterns = [pattern for pattern, _ in root["CONTROL_POLICY"]]
