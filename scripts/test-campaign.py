@@ -1257,6 +1257,9 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+ok("fn altgr_messages" in (runtime_dlls / "gui_x11.rs").read_text()
+   and "altgr_est_ctrl_gauche_plus_alt_droit" in (SCRIPTS / "test-all.sh").read_text(),
+   "AltGr : Ctrl gauche + Alt droit, « # @ € { } » tapés sans déclencher de raccourci Alt (#1151)")
 # #1146 : le HttpClient de .NET (ScreenToGif, Flow Launcher) se connecte par
 # ConnectEx et un port de complétion ; une erreur rend un code Winsock.
 ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
@@ -1291,4 +1294,10 @@ ok("fn parse_root(" in d3d12_shader_rs and "fn constant_buffers(" in d3d12_shade
    and "shaders_traduits_et_constantes_racine_opengl" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8")
    and "texture_et_echantillonneur_statique_opengl" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine, tampons de constantes, textures et échantillonneurs (#1177)")
+# #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
+# instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
+ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
+   and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
+   and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
