@@ -129,8 +129,14 @@ impl Interpreter {
             return Err(e);
         }
 
-        let raw =
-            callbacks::with_interpreter(self, || pinvoke::call(addr, &out, unicode, last_error));
+        let raw = callbacks::with_interpreter(self, || {
+            // Le code natif peut bloquer (boucle de messages, attente) : les
+            // autres fils managés continuent pendant ce temps.
+            let depth = super::threads::gil_release_all();
+            let raw = pinvoke::call(addr, &out, unicode, last_error);
+            super::threads::gil_restore(depth);
+            raw
+        });
         self.pins.truncate(pinned);
 
         Ok(match (&sig.ret_type, ret_kind) {

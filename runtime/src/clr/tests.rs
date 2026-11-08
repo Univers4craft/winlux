@@ -1345,3 +1345,262 @@ fn p_invoke_rappel_vers_un_delegue() {
     );
     assert_eq!(lancer(&b.build(main), None), 321);
 }
+
+// ── Étape 5 : fils managés (#1066) ──
+
+impl Prog {
+    /// Branchement long (`br`, `blt`…) vers une étiquette.
+    fn br(&mut self, op: u8, name: &'static str) -> &mut Prog {
+        self.code.push(op);
+        self.fixups.push((self.code.len(), name));
+        self.code.extend_from_slice(&[0; 4]);
+        self
+    }
+}
+
+const BLT: u8 = 0x3F;
+const BRTRUE: u8 = 0x3A;
+
+/// Quatre fils incrémentent 1000 fois un compteur sous `lock`, puis le fil
+/// principal les attend avec `Join`.
+#[test]
+fn quatre_fils_sous_verrou() {
+    let mut b = Builder::new("Fils");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let thread = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "Thread");
+    let thread_start = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "ThreadStart");
+    let monitor = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "Monitor");
+    let object_ctor = b.member_ref(object, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let ts_ctor = b.member_ref(thread_start, ".ctor", &delegue_ctor_sig());
+    let th_ctor = b.member_ref(
+        thread,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[&class(thread_start)]),
+    );
+    let start = b.member_ref(thread, "Start", &method_sig(true, &[T_VOID], &[]));
+    let join = b.member_ref(thread, "Join", &method_sig(true, &[T_VOID], &[]));
+    let enter = b.member_ref(
+        monitor,
+        "Enter",
+        &method_sig(false, &[T_VOID], &[&[T_OBJECT]]),
+    );
+    let exit = b.member_ref(
+        monitor,
+        "Exit",
+        &method_sig(false, &[T_VOID], &[&[T_OBJECT]]),
+    );
+
+    b.type_def(PUBLIC, "Fils", "P", object);
+    let verrou = b.field(F_PUBLIC | F_STATIC, "Verrou", &[T_OBJECT]);
+    let compteur = b.field(F_PUBLIC | F_STATIC, "Compteur", &[T_I4]);
+
+    let mut p = Prog::default();
+    p.il(Il::default().i4(0).op(STLOC0))
+        .label("boucle")
+        .il(Il::default()
+            .ldsfld(verrou)
+            .call(enter)
+            .ldsfld(compteur)
+            .i4(1)
+            .op(ADD)
+            .stsfld(compteur)
+            .ldsfld(verrou)
+            .call(exit)
+            .op(LDLOC0)
+            .i4(1)
+            .op(ADD)
+            .op(DUP)
+            .op(STLOC0)
+            .i4(1000));
+    p.br(BLT, "boucle").il(Il::default().ret());
+    let travail = b.method(
+        M_PUBLIC | M_STATIC,
+        "Travail",
+        &method_sig(false, &[T_VOID], &[]),
+        Some(avec_locaux(Il(p.finish()), vec![vec![T_I4]])),
+    );
+
+    // locaux : 0..3 = les quatre fils
+    let mut il = Il::default().newobj(object_ctor).stsfld(verrou);
+    for i in 0..4u8 {
+        il = il
+            .op(LDNULL)
+            .ldftn(travail)
+            .newobj(ts_ctor)
+            .newobj(th_ctor)
+            .op(0x13) // stloc.s
+            .op(i);
+    }
+    for i in 0..4u8 {
+        il = il.op(0x11).op(i).callvirt(start); // ldloc.s
+    }
+    for i in 0..4u8 {
+        il = il.op(0x11).op(i).callvirt(join);
+    }
+    let il = il.ldsfld(compteur).ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(il, vec![class(thread); 4])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 4000);
+}
+
+/// `ThreadPool` réveille le fil principal par `Monitor.Wait`/`Pulse`,
+/// `BeginInvoke`/`EndInvoke` rend le résultat d'un délégué exécuté sur un
+/// autre fil, et le fil principal porte l'identifiant 1.
+#[test]
+fn threadpool_wait_pulse_et_begin_invoke() {
+    let mut b = Builder::new("Attente");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let multicast = b.type_ref(Scope::Assembly(mscorlib), "System", "MulticastDelegate");
+    let iasync = b.type_ref(Scope::Assembly(mscorlib), "System", "IAsyncResult");
+    let async_cb = b.type_ref(Scope::Assembly(mscorlib), "System", "AsyncCallback");
+    let thread = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "Thread");
+    let wait_cb = b.type_ref(
+        Scope::Assembly(mscorlib),
+        "System.Threading",
+        "WaitCallback",
+    );
+    let pool = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "ThreadPool");
+    let monitor = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "Monitor");
+    let object_ctor = b.member_ref(object, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let wc_ctor = b.member_ref(wait_cb, ".ctor", &delegue_ctor_sig());
+    let queue = b.member_ref(
+        pool,
+        "QueueUserWorkItem",
+        &method_sig(false, &[T_BOOL], &[&class(wait_cb), &[T_OBJECT]]),
+    );
+    let un_objet = method_sig(false, &[T_VOID], &[&[T_OBJECT]]);
+    let enter = b.member_ref(monitor, "Enter", &un_objet);
+    let exit = b.member_ref(monitor, "Exit", &un_objet);
+    let pulse = b.member_ref(monitor, "Pulse", &un_objet);
+    let wait = b.member_ref(
+        monitor,
+        "Wait",
+        &method_sig(false, &[T_BOOL], &[&[T_OBJECT]]),
+    );
+    let current = b.member_ref(
+        thread,
+        "get_CurrentThread",
+        &method_sig(false, &class(thread), &[]),
+    );
+    let thread_id = b.member_ref(
+        thread,
+        "get_ManagedThreadId",
+        &method_sig(true, &[T_I4], &[]),
+    );
+    let sleep = b.member_ref(thread, "Sleep", &method_sig(false, &[T_VOID], &[&[T_I4]]));
+
+    let op = b.type_def(PUBLIC, "Attente", "Op", multicast);
+    let op_ctor = b.method(M_CTOR, ".ctor", &delegue_ctor_sig(), None);
+    let virt = M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG | M_NEWSLOT;
+    let begin = b.method(
+        virt,
+        "BeginInvoke",
+        &method_sig(
+            true,
+            &class(iasync),
+            &[&[T_I4], &class(async_cb), &[T_OBJECT]],
+        ),
+        None,
+    );
+    let end = b.method(
+        virt,
+        "EndInvoke",
+        &method_sig(true, &[T_I4], &[&class(iasync)]),
+        None,
+    );
+    b.method(virt, "Invoke", &method_sig(true, &[T_I4], &[&[T_I4]]), None);
+    let _ = op;
+
+    b.type_def(PUBLIC, "Attente", "P", object);
+    let verrou = b.field(F_PUBLIC | F_STATIC, "Verrou", &[T_OBJECT]);
+    let fait = b.field(F_PUBLIC | F_STATIC, "Fait", &[T_I4]);
+    let carre = b.method(
+        M_PUBLIC | M_STATIC,
+        "Carre",
+        &method_sig(false, &[T_I4], &[&[T_I4]]),
+        Some(Il::default().ldarg0().ldarg0().op(MUL).ret().body()),
+    );
+    // Signal(state) : lock (Verrou) { Fait = 1; Monitor.Pulse(Verrou); }
+    let signal = b.method(
+        M_PUBLIC | M_STATIC,
+        "Signal",
+        &un_objet,
+        Some(
+            Il::default()
+                .i4(5)
+                .call(sleep)
+                .ldsfld(verrou)
+                .call(enter)
+                .i4(1)
+                .stsfld(fait)
+                .ldsfld(verrou)
+                .call(pulse)
+                .ldsfld(verrou)
+                .call(exit)
+                .ret()
+                .body(),
+        ),
+    );
+
+    let mut p = Prog::default();
+    p.il(Il::default()
+        .newobj(object_ctor)
+        .stsfld(verrou)
+        .ldsfld(verrou)
+        .call(enter)
+        .op(LDNULL)
+        .ldftn(signal)
+        .newobj(wc_ctor)
+        .op(LDNULL)
+        .call(queue)
+        .op(POP));
+    // while (Fait == 0) Monitor.Wait(Verrou);
+    p.label("attente")
+        .il(Il::default().ldsfld(fait))
+        .br(BRTRUE, "fini")
+        .il(Il::default().ldsfld(verrou).call(wait).op(POP))
+        .br(0x38, "attente") // br
+        .label("fini");
+    p.il(Il::default()
+        .ldsfld(verrou)
+        .call(exit)
+        // Fait * 100
+        .ldsfld(fait)
+        .i4(100)
+        .op(MUL)
+        // + new Op(Carre).EndInvoke(BeginInvoke(7, null, null)) = 49
+        .op(LDNULL)
+        .ldftn(carre)
+        .newobj(op_ctor)
+        .op(DUP)
+        .op(STLOC0)
+        .i4(7)
+        .op(LDNULL)
+        .op(LDNULL)
+        .callvirt(begin)
+        .op(STLOC1)
+        .op(LDLOC0)
+        .op(LDLOC1)
+        .callvirt(end)
+        .op(ADD)
+        // + Thread.CurrentThread.ManagedThreadId * 1000 = 1000
+        .call(current)
+        .callvirt(thread_id)
+        .i4(1000)
+        .op(MUL)
+        .op(ADD)
+        .ret());
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(Il(p.finish()), vec![class(op), class(iasync)])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 1149);
+}
