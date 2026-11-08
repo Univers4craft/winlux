@@ -1301,4 +1301,7 @@ ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
+ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
+   and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
