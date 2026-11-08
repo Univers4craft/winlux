@@ -173,6 +173,11 @@ _TR = {
     'Ouvrir': ('Open', 'Abrir', 'Öffnen'),
     'Détacher du menu Démarrer': ('Unpin from Start', 'Desanclar de Inicio', 'Von Start lösen'),
     'Épingler au menu Démarrer': ('Pin to Start', 'Anclar a Inicio', 'An Start anheften'),
+    'Déplacer': ('Move', 'Mover', 'Verschieben'),
+    'Au début': ('Move to front', 'Mover al principio', 'An den Anfang'),
+    'Vers la gauche': ('Move left', 'Mover a la izquierda', 'Nach links'),
+    'Vers la droite': ('Move right', 'Mover a la derecha', 'Nach rechts'),
+    'À la fin': ('Move to end', 'Mover al final', 'Ans Ende'),
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
@@ -929,7 +934,10 @@ class Start(Gtk.Application):
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
-            for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
+            for index, app in enumerate(pinned):
+                button = self.app_button(app, True)
+                self.pin_drag(button, app)
+                grid.attach(button, index % 6, index // 6, 1, 1)
             # Clavier tactile ouvert : la place manque, les épinglés seuls (le
             # titre « Recommandations » était coupé par le bas de la liste).
             if self.keyboard_open():
@@ -1296,7 +1304,20 @@ class Start(Gtk.Application):
                 row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
             row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
             item.add(row)
-            item.connect("activate", lambda _, action=callback: action())
+            if isinstance(callback, list):
+                # Sous-menu (Déplacer, #925) ; une entrée sans action est grisée.
+                submenu = Gtk.Menu()
+                submenu.get_style_context().add_class("winlux-menu")
+                for label, action in callback:
+                    child = Gtk.MenuItem(label=label)
+                    child.set_sensitive(action is not None)
+                    if action is not None: child.connect("activate", lambda _, action=action: action())
+                    submenu.append(child)
+                item.set_submenu(submenu)
+            elif callback is None:
+                item.set_sensitive(False)
+            else:
+                item.connect("activate", lambda _, action=callback: action())
             menu.append(item)
         def deactivate(*_):
             self.context=None
@@ -1305,6 +1326,29 @@ class Start(Gtk.Application):
         menu.show_all()
         if event: menu.popup_at_pointer(event)
         else: menu.popup_at_widget(widget, Gdk.Gravity.NORTH_EAST, Gdk.Gravity.SOUTH_EAST, None)
+
+    def move_pin(self, identifier, target):
+        """Nouvel ordre des épingles enregistré dans start.json et affiché (#925)."""
+        pins = move_pin(self.state.get("pins", DEFAULTS), identifier, target, self.apps)
+        if pins is None: return False
+        self.state["pins"] = pins
+        self.save()
+        self.render()
+        return True
+
+    def pin_drag(self, button, app):
+        """Glisser-déposer d'une épingle sur une autre : elle prend sa place (#925)."""
+        targets = [Gtk.TargetEntry.new("application/x-winlux-pin", Gtk.TargetFlags.SAME_APP, 0)]
+        button.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, targets, Gdk.DragAction.MOVE)
+        button.drag_source_set_icon_gicon(app.get_icon() or Gio.ThemedIcon.new("application-x-executable"))
+        button.drag_dest_set(Gtk.DestDefaults.ALL, targets, Gdk.DragAction.MOVE)
+        button.connect("drag-data-get", lambda _w, _c, data, _i, _time: data.set(data.get_target(), 8, app.get_id().encode()))
+        def received(_widget, context, _x, _y, data, _info, stamp):
+            dragged = bytes(data.get_data() or b"").decode(errors="replace")
+            shown = [pin for pin in self.state.get("pins", DEFAULTS) if pin in self.apps]
+            moved = dragged != app.get_id() and app.get_id() in shown and self.move_pin(dragged, shown.index(app.get_id()))
+            context.finish(bool(moved), False, stamp)
+        button.connect("drag-data-received", received)
 
     def app_context(self, widget, event, app):
         if event.button != 3: return False
@@ -1336,9 +1380,17 @@ class Start(Gtk.Application):
         # « Nouvelle fenêtre »…), comme la liste de raccourcis de Windows.
         actions = [(app.get_action_name(name), lambda name=name: action(name))
                    for name in (app.list_actions() if hasattr(app, "list_actions") else [])]
-        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
-                                 (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin),
-                                 (_t("Créer un raccourci sur le bureau"), shortcut)])
+        entries = [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
+                   (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin)]
+        # Épinglée : Déplacer au début, à gauche, à droite, à la fin (#925) ;
+        # les choix sans effet sont grisés (None).
+        if identifier in self.state.get("pins", DEFAULTS):
+            pins = self.state.get("pins", DEFAULTS)
+            labels = {"first": _t("Au début"), "left": _t("Vers la gauche"), "right": _t("Vers la droite"), "last": _t("À la fin")}
+            entries.append((_t("Déplacer"), [(labels[where], (lambda where=where: self.move_pin(identifier, where))
+                                              if move_pin(pins, identifier, where, self.apps) is not None else None)
+                                             for where in PIN_MOVES]))
+        self.menu(widget, event, entries + [(_t("Créer un raccourci sur le bureau"), shortcut)])
         return True
 
     def power(self, widget):
@@ -1457,6 +1509,26 @@ def auto_pin(state, apps):
     state["auto_pinned"] = done
     return True
 
+
+PIN_MOVES = ("first", "left", "right", "last")
+
+def move_pin(pins, identifier, target, shown):
+    """Épingles réordonnées (#925), ou None si rien ne bouge.
+
+    target : « first », « left », « right », « last » (clic droit > Déplacer)
+    ou la place voulue dans la grille (glisser-déposer), comptée parmi les
+    épingles affichées. Une épingle d'une application absente (désinstallée,
+    pas encore installée) garde sa place relative derrière les autres."""
+    visible = [pin for pin in pins if pin in shown]
+    if identifier not in visible: return None
+    index = visible.index(identifier)
+    if isinstance(target, str):
+        target = {"first": 0, "left": index - 1, "right": index + 1, "last": len(visible) - 1}.get(target, index)
+    target = max(0, min(int(target), len(visible) - 1))
+    if target == index: return None
+    visible.insert(target, visible.pop(index))
+    order = iter(visible)
+    return [next(order) if pin in shown else pin for pin in pins]
 
 def migrate_pins(pins):
     """Épingles enregistrées, anciennes épingles par défaut remplacées, sans doublon."""

@@ -663,5 +663,10 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #925 : menu Démarrer, déplacer une application épinglée.
+ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "def pin_drag" in (SCRIPTS / "winlux-start-menu.py").read_text()
+   and "test-start-pin-move.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : épingle déplacée par clic droit (Déplacer) et glisser-déposer, ordre gardé (#925)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
