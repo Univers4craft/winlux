@@ -318,10 +318,12 @@ assert json.loads(store.read_text())["/panels/panel-1/plugin-ids"] == [3, 13, 1,
 
 # ── Serveur HTTP de test : faux registre npm, fausse API GitHub, faux Hugging Face ──
 routes = {}
+accepts = {}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        accepts[self.path] = self.headers.get("Accept")
         body = routes.get(self.path)
         if body is None:
             self.send_response(404)
@@ -458,25 +460,85 @@ assert not local.supported(), "moins de 3 Gio de mémoire : option cachée"
 assistant._mem_total_gib = lambda: 3.8
 assert local.supported() and local.launcher() is None and not local.remote
 # #911 : révisions figées, empreintes écrites dans le code (jamais « latest » de GitHub ni « main »).
-assert assistant.LLAMA_TAG == "b12202" and "/releases/download/b12202/" in assistant.LLAMA_URL
-assert len(assistant.LLAMA_SHA256) == 64 and len(assistant.LOCAL_MODEL_SHA256) == 64
-assert len(assistant.LOCAL_MODEL_REVISION) == 40
-engine_tgz = io.BytesIO()
-with tarfile.open(fileobj=engine_tgz, mode="w:gz") as tar:
-    for name, content in (("llama-b9999/llama-server", b"#!/bin/sh\n"), ("llama-b9999/libllama.so.0.9.0", b"so")):
-        info = tarfile.TarInfo(name)
-        info.size, info.mode = len(content), 0o644
-        tar.addfile(info, io.BytesIO(content))
-    link = tarfile.TarInfo("llama-b9999/libllama.so.0")
-    link.type, link.linkname = tarfile.SYMTYPE, "libllama.so.0.9.0"
-    tar.addfile(link)
-engine_tgz = engine_tgz.getvalue()
+assert assistant.LLAMA_TAG == "b12202" and "/releases/download/b12202" in assistant.LLAMA_RELEASES
+for name, sha256, size in assistant.LLAMA_ENGINES.values():
+    assert assistant.LLAMA_TAG in name and len(sha256) == 64 and size > 0
+for spec in assistant.LOCAL_MODELS.values():
+    assert len(spec["revision"]) == 40 and all(len(sha) == 64 and size > 0 for _, sha, size in spec["files"])
+
+# #928 : modèle et moteur choisis selon le PC, sans rien demander, et dits.
+drm = work / "drm"
+icd = work / "icd"
+assistant.DRM_DIR, assistant.VULKAN_ICD_DIRS = drm, (icd,)
+def fake_card(number, vendor, driver, vram=None):
+    device = work / "pci" / f"card{number}"
+    device.mkdir(parents=True)
+    (device / "vendor").write_text(vendor + "\n")
+    (work / "pci" / driver).mkdir(exist_ok=True)
+    os.symlink(work / "pci" / driver, device / "driver")
+    if vram is not None:
+        (device / "mem_info_vram_total").write_text(str(vram))
+    (drm / f"card{number}").mkdir(parents=True)
+    os.symlink(device, drm / f"card{number}" / "device")
+    (drm / f"card{number}-HDMI-A-1").mkdir()
+drm.mkdir()
+assistant._mem_total_gib = lambda: 7.6
+assert assistant.pc_plan() == {"model": "1.5b", "engine": "cpu", "gpu": None, "ram": 7.6, "vram": 0.0}
+fake_card(1, "0x8086", "i915")  # carte intégrée : processeur
+assert assistant.pc_plan()["engine"] == "cpu"
+assistant._mem_total_gib = lambda: 16.0
+assert assistant.pc_plan()["model"] == "3b", "16 Gio sans carte dédiée : 3B sur le processeur"
+# Portable de damien : GTX 1070 Mobile 8 Go, pilote nvidia, Vulkan ; 7,6 Gio de mémoire.
+(bin_dir / "nvidia-smi").write_text("#!/bin/sh\necho 8192\n")
+(bin_dir / "nvidia-smi").chmod(0o755)
+fake_card(0, "0x10de", "nvidia")
+assistant._mem_total_gib = lambda: 7.6
+assert assistant.pc_plan()["engine"] == "cpu", "sans pilote Vulkan, rien sur la carte"
+icd.mkdir()
+(icd / "nvidia_icd.json").write_text("{}")
+plan = assistant.pc_plan()
+assert plan == {"model": "7b", "engine": "vulkan", "gpu": "NVIDIA", "ram": 7.6, "vram": 8.0}, plan
+text = assistant.plan_text(plan)
+assert "Qwen2.5 7B" in text and "NVIDIA" in text and "carte graphique" in text and "strictement rien" in text
+assert "4,4 Go" in text, text
+(bin_dir / "nvidia-smi").write_text("#!/bin/sh\necho 4096\n")
+assert assistant.pc_plan()["model"] == "3b", "4 Go de VRAM : 3B sur la carte"
+fake_card(2, "0x1002", "amdgpu", vram=16 << 30)
+(icd / "radeon_icd.json").write_text("{}")
+assert assistant.pc_plan()["gpu"] == "AMD" and assistant.pc_plan()["model"] == "7b", "la plus grosse carte"
+assistant._LANG = "en"
+assert "graphics card" in assistant.plan_text(assistant.pc_plan()) and "4.4 GB" in assistant.plan_text(assistant.pc_plan())
+assistant._LANG = "fr"
+shutil_rm = __import__("shutil").rmtree
+shutil_rm(drm)
+drm.mkdir()
+assistant._mem_total_gib = lambda: 3.8
+assert assistant.pc_plan() == {"model": "1.5b", "engine": "cpu", "gpu": None, "ram": 3.8, "vram": 0.0}
+
+def engine_archive(marker):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for name, content in (("llama-b9999/llama-server", b"#!/bin/sh\n# " + marker + b"\n"),
+                              ("llama-b9999/libllama.so.0.9.0", b"so")):
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(content), 0o644
+            tar.addfile(info, io.BytesIO(content))
+        link = tarfile.TarInfo("llama-b9999/libllama.so.0")
+        link.type, link.linkname = tarfile.SYMTYPE, "libllama.so.0.9.0"
+        tar.addfile(link)
+    return buffer.getvalue()
+engine_cpu, engine_vk = engine_archive(b"cpu"), engine_archive(b"vulkan")
 model = b"GGUF" + b"\0" * 4096
-assistant.LLAMA_URL = f"{base}/engine.tar.gz"
-assistant.LLAMA_SHA256 = hashlib.sha256(engine_tgz).hexdigest()
-assistant.LOCAL_MODEL_SHA256 = hashlib.sha256(model).hexdigest()
-model_path = f"/{assistant.LOCAL_MODEL_REPO}/resolve/{assistant.LOCAL_MODEL_REVISION}/{assistant.LOCAL_MODEL_FILE}"
-routes["/engine.tar.gz"] = engine_tgz
+model_3b = b"GGUF3" + b"\0" * 4096
+assistant.LLAMA_RELEASES = base + "/download"
+assistant.LLAMA_ASSET_API = base + "/api/release"
+assistant.LLAMA_ENGINES = {"cpu": ("llama-b9999-bin-ubuntu-x64.tar.gz", hashlib.sha256(engine_cpu).hexdigest(), 100),
+                           "vulkan": ("llama-b9999-bin-ubuntu-vulkan-x64.tar.gz", hashlib.sha256(engine_vk).hexdigest(), 100)}
+assistant.LOCAL_MODELS["1.5b"]["files"] = (("petit.gguf", hashlib.sha256(model).hexdigest(), len(model)),)
+assistant.LOCAL_MODELS["3b"]["files"] = (("moyen.gguf", hashlib.sha256(model_3b).hexdigest(), len(model_3b)),)
+small = assistant.LOCAL_MODELS["1.5b"]
+model_path = f"/{small['repo']}/resolve/{small['revision']}/petit.gguf"
+routes["/download/llama-b9999-bin-ubuntu-x64.tar.gz"] = engine_cpu
 routes[model_path] = model[:-1] + b"X"  # altéré
 assistant.HF_BASE = base
 progress = []
@@ -492,6 +554,8 @@ steps = []
 assert local.install(lambda f, t: progress.append(t), None, steps.append) == local.engine()
 assert steps == [0, 1] and local.model().read_bytes() == model and progress
 assert (local.engine().parent / "libllama.so.0").is_symlink(), "liens des bibliothèques gardés"
+assert local.engine_kind() == "cpu" and local.gpu_layers() == [] and assistant.read_config()["local_model"] == "1.5b"
+assert assistant.local_model_text() == "Qwen2.5 1,5B, sur le processeur"
 assert local.status() == {"installed": True, "loggedIn": True}
 
 # Faux llama-server : vérifie la clé, répond selon le schéma demandé (comme la grammaire JSON).
@@ -539,6 +603,7 @@ os.environ["WINLUX_ASSISTANT_LLAMA"] = str(llama)
 server = assistant.LocalServer()
 server.start(timeout=30)
 try:
+    assert server.memory() > 0, "mémoire du moteur lue pour l'avertissement (#928)"
     started = json.loads(llama_record.read_text())
     assert started["argv"][started["argv"].index("--host") + 1] == "127.0.0.1", "jamais ouvert au réseau"
     assert started["key"] == server.key and server.key not in " ".join(started["argv"]), "clé hors de ps"
@@ -566,7 +631,31 @@ try:
     assert result["actions"][0][1] == ["winlux-shell-app", "settings", "10"]
 finally:
     server.stop()
-assert not server.running()
+assert not server.running() and server.memory() == 0
+# #928 : panneau ouvert sans question -> moteur arrêté après 2 minutes, relancé à la question suivante.
+panel = (project / "scripts/winlux-assistant.py").read_text(encoding="utf-8")
+assert assistant.LOCAL_IDLE_SECONDS == 120
+assert "self.idle_source = GLib.timeout_add_seconds(LOCAL_IDLE_SECONDS, self.idle_stop)" in panel
+assert "self.server.spawn()" in panel[panel.index("def ask_local"):panel.index("def answered_local")]
+assert "self.arm_idle()" in panel[panel.index("def answered_local"):panel.index("def card(")]
+
+# PC passé à une carte graphique (ou 16 Go) : moteur Vulkan et modèle plus grand ;
+# GitHub en 504 sur l'adresse de téléchargement -> API des fichiers, même empreinte.
+os.environ.pop("WINLUX_ASSISTANT_LLAMA", None)
+assistant.pc_plan = lambda: {"model": "3b", "engine": "vulkan", "gpu": "NVIDIA", "ram": 7.6, "vram": 4.0}
+medium = assistant.LOCAL_MODELS["3b"]
+routes[f"/{medium['repo']}/resolve/{medium['revision']}/moyen.gguf"] = model_3b
+routes["/api/release"] = json.dumps({"assets": [
+    {"name": "llama-b9999-bin-ubuntu-vulkan-x64.tar.gz", "url": f"{base}/api/asset/42"}]}).encode()
+routes["/api/asset/42"] = engine_vk
+steps = []
+assert local.install(None, None, steps.append) == local.engine()
+assert local.engine_kind() == "vulkan" and local.gpu_layers() == ["-ngl", "99"]
+assert b"vulkan" in local.engine().read_bytes() and accepts["/api/asset/42"] == "application/octet-stream"
+assert local.model().name == "moyen.gguf" and not (assistant.LOCAL_DIR / "petit.gguf").exists(), "ancien modèle retiré"
+assert assistant.local_model_text() == "Qwen2.5 3B, sur la carte graphique"
+assert "3B" in " ".join(local.steps())
+os.environ["WINLUX_ASSISTANT_LLAMA"] = str(llama)
 
 # Désactivée : fichiers gardés ; « Supprimer » libère la place.
 assistant.enable("local")
