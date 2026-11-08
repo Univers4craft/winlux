@@ -1551,7 +1551,6 @@ fn widen(v: u32) -> u64 {
     }
 }
 
-/// Relit les arguments x86 et appelle la fonction win64.
 // ---------------------------------------------------------------------
 // Historique des passages (WINLUX_WOW32_HISTORY)
 // ---------------------------------------------------------------------
@@ -1648,6 +1647,7 @@ pub(super) fn trace_history() {
     }
 }
 
+/// Relit les arguments x86 et appelle la fonction win64.
 extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let d = unsafe { &*(desc as usize as *const Desc) };
     if history_on() {
