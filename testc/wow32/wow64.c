@@ -87,6 +87,15 @@ __declspec(dllimport) BOOL WINAPI GetLogicalProcessorInformation(void *, DWORD *
 __declspec(dllimport) int WINAPI WSAStartup(WORD, void *);
 __declspec(dllimport) long WINAPI RegSetKeySecurity(void *, DWORD, void *);
 __declspec(dllimport) void *WINAPI gethostbyname(const char *);
+__declspec(dllimport) int WINAPI getaddrinfo(const char *, const char *, const void *, void **);
+__declspec(dllimport) void WINAPI freeaddrinfo(void *);
+__declspec(dllimport) void *WINAPI getservbyname(const char *, const char *);
+__declspec(dllimport) DWORD WINAPI socket(int, int, int);
+__declspec(dllimport) int WINAPI closesocket(DWORD);
+__declspec(dllimport) int WINAPI select(int, void *, void *, void *, const void *);
+__declspec(dllimport) int WINAPI WSAPoll(void *, DWORD, int);
+__declspec(dllimport) int WINAPI WinHttpGetIEProxyConfigForCurrentUser(void *);
+__declspec(dllimport) int WINAPI WinHttpGetDefaultProxyConfiguration(void *);
 __declspec(dllimport) unsigned int __cdecl _controlfp(unsigned int, unsigned int);
 __declspec(dllimport) BOOL WINAPI EnumCalendarInfoW(BOOL(WINAPI *)(unsigned short *), DWORD, DWORD, DWORD);
 __declspec(dllimport) HANDLE WINAPI LoadIconW(HANDLE, const unsigned short *);
@@ -509,6 +518,50 @@ __attribute__((used)) void __stdcall entry(void) {
         if (mods[0] != GetModuleHandleA(0)) fail(71, (DWORD)mods[0]);
         if (need % 4 != 0 || need < 4 || (need >= 8 && mods[1] == 0)) fail(71, need);
         if (mods[2] != (HANDLE)GUARD) fail(71, (DWORD)mods[2]);
+    }
+
+    /* 73-77 : structures écrites par ws2_32 et winhttp à la disposition
+     * x86 (#779 : un WSADATA 64 bits débordait sur l'adresse de retour).
+     * Chaque tampon est suivi d'un garde qui ne doit pas bouger. */
+    {
+        /* 73 : ADDRINFOA x86, 32 octets : ai_addrlen +16, ai_canonname
+         * +20, ai_addr +24, ai_next +28. */
+        DWORD hints[8] = {0, 2 /* AF_INET */, 1 /* SOCK_STREAM */, 0, 0, 0, 0, 0};
+        DWORD *ai = 0;
+        if (getaddrinfo("127.0.0.1", "22", hints, (void **)&ai) != 0 || !ai) fail(73, 0);
+        if (ai[1] != 2 || ai[4] != 16) fail(73, ai[4]);
+        unsigned char *sa = (unsigned char *)ai[6];
+        if (!sa || sa[0] != 2 || sa[2] != 0 || sa[3] != 22 || sa[4] != 127) fail(73, (DWORD)sa);
+        freeaddrinfo(ai);
+
+        /* 74 : SERVENT x86 : s_port (+8) avant s_proto (+12). */
+        DWORD *se = getservbyname("ssh", "tcp");
+        if (se) {
+            unsigned short port = (unsigned short)se[2];
+            if (port != 0x1600 /* htons(22) */) fail(74, se[2]);
+            const char *proto = (const char *)se[3];
+            if (!proto || proto[0] != 't') fail(74, (DWORD)proto);
+        }
+
+        /* 75 : fd_set x86 : SOCKET sur 4 octets à partir de +4. */
+        DWORD s = socket(2, 1, 6);
+        if (s == (DWORD)-1) fail(75, 0);
+        DWORD wset[4] = {1, s, GUARD, GUARD};
+        DWORD tv[2] = {0, 0};
+        int n = select(0, 0, wset, 0, tv);
+        if (n < 0 || wset[0] > 1 || (wset[0] == 1 && wset[1] != s) || wset[3] != GUARD) fail(75, n);
+
+        /* 76 : WSAPOLLFD x86 : { SOCKET fd; SHORT events; SHORT revents }. */
+        DWORD pfd[3] = {s, 0x10 /* POLLWRNORM */, GUARD};
+        if (WSAPoll(pfd, 1, 0) < 0 || pfd[0] != s || pfd[2] != GUARD) fail(76, pfd[1]);
+        closesocket(s);
+
+        /* 77 : WINHTTP_CURRENT_USER_IE_PROXY_CONFIG (16 octets) et
+         * WINHTTP_PROXY_INFO (12 octets) x86. */
+        DWORD ie[5] = {GUARD, GUARD, GUARD, GUARD, GUARD};
+        if (!WinHttpGetIEProxyConfigForCurrentUser(ie) || ie[4] != GUARD || ie[0] > 1) fail(77, ie[4]);
+        DWORD pi[4] = {GUARD, GUARD, GUARD, GUARD};
+        if (!WinHttpGetDefaultProxyConfiguration(pi) || pi[3] != GUARD || (pi[0] != 1 && pi[0] != 3)) fail(77, pi[0]);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");
