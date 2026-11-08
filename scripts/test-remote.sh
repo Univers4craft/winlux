@@ -15,7 +15,21 @@ mkdir -p "$root/etc/winlux"
 printf 'root:root:admin\nalice:user:s3cret\nbob:user:nopass\n' > "$root/etc/winlux/users.conf"
 state="$root/run/winlux/remote.txt"
 fail() { echo "ÉCHEC : $*" >&2; cat "$state" >&2 2>/dev/null || true; cat "$root/run/winlux/remote.log" >&2 2>/dev/null || true; exit 1; }
-port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+# Deux ports libres qui se suivent : « port-up » passe ensuite au suivant
+# (un port éphémère seul laissait parfois port + 1 occupé, « Address already in use »).
+port=$(python3 -c '
+import socket
+for base in range(20000, 60000, 7):
+    socks = []
+    try:
+        for p in (base, base + 1):
+            s = socket.socket(); s.bind(("127.0.0.1", p)); socks.append(s)
+        print(base); break
+    except OSError:
+        pass
+    finally:
+        for s in socks: s.close()
+')
 
 config status
 grep -qx 'enabled=0' "$state" || fail "activé par défaut"
