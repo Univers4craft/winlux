@@ -1042,6 +1042,12 @@ ok("const FIXED_INFO_SIZE: usize = 600;" in iphlp and "const IFROW_SIZE: usize =
    and "net_params()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
    "iphlpapi : paramètres réseau et table des interfaces sans boucle sans fin (#1048)")
 
+# #1072 : le pool de threads de .NET 9 appelle GetThreadIOPendingFlag.
+ok('"GetThreadIOPendingFlag"=>fn get_thread_io_pending_flag' in (runtime_dlls / "kernel32.rs").read_text()
+   and "GetThreadIOPendingFlag" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "io_pending()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
+   "kernel32 : GetThreadIOPendingFlag pour le pool de threads de .NET 9 (#1072)")
+
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
 ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
