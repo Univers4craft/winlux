@@ -161,6 +161,18 @@ pub(crate) fn open_client(name: &str, flags: u32) -> usize {
                 h
             }
             Err(seen) => {
+                // Instance cédée à un enfant qui n'écoute pas encore : sous
+                // Windows le tube existe déjà et le client s'y connecte tout
+                // de suite. On attend que l'enfant ouvre son rendez-vous.
+                if let Some(fd) = connect_handed_off(name) {
+                    let h = crate::dlls::kernel32::insert_file(std::fs::File::from(fd));
+                    if flags & FILE_FLAG_OVERLAPPED != 0 {
+                        crate::dlls::kernel32::mark_overlapped_handle(h);
+                    }
+                    crate::trace!("CreateFile(tube {name}, cédé à un enfant) = {h:#x}");
+                    crate::process::set_last_error(0);
+                    return h;
+                }
                 crate::process::set_last_error(if exists || seen {
                     ERROR_PIPE_BUSY
                 } else {
@@ -391,10 +403,53 @@ pub(crate) fn export(h: usize) -> Option<(String, Option<i32>, bool)> {
     })
 }
 
+/// Nom d'une instance serveur tel que Windows le rend pour FileNameInfo
+/// (`\nom`, sans `\\.\pipe`). Crashpad reconstruit ainsi le nom du tube
+/// qu'il a hérité pour en créer d'autres instances (#691) ; sans cela il
+/// recevait le chemin du socket Unix sous-jacent (« socket:[N] »).
+pub(crate) fn file_name(h: usize) -> Option<Vec<u16>> {
+    let (name, _, _) = export(h)?;
+    Some(format!("\\{name}").encode_utf16().collect())
+}
+
 /// Le parent cède l'instance à l'enfant : elle quitte son registre (son
 /// handle reste un simple descripteur).
 pub(crate) fn release(h: usize) {
+    if let Some((name, _, _)) = export(h) {
+        crate::dlls::lock(handed_off()).insert(name, std::time::Instant::now());
+    }
     close_server(h);
+}
+
+/// Noms des tubes dont ce processus a cédé une instance à un enfant, avec
+/// l'heure de la cession. Crashpad crée le tube, lance son handler avec
+/// l'instance en héritage puis s'y connecte aussitôt : sans attente, le
+/// client recevait ERROR_FILE_NOT_FOUND et Audacity affichait « Cannot
+/// start crashpad handler » (#942).
+fn handed_off() -> &'static Mutex<HashMap<String, std::time::Instant>> {
+    static H: std::sync::OnceLock<Mutex<HashMap<String, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    H.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Délai pendant lequel une instance cédée compte comme existante.
+const HANDOFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
+/// Attente maximale de l'enfant qui ouvre son rendez-vous.
+const HANDOFF_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn connect_handed_off(name: &str) -> Option<OwnedFd> {
+    let since = crate::dlls::lock(handed_off()).get(name).copied()?;
+    if since.elapsed() > HANDOFF_WINDOW {
+        return None;
+    }
+    let deadline = std::time::Instant::now() + HANDOFF_WAIT;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(fd) = remote::connect(name) {
+            return Some(fd);
+        }
+    }
+    None
 }
 
 /// L'enfant reprend une instance héritée.
@@ -641,5 +696,36 @@ mod tests {
             assert_eq!(open_client(&name, 0), usize::MAX);
             assert_eq!(crate::process::last_error(), ERROR_FILE_NOT_FOUND);
         }
+    }
+
+    /// #691 : FileNameInfo d'une instance de tube rend « \\nom », comme
+    /// Windows. Crashpad en tire le nom du tube hérité et en crée d'autres
+    /// instances ; il recevait « socket:[N] » et le client ne trouvait plus
+    /// le tube.
+    #[test]
+    fn nom_du_tube_par_file_name_info() {
+        let _teb = crate::process::test_teb();
+        let name = format!("crashpad_{}_test", std::process::id());
+        let h = create(&format!("\\\\.\\pipe\\{name}"), 3, 0, 255);
+        assert_ne!(h, usize::MAX);
+        let mut buf = [0u8; 4 + 2 * 260];
+        let ok = unsafe {
+            crate::dlls::kernel32::get_file_information_by_handle_ex(
+                h,
+                2,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+            )
+        };
+        assert_eq!(ok, 1);
+        let len = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize / 2;
+        let wide: Vec<u16> = buf[4..4 + 2 * len]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        assert_eq!(String::from_utf16_lossy(&wide), format!("\\{name}"));
+        close_server(h);
     }
 }

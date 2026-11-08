@@ -274,7 +274,9 @@ pub unsafe extern "win64" fn NtQueryInformationFile(
             if !need(4) {
                 return iosb(io, STATUS_BUFFER_TOO_SMALL, 0);
             }
-            let w = path.as_deref().map(windows_name_of).unwrap_or_default();
+            let w = crate::dlls::named_pipes::file_name(handle)
+                .or_else(|| path.as_deref().map(windows_name_of))
+                .unwrap_or_default();
             put_name(&o, 0, &w, io)
         }
         18 => {
