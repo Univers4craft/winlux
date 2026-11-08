@@ -287,13 +287,16 @@ fn native_of(proc32: u32) -> Option<usize> {
 extern "win64" fn native_from32(args: u32, native: usize) -> u64 {
     let hwnd = ext(arg(args, 0));
     let msg = arg(args, 1);
-    send_conv(
+    super::comctl::hint_class(crate::dlls::controls::builtin_class_of_proc(native));
+    let r = send_conv(
         hwnd,
         msg,
         arg(args, 2),
         arg(args, 3),
         &mut |wp, lp| unsafe { crate::dlls::gui::call_wndproc(native, hwnd, msg, wp, lp) },
-    ) as u64
+    );
+    super::comctl::hint_class(None);
+    r as u64
 }
 
 /// Procédure x86 appelée par le runtime (passerelle `wndproc64`).
@@ -835,9 +838,16 @@ extern "win64" fn call_window_proc(args: u32, _aux: usize) -> u64 {
         return 0;
     }
     match native_of(proc32) {
-        Some(native) => send_conv(ext(hwnd), msg, wp, lp, &mut |w, l| unsafe {
-            crate::dlls::gui::call_wndproc(native, ext(hwnd), msg, w, l)
-        }) as u64,
+        Some(native) => {
+            // La procédure appelée dit quel contrôle reçoit le message,
+            // même si la classe de la fenêtre est celle du programme.
+            super::comctl::hint_class(crate::dlls::controls::builtin_class_of_proc(native));
+            let r = send_conv(ext(hwnd), msg, wp, lp, &mut |w, l| unsafe {
+                crate::dlls::gui::call_wndproc(native, ext(hwnd), msg, w, l)
+            });
+            super::comctl::hint_class(None);
+            r as u64
+        }
         None => call32(proc32 as usize, &[hwnd, msg, wp, lp]) as u32 as u64,
     }
 }
