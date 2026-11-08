@@ -98,7 +98,8 @@ with tempfile.TemporaryDirectory() as directory:
        "openbox laisse le clic droit à xfdesktop (Renommer, Supprimer, Copier sur un fichier)")
     ok(desktop.find(f"{OB}mousebind/{OB}action/{OB}desktop") is not None,
        "un clic donne le clavier au bureau (focus <desktop>yes</desktop>)")
-    ok(contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "root-menu", "menu Winlux gardé sur la racine")
+    ok(contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "winlux-desktop-menu",
+       "menu du bureau traduit sur la racine (#787)")
     keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}command") for bind in rc.find(f"{OB}keyboard")}
     ok(keys.get("C-A-t") == "winlux-terminal", "Ctrl+Alt+T ouvre le terminal Winlux par openbox")
     uca = (home / ".config/Thunar/uca.xml").read_text()
@@ -113,6 +114,7 @@ with tempfile.TemporaryDirectory() as directory:
     old = (NATIVE / "config/openbox/rc.xml").read_text()
     old = old.split("<!-- Bureau :")[0] + '<context name="Desktop"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>\n  </mouse>' + old.split("</mouse>", 1)[1]
     old = old.replace('    <keybind key="C-A-t">', '    <keybind key="X-unused">')
+    old = old.replace("<menu>winlux-desktop-menu</menu>", "<menu>root-menu</menu>")
     (home / ".config/openbox/rc.xml").write_text(old)
     (home / ".config/Thunar").mkdir(parents=True)
     (home / ".config/Thunar/uca.xml").write_text("<actions>\n<action>\n\t<name>Open Terminal Here</name>\n</action>\n</actions>\n")
@@ -121,6 +123,14 @@ with tempfile.TemporaryDirectory() as directory:
     contexts = {item.get("name"): item for item in rc.find(f"{OB}mouse")}
     ok(not any(bind.get("button") == "Right" for bind in contexts["Desktop"]) and "Root" in contexts,
        "profil existant : ancien clic droit d'openbox sur le bureau migré")
+    keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}menu") for bind in rc.find(f"{OB}keyboard")}
+    ok(keys.get("W-F10") == "winlux-desktop-menu"
+       and contexts["Root"].findtext(f"{OB}mousebind/{OB}action/{OB}menu") == "winlux-desktop-menu",
+       "profil existant : Windows + F10 et la racine ouvrent le menu du bureau traduit (#787)")
+    for lang, word in (("en", "Open Explorer"), ("es", "Abrir Explorer"), ("de", "Explorer öffnen"), ("fr", "Ouvrir Explorer")):
+        menu = subprocess.run([sys.executable, str(SCRIPTS / "winlux-run.py"), "desktop-menu"], capture_output=True, text=True,
+                              env={**os.environ, "WINLUX_LANG": lang}).stdout
+        ok(word in menu and "<openbox_pipe_menu>" in menu, f"menu du bureau en {lang} (#787)")
     ok("Ouvrir dans le terminal" in (home / ".config/Thunar/uca.xml").read_text(), "profil existant : action Thunar traduite")
 
 # ── Barre des tâches : icône nm-applet en double ───────────────────────────
@@ -651,6 +661,15 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #659 : code PIN et empreinte à la connexion, vérifiés par le relais root.
+signin_tool = (SCRIPTS / "winlux-signin.py").read_text()
+ok("hashlib.scrypt" in signin_tool and "MAX_PIN_TRIES = 5" in signin_tool
+   and "def signin_prepare" in (SCRIPTS / "winlux-root.py").read_text()
+   and "def submit_pin" in (SCRIPTS / "winlux-lock.py").read_text()
+   and "def sections_signin" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and all((SCRIPTS / name).exists() for name in ("test-signin.py", "test-lock-signin.py", "test-signin-page.py")),
+   "options de connexion : code PIN (scrypt, 5 essais) et empreinte par le relais, écran et Paramètres testés")
+
 # #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
 broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
 ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
@@ -987,7 +1006,7 @@ ok("fn gil_acquire" in (clr / "threads.rs").read_text()
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
-   and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
+   and 'argv[1] == "overflow"' in (SCRIPTS / "winlux-tray.py").read_text()
    and "def tray_icon_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")

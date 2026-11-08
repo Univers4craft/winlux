@@ -150,7 +150,7 @@ def _balance_log(message):
     if path:
         try:
             with open(path, "a", encoding="utf-8") as log:
-                log.write(f"{time.monotonic():.2f} {message}\n")
+                log.write(f"{time.monotonic():.2f} [{os.getpid()}] {message}\n")
         except OSError:
             pass
 
@@ -168,7 +168,7 @@ def _genmon_blank(command):
     return not image and not (text and text.group(1).strip())
 
 
-def _settled_balance(ids, right_ids, left_ids):
+def _settled_balance(ids, right_ids, left_ids, parent=None):
     """Contrepoids, mesuré une fois le bloc de droite entièrement affiché.
 
     Au lancement de la barre, chaque greffon genmon (réseau, son, batterie,
@@ -188,7 +188,7 @@ def _settled_balance(ids, right_ids, left_ids):
     à jour suivantes.
     """
     children, screen = _panel_children()
-    age = _seconds_since_start(os.getppid())
+    age = _seconds_since_start(parent or os.getppid())
     key = f"{screen}:{','.join(map(str, ids))}"
     if age is not None and age <= 15:
         try:
@@ -245,8 +245,6 @@ def _settled_balance(ids, right_ids, left_ids):
     return width
 
 
-kind = sys.argv[1]
-
 # Icônes cachées derrière la flèche de la zone de notification : le greffon
 # systray d'XFCE retient chaque icône vue (known-legacy-items pour XEmbed,
 # known-items pour StatusNotifier) et masque celles de hidden-*. Écrit en
@@ -298,17 +296,6 @@ def overflow_set(name, hide):
             subprocess.run(args + ["-r"], capture_output=True, timeout=3)
         changed = True
     return changed
-
-
-if kind == "overflow":
-    import json as _json
-    action = sys.argv[2] if len(sys.argv) > 2 else "list"
-    if action == "list":
-        print(_json.dumps(overflow_list(), ensure_ascii=False))
-        raise SystemExit(0)
-    if action in ("hide", "show") and len(sys.argv) == 4 and sys.argv[3] not in OVERFLOW_SKIP:
-        raise SystemExit(0 if overflow_set(sys.argv[3], action == "hide") else 1)
-    raise SystemExit(2)
 
 
 def tray_directory():
@@ -388,9 +375,16 @@ def panel_dark():
     return not name  # pas encore de thème : barre sombre livrée
 
 
-DARK = panel_dark()
-color = "#e7ddf5" if DARK else "#2a2633"
-mode = "d" if DARK else "l"
+def refresh_settings():
+    """Langue et thème relus : le service résident suit leurs changements."""
+    global _LANG, DARK, color, mode
+    _LANG = _interface_lang()
+    DARK = panel_dark()
+    color = "#e7ddf5" if DARK else "#2a2633"
+    mode = "d" if DARK else "l"
+
+
+refresh_settings()
 
 
 def battery_part():
@@ -572,89 +566,230 @@ def screen_width():
 # ouvre les notifications.
 QUICK = "/usr/bin/winlux-popup quick"
 
-if kind == "battery":
-    body, tooltip, identity, _ = battery_part()
-elif kind == "audio":
-    body, tooltip, identity = audio_part()
-elif kind == "network":
-    body, tooltip, identity = network_part()
-elif kind == "status":
-    # Un seul bouton pour réseau, son et batterie (#703), comme Windows 11 :
-    # une cible de clic large au lieu de trois petites icônes séparées. Sans
-    # batterie (PC de bureau), rien n'est affiché à sa place.
-    parts = [network_part(), audio_part()]
-    battery = battery_part()
-    if battery[3]:
-        parts.append(battery[:3])
-    body = "".join(f'<g transform="translate({index * 30} 0)">{part[0]}</g>' for index, part in enumerate(parts))
-    icon = svg_file("status-" + "-".join(part[2] for part in parts), 30 * len(parts) - 6, 24, body)
-    tooltip = "\n".join(part[1] for part in parts)
-    print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>")
-    raise SystemExit(0)
-elif kind == "search":
-    # Recherche de la barre (#703) : zone « Rechercher » ou simple loupe
-    # (Personnalisation > Barre des tâches). Masquée, le greffon n'est plus
-    # dans la barre (winlux-control align-*). Une seule image, donc un seul
-    # bouton : tout le cadre est cliquable. Loupe seule sous 1500 px.
-    label = {"en": "Search", "es": "Buscar", "de": "Suchen"}.get(_LANG, "Rechercher")
-    accent = "#b69cff" if DARK else "#6a3df0"
-    glass = (f'<circle cx="10" cy="10" r="5.6" fill="none" stroke="{color}" stroke-width="1.7"/>'
-             f'<path d="M14.2 14.2 19 19" stroke="{accent}" stroke-width="2" stroke-linecap="round"/>')
-    if taskbar_preferences()["SEARCH"] == "icon" or screen_width() < 1500:
-        icon = svg_file("search-icon", 24, 24, glass)
+def render(kind, parent=None):
+    """Ligne genmon d'un greffon (<img>, <tool>, <click>) ; None si inconnu."""
+    if kind == "battery":
+        body, tooltip, identity, _ = battery_part()
+    elif kind == "audio":
+        body, tooltip, identity = audio_part()
+    elif kind == "network":
+        body, tooltip, identity = network_part()
+    elif kind == "status":
+        # Un seul bouton pour réseau, son et batterie (#703), comme Windows 11 :
+        # une cible de clic large au lieu de trois petites icônes séparées. Sans
+        # batterie (PC de bureau), rien n'est affiché à sa place.
+        parts = [network_part(), audio_part()]
+        battery = battery_part()
+        if battery[3]:
+            parts.append(battery[:3])
+        body = "".join(f'<g transform="translate({index * 30} 0)">{part[0]}</g>' for index, part in enumerate(parts))
+        icon = svg_file("status-" + "-".join(part[2] for part in parts), 30 * len(parts) - 6, 24, body)
+        tooltip = "\n".join(part[1] for part in parts)
+        return f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>"
+    elif kind == "search":
+        # Recherche de la barre (#703) : zone « Rechercher » ou simple loupe
+        # (Personnalisation > Barre des tâches). Masquée, le greffon n'est plus
+        # dans la barre (winlux-control align-*). Une seule image, donc un seul
+        # bouton : tout le cadre est cliquable. Loupe seule sous 1500 px.
+        label = {"en": "Search", "es": "Buscar", "de": "Suchen"}.get(_LANG, "Rechercher")
+        accent = "#b69cff" if DARK else "#6a3df0"
+        glass = (f'<circle cx="10" cy="10" r="5.6" fill="none" stroke="{color}" stroke-width="1.7"/>'
+                 f'<path d="M14.2 14.2 19 19" stroke="{accent}" stroke-width="2" stroke-linecap="round"/>')
+        if taskbar_preferences()["SEARCH"] == "icon" or screen_width() < 1500:
+            icon = svg_file("search-icon", 24, 24, glass)
+        else:
+            fill, stroke, text = ("#ffffff14", "#ffffff1f", "#c9c2da") if DARK else ("#ffffffd9", "#0000001a", "#5d566c")
+            width = 196
+            body = (f'<rect x="0.5" y="0.5" width="{width - 1}" height="31" rx="15.5" fill="{fill}" stroke="{stroke}"/>'
+                    f'<g transform="translate(10 4)">{glass}</g>'
+                    f'<text x="38" y="20.5" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="13" fill="{text}">{html.escape(label)}</text>')
+            icon = svg_file(f"search-box-{_LANG}", width, 32, body)
+        return f"<img>{icon}</img><tool>{html.escape(label)} (Windows + S)</tool><click>/usr/bin/winlux-start-menu</click>"
+    elif kind == "balance":
+        # Contrepoids de la barre centrée (greffon 13, juste après le séparateur 3).
+        width = 0
+        try:
+            listing = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids"],
+                                     capture_output=True, text=True, timeout=2).stdout
+            # Une ligne par id ; la première annonce le nombre d'éléments, traduite
+            # (« La valeur est un tableau de 12 éléments : ») : son nombre n'est pas un id.
+            ids = [int(line.strip()) for line in listing.splitlines() if line.strip().isdigit()]
+        except (OSError, subprocess.SubprocessError):
+            ids = []
+        # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
+        floating = taskbar_preferences()["STYLE"] == "floating"
+        # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
+        # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
+        # greffon, puis seulement étire ou non le séparateur 3.
+        if taskbar_alignment() == "left":
+            floating = True
+        if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
+            right = set(ids[ids.index(8) + 1:])
+            width = _settled_balance(ids, right, set(ids[:ids.index(3)]), parent)
+        body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
+        icon = directory / f"spacer-{width}.svg"
+        if not icon.exists():
+            # Écrit à part puis renommé : le service et un calcul direct
+            # peuvent créer le même fichier en même temps, et genmon ne doit
+            # jamais lire une image à moitié écrite (contrepoids ignoré).
+            temporary = icon.with_name(icon.name + f".{os.getpid()}")
+            temporary.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{max(1, width)}" height="1" viewBox="0 0 {max(1, width)} 1">{body}</svg>')
+            temporary.replace(icon)
+        # <tool></tool> vide : sans balise, genmon affiche son infobulle par défaut
+        # (« (genmon) », commande, période) au survol de la zone à côté de Démarrer (#645).
+        return f"<img>{icon}</img><tool></tool>"
+    elif kind == "notifications":
+        count = notification_count()
+        body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
+        tooltip = _t("Centre de notifications")
+        if count:
+            # Pastille du nombre de notifications, comme Windows 11 (#703).
+            badge = "9+" if count > 9 else str(count)
+            accent, on_accent = ("#b69cff", "#1c1a26") if DARK else ("#6a3df0", "#ffffff")
+            body = (f'<g transform="translate(0 4)">{body}</g><rect x="{11 if len(badge) == 1 else 7}" y="0" width="{13 if len(badge) == 1 else 17}" height="13" rx="6.5" fill="{accent}"/>'
+                    f'<text x="{17.5 if len(badge) == 1 else 15.5}" y="10" text-anchor="middle" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="{on_accent}">{badge}</text>')
+            icon = svg_file(f"notifications-{badge}", 26, 28, body)
+        else:
+            icon = svg_file("notifications", 24, 24, body)
+        return f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>/usr/bin/winlux-popup notifications</click>"
     else:
-        fill, stroke, text = ("#ffffff14", "#ffffff1f", "#c9c2da") if DARK else ("#ffffffd9", "#0000001a", "#5d566c")
-        width = 196
-        body = (f'<rect x="0.5" y="0.5" width="{width - 1}" height="31" rx="15.5" fill="{fill}" stroke="{stroke}"/>'
-                f'<g transform="translate(10 4)">{glass}</g>'
-                f'<text x="38" y="20.5" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="13" fill="{text}">{html.escape(label)}</text>')
-        icon = svg_file(f"search-box-{_LANG}", width, 32, body)
-    print(f"<img>{icon}</img><tool>{html.escape(label)} (Windows + S)</tool><click>/usr/bin/winlux-start-menu</click>")
-    raise SystemExit(0)
-elif kind == "balance":
-    # Contrepoids de la barre centrée (greffon 13, juste après le séparateur 3).
-    width = 0
+        return None
+    return f"<img>{svg_file(identity, 24, 24, body)}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>"
+
+
+# ── Service résident (winlux-tray serve) ─────────────────────────────────────
+# Chaque greffon genmon lançait un Python toutes les 2 à 5 s (environ 80 par
+# minute pour la barre). Le service calcule les mêmes lignes dans un seul
+# processus et les dépose dans OUTPUT ; /usr/bin/winlux-tray (lecteur en sh,
+# scripts/winlux-tray-read.sh) les recopie sans démarrer Python, et retombe
+# sur un calcul direct quand le service n'est pas là.
+
+SERVED = {"balance": 2, "status": 3, "search": 3, "notifications": 2}
+SETTLE = 8  # secondes de lancement de la barre laissées aux greffons
+
+
+def output_directory():
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "winlux/tray-out"
+
+
+def _panel_pid():
+    """xfce4-panel le plus récent du compte (son âge remplace celui du greffon).
+
+    Le plus récent : une barre relancée, ou une ancienne pas encore éteinte,
+    ne doit pas faire croire que la barre affichée tourne depuis longtemps
+    (le contrepoids serait mesuré pendant le lancement, #602)."""
+    best = None
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if (entry / "comm").read_text().strip() != "xfce4-panel" or entry.stat().st_uid != os.getuid():
+                continue
+            age = _seconds_since_start(int(entry.name))
+        except (OSError, ValueError):
+            continue
+        if age is not None and (best is None or age < best[1]):
+            best = (int(entry.name), age)
+    return best[0] if best else None
+
+
+def _write_if_changed(path, text):
     try:
-        listing = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids"],
-                                 capture_output=True, text=True, timeout=2).stdout
-        # Une ligne par id ; la première annonce le nombre d'éléments, traduite
-        # (« La valeur est un tableau de 12 éléments : ») : son nombre n'est pas un id.
-        ids = [int(line.strip()) for line in listing.splitlines() if line.strip().isdigit()]
-    except (OSError, subprocess.SubprocessError):
-        ids = []
-    # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
-    floating = taskbar_preferences()["STYLE"] == "floating"
-    # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
-    # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
-    # greffon, puis seulement étire ou non le séparateur 3.
-    if taskbar_alignment() == "left":
-        floating = True
-    if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
-        right = set(ids[ids.index(8) + 1:])
-        width = _settled_balance(ids, right, set(ids[:ids.index(3)]))
-    body = f'<rect width="{max(1, width)}" height="1" fill="none"/>'
-    icon = directory / f"spacer-{width}.svg"
-    if not icon.exists():
-        icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{max(1, width)}" height="1" viewBox="0 0 {max(1, width)} 1">{body}</svg>')
-    # <tool></tool> vide : sans balise, genmon affiche son infobulle par défaut
-    # (« (genmon) », commande, période) au survol de la zone à côté de Démarrer (#645).
-    print(f"<img>{icon}</img><tool></tool>")
-    raise SystemExit(0)
-elif kind == "notifications":
-    count = notification_count()
-    body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
-    tooltip = _t("Centre de notifications")
-    if count:
-        # Pastille du nombre de notifications, comme Windows 11 (#703).
-        badge = "9+" if count > 9 else str(count)
-        accent, on_accent = ("#b69cff", "#1c1a26") if DARK else ("#6a3df0", "#ffffff")
-        body = (f'<g transform="translate(0 4)">{body}</g><rect x="{11 if len(badge) == 1 else 7}" y="0" width="{13 if len(badge) == 1 else 17}" height="13" rx="6.5" fill="{accent}"/>'
-                f'<text x="{17.5 if len(badge) == 1 else 15.5}" y="10" text-anchor="middle" font-family="Inter, Noto Sans, DejaVu Sans, sans-serif" font-size="9.5" font-weight="700" fill="{on_accent}">{badge}</text>')
-        icon = svg_file(f"notifications-{badge}", 26, 28, body)
-    else:
-        icon = svg_file("notifications", 24, 24, body)
-    print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>/usr/bin/winlux-popup notifications</click>")
-    raise SystemExit(0)
-else:
-    raise SystemExit(2)
-print(f"<img>{svg_file(identity, 24, 24, body)}</img><tool>{html.escape(tooltip)}</tool><click>{QUICK}</click>")
+        if path.read_text(encoding="utf-8") == text:
+            return
+    except OSError:
+        pass
+    temporary = path.with_name(path.name + f".{os.getpid()}")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
+def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
+    """Boucle du service ; s'arrête sans barre des tâches pendant 20 s."""
+    import fcntl
+    folder = output_directory()
+    folder.mkdir(parents=True, exist_ok=True)
+    lock = open(folder / "serve.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0  # déjà lancé pour ce compte
+    # Sorties d'une session précédente (autre écran, autre ordre de greffons) :
+    # effacées, sinon le lecteur montrerait un contrepoids faux au démarrage (#602).
+    for stale in folder.glob("out-*"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    _write_if_changed(folder / "serve.pid", f"{os.getpid()}\n")
+    due = {kind: 0.0 for kind in SERVED}
+    missing_since = None
+    while rounds is None or rounds > 0:
+        if rounds is not None:
+            rounds -= 1
+        now = clock()
+        panel = _panel_pid()
+        if panel is None:
+            missing_since = missing_since or now
+            if now - missing_since > 20:
+                break
+        elif (_seconds_since_start(panel) or 0) < SETTLE:
+            # Barre en train de se lancer : les greffons calculent eux-mêmes
+            # (lecteur sans sortie servie), comme avant le service. Deux
+            # calculs en parallèle au lancement laissaient parfois une icône
+            # vide pour toute la session.
+            missing_since = None
+        else:
+            missing_since = None
+            refresh_settings()
+            for kind, period in SERVED.items():
+                if now < due[kind]:
+                    continue
+                due[kind] = now + period
+                try:
+                    line = render(kind, panel)
+                except Exception as error:  # un greffon en échec ne bloque pas les autres
+                    _balance_log(f"service : {kind} en échec ({error!r})")
+                    continue
+                if line:
+                    if kind == "balance":
+                        _balance_log(f"service : {line}")
+                    _write_if_changed(folder / f"out-{kind}", line + "\n")
+        sleep(1)
+    try:
+        (folder / "serve.pid").unlink()
+    except OSError:
+        pass
+    return 0
+
+
+def overflow(argv):
+    """winlux-tray overflow list|hide NOM|show NOM (zone de notification, #927)."""
+    action = argv[2] if len(argv) > 2 else "list"
+    if action == "list":
+        print(json.dumps(overflow_list(), ensure_ascii=False))
+        return 0
+    if action in ("hide", "show") and len(argv) == 4 and argv[3] not in OVERFLOW_SKIP:
+        return 0 if overflow_set(argv[3], action == "hide") else 1
+    return 2
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "overflow":
+        return overflow(argv)
+    if len(argv) != 2:
+        print("usage : winlux-tray status|search|balance|notifications|battery|audio|network|serve", file=sys.stderr)
+        return 2
+    if argv[1] == "serve":
+        # Lancé depuis un greffon : ne garder aucun descripteur hérité de genmon.
+        os.closerange(3, 1024)
+        return serve()
+    line = render(argv[1])
+    if line is None:
+        return 2
+    print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

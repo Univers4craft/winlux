@@ -4306,17 +4306,27 @@ pub extern "win64" fn flush_instruction_cache(
 ) -> i32 {
     1
 }
-pub extern "win64" fn get_tick_count() -> u32 {
-    CLOCK_START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_millis() as u32
-}
-pub extern "win64" fn get_tick_count64() -> u64 {
+/// Millisecondes écoulées depuis le démarrage du système, veille comprise,
+/// comme GetTickCount sous Windows (#534). CLOCK_BOOTTIME est monotone ;
+/// l'ancienne version comptait depuis le premier appel et rendait 0.
+pub fn boot_millis() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) } == 0 {
+        return ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000;
+    }
     CLOCK_START
         .get_or_init(std::time::Instant::now)
         .elapsed()
         .as_millis() as u64
+}
+pub extern "win64" fn get_tick_count() -> u32 {
+    boot_millis() as u32
+}
+pub extern "win64" fn get_tick_count64() -> u64 {
+    boot_millis()
 }
 pub unsafe extern "win64" fn get_current_process_id() -> u32 {
     libc::getpid() as u32
@@ -9034,7 +9044,24 @@ pub unsafe extern "win64" fn get_process_times(
     kernel: *mut u64,
     user: *mut u64,
 ) -> i32 {
-    let now = get_tick_count64() * 10_000; // 100ns units
+    process_or_thread_times(libc::RUSAGE_SELF, creation, exit, kernel, user)
+}
+
+/// Temps processeur réels (getrusage) en unités de 100 ns. GetProcessTimes
+/// rendait le temps écoulé depuis le premier GetTickCount comme temps
+/// « utilisateur » : faux dès que GetTickCount compte depuis le démarrage.
+unsafe fn process_or_thread_times(
+    who: i32,
+    creation: *mut u64,
+    exit: *mut u64,
+    kernel: *mut u64,
+    user: *mut u64,
+) -> i32 {
+    let mut usage: libc::rusage = core::mem::zeroed();
+    if libc::getrusage(who, &mut usage) != 0 {
+        usage = core::mem::zeroed();
+    }
+    let ticks = |t: libc::timeval| t.tv_sec as u64 * 10_000_000 + t.tv_usec as u64 * 10;
     if !creation.is_null() {
         *creation = 132_000_000_000_000_000;
     }
@@ -9042,10 +9069,10 @@ pub unsafe extern "win64" fn get_process_times(
         *exit = 0;
     }
     if !kernel.is_null() {
-        *kernel = now / 4;
+        *kernel = ticks(usage.ru_stime);
     }
     if !user.is_null() {
-        *user = now;
+        *user = ticks(usage.ru_utime);
     }
     1
 }
@@ -9057,7 +9084,7 @@ pub unsafe extern "win64" fn get_thread_times(
     kernel: *mut u64,
     user: *mut u64,
 ) -> i32 {
-    get_process_times(0, creation, exit, kernel, user)
+    process_or_thread_times(libc::RUSAGE_THREAD, creation, exit, kernel, user)
 }
 
 pub unsafe extern "win64" fn set_handle_information(h: usize, mask: u32, flags: u32) -> i32 {
@@ -9691,6 +9718,43 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    /// GetTickCount64 compte depuis le démarrage du système, pas depuis son
+    /// premier appel (#534) : la valeur suit /proc/uptime dès le départ.
+    #[test]
+    fn tick_count_depuis_le_demarrage() {
+        let uptime: f64 = std::fs::read_to_string("/proc/uptime")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let ticks = super::get_tick_count64();
+        let expected = (uptime * 1000.0) as u64;
+        assert!(ticks + 2000 >= expected, "{ticks} ms, uptime {expected} ms");
+    }
+
+    /// GetProcessTimes rend le vrai temps processeur, bien inférieur au temps
+    /// écoulé depuis le démarrage du système.
+    #[test]
+    fn process_times_temps_processeur() {
+        let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
+        let mut x = 0u64;
+        for i in 0..2_000_000u64 {
+            x = x.wrapping_mul(31).wrapping_add(i);
+        }
+        std::hint::black_box(x);
+        assert_eq!(
+            unsafe { super::get_process_times(0, &mut c, &mut e, &mut k, &mut u) },
+            1
+        );
+        assert!(u > 0, "temps utilisateur nul");
+        assert!(
+            u / 10_000 < super::get_tick_count64(),
+            "temps utilisateur = durée depuis le démarrage"
+        );
+    }
+
     /// WaitOnAddress n'est pas dans kernel32.dll sous Windows, seulement dans
     /// KernelBase et api-ms-win-core-synch-l1-2-0 (VLC choisit sa branche
     /// selon ce GetProcAddress, #495).
