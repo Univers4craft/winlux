@@ -601,5 +601,18 @@ ok((SCRIPTS / "winlux-webview.py").exists() and (SCRIPTS / "test-webview2.sh").e
    and "winlux-webview" in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")
    and '"webview2loader"' in (ROOT / "runtime/src/dlls/mod.rs").read_text(encoding="utf-8"),
    "WebView2 : WebView2Loader.dll maison, moteur WebKitGTK livré à la demande")
+# #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
+# en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
+runtime_dlls = ROOT / "runtime/src/dlls"
+ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exists()
+   and (runtime_dlls / "d3d8.rs").exists()
+   and (runtime_dlls / "d3dx9.rs").exists() and (runtime_dlls / "dsound_x86.rs").exists()
+   and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
+   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (ROOT / "runtime/src/audio/synth.rs").exists()
+   and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
+   and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
