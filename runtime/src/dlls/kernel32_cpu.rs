@@ -98,43 +98,6 @@ pub unsafe extern "win64" fn get_process_group_affinity(
     1
 }
 
-/// Les processus Winlux ne sont jamais placés dans un objet tâche (job).
-pub unsafe extern "win64" fn is_process_in_job(
-    _process: usize,
-    _job: usize,
-    result: *mut i32,
-) -> i32 {
-    if result.is_null() {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    *result = 0;
-    1
-}
-
-/// QueryInformationJobObject : sans objet tâche, aucune limite ne
-/// s'applique ; la structure demandée est rendue à zéro (aucun drapeau de
-/// limite, aucun plafond de CPU).
-pub unsafe extern "win64" fn query_information_job_object(
-    _job: usize,
-    _class: u32,
-    info: *mut u8,
-    len: u32,
-    ret_len: *mut u32,
-) -> i32 {
-    if info.is_null() && len != 0 {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    if !info.is_null() {
-        std::ptr::write_bytes(info, 0, len as usize);
-    }
-    if !ret_len.is_null() {
-        *ret_len = len;
-    }
-    1
-}
-
 thread_local! {
     static STACK_GUARANTEE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
@@ -851,8 +814,8 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetProcessAffinityMask" => fn get_process_affinity_mask,
         "GetProcessGroupAffinity" => fn get_process_group_affinity,
-        "IsProcessInJob" => fn is_process_in_job,
-        "QueryInformationJobObject" => fn query_information_job_object,
+        "IsProcessInJob" => fn super::jobs::is_process_in_job,
+        "QueryInformationJobObject" => fn super::jobs::query_information_job_object,
         "SetThreadStackGuarantee" => fn set_thread_stack_guarantee,
         "SetProcessAffinityMask" => fn set_process_affinity_mask,
         "SetThreadAffinityMask" => fn set_thread_affinity_mask,

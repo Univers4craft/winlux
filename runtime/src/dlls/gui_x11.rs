@@ -2650,6 +2650,9 @@ impl X11Backend {
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
+                if let Some(side) = gui::sided_modifier(vk, lparam) {
+                    gui::update_async_key_state(side, true);
+                }
                 // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
                 // produit pas de caractère (raccourci clavier).
                 // AltGr peut être encodé Ctrl+Alt par le serveur : XKB indique
@@ -2701,11 +2704,15 @@ impl X11Backend {
                     })
                     .unwrap_or(e.detail as usize);
                 gui::update_async_key_state(vk, false);
+                let lparam = key_lparam(e.detail, true, vk_is_extended(vk));
+                if let Some(side) = gui::sided_modifier(vk, lparam) {
+                    gui::update_async_key_state(side, false);
+                }
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KEYUP,
                     wparam: vk,
-                    lparam: key_lparam(e.detail, true, vk_is_extended(vk)),
+                    lparam,
                 })
             }
             Event::MappingNotify(_) => {

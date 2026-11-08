@@ -163,6 +163,19 @@ __declspec(noinline) int t_stack_overflow() {
     return code == 77 ? 0 : 1;
 }
 
+// 12. Débordement de pile sur le thread principal (#15) : rattrapé aussi,
+//     puis une seconde fois, preuve que la pile de secours a été rendue.
+__declspec(noinline) int t_main_overflow() {
+    for (int round = 0; round < 2; round++) {
+        depth = 0;
+        int got = 0;
+        __try { recurse(0); }
+        __except (keep(__exception_info(), 0xC00000FD)) { got = depth > 100; }
+        if (!got) return 1;
+    }
+    return 0;
+}
+
 // 11. Faute matérielle sous un __finally, rattrapée plus haut : le
 //     déroulement exécute le bloc __finally.
 static int finally_ran;
@@ -191,8 +204,19 @@ int entry() {
         *(volatile int *)(u64)zero = 1;
         ExitProcess(99);
     }
+    // Débordement non rattrapé (#15), sur le thread principal ou sur un
+    // thread secondaire : rapport de plantage EXCEPTION_STACK_OVERFLOW.
+    if (has_arg(GetCommandLineA(), "overflow-thread")) {
+        void *t = CreateThread(0, 256 * 1024, (u32(__stdcall *)(void *))recurse, 0, 0, 0);
+        WaitForSingleObject(t, 0xFFFFFFFF);
+        ExitProcess(98);
+    }
+    if (has_arg(GetCommandLineA(), "overflow")) {
+        recurse(0);
+        ExitProcess(97);
+    }
     int (*tests[])() = {t_null_write, t_read_address, t_divide, t_breakpoint, t_illegal, t_veh_resume,
-                        t_filter_continue, t_guard_page, t_single_step, t_stack_overflow, t_finally_on_fault};
+                        t_filter_continue, t_guard_page, t_single_step, t_stack_overflow, t_finally_on_fault, t_main_overflow};
     for (unsigned i = 0; i < sizeof tests / sizeof *tests; i++)
         if (tests[i]()) ExitProcess(i + 1);
     ExitProcess(0);

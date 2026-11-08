@@ -825,6 +825,11 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
+ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
+   and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
 # #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
 ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
    and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
@@ -846,6 +851,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
    "Rechercher/Remplacer : boîte non modale, FINDMSGSTRING au propriétaire, x86 et crochet (#712)")
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
+
+# #19 : objets job (KILL_ON_JOB_CLOSE, TerminateJobObject, enfants rattachés).
+_jobs = (ROOT / "runtime/src/dlls/jobs.rs").read_text()
+ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object_et_liste_des_pid" in _jobs
+   and "jobs::on_child_created(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
 
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
@@ -922,6 +934,11 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
+ok((SCRIPTS / "test-paintnet-d2d.py").exists()
+   and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
+   "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas
@@ -952,6 +969,14 @@ ok("def display_policy" in settings_source and "display_policy(screens)" in sett
    and "Jamais de menu vide (#998)" in settings_source
    and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
    "Paramètres : menus Écran et Alimentation jamais vides (#998)")
+# ── Débordement de pile (#15) : rattrapé sur le thread principal, et sinon
+# rapport EXCEPTION_STACK_OVERFLOW (0xC00000FD) au lieu d'une faute dans Winlux.
+ok("fn resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh.rs").read_text()
+   and "resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh_hw.rs").read_text()
+   and "reported == 0xC000_00FD" in (ROOT / "runtime/src/quality.rs").read_text()
+   and "t_main_overflow" in (ROOT / "testc/msvc/hwexc_msvc.c").read_text()
+   and "overflow-thread" in (SCRIPTS / "test-hw-exceptions.sh").read_text(),
+   "débordement de pile : rattrapé sur tout thread, sinon rapport EXCEPTION_STACK_OVERFLOW (#15)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
