@@ -162,6 +162,7 @@ pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
+pub mod ole32_storage;
 pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
@@ -546,6 +547,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = ole32::exports();
                     e.extend(dataobject::ole32_exports());
+                    e.extend(ole32_storage::exports());
                     for (name, addr) in wpf_native::ole32_exports() {
                         e.entry(name).or_insert(addr);
                     }
