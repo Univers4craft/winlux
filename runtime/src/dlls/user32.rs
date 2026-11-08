@@ -2477,8 +2477,15 @@ pub unsafe extern "win64" fn get_update_rect(hwnd: usize, rect: *mut Rect, _eras
     }
 }
 
-pub unsafe extern "win64" fn get_update_rgn(_hwnd: usize, _rgn: usize, _erase: i32) -> i32 {
-    1 // SIMPLEREGION
+/// `GetUpdateRgn` : la zone à repeindre est tout le rectangle client.
+/// wxHtmlWindow ne dessine que les cellules comprises dans la boîte de cette
+/// région ; laissée vide, le titre de l'accueil d'Audacity restait blanc (#1054).
+pub unsafe extern "win64" fn get_update_rgn(hwnd: usize, rgn: usize, _erase: i32) -> i32 {
+    const SIMPLEREGION: i32 = 2;
+    match gui::window_client_rect(hwnd) {
+        Some(r) if gui::set_region_rect(rgn, r) => SIMPLEREGION,
+        _ => 0, // ERROR
+    }
 }
 
 /// `RedrawWindow` : RDW_VALIDATE (sans RDW_INVALIDATE) valide la fenêtre,
@@ -4455,6 +4462,41 @@ mod tests_messages {
                 real_get_window_class_w(0x7777_0000, buf.as_mut_ptr(), 32),
                 0
             );
+            destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn region_a_repeindre_couvre_la_zone_client() {
+        // #1054 : wxHtmlWindow lit GetUpdateRgn puis GetRgnBox et ne dessine
+        // que ce qui tombe dedans ; une région vide le laissait blanc.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                120,
+                40,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let rgn = crate::dlls::gdi32::create_rect_rgn(0, 0, 0, 0);
+            assert_eq!(get_update_rgn(hwnd, rgn, 0), 2); // SIMPLEREGION
+            let mut r = Rect::default();
+            crate::dlls::gdi32::get_rgn_box(rgn, &mut r);
+            let client = gui::window_client_rect(hwnd).unwrap();
+            assert_eq!(
+                (r.left, r.top, r.right, r.bottom),
+                (client.left, client.top, client.right, client.bottom)
+            );
+            assert!(r.right > r.left && r.bottom > r.top);
             destroy_window(hwnd);
         }
     }
