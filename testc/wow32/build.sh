@@ -316,6 +316,19 @@ EXPORTS
 DirectPlayCreate@12
 DirectPlayLobbyCreateA@20
 DEF
+cat >"$tmp/jeux_msacm32.def" <<'DEF'
+LIBRARY msacm32.dll
+EXPORTS
+acmMetrics@12
+acmFormatSuggest@20
+acmFormatTagDetailsA@12
+acmStreamOpen@32
+acmStreamSize@16
+acmStreamPrepareHeader@12
+acmStreamUnprepareHeader@12
+acmStreamConvert@12
+acmStreamClose@8
+DEF
 cat >"$tmp/jeux_dpnet.def" <<'DEF'
 LIBRARY dpnet.dll
 EXPORTS
@@ -394,7 +407,7 @@ waveOutWrite@12
 waveOutClose@4
 DEF
 mkdir -p "$tmp/jeux64"
-for lib in jeux jeux_user32 jeux_gdi32 jeux_ddraw jeux_d3d8 jeux_d3d9 jeux_d3dx9 jeux_dsound jeux_ole32 jeux_dplayx jeux_dpnet jeux_winmm; do
+for lib in jeux jeux_user32 jeux_gdi32 jeux_ddraw jeux_d3d8 jeux_d3d9 jeux_d3dx9 jeux_dsound jeux_ole32 jeux_dplayx jeux_dpnet jeux_msacm32 jeux_winmm; do
     llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
     sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/jeux64/$lib.def"
     llvm-dlltool -m i386:x86-64 -d "$tmp/jeux64/$lib.def" -l "$tmp/jeux64/$lib.lib"
@@ -402,11 +415,11 @@ done
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
     "$tmp/jeux32.obj" "$tmp/jeux.lib" "$tmp/jeux_user32.lib" "$tmp/jeux_gdi32.lib" \
-    "$tmp/jeux_ddraw.lib" "$tmp/jeux_d3d8.lib" "$tmp/jeux_d3d9.lib" "$tmp/jeux_d3dx9.lib" "$tmp/jeux_dsound.lib" "$tmp/jeux_ole32.lib" "$tmp/jeux_dplayx.lib" "$tmp/jeux_dpnet.lib" "$tmp/jeux_winmm.lib" /out:"$out/jeux32.exe"
+    "$tmp/jeux_ddraw.lib" "$tmp/jeux_d3d8.lib" "$tmp/jeux_d3d9.lib" "$tmp/jeux_d3dx9.lib" "$tmp/jeux_dsound.lib" "$tmp/jeux_ole32.lib" "$tmp/jeux_dplayx.lib" "$tmp/jeux_dpnet.lib" "$tmp/jeux_msacm32.lib" "$tmp/jeux_winmm.lib" /out:"$out/jeux32.exe"
 clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux64/jeux64.obj"
 lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
     "$tmp/jeux64/jeux64.obj" "$tmp/jeux64/jeux.lib" "$tmp/jeux64/jeux_user32.lib" \
-    "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_dpnet.lib" "$tmp/jeux64/jeux_winmm.lib" \
+    "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_dpnet.lib" "$tmp/jeux64/jeux_msacm32.lib" "$tmp/jeux64/jeux_winmm.lib" \
     /out:"$out/jeux64.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans

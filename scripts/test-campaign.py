@@ -759,6 +759,12 @@ ok((runtime_dlls / "winmm_midi_in.rs").exists()
    and "WINLUX_MIDI_IN_DIR" in (SCRIPTS / "test-wow32.sh").read_text()
    and "midi_in_tests" in (ROOT / "testc/wow32/jeux32.c").read_text(),
    "entrée MIDI : midiIn* lit /dev/snd/midiC*D* (statut courant, temps réel, système exclusif)")
+# #237 : msacm32, conversions PCM (format, canaux, fréquence) testées par jeux32/jeux64.
+ok((runtime_dlls / "msacm32.rs").exists()
+   and '"msacm32"' in (runtime_dlls / "mod.rs").read_text()
+   and "acm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
+   and "msacm32 (conversions PCM)" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "msacm32 : acmStream* convertit le PCM (8/16/24/32 bits, flottant, canaux, fréquence)")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
@@ -1032,6 +1038,10 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1085 : une cible Direct2D 1.0 répond aussi à ID2D1DeviceContext à 6.
+ok("fn context_view(" in (ROOT / "runtime/src/dlls/d2d1_1.rs").read_text()
+   and "v11::context_view(this, out)" in (ROOT / "runtime/src/dlls/d2d1.rs").read_text(),
+   "Direct2D : HwndRenderTarget, DCRenderTarget et BitmapRenderTarget servent ID2D1DeviceContext6 (#1085)")
 # #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
 ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()

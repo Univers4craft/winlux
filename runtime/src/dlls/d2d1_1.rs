@@ -264,6 +264,77 @@ pub(super) unsafe fn is_device_context(this: *mut TargetObj) -> bool {
     *(this as *const *const ()) == DC_VT.ptr()
 }
 
+// --- Vue « contexte d'appareil » des cibles 1.0 ------------------------------------
+
+/// Sous Windows 8 et suivants, toute cible Direct2D répond à QueryInterface
+/// vers ID2D1DeviceContext à ID2D1DeviceContext6 (#1085). Les méthodes 57 et
+/// suivantes des cibles 1.0 (Hwnd, DC, Bitmap) n'ont pas le sens de celles du
+/// contexte : la cible remet donc un second pointeur d'interface dont chaque
+/// méthode est un relais qui remplace `this` par la cible puis saute dans
+/// DC_VT. AddRef, Release et QueryInterface relaient aussi : la vue vit
+/// autant que sa cible et IUnknown reste la cible elle-même.
+#[repr(C)]
+pub(super) struct ContextView {
+    vtbl: *const (),
+    target: *mut TargetObj,
+    dc: *const (),
+}
+
+// Chaque relais `i` (16 octets alignés) : rax = DC_VT, rcx = cible, saut
+// vers DC_VT[i]. La table des relais est construite au même endroit.
+core::arch::global_asm!(
+    ".pushsection .text.winlux_d2d_context_view,\"ax\",@progbits",
+    ".p2align 4",
+    "winlux_d2d_context_thunks:",
+    ".set winlux_d2d_k, 0",
+    ".rept 120",
+    ".p2align 4",
+    "mov rax, qword ptr [rcx + 16]",
+    "mov rcx, qword ptr [rcx + 8]",
+    "jmp qword ptr [rax + 8 * winlux_d2d_k]",
+    ".set winlux_d2d_k, winlux_d2d_k + 1",
+    ".endr",
+    ".popsection",
+    ".pushsection .data.rel.ro.winlux_d2d_context_view,\"aw\",@progbits",
+    ".p2align 3",
+    ".globl winlux_d2d_context_view_vt",
+    "winlux_d2d_context_view_vt:",
+    ".set winlux_d2d_k, 0",
+    ".rept 120",
+    ".quad winlux_d2d_context_thunks + 16 * winlux_d2d_k",
+    ".set winlux_d2d_k, winlux_d2d_k + 1",
+    ".endr",
+    ".popsection",
+);
+
+extern "C" {
+    static winlux_d2d_context_view_vt: [*const (); 120];
+}
+
+fn view_vt() -> *const () {
+    std::ptr::addr_of!(winlux_d2d_context_view_vt) as *const ()
+}
+
+/// QueryInterface d'une cible 1.0 vers ID2D1DeviceContext* : sa vue.
+pub(super) unsafe fn context_view(this: *mut TargetObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let p = {
+        let mut t = target(this);
+        let v = t.ext.view.get_or_insert_with(|| {
+            Box::new(ContextView {
+                vtbl: view_vt(),
+                target: this,
+                dc: DC_VT.ptr(),
+            })
+        });
+        &mut **v as *mut ContextView
+    };
+    Com::add_ref(this);
+    put(out, p)
+}
+
 // --- Prolongement de la cible pour le contexte d'appareil --------------------------
 
 /// Champs propres au contexte d'appareil (vides pour les cibles 1.0).
@@ -275,6 +346,8 @@ pub(super) struct TargetExt {
     /// D2D1_RENDERING_CONTROLS : précision et taille des tuiles.
     controls: [u32; 3],
     dpi: (f32, f32),
+    /// Vue ID2D1DeviceContext d'une cible 1.0 (créée à la première demande).
+    view: Option<Box<ContextView>>,
 }
 
 impl Default for TargetExt {
@@ -285,6 +358,7 @@ impl Default for TargetExt {
             primitive_blend: 0,
             controls: [1, 1024, 1024],
             dpi: (96.0, 96.0),
+            view: None,
         }
     }
 }
@@ -788,9 +862,10 @@ unsafe extern "win64" fn device_create_context(
         out: Output::None,
         state: TargetState::default(),
         drawing: false,
-        ext: TargetExt {
-            device: this.cast(),
-            ..TargetExt::default()
+        ext: {
+            let mut ext = TargetExt::default();
+            ext.device = this.cast();
+            ext
         },
     };
     put(
@@ -1680,6 +1755,11 @@ unsafe extern "win64" fn dc_get_device(this: *mut TargetObj, out: *mut *mut c_vo
 /// les lui rend (et à sa texture s'il vient d'une surface DXGI).
 unsafe extern "win64" fn dc_set_target(this: *mut TargetObj, image: *mut c_void) {
     let mut t = target(this);
+    if matches!(t.out, Output::Hwnd(_) | Output::Dc { .. }) {
+        // Vue d'une cible fenêtre ou HDC : sa destination ne change pas.
+        crate::log_warn!("d2d1", "SetTarget refusé sur une cible fenêtre ou HDC");
+        return;
+    }
     let new_out = if !image.is_null() && *(image as *const *const ()) == BITMAP_VT.ptr() {
         let b = &Com::get(image as *mut BitmapObj).data;
         t.w = b.w;
