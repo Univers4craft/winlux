@@ -198,6 +198,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod thread_ctl;
 pub mod threadpool;
+pub mod timer_queue;
 pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
