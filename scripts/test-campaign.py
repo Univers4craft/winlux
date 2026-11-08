@@ -573,7 +573,7 @@ ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/pr
 # #721 / #722 : plus de « Gestionnaire de fichiers » en double, page Applications installées.
 ok('"xfce4-file-manager.desktop"' in (SCRIPTS / "winlux-start-menu.py").read_text()
    and (SCRIPTS / "winlux-installed-apps.py").exists() and (SCRIPTS / "test-installed-apps.py").exists()
-   and '_t("Applications installées")]' in (SCRIPTS / "winlux-settings.py").read_text(),
+   and '_t("Sauvegarde"), _t("Applications installées")' in (SCRIPTS / "winlux-settings.py").read_text(),
    "menu Démarrer sans « Gestionnaire de fichiers » ; Paramètres > Applications installées (page 39)")
 
 # #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
@@ -587,6 +587,42 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #662 : dictée vocale (Windows + H) et sous-titres en direct (Windows + Ctrl + L),
+# modèle local vérifié par empreinte ; un compte existant reçoit les deux raccourcis.
+with tempfile.TemporaryDirectory() as directory:
+    home = Path(directory)
+    native_config(home)
+    rc = home / ".config/openbox/rc.xml"
+    text = rc.read_text()
+    ok("winlux-speech dictate" in text and "winlux-speech captions" in text, "compte neuf : Windows + H et Windows + Ctrl + L")
+    tree = ET.parse(rc)
+    keyboard = tree.getroot().find(f"{OB}keyboard")
+    for binding in [b for b in keyboard if b.get("key") in ("W-h", "W-C-l")]: keyboard.remove(binding)
+    tree.write(rc)
+    (rc.parent / "winlux-raccourcis-proposes.txt").write_text("W-h\nW-C-l\n")
+    native_config(home)
+    keys = {b.get("key") for b in ET.parse(rc).getroot().iter(f"{OB}keybind")}
+    ok({"W-h", "W-C-l"} <= keys, "compte existant : la dictée et les sous-titres arrivent avec la mise à jour")
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok('"sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"' in speech
+   and "digest.hexdigest() != info[\"sha256\"]" in speech and (SCRIPTS / "test-speech.py").exists(),
+   "voix : modèle Whisper base téléchargé à la demande, empreinte SHA-256 vérifiée, rien dans l'ISO")
+pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("if not mic and not output: return" in pages and '"LC_ALL": "C"' not in speech and 'LC_ALL="C"' in speech,
+   "voix : section masquée sans micro ni sortie audio ; pactl et parec en locale C")
+# #660 : pages VPN (40) et Point d'accès sans fil mobile (41), travail root
+# par le relais, état dans la zone de notification et les Réglages rapides.
+root_relay = (SCRIPTS / "winlux-root.py").read_text()
+ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exists()
+   and (SCRIPTS / "test-vpn-hotspot.py").exists()
+   and 'if tool == "winlux-vpn":' in root_relay and 'if tool == "winlux-hotspot":' in root_relay
+   and '_t("VPN"), _t("Point d’accès sans fil mobile")]' in (SCRIPTS / "winlux-settings.py").read_text()
+   and "def tunnels():" in (SCRIPTS / "winlux-tray.py").read_text()
+   and '"vpn": side_available("winlux-vpn")' in (SCRIPTS / "winlux-popup.py").read_text(),
+   "Paramètres > VPN et Point d'accès sans fil mobile, relais root, zone de notification, Réglages rapides")
+# #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
+ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
+   "Paramètres : interrupteurs activés à la couleur d'accent")
 # #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
 # en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
 runtime_dlls = ROOT / "runtime/src/dlls"

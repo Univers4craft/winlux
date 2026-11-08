@@ -396,6 +396,20 @@ pub(super) fn convert_message(
     wparam: u32,
     lparam: u32,
 ) -> Option<Converted> {
+    // WM_DRAWITEM… que le code x86 transmet à une procédure 64 bits
+    // (DefDlgProc, CallWindowProc) : la structure repasse en 64 bits, sinon
+    // la procédure x86 suivante la recevait convertie deux fois (titre vide
+    // du panneau de PuTTY 32 bits, #800).
+    if lparam != 0 {
+        let wp = widen(wparam) as usize;
+        match msg {
+            0x002B => return Some(struct_in(&DRAWITEMSTRUCT, lparam, 48, wp, false)),
+            0x002C => return Some(struct_in(&MEASUREITEMSTRUCT, lparam, 24, wp, true)),
+            0x002D => return Some(struct_in(&DELETEITEMSTRUCT, lparam, 20, wp, false)),
+            0x0039 => return Some(struct_in(&COMPAREITEMSTRUCT, lparam, 32, wp, false)),
+            _ => {}
+        }
+    }
     // Tous les messages ci-dessous passent une structure par lParam (sauf
     // TB_BUTTONSTRUCTSIZE, traité à part).
     if msg < 0x400 {
@@ -993,6 +1007,25 @@ mod tests {
         assert_eq!(b[8], 4);
         assert_eq!(u64::from_le_bytes(b[24..32].try_into().unwrap()), u64::MAX);
         assert_eq!(&b[32..36], &7i32.to_le_bytes());
+    }
+
+    /// #800 : un WM_DRAWITEM que le code x86 transmet (DefDlgProc) repasse
+    /// en disposition 64 bits avant d'atteindre le runtime.
+    #[test]
+    fn drawitem_x86_repasse_en_64_bits() {
+        let low = super::super::alloc_low(4096, false);
+        let x86 = unsafe { std::slice::from_raw_parts_mut(low as *mut u32, 12) };
+        // CtlType, CtlID, itemID, action, state, hwndItem, hDC, rcItem, data.
+        x86.copy_from_slice(&[5, 1003, 0, 1, 0, 0x40010, 0x210026, 0, 0, 286, 18, 0x77]);
+        let c = convert_message(0, 0x002B, 1003, low as u32).expect("converti");
+        let w = c.lparam as usize;
+        let q = |o: usize| unsafe { ((w + o) as *const u64).read_unaligned() };
+        let d = |o: usize| unsafe { ((w + o) as *const i32).read_unaligned() };
+        assert_eq!((d(0), d(4)), (5, 1003));
+        assert_eq!((q(24), q(32)), (0x40010, 0x210026));
+        assert_eq!((d(40), d(44), d(48), d(52)), (0, 0, 286, 18));
+        assert_eq!(q(56), 0x77);
+        (c.done.unwrap())(1);
     }
 
     #[test]
