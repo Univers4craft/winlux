@@ -900,6 +900,24 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
+# suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
+# tourner à 100 % ; une exception non gérée affiche le message .NET, pas
+# « Stack overflow. » (page de garde de la pile).
+ok((runtime_dlls / "thread_ctl.rs").exists()
+   and '"SuspendThread" => fn crate::dlls::kernel32::suspend_thread' in (runtime_dlls / "kernel32_node.rs").read_text()
+   and '"SetThreadContext" => fn crate::dlls::kernel32::set_thread_context' in (runtime_dlls / "games_win32.rs").read_text()
+   and "fn stack_region(" in (runtime_dlls / "kernel32.rs").read_text()
+   and (runtime_dlls / "write_watch.rs").exists()
+   and '"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch' in (runtime_dlls / "kernel32.rs").read_text()
+   and "fn wait_message() -> i32 {\n    loop {" in (runtime_dlls / "user32.rs").read_text()
+   and "fn peek_due_timer(" in (runtime_dlls / "gui.rs").read_text()
+   and "raise_exception_export()" in (runtime_dlls / "seh.rs").read_text()
+   and '"CoRegisterMessageFilter"' in (runtime_dlls / "ole32.rs").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-mingw.sh").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
+   ".NET autonome et WinForms : suspension de threads, contexte, WaitMessage, page de garde de pile")
+
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
 ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1

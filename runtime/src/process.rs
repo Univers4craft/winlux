@@ -811,8 +811,10 @@ fn start(exe: Module) -> u32 {
     if crate::wow32::active() {
         return crate::wow32::call32(entry, &[]) as u32;
     }
-    let f: extern "win64" fn() -> u32 = unsafe { std::mem::transmute(entry) };
-    f()
+    // Thread principal : objet de thread Win32 (OpenThread, suspension par
+    // le ramasse-miettes de .NET) et racine de pile Windows.
+    let _ = crate::dlls::kernel32::current_thread_object();
+    crate::dlls::thread_ctl::root_call(entry, 0)
 }
 
 /// Action personnalisée DLL de Windows Installer (#833) : la DLL est le
