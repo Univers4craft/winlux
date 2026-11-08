@@ -10,3 +10,7 @@ ok("def confirm(" in squirrel_py and all(lang in squirrel_py for lang in ('"fr"'
    and "winlux-squirrel-update" in (SCRIPTS / "build-live-iso.sh").read_text(encoding="utf-8")
    and "test-squirrel-update.py" in (SCRIPTS / "test-all.d" / "1190-mise-a-jour-squirrel.sh").read_text(encoding="utf-8"),
    "winlux-squirrel-update : confirmation en 4 langues, HTTPS seul, extraction protégée, dans l'ISO (#1190)")
+# Suite au banc sur 43fc227 : l'assembly ILMergée de Claude s'appelle « Update.exe ».
+ok('strip_suffix(".exe")' in (runtime_dlls.parent / "managed.rs").read_text(encoding="utf-8")
+   and '"Squirrel.Update" && a.get_string(td.name) == "Program"' in (runtime_dlls.parent / "managed.rs").read_text(encoding="utf-8"),
+   "Update.exe de Squirrel reconnu même ILMergé (assembly « Update.exe ») ou renommé (#1190)")
