@@ -634,6 +634,9 @@ _TR = {
     # Widgets (Windows + W)
     'Widgets': ('Widgets', 'Widgets', 'Widgets'),
     'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
+    'Autres icônes de la barre d’état système': ('Other system tray icons', 'Otros iconos de la bandeja del sistema', 'Weitere Symbole im Infobereich'),
+    'Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici.': ('None yet: every program that shows an icon next to the clock appears here.', 'Ninguno por ahora: cada programa que muestra un icono junto a la hora aparece aquí.', 'Noch keine: Jedes Programm, das ein Symbol neben der Uhr anzeigt, erscheint hier.'),
+    'Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre.': ('When off, the icon goes behind the arrow next to the network icon. Click the arrow to show it.', 'Desactivado, el icono se guarda tras la flecha, junto a la red. Un clic en la flecha lo muestra.', 'Ausgeschaltet wandert das Symbol hinter den Pfeil neben dem Netzwerksymbol. Ein Klick auf den Pfeil zeigt es.'),
     'Bouton Widgets dans la barre des tâches': ('Widgets button on the taskbar', 'Botón Widgets en la barra de tareas', 'Widgets-Schaltfläche in der Taskleiste'),
     'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
     'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
@@ -658,12 +661,10 @@ _TR = {
     'Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.': ('A small AI that runs on this PC, with no account or Internet. Three agents: find a file and open it in File Explorer, change a setting, help with a program.', 'Una pequeña IA que funciona en este equipo, sin cuenta ni Internet. Tres agentes: encontrar un archivo y abrirlo en el Explorador, cambiar un ajuste, ayudar con un programa.', 'Eine kleine KI, die auf diesem PC läuft, ohne Konto und ohne Internet. Drei Agenten: eine Datei finden und im Explorer öffnen, eine Einstellung ändern, bei einem Programm helfen.'),
     'À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…).': ('When you turn it on, Claude Code is downloaded if needed (about 300 MB), then you sign in to your Claude account (Google, email…).', 'Al activarlo, se descarga Claude Code si falta (unos 300 MB) y luego inicia sesión en su cuenta de Claude (Google, correo…).', 'Beim Aktivieren wird Claude Code bei Bedarf heruntergeladen (etwa 300 MB), dann melden Sie sich bei Ihrem Claude-Konto an (Google, E-Mail…).'),
     'À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…).': ('When you turn it on, Codex, OpenAI’s official tool, is downloaded (about 170 MB), then you sign in to your ChatGPT account (Google, email…).', 'Al activarlo, se descarga Codex, la herramienta oficial de OpenAI (unos 170 MB), y luego inicia sesión en su cuenta de ChatGPT (Google, correo…).', 'Beim Aktivieren wird Codex, das offizielle Werkzeug von OpenAI, heruntergeladen (etwa 170 MB), dann melden Sie sich bei Ihrem ChatGPT-Konto an (Google, E-Mail…).'),
-    'À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert.': ('When you turn it on, the llama.cpp engine (about 30 MB) and the Qwen2.5 1.5B model (about 1.1 GB) are downloaded. It only runs while its panel is open.', 'Al activarla, se descargan el motor llama.cpp (unos 30 MB) y el modelo Qwen2.5 1,5B (unos 1,1 GB). Solo funciona mientras su panel está abierto.', 'Beim Aktivieren werden die llama.cpp-Engine (etwa 30 MB) und das Modell Qwen2.5 1,5B (etwa 1,1 GB) heruntergeladen. Sie läuft nur, solange ihr Fenster geöffnet ist.'),
     'Compte {name}': ('{name} account', 'Cuenta de {name}', '{name}-Konto'),
     'Modèle': ('Model', 'Modelo', 'Modell'),
     'Supprimer l’IA locale': ('Remove the local AI', 'Eliminar la IA local', 'Lokale KI entfernen'),
     'Pas encore téléchargé': ('Not downloaded yet', 'Aún no descargado', 'Noch nicht heruntergeladen'),
-    'Qwen2.5 1,5B, sur ce PC': ('Qwen2.5 1.5B, on this PC', 'Qwen2.5 1,5B, en este equipo', 'Qwen2.5 1,5B, auf diesem PC'),
     'Terminer l’installation': ('Finish installing', 'Terminar la instalación', 'Installation abschließen'),
     'Vérification de la connexion…': ('Checking the sign-in…', 'Comprobando el inicio de sesión…', 'Anmeldung wird geprüft…'),
     'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
@@ -2096,6 +2097,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.tray_icon_settings()
         self.start_menu_settings()
         self.theme_files()
         if have("winlux-widgets"):
@@ -2119,6 +2121,29 @@ class ExtraPages:
             # « Aligner les icônes sur la grille » de Windows : seul le
             # rangement automatique est proposé.
             self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
+
+    def tray_icon_settings(self):
+        """Icônes cachées derrière la flèche, à côté du réseau : une par
+        programme, comme « Autres icônes de la barre d’état système » de
+        Windows 11. winlux-tray overflow lit et écrit la liste du greffon
+        systray d'XFCE, appliquée en direct."""
+        if not have("winlux-tray"):
+            return
+        try:
+            listing = subprocess.run(["winlux-tray", "overflow", "list"], capture_output=True, text=True, timeout=5).stdout
+            items = json.loads(listing or "[]")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            items = []
+        self.section(_t("Autres icônes de la barre d’état système"))
+        box = self.card()
+        if not items:
+            self.hint(_t("Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici."), box)
+            return
+        for item in items:
+            name = str(item.get("name", ""))
+            self.switch(box, name[:1].upper() + name[1:], not item.get("hidden"),
+                        lambda on, n=name: self.tool(["winlux-tray", "overflow", "show" if on else "hide", n], refresh=False))
+        self.hint(_t("Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre."), box)
 
     def start_menu_settings(self):
         """Menu Démarrer (#685) : volet « Pour vous » et historique local.
@@ -3465,7 +3490,7 @@ class ExtraPages:
          "À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…)."),
         ("local", "IA locale",
          "Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.",
-         "À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert."),
+         ""),
     )
 
     def page_assistant(self):
@@ -3486,7 +3511,8 @@ class ExtraPages:
                 self.actions(box, [(_t("Afficher la fenêtre d’activation"), lambda k=key: self.assistant_toggle(k, True))])
                 continue
             if not enabled:
-                self.hint(_t(before), box)
+                # IA locale : modèle choisi pour ce PC et ce qu'il coûte (#928).
+                self.hint(module.plan_text(backend.plan()) if not backend.remote else _t(before), box)
                 continue
             account = Gtk.Label(label=_t("Vérification de la connexion…"), xalign=0)
             account.get_style_context().add_class("subtitle")
@@ -3501,7 +3527,7 @@ class ExtraPages:
 
             def checked(status, account=account, buttons=buttons, key=key, backend=backend):
                 if not status.get("installed"): text = _t("Pas encore téléchargé")
-                elif not backend.remote: text = _t("Qwen2.5 1,5B, sur ce PC")
+                elif not backend.remote: text = module.local_model_text()
                 elif status.get("loggedIn"):
                     who = module.account_name(status)
                     text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté au compte")

@@ -495,6 +495,21 @@ jobs:
       - name: Installer une appli Squirrel (Claude pour Windows)
         run: sh scripts/test-squirrel.sh
 
+      - name: Programmes lancés par les installeurs NSIS (#179)
+        run: |
+          sudo apt-get install -y -q nsis || { sudo apt-get update -q && sudo apt-get install -y -q nsis; }
+          sh scripts/test-setup-run.sh
+
+      - name: Actions personnalisées et services msiexec (#833)
+        run: |
+          sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
+          sh scripts/test-msi-actions.sh
+
+      - name: Assistant d'installation au double-clic (#833)
+        run: |
+          sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }
+          sh scripts/test-setup-wizard.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
@@ -580,6 +595,9 @@ jobs:
       - name: Alignement de la barre appliqué en direct, sans relance manuelle
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-live-align.py
 
+      - name: Icônes cachées une par une derrière la flèche de la zone de notification
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-tray-overflow.py
+
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 
@@ -630,6 +648,9 @@ jobs:
 
       - name: Menu Démarrer rouvert dans son état initial (vue Épinglé, recherche vide, liste en haut)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-menu-reset.py
+
+      - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
 
       - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
         run: |
