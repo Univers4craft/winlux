@@ -2099,7 +2099,14 @@ unsafe fn tab_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize>
                 return Some(0);
             }
             let it = std::ptr::read_unaligned(lp as *const TcItem);
-            let text = read_text_ptr(it.text, msg == 0x133D);
+            // pszText n'est lu qu'avec TCIF_TEXT : sinon le champ peut être
+            // non initialisé (la VCL de Delphi ne remplit que mask et
+            // lParam pour ranger l'objet d'un onglet, #1129).
+            let text = if it.mask & 0x1 != 0 {
+                read_text_ptr(it.text, msg == 0x133D)
+            } else {
+                None
+            };
             let ok = with_common(hwnd, |s| match s.tabs.get_mut(wp) {
                 Some(t) => {
                     if it.mask & 0x1 != 0 {
