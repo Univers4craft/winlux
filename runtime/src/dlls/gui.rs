@@ -2958,7 +2958,10 @@ pub fn foreign_client_rect(hwnd: usize) -> Option<Rect> {
 pub fn native_window(hwnd: usize) -> Option<u64> {
     let mut id = None;
     with_backend(|b| id = b.native_window(hwnd));
-    id
+    // Fenêtre d'un autre processus du compte : les fenêtres X11 sont
+    // communes à tous les clients du serveur, Direct3D peut y présenter
+    // (processus GPU de Chromium, #1228).
+    id.or_else(|| foreign_window(hwnd).map(|f| f.xid))
 }
 
 pub fn monitors() -> Vec<Monitor> {
