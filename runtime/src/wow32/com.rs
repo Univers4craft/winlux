@@ -333,6 +333,83 @@ pub(super) static IACCPROPSERVICES: Iface = Iface {
     ],
 };
 
+/// IWbemLocator : WMI en lecture (#1198).
+pub(super) static IWBEMLOCATOR: Iface = Iface {
+    name: "IWbemLocator",
+    iid: crate::dlls::wbem::IID_IWBEM_LOCATOR,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, I, I, I, I, I, Out(&IWBEMSERVICES)]), // ConnectServer
+    ],
+};
+
+/// IWbemServices : seules les méthodes synchrones de lecture sont servies.
+pub(super) static IWBEMSERVICES: Iface = Iface {
+    name: "IWbemServices",
+    iid: crate::dlls::wbem::IID_IWBEM_SERVICES,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, I, I, Out(&IWBEMSERVICES), OutPtr]), // OpenNamespace
+        None,                                          // CancelAsyncCall
+        None,                                          // QueryObjectSink
+        Some(&[I, I, I, Out(&IWBEMCLASSOBJECT), OutPtr]), // GetObject
+        None,                                          // GetObjectAsync
+        None,                                          // PutClass
+        None,                                          // PutClassAsync
+        None,                                          // DeleteClass
+        None,                                          // DeleteClassAsync
+        Some(&[I, I, I, Out(&IENUMWBEMCLASSOBJECT)]),  // CreateClassEnum
+        None,                                          // CreateClassEnumAsync
+        None,                                          // PutInstance
+        None,                                          // PutInstanceAsync
+        None,                                          // DeleteInstance
+        None,                                          // DeleteInstanceAsync
+        Some(&[I, I, I, Out(&IENUMWBEMCLASSOBJECT)]),  // CreateInstanceEnum
+        None,                                          // CreateInstanceEnumAsync
+        Some(&[I, I, I, I, Out(&IENUMWBEMCLASSOBJECT)]), // ExecQuery
+    ],
+};
+
+/// IEnumWbemClassObject. Next est décrit pour un objet à la fois (uCount
+/// = 1), la forme qu'emploient les programmes.
+pub(super) static IENUMWBEMCLASSOBJECT: Iface = Iface {
+    name: "IEnumWbemClassObject",
+    iid: crate::dlls::wbem::IID_IENUM_WBEM_CLASS_OBJECT,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[]),                                // Reset
+        Some(&[I, I, Out(&IWBEMCLASSOBJECT), I]), // Next
+        None,                                     // NextAsync
+        Some(&[Out(&IENUMWBEMCLASSOBJECT)]),      // Clone
+        Some(&[I, I]),                            // Skip
+    ],
+};
+
+/// IWbemClassObject : lecture des propriétés (VARIANT, CIMTYPE, BSTR).
+pub(super) static IWBEMCLASSOBJECT: Iface = Iface {
+    name: "IWbemClassObject",
+    iid: crate::dlls::wbem::IID_IWBEM_CLASS_OBJECT,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        None,                               // GetQualifierSet
+        Some(&[I, I, Var, I, I]),           // Get
+        Some(&[I, I, Var, I]),              // Put
+        Some(&[I]),                         // Delete
+        Some(&[I, I, Var, OutPtr]),         // GetNames
+        Some(&[I]),                         // BeginEnumeration
+        Some(&[I, OutPtr, Var, I, I]),      // Next
+        Some(&[]),                          // EndEnumeration
+        None,                               // GetPropertyQualifierSet
+        Some(&[Out(&IWBEMCLASSOBJECT)]),    // Clone
+        Some(&[I, OutPtr]),                 // GetObjectText
+        None,                               // SpawnDerivedClass
+        Some(&[I, Out(&IWBEMCLASSOBJECT)]), // SpawnInstance
+        Some(&[I, In(&IWBEMCLASSOBJECT)]),  // CompareTo
+        Some(&[I, OutPtr]),                 // GetPropertyOrigin
+        Some(&[I]),                         // InheritsFrom
+    ],
+};
+
 /// ICustomDestinationList : listes de raccourcis de la barre des tâches.
 pub(super) static ICUSTOMDESTINATIONLIST: Iface = Iface {
     name: "ICustomDestinationList",
@@ -651,6 +728,10 @@ static ALL: &[&Iface] = &[
     &ICUSTOMDESTINATIONLIST,
     &IACCPROPSERVER,
     &IACCPROPSERVICES,
+    &IWBEMLOCATOR,
+    &IWBEMSERVICES,
+    &IENUMWBEMCLASSOBJECT,
+    &IWBEMCLASSOBJECT,
     &IXMLDOMNODE,
     &IXMLDOMDOCUMENT,
     &IXMLDOMDOCUMENT2,

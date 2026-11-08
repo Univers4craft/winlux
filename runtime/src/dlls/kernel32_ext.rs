@@ -66,6 +66,21 @@ pub unsafe extern "win64" fn global_memory_status_ex(out: *mut MemoryStatusEx) -
     1
 }
 
+/// GetPhysicallyInstalledSystemMemory : RAM installée, en Kio. MemTotal
+/// est un peu en dessous de la mémoire installée (le noyau garde sa part) :
+/// arrondi au multiple de 128 Mio supérieur. L'installeur web de Creative
+/// Cloud s'arrête si elle manque (#1205).
+pub unsafe extern "win64" fn get_physically_installed_system_memory(out: *mut u64) -> i32 {
+    if out.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let (total, ..) = meminfo();
+    const STEP: u64 = 128 << 20;
+    *out = total.div_ceil(STEP) * STEP / 1024;
+    1
+}
+
 /// WaitForMultipleObjectsEx : sans file d'APC, l'attente alertable se
 /// comporte comme l'attente ordinaire.
 pub unsafe extern "win64" fn wait_for_multiple_objects_ex(
@@ -443,6 +458,7 @@ pub extern "win64" fn rtl_dll_shutdown_in_progress() -> u8 {
 pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "GlobalMemoryStatusEx" => fn global_memory_status_ex,
+        "GetPhysicallyInstalledSystemMemory" => fn get_physically_installed_system_memory,
         "WaitForMultipleObjectsEx" => fn wait_for_multiple_objects_ex,
         "OpenEventW" => fn open_event_w,
         "CreateMemoryResourceNotification" => fn create_memory_resource_notification,
@@ -486,6 +502,21 @@ pub fn ntdll_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memoire_installee_en_kio() {
+        let mut kb = 0u64;
+        unsafe {
+            assert_eq!(get_physically_installed_system_memory(&mut kb), 1);
+            assert_eq!(
+                get_physically_installed_system_memory(std::ptr::null_mut()),
+                0
+            );
+        }
+        let (total, ..) = meminfo();
+        assert!(kb * 1024 >= total && kb * 1024 - total < 128 << 20);
+        assert_eq!(kb % (128 * 1024), 0);
+    }
 
     #[test]
     fn etat_de_la_memoire_coherent() {
