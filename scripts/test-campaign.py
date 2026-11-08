@@ -1120,6 +1120,20 @@ ok("CancelIoEx(server, &ov) == 1" in (ROOT / "testc/msvc/io_msvc.c").read_text()
    and "Some(libc::EFAULT) => return 998" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "E/S : lecture commencée annulée, handles invalides et tampons invalides (ERROR_NOACCESS) (#18)")
 
+# #851, #852, #996 : Claude pour Windows (Chromium) ; les .exe de test
+# tournent dans test-runtime.sh.
+runtime_tests = (SCRIPTS / "test-runtime.sh").read_text()
+ok(all(t in runtime_tests for t in ("ntdll_exports", "register_wait", "chromium_compat")),
+   "Claude pour Windows : table d'exports, attentes annulées et processus GPU testés (#851, #852, #996)")
+ok("Some(d) if d.screen" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "WindowFromDC(GetDC(NULL)) rend le bureau, ANGLE accepte l'affichage (#996)")
+ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "#767" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "même .exe dans un enfant : même adresse d'image, exigée par le bac à sable de Chromium (#767)")
+ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
+   and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
 update_apt = (SCRIPTS / "winlux-update-apt.py").read_text(encoding="utf-8")
@@ -1201,6 +1215,9 @@ ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
 ok("TEXT_FORMAT3" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8")
    and "format3_and_layout4_answer_and_keep_their_settings" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8"),
    "DirectWrite : IDWriteTextFormat3 et IDWriteTextLayout4 (Paint.NET 5.1, #1118)")
+ok("fn create_bitmap_brush(" in (runtime_dlls / "d2d1_brush.rs").read_text(encoding="utf-8")
+   and "bitmap_and_gradient_brushes_paint" in (runtime_dlls / "d2d1.rs").read_text(encoding="utf-8"),
+   "Direct2D : CreateBitmapBrush, CreateImageBrush et dégradés (Notepad++ / Scintilla, #1124)")
 # #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
 # vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
 msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")
@@ -1224,4 +1241,12 @@ ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_p
 ok("builtin_file_path(module)" in (runtime_dlls / "kernel32.rs").read_text()
    and "dll_integree_a_un_chemin_et_un_fichier_visible" in (SCRIPTS / "test-all.sh").read_text(),
    "DLL système intégrées : chemin System32 par GetModuleFileNameW, visibles par GetFileAttributesExW (#1113)")
+ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
+   and "fn user_locale() -> &'static Locale" in (runtime_dlls / "nls.rs").read_text()
+   and "SetThreadPreferredUILanguages" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "etoile_point_etoile_liste_aussi_les_noms_sans_point" in (SCRIPTS / "test-all.sh").read_text(),
+   "Langue des applications : « *.* » liste les dossiers sans point, locale par nom de la session (#1125)")
+ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
+   and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
+   "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

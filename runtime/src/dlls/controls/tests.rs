@@ -1507,7 +1507,8 @@ fn colonnes_ajustees_jamais_negatives_ni_chevauchees() {
     sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
     sendw(lv, 0x101E, 0, -1);
     assert!(sendw(lv, 0x101D, 0, 0) > w0, "ajustée au texte de la ligne");
-    sendw(lv, 0x101E, 1, -2);
+    // Comme la macro ListView_SetColumnWidth : MAKELPARAM(-2, 0) = 0xFFFE.
+    sendw(lv, 0x101E, 1, 0xFFFE);
     assert_eq!(
         sendw(lv, 0x101D, 1, 0),
         w1,

@@ -516,10 +516,42 @@ pub unsafe extern "win64" fn GetDiskFreeSpaceA(
 
 // ---- Attentes enregistrées et file de travail ------------------------------
 
+/// État d'une attente enregistrée. L'annulation et le début d'un rappel se
+/// font sous le même verrou : après `UnregisterWait(Ex)`, aucun rappel qui
+/// n'avait pas commencé ne part plus (#852 : Chromium libère l'objet
+/// surveillé juste après et le rappel tardif lisait un pointeur nul).
+#[derive(Default)]
+struct WaitState {
+    cancelled: bool,
+    /// Un rappel est en cours sur le thread d'attente.
+    running: bool,
+    thread: Option<std::thread::ThreadId>,
+}
+
+#[derive(Default)]
 struct RegisteredWait {
-    cancelled: std::sync::atomic::AtomicBool,
-    done: std::sync::Mutex<bool>,
-    finished: std::sync::Condvar,
+    state: std::sync::Mutex<WaitState>,
+    idle: std::sync::Condvar,
+}
+
+impl RegisteredWait {
+    fn cancelled(&self) -> bool {
+        crate::dlls::lock(&self.state).cancelled
+    }
+
+    /// Attend la fin du rappel en cours, sauf depuis ce rappel lui-même.
+    fn wait_idle(&self) {
+        let mut s = crate::dlls::lock(&self.state);
+        if s.thread == Some(std::thread::current().id()) {
+            return;
+        }
+        while s.running {
+            s = self
+                .idle
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
 }
 
 static WAITS: std::sync::Mutex<
@@ -554,22 +586,19 @@ pub unsafe extern "win64" fn RegisterWaitForSingleObject(
         return 0;
     }
     let id = NEXT_WAIT.fetch_add(4, Ordering::Relaxed);
-    let w = std::sync::Arc::new(RegisteredWait {
-        cancelled: std::sync::atomic::AtomicBool::new(false),
-        done: std::sync::Mutex::new(false),
-        finished: std::sync::Condvar::new(),
-    });
+    let w = std::sync::Arc::new(RegisteredWait::default());
     crate::dlls::lock(&WAITS)
         .get_or_insert_with(std::collections::HashMap::new)
         .insert(id, w.clone());
     let once = flags & 0x8 != 0; // WT_EXECUTEONLYONCE
     let ok = spawn_windows_thread(move || {
+        crate::dlls::lock(&w.state).thread = Some(std::thread::current().id());
         let cb: extern "win64" fn(usize, u8) = std::mem::transmute(callback);
         loop {
             // Attente par tranches pour pouvoir être annulée.
             let mut waited = 0u32;
             let result = loop {
-                if w.cancelled.load(Ordering::Acquire) {
+                if w.cancelled() {
                     break None;
                 }
                 let slice = if ms == u32::MAX {
@@ -590,15 +619,27 @@ pub unsafe extern "win64" fn RegisterWaitForSingleObject(
             if r == u32::MAX {
                 break;
             }
+            {
+                let mut s = crate::dlls::lock(&w.state);
+                if s.cancelled {
+                    break;
+                }
+                s.running = true;
+            }
             cb(context, (r == 0x102) as u8);
-            if once || w.cancelled.load(Ordering::Acquire) {
+            let cancelled = {
+                let mut s = crate::dlls::lock(&w.state);
+                s.running = false;
+                s.cancelled
+            };
+            w.idle.notify_all();
+            if once || cancelled {
                 break;
             }
         }
-        *crate::dlls::lock(&w.done) = true;
-        w.finished.notify_all();
     });
     if !ok {
+        crate::dlls::lock(&WAITS).as_mut().map(|m| m.remove(&id));
         crate::process::set_last_error(8);
         return 0;
     }
@@ -614,18 +655,27 @@ unsafe fn unregister(id: usize, completion: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     };
-    w.cancelled.store(true, Ordering::Release);
+    let running = {
+        let mut s = crate::dlls::lock(&w.state);
+        s.cancelled = true;
+        s.running
+    };
     if completion == usize::MAX {
         // INVALID_HANDLE_VALUE : attendre la fin d'un rappel en cours.
-        let mut done = crate::dlls::lock(&w.done);
-        while !*done {
-            done = w
-                .finished
-                .wait(done)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
+        w.wait_idle();
     } else if completion != 0 {
-        crate::dlls::kernel32::set_event(completion);
+        // L'événement est signalé quand plus aucun rappel ne tourne.
+        if running {
+            let signaled = spawn_windows_thread(move || {
+                w.wait_idle();
+                crate::dlls::kernel32::set_event(completion);
+            });
+            if !signaled {
+                crate::dlls::kernel32::set_event(completion);
+            }
+        } else {
+            crate::dlls::kernel32::set_event(completion);
+        }
     }
     1
 }
