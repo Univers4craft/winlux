@@ -1380,4 +1380,8 @@ ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls /
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
+ok("fn create_type_lib2(" in (runtime_dlls / "oleaut32_typelib.rs").read_text()
+   and "typelib::load_registered" in (runtime_dlls / "oleaut32.rs").read_text()
+   and "bibliotheque_de_types_creee_inscrite_et_appelee" in (SCRIPTS / "test-all.sh").read_text(),
+   "Bibliothèques de types : CreateTypeLib2, RegisterTypeLib, LoadRegTypeLib, LoadTypeLib, Invoke (#1108)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

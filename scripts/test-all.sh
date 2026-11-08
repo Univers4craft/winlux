@@ -162,6 +162,11 @@ step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_d
 # EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
 step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
 
+# Bibliothèques de types (#1108) : CreateTypeLib2/ICreateTypeInfo2, LayOut,
+# ITypeLib/ITypeInfo, RegisterTypeLib puis LoadRegTypeLib, LoadTypeLib
+# (stdole2.tlb intégrée) et Invoke d'une interface double.
+step "Bibliothèques de types créées, inscrites et appelées (#1108)" cargo test -q -p winlux -- bibliotheque_de_types_creee_inscrite_et_appelee
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

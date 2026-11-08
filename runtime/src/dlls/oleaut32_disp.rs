@@ -249,14 +249,19 @@ pub unsafe extern "win64" fn disp_call_func(
 
 // ── ITypeInfo d'une description INTERFACEDATA ──────────────────────
 
-struct Method {
-    name: String,
-    params: Vec<(String, u16)>,
-    dispid: i32,
-    slot: u32,
-    cc: u32,
-    flags: u16,
-    vt_return: u16,
+/// Méthode décrite pour GetIDsOfNames / Invoke (aussi construite par les
+/// ITypeInfo de CreateTypeLib2, oleaut32_typelib.rs).
+pub(super) struct Method {
+    pub name: String,
+    pub params: Vec<(String, u16)>,
+    pub dispid: i32,
+    pub slot: u32,
+    pub cc: u32,
+    pub flags: u16,
+    pub vt_return: u16,
+    /// Paramètre [out, retval] final (type pointé), 0 s'il n'y en a pas : il
+    /// n'est pas dans DISPPARAMS, sa valeur devient le résultat d'Invoke.
+    pub retval: u16,
 }
 
 #[repr(C)]
@@ -364,7 +369,18 @@ unsafe extern "win64" fn ti_get_names(
     }
     *count = 0;
     let info = &*(this as *const TypeInfo);
-    let Some(m) = info.methods.iter().find(|m| m.dispid == memid) else {
+    names_of(&info.methods, memid, names, max, count)
+}
+
+/// GetNames sur une liste de méthodes.
+pub(super) unsafe fn names_of(
+    methods: &[Method],
+    memid: i32,
+    names: *mut *mut u16,
+    max: u32,
+    count: *mut u32,
+) -> i32 {
+    let Some(m) = methods.iter().find(|m| m.dispid == memid) else {
         return TYPE_E_ELEMENTNOTFOUND;
     };
     let all = std::iter::once(&m.name).chain(m.params.iter().map(|(n, _)| n));
@@ -387,19 +403,25 @@ unsafe extern "win64" fn ti_get_ids_of_names(
     if names.is_null() || ids.is_null() {
         return E_INVALIDARG;
     }
+    let info = &*(this as *const TypeInfo);
+    ids_of_names(&info.methods, names, count, ids)
+}
+
+/// GetIDsOfNames sur une liste de méthodes.
+pub(super) unsafe fn ids_of_names(
+    methods: &[Method],
+    names: *const *const u16,
+    count: u32,
+    ids: *mut i32,
+) -> i32 {
     if count == 0 {
         return S_OK;
     }
-    let info = &*(this as *const TypeInfo);
     for i in 0..count as usize {
         *ids.add(i) = DISPID_UNKNOWN;
     }
     let member = wide(*names).to_lowercase();
-    let Some(m) = info
-        .methods
-        .iter()
-        .find(|m| m.name.to_lowercase() == member)
-    else {
+    let Some(m) = methods.iter().find(|m| m.name.to_lowercase() == member) else {
         return DISP_E_UNKNOWNNAME;
     };
     *ids = m.dispid;
@@ -407,8 +429,7 @@ unsafe extern "win64" fn ti_get_ids_of_names(
     for i in 1..count as usize {
         let name = wide(*names.add(i)).to_lowercase();
         // Le même nom de propriété peut exister en get et en put.
-        let found = info
-            .methods
+        let found = methods
             .iter()
             .filter(|o| o.dispid == m.dispid)
             .find_map(|o| o.params.iter().position(|(n, _)| n.to_lowercase() == name));
@@ -457,12 +478,36 @@ unsafe extern "win64" fn ti_invoke(
     excep: *mut u8,
     arg_err: *mut u32,
 ) -> i32 {
+    let info = &*(this as *const TypeInfo);
+    invoke_method(
+        &info.methods,
+        instance,
+        memid,
+        flags,
+        params,
+        result,
+        excep,
+        arg_err,
+    )
+}
+
+/// Invoke sur une liste de méthodes : arguments convertis au type déclaré,
+/// appel par DispCallFunc à l'entrée `slot` de la table de l'objet.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn invoke_method(
+    methods: &[Method],
+    instance: usize,
+    memid: i32,
+    flags: u16,
+    params: *const u8,
+    result: *mut u8,
+    excep: *mut u8,
+    arg_err: *mut u32,
+) -> i32 {
     if instance == 0 || params.is_null() {
         return E_INVALIDARG;
     }
-    let info = &*(this as *const TypeInfo);
-    let Some(m) = info
-        .methods
+    let Some(m) = methods
         .iter()
         .find(|m| m.dispid == memid && m.flags & flags != 0)
     else {
@@ -526,6 +571,20 @@ unsafe extern "win64" fn ti_invoke(
         }
         types.push(*vt);
     }
+    // [out, retval] : référence vers `ret`, qui devient le résultat.
+    let mut ret = [0u8; VARIANT_SIZE];
+    if m.retval != 0 {
+        let target = if m.retval == VT_VARIANT {
+            ret.as_mut_ptr()
+        } else {
+            ret.as_mut_ptr().add(8)
+        };
+        let mut t = [0u8; VARIANT_SIZE];
+        *(t.as_mut_ptr() as *mut u16) = VT_BYREF | m.retval;
+        *(t.as_mut_ptr().add(8) as *mut usize) = target as usize;
+        temps.push(t);
+        types.push(VT_BYREF | m.retval);
+    }
     let pointers: Vec<*const u8> = temps.iter().map(|t| t.as_ptr()).collect();
     let mut out = [0u8; VARIANT_SIZE];
     let hr = disp_call_func(
@@ -533,7 +592,7 @@ unsafe extern "win64" fn ti_invoke(
         m.slot as usize * 8,
         m.cc,
         m.vt_return,
-        total as u32,
+        types.len() as u32,
         types.as_ptr(),
         pointers.as_ptr(),
         out.as_mut_ptr(),
@@ -560,6 +619,9 @@ unsafe extern "win64" fn ti_invoke(
         }
         if !result.is_null() {
             std::ptr::write_bytes(result, 0, VARIANT_SIZE);
+            write_retval(m.retval, &ret, result);
+        } else if m.retval != 0 {
+            super::oleaut32::variant_clear(retval_variant(m.retval, &ret).as_mut_ptr().cast());
         }
         return S_OK;
     }
@@ -567,6 +629,23 @@ unsafe extern "win64" fn ti_invoke(
         std::ptr::copy_nonoverlapping(out.as_ptr(), result, VARIANT_SIZE);
     }
     S_OK
+}
+
+/// VARIANT complet d'une valeur [out, retval] reçue dans `ret`.
+fn retval_variant(vt: u16, ret: &[u8; VARIANT_SIZE]) -> [u8; VARIANT_SIZE] {
+    let mut v = *ret;
+    if vt != VT_VARIANT {
+        v[..2].copy_from_slice(&vt.to_le_bytes());
+    }
+    v
+}
+
+unsafe fn write_retval(vt: u16, ret: &[u8; VARIANT_SIZE], result: *mut u8) {
+    if vt == 0 {
+        return;
+    }
+    let v = retval_variant(vt, ret);
+    std::ptr::copy_nonoverlapping(v.as_ptr(), result, VARIANT_SIZE);
 }
 
 /// CreateDispTypeInfo : ITypeInfo d'une INTERFACEDATA.
@@ -613,6 +692,7 @@ pub unsafe extern "win64" fn create_disp_type_info(
             cc: *(md.add(24) as *const u32),
             flags: *(md.add(32) as *const u16),
             vt_return: *(md.add(34) as *const u16),
+            retval: 0,
         });
     }
     let info = Box::new(TypeInfo {
