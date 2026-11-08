@@ -2828,6 +2828,12 @@ pub trait GuiBackend: Send {
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
+    /// Raccourci global (RegisterHotKey) : prise de la combinaison sur tout
+    /// l'écran. Faux si un autre programme ou le gestionnaire de fenêtres la
+    /// tient déjà. Sans affichage réel, rien à prendre : accepté.
+    fn grab_hotkey(&mut self, _mods: u32, _vk: u32, _grab: bool) -> bool {
+        true
+    }
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
@@ -3054,6 +3060,10 @@ pub fn pump_backend() {
         }
     }
     for e in events {
+        if e.message == WM_HOTKEY && e.hwnd == 0 {
+            hotkey_pressed(e.lparam as u32, e.wparam as u32);
+            continue;
+        }
         // Fenêtre désactivée par une boîte modale : ni clic ni focus. Un
         // clic ou une activation ramène la boîte au premier plan, comme sous
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
@@ -3121,6 +3131,96 @@ pub fn pump_backend() {
         } else {
             post_to_window(e.hwnd, m);
         }
+    }
+}
+
+// ---------- Raccourcis globaux (RegisterHotKey) ----------
+
+pub const WM_HOTKEY: u32 = 0x0312;
+pub const ERROR_HOTKEY_ALREADY_REGISTERED: u32 = 1409;
+pub const ERROR_HOTKEY_NOT_REGISTERED: u32 = 1419;
+const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+
+struct HotKey {
+    hwnd: usize,
+    id: i32,
+    /// MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN (sans MOD_NOREPEAT).
+    mods: u32,
+    vk: u32,
+    thread: ThreadId,
+}
+
+fn hotkeys() -> &'static Mutex<Vec<HotKey>> {
+    static H: OnceLock<Mutex<Vec<HotKey>>> = OnceLock::new();
+    H.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// RegisterHotKey : la combinaison est refusée (ERROR_HOTKEY_ALREADY_REGISTERED)
+/// si un raccourci du programme ou un autre client de l'affichage (le
+/// gestionnaire de fenêtres, un autre programme) la tient déjà.
+pub fn register_hotkey(hwnd: usize, id: i32, mods: u32, vk: u32) -> Result<(), u32> {
+    if hwnd != 0 && !is_window(hwnd) {
+        return Err(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let mods = mods & 0xF;
+    let vk = vk & 0xFF;
+    if lock(hotkeys()).iter().any(|h| h.mods == mods && h.vk == vk) {
+        return Err(ERROR_HOTKEY_ALREADY_REGISTERED);
+    }
+    let mut grabbed = false;
+    with_backend(|b| grabbed = b.grab_hotkey(mods, vk, true));
+    if !grabbed {
+        return Err(ERROR_HOTKEY_ALREADY_REGISTERED);
+    }
+    lock(hotkeys()).push(HotKey {
+        hwnd,
+        id,
+        mods,
+        vk,
+        thread: std::thread::current().id(),
+    });
+    Ok(())
+}
+
+/// UnregisterHotKey : `hwnd` nul désigne les raccourcis du thread appelant.
+pub fn unregister_hotkey(hwnd: usize, id: i32) -> Result<(), u32> {
+    let me = std::thread::current().id();
+    let (mods, vk, still_used) = {
+        let mut list = lock(hotkeys());
+        let Some(pos) = list
+            .iter()
+            .position(|h| h.hwnd == hwnd && h.id == id && (hwnd != 0 || h.thread == me))
+        else {
+            return Err(ERROR_HOTKEY_NOT_REGISTERED);
+        };
+        let h = list.remove(pos);
+        let used = list.iter().any(|o| o.mods == h.mods && o.vk == h.vk);
+        (h.mods, h.vk, used)
+    };
+    if !still_used {
+        with_backend(|b| {
+            b.grab_hotkey(mods, vk, false);
+        });
+    }
+    Ok(())
+}
+
+/// Combinaison prise reçue de l'affichage : WM_HOTKEY à la fenêtre (ou au
+/// thread si `hwnd` est nul), wParam = id, lParam = MAKELPARAM(mods, vk).
+pub fn hotkey_pressed(mods: u32, vk: u32) -> bool {
+    let target = lock(hotkeys())
+        .iter()
+        .find(|h| h.mods == mods & 0xF && h.vk == vk)
+        .map(|h| (h.hwnd, h.id, h.thread));
+    let Some((hwnd, id, thread)) = target else {
+        return false;
+    };
+    let lparam = ((vk << 16) | (mods & 0xF)) as isize;
+    let msg = Msg::new(hwnd, WM_HOTKEY, id as u32 as usize, lparam);
+    if hwnd == 0 {
+        post_to_thread(thread, msg)
+    } else {
+        post_to_window(hwnd, msg)
     }
 }
 
@@ -4639,6 +4739,31 @@ mod tests {
         assert_eq!(mouse_button_transition(0x020B, 2 << 16), Some((6, true)));
         assert_eq!(mouse_button_transition(0x0204, 2), Some((2, true)));
         assert_eq!(mouse_button_transition(0x0200, 0), None);
+    }
+
+    /// RegisterHotKey : une combinaison n'a qu'un titulaire, WM_HOTKEY va
+    /// à la file du thread quand hwnd est nul (#1168).
+    #[test]
+    fn raccourci_global_unique_et_wm_hotkey() {
+        let (ctrl_alt, f12) = (3, 0x7B);
+        assert_eq!(register_hotkey(0, 7, ctrl_alt | 0x4000, f12), Ok(()));
+        assert_eq!(
+            register_hotkey(0, 8, ctrl_alt, f12),
+            Err(ERROR_HOTKEY_ALREADY_REGISTERED)
+        );
+        assert_eq!(register_hotkey(0x7fff_0001, 9, 1, 0x20), Err(1400));
+        assert!(hotkey_pressed(ctrl_alt, f12));
+        let msg = lock(&current_queue().items)
+            .iter()
+            .find(|m| m.message == WM_HOTKEY)
+            .map(|m| (m.hwnd, m.wparam, m.lparam));
+        assert_eq!(msg, Some((0, 7, (0x7B << 16) | 3)));
+        lock(&current_queue().items).retain(|m| m.message != WM_HOTKEY);
+        assert_eq!(unregister_hotkey(0, 7), Ok(()));
+        assert_eq!(unregister_hotkey(0, 7), Err(ERROR_HOTKEY_NOT_REGISTERED));
+        assert!(!hotkey_pressed(ctrl_alt, f12));
+        assert_eq!(register_hotkey(0, 8, ctrl_alt, f12), Ok(()));
+        assert_eq!(unregister_hotkey(0, 8), Ok(()));
     }
 
     /// Le clic qui donne le focus reste tenu : SetFocus pendant

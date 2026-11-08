@@ -75,7 +75,7 @@ run() {
 }
 
 run hello32
-echo "hello32 : programme x86 lancé, 16 vérifications passées"
+echo "hello32 : programme x86 lancé, 17 vérifications passées"
 run hello32_reloc
 echo "hello32_reloc : image déplacée sous 2 Go, relocations HIGHLOW"
 run hello32 WINLUX_WOW32_NO_FSGSBASE=1
@@ -194,6 +194,8 @@ if test -f "$out/com32.exe"; then
     echo "msxml32 : DOMDocument MSXML en x86 (VARIANT par valeur, nœuds, XPath, save/load)"
     check accprop32 'AccPropServices : tout est correct'
     echo "accprop32 : annotations d'accessibilité en x86 (MSAAPROPID et VARIANT par valeur, IAccPropServer)"
+    check wmi32 'WMI : tout est correct'
+    echo "wmi32 : WMI en x86 (WbemLocator, ExecQuery, VARIANT, CIMTYPE, SAFEARRAY de noms)"
 fi
 
 gui() {

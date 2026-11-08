@@ -876,6 +876,16 @@ pub extern "win64" fn wsa_get_last_error() -> i32 {
         LAST_WSA_ERROR.with(|x| x.get())
     }
 }
+/// SetFileCompletionNotificationModes sur une socket ; faux si `s` n'en
+/// est pas une.
+pub(crate) fn set_completion_modes(s: usize, flags: u8) -> bool {
+    if !valid_socket(s) {
+        return false;
+    }
+    overlapped::set_modes(s, flags);
+    true
+}
+
 /// Le handle est-il une socket ouverte ? (CreateIoCompletionPort, CancelIoEx)
 pub(crate) fn is_socket(s: usize) -> bool {
     valid_socket(s)
@@ -4177,6 +4187,77 @@ mod tests {
             port, &mut bytes, &mut key, &mut ov, 2000,
         );
         (ok, bytes, key, ov as usize)
+    }
+
+    #[test]
+    fn mode_sans_paquet_si_fin_immediate_pour_libuv() {
+        // #1155 : libuv (Node d'Electron) pose FILE_SKIP_COMPLETION_PORT_ON_SUCCESS
+        // et FILE_SKIP_SET_EVENT_ON_HANDLE sur chaque socket TCP, et échouait
+        // en « connect EISDIR » (ERROR_INVALID_FUNCTION) quand on refusait.
+        let _wsa = init();
+        unsafe {
+            let (srv, addr) = listener();
+            let port = crate::dlls::kernel32::create_io_completion_port(usize::MAX, 0, 0, 0);
+            let cli = overlapped_client(port);
+            assert_eq!(
+                crate::dlls::kernel32_node::SetFileCompletionNotificationModes(cli, 3),
+                1
+            );
+            assert_eq!(
+                connect(cli, &addr as *const _ as *const u8, 16),
+                0,
+                "connexion bloquante"
+            );
+            let acc = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_ne!(acc, INVALID_SOCKET);
+
+            // Envoi fini tout de suite : OVERLAPPED rempli, aucun paquet.
+            let msg = b"salut";
+            let sb = WsaBuf {
+                len: 5,
+                buf: msg.as_ptr() as *mut u8,
+            };
+            let sov = new_overlapped();
+            let sovp = &*sov as *const _ as usize;
+            let mut sent = 0u32;
+            assert_eq!(wsa_send(cli, &sb, 1, &mut sent, 0, sovp, 0), 0);
+            assert_eq!(sent, 5);
+            assert_eq!((sov.internal, sov.internal_high), (0, 5));
+            assert_eq!(
+                next_packet(port).0,
+                0,
+                "aucun paquet après une fin immédiate"
+            );
+
+            // Une réception qui attend poste toujours son paquet.
+            let mut data = [0u8; 8];
+            let mut wb = WsaBuf {
+                len: 8,
+                buf: data.as_mut_ptr(),
+            };
+            let rov = new_overlapped();
+            let rovp = &*rov as *const _ as usize;
+            let mut flags = 0u32;
+            assert_eq!(
+                wsa_recv(cli, &mut wb, 1, std::ptr::null_mut(), &mut flags, rovp, 0),
+                SOCKET_ERROR
+            );
+            assert_eq!(wsa_get_last_error(), 997);
+            assert_eq!(
+                libc::send(acc as i32, b"ok".as_ptr() as *const c_void, 2, 0),
+                2
+            );
+            assert_eq!(next_packet(port), (1, 2, 7, rovp));
+
+            // Un handle qui n'est pas une socket : refus, ERROR_INVALID_FUNCTION.
+            assert_eq!(
+                crate::dlls::kernel32_node::SetFileCompletionNotificationModes(0x7777_0000, 3),
+                0
+            );
+            closesocket(acc);
+            closesocket(cli);
+            closesocket(srv);
+        }
     }
 
     #[test]

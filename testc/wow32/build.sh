@@ -32,6 +32,7 @@ QueryPerformanceFrequency@4
 GetCurrentProcessId@0
 GetCurrentProcess@0
 GetEnvironmentVariableA@12
+GetPhysicallyInstalledSystemMemory@4
 DEF
 llvm-dlltool -m i386 -k -d "$tmp/kernel32.def" -l "$tmp/kernel32.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/hello32.c" -o "$tmp/hello32.obj"
@@ -527,4 +528,6 @@ if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     # AccPropServices vu d'un programme x86 (#1114) : MSAAPROPID et VARIANT
     # passés par valeur sur la pile.
     i686-w64-mingw32-gcc -O1 "$src/../accprop_suite.c" -o "$out/accprop32.exe" -lole32 -loleaut32 -luuid
+    # WMI vu d'un programme x86 (#1198) : même source qu'en 64 bits.
+    i686-w64-mingw32-gcc -O1 "$src/../wmi_suite.c" -o "$out/wmi32.exe" -lole32 -loleaut32 -lwbemuuid
 fi
