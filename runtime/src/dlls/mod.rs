@@ -180,6 +180,7 @@ pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
+pub mod shell_folder_com;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;

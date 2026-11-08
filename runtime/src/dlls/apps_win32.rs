@@ -664,7 +664,7 @@ unsafe extern "win64" fn init_common_controls_ordinal() {
 /// CoTaskMemFree, comme sous Windows).
 const PIDL_TAG: &[u8; 4] = b"WLXP";
 
-unsafe fn pidl_from_path(path: &str) -> usize {
+pub(crate) unsafe fn pidl_from_path(path: &str) -> usize {
     let w = utf16z(path);
     let cb = 2 + 4 + w.len() * 2;
     let total = cb + 2;
@@ -681,17 +681,30 @@ unsafe fn pidl_from_path(path: &str) -> usize {
     p as usize
 }
 
-unsafe fn path_from_pidl(pidl: *const u8) -> Option<String> {
+/// Chemin d'un identifiant Winlux. Un identifiant de plusieurs éléments
+/// (ILCombine, ou mis bout à bout par le programme) désigne le chemin de
+/// son dernier élément « WLXP », qui porte toujours le chemin complet.
+pub(crate) unsafe fn path_from_pidl(pidl: *const u8) -> Option<String> {
     if pidl.is_null() {
         return None;
     }
-    let cb = std::ptr::read_unaligned(pidl as *const u16) as usize;
-    if cb < 8 || std::slice::from_raw_parts(pidl.add(2), 4) != PIDL_TAG {
-        return None;
+    let mut found = None;
+    let mut item = pidl;
+    for _ in 0..64 {
+        let cb = std::ptr::read_unaligned(item as *const u16) as usize;
+        if cb == 0 {
+            break;
+        }
+        if cb >= 8 && std::slice::from_raw_parts(item.add(2), 4) == PIDL_TAG {
+            found = Some(item);
+        }
+        item = item.add(cb);
     }
+    let item = found?;
+    let cb = std::ptr::read_unaligned(item as *const u16) as usize;
     let n = (cb - 6) / 2;
     let mut w = vec![0u16; n];
-    std::ptr::copy_nonoverlapping(pidl.add(6), w.as_mut_ptr() as *mut u8, n * 2);
+    std::ptr::copy_nonoverlapping(item.add(6), w.as_mut_ptr() as *mut u8, n * 2);
     let end = w.iter().position(|&c| c == 0).unwrap_or(n);
     Some(String::from_utf16_lossy(&w[..end]))
 }
@@ -797,13 +810,10 @@ unsafe extern "win64" fn il_free(pidl: usize) {
     }
 }
 
-/// SHGetDesktopFolder : Winlux n'a pas encore l'espace de noms du Shell en
-/// objets COM. E_NOTIMPL est une réponse prévue par les programmes.
+/// SHGetDesktopFolder : le dossier racine de l'espace de noms
+/// (shell_folder_com), sur le système de fichiers.
 unsafe extern "win64" fn sh_get_desktop_folder(out: *mut usize) -> u32 {
-    if !out.is_null() {
-        *out = 0;
-    }
-    0x8000_4001
+    super::shell_folder_com::desktop(out)
 }
 
 const SHGFI_ICON: u32 = 0x100;
