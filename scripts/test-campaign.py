@@ -791,6 +791,11 @@ ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
    and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
    and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
    "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+# #923 : Paramètres > Navigateurs, éditeur, version et source avant l'installation.
+ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
+   and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
+   and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
