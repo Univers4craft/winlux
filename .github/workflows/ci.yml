@@ -511,6 +511,11 @@ jobs:
           sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32 || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools nsis gcc-mingw-w64-x86-64-win32 gcc-mingw-w64-i686-win32; }
           sh scripts/test-msi-actions.sh
 
+      - name: Actions personnalisées VBScript et JScript (#973)
+        run: |
+          sudo apt-get install -y -q wixl msitools || { sudo apt-get update -q && sudo apt-get install -y -q wixl msitools; }
+          sh scripts/test-msi-scripts.sh
+
       - name: Assistant d'installation au double-clic (#833)
         run: |
           sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0 || { sudo apt-get update -q && sudo apt-get install -y -q nsis xvfb python3-gi gir1.2-gtk-3.0; }

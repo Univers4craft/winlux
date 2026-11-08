@@ -1280,8 +1280,12 @@ fn cached_package(code: &str) -> PathBuf {
 }
 
 fn has_exe_actions(db: &Database) -> bool {
-    db.rows("CustomAction")
-        .any(|r| matches!(r.int("Type").unwrap_or(0) & 0x3F, 1 | 2 | 17 | 18 | 34 | 50))
+    db.rows("CustomAction").any(|r| {
+        matches!(
+            r.int("Type").unwrap_or(0) & 0x3F,
+            1 | 2 | 17 | 18 | 34 | 50 | 5 | 6 | 21 | 22 | 37 | 38 | 53 | 54
+        )
+    })
 }
 
 /// Actions de désinstallation du paquet conservé : contexte reconstruit
