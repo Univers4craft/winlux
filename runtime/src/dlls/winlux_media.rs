@@ -766,6 +766,9 @@ pub struct PlayPlan {
     pub hw: Vec<String>,
     /// Sortie audio FFmpeg (`-f <format> <périphérique>`).
     pub audio_out: (String, String),
+    /// Nom présenté au serveur son (`application.name`, #1010) : celui du
+    /// .exe qui lit, pas « Lavf… » de libavformat.
+    pub audio_app: String,
 }
 
 /// Chaîne `atempo` couvrant 0,25× à 4× (chaque étage accepte 0,5 à 2).
@@ -867,11 +870,42 @@ pub fn build_play_args(p: &PlayPlan) -> Vec<String> {
         a.push(format!("0:{index}"));
         a.push("-af".into());
         a.push(filters.join(","));
+        if p.audio_out.0 == "pulse" && !p.audio_app.is_empty() {
+            // Options du muxer pulse : nom du client et du flux (#1010).
+            a.extend([
+                "-name".into(),
+                p.audio_app.clone(),
+                "-stream_name".into(),
+                p.audio_app.clone(),
+            ]);
+        }
         a.push("-f".into());
         a.push(p.audio_out.0.clone());
         a.push(p.audio_out.1.clone());
     }
     a
+}
+
+/// Propriétés du flux audio d'un FFmpeg auxiliaire (#1010) : libpulse lit
+/// PULSE_PROP (application.process.binary, que `-name` ne règle pas), le
+/// greffon ALSA de PipeWire lit PIPEWIRE_PROPS.
+pub fn audio_env(app: &str, binary: &str) -> Vec<(String, String)> {
+    let clean = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !c.is_control() && !matches!(c, '"' | '\'' | '\\' | '{' | '}'))
+            .collect()
+    };
+    let (app, binary) = (clean(app), clean(binary));
+    vec![
+        (
+            "PULSE_PROP".into(),
+            format!("application.name='{app}' application.process.binary='{binary}'"),
+        ),
+        (
+            "PIPEWIRE_PROPS".into(),
+            format!("{{ application.name=\"{app}\" application.process.binary=\"{binary}\" node.description=\"{app}\" }}"),
+        ),
+    ]
 }
 
 fn audio_output() -> Option<(String, String)> {
@@ -1053,6 +1087,10 @@ struct Attempt {
 
 fn run_attempt(ffmpeg: &Path, at: &Attempt, frame_size: usize, sh: &Arc<Shared>) -> bool {
     let mut cmd = Command::new(ffmpeg);
+    cmd.envs(audio_env(
+        &crate::audio::backend::app_name(),
+        &crate::audio::backend::process_binary(),
+    ));
     die_with_parent(&mut cmd)
         .args(&at.args)
         .stdin(Stdio::null())
@@ -1223,6 +1261,7 @@ fn open_session(path: &Path, o: &OpenOptions, sub_path: Option<PathBuf>) -> Opti
         subtitle,
         hw: Vec::new(),
         audio_out: ("alsa".into(), "default".into()),
+        audio_app: crate::audio::backend::app_name(),
     };
     let hw = if o.flags & 2 == 0 && video.is_some() {
         c.hw_args(&hw_policy())
@@ -2018,6 +2057,7 @@ format.tags.title="Film"
             },
             hw: vec!["-hwaccel".into(), "vaapi".into()],
             audio_out: ("pulse".into(), "default".into()),
+            audio_app: "Lecteur multimédia".into(),
         };
         let a = build_play_args(&plan);
         let joined = a.join(" ");
@@ -2026,8 +2066,25 @@ format.tags.title="Film"
         assert!(joined.contains("setpts=(PTS-STARTPTS)/1.5000,scale=w=1280:h=720"));
         assert!(joined.contains("-map [vout] -f rawvideo -pix_fmt bgra pipe:1"));
         assert!(joined.contains(
-            "-map 0:2 -af asetpts=PTS-STARTPTS,atempo=1.5000,volume=0.80 -f pulse default"
+            "-map 0:2 -af asetpts=PTS-STARTPTS,atempo=1.5000,volume=0.80 -name Lecteur multimédia -stream_name Lecteur multimédia -f pulse default"
         ));
+        // #1010 : le flux porte le nom du lecteur, pas « Lavf… » ; option
+        // propre au muxer pulse, jamais passée à ALSA.
+        let name_at = a.iter().position(|x| x == "-name").expect("-name absent");
+        assert_eq!(a[name_at + 1], "Lecteur multimédia");
+        let alsa = PlayPlan {
+            audio_out: ("alsa".into(), "default".into()),
+            ..plan.clone()
+        };
+        assert!(!build_play_args(&alsa).contains(&"-name".to_string()));
+        let env = audio_env("Lecteur multimédia", "mediaplayer.exe");
+        assert!(env.iter().any(|(k, v)| k == "PULSE_PROP"
+            && v.contains("application.process.binary='mediaplayer.exe'")
+            && v.contains("application.name='Lecteur multimédia'")));
+        assert!(env.iter().any(|(k, v)| k == "PIPEWIRE_PROPS"
+            && v.contains("application.process.binary=\"mediaplayer.exe\"")));
+        let hostile = audio_env("a'b\"c{d}", "x.exe");
+        assert!(hostile[0].1.contains("application.name='abcd'"));
 
         let audio_only = PlayPlan {
             video: None,

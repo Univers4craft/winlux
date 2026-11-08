@@ -316,11 +316,19 @@ def state():
 def phase(name, percent, item):
     publish_run(RUN / "update-progress", f"phase={name}\npercent={percent}\ndone=0\ntotal=0\nitem={item}\n")
 
+# Petits fichiers (manifeste, release, notes, empreinte) demandés depuis un
+# bouton de la page : délai court et quelques tentatives sur les erreurs
+# passagères (5xx, 429, délai), jamais quinze minutes d'attente (#1007).
+DOWNLOAD_LIMITS = ["--connect-timeout", "10", "--max-time", "30",
+                   "--retry", "3", "--retry-delay", "2", "--retry-max-time", "60"]
+
+
 def download(url, destination, accept=None):
     command = ["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https",
-               "--connect-timeout", "20", "--max-time", "900", "--output", str(destination)]
+               *DOWNLOAD_LIMITS, "--write-out", "%{http_code}", "--output", str(destination)]
     if accept: command += ["--header", "Accept: " + accept]
-    run(*command, url)
+    # Code HTTP sur la sortie (error.stdout) ; le message de curl reste au journal.
+    return subprocess.run([*command, url], check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
 
 MANIFEST_URL = f"https://github.com/{REPOSITORY}/releases/latest/download/winlux-update-manifest.txt"
 RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -341,9 +349,25 @@ def certificate_error(error, url=MANIFEST_URL):
         return None
     return RuntimeError(text) if text else None
 
+def http_status(error):
+    try: return int((getattr(error, "stdout", None) or "").strip()[-3:])
+    except ValueError: return 0
+
+
+def server_error(error):
+    """GitHub qui répond 5xx ou 429 : panne passagère du serveur, pas « aucune version » (#1007)."""
+    status = http_status(error)
+    if error.returncode == 22 and (status >= 500 or status == 429):
+        return RuntimeError(f"GitHub ne répond pas pour l’instant (erreur {status} du serveur). "
+                            "Ce n’est pas un problème de ce PC : réessayez dans quelques minutes.")
+    return None
+
+
 def offline_error(error):
     explained = certificate_error(error)
     if explained: return explained
+    busy = server_error(error)
+    if busy: return busy
     reason = OFFLINE_CODES.get(error.returncode)
     if reason is None: return None
     return RuntimeError("GitHub est injoignable (" + reason + ") : vérifiez la connexion réseau puis relancez la recherche.")

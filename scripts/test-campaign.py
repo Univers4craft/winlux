@@ -166,6 +166,12 @@ ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
 ok("fn msi_view_modify" in msi_views and "MsiRecordReadStream" in (ROOT / "runtime/src/msi/session.rs").read_text()
    and "MSIMODIFY_INSERT_TEMPORARY" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
    "msiexec : une action DLL écrit dans la base (MsiViewModify) et lit les flux de la table Binary (#833)")
+msi_script = (ROOT / "runtime/src/msi/script/mod.rs").read_text()
+ok("--msi-script-action" in (ROOT / "runtime/src/main.rs").read_text()
+   and "fn status_code" in msi_script and (ROOT / "runtime/src/msi/script/vbs.rs").exists()
+   and (ROOT / "runtime/src/msi/script/js.rs").exists()
+   and "scripts/test-msi-scripts.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "msiexec : actions personnalisées VBScript et JScript (types 5, 6, 21, 22, 37, 38, 53, 54) avec l'objet Session (#973)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -394,6 +400,9 @@ ok('GROUP="netdev"' in (ROOT / "integration/native/udev/60-winlux-rfkill.rules")
 desktop_packages = (SCRIPTS / "prepare-desktop-packages.py").read_text()
 ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"at-spi2-core"' in desktop_packages,
    "image : rfkill (#604), glxinfo pour la ligne OpenGL du rapport (#610), bus org.a11y.Bus (#615)")
+ok('"-stream_name"' in (ROOT / "runtime/src/dlls/winlux_media.rs").read_text()
+   and '"Lecteur multimédia"' in (ROOT / "runtime/src/audio/backend.rs").read_text(),
+   "mélangeur : le son du lecteur s'appelle « Lecteur multimédia », plus « Lavf… » de ffmpeg (#1010)")
 
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
@@ -799,6 +808,11 @@ ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
    and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
+# #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
+ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
+   and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
+   and "test-dbcs-gconv.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "pages 932/936/949/950, IsDBCSLeadByte, clés TimeZoneInformation, Nls\\CodePage, Keyboard Layout et Fonts (#183)")
 # #925 : menu Démarrer, déplacer une application épinglée.
 ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "def pin_drag" in (SCRIPTS / "winlux-start-menu.py").read_text()
@@ -891,10 +905,28 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
+speech = (SCRIPTS / "winlux-speech.py").read_text()
+ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
+   and '"Deprecat" not in out.stderr' in (SCRIPTS / "test-speech.py").read_text(),
+   "voix : arrêt sur SIGTERM sans avertissement de dépréciation de PyGObject")
+
 # Paramètres : aucun menu déroulant vide (#998), « Adaptation à l'écran » sur la
 # politique effective quand display_policy= est vide.
 ok("def display_policy" in settings_source and "display_policy(screens)" in settings_source
    and "Jamais de menu vide (#998)" in settings_source
    and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
    "Paramètres : menus Écran et Alimentation jamais vides (#998)")
+
+# Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
+# pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
+update_apt = (SCRIPTS / "winlux-update-apt.py").read_text(encoding="utf-8")
+update_page = (SCRIPTS / "winlux-update-page.py").read_text(encoding="utf-8")
+update_test = (SCRIPTS / "test-update-page.py").read_text(encoding="utf-8")
+ok("def server_error" in update_apt and '"--max-time", "30"' in update_apt and '"--retry"' in update_apt
+   and "recherche en 503" in update_test, "Mise à jour : GitHub en panne n'est pas « aucune version publiée » (#1007)")
+ok('self.pause_combo.set_active_id("")' in update_page and "(#1008)" in update_test,
+   "Mise à jour : liste de pause revenue à « Choisir une durée » après la reprise (#1008)")
+ok("semaine(s)" not in update_page and "def weeks_text" in update_page and "(#1009)" in update_test,
+   "Mise à jour : « 1 semaine », « 2 semaines » dans les quatre langues (#1009)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -422,6 +422,14 @@ void __stdcall entry(void) {
                   eb.bmHeight == 1,
           empty);
     DeleteObject(empty);
+    /* 49 : DIB 16x16 en 1 bit par pixel avec sa palette (masques des
+     * listes d'images de la VCL, #905). */
+    struct { BITMAPINFOHEADER h; DWORD colors[2]; } mono = {
+        {sizeof(BITMAPINFOHEADER), 16, -16, 1, 1, 0, 0, 0, 0, 0, 0}, {0, 0xFFFFFF}};
+    void *mbits = 0;
+    HBITMAP mask = CreateDIBSection(mem, &mono, 0, &mbits, 0, 0);
+    CHECK(49, mask != 0 && mbits != 0, mask);
+    DeleteObject(mask);
     DeleteObject(red);
     DeleteDC(mem);
     DeleteObject(bmp);
