@@ -928,6 +928,9 @@ pub struct X11Backend {
     last_click: Option<(usize, u8, std::time::Instant, i32, i32)>,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
+    /// Fenêtre possédée → propriétaire. openbox ne relève pas un
+    /// transitoire avec sa propriétaire : Winlux le fait lui-même (#1068).
+    owners: HashMap<usize, usize>,
 }
 
 impl X11Backend {
@@ -1023,6 +1026,7 @@ impl X11Backend {
             pinch_last: 1.0,
             last_click: None,
             xdnd,
+            owners: HashMap::new(),
         })
     }
 
@@ -2732,6 +2736,58 @@ impl X11Backend {
     }
 
     /// Fenêtre X qui porte le titre et la taille totale (gestionnaire).
+    /// Fenêtre X affichée (mappée et visible).
+    fn is_viewable(&self, xwin: Window) -> bool {
+        self.conn
+            .get_window_attributes(xwin)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE)
+    }
+
+    /// Demande au gestionnaire de passer la fenêtre au premier plan.
+    fn restack_above(&self, xwin: Window) {
+        let aux = ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+        let _ = self.conn.configure_window(xwin, &aux);
+    }
+
+    /// Relève les fenêtres affichées que possède `owner`, puis les leurs.
+    ///
+    /// WM_TRANSIENT_FOR est aussi reposé : openbox lit ce lien quand il
+    /// prend la boîte en charge, et une propriétaire pas encore affichée à
+    /// ce moment lui est inconnue. Le lien était alors perdu, et un clic sur
+    /// la fenêtre principale la repassait devant sa boîte (#1068).
+    fn raise_owned(&self, owner: usize) {
+        let mut todo = vec![owner];
+        let mut seen = 0;
+        while let Some(o) = todo.pop() {
+            seen += 1;
+            if seen > 64 {
+                break;
+            }
+            let owner_top = match self.windows.get(&o) {
+                Some(w) => Self::top_xwin(w),
+                None => continue,
+            };
+            for (&owned, _) in self.owners.iter().filter(|(_, &ow)| ow == o) {
+                if let Some(w) = self.windows.get(&owned) {
+                    let top = Self::top_xwin(w);
+                    let _ = self.conn.change_property32(
+                        x11rb::protocol::xproto::PropMode::REPLACE,
+                        top,
+                        AtomEnum::WM_TRANSIENT_FOR,
+                        AtomEnum::WINDOW,
+                        &[owner_top],
+                    );
+                    if self.is_viewable(top) {
+                        self.restack_above(top);
+                        todo.push(owned);
+                    }
+                }
+            }
+        }
+    }
+
     fn top_xwin(w: &XWin) -> Window {
         if w.frame != 0 {
             w.frame
@@ -4252,6 +4308,8 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
+        self.owners.remove(&hwnd);
+        self.owners.retain(|_, o| *o != hwnd);
         self.content.remove(&hwnd);
         self.menu_bars.remove(&hwnd);
         self.overlay.forget(hwnd);
@@ -4276,6 +4334,12 @@ impl gui::GuiBackend for X11Backend {
                 let _ = self.conn.map_window(top);
             } else {
                 let _ = self.conn.unmap_window(top);
+            }
+            if show {
+                // Une propriétaire affichée après ses boîtes (VLC ouvre
+                // « Vie privée / Réseau » avant sa fenêtre principale) passe
+                // dessous ses fenêtres possédées, comme sous Windows (#1068).
+                self.raise_owned(hwnd);
             }
             let _ = self.conn.flush();
         }
@@ -4425,7 +4489,40 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::WINDOW,
             &[owner_top],
         );
+        self.owners.insert(hwnd, owner);
+        // Propriétaire donné après l'affichage (Qt 5, GWLP_HWNDPARENT) :
+        // la boîte passe tout de suite au-dessus.
+        if self.is_viewable(top) {
+            self.restack_above(top);
+        }
         let _ = self.conn.flush();
+    }
+
+    fn set_dialog_type(&mut self, hwnd: usize) {
+        let Some(w) = self.windows.get(&hwnd) else {
+            return;
+        };
+        let top = Self::top_xwin(w);
+        let atom = |name: &[u8]| {
+            self.conn
+                .intern_atom(false, name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| r.atom)
+        };
+        if let (Some(kind), Some(dialog)) = (
+            atom(b"_NET_WM_WINDOW_TYPE"),
+            atom(b"_NET_WM_WINDOW_TYPE_DIALOG"),
+        ) {
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                top,
+                kind,
+                AtomEnum::ATOM,
+                &[dialog],
+            );
+            let _ = self.conn.flush();
+        }
     }
 
     fn set_no_initial_focus(&mut self, hwnd: usize) {
@@ -4625,6 +4722,7 @@ impl gui::GuiBackend for X11Backend {
             let aux =
                 ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
             let _ = self.conn.configure_window(Self::top_xwin(w), &aux);
+            self.raise_owned(hwnd);
             let _ = self.conn.flush();
         }
     }
