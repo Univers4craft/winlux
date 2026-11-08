@@ -581,10 +581,11 @@ impl Painter {
                     r.top,
                     r.right,
                     r.bottom,
-                    // Ellipse des coins de 4 × radius : rendu inchangé depuis
-                    // que RoundRect prend un diamètre comme Windows (#866).
-                    radius * 4,
-                    radius * 4,
+                    // RoundRect prend la largeur de l'ellipse des coins (#866) :
+                    // le rayon voulu, enfin respecté (case à cocher carrée aux
+                    // coins de 3 px et non plus un disque, boutons à 4 px).
+                    radius * 2,
+                    radius * 2,
                 );
             }
         }
@@ -885,13 +886,13 @@ fn paint_button(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
     }
     if is_check_like(t) || is_radio(t) {
         let text_color = background(hwnd, p.hdc, WM_CTLCOLORSTATIC, face_color(), p, r);
-        let size = 16.min(r.height().max(10));
+        // Case de 13 px collée au bord, libellé 3 px plus loin, comme le
+        // thème de Windows à 96 ppp : wxWidgets ne réserve que largeur du
+        // texte + case + un caractère (18 px de plus que le texte pour les
+        // boutons radio de FileZilla), au-delà le libellé finit en « … » (#842).
+        let size = 13.min(r.height().max(10));
         let left_text = style(hwnd) & BS_LEFTTEXT != 0;
-        let bx = if left_text {
-            r.right - size - 1
-        } else {
-            r.left + 1
-        };
+        let bx = if left_text { r.right - size } else { r.left };
         let by = r.top + (r.height() - size) / 2;
         let bxr = Rect::from_size(bx, by, size, size);
         let filled = c.check != 0;
@@ -923,12 +924,12 @@ fn paint_button(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
             }
         }
         let tr = if left_text {
-            Rect { right: bx - 4, ..r }
+            Rect { right: bx - 3, ..r }
         } else {
             // Écart de Windows entre la case et le libellé : les programmes
             // réservent largeur du texte + case + un caractère (#801, #842).
             Rect {
-                left: bx + size + 4,
+                left: bx + size + 3,
                 ..r
             }
         };

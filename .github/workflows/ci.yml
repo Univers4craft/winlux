@@ -310,6 +310,9 @@ jobs:
       - name: Vérifier « Copier le texte » d'une image ou de l'écran (Windows + Maj + T)
         run: python3 -B scripts/test-ocr.py
 
+      - name: Vérifier la dictée vocale et les sous-titres en direct (Windows + H, Windows + Ctrl + L)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-speech.py
+
       - name: Vérifier le thème automatique, le diaporama et les thèmes partageables
         run: python3 -B scripts/test-appearance-auto.py
 
