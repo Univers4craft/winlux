@@ -2911,10 +2911,20 @@ unsafe fn load_library_str(name: &str) -> usize {
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
     if let Some(h) = crate::dlls::module_handle(n).filter(|_| !real_first) {
-        {
+        // Une DLL réelle libérée par FreeLibrary (DLL_PROCESS_DETACH déjà
+        // reçu) puis rechargée : Windows la reprojette et rappelle son
+        // DllMain ; ses objets globaux C++ détruits sont reconstruits.
+        let reattach = {
             let mut mods = crate::loader::MODULES.lock().unwrap();
-            if let Some(m) = mods.iter_mut().find(|m| m.base == h) {
+            mods.iter_mut().find(|m| m.base == h).and_then(|m| {
                 m.refcount = m.refcount.saturating_add(1);
+                (!m.initialized).then(|| m.clone())
+            })
+        };
+        if let Some(m) = reattach {
+            if !initialize_with_dependencies(&m, &[]) {
+                crate::process::set_last_error(1114);
+                return 0;
             }
         }
         return h;
@@ -2927,9 +2937,15 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(126);
         return 0;
     };
+    let before: Vec<usize> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.base)
+        .collect();
     match crate::loader::load(&path, false) {
         Ok(m) => {
-            if crate::process::initialize_dynamic_module(&m) {
+            if initialize_with_dependencies(&m, &before) {
                 m.base
             } else {
                 crate::process::set_last_error(1114);
@@ -2941,6 +2957,36 @@ unsafe fn load_library_str(name: &str) -> usize {
             0
         }
     }
+}
+/// DllMain (et rappels TLS) de `m` et des DLL réelles que son chargement a
+/// amenées, dépendances d'abord, comme le chargeur de Windows. Sans cela, une
+/// DLL chargée seulement comme dépendance d'un LoadLibrary n'était jamais
+/// initialisée : ses objets globaux C++ restaient à zéro. C'était le
+/// plantage d'Audacity au premier lancement (#691) : la clé de
+/// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
+/// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
+fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
+    // Les dépendances sont projetées après le module qui les importe : à
+    // rebours, chacune passe avant ceux qui l'utilisent.
+    let pending: Vec<crate::loader::Module> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|x| x.base != m.base && !x.initialized && x.refcount > 0)
+        .filter(|x| !before.is_empty() && !before.contains(&x.base))
+        .cloned()
+        .collect();
+    for dep in pending.iter().rev() {
+        if !crate::process::initialize_dynamic_module(dep) {
+            crate::trace!(
+                "DllMain de {} (dépendance de {}) a échoué",
+                dep.name,
+                m.name
+            );
+            return false;
+        }
+    }
+    crate::process::initialize_dynamic_module(m)
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {

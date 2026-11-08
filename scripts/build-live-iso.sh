@@ -227,10 +227,11 @@ chmod 755 \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/run-tls-suite.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
+for name in hello exitcode p1_suite dll_import dll_deps delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite system32_suite tls_suite print_suite winpaths uac_suite comctl_suite bars_suite commdlg_suite menu_suite calc; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+cp "$root/target/x86_64-pc-windows-msvc/release/testdll2.dll" "$stage/opt/winlux/tests/testdll2.dll"
 # Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
 # quand le compilateur MinGW-w64 est présent sur la machine de construction.
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
