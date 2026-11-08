@@ -66,7 +66,7 @@ while IFS= read -r command; do
         *xvfb-run*) command -v xvfb-run >/dev/null 2>&1 || { skip "$script" "xvfb-run absent"; continue; } ;;
     esac
     case "$script" in
-        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-image-memory.py|scripts/test-integration.sh|scripts/test-mingw.sh)
+        scripts/test-runtime.sh|scripts/test-runtime-parallel.sh|scripts/test-image-memory.py|scripts/test-loadlibrary-personal-cwd.sh|scripts/test-integration.sh|scripts/test-mingw.sh)
             if test "$quick" = 1; then skip "$script" "mode rapide"; continue; fi
             test -d target/x86_64-pc-windows-msvc/release || { skip "$script" "programmes PE non compilés"; continue; } ;;
     esac
@@ -95,6 +95,7 @@ fi
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 step "scripts/test-notices.py" python3 -B scripts/test-notices.py
+step "scripts/test-native-catalogue.py (raccourcis du menu, #992)" python3 -B scripts/test-native-catalogue.py
 step "scripts/test-update-signature.py" python3 -B scripts/test-update-signature.py
 step "scripts/test-ab-update.py (mises à jour A/B)" python3 -B scripts/test-ab-update.py
 

@@ -281,7 +281,7 @@ fn jeton_pose_sur_un_thread_puis_relu() {
 #[test]
 fn objet_job_se_ferme_une_fois() {
     let _teb = crate::process::test_teb();
-    let job = unsafe { crate::dlls::kernel32_node::CreateJobObjectW(0, std::ptr::null()) };
+    let job = unsafe { crate::dlls::jobs::create_job_object_w(0, std::ptr::null()) };
     assert_eq!(crate::dlls::kernel32::close_handle(job), 1);
     assert_eq!(crate::dlls::kernel32::close_handle(job), 0);
 }

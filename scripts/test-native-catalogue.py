@@ -199,6 +199,37 @@ with tempfile.TemporaryDirectory() as temporary:
             if output.exists(): break
             time.sleep(0.1)
         assert json.loads(output.read_text()) == ["desktop", str(exe), "deux mots", "$()`; &"]
+    # Aide et site web d'un programme (#992) : entrées du menu, pas « Documents ».
+    folder = links / "PuTTY (64-bit)"
+    folder.mkdir()
+    (home / "putty").mkdir(exist_ok=True)
+    (home / "putty/putty.chm").write_bytes(b"ITSF")
+    (home / "putty/website.url").write_text("[InternetShortcut]\r\nURL=https://example.org/putty/\r\n")
+    for name, target in [("PuTTY Manual", home / "putty/putty.chm"), ("PuTTY Web Site", home / "putty/website.url")]:
+        data = bytearray(76)
+        struct.pack_into("<I", data, 0, 76)
+        struct.pack_into("<I", data, 20, 8 | 128)
+        encoded = str(target).encode("utf-16-le")
+        data.extend(struct.pack("<H", len(encoded) // 2) + encoded)
+        (folder / f"{name}.lnk").write_bytes(data)
+    (folder / "Forum.url").write_text("[InternetShortcut]\nURL=javascript:alert(1)\n")
+    (folder / "Aide en ligne.url").write_text("[InternetShortcut]\nURL=https://example.org/aide\n")
+    found_links = sorted(catalogue.link_shortcuts(home))
+    assert found_links == [("Aide en ligne", "https://example.org/aide", "web-browser"),
+                           ("PuTTY Manual", str(home / "putty/putty.chm"), "help-browser"),
+                           ("PuTTY Web Site", "https://example.org/putty/", "web-browser")], found_links
+    assert all(name != "Programme installé" for name, _, _ in found_links), "un .exe compté deux fois"
+    catalogue.refresh()
+    link_entries = {path.read_text().split("Name=", 1)[1].split("\n", 1)[0]: path.read_text()
+                    for path in catalogue.APPS.glob("winlux-link-*.desktop")}
+    assert sorted(link_entries) == ["Aide en ligne", "PuTTY Manual", "PuTTY Web Site"], sorted(link_entries)
+    assert 'Exec=/usr/bin/xdg-open "https://example.org/putty/"' in link_entries["PuTTY Web Site"]
+    assert "Categories=Utility;WinluxWindows;" in link_entries["PuTTY Manual"]
+    (folder / "Aide en ligne.url").unlink()
+    catalogue.refresh()
+    assert len(list(catalogue.APPS.glob("winlux-link-*.desktop"))) == 2, "lanceur d'un raccourci supprimé gardé"
+    menu = (project / "scripts/winlux-start-menu.py").read_text()
+    assert '"/Start Menu/Programs" in directory' in menu and '("winlux-pe-", "winlux-link-")' in menu
     exe.unlink()
     editor.unlink()
     catalogue.refresh()

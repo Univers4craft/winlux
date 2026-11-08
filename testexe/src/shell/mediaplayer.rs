@@ -450,6 +450,9 @@ static mut DECODE_W: u32 = 0;
 static mut DECODE_H: u32 = 0;
 static mut LAST_SAVE: u32 = 0;
 static mut PENDING_RESTART: u32 = 0;
+/// Pause en direct (#1013) : ffmpeg suspendu, le flux audio reste ouvert et
+/// garde son volume dans le mélangeur ; la reprise ne relance rien.
+static mut LIVE_PAUSE: bool = false;
 static mut RESIZED_AT: u32 = 0;
 static mut AUDIO_WARNED: bool = false;
 
@@ -753,6 +756,7 @@ unsafe fn set_window_title(name: &[u8]) {
 // ---------------------------------------------------------------------------
 
 unsafe fn stop_session() {
+    LIVE_PAUSE = false;
     if SESSION != 0 {
         WinluxMediaClose(SESSION);
         SESSION = 0;
@@ -820,9 +824,16 @@ unsafe fn play_pause() {
     }
     if PLAYING {
         POSITION = current_position();
-        stop_session();
+        if SESSION != 0 && !STILL && WinluxMediaControl(SESSION, 1, 1) == 1 {
+            LIVE_PAUSE = true;
+        } else {
+            stop_session();
+        }
         PLAYING = false;
         save_resume();
+    } else if LIVE_PAUSE && SESSION != 0 && WinluxMediaControl(SESSION, 1, 0) == 1 {
+        LIVE_PAUSE = false;
+        PLAYING = true;
     } else {
         let pos = if DURATION > 0 && POSITION + 500 >= DURATION {
             0
@@ -847,6 +858,16 @@ unsafe fn seek(ms: u32) {
             POSITION = ms;
         }
     }
+}
+
+/// Volume ou silence : réglé en direct sur la lecture en cours (#1013),
+/// sinon à la prochaine relance.
+unsafe fn apply_volume() {
+    let volume = if MUTED { 0 } else { VOLUME };
+    if SESSION != 0 && !STILL && WinluxMediaControl(SESSION, 2, volume) == 1 {
+        return;
+    }
+    restart_soon();
 }
 
 unsafe fn restart_soon() {
@@ -1352,7 +1373,7 @@ pub unsafe fn on_mouse_up(x: i32, y: i32) -> bool {
             return true;
         }
         Hit::Volume => {
-            restart_soon();
+            apply_volume();
             return true;
         }
         _ => {}
@@ -1375,7 +1396,7 @@ pub unsafe fn on_mouse_up(x: i32, y: i32) -> bool {
         Hit::Chapters if CHAPTER_COUNT > 0 => toggle_menu(Menu::Chapters),
         Hit::Mute => {
             MUTED = !MUTED;
-            restart_soon();
+            apply_volume();
         }
         Hit::Fullscreen => toggle_fullscreen(),
         Hit::Playlist => {
@@ -1535,7 +1556,7 @@ pub unsafe fn on_wheel(delta: i32) -> bool {
 unsafe fn change_volume(d: i32) {
     VOLUME = (VOLUME as i32 + d).clamp(0, 100) as u32;
     MUTED = false;
-    restart_soon();
+    apply_volume();
 }
 
 pub unsafe fn on_key(vk: u32) -> bool {
@@ -1551,7 +1572,7 @@ pub unsafe fn on_key(vk: u32) -> bool {
         0x1B if FULLSCREEN => toggle_fullscreen(),
         0x4D | 0xAD => {
             MUTED = !MUTED;
-            restart_soon();
+            apply_volume();
         }
         0x4E | 0xB0 => next(1),  // N, piste suivante
         0x50 | 0xB1 => next(-1), // P, piste précédente
