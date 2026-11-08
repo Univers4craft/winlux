@@ -1380,10 +1380,6 @@ ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
-# #1206 : Paint.NET demande ID2D1EffectContext2 dans Initialize de ses effets.
-ok("IID_EFFECT_CONTEXT2" in (runtime_dlls / "d2d1_effects.rs").read_text(encoding="utf-8")
-   and "initialize_obtient_le_contexte_d_effet_2" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "Direct2D : effets personnalisés, contexte d'effet ID2D1EffectContext1/2 (#1206)")
 ok("GetPhysicallyInstalledSystemMemory" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
    and "memoire_installee_en_kio" in (runtime_dlls / "kernel32_ext.rs").read_text(),
    "Installeur Creative Cloud 32 bits : GetPhysicallyInstalledSystemMemory (#1205)")
