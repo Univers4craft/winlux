@@ -1181,6 +1181,240 @@ static int dplay_tests(void) {
     return 0;
 }
 
+/* DirectPlay 8 (#863) : deux pairs dans le même programme, sur 127.0.0.1. */
+__declspec(dllimport) HRESULT WINAPI DirectPlay8Create(const GUID *, void **, void *);
+__declspec(dllimport) HRESULT WINAPI DirectPlay8AddressCreate(const GUID *, void **, void *);
+typedef HRESULT(WINAPI *M11)(void *, void *, void *, void *, void *, void *, void *, void *, void *,
+                             void *, void *, void *);
+#define CALL11(o, i, a, b, c, d, e, f, g, h, j, k, l) \
+    ((M11)VT(o)[i])(o, P(a), P(b), P(c), P(d), P(e), P(f), P(g), P(h), P(j), P(k), P(l))
+static const GUID CLSID_DirectPlay8Peer = {
+    0x286f484d, 0x375e, 0x4458, {0xa2, 0x72, 0xb1, 0x38, 0xe2, 0xf8, 0x0a, 0x6a}};
+static const GUID IID_IDirectPlay8Peer = {
+    0x5102dacf, 0x241b, 0x11d3, {0xae, 0xa7, 0x00, 0x60, 0x97, 0xb0, 0x14, 0x11}};
+static const GUID IID_IDirectPlay8Address = {
+    0x83783300, 0x4063, 0x4c8a, {0x9d, 0xb3, 0x82, 0x83, 0x0a, 0x7f, 0xeb, 0x31}};
+static const GUID CLSID_DP8SP_TCPIP = {
+    0xebfe7ba0, 0x628d, 0x11d2, {0xae, 0x0f, 0x00, 0x60, 0x97, 0xb0, 0x14, 0x11}};
+typedef unsigned short WCH;
+typedef struct {
+    DWORD dwSize, dwFlags;
+    GUID guidInstance, guidApplication;
+    DWORD dwMaxPlayers, dwCurrentPlayers;
+    WCH *pwszSessionName, *pwszPassword;
+    void *pvReservedData;
+    DWORD dwReservedDataSize;
+    void *pvApplicationReservedData;
+    DWORD dwApplicationReservedDataSize;
+} DPN_APPLICATION_DESC;
+typedef struct {
+    DWORD dwSize, dwInfoFlags;
+    WCH *pwszName;
+    void *pvData;
+    DWORD dwDataSize, dwPlayerFlags;
+} DPN_PLAYER_INFO;
+typedef struct { DWORD dwBufferSize; unsigned char *pBufferData; } DPN_BUFFER_DESC;
+typedef struct { DWORD dwSize, dpnid; void *pvPlayerContext; } DPNMSG_PLAYER;
+typedef struct {
+    DWORD dwSize, dpnidSender;
+    void *pvPlayerContext;
+    unsigned char *pReceiveData;
+    DWORD dwReceiveDataSize, hBufferHandle;
+} DPNMSG_RECEIVE;
+typedef struct {
+    DWORD dwSize, hAsyncOp;
+    void *pvUserContext;
+    HRESULT hResultCode;
+    void *pvApplicationReplyData;
+    DWORD dwApplicationReplyDataSize, dpnidLocal;
+} DPNMSG_CONNECT_COMPLETE;
+typedef struct {
+    DWORD dwSize;
+    void *pAddressSender, *pAddressDevice;
+    const DPN_APPLICATION_DESC *pApplicationDescription;
+    void *pvResponseData;
+    DWORD dwResponseDataSize;
+    void *pvUserContext;
+    DWORD dwRoundTripLatencyMS;
+} DPNMSG_ENUM_HOSTS_RESPONSE;
+typedef struct {
+    DWORD dwSize;
+    void *pvUserConnectData;
+    DWORD dwUserConnectDataSize;
+    void *pvReplyData;
+    DWORD dwReplyDataSize;
+    void *pvReplyContext, *pvPlayerContext, *pAddressPlayer, *pAddressDevice;
+} DPNMSG_INDICATE_CONNECT;
+enum {
+    P8_INITIALIZE = 3, P8_CONNECT = 6, P8_SENDTO = 7, P8_HOST = 9, P8_GETAPPDESC = 10,
+    P8_ENUMPLAYERS = 18, P8_SETPEERINFO = 20, P8_GETPEERINFO = 21, P8_LOCALADDRESSES = 23,
+    P8_CLOSE = 24, P8_ENUMHOSTS = 25, A8_BUILDA = 4, A8_GETURLA = 10, A8_SETSP = 13,
+    A8_GETCOMPONENT = 16, A8_ADDCOMPONENT = 18
+};
+#define DP8_SYNC 0x80000000u
+static volatile int h8_create, h8_indicate, h8_recv, h8_destroy, c8_create, c8_recv, c8_done,
+    c8_enum;
+static volatile DWORD h8_from, c8_from, c8_local;
+static HRESULT WINAPI dp8_handler(void *ctx, DWORD id, void *msg) {
+    int host = ctx == (void *)0x8001;
+    switch (id) {
+    case 0xFFFF0007: /* CREATE_PLAYER */
+        ((DPNMSG_PLAYER *)msg)->pvPlayerContext = (void *)(UINT_PTR)(0x700 + h8_create);
+        if (host) h8_create++; else c8_create++;
+        break;
+    case 0xFFFF0009: /* DESTROY_PLAYER */
+        if (host) h8_destroy++;
+        break;
+    case 0xFFFF000E: { /* INDICATE_CONNECT */
+        DPNMSG_INDICATE_CONNECT *m = msg;
+        if (m->dwUserConnectDataSize == 4 && *(DWORD *)m->pvUserConnectData == 0x4A4F494E)
+            h8_indicate++;
+        break;
+    }
+    case 0xFFFF0011: { /* RECEIVE */
+        DPNMSG_RECEIVE *m = msg;
+        if (host && m->dwReceiveDataSize == 8 && m->pReceiveData[0] == 'b') {
+            h8_from = m->dpnidSender;
+            h8_recv++;
+        } else if (!host && m->dwReceiveDataSize == 6 && m->pReceiveData[0] == 's') {
+            c8_from = m->dpnidSender;
+            c8_recv++;
+        }
+        break;
+    }
+    case 0xFFFF0005: { /* CONNECT_COMPLETE */
+        DPNMSG_CONNECT_COMPLETE *m = msg;
+        if (m->hResultCode == 0 && m->pvUserContext == (void *)0x55) {
+            c8_local = m->dpnidLocal;
+            c8_done++;
+        }
+        break;
+    }
+    case 0xFFFF000B: { /* ENUM_HOSTS_RESPONSE */
+        DPNMSG_ENUM_HOSTS_RESPONSE *m = msg;
+        if (m->pvUserContext == (void *)0x66 && m->pApplicationDescription->pwszSessionName[0] == 'W' &&
+            m->pApplicationDescription->dwCurrentPlayers == 1)
+            c8_enum++;
+        break;
+    }
+    }
+    return 0;
+}
+static void dp8_name(DPN_PLAYER_INFO *pi, WCH *name) {
+    zero(pi, sizeof *pi);
+    pi->dwSize = sizeof *pi;
+    pi->dwInfoFlags = 1; /* DPNINFO_NAME */
+    pi->pwszName = name;
+}
+
+static int dplay8_tests(void) {
+    void *host = 0, *client = 0, *dev = 0, *haddr = 0, *locals[4] = {0};
+    DPN_APPLICATION_DESC ad;
+    DPN_PLAYER_INFO pi;
+    DPN_BUFFER_DESC bd;
+    DWORD n, size, type, port = 0, h = 0, ids[8], join = 0x4A4F494E;
+    char url[256];
+    unsigned char buf[512];
+    static WCH hote[] = {'H', 'o', 't', 'e', 0}, cli[] = {'C', 'l', 'i', 0},
+               session[] = {'W', 'i', 'n', 'l', 'u', 'x', 0},
+               kport[] = {'p', 'o', 'r', 't', 0},
+               khost[] = {'h', 'o', 's', 't', 'n', 'a', 'm', 'e', 0},
+               loop[] = {'1', '2', '7', '.', '0', '.', '0', '.', '1', 0};
+
+    /* Adresses : URL DirectPlay aller-retour. */
+    CHECK(223, DirectPlay8AddressCreate(&IID_IDirectPlay8Address, &haddr, 0) == 0 && haddr);
+    CHECK(224, CALL1(haddr, A8_BUILDA,
+                     "x-directplay:/provider=%7BEBFE7BA0-628D-11D2-AE0F-006097B01411%7D;"
+                     "hostname=127.0.0.1;port=2302") == 0);
+    n = sizeof url;
+    size = sizeof port;
+    CHECK(225, CALL2(haddr, A8_GETURLA, url, &n) == 0 && url[0] == 'x' &&
+                   CALL4(haddr, A8_GETCOMPONENT, kport, &port, &size, &type) == 0 &&
+                   port == 2302 && type == 2);
+
+    /* Hôte. */
+    CHECK(226, DirectPlay8Create(&IID_IDirectPlay8Peer, &host, 0) == 0 && host);
+    CHECK(227, CALL3(host, P8_INITIALIZE, 0x8001, dp8_handler, 0) == 0);
+    dp8_name(&pi, hote);
+    CHECK(228, CALL4(host, P8_SETPEERINFO, &pi, 0, 0, DP8_SYNC) == 0);
+    CHECK(229, DirectPlay8AddressCreate(&IID_IDirectPlay8Address, &dev, 0) == 0 &&
+                   CALL1(dev, A8_SETSP, &CLSID_DP8SP_TCPIP) == 0);
+    zero(&ad, sizeof ad);
+    ad.dwSize = sizeof ad;
+    ad.guidApplication = APP_JEUX;
+    ad.dwMaxPlayers = 4;
+    ad.pwszSessionName = session;
+    CHECK(230, CALL7(host, P8_HOST, &ad, &dev, 1, 0, 0, 0x11, 0) == 0);
+    wait_for(&h8_create, 1, 2000);
+    CHECK(231, h8_create == 1);
+    /* Port réel de la partie, lu sur l'adresse locale de l'hôte. */
+    n = 4;
+    size = sizeof port;
+    port = 0;
+    CHECK(232, CALL3(host, P8_LOCALADDRESSES, locals, &n, 0) == 0 && n >= 1 &&
+                   CALL4(locals[0], A8_GETCOMPONENT, kport, &port, &size, &type) == 0 && port);
+    for (h = 0; h < n; h++) CALL0(locals[h], 2);
+
+    /* Client par CoCreateInstance, recherche puis connexion. */
+    CHECK(233, CoCreateInstance(&CLSID_DirectPlay8Peer, 0, 1, &IID_IDirectPlay8Peer, &client) == 0 &&
+                   client);
+    CHECK(234, CALL3(client, P8_INITIALIZE, 0x8002, dp8_handler, 0) == 0);
+    dp8_name(&pi, cli);
+    CHECK(235, CALL4(client, P8_SETPEERINFO, &pi, 0, 0, DP8_SYNC) == 0);
+    CALL0(haddr, 8); /* Clear */
+    CHECK(236, CALL1(haddr, A8_SETSP, &CLSID_DP8SP_TCPIP) == 0 &&
+                   CALL4(haddr, A8_ADDCOMPONENT, khost, loop, sizeof loop, 1) == 0 &&
+                   CALL4(haddr, A8_ADDCOMPONENT, kport, &port, 4, 2) == 0);
+    zero(&ad, sizeof ad);
+    ad.dwSize = sizeof ad;
+    ad.guidApplication = APP_JEUX;
+    CHECK(237, CALL11(client, P8_ENUMHOSTS, &ad, haddr, dev, 0, 0, 1, 0, 800, 0x66, &h, DP8_SYNC) ==
+                       0 &&
+                   c8_enum >= 1);
+    CHECK(238, CALL11(client, P8_CONNECT, &ad, haddr, dev, 0, 0, &join, 4, 0, 0x55, &h, DP8_SYNC) ==
+                   0);
+    wait_for(&c8_done, 1, 3000);
+    wait_for(&c8_create, 2, 3000);
+    CHECK(239, c8_done == 1 && c8_local != 0 && c8_create == 2);
+    wait_for(&h8_create, 2, 3000);
+    CHECK(240, h8_indicate == 1 && h8_create == 2);
+
+    /* Messages dans les deux sens. */
+    bd.dwBufferSize = 8;
+    bd.pBufferData = (unsigned char *)"bonjour";
+    CHECK(241, CALL7(client, P8_SENDTO, 0, &bd, 1, 0, 0, &h, DP8_SYNC | 0x10) == 0);
+    wait_for(&h8_recv, 1, 3000);
+    CHECK(242, h8_recv == 1 && h8_from == c8_local);
+    bd.dwBufferSize = 6;
+    bd.pBufferData = (unsigned char *)"salut";
+    CHECK(243, CALL7(host, P8_SENDTO, h8_from, &bd, 1, 0, 0, &h, DP8_SYNC) == 0);
+    wait_for(&c8_recv, 1, 3000);
+    CHECK(244, c8_recv == 1 && c8_from != 0 && c8_from != c8_local);
+
+    /* Le client voit le nom et le rôle de l'hôte, la partie et ses joueurs. */
+    size = sizeof buf;
+    CHECK(245, CALL4(client, P8_GETPEERINFO, c8_from, buf, &size, 0) == 0 &&
+                   ((DPN_PLAYER_INFO *)buf)->pwszName[0] == 'H' &&
+                   (((DPN_PLAYER_INFO *)buf)->dwPlayerFlags & 4));
+    size = sizeof buf;
+    CHECK(246, CALL3(client, P8_GETAPPDESC, buf, &size, 0) == 0 &&
+                   ((DPN_APPLICATION_DESC *)buf)->dwCurrentPlayers == 2 &&
+                   ((DPN_APPLICATION_DESC *)buf)->pwszSessionName[0] == 'W');
+    n = 8;
+    CHECK(247, CALL3(client, P8_ENUMPLAYERS, ids, &n, 1) == 0 && n == 2);
+
+    /* Départ du client : l'hôte détruit son joueur. */
+    CHECK(248, CALL1(client, P8_CLOSE, 0) == 0);
+    wait_for(&h8_destroy, 1, 3000);
+    CHECK(249, h8_destroy == 1);
+    CHECK(250, CALL1(host, P8_CLOSE, 0) == 0);
+    CALL0(client, 2);
+    CALL0(host, 2);
+    CALL0(dev, 2);
+    CHECK(251, CALL0(haddr, 2) == 0);
+    return 0;
+}
+
 void entry(void) {
     WNDCLASSEXA wc;
     HWND hwnd;
@@ -1205,6 +1439,8 @@ void entry(void) {
     out("DirectShow : 11 verifications passees\n");
     dplay_tests();
     out("DirectPlay : 23 verifications passees\n");
+    dplay8_tests();
+    out("DirectPlay 8 : 29 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
     timer_wave_tests();

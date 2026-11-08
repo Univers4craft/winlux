@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Autorisations des applications Windows (.exe), au style de Windows 11.
+"""Autorisations des applications Windows (.exe).
 
 Usage :
   winlux-permission ask CAPACITÉ NOM CHEMIN_EXE   fenêtre « Autoriser … ? »

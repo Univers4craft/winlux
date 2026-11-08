@@ -159,6 +159,10 @@ ok("MsiGetPropertyW" in msi_session and "MsiProcessMessage" in msi_session
    and "--msi-dll-action" in (ROOT / "runtime/src/main.rs").read_text()
    and "i686-w64-mingw32-gcc" in (SCRIPTS / "test-msi-actions.sh").read_text(),
    "msiexec : actions personnalisées DLL x86 et x64 (types 1 et 17) avec session msi.dll (#833)")
+msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
+ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
+   and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
@@ -289,6 +293,10 @@ for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)
     ok(marker in explorer, f"Explorateur : {label}")
 ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
    "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("fn native_frameless" in (ROOT / "testexe/src/shell/wm.rs").read_text()
+   and "fn begin_move_resize" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "Explorateur : onglets dans la barre de titre, fenêtre sans cadre déplaçable (#888)")
+ok('b" GB", b" TB"' in explorer, "Explorateur : unités et dates dans la langue de la session (#916)")
 ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
    "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
@@ -676,12 +684,35 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and (runtime_dlls / "d3dx9_asm.rs").exists() and (runtime_dlls / "d3dx9_shader.rs").exists()
    and (runtime_dlls / "d3dx9_mesh.rs").exists()
    and (runtime_dlls / "d3dx9_hlsl.rs").exists() and (runtime_dlls / "d3dx9_effect.rs").exists()
-   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (runtime_dlls / "dpnet.rs").exists()
+   and "DirectPlay 4 et 8" in (SCRIPTS / "test-wow32.sh").read_text()
    and (ROOT / "runtime/src/audio/synth.rs").exists()
    and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
-   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
+
+# Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
+# boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
+update_page = (SCRIPTS / "winlux-update-page.py").read_text()
+settings_source = (SCRIPTS / "winlux-settings.py").read_text()
+ok('"update-auto-on"), (_t("Désactiver"), "update-auto-off")' not in settings_source
+   and "Redémarrer après installation" not in settings_source
+   and "UpdatePanel(self" in settings_source
+   and all(word in update_page for word in ("update-pause-", "update-resume", "update-hours-", "load_history", "notes_markup", "def notify"))
+   and (SCRIPTS / "test-update-page.py").exists(),
+   "page Mise à jour OS : carte d'état, pause, heures d'activité, historique, notes, notification (#875-#882)")
+
+# Écran et Alimentation en menus (#895) ; Réseau, Comptes et Personnalisation
+# refaits (#898) : plus d'interface réseau brute, carte du compte, aperçu.
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in settings_source
+   and '(_t("Connexion"), "network")' not in settings_source
+   and "def network_summary" in pages_source and "def desktop_preview" in pages_source
+   and 'self.hero("user", name, detail' in pages_source
+   and (SCRIPTS / "test-settings-redesign.py").exists(),
+   "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
+
 
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
