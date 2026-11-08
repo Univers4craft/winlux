@@ -454,4 +454,9 @@ fi
 if command -v i686-w64-mingw32-gcc >/dev/null 2>&1; then
     i686-w64-mingw32-gcc -O1 "$src/com32.c" -o "$out/com32.exe" -lole32 -loleaut32 -lshell32 -lcomctl32 -luuid
     i686-w64-mingw32-gcc -O1 "$src/dlg32.c" -o "$out/dlg32.exe" -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdi32 -luuid
+    # MSXML intégré vu d'un programme x86 (#1084) : même source qu'en 64 bits.
+    i686-w64-mingw32-gcc -O1 "$src/../msxml_suite.c" -o "$out/msxml32.exe" -lole32 -loleaut32 -luuid -lmsxml2
+    # AccPropServices vu d'un programme x86 (#1114) : MSAAPROPID et VARIANT
+    # passés par valeur sur la pile.
+    i686-w64-mingw32-gcc -O1 "$src/../accprop_suite.c" -o "$out/accprop32.exe" -lole32 -loleaut32 -luuid
 fi

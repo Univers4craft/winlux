@@ -150,6 +150,7 @@ mfcapture.rs	MfObj	a-verifier
 mfcapture.rs	Reader	a-verifier	
 mfreader.rs	Reader	a-verifier	
 msvcp140.rs	Thrd	a-verifier	
+msxml.rs	Obj	interne	objet DOM 64 bits ; le code x86 le voit par les mandataires de wow32/com.rs (msxml32.exe, #1084)
 ole32.rs	ComStream	a-verifier	
 ole32.rs	ContextVtbl	a-verifier	
 ole32.rs	Factory	a-verifier	
@@ -159,6 +160,7 @@ ole32.rs	MarshalStream	a-verifier
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
+oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160

@@ -763,8 +763,13 @@ ok((runtime_dlls / "winmm_midi_in.rs").exists()
 ok((runtime_dlls / "msacm32.rs").exists()
    and '"msacm32"' in (runtime_dlls / "mod.rs").read_text()
    and "acm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
-   and "msacm32 (conversions PCM)" in (SCRIPTS / "test-wow32.sh").read_text(),
+   and "msacm32 (conversions PCM" in (SCRIPTS / "test-wow32.sh").read_text(),
    "msacm32 : acmStream* convertit le PCM (8/16/24/32 bits, flottant, canaux, fréquence)")
+# #1122 : décodeurs IMA ADPCM et ADPCM MS dans msacm32, testés par jeux32/jeux64.
+ok("fn decode_block" in (runtime_dlls / "msacm32.rs").read_text()
+   and "adpcm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
+   and "décodeurs ADPCM" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "msacm32 : sons IMA ADPCM et ADPCM MS décodés en PCM")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
@@ -1196,6 +1201,22 @@ ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
 ok("TEXT_FORMAT3" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8")
    and "format3_and_layout4_answer_and_keep_their_settings" in (runtime_dlls / "dwrite_text.rs").read_text(encoding="utf-8"),
    "DirectWrite : IDWriteTextFormat3 et IDWriteTextLayout4 (Paint.NET 5.1, #1118)")
+# #1084 : MSXML intégré (DOMDocument 2.6 à 6.0), en 64 et 32 bits ;
+# vérifié par msxml_suite.exe (test-mingw.sh) et msxml32.exe (test-wow32.sh).
+msxml_rs = (ROOT / "runtime/src/dlls/msxml.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in msxml_rs and "msxml::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IXMLDOMDOCUMENT3" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "msxml_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "msxml32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "MSXML : DOMDocument intégré, x64 et x86 (#1084)")
+# #1114 : annotations d'accessibilité (CLSID_AccPropServices) de la VCL,
+# vérifiées par accprop_suite.exe (test-mingw.sh) et accprop32.exe (test-wow32.sh).
+accprop_rs = (ROOT / "runtime/src/dlls/oleacc_props.rs").read_text(encoding="utf-8")
+ok("fn create_builtin" in accprop_rs and "oleacc_props::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "IACCPROPSERVICES" in (ROOT / "runtime/src/wow32/com.rs").read_text(encoding="utf-8")
+   and "accprop_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8")
+   and "accprop32" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8"),
+   "AccPropServices : annotations d'accessibilité, x64 et x86 (#1114)")
 ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w'
    in (runtime_dlls / "win32_basics.rs").read_text()
    and "GetVolumeNameForVolumeMountPointW" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(),
