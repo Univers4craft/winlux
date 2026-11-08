@@ -41,6 +41,19 @@ ou qui a moins de 3 Gio de mémoire.
 - `claude.exe` et `codex` tournent toujours dans `~/.local/share/winlux/assistant`,
   jamais dans le dossier courant : lancés depuis le Bureau, la couche PE
   demandait l'accès aux fichiers personnels et l'activation restait figée (#913).
+- **IA locale adaptée au PC** (#928), choisie sans rien demander et affichée
+  avant le téléchargement : carte graphique dédiée utilisable par Vulkan
+  (pilote nvidia ou amdgpu et son fichier ICD) avec 7 Gio ou plus → Qwen2.5 7B
+  sur la carte (`-ngl 99`, moteur `ubuntu-vulkan-x64`) ; de 3,5 à 7 Gio → 3B
+  sur la carte ; sinon processeur seul : 3B avec 12 Gio de mémoire ou plus,
+  1,5B en dessous. Si le moteur Vulkan ne démarre pas, retour au processeur.
+  Un PC qui change (carte ajoutée) reprend le bon modèle à la réactivation et
+  l'ancien est effacé.
+- **Aucune ressource quand on ne lui écrit plus** (#928) : le moteur s'arrête
+  deux minutes après la dernière question, même panneau ouvert, et redémarre
+  à la question suivante. Panneau fermé ou IA désactivée : rien ne tourne.
+  Pendant qu'il tourne, le bas du panneau dit la mémoire prise (lue dans
+  /proc) et si la carte graphique travaille.
 - **Révisions figées** (#911) : llama.cpp `b12202` (`llama-b12202-bin-ubuntu-x64.tar.gz`),
   Qwen2.5 1,5B à la révision `91cad511…`, Codex `0.167.0`, chacun avec son
   empreinte écrite dans `winlux-assistant` : jamais « la dernière publiée »

@@ -13,7 +13,7 @@ Entièrement local : comptes locaux, aucun compte en ligne, aucune donnée envoy
 | Avertissements | Bulle 5 minutes puis 1 minute avant la fin. |
 | Fin du temps | Écran « Temps d'écran terminé » par-dessus la session ; les applications restent ouvertes derrière. Boutons « Un adulte accorde du temps » (compte administrateur + mot de passe, 15 min à 2 h) et « Changer d'utilisateur ». Quand le temps revient (le lendemain, ou dans la plage), le mot de passe du compte le lève. |
 | Accorder du temps | Aussi depuis les Paramètres de l'adulte : + 15 min, + 30 min, + 1 h. |
-| Applications bloquées | Programme Windows (`jeu.exe`) ou application Linux : fermée dès qu'elle s'ouvre, tentative notée. Choix parmi les applications installées, celles de l'activité, ou un nom tapé. Les programmes du bureau (panneau, gestionnaire de fenêtres, outils Winlux) ne peuvent pas être bloqués. |
+| Applications bloquées | Programme Windows (`jeu.exe`) ou application Linux : fermée dès qu'elle s'ouvre, tentative notée. Une copie renommée l'est aussi (#815) : le service reconnaît le nom d'origine inscrit dans le `.exe` (ressource VERSIONINFO) et l'empreinte du fichier (taille, début et fin), prise sur le programme installé ou à la première tentative. Choix parmi les applications installées, celles de l'activité, ou un nom tapé. Les programmes du bureau (panneau, gestionnaire de fenêtres, outils Winlux) ne peuvent pas être bloqués. |
 | Sites web | Aucun filtre, « Bloquer les sites de la liste » ou « Autoriser seulement les sites de la liste » ; un site couvre ses sous-domaines. |
 | Recherches filtrées | Google, Bing, DuckDuckGo en recherche protégée et YouTube en mode restreint, par les noms publics que ces services documentent (`forcesafesearch.google.com`, `strict.bing.com`, `safe.duckduckgo.com`, `restrict.youtube.com`). |
 | Activité | Temps par jour sur 7 jours, applications les plus utilisées (fenêtre active, minute par minute), tentatives bloquées (applications et sites), avec « Bloquer » à côté de chaque application. |
@@ -26,11 +26,12 @@ Entièrement local : comptes locaux, aucun compte en ligne, aucune donnée envoy
 - **Horloge** : couper l'heure automatique est réservé aux administrateurs ; pour un compte surveillé, changer de fuseau horaire l'est aussi.
 - **Service et écran en root** : `winlux-parental daemon` est lancé par les services système au démarrage (pas de systemd). L'écran de blocage tourne en root : le compte ne peut pas le tuer. S'il le ferme par X11 (`xkill`), il revient aussitôt ; à la deuxième fois, les programmes du compte sont suspendus (SIGSTOP) jusqu'à ce que l'écran soit levé normalement. Une application plein écran qui garde le clavier est fermée.
 - **DNS** : nftables (`table inet winlux_parental`, `meta skuid`) redirige le DNS du compte vers le résolveur filtrant du service (port 54000 + UID − 1000, sur 127.0.0.1 et ::1) ; DNS chiffré (port 853) et résolveurs DoH connus refusés pour ce compte ; `use-application-dns.net` coupe le DoH automatique de Firefox.
+- **Connexions** (#816) : quand un filtre web est actif, le compte ne joint, hors du réseau local, que les adresses que le résolveur filtrant vient de lui donner (ensembles nftables `ok4_<uid>` et `ok6_<uid>`, trois heures, ouverts avant que la réponse DNS ne parte). Un VPN, un proxy, Tor ou un DoH inconnu joints par leur adresse sont donc refusés ; les services VPN et proxys web grand public sont en plus refusés par leur nom.
 
 ## Limites connues
 
-- Une application bloquée l'est par son nom de programme : une copie renommée d'un `.exe` n'est pas reconnue (#815). Les applications Flatpak et Snap ne sont pas proposées.
-- Le filtre web repose sur le DNS : un VPN, un proxy ou un résolveur DoH inconnu le contournent (#816) ; « Autoriser seulement » bloque aussi les domaines techniques des sites autorisés (CDN), à ajouter à la main.
+- Une copie renommée **et** modifiée d'un programme sans nom d'origine dans sa ressource VERSIONINFO n'est pas reconnue. Les applications Flatpak et Snap ne sont pas proposées.
+- Avec « Bloquer les sites de la liste », un proxy ou un VPN peu connu joint par son nom reste ouvert comme tout site absent de la liste ; « Autoriser seulement » ferme aussi cette porte. Un programme qui joint une adresse écrite en dur (certains jeux en ligne) ne fonctionne pas sous filtre web. « Autoriser seulement » bloque aussi les domaines techniques des sites autorisés (CDN), à ajouter à la main.
 - Le compte doit avoir un UID entre 1000 et 1999 pour le filtre web (comptes créés par Winlux).
 - La session Live n'a pas de contrôle parental (page masquée).
 
