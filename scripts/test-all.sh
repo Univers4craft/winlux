@@ -171,6 +171,10 @@ step "IsProcessorFeaturePresent : SSSE3, SSE4.1, SSE4.2, AVX-512F (#1195)" cargo
 # valuateurs XInput, promotion souris de Windows, wintab32 maison.
 step "Stylet, WM_POINTER et wintab32 (#1199)" cargo test -q -p winlux -- stylet_en_messages_pointeur_avec_pression valuateurs_du_stylet_depuis_xinput tablette_wintab_paquets_avec_pression
 
+# Effets Direct2D personnalisés (#1206, Paint.NET) : le contexte passé à
+# Initialize répond à ID2D1EffectContext1 et ID2D1EffectContext2.
+step "Contexte d'effet Direct2D en version 2 (#1206)" cargo test -q -p winlux -- initialize_obtient_le_contexte_d_effet_2 vtables_have_windows_sizes
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

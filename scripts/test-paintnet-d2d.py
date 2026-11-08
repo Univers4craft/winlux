@@ -44,7 +44,7 @@ anim = source("uianimation.rs")
 
 ok(vtable(d2d1, "FACTORY_VT") == 33, "ID2D1Factory7 : 33 méthodes")
 ok("DC_VT: VTable<120>" in d2d1_1, "ID2D1DeviceContext6 : 120 méthodes")
-ok(vtable(effects, "CONTEXT_VT") == 24, "ID2D1EffectContext : 24 méthodes")
+ok(vtable(effects, "CONTEXT_VT") == 27, "ID2D1EffectContext2 : 27 méthodes (#1206)")
 ok(vtable(effects, "GRAPH_VT") == 12, "ID2D1TransformGraph : 12 méthodes")
 ok(vtable(effects, "DRAW_INFO_VT") == 12, "ID2D1DrawInfo : 12 méthodes")
 ok("factory_effect_properties" in d2d1 and "unsupported!(\"GetEffectProperties\")" not in d2d1,
