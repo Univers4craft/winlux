@@ -866,6 +866,11 @@ pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
         eprintln!("winlux[fenetre] afficher {hwnd:#x} cmd={cmd}");
     }
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
+    // SW_SHOWMINNOACTIVE (7), SW_SHOWNA (8), SW_SHOWNOACTIVATE (4) : la
+    // fenêtre s'affiche sans prendre le focus (#1127).
+    if matches!(cmd, 4 | 7 | 8) && !was {
+        with_backend(|b| b.set_no_initial_focus(hwnd));
+    }
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
     // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
     // (fenêtres de premier niveau seulement).
@@ -1325,6 +1330,7 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         19 => 1,                              // SM_MOUSEPRESENT
         23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
         36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        68 | 69 => 4,                         // SM_CXDRAG / SM_CYDRAG (#1138)
         43 => 3,                              // SM_CMOUSEBUTTONS
         75 => 1,                              // SM_MOUSEWHEELPRESENT
         // Icônes : 32 px, petite icône 16 px.
@@ -1496,6 +1502,7 @@ const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const GWL_USERDATA: i32 = -21;
 const GWL_ID: i32 = -12;
+const GWLP_HWNDPARENT: i32 = -8;
 const _GWLP_WNDPROC: i32 = -4;
 const _GWLP_HINSTANCE: i32 = -6;
 const _GWLP_USERDATA: i32 = -21;
@@ -1540,6 +1547,11 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
         GWL_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
         GWL_HINSTANCE => 0x0040_0000_isize,
+        // Parent d'une fille, propriétaire d'une fenêtre de premier niveau.
+        GWLP_HWNDPARENT => lock(user_data_map())
+            .get(&(hwnd, index))
+            .copied()
+            .unwrap_or_else(|| gui::window_parent(hwnd).unwrap_or(0) as isize),
         // GWLP_USERDATA, GWLP_ID et index positifs : données de la fenêtre
         // (cbWndExtra ; DWLP_MSGRESULT 0, DWLP_DLGPROC 8, DWLP_USER 16 en x64).
         GWL_USERDATA | GWL_ID => lock(user_data_map())
@@ -1568,6 +1580,16 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
         }
         GWL_USERDATA | GWL_ID => {
             lock(user_data_map()).insert((hwnd, index), value);
+        }
+        // Qt 5 donne son propriétaire à une boîte après la création, par
+        // SetWindowLongPtr(GWLP_HWNDPARENT) : la boîte « Vie privée » de VLC
+        // doit alors rester au-dessus de la fenêtre principale (#1068).
+        GWLP_HWNDPARENT if gui::window_style(hwnd).is_some_and(|s| s & WS_CHILD == 0) => {
+            lock(user_data_map()).insert((hwnd, index), value);
+            let owner = owner_top_level(value as usize);
+            if owner != 0 && owner != hwnd {
+                with_backend(|b| b.set_owner(hwnd, owner));
+            }
         }
         _ => {
             if index >= 0 {
@@ -1913,6 +1935,64 @@ pub extern "win64" fn set_capture(hwnd: usize) -> usize {
 pub extern "win64" fn release_capture() -> i32 {
     gui::release_capture();
     1
+}
+
+/// Détection d'un glisser (DragDetect, et la liste ou l'arborescence avant
+/// LVN_BEGINDRAG / TVN_BEGINDRAG, #1138) : vrai dès que le pointeur sort,
+/// bouton gauche tenu, du rectangle SM_CXDRAG × SM_CYDRAG centré sur `x`,
+/// `y` (coordonnées écran) ; faux au relâchement, à un autre clic ou à
+/// Échap. Les déplacements sont consommés, les clics restent dans la file.
+pub unsafe fn drag_detect_at(hwnd: usize, x: i32, y: i32) -> bool {
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_MOUSELAST: u32 = 0x020E;
+    let cx = get_system_metrics(68).max(1); // SM_CXDRAG
+    let cy = get_system_metrics(69).max(1); // SM_CYDRAG
+    let previous = gui::set_capture(hwnd);
+    let started = std::time::Instant::now();
+    let mut dragged = false;
+    loop {
+        let mut m: Msg = std::mem::zeroed();
+        if peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSELAST, 0) != 0 {
+            if m.message != WM_MOUSEMOVE {
+                break;
+            }
+            peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSEMOVE, 1);
+            let mut p = Point {
+                x: m.lparam as u16 as i16 as i32,
+                y: (m.lparam >> 16) as u16 as i16 as i32,
+            };
+            client_to_screen(m.hwnd, &mut p);
+            if (p.x - x).abs() > cx / 2 || (p.y - y).abs() > cy / 2 {
+                dragged = true;
+                break;
+            }
+            continue;
+        }
+        if gui::get_async_key_state(0x1B) < 0 {
+            break;
+        }
+        // Bouton déjà relâché sans message en attente (clic envoyé par
+        // SendMessage, automate) : pas de glisser.
+        let held = gui::get_key_state(1) < 0 || gui::get_async_key_state(1) < 0;
+        if !held || !gui::backend_is_interactive() {
+            break;
+        }
+        // Garde-fou : un bouton « tenu » que le serveur X ne relâche jamais.
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    gui::release_capture();
+    if previous != 0 && previous != hwnd {
+        gui::set_capture(previous);
+    }
+    dragged
+}
+
+/// DragDetect(HWND, POINT) : le POINT (8 octets) arrive dans un registre.
+pub unsafe extern "win64" fn drag_detect(hwnd: usize, pt: u64) -> i32 {
+    drag_detect_at(hwnd, pt as u32 as i32, (pt >> 32) as u32 as i32) as i32
 }
 
 pub extern "win64" fn get_capture() -> usize {
@@ -3817,7 +3897,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
         "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
-        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
+        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture, "DragDetect"=>fn drag_detect,
         "GetCapture"=>fn get_capture,
         "GetCursorPos"=>fn get_cursor_pos, "SetCursorPos"=>fn set_cursor_pos,
         "LoadCursorA"=>fn load_cursor_a, "LoadCursorW"=>fn load_cursor_w,
@@ -4242,9 +4322,12 @@ mod tests {
     fn peek_message_rend_wm_timer_comme_get_message() {
         unsafe {
             // Minuteur de thread (hwnd 0), comme SetTimer(NULL, …).
-            let id = set_timer(0, 0, 30, 0);
+            // Période longue : sous la charge de la suite complète, une
+            // période de 30 ms pouvait échoir de nouveau avant la dernière
+            // vérification (#1141).
+            let id = set_timer(0, 0, 300, 0);
             assert_ne!(id, 0);
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            std::thread::sleep(std::time::Duration::from_millis(330));
             // MsgWait voit le minuteur échu…
             assert_eq!(
                 msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
@@ -4493,6 +4576,38 @@ mod tests_messages {
                 0
             );
             destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn proprietaire_donne_apres_creation_par_gwlp_hwndparent() {
+        // #1068 : Qt 5 rattache sa boîte à la fenêtre principale après coup.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let make = |style: u32| {
+                create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    100,
+                    50,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            let main = make(0x00CF_0000);
+            let dialog = make(0x80C8_0000);
+            assert_ne!(main, 0);
+            assert_ne!(dialog, 0);
+            assert_eq!(set_window_long_ptr_w(dialog, -8, main as isize), 0);
+            assert_eq!(get_window_long_ptr_w(dialog, -8), main as isize);
+            destroy_window(dialog);
+            destroy_window(main);
         }
     }
 

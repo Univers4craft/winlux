@@ -852,7 +852,7 @@ fn create_adapter(factory: *mut DxgiFactory) -> *mut DxgiAdapter {
         unsafe { (*factory).ref_count.fetch_add(1, Ordering::Relaxed) };
     }
     Box::into_raw(Box::new(DxgiAdapter {
-        vtable: &ADAPTER_VTABLE,
+        vtable: crate::dlls::dx11_x86::abi(&ADAPTER_VTABLE, "dlls::dxgi", "DxgiAdapterVTable"),
         ref_count: AtomicU32::new(1),
         desc: adapter_desc(),
         factory,
@@ -979,9 +979,8 @@ unsafe extern "win64" fn sc_get_device(
     if dev.is_null() {
         return E_FAIL;
     }
-    let vtable = *(dev as *const *const usize);
     let qi: unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32 =
-        std::mem::transmute(*vtable);
+        std::mem::transmute(crate::dlls::legacy_com::method(dev as usize, 0));
     qi(dev, riid, out)
 }
 
@@ -1136,7 +1135,7 @@ pub(crate) fn create_swap_chain(
         );
     }
     Box::into_raw(Box::new(DxgiSwapChain {
-        vtable: &SWAP_CHAIN_VTABLE,
+        vtable: crate::dlls::dx11_x86::abi(&SWAP_CHAIN_VTABLE, "dlls::dxgi", "DxgiSwapChainVTable"),
         ref_count: AtomicU32::new(1),
         desc,
         gl_ctx: Mutex::new(gl_ctx),
@@ -1557,7 +1556,7 @@ static FACTORY_VTABLE: DxgiFactoryVTable = DxgiFactoryVTable {
 
 fn create_factory() -> *mut DxgiFactory {
     Box::into_raw(Box::new(DxgiFactory {
-        vtable: &FACTORY_VTABLE,
+        vtable: crate::dlls::dx11_x86::abi(&FACTORY_VTABLE, "dlls::dxgi", "DxgiFactoryVTable"),
         ref_count: AtomicU32::new(1),
     }))
 }

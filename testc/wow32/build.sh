@@ -421,6 +421,47 @@ lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
     "$tmp/jeux64/jeux64.obj" "$tmp/jeux64/jeux.lib" "$tmp/jeux64/jeux_user32.lib" \
     "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_dpnet.lib" "$tmp/jeux64/jeux_msacm32.lib" "$tmp/jeux64/jeux_winmm.lib" \
     /out:"$out/jeux64.exe"
+# Direct3D 11 et DXGI (#1090) : d3d1132.exe (x86) et d3d1164.exe (x64).
+cat >"$tmp/d3d11_k32.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+GetModuleHandleA@4
+DEF
+cat >"$tmp/d3d11_user32.def" <<'DEF'
+LIBRARY user32.dll
+EXPORTS
+RegisterClassExA@4
+CreateWindowExA@48
+DefWindowProcA@16
+DEF
+cat >"$tmp/d3d11_d3d11.def" <<'DEF'
+LIBRARY d3d11.dll
+EXPORTS
+D3D11CreateDevice@40
+D3D11CreateDeviceAndSwapChain@48
+DEF
+cat >"$tmp/d3d11_dxgi.def" <<'DEF'
+LIBRARY dxgi.dll
+EXPORTS
+CreateDXGIFactory@8
+DEF
+mkdir -p "$tmp/d3d1164"
+for lib in d3d11_k32 d3d11_user32 d3d11_d3d11 d3d11_dxgi; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/d3d1164/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/d3d1164/$lib.def" -l "$tmp/d3d1164/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/d3d1132.c" -o "$tmp/d3d1132.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
+    "$tmp/d3d1132.obj" "$tmp/d3d11_k32.lib" "$tmp/d3d11_user32.lib" "$tmp/d3d11_d3d11.lib" \
+    "$tmp/d3d11_dxgi.lib" /out:"$out/d3d1132.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/d3d1132.c" -o "$tmp/d3d1164/d3d1164.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
+    "$tmp/d3d1164/d3d1164.obj" "$tmp/d3d1164/d3d11_k32.lib" "$tmp/d3d1164/d3d11_user32.lib" \
+    "$tmp/d3d1164/d3d11_d3d11.lib" "$tmp/d3d1164/d3d11_dxgi.lib" /out:"$out/d3d1164.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.

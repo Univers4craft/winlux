@@ -1507,10 +1507,83 @@ fn colonnes_ajustees_jamais_negatives_ni_chevauchees() {
     sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
     sendw(lv, 0x101E, 0, -1);
     assert!(sendw(lv, 0x101D, 0, 0) > w0, "ajustée au texte de la ligne");
-    sendw(lv, 0x101E, 1, -2);
+    // Comme la macro ListView_SetColumnWidth : MAKELPARAM(-2, 0) = 0xFFFE.
+    sendw(lv, 0x101E, 1, 0xFFFE);
     assert_eq!(
         sendw(lv, 0x101D, 1, 0),
         w1,
         "colonne vide : ajustée à l'en-tête"
     );
+}
+
+#[test]
+fn glisser_depuis_une_liste_ou_une_arborescence() {
+    // #1138 : FileZilla (wxWidgets) lance DoDragDrop sur LVN_BEGINDRAG ;
+    // sans cette notification, tirer un fichier ne faisait que le
+    // sélectionner.
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1, 54, (0, 0, 300, 200));
+    let t = w("Nom");
+    let mut col = LvColumnW {
+        mask: 0x2 | 0x4,
+        fmt: 0,
+        cx: 200,
+        text: t.as_ptr(),
+        text_max: 0,
+        sub_item: 0,
+    };
+    sendw(lv, 0x1061, 0, &mut col as *mut LvColumnW as isize);
+    let name = w("rapport.txt");
+    let mut it = LvItemW {
+        mask: 0x1,
+        item: 0,
+        sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: name.as_ptr(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize);
+    let y = (0..150)
+        .find(|&y| {
+            let mut hit = [10i32, y, 0, -1, 0, 0];
+            sendw(lv, 0x1012, 0, hit.as_mut_ptr() as isize) == 0
+        })
+        .expect("ligne 0 visible");
+    let at = ((y as isize) << 16) | 10;
+    // Pointeur déplacé de 20 px bouton tenu : LVN_BEGINDRAG, pas de NM_CLICK.
+    notify_codes();
+    unsafe { user32::post_message_w(lv, 0x0200, 1, ((y as isize + 20) << 16) | 30) };
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-109), "LVN_BEGINDRAG : {codes:?}");
+    assert!(!codes.contains(&-2), "pas de NM_CLICK : {codes:?}");
+    // Simple clic : NM_CLICK, pas de glisser.
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-2) && !codes.contains(&-109), "{codes:?}");
+    // Déplacement sous le seuil (SM_CXDRAG) : toujours un clic.
+    unsafe { user32::post_message_w(lv, 0x0200, 1, ((y as isize) << 16) | 11) };
+    sendw(lv, WM_LBUTTONDOWN, 1, at);
+    let codes = notify_codes();
+    assert!(codes.contains(&-2) && !codes.contains(&-109), "{codes:?}");
+    gui::destroy_window(p);
+
+    // Arborescence : TVN_BEGINDRAGW.
+    let p = parent_window();
+    let tv = child(p, "SysTreeView32", "", 0x7, 55, (0, 0, 200, 200));
+    let h = tv_insert(tv, 0xFFFF_FFFF_FFFF_0000, "Documents", 1);
+    let mut r = [0i32; 4];
+    unsafe { *(r.as_mut_ptr() as *mut usize) = h };
+    assert_eq!(sendw(tv, 0x1104, 1, r.as_mut_ptr() as isize), 1);
+    let (x, y) = (100, (r[1] + r[3]) / 2);
+    notify_codes();
+    unsafe { user32::post_message_w(tv, 0x0200, 1, ((y as isize + 30) << 16) | x as isize) };
+    sendw(tv, WM_LBUTTONDOWN, 1, ((y as isize) << 16) | x as isize);
+    let codes = notify_codes();
+    assert!(codes.contains(&-456), "TVN_BEGINDRAGW : {codes:?}");
+    gui::destroy_window(p);
 }
