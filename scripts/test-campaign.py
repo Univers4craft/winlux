@@ -759,6 +759,12 @@ ok((runtime_dlls / "winmm_midi_in.rs").exists()
    and "WINLUX_MIDI_IN_DIR" in (SCRIPTS / "test-wow32.sh").read_text()
    and "midi_in_tests" in (ROOT / "testc/wow32/jeux32.c").read_text(),
    "entrée MIDI : midiIn* lit /dev/snd/midiC*D* (statut courant, temps réel, système exclusif)")
+# #237 : msacm32, conversions PCM (format, canaux, fréquence) testées par jeux32/jeux64.
+ok((runtime_dlls / "msacm32.rs").exists()
+   and '"msacm32"' in (runtime_dlls / "mod.rs").read_text()
+   and "acm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
+   and "msacm32 (conversions PCM)" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "msacm32 : acmStream* convertit le PCM (8/16/24/32 bits, flottant, canaux, fréquence)")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.

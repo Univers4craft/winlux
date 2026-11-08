@@ -252,6 +252,23 @@ IMP UINT WINAPI midiStreamProperty(HANDLE, BYTE *, DWORD);
 IMP UINT WINAPI midiStreamPosition(HANDLE, MMTIME *, UINT);
 IMP UINT WINAPI midiStreamClose(HANDLE);
 IMP UINT WINAPI midiInGetNumDevs(void);
+typedef struct {
+    DWORD cbStruct, fdwStatus; DWORD_PTR dwUser; BYTE *pbSrc; DWORD cbSrcLength, cbSrcLengthUsed;
+    DWORD_PTR dwSrcUser; BYTE *pbDst; DWORD cbDstLength, cbDstLengthUsed; DWORD_PTR dwDstUser;
+    DWORD dwReservedDriver[sizeof(void *) == 8 ? 15 : 10];
+} ACMSTREAMHEADER;
+typedef struct { DWORD cbStruct, dwFormatTagIndex, dwFormatTag, cbFormatSize, fdwSupport,
+    cStandardFormats; char szFormatTag[48]; } ACMFORMATTAGDETAILSA;
+IMP UINT WINAPI acmMetrics(HANDLE, UINT, void *);
+IMP UINT WINAPI acmFormatSuggest(HANDLE, WAVEFORMATEX *, WAVEFORMATEX *, DWORD, DWORD);
+IMP UINT WINAPI acmFormatTagDetailsA(HANDLE, ACMFORMATTAGDETAILSA *, DWORD);
+IMP UINT WINAPI acmStreamOpen(HANDLE *, HANDLE, WAVEFORMATEX *, WAVEFORMATEX *, void *, DWORD_PTR,
+                              DWORD_PTR, DWORD);
+IMP UINT WINAPI acmStreamSize(HANDLE, DWORD, DWORD *, DWORD);
+IMP UINT WINAPI acmStreamPrepareHeader(HANDLE, ACMSTREAMHEADER *, DWORD);
+IMP UINT WINAPI acmStreamUnprepareHeader(HANDLE, ACMSTREAMHEADER *, DWORD);
+IMP UINT WINAPI acmStreamConvert(HANDLE, ACMSTREAMHEADER *, DWORD);
+IMP UINT WINAPI acmStreamClose(HANDLE, DWORD);
 IMP UINT WINAPI midiInGetDevCapsA(UINT_PTR, MIDIINCAPSA *, UINT);
 IMP UINT WINAPI midiInOpen(HANDLE *, UINT, DWORD_PTR, DWORD_PTR, DWORD);
 IMP UINT WINAPI midiInPrepareHeader(HANDLE, MIDIHDR *, UINT);
@@ -629,6 +646,65 @@ static int midi_in_tests(void) {
                    (hdr.dwFlags & 1));
     CHECK(169, midiInUnprepareHeader(h, &hdr, sizeof hdr) == 0 && midiInClose(h) == 0 &&
                    mim_close == 1 && midiInClose(h) == 5);
+    return 0;
+}
+
+/* msacm32 (#237) : conversion PCM 8 bits mono 11 025 Hz vers 16 bits
+ * stéréo 22 050 Hz, rappel asynchrone, en x86 comme en x64. */
+static volatile int acm_open, acm_close, acm_done;
+static void CALLBACK acm_cb(HANDLE h, UINT msg, DWORD_PTR inst, DWORD_PTR p1, DWORD_PTR p2) {
+    if (inst != 0x57) return;
+    if (msg == 0x3D4) acm_open++;
+    if (msg == 0x3D5) acm_close++;
+    if (msg == 0x3D6) acm_done++;
+}
+static int acm_tests(void) {
+    WAVEFORMATEX src = {1, 1, 11025, 11025, 1, 8, 0}, dst, adpcm = {2, 1, 22050, 11155, 512, 4, 0};
+    ACMFORMATTAGDETAILSA tag;
+    ACMSTREAMHEADER hdr, other;
+    static BYTE in[100];
+    static short pcm[1000];
+    HANDLE h = 0;
+    DWORD n = 0;
+    int i;
+
+    for (i = 0; i < 100; i++) in[i] = (BYTE)(128 + i);
+    zero(&dst, sizeof dst);
+    dst.wFormatTag = 1;
+    dst.wBitsPerSample = 16;
+    CHECK(145, acmMetrics(0, 50, &n) == 0 && n >= 18 &&
+                   acmFormatSuggest(0, &src, &dst, sizeof dst, 0x90000) == 0 &&
+                   dst.nChannels == 1 && dst.nSamplesPerSec == 11025 && dst.nBlockAlign == 2);
+    zero(&tag, sizeof tag);
+    tag.cbStruct = sizeof tag;
+    tag.dwFormatTag = 1;
+    CHECK(146, acmFormatTagDetailsA(0, &tag, 1) == 0 && tag.szFormatTag[0] == 'P' &&
+                   acmStreamOpen(0, 0, &src, &adpcm, 0, 0, 0, 1) == 512);
+    dst.nChannels = 2;
+    dst.nSamplesPerSec = 22050;
+    dst.nBlockAlign = 4;
+    dst.nAvgBytesPerSec = 88200;
+    CHECK(147, acmStreamOpen(0, 0, &src, &dst, 0, 0, 0, 1) == 0 &&
+                   acmStreamOpen(&h, 0, &src, &dst, 0, (DWORD_PTR)acm_cb, 0x57,
+                                 CALLBACK_FUNCTION | 2) == 0 && h && acm_open == 1);
+    CHECK(148, acmStreamSize(h, sizeof in, &n, 0) == 0 && n == 804);
+    zero(&hdr, sizeof hdr);
+    hdr.cbStruct = sizeof hdr;
+    hdr.pbSrc = in;
+    hdr.cbSrcLength = sizeof in;
+    hdr.pbDst = (BYTE *)pcm;
+    hdr.cbDstLength = sizeof pcm;
+    other = hdr;
+    CHECK(149, acmStreamConvert(h, &other, 0) == 514 &&
+                   acmStreamPrepareHeader(h, &hdr, 0) == 0 && (hdr.fdwStatus & 0x20000));
+    CHECK(106, acmStreamConvert(h, &hdr, 0x10 | 0x20) == 0 && hdr.cbSrcLengthUsed == 100 &&
+                   hdr.cbDstLengthUsed == 800 && (hdr.fdwStatus & 0x10000) && acm_done == 1);
+    /* 128 → 0 ; puis une rampe de 256 par octet source, 128 par trame cible. */
+    CHECK(107, pcm[0] == 0 && pcm[1] == 0 && pcm[2] == 128 && pcm[3] == 128 && pcm[4] == 256 &&
+                   pcm[198 * 2] == 99 * 256);
+    CHECK(108, acmStreamUnprepareHeader(h, &hdr, 0) == 0 && !(hdr.fdwStatus & 0x20000) &&
+                   acmStreamConvert(h, &hdr, 0) == 514);
+    CHECK(109, acmStreamClose(h, 0) == 0 && acm_close == 1 && acmStreamClose(h, 0) == 5);
     return 0;
 }
 
@@ -1525,6 +1601,8 @@ void entry(void) {
     out("DirectPlay 8 : 29 verifications passees\n");
     midi_tests();
     out("MIDI : 15 verifications passees\n");
+    acm_tests();
+    out("msacm32 : 9 verifications passees\n");
     if (midi_in_tests() == 0) out("Entree MIDI : 9 verifications passees\n");
     else out("Entree MIDI : WINLUX_MIDI_IN_DIR absent, sautee\n");
     timer_wave_tests();
