@@ -2422,9 +2422,14 @@ unsafe extern "win64" fn ctx_map(
             .staging_data
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // Lecture (READ, READ_WRITE) : un compute shader ou une copie GPU a
-        // pu écrire le tampon depuis ; la copie processeur est relue.
-        if matches!(map_type, 1 | 3) && (*buf).gl_buffer != 0 {
+        // Lecture (READ, READ_WRITE) : toujours relue. En écriture, Unmap
+        // téléverse toute la copie processeur : si le GPU a écrit le tampon
+        // depuis (compute shader, copie), elle est relue aussi, sinon les
+        // octets non touchés écrasaient le GPU de valeurs périmées (#1184).
+        let gpu_wrote = take_gpu_written((*buf).gl_buffer);
+        if (matches!(map_type, 1 | 3) || (gpu_wrote && map_type != MAP_WRITE_DISCARD))
+            && (*buf).gl_buffer != 0
+        {
             if let Some(g) = gl_here() {
                 const GL_COPY_READ_BUFFER: u32 = 0x8F36;
                 (g.BindBuffer)(GL_COPY_READ_BUFFER, (*buf).gl_buffer);
@@ -2468,6 +2473,30 @@ unsafe extern "win64" fn ctx_map(
         return S_OK;
     }
     E_INVALIDARG
+}
+
+/// Tampons GL écrits par le GPU depuis la dernière relecture de leur copie
+/// processeur (#1184).
+static GPU_WRITTEN: Mutex<Option<std::collections::HashSet<gl::GLuint>>> = Mutex::new(None);
+
+/// Note qu'un tampon GL a été écrit par le GPU.
+pub(super) fn mark_gpu_written(buffer: gl::GLuint) {
+    if buffer != 0 {
+        GPU_WRITTEN
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(buffer);
+    }
+}
+
+/// Vrai (une fois) si le GPU a écrit le tampon depuis le dernier appel.
+fn take_gpu_written(buffer: gl::GLuint) -> bool {
+    GPU_WRITTEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+        .is_some_and(|set| set.remove(&buffer))
 }
 
 unsafe extern "win64" fn ctx_unmap(_this: *mut DeviceContext, resource: *mut c_void, _sub: u32) {
@@ -2951,6 +2980,9 @@ unsafe fn copy_buffer_range(
     );
     (g.BindBuffer)(COPY_READ_BUFFER, 0);
     (g.BindBuffer)(COPY_WRITE_BUFFER, 0);
+    // La copie processeur de la source peut être périmée : la destination
+    // sera relue avant un Map qui garde son contenu (#1184).
+    mark_gpu_written(d.gl_buffer);
     let (so, dof, n) = (src_offset as usize, dst_offset as usize, len as usize);
     if std::ptr::eq(s, d) {
         let mut data = d.staging_data.lock().unwrap_or_else(|e| e.into_inner());

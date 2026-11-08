@@ -363,9 +363,21 @@ unsafe fn create_window_inner(
             }
         } else {
             b.create_window(hwnd, &title, rect);
-            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+            if style & 0x8000_0000 != 0 {
+                crate::thunks::api_note(&format!(
+                    "CreateWindowEx {hwnd:#x} {class:?} : style {style:#x}, ex {ex_style:#x}, parent {parent:#x}, hors gestionnaire {} (#1222)",
+                    floating_popup(style, ex_style)
+                ));
+            }
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS)
+                || floating_popup(style, ex_style)
+            {
                 // Menu surgissant : ni cadre ni placement du gestionnaire.
                 b.set_popup(hwnd);
+            } else if layered_without_caption(style, ex_style) {
+                // Fenêtre en couches sans barre de titre (WPF transparente,
+                // Flow Launcher) : le programme dessine tout, cadre compris.
+                b.set_decorations(hwnd, 0);
             } else if let Some(level) = popup_decorations(style) {
                 b.set_decorations(hwnd, level);
             }
@@ -1206,7 +1218,7 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
         // Le cadre ne part que si la fenêtre a déjà une barre de titre à
         // elle (#1211). Sinon il reste, et sera retiré dès qu'elle en aura
         // une (voir `recheck_own_frame`).
-        if has_own_caption(hwnd) {
+        if has_own_caption(hwnd) || drawn_whole(hwnd) {
             take_own_frame(hwnd);
         } else {
             let mut pending = pending_frame();
@@ -1218,7 +1230,11 @@ unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
         list.retain(|&h| h != hwnd);
         drop(list);
         let style = gui::window_style(hwnd).unwrap_or(0);
-        let level = popup_decorations(style).unwrap_or(2);
+        let level = if drawn_whole(hwnd) {
+            0
+        } else {
+            popup_decorations(style).unwrap_or(2)
+        };
         with_backend(|b| b.set_decorations(hwnd, level));
     }
 }
@@ -4261,6 +4277,50 @@ fn owner_top_level(mut hwnd: usize) -> usize {
     0
 }
 
+/// Fenêtre surgissante qui n'est ni une boîte ni une fenêtre d'application :
+/// WS_POPUP sans barre de titre, ni en couches ni WS_EX_APPWINDOW, et
+/// marquée outil (WS_EX_TOOLWINDOW), jamais activée (WS_EX_NOACTIVATE) ou
+/// toujours au premier plan (WS_EX_TOPMOST). C'est la forme d'un menu ou
+/// d'une bulle dessinés par le programme, comme le menu de l'icône de
+/// Claude (Chromium, #1222) : le gestionnaire de fenêtres ne doit ni la
+/// recentrer ni lui donner un bouton dans la barre des tâches. La première
+/// version exigeait outil ET non activable, ce que ce menu n'a pas.
+/// Une fenêtre en couches (Flow Launcher) reste gérée : elle prend le
+/// clavier.
+fn floating_popup(style: u32, ex_style: u32) -> bool {
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_EX_TOPMOST: u32 = 0x0000_0008;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_APPWINDOW: u32 = 0x0004_0000;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+    style & WS_POPUP != 0
+        && style & WS_CAPTION != WS_CAPTION
+        && ex_style & (WS_EX_LAYERED | WS_EX_APPWINDOW) == 0
+        && ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) != 0
+}
+
+/// Fenêtre en couches (WS_EX_LAYERED) sans barre de titre Win32 : tout son
+/// rendu, bords compris, vient du programme (UpdateLayeredWindow). Un cadre
+/// du gestionnaire de fenêtres y ajoutait un titre et des bords (#1220).
+fn layered_without_caption(style: u32, ex_style: u32) -> bool {
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_EX_LAYERED: u32 = 0x0008_0000;
+    ex_style & WS_EX_LAYERED != 0 && style & WS_CAPTION != WS_CAPTION && style & WS_CHILD == 0
+}
+
+/// La fenêtre qui prend toute sa surface (WM_NCCALCSIZE) dessine-t-elle
+/// tout elle-même, sans barre de titre à trouver ? Cas des fenêtres en
+/// couches sans titre (#1220) : leur cadre part tout de suite.
+fn drawn_whole(hwnd: usize) -> bool {
+    layered_without_caption(
+        gui::window_style(hwnd).unwrap_or(0),
+        gui::window_ex_style(hwnd).unwrap_or(0),
+    )
+}
+
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
@@ -4301,6 +4361,35 @@ mod tests {
             let mut wp = WindowPlacement::default();
             assert_eq!(get_window_placement(0x7fff_0001, &mut wp), 0);
         }
+    }
+
+    /// #1222 : le menu de l'icône de Claude (WS_POPUP, outil, jamais
+    /// activé) échappe au gestionnaire ; une fenêtre outil ordinaire
+    /// (Flow Launcher, activable) ou une boîte avec titre reste gérée.
+    /// #1220 : Flow Launcher (WPF transparente) n'a pas de cadre openbox.
+    #[test]
+    fn fenetre_en_couches_sans_cadre() {
+        assert!(layered_without_caption(0x0606_0000, 0x0008_0088));
+        assert!(layered_without_caption(0x8000_0000, 0x0008_0000));
+        assert!(!layered_without_caption(0x00CF_0000, 0x0008_0000));
+        assert!(!layered_without_caption(0x0606_0000, 0x0000_0088));
+        assert!(!layered_without_caption(0x4000_0000, 0x0008_0000));
+    }
+
+    #[test]
+    fn menu_dessine_par_le_programme_hors_gestionnaire() {
+        assert!(floating_popup(0x8000_0000, 0x0800_0080));
+        assert!(floating_popup(0x8000_0000, 0x0000_0080));
+        assert!(floating_popup(0x8600_0000, 0x0000_0008));
+        assert!(floating_popup(0x8000_0000, 0x0800_0000));
+        assert!(
+            !floating_popup(0x8000_0000, 0x0008_0088),
+            "en couches : Flow"
+        );
+        assert!(!floating_popup(0x8000_0000, 0x0004_0080), "WS_EX_APPWINDOW");
+        assert!(!floating_popup(0x8000_0000, 0));
+        assert!(!floating_popup(0x80C0_0000, 0x0800_0080));
+        assert!(!floating_popup(0x0000_0000, 0x0800_0080));
     }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés

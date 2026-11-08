@@ -162,6 +162,7 @@ pub mod notifyicon;
 pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
+pub mod ole32_storage;
 pub mod oleacc_props;
 pub mod oleaut32;
 pub mod oleaut32_disp;
@@ -201,6 +202,7 @@ pub mod taskdialog;
 pub mod taskschd;
 pub mod thread_ctl;
 pub mod threadpool;
+pub mod timer_queue;
 pub(crate) mod uianimation;
 pub mod uiautomationcore;
 pub mod url_moniker;
@@ -233,6 +235,7 @@ pub mod winlux_pty;
 pub mod winmm;
 pub mod winmm_midi;
 pub mod winmm_midi_in;
+pub mod winmm_mmio;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintab32;
@@ -544,6 +547,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = ole32::exports();
                     e.extend(dataobject::ole32_exports());
+                    e.extend(ole32_storage::exports());
                     for (name, addr) in wpf_native::ole32_exports() {
                         e.entry(name).or_insert(addr);
                     }
@@ -655,6 +659,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winmm_waveout::exports());
                     e.extend(winmm_midi::exports());
                     e.extend(winmm_midi_in::exports());
+                    e.extend(winmm_mmio::exports());
                     e
                 },
                 handle: 0,

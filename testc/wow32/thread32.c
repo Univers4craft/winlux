@@ -21,6 +21,13 @@ static DWORD WINAPI worker(LPVOID p) {
     return 40 + id;
 }
 static unsigned __stdcall worker2(void *p) { return (unsigned)(INT_PTR)p * 2; }
+/* File de minuteurs (#1226 : installeur Creative Cloud). */
+static volatile LONG ticks;
+static HANDLE tick_event;
+static void CALLBACK tick_cb(PVOID p, BOOLEAN fired) {
+    CHECK(10, p == (PVOID)0x1226 && fired);
+    if (InterlockedIncrement(&ticks) == 3) SetEvent(tick_event);
+}
 static BOOL CALLBACK locale_cb(LPWSTR s) { (void)s; InterlockedIncrement(&counter); return FALSE; }
 
 int main(void) {
@@ -41,6 +48,25 @@ int main(void) {
     HMODULE k = GetModuleHandleA("kernel32.dll");
     DWORD (WINAPI *gtc)(void) = (DWORD (WINAPI *)(void))GetProcAddress(k, "GetTickCount");
     CHECK(8, gtc != NULL && gtc() != 0);
+    /* Fonction absente : NULL, sauf diagnostic WINLUX_GETPROC_STUBS=1 qui
+       rend un bouchon journalisé (jamais appelé ici). */
+    char flag[4] = {0};
+    DWORD fl = GetEnvironmentVariableA("WINLUX_GETPROC_STUBS", flag, sizeof flag);
+    FARPROC absent = GetProcAddress(k, "WinluxFonctionAbsente");
+    if (fl == 1 && flag[0] == '1') CHECK(16, absent != NULL);
+    else CHECK(16, absent == NULL && GetLastError() == ERROR_PROC_NOT_FOUND);
+    HANDLE q = CreateTimerQueue();
+    CHECK(9, q != NULL);
+    tick_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    HANDLE tm = NULL;
+    CHECK(11, CreateTimerQueueTimer(&tm, q, tick_cb, (PVOID)0x1226, 5, 5, 0) && tm != NULL);
+    CHECK(12, WaitForSingleObject(tick_event, 5000) == WAIT_OBJECT_0);
+    CHECK(13, ChangeTimerQueueTimer(q, tm, 60000, 0));
+    CHECK(14, DeleteTimerQueueEx(q, INVALID_HANDLE_VALUE));
+    LONG frozen = ticks;
+    Sleep(30);
+    CHECK(15, ticks == frozen);
+    CloseHandle(tick_event);
     if (!fails) printf("Threads 32 bits : tout est correct\n");
     return fails;
 }

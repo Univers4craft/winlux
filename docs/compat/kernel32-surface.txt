@@ -21,7 +21,9 @@ CallbackMayRunLong
 CancelIo
 CancelIoEx
 CancelSynchronousIo
+CancelTimerQueueTimer
 CancelWaitableTimer
+ChangeTimerQueueTimer
 CheckRemoteDebuggerPresent
 ClearCommBreak
 ClearCommError
@@ -83,6 +85,8 @@ CreateThread
 CreateThreadpoolTimer
 CreateThreadpoolWait
 CreateThreadpoolWork
+CreateTimerQueue
+CreateTimerQueueTimer
 CreateToolhelp32Snapshot
 CreateWaitableTimerA
 CreateWaitableTimerExW
@@ -96,6 +100,9 @@ DeleteFiber
 DeleteFileA
 DeleteFileW
 DeleteProcThreadAttributeList
+DeleteTimerQueue
+DeleteTimerQueueEx
+DeleteTimerQueueTimer
 DeviceIoControl
 DisableThreadLibraryCalls
 DiscardVirtualMemory
@@ -722,6 +729,7 @@ SetThreadStackGuarantee
 SetThreadUILanguage
 SetThreadpoolTimer
 SetThreadpoolWait
+SetTimerQueueTimer
 SetUnhandledExceptionFilter
 SetWaitableTimer
 SetXStateFeaturesMask

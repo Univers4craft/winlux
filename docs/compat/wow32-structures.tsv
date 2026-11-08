@@ -169,6 +169,10 @@ ole32.rs	MarshalStream	a-verifier
 ole32.rs	MarshalVtbl	a-verifier	
 ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
+ole32_storage.rs	EnumObj	interne	IEnumSTATSTG du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	LockBytesObj	interne	ILockBytes de CreateILockBytesOnHGlobal (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	StgObj	interne	IStorage du stockage composé (#1235), x64 seulement (refusé si wow32 actif)
+ole32_storage.rs	StmObj	interne	IStream d'un flux de stockage composé (#1235), x64 seulement (refusé si wow32 actif)
 oleacc_props.rs	Obj	interne	objet IAccPropServices du runtime ; en x86, la passerelle COM (wow32/com.rs, IACCPROPSERVICES) l'enveloppe (accprop32.exe, #1114)
 oleaut32_disp.rs	StdDispatch	interne	objet de CreateStdDispatch (#16), x64 seulement
 oleaut32_disp.rs	TypeInfo	interne	ITypeInfo de CreateDispTypeInfo (#16), jamais vu par du code x86 (refusé si wow32 actif)

@@ -198,6 +198,100 @@ struct SafeArrayInner {
     locks: u32,
     data: Vec<u8>,
     bounds: Vec<SafeArrayBound>,
+    /// Structure SAFEARRAY publique (oaidl.h) que voit l'appelant, précédée
+    /// de 16 octets dont les 4 derniers portent le VARTYPE
+    /// (FADF_HAVEVARTYPE). Son adresse + 16 est le pointeur rendu (#1204).
+    header: Vec<u64>,
+}
+
+// Le tampon d'en-tête et les données appartiennent au tableau, protégé
+// par le verrou de la table.
+unsafe impl Send for SafeArrayInner {}
+
+const FADF_HAVEVARTYPE: u16 = 0x0080;
+const FADF_BSTR: u16 = 0x0100;
+const FADF_UNKNOWN: u16 = 0x0200;
+const FADF_DISPATCH: u16 = 0x0400;
+const FADF_VARIANT: u16 = 0x0800;
+
+impl SafeArrayInner {
+    fn new(vt: u16, bounds: Vec<SafeArrayBound>, data: Vec<u8>, element_size: u32) -> Box<Self> {
+        let dims = bounds.len();
+        // 16 octets de préfixe, puis 24 + 8 par dimension (x64).
+        let words = (16 + 24 + 8 * dims).div_ceil(8);
+        let mut inner = Box::new(SafeArrayInner {
+            dims: dims as u16,
+            vt,
+            element_size,
+            locks: 0,
+            data,
+            bounds,
+            header: vec![0u64; words],
+        });
+        inner.sync_header();
+        inner
+    }
+
+    /// Adresse du SAFEARRAY public, clé de la table.
+    fn key(&self) -> usize {
+        self.header.as_ptr() as usize + 16
+    }
+
+    /// Recopie l'état dans la structure publique : cDims, fFeatures,
+    /// cbElements, cLocks, pvData puis rgsabound, la dimension la plus à
+    /// droite en premier comme sous Windows. Disposition x86 (pointeur de
+    /// 4 octets, bornes à l'octet 16) pour un programme 32 bits.
+    fn sync_header(&mut self) {
+        let features = FADF_HAVEVARTYPE
+            | match self.vt {
+                VT_BSTR => FADF_BSTR,
+                13 => FADF_UNKNOWN,
+                9 => FADF_DISPATCH,
+                12 => FADF_VARIANT,
+                _ => 0,
+            };
+        let data = self.data.as_mut_ptr() as usize;
+        let ptr32 = crate::wow32::pointer_size() == 4;
+        let bounds: Vec<SafeArrayBound> = self.bounds.iter().rev().copied().collect();
+        let (dims, size, locks, vt) = (self.dims, self.element_size, self.locks, self.vt);
+        let base = self.header.as_mut_ptr() as *mut u8;
+        unsafe {
+            std::ptr::write_unaligned(base.add(12) as *mut u32, u32::from(vt));
+            let sa = base.add(16);
+            std::ptr::write_unaligned(sa as *mut u16, dims);
+            std::ptr::write_unaligned(sa.add(2) as *mut u16, features);
+            std::ptr::write_unaligned(sa.add(4) as *mut u32, size);
+            std::ptr::write_unaligned(sa.add(8) as *mut u32, locks);
+            let first = if ptr32 {
+                std::ptr::write_unaligned(sa.add(12) as *mut u32, data as u32);
+                16
+            } else {
+                std::ptr::write_unaligned(sa.add(16) as *mut usize, data);
+                24
+            };
+            for (i, b) in bounds.iter().enumerate() {
+                std::ptr::write_unaligned(sa.add(first + 8 * i) as *mut SafeArrayBound, *b);
+            }
+        }
+    }
+}
+
+/// IUnknown::AddRef (1) ou Release (2) d'un élément VT_UNKNOWN/VT_DISPATCH.
+/// Les objets d'un programme 32 bits suivent une autre convention d'appel :
+/// leur compteur n'est alors pas touché.
+unsafe fn unk_call(slot: usize, p: usize) {
+    if p == 0 || crate::wow32::pointer_size() != 8 {
+        return;
+    }
+    let vtbl = *(p as *const *const usize);
+    let f: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtbl.add(slot));
+    f(p);
+}
+
+fn register(inner: Box<SafeArrayInner>) -> usize {
+    let key = inner.key();
+    lock(safe_arrays()).insert(key, inner);
+    key
 }
 
 static SAFE_ARRAYS: OnceLock<Mutex<HashMap<usize, Box<SafeArrayInner>>>> = OnceLock::new();
@@ -241,19 +335,12 @@ pub unsafe extern "win64" fn safe_array_create(vt: u16, dims: u32, bounds_ptr: u
     else {
         return 0;
     };
-    let data = vec![0u8; data_size];
-
-    let inner = Box::new(SafeArrayInner {
-        dims: dims as u16,
+    register(SafeArrayInner::new(
         vt,
-        element_size: elem_size,
-        locks: 0,
-        data,
         bounds,
-    });
-    let key = &*inner as *const SafeArrayInner as usize;
-    lock(safe_arrays()).insert(key, inner);
-    key
+        vec![0u8; data_size],
+        elem_size,
+    ))
 }
 
 pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count: u32) -> usize {
@@ -268,19 +355,12 @@ pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count
     else {
         return 0;
     };
-    let data = vec![0u8; data_size];
-
-    let inner = Box::new(SafeArrayInner {
-        dims: 1,
+    register(SafeArrayInner::new(
         vt,
-        element_size: elem_size,
-        locks: 0,
-        data,
-        bounds: vec![bound],
-    });
-    let key = &*inner as *const SafeArrayInner as usize;
-    lock(safe_arrays()).insert(key, inner);
-    key
+        vec![bound],
+        vec![0u8; data_size],
+        elem_size,
+    ))
 }
 
 pub extern "win64" fn safe_array_destroy(sa: usize) -> i32 {
@@ -293,10 +373,14 @@ pub extern "win64" fn safe_array_destroy(sa: usize) -> i32 {
             return E_INVALIDARG;
         }
     }
-    if map.remove(&sa).is_some() {
-        0
-    } else {
-        E_INVALIDARG
+    match map.remove(&sa) {
+        Some(inner) => {
+            drop(map);
+            // SAFETY : éléments écrits par les fonctions SafeArray* elles-mêmes.
+            unsafe { clear_elements(&inner) };
+            0
+        }
+        None => E_INVALIDARG,
     }
 }
 
@@ -309,6 +393,7 @@ pub unsafe extern "win64" fn safe_array_access_data(sa: usize, data: *mut *mut c
         return E_INVALIDARG;
     };
     inner.locks = inner.locks.saturating_add(1);
+    inner.sync_header();
     *data = inner.data.as_mut_ptr() as *mut c_void;
     0
 }
@@ -322,6 +407,7 @@ pub extern "win64" fn safe_array_unaccess_data(sa: usize) -> i32 {
         return E_INVALIDARG;
     };
     inner.locks = inner.locks.saturating_sub(1);
+    inner.sync_header();
     0
 }
 
@@ -386,7 +472,32 @@ pub unsafe extern "win64" fn safe_array_get_element(
     if offset + elem_size > inner.data.len() {
         return DISP_E_BADINDEX;
     }
-    std::ptr::copy_nonoverlapping(inner.data.as_ptr().add(offset), out as *mut u8, elem_size);
+    let at = inner.data.as_ptr().add(offset);
+    match inner.vt {
+        // Une copie de la chaîne, de l'interface (AddRef) ou du VARIANT,
+        // que l'appelant libère (Microsoft Learn, SafeArrayGetElement).
+        VT_BSTR => {
+            let b = std::ptr::read_unaligned(at as *const *const u16);
+            let copy = if b.is_null() {
+                std::ptr::null_mut()
+            } else {
+                sys_alloc_string_len(b, sys_string_len(b))
+            };
+            std::ptr::write_unaligned(out as *mut *mut u16, copy);
+        }
+        9 | 13 => {
+            let p = std::ptr::read_unaligned(at as *const usize);
+            if p != 0 {
+                unk_call(1, p);
+            }
+            std::ptr::write_unaligned(out as *mut usize, p);
+        }
+        12 => {
+            std::ptr::write_bytes(out as *mut u8, 0, elem_size);
+            return variant_copy(out, at as *const c_void);
+        }
+        _ => std::ptr::copy_nonoverlapping(at, out as *mut u8, elem_size),
+    }
     0
 }
 
@@ -410,12 +521,68 @@ pub unsafe extern "win64" fn safe_array_put_element(
     if offset + elem_size > inner.data.len() {
         return DISP_E_BADINDEX;
     }
-    std::ptr::copy_nonoverlapping(
-        val as *const u8,
-        inner.data.as_mut_ptr().add(offset),
-        elem_size,
-    );
+    let at = inner.data.as_mut_ptr().add(offset);
+    match inner.vt {
+        // `pv` est la chaîne, l'interface ou le VARIANT lui-même : le
+        // tableau en garde une copie et libère l'ancienne valeur
+        // (Microsoft Learn, SafeArrayPutElement).
+        VT_BSTR => {
+            let b = val as *const u16;
+            let copy = sys_alloc_string_len(b, sys_string_len(b));
+            if copy.is_null() {
+                return E_OUTOFMEMORY;
+            }
+            let old = std::ptr::read_unaligned(at as *const *mut u16);
+            std::ptr::write_unaligned(at as *mut *mut u16, copy);
+            if !old.is_null() {
+                sys_free_string(old);
+            }
+        }
+        9 | 13 => {
+            let p = val as usize;
+            unk_call(1, p);
+            let old = std::ptr::read_unaligned(at as *const usize);
+            std::ptr::write_unaligned(at as *mut usize, p);
+            if old != 0 {
+                unk_call(2, old);
+            }
+        }
+        12 => {
+            variant_clear(at as *mut c_void);
+            return variant_copy(at as *mut c_void, val);
+        }
+        _ => std::ptr::copy_nonoverlapping(val as *const u8, at, elem_size),
+    }
     0
+}
+
+/// Libère ce que tient chaque élément (chaînes, interfaces, VARIANT), comme
+/// SafeArrayDestroy sous Windows.
+unsafe fn clear_elements(inner: &SafeArrayInner) {
+    let size = inner.element_size as usize;
+    if size == 0 {
+        return;
+    }
+    for at in inner.data.chunks_exact(size).map(|c| c.as_ptr()) {
+        match inner.vt {
+            VT_BSTR => {
+                let b = std::ptr::read_unaligned(at as *const *mut u16);
+                if !b.is_null() {
+                    sys_free_string(b);
+                }
+            }
+            9 | 13 => {
+                let p = std::ptr::read_unaligned(at as *const usize);
+                if p != 0 {
+                    unk_call(2, p);
+                }
+            }
+            12 => {
+                variant_clear(at as *mut c_void);
+            }
+            _ => return,
+        }
+    }
 }
 
 unsafe fn compute_offset(inner: &SafeArrayInner, indices: *const i32) -> Option<usize> {
@@ -507,6 +674,7 @@ pub unsafe extern "win64" fn safe_array_redim(sa: usize, bound: *const SafeArray
     match total {
         Some(n) if n <= 1 << 30 => {
             inner.data.resize(n, 0);
+            inner.sync_header();
             0
         }
         _ => E_OUTOFMEMORY,
@@ -706,5 +874,97 @@ pub fn exports() -> crate::dlls::Exports {
         "#149" => fn sys_string_byte_len, "#150" => fn sys_alloc_string_byte_len,
         "#200" => fn get_error_info, "#201" => fn set_error_info, "#202" => fn create_error_info,
         "#411" => fn safe_array_create_vector,
+    }
+}
+
+#[cfg(test)]
+mod safearray_tests {
+    use super::*;
+
+    unsafe fn rd<T: Copy>(p: usize) -> T {
+        std::ptr::read_unaligned(p as *const T)
+    }
+
+    #[test]
+    fn safearray_a_la_disposition_publique_et_copie_les_chaines() {
+        // #1204 : les champs de oaidl.h se lisent directement.
+        unsafe {
+            let sa = safe_array_create_vector(VT_BSTR, 2, 5);
+            assert_ne!(sa, 0);
+            assert_eq!(rd::<u16>(sa), 1, "cDims");
+            let features = rd::<u16>(sa + 2);
+            assert_eq!(features & 0x0180, 0x0180, "FADF_BSTR | FADF_HAVEVARTYPE");
+            assert_eq!(rd::<u32>(sa + 4), 8, "cbElements");
+            assert_eq!(rd::<u16>(sa - 4), VT_BSTR, "VARTYPE avant la structure");
+            assert_eq!(rd::<u32>(sa + 24), 5, "rgsabound[0].cElements");
+            assert_eq!(rd::<i32>(sa + 28), 2, "rgsabound[0].lLbound");
+            let mut data: *mut c_void = std::ptr::null_mut();
+            assert_eq!(safe_array_access_data(sa, &mut data), 0);
+            assert_eq!(rd::<usize>(sa + 16), data as usize, "pvData");
+            assert_eq!(rd::<u32>(sa + 8), 1, "cLocks");
+            safe_array_unaccess_data(sa);
+            assert_eq!(rd::<u32>(sa + 8), 0);
+
+            // PutElement prend la chaîne elle-même et en garde une copie.
+            let text: Vec<u16> = "bonjour".encode_utf16().collect();
+            let b = sys_alloc_string_len(text.as_ptr(), text.len() as u32);
+            let idx = [3i32];
+            assert_eq!(
+                safe_array_put_element(sa, idx.as_ptr(), b as *const c_void),
+                0
+            );
+            let stored = rd::<*mut u16>(data as usize + 8);
+            assert!(!stored.is_null() && stored != b, "copie, pas le pointeur");
+            assert_eq!(sys_string_len(stored), 7);
+            // GetElement rend une autre copie, à libérer par l'appelant.
+            let mut got: *mut u16 = std::ptr::null_mut();
+            assert_eq!(
+                safe_array_get_element(sa, idx.as_ptr(), &mut got as *mut _ as *mut c_void),
+                0
+            );
+            assert!(!got.is_null() && got != stored);
+            assert_eq!(std::slice::from_raw_parts(got, 7), &text[..]);
+            sys_free_string(got);
+            sys_free_string(b);
+            assert_eq!(safe_array_destroy(sa), 0);
+        }
+    }
+
+    #[test]
+    fn safearray_bornes_dans_l_ordre_de_windows() {
+        // rgsabound garde la dimension la plus à droite en premier.
+        unsafe {
+            let bounds = [
+                SafeArrayBound {
+                    elements: 3,
+                    lower_bound: 0,
+                },
+                SafeArrayBound {
+                    elements: 7,
+                    lower_bound: 1,
+                },
+            ];
+            let sa = safe_array_create(VT_I4, 2, bounds.as_ptr() as usize);
+            assert_ne!(sa, 0);
+            assert_eq!(rd::<u16>(sa), 2);
+            assert_eq!(rd::<u32>(sa + 4), 4);
+            assert_eq!((rd::<u32>(sa + 24), rd::<i32>(sa + 28)), (7, 1));
+            assert_eq!((rd::<u32>(sa + 32), rd::<i32>(sa + 36)), (3, 0));
+            let mut ub = 0;
+            assert_eq!(safe_array_get_u_bound(sa, 2, &mut ub), 0);
+            assert_eq!(ub, 7);
+            // Redim change la dernière dimension et pvData suit.
+            let nb = SafeArrayBound {
+                elements: 9,
+                lower_bound: 1,
+            };
+            assert_eq!(safe_array_redim(sa, &nb), 0);
+            assert_eq!(rd::<u32>(sa + 24), 9);
+            let mut data: *mut c_void = std::ptr::null_mut();
+            safe_array_access_data(sa, &mut data);
+            assert_eq!(rd::<usize>(sa + 16), data as usize);
+            safe_array_unaccess_data(sa);
+            assert_eq!(safe_array_destroy(sa), 0);
+        }
     }
 }

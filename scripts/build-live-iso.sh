@@ -134,6 +134,7 @@ cp "$root/integration/store-catalogs.json" "$stage/usr/share/winlux/store-catalo
 # description ; téléchargés chez l'éditeur après confirmation, jamais dans l'ISO.
 cp "$root/integration/store-editeurs.json" "$stage/usr/share/winlux/store-editeurs.json"
 install -D -m 755 "$root/scripts/winlux-store-confirm.py" "$stage/usr/lib/winlux/winlux-store-confirm"
+install -D -m 755 "$root/scripts/winlux-squirrel-update.py" "$stage/usr/lib/winlux/winlux-squirrel-update"
 install -m 755 "$root/scripts/winlux-store-repos.py" "$stage/usr/bin/winlux-store-repos"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts" "$stage/usr/bin/winlux-store-catalogs"
 # Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
