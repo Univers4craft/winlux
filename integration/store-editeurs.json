@@ -45,9 +45,9 @@
     {
       "id": "discord", "name": "Discord", "publisher": "Discord Inc.", "category": "internet",
       "licence": "proprietaire", "package": "discord", "kind": "deb",
-      "url": "https://discord.com/api/download?platform=linux&format=deb",
-      "version": "", "sha256": "",
-      "hosts": ["discord.com", "dl.discordapp.net"], "site": "https://discord.com/download",
+      "url": "https://stable.dl2.discordapp.net/distro/app/stable/linux/x64/1.0.168/Discord.deb",
+      "version": "1.0.168", "sha256": "93d43ad090825b9edcacfb3841506ea51e7040c60d93a9e377d0caca547bea28", "size": 2387236,
+      "hosts": ["stable.dl2.discordapp.net"], "site": "https://discord.com/download",
       "desc": {"fr": "Discussions vocales, vidéo et écrites entre amis et communautés.",
                "en": "Voice, video and text chat for friends and communities.",
                "es": "Chat de voz, vídeo y texto para amigos y comunidades.",

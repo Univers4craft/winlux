@@ -50,6 +50,15 @@ def main(argv):
                 print(f"{e['id']}: {len(found)} versions, dernière lue {last.get('Version')} "
                       f"Filename={last.get('Filename')} SHA256={last.get('SHA256')} Size={last.get('Size')} "
                       f"Depends={last.get('Depends', '')[:300]}")
+                # Adresse du paquet : racine du dépôt, ou dossier de l'index pour un dépôt « plat ».
+                roots = [e["base"]]
+                if e.get("flat"):
+                    roots.append(urllib.parse.urljoin(e["base"], e["index"].rsplit("/", 1)[0] + "/"))
+                for root in roots:
+                    url = urllib.parse.urljoin(root, last.get("Filename", "").removeprefix("./"))
+                    head = subprocess.run(["curl", "--silent", "--head", "--location", "--proto", "=https", "--max-time", "60",
+                                           "-o", "/dev/null", "-w", "%{http_code}", url], capture_output=True, text=True)
+                    print(f"    {head.stdout.strip()} {url}")
                 continue
             deb = work / "paquet.deb"
             r = curl(e["url"], deb)
@@ -65,7 +74,7 @@ def main(argv):
             subprocess.run(["dpkg-deb", "-e", str(deb), str(control)], capture_output=True)
             for script in sorted(control.glob("*")) if control.is_dir() else []:
                 for line in script.read_text(errors="replace").splitlines():
-                    if re.search(r"https?://|signed-by|sources\.list|keyring|\.gpg|\.asc", line):
+                    if re.search(r"https?://|signed-by|sources\.list|keyring|\.gpg|\.asc|Suites|Components|Types:", line):
                         print(f"    {script.name}: {line.strip()[:240]}")
     print(f"{failures} dépôt(s) en échec")
     return 0
