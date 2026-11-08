@@ -57,6 +57,11 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # reste « monde » : canaux 12-13 et une partie du 5 GHz bloqués, une
             # box sur le canal 12 ou 13 est invisible.
             "wireless-regdb",
+            # VPN et point d'accès sans fil mobile (#660) : greffon OpenVPN de
+            # NetworkManager (WireGuard y est intégré), dnsmasq pour les adresses
+            # des appareils du point d'accès, nft pour la traduction d'adresses,
+            # iw pour les cartes capables de point d'accès.
+            "network-manager-openvpn", "openvpn", "dnsmasq-base", "nftables", "iw",
             # Certificats : magasin Mozilla, update-ca-certificates (openssl) et
             # certutil pour les navigateurs NSS (winlux-certificates).
             "ca-certificates", "openssl", "libnss3-tools",
