@@ -550,6 +550,33 @@ mod tests {
                 assert_eq!(method::<Qi>(lay, 0)(lay, &iid, &mut p), S_OK);
                 method::<Unary>(p, 2)(p);
             }
+            // IDWriteTextFormat1-3 d'une mise en page : une vue dont les
+            // emplacements sont ceux de IDWriteTextFormat3 (#1158, Paint.NET).
+            let mut view = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(lay, 0)(lay, &IID_TEXT_FORMAT3, &mut view),
+                S_OK
+            );
+            assert!(!view.is_null() && view != lay);
+            let mut again = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(lay, 0)(lay, &IID_TEXT_FORMAT1, &mut again),
+                S_OK
+            );
+            assert_eq!(again, view);
+            method::<Unary>(again, 2)(again);
+            let mut g = LineSpacing::default();
+            assert_eq!(method::<GetS>(view, 37)(view, &mut g), S_OK);
+            assert_eq!(method::<GetW>(view, 22)(view), 700);
+            assert_eq!(method::<Unary>(view, 39)(view), 1);
+            let mut back = std::ptr::null_mut();
+            assert_eq!(
+                method::<Qi>(view, 0)(view, &IID_TEXT_LAYOUT4, &mut back),
+                S_OK
+            );
+            assert_eq!(back, lay);
+            method::<Unary>(back, 2)(back);
+            method::<Unary>(view, 2)(view);
             // IDWriteTextLayout2::GetMetrics et IDWriteTextLayout3::GetLineMetrics.
             let mut m: TextMetrics1 = std::mem::zeroed();
             type GetM = unsafe extern "win64" fn(*mut c_void, *mut TextMetrics1) -> i32;

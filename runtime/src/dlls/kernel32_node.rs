@@ -790,36 +790,106 @@ static SNAPSHOTS: std::sync::Mutex<Option<std::collections::HashMap<usize, Snaps
     std::sync::Mutex::new(None);
 static NEXT_SNAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x534E_0000);
 
+/// Un processus vu dans /proc, sous son nom Windows.
+pub(crate) struct ProcessRecord {
+    pub pid: u32,
+    pub ppid: u32,
+    /// Identifiants des fils (/proc/PID/task).
+    pub threads: Vec<u32>,
+    /// « PaintDotNet.exe » pour un programme lancé par Winlux, sinon le nom
+    /// Linux suivi de « .exe ».
+    pub name: String,
+    /// Départ, temps utilisateur et noyau, en tops d'horloge depuis le
+    /// démarrage (/proc/PID/stat).
+    pub start_ticks: u64,
+    pub user_ticks: u64,
+    pub kernel_ticks: u64,
+    pub virtual_bytes: u64,
+    pub resident_bytes: u64,
+}
+
+/// Nom Windows d'un processus : pour un processus Winlux (même exécutable
+/// que le nôtre), le fichier .exe passé en premier argument.
+fn windows_name(pid: u32, comm: &str, runtime: Option<&std::path::Path>) -> String {
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+    if exe.is_some() && exe.as_deref() == runtime {
+        if let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) {
+            if let Some(arg) = cmdline.split(|b| *b == 0).nth(1) {
+                let arg = String::from_utf8_lossy(arg);
+                let file = arg.rsplit(['/', '\\']).next().unwrap_or("");
+                if !arg.starts_with("--") && !file.is_empty() {
+                    return file.to_string();
+                }
+            }
+        }
+    }
+    if comm.to_ascii_lowercase().ends_with(".exe") {
+        comm.to_string()
+    } else {
+        format!("{comm}.exe")
+    }
+}
+
+/// Processus du système, lus dans /proc (Toolhelp, NtQuerySystemInformation).
+pub(crate) fn system_processes() -> Vec<ProcessRecord> {
+    let runtime = std::fs::read_link("/proc/self/exe").ok();
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
+    let mut procs = Vec::new();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return procs;
+    };
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
+            continue;
+        };
+        let comm = &stat[open + 1..close];
+        // Champs après « (comm) » : état (0), ppid (1), utime (11), stime
+        // (12), num_threads (17), starttime (19), vsize (20), rss (21).
+        let rest: Vec<&str> = stat[close + 1..].split_whitespace().collect();
+        let num = |k: usize| rest.get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let mut threads: Vec<u32> = std::fs::read_dir(format!("/proc/{pid}/task"))
+            .map(|t| {
+                t.flatten()
+                    .filter_map(|t| t.file_name().to_str().and_then(|n| n.parse().ok()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if threads.is_empty() {
+            threads.push(pid);
+        }
+        threads.sort_unstable();
+        procs.push(ProcessRecord {
+            pid,
+            ppid: num(1) as u32,
+            threads,
+            name: windows_name(pid, comm, runtime.as_deref()),
+            start_ticks: num(19),
+            user_ticks: num(11),
+            kernel_ticks: num(12),
+            virtual_bytes: num(20),
+            resident_bytes: num(21) * page,
+        });
+    }
+    procs.sort_by_key(|p| p.pid);
+    procs
+}
+
 pub unsafe extern "win64" fn CreateToolhelp32Snapshot(flags: u32, _pid: u32) -> usize {
     if flags & 0x2 == 0 {
         // Seuls les processus (TH32CS_SNAPPROCESS) sont décrits.
         crate::process::set_last_error(50);
         return usize::MAX;
     }
-    let mut procs = Vec::new();
-    if let Ok(rd) = std::fs::read_dir("/proc") {
-        for e in rd.flatten() {
-            let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
-                continue;
-            };
-            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-                continue;
-            };
-            let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
-                continue;
-            };
-            let name = stat[open + 1..close].to_string();
-            let rest: Vec<&str> = stat[close + 1..].split_whitespace().collect();
-            let ppid = rest.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
-            let threads = rest.get(17).and_then(|v| v.parse().ok()).unwrap_or(1);
-            let exe = if name.to_ascii_lowercase().ends_with(".exe") {
-                name
-            } else {
-                format!("{name}.exe")
-            };
-            procs.push((pid, ppid, threads, exe));
-        }
-    }
+    let procs = system_processes()
+        .into_iter()
+        .map(|p| (p.pid, p.ppid, p.threads.len() as u32, p.name))
+        .collect();
     let id = NEXT_SNAP.fetch_add(4, Ordering::Relaxed);
     crate::dlls::lock(&SNAPSHOTS)
         .get_or_insert_with(std::collections::HashMap::new)
