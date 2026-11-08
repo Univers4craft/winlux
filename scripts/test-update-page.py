@@ -183,6 +183,38 @@ with tempfile.TemporaryDirectory() as folder:
     glob["sys"].argv = ["winlux-update-apt", "--active-hours", "9", "17"]
     ok(glob["main"]() == 0 and glob["active_hours"]() == (9, 17), "--active-hours 9 17")
 
+    # #1007 : GitHub en 5xx n'est pas « aucune version publiée », et l'attente reste courte.
+    busy = glob["server_error"](subprocess.CalledProcessError(22, ["curl"], output="504"))
+    ok(busy is not None and "ne répond pas" in str(busy) and "504" in str(busy), "erreur 504 : « GitHub ne répond pas » (#1007)")
+    ok(glob["server_error"](subprocess.CalledProcessError(22, ["curl"], output="429")) is not None, "erreur 429 : serveur occupé (#1007)")
+    ok(glob["server_error"](subprocess.CalledProcessError(22, ["curl"], output="404")) is None, "erreur 404 : pas une panne du serveur (#1007)")
+    limits = glob["DOWNLOAD_LIMITS"]
+    ok(limits[limits.index("--max-time") + 1] == "30" and "--retry" in limits and "--connect-timeout" in limits,
+       "petits fichiers : 30 s au plus, avec nouveaux essais (#1007)")
+    fake = folder / "bin"; fake.mkdir()
+    (fake / "curl").write_text("#!/bin/sh\nprintf 503\necho 'curl: (22) The requested URL returned error: 503' >&2\nexit 22\n")
+    (fake / "curl").chmod(0o755)
+    real_local, real_path = glob["local_manifest"], os.environ["PATH"]
+    glob["local_manifest"] = lambda: None
+    os.environ["PATH"] = f"{fake}:{real_path}"
+    try:
+        work = folder / "work"; work.mkdir()
+        try: glob["release_metadata"](work); message = ""
+        except RuntimeError as error: message = str(error)
+    finally:
+        os.environ["PATH"] = real_path; glob["local_manifest"] = real_local
+    ok("ne répond pas" in message and "Aucune version publiée" not in message, "recherche en 503 : message de serveur indisponible (#1007)")
+
+# ── Liste de pause : vrai pluriel (#1009) et remise à zéro après la reprise (#1008) ──
+for lang, one, two in (("fr", "Pendant 1 semaine", "Pendant 2 semaines"), ("en", "For 1 week", "For 2 weeks"),
+                       ("es", "Durante 1 semana", "Durante 2 semanas"), ("de", "Für 1 Woche", "Für 2 Wochen")):
+    words = page(lang)["weeks_text"]
+    ok(words(1) == one and words(2) == two, f"pluriel des semaines en {lang} (#1009)")
+os.environ["WINLUX_LANG"] = "fr"
+ok("semaine(s)" not in source and "week(s)" not in source, "plus de « semaine(s) » (#1009)")
+ok('if paused and self.pause_combo.get_active_id(): self.pause_combo.set_active_id("")' in source,
+   "liste de pause remise sur « Choisir une durée » pendant une pause (#1008)")
+
 # ── winlux-control, relais root, paquet, session ────────────────────────
 control = (HERE / "winlux-control.sh").read_text(encoding="utf-8")
 ok("update-pause-1|update-pause-2|update-pause-3|update-pause-4|update-pause-5)" in control and "update-resume)" in control

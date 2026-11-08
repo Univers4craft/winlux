@@ -88,7 +88,8 @@ _TR = {
     "Rien ne s’installe tout seul pendant la pause ; la recherche reste possible.": ("Nothing installs by itself during the pause; you can still check.", "Nada se instala solo durante la pausa; puede seguir buscando.", "Während der Pause wird nichts automatisch installiert; Suchen bleibt möglich."),
     "Suspendues jusqu’au {date}": ("Paused until {date}", "En pausa hasta el {date}", "Angehalten bis {date}"),
     "Reprendre": ("Resume", "Reanudar", "Fortsetzen"),
-    "Pendant {count} semaine(s)": ("For {count} week(s)", "Durante {count} semana(s)", "Für {count} Woche(n)"),
+    "Pendant 1 semaine": ("For 1 week", "Durante 1 semana", "Für 1 Woche"),
+    "Pendant {count} semaines": ("For {count} weeks", "Durante {count} semanas", "Für {count} Wochen"),
     "Choisir une durée": ("Choose a duration", "Elegir una duración", "Dauer wählen"),
     "Installer automatiquement les nouvelles versions": ("Install new versions automatically", "Instalar automáticamente las nuevas versiones", "Neue Versionen automatisch installieren"),
     "En dehors des heures d’activité, jamais pendant un jeu. Le redémarrage reste votre choix.": ("Outside active hours, never during a game. Restarting is always your choice.", "Fuera del horario de actividad, nunca durante un juego. El reinicio siempre lo decide usted.", "Außerhalb der Nutzungszeit, nie während eines Spiels. Den Neustart entscheiden Sie."),
@@ -582,7 +583,7 @@ class UpdatePanel:
         self.pause_combo = Gtk.ComboBoxText()
         self.pause_combo.append("", _t("Choisir une durée"))
         for weeks in PAUSE_WEEKS:
-            self.pause_combo.append(str(weeks), _t("Pendant {count} semaine(s)").format(count=weeks))
+            self.pause_combo.append(str(weeks), weeks_text(weeks))
         self.pause_combo.set_active_id("")
         self.pause_combo.connect("changed", lambda combo: combo.get_active_id() and self.run("update-pause-" + combo.get_active_id()))
         self.resume_button = self.button(_t("Reprendre"), lambda: self.run("update-resume"))
@@ -770,6 +771,9 @@ class UpdatePanel:
         # Options
         try: paused = int(state.get("paused_until", "0") or 0) > time.time()
         except ValueError: paused = False
+        # En pause, la liste est cachée et remise sur « Choisir une durée » :
+        # après « Reprendre », elle ne montre plus l'ancienne durée (#1008).
+        if paused and self.pause_combo.get_active_id(): self.pause_combo.set_active_id("")
         self.pause_combo.set_visible(not paused)
         self.resume_button.set_visible(paused)
         set_text(self.pause_sub, _t("Suspendues jusqu’au {date}").format(date=short_date(int(state["paused_until"]))) if paused
@@ -780,6 +784,11 @@ class UpdatePanel:
                  if previous else _t("Aucune version précédente conservée."))
         for widget in (self.pause_combo, self.resume_button, self.auto_switch, self.start_combo, self.end_combo, self.rollback_button):
             widget.set_sensitive(not busy)
+
+
+def weeks_text(weeks):
+    """« Pendant 1 semaine », « Pendant 2 semaines » (vrai pluriel, #1009)."""
+    return _t("Pendant 1 semaine") if weeks == 1 else _t("Pendant {count} semaines").format(count=weeks)
 
 
 def set_text(widget, text, button=False):
