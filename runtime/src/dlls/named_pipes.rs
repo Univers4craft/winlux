@@ -161,6 +161,18 @@ pub(crate) fn open_client(name: &str, flags: u32) -> usize {
                 h
             }
             Err(seen) => {
+                // Instance cédée à un enfant qui n'écoute pas encore : sous
+                // Windows le tube existe déjà et le client s'y connecte tout
+                // de suite. On attend que l'enfant ouvre son rendez-vous.
+                if let Some(fd) = connect_handed_off(name) {
+                    let h = crate::dlls::kernel32::insert_file(std::fs::File::from(fd));
+                    if flags & FILE_FLAG_OVERLAPPED != 0 {
+                        crate::dlls::kernel32::mark_overlapped_handle(h);
+                    }
+                    crate::trace!("CreateFile(tube {name}, cédé à un enfant) = {h:#x}");
+                    crate::process::set_last_error(0);
+                    return h;
+                }
                 crate::process::set_last_error(if exists || seen {
                     ERROR_PIPE_BUSY
                 } else {
@@ -403,7 +415,41 @@ pub(crate) fn file_name(h: usize) -> Option<Vec<u16>> {
 /// Le parent cède l'instance à l'enfant : elle quitte son registre (son
 /// handle reste un simple descripteur).
 pub(crate) fn release(h: usize) {
+    if let Some((name, _, _)) = export(h) {
+        crate::dlls::lock(handed_off()).insert(name, std::time::Instant::now());
+    }
     close_server(h);
+}
+
+/// Noms des tubes dont ce processus a cédé une instance à un enfant, avec
+/// l'heure de la cession. Crashpad crée le tube, lance son handler avec
+/// l'instance en héritage puis s'y connecte aussitôt : sans attente, le
+/// client recevait ERROR_FILE_NOT_FOUND et Audacity affichait « Cannot
+/// start crashpad handler » (#942).
+fn handed_off() -> &'static Mutex<HashMap<String, std::time::Instant>> {
+    static H: std::sync::OnceLock<Mutex<HashMap<String, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    H.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Délai pendant lequel une instance cédée compte comme existante.
+const HANDOFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
+/// Attente maximale de l'enfant qui ouvre son rendez-vous.
+const HANDOFF_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn connect_handed_off(name: &str) -> Option<OwnedFd> {
+    let since = crate::dlls::lock(handed_off()).get(name).copied()?;
+    if since.elapsed() > HANDOFF_WINDOW {
+        return None;
+    }
+    let deadline = std::time::Instant::now() + HANDOFF_WAIT;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if let Ok(fd) = remote::connect(name) {
+            return Some(fd);
+        }
+    }
+    None
 }
 
 /// L'enfant reprend une instance héritée.
