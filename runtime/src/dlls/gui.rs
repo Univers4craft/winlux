@@ -611,8 +611,26 @@ fn transition_key_state(byte: &mut u8, vk: usize, down: bool) {
 /// Les boutons de la souris suivent la même règle (VK_LBUTTON…) : Qt (VLC)
 /// lit l'état des boutons au moment du clic et ignorait sinon tout clic.
 pub fn observe_key_message(msg: &Msg) {
-    if let Some((vk, down)) = mouse_button_transition(msg.message, msg.wparam) {
-        update_thread_key_state(vk, down);
+    // Messages souris : MK_* de wParam donne l'état des boutons (VK_LBUTTON…)
+    // que WPF relit par GetKeyState pendant WM_LBUTTONDOWN (#268).
+    if (0x0200..=0x020D).contains(&msg.message) && msg.message != 0x020A {
+        const BUTTONS: [(usize, usize); 5] = [
+            (0x01, 0x01), // MK_LBUTTON → VK_LBUTTON
+            (0x02, 0x02), // MK_RBUTTON → VK_RBUTTON
+            (0x10, 0x04), // MK_MBUTTON → VK_MBUTTON
+            (0x20, 0x05), // MK_XBUTTON1 → VK_XBUTTON1
+            (0x40, 0x06), // MK_XBUTTON2 → VK_XBUTTON2
+        ];
+        for (mk, vk) in BUTTONS {
+            let down = msg.wparam & mk != 0;
+            if (get_key_state(vk) < 0) != down {
+                update_thread_key_state(vk, down);
+            }
+        }
+        // Le bouton du message lui-même, même si wParam ne le porte pas.
+        if let Some((vk, down)) = mouse_button_transition(msg.message, msg.wparam) {
+            update_thread_key_state(vk, down);
+        }
         return;
     }
     if msg.wparam >= KEY_STATE_COUNT {
@@ -1275,6 +1293,15 @@ pub fn clip_cmd(cmd: DrawCmd, clip: &[Rect]) -> Vec<DrawCmd> {
             _ => vec![other],
         },
     }
+}
+
+/// Type GDI d'un HDC pour GetObjectType : OBJ_MEMDC (10) pour un DC
+/// mémoire (sans fenêtre), OBJ_DC (3) sinon ; `None` si ce n'est pas un DC.
+/// System.Drawing refuse un DC dont le type est 0 (#666).
+pub fn dc_object_type(hdc: usize) -> Option<u32> {
+    lock(dcs())
+        .get(&hdc)
+        .map(|d| if d.hwnd == 0 { 10 } else { 3 })
 }
 
 /// Fenêtre cible d'un HDC, `None` si l'invalide.
@@ -2883,6 +2910,14 @@ pub fn set_class_style(name: &str, style: u32) {
         .or_insert(style);
 }
 
+/// Style de classe mémorisé (0 si inconnu), pour GetClassInfoEx.
+pub fn class_style(name: &str) -> u32 {
+    lock(class_styles())
+        .get(&name.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(0)
+}
+
 /// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
 /// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
 /// texte sous Windows.
@@ -2932,9 +2967,25 @@ pub fn lookup_class(name: &str) -> Option<ClassInfo> {
 
 // ---------- Accès utilisés par user32 ----------
 
+/// Identifiant Win32 (GetCurrentThreadId) de chaque thread qui a créé une
+/// fenêtre : GetWindowThreadProcessId le rend, et WPF le compare au sien.
+fn thread_tids() -> &'static Mutex<HashMap<ThreadId, u32>> {
+    static T: OnceLock<Mutex<HashMap<ThreadId, u32>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Thread Win32 propriétaire d'une fenêtre (celui qui l'a créée).
+pub fn window_thread_id(hwnd: usize) -> Option<u32> {
+    let owner = lock(windows()).get(&hwnd).map(|w| w.owner)?;
+    lock(thread_tids()).get(&owner).copied()
+}
+
 /// Insère une fenêtre déjà construite dans la table ; une fenêtre de premier
 /// niveau arrive au sommet de l'ordre Z.
 pub fn insert_window(hwnd: usize, w: Window) {
+    if w.owner == std::thread::current().id() {
+        lock(thread_tids()).insert(w.owner, crate::dlls::kernel32::get_current_thread_id());
+    }
     let top_level = w.parent == 0;
     lock(windows()).insert(hwnd, w);
     if top_level {
@@ -3838,6 +3889,34 @@ mod tests {
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn boutons_souris_dans_get_key_state() {
+        // Thread neuf : son état clavier lui est propre.
+        std::thread::spawn(|| {
+            let msg = |message: u32, wparam: usize| Msg {
+                hwnd: 0,
+                message,
+                wparam,
+                lparam: 0,
+                time: 0,
+                pt: Point::default(),
+                l_private: 0,
+            };
+            observe_key_message(&msg(0x0201, 0x0001));
+            assert!(get_key_state(0x01) < 0);
+            assert!(get_key_state(0x02) >= 0);
+            // Glissé avec le bouton droit en plus, puis relâchements.
+            observe_key_message(&msg(0x0200, 0x0003));
+            assert!(get_key_state(0x02) < 0);
+            observe_key_message(&msg(0x0202, 0x0002));
+            assert!(get_key_state(0x01) >= 0);
+            observe_key_message(&msg(0x0205, 0));
+            assert!(get_key_state(0x02) >= 0);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn les_enfants_sont_places_dans_la_zone_client_du_parent() {
         let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
         let fenetre = |parent: usize, style: u32, rect: Rect| {
@@ -4680,6 +4759,23 @@ pub fn raw_keys() -> [bool; 256] {
 }
 
 /// Position écran du pointeur : accumule le déplacement relatif.
+/// Dernière position connue du pointeur, en coordonnées écran logiques
+/// (mouvements et clics reçus par une fenêtre Winlux).
+static CURSOR_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+pub fn set_cursor_screen_pos(x: i32, y: i32) {
+    *lock(&CURSOR_POS) = Some((x, y));
+}
+
+/// Position du pointeur pour GetCursorPos ; centre de l'écran tant que la
+/// souris n'a encore rien fait sur une fenêtre Winlux.
+pub fn cursor_screen_pos() -> (i32, i32) {
+    lock(&CURSOR_POS).unwrap_or_else(|| {
+        let (w, h) = screen_size();
+        (w / 2, h / 2)
+    })
+}
+
 pub fn raw_mouse_motion(x: i32, y: i32) {
     let mut r = lock(raw_input());
     if let Some((lx, ly)) = r.mouse_last {
@@ -4691,6 +4787,17 @@ pub fn raw_mouse_motion(x: i32, y: i32) {
 
 /// Bouton X11 (1 gauche, 2 milieu, 3 droit, 4/5 molette, 8/9 latéraux).
 pub fn raw_mouse_button(detail: u8, down: bool) {
+    let vk = match detail {
+        1 => 0x01,
+        3 => 0x02,
+        2 => 0x04,
+        8 => 0x05,
+        9 => 0x06,
+        _ => 0,
+    };
+    if vk != 0 {
+        update_async_key_state(vk, down);
+    }
     let mut r = lock(raw_input());
     match detail {
         4 if down => r.wheel += 120,

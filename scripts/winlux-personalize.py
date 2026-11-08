@@ -84,7 +84,8 @@ def palette(dark):
 TASKBAR=HOME/".config/winlux/taskbar.conf"
 TASKBAR_STYLES=("classic","floating")
 SEARCH_MODES=("box","icon","hidden")
-FLOAT_RADIUS=14  # coins de la barre flottante
+FLOAT_RADIUS=8  # coins des capsules de la barre flottante (rayon visible)
+FLOAT_MARGIN=(3,8,6)  # vide transparent autour de chaque capsule : haut, côtés, bas (px)
 
 def taskbar_preferences():
     """STYLE (classic|floating) et SEARCH (box|icon|hidden) de la barre du compte."""
@@ -129,14 +130,24 @@ def panel_css(dark,accent,floating=False):
          f".xfce4-panel .tasklist button:checked {{background-color:{active}; background-image:linear-gradient({mark},{mark}); background-size:16px 3px;}} "
          )
     if floating:
-        # Barre flottante (#703) : une capsule centrée, à la largeur de son
-        # contenu, coins arrondis en haut ; picom rend transparent ce qui
-        # l'entoure. Elle reste collée au bord : un vide dessous ferait passer
-        # les fenêtres agrandies sous la barre (pas de réservation d'écran).
-        # Les greffons externes (genmon) ont leur propre fenêtre : sans arrondi.
-        css+=(f"#XfcePanelWindow.xfce4-panel {{background-color:{bar}; border:1px solid {line}; border-bottom:none; "
-              f"border-radius:{FLOAT_RADIUS}px {FLOAT_RADIUS}px 0 0;}} "
-              f"#XfcePanelWindowWrapper.xfce4-panel {{background-color:{bar}; border:none; border-radius:0;}} ")
+        # Barre flottante (#889, maquette 5-B) : deux capsules (barre et
+        # panneau 2 en bas à droite), décollées du bord. La fenêtre de chaque
+        # panneau garde toute sa hauteur (réservation d'écran intacte) ; une
+        # bordure transparente (FLOAT_MARGIN) l'entoure et seul l'intérieur
+        # est peint, arrondi sur les quatre coins (rayon compté depuis le
+        # bord extérieur : marge + FLOAT_RADIUS). picom rend le reste
+        # transparent. Les greffons externes (genmon) ont leur propre fenêtre,
+        # aussi haute que la barre : même bordure transparente en haut et en
+        # bas, pour qu'ils ne débordent pas de la capsule. Les boutons
+        # gardent la même marge (survol et repères dans la capsule).
+        top,side,bottom=FLOAT_MARGIN
+        css+=(f"#XfcePanelWindow.xfce4-panel {{background-color:{bar}; background-image:none; background-clip:padding-box; "
+              f"border-style:solid; border-color:transparent; border-width:{top}px {side}px {bottom}px {side}px; "
+              f"border-radius:{FLOAT_RADIUS+side}px / {FLOAT_RADIUS+top}px {FLOAT_RADIUS+top}px {FLOAT_RADIUS+bottom}px {FLOAT_RADIUS+bottom}px; "
+              f"box-shadow:inset 0 0 0 1px {line};}} "
+              f"#XfcePanelWindowWrapper.xfce4-panel {{background-color:{bar}; background-image:none; background-clip:padding-box; "
+              f"border-style:solid; border-color:transparent; border-width:{top}px 0 {bottom}px 0; border-radius:0;}} "
+              f".xfce4-panel button {{margin-top:{top}px; margin-bottom:{bottom}px;}} ")
     else:
         css+="#XfcePanelWindowWrapper.xfce4-panel {border:none;} "
     return css
@@ -228,11 +239,8 @@ def apply(kind,value):
         before=dict(values)
         values["STYLE" if kind=="taskbar-style" else "SEARCH"]=value
         save_taskbar_preferences(values)
-        if kind=="taskbar-style":
-            # Flottante : la barre épouse son contenu et se centre d'elle-même.
-            floating=value=="floating"
-            query("xfce4-panel","/panels/panel-1/length","1" if floating else "100","uint")
-            query("xfce4-panel","/panels/panel-1/length-adjust","true" if floating else "false","bool")
+        # Longueur, ancrage et second panneau de la barre flottante : posés
+        # par winlux-control align-* ci-dessous, au même endroit que l'ordre.
         if kind=="taskbar-style" or "hidden" in (before["SEARCH"],values["SEARCH"]):
             # Séparateurs extensibles et présence de la recherche : winlux-control
             # remet l'ordre en place (et relance la barre seulement s'il change).
@@ -249,6 +257,11 @@ def apply(kind,value):
             return
     elif kind=="panel-size":
         query("xfce4-panel","/panels/panel-1/size",value,"uint")
+        # Barre flottante : le panneau 2 (état, heure) garde la même hauteur.
+        try:
+            panels=subprocess.run(["xfconf-query","-c","xfce4-panel","-p","/panels"],capture_output=True,text=True,timeout=5).stdout
+            if "2" in [line.strip() for line in panels.splitlines()]: query("xfce4-panel","/panels/panel-2/size",value,"uint")
+        except (OSError,subprocess.SubprocessError): pass
         # Menu Windows + X posé juste au-dessus de la barre redimensionnée.
         try: subprocess.run(["winlux-run","place-menu","",value],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
         except (OSError,subprocess.SubprocessError): pass

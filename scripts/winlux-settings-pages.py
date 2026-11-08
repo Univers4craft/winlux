@@ -658,17 +658,17 @@ _TR = {
     'Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.': ('A small AI that runs on this PC, with no account or Internet. Three agents: find a file and open it in File Explorer, change a setting, help with a program.', 'Una pequeña IA que funciona en este equipo, sin cuenta ni Internet. Tres agentes: encontrar un archivo y abrirlo en el Explorador, cambiar un ajuste, ayudar con un programa.', 'Eine kleine KI, die auf diesem PC läuft, ohne Konto und ohne Internet. Drei Agenten: eine Datei finden und im Explorer öffnen, eine Einstellung ändern, bei einem Programm helfen.'),
     'À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…).': ('When you turn it on, Claude Code is downloaded if needed (about 300 MB), then you sign in to your Claude account (Google, email…).', 'Al activarlo, se descarga Claude Code si falta (unos 300 MB) y luego inicia sesión en su cuenta de Claude (Google, correo…).', 'Beim Aktivieren wird Claude Code bei Bedarf heruntergeladen (etwa 300 MB), dann melden Sie sich bei Ihrem Claude-Konto an (Google, E-Mail…).'),
     'À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…).': ('When you turn it on, Codex, OpenAI’s official tool, is downloaded (about 170 MB), then you sign in to your ChatGPT account (Google, email…).', 'Al activarlo, se descarga Codex, la herramienta oficial de OpenAI (unos 170 MB), y luego inicia sesión en su cuenta de ChatGPT (Google, correo…).', 'Beim Aktivieren wird Codex, das offizielle Werkzeug von OpenAI, heruntergeladen (etwa 170 MB), dann melden Sie sich bei Ihrem ChatGPT-Konto an (Google, E-Mail…).'),
-    'À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert.': ('When you turn it on, the llama.cpp engine (about 30 MB) and the Qwen2.5 1.5B model (about 1.1 GB) are downloaded. It only runs while its panel is open.', 'Al activarla, se descargan el motor llama.cpp (unos 30 MB) y el modelo Qwen2.5 1,5B (unos 1,1 GB). Solo funciona mientras su panel está abierto.', 'Beim Aktivieren werden die llama.cpp-Engine (etwa 30 MB) und das Modell Qwen2.5 1,5B (etwa 1,1 GB) heruntergeladen. Sie läuft nur, solange ihr Fenster geöffnet ist.'),
     'Compte {name}': ('{name} account', 'Cuenta de {name}', '{name}-Konto'),
     'Modèle': ('Model', 'Modelo', 'Modell'),
     'Supprimer l’IA locale': ('Remove the local AI', 'Eliminar la IA local', 'Lokale KI entfernen'),
     'Pas encore téléchargé': ('Not downloaded yet', 'Aún no descargado', 'Noch nicht heruntergeladen'),
-    'Qwen2.5 1,5B, sur ce PC': ('Qwen2.5 1.5B, on this PC', 'Qwen2.5 1,5B, en este equipo', 'Qwen2.5 1,5B, auf diesem PC'),
     'Terminer l’installation': ('Finish installing', 'Terminar la instalación', 'Installation abschließen'),
     'Vérification de la connexion…': ('Checking the sign-in…', 'Comprobando el inicio de sesión…', 'Anmeldung wird geprüft…'),
     'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
     'Connecté : {account}': ('Signed in: {account}', 'Sesión iniciada: {account}', 'Angemeldet: {account}'),
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
+    'Activation en cours dans sa fenêtre.': ('Turning on in its own window.', 'Activación en curso en su ventana.', 'Wird in seinem eigenen Fenster aktiviert.'),
+    'Afficher la fenêtre d’activation': ('Show the setup window', 'Mostrar la ventana de activación', 'Aktivierungsfenster anzeigen'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
     'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
@@ -829,6 +829,7 @@ PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
 PAGE_VPN = 40
 PAGE_HOTSPOT = 41
+PAGE_PARENTAL = 42
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1461,6 +1462,9 @@ def page_available(page, status=None):
         # NetworkManager et WireGuard (module du noyau) ou le greffon OpenVPN.
         module = vpn_page()
         return module is not None and module.available()
+    if page == PAGE_PARENTAL:
+        module = parental_module()
+        return module is not None and module.available()
     if page == PAGE_HOTSPOT:
         # Carte Wi-Fi capable de point d’accès (mode AP), dnsmasq : sinon pas de page.
         module = hotspot_page()
@@ -1760,6 +1764,30 @@ def installed_apps_module():
     return None
 
 
+_PARENTAL = []
+
+
+def parental_module():
+    """winlux-parental (#661), installé à côté ou dans scripts/ du dépôt."""
+    if _PARENTAL: return _PARENTAL[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-parental.py"), here.with_name("winlux-parental")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_parental_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_parental_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _PARENTAL.append(module)
+    return module
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1793,7 +1821,8 @@ class ExtraPages:
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
                    PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed",
-                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot"}
+                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot",
+                   PAGE_PARENTAL: "page_parental"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -3434,7 +3463,7 @@ class ExtraPages:
          "À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…)."),
         ("local", "IA locale",
          "Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.",
-         "À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert."),
+         ""),
     )
 
     def page_assistant(self):
@@ -3446,10 +3475,17 @@ class ExtraPages:
             backend = module.provider(key)
             if not backend.supported(): continue  # matériel trop juste : option cachée, pas grisée
             enabled = module.is_enabled(key)
+            running = self.assistant_setup_running(key)
             box = self.card()
-            self.switch(box, _t(name), enabled, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            self.switch(box, _t(name), enabled or running, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            if running and not enabled:
+                # Page reconstruite pendant qu'une autre activation se termine.
+                self.hint(_t("Activation en cours dans sa fenêtre."), box)
+                self.actions(box, [(_t("Afficher la fenêtre d’activation"), lambda k=key: self.assistant_toggle(k, True))])
+                continue
             if not enabled:
-                self.hint(_t(before), box)
+                # IA locale : modèle choisi pour ce PC et ce qu'il coûte (#928).
+                self.hint(module.plan_text(backend.plan()) if not backend.remote else _t(before), box)
                 continue
             account = Gtk.Label(label=_t("Vérification de la connexion…"), xalign=0)
             account.get_style_context().add_class("subtitle")
@@ -3464,7 +3500,7 @@ class ExtraPages:
 
             def checked(status, account=account, buttons=buttons, key=key, backend=backend):
                 if not status.get("installed"): text = _t("Pas encore téléchargé")
-                elif not backend.remote: text = _t("Qwen2.5 1,5B, sur ce PC")
+                elif not backend.remote: text = module.local_model_text()
                 elif status.get("loggedIn"):
                     who = module.account_name(status)
                     text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté au compte")
@@ -3494,23 +3530,36 @@ class ExtraPages:
         module.write_config(current=key)
         self.spawn([sys.executable, module.__file__])
 
+    def assistant_setup_running(self, key):
+        process = getattr(self, "assistant_setups", {}).get(key)
+        return process is not None and process.poll() is None
+
     def assistant_toggle(self, key, on):
         """Activer ouvre la fenêtre de configuration (téléchargement, connexion) ;
-        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat."""
+        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat.
+        Chaque assistant a sa propre fenêtre (#910) : activer ChatGPT pendant que
+        celle de Claude est ouverte ne doit pas être ignoré en silence."""
         import sys
         module = assistant_module()
+        setups = self.__dict__.setdefault("assistant_setups", {})
         if not on:
+            process = setups.pop(key, None)
+            if process is not None and process.poll() is None: process.terminate()
             self.tool([sys.executable, module.__file__, "--desactiver", key])
             return
-        if getattr(self, "assistant_setup", None) is not None and self.assistant_setup.poll() is None: return
+        command = [sys.executable, module.__file__, "--configurer", key]
+        if self.assistant_setup_running(key):
+            self.spawn(command)  # la fenêtre déjà ouverte revient devant
+            return
         try:
-            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer", key], start_new_session=True)
+            process = setups[key] = subprocess.Popen(command, start_new_session=True)
         except OSError as error:
             self.show_error(_t("L’opération a échoué"), str(error))
             return
 
         def wait():
-            if self.assistant_setup.poll() is None: return True
+            if process.poll() is None: return True
+            if setups.get(key) is process: setups.pop(key)
             self.extra_refresh()
             return False
         GLib.timeout_add(500, wait)
@@ -3786,6 +3835,12 @@ class ExtraPages:
         kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
         self.installed_filter = None
         self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def page_parental(self):
+        """Contrôle parental (#661) : temps d’écran, applications et sites, activité."""
+        module = parental_module()
+        if module is not None:
+            self.parental_panel = module.page(self)
 
     def open_installed_windows(self):
         self.installed_filter = "windows"
