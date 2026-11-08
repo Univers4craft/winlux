@@ -8,17 +8,31 @@ run="$root/run/winlux"
 # Le module d'alimentation du runtime suit la meme racine (tests).
 if test -n "$root"; then export WINLUX_POWER_ROOT="$root"; fi
 config="$root/etc/winlux"
-mkdir -p "$run" "$config"
+test -d "$run" && test -d "$config" || mkdir -p "$run" "$config"
 export DISPLAY=${DISPLAY:-:0}
 export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlux/session-bus}
 
-value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
-pref() { value "$config/preferences.conf" "$1"; }
-overlay() { value "$config/overlay.conf" "$1"; }
+# Première valeur de CLE= dans un fichier, lue sans lancer de programme
+# (relevé toutes les 3 s). 3e argument : valeur mise à la place
+# d'une clé présente mais vide (ancien « | sed 's/^$/…/' »).
+value() {
+    test -r "$1" || return 0
+    while IFS= read -r _vl || test -n "$_vl"; do
+        case $_vl in "$2="*) _vl=${_vl#"$2="}; printf '%s\n' "${_vl:-${3:-}}"; return 0 ;; esac
+    done < "$1"
+}
+# Première ligne d'un fichier (valeurs de /run, /sys, /proc), sinon la
+# valeur par défaut si le fichier manque ; sans lancer cat ni head.
+first() {
+    if test -r "$1"; then _fl=; IFS= read -r _fl < "$1" || true; printf '%s\n' "$_fl"
+    else printf '%s\n' "${2-}"; fi
+}
+pref() { value "$config/preferences.conf" "$@"; }
+overlay() { value "$config/overlay.conf" "$@"; }
 # Les jeux lancés par l'utilisateur lisent ce fichier : il reste lisible.
 save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/overlay.conf"; }
 cpu_pref() { value "$config/cpu.conf" "$1"; }
-input() { value "$config/input.conf" "$1"; }
+input() { value "$config/input.conf" "$@"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
 # Bureau sous le compte de l'utilisateur (système installé) : /etc reste à
 # root, le relais winlux-root écrit les préférences et exécute les actions
@@ -37,6 +51,31 @@ save() {
     mv "$tmp" "$file"
 }
 have() { command -v "$1" >/dev/null 2>&1; }
+# Relance de la barre des tâches (xfce4-panel -r). Le panneau relancé
+# abandonne (« There is already a running instance ») s'il trouve encore
+# l'ancien sur le bus de session : sur une machine chargée, la barre
+# disparaissait jusqu'à la session suivante (#848). On attend qu'un nouveau
+# panneau tienne une seconde, sinon on en lance un.
+restart_panel() {
+    uid=$(id -u)
+    old=" $(pgrep -u "$uid" -x xfce4-panel | tr '\n' ' ') "
+    xfce4-panel -r >/dev/null 2>&1 || true
+    last= stable=0
+    for attempt in $(seq 1 50); do
+        sleep 0.2
+        alive=
+        for pid in $(pgrep -u "$uid" -x xfce4-panel); do
+            case "$old" in *" $pid "*) continue ;; esac
+            case "$(ps -o stat= -p "$pid" 2>/dev/null)" in Z*|'') continue ;; esac
+            alive=$pid
+        done
+        if test -n "$alive" && test "$alive" = "$last"; then stable=$((stable + 1)); else stable=0; fi
+        last=$alive
+        # Toujours là une seconde après : il a passé le contrôle d'instance.
+        test "$stable" -ge 5 && return 0
+    done
+    setsid -f xfce4-panel --disable-wm-check </dev/null >/dev/null 2>&1 || true
+}
 trust_desktop() {
     chmod 755 "$1" || return
     if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
@@ -46,10 +85,13 @@ trust_desktop() {
 # d'utilisateur ») ne pouvait ni remplacer action.txt du premier (mv :
 # « Opération non permise ») ni écrire son action.log, et winlux-control
 # s'arrêtait avant d'agir (barre jamais centrée chez lui).
-if { test -z "$root" || test "${WINLUX_CONTROL_PER_ACCOUNT:-0}" = 1; } && test "$(id -u)" != 0; then
-    mine="$run/control-$(id -u)"
-    mkdir -p "$mine"
-    chmod 755 "$mine" 2>/dev/null || true
+uid=$(id -u)
+if { test -z "$root" || test "${WINLUX_CONTROL_PER_ACCOUNT:-0}" = 1; } && test "$uid" != 0; then
+    mine="$run/control-$uid"
+    if ! test -d "$mine"; then
+        mkdir -p "$mine"
+        chmod 755 "$mine" 2>/dev/null || true
+    fi
 else
     mine=$run
 fi
@@ -68,11 +110,22 @@ publish() { chmod 644 "$1" 2>/dev/null; mv "$1" "$2" 2>/dev/null || { rm -f "$1"
 # dont la réponse change rarement (deux sont en Python) sont reprises du
 # relevé de moins d'une minute. Toute action de winlux-control, dont chaque
 # réglage changé dans Paramètres, refait un relevé complet.
+nl='
+'
+fresh_cache=unset
 cached() {
     key=$1; shift
     file="$mine/status-cache/$key"
-    if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1 && test -f "$file" && test -n "$(find "$file" -mmin -1 2>/dev/null)"; then
-        cat "$file"; return 0
+    if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1 && test -f "$file"; then
+        # Un seul find par relevé pour toutes les sondes en cache.
+        if test "$fresh_cache" = unset; then
+            fresh_cache=$(find "$mine/status-cache" -maxdepth 1 -type f -mmin -1 2>/dev/null || true)
+        fi
+        case "$nl$fresh_cache$nl" in
+            *"$nl$file$nl"*)
+                while IFS= read -r _cl || test -n "$_cl"; do printf '%s\n' "$_cl"; done < "$file"
+                return 0 ;;
+        esac
     fi
     # Session du compte : /run/winlux peut ne pas lui être inscriptible,
     # la valeur est alors calculée à chaque relevé, sans cache.
@@ -87,34 +140,55 @@ cached() {
 }
 status() {
     control_tmp=$(fresh "$run/control.txt") || return
+    # Calculé ici, hors des $(…) : un sous-shell perdrait la valeur.
+    if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1; then
+        fresh_cache=$(find "$mine/status-cache" -maxdepth 1 -type f -mmin -1 2>/dev/null || true)
+    fi
     {
-        printf 'version=%s\n' "$(head -n 1 "$root/usr/share/winlux/version" 2>/dev/null || printf 'developpement')"
-        printf 'kernel=%s\n' "$(uname -r)"
+        printf 'version=%s\n' "$(first "$root/usr/share/winlux/version" developpement)"
+        if test -r /proc/sys/kernel/osrelease; then printf 'kernel=%s\n' "$(first /proc/sys/kernel/osrelease)"
+        else printf 'kernel=%s\n' "$(uname -r)"; fi
         persistent=0
         if test -r "$root/proc/mounts"; then
-            persistent=$(awk '$2 == "/" && $3 ~ /^(ext[234]|btrfs|xfs|f2fs)$/ { saved=1 } END { print saved+0 }' "$root/proc/mounts")
+            while read -r _dev _mnt _fs _rest; do
+                test "$_mnt" = / || continue
+                case $_fs in ext2|ext3|ext4|btrfs|xfs|f2fs) persistent=1 ;; esac
+            done < "$root/proc/mounts"
         fi
         printf 'persistent=%s\n' "$persistent"
-        printf 'layout=%s\n' "$(input XKB_LAYOUT | sed 's/^$/fr/')"
-        printf 'tap=%s\n' "$(input TAP_TO_CLICK | sed 's/^$/0/')"
-        printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED | sed 's/^$/50/')"
+        printf 'layout=%s\n' "$(input XKB_LAYOUT fr)"
+        printf 'tap=%s\n' "$(input TAP_TO_CLICK 0)"
+        printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED 50)"
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
-        printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
+        printf 'lang=%s\n' "$(value "$config/locale.conf" LANG fr)"
         # Le fuseau réel : /etc/timezone, sinon la cible de /etc/localtime,
         # sinon UTC (jamais « Paris » affiché pour un système resté en UTC).
-        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || { readlink /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p' | grep . ; } || printf 'UTC')"
+        if test -r /etc/timezone; then tz=$(first /etc/timezone); else tz=$({ readlink /etc/localtime 2>/dev/null | sed -n 's#^.*/zoneinfo/##p' | grep . ; } || printf 'UTC'); fi; printf 'timezone=%s\n' "$tz"
         printf 'network='; if have ip; then
-            iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
+            # Champs lus par le shell, 1re ligne seulement (5e de la route,
+            # 4e de l'adresse), comme l'ancien awk.
+            route=$(ip -4 route show default 2>/dev/null) || route=
+            set -f
+            # shellcheck disable=SC2086
+            set -- ${route%%"$nl"*}
+            set +f
+            iface=${5:-}
             if test -n "$iface"; then
-                addr=$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk 'NR==1 { print $4 }')
+                address=$(ip -4 -o addr show dev "$iface" 2>/dev/null) || address=
+                set -f
+                # shellcheck disable=SC2086
+                set -- ${address%%"$nl"*}
+                set +f
+                addr=${4:-}
                 printf '%s %s\n' "$iface" "$addr"
                 printf 'network_connected=1\n'
             else printf 'Hors ligne - aucune route par defaut\nnetwork_connected=0\n'; fi
         else printf 'Outil ip indisponible\nnetwork_connected=0\n'; fi
         printf 'audio='
         if have wpctl; then
-            wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | head -n 1 || printf 'Aucun peripherique audio\n'
+            volume=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || volume=
+            printf '%s\n' "${volume:-Aucun peripherique audio}"
         elif have amixer; then
             amixer get Master 2>/dev/null | awk -F '[][]' '/%/ { print $2 " " $4; found=1; exit } END { if (!found) print "Aucun controle Master" }'
         else printf 'Audio non disponible (aucun mixeur installe)\n'; fi
@@ -123,48 +197,61 @@ status() {
         present=0
         for bat in "$root"/sys/class/power_supply/BAT*; do
             test -r "$bat/capacity" || continue
-            capacity=$(cat "$bat/capacity")
+            capacity=$(first "$bat/capacity")
             case "$capacity" in ''|*[!0-9]*) continue ;; esac
             test "$capacity" -le 100 || continue
-            printf 'battery=%s%% %s\nbattery_level=%s\n' "$capacity" "$(cat "$bat/status" 2>/dev/null || true)" "$capacity"
+            printf 'battery=%s%% %s\nbattery_level=%s\n' "$capacity" "$(first "$bat/status")" "$capacity"
             present=1; break
         done
         if test "$present" = 0; then printf 'battery=Alimentation CA - aucune batterie exposee\n'; fi
         printf 'battery_present=%s\n' "$present"
         # Etat detaille, modes et delais : module d'alimentation du runtime.
         if have winlux; then winlux --power status 2>/dev/null || true; fi
-        devices=0
-        if test -r "$root/proc/bus/input/devices"; then devices=$(awk '/^N: Name=/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
+        devices=0 pads=0
+        if test -r "$root/proc/bus/input/devices"; then
+            while IFS= read -r _il; do
+                case $_il in
+                    'N: Name='*) devices=$((devices + 1)) ;;
+                    'H: Handlers='*' js'[0-9]*) pads=$((pads + 1)) ;;
+                esac
+            done < "$root/proc/bus/input/devices"
+        fi
         printf 'input_devices=%s\n' "$devices"
         # Périphériques des programmes Windows : manettes (XInput/DirectInput),
         # webcams (Media Foundation) et micro (waveIn/WASAPI).
-        pads=0
-        if test -r "$root/proc/bus/input/devices"; then pads=$(awk '/^H: Handlers=/ && / js[0-9]/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
         printf 'gamepads=%s\n' "$pads"
         cams=0
         for cam in "$root"/sys/class/video4linux/video*; do
             test -r "$cam/name" || continue
             # Un seul nœud de capture par caméra UVC (index 0).
-            test "$(cat "$cam/index" 2>/dev/null || echo 0)" = 0 || continue
+            test "$(first "$cam/index" 0)" = 0 || continue
             cams=$((cams + 1))
         done
         printf 'cameras=%s\n' "$cams"
         printf 'microphone='
-        if have wpctl && mic=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -n 1) && test -n "$mic"; then
+        if have wpctl && mic=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n '/.*node.description = "\(.*\)".*/{s//\1/p;q;}') && test -n "$mic"; then
             printf '%s\n' "$mic"
         elif test -r "$root/proc/asound/pcm" && grep -q 'capture' "$root/proc/asound/pcm"; then
             grep 'capture' "$root/proc/asound/pcm" | head -n 1 | cut -d: -f3 | sed 's/^ *//'
         else printf 'Aucun micro detecte\n'; fi
         bluetooth="$run/bluetooth.txt"
-        if have winlux-bluetooth; then winlux-bluetooth status 2>/dev/null || true; fi
-        printf 'bluetooth_present=%s\n' "$(value "$bluetooth" present | sed 's/^$/0/')"
-        printf 'bluetooth_powered=%s\n' "$(value "$bluetooth" powered | sed 's/^$/0/')"
-        printf 'bluetooth_connected=%s\n' "$(value "$bluetooth" connected | sed 's/^$/0/')"
-        printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
+        # Sans adaptateur, l'état « absent » déjà publié reste vrai : le relevé
+        # périodique ne relance pas winlux-bluetooth pour rien.
+        adapter=0
+        for _bt in "$root"/sys/class/bluetooth/*; do test -e "$_bt" && adapter=1; break; done
+        if have winlux-bluetooth && { test "$adapter" = 1 || test "${WINLUX_CONTROL_PERIODIC:-0}" != 1 \
+                || test "$(value "$bluetooth" present)" != 0; }; then
+            winlux-bluetooth status 2>/dev/null || true
+        fi
+        printf 'bluetooth_present=%s\n' "$(value "$bluetooth" present 0)"
+        printf 'bluetooth_powered=%s\n' "$(value "$bluetooth" powered 0)"
+        printf 'bluetooth_connected=%s\n' "$(value "$bluetooth" connected 0)"
+        # Réglage changé seulement par une action (qui refait un relevé complet).
+        auto=$(cached update-auto winlux-update --auto status); printf 'update_auto=%s\n' "${auto:-indisponible}"
         if test -f "$root/var/lib/winlux/pending-reboot"; then
             printf 'update_action=reboot\n'
         else
-            printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
+            printf 'update_action=%s\n' "$(first "$run/update-action")"
         fi
         # Overlay de performances (Paramètres > Graphismes) ; vide = défaut.
         setting=$(overlay OVERLAY_ENABLED); printf 'overlay_enabled=%s\n' "${setting:-0}"
@@ -172,24 +259,25 @@ status() {
         printf 'overlay_position=%s\n' "$(overlay OVERLAY_POSITION)"
         setting=$(overlay OVERLAY_AUTOSHOW); printf 'overlay_autoshow=%s\n' "${setting:-0}"
         for metric in fps frametime cpu gpu; do
-            setting=$(overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')")
+            case $metric in fps) key=FPS ;; frametime) key=FRAMETIME ;; cpu) key=CPU ;; *) key=GPU ;; esac
+            setting=$(overlay "OVERLAY_$key")
             printf 'overlay_%s=%s\n' "$metric" "${setting:-1}"
         done
-        gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
+        gpu_count=$(first "$root/run/winlux/hw/gpu-count" 0)
         printf 'gpu_count=%s\n' "$gpu_count"
-        printf 'virtual_machine=%s\n' "$(cat "$root/run/winlux/hw/virtual-machine" 2>/dev/null || true)"
-        test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
-        test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
-        test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'
-        gpu_mode=$(cat "$root/run/winlux/hw/gpu-mode" 2>/dev/null || true)
+        printf 'virtual_machine=%s\n' "$(first "$root/run/winlux/hw/virtual-machine")"
+        test "$(first "$root/run/winlux/hw/has-nvidia")" = 1 && printf 'gpu_nvidia=%s\n' "$(first "$root/run/winlux/hw/nvidia-driver" nouveau)"
+        test "$(first "$root/run/winlux/hw/has-amd")" = 1 && printf 'gpu_amd=%s\n' "$(first "$root/run/winlux/hw/amd-driver" amdgpu)"
+        test "$(first "$root/run/winlux/hw/has-intel")" = 1 && printf 'gpu_intel=i915\n'
+        gpu_mode=$(first "$root/run/winlux/hw/gpu-mode")
         test -n "$gpu_mode" && printf 'gpu_mode=%s\n' "$gpu_mode"
-        printf 'cpu_sockets=%s\n' "$(cat "$root/run/winlux/hw/cpu-sockets" 2>/dev/null || echo 1)"
-        printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
-        printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
-        printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        printf 'cpu_sockets=%s\n' "$(first "$root/run/winlux/hw/cpu-sockets" 1)"
+        printf 'cpu_threads=%s\n' "$(first "$root/run/winlux/hw/cpu-threads" 1)"
+        printf 'wifi=%s\n' "$(first "$root/run/winlux/hw/has-wifi" 0)"
+        printf 'touchpad=%s\n' "$(first "$root/run/winlux/hw/has-touchpad" 0)"
         # Réglages réellement acceptés par le pavé (rien sans pavé tactile).
         if have winlux-touchpad; then cached touchpad winlux-touchpad status; fi
-        printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
+        printf 'webcam=%s\n' "$(first "$root/run/winlux/hw/has-webcam" 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
         welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
         # Vie privee : rien n'est envoye par defaut, la localisation est coupee.
@@ -203,7 +291,8 @@ status() {
         # Signaler un probleme : reglages lus par winlux-report (envoi automatique
         # des plantages seulement si AUTO=on, ou jeton personnel avec AUTO=default).
         if have winlux-report; then cached report env WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status; fi
-        if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
+        # Mises à jour du système (apt) : lentes à interroger, changent rarement.
+        if have winlux-sysupdate; then cached sysupdate winlux-sysupdate status; fi
         printf 'control_available=1\n'
         if have winlux-browsers; then cached browsers winlux-browsers --status; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
@@ -236,11 +325,13 @@ updates_current() {
 cpu_status() {
     have winlux || { rm -f "$run/cpu.txt"; return 0; }
     cpu_tmp=$(fresh "$run/cpu.txt") || return 0
-    if winlux --cpu-report "${root:-/}" > "$cpu_tmp" 2>/dev/null; then
+    # Capacités et temps de démarrage ne changent pas pendant la session.
+    cached cpu-report winlux --cpu-report "${root:-/}" > "$cpu_tmp"
+    if test -s "$cpu_tmp"; then
         hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
         printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$cpu_tmp"
         # Temps du dernier démarrage (repères notés par l'init).
-        winlux --boot-time "${root:-/}" >> "$cpu_tmp" 2>/dev/null || true
+        cached boot-time winlux --boot-time "${root:-/}" >> "$cpu_tmp"
         # Mode jeu : réglage, capacités réelles et partie en cours.
         winlux --gamemode status "${root:-/}" >> "$cpu_tmp" 2>/dev/null || true
         publish "$cpu_tmp" "$run/cpu.txt"
@@ -500,7 +591,7 @@ perform() {
                     # Démarrer au quart de l'écran (#651). Relance dès que l'ordre
                     # change ; à l'ouverture de session, il est déjà en place.
                     if test -n "$current" && pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
-                        xfce4-panel -r >/dev/null 2>&1 || true
+                        restart_panel
                     fi
                 fi
                 expand=false; test "$alignment" != center || expand=true

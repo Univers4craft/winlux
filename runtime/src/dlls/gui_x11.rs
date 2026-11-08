@@ -848,6 +848,7 @@ pub fn renders_itself(imports: &[String]) -> bool {
         let n = name.to_ascii_lowercase();
         n.starts_with("d3d")
             || n.starts_with("dxgi")
+            || n == "ddraw.dll"
             || n == "opengl32.dll"
             || n.starts_with("vulkan-1")
             || n.starts_with("sdl2")
@@ -1328,7 +1329,15 @@ impl X11Backend {
 
     fn scaled_font(&self, spec: &FontSpec) -> FontSpec {
         let mut scaled = spec.clone();
-        scaled.height = self.scaled(spec.height).max(1);
+        // Hauteur négative (taille des caractères, la forme habituelle des
+        // LOGFONT) : on garde le signe. `max(1)` la ramenait à 1, donc à la
+        // taille plancher de 9 pixels : le texte des applications était
+        // dessiné et mesuré trop petit (onglets de FileZilla, #798).
+        scaled.height = if spec.height < 0 {
+            -self.scaled(-spec.height).max(1)
+        } else {
+            self.scaled(spec.height).max(1)
+        };
         if spec.width != 0 {
             scaled.width = self.scaled(spec.width).max(1);
         }

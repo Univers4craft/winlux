@@ -49,7 +49,11 @@ for name, directory in NAMES.items():
     (host / release / "kernel" / directory / f"{name}.ko.zst").write_bytes(b"x")
 
 
-def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP TTLS MSCHAPV2 WPS", certs=True,
+VPN_TOOLS = ("usr/sbin/openvpn", "usr/lib/NetworkManager/VPN/nm-openvpn-service.name", "usr/sbin/dnsmasq",
+             "usr/sbin/nft", "usr/sbin/iw", "usr/bin/winlux-vpn", "usr/bin/winlux-hotspot")
+
+
+def stage(vpn_tools=VPN_TOOLS, with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP TTLS MSCHAPV2 WPS", certs=True,
           roots=150, conf=True, hashed=True, tools=("usr/sbin/update-ca-certificates", "usr/bin/openssl", "usr/bin/certutil",
                                        "usr/bin/winlux-certificates")):
     root = Path(tempfile.mkdtemp(dir=tmp))
@@ -61,7 +65,7 @@ def stage(with_ccm=True, depmod=True, regdb=True, nf=True, supplicant=b"SAE PEAP
         (modules / "kernel" / directory / f"{name}.ko").write_bytes(b"x")
     (modules / "modules.dep").write_text(("kernel/crypto/ccm.ko:\n" if depmod else "kernel/crypto/cmac.ko:\n")
                                          + "kernel/net/netfilter/nf_tables.ko:\n")
-    for binary in ("usr/sbin/NetworkManager", "usr/bin/nmcli"):
+    for binary in ("usr/sbin/NetworkManager", "usr/bin/nmcli", *vpn_tools):
         (root / binary).parent.mkdir(parents=True, exist_ok=True)
         (root / binary).write_bytes(b"\x7fELF")
     if supplicant is not None:
@@ -116,7 +120,15 @@ result = run(stage(hashed=False))
 check(result.returncode != 0 and "empreinte" in result.stderr, f"/etc/ssl/certs sans liens par empreinte non détecté : {result.stderr!r}")
 result = run(stage(tools=("usr/sbin/update-ca-certificates", "usr/bin/openssl", "usr/bin/winlux-certificates")))
 check(result.returncode != 0 and "certutil" in result.stderr, f"certutil absent non détecté : {result.stderr!r}")
+result = run(stage(vpn_tools=tuple(t for t in VPN_TOOLS if t != "usr/sbin/dnsmasq")))
+check(result.returncode != 0 and "dnsmasq" in result.stderr, f"dnsmasq absent (point d'accès) non détecté : {result.stderr!r}")
+result = run(stage(vpn_tools=tuple(t for t in VPN_TOOLS if "openvpn" not in t)))
+check(result.returncode != 0 and "openvpn" in result.stderr, f"OpenVPN absent non détecté : {result.stderr!r}")
+packages = (HERE / "prepare-desktop-packages.py").read_text()
+for package in ("network-manager-openvpn", "openvpn", "dnsmasq-base", "nftables", "iw"):
+    check(f'"{package}"' in packages, f"{package} absent des paquets (VPN, point d'accès)")
 stage_script = (HERE / "stage-desktop-components.sh").read_text()
+check(" winlux-vpn winlux-hotspot " in stage_script, "winlux-vpn et winlux-hotspot non installés dans l'image")
 check("ca-certificates.conf" in stage_script, "l'image ne crée pas /etc/ca-certificates.conf")
 check("openssl rehash" in stage_script, "l'image ne crée pas les liens par empreinte de /etc/ssl/certs")
 check('"libnss3-tools"' in (HERE / "prepare-desktop-packages.py").read_text(), "certutil (libnss3-tools) absent des paquets")

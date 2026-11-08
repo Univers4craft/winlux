@@ -7,6 +7,8 @@ static NOTES: StdMutex<Vec<(u16, u16)>> = StdMutex::new(Vec::new());
 static SERIAL: StdMutex<()> = StdMutex::new(());
 /// Codes WM_NOTIFY reçus par la fenêtre parente.
 static NOTIFY: StdMutex<Vec<i32>> = StdMutex::new(Vec::new());
+/// URL des NM_CLICK de SysLink reçus par la fenêtre parente.
+static LINK_URLS: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
 /// WM_DRAWITEM reçus par la fenêtre parente : (type de contrôle, élément, donnée).
 static DRAWN: StdMutex<Vec<(u32, u32, usize)>> = StdMutex::new(Vec::new());
 
@@ -29,6 +31,23 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
     if msg == 0x004E && lp != 0 {
         let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
         NOTIFY.lock().unwrap().push(code);
+        if code == -2
+            && crate::dlls::gui::window_class(unsafe { *(lp as *const usize) })
+                .is_some_and(|c| c.eq_ignore_ascii_case("SysLink"))
+        {
+            // NMLINK : szUrl à 24 + 112.
+            let url: Vec<u16> = unsafe {
+                let p = (lp as *const u8).add(136) as *const u16;
+                (0..2084)
+                    .map(|k| *p.add(k))
+                    .take_while(|&c| c != 0)
+                    .collect()
+            };
+            LINK_URLS
+                .lock()
+                .unwrap()
+                .push(String::from_utf16_lossy(&url));
+        }
         if code == -177 {
             // LVN_GETDISPINFOW : NMHDR (24 octets) puis LVITEMW
             unsafe {
@@ -329,6 +348,29 @@ fn liste_ajout_tri_selection_double_clic() {
         1,
         "la sélection suit la suppression"
     );
+    gui::destroy_window(p);
+}
+
+/// #841 : comme sous Windows, SetWindowPos sur une liste déroulante fermée
+/// ne change que la hauteur de la liste ouverte ; le champ garde la sienne
+/// (wxWidgets relit cette taille pour régler le champ).
+#[test]
+fn liste_deroulante_garde_la_hauteur_du_champ() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let cb = child(p, "COMBOBOX", "", 0x2, 32, (0, 0, 150, 200));
+    let h = gui::window_rect(cb).unwrap().height();
+    unsafe { user32::set_window_pos(cb, 0, 0, 0, 300, 170, 0x0002 | 0x0004) };
+    let r = gui::window_rect(cb).unwrap();
+    assert_eq!((r.width(), r.height()), (300, h));
+    // Champ plus haut : la fenêtre fermée suit.
+    sendw(cb, 0x153, usize::MAX, 30);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
+    // La liste ouverte reprend la hauteur demandée.
+    sendw(cb, 0x14F, 1, 0);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 170);
+    sendw(cb, 0x14F, 0, 0);
+    assert_eq!(gui::window_rect(cb).unwrap().height(), 36);
     gui::destroy_window(p);
 }
 
@@ -1223,4 +1265,148 @@ fn tabulations_des_statiques_deviennent_des_espaces() {
         "Dossiers:       1\nC:\\     Bureau"
     );
     assert_eq!(expand_tabs("sans"), "sans");
+}
+
+/// #795 : un RichEdit (RICHEDIT50W) se crée, répond aux messages RichEdit
+/// et ne défile pas au-delà de la dernière page (journal de FileZilla).
+#[test]
+fn richedit_journal_qui_defile_jusqu_a_la_derniere_page() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    // ES_MULTILINE | ES_READONLY | WS_VSCROLL, 5 lignes de haut environ.
+    let e = child(
+        p,
+        "RICHEDIT50W",
+        "",
+        0x4 | 0x800 | 0x0020_0000,
+        11,
+        (10, 10, 300, 90),
+    );
+    assert_eq!(kind_of(e), Some(Kind::Edit));
+    for i in 0..30 {
+        let n = title(e).chars().count();
+        sendw(e, 0x00B1, n, n as isize); // fin
+        let line = w(&format!("Status:\tligne {i}\n"));
+        sendw(e, 0x00C2, 0, line.as_ptr() as isize);
+    }
+    // EM_GETTEXTLENGTHEX (GETTEXTLENGTHEX par défaut).
+    let gtl = [0u32, 1200];
+    let len = sendw(e, 0x045F, gtl.as_ptr() as usize, gtl.as_ptr() as isize);
+    assert_eq!(len as usize, title(e).encode_utf16().count());
+    // EM_EXSETSEL / EM_EXGETSEL.
+    let range = [3i32, 9];
+    sendw(e, 0x0437, 0, range.as_ptr() as isize);
+    let mut got = [0i32; 2];
+    sendw(e, 0x0434, 0, got.as_mut_ptr() as isize);
+    assert_eq!(got, [3, 9]);
+    // EM_GETTEXTRANGE.
+    let mut buf = [0u16; 16];
+    #[repr(C)]
+    struct TextRange {
+        min: i32,
+        max: i32,
+        text: *mut u16,
+    }
+    let tr = TextRange {
+        min: 0,
+        max: 6,
+        text: buf.as_mut_ptr(),
+    };
+    let n = sendw(e, 0x044B, 0, &tr as *const TextRange as isize);
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Status");
+    // EM_SETEVENTMASK renvoie l'ancien masque.
+    assert_eq!(sendw(e, 0x0445, 0, 0x1), 0);
+    assert_eq!(sendw(e, 0x043B, 0, 0), 1);
+    // ShowPosition de wxWidgets : EM_LINESCROLL jusqu'à la dernière ligne.
+    let last = sendw(e, 0x00C9, title(e).chars().count(), 0);
+    let first = sendw(e, 0x00CE, 0, 0);
+    sendw(e, 0x00B6, 0, last - first);
+    let top = sendw(e, 0x00CE, 0, 0);
+    assert!(
+        top > 0 && top < last,
+        "dernière page pleine, pas une ligne seule : {top}/{last}"
+    );
+    // L'EDIT ordinaire garde son comportement (dernière ligne en haut).
+    let plain = child(p, "EDIT", "", 0x4 | 0x0020_0000, 12, (10, 110, 300, 90));
+    let t = w("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+    unsafe { user32::set_window_text_w(plain, t.as_ptr()) };
+    sendw(plain, 0x00B6, 0, 100);
+    assert_eq!(sendw(plain, 0x00CE, 0, 0), 9);
+    unsafe {
+        user32::destroy_window(e);
+        user32::destroy_window(plain);
+        user32::destroy_window(p);
+    }
+}
+
+/// #802 : Ctrl+A dans un champ sélectionne tout ; la frappe suivante remplace.
+#[test]
+fn ctrl_a_selectionne_tout_le_champ() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let e = child(p, "EDIT", "22", WS_BORDER | 0x80, 13, (10, 10, 120, 24));
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYDOWN, 0x11, 0));
+    sendw(e, gui::WM_KEYDOWN, 0x41, 0);
+    gui::observe_key_message(&gui::Msg::new(e, gui::WM_KEYUP, 0x11, 0));
+    let r = sendw(e, 0x00B0, 0, 0);
+    assert_eq!((r & 0xFFFF, r >> 16), (0, 2));
+    for ch in "2222".chars() {
+        sendw(e, WM_CHAR, ch as usize, 0);
+    }
+    assert_eq!(text_of(e), "2222");
+    unsafe {
+        user32::destroy_window(e);
+        user32::destroy_window(p);
+    }
+}
+
+/// #865 : SysLink existe (wxHyperlinkCtrl), donne sa taille idéale et
+/// signale un clic sur un lien par NM_CLICK avec l'URL.
+#[test]
+fn syslink_taille_et_clic() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let link = child(
+        p,
+        "SysLink",
+        "Voir <A HREF=\"https://exemple.org/aide\">l'aide</A>",
+        0x5001_0000,
+        40,
+        (0, 0, 300, 20),
+    );
+    assert_ne!(link, 0, "SysLink créé");
+    let mut size = [0i32; 2];
+    let h = sendw(link, 0x0701, 0, size.as_mut_ptr() as isize);
+    assert!(
+        size[0] > 20 && size[1] > 5 && h == size[1] as isize,
+        "{size:?}"
+    );
+    LINK_URLS.lock().unwrap().clear();
+    // Clic sur « Voir » : rien ; clic au bout du texte, dans le lien.
+    sendw(link, WM_LBUTTONUP, 0, (5 << 16) | 2);
+    assert!(LINK_URLS.lock().unwrap().is_empty());
+    let x = (size[0] - 3) as isize;
+    sendw(link, WM_LBUTTONUP, 0, (5 << 16) | x);
+    assert_eq!(
+        *LINK_URLS.lock().unwrap(),
+        vec!["https://exemple.org/aide".to_string()]
+    );
+    gui::destroy_window(p);
+}
+
+#[test]
+fn roundrect_prend_la_largeur_de_l_ellipse() {
+    // RoundRect(…, 6, 6) sur un carré de 12 : coins de rayon 3 (#866). Avec
+    // un rayon de 6, le pixel (1, 1) restait blanc et la case devenait ronde.
+    use crate::dlls::gdi32;
+    let (dc, bmp) = memory_dc(12, 12);
+    let brush = gdi32::create_solid_brush(0);
+    gdi32::select_object(dc, brush);
+    let px = |x, y| unsafe { gdi32::get_pixel(dc, x, y) };
+    unsafe { gdi32::round_rect(dc, 0, 0, 12, 12, 6, 6) };
+    assert_eq!(px(1, 1), 0, "coin trop arrondi");
+    assert_eq!(px(0, 0), 0x00FF_FFFF, "coin pas arrondi");
+    assert_eq!(px(6, 0), 0);
+    gdi32::delete_object(brush);
+    gdi32::delete_object(bmp);
 }

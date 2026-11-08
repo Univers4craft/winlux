@@ -57,7 +57,8 @@ for page, label, keywords in index:
     assert label in module["_TR"] and len(module["_TR"][label]) == 3 and all(module["_TR"][label]), label
     assert page in pages(label), (label, pages(label))
 expected = {"wifi": 35, "wi fi": 35, "WLAN": 35, "comptes": 33, "mot de passe": 33, "imprimante": 26, "printer": 26,
-            "Drucker": 26, "impresora": 26, "vpn": 2, "telephone": 37, "téléphone": 37, "langue": 14, "accessibilite": 12,
+            "Drucker": 26, "impresora": 26, "vpn": 40, "wireguard": 40, "hotspot": 41, "partage de connexion": 41,
+            "Mobiler Hotspot": 41, "telephone": 37, "téléphone": 37, "langue": 14, "accessibilite": 12,
             "loupe": 12, "confidentialite": 18, "fond ecran": 21, "écran fond": 21, "theme sombre": 21, "stockage": None,
             "son": 16, "volume": 16, "Lautstärke": 16, "bluetooth": 22, "batterie": 23, "veille": 23, "pilotes": 34,
             "gestionnaire de périphériques": 34, "certificat": 36, "presse-papiers": 32, "heure": 14, "resolution": 8}

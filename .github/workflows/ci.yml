@@ -114,6 +114,9 @@ jobs:
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
 
+      - name: Inventaire des structures à taille x86 (#232)
+        run: python3 -B scripts/test-wow32-structures.py
+
       - name: Vérifier les fonctions importées par les vrais jeux (docs/jeux/imports-jeux.tsv)
         run: python3 -B scripts/test-games-imports.py
 
@@ -392,6 +395,7 @@ jobs:
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          python3 -B scripts/test-control-status-cost.py
           python3 -B scripts/test-second-session-taskbar.py
           python3 -B scripts/test-panel-tooltips.py
           python3 -B scripts/test-quick-menu-position.py
@@ -590,7 +594,7 @@ jobs:
       - name: Touches de volume du clavier sous openbox réel (pas de 2 %, sourdine, micro, indicateur)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-volume-keys.py
 
-      - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, langues)
+      - name: Réglages rapides Win+A (tuiles selon le matériel, luminosité, mode avion, VPN, point d'accès, langues)
         run: |
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-quick-settings.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-brightness.py
@@ -600,6 +604,10 @@ jobs:
           /usr/bin/python3 -B scripts/test-ecran-veille-retour.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-wifi.py
           xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-wifi.py
+          # VPN et point d'accès sans fil mobile (#660) : services, relais, pages GTK.
+          /usr/bin/python3 -B scripts/test-vpn-hotspot.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-vpn-hotspot.py
+          xvfb-run -a -s '-screen 0 1024x600x24' /usr/bin/python3 -B scripts/test-vpn-hotspot.py
           xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py quick
 
       - name: Navigation au clavier (menu Démarrer, réglages rapides)
