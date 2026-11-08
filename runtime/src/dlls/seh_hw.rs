@@ -502,6 +502,9 @@ unsafe extern "C" fn hw_dispatch(frame: *mut HwFrame) -> ! {
         crate::thunks::describe_site(f.rec.address),
         &f.rec.info[..f.rec.nparams as usize]
     );
+    if crate::log::enabled(crate::log::Level::Trace) {
+        crate::trace!("{}", seh::describe_registers(&f.ctx));
+    }
     match seh::dispatch(&mut f.rec, &mut f.ctx) {
         Unhandled::InvalidDisposition => {
             super::kernel32_misc::report_unhandled(0xC000_0026, 1, &[])
