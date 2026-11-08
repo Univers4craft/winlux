@@ -1291,4 +1291,18 @@ ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+ok("fn lv_edit_label" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "clic_droit_menu_contextuel_et_renommage_dans_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes : clic droit (NM_RCLICK, WM_CONTEXTMENU), Maj+F10 et renommage en place (#1139)")
+ok("placement_de_fenetre_deplace_et_affiche" in (SCRIPTS / "test-all.sh").read_text()
+   and "show_window(hwnd, p.show_cmd as i32)" in (runtime_dlls / "user32.rs").read_text(),
+   "SetWindowPlacement affiche la fenêtre : 7-Zip s'ouvre (#1159)")
+ok("en_tetes_nt_d_une_image_projetee" in (SCRIPTS / "test-all.sh").read_text(),
+   "ImageNtHeader : les extensions livrées avec Notepad++ se chargent (#1152)")
+ok("LVS_EX_CHECKBOXES" in (runtime_dlls / "controls/comctl.rs").read_text()
+   and "cases_a_cocher_des_lignes_d_une_liste" in (SCRIPTS / "test-all.sh").read_text(),
+   "Listes à cases à cocher (LVS_EX_CHECKBOXES) : récupération d'Audacity (#1153)")
+ok("fn message_box_wrap" in (runtime_dlls / "dialogs.rs").read_text()
+   and "longue_boite_de_message_tient_dans_l_ecran" in (SCRIPTS / "test-all.sh").read_text(),
+   "Boîte de message longue : élargie puis limitée à la zone de travail, boutons visibles (#1161)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
