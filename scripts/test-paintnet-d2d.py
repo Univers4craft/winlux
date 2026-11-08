@@ -6,7 +6,9 @@ sont en place et gardent la taille de table de méthodes publiée par Windows :
 Direct3D 11.1 à 11.4, Direct2D 1.1 à 1.3 (fabrique 7, contexte de dessin),
 effets personnalisés (ID2D1EffectContext, ID2D1TransformGraph,
 ID2D1DrawInfo, pixel shaders), gestionnaire d'animations Windows,
-et GdipImageForceValidation. Les tests unitaires Rust
+GdipImageForceValidation, et DirectWrite 3 à 7 (#984 : jeux de polices,
+collections 1 à 3, faces 1 à 6, paramètres de rendu 3, repli
+personnalisé). Les tests unitaires Rust
 (cargo test) contrôlent le comportement de chaque pièce.
 """
 from pathlib import Path
@@ -70,6 +72,28 @@ ok("DXGI_ADAPTER_DESC2_SIZE: usize = 320" in source("dxgi.rs"),
 ok("v11::context_view(this, out)" in d2d1 and "winlux_d2d_context_view_vt" in d2d1_1
    and ".rept 120" in d2d1_1,
    "anciennes cibles : QueryInterface vers ID2D1DeviceContext6 rend une vue à 120 relais (#1085)")
+
+dwrite = source("dwrite.rs")
+sets = source("dwrite_sets.rs")
+fallback = source("dwrite_fallback.rs")
+custom = source("dwrite_custom.rs")
+ok(vtable(dwrite, "FACTORY_VT") == 57 and "IID_DWRITE_FACTORY7" in sets,
+   "IDWriteFactory7 : 57 méthodes, demandé par Paint.NET 5.1")
+ok(vtable(dwrite, "COLLECTION_VT") == 14 and vtable(dwrite, "FAMILY_VT") == 14
+   and vtable(dwrite, "FONT_VT") == 24 and vtable(dwrite, "FACE_VT") == 60,
+   "IDWriteFontCollection3, IDWriteFontFamily2, IDWriteFont3, IDWriteFontFace6")
+ok(vtable(sets, "SET_VT") == 32 and vtable(sets, "REF_VT") == 20
+   and vtable(sets, "BUILDER_VT") == 10 and vtable(sets, "LIST_VT") == 10,
+   "IDWriteFontSet4, IDWriteFontFaceReference1, IDWriteFontSetBuilder2, IDWriteFontList2")
+ok(vtable(fallback, "PARAMS_VT") == 11 and "IID_RENDERING_PARAMS3" in fallback
+   and "E_NOTIMPL" not in fallback and vtable(fallback, "BUILDER_VT") == 6,
+   "IDWriteRenderingParams3, CreateGlyphRunAnalysis et CreateFontFallbackBuilder réels")
+ok("fn raw_table" in source("sfnt.rs") and "raw_table(&tag.to_le_bytes())" in dwrite,
+   "TryGetFontTable rend les tables OpenType")
+
+ok("// CreateCustomFontCollection" in dwrite and "not_implemented as *const (), // CreateCustom" not in dwrite
+   and "fn custom_file_reference(" in custom and "fn read_stream(" in custom,
+   "DirectWrite : collections et fichiers de polices fournis par l'appli (#1075)")
 
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,

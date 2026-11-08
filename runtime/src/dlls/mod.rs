@@ -26,6 +26,7 @@ pub mod audio_com;
 pub mod bcrypt;
 pub mod chromium_win32;
 pub mod clipboard;
+pub mod com_registry;
 pub mod comctl32;
 pub mod comdlg32;
 pub mod comdlg32_files;

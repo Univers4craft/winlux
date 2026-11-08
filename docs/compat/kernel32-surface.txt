@@ -364,6 +364,7 @@ GetThreadContext
 GetThreadDescription
 GetThreadErrorMode
 GetThreadGroupAffinity
+GetThreadIOPendingFlag
 GetThreadId
 GetThreadLocale
 GetThreadPreferredUILanguages

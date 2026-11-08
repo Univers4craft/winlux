@@ -32,4 +32,4 @@ test "$status" -eq 0 || {
     echo "threadctl_msvc.exe : le test n° $status a échoué" >&2
     exit 1
 }
-echo "threadctl_msvc : suspension, contexte, détournement, page de garde, vue W^X, messages enregistrés, paramètres réseau"
+echo "threadctl_msvc : suspension, contexte, détournement, page de garde, vue W^X, messages enregistrés, paramètres réseau, E/S en attente"
