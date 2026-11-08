@@ -2,6 +2,7 @@
 # Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
 # fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
 audio_com.rs	Iface	a-verifier	
+cabinet_lz.rs	FdiNotification	a-verifier	
 com_local.rs	Proxy	interne	mandataire IDispatch hors processus (#16), x64 seulement (refusé si wow32 actif)
 comdlg32_ui.rs	DrawItem	a-verifier	
 comdlg32_ui.rs	LvColumnW	a-verifier	
