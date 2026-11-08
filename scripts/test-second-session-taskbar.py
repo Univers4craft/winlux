@@ -11,6 +11,10 @@ n'appliquait l'alignement que dans la 1re session.
 1. winlux-user-session applique l'alignement dans toute session.
 2. Sur l'état de camille (xfconf simulé), align-left et align-center donnent
    le bon ordre et le bon étirement, sans relancer la barre.
+
+Plus loin : Vue des tâches et Rechercher recopiés par la barre sous un nom
+numéroté gardés dans l'ordre (#885), genmon vide hors du bloc attendu par le
+contrepoids et valeur du cache rendue sans attendre (#887).
 """
 import json
 import os
@@ -207,6 +211,74 @@ except SystemExit:
     else:
         ok(probe.returncode == 0 and f"{home}/cache/winlux/tray/spacer-0.svg" in out,
            f"dossier d'icônes non inscriptible : repli dans ~/.cache, pas de PermissionError ({out or probe.stderr[-300:]})")
+
+# ── 5. Vue des tâches recopiée sous un nom numéroté (#885) ──────────────────
+# Portable de damien, 8 novembre 2026 : launcher-15/17941231871.desktop, dont
+# items ne nomme plus winlux-taskview.desktop ; align-center retirait le 15.
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    for sub in ("bin", "root/etc/winlux", "home/.config/xfce4/panel/launcher-15", "home/.config/xfce4/panel/launcher-16"):
+        (work / sub).mkdir(parents=True)
+    fake = work / "bin/xfconf-query"
+    fake.write_text(FAKE)
+    fake.chmod(0o755)
+    for tool in ("pgrep", "xfce4-panel"):
+        (work / "bin" / tool).write_text("#!/bin/sh\nexit 1\n")
+        (work / "bin" / tool).chmod(0o755)
+    panel = work / "home/.config/xfce4/panel"
+    (panel / "launcher-15/17941231871.desktop").write_text(
+        "[Desktop Entry]\nName=Vue des tâches\nExec=winlux-taskview\n"
+        "X-XFCE-Source=file:///usr/share/applications/winlux-taskview.desktop\n")
+    (panel / "launcher-16/123.desktop").write_text("[Desktop Entry]\nName=Rechercher\nExec=winlux-search\n")
+    store, log = work / "xfconf.json", work / "xfconf.log"
+    for how, expected in (("center", "3 13 1 16 15 2 8 10 12 4 7 9"), ("left", "3 1 16 15 2 8 10 12 4 7 9 13")):
+        state = {"/panels/panel-1/plugin-ids": "3 1 2 8 10 12 4 7 9 13".split(),
+                 "/plugins/plugin-3": "separator", "/plugins/plugin-3/expand": "true",
+                 "/plugins/plugin-10": "systray", "/plugins/plugin-12": "genmon",
+                 "/plugins/plugin-15": "launcher", "/plugins/plugin-15/items": ["17941231871.desktop"],
+                 "/plugins/plugin-16": "launcher", "/plugins/plugin-16/items": ["123.desktop"]}
+        for number in (4, 7, 9, 13):
+            state[f"/plugins/plugin-{number}"] = "genmon"
+        store.write_text(json.dumps(state))
+        log.write_text("")
+        result = subprocess.run(
+            ["sh", str(ROOT / "scripts/winlux-control.sh"), f"align-{how}"],
+            env={**os.environ, "PATH": f"{work}/bin:/usr/bin:/bin", "WINLUX_CONTROL_ROOT": str(work / "root"),
+                 "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "home/.config"),
+                 "WINLUX_CONTROL_NO_STATUS": "1", "WINLUX_ROOT_SOCKET": str(work / "absent.sock"),
+                 "FAKE_XFCONF": str(store), "FAKE_XFCONF_LOG": str(log)},
+            capture_output=True, text=True, timeout=30)
+        ids = " ".join(json.loads(store.read_text())["/panels/panel-1/plugin-ids"])
+        ok(result.returncode == 0 and ids == expected,
+           f"align-{how} : Rechercher (16) et Vue des tâches (15) reconnus à leur fichier recopié ({ids})")
+
+# ── 6. Contrepoids : genmon vide et cache repris tout de suite (#887) ───────
+import ast
+import time as _time
+tree = ast.parse(tray)
+wanted = {"_genmon_blank", "_settled_balance", "balance_width"}
+scope = {"re": re, "os": os, "subprocess": subprocess, "time": _time, "Path": Path}
+exec(compile(ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted],
+                        type_ignores=[]), "winlux-tray.py", "exec"), scope)
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    for name, output in (("vide", "<txt></txt><tool></tool>"), ("image", "<img>/tmp/x.svg</img>"), ("texte", "<txt>12:00</txt>")):
+        script = work / name
+        script.write_text(f"#!/bin/sh\necho '{output}'\n")
+        script.chmod(0o755)
+    blank = scope["_genmon_blank"]
+    ok(blank(str(work / "vide")) and not blank(str(work / "image")) and not blank(str(work / "texte")) and not blank(""),
+       "genmon sans image ni texte (clavier tactile sans écran tactile) : hors du bloc attendu")
+    cache = work / "taskbar-balance"
+    ids = [3, 13, 1, 15, 2, 8, 10, 12, 4, 7, 9]
+    cache.write_text("1920:" + ",".join(map(str, ids)) + " 317\n")
+    calls = []
+    scope.update(_panel_children=lambda: (calls.append(1), ([(12, 1600, 1)], 1920))[1],
+                 _seconds_since_start=lambda pid: 1.0, _balance_cache=lambda: cache)
+    began = _time.monotonic()
+    width = scope["_settled_balance"](ids, {10, 12, 4, 7, 9}, set())
+    ok(width == 317 and _time.monotonic() - began < 1,
+       f"même écran, même ordre : contrepoids du cache rendu sans attendre ({width}, {_time.monotonic() - began:.1f} s)")
 
 if failures:
     raise SystemExit(f"{len(failures)} échec(s)")
