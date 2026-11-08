@@ -106,6 +106,7 @@ dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 22
 dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
 dwrite_fallback.rs	Source	interne	test unitaire
+dwrite_sets.rs	FontProperty	a-verifier	
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
 dxgi.rs	DxgiAdapterVTable	a-verifier	
@@ -169,6 +170,7 @@ taskschd.rs	Obj	a-verifier
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
+url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte
@@ -224,3 +226,4 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
+ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32

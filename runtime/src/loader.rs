@@ -36,6 +36,69 @@ pub struct TlsInfo {
     pub index_addr: usize,
     pub callbacks_addr: usize,
     pub zero_fill: usize,
+    /// Index TLS du module (entrée du tableau ThreadLocalStoragePointer),
+    /// fixé au chargement et rendu au déchargement (#24).
+    pub slot: usize,
+}
+
+/// Nombre d'entrées du tableau TLS statique d'un TEB (une page).
+pub const TLS_MODULE_SLOTS: usize = 512;
+static TLS_MODULE_USED: Mutex<[bool; TLS_MODULE_SLOTS]> = Mutex::new([false; TLS_MODULE_SLOTS]);
+
+/// Premier index TLS libre (usize::MAX si les 512 sont pris).
+fn alloc_tls_slot() -> usize {
+    let mut used = TLS_MODULE_USED.lock().unwrap_or_else(|e| e.into_inner());
+    match used.iter().position(|u| !u) {
+        Some(i) => {
+            used[i] = true;
+            i
+        }
+        None => usize::MAX,
+    }
+}
+
+/// Rend l'index TLS d'un module déchargé.
+pub fn free_tls_slot(slot: usize) {
+    if slot < TLS_MODULE_SLOTS {
+        TLS_MODULE_USED.lock().unwrap_or_else(|e| e.into_inner())[slot] = false;
+    }
+}
+
+/// DLL réelles que chaque module tient par ses imports (base → bases) :
+/// une référence par DLL importée, rendue quand le module est déchargé (#24).
+static DEPENDENCIES: Mutex<Vec<(usize, Vec<usize>)>> = Mutex::new(Vec::new());
+
+/// Dépendances tenues par le module `base`, retirées de la table.
+pub fn take_dependencies(base: usize) -> Vec<usize> {
+    let mut d = DEPENDENCIES.lock().unwrap_or_else(|e| e.into_inner());
+    match d.iter().position(|(b, _)| *b == base) {
+        Some(i) => d.remove(i).1,
+        None => Vec::new(),
+    }
+}
+
+/// GET_MODULE_HANDLE_EX_FLAG_PIN : le module ne sera plus déchargé.
+pub fn pin(base: usize) {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(m) = mods.iter_mut().find(|m| m.base == base) {
+        m.refcount = u32::MAX;
+    }
+}
+
+/// Retire de la liste et démappe un module dont le compteur est tombé à
+/// zéro (après son DllMain(DLL_PROCESS_DETACH)). Rend le module retiré.
+pub fn unload(base: usize) -> Option<Module> {
+    let _serialized = load_lock();
+    let m = {
+        let mut mods = MODULES.lock().unwrap();
+        let pos = mods.iter().position(|m| m.base == base)?;
+        if pos == 0 || mods[pos].refcount != 0 {
+            return None;
+        }
+        mods.remove(pos)
+    };
+    libc_munmap(m.base, m.size);
+    Some(m)
 }
 
 /// Un module PE (le .exe ou une DLL réelle) chargé en mémoire.
@@ -500,6 +563,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         return Ok(existing);
     }
     let m = load_unlocked(path, force_reloc)?;
+    let before: Vec<usize> = MODULES.lock().unwrap().iter().map(|x| x.base).collect();
     // Une liaison qui échoue (import introuvable, protection impossible) ne
     // laisse pas un module à moitié lié dans la liste : GetModuleHandle ne
     // doit pas le trouver et un nouveau LoadLibrary doit réessayer.
@@ -510,10 +574,33 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
     };
     if let Err(e) = linked {
         remove_module(m.base);
+        if let Some(t) = &m.tls {
+            free_tls_slot(t.slot);
+        }
         unsafe {
             libc::munmap(m.base as *mut libc::c_void, m.size);
         }
         return Err(e);
+    }
+    // Une référence par DLL réelle importée : celle qu'on vient de charger
+    // pour nous a déjà la sienne (son premier chargement), une DLL déjà là
+    // en prend une de plus.
+    let mut deps: Vec<usize> = Vec::new();
+    for name in m.import_names() {
+        if let Some(d) = find_module_by_name(&name) {
+            if d.base != m.base && !deps.contains(&d.base) {
+                if before.contains(&d.base) {
+                    increment_ref(d.base);
+                }
+                deps.push(d.base);
+            }
+        }
+    }
+    if !deps.is_empty() {
+        DEPENDENCIES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((m.base, deps));
     }
     Ok(m)
 }
@@ -665,7 +752,11 @@ fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
         read_tls32(&m)
     } else {
         read_tls(&m)
-    };
+    }
+    .map(|mut t| {
+        t.slot = alloc_tls_slot();
+        t
+    });
 
     MODULES.lock().unwrap().push(m.clone());
     Ok(m)
@@ -725,6 +816,7 @@ fn read_tls(m: &Module) -> Option<TlsInfo> {
         index_addr: rd64(b, o + 16)? as usize,
         callbacks_addr: rd64(b, o + 24)? as usize,
         zero_fill: rd32(b, o + 32)? as usize,
+        slot: usize::MAX,
     })
 }
 
@@ -742,6 +834,7 @@ fn read_tls32(m: &Module) -> Option<TlsInfo> {
         index_addr: rd32(b, o + 8)? as usize,
         callbacks_addr: rd32(b, o + 12)? as usize,
         zero_fill: rd32(b, o + 16)? as usize,
+        slot: usize::MAX,
     })
 }
 

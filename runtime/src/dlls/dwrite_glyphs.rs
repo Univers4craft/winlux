@@ -73,14 +73,25 @@ impl Rect {
 
 /// Couverture calculée une fois : un octet (0..255) par pixel de `bounds`.
 pub struct Analysis {
-    aliased: bool,
+    /// Texture d'un octet par pixel : mode ALIASED, ou anticrénelage en
+    /// niveaux de gris demandé à IDWriteFactory2/3.
+    one_byte: bool,
     bounds: Rect,
     coverage: Vec<u8>,
 }
 
 impl Analysis {
     /// Rastérise un chemin déjà en pixels.
+    #[cfg(test)]
     pub fn from_polys(polys: &[Vec<(f32, f32)>], aliased: bool) -> Analysis {
+        Self::from_polys_gray(polys, aliased, false)
+    }
+
+    /// Comme `from_polys`, avec la couverture en niveaux de gris dans la
+    /// texture DWRITE_TEXTURE_ALIASED_1x1 quand `gray` est vrai
+    /// (DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE).
+    pub fn from_polys_gray(polys: &[Vec<(f32, f32)>], aliased: bool, gray: bool) -> Analysis {
+        let one_byte = aliased || gray;
         let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for p in polys.iter().flatten() {
             if p.0.is_finite() && p.1.is_finite() {
@@ -94,7 +105,7 @@ impl Analysis {
         // est tronquée (taille maximale d'une texture Direct3D).
         const MAX: f32 = 16384.0;
         let empty = Analysis {
-            aliased,
+            one_byte,
             bounds: Rect::default(),
             coverage: Vec::new(),
         };
@@ -146,14 +157,14 @@ impl Analysis {
             })
             .collect();
         Analysis {
-            aliased,
+            one_byte,
             bounds,
             coverage,
         }
     }
 
     pub fn bounds(&self, texture: u32) -> Rect {
-        let wanted = if self.aliased {
+        let wanted = if self.one_byte {
             TEXTURE_ALIASED_1X1
         } else {
             TEXTURE_CLEARTYPE_3X1
@@ -194,6 +205,34 @@ type AnalysisObj = Com<Analysis>;
 /// IDWriteFactory::CreateGlyphRunAnalysis.
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "win64" fn create_glyph_run_analysis(
+    this: *mut c_void,
+    run: *const GlyphRun,
+    pixels_per_dip: f32,
+    transform: *const DwMatrix,
+    rendering_mode: u32,
+    measuring_mode: u32,
+    origin_x: f32,
+    origin_y: f32,
+    out: *mut *mut c_void,
+) -> i32 {
+    create_glyph_run_analysis_aa(
+        this,
+        run,
+        pixels_per_dip,
+        transform,
+        rendering_mode,
+        measuring_mode,
+        origin_x,
+        origin_y,
+        false,
+        out,
+    )
+}
+
+/// Même chose, avec l'anticrénelage en niveaux de gris des versions 2 et 3
+/// de la fabrique (`gray`).
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn create_glyph_run_analysis_aa(
     _this: *mut c_void,
     run: *const GlyphRun,
     pixels_per_dip: f32,
@@ -202,6 +241,7 @@ pub unsafe extern "win64" fn create_glyph_run_analysis(
     _measuring_mode: u32,
     origin_x: f32,
     origin_y: f32,
+    gray: bool,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
@@ -240,7 +280,7 @@ pub unsafe extern "win64" fn create_glyph_run_analysis(
         } else {
             Vec::new()
         };
-    let a = Analysis::from_polys(&polys, rendering_mode == RENDERING_MODE_ALIASED);
+    let a = Analysis::from_polys_gray(&polys, rendering_mode == RENDERING_MODE_ALIASED, gray);
     put(out, Com::create(ANALYSIS_VT.ptr(), a))
 }
 

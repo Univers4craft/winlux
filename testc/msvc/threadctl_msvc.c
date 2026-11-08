@@ -19,7 +19,8 @@
 //      (#965) : les pages écrites sont rendues, jamais une page non engagée ;
 //  11. GetNetworkParams, GetIfTable, GetAdaptersInfo (#1048) : un tampon trop
 //      petit donne la taille à allouer, et le second appel réussit (.NET
-//      boucle sans fin sur une taille 0).
+//      boucle sans fin sur une taille 0) ;
+//  12. GetThreadIOPendingFlag (#1072) : TRUE, et aucune E/S en attente.
 // Code de sortie : 0 si tout passe, sinon le numéro du premier test raté.
 typedef unsigned long long u64;
 typedef unsigned int u32;
@@ -52,6 +53,7 @@ __declspec(dllimport) int __stdcall WaitMessage(void);
 __declspec(dllimport) void *__stdcall CreateCompatibleDC(void *);
 __declspec(dllimport) u32 __stdcall GetObjectType(void *);
 __declspec(dllimport) int __stdcall DeleteDC(void *);
+__declspec(dllimport) int __stdcall GetThreadIOPendingFlag(void *, int *);
 __declspec(dllimport) u32 __stdcall GetNetworkParams(void *, u32 *);
 __declspec(dllimport) u32 __stdcall GetIfTable(void *, u32 *, int);
 __declspec(dllimport) u32 __stdcall GetAdaptersInfo(void *, u32 *);
@@ -219,6 +221,12 @@ static int net_params(void) {
     return GetAdaptersInfo(netbuf, &size) == 0 ? 0 : 11;
 }
 
+static int io_pending(void) {
+    int pending = 7;
+    if (!GetThreadIOPendingFlag(GetCurrentThread(), &pending) || pending != 0) return 12;
+    return 0;
+}
+
 void entry(void) {
     u32 r = suspend_tests();
     if (!r) r = stack_guard();
@@ -226,6 +234,7 @@ void entry(void) {
     if (!r) r = messages();
     if (!r) r = write_watch();
     if (!r) r = net_params();
+    if (!r) r = io_pending();
     stop = 1;
     ExitProcess(r);
 }

@@ -927,6 +927,14 @@ ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_a
    and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
 
+# #24 : FreeLibrary décharge vraiment (démappage, index TLS rendu, dépendances relâchées).
+_deps = (ROOT / "testexe/src/bin/dll_deps.rs").read_text()
+ok("image neuve après rechargement" in _deps and "la DLL et sa dépendance sont toutes deux déchargées" in _deps
+   and "fn unload(" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "fn release_module_tls(" in (ROOT / "runtime/src/process.rs").read_text()
+   and "dll_deps" in (ROOT / "scripts/test-runtime.sh").read_text(),
+   "FreeLibrary : DLL démappée, TLS libéré, dépendances relâchées, rechargement à neuf (#24)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
@@ -1016,6 +1024,15 @@ ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
    "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+# #984 : DirectWrite 3 à 7 (IDWriteFactory7 de Paint.NET 5.1), jeux de polices.
+ok((ROOT / "runtime/src/dlls/dwrite_sets.rs").exists()
+   and "VTable<57>" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "IDWriteFactory7 : 57 méthodes" in (SCRIPTS / "test-paintnet-d2d.py").read_text(),
+   "DirectWrite : IDWriteFactory7, jeux de polices et faces 1 à 6 (#984)")
+# #1075 : polices livrées par l'appli (FontFamily par URI dans WPF).
+ok("custom::custom_collection as *const ()" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "fn read_stream(" in (ROOT / "runtime/src/dlls/dwrite_custom.rs").read_text(),
+   "DirectWrite : CreateCustomFontCollection et CreateCustomFontFileReference lisent les polices de l'appli (#1075)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas
@@ -1041,6 +1058,12 @@ ok("const FIXED_INFO_SIZE: usize = 600;" in iphlp and "const IFROW_SIZE: usize =
    and "fn parametres_reseau_taille_puis_contenu" in iphlp
    and "net_params()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
    "iphlpapi : paramètres réseau et table des interfaces sans boucle sans fin (#1048)")
+
+# #1072 : le pool de threads de .NET 9 appelle GetThreadIOPendingFlag.
+ok('"GetThreadIOPendingFlag"=>fn get_thread_io_pending_flag' in (runtime_dlls / "kernel32.rs").read_text()
+   and "GetThreadIOPendingFlag" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "io_pending()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
+   "kernel32 : GetThreadIOPendingFlag pour le pool de threads de .NET 9 (#1072)")
 
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
@@ -1117,4 +1140,11 @@ ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testex
    "Shell PE : WINLUX_LANG choisit la langue (#1026)")
 ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
    "Shell PE : winlux-shell-app notepad (#1027)")
+# #16 : activation COM depuis le registre (InprocServer32 → DllGetClassObject),
+# CoCreateInstanceEx, CoFreeUnusedLibraries ; vérifiée par com_suite.exe.
+com_registry = (ROOT / "runtime/src/dlls/com_registry.rs").read_text(encoding="utf-8")
+ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
+   and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
+   and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

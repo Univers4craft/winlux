@@ -13,8 +13,10 @@
 //! nul, comme sous Windows.
 //!
 //! Le reste répond de façon cohérente : collection EUDC vide, paramètres de
-//! rendu personnalisés, aucune police en couleur (`DWRITE_E_NOCOLOR`), et
-//! pas de constructeur de repli personnalisé (`E_NOTIMPL`, sortie nulle).
+//! rendu personnalisés, aucune police en couleur (`DWRITE_E_NOCOLOR`).
+//! Le constructeur de repli personnalisé (IDWriteFontFallbackBuilder)
+//! garde les correspondances plages Unicode → familles de l'appli, puis
+//! le repli du système s'il a été ajouté (#984).
 
 use super::{
     families, match_face, pick, read_wide, CollectionObj, FaceInfo, Family, COLLECTION_VT, FONT_VT,
@@ -27,7 +29,6 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
-const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 /// La suite de glyphes n'a aucun glyphe en couleur (TranslateColorGlyphRun).
 pub const DWRITE_E_NOCOLOR: i32 = 0x8898_500Cu32 as i32;
 
@@ -54,6 +55,12 @@ pub const IID_RENDERING_PARAMS1: Guid = guid(
     0xa6fc,
     0x4248,
     [0x8b, 0x50, 0x66, 0x74, 0x34, 0x8f, 0xca, 0xd3],
+);
+pub const IID_RENDERING_PARAMS3: Guid = guid(
+    0xb7924baa,
+    0x391b,
+    0x412a,
+    [0x8c, 0x5c, 0xe4, 0x4c, 0xc2, 0xd8, 0x67, 0xdc],
 );
 pub const IID_RENDERING_PARAMS2: Guid = guid(
     0xf9d7_11c3,
@@ -131,12 +138,15 @@ pub unsafe extern "win64" fn system_fallback(_this: *mut c_void, out: *mut *mut 
     put(out, Com::create(FALLBACK_VT.ptr(), ()))
 }
 
-/// IDWriteFactory2::CreateFontFallbackBuilder : non pris en charge.
+/// IDWriteFactory2::CreateFontFallbackBuilder.
 pub unsafe extern "win64" fn fallback_builder(_this: *mut c_void, out: *mut *mut c_void) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
+    if out.is_null() {
+        return E_POINTER;
     }
-    E_NOTIMPL
+    put(
+        out,
+        Com::create(BUILDER_VT.ptr(), Mutex::new(Custom::default())),
+    )
 }
 
 /// IDWriteFactory2::TranslateColorGlyphRun : aucune police en couleur n'est
@@ -158,24 +168,24 @@ pub unsafe extern "win64" fn translate_color(
     DWRITE_E_NOCOLOR
 }
 
-/// IDWriteFactory2::CreateGlyphRunAnalysis : pas encore de rendu en
-/// niveaux de gris par DirectWrite (la version d'IDWriteFactory non plus).
+/// IDWriteFactory2::CreateGlyphRunAnalysis : même rendu que la version 3
+/// (DWRITE_RENDERING_MODE et DWRITE_RENDERING_MODE1 ont les mêmes valeurs
+/// jusqu'à OUTLINE).
 pub unsafe extern "win64" fn glyph_run_analysis2(
-    _this: *mut c_void,
-    _run: *const c_void,
-    _transform: *const c_void,
-    _mode: u32,
-    _measuring: u32,
-    _grid_fit: u32,
-    _antialias: u32,
-    _x: f32,
-    _y: f32,
+    this: *mut c_void,
+    run: *const super::GlyphRun,
+    transform: *const crate::dlls::dwrite_glyphs::DwMatrix,
+    mode: u32,
+    measuring: u32,
+    grid_fit: u32,
+    antialias: u32,
+    x: f32,
+    y: f32,
     out: *mut *mut c_void,
 ) -> i32 {
-    if !out.is_null() {
-        *out = std::ptr::null_mut();
-    }
-    E_NOTIMPL
+    super::sets::glyph_run_analysis3(
+        this, run, transform, mode, measuring, grid_fit, antialias, x, y, out,
+    )
 }
 
 // --- IDWriteRenderingParams1 et 2 ------------------------------------------------------
@@ -203,6 +213,42 @@ unsafe fn new_params(
     grid_fit: u32,
     out: *mut *mut c_void,
 ) -> i32 {
+    // DWRITE_RENDERING_MODE s'arrête à OUTLINE (6).
+    if mode > 6 {
+        if !out.is_null() {
+            *out = std::ptr::null_mut();
+        }
+        return E_INVALIDARG;
+    }
+    new_params3(
+        gamma,
+        contrast,
+        gray_contrast,
+        cleartype,
+        geometry,
+        mode,
+        grid_fit,
+        out,
+    )
+}
+
+/// Paramètres par défaut de Windows (IDWriteFactory::CreateRenderingParams).
+pub(super) unsafe fn default_params(out: *mut *mut c_void) -> i32 {
+    new_params3(2.2, 1.0, 1.0, 1.0, 1, 5, 0, out)
+}
+
+/// IDWriteRenderingParams3 : DWRITE_RENDERING_MODE1 va jusqu'à
+/// NATURAL_SYMMETRIC_DOWNSAMPLED (7).
+pub(super) unsafe fn new_params3(
+    gamma: f32,
+    contrast: f32,
+    gray_contrast: f32,
+    cleartype: f32,
+    geometry: u32,
+    mode: u32,
+    grid_fit: u32,
+    out: *mut *mut c_void,
+) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
@@ -212,8 +258,8 @@ unsafe fn new_params(
         || gray_contrast < 0.0
         || !(0.0..=1.0).contains(&cleartype)
         || geometry > 2
-        || mode > 6
-        || grid_fit > 3
+        || mode > 7
+        || grid_fit > 2
     {
         *out = std::ptr::null_mut();
         return E_INVALIDARG;
@@ -242,6 +288,7 @@ unsafe extern "win64" fn params_qi(
             super::IID_RENDERING_PARAMS,
             IID_RENDERING_PARAMS1,
             IID_RENDERING_PARAMS2,
+            IID_RENDERING_PARAMS3,
         ],
     )
 }
@@ -258,6 +305,13 @@ unsafe extern "win64" fn params_geometry(this: *mut ParamsObj) -> u32 {
     Com::get(this).geometry
 }
 unsafe extern "win64" fn params_mode(this: *mut ParamsObj) -> u32 {
+    // NATURAL_SYMMETRIC_DOWNSAMPLED n'existe qu'en DWRITE_RENDERING_MODE1.
+    match Com::get(this).mode {
+        7 => 5,
+        m => m,
+    }
+}
+unsafe extern "win64" fn params_mode1(this: *mut ParamsObj) -> u32 {
     Com::get(this).mode
 }
 unsafe extern "win64" fn params_gray_contrast(this: *mut ParamsObj) -> f32 {
@@ -266,7 +320,7 @@ unsafe extern "win64" fn params_gray_contrast(this: *mut ParamsObj) -> f32 {
 unsafe extern "win64" fn params_grid_fit(this: *mut ParamsObj) -> u32 {
     Com::get(this).grid_fit
 }
-static PARAMS_VT: VTable<10> = VTable([
+static PARAMS_VT: VTable<11> = VTable([
     params_qi as *const (),
     add_ref::<Params> as *const (),
     release::<Params> as *const (),
@@ -277,6 +331,7 @@ static PARAMS_VT: VTable<10> = VTable([
     params_mode as *const (),
     params_gray_contrast as *const (), // IDWriteRenderingParams1
     params_grid_fit as *const (),      // IDWriteRenderingParams2
+    params_mode1 as *const (),         // IDWriteRenderingParams3
 ]);
 
 // --- IDWriteFontFallback ----------------------------------------------------------------
@@ -458,6 +513,248 @@ static FALLBACK_VT: VTable<4> = VTable([
     map_characters as *const (),
 ]);
 
+// --- IDWriteFontFallbackBuilder et repli personnalisé ------------------------------------
+
+const IID_FALLBACK_BUILDER: Guid = guid(
+    0xfd882d06,
+    0x8aba,
+    0x4fb8,
+    [0xb8, 0x49, 0x8b, 0xe8, 0xb7, 0x3e, 0x14, 0xde],
+);
+
+/// Une correspondance AddMapping : plages, familles visées dans l'ordre,
+/// collection (sinon celle du système) et échelle.
+#[derive(Clone, Default)]
+struct Mapping {
+    ranges: Vec<(u32, u32)>,
+    families: Vec<String>,
+    collection: Option<Vec<Family>>,
+    scale: f32,
+}
+
+/// Repli construit par l'appli : ses correspondances, puis celui du
+/// système s'il a été ajouté par AddMappings.
+#[derive(Clone, Default)]
+struct Custom {
+    mappings: Vec<Mapping>,
+    system: bool,
+}
+
+type BuilderObj = Com<Mutex<Custom>>;
+type CustomObj = Com<Custom>;
+
+unsafe extern "win64" fn builder_qi(
+    this: *mut BuilderObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_FALLBACK_BUILDER])
+}
+
+unsafe extern "win64" fn builder_add_mapping(
+    this: *mut BuilderObj,
+    ranges: *const [u32; 2],
+    n_ranges: u32,
+    names: *const *const u16,
+    n_names: u32,
+    collection: *mut c_void,
+    _locale: *const u16,
+    _base: *const u16,
+    scale: f32,
+) -> i32 {
+    if ranges.is_null() || n_ranges == 0 || names.is_null() || n_names == 0 || scale <= 0.0 {
+        return E_INVALIDARG;
+    }
+    let ranges = std::slice::from_raw_parts(ranges, n_ranges as usize)
+        .iter()
+        .map(|r| (r[0], r[1]))
+        .collect();
+    let families = std::slice::from_raw_parts(names, n_names as usize)
+        .iter()
+        .map(|&n| read_wide(n))
+        .collect();
+    let collection = (!collection.is_null()
+        && *(collection as *const *const ()) == COLLECTION_VT.ptr())
+    .then(|| Com::get(collection as *mut CollectionObj).clone());
+    crate::dlls::lock(Com::get(this)).mappings.push(Mapping {
+        ranges,
+        families,
+        collection,
+        scale,
+    });
+    S_OK
+}
+
+unsafe extern "win64" fn builder_add_mappings(this: *mut BuilderObj, other: *mut c_void) -> i32 {
+    if other.is_null() {
+        return E_INVALIDARG;
+    }
+    let vt = *(other as *const *const ());
+    let mut me = crate::dlls::lock(Com::get(this));
+    if vt == FALLBACK_VT.ptr() {
+        me.system = true;
+    } else if vt == CUSTOM_VT.ptr() {
+        let o = Com::get(other as *mut CustomObj);
+        me.mappings.extend(o.mappings.iter().cloned());
+        me.system |= o.system;
+    } else {
+        return E_INVALIDARG;
+    }
+    S_OK
+}
+
+unsafe extern "win64" fn builder_create(this: *mut BuilderObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let c = crate::dlls::lock(Com::get(this)).clone();
+    put(out, Com::create(CUSTOM_VT.ptr(), c))
+}
+
+static BUILDER_VT: VTable<6> = VTable([
+    builder_qi as *const (),
+    add_ref::<Mutex<Custom>> as *const (),
+    release::<Mutex<Custom>> as *const (),
+    builder_add_mapping as *const (),
+    builder_add_mappings as *const (),
+    builder_create as *const (),
+]);
+
+impl Mapping {
+    fn covers(&self, ch: u32) -> bool {
+        self.ranges.iter().any(|&(a, b)| (a..=b).contains(&ch))
+    }
+    /// Première famille visée qui a le caractère.
+    fn face_for(&self, ch: u32, weight: u32, italic: bool) -> Option<FaceInfo> {
+        let fams = self.collection.clone().unwrap_or_else(families);
+        let named = |n: &str| fams.iter().find(|f| f.name.eq_ignore_ascii_case(n));
+        self.families.iter().find_map(|n| {
+            // Une famille absente est sautée ; une police Windows absente
+            // est servie par sa remplaçante libre.
+            let fam = named(n).or_else(|| {
+                super::is_windows_font(n)
+                    .then(|| super::substitutes(n).iter().find_map(|s| named(s)))
+                    .flatten()
+            })?;
+            let f = pick(fam, weight, italic);
+            has_glyph(&f, ch).then_some(f)
+        })
+    }
+}
+
+impl Custom {
+    /// Plage rendue par une même police : (longueur UTF-16, face, échelle).
+    fn map(
+        &self,
+        fams: &[Family],
+        text: &[u16],
+        base: &str,
+        weight: u32,
+        italic: bool,
+    ) -> (u32, Option<FaceInfo>, f32) {
+        let chars = super::decode(text);
+        let Some(&(first, _, _)) = chars.first() else {
+            return (0, None, 1.0);
+        };
+        let pick_for = |c: u32| -> Option<(usize, FaceInfo)> {
+            self.mappings
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.covers(c))
+                .find_map(|(i, m)| m.face_for(c, weight, italic).map(|f| (i, f)))
+        };
+        let lead = chars
+            .iter()
+            .find(|(c, _, _)| !is_neutral(*c))
+            .map_or(first, |x| x.0);
+        match pick_for(lead) {
+            Some((i, face)) => {
+                let mut length = 0u32;
+                for &(c, _, n) in &chars {
+                    let same =
+                        is_neutral(c) || pick_for(c).is_some_and(|(j, f)| j == i && f == face);
+                    if !same {
+                        break;
+                    }
+                    length += n;
+                }
+                (length.max(1), Some(face), self.mappings[i].scale)
+            }
+            None if self.system => {
+                let (n, f) = map_run(fams, text, base, weight, italic);
+                (n, f, 1.0)
+            }
+            None => {
+                // Rien ne couvre ce caractère : la plage reste sans police
+                // jusqu'au prochain caractère couvert.
+                let mut length = 0u32;
+                for &(c, _, n) in &chars {
+                    if length > 0 && !is_neutral(c) && pick_for(c).is_some() {
+                        break;
+                    }
+                    length += n;
+                }
+                (length.max(1), None, 1.0)
+            }
+        }
+    }
+}
+
+unsafe extern "win64" fn custom_qi(
+    this: *mut CustomObj,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    qi_list(this, riid, out, &[IID_FONT_FALLBACK])
+}
+
+unsafe extern "win64" fn custom_map(
+    this: *mut CustomObj,
+    source: *mut c_void,
+    position: u32,
+    length: u32,
+    collection: *mut c_void,
+    family: *const u16,
+    weight: u32,
+    style: u32,
+    _stretch: u32,
+    mapped_length: *mut u32,
+    mapped_font: *mut *mut c_void,
+    scale: *mut f32,
+) -> i32 {
+    if mapped_length.is_null() || mapped_font.is_null() || scale.is_null() {
+        return E_POINTER;
+    }
+    *mapped_font = std::ptr::null_mut();
+    *mapped_length = 0;
+    *scale = 1.0;
+    if source.is_null() {
+        return E_INVALIDARG;
+    }
+    if length == 0 {
+        return S_OK;
+    }
+    let Some(text) = crate::dlls::dwrite_analyzer::source_text(source, position, length) else {
+        return E_INVALIDARG;
+    };
+    let base = read_wide(family);
+    let fams = base_families(collection);
+    let (n, face, s) = Com::get(this).map(&fams, &text, &base, weight, style != 0);
+    *mapped_length = n.min(length);
+    *scale = s;
+    if let Some(face) = face {
+        *mapped_font = Com::create(FONT_VT.ptr(), face).cast();
+    }
+    S_OK
+}
+
+static CUSTOM_VT: VTable<4> = VTable([
+    custom_qi as *const (),
+    add_ref::<Custom> as *const (),
+    release::<Custom> as *const (),
+    custom_map as *const (),
+]);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +831,110 @@ mod tests {
             n, 4,
             "deux caractères hors BMP sans police = 4 unités UTF-16"
         );
+    }
+
+    #[test]
+    fn custom_fallback_follows_the_app_mappings_then_the_system() {
+        let fams = system();
+        let Some(target) = fams
+            .iter()
+            .find(|f| has_glyph(&pick(f, 400, false), 'A' as u32))
+        else {
+            return;
+        };
+        let latin = Mapping {
+            ranges: vec![(0x41, 0x5A)],
+            families: vec!["Police absente".into(), target.name.clone()],
+            collection: None,
+            scale: 1.5,
+        };
+        let only_app = Custom {
+            mappings: vec![latin.clone()],
+            system: false,
+        };
+        // « AB » suit la correspondance, avec son échelle.
+        let (n, face, scale) = only_app.map(&fams, &wide("ABc"), "", 400, false);
+        assert_eq!((n, scale), (2, 1.5));
+        assert_eq!(face.unwrap().family, target.name);
+        // « c » n'est couvert par rien : pas de police sans le système.
+        let (n, face, _) = only_app.map(&fams, &wide("cdA"), "", 400, false);
+        assert_eq!((n, face), (2, None));
+        let with_system = Custom {
+            mappings: vec![latin],
+            system: true,
+        };
+        let (_, face, scale) = with_system.map(&fams, &wide("cd"), &target.name, 400, false);
+        assert_eq!(scale, 1.0);
+        assert!(face.is_some());
+    }
+
+    #[test]
+    fn rendering_params3_accept_the_downsampled_mode() {
+        unsafe {
+            let mut p: *mut c_void = std::ptr::null_mut();
+            assert_eq!(new_params3(2.2, 1.0, 1.0, 1.0, 1, 7, 1, &mut p), S_OK);
+            let obj = p as *mut ParamsObj;
+            assert_eq!((params_mode(obj), params_mode1(obj)), (5, 7));
+            assert_eq!(release::<Params>(obj), 0);
+            // IDWriteRenderingParams2 refuse ce mode.
+            let mut q: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                new_params(2.2, 1.0, 1.0, 1.0, 1, 7, 1, &mut q),
+                E_INVALIDARG
+            );
+            assert!(q.is_null());
+            assert_eq!(std::mem::size_of_val(&PARAMS_VT), 11 * 8);
+            assert_eq!(std::mem::size_of_val(&BUILDER_VT), 6 * 8);
+        }
+    }
+
+    #[test]
+    fn factory7_is_served_with_its_57_methods() {
+        unsafe {
+            let mut factory: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                super::super::DWriteCreateFactory(
+                    0,
+                    &super::super::sets::IID_DWRITE_FACTORY7,
+                    &mut factory
+                ),
+                S_OK
+            );
+            assert_eq!(std::mem::size_of_val(&super::super::FACTORY_VT), 57 * 8);
+            assert_eq!(std::mem::size_of_val(&super::super::FACE_VT), 60 * 8);
+            assert_eq!(std::mem::size_of_val(&super::super::FONT_VT), 24 * 8);
+            assert_eq!(std::mem::size_of_val(&super::super::FAMILY_VT), 14 * 8);
+            assert_eq!(std::mem::size_of_val(&super::super::COLLECTION_VT), 14 * 8);
+            let vt = *(factory as *const *const *const ());
+            // IDWriteFactory7::GetSystemFontCollection (56) puis GetFontSet (7).
+            type GetCol = unsafe extern "win64" fn(*mut c_void, i32, u32, *mut *mut c_void) -> i32;
+            let get: GetCol = std::mem::transmute(*vt.add(56));
+            let mut col: *mut c_void = std::ptr::null_mut();
+            assert_eq!(get(factory, 0, 1, &mut col), S_OK);
+            let cvt = *(col as *const *const *const ());
+            type GetSet = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            let get_set: GetSet = std::mem::transmute(*cvt.add(7));
+            let mut set: *mut c_void = std::ptr::null_mut();
+            assert_eq!(get_set(col, &mut set), S_OK);
+            type Count = unsafe extern "win64" fn(*mut c_void) -> u32;
+            let families: Count = std::mem::transmute(*cvt.add(3));
+            let fonts: Count = std::mem::transmute(*(*(set as *const *const *const ())).add(3));
+            assert!(fonts(set) >= families(col));
+            // Paramètres de rendu par défaut : IDWriteRenderingParams3.
+            type Make = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            let make: Make = std::mem::transmute(*vt.add(10));
+            let mut params: *mut c_void = std::ptr::null_mut();
+            assert_eq!(make(factory, &mut params), S_OK);
+            type Qi = unsafe extern "win64" fn(*mut c_void, *const Guid, *mut *mut c_void) -> i32;
+            let qi: Qi = std::mem::transmute(**(params as *const *const *const ()));
+            let mut p3: *mut c_void = std::ptr::null_mut();
+            assert_eq!(qi(params, &IID_RENDERING_PARAMS3, &mut p3), S_OK);
+            for o in [p3, params, set, col, factory] {
+                let rel: unsafe extern "win64" fn(*mut c_void) -> u32 =
+                    std::mem::transmute(*(*(o as *const *const *const ())).add(2));
+                rel(o);
+            }
+        }
     }
 
     #[test]

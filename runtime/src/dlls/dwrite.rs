@@ -25,8 +25,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// IDWriteFactory1/2 et police de repli du système (#672).
+#[path = "dwrite_custom.rs"]
+mod custom;
 #[path = "dwrite_fallback.rs"]
 pub(crate) mod fallback;
+
+/// IDWriteFactory3 à 7, jeux de polices et interfaces de niveau 1 à 6 (#984).
+#[path = "dwrite_sets.rs"]
+mod sets;
 
 const E_NOT_SUFFICIENT_BUFFER: i32 = 0x8007_007Au32 as i32;
 const DWRITE_E_FILEFORMAT: i32 = 0x8898_5000u32 as i32;
@@ -453,6 +459,11 @@ unsafe extern "win64" fn factory_qi(
             IID_DWRITE_FACTORY,
             fallback::IID_DWRITE_FACTORY1,
             fallback::IID_DWRITE_FACTORY2,
+            sets::IID_DWRITE_FACTORY3,
+            sets::IID_DWRITE_FACTORY4,
+            sets::IID_DWRITE_FACTORY5,
+            sets::IID_DWRITE_FACTORY6,
+            sets::IID_DWRITE_FACTORY7,
         ],
     )
 }
@@ -498,11 +509,10 @@ unsafe extern "win64" fn factory_font_face(
         return E_INVALIDARG;
     }
     *out = std::ptr::null_mut();
-    let file = *files;
-    if file.is_null() || *(file as *const *const ()) != FILE_VT.ptr() {
+    // Fichier Winlux, ou fichier d'un chargeur de l'application (#1075).
+    let Some(path) = custom::file_path(*files) else {
         return E_INVALIDARG;
-    }
-    let path = Com::get(file as *mut FileObj).clone();
+    };
     let Some(font) = sfnt::load(&path, index) else {
         return DWRITE_E_FILEFORMAT;
     };
@@ -526,10 +536,9 @@ unsafe extern "win64" fn factory_font_face(
 }
 
 unsafe extern "win64" fn rendering_params(_this: *mut FactoryObj, out: *mut *mut c_void) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
-    }
-    put(out, Com::create(PARAMS_VT.ptr(), ()))
+    // Mêmes valeurs que Windows par défaut, et un objet qui répond aussi en
+    // IDWriteRenderingParams1 à 3 (Paint.NET demande la version 3).
+    fallback::default_params(out)
 }
 unsafe extern "win64" fn monitor_rendering_params(
     this: *mut FactoryObj,
@@ -642,17 +651,18 @@ unsafe extern "win64" fn gdi_compatible_layout(
     create_text_layout(this, text, len, format, max_w, max_h, out)
 }
 
-// IDWriteFactory, puis IDWriteFactory1 (24-25) et IDWriteFactory2 (26-30).
-static FACTORY_VT: VTable<31> = VTable([
+// IDWriteFactory, puis IDWriteFactory1 (24-25), IDWriteFactory2 (26-30),
+// IDWriteFactory3 (31-39), 4 (40-42), 5 (43-47), 6 (48-54) et 7 (55-56).
+static FACTORY_VT: VTable<57> = VTable([
     factory_qi as *const (),
     add_ref::<()> as *const (),
     release::<()> as *const (),
     system_collection as *const (),
-    not_implemented as *const (), // CreateCustomFontCollection
-    register_loader as *const (), // RegisterFontCollectionLoader
-    register_loader as *const (), // UnregisterFontCollectionLoader
+    custom::custom_collection as *const (), // CreateCustomFontCollection
+    register_loader as *const (),           // RegisterFontCollectionLoader
+    register_loader as *const (),           // UnregisterFontCollectionLoader
     font_file_reference as *const (),
-    not_implemented as *const (), // CreateCustomFontFileReference
+    custom::custom_file_reference as *const (), // CreateCustomFontFileReference
     factory_font_face as *const (),
     rendering_params as *const (),
     monitor_rendering_params as *const (),
@@ -675,37 +685,32 @@ static FACTORY_VT: VTable<31> = VTable([
     fallback::translate_color as *const (), // IDWriteFactory2::TranslateColorGlyphRun
     fallback::custom_params2 as *const (), // IDWriteFactory2::CreateCustomRenderingParams
     fallback::glyph_run_analysis2 as *const (), // IDWriteFactory2::CreateGlyphRunAnalysis
-]);
-
-// Paramètres de rendu : valeurs par défaut de Windows.
-unsafe extern "win64" fn params_qi(
-    this: *mut FactoryObj,
-    riid: *const Guid,
-    out: *mut *mut c_void,
-) -> i32 {
-    qi_list(this, riid, out, &[IID_RENDERING_PARAMS])
-}
-unsafe extern "win64" fn gamma(_this: *mut c_void) -> f32 {
-    2.2
-}
-unsafe extern "win64" fn one(_this: *mut c_void) -> f32 {
-    1.0
-}
-unsafe extern "win64" fn pixel_geometry(_this: *mut c_void) -> u32 {
-    1 // RGB
-}
-unsafe extern "win64" fn rendering_mode(_this: *mut c_void) -> u32 {
-    5 // OUTLINE
-}
-static PARAMS_VT: VTable<8> = VTable([
-    params_qi as *const (),
-    add_ref::<()> as *const (),
-    release::<()> as *const (),
-    gamma as *const (),
-    one as *const (),
-    one as *const (),
-    pixel_geometry as *const (),
-    rendering_mode as *const (),
+    sets::glyph_run_analysis3 as *const (), // IDWriteFactory3
+    sets::custom_params3 as *const (),
+    sets::face_reference_from_file as *const (),
+    sets::face_reference_from_path as *const (),
+    sets::system_font_set as *const (),
+    sets::font_set_builder as *const (),
+    sets::collection_from_set as *const (),
+    sets::system_collection3 as *const (),
+    sets::download_queue as *const (),
+    sets::translate_color4 as *const (), // IDWriteFactory4
+    sets::glyph_origins as *const (),
+    sets::glyph_origins_transformed as *const (),
+    sets::font_set_builder as *const (), // IDWriteFactory5
+    unsupported!("IDWriteFactory5::CreateInMemoryFontFileLoader"),
+    unsupported!("IDWriteFactory5::CreateHttpFontFileLoader"),
+    sets::container_type as *const (),
+    unsupported!("IDWriteFactory5::UnpackFontFile"),
+    sets::face_reference6 as *const (), // IDWriteFactory6
+    unsupported!("IDWriteFactory6::CreateFontResource"),
+    sets::system_font_set6 as *const (),
+    sets::system_collection6 as *const (),
+    sets::collection_from_set6 as *const (),
+    sets::font_set_builder as *const (),
+    sets::text_format6 as *const (),
+    sets::system_font_set6 as *const (), // IDWriteFactory7
+    sets::system_collection6 as *const (),
 ]);
 
 // Fichier de police (référence à un chemin).
@@ -984,7 +989,8 @@ unsafe extern "win64" fn collection_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_FONT_COLLECTION])
+    let [c1, c2, c3] = sets::COLLECTION_IIDS;
+    qi_list(this, riid, out, &[IID_FONT_COLLECTION, c1, c2, c3])
 }
 unsafe extern "win64" fn collection_count(this: *mut CollectionObj) -> u32 {
     Com::get(this).len() as u32
@@ -1046,7 +1052,8 @@ unsafe extern "win64" fn collection_font_from_face(
         }
     }
 }
-static COLLECTION_VT: VTable<7> = VTable([
+// IDWriteFontCollection, puis 1 (7-8), 2 (9-12) et 3 (13).
+static COLLECTION_VT: VTable<14> = VTable([
     collection_qi as *const (),
     add_ref::<Vec<Family>> as *const (),
     release::<Vec<Family>> as *const (),
@@ -1054,6 +1061,13 @@ static COLLECTION_VT: VTable<7> = VTable([
     collection_family as *const (),
     collection_find as *const (),
     collection_font_from_face as *const (),
+    sets::collection_font_set as *const (),
+    collection_family as *const (), // GetFontFamily (IDWriteFontFamily1)
+    collection_family as *const (), // GetFontFamily (IDWriteFontFamily2)
+    sets::collection_matching as *const (),
+    sets::collection_model as *const (),
+    sets::collection_font_set as *const (), // GetFontSet (IDWriteFontSet1)
+    sets::no_event as *const (),            // GetExpirationEvent
 ]);
 
 type FamilyObj = Com<Family>;
@@ -1063,7 +1077,8 @@ unsafe extern "win64" fn family_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_FONT_LIST, IID_FONT_FAMILY])
+    let [f1, f2] = sets::FAMILY_IIDS;
+    qi_list(this, riid, out, &[IID_FONT_LIST, IID_FONT_FAMILY, f1, f2])
 }
 unsafe extern "win64" fn family_collection(_this: *mut FamilyObj, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
@@ -1123,7 +1138,8 @@ unsafe extern "win64" fn family_matching(
         .sort_by_key(|x| (x.italic != italic) as u32 * 2000 + (x.weight as u32).abs_diff(weight));
     put(out, Com::create(FAMILY_VT.ptr(), f))
 }
-static FAMILY_VT: VTable<9> = VTable([
+// IDWriteFontFamily, puis 1 (9-11) et 2 (12-13).
+static FAMILY_VT: VTable<14> = VTable([
     family_qi as *const (),
     add_ref::<Family> as *const (),
     release::<Family> as *const (),
@@ -1133,6 +1149,11 @@ static FAMILY_VT: VTable<9> = VTable([
     family_names as *const (),
     family_first_match as *const (),
     family_matching as *const (),
+    sets::family_locality as *const (),
+    family_font as *const (), // GetFont (IDWriteFont3)
+    sets::family_reference as *const (),
+    sets::family_matching_axes as *const (),
+    sets::family_font_set as *const (),
 ]);
 
 type FontObj = Com<FaceInfo>;
@@ -1142,7 +1163,8 @@ unsafe extern "win64" fn font_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_FONT])
+    let [f1, f2] = sets::FONT_IIDS;
+    qi_list(this, riid, out, &[IID_FONT, f1, f2])
 }
 unsafe extern "win64" fn font_family(this: *mut FontObj, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
@@ -1219,7 +1241,8 @@ unsafe extern "win64" fn font_create_face(this: *mut FontObj, out: *mut *mut c_v
         }
     }
 }
-static FONT_VT: VTable<14> = VTable([
+// IDWriteFont, puis 1 (14-17), 2 (18) et 3 (19-23).
+static FONT_VT: VTable<24> = VTable([
     font_qi as *const (),
     add_ref::<FaceInfo> as *const (),
     release::<FaceInfo> as *const (),
@@ -1234,6 +1257,16 @@ static FONT_VT: VTable<14> = VTable([
     font_metrics as *const (),
     font_has_char as *const (),
     font_create_face as *const (),
+    sets::font_metrics1 as *const (), // IDWriteFont1
+    sets::font_panose as *const (),
+    sets::font_unicode_ranges as *const (),
+    sets::font_monospaced as *const (),
+    sets::get_false as *const (),         // IDWriteFont2::IsColorFont
+    sets::font_create_face3 as *const (), // IDWriteFont3
+    sets::font_equals as *const (),
+    sets::font_reference as *const (),
+    sets::font_has_char3 as *const (),
+    sets::font_locality as *const (),
 ]);
 
 // --- Faces ----------------------------------------------------------------------------
@@ -1326,7 +1359,8 @@ unsafe extern "win64" fn face_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    qi_list(this, riid, out, &[IID_FONT_FACE])
+    let [f1, f2, f3, f4, f5, f6] = sets::IID_FONT_FACE_N;
+    qi_list(this, riid, out, &[IID_FONT_FACE, f1, f2, f3, f4, f5, f6])
 }
 unsafe extern "win64" fn face_type(this: *mut FaceObj) -> u32 {
     if Com::get(this)
@@ -1412,25 +1446,24 @@ unsafe extern "win64" fn face_glyph_indices(
     }
     S_OK
 }
+/// TryGetFontTable : les octets de la table OpenType, qui restent valides
+/// tant que la face vit (elle garde la police en mémoire).
 unsafe extern "win64" fn face_table(
-    _this: *mut FaceObj,
-    _tag: u32,
+    this: *mut FaceObj,
+    tag: u32,
     data: *mut *const c_void,
     size: *mut u32,
     ctx: *mut *mut c_void,
     exists: *mut i32,
 ) -> i32 {
-    for (p, v) in [(data as *mut usize, 0usize), (ctx as *mut usize, 0)] {
-        if !p.is_null() {
-            *p = v;
-        }
+    if data.is_null() || size.is_null() || ctx.is_null() || exists.is_null() {
+        return E_INVALIDARG;
     }
-    if !size.is_null() {
-        *size = 0;
-    }
-    if !exists.is_null() {
-        *exists = 0;
-    }
+    let table = Com::get(this).font.raw_table(&tag.to_le_bytes());
+    *ctx = std::ptr::null_mut();
+    *data = table.map_or(std::ptr::null(), |t| t.as_ptr().cast());
+    *size = table.map_or(0, |t| t.len() as u32);
+    *exists = table.is_some() as i32;
     S_OK
 }
 
@@ -1634,7 +1667,9 @@ unsafe extern "win64" fn face_gdi_glyph_metrics(
 ) -> i32 {
     face_design_metrics(this, indices, count, out, sideways)
 }
-static FACE_VT: VTable<18> = VTable([
+// IDWriteFontFace, puis 1 (18-29), 2 (30-34), 3 (35-48), 4 (49-52),
+// 5 (53-57) et 6 (58-59).
+static FACE_VT: VTable<60> = VTable([
     face_qi as *const (),
     add_ref::<Face> as *const (),
     release::<Face> as *const (),
@@ -1653,6 +1688,48 @@ static FACE_VT: VTable<18> = VTable([
     face_recommended_mode as *const (),
     face_gdi_metrics as *const (),
     face_gdi_glyph_metrics as *const (),
+    sets::face_metrics1 as *const (), // IDWriteFontFace1
+    sets::face_gdi_metrics1 as *const (),
+    sets::face_caret as *const (),
+    sets::face_unicode_ranges as *const (),
+    sets::face_monospaced as *const (),
+    sets::face_design_advances as *const (),
+    sets::face_gdi_advances as *const (),
+    sets::face_kerning as *const (),
+    sets::get_false as *const (), // HasKerningPairs
+    sets::face_recommended1 as *const (),
+    sets::face_vertical_variants as *const (),
+    sets::get_false as *const (), // HasVerticalGlyphVariants
+    sets::get_false as *const (), // IDWriteFontFace2::IsColorFont
+    sets::get_zero as *const (),  // GetColorPaletteCount
+    sets::get_zero as *const (),  // GetPaletteEntryCount
+    sets::face_palette_entries as *const (),
+    sets::face_recommended2 as *const (),
+    sets::face_reference as *const (), // IDWriteFontFace3
+    sets::face_panose as *const (),
+    sets::face_weight as *const (),
+    sets::face_stretch as *const (),
+    sets::face_style as *const (),
+    sets::face_family_names as *const (),
+    sets::face_face_names as *const (),
+    sets::face_info_strings as *const (),
+    sets::face_has_char as *const (),
+    sets::face_recommended2 as *const (), // GetRecommendedRenderingMode (DWRITE_RENDERING_MODE1)
+    sets::face_char_local as *const (),
+    sets::face_char_local as *const (), // IsGlyphLocal
+    sets::face_all_local as *const (),
+    sets::face_all_local as *const (),        // AreGlyphsLocal
+    sets::face_image_formats_of as *const (), // IDWriteFontFace4
+    sets::face_image_formats as *const (),
+    unsupported!("IDWriteFontFace4::GetGlyphImageData"),
+    sets::nothing1 as *const (), // ReleaseGlyphImageData
+    sets::get_zero as *const (), // IDWriteFontFace5::GetFontAxisValueCount
+    sets::face_axis_values as *const (),
+    sets::get_false as *const (), // HasVariations
+    unsupported!("IDWriteFontFace5::GetFontResource"),
+    sets::face_equals as *const (),
+    sets::face_family_names6 as *const (), // IDWriteFontFace6
+    sets::face_face_names6 as *const (),
 ]);
 
 // --- Format et mise en page -------------------------------------------------------------
