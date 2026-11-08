@@ -17,9 +17,13 @@ for src in "$root"/testc/*.c; do
     test "$name" = gdiplus_suite && libs="-lgdiplus -lgdi32"
     # service_suite : vrai service Windows en Unicode (wmain), #17.
     test "$name" = service_suite && libs="-municode -ladvapi32"
+    # com_suite : activation COM depuis le registre (#16).
+    test "$name" = com_suite && libs="-lole32 -luuid -ladvapi32"
     # shellcheck disable=SC2086
     "$cc" -O2 -Wall -Werror -o "$out/$name.exe" "$src" $libs
 done
+# Serveur COM en processus que com_suite.exe active par le registre (#16).
+"$cc" -O2 -Wall -Werror -shared -o "$out/com_server.dll" "$root/testc/dll/com_server.c" -luuid
 # games_suite une seconde fois contre l'UCRT (api-ms-win-crt-*), comme les
 # jeux construits avec llvm-mingw (Warzone 2100) : specs où msvcrt devient ucrt.
 "$cc" -dumpspecs | sed 's/-lmsvcrt/-lucrt/g' >"$out/ucrt.specs"

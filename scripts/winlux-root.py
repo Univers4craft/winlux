@@ -22,6 +22,11 @@ tourne en root et n'exécute que des actions connues :
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
   winlux-root policy ACTION               user | admin | refusé (diagnostic)
 
+Options de connexion (#659) : op « signin » (code PIN, empreinte, par
+winlux-signin) et op « switch » avec « pin » ou « finger » au lieu du mot de
+passe. Un compte ne touche qu'à son propre code et à ses propres empreintes,
+et confirme d'abord son mot de passe pour les créer ou les effacer.
+
 Le relais vérifie l'appelant par SO_PEERCRED : root, ou un compte du bureau
 (/etc/winlux/users.conf, UID ≥ 1000) ; le compte isolé du navigateur n'y a
 pas accès. Les actions « admin » (installer un logiciel, partager un dossier,
@@ -59,6 +64,7 @@ USERS_CONF = ROOT + "/etc/winlux/users.conf"
 CONFIG = ROOT + "/etc/winlux"
 CONTROL = os.environ.get("WINLUX_ROOT_CONTROL", "/usr/bin/winlux-control")
 SHARE = "/usr/bin/winlux-share"
+SIGNIN = os.environ.get("WINLUX_ROOT_SIGNIN", "/usr/bin/winlux-signin")
 PARENTAL = os.environ.get("WINLUX_ROOT_PARENTAL", "/usr/bin/winlux-parental")
 PARENTAL_CONF = ROOT + "/etc/winlux/parental"
 ELEVATION_SECONDS = 300
@@ -510,6 +516,7 @@ def check_request(uid, name, request):
             return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
     if ok:
         FAILURES.pop(uid, None)
+        pin_unblock(user)
         if request.get("op") == "elevate":
             ELEVATED[uid] = time.monotonic() + ELEVATION_SECONDS
         sync_share_password(user, password)
@@ -609,20 +616,34 @@ def give_back(uid, since):
                 pass
 
 
-def switch_request(uid, name, request):
+def switch_request(uid, name, request, connection=None):
     """« Changer d'utilisateur » depuis l'écran de verrouillage : le mot de
-    passe du compte choisi est vérifié ici, puis sa session est ouverte ou
-    rejointe (winlux-sessions switch)."""
+    passe du compte choisi (ou son code PIN, ou son doigt) est vérifié ici,
+    puis sa session est ouverte ou rejointe (winlux-sessions switch)."""
     user = request.get("user")
     password = request.get("password", "")
     if not isinstance(user, str) or not NAME.match(user) or user not in users_conf() or \
             not isinstance(password, str):
         return {"ok": False}
-    throttle(uid)
-    if not password_ok(user, password):
-        FAILURES[uid] = FAILURES.get(uid, 0) + 1
-        return {"ok": False}
-    FAILURES.pop(uid, None)
+    if "pin" in request:
+        if password_ok(user, ""):
+            return {"ok": False, "error": "no-password"}
+        answer = signin_run("pin-check", user, request.get("pin") if isinstance(request.get("pin"), str) else "")
+        if not answer.get("ok"):
+            return {"ok": False, "error": answer.get("error", "pin-wrong"), "locked": bool(answer.get("locked"))}
+    elif request.get("finger"):
+        if connection is None or password_ok(user, ""):
+            return {"ok": False, "error": "failed"}
+        answer = signin_stream(connection, "fp-verify", user)
+        if not answer.get("ok"):
+            return {"ok": False, "error": answer.get("error", "no-match")}
+    else:
+        throttle(uid)
+        if not password_ok(user, password):
+            FAILURES[uid] = FAILURES.get(uid, 0) + 1
+            return {"ok": False}
+        FAILURES.pop(uid, None)
+        pin_unblock(user)
     block = parental_block(user)
     if block is not None:
         return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
@@ -633,6 +654,174 @@ def switch_request(uid, name, request):
     except (OSError, subprocess.SubprocessError):
         return {"ok": False}
     return {"ok": result.returncode == 0}
+
+
+# ── Options de connexion : code PIN et empreinte (winlux-signin, #659) ──────
+
+SIGNIN_ACTIONS = ("status", "pin-check", "pin-set", "pin-remove", "fp-verify", "fp-enroll", "fp-delete")
+# Le code et les empreintes d'un compte ne regardent que lui.
+SIGNIN_OWN = ("pin-check", "pin-set", "pin-remove", "fp-verify", "fp-enroll", "fp-delete")
+# Créer ou effacer : le mot de passe du compte d'abord, comme sous Windows.
+SIGNIN_PASSWORD = ("pin-set", "pin-remove", "fp-enroll", "fp-delete")
+# Le lecteur peut attendre un doigt une minute : processus à part.
+SIGNIN_FORK = ("status", "fp-verify", "fp-enroll", "fp-delete")
+
+
+def signin_env():
+    env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C.UTF-8",
+           "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket"}
+    for key in ("WINLUX_ROOT_PREFIX", "WINLUX_FPRINT_FAKE"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    return env
+
+
+def _last_answer(text):
+    for line in reversed((text or "").splitlines()):
+        try:
+            answer = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(answer, dict) and "ok" in answer:
+            return answer
+    return {"ok": False, "error": "failed"}
+
+
+def signin_run(action, user, secret=None):
+    """winlux-signin ACTION COMPTE, secret sur l'entrée standard ; réponse finale."""
+    try:
+        result = run_waited([SIGNIN, action, user], input=(secret or "") + "\n", text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=signin_env(), timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False, "error": "failed"}
+    return _last_answer(result.stdout)
+
+
+def pin_unblock(user):
+    """Un mot de passe juste débloque le code PIN du compte."""
+    if os.path.exists(os.path.join(ROOT + "/var/lib/winlux/signin", user + ".pin")):
+        signin_run("pin-unblock", user)
+
+
+def signin_stream(connection, action, user):
+    """winlux-signin en flux : chaque événement (doigt à reposer, étape
+    d'enregistrement) part tout de suite au client ; s'il raccroche (mot de
+    passe tapé, écran quitté), l'opération est arrêtée et le lecteur relâché."""
+    import select
+    try:
+        proc = subprocess.Popen([SIGNIN, action, user], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=signin_env(), text=True)
+    except OSError:
+        return {"ok": False, "error": "failed"}
+    final = {"ok": False, "error": "failed"}
+    try:
+        while True:
+            readable, _, _ = select.select([proc.stdout, connection], [], [], 1.0)
+            if connection in readable:
+                try:
+                    gone = not connection.recv(1, socket.MSG_PEEK)
+                except OSError:
+                    gone = True
+                if gone:
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    return {"ok": False, "error": "cancelled"}
+            if proc.stdout in readable:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if "ok" in event:
+                    final = event
+                else:
+                    reply(connection, event)
+        proc.wait(timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        proc.kill()
+    return final
+
+
+def parental_gate(user, answer):
+    """Code ou doigt justes : le contrôle parental s'applique comme au mot
+    de passe (#661), sinon le code PIN contournerait les horaires permis."""
+    if answer.get("ok"):
+        block = parental_block(user)
+        if block is not None:
+            return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
+    return answer
+
+
+def signin_target(uid, name, request):
+    action = request.get("action")
+    user = request.get("user") or name
+    if action not in SIGNIN_ACTIONS or not isinstance(user, str) or not NAME.match(user) or \
+            (user not in users_conf() and user != name):
+        return None, None
+    if action in SIGNIN_OWN and user != name and uid != 0:
+        return None, None
+    return action, user
+
+
+def signin_prepare(uid, name, request):
+    """Partie rapide, dans le relais : contrôles, mot de passe (avec la même
+    temporisation que les autres vérifications), code PIN. None : la suite
+    tourne dans un processus à part (signin_child)."""
+    action, user = signin_target(uid, name, request)
+    if action is None:
+        return {"ok": False, "error": "failed"}
+    if action in SIGNIN_PASSWORD:
+        password = request.get("password", "")
+        if not isinstance(password, str):
+            return {"ok": False, "error": "password"}
+        if password_ok(user, ""):
+            if action in ("pin-set", "fp-enroll"):
+                return {"ok": False, "error": "no-password"}
+        else:
+            throttle(uid)
+            if not password_ok(user, password):
+                FAILURES[uid] = FAILURES.get(uid, 0) + 1
+                return {"ok": False, "error": "password"}
+            FAILURES.pop(uid, None)
+            pin_unblock(user)
+    if action == "pin-check" and password_ok(user, ""):
+        return {"ok": False, "error": "no-password"}
+    pin = request.get("pin") if isinstance(request.get("pin"), str) else ""
+    if action == "pin-check":
+        return parental_gate(user, signin_run(action, user, pin))
+    if action == "pin-set":
+        return signin_run(action, user, pin)
+    if action == "pin-remove":
+        return signin_run(action, user)
+    return None
+
+
+def signin_child(connection, uid, name, request):
+    action, user = signin_target(uid, name, request)
+    if action == "status":
+        answer = signin_run("status", user)
+        if answer.get("ok"):
+            answer["password"] = not password_ok(user, "")
+        return answer
+    if action == "fp-verify" and password_ok(user, ""):
+        return {"ok": False, "error": "no-password"}
+    if action == "fp-verify":
+        return parental_gate(user, signin_stream(connection, action, user))
+    if action == "fp-enroll":
+        return signin_stream(connection, action, user)
+    if action == "fp-delete":
+        return signin_run(action, user)
+    return {"ok": False, "error": "failed"}
+
+
+def needs_child(request):
+    if request.get("op") == "signin":
+        return request.get("action") in SIGNIN_FORK
+    return request.get("op") == "switch" and bool(request.get("finger"))
 
 
 def effective_level(op, args, uid, name):
@@ -664,7 +853,9 @@ def handle(connection, uid, name, request, fds):
     if op in ("check", "elevate"):
         return check_request(uid, name, request)
     if op == "switch":
-        return switch_request(uid, name, request)
+        return switch_request(uid, name, request, connection)
+    if op == "signin":
+        return signin_prepare(uid, name, request) or signin_child(connection, uid, name, request)
     if op == "conf":
         file, key, value = request.get("file"), request.get("key"), request.get("value", "")
         allowed = CONF_KEYS.get(file, False)
@@ -763,6 +954,30 @@ def serve():
                     close_all(fds)
                     continue
                 request = json.loads(message or "{}")
+                if not isinstance(request, dict):
+                    raise ValueError("demande invalide")
+                if request.get("op") == "signin":
+                    # Contrôles et mot de passe ici (la temporisation des échecs
+                    # vit dans ce processus) ; l'attente du doigt à part.
+                    answer = signin_prepare(uid, name, request)
+                    if answer is not None:
+                        reply(connection, answer)
+                        close_all(fds)
+                        continue
+                if needs_child(request):
+                    close_all(fds)
+                    if os.fork() == 0:
+                        try:
+                            signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+                            server.close()
+                            connection.settimeout(None)
+                            if request.get("op") == "signin":
+                                reply(connection, signin_child(connection, uid, name, request))
+                            else:
+                                reply(connection, switch_request(uid, name, request, connection))
+                        finally:
+                            os._exit(0)
+                    continue
                 if request.get("op") in ("control", "exec"):
                     # Les commandes longues (APT) tournent à part ; l'élévation
                     # est décidée ici, dans le processus qui la mémorise.

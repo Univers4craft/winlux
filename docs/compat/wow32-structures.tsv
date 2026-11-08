@@ -128,6 +128,7 @@ gui.rs	WndClassExA	a-verifier
 gui_x11.rs	XftFont	a-verifier	
 icons.rs	IconInfo	a-verifier	
 image_list_com.rs	Obj	interne	objet IImageList d'une liste système ; en x86 seul le handle sert (ImageList_*), pas la table de méthodes
+jumplist_com.rs	Obj	interne	objets ICustomDestinationList et IObjectArray du runtime ; en x86, la passerelle COM (wow32/com.rs) les enveloppe
 kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
 kernel32.rs	Entry	interne	test unitaire
 kernel32.rs	MemoryBasicInformation	x86	wow64.c n° 8-9 (28 octets)
@@ -168,6 +169,7 @@ taskschd.rs	Obj	a-verifier
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
+url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte
@@ -223,3 +225,4 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
+ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32

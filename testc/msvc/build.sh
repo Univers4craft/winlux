@@ -150,8 +150,8 @@ lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/io_msvc.obj
 # Suspension de threads et contexte, ce qu'il faut au ramasse-miettes de
 # coreclr (#269) : SuspendThread, Get/SetThreadContext, page de garde de la
 # pile, vue exécutable W^X, messages enregistrés, WM_TIMER en PM_NOREMOVE,
-# paramètres réseau d'iphlpapi (#1048).
-printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nExitThread\nCreateThread\nSuspendThread\nResumeThread\nGetThreadContext\nSetThreadContext\nGetCurrentThread\nGetCurrentProcess\nDuplicateHandle\nWaitForSingleObject\nGetExitCodeThread\nSleep\nVirtualQuery\nVirtualAlloc\nCreateFileMappingW\nMapViewOfFileEx\nGetWriteWatch\nResetWriteWatch\n' >"$tmp/kernel32_threadctl.def"
+# paramètres réseau d'iphlpapi (#1048), GetThreadIOPendingFlag (#1072).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nExitThread\nCreateThread\nSuspendThread\nResumeThread\nGetThreadContext\nSetThreadContext\nGetCurrentThread\nGetCurrentProcess\nDuplicateHandle\nWaitForSingleObject\nGetExitCodeThread\nSleep\nVirtualQuery\nVirtualAlloc\nCreateFileMappingW\nMapViewOfFileEx\nGetWriteWatch\nResetWriteWatch\nGetThreadIOPendingFlag\n' >"$tmp/kernel32_threadctl.def"
 printf 'LIBRARY user32.dll\nEXPORTS\nRegisterWindowMessageW\nSetTimer\nKillTimer\nPeekMessageW\nWaitMessage\n' >"$tmp/user32_threadctl.def"
 printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC\nGetObjectType\nDeleteDC\n' >"$tmp/gdi32_threadctl.def"
 printf 'LIBRARY iphlpapi.dll\nEXPORTS\nGetNetworkParams\nGetIfTable\nGetAdaptersInfo\n' >"$tmp/iphlpapi_threadctl.def"
