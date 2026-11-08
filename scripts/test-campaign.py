@@ -934,6 +934,11 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
+ok((SCRIPTS / "test-paintnet-d2d.py").exists()
+   and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
+   "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas
