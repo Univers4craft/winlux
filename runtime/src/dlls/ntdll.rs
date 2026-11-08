@@ -1720,37 +1720,135 @@ pub unsafe extern "win64" fn nt_write_virtual_memory(
     STATUS_SUCCESS
 }
 
-/// `NtCreateSection` : stub.
-pub unsafe extern "win64" fn nt_create_section(
-    _handle: *mut usize,
-    _access: u32,
-    _attrs: *const c_void,
-    _max_size: *const c_void,
-    _protect: u32,
-    _alloc: u32,
-    _file: usize,
-) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+const STATUS_OBJECT_NAME_EXISTS: i32 = 0x4000_0000;
+const STATUS_NO_MEMORY: i32 = 0xC000_0017u32 as i32;
+const STATUS_CONFLICTING_ADDRESSES: i32 = 0xC000_0018u32 as i32;
+const STATUS_MAPPED_FILE_SIZE_ZERO: i32 = 0xC000_011Eu32 as i32;
+const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
+const OBJ_OPENIF: u32 = 0x80;
+
+/// Code Win32 d'une section refusée → NTSTATUS.
+fn section_status(err: u32) -> i32 {
+    match err {
+        2 => STATUS_OBJECT_NAME_NOT_FOUND,
+        5 => STATUS_ACCESS_DENIED,
+        6 => STATUS_INVALID_HANDLE,
+        8 => STATUS_NO_MEMORY,
+        487 => STATUS_CONFLICTING_ADDRESSES,
+        1006 => STATUS_MAPPED_FILE_SIZE_ZERO,
+        _ => STATUS_INVALID_PARAMETER,
+    }
 }
 
-/// `NtMapViewOfSection` : stub.
+/// `OBJECT_ATTRIBUTES.Attributes` (décalage 0x18).
+unsafe fn oa_attributes(attrs: *const c_void) -> u32 {
+    if attrs.is_null() {
+        0
+    } else {
+        std::ptr::read_unaligned((attrs as *const u8).add(0x18) as *const u32)
+    }
+}
+
+/// `NtCreateSection` : section anonyme ou adossée à un fichier, nommée ou
+/// non, sur le moteur de CreateFileMapping (#20) : un nom
+/// `\Sessions\N\BaseNamedObjects\X` désigne la même section que `X` pour
+/// CreateFileMapping, dans ce processus et dans les autres du compte.
+pub unsafe extern "win64" fn nt_create_section(
+    handle: *mut usize,
+    _access: u32,
+    attrs: *const c_void,
+    max_size: *const c_void,
+    protect: u32,
+    _alloc: u32,
+    file: usize,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let size = if max_size.is_null() {
+        0
+    } else {
+        std::ptr::read_unaligned(max_size as *const u64)
+    };
+    let name = oa_path(attrs);
+    let named = name.is_some();
+    match crate::dlls::mmap::nt_create(file, protect, size, name) {
+        Ok((h, existed)) if existed && named => {
+            if oa_attributes(attrs) & OBJ_OPENIF != 0 {
+                *handle = h;
+                STATUS_OBJECT_NAME_EXISTS
+            } else {
+                crate::dlls::kernel32::close_handle(h);
+                STATUS_OBJECT_NAME_COLLISION
+            }
+        }
+        Ok((h, _)) => {
+            *handle = h;
+            STATUS_SUCCESS
+        }
+        Err(e) => section_status(e),
+    }
+}
+
+/// `NtOpenSection` : section nommée existante.
+pub unsafe extern "win64" fn nt_open_section(
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+) -> i32 {
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(name) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    match crate::dlls::mmap::nt_open(name, access) {
+        0 => STATUS_OBJECT_NAME_NOT_FOUND,
+        h => {
+            *handle = h;
+            STATUS_SUCCESS
+        }
+    }
+}
+
+/// `NtMapViewOfSection` : vue dans le processus courant (une vue dans un
+/// autre processus n'est pas prise en charge).
 pub unsafe extern "win64" fn nt_map_view_of_section(
-    _section: usize,
-    _process: usize,
-    _base: *mut *mut c_void,
+    section: usize,
+    process: usize,
+    base: *mut *mut c_void,
     _zero_bits: usize,
     _commit: usize,
-    _offset: *mut c_void,
-    _size: *mut usize,
+    offset: *mut c_void,
+    size: *mut usize,
     _inherit: u32,
     _alloc: u32,
-    _protect: u32,
+    protect: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || size.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if !crate::dlls::kernel32::is_current_process_handle(process) {
+        return STATUS_NOT_SUPPORTED;
+    }
+    let off = if offset.is_null() {
+        0
+    } else {
+        std::ptr::read_unaligned(offset as *const u64)
+    };
+    match crate::dlls::mmap::nt_map(section, protect, off, *size, *base as usize) {
+        Ok((addr, len)) => {
+            *base = addr as *mut c_void;
+            *size = len;
+            STATUS_SUCCESS
+        }
+        Err(e) => section_status(e),
+    }
 }
 
-/// `NtUnmapViewOfSection` : stub.
-pub unsafe extern "win64" fn nt_unmap_view_of_section(_process: usize, _base: *mut c_void) -> i32 {
+/// `NtUnmapViewOfSection` : retire une vue de section du processus courant.
+pub unsafe extern "win64" fn nt_unmap_view_of_section(_process: usize, base: *mut c_void) -> i32 {
+    crate::dlls::mmap::unmap_view_of_file(base as usize);
     STATUS_SUCCESS
 }
 
@@ -2024,6 +2122,7 @@ pub fn exports() -> crate::dlls::Exports {
         "NtWriteVirtualMemory" => fn nt_write_virtual_memory,
         "NtCreateSection" => fn nt_create_section,
         "NtMapViewOfSection" => fn nt_map_view_of_section,
+        "NtOpenSection" => fn nt_open_section,
         "NtUnmapViewOfSection" => fn nt_unmap_view_of_section,
         "NtQueryPerformanceCounter" => fn nt_query_performance_counter,
         "NtTerminateProcess" => fn nt_terminate_process,
@@ -2035,5 +2134,127 @@ pub fn exports() -> crate::dlls::Exports {
         "NtFlushBuffersFile" => fn nt_flush_buffers_file,
         "NtQueryAttributesFile" => fn nt_query_attributes_file,
         "NtRaiseHardError" => fn nt_raise_hard_error,
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    /// UNICODE_STRING (16 octets) + OBJECT_ATTRIBUTES (48 octets).
+    fn attributes(name: &[u16], attributes: u32) -> (Vec<u8>, Vec<u8>) {
+        let mut us = vec![0u8; 16];
+        us[0..2].copy_from_slice(&((name.len() * 2) as u16).to_le_bytes());
+        us[2..4].copy_from_slice(&((name.len() * 2) as u16).to_le_bytes());
+        us[8..16].copy_from_slice(&(name.as_ptr() as u64).to_le_bytes());
+        let mut oa = vec![0u8; 48];
+        oa[0..4].copy_from_slice(&48u32.to_le_bytes());
+        oa[16..24].copy_from_slice(&(us.as_ptr() as u64).to_le_bytes());
+        oa[24..28].copy_from_slice(&attributes.to_le_bytes());
+        (us, oa)
+    }
+
+    #[test]
+    fn sections_nommees_de_ntdll_et_de_kernel32() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let name: Vec<u16> = format!(
+                "\\Sessions\\1\\BaseNamedObjects\\winlux-section-{}",
+                std::process::id()
+            )
+            .encode_utf16()
+            .collect();
+            let (_us, oa) = attributes(&name, 0);
+            let size: u64 = 8192;
+            let mut h = 0usize;
+            let st = nt_create_section(
+                &mut h,
+                0xF001F,
+                oa.as_ptr().cast(),
+                (&size as *const u64).cast(),
+                4,
+                0x0800_0000,
+                0,
+            );
+            assert_eq!(st, STATUS_SUCCESS);
+            // Même nom sans OBJ_OPENIF : collision ; avec : le même objet.
+            let mut again = 0usize;
+            let st = nt_create_section(
+                &mut again,
+                0xF001F,
+                oa.as_ptr().cast(),
+                (&size as *const u64).cast(),
+                4,
+                0x0800_0000,
+                0,
+            );
+            assert_eq!(st, STATUS_OBJECT_NAME_COLLISION);
+            let (_us2, oa_openif) = attributes(&name, OBJ_OPENIF);
+            let st = nt_create_section(
+                &mut again,
+                0xF001F,
+                oa_openif.as_ptr().cast(),
+                (&size as *const u64).cast(),
+                4,
+                0x0800_0000,
+                0,
+            );
+            assert_eq!(st, STATUS_OBJECT_NAME_EXISTS);
+            // Vue par ntdll, relue par une vue de kernel32 sur le nom court.
+            let mut base: *mut c_void = std::ptr::null_mut();
+            let mut len = 0usize;
+            let st = nt_map_view_of_section(
+                h,
+                usize::MAX,
+                &mut base,
+                0,
+                0,
+                std::ptr::null_mut(),
+                &mut len,
+                1,
+                0,
+                4,
+            );
+            assert_eq!(st, STATUS_SUCCESS);
+            assert!(len >= 8192, "{len}");
+            *(base as *mut u32) = 0x5EC7_1011;
+            let short: Vec<u16> = format!("Local\\winlux-section-{}", std::process::id())
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let k = crate::dlls::mmap::open_file_mapping_w(4, 0, short.as_ptr());
+            assert_ne!(k, 0);
+            let view = crate::dlls::mmap::map_view_of_file(k, 4, 0, 0, 0) as *const u32;
+            assert_eq!(*view, 0x5EC7_1011);
+            let mut opened = 0usize;
+            assert_eq!(
+                nt_open_section(&mut opened, 4, oa.as_ptr().cast()),
+                STATUS_SUCCESS
+            );
+            assert_eq!(nt_unmap_view_of_section(usize::MAX, base), STATUS_SUCCESS);
+            crate::dlls::mmap::unmap_view_of_file(view as usize);
+            for x in [h, again, k, opened] {
+                assert_eq!(nt_close(x), STATUS_SUCCESS);
+            }
+            let mut none = 0usize;
+            assert_eq!(
+                nt_open_section(&mut none, 4, oa.as_ptr().cast()),
+                STATUS_OBJECT_NAME_NOT_FOUND
+            );
+            // Section anonyme sans taille : refusée.
+            let mut anon = 0usize;
+            assert_eq!(
+                nt_create_section(
+                    &mut anon,
+                    0xF001F,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    4,
+                    0x0800_0000,
+                    0
+                ),
+                STATUS_INVALID_PARAMETER
+            );
+        }
     }
 }
