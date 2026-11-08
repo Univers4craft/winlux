@@ -492,6 +492,9 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
+      - name: Mémoire au lancement d'un gros .exe (#997)
+        run: python3 -B scripts/test-image-memory.py
+
       - name: Installer des paquets MSIX (#272)
         run: sh scripts/test-msix.sh
 
@@ -622,7 +625,7 @@ jobs:
         run: /usr/bin/python3 -B scripts/test-update-page.py
 
       - name: Paramètres Réseau, Comptes et Personnalisation refaits (carte de connexion, compte ouvert, aperçu du bureau)
-        run: /usr/bin/python3 -B scripts/test-settings-redesign.py
+        run: xvfb-run -a /usr/bin/python3 -B scripts/test-settings-redesign.py
 
       - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py

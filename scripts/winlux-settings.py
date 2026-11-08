@@ -287,11 +287,7 @@ _TR = {
     'Recherche': ('Check', 'Búsqueda', 'Suche'),
     'Mise à jour': ('Update', 'Actualización', 'Update'),
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
-    'Annuler': ('Cancel', 'Cancelar', 'Abbrechen'),
-    'Installer {name} ?': ('Install {name}?', '¿Instalar {name}?', '{name} installieren?'),
     'Recherche de la version chez l’éditeur…': ('Looking up the version from the publisher…', 'Buscando la versión en el sitio del editor…', 'Version wird beim Hersteller abgefragt…'),
-    'Éditeur : {publisher}': ('Publisher: {publisher}', 'Editor: {publisher}', 'Herausgeber: {publisher}'),
-    'Version : {version}': ('Version: {version}', 'Versión: {version}', 'Version: {version}'),
     'Version : connue au téléchargement (index de l’éditeur injoignable pour l’instant)': ('Version: known when downloading (the publisher’s index can’t be reached right now)', 'Versión: se conocerá al descargar (el índice del editor no responde por ahora)', 'Version: wird beim Herunterladen bekannt (Index des Herausgebers derzeit nicht erreichbar)'),
     'Source : https://{host}': ('Source: https://{host}', 'Origen: https://{host}', 'Quelle: https://{host}'),
     'Taille : {size} Mo': ('Size: {size} MB', 'Tamaño: {size} MB', 'Größe: {size} MB'),
@@ -677,7 +673,14 @@ POWER_BUTTON_ACTIONS = (("nothing", "Ne rien faire"), ("sleep", "Mettre en veill
 POWER_CHOICES = ("power-profile-", "power-screen-", "power-sleep-", "power-lid", "power-button")
 
 
+def display_policy(status):
+    """Politique d'affichage lue (display_policy=) : vide tant que rien n'a été
+    choisi, et le runtime suit alors l'écran (POLICY != fixed) : « follow »."""
+    return "fixed" if status.get("display_policy") == "fixed" else "follow"
+
+
 def delay_text(seconds):
+    seconds = int(seconds)
     if not seconds: return _t("Jamais")
     if seconds >= 3600: return _t("{count} h").format(count=seconds // 3600)
     return _t("{count} min").format(count=seconds // 60)
@@ -1005,7 +1008,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 if follow and screens.get("display_count", "1") == "1":
                     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
                     card.get_style_context().add_class("card")
-                    self.choice_row(card, _t("Adaptation à l'écran"), follow, screens.get("display_policy", "follow"), "display-")
+                    self.choice_row(card, _t("Adaptation à l'écran"), follow, display_policy(screens), "display-")
                     self.body.pack_start(card, False, False, 0)
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
                            row_spacing=8, column_spacing=8, homogeneous=False)
@@ -1018,7 +1021,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if action.startswith("browser-install-"):
                 # Téléchargement : produit, éditeur, version et source montrés,
                 # avec refus possible, avant tout lancement (#923).
-                button.connect("clicked", lambda _, value=action: self.confirm_browser(value))
+                button.connect("clicked", lambda _, value=action: self.execute(value))
             else:
                 button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
@@ -1065,11 +1068,18 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.rollback_button is not None:
             self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
 
-    def choice_row(self, parent, title, items, active, prefix):
-        """Une ligne « titre … menu déroulant » qui lance prefix + valeur choisie."""
+    def choice_row(self, parent, title, items, active, prefix, label_of=None):
+        """Une ligne « titre … menu déroulant » qui lance prefix + valeur choisie.
+        Jamais de menu vide (#998) : une valeur absente de la liste y est
+        ajoutée avec son libellé (label_of), sinon le premier choix s'affiche."""
         row = Gtk.Box(spacing=12)
         row.pack_start(Gtk.Label(label=title, xalign=0, wrap=True), True, True, 0)
         combo = Gtk.ComboBoxText(valign=Gtk.Align.CENTER)
+        items = list(items)
+        keys = [str(key) for key, _ in items]
+        if str(active) not in keys:
+            if label_of is not None and str(active): items.append((active, label_of(active)))
+            elif items: active = items[0][0]
         for key, label in items: combo.append(str(key), label)
         combo.set_active_id(str(active))
         combo.connect("changed", lambda widget: widget.get_active_id() not in (None, str(active))
@@ -1088,7 +1098,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if profiles:
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             card.get_style_context().add_class("card")
-            current = status.get("power_profile", "balanced")
+            current = status.get("power_profile") or "balanced"
             if current == "power-saver": current = "saver"
             self.choice_row(card, _t("Mode"), profiles, current, "power-profile-")
             self.body.pack_start(card, False, False, 0)
@@ -1102,7 +1112,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 if action not in names: continue
                 value = status.get(key, "")
                 value = int(value) if value.isdigit() else 600
-                self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-")
+                self.choice_row(card, names[action], delays, value, f"power-set-{action[len('power-'):]}-", delay_text)
             self.body.pack_start(card, False, False, 0)
         if "power-lid" in names or "power-button" in names:
             self.label(_t("Boutons et capot"), "section")
@@ -1111,7 +1121,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             items = [(key, _t(label)) for key, label in POWER_BUTTON_ACTIONS]
             for action, key in (("power-lid", "power_lid"), ("power-button", "power_button")):
                 if action in names:
-                    self.choice_row(card, names[action], items, status.get(key, "sleep"), f"power-set-{action[len('power-'):]}-")
+                    self.choice_row(card, names[action], items, status.get(key) or "sleep", f"power-set-{action[len('power-'):]}-")
             self.body.pack_start(card, False, False, 0)
 
     def privacy_controls(self):
@@ -1395,22 +1405,6 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
-    def confirm_browser(self, action):
-        ident = action[len("browser-install-"):]
-        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                   buttons=Gtk.ButtonsType.NONE,
-                                   text=_t("Installer {name} ?").format(name=BROWSER_NAMES[ident]))
-        dialog.format_secondary_text(browser_download_text(ident))
-        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
-        dialog.add_button(_t("Télécharger et installer"), Gtk.ResponseType.OK)
-        dialog.set_default_response(Gtk.ResponseType.CANCEL)
-
-        def answered(window, response):
-            window.destroy()
-            if response == Gtk.ResponseType.OK: self.execute(action)
-        dialog.connect("response", answered)
-        dialog.show_all()
-
     def show_info(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.INFO,
                                    buttons=Gtk.ButtonsType.CLOSE, text=title)
@@ -1471,27 +1465,6 @@ def browser_confirmation(ident, details):
     else:
         lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 publiée par l’éditeur)."))
     return _t("Installer {name} ?").format(name=name), "\n".join(lines)
-
-
-# Éditeur et dépôt officiel de chaque navigateur, les mêmes que le
-# téléchargeur (prepare-browser-packages.py, SOURCES) : vérifié par test.
-BROWSER_PUBLISHERS = {"chrome": ("Google", "https://dl.google.com/linux/chrome/deb/"),
-                      "edge": ("Microsoft", "https://packages.microsoft.com/repos/edge/"),
-                      "firefox": ("Mozilla", "https://packages.mozilla.org/apt/")}
-BROWSER_VERSION_FILES = ("/var/cache/winlux/browsers/{id}.version", "/usr/share/winlux/browsers/{id}.version")
-
-
-def browser_download_text(ident, root=""):
-    """Texte de la confirmation : éditeur, version, source, empreinte (#923)."""
-    publisher, source = BROWSER_PUBLISHERS[ident]
-    version = next((read(root + path.format(id=ident)).strip() for path in BROWSER_VERSION_FILES
-                    if read(root + path.format(id=ident)).strip()), "")
-    lines = [_t("Éditeur : {publisher}").format(publisher=publisher),
-             _t("Version : {version}").format(version=version or _t("dernière version stable publiée par l’éditeur")),
-             _t("Source : {source}").format(source=source),
-             "",
-             _t("Winlux télécharge le paquet officiel sur ce site, vérifie son empreinte SHA-256 et refuse l’installation si elle ne correspond pas.")]
-    return "\n".join(lines)
 
 
 def browser_buttons_shown(status, action):

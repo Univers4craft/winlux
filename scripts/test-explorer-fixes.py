@@ -246,6 +246,16 @@ ok("fn begin_move_resize" in gui and "_NET_WM_MOVERESIZE" in x11 and "WM_CHANGE_
    "#888 : runtime — WM_NCLBUTTONDOWN/WM_SYSCOMMAND et ShowWindow réduire/agrandir via le gestionnaire")
 ok('c"Explorateur de fichiers"' in demo and 'c"Datei-Explorer"' in demo,
    "#888 : titre de fenêtre traduit, plus « Explorer Winlux »")
+# Les tests de session cherchent la fenêtre sous ses titres traduits : l'ancien
+# titre « Explorer Winlux » faisait échouer le contrôle « release » (session invitée).
+_titled = [p.name for p in (ROOT / "scripts").glob("*.py")
+           if p.name != "test-explorer-fixes.py"
+           and any(k in p.read_text(encoding="utf-8")
+                   for k in ('wait_title("Explorer Winlux")', '"Explorer Winlux" in title'))]
+guest = (ROOT / "scripts/test-native-session-guest.py").read_text(encoding="utf-8")
+ok(not _titled and 'wait_title("Explorer Winlux")' not in guest and "EXPLORER_TITLES" in guest
+   and '"Datei-Explorer"' in guest,
+   "#888 : la session invitée cherche l'Explorateur sous ses quatre titres traduits")
 ok("Cmd::More" in explorer and "Cmd::Share" in explorer and "fn view_label" in explorer,
    "#888 : barre de commandes compacte (Partager, affichage courant ▾, « … »)")
 ok('const NET: &[u8] = b"::net";' in explorer and "push(net_label(), Glyph::NetDrive, NET, 0);" in explorer,
@@ -254,5 +264,22 @@ ok("fn center_wrap" in explorer and "layout_regression();" in explorer,
    "#888 : noms sur deux lignes, vérifiés par explorer_regression")
 ok('b" GB", b" TB"' in explorer and "formats_regression();" in explorer,
    "#916 : unités GB et date 08.11.2026 en allemand")
+
+# ── #28 : Tab entre les contrôles dans toutes les fenêtres du shell PE ─────
+wm = (SHELL / "wm.rs").read_text(encoding="utf-8")
+gfx = (SHELL / "gfx.rs").read_text(encoding="utf-8")
+admin = (SHELL / "admin_ui.rs").read_text(encoding="utf-8")
+ok("crate::gfx::focus_begin(app);" in wm and "crate::gfx::focus_end(g.hdc, g.b);" in wm,
+   "#28 : chaque fenêtre déclare ses contrôles en se dessinant, le cadre de focus est dessiné ensuite")
+ok("crate::gfx::focus_key(app, vk, ch)" in wm and "FocusKey::Click(x, y)" in wm and "app_key_uses_focus" in wm,
+   "#28 : Tab, Maj+Tab, Entrée et Espace passent par le focus, sauf Éditeur et Terminal")
+ok("pub unsafe fn focus_modal()" in gfx and "focus_modal();" in admin and "pub fn row(&mut self" in admin,
+   "#28 : une boîte modale garde Tab, les lignes de liste ne sont pas des arrêts de tabulation")
+for name in ("explorer", "settings", "diskcleaner", "diskmgr", "restore", "welcome", "store", "fonts", "programs", "filehistory"):
+    src = (SHELL / f"{name}.rs").read_text(encoding="utf-8")
+    ok("focus_zone(" in src or "focus_field(" in src, f"#28 : {name}.rs déclare ses contrôles")
+ok("0x09 | 0x75 => {" in explorer, "#28 : F6 (ou Ctrl+Tab) change de volet dans l'Explorateur double volet")
+ok("wm::focus_regression_checks();" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text(encoding="utf-8"),
+   "#28 : comportement vérifié par explorer_regression (Focus clavier)")
 
 print(f"test-explorer-fixes : {checks} vérifications OK")

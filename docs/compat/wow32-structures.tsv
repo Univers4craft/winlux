@@ -95,6 +95,7 @@ dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 
 dpnet.rs	Addr	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 223-236 (IDirectPlay8Address)
 dpnet.rs	Obj	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 226-251 (IDirectPlay8Peer)
 dwrite.rs	GlyphRun	a-verifier	
+dwrite_fallback.rs	Source	interne	test unitaire
 dxgi.rs	DxgiAdapter	a-verifier	
 dxgi.rs	DxgiAdapterDesc	a-verifier	
 dxgi.rs	DxgiAdapterVTable	a-verifier	
@@ -105,6 +106,7 @@ dxgi.rs	DxgiSwapChainDesc	a-verifier
 dxgi.rs	DxgiSwapChainVTable	a-verifier	
 dxva2.rs	BufferDesc	a-verifier	
 dxva2.rs	Obj	a-verifier	
+fiber64.rs	Fiber	interne	bloc de fibre 64 bits ; les programmes x86 ont wow32/fiber.rs (#654)
 games_win32.rs	WsaBuf	a-verifier	
 gdi32.rs	BitmapObject	a-verifier	
 gdi32.rs	LogBrush	a-verifier	
@@ -154,6 +156,7 @@ shlwapi_reg.rs	StreamVtbl	a-verifier
 taskschd.rs	Obj	a-verifier	
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
+url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte

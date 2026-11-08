@@ -101,6 +101,7 @@ __declspec(dllimport) BOOL WINAPI Rectangle(HDC, int, int, int, int);
 __declspec(dllimport) COLORREF WINAPI SetTextColor(HDC, COLORREF);
 __declspec(dllimport) int WINAPI SetBkMode(HDC, int);
 __declspec(dllimport) HDC WINAPI CreateCompatibleDC(HDC);
+__declspec(dllimport) HBITMAP WINAPI CreateCompatibleBitmap(HDC, int, int);
 __declspec(dllimport) BOOL WINAPI DeleteDC(HDC);
 __declspec(dllimport) HBITMAP WINAPI CreateDIBSection(HDC, const void *, UINT, void **, HANDLE, DWORD);
 __declspec(dllimport) int WINAPI GetObjectA(HGDIOBJ, int, void *);
@@ -395,6 +396,32 @@ void __stdcall entry(void) {
     CHECK(55, GetObjectA(bmp, sizeof bm, &bm) == sizeof bm, GetObjectA(bmp, sizeof bm, &bm));
     CHECK(56, bm.bmWidth == 16 && bm.bmBitsPixel == 32 && bm.bmBits == bits, bm.bmBits);
     CHECK(57, GetObjectA(red, 0, 0) == sizeof(LOGBRUSH), GetObjectA(red, 0, 0));
+    /* DIBSECTION x86 (84 octets) : la VCL recopie dsBmih pour recréer la
+     * DIB (TBitmap, listes d'images PNG de WinSCP, #905). */
+    struct {
+        BITMAP dsBm;
+        BITMAPINFOHEADER dsBmih;
+        DWORD dsBitfields[3];
+        HANDLE dshSection;
+        DWORD dsOffset;
+    } ds;
+    int ds_size = GetObjectA(bmp, sizeof ds, &ds);
+    CHECK(58, ds_size == 84 && sizeof ds == 84 && ds.dsBm.bmBits == bits && ds.dsBmih.biSize == 40 &&
+                  ds.dsBmih.biWidth == 16 && ds.dsBmih.biHeight == -16 && ds.dsBmih.biBitCount == 32,
+          ds_size);
+    void *bits2 = 0;
+    HBITMAP copy = CreateDIBSection(mem, &ds.dsBmih, 0, &bits2, 0, 0);
+    CHECK(59, copy != 0 && bits2 != 0, copy);
+    DeleteObject(copy);
+    /* 48 : taille nulle → bitmap 1x1 (documentation de
+     * CreateCompatibleBitmap) ; la VCL en crée une pour chaque TBitmap
+     * vide (listes d'images de WinSCP, #905). */
+    HBITMAP empty = CreateCompatibleBitmap(mem, 0, 0);
+    BITMAP eb = {0};
+    CHECK(48, empty != 0 && GetObjectA(empty, sizeof eb, &eb) == sizeof eb && eb.bmWidth == 1 &&
+                  eb.bmHeight == 1,
+          empty);
+    DeleteObject(empty);
     DeleteObject(red);
     DeleteDC(mem);
     DeleteObject(bmp);

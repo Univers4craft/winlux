@@ -6458,6 +6458,54 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     draw_password(g, f);
     crate::sharing::draw_dialog(g, f);
     pick::draw_overlay(g, f);
+    focus_zones(&geo, f);
+}
+
+/// Contrôles atteignables par Tab (#28), dans l'ordre de Windows : onglets,
+/// Précédent/Suivant/Parent/Actualiser, adresse, recherche, barre de
+/// commandes, Détails, puis le volet de navigation. La liste des fichiers se
+/// parcourt aux flèches. Menu ou boîte ouverte : rien derrière.
+unsafe fn focus_zones(geo: &Geo, f: &Frame) {
+    focus_modal();
+    if MENU != Menu::None
+        || PASSWORD_OPEN
+        || copy::dialog_open()
+        || props::dialog_open()
+        || crate::sharing::dialog_open()
+        || pick::active()
+    {
+        return;
+    }
+    let t = f.title;
+    let w = ((t.right - t.left - 60) / NTABS.max(1) as i32)
+        .min(TAB_W)
+        .max(90);
+    for i in 0..NTABS {
+        let x = t.left + 8 + i as i32 * w;
+        focus_zone(&rect(x, t.top + 6, x + w - 32, t.bottom));
+    }
+    let x = t.left + 8 + NTABS as i32 * w;
+    focus_zone(&rect(x + 4, t.top + 8, x + 36, t.bottom - 4));
+    for r in nav_buttons(geo) {
+        focus_zone(&r);
+    }
+    focus_field(&address_rect(geo));
+    focus_field(&search_rect(geo));
+    for r in command_rects(geo) {
+        if r.right <= geo.command.right {
+            focus_zone(&r);
+        }
+    }
+    focus_zone(&details_button(geo));
+    let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
+    let n = nav_items(&mut items);
+    for i in 0..n {
+        let r = nav_row(geo, i);
+        if r.bottom > geo.nav.bottom || geo.nav.right <= geo.nav.left {
+            break;
+        }
+        focus_zone(&r);
+    }
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -7353,12 +7401,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 open_item(p, i, false)
             }
         }
-        0x09 => {
+        0x09 | 0x75 => {
             let t = tab();
             if t.dual {
                 t.focus = 1 - t.focus;
             }
-        } // Tab : change de volet
+        } // F6 (ou Ctrl+Tab) : change de volet ; Tab seul va de contrôle en contrôle (#28)
         0x26 | 0x28 | 0x25 | 0x27 if p.nview > 0 => {
             let step = if VIEW == View::Details {
                 1
