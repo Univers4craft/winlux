@@ -324,9 +324,14 @@ pub unsafe extern "win64" fn ReOpenFile(h: usize, _access: u32, _share: u32, fla
     }
 }
 
-/// `SetFileCompletionNotificationModes` : non pris en charge ; libuv
-/// attend alors exactement ERROR_INVALID_FUNCTION pour continuer sans.
-pub unsafe extern "win64" fn SetFileCompletionNotificationModes(_h: usize, _flags: u8) -> i32 {
+/// `SetFileCompletionNotificationModes` : pris en charge pour les sockets
+/// (libuv rend sinon ERROR_INVALID_FUNCTION à Node, « connect EISDIR »,
+/// #1155). Pour un fichier ou un tube, libuv accepte ERROR_INVALID_FUNCTION
+/// et continue sans.
+pub unsafe extern "win64" fn SetFileCompletionNotificationModes(h: usize, flags: u8) -> i32 {
+    if crate::dlls::ws2_32::set_completion_modes(h, flags) {
+        return 1;
+    }
     crate::process::set_last_error(1);
     0
 }

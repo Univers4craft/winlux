@@ -1163,6 +1163,21 @@ fn stream_io(
 
 /// Termine une opération asynchrone sans fil d'E/S (ConnectNamedPipe) :
 /// OVERLAPPED, événement et port de complétion associé au handle.
+/// Opération réussie tout de suite sur un handle en
+/// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS : OVERLAPPED rempli, événement
+/// signalé si `signal`, aucun paquet au port de complétion.
+pub(crate) fn complete_overlapped_inline(overlapped: usize, bytes: u32, signal: bool) {
+    unsafe {
+        let p = overlapped as *mut Overlapped;
+        (*p).internal = 0;
+        (*p).internal_high = bytes as usize;
+        let raw = (*p).event;
+        if signal && raw & !1 != 0 {
+            let _ = set_event(raw & !1);
+        }
+    }
+}
+
 pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
     unsafe {
         let p = overlapped as *mut Overlapped;

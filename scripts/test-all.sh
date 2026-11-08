@@ -110,7 +110,7 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 
 # Sockets .NET (#1146) : port de complétion, ConnectEx, WSASend/WSARecv avec
 # OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
-step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur
+step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur mode_sans_paquet_si_fin_immediate_pour_libuv
 
 # Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
 # TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
