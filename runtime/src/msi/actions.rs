@@ -22,8 +22,11 @@
 //! installé) sont exécutées dans un processus à part
 //! (`winlux --msi-dll-action`, voir `session.rs`) avec les fonctions de
 //! session de msi.dll ; une action immédiate peut y poser des propriétés.
-//! Un échec est journalisé sans arrêter l'installation. Les scripts (5, 6,
-//! 21, 22, 37, 38) sont notés dans le journal.
+//! Les scripts VBScript et JScript (5 et 6 : table `Binary`, 21 et 22 :
+//! fichier installé, 37 et 38 : texte dans `Target`, 53 et 54 : texte dans
+//! une propriété) passent de même par `winlux --msi-script-action` (voir
+//! `script/mod.rs`), avec l'objet `Session`. Un échec est journalisé sans
+//! arrêter l'installation.
 
 use super::cond::Context;
 use super::db::Database;
@@ -196,12 +199,14 @@ pub fn run_phase(
             ctx.props.insert(a.source.clone(), value);
             continue;
         }
-        if !matches!(base, 1 | 2 | 17 | 18 | 34 | 50) || is_shell_exec(a) {
-            continue; // scripts notés par `unsupported`
+        if !is_runnable(base) || is_shell_exec(a) {
+            continue; // notées par `unsupported`
         }
+        // Programme, DLL ou script installé par le paquet : après la pose.
+        let installed = matches!(base, 17 | 18 | 21 | 22);
         let wanted = match phase {
-            Phase::BeforeFiles => *n < files_at && !matches!(base, 17 | 18),
-            Phase::AfterFiles => *n >= files_at || matches!(base, 17 | 18),
+            Phase::BeforeFiles => *n < files_at && !installed,
+            Phase::AfterFiles => *n >= files_at || installed,
             Phase::Uninstall => true,
         };
         if !wanted || !ctx.eval(cond) {
@@ -269,6 +274,15 @@ fn run_one(
             run::describe(line.trim(), &outcome)
         ));
         return matches!(outcome, Outcome::Exited(_));
+    }
+    if is_script(base) {
+        let Some(m) = script_action(db, ctx, name, a, phase, temp, scheduled) else {
+            return false;
+        };
+        for line in m.lines() {
+            log.log(line);
+        }
+        return m.lines().next().is_some_and(|l| l.ends_with(": terminée"));
     }
     if matches!(base, 1 | 17) {
         let Some(m) = dll_action(db, ctx, name, a, phase, temp, scheduled) else {
@@ -366,6 +380,116 @@ fn dll_action(
             }
         },
     };
+    let params = format!("\"{}\" {}", dll.display(), a.target);
+    let what = format!("DLL {name} ({})", a.target);
+    child_action(
+        ctx,
+        name,
+        a,
+        phase,
+        temp,
+        scheduled,
+        "--msi-dll-action",
+        &params,
+        &what,
+    )
+}
+
+/// Types d'actions exécutées par le msiexec de Winlux.
+fn is_runnable(base: i32) -> bool {
+    matches!(base, 1 | 2 | 17 | 18 | 34 | 50) || is_script(base)
+}
+
+/// Scripts : JScript (5, 21, 37, 53) et VBScript (6, 22, 38, 54).
+fn is_script(base: i32) -> bool {
+    matches!(base, 5 | 6 | 21 | 22 | 37 | 38 | 53 | 54)
+}
+
+/// Action script : le texte (table `Binary`, fichier installé, `Target` ou
+/// propriété) est écrit dans un fichier puis exécuté par
+/// `winlux --msi-script-action`, comme une action DLL.
+fn script_action(
+    db: &Database,
+    ctx: &mut Context,
+    name: &str,
+    a: &Action,
+    phase: Phase,
+    temp: &std::path::Path,
+    scheduled: &mut Vec<String>,
+) -> Option<String> {
+    let base = a.kind & 0x3F;
+    let lang = if base & 7 == 5 { "JScript" } else { "VBScript" };
+    let ext = if lang == "JScript" { "js" } else { "vbs" };
+    let fail = |why: String| Some(format!("Action personnalisée {name} non lancée : {why}"));
+    let (file, function) = match base & 0x30 {
+        0x00 => {
+            let Some(data) = db
+                .streams
+                .get(&format!("Binary.{}", a.source))
+                .or_else(|| db.streams.get(&a.source))
+            else {
+                return fail(format!("script {} absent du paquet", a.source));
+            };
+            std::fs::create_dir_all(temp).ok()?;
+            let p = temp.join(format!("{name}.{ext}"));
+            std::fs::write(&p, data).ok()?;
+            (p, a.target.clone())
+        }
+        0x10 => match ctx.files.get(&a.source) {
+            Some(f) => (crate::paths::to_linux(f), a.target.clone()),
+            None => return fail(format!("fichier {} non installé", a.source)),
+        },
+        0x20 => {
+            std::fs::create_dir_all(temp).ok()?;
+            let p = temp.join(format!("{name}.{ext}"));
+            std::fs::write(&p, &a.target).ok()?;
+            (p, String::new())
+        }
+        _ => {
+            let text = ctx.get(&a.source);
+            if text.trim().is_empty() {
+                return fail(format!("propriété {} vide", a.source));
+            }
+            std::fs::create_dir_all(temp).ok()?;
+            let p = temp.join(format!("{name}.{ext}"));
+            std::fs::write(&p, text).ok()?;
+            (p, a.target.clone())
+        }
+    };
+    let params = format!("{lang} \"{}\" {function}", file.display());
+    let what = if function.is_empty() {
+        format!("{lang} {name}")
+    } else {
+        format!("{lang} {name} ({function})")
+    };
+    child_action(
+        ctx,
+        name,
+        a,
+        phase,
+        temp,
+        scheduled,
+        "--msi-script-action",
+        &params,
+        &what,
+    )
+}
+
+/// Lance une action DLL ou script dans un processus à part qui partage le
+/// fichier de session ; relit le code et (action immédiate) les
+/// propriétés. Renvoie les lignes à journaliser.
+#[allow(clippy::too_many_arguments)]
+fn child_action(
+    ctx: &mut Context,
+    name: &str,
+    a: &Action,
+    phase: Phase,
+    temp: &std::path::Path,
+    scheduled: &mut Vec<String>,
+    builtin: &'static str,
+    params: &str,
+    what: &str,
+) -> Option<String> {
     let deferred = a.kind & 0x400 != 0;
     let mut props = ctx.props.clone();
     if deferred {
@@ -380,10 +504,9 @@ fn dll_action(
         ("WINLUX_MSI_SCHEDULED", flag(deferred)),
         ("WINLUX_MSI_REMOVING", flag(phase == Phase::Uninstall)),
     ];
-    let params = format!("\"{}\" {}", dll.display(), a.target);
     let (outcome, output) = run::spawn_with(
-        &Target::Builtin("--msi-dll-action"),
-        &params,
+        &Target::Builtin(builtin),
+        params,
         "",
         a.kind & 0x80 == 0,
         true,
@@ -417,15 +540,13 @@ fn dll_action(
             if !deferred && code.is_some() {
                 ctx.props = back;
             }
-            format!("Action personnalisée DLL {name} ({}) : terminée", a.target)
+            format!("Action personnalisée {what} : terminée")
         }
-        Outcome::Exited(c) => format!(
-            "Action personnalisée DLL {name} ({}) en échec (code {c}), installation poursuivie",
-            a.target
-        ),
+        Outcome::Exited(c) => {
+            format!("Action personnalisée {what} en échec (code {c}), installation poursuivie")
+        }
         other => format!(
-            "Action personnalisée DLL {name} ({}) : {}",
-            a.target,
+            "Action personnalisée {what} : {}",
             run::describe(&a.target, other)
         ),
     };
@@ -442,7 +563,7 @@ pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
         .filter_map(|(_, name, cond)| {
             let a = actions.get(&name)?;
             let base = a.kind & 0x3F;
-            if matches!(base, 1 | 2 | 17 | 18 | 34 | 50 | 51 | 35) && !is_shell_exec(a)
+            if (is_runnable(base) || matches!(base, 51 | 35)) && !is_shell_exec(a)
                 || !ctx.eval(&cond)
             {
                 return None;
@@ -451,7 +572,6 @@ pub fn unsupported(db: &Database, ctx: &Context) -> Vec<String> {
                 return Some(format!("{name} (ouverture en fin d'installation)"));
             }
             let what = match base {
-                5 | 6 | 21 | 22 | 37 | 38 => "script",
                 19 => "erreur",
                 7 | 23 | 39 => "installation imbriquée",
                 _ => "autre",

@@ -1612,8 +1612,87 @@ pub fn create_dib_section(
     bit_count: u16,
     top_down: bool,
 ) -> Option<(usize, *mut u8)> {
-    if width <= 0 || height <= 0 || !matches!(bit_count, 24 | 32) {
+    create_dib_section_with_palette(width, height, bit_count, top_down, Vec::new())
+}
+
+/// Tables de couleurs des DIB sections à palette (1, 4 et 8 bits par
+/// pixel), en COLORREF, indexées par l'adresse du tampon de pixels : le
+/// tampon ne bouge jamais tant que la bitmap existe.
+fn dib_palettes() -> &'static Mutex<HashMap<usize, Vec<u32>>> {
+    static P: OnceLock<Mutex<HashMap<usize, Vec<u32>>>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+fn palette_of(bytes: &[u8]) -> Vec<u32> {
+    lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Table de couleurs (COLORREF) de la DIB sélectionnée dans `hdc`, comme
+/// GetDIBColorTable ; vide pour une DIB sans palette.
+pub fn dc_dib_color_table(hdc: usize) -> Vec<u32> {
+    let bitmap = dc_bitmap(hdc);
+    let objects = lock(objects());
+    match objects.get(&bitmap) {
+        Some(GdiObject::Bitmap {
+            dib_bits: Some(bytes),
+            dib_bit_count,
+            ..
+        }) if *dib_bit_count <= 8 => palette_of(bytes),
+        _ => Vec::new(),
+    }
+}
+
+/// Remplace des entrées de la table de couleurs de la DIB sélectionnée
+/// dans `hdc` (SetDIBColorTable) ; rend le nombre d'entrées changées.
+pub fn set_dc_dib_color_table(hdc: usize, start: usize, colors: &[u32]) -> usize {
+    let bitmap = dc_bitmap(hdc);
+    let objects = lock(objects());
+    let Some(GdiObject::Bitmap {
+        dib_bits: Some(bytes),
+        dib_bit_count,
+        ..
+    }) = objects.get(&bitmap)
+    else {
+        return 0;
+    };
+    if *dib_bit_count > 8 {
+        return 0;
+    }
+    let mut palettes = lock(dib_palettes());
+    let Some(table) = palettes.get_mut(&(bytes.as_ptr() as usize)) else {
+        return 0;
+    };
+    let mut n = 0;
+    for (i, &c) in colors.iter().enumerate() {
+        if let Some(slot) = table.get_mut(start + i) {
+            *slot = c & 0x00FF_FFFF;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// DIB section de 1, 4, 8, 16, 24 ou 32 bits par pixel. `palette`
+/// (COLORREF) sert aux formats à palette ; 16 bits est en 5-5-5.
+pub fn create_dib_section_with_palette(
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    top_down: bool,
+    mut palette: Vec<u32>,
+) -> Option<(usize, *mut u8)> {
+    if width <= 0 || height <= 0 || !matches!(bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
         return None;
+    }
+    if bit_count <= 8 {
+        let entries = 1usize << bit_count;
+        if palette.is_empty() && bit_count == 1 {
+            palette = vec![0, 0x00FF_FFFF];
+        }
+        palette.resize(entries, 0);
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
     if pixels > MAX_BITMAP_PIXELS {
@@ -1623,13 +1702,23 @@ pub fn create_dib_section(
     let bytes = stride.checked_mul(height as usize)?;
     let mut dib_bits = vec![0u8; bytes];
     let bits_ptr = dib_bits.as_mut_ptr();
+    {
+        let mut palettes = lock(dib_palettes());
+        if bit_count <= 8 {
+            palettes.insert(bits_ptr as usize, palette.clone());
+        } else {
+            palettes.remove(&(bits_ptr as usize));
+        }
+    }
+    // Pixels de départ : index 0 de la palette, comme le tampon à zéro.
+    let first = palette.first().copied().unwrap_or(0);
     let handle = next_handle(0x0021_0000);
     lock(objects()).insert(
         handle,
         GdiObject::Bitmap {
             width: width as usize,
             height: height as usize,
-            pixels: vec![0; pixels],
+            pixels: vec![first; pixels],
             dib_bits: Some(dib_bits),
             dib_bit_count: bit_count,
             dib_stride: stride,
@@ -1652,8 +1741,11 @@ fn bitmap_color_at(
 ) -> u32 {
     let index = if top_down { y } else { height - 1 - y } * width + x;
     if let Some(bytes) = dib_bits {
-        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let row = if top_down { y } else { height - 1 - y };
+        if dib_bit_count <= 16 {
+            return low_depth_color(bytes, dib_bit_count, row * dib_stride, x);
+        }
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let offset = row * dib_stride + x * bytes_per_pixel;
         let b = bytes[offset] as u32;
         let g = bytes[offset + 1] as u32;
@@ -1662,6 +1754,57 @@ fn bitmap_color_at(
     } else {
         pixels[index]
     }
+}
+
+/// Couleur (COLORREF) d'un pixel d'une DIB de 1, 4, 8 ou 16 bits.
+fn low_depth_color(bytes: &[u8], bit_count: u16, row_start: usize, x: usize) -> u32 {
+    if bit_count == 16 {
+        let o = row_start + x * 2;
+        let v = u16::from_le_bytes([bytes[o], bytes[o + 1]]) as u32;
+        let scale = |c: u32| (c << 3) | (c >> 2);
+        let (r, g, b) = (scale((v >> 10) & 31), scale((v >> 5) & 31), scale(v & 31));
+        return (b << 16) | (g << 8) | r;
+    }
+    let bits = bit_count as usize;
+    let bit = x * bits;
+    let byte = bytes[row_start + bit / 8];
+    let index = (byte >> (8 - bits - bit % 8)) & ((1u16 << bits) - 1) as u8;
+    lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .and_then(|p| p.get(index as usize).copied())
+        .unwrap_or(0)
+}
+
+/// Écrit `color` dans une DIB de 1, 4, 8 ou 16 bits : l'entrée de palette
+/// la plus proche pour les formats à palette.
+fn set_low_depth_color(bytes: &mut [u8], bit_count: u16, row_start: usize, x: usize, color: u32) {
+    if bit_count == 16 {
+        let c = |shift: u32| ((color >> shift) & 0xFF) >> 3;
+        let v = ((c(0) << 10) | (c(8) << 5) | c(16)) as u16;
+        let o = row_start + x * 2;
+        bytes[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        return;
+    }
+    let distance = |p: u32| {
+        let d = |shift: u32| ((p >> shift) & 0xFF) as i32 - ((color >> shift) & 0xFF) as i32;
+        d(0) * d(0) + d(8) * d(8) + d(16) * d(16)
+    };
+    let index = lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .and_then(|table| {
+            table
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &p)| distance(p))
+                .map(|(i, _)| i)
+        })
+        .unwrap_or(0) as u8;
+    let bits = bit_count as usize;
+    let bit = x * bits;
+    let shift = 8 - bits - bit % 8;
+    let mask = (((1u16 << bits) - 1) as u8) << shift;
+    let b = &mut bytes[row_start + bit / 8];
+    *b = (*b & !mask) | ((index << shift) & mask);
 }
 
 fn set_bitmap_color(
@@ -1679,8 +1822,12 @@ fn set_bitmap_color(
     let index = if top_down { y } else { height - 1 - y } * width + x;
     pixels[index] = color;
     if let Some(bytes) = dib_bits {
-        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let row = if top_down { y } else { height - 1 - y };
+        if dib_bit_count <= 16 {
+            set_low_depth_color(bytes, dib_bit_count, row * dib_stride, x, color);
+            return;
+        }
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let offset = row * dib_stride + x * bytes_per_pixel;
         bytes[offset] = ((color >> 16) & 0xFF) as u8; // B
         bytes[offset + 1] = ((color >> 8) & 0xFF) as u8; // G
@@ -1708,7 +1855,7 @@ pub fn write_bitmap_row(handle: usize, y: usize, row: &[u32]) -> bool {
         return false;
     };
     let (w, h, bits, stride, td) = (*width, *height, *dib_bit_count, *dib_stride, *top_down);
-    if y >= h || (dib_bits.is_some() && bits < 24) {
+    if y >= h {
         return false;
     }
     for (x, &c) in row.iter().take(w).enumerate() {
