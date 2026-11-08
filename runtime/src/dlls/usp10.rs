@@ -400,7 +400,7 @@ unsafe extern "win64" fn get_glyph_outline_w(
 }
 
 /// TEXTMETRICW (60 octets) de la police.
-fn text_metrics(f: &GdiFont, out: &mut [u8]) {
+pub fn text_metrics(f: &GdiFont, out: &mut [u8]) {
     let asc = f.ascent();
     let desc = f.descent();
     let height = asc + desc;
