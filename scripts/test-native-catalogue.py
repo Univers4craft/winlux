@@ -72,6 +72,26 @@ with tempfile.TemporaryDirectory() as temporary:
         data.extend(struct.pack("<H", len(encoded) // 2) + encoded)
     (links / "Programme installé.lnk").write_bytes(data)
     assert list(catalogue.shortcuts(home)) == [(exe, "Programme installé", ["--message", "deux mots"])]
+    # Raccourci d'éditeur vers C:\Users\<compte>\AppData\… (Claude pour Windows, #1188/#1189) :
+    # le dossier personnel lui-même, pas ~/Users/<compte>/…
+    claude = home / "AppData/Local/AnthropicClaude/app-0.14.10/claude.exe"
+    claude.parent.mkdir(parents=True)
+    claude.write_bytes(fixture())
+    (links / "Anthropic PBC").mkdir()
+    data = bytearray(76)
+    struct.pack_into("<I", data, 0, 76)
+    struct.pack_into("<I", data, 20, 8 | 128)
+    encoded = f"C:\\Users\\{home.name.upper()}\\AppData\\Local\\AnthropicClaude\\app-0.14.10\\claude.exe".encode("utf-16-le")
+    data.extend(struct.pack("<H", len(encoded) // 2) + encoded)
+    (links / "Anthropic PBC/Claude.lnk").write_bytes(data)
+    assert (claude, "Claude", []) in list(catalogue.shortcuts(home)), list(catalogue.shortcuts(home))
+    assert catalogue.windows_path(f"C:\\Users\\{home.name}\\Desktop\\a.txt", home) == catalogue.desktop_dir(home) / "a.txt"
+    assert catalogue.windows_path("C:\\Users\\autre\\a.exe", home) == home / "Users/autre/a.exe"
+    assert catalogue.windows_path("C:\\Users\\Public\\Desktop\\a.lnk", home) == home / "Public/Desktop/a.lnk"
+    assert catalogue.windows_path("C:\\Program Files\\X\\a.exe", home) == home / "Program Files/X/a.exe"
+    (links / "Anthropic PBC/Claude.lnk").unlink()
+    (links / "Anthropic PBC").rmdir()
+    claude.unlink()
     key = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Test"
     lines = ["WINLUX-REGISTRY-1"]
     for name, value in [("DisplayName", "Programme installé"), ("DisplayIcon", f'"{exe}",0')]:
