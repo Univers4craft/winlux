@@ -852,6 +852,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
 
+# #19 : objets job (KILL_ON_JOB_CLOSE, TerminateJobObject, enfants rattachés).
+_jobs = (ROOT / "runtime/src/dlls/jobs.rs").read_text()
+ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object_et_liste_des_pid" in _jobs
+   and "jobs::on_child_created(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
@@ -927,6 +934,11 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
+ok((SCRIPTS / "test-paintnet-d2d.py").exists()
+   and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
+   "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas

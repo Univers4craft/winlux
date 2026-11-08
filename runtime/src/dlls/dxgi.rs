@@ -591,6 +591,8 @@ struct DxgiAdapterVTable {
     set_video_memory_reservation: unsafe extern "win64" fn() -> i32,
     register_budget: unsafe extern "win64" fn() -> i32,
     unregister_budget: unsafe extern "win64" fn() -> i32,
+    // IDXGIAdapter4
+    get_desc3: unsafe extern "win64" fn(*mut DxgiAdapter, *mut DxgiAdapterDesc1) -> i32,
 }
 
 /// DXGI_ADAPTER_DESC1/2 : DESC + Flags (+ champs DESC2 laissés à zéro).
@@ -618,16 +620,24 @@ impl DxgiAdapter {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        // IDXGIAdapter1 (29038f61), 2 (0aa1ae0a), 3 (645967a4), IDXGIObject.
+        // IDXGIAdapter1 (29038f61), 2 (0aa1ae0a), 3 (645967a4), 4 (3c8d99d1),
+        // IDXGIObject.
         if *riid == IID_IUNKNOWN
             || *riid == IID_IDXGI_ADAPTER
-            || [0x2903_8f61, 0x0aa1_ae0a, 0x6459_67a4, 0xaec2_2fb8].contains(&riid.data1)
+            || [
+                0x2903_8f61,
+                0x0aa1_ae0a,
+                0x6459_67a4,
+                0x3c8d_99d1,
+                0xaec2_2fb8,
+            ]
+            .contains(&riid.data1)
         {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (adaptateur)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -637,6 +647,7 @@ impl DxgiAdapter {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             // L'adaptateur tient une référence sur sa fabrique (create_adapter).
             let adapter = Box::from_raw(this);
             if !adapter.factory.is_null() {
@@ -649,27 +660,27 @@ impl DxgiAdapter {
 }
 
 unsafe extern "win64" fn adapter_stub3(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn adapter_stub2(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn adapter_get_priv(
-    _: *mut DxgiAdapter,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiAdapter,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 
 unsafe extern "win64" fn adapter_get_parent(
@@ -730,7 +741,10 @@ unsafe extern "win64" fn adapter_get_desc1(
     );
     S_OK
 }
-/// DESC2 ajoute 12 octets (granularités, zéro) : on les efface d'abord.
+/// DESC2 (et DESC3) ajoutent les deux granularités de préemption après
+/// Flags : 316 octets, 320 avec l'alignement. Elles restent à zéro.
+const DXGI_ADAPTER_DESC2_SIZE: usize = 320;
+
 unsafe extern "win64" fn adapter_get_desc2(
     this: *mut DxgiAdapter,
     out: *mut DxgiAdapterDesc1,
@@ -738,15 +752,11 @@ unsafe extern "win64" fn adapter_get_desc2(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    std::ptr::write_bytes(
-        out as *mut u8,
-        0,
-        std::mem::size_of::<DxgiAdapterDesc1>() + 12,
-    );
+    std::ptr::write_bytes(out as *mut u8, 0, DXGI_ADAPTER_DESC2_SIZE);
     adapter_get_desc1(this, out)
 }
 unsafe extern "win64" fn adapter_notimpl() -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIAdapter (méthode non prise en charge)")
 }
 unsafe extern "win64" fn adapter_ok() -> i32 {
     S_OK
@@ -790,6 +800,8 @@ static ADAPTER_VTABLE: DxgiAdapterVTable = DxgiAdapterVTable {
     set_video_memory_reservation: adapter_ok,
     register_budget: adapter_notimpl,
     unregister_budget: adapter_ok,
+    // DXGI_ADAPTER_DESC3 a la même disposition que DESC2.
+    get_desc3: adapter_get_desc2,
 };
 
 /// Description de l'adaptateur : le vrai GPU quand Vulkan le connaît.
@@ -905,7 +917,7 @@ impl DxgiSwapChain {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (chaîne d'échange)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -915,6 +927,7 @@ impl DxgiSwapChain {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let _ = Box::from_raw(this);
             return 0;
         }
@@ -923,23 +936,27 @@ impl DxgiSwapChain {
 }
 
 unsafe extern "win64" fn sc_stub3(
-    _: *mut DxgiSwapChain,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
-unsafe extern "win64" fn sc_stub2(_: *mut DxgiSwapChain, _: *const Guid, _: *const c_void) -> i32 {
-    S_OK
+unsafe extern "win64" fn sc_stub2(
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    iface: *const c_void,
+) -> i32 {
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn sc_get_priv(
-    _: *mut DxgiSwapChain,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiSwapChain,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn sc_get_parent(
     _: *mut DxgiSwapChain,
@@ -1052,7 +1069,7 @@ unsafe extern "win64" fn sc_get_output(_: *mut DxgiSwapChain, _: *mut *mut c_voi
     DXGI_ERROR_NOT_FOUND
 }
 unsafe extern "win64" fn sc_get_stats(_: *mut DxgiSwapChain, _: *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGISwapChain::GetFrameStatistics")
 }
 unsafe extern "win64" fn sc_get_present_count(this: *mut DxgiSwapChain, out: *mut u32) -> i32 {
     if out.is_null() {
@@ -1228,7 +1245,7 @@ impl DxgiFactory {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("dxgi", riid);
+        crate::dlls::comobj::log_no_interface("dxgi (fabrique)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -1238,6 +1255,7 @@ impl DxgiFactory {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let _ = Box::from_raw(this);
             return 0;
         }
@@ -1246,23 +1264,27 @@ impl DxgiFactory {
 }
 
 unsafe extern "win64" fn fac_stub3(
-    _: *mut DxgiFactory,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
-unsafe extern "win64" fn fac_stub2(_: *mut DxgiFactory, _: *const Guid, _: *const c_void) -> i32 {
-    S_OK
+unsafe extern "win64" fn fac_stub2(
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    iface: *const c_void,
+) -> i32 {
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn fac_get_priv(
-    _: *mut DxgiFactory,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DxgiFactory,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn fac_get_parent(
     _: *mut DxgiFactory,
@@ -1362,7 +1384,7 @@ unsafe extern "win64" fn fac_zero(_: *mut DxgiFactory) -> i32 {
     0
 }
 unsafe extern "win64" fn fac_notimpl() -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIFactory (méthode non prise en charge)")
 }
 unsafe extern "win64" fn fac_ok() -> i32 {
     S_OK
@@ -1619,5 +1641,16 @@ mod refcount_tests {
             assert_eq!(DxgiFactory::release(parent.cast()), 1);
             assert_eq!(DxgiAdapter::release(a), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod adapter_desc_tests {
+    #[test]
+    fn adapter_desc_sizes_match_windows() {
+        // DXGI_ADAPTER_DESC 304 octets, DESC1 312 ; DESC2/3 = 320.
+        assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc>(), 304);
+        assert_eq!(std::mem::size_of::<super::DxgiAdapterDesc1>(), 312);
+        assert_eq!(super::DXGI_ADAPTER_DESC2_SIZE, 320);
     }
 }
