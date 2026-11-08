@@ -1246,4 +1246,7 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+ok("fn altgr_messages" in (runtime_dlls / "gui_x11.rs").read_text()
+   and "altgr_est_ctrl_gauche_plus_alt_droit" in (SCRIPTS / "test-all.sh").read_text(),
+   "AltGr : Ctrl gauche + Alt droit, « # @ € { } » tapés sans déclencher de raccourci Alt (#1151)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

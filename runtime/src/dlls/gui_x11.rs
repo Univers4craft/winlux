@@ -87,6 +87,25 @@ fn focus_is_grab(mode: x11rb::protocol::xproto::NotifyMode) -> bool {
     matches!(mode, NotifyMode::GRAB | NotifyMode::UNGRAB)
 }
 
+/// Touche AltGr : ISO_Level3_Shift ou Mode_switch.
+fn is_altgr_keysym(base: Option<u32>) -> bool {
+    matches!(base, Some(0xFE03 | 0xFF7E))
+}
+
+/// (VK, lParam) des deux messages d'AltGr dans l'ordre d'envoi : Ctrl
+/// gauche (balayage 0x1D) puis Alt droit (0x38 étendu) à l'appui, l'inverse
+/// au relâchement (bits 30 et 31).
+fn altgr_messages(down: bool) -> [(usize, isize); 2] {
+    let up_bits: isize = if down { 0 } else { (1 << 30) | (1 << 31) };
+    let ctrl = (0x11, 1 | (0x1D << 16) | up_bits);
+    let alt = (0x12, 1 | (0x38 << 16) | (1 << 24) | up_bits);
+    if down {
+        [ctrl, alt]
+    } else {
+        [alt, ctrl]
+    }
+}
+
 /// Famille fontconfig d'une police GDI : les noms de police par défaut
 /// (« fixed », vide, police système des boîtes) deviennent Segoe UI (#1054).
 fn xft_family(face: &str) -> &str {
@@ -2712,6 +2731,13 @@ impl X11Backend {
                     }
                     return None;
                 }
+                // AltGr : sous Windows, Ctrl gauche + Alt droit. Vu comme Alt
+                // seul, AltGr+3 (« # ») déclenchait le raccourci Alt+3 de
+                // Notepad++ au lieu du caractère, et une autre combinaison
+                // le fermait (#1151).
+                if is_altgr_keysym(xkb.map(|(b, _, _, _)| b).or(base)) {
+                    return Some(self.altgr_events(hwnd, true));
+                }
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
@@ -2754,10 +2780,17 @@ impl X11Backend {
                 gui::raw_key(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let syms = self.key_syms(e.detail);
-                let vk = self
+                let xkb = self
                     .keyboard
                     .as_ref()
-                    .and_then(|k| k.translate(e.detail, e.state.into()))
+                    .and_then(|k| k.translate(e.detail, e.state.into()));
+                if is_altgr_keysym(
+                    xkb.map(|(b, _, _, _)| b)
+                        .or_else(|| syms.as_deref().and_then(base_keysym)),
+                ) {
+                    return Some(self.altgr_events(hwnd, false));
+                }
+                let vk = xkb
                     .and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
                     .or_else(|| {
                         syms.as_deref().and_then(|s| {
@@ -2789,7 +2822,29 @@ impl X11Backend {
         }
     }
 
-    /// Vrai si `xwin` est le cadre (barre de menus) de `hwnd`.
+    /// AltGr enfoncé ou relâché : VK_CONTROL (Ctrl gauche) puis VK_MENU
+    /// (Alt droit, étendu), comme le pilote clavier de Windows. Le premier
+    /// message est rendu, le second suit dans le même lot.
+    fn altgr_events(&mut self, hwnd: usize, down: bool) -> PendingEvent {
+        for vk in [0x11, 0xA2, 0x12, 0xA5] {
+            gui::update_async_key_state(vk, down);
+        }
+        let message = if down { gui::WM_KEYDOWN } else { gui::WM_KEYUP };
+        let [first, second] = altgr_messages(down);
+        self.deferred_events.push(PendingEvent {
+            hwnd,
+            message,
+            wparam: second.0,
+            lparam: second.1,
+        });
+        PendingEvent {
+            hwnd,
+            message,
+            wparam: first.0,
+            lparam: first.1,
+        }
+    }
+
     /// Vrai si le dernier SetFocus de Winlux visait un contrôle (fenêtre X
     /// enfant) encore connu : c'est lui qui garde le focus Win32.
     fn focus_kept_by_child(&self) -> bool {
@@ -2799,6 +2854,7 @@ impl X11Backend {
             .is_some_and(|w| w.child && w.window == self.asked_focus)
     }
 
+    /// Vrai si `xwin` est le cadre (barre de menus) de `hwnd`.
     fn is_frame(&self, hwnd: usize, xwin: Window) -> bool {
         self.windows
             .get(&hwnd)
@@ -3318,6 +3374,37 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn altgr_est_ctrl_gauche_plus_alt_droit() {
+        assert!(is_altgr_keysym(Some(0xFE03)));
+        assert!(is_altgr_keysym(Some(0xFF7E)));
+        assert!(!is_altgr_keysym(Some(0xFFE9))); // Alt_L
+        let [ctrl, alt] = altgr_messages(true);
+        assert_eq!(ctrl.0, 0x11);
+        assert_eq!(gui::sided_modifier(ctrl.0, ctrl.1), Some(0xA2));
+        assert_eq!(alt.0, 0x12);
+        assert_eq!(gui::sided_modifier(alt.0, alt.1), Some(0xA5));
+        let [first, second] = altgr_messages(false);
+        assert_eq!((first.0, second.0), (0x12, 0x11));
+        assert!(first.1 & (1 << 31) != 0 && second.1 & (1 << 31) != 0);
+        // Ctrl et Alt enfoncés : un raccourci Alt+3 (Notepad++) ne répond
+        // pas à AltGr+3, qui tape « # » sur un clavier français (#1151).
+        let alt_3 = [crate::dlls::accel::Accel {
+            virt: 0x01 | 0x10, // FVIRTKEY | FALT
+            key: 0x33,
+            cmd: 42,
+        }];
+        let mods = (false, true, true);
+        assert_eq!(
+            crate::dlls::accel::match_accel(&alt_3, gui::WM_KEYDOWN, 0x33, mods),
+            None
+        );
+        assert_eq!(
+            crate::dlls::accel::match_accel(&alt_3, gui::WM_KEYDOWN, 0x33, (false, false, true)),
+            Some(42)
+        );
+    }
 
     #[test]
     fn police_par_defaut_de_wx_rendue_en_segoe_ui() {

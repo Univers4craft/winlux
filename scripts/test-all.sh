@@ -108,6 +108,10 @@ step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" c
 # ERROR_FILE_NOT_FOUND, sans runtime enfant qui écrit sur stderr.
 step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- programme_windows_absent_echoue_sans_lancer_de_runtime
 
+# AltGr (#1151) : Ctrl gauche + Alt droit comme sous Windows, sans quoi
+# AltGr+3 (« # ») déclenche le raccourci Alt+3 de Notepad++.
+step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q -p winlux -- altgr_est_ctrl_gauche_plus_alt_droit
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
