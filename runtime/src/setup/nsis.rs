@@ -554,14 +554,23 @@ impl<'a, 'b> Vm<'a, 'b> {
         let marker = "software\\microsoft\\windows\\currentversion\\uninstall\\";
         let lower = key.to_lowercase();
         // Identifiant dans sa casse d'origine quand les positions coïncident.
-        let src = if lower.len() == key.len() { key } else { &lower };
+        let src = if lower.len() == key.len() {
+            key
+        } else {
+            &lower
+        };
         if let Some(i) = lower.find(marker) {
             let id = src[i + marker.len()..]
                 .split('\\')
                 .next()
                 .unwrap_or("")
                 .to_string();
-            if !id.is_empty() && !self.uninstall_ids.iter().any(|x| x.eq_ignore_ascii_case(&id)) {
+            if !id.is_empty()
+                && !self
+                    .uninstall_ids
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(&id))
+            {
                 self.uninstall_ids.push(id);
             }
         }
@@ -1146,7 +1155,8 @@ impl<'a, 'b> Vm<'a, 'b> {
                     }
                 };
                 self.note_uninstall_key(&key);
-                self.reg.insert((key.to_lowercase(), name.to_lowercase()), text);
+                self.reg
+                    .insert((key.to_lowercase(), name.to_lowercase()), text);
                 if let Some(inst) = self.inst.as_deref_mut() {
                     inst.reg_set(&key, &name, kind, bytes, true);
                     inst.flush_registry();
