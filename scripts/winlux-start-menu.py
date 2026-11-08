@@ -343,6 +343,8 @@ MENU_CSS = Template("""
   #winlux-start .app-name { font-size: 9pt; }
   #winlux-start label.dim { color: $dim; font-size: 8.5pt; }
   #winlux-start label.accent { color: $accent; font-weight: bold; }
+  #winlux-start button.pin-target { box-shadow: inset 0 0 0 2px $accent; border-radius: 8px; }
+  #winlux-start button.pin-dragged { opacity: 0.4; }
   #winlux-start label.letter { color: $accent; font-weight: bold; font-size: 11pt; }
   #winlux-start button.link { background: $chip; padding: 6px 12px; }
   #winlux-start button.link:hover { background: $hover; }
@@ -785,6 +787,7 @@ class Start(Gtk.Application):
         elif self.file_results:self.open_file(self.file_results[0])
 
     def launch(self, app):
+        if getattr(self, "pin_dragging", False): return  # lâcher d'un glisser-déposer (#925)
         try:
             app.launch([], self.window.get_display().get_app_launch_context())
             self.state["recent"] = ([app.get_id()] + [value for value in self.state.get("recent", []) if value != app.get_id()])[:6]
@@ -1349,6 +1352,21 @@ class Start(Gtk.Application):
             moved = dragged != app.get_id() and app.get_id() in shown and self.move_pin(dragged, shown.index(app.get_id()))
             context.finish(bool(moved), False, stamp)
         button.connect("drag-data-received", received)
+        # Pendant le glisser : épingle d'origine estompée, place visée entourée
+        # d'accent ; aucun lancement au lâcher (#925).
+        def begin(*_):
+            self.pin_dragging = True
+            button.get_style_context().add_class("pin-dragged")
+        def end(*_):
+            button.get_style_context().remove_class("pin-dragged")
+            GLib.timeout_add(300, lambda: setattr(self, "pin_dragging", False) or False)
+        def motion(widget, *_):
+            widget.get_style_context().add_class("pin-target")
+            return False  # Gtk.DestDefaults.MOTION répond au glisser
+        button.connect("drag-begin", begin)
+        button.connect("drag-end", end)
+        button.connect("drag-motion", motion)
+        button.connect("drag-leave", lambda widget, *_: widget.get_style_context().remove_class("pin-target"))
 
     def app_context(self, widget, event, app):
         if event.button != 3: return False

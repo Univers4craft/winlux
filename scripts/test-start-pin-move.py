@@ -9,7 +9,8 @@
    grisés sur la 1re tuile, « Vers la droite » et « À la fin » sur la
    dernière ; « Au début » sur la 4e la met en tête, à l'écran et dans
    start.json.
-3. Glisser-déposer réel (xdotool) de la 5e tuile sur la 2e.
+3. Glisser-déposer réel (xdotool) de la 5e tuile sur la 2e : tuile glissée
+   estompée, place visée entourée d'accent, rien n'est lancé au lâcher.
 4. Un nouveau menu (nouvelle session) relit le même ordre.
 5. Les cinq textes existent en anglais, espagnol et allemand.
 
@@ -162,13 +163,22 @@ def run():
     (sx, sy), (tx, ty) = centre(tiles()[4]), centre(tiles()[1])
     xdo("mousemove", sx, sy)
     pump(0.2)
+    launched = []
+    original = app.launch
+    app.launch = lambda target: (launched.append(target.get_id()), original(target))
+    source, target = tiles()[4], tiles()[1]
     xdo("mousedown", 1)
     for step in range(1, 13):
         xdo("mousemove", sx + (tx - sx) * step // 12, sy + (ty - sy) * step // 12)
         pump(0.05)
     pump(0.3)
+    check(source.get_style_context().has_class("pin-dragged"), "épingle glissée non estompée pendant le glisser")
+    check(target.get_style_context().has_class("pin-target"), "place visée non entourée pendant le glisser")
     xdo("mouseup", 1)
     pump(0.8)
+    check(not launched, f"application lancée au lâcher : {launched}")
+    check(not any(b.get_style_context().has_class("pin-dragged") or b.get_style_context().has_class("pin-target") for b in tiles()),
+          "estompage ou cadre restés après le lâcher")
     expected = ["Delta", "Echo", "Alpha", "Bravo", "Charlie", "Foxtrot"]
     check(order() == expected, f"après glisser Echo sur Alpha : {order()}")
     check(app.window.get_visible(), "le menu s'est fermé pendant le glisser-déposer")
