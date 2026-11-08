@@ -8,6 +8,10 @@
 //!   comme sous Windows ; le bac à sable de Chromium tue sinon l'enfant.
 //! - #767 : VirtualAllocEx, WriteProcessMemory, VirtualProtectEx et
 //!   VirtualFreeEx dans un enfant créé suspendu (préparation du bac à sable).
+//! - #996 : NtQueryObject rend les droits réels d'un fichier ouvert en
+//!   lecture (le mandataire de polices de Chromium les vérifie), et
+//!   CreateDIBSection accepte une section : les pixels vivent dans la
+//!   section, partagée avec ses autres vues (sortie logicielle).
 
 #![no_std]
 #![no_main]
@@ -33,6 +37,16 @@ extern "system" {
         n: usize,
         done: *mut usize,
     ) -> i32;
+    fn CreateFileMappingW(
+        file: Handle,
+        sa: *mut core::ffi::c_void,
+        protect: u32,
+        high: u32,
+        low: u32,
+        name: *const u16,
+    ) -> Handle;
+    fn MapViewOfFile(map: Handle, access: u32, high: u32, low: u32, size: usize) -> *mut u8;
+    fn UnmapViewOfFile(addr: *mut u8) -> i32;
     fn ReadProcessMemory(
         p: Handle,
         addr: *const u8,
@@ -40,6 +54,15 @@ extern "system" {
         n: usize,
         done: *mut usize,
     ) -> i32;
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+extern "system" {
+    fn GetPixel(dc: Handle, x: i32, y: i32) -> u32;
+}
+#[link(name = "ntdll", kind = "raw-dylib")]
+extern "system" {
+    fn NtQueryObject(h: Handle, class: u32, buf: *mut u8, len: u32, ret: *mut u32) -> i32;
 }
 
 unsafe fn env_is(name: &core::ffi::CStr, expected: &[u8]) -> bool {
@@ -108,6 +131,72 @@ pub extern "C" fn mainCRTStartup() -> ! {
             "WindowFromDC d'un DC mémoire : aucune fenêtre"
         );
         DeleteDC(mem);
+
+        // Fichier ouvert en lecture : aucun droit d'écriture annoncé
+        // (OBJECT_BASIC_INFORMATION.GrantedAccess, à l'octet 4).
+        let mut path = [0 as c_char; 512];
+        GetModuleFileNameA(null, path.as_mut_ptr(), 512);
+        let file = CreateFileA(path.as_ptr(), 0x8000_0000, 1, null, 3, 0, null);
+        let mut info = [0u8; 56];
+        let mut got = 0u32;
+        let status = NtQueryObject(file, 0, info.as_mut_ptr(), 56, &mut got);
+        let access = u32::from_le_bytes([info[4], info[5], info[6], info[7]]);
+        check!(
+            status == 0 && access & 0x1 != 0 && access & 0xd0116 == 0,
+            "NtQueryObject : fichier en lecture seule, droits de lecture seulement"
+        );
+        CloseHandle(file);
+
+        // DIB dans une section : les deux vues voient les mêmes pixels.
+        let section = CreateFileMappingW(
+            -1isize as Handle,
+            null,
+            0x04,
+            0,
+            0x2_0000,
+            core::ptr::null(),
+        );
+        check!(
+            !section.is_null(),
+            "CreateFileMappingW d'une section anonyme"
+        );
+        let view = MapViewOfFile(section, 0x6, 0, 0, 0x2_0000);
+        check!(!view.is_null(), "MapViewOfFile de la section");
+        if !view.is_null() {
+            let offset = 0x1_0010usize;
+            *view.add(offset) = 0x5A;
+            let header = BitmapInfoHeader {
+                size: 40,
+                width: 16,
+                height: -8,
+                planes: 1,
+                bit_count: 32,
+                ..Default::default()
+            };
+            let mut bits: *mut core::ffi::c_void = null;
+            let dib = CreateDIBSection(null, &header, 0, &mut bits, section, offset as u32);
+            check!(
+                !dib.is_null() && !bits.is_null() && *(bits as *const u8) == 0x5A,
+                "CreateDIBSection avec une section : pixels pris dans la section"
+            );
+            if !dib.is_null() {
+                let dc = CreateCompatibleDC(null);
+                let old = SelectObject(dc, dib);
+                // Pixel (1, 0) écrit par l'autre vue, en BGRX, comme le
+                // processus de rendu de Chromium.
+                let px = view.add(offset + 4);
+                (*px, *px.add(1), *px.add(2)) = (0x11, 0x22, 0x33);
+                check!(
+                    GetPixel(dc, 1, 0) == 0x00_11_22_33,
+                    "un pixel écrit par l'autre vue se lit dans la DIB"
+                );
+                SelectObject(dc, old);
+                DeleteDC(dc);
+                check!(DeleteObject(dib) != 0, "DeleteObject de la DIB en section");
+            }
+            UnmapViewOfFile(view);
+        }
+        CloseHandle(section);
 
         SetEnvironmentVariableA(c"WINLUX_TEST_PLOMBERIE".as_ptr(), c"oui".as_ptr());
         let mut base = [0u8; 20];
