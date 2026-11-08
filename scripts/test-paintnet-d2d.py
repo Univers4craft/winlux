@@ -107,6 +107,9 @@ ok(vtable(dwrite, "FORMAT_VT") == 43 and vtable(dwrite, "LAYOUT_VT") == 89
    and "TEXT_FORMAT3" in text and "TEXT_LAYOUT4" in text,
    "IDWriteTextFormat1-3 et IDWriteTextLayout1-4 servis par CreateTextFormat et CreateTextLayout (#1118)")
 
+ok("fn layout_format_view(" in dwrite and "FORMAT_ON_LAYOUT_VT" in dwrite,
+   "une mise en page répond à IDWriteTextFormat1-3 par une vue (#1158)")
+
 gdiplus = source("gdiplus.rs")
 ok("\"GdipImageForceValidation\" => fn image_force_validation" in gdiplus,
    "GdipImageForceValidation (Image.FromStream avec validation) ne répond plus NotImplemented")

@@ -1278,6 +1278,8 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
    and "perte_du_focus_garde_les_boutons_de_souris" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Bouton de souris tenu malgré SetFocus pendant le clic : DragDetect démarre le glisser (#1138)")

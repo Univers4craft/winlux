@@ -34,6 +34,13 @@ mod v11;
 #[path = "d2d1_brush.rs"]
 mod brushes;
 
+/// Table de 120 relais « this = [this + 8], saut vers ([this + 16])[i] »
+/// pour les vues d'interface (ID2D1DeviceContext d'une ancienne cible,
+/// IDWriteTextFormat3 d'une mise en page).
+pub(crate) fn tear_off_vt() -> *const () {
+    v11::view_vt()
+}
+
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 const D2DERR_WRONG_STATE: i32 = 0x8899_0001u32 as i32;
 const D2DERR_UNSUPPORTED_PIXEL_FORMAT: i32 = 0x8898_2F80u32 as i32;
