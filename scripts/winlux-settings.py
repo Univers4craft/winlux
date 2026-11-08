@@ -160,6 +160,14 @@ _TR = {
     'sur batterie': ('on battery', 'con batería', 'Akkubetrieb'),
     'chargée': ('fully charged', 'cargada', 'vollständig geladen'),
     'branchée, pas en charge': ('plugged in, not charging', 'conectada, sin cargar', 'angeschlossen, wird nicht geladen'),
+    'Installer {name} ?': ('Install {name}?', '¿Instalar {name}?', '{name} installieren?'),
+    'Annuler': ('Cancel', 'Cancelar', 'Abbrechen'),
+    'Télécharger et installer': ('Download and install', 'Descargar e instalar', 'Herunterladen und installieren'),
+    'Éditeur : {publisher}': ('Publisher: {publisher}', 'Editor: {publisher}', 'Herausgeber: {publisher}'),
+    'Version : {version}': ('Version: {version}', 'Versión: {version}', 'Version: {version}'),
+    'Source : {source}': ('Source: {source}', 'Origen: {source}', 'Quelle: {source}'),
+    'dernière version stable publiée par l’éditeur': ('latest stable version released by the publisher', 'última versión estable publicada por el editor', 'neueste stabile Version des Herausgebers'),
+    'Winlux télécharge le paquet officiel sur ce site, vérifie son empreinte SHA-256 et refuse l’installation si elle ne correspond pas.': ('Winlux downloads the official package from this site, checks its SHA-256 fingerprint and refuses to install it if it does not match.', 'Winlux descarga el paquete oficial de este sitio, comprueba su huella SHA-256 y rechaza la instalación si no coincide.', 'Winlux lädt das offizielle Paket von dieser Seite herunter, prüft seinen SHA-256-Fingerabdruck und verweigert die Installation, wenn er nicht übereinstimmt.'),
     'Alimentation et batterie': ('Power & battery', 'Energía y batería', 'Energie und Akku'),
     'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
     'Version': ('Version', 'Versión', 'Version'),
@@ -995,7 +1003,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.browser_buttons = {}
         for title, action in actions:
             button = Gtk.Button(label=title)
-            button.connect("clicked", lambda _, value=action: self.execute(value))
+            if action.startswith("browser-install-"):
+                # Téléchargement : produit, éditeur, version et source montrés,
+                # avec refus possible, avant tout lancement (#923).
+                button.connect("clicked", lambda _, value=action: self.confirm_browser(value))
+            else:
+                button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
@@ -1335,6 +1348,22 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
+    def confirm_browser(self, action):
+        ident = action[len("browser-install-"):]
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.NONE,
+                                   text=_t("Installer {name} ?").format(name=BROWSER_NAMES[ident]))
+        dialog.format_secondary_text(browser_download_text(ident))
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Télécharger et installer"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+
+        def answered(window, response):
+            window.destroy()
+            if response == Gtk.ResponseType.OK: self.execute(action)
+        dialog.connect("response", answered)
+        dialog.show_all()
+
     def show_info(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.INFO,
                                    buttons=Gtk.ButtonsType.CLOSE, text=title)
@@ -1353,6 +1382,27 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
 
 # Ordre alphabétique : aucun navigateur mis en avant.
 BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+
+
+# Éditeur et dépôt officiel de chaque navigateur, les mêmes que le
+# téléchargeur (prepare-browser-packages.py, SOURCES) : vérifié par test.
+BROWSER_PUBLISHERS = {"chrome": ("Google", "https://dl.google.com/linux/chrome/deb/"),
+                      "edge": ("Microsoft", "https://packages.microsoft.com/repos/edge/"),
+                      "firefox": ("Mozilla", "https://packages.mozilla.org/apt/")}
+BROWSER_VERSION_FILES = ("/var/cache/winlux/browsers/{id}.version", "/usr/share/winlux/browsers/{id}.version")
+
+
+def browser_download_text(ident, root=""):
+    """Texte de la confirmation : éditeur, version, source, empreinte (#923)."""
+    publisher, source = BROWSER_PUBLISHERS[ident]
+    version = next((read(root + path.format(id=ident)).strip() for path in BROWSER_VERSION_FILES
+                    if read(root + path.format(id=ident)).strip()), "")
+    lines = [_t("Éditeur : {publisher}").format(publisher=publisher),
+             _t("Version : {version}").format(version=version or _t("dernière version stable publiée par l’éditeur")),
+             _t("Source : {source}").format(source=source),
+             "",
+             _t("Winlux télécharge le paquet officiel sur ce site, vérifie son empreinte SHA-256 et refuse l’installation si elle ne correspond pas.")]
+    return "\n".join(lines)
 
 
 def browser_buttons_shown(status, action):
