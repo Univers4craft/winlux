@@ -399,6 +399,7 @@ jobs:
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          python3 -B scripts/test-control-status-cost.py
           python3 -B scripts/test-second-session-taskbar.py
           python3 -B scripts/test-panel-tooltips.py
           python3 -B scripts/test-quick-menu-position.py
