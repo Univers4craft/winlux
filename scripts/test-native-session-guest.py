@@ -149,6 +149,10 @@ print(run("gdbus", "call", "--session", "--dest", "org.a11y.Bus", "--object-path
 print(run("gdbus", "call", "--system", "--dest", "org.freedesktop.UPower", "--object-path", "/org/freedesktop/UPower",
           "--method", "org.freedesktop.UPower.GetDisplayDevice", timeout=30), flush=True)
 print("WINLUX_SESSION_PLUMBING=0", flush=True)
+# Pages de code asiatiques (#183) : le runtime passe par les modules gconv de libc6.
+gconv = subprocess.run(["iconv", "-f", "CP932", "-t", "UTF-8"], input=bytes([0x93, 0xfa, 0x96, 0x7b]),
+                       capture_output=True, timeout=20)
+assert gconv.returncode == 0 and gconv.stdout.decode() == "日本", f"modules gconv absents de l'ISO : {gconv.stderr!r}"
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")

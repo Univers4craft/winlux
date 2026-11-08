@@ -315,13 +315,50 @@ unsafe extern "win64" fn create_di_bitmap(
 }
 
 /// GetDIBColorTable : les bitmaps de Winlux sont en couleurs vraies.
-unsafe extern "win64" fn get_dib_color_table(
-    _hdc: usize,
-    _start: u32,
-    _n: u32,
-    _rgb: *mut u32,
+/// GetDIBColorTable : entrées RGBQUAD de la table de couleurs de la DIB
+/// à palette sélectionnée dans le DC ; 0 pour une DIB sans palette.
+pub unsafe extern "win64" fn get_dib_color_table(
+    hdc: usize,
+    start: u32,
+    n: u32,
+    rgb: *mut u32,
 ) -> u32 {
-    0
+    let table = crate::dlls::gui::dc_dib_color_table(hdc);
+    if rgb.is_null() {
+        return 0;
+    }
+    let mut copied = 0;
+    for (i, &c) in table
+        .iter()
+        .skip(start as usize)
+        .take(n as usize)
+        .enumerate()
+    {
+        // COLORREF 0x00BBGGRR → RGBQUAD (bleu, vert, rouge, 0).
+        let quad = ((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF);
+        rgb.add(i).write_unaligned(quad);
+        copied += 1;
+    }
+    copied
+}
+
+/// SetDIBColorTable : remplace des entrées de la table de couleurs.
+pub unsafe extern "win64" fn set_dib_color_table(
+    hdc: usize,
+    start: u32,
+    n: u32,
+    rgb: *const u32,
+) -> u32 {
+    if rgb.is_null() {
+        return 0;
+    }
+    let colors: Vec<u32> = (0..n as usize)
+        .map(|i| {
+            let q = rgb.add(i).read_unaligned();
+            ((q & 0xFF) << 16) | (q & 0xFF00) | ((q >> 16) & 0xFF)
+        })
+        .collect();
+    crate::dlls::gui::set_dc_dib_color_table(hdc, start as usize, &colors) as u32
 }
 
 /// MaskBlt : là où le masque monochrome vaut 1, l'opération de premier plan
@@ -747,7 +784,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CreatePolygonRgn" => fn create_polygon_rgn, "CreatePolyPolygonRgn" => fn create_poly_polygon_rgn,
         "ExtCreateRegion" => fn ext_create_region, "GetRegionData" => fn get_region_data,
         "CreateBitmapIndirect" => fn create_bitmap_indirect, "CreateDIBitmap" => fn create_di_bitmap,
-        "GetDIBColorTable" => fn get_dib_color_table, "MaskBlt" => fn mask_blt, "ExtFloodFill" => fn ext_flood_fill,
+        "GetDIBColorTable" => fn get_dib_color_table, "SetDIBColorTable" => fn set_dib_color_table, "MaskBlt" => fn mask_blt, "ExtFloodFill" => fn ext_flood_fill,
         "GetGraphicsMode" => fn get_graphics_mode, "SetGraphicsMode" => fn set_graphics_mode,
         "GetLayout" => fn get_layout, "SetLayout" => fn set_layout,
         "GetWorldTransform" => fn get_world_transform, "SetWorldTransform" => fn set_world_transform,
@@ -764,6 +801,79 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DIB 16x16 en 1 bit par pixel avec sa palette (masques des listes
+    /// d'images de la VCL, WinSCP x86 #905), puis 4, 8 et 16 bits.
+    #[test]
+    fn dib_section_a_palette_et_16_bits() {
+        use crate::dlls::gdi32;
+        use crate::dlls::gui::{self, Rect};
+        unsafe {
+            // BITMAPINFOHEADER (40) + 2 RGBQUAD : noir, blanc.
+            let mut info = [0u8; 48];
+            info[0] = 40;
+            info[4] = 16; // largeur
+            info[8..12].copy_from_slice(&(-16i32).to_le_bytes()); // haut-bas
+            info[12] = 1; // plans
+            info[14] = 1; // bits par pixel
+            info[44..48].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0]);
+            let mut bits = std::ptr::null_mut();
+            let bmp = gdi32::create_dib_section(0, info.as_ptr().cast(), 0, &mut bits, 0, 0);
+            assert!(bmp != 0 && !bits.is_null());
+            let dc = gdi32::create_compatible_dc(0);
+            gdi32::select_object(dc, bmp);
+            gui::record(
+                dc,
+                gui::DrawCmd::FillRect {
+                    rect: Rect::from_size(3, 0, 1, 1),
+                    color: 0x00FF_FFFF,
+                },
+            );
+            // Pixel (3, 0) blanc : bit 4 (de poids fort) du premier octet.
+            assert_eq!(*(bits as *const u8), 0b0001_0000);
+            assert_eq!(gdi32::get_pixel(dc, 3, 0), 0x00FF_FFFF);
+            assert_eq!(gdi32::get_pixel(dc, 4, 0), 0);
+            // Le programme écrit lui-même dans le tampon : pixel (0, 1).
+            *(bits as *mut u8).add(4) = 0x80;
+            assert_eq!(gdi32::get_pixel(dc, 0, 1), 0x00FF_FFFF);
+            let mut table = [0u32; 4];
+            assert_eq!(get_dib_color_table(dc, 0, 4, table.as_mut_ptr()), 2);
+            assert_eq!(table[..2], [0, 0x00FF_FFFF]);
+            // Palette changée : le blanc devient rouge (RGBQUAD 0x00FF0000).
+            assert_eq!(set_dib_color_table(dc, 1, 1, [0x00FF_0000u32].as_ptr()), 1);
+            assert_eq!(gdi32::get_pixel(dc, 3, 0), 0x0000_00FF);
+            gdi32::delete_dc(dc);
+            gdi32::delete_object(bmp);
+            // 4, 8 et 16 bits sont acceptés aussi.
+            for depth in [4u8, 8, 16] {
+                let mut big = vec![0u8; 40 + 256 * 4];
+                big[..48].copy_from_slice(&info);
+                big[14] = depth;
+                let mut b = std::ptr::null_mut();
+                let h = gdi32::create_dib_section(0, big.as_ptr().cast(), 0, &mut b, 0, 0);
+                assert!(h != 0, "{depth} bits");
+                gdi32::delete_object(h);
+            }
+            // 16 bits 5-5-5 : un pixel rouge s'écrit 0x7C00.
+            let mut i16 = info;
+            i16[14] = 16;
+            let mut b = std::ptr::null_mut();
+            let h = gdi32::create_dib_section(0, i16.as_ptr().cast(), 0, &mut b, 0, 0);
+            let dc = gdi32::create_compatible_dc(0);
+            gdi32::select_object(dc, h);
+            gui::record(
+                dc,
+                gui::DrawCmd::FillRect {
+                    rect: Rect::from_size(0, 0, 1, 1),
+                    color: 0x0000_00FF,
+                },
+            );
+            assert_eq!(*(b as *const u16), 0x7C00);
+            assert_eq!(gdi32::get_pixel(dc, 0, 0), 0x0000_00FF);
+            gdi32::delete_dc(dc);
+            gdi32::delete_object(h);
+        }
+    }
 
     #[test]
     fn angle_arc_balaye_dans_le_sens_trigonometrique() {
