@@ -2333,10 +2333,47 @@ struct ColorContext {
 type ColorObj = Com<Res<ColorContext>>;
 
 unsafe fn new_color(this: *mut TargetObj, c: ColorContext, out: *mut *mut c_void) -> i32 {
+    new_color_in(
+        Com::get(this).factory,
+        c.space,
+        c.profile,
+        c.dxgi_space,
+        out,
+    )
+}
+
+/// Contexte de couleur rattaché à une fabrique : sert aussi au contexte des
+/// effets personnalisés (ID2D1EffectContext::CreateColorContext*, #1206).
+pub(super) unsafe fn new_color_in(
+    factory: *mut FactoryObj,
+    space: u32,
+    profile: Vec<u8>,
+    dxgi_space: u32,
+    out: *mut *mut c_void,
+) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
-    put(out, new_res(Com::get(this).factory, COLOR_VT.ptr(), c))
+    put(
+        out,
+        new_res(
+            factory,
+            COLOR_VT.ptr(),
+            ColorContext {
+                space,
+                profile,
+                dxgi_space,
+            },
+        ),
+    )
+}
+
+/// Profil ICC lu depuis un chemin Windows (CreateColorContextFromFilename).
+pub(super) unsafe fn read_profile(path: *const u16) -> Option<Vec<u8>> {
+    if path.is_null() {
+        return None;
+    }
+    std::fs::read(crate::paths::to_linux(&wide(path))).ok()
 }
 
 unsafe extern "win64" fn dc_color_context(
@@ -2367,9 +2404,8 @@ unsafe extern "win64" fn dc_color_context_file(
     path: *const u16,
     out: *mut *mut c_void,
 ) -> i32 {
-    let p = crate::paths::to_linux(&wide(path));
-    match std::fs::read(&p) {
-        Ok(bytes) => new_color(
+    match read_profile(path) {
+        Some(bytes) => new_color(
             this,
             ColorContext {
                 space: 0,
@@ -2378,7 +2414,7 @@ unsafe extern "win64" fn dc_color_context_file(
             },
             out,
         ),
-        Err(_) => {
+        None => {
             if !out.is_null() {
                 *out = std::ptr::null_mut();
             }

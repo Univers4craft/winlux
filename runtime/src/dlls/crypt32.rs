@@ -778,6 +778,23 @@ pub unsafe extern "win64" fn CertAddCertificateContextToStore(
     1
 }
 
+/// `CertAddCertificateLinkToStore` : sous Windows, le magasin reçoit un lien
+/// vers le contexte d'origine. Ici, une copie dans le magasin, avec ses
+/// propriétés, se comporte de même pour les magasins en mémoire que .NET
+/// remplit avant X509Chain.Build (SslStream, #1207).
+pub unsafe extern "win64" fn CertAddCertificateLinkToStore(
+    h: usize,
+    ctx: usize,
+    disp: u32,
+    out: *mut usize,
+) -> i32 {
+    if h == 0 || cert(ctx).is_none() {
+        crate::process::set_last_error(0x8007_0057); // E_INVALIDARG
+        return 0;
+    }
+    CertAddCertificateContextToStore(h, ctx, disp, out)
+}
+
 pub unsafe extern "win64" fn CertCompareCertificate(
     _enc: u32,
     a: *const CertInfo,
@@ -2301,6 +2318,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CertCreateCertificateContext" => fn CertCreateCertificateContext,
         "CertAddEncodedCertificateToStore" => fn CertAddEncodedCertificateToStore,
         "CertAddCertificateContextToStore" => fn CertAddCertificateContextToStore,
+        "CertAddCertificateLinkToStore" => fn CertAddCertificateLinkToStore,
         "CertCompareCertificate" => fn CertCompareCertificate,
         "CertFindCertificateInStore" => fn CertFindCertificateInStore,
         "CertGetCertificateContextProperty" => fn CertGetCertificateContextProperty,
@@ -2657,6 +2675,23 @@ mod tests {
                 0
             );
             CertCloseStore(trust, 0);
+
+            // X509Chain.Build de .NET : magasin en mémoire rempli par
+            // CertAddCertificateLinkToStore (#1207).
+            let linked = new_store();
+            assert_eq!(
+                CertAddCertificateLinkToStore(linked, ctx, 4, std::ptr::null_mut()),
+                1
+            );
+            let found = CertEnumCertificatesInStore(linked, 0);
+            assert_ne!(found, 0, "lien_vers_un_certificat_dans_un_magasin_memoire");
+            assert_eq!(cert_der(found), cert_der(ctx));
+            CertFreeCertificateContext(found);
+            assert_eq!(
+                CertAddCertificateLinkToStore(0, ctx, 4, std::ptr::null_mut()),
+                0
+            );
+            CertCloseStore(linked, 0);
             CertFreeCertificateContext(ctx);
         }
     }

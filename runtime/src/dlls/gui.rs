@@ -2069,6 +2069,22 @@ fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
     S.get_or_init(Default::default)
 }
 
+/// Bitmaps monochromes (`CreateBitmap` à 1 bit par pixel) : une copie
+/// couleur vers elles suit la règle de Windows (couleur de fond du DC
+/// source → blanc, toute autre → noir). wxWidgets en tire ses masques.
+fn monochrome() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+pub fn mark_monochrome(handle: usize) {
+    lock(monochrome()).insert(handle);
+}
+
+pub fn is_monochrome(handle: usize) -> bool {
+    lock(monochrome()).contains(&handle)
+}
+
 /// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
 pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     let h = bitmap_from_pixels(width, height, pixels)?;
@@ -2270,6 +2286,7 @@ pub fn delete_object(obj: usize) -> bool {
         Some(GdiObject::SystemBrush(_)) => false,
         Some(_) => {
             lock(device_dependent()).remove(&obj);
+            lock(monochrome()).remove(&obj);
             map.remove(&obj).is_some()
         }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
@@ -3070,7 +3087,22 @@ pub fn pump_backend() {
             update_async_key_state(vk, down);
         }
     }
-    for e in events {
+    // Stylet (#1199) : chaque message souris qu'il produit est précédé de
+    // son WM_POINTER*, et marqué « promu » (GetMessageExtraInfo).
+    let events: Vec<(PendingEvent, u32)> = events
+        .into_iter()
+        .flat_map(|e| {
+            let origin = screen_rect(e.hwnd).map(|r| (r.left, r.top));
+            match origin.and_then(|o| crate::dlls::pointer::pointer_for_mouse(&e, o)) {
+                Some(p) => {
+                    let mark = crate::dlls::pointer::promoted_mark(&p);
+                    vec![(p, 0), (e, mark)]
+                }
+                None => vec![(e, 0)],
+            }
+        })
+        .collect();
+    for (e, promoted) in events {
         if e.message == WM_HOTKEY && e.hwnd == 0 {
             hotkey_pressed(e.lparam as u32, e.wparam as u32);
             continue;
@@ -3080,8 +3112,9 @@ pub fn pump_backend() {
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
         // la boîte Tonalité y laissait un geste à moitié fait, et la piste
         // générée n'était plus jamais redessinée (#1120).
-        let mouse =
-            (0x0200..=0x020E).contains(&e.message) || (0x00A0..=0x00AD).contains(&e.message);
+        let mouse = (0x0200..=0x020E).contains(&e.message)
+            || (0x00A0..=0x00AD).contains(&e.message)
+            || (0x0245..=0x024A).contains(&e.message);
         if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
             let press = matches!(
                 e.message,
@@ -3135,7 +3168,7 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: 0,
+            l_private: promoted,
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -3843,6 +3876,11 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         {
             continue;
         }
+        // Message souris promu d'un WM_POINTER* que la fenêtre a traité
+        // elle-même : Windows ne le produit pas (#1199).
+        if !crate::dlls::pointer::on_take(&m) {
+            continue;
+        }
         break m;
     };
     if taken.message == WM_PAINT {
@@ -3950,6 +3988,7 @@ pub fn default_nccalcsize_seen() -> bool {
 
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+    crate::dlls::pointer::on_default(message);
     match message {
         // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
         // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le

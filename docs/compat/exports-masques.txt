@@ -165,6 +165,8 @@ GetObjectW  gdi32  ←  gdi32_palette
 GetOutlineTextMetricsW  win32_basics  ←  usp10
 GetParent  user32_ext  ←  user32
 GetPath  win32_basics  ←  hors exports!
+GetPointerDevices  electron_win32  ←  pointer
+GetPointerType  electron_win32  ←  pointer
 GetPrivateProfileStringA  kernel32  ←  inifile
 GetPrivateProfileStringW  electron_win32  ←  inifile
 GetPropA  user32_ext  ←  user32
@@ -192,7 +194,7 @@ GetTextMetricsW  gdi32  ←  gdi32_ext
 GetUpdateRect  user32_ext  ←  user32
 GetUserDefaultLocaleName  intl::api  ←  nls
 GetUserGeoID  intl::api  ←  nls
-GetUserNameA  advapi32  ←  kernel32
+GetUserNameA  advapi32  ←  kernel32, kernel32_fs
 GetWindow  user32_ext  ←  user32
 GetWindowDC  user32_ext  ←  user32
 GetWindowLongA  user32_ext  ←  user32
@@ -275,6 +277,7 @@ Rectangle  gdi32  ←  gdi32_path
 RedrawWindow  user32_ext  ←  user32
 RegisterDragDrop  ole32  ←  dataobject
 RegisterEventSourceA  advapi32  ←  apps_win32
+RegisterPointerDeviceNotifications  electron_win32  ←  pointer
 RegisterRawInputDevices  games_win32  ←  rawinput
 ReleaseCapture  user32_ext  ←  user32
 RemoveMenu  user32  ←  menus
