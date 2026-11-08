@@ -1288,4 +1288,9 @@ ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+# #1183 : SslStream de .NET normalise le nom d'hôte par Normaliz.dll!IdnToAscii.
+ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
+   and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
+   and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
