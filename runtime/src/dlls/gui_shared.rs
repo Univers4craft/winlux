@@ -265,4 +265,23 @@ mod tests {
         withdraw_in(&d, h, other);
         assert_eq!(unsafe { crate::dlls::user32::is_window(h) }, 0);
     }
+
+    #[test]
+    fn direct3d_trouve_la_fenetre_x11_d_un_autre_processus() {
+        let Some(d) = dir() else { return };
+        let other = unsafe { libc::getppid() } as u32;
+        let h = alloc_hwnd();
+        publish_in(
+            &d,
+            h,
+            Foreign {
+                pid: other,
+                tid: 7,
+                xid: 0x1c0_0042,
+            },
+        );
+        assert_eq!(crate::dlls::gui::native_window(h), Some(0x1c0_0042));
+        withdraw_in(&d, h, other);
+        assert_eq!(crate::dlls::gui::native_window(h), None);
+    }
 }
