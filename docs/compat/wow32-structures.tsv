@@ -155,6 +155,7 @@ ole32.rs	IMallocVTable	a-verifier
 ole32.rs	IStreamVTable	a-verifier	
 ole32.rs	MarshalStream	a-verifier	
 ole32.rs	MarshalVtbl	a-verifier	
+ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
 ole32.rs	StatStg	a-verifier	
 quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
 quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
@@ -165,6 +166,8 @@ seh.rs	DispatcherContext	a-verifier
 seh.rs	ExceptionPointers	a-verifier	
 seh.rs	ExceptionRecord	a-verifier	
 shell32.rs	ShellExecuteInfo	x86	SHELLEXECUTEINFO de 60 octets converti par execute_ex_any
+shell_folder_com.rs	Enum	interne	objet IEnumIDList du runtime ; en x86, la passerelle COM (wow32/com.rs, IENUMIDLIST) l'enveloppe
+shell_folder_com.rs	Folder	interne	objet IShellFolder du runtime ; en x86, la passerelle COM (wow32/com.rs, ISHELLFOLDER) l'enveloppe
 shlwapi_reg.rs	RegStream	a-verifier	
 shlwapi_reg.rs	StreamVtbl	a-verifier	
 taskschd.rs	Obj	a-verifier	
@@ -227,4 +230,3 @@ ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
 ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
 xaudio2.rs	Cb	a-verifier	
 xaudio2.rs	Voice	a-verifier	
-ole32.rs	MultiQi	a-verifier	CoCreateInstanceEx (#16) : pas encore de traduction wow32
