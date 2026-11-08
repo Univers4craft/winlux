@@ -139,6 +139,7 @@ _TR = {
     'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
     'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
     'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Lancer sans isolation (Chromium, Electron)': ('Start without isolation (Chromium, Electron)', 'Iniciar sin aislamiento (Chromium, Electron)', 'Ohne Isolierung starten (Chromium, Electron)'),
     'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
@@ -242,7 +243,6 @@ _TR = {
     'La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation.': ('Preparing updates uses the disk. Keep the computer on during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga el ordenador encendido durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie den Computer während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
-    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
     'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
@@ -255,6 +255,8 @@ _TR = {
     'Installation': ('Installing', 'Instalación', 'Installation'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'VPN': ('VPN', 'VPN', 'VPN'),
+    'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -334,15 +336,15 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde"), _t("Applications installées")]
+         _t("Sauvegarde"), _t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 39 n’existent que dans les Paramètres natifs.
+# Pages 29 à 41 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
-              (_t("Réseau et Internet"), [35, 2, 20, 28]),
+              (_t("Réseau et Internet"), [35, 2, 40, 41, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [39, 1, 10, 11, 15, 30]),
               (_t("Comptes"), [33, 38]),
@@ -374,9 +376,10 @@ def lock_delay_text(seconds):
     return _t("{n} minutes").format(n=seconds // 60)
 
 
-PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network")
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network", "sandbox")
 PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
-                    "screen": "Capture de l’écran", "network": "Réseau et Internet"}
+                    "screen": "Capture de l’écran", "network": "Réseau et Internet",
+                    "sandbox": "Lancer sans isolation (Chromium, Electron)"}
 
 
 def permission_tool():
@@ -697,6 +700,7 @@ SETTINGS_CSS = """
   combobox button, combobox button label, menu, menuitem, menuitem label {{ background: {button}; color: {fg}; }}
   menuitem:hover, menuitem:hover label {{ background: {selected}; color: {selected_fg}; }}
   progressbar text {{ color: {fg}; }}
+  switch:checked {{ background: {accent}; border-color: {accent}; }}
   .heading {{ font-size: 24px; font-weight: bold; }}
   .subtitle, label.subtitle {{ color: {dim}; }}
   .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; }}
@@ -1277,6 +1281,9 @@ PAGE_NAMES = {
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
     # ms-settings:appsfeatures ouvre « Applications installées » (#722).
     "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
+    # VPN et point d’accès sans fil mobile (#660), noms de Windows compris.
+    "network-vpn": 40, "vpn": 40, "network-mobilehotspot": 41, "mobilehotspot": 41, "hotspot": 41,
+    "point-d-acces": 41, "partage-de-connexion": 41,
 }
 
 

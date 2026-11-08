@@ -3,6 +3,7 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod a11y;
+pub mod absent_devices;
 pub mod accel;
 pub mod actctx;
 pub mod advapi32;
@@ -37,13 +38,17 @@ pub mod d2d1;
 pub mod d2d_raster;
 pub mod d3d11;
 pub mod d3d12;
+pub mod d3d8;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod d3dcompiler;
+pub mod d3dx9;
+pub mod d3dx9_draw;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
+pub mod ddraw;
 pub mod devio;
 pub mod devnodes;
 pub mod dialogs;
@@ -51,6 +56,7 @@ pub mod dinput8;
 pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
+pub mod dplayx;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -63,12 +69,14 @@ pub mod errorinfo;
 pub mod evdev;
 pub mod eventing;
 pub mod filedialog_com;
+pub mod ftp_apps;
 pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gdi32_more;
 pub mod gdi32_palette;
+pub mod gdi32_path;
 pub mod gdiplus;
 pub mod gl_bindings;
 pub mod gl_legacy;
@@ -94,6 +102,7 @@ pub mod kernel32_legacy;
 pub mod kernel32_misc;
 pub mod kernel32_node;
 pub mod knownfolders;
+pub mod legacy_com;
 pub mod legacy_dlls;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -118,6 +127,7 @@ pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
 pub mod opengl32;
+pub mod pdh;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -167,6 +177,7 @@ pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_midi;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
@@ -425,7 +436,17 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ncrypt",
-                exports: ncrypt::exports(),
+                // ncrypt.dll exporte aussi les BCrypt* (FileZilla les y
+                // importe pour BCryptGenRandom).
+                exports: {
+                    let mut e = ncrypt::exports();
+                    for (name, addr) in bcrypt::exports() {
+                        if name.starts_with("BCrypt") {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -450,6 +471,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(gdi32_more::exports());
+                    e.extend(gdi32_path::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
                     e.extend(displaymode::gdi32_exports());
@@ -470,6 +492,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = winmm::exports();
                     e.extend(winmm_waveout::exports());
+                    e.extend(winmm_midi::exports());
                     e
                 },
                 handle: fake_module(),
@@ -530,6 +553,16 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "dplayx",
+                exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dplay",
+                exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "quartz",
                 exports: quartz::exports(),
                 handle: fake_module(),
@@ -572,6 +605,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dxva2",
                 exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ddraw",
+                exports: ddraw::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3dx9",
+                exports: d3dx9::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d8",
+                exports: d3d8::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -658,9 +706,52 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: uxtheme::exports(),
                 handle: fake_module(),
             },
+            // RichEdit : les classes RICHEDIT50W, RichEdit20W/A et RICHEDIT
+            // sont fournies par controls::richedit ; ces DLL n'ont qu'à se
+            // charger (LoadLibrary de wxWidgets, #795).
+            Builtin {
+                name: "msftedit",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "riched20",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "riched32",
+                exports: Exports::new(),
+                handle: fake_module(),
+            },
             Builtin {
                 name: "sensapi",
                 exports: sensapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "pdh",
+                exports: pdh::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winscard",
+                exports: absent_devices::winscard_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "bthprops.cpl",
+                exports: absent_devices::bthprops_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dcomp",
+                exports: absent_devices::dcomp_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "fontsub",
+                exports: absent_devices::fontsub_exports(),
                 handle: fake_module(),
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
@@ -907,12 +998,15 @@ fn add_basics(all: &mut [Builtin]) {
     let electron = electron_win32::all();
     // Fonctions communes à Notepad++, Audacity et Claude (common_apps).
     let common = common_apps::all();
+    // Imports de FileZilla (ftp_apps).
+    let ftp = ftp_apps::all();
     for (dll, exports) in extra
         .into_iter()
         .chain(games)
         .chain(apps)
         .chain(electron)
         .chain(common)
+        .chain(ftp)
     {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
@@ -965,6 +1059,8 @@ fn add_basics(all: &mut [Builtin]) {
         {
             b.exports.insert(name, addr);
         }
+        // En dernier : les tracés passent par le chemin ouvert (BeginPath).
+        gdi32_path::hook(&mut b.exports);
     }
     // Fichiers .ini : de vraies lectures et écritures remplacent les
     // anciennes versions qui rendaient toujours la valeur par défaut.
@@ -1008,6 +1104,10 @@ pub fn normalize(dll: &str) -> String {
     // Compilateur HLSL : toutes les versions servies par le même d3dcompiler_47.
     if base.starts_with("d3dcompiler_") {
         return "d3dcompiler_47".into();
+    }
+    // D3DX9 (#834) : d3dx9_24 … d3dx9_43 servies par la même bibliothèque.
+    if base.starts_with("d3dx9_") {
+        return "d3dx9".into();
     }
     // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
     if base == "sspicli" {
@@ -1169,7 +1269,13 @@ pub fn normalize(dll: &str) -> String {
 /// Redistribuables dont Winlux a une version maison partielle : la vraie
 /// DLL, quand elle est présente (dossier de l'appli ou System32), passe avant.
 pub fn prefers_real_file(normalized: &str) -> bool {
-    matches!(normalized, "msvcp140")
+    // Runtime MinGW (libstdc++, libgcc, winpthread) : la copie maison ne
+    // couvre que les petits tests C++ ; une appli qui livre la sienne
+    // (FileZilla, wxWidgets…) en a besoin en entier (#783).
+    matches!(
+        normalized,
+        "msvcp140" | "libstdc++-6" | "libgcc_s_seh-1" | "libgcc_s_dw2-1" | "libwinpthread-1"
+    )
 }
 
 pub fn is_builtin(normalized: &str) -> bool {

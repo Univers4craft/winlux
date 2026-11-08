@@ -491,6 +491,11 @@ pub(super) fn to32(v: u64, iface: Option<&'static Iface>, iid: &Guid) -> u32 {
     if v == 0 {
         return 0;
     }
+    // Objet « deux ABI » du runtime (DirectShow, DirectSound, Direct3D 9…) :
+    // sa table est déjà celle du programme x86 (#778).
+    if unsafe { crate::dlls::legacy_com::is_x86_object(v as usize) } {
+        return v as u32;
+    }
     // Mandataire d'un objet x86 : l'objet lui-même.
     if let Some((x, fx)) = maps(|m| m.p64_obj.get(&(v as usize)).copied()) {
         let fits = match iface {
@@ -853,6 +858,9 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
 fn to32_borrowed(v: u64, iface: Option<&'static Iface>, iid: &Guid) -> u32 {
     if v == 0 {
         return 0;
+    }
+    if unsafe { crate::dlls::legacy_com::is_x86_object(v as usize) } {
+        return v as u32;
     }
     if let Some((x, _)) = maps(|m| m.p64_obj.get(&(v as usize)).copied()) {
         return x;

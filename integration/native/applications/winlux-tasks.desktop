@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Gestionnaire de tâches
+Name[en]=Task Manager
+Name[de]=Task-Manager
+Name[es]=Administrador de tareas
 Exec=/usr/bin/winlux-shell-app taskmgr
 StartupWMClass=winlux-taskmgr
 Icon=utilities-system-monitor

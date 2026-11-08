@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Fichiers et périphériques
+Name[en]=Files and devices
+Name[de]=Dateien und Geräte
+Name[es]=Archivos y dispositivos
 Exec=/usr/bin/winlux-system-tools files
 Icon=system-file-manager
 Categories=System;FileManager;

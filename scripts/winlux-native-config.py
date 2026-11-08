@@ -42,8 +42,20 @@ def _t(text):
 
 
 def _append_account_line(path, line, mode):
-    """Ajoute une ligne par fichier temporaire + fsync + rename."""
+    """Ajoute une ligne par fichier temporaire + fsync + rename, sous le
+    verrou /etc/.pwd.lock que prennent useradd, passwd et chpasswd (lckpwdf),
+    puis fsync du dossier pour que le rename survive à une coupure (#399)."""
+    import fcntl
     target = Path(path)
+    lock = os.open(str(target.parent / ".pwd.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.lockf(lock, fcntl.LOCK_EX)
+        _append_locked(target, line, mode)
+    finally:
+        os.close(lock)
+
+
+def _append_locked(target, line, mode):
     try:
         text = target.read_text(encoding="utf-8", errors="surrogateescape")
         info = target.stat()
@@ -60,6 +72,11 @@ def _append_account_line(path, line, mode):
     os.chown(temporary, owner, group)
     os.chmod(temporary, mode)
     os.rename(temporary, target)
+    directory = os.open(str(target.parent), os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def ensure_system_account(name, first_uid, comment, home):
@@ -124,7 +141,12 @@ if os.geteuid() == 0:
     if policy_user:
         os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
-    for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
+    # Comptes que créent les scripts des paquets (absents : paquets extraits
+    # sans postinst) : dnsmasq du point d'accès sans fil mobile et OpenVPN de
+    # NetworkManager quittent root pour eux (#660).
+    ensure_account_or_log("dnsmasq", 970, "dnsmasq", "/var/lib/misc")
+    ensure_account_or_log("nm-openvpn", 975, "NetworkManager OpenVPN", "/var/lib/openvpn/chroot")
+    for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2","/etc/NetworkManager/dnsmasq-shared.d"):
         Path(directory).mkdir(parents=True,exist_ok=True)
     saver = ensure_account_or_log("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
     if saver:

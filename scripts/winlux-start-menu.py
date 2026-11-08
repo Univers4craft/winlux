@@ -18,6 +18,19 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
 
+class FixedWidthBox(Gtk.Box):
+    """Boîte dont la largeur est celle demandée par set_size_request, quel que
+    soit son contenu : le volet « Pour vous » garde 320 ou 360 px même quand un
+    nom d'application long (« Textverarbeitung ») voudrait l'élargir (#869).
+    Les libellés se coupent alors avec « … » dans la place donnée."""
+
+    def do_get_preferred_width(self):
+        width = self.get_size_request()[0]
+        if width <= 0:
+            return Gtk.Box.do_get_preferred_width(self)
+        return width, width
+
+
 # ── Recherche : ni casse ni accents (« parametres » trouve « Paramètres ») ──
 
 _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
@@ -124,6 +137,8 @@ _TR = {
     'Certificats': ('Certificates', 'Certificados', 'Zertifikate'),
     'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobilgeräte'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'VPN': ('VPN', 'VPN', 'VPN'),
+    'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
     'Meilleur résultat': ('Best match', 'Mejor coincidencia', 'Höchste Übereinstimmung'),
     'Applications': ('Apps', 'Aplicaciones', 'Apps'),
     'Documents': ('Documents', 'Documentos', 'Dokumente'),
@@ -225,7 +240,7 @@ SETTINGS_INDEX = [
     (0, "Système Linux", "systeme linux noyau kernel services system sistema núcleo Kernel Dienste"),
     (39, "Applications installées", "applications installees logiciels installes programmes desinstaller supprimer taille liste installed apps programs uninstall remove size aplicaciones instaladas programas desinstalar installierte Apps Programme deinstallieren entfernen"),
     (1, "Gérer les applications", "applications apps gerer demarrage boutiques logiciels par defaut installer manage startup stores software aplicaciones administrar inicio tiendas verwalten Autostart"),
-    (2, "Réseau", "reseau ethernet cable proxy vpn ip dns internet network red Netzwerk Kabel"),
+    (2, "Réseau", "reseau ethernet cable proxy ip dns internet network red Netzwerk Kabel"),
     (4, "Clavier et souris", "clavier souris azerty qwerty disposition pave tactile touchpad pointeur keyboard mouse layout teclado raton Tastatur Maus Layout"),
     (7, "Mise à jour OS", "mise a jour os mises a jour winlux systeme exploitation os update operating system actualizacion del so sistema operativo Betriebssystem OS-Update update updates actualizaciones actualizar Aktualisierung Updates"),
     (8, "Écran", "ecran affichage resolution luminosite echelle orientation projeter second ecran moniteur display brightness scale monitor project pantalla brillo escala Bildschirm Anzeige Helligkeit Auflosung Skalierung"),
@@ -255,7 +270,9 @@ SETTINGS_INDEX = [
     (32, "Presse-papiers", "presse papiers historique copier coller clipboard history portapapeles historial Zwischenablage Verlauf"),
     (33, "Comptes", "comptes compte utilisateur utilisateurs mot de passe connexion famille accounts account user password sign in cuentas cuenta usuario contrasena Konten Konto Benutzer Kennwort Anmeldung"),
     (34, "Matériel et pilotes", "materiel pilotes peripheriques gestionnaire de peripheriques hardware drivers devices device manager controladores hardware administrador de dispositivos Treiber Hardware Gerate-Manager"),
-    (35, "Wi-Fi", "wifi wi fi sans fil reseau sans fil hotspot wireless wlan inalambrica red WLAN Drahtlos"),
+    (35, "Wi-Fi", "wifi wi fi sans fil reseau sans fil wireless wlan inalambrica red WLAN Drahtlos"),
+    (40, "VPN", "vpn reseau prive virtuel wireguard openvpn tunnel entreprise virtual private network red privada virtual virtuelles privates Netzwerk"),
+    (41, "Point d’accès sans fil mobile", "point d acces sans fil mobile partage de connexion hotspot tethering partager internet mobile hotspot share internet zona con cobertura compartir conexion mobiler Hotspot Internetfreigabe Tethering"),
     (36, "Certificats", "certificats certificat securite ssl tls certificates certificate certificados certificado Zertifikate Zertifikat"),
     (37, "Appareils mobiles", "appareils mobiles telephone smartphone android mobile devices phone dispositivos moviles telefono movil Mobilgerate Telefon Handy Smartphone"),
     (38, "Sauvegarde", "sauvegarde sauvegarder documents copie de securite disque externe restaurer backup back up external drive restore copia de seguridad disco externo restaurar Sicherung sichern externe Festplatte wiederherstellen"),
@@ -673,7 +690,7 @@ class Start(Gtk.Application):
         footer.pack_end(power, False, False, 0)
         self.left.pack_end(footer, False, False, 0)
         # Volet « Pour vous » : rempli par render_side().
-        self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.side = FixedWidthBox(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.side.get_style_context().add_class("side")
         self.side.set_no_show_all(True)
         panes.pack_end(self.side, False, False, 0)
@@ -791,6 +808,9 @@ class Start(Gtk.Application):
         label.set_max_width_chars(12 if grid else 50)
         if grid:
             label.set_line_wrap(True)
+            # Un mot plus long que la tuile (« Textverarbeitungsprogramm ») se
+            # coupe aussi en deux lignes au lieu d'élargir le menu (#869).
+            label.set_line_wrap_mode(2)  # Pango.WrapMode.WORD_CHAR
             label.set_lines(2)
         label.get_style_context().add_class("app-name")
         box.pack_start(label, not badge, not badge, 0)

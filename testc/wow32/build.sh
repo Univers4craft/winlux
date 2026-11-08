@@ -52,6 +52,8 @@ GetStdHandle@4
 WriteFile@20
 GetCommandLineA@0
 SetUnhandledExceptionFilter@4
+RtlUnwind@16
+EnumCalendarInfoW@16
 DEF
 printf 'LIBRARY msvcrt.dll\nEXPORTS\n_except_handler3\n' >"$tmp/msvcrt_seh.def"
 llvm-dlltool -m i386 -k -d "$tmp/kernel32_seh.def" -l "$tmp/kernel32_seh.lib"
@@ -134,7 +136,9 @@ llvm-dlltool -m i386 -k -d "$tmp/kernel32_wow64.def" -l "$tmp/kernel32_wow64.lib
 llvm-dlltool -m i386 -k -d "$tmp/advapi32_wow64.def" -l "$tmp/advapi32_wow64.lib"
 printf 'LIBRARY oleaut32.dll\nEXPORTS\nSysAllocString@4\nSysStringLen@4\nVariantCopy@8\nVariantClear@4\n' >"$tmp/oleaut32_wow64.def"
 llvm-dlltool -m i386 -k -d "$tmp/oleaut32_wow64.def" -l "$tmp/oleaut32_wow64.lib"
-printf 'LIBRARY ws2_32.dll\nEXPORTS\nWSAStartup@8\ngethostbyname@4\n' >"$tmp/ws2_32_wow64.def"
+printf 'LIBRARY ws2_32.dll\nEXPORTS\nWSAStartup@8\ngethostbyname@4\ngetaddrinfo@16\nfreeaddrinfo@4\ngetservbyname@8\nsocket@12\nclosesocket@4\nselect@20\nWSAPoll@12\n' >"$tmp/ws2_32_wow64.def"
+printf 'LIBRARY winhttp.dll\nEXPORTS\nWinHttpGetIEProxyConfigForCurrentUser@4\nWinHttpGetDefaultProxyConfiguration@4\n' >"$tmp/winhttp_wow64.def"
+llvm-dlltool -m i386 -k -d "$tmp/winhttp_wow64.def" -l "$tmp/winhttp_wow64.lib"
 llvm-dlltool -m i386 -k -d "$tmp/ws2_32_wow64.def" -l "$tmp/ws2_32_wow64.lib"
 printf 'LIBRARY user32.dll\nEXPORTS\nLoadIconW@8\nGetIconInfo@8\nCreatePopupMenu@0\nInsertMenuItemW@16\nGetMenuItemInfoW@16\n' >"$tmp/user32_wow64.def"
 printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC@4\nCreateCompatibleBitmap@12\nSelectObject@8\n' >"$tmp/gdi32_wow64.def"
@@ -144,7 +148,7 @@ clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$s
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" "$tmp/msvcrt_wow64.lib" \
     "$tmp/oleaut32_wow64.lib" "$tmp/ws2_32_wow64.lib" "$tmp/user32_wow64.lib" \
-    "$tmp/gdi32_wow64.lib" /out:"$out/wow64.exe"
+    "$tmp/gdi32_wow64.lib" "$tmp/winhttp_wow64.lib" /out:"$out/wow64.exe"
 # Exceptions C++ MSVC x86 (#232, étape 7) : tables de clang en cible
 # i686-pc-windows-msvc, msvcrt!__CxxFrameHandler3 et _CxxThrowException.
 cat >"$tmp/kernel32_cxx.def" <<'DEF'
@@ -236,6 +240,125 @@ done
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/gui32.c" -o "$tmp/gui32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
     "$tmp/gui32.obj" "$tmp/kernel32_gui.lib" "$tmp/user32.lib" "$tmp/gdi32.lib" /out:"$out/gui32.exe"
+# Anciens jeux (#237, #777) : DirectDraw, MIDI, timeSetEvent et waveOut,
+# en x86 (jeux32.exe) et en x64 (jeux64.exe) pour les deux dispositions.
+cat >"$tmp/jeux.def" <<'DEF'
+LIBRARY kernel32.dll
+EXPORTS
+GetStdHandle@4
+WriteFile@20
+ExitProcess@4
+Sleep@4
+GetTickCount@0
+GetModuleHandleA@4
+CreateEventA@16
+WaitForSingleObject@8
+DEF
+cat >"$tmp/jeux_user32.def" <<'DEF'
+LIBRARY user32.dll
+EXPORTS
+RegisterClassExA@4
+CreateWindowExA@48
+DefWindowProcA@16
+FillRect@12
+DEF
+cat >"$tmp/jeux_gdi32.def" <<'DEF'
+LIBRARY gdi32.dll
+EXPORTS
+CreateSolidBrush@4
+DeleteObject@4
+DEF
+cat >"$tmp/jeux_ddraw.def" <<'DEF'
+LIBRARY ddraw.dll
+EXPORTS
+DirectDrawCreate@12
+DirectDrawCreateEx@16
+DirectDrawEnumerateA@8
+DEF
+cat >"$tmp/jeux_d3d8.def" <<'DEF'
+LIBRARY d3d8.dll
+EXPORTS
+Direct3DCreate8@4
+DEF
+cat >"$tmp/jeux_dsound.def" <<'DEF'
+LIBRARY dsound.dll
+EXPORTS
+DirectSoundCreate8@12
+DirectSoundEnumerateA@8
+DEF
+cat >"$tmp/jeux_dplayx.def" <<'DEF'
+LIBRARY dplayx.dll
+EXPORTS
+DirectPlayCreate@12
+DirectPlayLobbyCreateA@20
+DEF
+cat >"$tmp/jeux_ole32.def" <<'DEF'
+LIBRARY ole32.dll
+EXPORTS
+CoInitialize@4
+CoCreateInstance@20
+DEF
+cat >"$tmp/jeux_d3d9.def" <<'DEF'
+LIBRARY d3d9.dll
+EXPORTS
+Direct3DCreate9@4
+DEF
+cat >"$tmp/jeux_d3dx9.def" <<'DEF'
+LIBRARY d3dx9_43.dll
+EXPORTS
+D3DXMatrixRotationZ@8
+D3DXMatrixTranslation@16
+D3DXMatrixScaling@16
+D3DXMatrixMultiply@12
+D3DXMatrixInverse@12
+D3DXMatrixDeterminant@4
+D3DXFloat32To16Array@12
+D3DXCreateTextureFromFileInMemory@16
+D3DXCreateTextureFromFileInMemoryEx@60
+D3DXCreateSprite@8
+D3DXCreateFontA@48
+D3DXCreateBuffer@8
+DEF
+cat >"$tmp/jeux_winmm.def" <<'DEF'
+LIBRARY winmm.dll
+EXPORTS
+midiOutGetNumDevs@0
+midiOutGetDevCapsA@12
+midiOutOpen@20
+midiOutShortMsg@8
+midiOutClose@4
+midiOutPrepareHeader@12
+midiOutUnprepareHeader@12
+midiStreamOpen@24
+midiStreamOut@12
+midiStreamRestart@4
+midiStreamProperty@12
+midiStreamPosition@12
+midiStreamClose@4
+timeBeginPeriod@4
+timeSetEvent@20
+timeKillEvent@4
+waveOutOpen@24
+waveOutPrepareHeader@12
+waveOutUnprepareHeader@12
+waveOutWrite@12
+waveOutClose@4
+DEF
+mkdir -p "$tmp/jeux64"
+for lib in jeux jeux_user32 jeux_gdi32 jeux_ddraw jeux_d3d8 jeux_d3d9 jeux_d3dx9 jeux_dsound jeux_ole32 jeux_dplayx jeux_winmm; do
+    llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
+    sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/jeux64/$lib.def"
+    llvm-dlltool -m i386:x86-64 -d "$tmp/jeux64/$lib.def" -l "$tmp/jeux64/$lib.lib"
+done
+clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux32.obj"
+lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
+    "$tmp/jeux32.obj" "$tmp/jeux.lib" "$tmp/jeux_user32.lib" "$tmp/jeux_gdi32.lib" \
+    "$tmp/jeux_ddraw.lib" "$tmp/jeux_d3d8.lib" "$tmp/jeux_d3d9.lib" "$tmp/jeux_d3dx9.lib" "$tmp/jeux_dsound.lib" "$tmp/jeux_ole32.lib" "$tmp/jeux_dplayx.lib" "$tmp/jeux_winmm.lib" /out:"$out/jeux32.exe"
+clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux64/jeux64.obj"
+lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
+    "$tmp/jeux64/jeux64.obj" "$tmp/jeux64/jeux.lib" "$tmp/jeux64/jeux_user32.lib" \
+    "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_winmm.lib" \
+    /out:"$out/jeux64.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans
 # i686-w64-mingw32-gcc, le test le saute.

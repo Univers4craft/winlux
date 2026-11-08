@@ -1143,7 +1143,21 @@ impl<'a, 'b> Vm<'a, 'b> {
                     self.set_var(p[1], "0".into());
                 }
             }
-            65 => self.error(), // GetOSInfo
+            65 => {
+                // EW_GETOSINFO. Opération 1 (GETOSINFO_READMEMORY, utilisée
+                // par GetWinVer et WinVer.nsh) : lit `cb` octets à `offset`
+                // dans exec_flags_t (14 entiers) suivi de l'osinfo
+                // { WVBuild, WVProd, WVSP, WVMin, WVMaj }. Sans elle, les
+                // installeurs croyaient le système trop ancien (#799).
+                let addr = self.int(p[2]);
+                if p[3] == 1 && addr == 0 {
+                    let value = os_info_read(&self.flags, self.int(p[4]) as u64);
+                    self.set_var(p[1], value.to_string());
+                } else {
+                    self.set_var(p[1], String::new());
+                    self.error();
+                }
+            }
             _ => {}
         }
         Ok(0)
@@ -1758,6 +1772,25 @@ fn plugin_call(dll: &str, func: &str, stack: &mut Vec<String>, lang: &str) -> Op
     Some(done)
 }
 
+/// EW_GETOSINFO / GETOSINFO_READMEMORY à l'adresse 0 (ABI_OSINFOADDRESS) :
+/// `spec` donne la taille lue (octet bas) et le décalage (octet haut) dans
+/// exec_flags_t (14 entiers) suivi de l'osinfo { WVBuild, WVProd, WVSP,
+/// WVMin, WVMaj } ; Winlux répond Windows 10 22H2, poste de travail (#799).
+fn os_info_read(flags: &[i32], spec: u64) -> u64 {
+    let (cb, offset) = ((spec & 0xFF) as usize, ((spec >> 24) & 0xFF) as usize);
+    let mut mem = [0u8; 64];
+    for (k, f) in flags.iter().take(14).enumerate() {
+        mem[4 * k..4 * k + 4].copy_from_slice(&f.to_le_bytes());
+    }
+    mem[56..60].copy_from_slice(&19045u32.to_le_bytes());
+    mem[60..64].copy_from_slice(&[1, 0, 0, 10]);
+    let mut value = 0u64;
+    for k in 0..cb.min(8) {
+        value |= u64::from(*mem.get(offset + k).unwrap_or(&0)) << (8 * k);
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1805,6 +1838,20 @@ mod tests {
         plugin_call("INetC.dll", "get", &mut stack, "en").unwrap();
         assert_eq!(stack, vec!["Cancelled"]);
         assert!(plugin_call("Inconnu.dll", "Truc", &mut stack, "en").is_none());
+    }
+
+    #[test]
+    fn getwinver_windows_10() {
+        // WinVer.nsh : WVMaj (1 octet à 63), WVMin (62), WVBuild (4 octets à 56),
+        // WVProd (60) ; un drapeau d'exécution reste lisible à son décalage.
+        let mut flags = [0i32; 14];
+        flags[3] = 0x1234;
+        assert_eq!(os_info_read(&flags, (63 << 24) | 1), 10);
+        assert_eq!(os_info_read(&flags, (62 << 24) | 1), 0);
+        assert_eq!(os_info_read(&flags, (56 << 24) | 4), 19045);
+        assert_eq!(os_info_read(&flags, (60 << 24) | 1), 1);
+        assert_eq!(os_info_read(&flags, (12 << 24) | 4), 0x1234);
+        assert_eq!(os_info_read(&flags, (63 << 24) | 4), 10); // au-delà : zéros
     }
 
     #[test]

@@ -211,6 +211,18 @@ winlux_wow_back64:
     mov r12d, eax
     mov r13d, edx
     call winlux_wow_fs_glibc
+    // Chaîne sous la pile x86 : un gestionnaire d'exception x86 a sauté
+    // hors d'un appel 64 → 32 plus profond sans le terminer (Delphi,
+    // C++Builder). On retrouve le maillon de cet appel-ci (#779).
+    mov rax, qword ptr gs:[{rsp_chain}]
+    cmp rax, rsp
+    jae 6f
+    mov rcx, rsp
+    and rsp, -16
+    sub rsp, 32
+    call qword ptr [rip + winlux_wow_repair_ptr]
+    mov qword ptr gs:[{rsp_chain}], rax
+6:
     mov rsp, qword ptr gs:[{rsp_chain}]
     add rsp, 8
     pop qword ptr gs:[{rsp_chain}]
@@ -271,6 +283,9 @@ winlux_wow_ret32_target:
     .balign 8
     .globl winlux_wow_dispatch_ptr
 winlux_wow_dispatch_ptr:
+    .quad 0
+    .globl winlux_wow_repair_ptr
+winlux_wow_repair_ptr:
     .quad 0
     .globl winlux_wow_enter32_far
 winlux_wow_enter32_far:
@@ -356,6 +371,7 @@ extern "C" {
     static winlux_wow_back64: u8;
     static winlux_wow_ret32_target: u8;
     static winlux_wow_dispatch_ptr: u8;
+    static winlux_wow_repair_ptr: u8;
     static winlux_wow_enter32_far: u8;
     static winlux_wow_has_fsgsbase: u8;
     static winlux_wow_call_ebp: u8;
@@ -393,6 +409,8 @@ fn blob() -> &'static Blob {
         );
         (at(std::ptr::addr_of!(winlux_wow_dispatch_ptr)) as *mut u64)
             .write_unaligned(dispatch as *const () as usize as u64);
+        (at(std::ptr::addr_of!(winlux_wow_repair_ptr)) as *mut u64)
+            .write_unaligned(repair_chain as *const () as usize as u64);
         *(at(std::ptr::addr_of!(winlux_wow_has_fsgsbase)) as *mut u8) = has_fsgsbase() as u8;
         Blob {
             entry64: at(std::ptr::addr_of!(winlux_wow_entry64)) as u32,
@@ -807,12 +825,56 @@ pub fn init_thread(teb64: usize) {
 // Appels 64 → 32
 // ---------------------------------------------------------------------
 
+thread_local! {
+    /// Appels 64 → 32 en cours : (repère dans la pile de `call32`, chaîne
+    /// en place avant l'appel). Le maillon de chaque appel vit dans la pile
+    /// partagée ; quand un gestionnaire d'exception x86 saute hors d'un
+    /// appel sans le terminer, ce maillon est abandonné et la pile le
+    /// réécrit. Cette copie permet de retrouver le bon (#779).
+    static CALLS32: std::cell::RefCell<Vec<(u64, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Appelle du code x86 (stdcall ou cdecl) et rend edx:eax.
 pub fn call32(target: usize, args: &[u32]) -> u64 {
     assert!(target < limit(), "wow32 : appel 32 bits vers 0x{target:x}");
     let f: extern "win64" fn(usize, *const u32, usize) -> u64 =
         unsafe { std::mem::transmute(blob().call32) };
-    f(target, args.as_ptr(), args.len())
+    let marker = 0u8;
+    let here = std::ptr::addr_of!(marker) as u64;
+    let depth = CALLS32.with(|c| {
+        let mut c = c.borrow_mut();
+        c.push((here, seh::chain_now()));
+        c.len() - 1
+    });
+    let r = f(target, args.as_ptr(), args.len());
+    // Les appels plus profonds encore notés ont été abandonnés.
+    CALLS32.with(|c| c.borrow_mut().truncate(depth));
+    std::hint::black_box(&marker);
+    r
+}
+
+/// Retour d'un appel 64 → 32 alors que la chaîne pointe sous la pile x86
+/// (`esp`) : les appels notés sous `esp` sont morts ; la chaîne d'avant le
+/// plus ancien d'entre eux est celle de l'appel qui revient.
+extern "win64" fn repair_chain(esp: u64) -> u64 {
+    let stale = seh::chain_now();
+    let mut found = None;
+    CALLS32.with(|c| {
+        let mut c = c.borrow_mut();
+        while let Some(&(at, before)) = c.last() {
+            if at >= esp {
+                break;
+            }
+            c.pop();
+            found = Some(before);
+        }
+    });
+    crate::trace!(
+        "wow32 : retour 32 → 64 après un saut hors d'un appel imbriqué (chaîne 0x{stale:x} → {:x?})",
+        found
+    );
+    found.unwrap_or(stale)
 }
 
 /// Assistant x86 « appel avec ebp » (filtres et blocs __finally).
@@ -1865,6 +1927,65 @@ pub fn wrap_fault_handlers() {
             libc::sigaction(sig, &sa, std::ptr::null_mut());
         }
     }
+}
+
+/// Table de méthodes x86 (stdcall) d'un objet COM du runtime qui lit
+/// lui-même la disposition x86 de ses arguments (DirectDraw, Direct3D 8,
+/// #237). `methods[i]` = (fonction win64, nombre d'arguments après `this`) ;
+/// chaque argument x86 de 4 octets est passé étendu à 64 bits (un `float`
+/// garde ses bits dans les 32 bits bas). Rend l'adresse x86 de la table.
+/// Comme `x86_vtable`, avec la signature de chaque méthode : une lettre par
+/// argument après `this` (`i` : 4 octets étendus, `p` : pointeur vers une
+/// case de la taille d'un pointeur, remplie par la méthode), suivie de
+/// `>f` si la méthode rend un `float` (#778, Direct3D 9).
+pub fn x86_vtable_sig(name: &str, methods: &[(usize, &str)]) -> u32 {
+    let table: Vec<u32> = methods
+        .iter()
+        .enumerate()
+        .map(|(i, &(target, sig))| {
+            let (args, ret) = sig.split_once('>').unwrap_or((sig, "i"));
+            let mut kinds = vec![b'i'];
+            kinds.extend(args.bytes());
+            let n = kinds.len() as u16;
+            make_stub(
+                Desc {
+                    ret: ret.bytes().next().unwrap_or(b'i'),
+                    supported: true,
+                    target,
+                    kinds,
+                    label: format!("{name}::méthode n° {i}"),
+                    fix: crt::Fix::None,
+                    raw: None,
+                    callbacks: 0,
+                },
+                Some(n * 4),
+            ) as u32
+        })
+        .collect();
+    Box::leak(table.into_boxed_slice()).as_ptr() as usize as u32
+}
+
+pub fn x86_vtable(name: &str, methods: &[(usize, u8)]) -> u32 {
+    let table: Vec<u32> = methods
+        .iter()
+        .enumerate()
+        .map(|(i, &(target, n))| {
+            make_stub(
+                Desc {
+                    ret: b'i',
+                    supported: true,
+                    target,
+                    kinds: vec![b'i'; n as usize + 1],
+                    label: format!("{name}::méthode n° {i}"),
+                    fix: crt::Fix::None,
+                    raw: None,
+                    callbacks: 0,
+                },
+                Some(((n as u16) + 1) * 4),
+            ) as u32
+        })
+        .collect();
+    Box::leak(table.into_boxed_slice()).as_ptr() as usize as u32
 }
 
 #[cfg(test)]

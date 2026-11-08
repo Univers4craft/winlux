@@ -665,8 +665,19 @@ pub unsafe extern "win64" fn QueueUserWorkItem(func: usize, context: usize, _fla
 /// sont acceptés sans effet : sous Linux, chaque enfant reste attaché à
 /// son groupe de processus et Winlux le termine avec la session.
 static NEXT_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x4A4F_0000);
+static JOBS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 pub unsafe extern "win64" fn CreateJobObjectW(_sa: usize, _name: *const u16) -> usize {
-    NEXT_JOB.fetch_add(4, Ordering::Relaxed)
+    let job = NEXT_JOB.fetch_add(4, Ordering::Relaxed);
+    crate::dlls::lock(&JOBS).push(job);
+    job
+}
+/// CloseHandle d'un objet Job : doit réussir, Chromium vérifie la fermeture
+/// de chaque poignée (CHECK de ScopedHandle, #767).
+pub(crate) fn close_job(h: usize) -> bool {
+    let mut jobs = crate::dlls::lock(&JOBS);
+    let before = jobs.len();
+    jobs.retain(|&j| j != h);
+    jobs.len() != before
 }
 pub unsafe extern "win64" fn job_ok2(_a: usize, _b: usize) -> i32 {
     1

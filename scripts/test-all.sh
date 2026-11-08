@@ -84,8 +84,8 @@ if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev
 fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
-step "scripts/test-default-accent.py" python3 -B scripts/test-default-accent.py
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
+step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 
 # Applis WinForms et WPF .NET autonomes (#664–#666, #268) : télécharge une fois le runtime
 # .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.

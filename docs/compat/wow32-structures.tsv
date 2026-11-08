@@ -1,0 +1,203 @@
+# Structures #[repr(C)] à champs de taille pointeur dans runtime/src/dlls (#232).
+# Vérifié par scripts/test-wow32-structures.py ; une ligne par structure.
+# fichier<TAB>structure<TAB>état (x86, interne, a-verifier)<TAB>preuve ou remarque
+audio_com.rs	Iface	a-verifier	
+comdlg32_ui.rs	DrawItem	a-verifier	
+comdlg32_ui.rs	LvColumnW	a-verifier	
+comdlg32_ui.rs	LvItemW	a-verifier	
+controls.rs	DrawItemStruct	a-verifier	
+controls/bars.rs	CbeItem	a-verifier	
+controls/bars.rs	NmHdr	a-verifier	
+controls/bars.rs	NmToolbar	a-verifier	
+controls/bars.rs	TbButton	a-verifier	
+controls/comctl.rs	LvColumn	a-verifier	
+controls/comctl.rs	LvItem	a-verifier	
+controls/comctl.rs	NmHdr	a-verifier	
+controls/comctl.rs	NmItemActivate	a-verifier	
+controls/comctl.rs	NmListView	a-verifier	
+controls/comctl.rs	TcItem	a-verifier	
+controls/comctl.rs	TvItem	a-verifier	
+controls/tests.rs	LvColumnW	interne	test unitaire
+controls/tests.rs	LvItemW	interne	test unitaire
+controls/tests.rs	TbButtonT	interne	test unitaire
+controls/tests.rs	TcItemW	interne	test unitaire
+controls/tests.rs	TestTcItem	interne	test unitaire
+controls/tests.rs	TextRange	interne	test unitaire
+controls/tests.rs	TvInsert	interne	test unitaire
+coremessaging.rs	Controller	a-verifier	
+coremessaging.rs	Handler	a-verifier	
+coremessaging.rs	Queue	a-verifier	
+coremessaging.rs	Timer	a-verifier	
+crt_runtime.rs	Lconv	a-verifier	
+crt_runtime.rs	LocaleInfo	a-verifier	
+crt_runtime.rs	LocalePointers	a-verifier	
+crt_runtime.rs	OnexitTable	a-verifier	
+crt_ucrt.rs	Empty	a-verifier	
+crypt32.rs	AlgId	a-verifier	
+crypt32.rs	BitBlob	a-verifier	
+crypt32.rs	Blob	a-verifier	
+crypt32.rs	CertContext	a-verifier	
+crypt32.rs	CertInfo	a-verifier	
+crypt32.rs	Chain	a-verifier	
+crypt32.rs	ChainContext	a-verifier	
+crypt32.rs	ChainElement	a-verifier	
+crypt32.rs	Extension	a-verifier	
+crypt32.rs	PolicyPara	a-verifier	
+crypt32.rs	PolicyStatus	a-verifier	
+crypt32.rs	SimpleChain	a-verifier	
+crypt32.rs	SslExtraPara	a-verifier	
+cxx_eh.rs	ExceptionPointers	a-verifier	
+d2d1.rs	HwndProps	a-verifier	
+d3d11.rs	Buffer	a-verifier	
+d3d11.rs	BufferVTable	a-verifier	
+d3d11.rs	D3D11InputElementDesc	a-verifier	
+d3d11.rs	D3D11MappedSubresource	a-verifier	
+d3d11.rs	D3D11SubresourceData	a-verifier	
+d3d11.rs	Device	a-verifier	
+d3d11.rs	DeviceContext	a-verifier	
+d3d11.rs	DeviceContextVTable	a-verifier	
+d3d11.rs	DeviceVTable	a-verifier	
+d3d11.rs	DxgiDevice	a-verifier	
+d3d11.rs	DxgiDeviceVTable	a-verifier	
+d3d11.rs	Texture2D	a-verifier	
+d3d11.rs	Texture2DVTable	a-verifier	
+d3d12.rs	Barrier	a-verifier	
+d3d12.rs	CopyLocation	a-verifier	
+d3d12.rs	Descriptor	a-verifier	
+d3d12.rs	InputElement	a-verifier	
+d3d12.rs	Obj	a-verifier	
+d3d8.rs	D3d8	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
+d3d8.rs	Device	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
+d3d8.rs	Res	x86	objet COM : le programme ne lit que sa table (1re case, sous 4 Go) ; jeux32.c n° 80-105
+d3d9.rs	CreationParams	a-verifier	
+d3d9.rs	LockedRect	a-verifier	
+d3d9.rs	Obj	a-verifier	
+d3d9.rs	PresentParams	a-verifier	
+d3dcompiler.rs	Blob	a-verifier	
+d3dcompiler.rs	BlobVTable	a-verifier	
+d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
+d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
+d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
+dataobject.rs	DataObject	a-verifier	
+dataobject.rs	EnumFormat	a-verifier	
+dataobject.rs	FormatEtc	a-verifier	
+dataobject.rs	StgMedium	a-verifier	
+ddraw.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 1-36
+dinput8.rs	DevObj	a-verifier	
+dinput8.rs	DiObj	a-verifier	
+dpapi.rs	DataBlob	a-verifier	
+dplayx.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 170-192 (IDirectPlay4A)
+dplayx.rs	LFace	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 174-176 (IDirectPlayLobby3A)
+dwrite.rs	GlyphRun	a-verifier	
+dxgi.rs	DxgiAdapter	a-verifier	
+dxgi.rs	DxgiAdapterDesc	a-verifier	
+dxgi.rs	DxgiAdapterVTable	a-verifier	
+dxgi.rs	DxgiFactory	a-verifier	
+dxgi.rs	DxgiFactoryVTable	a-verifier	
+dxgi.rs	DxgiSwapChain	a-verifier	
+dxgi.rs	DxgiSwapChainDesc	a-verifier	
+dxgi.rs	DxgiSwapChainVTable	a-verifier	
+dxva2.rs	BufferDesc	a-verifier	
+dxva2.rs	Obj	a-verifier	
+games_win32.rs	WsaBuf	a-verifier	
+gdi32.rs	BitmapObject	a-verifier	
+gdi32.rs	LogBrush	a-verifier	
+gui.rs	CreateStructA	a-verifier	
+gui.rs	Msg	a-verifier	
+gui.rs	PaintStruct	a-verifier	
+gui.rs	WndClassA	a-verifier	
+gui.rs	WndClassExA	a-verifier	
+gui_x11.rs	XftFont	a-verifier	
+icons.rs	IconInfo	a-verifier	
+kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
+kernel32.rs	Entry	interne	test unitaire
+kernel32.rs	MemoryBasicInformation	x86	wow64.c n° 8-9 (28 octets)
+kernel32.rs	Overlapped	a-verifier	
+kernel32.rs	OverlappedEntry	a-verifier	
+kernel32.rs	ProcessInformation	x86	wow64.c n° 42-45 (PROCESS_INFORMATION de 16 octets)
+kernel32.rs	SecurityAttributes	a-verifier	
+kernel32.rs	StartupInfo	x86	wow64.c n° 10-11, forme W convertie de même
+kernel32.rs	StartupInfoA	x86	wow64.c n° 10-11 (STARTUPINFOA de 68 octets)
+kernel32.rs	SystemInfo	x86	wow64.c n° 4-7 (SYSTEM_INFO de 36 octets)
+libgcc.rs	UnwindContext	a-verifier	
+mfcapture.rs	MediaSource	a-verifier	
+mfcapture.rs	MemBuf	a-verifier	
+mfcapture.rs	MfObj	a-verifier	
+mfcapture.rs	Reader	a-verifier	
+mfreader.rs	Reader	a-verifier	
+msvcp140.rs	Thrd	a-verifier	
+ole32.rs	ComStream	a-verifier	
+ole32.rs	ContextVtbl	a-verifier	
+ole32.rs	Factory	a-verifier	
+ole32.rs	IMallocVTable	a-verifier	
+ole32.rs	IStreamVTable	a-verifier	
+ole32.rs	MarshalStream	a-verifier	
+ole32.rs	MarshalVtbl	a-verifier	
+ole32.rs	StatStg	a-verifier	
+quartz.rs	Face	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
+quartz.rs	Graph	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 150-160
+schannel.rs	SecBuffer	a-verifier	
+schannel.rs	SecBufferDesc	a-verifier	
+schannel.rs	SecHandle	a-verifier	
+seh.rs	DispatcherContext	a-verifier	
+seh.rs	ExceptionPointers	a-verifier	
+seh.rs	ExceptionRecord	a-verifier	
+shell32.rs	ShellExecuteInfo	x86	SHELLEXECUTEINFO de 60 octets converti par execute_ex_any
+shlwapi_reg.rs	RegStream	a-verifier	
+shlwapi_reg.rs	StreamVtbl	a-verifier	
+taskschd.rs	Obj	a-verifier	
+threadpool.rs	Instance	a-verifier	
+uiautomationcore.rs	Vtbl	a-verifier	
+vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkCommandBufferBeginInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkCommandPoolCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkDeviceCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkDeviceQueueCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkFenceCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkGraphicsPipelineCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkImageCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkImageMemoryBarrier	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkImageViewCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkInstanceCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkMemoryAllocateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkMemoryBarrier	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPhysicalDeviceDynamicRenderingFeatures	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPhysicalDeviceExtendedDynamicStateFeaturesEXT	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineColorBlendStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineDynamicStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineInputAssemblyStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineLayoutCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineMultisampleStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineRasterizationStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineRenderingCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineShaderStageCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineVertexInputStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineViewportStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPresentInfoKHR	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkRenderingAttachmentInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkRenderingInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkSemaphoreCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkShaderModuleCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkSubmitInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkSwapchainCreateInfoKHR	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
+vulkan1.rs	Callback	a-verifier	
+vulkan1.rs	Xlib	a-verifier	
+win32_basics.rs	MemoryStatus	a-verifier	
+winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
+winhttp.rs	ProxyInfo	x86	wow64.c n° 77 (WINHTTP_PROXY_INFO de 12 octets)
+winlux_media.rs	OpenOptions	a-verifier	
+winmm_waveout.rs	WaveHdr	a-verifier	
+winusb.rs	Bulk	a-verifier	
+winusb.rs	Ctrl	a-verifier	
+ws2_32.rs	WinAddrInfoA	x86	wow64.c n° 73 (ADDRINFOA de 32 octets)
+ws2_32.rs	WinAddrInfoW	x86	ADDRINFOW de 32 octets, même conversion que n° 73
+ws2_32.rs	WinFdSet	x86	wow64.c n° 75 (fd_set à SOCKET de 4 octets)
+ws2_32.rs	WinServent	x86	wow64.c n° 74 (SERVENT de 16 octets sous 4 Go)
+ws2_32.rs	WsaBuf	x86	WSABUF de 8 octets lu par read_wsabuf (WSASend/WSARecv)
+ws2_32.rs	WsaData	x86	wow64.c n° 72 (WSADATA de 400 octets, #779)
+ws2_32.rs	WsaPollFd	x86	wow64.c n° 76 (WSAPOLLFD de 8 octets)
+xaudio2.rs	Cb	a-verifier	
+xaudio2.rs	Voice	a-verifier	

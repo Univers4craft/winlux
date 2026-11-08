@@ -44,19 +44,28 @@ const TIME_BYTES: u32 = 4;
 const WAVE_MAPPER: u32 = u32::MAX;
 const DEVICE_NAME: &str = "Haut-parleurs (Winlux)";
 
-// WAVEHDR (x64) : lpData @0, dwBufferLength @8, dwBytesRecorded @12,
+// WAVEHDR x64 : lpData @0, dwBufferLength @8, dwBytesRecorded @12,
 // dwUser @16, dwFlags @24, dwLoops @28, lpNext @32, reserved @40.
+// WAVEHDR x86 (programme 32 bits, #777) : lpData @0, dwBufferLength @4,
+// dwBytesRecorded @8, dwUser @12, dwFlags @16, dwLoops @20, lpNext @24.
+fn x86() -> bool {
+    crate::wow32::active()
+}
 unsafe fn hdr_data(h: usize) -> *const u8 {
-    *(h as *const *const u8)
+    if x86() {
+        *(h as *const u32) as usize as *const u8
+    } else {
+        *(h as *const *const u8)
+    }
 }
 unsafe fn hdr_len(h: usize) -> usize {
-    *((h + 8) as *const u32) as usize
+    *((h + if x86() { 4 } else { 8 }) as *const u32) as usize
 }
 unsafe fn hdr_flags(h: usize) -> *mut u32 {
-    (h + 24) as *mut u32
+    (h + if x86() { 16 } else { 24 }) as *mut u32
 }
 unsafe fn hdr_loops(h: usize) -> u32 {
-    *((h + 28) as *const u32)
+    *((h + if x86() { 20 } else { 28 }) as *const u32)
 }
 
 #[derive(Clone, Copy)]
@@ -289,6 +298,12 @@ pub unsafe extern "win64" fn wave_out_open(
     ) {
         return MMSYSERR_INVALFLAG;
     }
+    // Fonction x86 d'un programme 32 bits : passerelle 64 → 32 (#777).
+    let callback = if kind == CALLBACK_FUNCTION && callback != 0 && x86() {
+        crate::wow32::callback64(callback as u32)
+    } else {
+        callback
+    };
     static NEXT: AtomicUsize = AtomicUsize::new(0x7731_0000);
     let handle = NEXT.fetch_add(4, Ordering::Relaxed);
     let wo = Arc::new(WaveOut {

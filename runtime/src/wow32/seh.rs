@@ -241,11 +241,15 @@ fn frame_ok(f: u32) -> bool {
 /// Répartition d'une exception x86. Rend si personne ne l'a prise ou si un
 /// gestionnaire demande de continuer (`true`).
 fn dispatch(rec: u32, ctx: u32) -> bool {
-    DISPATCHES.with(|d| d.borrow_mut().push(chain_now()));
-    let result = walk(rec, ctx);
-    DISPATCHES.with(|d| {
-        d.borrow_mut().pop();
+    // Une répartition abandonnée par un saut direct (Delphi, C++Builder)
+    // laisse sa valeur : la longueur notée ici la retire au retour.
+    let depth = DISPATCHES.with(|d| {
+        let mut d = d.borrow_mut();
+        d.push(chain_now());
+        d.len() - 1
     });
+    let result = walk(rec, ctx);
+    DISPATCHES.with(|d| d.borrow_mut().truncate(depth));
     result
 }
 
@@ -262,6 +266,7 @@ fn walk(rec: u32, ctx: u32) -> bool {
         let handler = rd(frame + 4);
         crate::trace!("wow32 : gestionnaire SEH 0x{handler:x} (cadre 0x{frame:x})");
         let r = call32(handler as usize, &[rec, frame, ctx, dc]) as u32;
+        crate::trace!("wow32 : gestionnaire SEH 0x{handler:x} → {r}");
         match r {
             // ExceptionContinueExecution
             0 => {
@@ -295,6 +300,49 @@ fn walk(rec: u32, ctx: u32) -> bool {
     false
 }
 
+/// Trace d'une faute x86 : registres et premiers mots de la pile, pour
+/// retrouver l'appelant d'un saut vers une adresse nulle (#779).
+fn trace_fault_state(ctx: &[u8]) {
+    if !crate::log::enabled(crate::log::Level::Trace) {
+        return;
+    }
+    let esp = get(ctx, CTX_ESP);
+    let words: Vec<String> = (0..24u32)
+        .map(|i| {
+            let w = rd(esp.wrapping_add(i * 4));
+            format!("{w:08x}")
+        })
+        .collect();
+    crate::trace!(
+        "wow32 :   eax={:08x} ebx={:08x} ecx={:08x} edx={:08x} esi={:08x} edi={:08x} ebp={:08x} esp={esp:08x}",
+        get(ctx, CTX_EAX),
+        get(ctx, CTX_EBX),
+        get(ctx, CTX_ECX),
+        get(ctx, CTX_EDX),
+        get(ctx, CTX_ESI),
+        get(ctx, CTX_EDI),
+        get(ctx, CTX_EBP)
+    );
+    crate::trace!("wow32 :   pile : {}", words.join(" "));
+    crate::trace!(
+        "wow32 :   [esp] = {}",
+        crate::thunks::describe_site(rd(esp) as usize)
+    );
+    // Adresses de retour le long de la chaîne des ebp, tant qu'elle reste
+    // dans la pile du thread.
+    let mut ebp = get(ctx, CTX_EBP);
+    let mut sites = Vec::new();
+    while sites.len() < 10 && frame_ok(ebp) && ebp >= esp {
+        sites.push(crate::thunks::describe_site(rd(ebp + 4) as usize));
+        let next = rd(ebp);
+        if next <= ebp {
+            break;
+        }
+        ebp = next;
+    }
+    crate::trace!("wow32 :   appelants (ebp) : {}", sites.join(" ← "));
+}
+
 fn unhandled(rec: &[u8], _ctx: u32) -> ! {
     let n = get(rec, 16).min(15) as usize;
     let params: Vec<usize> = (0..n).map(|i| get(rec, 20 + i * 4) as usize).collect();
@@ -308,6 +356,7 @@ unsafe extern "C" fn hw_dispatch(frame: *mut HwFrame) -> ! {
     let ctx = f.ctx.as_ptr() as usize as u32;
     let code = get(&f.rec, 0);
     crate::trace!("wow32 : faute 0x{code:08x} à 0x{:x}", get(&f.rec, 12));
+    trace_fault_state(&f.ctx);
     if dispatch(rec, ctx) {
         // Un gestionnaire a pu changer le contexte, y compris l'état SSE.
         let ext: [u8; 512] = f.ctx[CTX_EXTENDED..CTX_EXTENDED + 512].try_into().unwrap();
@@ -366,8 +415,13 @@ pub extern "win64" fn raise_exception(code: u32, flags: u32, nargs: u32, args: u
 /// `RtlUnwind(TargetFrame, TargetIp, ExceptionRecord, ReturnValue)` : appelle
 /// les gestionnaires des cadres au-dessus de `target` avec le drapeau de
 /// déroulement et les retire de la chaîne. Rend `ret` à l'appelant.
-pub extern "win64" fn rtl_unwind(target: u32, _ip: u32, record: u32, ret: u32) -> u32 {
+pub extern "win64" fn rtl_unwind(target: u32, ip: u32, record: u32, ret: u32) -> u32 {
+    crate::trace!(
+        "wow32 : RtlUnwind(cadre 0x{target:x}, ip 0x{ip:x}, record 0x{record:x}) depuis 0x{:x}",
+        super::caller_regs().eip
+    );
     unwind_to(target, record);
+    crate::trace!("wow32 : RtlUnwind vers 0x{target:x} terminé");
     ret
 }
 
@@ -396,6 +450,7 @@ fn unwind_to(target: u32, record: u32) {
             break;
         }
         let handler = rd(frame + 4);
+        crate::trace!("wow32 : déroulement, gestionnaire 0x{handler:x} (cadre 0x{frame:x})");
         call32(handler as usize, &[rec, frame, c, dc]);
         frame = rd(frame);
         wr(teb, frame);

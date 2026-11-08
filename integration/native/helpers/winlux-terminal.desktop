@@ -2,6 +2,9 @@
 Type=X-XFCE-Helper
 X-XFCE-Category=TerminalEmulator
 Name=Terminal Winlux
+Name[en]=Winlux Terminal
+Name[de]=Winlux-Terminal
+Name[es]=Terminal de Winlux
 Icon=utilities-terminal
 X-XFCE-Binaries=winlux-terminal;
 X-XFCE-Commands=/usr/bin/winlux-terminal;
