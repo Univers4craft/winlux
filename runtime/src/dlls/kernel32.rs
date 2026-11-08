@@ -1865,8 +1865,11 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
     };
-    if (creation == 2 || creation == 4) && existed {
-        crate::process::set_last_error(183);
+    // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
+    // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
+    // l'erreur d'une tentative précédente ne doit pas rester (#905).
+    if creation == 2 || creation == 4 {
+        crate::process::set_last_error(if existed { 183 } else { 0 });
     }
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
