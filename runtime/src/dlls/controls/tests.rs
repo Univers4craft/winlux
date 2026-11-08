@@ -1735,3 +1735,62 @@ fn superclasse_retrouve_le_controle_d_origine() {
     let button = super::builtin_class("Button").unwrap();
     assert_eq!(super::builtin_class_of_proc(button), None);
 }
+
+#[test]
+fn wm_setcursor_applique_le_curseur_de_classe() {
+    // #1253 : la fenêtre sous le pointeur reçoit WM_SETCURSOR ; DefWindowProc
+    // consulte d'abord le parent puis applique le curseur de classe.
+    const WM_SETCURSOR: u32 = 0x0020;
+    let lp = (0x0200isize << 16) | 1; // HTCLIENT, WM_MOUSEMOVE
+    let parent = parent_window();
+    let edit = child(parent, "Edit", "texte", 0, 1, (0, 0, 100, 20));
+    let button = child(parent, "Button", "OK", 0, 2, (0, 30, 100, 20));
+    let current = || gui::CURSOR_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
+    let r = unsafe { user32::send_message_w(edit, WM_SETCURSOR, edit, lp) };
+    assert_eq!(r, 1);
+    assert_eq!(
+        current(),
+        gui::load_cursor(0, 32513),
+        "barre en I sur une zone de texte"
+    );
+    let r = unsafe { user32::send_message_w(button, WM_SETCURSOR, button, lp) };
+    assert_eq!(r, 1);
+    assert_eq!(
+        current(),
+        gui::load_cursor(0, 32512),
+        "flèche sur un bouton"
+    );
+    // Classe enregistrée sans curseur : rien n'est choisi, l'appli le fait.
+    gui::set_class_cursor("WinluxTestSansCurseur", 0);
+    gui::register_class(
+        "WinluxTestSansCurseur",
+        gui::ClassInfo {
+            wnd_proc: parent_proc as *const () as usize,
+            background: 0,
+            instance: 0,
+        },
+    );
+    let class = w("WinluxTestSansCurseur");
+    let title = w("Sans curseur");
+    let bare = unsafe {
+        user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            0x00CF_0000,
+            0,
+            0,
+            100,
+            100,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(bare, 0);
+    assert_eq!(
+        unsafe { user32::send_message_w(bare, WM_SETCURSOR, bare, lp) },
+        0
+    );
+}
