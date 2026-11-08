@@ -771,12 +771,6 @@ pub extern "win64" fn to_unicode_ex(
 ) -> i32 {
     0
 }
-pub extern "win64" fn register_window_message_a(_msg: *const u8) -> u32 {
-    0xC001
-}
-pub extern "win64" fn register_window_message_w(_msg: *const u16) -> u32 {
-    0xC001
-}
 pub extern "win64" fn reply_message(_result: isize) -> i32 {
     1
 }
@@ -876,8 +870,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetDCEx"=>fn get_dc_ex, "RedrawWindow"=>fn redraw_window, "GetUpdateRect"=>fn get_update_rect,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
         "ToUnicodeEx"=>fn to_unicode_ex,
-        "RegisterWindowMessageA"=>fn register_window_message_a,
-        "RegisterWindowMessageW"=>fn register_window_message_w,
         "ReplyMessage"=>fn reply_message, "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,

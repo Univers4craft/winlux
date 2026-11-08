@@ -28,6 +28,17 @@ extern "C" {
     fn ChooseColorW(cc: *mut ChooseColor) -> i32;
     fn ChooseFontW(cf: *mut ChooseFont) -> i32;
     fn CommDlgExtendedError() -> u32;
+    fn FindTextW(fr: *mut FindReplace) -> Handle;
+    fn FindTextA(fr: *mut FindReplace) -> Handle;
+    fn ReplaceTextW(fr: *mut FindReplace) -> Handle;
+}
+
+#[link(name = "user32", kind = "raw-dylib")]
+extern "system" {
+    fn GetDlgItem(dlg: Handle, id: i32) -> Handle;
+    fn RegisterWindowMessageW(name: *const u16) -> u32;
+    fn RegisterWindowMessageA(name: *const c_char) -> u32;
+    fn IsWindowEnabled(hwnd: Handle) -> i32;
 }
 
 #[link(name = "ole32", kind = "raw-dylib")]
@@ -272,11 +283,190 @@ struct ChooseFont {
     size_max: i32,
 }
 
+/// FINDREPLACE (commdlg.h), 80 octets en 64 bits.
+#[repr(C)]
+struct FindReplace {
+    size: u32,
+    owner: Handle,
+    instance: Handle,
+    flags: u32,
+    find: *mut u16,
+    replace: *mut u16,
+    find_len: u16,
+    replace_len: u16,
+    cust_data: isize,
+    hook: usize,
+    template: *const u16,
+}
+
+const FR_DOWN: u32 = 0x1;
+const FR_WHOLEWORD: u32 = 0x2;
+const FR_MATCHCASE: u32 = 0x4;
+const FR_FINDNEXT: u32 = 0x8;
+const FR_REPLACE: u32 = 0x10;
+const FR_REPLACEALL: u32 = 0x20;
+const FR_DIALOGTERM: u32 = 0x40;
+const FR_ENABLEHOOK: u32 = 0x100;
+
 static mut SHOW_MS: u32 = 0;
 static mut OWNER: Handle = core::ptr::null_mut();
+/// Message « commdlg_FindReplace » et ce que le propriétaire en a reçu.
+static mut FIND_MSG: u32 = 0;
+static mut FIND_COUNT: u32 = 0;
+static mut FIND_FLAGS: u32 = 0;
+static mut FIND_LPARAM: isize = 0;
+static mut HOOK_INIT: isize = 0;
 
 unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize {
+    if FIND_MSG != 0 && msg == FIND_MSG {
+        FIND_COUNT += 1;
+        FIND_LPARAM = lparam;
+        FIND_FLAGS = (*(lparam as *const FindReplace)).flags;
+        return 0;
+    }
     DefWindowProcA(hwnd, msg, wparam, lparam)
+}
+
+/// Procédure crochet : retient le lParam de WM_INITDIALOG (la FINDREPLACE).
+unsafe extern "win64" fn find_hook(_dlg: Handle, msg: u32, _wp: usize, lp: isize) -> isize {
+    if msg == 0x0110 {
+        HOOK_INIT = lp;
+    }
+    0
+}
+
+unsafe fn item_is(dlg: Handle, id: i32, text: &[u16]) -> bool {
+    let mut buf = [0u16; 64];
+    let n = GetWindowTextW(GetDlgItem(dlg, id), buf.as_mut_ptr(), 64) as usize;
+    n + 1 == text.len() && buf[..n] == text[..n]
+}
+
+fn same(buf: &[u16], text: &[u16]) -> bool {
+    buf.len() >= text.len() && buf[..text.len()] == *text
+}
+
+/// Boîtes non modales Rechercher et Remplacer (#712) : le propriétaire
+/// reçoit « commdlg_FindReplace » avec SA structure, le texte et les
+/// options cochées, puis FR_DIALOGTERM à la fermeture.
+unsafe fn find_replace() {
+    let name = w(b"commdlg_FindReplace\0");
+    FIND_MSG = RegisterWindowMessageW(name.as_ptr());
+    let other = w(b"TaskbarCreated\0");
+    check!(FIND_MSG >= 0xC000, "RegisterWindowMessageW(FINDMSGSTRING)");
+    check!(
+        RegisterWindowMessageW(other.as_ptr()) != FIND_MSG
+            && RegisterWindowMessageA(c"COMMDLG_FINDREPLACE".as_ptr()) == FIND_MSG,
+        "messages enregistres : un identifiant par nom, sans casse"
+    );
+
+    let mut what = [0u16; 64];
+    let abc = w(b"abc\0");
+    what[..abc.len()].copy_from_slice(&abc);
+    let mut fr = FindReplace {
+        size: core::mem::size_of::<FindReplace>() as u32,
+        owner: OWNER,
+        instance: core::ptr::null_mut(),
+        flags: FR_DOWN,
+        find: what.as_mut_ptr(),
+        replace: core::ptr::null_mut(),
+        find_len: 64,
+        replace_len: 0,
+        cust_data: 0,
+        hook: 0,
+        template: core::ptr::null(),
+    };
+    check!(fr.size == 80, "FINDREPLACE de 80 octets");
+    let dlg = FindTextW(&mut fr);
+    check!(!dlg.is_null() && IsWindow(dlg) != 0, "FindTextW ouvre la boite non modale");
+    if dlg.is_null() {
+        return;
+    }
+    check!(item_is(dlg, 0x480, &abc), "texte de depart repris du programme");
+    check!(IsWindowEnabled(GetDlgItem(dlg, 1)) != 0, "Suivant actif avec du texte");
+    let typed = w(b"Winlux\0");
+    SetWindowTextW(GetDlgItem(dlg, 0x480), typed.as_ptr());
+    SendMessageW(GetDlgItem(dlg, 0x411), 0x00F1, 1, 0); // Respecter la casse
+    SendMessageW(dlg, 0x0111, 1, 0); // Suivant
+    check!(
+        FIND_COUNT == 1 && FIND_LPARAM == &fr as *const FindReplace as isize,
+        "Suivant : le proprietaire recoit sa FINDREPLACE"
+    );
+    check!(
+        FIND_FLAGS & (FR_FINDNEXT | FR_MATCHCASE | FR_DOWN) == (FR_FINDNEXT | FR_MATCHCASE | FR_DOWN)
+            && FIND_FLAGS & FR_WHOLEWORD == 0,
+        "Suivant : FR_FINDNEXT, casse, vers le bas"
+    );
+    check!(same(&what, &typed), "texte cherche recopie dans le tampon");
+    SendMessageW(dlg, 0x0111, 0x420, 0); // Haut
+    SendMessageW(GetDlgItem(dlg, 0x410), 0x00F1, 1, 0); // Mot entier
+    SendMessageW(dlg, 0x0111, 1, 0);
+    check!(
+        FIND_COUNT == 2 && FIND_FLAGS & FR_DOWN == 0 && FIND_FLAGS & FR_WHOLEWORD != 0,
+        "Haut et mot entier"
+    );
+    let empty = [0u16; 1];
+    SetWindowTextW(GetDlgItem(dlg, 0x480), empty.as_ptr());
+    check!(IsWindowEnabled(GetDlgItem(dlg, 1)) == 0, "Suivant grise sans texte");
+    SendMessageW(dlg, 0x0111, 2, 0); // Annuler
+    check!(
+        FIND_COUNT == 3 && FIND_FLAGS & FR_DIALOGTERM != 0 && FIND_FLAGS & FR_FINDNEXT == 0,
+        "fermeture : FR_DIALOGTERM"
+    );
+    check!(IsWindow(dlg) == 0, "boite detruite apres FR_DIALOGTERM");
+
+    // Remplacer, avec procédure crochet.
+    let mut with = [0u16; 64];
+    fr.flags = FR_ENABLEHOOK;
+    fr.hook = find_hook as *const () as usize;
+    fr.replace = with.as_mut_ptr();
+    fr.replace_len = 64;
+    let dlg = ReplaceTextW(&mut fr);
+    check!(!dlg.is_null(), "ReplaceTextW ouvre la boite non modale");
+    if dlg.is_null() {
+        return;
+    }
+    check!(
+        HOOK_INIT == &fr as *const FindReplace as isize,
+        "crochet : WM_INITDIALOG avec la FINDREPLACE"
+    );
+    let by = w(b"Ersatz\0");
+    SetWindowTextW(GetDlgItem(dlg, 0x480), typed.as_ptr());
+    SetWindowTextW(GetDlgItem(dlg, 0x481), by.as_ptr());
+    SendMessageW(dlg, 0x0111, 0x400, 0); // Remplacer
+    check!(
+        FIND_FLAGS & FR_REPLACE != 0 && FIND_FLAGS & FR_DOWN != 0 && same(&with, &by),
+        "Remplacer : FR_REPLACE et texte de remplacement"
+    );
+    SendMessageW(dlg, 0x0111, 0x401, 0); // Remplacer tout
+    check!(
+        FIND_FLAGS & FR_REPLACEALL != 0 && FIND_FLAGS & FR_REPLACE == 0,
+        "Remplacer tout : FR_REPLACEALL"
+    );
+    SendMessageW(dlg, 0x0111, 2, 0);
+    check!(IsWindow(dlg) == 0, "boite Remplacer fermee");
+
+    // ANSI.
+    let mut ansi = *b"abc\0\0\0\0\0\0\0\0\0\0\0\0\0";
+    fr.flags = 0;
+    fr.hook = 0;
+    fr.find = ansi.as_mut_ptr().cast();
+    fr.find_len = 16;
+    let dlg = FindTextA(&mut fr);
+    check!(!dlg.is_null(), "FindTextA");
+    if !dlg.is_null() {
+        SetWindowTextW(GetDlgItem(dlg, 0x480), typed.as_ptr());
+        SendMessageW(dlg, 0x0111, 1, 0);
+        check!(&ansi[..7] == b"Winlux\0", "FindTextA : tampon ANSI");
+        SendMessageW(dlg, 0x0111, 2, 0);
+    }
+
+    // Tampon absent : NULL et FRERR_BUFFERLENGTHZERO.
+    fr.find_len = 0;
+    check!(
+        FindTextW(&mut fr).is_null() && CommDlgExtendedError() == 0x4001,
+        "tampon vide : FRERR_BUFFERLENGTHZERO"
+    );
+    FIND_MSG = 0;
 }
 
 /// Valide la boîte affichée comme un utilisateur : touche Entrée.
@@ -553,6 +743,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(lf.face[0] != 0, "nom de police rendu");
 
         DeleteFileW(path.as_ptr());
+        if SHOW_MS == 0 {
+            find_replace();
+        }
         ExitProcess(if FAILURES == 0 { 0 } else { 1 });
     }
 }
