@@ -1324,4 +1324,10 @@ ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
+# #1207 : X509Chain.Build de .NET (SslStream) remplit un magasin par
+# CertAddCertificateLinkToStore avant CertGetCertificateChain.
+ok('"CertAddCertificateLinkToStore" => fn CertAddCertificateLinkToStore' in (runtime_dlls / "crypt32.rs").read_text()
+   and "lien_vers_un_certificat_dans_un_magasin_memoire" in (runtime_dlls / "crypt32.rs").read_text()
+   and "CertAddCertificateLinkToStore pour X509Chain (#1207)" in (SCRIPTS / "test-all.sh").read_text(),
+   "HTTPS .NET : CertAddCertificateLinkToStore pour la vérification du certificat (#1207)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
