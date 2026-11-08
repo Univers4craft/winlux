@@ -5732,6 +5732,10 @@ pub fn raw_keys() -> [bool; 256] {
 /// (mouvements et clics reçus par une fenêtre Winlux).
 static CURSOR_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 
+/// Tests qui posent puis relisent la position du pointeur (partagée).
+#[cfg(test)]
+pub static CURSOR_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn set_cursor_screen_pos(x: i32, y: i32) {
     *lock(&CURSOR_POS) = Some((x, y));
 }
@@ -5739,10 +5743,39 @@ pub fn set_cursor_screen_pos(x: i32, y: i32) {
 /// Position du pointeur pour GetCursorPos ; centre de l'écran tant que la
 /// souris n'a encore rien fait sur une fenêtre Winlux.
 pub fn cursor_screen_pos() -> (i32, i32) {
-    lock(&CURSOR_POS).unwrap_or_else(|| {
+    let pos = lock(&CURSOR_POS).unwrap_or_else(|| {
         let (w, h) = screen_size();
         (w / 2, h / 2)
-    })
+    });
+    if crate::thunks::api_trace_active() {
+        // Une note à chaque changement seulement : GetCursorPos est appelé
+        // à chaque survol (#1222).
+        static LAST: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+        let mut last = lock(&LAST);
+        if *last != Some(pos) {
+            *last = Some(pos);
+            crate::thunks::api_note(&format!("GetCursorPos → ({}, {}) (#1222)", pos.0, pos.1));
+        }
+    }
+    pos
+}
+
+/// Échelle de l'affichage en millièmes (1000 = 100 %), posée par le moteur
+/// X11 à sa création ; lue sans prendre le verrou du moteur.
+static DISPLAY_SCALE_MILLI: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+
+pub fn set_display_scale(scale: f32) {
+    let milli = (scale * 1000.0).round().clamp(1.0, 100_000.0) as u32;
+    DISPLAY_SCALE_MILLI.store(milli, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Point de l'écran X (pixels réels) en coordonnées écran logiques de Win32.
+pub fn logical_point(x: i32, y: i32) -> (i32, i32) {
+    let scale = DISPLAY_SCALE_MILLI.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
+    (
+        (x as f32 / scale).round() as i32,
+        (y as f32 / scale).round() as i32,
+    )
 }
 
 pub fn raw_mouse_motion(x: i32, y: i32) {

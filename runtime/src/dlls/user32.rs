@@ -4530,6 +4530,9 @@ mod tests {
 
     #[test]
     fn position_du_pointeur_suivie() {
+        let _guard = gui::CURSOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unsafe {
             gui::set_cursor_screen_pos(260, 200);
             let mut p = Point { x: 0, y: 0 };
