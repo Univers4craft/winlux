@@ -260,7 +260,35 @@ pub fn init(exe: &Path, args: &[String]) {
         .unwrap_or_else(|| PathBuf::from("/root"));
     let user_dirs =
         std::fs::read_to_string(home.join(".config/user-dirs.dirs")).unwrap_or_default();
-    let mut granted = Vec::new();
+    let personal = personal_dirs(&home, &user_dirs);
+    let granted = granted_paths(args, std::env::current_dir().ok(), &personal);
+    let _ = APP.set(App {
+        name: exe
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        dir: exe.parent().map(Path::to_path_buf).unwrap_or_default(),
+        trusted: is_trusted(&exe),
+        personal,
+        exe,
+        granted,
+    });
+}
+
+/// Ce que l'utilisateur a donné au programme en le lançant : les fichiers et
+/// dossiers de la ligne de commande, et le dossier où il l'a lancé (#1019).
+/// Lancé depuis un terminal ouvert sur le Bureau, claude.exe lit d'abord son
+/// dossier courant (CreateFileW \\?\C:\Users\…\Bureau) : sans cela il
+/// attendait l'autorisation « fichiers personnels » avant d'afficher quoi
+/// que ce soit. Seul un dossier de lancement situé dans un dossier personnel
+/// compte : lancé depuis le dossier personnel lui-même (cas courant), rien
+/// n'est accordé et Bureau, Documents… restent protégés.
+fn granted_paths(args: &[String], cwd: Option<PathBuf>, personal: &[PathBuf]) -> Vec<PathBuf> {
+    let mut granted: Vec<PathBuf> = cwd
+        .map(|c| normalize(&c))
+        .filter(|c| personal.iter().any(|d| c.starts_with(d)))
+        .into_iter()
+        .collect();
     for arg in args {
         let arg = arg.trim_matches('"');
         let looks_windows = arg.len() > 2 && arg.as_bytes()[1] == b':';
@@ -280,17 +308,7 @@ pub fn init(exe: &Path, args: &[String]) {
             granted.push(parent.to_path_buf());
         }
     }
-    let _ = APP.set(App {
-        name: exe
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        dir: exe.parent().map(Path::to_path_buf).unwrap_or_default(),
-        trusted: is_trusted(&exe),
-        personal: personal_dirs(&home, &user_dirs),
-        exe,
-        granted,
-    });
+    granted
 }
 
 /// Programme installé (Program Files, AppData) : son chemin Windows.
@@ -642,6 +660,38 @@ mod tests {
         let granted = vec![PathBuf::from("/home/a/Documents/Photos")];
         assert!(!need("/home/a/Documents/Photos/2.jpg", jeux, &granted));
         assert!(need("/home/a/Documents/autre.txt", jeux, &granted));
+    }
+
+    #[test]
+    fn launch_folder_and_arguments_are_granted() {
+        let personal = vec![
+            PathBuf::from("/home/a/Bureau"),
+            PathBuf::from("/home/a/Documents"),
+        ];
+        let granted = granted_paths(
+            &[
+                "/home/a/Documents/lettre.txt".to_string(),
+                "--version".to_string(),
+            ],
+            Some(PathBuf::from("/home/a/Bureau")),
+            &personal,
+        );
+        let app = Path::new("/home/a/.local/share/winlux/claude-code");
+        let need =
+            |p: &str| personal_access_needs_permission(Path::new(p), &personal, app, &granted);
+        // Dossier de lancement (#1019) et dossier du fichier donné : libres.
+        assert!(!need("/home/a/Bureau"));
+        assert!(!need("/home/a/Bureau/notes.txt"));
+        assert!(!need("/home/a/Documents/autre.txt"));
+        // Lancé depuis le dossier personnel lui-même : le Bureau reste protégé.
+        let granted = granted_paths(&[], Some(PathBuf::from("/home/a")), &personal);
+        assert!(granted.is_empty());
+        assert!(personal_access_needs_permission(
+            Path::new("/home/a/Bureau/x"),
+            &personal,
+            app,
+            &granted
+        ));
     }
 
     #[test]

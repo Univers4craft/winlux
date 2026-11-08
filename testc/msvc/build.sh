@@ -147,3 +147,15 @@ llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_io.def" -l "$tmp/kernel32_io.lib"
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/io_msvc.c" -o "$tmp/io_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/io_msvc.obj" \
     "$tmp/kernel32_io.lib" /out:"$out/io_msvc.exe"
+# Suspension de threads et contexte, ce qu'il faut au ramasse-miettes de
+# coreclr (#269) : SuspendThread, Get/SetThreadContext, page de garde de la
+# pile, vue exécutable W^X, messages enregistrés, WM_TIMER en PM_NOREMOVE.
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nExitThread\nCreateThread\nSuspendThread\nResumeThread\nGetThreadContext\nSetThreadContext\nGetCurrentThread\nGetCurrentProcess\nDuplicateHandle\nWaitForSingleObject\nGetExitCodeThread\nSleep\nVirtualQuery\nVirtualAlloc\nCreateFileMappingW\nMapViewOfFileEx\nGetWriteWatch\nResetWriteWatch\n' >"$tmp/kernel32_threadctl.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nRegisterWindowMessageW\nSetTimer\nKillTimer\nPeekMessageW\nWaitMessage\n' >"$tmp/user32_threadctl.def"
+printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC\nGetObjectType\nDeleteDC\n' >"$tmp/gdi32_threadctl.def"
+for d in kernel32_threadctl user32_threadctl gdi32_threadctl; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/threadctl_msvc.c" -o "$tmp/threadctl_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/threadctl_msvc.obj" \
+    "$tmp/kernel32_threadctl.lib" "$tmp/user32_threadctl.lib" "$tmp/gdi32_threadctl.lib" /out:"$out/threadctl_msvc.exe"

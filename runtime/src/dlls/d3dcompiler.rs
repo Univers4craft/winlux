@@ -250,6 +250,15 @@ fn is_sm4_plus(target: &str) -> bool {
         .is_some_and(|m| m >= 4)
 }
 
+/// Profils Direct3D 9 : « vs_1_1 », « vs_2_0 », « ps_2_a », « ps_3_0 »…
+fn is_d3d9_profile(target: &str) -> bool {
+    (target.starts_with("vs_") || target.starts_with("ps_"))
+        && target
+            .get(3..4)
+            .and_then(|c| c.parse::<u32>().ok())
+            .is_some_and(|m| (1..=3).contains(&m))
+}
+
 /// Copie du source et du résultat quand WINLUX_HLSL_DUMP désigne un dossier.
 fn dump(
     source: &str,
@@ -309,6 +318,35 @@ unsafe fn compile_common(
         unsafe { crate::dlls::cstr(entry) }
     };
     crate::trace!("D3DCompile(cible {target}, entrée {entry}, {src_size} octets de HLSL)");
+    if is_d3d9_profile(&target) {
+        // vs/ps 1.x à 3.0 : D3DCompile rend le code Direct3D 9 brut (jetons
+        // avec la table des constantes), comme D3DXCompileShader (#931).
+        let text =
+            String::from_utf8_lossy(source.strip_suffix(&[0]).unwrap_or(source)).into_owned();
+        let defs = unsafe { read_defines(defines) };
+        let inc = |name: &str| include_file(include, source_name, name, false);
+        return match crate::dlls::d3dx9_hlsl::compile(&text, &defs, &inc, &entry, &target, flags1) {
+            Ok(c) => {
+                let bytes: Vec<u8> = c.tokens.iter().flat_map(|t| t.to_le_bytes()).collect();
+                unsafe { *code = new_blob(bytes) };
+                S_OK
+            }
+            Err(e) => {
+                let msg = error_text(source_name, &e);
+                crate::log_warn!(
+                    "d3dcompiler",
+                    "HLSL non compilé ({target}, {entry}) : {}",
+                    msg.trim_end()
+                );
+                if !errors.is_null() {
+                    let mut b = msg.into_bytes();
+                    b.push(0);
+                    unsafe { *errors = new_blob(b) };
+                }
+                E_FAIL
+            }
+        };
+    }
     if !is_sm4_plus(&target) || crate::dlls::hlsl::stage_of(&target).is_err() {
         // Étages non traduits (géométrie, calcul…) : source emballé tel quel.
         unsafe { *code = new_blob(dxbc_container(&target, source)) };
@@ -555,5 +593,44 @@ mod tests {
             error_text("a.hlsl", "(3) : identifiant inconnu"),
             "a.hlsl(3,1): error X3000: identifiant inconnu\n"
         );
+    }
+
+    /// Shader généré par WPF (wpfgfx, rendu matériel D3D9) : D3DCompile en
+    /// vs_2_0 / ps_2_0 doit rendre du code Direct3D 9, pas un conteneur DXBC.
+    #[test]
+    fn d3dcompile_profils_d3d9_pour_wpf() {
+        let src = include_bytes!("d3dcompiler_wpf_exemple.hlsl");
+        for (entry, target, kind) in [
+            (c"VertexShaderImpl", c"vs_2_0", 0xFFFE_0200u32),
+            (c"PixelShaderImpl", c"ps_2_0", 0xFFFF_0200u32),
+        ] {
+            let mut code = std::ptr::null_mut();
+            let mut errors = std::ptr::null_mut();
+            let hr = unsafe {
+                d3d_compile(
+                    src.as_ptr().cast(),
+                    src.len(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    entry.as_ptr().cast(),
+                    target.as_ptr().cast(),
+                    0,
+                    0,
+                    &mut code,
+                    &mut errors,
+                )
+            };
+            assert_eq!(hr, S_OK, "{target:?}");
+            let blob = code.cast::<Blob>();
+            let data = unsafe { (*blob).data.clone() };
+            unsafe { blob_release(blob) };
+            let first = u32::from_le_bytes(data[..4].try_into().unwrap());
+            assert_eq!(first, kind, "{target:?}");
+            let last = u32::from_le_bytes(data[data.len() - 4..].try_into().unwrap());
+            assert_eq!(last, 0x0000_FFFF, "fin de shader D3D9");
+        }
+        assert!(is_d3d9_profile("ps_3_0") && is_d3d9_profile("vs_1_1"));
+        assert!(!is_d3d9_profile("ps_4_0_level_9_3") && !is_d3d9_profile("gs_4_0"));
     }
 }

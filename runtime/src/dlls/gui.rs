@@ -637,9 +637,29 @@ pub fn observe_key_message(msg: &Msg) {
         return;
     }
     match msg.message {
-        WM_KEYDOWN => update_thread_key_state(msg.wparam, true),
-        WM_KEYUP => update_thread_key_state(msg.wparam, false),
-        _ => {}
+        WM_KEYDOWN | 0x0104 => update_thread_key_state(msg.wparam, true),
+        WM_KEYUP | 0x0105 => update_thread_key_state(msg.wparam, false),
+        _ => return,
+    }
+    // Windows tient aussi l'état du côté gauche ou droit de Maj, Ctrl et
+    // Alt : Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis (Ctrl+O).
+    if let Some(side) = sided_modifier(msg.wparam, msg.lparam) {
+        update_thread_key_state(side, matches!(msg.message, WM_KEYDOWN | 0x0104));
+    }
+}
+
+/// VK_LSHIFT/VK_RSHIFT, VK_LCONTROL/VK_RCONTROL ou VK_LMENU/VK_RMENU d'un
+/// message clavier portant VK_SHIFT, VK_CONTROL ou VK_MENU. Le côté se lit
+/// dans lParam : code de balayage 0x36 pour Maj droite, bit étendu (24) pour
+/// Ctrl et Alt droits.
+pub fn sided_modifier(vk: usize, lparam: isize) -> Option<usize> {
+    let scan = (lparam >> 16) & 0xFF;
+    let extended = lparam & (1 << 24) != 0;
+    match vk {
+        0x10 => Some(if scan == 0x36 { 0xA1 } else { 0xA0 }),
+        0x11 => Some(if extended { 0xA3 } else { 0xA2 }),
+        0x12 => Some(if extended { 0xA5 } else { 0xA4 }),
+        _ => None,
     }
 }
 
@@ -4003,6 +4023,31 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
     })
 }
 
+/// WM_TIMER échu sans réarmer le minuteur (`PeekMessage(PM_NOREMOVE)`) :
+/// Windows le montre aussi, et WinForms n'appelle GetMessage qu'après l'avoir
+/// vu par ce moyen.
+pub fn peek_due_timer(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
+    const WM_TIMER: u32 = 0x0113;
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_TIMER) {
+        return None;
+    }
+    let now = crate::dlls::kernel32::get_tick_count64();
+    let tid = std::thread::current().id();
+    let t = lock(timers());
+    let e = t
+        .iter()
+        .find(|e| e.owner == tid && (hwnd == 0 || e.hwnd == hwnd) && now >= e.next_fire)?;
+    Some(Msg {
+        hwnd: e.hwnd,
+        message: WM_TIMER,
+        wparam: e.id,
+        lparam: e.callback as isize,
+        time: now as u32,
+        pt: Point::default(),
+        l_private: 0,
+    })
+}
+
 /// Millisecondes avant le prochain minuteur du thread appelant (pour borner
 /// l'attente).
 pub fn next_timer_ms(hwnd: usize) -> Option<u32> {
@@ -4301,6 +4346,27 @@ mod tests {
         assert_eq!(mouse_button_transition(0x020B, 2 << 16), Some((6, true)));
         assert_eq!(mouse_button_transition(0x0204, 2), Some((2, true)));
         assert_eq!(mouse_button_transition(0x0200, 0), None);
+    }
+
+    /// Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis : Ctrl+O sans
+    /// côté gauche/droit restait une simple frappe de « o ».
+    #[test]
+    fn modificateurs_gauche_et_droit_suivis() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let gauche = 0x1D << 16;
+        let droite = (0x1D << 16) | (1 << 24);
+        observe_key_message(&Msg::new(0, WM_KEYDOWN, 0x11, gauche));
+        assert!(get_key_state(0x11) < 0 && get_key_state(0xA2) < 0);
+        assert!(get_key_state(0xA3) >= 0);
+        observe_key_message(&Msg::new(0, WM_KEYUP, 0x11, gauche));
+        assert!(get_key_state(0x11) >= 0 && get_key_state(0xA2) >= 0);
+        observe_key_message(&Msg::new(0, 0x0104, 0x12, droite));
+        assert!(get_key_state(0xA5) < 0);
+        observe_key_message(&Msg::new(0, 0x0105, 0x12, droite));
+        assert!(get_key_state(0xA5) >= 0 && get_key_state(0x12) >= 0);
+        assert_eq!(sided_modifier(0x10, 0x36 << 16), Some(0xA1));
+        assert_eq!(sided_modifier(0x10, 0x2A << 16), Some(0xA0));
+        assert_eq!(sided_modifier(0x41, 0), None);
     }
 
     #[test]

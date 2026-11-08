@@ -88,6 +88,11 @@ if test -f "$dir/hwexc_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hw-exceptions.sh"
 fi
 
+# Suspension de threads et contexte pour coreclr (#269), bloquant.
+if test -f "$dir/threadctl_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-thread-control.sh"
+fi
+
 # Manettes et périphériques HID (#271), bloquant.
 if test -f "$dir/hid_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
