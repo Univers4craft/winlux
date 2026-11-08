@@ -1257,6 +1257,12 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+# #1146 : le HttpClient de .NET (ScreenToGif, Flow Launcher) se connecte par
+# ConnectEx et un port de complétion ; une erreur rend un code Winsock.
+ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
+   and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
+   "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
 ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
    and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
    and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
@@ -1277,6 +1283,9 @@ ok("fn D3D10CreateDeviceAndSwapChain1" in d3d10_rs and "fn device_table" in d3d1
    and "d3d1032" in (SCRIPTS / "test-wow32.sh").read_text(encoding="utf-8")
    and "device_table_has_101_methods" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Direct3D 10 et 10.1 sur Direct3D 11, x86 et x64 (#1090, étape 2)")
+ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
+   and "perte_du_focus_garde_les_boutons_de_souris" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Bouton de souris tenu malgré SetFocus pendant le clic : DragDetect démarre le glisser (#1138)")
 # #1147 : CoIncrementMTAUsage / CoDecrementMTAUsage (WinRT côté .NET, Flow Launcher).
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),

@@ -106,6 +106,8 @@ void __stdcall entry(void) {
         GetTickCount();
     }
     if ((DWORD)&n != before) ExitProcess(14);
+    /* FS x86 intact après des passerelles (y compris en pas à pas). */
+    if (fs_read(0x18) != teb || fs_read(0x00) != 0xffffffffu) ExitProcess(16);
     say("Tout est correct.\r\n");
     ExitProcess(0);
 }
