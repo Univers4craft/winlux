@@ -83,24 +83,29 @@ check('self.label(crumb + "  ›" if fold(crumb) != fold(PAGES[self.current]) el
 # Navigateurs (#923) : confirmation avec éditeur, version, source et empreinte.
 settings_module = runpy.run_path(str(HERE / "winlux-settings.py"), run_name="redesign_browsers")
 fetcher = runpy.run_path(str(HERE / "prepare-browser-packages.py"), run_name="redesign_fetch")
-publishers, text = settings_module["BROWSER_PUBLISHERS"], settings_module["browser_download_text"]
-check({ident: source for ident, (_, source) in publishers.items()} == {ident: row[1] for ident, row in fetcher["SOURCES"].items()},
+confirmation, hosts = settings_module["browser_confirmation"], settings_module["BROWSER_HOSTS"]
+from urllib.parse import urlparse
+check(hosts == {ident: urlparse(row[1]).hostname for ident, row in fetcher["SOURCES"].items()},
       "sources affichées = dépôts réellement utilisés par le téléchargeur")
-with tempfile.TemporaryDirectory() as tmp:
-    (Path(tmp) / "var/cache/winlux/browsers").mkdir(parents=True)
-    (Path(tmp) / "var/cache/winlux/browsers/firefox.version").write_text("147.0.1\n")
-    shown = text("firefox", tmp)
-    check("Mozilla" in shown and "147.0.1" in shown and "https://packages.mozilla.org/apt/" in shown and "SHA-256" in shown,
-          f"confirmation Firefox : {shown!r}")
-    shown = text("chrome", tmp)
-    check("Google" in shown and "dernière version stable" in shown and "dl.google.com" in shown, f"version inconnue dite : {shown!r}")
+_, shown = confirmation("firefox", {"version": "147.0.1", "sha256": "ab" * 32})
+check("Mozilla" in shown and "147.0.1" in shown and "packages.mozilla.org" in shown and "SHA-256" in shown,
+      f"confirmation Firefox : {shown!r}")
+_, shown = confirmation("chrome", {})
+check("Google" in shown and "connue au téléchargement" in shown and "dl.google.com" in shown, f"version inconnue dite : {shown!r}")
 tr = settings_module["_TR"]
-for key in ("Installer {name} ?", "Télécharger et installer", "Annuler", "Éditeur : {publisher}", "Version : {version}",
-            "Source : {source}", "dernière version stable publiée par l’éditeur"):
+for key in ("Installer {name} ?", "Annuler", "Éditeur : {publisher}", "Version : {version}", "Source : https://{host}"):
     check(len(tr.get(key, ())) == 3, f"« {key} » sans ses traductions")
-check('button.connect("clicked", lambda _, value=action: self.confirm_browser(value))' in settings
-      and "if response == Gtk.ResponseType.OK: self.execute(action)" in settings,
-      "« Installer … » demande confirmation, refus possible, avant tout téléchargement")
+check('button.connect("clicked", lambda _, value=action: self.execute(value))' in settings
+      and settings.count("def confirm_browser(") == 1 and settings.count("\nBROWSER_PUBLISHERS = ") == 1
+      and "self.browser_confirmed = \"browser-install-\" + ident" in settings,
+      "« Installer … » demande confirmation, refus possible, avant tout téléchargement (une seule boîte)")
+_box = settings[settings.index("def confirm_browser(self, ident):"):]
+_box = _box[:_box.index("dialog.show_all()")]
+check("dialog.set_default_response(Gtk.ResponseType.CANCEL)" in _box and "install.set_sensitive(False)" in _box,
+      "confirmation : Annuler par défaut, Installer grisé tant que l'index n'est pas lu")
+for key in ("Installer", "Recherche de la version chez l’éditeur…",
+            "Version : connue au téléchargement (index de l’éditeur injoignable pour l’instant)", "Taille : {size} Mo"):
+    check(len(tr.get(key, ())) == 3, f"« {key} » sans ses traductions")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
