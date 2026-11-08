@@ -108,6 +108,10 @@ step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" c
 # ERROR_FILE_NOT_FOUND, sans runtime enfant qui écrit sur stderr.
 step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- programme_windows_absent_echoue_sans_lancer_de_runtime
 
+# Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
+# DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
+step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
