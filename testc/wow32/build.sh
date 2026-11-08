@@ -276,6 +276,7 @@ GetTickCount@0
 GetModuleHandleA@4
 CreateEventA@16
 WaitForSingleObject@8
+GetEnvironmentVariableA@12
 DEF
 cat >"$tmp/jeux_user32.def" <<'DEF'
 LIBRARY user32.dll
@@ -373,6 +374,16 @@ midiStreamRestart@4
 midiStreamProperty@12
 midiStreamPosition@12
 midiStreamClose@4
+midiInGetNumDevs@0
+midiInGetDevCapsA@12
+midiInOpen@20
+midiInPrepareHeader@12
+midiInUnprepareHeader@12
+midiInAddBuffer@12
+midiInStart@4
+midiInStop@4
+midiInReset@4
+midiInClose@4
 timeBeginPeriod@4
 timeSetEvent@20
 timeKillEvent@4

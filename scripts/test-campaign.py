@@ -719,6 +719,12 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
+# #237 : entrée MIDI sur les claviers branchés, testée sans matériel par jeux32/jeux64.
+ok((runtime_dlls / "winmm_midi_in.rs").exists()
+   and "/dev/snd" in (runtime_dlls / "winmm_midi_in.rs").read_text()
+   and "WINLUX_MIDI_IN_DIR" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "midi_in_tests" in (ROOT / "testc/wow32/jeux32.c").read_text(),
+   "entrée MIDI : midiIn* lit /dev/snd/midiC*D* (statut courant, temps réel, système exclusif)")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
