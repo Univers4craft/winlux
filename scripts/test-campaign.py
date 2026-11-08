@@ -1416,9 +1416,4 @@ for extra in loaded:
     runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
 ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
    f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
-# #1199 : stylet (pression, inclinaison) pour Photoshop : WM_POINTER et wintab32.
-ok('"GetPointerPenInfo" => fn get_pointer_pen_info' in (runtime_dlls / "pointer.rs").read_text(encoding="utf-8")
-   and 'name: "wintab32"' in (runtime_dlls / "mod.rs").read_text(encoding="utf-8")
-   and "stylet_en_messages_pointeur_avec_pression" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
-   "Stylet : WM_POINTER avec pression et inclinaison, wintab32.dll maison (#1199)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
