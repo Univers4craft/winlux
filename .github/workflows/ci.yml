@@ -272,6 +272,8 @@ jobs:
         run: python3 -B scripts/test-uac.py
       - name: Vérifier le relais root du bureau (politique, préférences, élévation)
         run: python3 -B scripts/test-root.py
+      - name: Vérifier le code PIN et l'empreinte (relais root, lecteur simulé, #659)
+        run: python3 -B scripts/test-signin.py
       - name: Vérifier le contrôle parental (le compte surveillé ne lève pas sa restriction, #661)
         run: python3 -B scripts/test-parental.py
       - name: Vérifier que le Xorg de l'init a sa session (changement d'utilisateur, VT)
@@ -374,6 +376,8 @@ jobs:
           xvfb-run -a -s '-screen 0 1280x720x24' /usr/bin/python3 -B scripts/test-lock-osk.py
           for screen in 1366x768 1920x1080 2560x1080; do xvfb-run -a -s "-screen 0 ${screen}x24" /usr/bin/python3 -B scripts/test-lock-wake.py; done
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-accounts.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-lock-signin.py
+          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-signin-page.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-osk.py --clavier
           xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-licence.py
