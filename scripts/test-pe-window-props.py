@@ -75,7 +75,7 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
         for w in wins:
             got = props(w)
             missing = [name for name in REQUIRED if name not in got]
-            if missing and not got and not exists(w):
+            if missing and not exists(w):
                 print(f"  --     {label} : fenêtre {w} détruite entre-temps, ignorée")
                 continue
             if missing:
