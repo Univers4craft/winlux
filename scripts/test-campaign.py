@@ -763,8 +763,13 @@ ok((runtime_dlls / "winmm_midi_in.rs").exists()
 ok((runtime_dlls / "msacm32.rs").exists()
    and '"msacm32"' in (runtime_dlls / "mod.rs").read_text()
    and "acm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
-   and "msacm32 (conversions PCM)" in (SCRIPTS / "test-wow32.sh").read_text(),
+   and "msacm32 (conversions PCM" in (SCRIPTS / "test-wow32.sh").read_text(),
    "msacm32 : acmStream* convertit le PCM (8/16/24/32 bits, flottant, canaux, fréquence)")
+# #1122 : décodeurs IMA ADPCM et ADPCM MS dans msacm32, testés par jeux32/jeux64.
+ok("fn decode_block" in (runtime_dlls / "msacm32.rs").read_text()
+   and "adpcm_tests" in (ROOT / "testc/wow32/jeux32.c").read_text()
+   and "décodeurs ADPCM" in (SCRIPTS / "test-wow32.sh").read_text(),
+   "msacm32 : sons IMA ADPCM et ADPCM MS décodés en PCM")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
