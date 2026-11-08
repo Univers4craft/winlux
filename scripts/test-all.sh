@@ -112,6 +112,10 @@ step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- program
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
 
+# Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
+# CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
+step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
