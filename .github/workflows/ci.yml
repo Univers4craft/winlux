@@ -113,6 +113,8 @@ jobs:
 
       - name: Figer la surface d'exports de kernel32 (#521)
         run: python3 -B scripts/test-kernel32-exports.py
+      - name: Pages de code asiatiques, modules gconv gardés dans l'ISO (#183)
+        run: python3 -B scripts/test-dbcs-gconv.py
 
       - name: Inventaire des structures à taille x86 (#232)
         run: python3 -B scripts/test-wow32-structures.py

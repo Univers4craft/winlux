@@ -771,6 +771,11 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
+ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
+   and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
+   and "test-dbcs-gconv.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "pages 932/936/949/950, IsDBCSLeadByte, clés TimeZoneInformation, Nls\\CodePage, Keyboard Layout et Fonts (#183)")
 # #925 : menu Démarrer, déplacer une application épinglée.
 ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "def pin_drag" in (SCRIPTS / "winlux-start-menu.py").read_text()
