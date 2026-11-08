@@ -1165,4 +1165,11 @@ com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
 ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
    and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
+ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w'
+   in (runtime_dlls / "win32_basics.rs").read_text()
+   and "GetVolumeNameForVolumeMountPointW" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(),
+   "kernel32 : GetVolumeNameForVolumeMountPointW (#1112, diagnostic de Paint.NET)")
+ok("builtin_file_path(module)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "dll_integree_a_un_chemin_et_un_fichier_visible" in (SCRIPTS / "test-all.sh").read_text(),
+   "DLL système intégrées : chemin System32 par GetModuleFileNameW, visibles par GetFileAttributesExW (#1113)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
