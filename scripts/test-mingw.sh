@@ -43,6 +43,20 @@ cat "$work/service.txt"
 test "$service_status" -eq 0 || { echo "service_suite.exe : code $service_status" >&2; exit 1; }
 grep -q '^Service Windows : tout est correct$' "$work/service.txt" || { echo "service_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# Activation COM depuis le registre (#16) : InprocServer32, DllGetClassObject,
+# CoCreateInstanceEx, CoFreeUnusedLibraries.
+test -f "$dir/com_suite.exe" || { echo "com_suite.exe absent" >&2; exit 1; }
+test -f "$dir/com_server.dll" || { echo "com_server.dll absent" >&2; exit 1; }
+mkdir -p "$work/com"
+set +e
+(cd "$work/com" && WINLUX_REGISTRY_PATH="$work/com/registre.tsv" WINLUX_GUI=headless \
+    timeout 120 "$runtime" "$dir/com_suite.exe") >"$work/com.txt" 2>&1
+com_status=$?
+set -e
+cat "$work/com.txt"
+test "$com_status" -eq 0 || { echo "com_suite.exe : code $com_status" >&2; exit 1; }
+grep -q '^COM par le registre : tout est correct$' "$work/com.txt" || { echo "com_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }
