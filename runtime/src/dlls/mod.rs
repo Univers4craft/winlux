@@ -142,6 +142,7 @@ pub mod mmdevapi;
 pub mod monitors;
 pub mod mouse;
 pub mod mpr;
+pub mod msacm32;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -690,6 +691,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dpnaddr",
                 exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "msacm32",
+                exports: msacm32::exports(),
                 handle: fake_module(),
             },
             Builtin {

@@ -369,6 +369,12 @@ unsafe fn create_window_inner(
             } else if let Some(level) = popup_decorations(style) {
                 b.set_decorations(hwnd, level);
             }
+            // Fenêtre possédée : toujours au-dessus de sa propriétaire, comme
+            // sous Windows (boîte « Vie privée » de VLC, #1068).
+            let owner = owner_top_level(parent);
+            if owner != 0 {
+                b.set_owner(hwnd, owner);
+            }
         }
     });
 
@@ -2471,8 +2477,15 @@ pub unsafe extern "win64" fn get_update_rect(hwnd: usize, rect: *mut Rect, _eras
     }
 }
 
-pub unsafe extern "win64" fn get_update_rgn(_hwnd: usize, _rgn: usize, _erase: i32) -> i32 {
-    1 // SIMPLEREGION
+/// `GetUpdateRgn` : la zone à repeindre est tout le rectangle client.
+/// wxHtmlWindow ne dessine que les cellules comprises dans la boîte de cette
+/// région ; laissée vide, le titre de l'accueil d'Audacity restait blanc (#1054).
+pub unsafe extern "win64" fn get_update_rgn(hwnd: usize, rgn: usize, _erase: i32) -> i32 {
+    const SIMPLEREGION: i32 = 2;
+    match gui::window_client_rect(hwnd) {
+        Some(r) if gui::set_region_rect(rgn, r) => SIMPLEREGION,
+        _ => 0, // ERROR
+    }
 }
 
 /// `RedrawWindow` : RDW_VALIDATE (sans RDW_INVALIDATE) valide la fenêtre,
@@ -3875,6 +3888,24 @@ pub fn exports() -> crate::dlls::Exports {
     }
 }
 
+/// Fenêtre de premier niveau qui contient `hwnd` (un propriétaire désigné
+/// par une fenêtre enfant est remplacé par sa fenêtre principale).
+fn owner_top_level(mut hwnd: usize) -> usize {
+    for _ in 0..64 {
+        let Some(style) = gui::window_style(hwnd) else {
+            return 0;
+        };
+        if style & WS_CHILD == 0 {
+            return hwnd;
+        }
+        match gui::window_parent(hwnd) {
+            Some(p) if p != 0 => hwnd = p,
+            _ => return 0,
+        }
+    }
+    0
+}
+
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
@@ -4378,6 +4409,49 @@ mod tests_messages {
         0
     }
 
+    /// Une boîte possédée reste au-dessus de la fenêtre principale qui
+    /// contient son propriétaire, même désigné par un enfant (#1068).
+    #[test]
+    fn proprietaire_ramene_a_sa_fenetre_principale() {
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let top = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                50,
+                50,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            let child = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_CHILD,
+                0,
+                0,
+                10,
+                10,
+                top,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(top, 0);
+            assert_ne!(child, 0);
+            assert_eq!(owner_top_level(child), top);
+            assert_eq!(owner_top_level(top), top);
+            assert_eq!(owner_top_level(0x7777_0000), 0);
+            destroy_window(top);
+        }
+    }
+
     #[test]
     fn real_get_window_class_rend_le_nom_de_classe() {
         unsafe {
@@ -4409,6 +4483,41 @@ mod tests_messages {
                 real_get_window_class_w(0x7777_0000, buf.as_mut_ptr(), 32),
                 0
             );
+            destroy_window(hwnd);
+        }
+    }
+
+    #[test]
+    fn region_a_repeindre_couvre_la_zone_client() {
+        // #1054 : wxHtmlWindow lit GetUpdateRgn puis GetRgnBox et ne dessine
+        // que ce qui tombe dedans ; une région vide le laissait blanc.
+        unsafe {
+            let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                120,
+                40,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let rgn = crate::dlls::gdi32::create_rect_rgn(0, 0, 0, 0);
+            assert_eq!(get_update_rgn(hwnd, rgn, 0), 2); // SIMPLEREGION
+            let mut r = Rect::default();
+            crate::dlls::gdi32::get_rgn_box(rgn, &mut r);
+            let client = gui::window_client_rect(hwnd).unwrap();
+            assert_eq!(
+                (r.left, r.top, r.right, r.bottom),
+                (client.left, client.top, client.right, client.bottom)
+            );
+            assert!(r.right > r.left && r.bottom > r.top);
             destroy_window(hwnd);
         }
     }
