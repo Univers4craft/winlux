@@ -333,13 +333,19 @@ fn windows() -> &'static Mutex<HashMap<usize, Window>> {
     W.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn next_hwnd() -> &'static std::sync::atomic::AtomicUsize {
-    static N: OnceLock<std::sync::atomic::AtomicUsize> = OnceLock::new();
-    N.get_or_init(|| std::sync::atomic::AtomicUsize::new(0x0004_0000))
+/// Nouveau HWND : unique entre les processus du compte, comme sous Windows
+/// où une fenêtre vaut pour tous (#1228).
+pub fn alloc_hwnd() -> usize {
+    super::gui_shared::alloc_hwnd()
 }
 
-pub fn alloc_hwnd() -> usize {
-    next_hwnd().fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// Fenêtre d'un autre processus du compte (processus GPU de Chromium qui
+/// reçoit le HWND du navigateur, #1228).
+pub fn foreign_window(hwnd: usize) -> Option<super::gui_shared::Foreign> {
+    if lock(windows()).contains_key(&hwnd) {
+        return None;
+    }
+    super::gui_shared::foreign(hwnd)
 }
 
 // ---------- Files de messages par thread ----------
@@ -2063,6 +2069,22 @@ fn device_dependent() -> &'static Mutex<std::collections::HashSet<usize>> {
     S.get_or_init(Default::default)
 }
 
+/// Bitmaps monochromes (`CreateBitmap` à 1 bit par pixel) : une copie
+/// couleur vers elles suit la règle de Windows (couleur de fond du DC
+/// source → blanc, toute autre → noir). wxWidgets en tire ses masques.
+fn monochrome() -> &'static Mutex<std::collections::HashSet<usize>> {
+    static S: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();
+    S.get_or_init(Default::default)
+}
+
+pub fn mark_monochrome(handle: usize) {
+    lock(monochrome()).insert(handle);
+}
+
+pub fn is_monochrome(handle: usize) -> bool {
+    lock(monochrome()).contains(&handle)
+}
+
 /// Comme `bitmap_from_pixels`, mais vue par le programme comme une DDB.
 pub fn ddb_from_pixels(width: usize, height: usize, pixels: &[u32]) -> Option<usize> {
     let h = bitmap_from_pixels(width, height, pixels)?;
@@ -2264,6 +2286,7 @@ pub fn delete_object(obj: usize) -> bool {
         Some(GdiObject::SystemBrush(_)) => false,
         Some(_) => {
             lock(device_dependent()).remove(&obj);
+            lock(monochrome()).remove(&obj);
             map.remove(&obj).is_some()
         }
         None => (1..=9).contains(&obj) || obj == DEFAULT_BITMAP,
@@ -2759,6 +2782,10 @@ pub trait GuiBackend: Send {
         self.create_window(hwnd, "", rect);
     }
     fn destroy_window(&mut self, _hwnd: usize) {}
+    /// Taille logique d'une fenêtre X11 d'un autre processus (#1228).
+    fn foreign_size(&mut self, _xid: u64) -> Option<(i32, i32)> {
+        None
+    }
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
@@ -2932,6 +2959,21 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
     })
 }
 
+/// Zone client d'une fenêtre d'un autre processus : taille de sa fenêtre
+/// X11, lue sur le serveur (#1228).
+pub fn foreign_client_rect(hwnd: usize) -> Option<Rect> {
+    let f = foreign_window(hwnd)?;
+    let mut size = None;
+    with_backend(|b| size = b.foreign_size(f.xid));
+    let (w, h) = size?;
+    Some(Rect {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    })
+}
+
 /// Fenêtre X11 réelle d'un HWND (`None` en headless ou HWND inconnu).
 /// Direct3D en a besoin pour créer un contexte GLX ou une surface Vulkan.
 pub fn native_window(hwnd: usize) -> Option<u64> {
@@ -3046,7 +3088,22 @@ pub fn pump_backend() {
             update_async_key_state(vk, down);
         }
     }
-    for e in events {
+    // Stylet (#1199) : chaque message souris qu'il produit est précédé de
+    // son WM_POINTER*, et marqué « promu » (GetMessageExtraInfo).
+    let events: Vec<(PendingEvent, u32)> = events
+        .into_iter()
+        .flat_map(|e| {
+            let origin = screen_rect(e.hwnd).map(|r| (r.left, r.top));
+            match origin.and_then(|o| crate::dlls::pointer::pointer_for_mouse(&e, o)) {
+                Some(p) => {
+                    let mark = crate::dlls::pointer::promoted_mark(&p);
+                    vec![(p, 0), (e, mark)]
+                }
+                None => vec![(e, 0)],
+            }
+        })
+        .collect();
+    for (e, promoted) in events {
         if e.message == WM_HOTKEY && e.hwnd == 0 {
             hotkey_pressed(e.lparam as u32, e.wparam as u32);
             continue;
@@ -3056,8 +3113,9 @@ pub fn pump_backend() {
         // Windows. Le clic livré à la fenêtre principale d'Audacity pendant
         // la boîte Tonalité y laissait un geste à moitié fait, et la piste
         // générée n'était plus jamais redessinée (#1120).
-        let mouse =
-            (0x0200..=0x020E).contains(&e.message) || (0x00A0..=0x00AD).contains(&e.message);
+        let mouse = (0x0200..=0x020E).contains(&e.message)
+            || (0x00A0..=0x00AD).contains(&e.message)
+            || (0x0245..=0x024A).contains(&e.message);
         if (mouse || e.message == WM_SETFOCUS) && input_disabled(e.hwnd) {
             let press = matches!(
                 e.message,
@@ -3111,7 +3169,7 @@ pub fn pump_backend() {
             lparam: e.lparam,
             time: 0,
             pt: Point::default(),
-            l_private: 0,
+            l_private: promoted,
         };
         if e.message == WM_PAINT {
             request_paint(e.hwnd);
@@ -3365,6 +3423,7 @@ pub fn destroy_window(hwnd: usize) -> bool {
         destroy_window(c);
     }
     with_backend(|b| b.destroy_window(hwnd));
+    super::gui_shared::withdraw(hwnd);
     // Plus aucun rappel sur une HWND morte : minuteurs, capture de la souris,
     // ordre Z et messages encore en file pour cette fenêtre.
     remove_window_timers(hwnd);
@@ -3818,6 +3877,11 @@ pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
         {
             continue;
         }
+        // Message souris promu d'un WM_POINTER* que la fenêtre a traité
+        // elle-même : Windows ne le produit pas (#1199).
+        if !crate::dlls::pointer::on_take(&m) {
+            continue;
+        }
         break m;
     };
     if taken.message == WM_PAINT {
@@ -3925,6 +3989,7 @@ pub fn default_nccalcsize_seen() -> bool {
 
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+    crate::dlls::pointer::on_default(message);
     match message {
         // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
         // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le

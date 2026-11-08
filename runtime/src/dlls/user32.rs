@@ -386,6 +386,11 @@ unsafe fn create_window_inner(
             }
         }
     });
+    // Visible des autres processus du compte (#1228) : le processus GPU de
+    // Chromium reçoit ce HWND et ANGLE le vérifie par IsWindow.
+    if let Some(xid) = gui::native_window(hwnd) {
+        super::gui_shared::publish(hwnd, super::kernel32::get_current_thread_id(), xid);
+    }
 
     // Barre de menus d'une fenêtre de premier niveau : hMenu, sinon le
     // menu de la classe (Notepad++ le déclare dans WNDCLASSEX).
@@ -938,7 +943,7 @@ pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn is_window(hwnd: usize) -> i32 {
-    gui::wnd_proc_of(hwnd).is_some() as i32
+    (gui::wnd_proc_of(hwnd).is_some() || gui::foreign_window(hwnd).is_some()) as i32
 }
 
 pub extern "win64" fn get_focus() -> usize {
@@ -1031,7 +1036,7 @@ pub unsafe extern "win64" fn get_client_rect(hwnd: usize, out: *mut Rect) -> i32
         crate::process::set_last_error(87);
         return 0;
     }
-    match gui::window_client_rect(hwnd) {
+    match gui::window_client_rect(hwnd).or_else(|| gui::foreign_client_rect(hwnd)) {
         Some(r) => {
             std::ptr::write_unaligned(out, r);
             1
@@ -3023,6 +3028,13 @@ pub unsafe extern "win64" fn system_parameters_info_w(
 pub unsafe extern "win64" fn get_window_thread_process_id(hwnd: usize, pid: *mut u32) -> u32 {
     let Some(tid) = gui::window_thread_id(hwnd) else {
         if gui::wnd_proc_of(hwnd).is_none() {
+            // Fenêtre d'un autre processus du compte (#1228).
+            if let Some(f) = gui::foreign_window(hwnd) {
+                if !pid.is_null() {
+                    *pid = f.pid;
+                }
+                return f.tid;
+            }
             crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
             return 0;
         }

@@ -945,4 +945,50 @@ mod tests {
             assert_eq!(px[1] & 0x00FF_FFFF, 0x00FF_0000);
         }
     }
+
+    #[test]
+    fn masque_monochrome_tire_de_la_couleur_de_fond() {
+        // #1121 : wxWidgets fabrique le masque d'une bitmap en la copiant
+        // dans une bitmap 1 bit avec NOTSRCCOPY : la couleur de fond du DC
+        // source (ici un PALETTERGB, comme Audacity) devient transparente.
+        type Dc = unsafe extern "win64" fn(usize) -> usize;
+        type Sel = unsafe extern "win64" fn(usize, usize) -> usize;
+        type Bmp = unsafe extern "win64" fn(i32, i32, u32, u32, *const u8) -> usize;
+        type Bk = unsafe extern "win64" fn(usize, u32) -> u32;
+        type Blt = unsafe extern "win64" fn(usize, i32, i32, i32, i32, usize, i32, i32, u32) -> i32;
+        let f = |name: &str| crate::dlls::lookup("gdi32", name).unwrap();
+        unsafe {
+            let dc: Dc = std::mem::transmute(f("CreateCompatibleDC"));
+            let select: Sel = std::mem::transmute(f("SelectObject"));
+            let create_bitmap: Bmp = std::mem::transmute(f("CreateBitmap"));
+            let set_bk: Bk = std::mem::transmute(f("SetBkColor"));
+            let bit_blt: Blt = std::mem::transmute(f("BitBlt"));
+            let gui = |h| super::super::gui::bitmap_pixels(h).unwrap().2;
+            let fond = 0x00F9_F8F8;
+            let image =
+                super::super::gui::bitmap_from_pixels(3, 1, &[fond, 0x0000_0000, fond]).unwrap();
+            let mask = create_bitmap(3, 1, 1, 1, std::ptr::null());
+            let (src, mdc) = (dc(0), dc(0));
+            select(src, image);
+            select(mdc, mask);
+            set_bk(src, 0x0200_0000 | fond);
+            assert_eq!(bit_blt(mdc, 0, 0, 3, 1, src, 0, 0, 0x0033_0008), 1);
+            let m: Vec<u32> = gui(mask).iter().map(|p| p & 0x00FF_FFFF).collect();
+            assert_eq!(m, vec![0, 0x00FF_FFFF, 0], "seul le trait est opaque");
+            select(mdc, super::super::gui::DEFAULT_BITMAP);
+            let dst_bmp = super::super::gui::bitmap_from_pixels(3, 1, &[0x00AB_CDEF; 3]).unwrap();
+            let dst = dc(0);
+            select(dst, dst_bmp);
+            assert_eq!(
+                mask_blt(dst, 0, 0, 3, 1, src, 0, 0, mask, 0, 0, 0xAACC_0020),
+                1
+            );
+            let px: Vec<u32> = gui(dst_bmp).iter().map(|p| p & 0x00FF_FFFF).collect();
+            assert_eq!(
+                px,
+                vec![0x00AB_CDEF, 0, 0x00AB_CDEF],
+                "le fond reste visible"
+            );
+        }
+    }
 }
