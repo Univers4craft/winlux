@@ -1122,6 +1122,10 @@ pub unsafe extern "win64" fn set_window_pos(
         with_backend(|backend| backend.show_window(hwnd, false));
     }
 
+    if flags & SWP_FRAMECHANGED != 0 {
+        frame_changed(hwnd, rect, flags);
+    }
+
     if flags & SWP_NOREDRAW == 0
         && gui::window_rect(hwnd).is_some()
         && (moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0)
@@ -1132,6 +1136,68 @@ pub unsafe extern "win64" fn set_window_pos(
         }
     }
     1
+}
+
+/// Fenêtres dont le cadre du gestionnaire a été retiré par `frame_changed`.
+static OWN_FRAME: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+#[repr(C)]
+struct WindowPos {
+    hwnd: usize,
+    insert_after: usize,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+}
+
+#[repr(C)]
+struct NcCalcSizeParams {
+    rects: [Rect; 3],
+    pos: *mut WindowPos,
+}
+
+/// SetWindowPos(SWP_FRAMECHANGED) : WM_NCCALCSIZE est envoyé, comme sous
+/// Windows. Une fenêtre qui y répond elle-même, sans DefWindowProc, en
+/// gardant tout le rectangle pour sa zone cliente dessine sa propre barre de
+/// titre (WindowChrome de WPF, ScreenToGif) : le cadre du gestionnaire de
+/// fenêtres est alors retiré, sinon deux barres de titre se superposent
+/// (#1131). Il revient si la fenêtre rend plus tard la main à DefWindowProc.
+unsafe fn frame_changed(hwnd: usize, rect: Rect, flags: u32) {
+    // Programme 32 bits : la structure serait à traduire, on n'envoie rien.
+    if crate::wow32::pointer_size() != 8 || gui::window_parent(hwnd).unwrap_or(0) != 0 {
+        return;
+    }
+    let mut pos = WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: rect.left,
+        y: rect.top,
+        cx: rect.width(),
+        cy: rect.height(),
+        flags,
+    };
+    let mut params = NcCalcSizeParams {
+        rects: [rect, rect, rect],
+        pos: &mut pos,
+    };
+    gui::reset_default_nccalcsize();
+    send_message_w(hwnd, 0x0083, 1, &mut params as *mut _ as isize);
+    let own = !gui::default_nccalcsize_seen() && params.rects[0] == rect;
+    let mut list = OWN_FRAME.lock().unwrap_or_else(|e| e.into_inner());
+    let had = list.contains(&hwnd);
+    if own && !had {
+        list.push(hwnd);
+        drop(list);
+        with_backend(|b| b.set_decorations(hwnd, 0));
+    } else if !own && had {
+        list.retain(|&h| h != hwnd);
+        drop(list);
+        let style = gui::window_style(hwnd).unwrap_or(0);
+        let level = popup_decorations(style).unwrap_or(2);
+        with_backend(|b| b.set_decorations(hwnd, level));
+    }
 }
 
 /// Déplace/redimensionne une fenêtre (raccourci Win32 de `SetWindowPos`).
@@ -4343,6 +4409,84 @@ mod tests {
             assert_ne!(hwnd, 0);
             assert_eq!(CREATE_SEEN_BY.load(std::sync::atomic::Ordering::SeqCst), 2);
             destroy_window(hwnd);
+        }
+    }
+
+    unsafe extern "win64" fn proc_cadre_maison(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        // WindowChrome de WPF : WM_NCCALCSIZE traité sans DefWindowProc,
+        // toute la fenêtre reste zone cliente.
+        if msg == 0x0083 {
+            return 0;
+        }
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    unsafe extern "win64" fn proc_cadre_standard(h: usize, msg: u32, w: usize, l: isize) -> isize {
+        gui::def_window_proc(h, msg, w, l)
+    }
+
+    /// #1131 : le cadre du gestionnaire est retiré d'une fenêtre qui dessine
+    /// sa propre barre de titre, et seulement d'elle.
+    #[test]
+    fn wm_nccalcsize_traite_par_l_appli_retire_le_cadre() {
+        unsafe {
+            let mut fenetres = Vec::new();
+            for (nom, proc_) in [
+                ("Winlux1131Maison", proc_cadre_maison as *const () as usize),
+                (
+                    "Winlux1131Standard",
+                    proc_cadre_standard as *const () as usize,
+                ),
+            ] {
+                let name: Vec<u16> = nom.encode_utf16().chain([0]).collect();
+                let wc = gui::WndClassA {
+                    style: 0,
+                    wnd_proc: proc_,
+                    cls_extra: 0,
+                    wnd_extra: 0,
+                    instance: 0,
+                    icon: 0,
+                    cursor: 0,
+                    background: 0,
+                    menu_name: std::ptr::null(),
+                    class_name: name.as_ptr().cast(),
+                };
+                assert_ne!(register_class_w(&wc), 0);
+                let hwnd = create_window_ex_w(
+                    0,
+                    name.as_ptr(),
+                    name.as_ptr(),
+                    0x00CF_0000, // WS_OVERLAPPEDWINDOW
+                    10,
+                    10,
+                    320,
+                    200,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                );
+                assert_ne!(hwnd, 0);
+                assert_eq!(
+                    set_window_pos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED
+                    ),
+                    1
+                );
+                fenetres.push(hwnd);
+            }
+            let own = |h: usize| OWN_FRAME.lock().unwrap().contains(&h);
+            assert!(own(fenetres[0]));
+            assert!(!own(fenetres[1]));
+            for h in fenetres {
+                destroy_window(h);
+            }
         }
     }
 

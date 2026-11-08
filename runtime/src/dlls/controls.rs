@@ -337,6 +337,32 @@ pub fn builtin_class(name: &str) -> Option<usize> {
     Some(proc_addr as usize)
 }
 
+/// Classe prédéfinie (en minuscules) dont `proc_` est la procédure : une
+/// classe dérivée par GetClassInfo puis RegisterClass (superclasse, comme
+/// le TPageControl de la VCL de Delphi) se comporte comme elle (#1129).
+pub fn builtin_class_of_proc(proc_: usize) -> Option<&'static str> {
+    const NAMES: &[&str] = &[
+        "systabcontrol32",
+        "syslistview32",
+        "systreeview32",
+        "toolbarwindow32",
+        "comboboxex32",
+        "rebarwindow32",
+        "tooltips_class32",
+        "msctls_statusbar32",
+        "msctls_progress32",
+        "msctls_trackbar32",
+        "msctls_updown32",
+    ];
+    if proc_ == 0 {
+        return None;
+    }
+    NAMES
+        .iter()
+        .copied()
+        .find(|n| builtin_class(n) == Some(proc_))
+}
+
 /// Classe désignée par un atome prédéfini (modèles de boîte de dialogue).
 #[allow(dead_code)] // utilisée par le gestionnaire de dialogues
 pub fn atom_class(atom: u16) -> Option<&'static str> {
