@@ -197,6 +197,7 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
             return;
         }
         let code = report(sig, info, ctx);
+        crate::dlls::kernel32::record_exit_code(code);
         libc::_exit(code as i32);
     }
 }
