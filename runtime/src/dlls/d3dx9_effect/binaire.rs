@@ -410,8 +410,10 @@ fn shader_of(objects: &HashMap<u32, Vec<u8>>, obj: u32) -> Option<Shader> {
         return None;
     }
     let tokens: Vec<u32> = b
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     let ctab = crate::dlls::d3dx9_asm::constant_table(&tokens)
         .map(|t| {
@@ -428,8 +430,10 @@ fn shader_of(objects: &HashMap<u32, Vec<u8>>, obj: u32) -> Option<Shader> {
                     cols: c.columns,
                     elements: c.elements,
                     default: c.default.as_ref().map(|d| {
-                        d.chunks_exact(4)
-                            .map(|w| f32::from_le_bytes(w.try_into().unwrap()))
+                        d.as_chunks::<4>()
+                            .0
+                            .iter()
+                            .map(|w| f32::from_le_bytes(*w))
                             .collect()
                     }),
                 })
