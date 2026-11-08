@@ -32,6 +32,8 @@
 # timeSetEvent et waveOut avec rappel, en x86 puis en x64.
 # d3d1132.exe et d3d1164.exe (#1090) : Direct3D 11 et DXGI en x86 et en x64,
 # sous Xvfb (contexte OpenGL).
+# d3d1032.exe et d3d1064.exe (#1090, étape 2) : Direct3D 10 et 10.1 sur
+# Direct3D 11, en x86 et en x64, sous Xvfb.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -41,7 +43,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132 d3d1032"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -253,6 +255,18 @@ if command -v xvfb-run >/dev/null 2>&1; then
         fi
     done
     echo "d3d1132/d3d1164 : Direct3D 11 et DXGI en x86 et en x64 (données initiales, Map, tableaux de vues, DXGI_SWAP_CHAIN_DESC, DXGI_ADAPTER_DESC)"
+    for name in d3d1032 d3d1064; do
+        set +e
+        xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI timeout 60 "$runtime" "$out/$name.exe" >"$work/d3d10.txt" 2>&1
+        status=$?
+        set -e
+        if test "$status" -ne 0 || ! grep -q 'Direct3D 10 : tout est correct' "$work/d3d10.txt"; then
+            tail -20 "$work/d3d10.txt"
+            echo "$name.exe : code $status, vérification n° $status en échec" >&2
+            exit 1
+        fi
+    done
+    echo "d3d1032/d3d1064 : Direct3D 10 et 10.1 sur Direct3D 11 en x86 et en x64 (D3D10_MAPPED_TEXTURE2D, D3D10_VIEWPORT, D3D10_BLEND_DESC, tableaux d'objets, chaîne d'échange)"
 else
     echo "d3d1132 : xvfb-run absent, test Direct3D 11 sauté"
 fi

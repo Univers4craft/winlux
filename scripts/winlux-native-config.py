@@ -719,6 +719,14 @@ def migrate_openbox(openbox_config, default_rc):
                                 keyboard.remove(binding)
                                 changed = True
                 for binding in list(keyboard):
+                    # Alt+Espace livré autrefois vers le menu de fenêtre : rendu aux
+                    # applications (#1168). Une liaison personnelle reste.
+                    actions = binding.findall(f"{{{namespace}}}action")
+                    if binding.get("key") == "A-space" and len(actions) == 1 and actions[0].get("name") == "ShowMenu" \
+                            and actions[0].findtext(f"{{{namespace}}}menu") in ("winlux-window-menu", "client-menu"):
+                        keyboard.remove(binding)
+                        changed = True
+                for binding in list(keyboard):
                     commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
                     if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
                         keyboard.remove(binding)
