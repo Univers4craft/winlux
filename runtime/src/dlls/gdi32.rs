@@ -1362,10 +1362,17 @@ pub unsafe extern "win64" fn rectangle(
         right,
         bottom,
     };
+    let outline = gui::object_color(pen);
     if let Some(color) = gui::object_color(brush) {
+        // Sans plume (NULL_PEN), la figure fait un pixel de moins en largeur
+        // et en hauteur, mais commence bien en (left, top) (documentation
+        // de Rectangle). Rogner aussi le haut et la gauche laissait une
+        // ligne noire au bord des bitmaps neuves (#1239, vumètres
+        // d'Audacity).
+        let inset = i32::from(outline.is_some());
         let inner = Rect {
-            left: left + 1,
-            top: top + 1,
+            left: left + inset,
+            top: top + inset,
             right: right - 1,
             bottom: bottom - 1,
         };
@@ -1373,7 +1380,7 @@ pub unsafe extern "win64" fn rectangle(
             gui::record(hdc, DrawCmd::FillRect { rect: inner, color });
         }
     }
-    if let Some(color) = gui::object_color(pen) {
+    if let Some(color) = outline {
         let width = gui::object_pen_width(pen);
         gui::record(hdc, DrawCmd::FrameRect { rect, color, width });
     }
