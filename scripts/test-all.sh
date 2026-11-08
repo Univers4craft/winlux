@@ -133,6 +133,13 @@ step "Direct3D 10 sur Direct3D 11 (#1090)" cargo test -q -p winlux -- blend_desc
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
 
+# Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine et
+# tampons de constantes (#1177). Le rendu demande un affichage : xvfb-run.
+step "Direct3D 12 : signature racine et tampons de constantes (#1177)" cargo test -q -p winlux -- root_signature_round_trip root_arguments_become_constant_buffers echantillonneurs_des_tables_et_statiques
+if command -v xvfb-run >/dev/null 2>&1; then
+    step "Direct3D 12 : shaders traduits sur OpenGL (#1177)" xvfb-run -a cargo test -q -p winlux -- shaders_traduits_et_constantes_racine_opengl texture_et_echantillonneur_statique_opengl
+fi
+
 # Barre de titre dessinée par l'appli (#1131) : WM_NCCALCSIZE traité sans
 # DefWindowProc retire le cadre du gestionnaire (WindowChrome de WPF).
 step "Cadre retiré pour une barre de titre maison (#1131)" cargo test -q -p winlux -- wm_nccalcsize_traite_par_l_appli_retire_le_cadre
