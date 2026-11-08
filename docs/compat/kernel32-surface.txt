@@ -111,6 +111,7 @@ EnumCalendarInfoW
 EnumDateFormatsExEx
 EnumResourceLanguagesW
 EnumResourceNamesW
+EnumSystemFirmwareTables
 EnumSystemLocalesA
 EnumSystemLocalesEx
 EnumSystemLocalesW
@@ -346,6 +347,7 @@ GetSystemDefaultLocaleName
 GetSystemDefaultUILanguage
 GetSystemDirectoryA
 GetSystemDirectoryW
+GetSystemFirmwareTable
 GetSystemInfo
 GetSystemPowerStatus
 GetSystemPreferredUILanguages

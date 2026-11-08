@@ -1230,15 +1230,27 @@ unsafe extern "win64" fn GetPointerType(_id: u32, kind: *mut u32) -> i32 {
 
 /// `SystemParametersInfoForDpi` : mêmes valeurs que SystemParametersInfoW
 /// (les métriques sont déjà celles de l'échelle de la session).
-/// RegisterHotKey(hwnd, id, modifiers, vk) : les raccourcis globaux de la
-/// session appartiennent à Winlux (openbox) ; l'appli est acceptée sans
-/// rien voler aux raccourcis du bureau.
-unsafe extern "win64" fn RegisterHotKey(_hwnd: usize, _id: i32, _mods: u32, _vk: u32) -> i32 {
-    1
+/// RegisterHotKey(hwnd, id, modifiers, vk) : la combinaison est prise sur
+/// tout l'écran et rend WM_HOTKEY ; refusée (ERROR_HOTKEY_ALREADY_REGISTERED)
+/// si le gestionnaire de fenêtres ou un autre programme la tient déjà (#1168).
+unsafe extern "win64" fn RegisterHotKey(hwnd: usize, id: i32, mods: u32, vk: u32) -> i32 {
+    match crate::dlls::gui::register_hotkey(hwnd, id, mods, vk) {
+        Ok(()) => 1,
+        Err(code) => {
+            crate::process::set_last_error(code);
+            0
+        }
+    }
 }
 
-unsafe extern "win64" fn UnregisterHotKey(_hwnd: usize, _id: i32) -> i32 {
-    1
+unsafe extern "win64" fn UnregisterHotKey(hwnd: usize, id: i32) -> i32 {
+    match crate::dlls::gui::unregister_hotkey(hwnd, id) {
+        Ok(()) => 1,
+        Err(code) => {
+            crate::process::set_last_error(code);
+            0
+        }
+    }
 }
 
 unsafe extern "win64" fn SystemParametersInfoForDpi(
@@ -2915,6 +2927,7 @@ mod tests {
             assert_eq!(small, 8);
             assert_eq!(RegisterHotKey(0, 1, 2, 0x41), 1);
             assert_eq!(UnregisterHotKey(0, 1), 1);
+            assert_eq!(UnregisterHotKey(0, 1), 0);
         }
     }
 
