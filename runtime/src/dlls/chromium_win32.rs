@@ -499,6 +499,34 @@ pub extern "win64" fn SetThreadDpiAwarenessContext(ctx: isize) -> isize {
     old
 }
 
+thread_local! {
+    /// DPI_HOSTING_BEHAVIOR du thread (0 = DPI_HOSTING_BEHAVIOR_DEFAULT).
+    static THREAD_HOSTING: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// `GetThreadDpiHostingBehavior` : WinForms .NET 8 l'appelle au démarrage
+/// (#666). Les fenêtres enfants de DPI différents ne sont pas distinguées
+/// dans Winlux : le comportement reste celui demandé par le thread.
+pub extern "win64" fn GetThreadDpiHostingBehavior() -> i32 {
+    THREAD_HOSTING.with(std::cell::Cell::get)
+}
+
+/// `SetThreadDpiHostingBehavior` : DEFAULT (0) ou MIXED (1), rend l'ancien ;
+/// toute autre valeur rend DPI_HOSTING_BEHAVIOR_INVALID (-1).
+pub extern "win64" fn SetThreadDpiHostingBehavior(value: i32) -> i32 {
+    if !matches!(value, 0 | 1) {
+        crate::process::set_last_error(ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+    THREAD_HOSTING.with(|t| t.replace(value))
+}
+
+/// `GetWindowDpiHostingBehavior` : celui du thread au moment de la création
+/// n'est pas mémorisé par fenêtre ; DEFAULT pour toutes.
+pub extern "win64" fn GetWindowDpiHostingBehavior(_hwnd: usize) -> i32 {
+    0
+}
+
 pub extern "win64" fn GetWindowDpiAwarenessContext(_hwnd: usize) -> isize {
     PROCESS_CONTEXT.load(Ordering::Relaxed)
 }
@@ -561,6 +589,9 @@ pub fn user32_exports() -> crate::dlls::Exports {
         "GetThreadDpiAwarenessContext" => fn GetThreadDpiAwarenessContext,
         "SetThreadDpiAwarenessContext" => fn SetThreadDpiAwarenessContext,
         "GetWindowDpiAwarenessContext" => fn GetWindowDpiAwarenessContext,
+        "GetThreadDpiHostingBehavior" => fn GetThreadDpiHostingBehavior,
+        "SetThreadDpiHostingBehavior" => fn SetThreadDpiHostingBehavior,
+        "GetWindowDpiHostingBehavior" => fn GetWindowDpiHostingBehavior,
         "GetAwarenessFromDpiAwarenessContext" => fn GetAwarenessFromDpiAwarenessContext,
         "AreDpiAwarenessContextsEqual" => fn AreDpiAwarenessContextsEqual,
         "IsValidDpiAwarenessContext" => fn IsValidDpiAwarenessContext,

@@ -152,6 +152,7 @@ pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskdialog;
 pub mod taskschd;
+pub mod thread_ctl;
 pub mod threadpool;
 pub mod uiautomationcore;
 pub mod user32;

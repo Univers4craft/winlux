@@ -2329,7 +2329,14 @@ pub extern "win64" fn get_object_type(obj: usize) -> u32 {
             gui::GdiObjectInfo::Region(_) => 8, // OBJ_REGION
         }
     } else {
-        0
+        // Un DC : OBJ_DC (3) s'il est lié à une fenêtre, OBJ_MEMDC (10)
+        // sinon. System.Drawing (WinForms) refuse de dessiner quand
+        // GetObjectType ne reconnaît pas le DC de la fenêtre.
+        match gui::dc_window(obj) {
+            Some(0) => 10,
+            Some(_) => 3,
+            None => 0,
+        }
     }
 }
 
@@ -2689,5 +2696,19 @@ mod display_name_tests {
         assert!(super::is_display_name("\\\\.\\display12"));
         assert!(!super::is_display_name("\\\\.\\DISPLAY"));
         assert!(!super::is_display_name("Microsoft Print to PDF"));
+    }
+}
+
+#[cfg(test)]
+mod object_type_tests {
+    #[test]
+    fn get_object_type_reconnait_les_dc() {
+        let mem = super::create_compatible_dc(0);
+        assert_eq!(super::get_object_type(mem), 10, "OBJ_MEMDC");
+        let win = super::gui::create_dc(0x5_0269);
+        assert_eq!(super::get_object_type(win), 3, "OBJ_DC");
+        super::gui::free_dc(win);
+        super::gui::free_dc(mem);
+        assert_eq!(super::get_object_type(win), 0);
     }
 }

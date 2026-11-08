@@ -346,7 +346,7 @@ unsafe fn create_window_common(
     // WM_NCCREATE puis WM_CREATE, synchrones : beaucoup de programmes y
     // rangent leur objet C++ (lpCreateParams) ; FALSE ou -1 refuse la fenêtre.
     let nc = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        gui::wnd_proc_of(hwnd).unwrap_or(info.wnd_proc),
         hwnd,
         WM_NCCREATE,
         0,
@@ -357,8 +357,12 @@ unsafe fn create_window_common(
         forget_window_longs(hwnd);
         return 0;
     }
+    // Procédure actuelle de la fenêtre, pas celle de la classe : WinForms
+    // sous-classe la fenêtre (SetWindowLongPtr(GWLP_WNDPROC)) dès le
+    // premier message et refuse d'en recevoir un second par la procédure de
+    // classe (« Le handle de fenêtre existe déjà », #666).
     let created = crate::dlls::gui::call_wndproc(
-        info.wnd_proc,
+        gui::wnd_proc_of(hwnd).unwrap_or(info.wnd_proc),
         hwnd,
         gui::WM_CREATE,
         0,
@@ -619,11 +623,14 @@ pub unsafe extern "win64" fn peek_message_a(
     // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
     // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
     // vide sa file par PeekMessage tournerait sans fin (PuTTY).
-    if remove & 0x1 != 0 {
-        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
-            write_msg(out, &m);
-            return 1;
-        }
+    let timer = if remove & 0x1 != 0 {
+        gui::due_timer(hwnd, min, max, false)
+    } else {
+        gui::peek_due_timer(hwnd, min, max)
+    };
+    if let Some(m) = timer {
+        write_msg(out, &m);
+        return 1;
     }
     0
 }
@@ -1538,21 +1545,48 @@ pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_co
     }
 }
 
+/// GetClassInfoEx : remplit WNDCLASSEX pour une classe du programme ou une
+/// classe prédéfinie (BUTTON, EDIT…). WinForms en lit la procédure pour
+/// « sur-classer » les contrôles de Windows (WindowsForms10.BUTTON…, #666).
+/// Renvoie l'atome de la classe, 0 et ERROR_CLASS_DOES_NOT_EXIST sinon.
+unsafe fn get_class_info_common(name: String, raw_name: usize, out: *mut u8) -> i32 {
+    if out.is_null() || name.is_empty() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(info) = gui::lookup_class(&name) else {
+        crate::process::set_last_error(1411); // ERROR_CLASS_DOES_NOT_EXIST
+        return 0;
+    };
+    // WNDCLASSEX (x64) : cbSize est laissé tel que l'appelant l'a posé.
+    (out.add(4) as *mut u32).write_unaligned(gui::class_style(&name));
+    (out.add(8) as *mut usize).write_unaligned(info.wnd_proc);
+    (out.add(16) as *mut i32).write_unaligned(0); // cbClsExtra
+    (out.add(20) as *mut i32).write_unaligned(0); // cbWndExtra
+    (out.add(24) as *mut usize).write_unaligned(info.instance);
+    (out.add(32) as *mut usize).write_unaligned(0); // hIcon
+    (out.add(40) as *mut usize).write_unaligned(0); // hCursor
+    (out.add(48) as *mut usize).write_unaligned(info.background);
+    (out.add(56) as *mut usize).write_unaligned(0); // lpszMenuName
+    (out.add(64) as *mut usize).write_unaligned(raw_name);
+    (out.add(72) as *mut usize).write_unaligned(0); // hIconSm
+    i32::from(class_atom(&name))
+}
+
 pub unsafe extern "win64" fn get_class_info_ex_a(
     _instance: usize,
-    _name: *const u8,
-    _out: *mut u8,
+    name: *const u8,
+    out: *mut u8,
 ) -> i32 {
-    // Stub : renvoie 0 (non trouvé)
-    0
+    get_class_info_common(read_class_name_a(name), name as usize, out)
 }
 
 pub unsafe extern "win64" fn get_class_info_ex_w(
     _instance: usize,
-    _name: *const u16,
-    _out: *mut u8,
+    name: *const u16,
+    out: *mut u8,
 ) -> i32 {
-    0
+    get_class_info_common(read_class_name_w(name), name as usize, out)
 }
 
 // =====================================================================
@@ -2850,12 +2884,33 @@ pub unsafe extern "win64" fn to_unicode(
     to_unicode_ex(vk, scan, state, buf, buf_size, flags, 0)
 }
 
-pub extern "win64" fn register_window_message_a(_name: *const u8) -> u32 {
-    0xC000
+/// Identifiant d'un message enregistré : un par nom (sans casse), stable
+/// d'un processus à l'autre, dans la plage 0xC000-0xFFFF partagée avec les
+/// formats de presse-papiers. Avant, tous les noms recevaient 0xC000 :
+/// WinForms prenait son message d'appel inter-threads pour
+/// « WinFormsUnSubclass » et lâchait la fenêtre de son formulaire.
+fn register_window_message(name: &str) -> u32 {
+    if name.is_empty() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    super::clipboard::registered_id(name)
 }
 
-pub extern "win64" fn register_window_message_w(_name: *const u16) -> u32 {
-    0xC000
+pub unsafe extern "win64" fn register_window_message_a(name: *const u8) -> u32 {
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    register_window_message(&super::cstr(name))
+}
+
+pub unsafe extern "win64" fn register_window_message_w(name: *const u16) -> u32 {
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    register_window_message(&super::wstr(name))
 }
 
 pub extern "win64" fn get_message_pos() -> u32 {
@@ -2874,8 +2929,31 @@ pub extern "win64" fn in_send_message() -> i32 {
     0
 }
 
+/// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
+/// minuteur soit disponible. Répondre tout de suite faisait tourner à 100 %
+/// la boucle `PeekMessage(PM_NOREMOVE)` / `WaitMessage` de WinForms.
 pub extern "win64" fn wait_message() -> i32 {
-    1
+    loop {
+        gui::pump_backend();
+        super::ws2_32::pump_async();
+        let q = gui::current_queue();
+        if gui::peek_message(&q, 0, 0, 0).is_some()
+            || gui::pending_paint(0, 0, 0).is_some()
+            || gui::peek_due_timer(0, 0, 0).is_some()
+        {
+            return 1;
+        }
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(0).map_or(cap, |ms| ms.min(cap));
+        if !gui::wait_backend(wait) {
+            // Sans affichage, rien ne viendra : rendre la main.
+            return 1;
+        }
+    }
 }
 
 pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
@@ -3816,5 +3894,41 @@ mod tests_messages {
             );
             assert_eq!(call_window_proc(0, 1, 2, 3, 4), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_winforms {
+    use super::*;
+
+    #[test]
+    fn messages_enregistres_distincts_et_stables() {
+        let w = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain([0]).collect();
+            unsafe { register_window_message_w(v.as_ptr()) }
+        };
+        let a = w("WinFormsUnSubclass");
+        let b = w("WindowsForms12_ThreadCallbackMessage");
+        assert!((0xC000..=0xFFFF).contains(&a) && (0xC000..=0xFFFF).contains(&b));
+        assert_ne!(a, b, "deux noms, deux messages");
+        assert_eq!(a, w("winformsunsubclass"), "sans casse");
+        assert_eq!(a, unsafe {
+            register_window_message_a(c"WinFormsUnSubclass".as_ptr().cast())
+        });
+        assert_eq!(w(""), 0);
+    }
+
+    #[test]
+    fn get_class_info_ex_classe_predefinie_et_inconnue() {
+        let mut wc = [0u8; 80];
+        wc[..4].copy_from_slice(&80u32.to_le_bytes());
+        let name: Vec<u16> = "BUTTON".encode_utf16().chain([0]).collect();
+        let atom = unsafe { get_class_info_ex_w(0, name.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_ne!(atom, 0);
+        let proc_ = usize::from_le_bytes(wc[8..16].try_into().unwrap());
+        assert_ne!(proc_, 0, "lpfnWndProc rempli");
+        let unknown: Vec<u16> = "PasUneClasse_269".encode_utf16().chain([0]).collect();
+        let r = unsafe { get_class_info_ex_w(0, unknown.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_eq!(r, 0);
     }
 }

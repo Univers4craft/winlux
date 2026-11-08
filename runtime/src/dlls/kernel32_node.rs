@@ -922,10 +922,6 @@ pub unsafe extern "win64" fn fail_not_supported() -> i32 {
     crate::process::set_last_error(50);
     0
 }
-pub unsafe extern "win64" fn fail_suspend() -> u32 {
-    crate::process::set_last_error(50);
-    u32::MAX
-}
 pub unsafe extern "win64" fn fail_no_more_files() -> usize {
     crate::process::set_last_error(18);
     usize::MAX
@@ -1291,9 +1287,9 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "WaitNamedPipeW" => fn crate::dlls::named_pipes::wait_named_pipe_w,
         "Thread32First" => fn fail_not_supported,
         "Thread32Next" => fn fail_not_supported,
-        "OpenThread" => fn fail_not_supported,
-        "SuspendThread" => fn fail_suspend,
-        "GetThreadContext" => fn fail_not_supported,
+        "OpenThread" => fn crate::dlls::kernel32::open_thread,
+        "SuspendThread" => fn crate::dlls::kernel32::suspend_thread,
+        "GetThreadContext" => fn crate::dlls::kernel32::get_thread_context,
         "BeginUpdateResourceW" => fn fail_not_supported,
         "UpdateResourceW" => fn fail_not_supported,
         "EndUpdateResourceW" => fn fail_not_supported,

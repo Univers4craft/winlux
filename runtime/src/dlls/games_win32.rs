@@ -266,7 +266,7 @@ pub fn kernel32_exports() -> Exports {
         "CopyFileExW" => fn CopyFileExW,
         "SetProcessShutdownParameters" => fn ok1, "GetProcessShutdownParameters" => fn GetProcessShutdownParameters,
         "Wow64GetThreadContext" => fn not_supported, "Wow64SetThreadContext" => fn not_supported,
-        "SetThreadContext" => fn not_supported,
+        "SetThreadContext" => fn crate::dlls::kernel32::set_thread_context,
         "GetSystemTimeAdjustment" => fn GetSystemTimeAdjustment,
         "SetSystemTime" => fn privilege_not_held, "SetLocalTime" => fn privilege_not_held,
         "SetSystemTimeAdjustment" => fn privilege_not_held,

@@ -614,4 +614,22 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
+# #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
+# suspend ses threads et lit leur contexte ; WinForms ferme sa fenêtre grâce
+# à des messages enregistrés distincts ; une exception non gérée affiche le
+# message .NET, pas « Stack overflow. » (page de garde de la pile).
+ok((runtime_dlls / "thread_ctl.rs").exists()
+   and '"SuspendThread" => fn crate::dlls::kernel32::suspend_thread' in (runtime_dlls / "kernel32_node.rs").read_text()
+   and '"SetThreadContext" => fn crate::dlls::kernel32::set_thread_context' in (runtime_dlls / "games_win32.rs").read_text()
+   and "fn stack_region(" in (runtime_dlls / "kernel32.rs").read_text()
+   and "super::clipboard::registered_id(name)" in (runtime_dlls / "user32.rs").read_text()
+   and "fn peek_due_timer(" in (runtime_dlls / "gui.rs").read_text()
+   and "raise_exception_export()" in (runtime_dlls / "seh.rs").read_text()
+   and '"_get_initial_wide_environment"' in (runtime_dlls / "crt_runtime.rs").read_text()
+   and '"GetThreadDpiHostingBehavior"' in (runtime_dlls / "chromium_win32.rs").read_text()
+   and '"CoRegisterMessageFilter"' in (runtime_dlls / "ole32.rs").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-mingw.sh").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
+   ".NET autonome et WinForms : suspension de threads, contexte, messages enregistrés, page de garde de pile")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

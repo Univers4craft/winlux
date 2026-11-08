@@ -2852,6 +2852,15 @@ pub fn set_class_style(name: &str, style: u32) {
         .or_insert(style);
 }
 
+/// Style de classe enregistré (GetClassInfoEx) ; les classes prédéfinies
+/// ont CS_DBLCLKS | CS_PARENTDC | CS_HREDRAW | CS_VREDRAW comme BUTTON.
+pub fn class_style(name: &str) -> u32 {
+    lock(class_styles())
+        .get(&name.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(0x0008 | 0x0080 | 0x0002 | 0x0001)
+}
+
 /// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
 /// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
 /// texte sous Windows.
@@ -3718,6 +3727,31 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
     } else {
         e.next_fire + interval
     };
+    Some(Msg {
+        hwnd: e.hwnd,
+        message: WM_TIMER,
+        wparam: e.id,
+        lparam: e.callback as isize,
+        time: now as u32,
+        pt: Point::default(),
+        l_private: 0,
+    })
+}
+
+/// WM_TIMER échu sans réarmer le minuteur (`PeekMessage(PM_NOREMOVE)`) :
+/// Windows le montre aussi, et WinForms n'appelle GetMessage qu'après l'avoir
+/// vu par ce moyen.
+pub fn peek_due_timer(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
+    const WM_TIMER: u32 = 0x0113;
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_TIMER) {
+        return None;
+    }
+    let now = crate::dlls::kernel32::get_tick_count64();
+    let tid = std::thread::current().id();
+    let t = lock(timers());
+    let e = t
+        .iter()
+        .find(|e| e.owner == tid && (hwnd == 0 || e.hwnd == hwnd) && now >= e.next_fire)?;
     Some(Msg {
         hwnd: e.hwnd,
         message: WM_TIMER,

@@ -10,11 +10,121 @@ use std::thread::ThreadId;
 static PROCESS_HEAP: AtomicUsize = AtomicUsize::new(0);
 struct VmRegion {
     size: usize,
-    committed: Vec<bool>,
-    protection: Vec<u32>,
+    /// Protection Windows de chaque page, 0 pour une page réservée mais non
+    /// engagée.
+    pages: PageMap,
     allocation_protection: u32,
     kind: u32,
 }
+
+/// Protections des pages d'une région, rangées par plages contiguës de même
+/// valeur : le ramasse-miettes de .NET réserve 256 Gio d'un coup, soit 67
+/// millions de pages qu'un tableau par page faisait payer ~335 Mio de RAM
+/// (#665).
+#[derive(Clone)]
+pub(crate) struct PageMap {
+    /// Début de chaque plage -> valeur ; plages voisines toujours distinctes.
+    runs: std::collections::BTreeMap<usize, u32>,
+    len: usize,
+}
+
+impl PageMap {
+    pub(crate) fn new(len: usize, value: u32) -> Self {
+        let mut runs = std::collections::BTreeMap::new();
+        runs.insert(0, value);
+        PageMap { runs, len }
+    }
+    fn from_pages(values: &[u32]) -> Self {
+        let mut runs = std::collections::BTreeMap::new();
+        let mut last = None;
+        for (i, &v) in values.iter().enumerate() {
+            if last != Some(v) {
+                runs.insert(i, v);
+                last = Some(v);
+            }
+        }
+        if runs.is_empty() {
+            runs.insert(0, 0);
+        }
+        PageMap {
+            runs,
+            len: values.len(),
+        }
+    }
+    pub(crate) fn get(&self, page: usize) -> u32 {
+        self.runs.range(..=page).next_back().map_or(0, |(_, &v)| v)
+    }
+    fn committed(&self, page: usize) -> bool {
+        self.get(page) != 0
+    }
+    /// Toutes les pages de [first, first + count) sont-elles engagées ?
+    fn all_committed(&self, first: usize, count: usize) -> bool {
+        if count == 0 {
+            return true;
+        }
+        self.get(first) != 0
+            && self
+                .runs
+                .range(first + 1..first + count)
+                .all(|(_, &v)| v != 0)
+    }
+    /// Donne la valeur `value` aux pages [first, first + count).
+    pub(crate) fn fill(&mut self, first: usize, count: usize, value: u32) {
+        let end = (first + count).min(self.len);
+        if first >= end {
+            return;
+        }
+        let after = self.get(end);
+        let inner: Vec<usize> = self.runs.range(first..end).map(|(&k, _)| k).collect();
+        for k in inner {
+            self.runs.remove(&k);
+        }
+        if end < self.len {
+            self.runs.insert(end, after);
+        }
+        self.runs.insert(first, value);
+        // Fusion avec les voisines de même valeur.
+        if end < self.len && after == value {
+            self.runs.remove(&end);
+        }
+        if first > 0 && self.get(first - 1) == value {
+            self.runs.remove(&first);
+        }
+    }
+    /// Plage [début, fin) de même valeur qui contient `page`.
+    fn run_bounds(&self, page: usize) -> (usize, usize) {
+        let start = self.runs.range(..=page).next_back().map_or(0, |(&k, _)| k);
+        let end = self
+            .runs
+            .range(page + 1..)
+            .next()
+            .map_or(self.len, |(&k, _)| k);
+        (start, end)
+    }
+}
+
+/// Vue de fichier mappé (MapViewOfFile) : visible des fonctions Virtual*
+/// comme une région MEM_MAPPED engagée avec la protection de la vue.
+pub(crate) fn register_view(base: usize, len: usize, protection: u32) {
+    let pages = len.div_ceil(4096);
+    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+        base,
+        VmRegion {
+            size: pages * 4096,
+            pages: PageMap::new(pages, protection),
+            allocation_protection: protection,
+            kind: MEM_MAPPED_KIND,
+        },
+    );
+}
+pub(crate) fn unregister_view(base: usize) {
+    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    if maps.get(&base).is_some_and(|r| r.kind == MEM_MAPPED_KIND) {
+        maps.remove(&base);
+    }
+}
+const MEM_MAPPED_KIND: u32 = 0x40000;
+
 /// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
 pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     let pages = protection.len();
@@ -22,8 +132,7 @@ pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
         base,
         VmRegion {
             size: pages * 4096,
-            committed: vec![true; pages],
-            protection,
+            pages: PageMap::from_pages(&protection),
             allocation_protection: 0x80,
             kind: 0x1000000,
         },
@@ -170,6 +279,9 @@ struct ThreadState {
     /// GetCurrentThreadId dans le thread) ; 0 tant que le thread n'a pas pris
     /// la main une première fois.
     win_tid: u32,
+    /// Le thread a quitté son attente de démarrage : la suspension passe
+    /// désormais par `slot` (signal), plus par `suspend_count`.
+    running: bool,
 }
 pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
@@ -183,6 +295,31 @@ pub(crate) struct ThreadObject {
     /// y saute pour terminer le thread proprement sans dérouler les trames
     /// Windows, qui n'ont pas d'informations de déroulement Linux.
     exit_jump: Mutex<Box<[u64; 8]>>,
+    /// Suspension d'un thread démarré (SuspendThread, GetThreadContext…).
+    pub(crate) slot: super::thread_ctl::SuspendSlot,
+    /// Thread Rust correspondant (file d'APC de QueueUserAPC).
+    pub(crate) rust_id: OnceLock<ThreadId>,
+}
+
+impl ThreadObject {
+    fn new(suspended: bool) -> Self {
+        ThreadObject {
+            state: Mutex::new(ThreadState {
+                finished: false,
+                exit_code: 259,
+                suspend_count: usize::from(suspended),
+                win_tid: 0,
+                running: false,
+            }),
+            changed: Condvar::new(),
+            os_tid: AtomicI32::new(0),
+            pending_cpus: Mutex::new(None),
+            priority: AtomicI32::new(0),
+            exit_jump: Mutex::new(Box::new([0; 8])),
+            slot: super::thread_ctl::SuspendSlot::new(),
+            rust_id: OnceLock::new(),
+        }
+    }
 }
 
 core::arch::global_asm!(
@@ -3490,21 +3627,30 @@ pub unsafe extern "win64" fn virtual_alloc(
         let page_base = addr as usize & !(PAGE - 1);
         let page_end = page_end0 & !(PAGE - 1);
         let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
-        let Some((&region_base, r)) = maps
-            .iter_mut()
-            .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
-        else {
+        let Some((&region_base, r)) = maps.iter_mut().find(|(b, r)| {
+            // Une vue d'une section SEC_RESERVE s'engage aussi par
+            // VirtualAlloc (coreclr, mémoire exécutable W^X, #665).
+            matches!(r.kind, 0x20000 | MEM_MAPPED_KIND)
+                && page_base >= **b
+                && page_end <= **b + r.size
+        }) else {
             crate::process::set_last_error(487);
             return std::ptr::null_mut();
         };
+        if r.kind == MEM_MAPPED_KIND {
+            // Les pages d'une vue sont déjà accessibles avec les droits de
+            // la vue (FILE_MAP_*) : l'engagement n'y change rien. coreclr
+            // engage en PAGE_READWRITE des pages de sa vue exécutable où il
+            // exécute ensuite du code écrit par l'autre vue.
+            return page_base as *mut c_void;
+        }
         let start = (page_base - region_base) / PAGE;
         let count = (page_end - page_base) / PAGE;
         if libc::mprotect(page_base as *mut _, page_end - page_base, win_prot(prot)) != 0 {
             crate::process::set_last_error(8);
             return std::ptr::null_mut();
         }
-        r.committed[start..start + count].fill(true);
-        r.protection[start..start + count].fill(prot);
+        r.pages.fill(start, count, prot);
         return page_base as *mut c_void;
     }
     let page_base = if addr.is_null() {
@@ -3582,8 +3728,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         p,
         VmRegion {
             size: mapped_size,
-            committed: vec![_kind & MEM_COMMIT != 0; pages],
-            protection: vec![if _kind & MEM_COMMIT != 0 { prot } else { 1 }; pages],
+            pages: PageMap::new(pages, if _kind & MEM_COMMIT != 0 { prot } else { 0 }),
             allocation_protection: prot,
             kind: 0x20000,
         },
@@ -3650,8 +3795,7 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
         }
         let first = (start - base) / PAGE;
         let count = (end - start) / PAGE;
-        region.committed[first..first + count].fill(false);
-        region.protection[first..first + count].fill(1);
+        region.pages.fill(first, count, 0);
         return 1;
     }
     crate::process::set_last_error(87);
@@ -3716,17 +3860,17 @@ pub unsafe extern "win64" fn virtual_protect(
     };
     let first = (start - base) / PAGE;
     let count = (end - start) / PAGE;
-    if r.committed[first..first + count].iter().any(|c| !*c) {
+    if !r.pages.all_committed(first, count) {
         crate::process::set_last_error(487);
         return 0;
     }
-    let previous = r.protection[first];
+    let previous = r.pages.get(first);
     if libc::mprotect(start as *mut c_void, end - start, win_prot(prot)) != 0 {
         crate::process::set_last_error(8);
         return 0;
     }
     *old = previous;
-    r.protection[first..first + count].fill(prot);
+    r.pages.fill(first, count, prot);
     1
 }
 /// Pour le gestionnaire de fautes (contexte de signal : jamais de verrou
@@ -3742,9 +3886,8 @@ pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
     Some(maps.iter().any(|(&b, r)| {
         addr >= b
             && addr < b + r.size
-            && r.committed[(addr - b) / PAGE]
             && matches!(
-                r.protection[(addr - b) / PAGE] & 0xFF,
+                r.pages.get((addr - b) / PAGE) & 0xFF,
                 0x10 | 0x20 | 0x40 | 0x80
             )
     }))
@@ -3766,15 +3909,15 @@ pub(crate) fn clear_guard_page(addr: usize) -> bool {
         return false;
     };
     let index = (addr - base) / PAGE;
-    if !r.committed[index] || r.protection[index] & PAGE_GUARD == 0 {
+    if !r.pages.committed(index) || r.pages.get(index) & PAGE_GUARD == 0 {
         return false;
     }
-    let prot = r.protection[index] & !PAGE_GUARD;
+    let prot = r.pages.get(index) & !PAGE_GUARD;
     let page = base + index * PAGE;
     if unsafe { libc::mprotect(page as *mut c_void, PAGE, win_prot(prot)) } != 0 {
         return false;
     }
-    r.protection[index] = prot;
+    r.pages.fill(index, 1, prot);
     true
 }
 
@@ -3787,10 +3930,7 @@ pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
     };
     let maps = table.try_lock().ok()?;
     Some(maps.iter().any(|(&b, r)| {
-        addr >= b
-            && addr < b + r.size
-            && r.committed[(addr - b) / PAGE]
-            && r.protection[(addr - b) / PAGE] & PAGE_GUARD != 0
+        addr >= b && addr < b + r.size && r.pages.get((addr - b) / PAGE) & PAGE_GUARD != 0
     }))
 }
 
@@ -3798,6 +3938,40 @@ pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
 /// thread courant, décrite comme une pile Windows (AllocationBase au bas de
 /// la réservation, ce que lit coreclr pour borner sa pile), ou une
 /// projection de `/proc/self/maps` (image, tas, piles des autres threads).
+/// Pile du thread vue par `VirtualQuery`, découpée comme sous Windows : en
+/// bas une page réservée, puis une page de garde (PAGE_GUARD), puis la partie
+/// validée jusqu'au sommet. coreclr cherche cette page de garde quand une
+/// exception n'est pas gérée : sans elle, il conclut à un débordement de
+/// pile et s'arrête sur « Stack overflow. » au lieu d'afficher l'exception.
+fn stack_region(address: usize, limit: usize, base: usize) -> MemoryBasicInformation {
+    const PAGE: usize = 4096;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    const MEM_PRIVATE: u32 = 0x20000;
+    const PAGE_READWRITE: u32 = 4;
+    const PAGE_GUARD: u32 = 0x100;
+    let page = address & !(PAGE - 1);
+    let guard = limit + PAGE;
+    let committed = (limit + 2 * PAGE).min(base);
+    let (lo, hi, state, protect) = if page < guard {
+        (limit, guard, MEM_RESERVE, 0)
+    } else if page < committed {
+        (guard, committed, MEM_COMMIT, PAGE_READWRITE | PAGE_GUARD)
+    } else {
+        (committed, base, MEM_COMMIT, PAGE_READWRITE)
+    };
+    MemoryBasicInformation {
+        base_address: page.max(lo) as *mut c_void,
+        allocation_base: limit as *mut c_void,
+        allocation_protect: PAGE_READWRITE,
+        partition_id: 0,
+        region_size: hi - page.max(lo),
+        state,
+        protect,
+        kind: MEM_PRIVATE,
+    }
+}
+
 fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
     const PAGE: usize = 4096;
     const MEM_COMMIT: u32 = 0x1000;
@@ -3813,16 +3987,7 @@ fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
             )
         };
         if limit < base && address >= limit && address < base {
-            return Some(MemoryBasicInformation {
-                base_address: page as *mut c_void,
-                allocation_base: limit as *mut c_void,
-                allocation_protect: 4,
-                partition_id: 0,
-                region_size: base - page,
-                state: MEM_COMMIT,
-                protect: 4,
-                kind: MEM_PRIVATE,
-            });
+            return Some(stack_region(address, limit, base));
         }
     }
     let text = std::fs::read_to_string("/proc/self/maps").ok()?;
@@ -3890,22 +4055,9 @@ pub unsafe extern "win64" fn virtual_query(
         .find(|(base, r)| address >= **base && address < **base + r.size);
     let result = if let Some((&base, r)) = region {
         let idx = (page - base) / PAGE;
-        let committed = r.committed[idx];
-        let protect = if committed { r.protection[idx] } else { 1 };
-        let mut first = idx;
-        let mut last = idx + 1;
-        while first > 0
-            && r.committed[first - 1] == committed
-            && (!committed || r.protection[first - 1] == protect)
-        {
-            first -= 1;
-        }
-        while last < r.committed.len()
-            && r.committed[last] == committed
-            && (!committed || r.protection[last] == protect)
-        {
-            last += 1;
-        }
+        let committed = r.pages.committed(idx);
+        let protect = if committed { r.pages.get(idx) } else { 1 };
+        let (first, last) = r.pages.run_bounds(idx);
         MemoryBasicInformation {
             base_address: (base + first * PAGE) as *mut c_void,
             allocation_base: base as *mut c_void,
@@ -4431,21 +4583,8 @@ pub unsafe extern "win64" fn create_thread(
         return 0;
     }
     let seq = NEXT_THREAD.fetch_add(1, Ordering::Relaxed);
-    let state = Arc::new(ThreadObject {
-        state: Mutex::new(ThreadState {
-            finished: false,
-            exit_code: 259,
-            suspend_count: usize::from(flags & 4 != 0),
-            win_tid: 0,
-        }),
-        changed: Condvar::new(),
-        os_tid: AtomicI32::new(0),
-        pending_cpus: Mutex::new(None),
-        priority: AtomicI32::new(0),
-        exit_jump: Mutex::new(Box::new([0; 8])),
-    });
+    let state = Arc::new(ThreadObject::new(flags & 4 != 0));
     let handle = add_sync(SyncHandle::Thread(state.clone()), None);
-    let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(start);
     let mut builder = std::thread::Builder::new().name(format!("win-thread-{seq}"));
     if stack != 0 {
         builder = builder.stack_size(stack.max(64 * 1024));
@@ -4454,6 +4593,9 @@ pub unsafe extern "win64" fn create_thread(
     if builder
         .spawn(move || {
             let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+            let _ = thread.rust_id.set(std::thread::current().id());
+            super::thread_ctl::register(os_tid, &thread.slot);
+            register_thread_object(os_tid, &thread);
             let mut s = lock(&thread.state);
             // L'identifiant rendu par CreateThread est celui que
             // GetCurrentThreadId donnera dans le thread : le créateur attend
@@ -4466,6 +4608,7 @@ pub unsafe extern "win64" fn create_thread(
                     .wait(s)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
+            s.running = true;
             drop(s);
             {
                 // Même verrou que SetThreadAffinityMask/SetThreadPriority :
@@ -4486,7 +4629,7 @@ pub unsafe extern "win64" fn create_thread(
             // Second retour (valeur 1) : ExitThread a déjà enregistré le code
             // et signalé le handle ; le thread se termine simplement ici.
             if winlux_thread_setjmp(jump) == 0 {
-                let code = f(param);
+                let code = super::thread_ctl::root_call(start, param);
                 finish_current_thread(code);
             }
             std::hint::black_box(&thread);
@@ -4518,6 +4661,208 @@ thread_local! {
     /// principal et les threads Rust internes).
     static CURRENT_THREAD: std::cell::RefCell<Option<Arc<ThreadObject>>> =
         const { std::cell::RefCell::new(None) };
+    /// Objet de thread créé pour un thread qui ne vient pas de CreateThread
+    /// (thread principal, threads de Winlux qui exécutent du code invité) :
+    /// marqué terminé à la fin du thread.
+    static ADOPTED: AdoptedThread = const { AdoptedThread(std::cell::RefCell::new(None)) };
+}
+
+struct AdoptedThread(std::cell::RefCell<Option<Arc<ThreadObject>>>);
+impl Drop for AdoptedThread {
+    fn drop(&mut self) {
+        if let Some(thread) = self.0.borrow_mut().take() {
+            let tid = thread.os_tid.load(Ordering::Acquire);
+            super::thread_ctl::unregister(tid, &thread.slot);
+            unregister_thread_object(tid);
+            let mut s = lock(&thread.state);
+            s.exit_code = 0;
+            s.finished = true;
+            thread.changed.notify_all();
+        }
+    }
+}
+
+/// Threads Win32 vivants par tid Linux (OpenThread).
+static THREADS_BY_TID: OnceLock<Mutex<HashMap<i32, std::sync::Weak<ThreadObject>>>> =
+    OnceLock::new();
+fn register_thread_object(tid: i32, t: &Arc<ThreadObject>) {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).insert(tid, Arc::downgrade(t));
+}
+fn unregister_thread_object(tid: i32) {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new()))).remove(&tid);
+}
+fn thread_object_by_tid(tid: i32) -> Option<Arc<ThreadObject>> {
+    lock(THREADS_BY_TID.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&tid)
+        .and_then(std::sync::Weak::upgrade)
+}
+
+/// Objet de thread Win32 du thread courant, créé au besoin (thread
+/// principal, threads internes) : DuplicateHandle(GetCurrentThread()) en
+/// donne un vrai handle, que coreclr passe ensuite à SuspendThread depuis
+/// le thread du ramasse-miettes.
+pub(crate) fn current_thread_object() -> Arc<ThreadObject> {
+    if let Some(t) = CURRENT_THREAD
+        .try_with(|c| c.borrow().clone())
+        .ok()
+        .flatten()
+    {
+        return t;
+    }
+    if let Some(t) = ADOPTED.try_with(|a| a.0.borrow().clone()).ok().flatten() {
+        return t;
+    }
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) as i32 };
+    let t = Arc::new(ThreadObject::new(false));
+    {
+        let mut s = lock(&t.state);
+        s.win_tid = tid as u32;
+        s.running = true;
+    }
+    t.os_tid.store(tid, Ordering::Release);
+    let _ = t.rust_id.set(std::thread::current().id());
+    if ADOPTED
+        .try_with(|a| *a.0.borrow_mut() = Some(t.clone()))
+        .is_ok()
+    {
+        super::thread_ctl::register(tid, &t.slot);
+        register_thread_object(tid, &t);
+    }
+    t
+}
+
+/// Thread visé par un handle : pseudo-handle, handle de thread, ou rien.
+fn thread_object_of(h: usize) -> Option<Arc<ThreadObject>> {
+    if h == get_current_thread() {
+        return Some(current_thread_object());
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => Some(t),
+        _ => None,
+    }
+}
+
+fn is_current(t: &ThreadObject) -> bool {
+    t.os_tid.load(Ordering::Acquire) == unsafe { libc::syscall(libc::SYS_gettid) as i32 }
+}
+
+/// tid d'un thread démarré (None s'il attend encore son démarrage).
+fn running_tid(t: &ThreadObject) -> Option<i32> {
+    let s = lock(&t.state);
+    s.running.then_some(s.win_tid as i32)
+}
+
+/// `SuspendThread`.
+pub extern "win64" fn suspend_thread(h: usize) -> u32 {
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return u32::MAX;
+    };
+    {
+        let mut s = lock(&t.state);
+        if s.finished {
+            crate::process::set_last_error(5);
+            return u32::MAX;
+        }
+        if !s.running {
+            // Pas encore démarré : il attend que le compte retombe à 0.
+            let prev = s.suspend_count as u32;
+            if prev >= super::thread_ctl::MAXIMUM_SUSPEND_COUNT {
+                crate::process::set_last_error(super::thread_ctl::ERROR_SIGNAL_REFUSED);
+                return u32::MAX;
+            }
+            s.suspend_count += 1;
+            return prev;
+        }
+    }
+    let Some(tid) = running_tid(&t) else {
+        return 0;
+    };
+    match super::thread_ctl::suspend(&t.slot, tid) {
+        Ok(prev) => prev,
+        Err(e) => {
+            crate::process::set_last_error(e);
+            u32::MAX
+        }
+    }
+}
+
+/// `GetThreadContext`.
+pub unsafe extern "win64" fn get_thread_context(h: usize, ctx: *mut u8) -> i32 {
+    if ctx.is_null() {
+        crate::process::set_last_error(998);
+        return 0;
+    }
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    if is_current(&t) {
+        super::thread_ctl::get_own_context(ctx);
+        return 1;
+    }
+    let Some(tid) = running_tid(&t) else {
+        // Créé suspendu, jamais démarré : pas encore de registres.
+        crate::process::set_last_error(31);
+        return 0;
+    };
+    if super::thread_ctl::get_context(&t.slot, tid, ctx) {
+        1
+    } else {
+        crate::process::set_last_error(5);
+        0
+    }
+}
+
+/// `SetThreadContext`.
+pub unsafe extern "win64" fn set_thread_context(h: usize, ctx: *const u8) -> i32 {
+    if ctx.is_null() {
+        crate::process::set_last_error(998);
+        return 0;
+    }
+    let Some(t) = thread_object_of(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    if is_current(&t) {
+        let flags = (ctx.add(0x30) as *const u32).read_unaligned();
+        if flags & 0x1 != 0 {
+            let mut copy = seh_context_copy(ctx);
+            super::seh::rtl_restore_context(copy.as_mut_ptr(), std::ptr::null_mut());
+        }
+        return 1;
+    }
+    let Some(tid) = running_tid(&t) else {
+        crate::process::set_last_error(31);
+        return 0;
+    };
+    if super::thread_ctl::set_context(&t.slot, tid, ctx) {
+        1
+    } else {
+        crate::process::set_last_error(5);
+        0
+    }
+}
+
+unsafe fn seh_context_copy(ctx: *const u8) -> Vec<u8> {
+    std::slice::from_raw_parts(ctx, super::seh::CONTEXT_SIZE).to_vec()
+}
+
+/// `OpenThread` : handle vers un thread de ce processus par son identifiant.
+pub extern "win64" fn open_thread(_access: u32, inherit: i32, tid: u32) -> usize {
+    let me = unsafe { libc::syscall(libc::SYS_gettid) as u32 };
+    let t = if tid == me {
+        Some(current_thread_object())
+    } else {
+        thread_object_by_tid(tid as i32)
+    };
+    let Some(t) = t else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let h = add_sync(SyncHandle::Thread(t), None);
+    crate::dlls::inherit::set(h, inherit != 0);
+    h
 }
 
 /// Termine le thread Win32 courant : rappels DLL_THREAD_DETACH, libération
@@ -4547,6 +4892,9 @@ pub(crate) fn finish_current_thread(code: u32) {
         .ok()
         .flatten();
     if let Some(thread) = thread {
+        let tid = thread.os_tid.load(Ordering::Acquire);
+        super::thread_ctl::unregister(tid, &thread.slot);
+        unregister_thread_object(tid);
         let _gate = sync_gate();
         let mut s = lock(&thread.state);
         s.exit_code = code;
@@ -5294,6 +5642,10 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
             if s.finished {
                 crate::process::set_last_error(6);
                 return u32::MAX;
+            }
+            if s.running {
+                drop(s);
+                return super::thread_ctl::resume(&t.slot);
             }
             let old = s.suspend_count;
             if old > 0 {
@@ -7480,6 +7832,15 @@ pub unsafe extern "win64" fn queue_user_apc(func: usize, thread: usize, param: u
         queue_apc(std::thread::current().id(), Apc::User(func, param));
         return 1;
     }
+    // Autre thread : l'APC tourne à sa prochaine attente alertable.
+    if let Some(SyncHandle::Thread(t)) = lookup_sync(thread) {
+        if let Some(id) = t.rust_id.get() {
+            if !lock(&t.state).finished {
+                queue_apc(*id, Apc::User(func, param));
+                return 1;
+            }
+        }
+    }
     crate::process::set_last_error(6);
     0
 }
@@ -8246,6 +8607,11 @@ pub unsafe extern "win64" fn duplicate_handle(
         let h = next_handle();
         insert_sync_at(h, foreign_process(std::process::id() as i32));
         Some(h)
+    } else if src_handle == get_current_thread() {
+        // Vrai handle vers le thread courant : coreclr le garde pour
+        // suspendre ce thread depuis le ramasse-miettes ; le pseudo-handle
+        // y désignerait le thread du ramasse-miettes lui-même.
+        Some(add_sync(SyncHandle::Thread(current_thread_object()), None))
     } else if pseudo {
         Some(src_handle)
     } else if let Some(fd) = std_fd.filter(|&fd| libc::isatty(fd) == 1) {
@@ -10369,5 +10735,23 @@ mod surveillance_de_dossiers {
             usize::MAX
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod pile_virtual_query {
+    #[test]
+    fn la_pile_a_une_page_de_garde_comme_sous_windows() {
+        let (limit, base) = (0x10_0000usize, 0x20_0000usize);
+        let bas = super::stack_region(limit + 10, limit, base);
+        assert_eq!((bas.state, bas.allocation_base as usize), (0x2000, limit));
+        let garde = super::stack_region(limit + 4096, limit, base);
+        assert_eq!(garde.state, 0x1000);
+        assert_eq!(garde.protect, 0x104, "PAGE_READWRITE | PAGE_GUARD");
+        assert_eq!(garde.region_size, 4096);
+        let haut = super::stack_region(base - 8, limit, base);
+        assert_eq!((haut.state, haut.protect), (0x1000, 4));
+        assert_eq!(haut.base_address as usize + haut.region_size, base);
+        assert_eq!(haut.allocation_base as usize, limit);
     }
 }

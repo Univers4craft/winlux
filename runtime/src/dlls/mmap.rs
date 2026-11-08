@@ -92,6 +92,8 @@ const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 const FILE_MAP_WRITE: u32 = 0x0002;
 const _FILE_MAP_READ: u32 = 0x0004;
 const FILE_MAP_COPY: u32 = 0x0001;
+const FILE_MAP_EXECUTE: u32 = 0x0020;
+const SECTION_MAP_EXECUTE: u32 = 0x0008;
 
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_INVALID_HANDLE: u32 = 6;
@@ -354,6 +356,23 @@ pub unsafe extern "win64" fn map_view_of_file(
     offset_low: u32,
     bytes_to_map: usize,
 ) -> usize {
+    map_view(mapping, access, offset_high, offset_low, bytes_to_map, 0)
+}
+
+unsafe fn map_view(
+    mapping: usize,
+    access: u32,
+    offset_high: u32,
+    offset_low: u32,
+    bytes_to_map: usize,
+    base: usize,
+) -> usize {
+    if !base.is_multiple_of(65536) {
+        // ERROR_MAPPED_ALIGNMENT : l'adresse demandée doit suivre la
+        // granularité d'allocation.
+        crate::process::set_last_error(1132);
+        return 0;
+    }
     let guard = mappings();
     let fm = match guard.as_ref().and_then(|m| m.get(&mapping)) {
         Some(m) => m,
@@ -373,6 +392,12 @@ pub unsafe extern "win64" fn map_view_of_file(
     } else {
         0
     };
+    let need = need
+        | if access & FILE_MAP_EXECUTE != 0 {
+            SECTION_MAP_EXECUTE
+        } else {
+            0
+        };
     if need & !fm.access != 0 {
         crate::process::set_last_error(ERROR_ACCESS_DENIED);
         return 0;
@@ -400,6 +425,22 @@ pub unsafe extern "win64" fn map_view_of_file(
     } else {
         libc::PROT_READ
     };
+    // Vue exécutable (FILE_MAP_EXECUTE) : coreclr y place le code compilé
+    // par son JIT, écrit par une seconde vue inscriptible (W^X, #665).
+    let exec = access & FILE_MAP_EXECUTE != 0;
+    let prot = if exec { prot | libc::PROT_EXEC } else { prot };
+    let win_prot = match (
+        exec,
+        access & FILE_MAP_COPY != 0,
+        access & FILE_MAP_WRITE != 0,
+    ) {
+        (false, true, _) => 0x08,
+        (true, true, _) => 0x80,
+        (false, false, true) => 0x04,
+        (true, false, true) => 0x40,
+        (false, false, false) => 0x02,
+        (true, false, false) => 0x20,
+    };
 
     // Vue partagée (les écritures des autres vues y apparaissent), sauf
     // copie sur écriture demandée.
@@ -409,8 +450,15 @@ pub unsafe extern "win64" fn map_view_of_file(
         libc::MAP_SHARED
     };
 
+    // Adresse imposée (MapViewOfFileEx) : la vue s'y place ou échoue
+    // (ERROR_INVALID_ADDRESS), jamais ailleurs.
+    let flags = if base != 0 {
+        flags | libc::MAP_FIXED_NOREPLACE
+    } else {
+        flags
+    };
     let p = libc::mmap(
-        std::ptr::null_mut(),
+        base as *mut _,
         len,
         prot,
         flags,
@@ -419,7 +467,13 @@ pub unsafe extern "win64" fn map_view_of_file(
     );
 
     if p == libc::MAP_FAILED {
-        crate::process::set_last_error(8);
+        crate::process::set_last_error(if base != 0 { 487 } else { 8 });
+        return 0;
+    }
+    if base != 0 && p as usize != base {
+        // Noyau trop ancien pour MAP_FIXED_NOREPLACE : simple indice.
+        libc::munmap(p, len);
+        crate::process::set_last_error(487);
         return 0;
     }
 
@@ -429,6 +483,10 @@ pub unsafe extern "win64" fn map_view_of_file(
         .as_mut()
         .unwrap()
         .insert(addr, MappedView { addr, len });
+    // Visible des fonctions Virtual* (VirtualAlloc MEM_COMMIT sur une vue
+    // d'une section SEC_RESERVE, VirtualProtect, VirtualQuery) et du tri des
+    // fautes matérielles (code invité).
+    crate::dlls::kernel32::register_view(addr, len, win_prot);
     addr
 }
 
@@ -439,9 +497,9 @@ pub unsafe extern "win64" fn map_view_of_file_ex(
     offset_high: u32,
     offset_low: u32,
     bytes_to_map: usize,
-    _base: usize,
+    base: usize,
 ) -> usize {
-    map_view_of_file(mapping, access, offset_high, offset_low, bytes_to_map)
+    map_view(mapping, access, offset_high, offset_low, bytes_to_map, base)
 }
 
 /// UnmapViewOfFile
@@ -449,6 +507,7 @@ pub unsafe extern "win64" fn unmap_view_of_file(addr: usize) -> i32 {
     let view = views().as_mut().and_then(|m| m.remove(&addr));
     match view {
         Some(v) => {
+            crate::dlls::kernel32::unregister_view(v.addr);
             libc::munmap(v.addr as *mut _, v.len);
             1
         }
