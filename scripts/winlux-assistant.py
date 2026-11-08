@@ -66,11 +66,31 @@ MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
 NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
-LLAMA_RELEASE_API = os.environ.get("WINLUX_LLAMA_RELEASE_API",
-                                   "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+# Révisions figées, empreinte SHA-256 écrite ici (#911) : jamais « la dernière
+# publiée » (« latest » de llama.cpp, v0.9.0, n'avait même aucun binaire).
+# Relevées le 2026-11-08 sur le portable de test (archive téléchargée, empreinte
+# recalculée, RUNPATH $ORIGIN, besoins système : libstdc++, libgomp1, libssl3).
+LLAMA_TAG = "b12202"
+LLAMA_ARCHIVE = f"llama-{LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+LLAMA_URL = os.environ.get("WINLUX_LLAMA_URL",
+                           f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}/{LLAMA_ARCHIVE}")
+LLAMA_SHA256 = "9076cf9b2ce5b849384711e85b0c37d18c36b1475106c236941de2b6f0899a88"  # 23 066 943 octets
+# Navigateurs livrés par le catalogue Winlux (winlux-browsers) ou installés à part.
+BROWSERS_DIR = Path(os.environ.get("WINLUX_BROWSERS_DIR", "/opt/winlux/browsers"))
+BROWSER_BINARIES = ("edge/root/opt/microsoft/msedge/microsoft-edge", "chrome/root/opt/google/chrome/google-chrome",
+                    "firefox/root/usr/lib/firefox/firefox")
+BROWSER_COMMANDS = ("firefox", "firefox-esr", "chromium", "chromium-browser", "google-chrome-stable",
+                    "microsoft-edge-stable", "brave-browser", "epiphany", "falkon")
+CODEX_VERSION = "0.167.0"  # relevée le 2026-11-08 (registre npm, empreinte recalculée)
+CODEX_SHA512 = {
+    "linux-x64": "FNc7danfUng9Sp6w+Fh7kofNHHZpA6VMyNKWsWrS3OwHly69gywTWeiuwrUPXpJSho8Df4xqRsHfHRPzj7zYQg==",
+    "linux-arm64": "5cv+sybRWqpRJL6KCv3YSnIx1GHRmjek997C38n1Zfno4HomKDLkNSjWLDOOc2+ISlVNSRRnySWq4zKmzlY12g==",
+}
 HF_BASE = os.environ.get("WINLUX_HF_BASE", "https://huggingface.co").rstrip("/")
 LOCAL_MODEL_REPO = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
 LOCAL_MODEL_FILE = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+LOCAL_MODEL_REVISION = "91cad51170dc346986eccefdc2dd33a9da36ead9"  # 2024-09-20
+LOCAL_MODEL_SHA256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"  # 1 117 320 736 octets
 LOCAL_MIN_RAM_GIB = 3  # modèle 1,1 Go + contexte : au-dessous, l'option est cachée
 MAX_AGENTS = 3
 
@@ -110,6 +130,28 @@ _TR = {
                                                    "Si la página muestra un código, péguelo aquí:",
                                                    "Wenn die Seite einen Code anzeigt, fügen Sie ihn hier ein:"),
     "Valider": ("Confirm", "Confirmar", "Bestätigen"),
+    "Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un autre ordinateur, "
+    "connectez-vous, puis collez ici le code affiché.":
+        ("No web browser is installed on this PC. Open this link on your phone or another computer, "
+         "sign in, then paste the code shown here.",
+         "No hay ningún navegador instalado en este PC. Abra este enlace en su teléfono u otro ordenador, "
+         "inicie sesión y pegue aquí el código que aparece.",
+         "Auf diesem PC ist kein Browser installiert. Öffnen Sie diesen Link auf Ihrem Telefon oder einem anderen "
+         "Computer, melden Sie sich an und fügen Sie den angezeigten Code hier ein."),
+    "Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un autre ordinateur, "
+    "connectez-vous, puis saisissez ce code :":
+        ("No web browser is installed on this PC. Open this link on your phone or another computer, "
+         "sign in, then enter this code:",
+         "No hay ningún navegador instalado en este PC. Abra este enlace en su teléfono u otro ordenador, "
+         "inicie sesión e introduzca este código:",
+         "Auf diesem PC ist kein Browser installiert. Öffnen Sie diesen Link auf Ihrem Telefon oder einem anderen "
+         "Computer, melden Sie sich an und geben Sie diesen Code ein:"),
+    "Copier le lien": ("Copy the link", "Copiar el enlace", "Link kopieren"),
+    "Lien copié.": ("Link copied.", "Enlace copiado.", "Link kopiert."),
+    "Installer un navigateur": ("Install a browser", "Instalar un navegador", "Browser installieren"),
+    "Le moteur llama.cpp ne peut pas démarrer sur ce PC : {e}":
+        ("The llama.cpp engine cannot start on this PC: {e}", "El motor llama.cpp no puede iniciarse en este PC: {e}",
+         "Die llama.cpp-Engine kann auf diesem PC nicht starten: {e}"),
     "Ouvrir la page de connexion": ("Open the sign-in page", "Abrir la página de inicio de sesión",
                                     "Anmeldeseite öffnen"),
     "La connexion n'a pas abouti : {e}": ("Sign-in did not complete: {e}", "No se completó el inicio de sesión: {e}",
@@ -336,11 +378,6 @@ def _get(url, timeout=30):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def _get_json(url):
-    with _get(url) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def download(url, target, algorithm, expected, progress=None, cancel=None, label=""):
     """Télécharge `url` dans `target` ; le fichier n'est gardé que si son
     empreinte `algorithm` (sha256, sha512) vaut exactement `expected` (octets)."""
@@ -409,7 +446,7 @@ class Provider:
     def status(self, launcher=None):
         return {"installed": self.launcher() is not None, "loggedIn": False}
 
-    def login_command(self, launcher):
+    def login_command(self, launcher, browser=True):
         return None
 
     def logout(self):
@@ -445,14 +482,16 @@ class ClaudeProvider(Provider):
     def status(self, launcher=None):
         return auth_status(launcher)
 
-    def login_command(self, launcher):
+    def login_command(self, launcher, browser=True):
+        # Sans navigateur, la page de connexion s'ouvre sur un autre appareil et
+        # son code se colle ici : la page de retour est celle d'Anthropic.
         return [str(launcher), "auth", "login", "--claudeai"]
 
     def logout(self):
         launcher = self.launcher()
         if launcher:
             subprocess.run([str(launcher), "auth", "logout"], capture_output=True, timeout=60, env=claude_env(),
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, cwd=work_dir())
 
     def protect(self):
         return protect_credentials()
@@ -470,7 +509,7 @@ class ClaudeProvider(Provider):
         """La conversation part par l'entrée standard, jamais en argument :
         `ps` la montrerait aux autres comptes."""
         result = subprocess.run(self.command(self.name), input=prompt, capture_output=True, text=True,
-                                timeout=timeout, cwd=WORK, env=claude_env())
+                                timeout=timeout, cwd=work_dir(), env=claude_env())
         output = result.stdout.strip()
         try:
             data = json.loads(output[output.find("{"):]) if "{" in output else {}
@@ -518,13 +557,12 @@ class ChatGPTProvider(Provider):
 
     def install(self, progress, cancel, mark):
         suffix, triple = self.TARGETS[_machine()]
-        package = f"{NPM_REGISTRY}/@openai%2fcodex"
-        version = _get_json(f"{package}/latest")["version"]
-        dist = _get_json(f"{package}/{version}-{suffix}")["dist"]
-        integrity = next((part for part in dist.get("integrity", "").split() if part.startswith("sha512-")), "")
-        expected = base64.b64decode(integrity[7:]) if integrity else b""
+        # Version figée et empreinte SHA-512 écrites ici, comme llama.cpp (#911).
+        version = CODEX_VERSION
+        tarball = f"{NPM_REGISTRY}/@openai/codex/-/codex-{version}-{suffix}.tgz"
+        expected = base64.b64decode(CODEX_SHA512[suffix])
         CODEX_DIR.parent.mkdir(parents=True, exist_ok=True)
-        archive = download(dist["tarball"], CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
+        archive = download(tarball, CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
                            _t("Téléchargement de Codex"))
         staging = CODEX_DIR.with_name("codex.nouveau")
         shutil.rmtree(staging, ignore_errors=True)
@@ -564,21 +602,23 @@ class ChatGPTProvider(Provider):
             return {"installed": False, "loggedIn": False}
         try:
             result = subprocess.run([str(launcher), "login", "status"], capture_output=True, text=True, timeout=30,
-                                    env=self.env(), stdin=subprocess.DEVNULL)
+                                    env=self.env(), stdin=subprocess.DEVNULL, cwd=work_dir())
             out = result.stdout + result.stderr
             logged = result.returncode == 0 and "Logged in" in out
         except (OSError, subprocess.SubprocessError):
             out, logged = "", False
         return {"installed": True, "loggedIn": logged, "account": "ChatGPT" if logged and "ChatGPT" in out else ""}
 
-    def login_command(self, launcher):
-        return [str(launcher), "login"]
+    def login_command(self, launcher, browser=True):
+        # Sans navigateur sur ce PC, le retour sur 127.0.0.1:1455 est impossible :
+        # connexion par code à saisir sur un autre appareil (#912).
+        return [str(launcher), "login"] if browser else [str(launcher), "login", "--device-auth"]
 
     def logout(self):
         launcher = self.launcher()
         if launcher:
             subprocess.run([str(launcher), "logout"], capture_output=True, timeout=60, env=self.env(),
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, cwd=work_dir())
 
     def protect(self):
         """Jeton du compte ChatGPT (auth.json) lisible par le seul propriétaire."""
@@ -611,7 +651,7 @@ class ChatGPTProvider(Provider):
         try:
             result = subprocess.run(self.command(schema_file, out_file),
                                     input=system_prompt(self.name) + "\n\n" + prompt,
-                                    capture_output=True, text=True, timeout=timeout, cwd=WORK, env=self.env())
+                                    capture_output=True, text=True, timeout=timeout, cwd=work_dir(), env=self.env())
             text = out_file.read_text(encoding="utf-8") if out_file.is_file() else ""
         finally:
             out_file.unlink(missing_ok=True)
@@ -640,6 +680,23 @@ class ChatGPTProvider(Provider):
         except ValueError:
             answer = {"reponse": text, "demande": "aucune"}
         return answer if isinstance(answer, dict) else {"reponse": str(answer), "demande": "aucune"}
+
+
+def engine_problem(server):
+    """Bibliothèque système manquante au moteur : dit tout de suite, plutôt qu'à
+    l'ouverture du panneau. Chaîne vide si llama-server démarre."""
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = ":".join(filter(None, (str(server.parent), env.get("LD_LIBRARY_PATH"))))
+    try:
+        result = subprocess.run([str(server), "--version"], capture_output=True, text=True, timeout=30, env=env,
+                                stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return ""
+    except OSError as error:
+        return str(error)
+    text = result.stdout + result.stderr
+    found = re.search(r"error while loading shared libraries: ([^:\s]+)", text)
+    return found.group(1) if found else ""
 
 
 class LocalProvider(Provider):
@@ -671,15 +728,8 @@ class LocalProvider(Provider):
         return self.engine() if self.engine() and self.model() else None
 
     def install_engine(self, progress, cancel):
-        release = _get_json(LLAMA_RELEASE_API)
-        asset = next((a for a in release.get("assets", [])
-                      if re.search(r"-bin-ubuntu-x64\.(zip|tar\.gz)$", a.get("name", ""))), None)
-        if asset is None:
-            raise RuntimeError(_t("Archive inattendue : {name}", name="llama.cpp"))
-        digest = asset.get("digest") or ""
-        expected = bytes.fromhex(digest[7:]) if digest.startswith("sha256:") else b""
         LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-        archive = download(asset["browser_download_url"], LOCAL_DIR / asset["name"], "sha256", expected, progress,
+        archive = download(LLAMA_URL, LOCAL_DIR / LLAMA_ARCHIVE, "sha256", bytes.fromhex(LLAMA_SHA256), progress,
                            cancel, _t("Téléchargement du moteur"))
         staging = LOCAL_DIR / "moteur.nouveau"
         shutil.rmtree(staging, ignore_errors=True)
@@ -696,19 +746,18 @@ class LocalProvider(Provider):
             for path in servers[0].parent.iterdir():  # zip ne garde pas le droit d'exécution
                 if path.is_file() and (path.name.startswith("llama-") or ".so" in path.name):
                     path.chmod(0o755)
+            missing = engine_problem(servers[0])
+            if missing:
+                raise RuntimeError(_t("Le moteur llama.cpp ne peut pas démarrer sur ce PC : {e}", e=missing))
             _replace_dir(staging, LOCAL_DIR / "moteur")
         finally:
             archive.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
 
     def install_model(self, progress, cancel):
-        files = _get_json(f"{HF_BASE}/api/models/{LOCAL_MODEL_REPO}/tree/main")
-        entry = next((f for f in files if f.get("path") == LOCAL_MODEL_FILE), None)
-        oid = ((entry or {}).get("lfs") or {}).get("oid", "")
-        if not re.fullmatch(r"[0-9a-f]{64}", oid):
-            raise RuntimeError(_t("Fichier corrompu, empreinte incorrecte : {name}", name=LOCAL_MODEL_FILE))
-        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/main/{LOCAL_MODEL_FILE}", LOCAL_DIR / LOCAL_MODEL_FILE,
-                 "sha256", bytes.fromhex(oid), progress, cancel, _t("Téléchargement du modèle"))
+        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/{LOCAL_MODEL_REVISION}/{LOCAL_MODEL_FILE}",
+                 LOCAL_DIR / LOCAL_MODEL_FILE, "sha256", bytes.fromhex(LOCAL_MODEL_SHA256), progress, cancel,
+                 _t("Téléchargement du modèle"))
 
     def install(self, progress, cancel, mark):
         if self.engine() is None:
@@ -770,6 +819,19 @@ def _private_dir(path):
     return path
 
 
+def work_dir():
+    """Dossier de travail de claude.exe et codex : jamais un dossier personnel
+    (#913), sinon la couche PE demande l'accès aux fichiers personnels."""
+    return _private_dir(WORK)
+
+
+def has_browser():
+    """Un vrai navigateur est-il installé sur ce PC (#912) ? L'ISO n'en livre aucun."""
+    if any(os.access(BROWSERS_DIR / path, os.X_OK) for path in BROWSER_BINARIES):
+        return True
+    return any(shutil.which(name) for name in BROWSER_COMMANDS)
+
+
 def _runs_pe(launcher):
     """Le lanceur de Claude Code passe-t-il par la couche PE (claude.exe) ?"""
     try:
@@ -823,7 +885,8 @@ def auth_status(launcher=None, timeout=60):
         return {"loggedIn": False, "installed": False}
     try:
         out = subprocess.run([str(launcher), "auth", "status", "--json"], capture_output=True, text=True,
-                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL).stdout
+                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL,
+                             cwd=work_dir()).stdout
         start = out.find("{")
         status = json.loads(out[start:out.rindex("}") + 1]) if start >= 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -1483,6 +1546,17 @@ def run_setup(key="claude"):
     backend = provider(key)
     name = display_name(key)
     Gdk, GLib, Gtk = _gtk()
+    # Une seule fenêtre par assistant (#910) : un deuxième clic sur l'interrupteur
+    # ramène celle qui est ouverte (elle a pu passer derrière les Paramètres).
+    from gi.repository import Gio
+    app = Gtk.Application(application_id=f"org.winlux.AssistantSetup.{key}", flags=Gio.ApplicationFlags.FLAGS_NONE)
+    try:
+        app.register(None)
+    except GLib.Error:
+        pass  # pas de bus de session : fenêtre simple
+    if app.get_is_registered() and app.get_is_remote():
+        app.activate()
+        return
     heading_text = _t("Assistant IA : activer {name}", name=name)
     win = Gtk.Window(title=heading_text)
     win.set_role("winlux-assistant-setup")
@@ -1514,6 +1588,21 @@ def run_setup(key="claude"):
     code_line.pack_start(send_code, False, False, 0)
     code_box.pack_start(code_line, False, False, 0)
     box.pack_start(code_box, False, False, 0)
+    # Sans navigateur sur ce PC (#912) : le lien à ouvrir sur un autre appareil.
+    link_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    link_text = Gtk.Label(xalign=0, wrap=True, max_width_chars=62)
+    link_url = Gtk.Label(xalign=0, wrap=True, max_width_chars=62, selectable=True)
+    link_url.set_line_wrap_mode(2)  # Pango.WrapMode.CHAR : une URL n'a pas d'espace
+    device_code = Gtk.Label(xalign=0, selectable=True)
+    link_line = Gtk.Box(spacing=8)
+    copy_link = Gtk.Button(label=_t("Copier le lien"))
+    get_browser = Gtk.Button(label=_t("Installer un navigateur"))
+    link_line.pack_start(copy_link, False, False, 0)
+    link_line.pack_start(get_browser, False, False, 0)
+    for widget in (link_text, link_url, device_code, link_line):
+        link_box.pack_start(widget, False, False, 0)
+    box.pack_start(link_box, False, False, 0)
+    box.reorder_child(link_box, box.get_children().index(code_box))  # le lien, puis le code à coller
     buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
     open_page = Gtk.Button(label=_t("Ouvrir la page de connexion"))
     retry = Gtk.Button(label=_t("Réessayer"))
@@ -1524,7 +1613,7 @@ def run_setup(key="claude"):
         buttons.pack_start(button, False, False, 0)
     box.pack_start(buttons, False, False, 0)
     win.add(box)
-    state = {"cancel": threading.Event(), "process": None, "url": None}
+    state = {"cancel": threading.Event(), "process": None, "url": None, "code": None, "browser": True}
 
     def mark(index, done=True):
         label, text = steps[index]
@@ -1542,6 +1631,7 @@ def run_setup(key="claude"):
     def failed(text):
         status.set_text(text)
         code_box.hide()
+        link_box.hide()
         open_page.hide()
         retry.show()
         close.set_label(_t("Fermer"))
@@ -1561,6 +1651,7 @@ def run_setup(key="claude"):
         status.set_text(done + "\n\n" + _t("C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des "
                                            "tâches ou appuyez sur Windows+C."))
         code_box.hide()
+        link_box.hide()
         open_page.hide()
         finish.show()
         finish.grab_focus()
@@ -1568,19 +1659,41 @@ def run_setup(key="claude"):
         return False
 
     def got_url():
-        open_page.show()
         if backend.code_entry:
             code_box.show_all()
-        if backend.open_login_page:
-            open_url(state["url"])
+        if state["browser"]:
+            open_page.show()
+            if backend.open_login_page:
+                open_url(state["url"])
+            return False
+        # Aucun navigateur : rien n'est ouvert ici, le lien part sur un autre appareil.
+        status.set_text("")
+        link_text.set_text(_t("Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou un "
+                              "autre ordinateur, connectez-vous, puis collez ici le code affiché.") if backend.code_entry
+                           else _t("Aucun navigateur n'est installé sur ce PC. Ouvrez ce lien sur votre téléphone ou "
+                                   "un autre ordinateur, connectez-vous, puis saisissez ce code :"))
+        link_url.set_text(state["url"])
+        link_box.show_all()
+        device_code.set_visible(bool(state["code"]))
+        return False
+
+    def got_code():
+        device_code.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(state['code'])}</span>")
+        device_code.show()
         return False
 
     def login_output(process):
         for line in iter(process.stdout.readline, ""):
+            line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)  # couleurs du terminal
             found = re.search(r"https://\S+", line)
             if found and not state["url"]:
                 state["url"] = found.group(0)
                 GLib.idle_add(got_url)
+            elif state["url"] and not state["code"] and not state["browser"]:
+                code_found = re.search(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b", line)
+                if code_found:
+                    state["code"] = code_found.group(0)
+                    GLib.idle_add(got_code)
         process.wait()
         backend.protect()
         info = backend.status()
@@ -1593,10 +1706,17 @@ def run_setup(key="claude"):
         mark(1, False)
         bar.set_fraction(0.0)
         status.set_text(_t("Connectez-vous dans la page qui vient de s'ouvrir (Google, e-mail…)."))
+        state["browser"] = has_browser()
+        env = backend.env()
+        if not state["browser"]:
+            # Ni claude.exe ni codex n'ouvrent « Ouvrir le lien » par-dessus cette fenêtre.
+            env.update(WINLUX_BROWSER="true", BROWSER="true")
+            status.set_text("")
         try:
-            process = subprocess.Popen(backend.login_command(launcher), stdin=subprocess.PIPE,
+            # Groupe de processus à part : Annuler ferme aussi ce que la connexion a lancé.
+            process = subprocess.Popen(backend.login_command(launcher, state["browser"]), stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                       env=backend.env(), cwd=str(HOME))
+                                       env=env, cwd=work_dir(), start_new_session=True)
         except OSError as error:
             return failed(_t("La connexion n'a pas abouti : {e}", e=error))
         state["process"] = process
@@ -1633,6 +1753,8 @@ def run_setup(key="claude"):
         close.set_label(_t("Annuler"))
         state["cancel"] = threading.Event()
         state["url"] = None
+        state["code"] = None
+        link_box.hide()
         mark(0, False)
         threading.Thread(target=work, daemon=True).start()
 
@@ -1650,21 +1772,42 @@ def run_setup(key="claude"):
         state["cancel"].set()
         process = state["process"]
         if process and process.poll() is None:
-            process.terminate()
+            try:
+                os.killpg(process.pid, 15)  # et le navigateur lancé par la connexion (#912)
+            except OSError:
+                process.terminate()
         Gtk.main_quit()
+
+    def copy_url(*_):
+        if state["url"]:
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(state["url"], -1)
+            status.set_text(_t("Lien copié."))
+
+    def install_browser(*_):
+        # Choix explicite : la page Navigateurs des Paramètres (Edge, Firefox, Chrome).
+        try:
+            subprocess.Popen(["winlux-shell-app", "settings", "11"], start_new_session=True)
+        except OSError:
+            pass
 
     def open_assistant(*_):
         subprocess.Popen([sys.executable, str(Path(__file__).resolve())], start_new_session=True)
         quit_setup()
 
     open_page.connect("clicked", lambda *_: state["url"] and open_url(state["url"]))
+    copy_link.connect("clicked", copy_url)
+    get_browser.connect("clicked", install_browser)
     send_code.connect("clicked", submit_code)
     code.connect("activate", submit_code)
     retry.connect("clicked", start)
     finish.connect("clicked", open_assistant)
     close.connect("clicked", quit_setup)
     win.connect("destroy", quit_setup)
+    app.connect("activate", lambda *_: win.present())
+    app.hold()
     win.show_all()
+    link_box.hide()
+    win.present()
     start()
     Gtk.main()
 

@@ -650,6 +650,17 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
+# #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
+# à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
+# PC (lien et code pour un autre appareil), claude.exe jamais lancé dans un dossier personnel.
+assistant_source = (SCRIPTS / "winlux-assistant.py").read_text()
+ok("assistant_setups" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "org.winlux.AssistantSetup." in assistant_source
+   and 'LLAMA_SHA256 = "' in assistant_source and 'LOCAL_MODEL_REVISION = "' in assistant_source
+   and 'CODEX_VERSION = "' in assistant_source and "releases/latest" not in assistant_source
+   and "def has_browser" in assistant_source and '"--device-auth"' in assistant_source
+   and "cwd=work_dir()" in assistant_source and "cwd=str(HOME)" not in assistant_source,
+   "Assistant IA : trois activations possibles, IA locale téléchargeable, connexion sans navigateur, sans question de fichiers")
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
    and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
@@ -657,5 +668,15 @@ ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
 ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
    and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
+# #914 : infobulle réseau au nom du Wi-Fi, pas de la carte (« wlo1 »).
+ok("def wifi_name" in (SCRIPTS / "winlux-tray.py").read_text()
+   and (SCRIPTS / "test-tray-wifi-name.py").exists()
+   and "test-tray-wifi-name.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre : infobulle Wi-Fi au nom du réseau (#914)")
+# #915 : icône d'une fenêtre .exe lancée avec un chemin relatif ou Windows.
+ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
