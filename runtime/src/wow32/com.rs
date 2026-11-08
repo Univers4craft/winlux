@@ -62,6 +62,12 @@ pub(super) enum A {
     /// Structure de 16 octets passée par valeur (GUID, MSAAPROPID) :
     /// quatre cases de la pile x86, adresse d'une copie en x64.
     GuidIn,
+    /// STRRET* lu et écrit (264 octets en x86, 272 en x64 : l'union est
+    /// alignée sur 8).
+    StrRet,
+    /// Tableau de pointeurs lu et écrit (PCUITEMID_CHILD_ARRAY, PITEMID_CHILD*)
+    /// ; le nombre d'éléments est l'argument `I` qui le précède.
+    Pidls,
 }
 
 /// Description d'une interface : ses méthodes propres (après celles de
@@ -593,6 +599,38 @@ pub(super) static IXMLDOMPARSEERROR: Iface = Iface {
     ],
 };
 
+/// IEnumIDList : éléments d'un dossier du Shell.
+pub(super) static IENUMIDLIST: Iface = Iface {
+    name: "IEnumIDList",
+    iid: crate::dlls::shell_folder_com::IID_IENUM_ID_LIST,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, Pidls, I]),       // Next
+        Some(&[I]),                 // Skip
+        Some(&[]),                  // Reset
+        Some(&[Out(&IENUMIDLIST)]), // Clone
+    ],
+};
+
+/// IShellFolder : dossier de l'espace de noms (SHGetDesktopFolder).
+pub(super) static ISHELLFOLDER: Iface = Iface {
+    name: "IShellFolder",
+    iid: crate::dlls::shell_folder_com::IID_ISHELL_FOLDER,
+    parent: Some(&IUNKNOWN),
+    methods: &[
+        Some(&[I, In(&IUNKNOWN), I, I, OutPtr, I]), // ParseDisplayName
+        Some(&[I, I, Out(&IENUMIDLIST)]),           // EnumObjects
+        Some(&[I, In(&IUNKNOWN), Iid, OutQ]),       // BindToObject
+        Some(&[I, In(&IUNKNOWN), Iid, OutQ]),       // BindToStorage
+        Some(&[I, I, I]),                           // CompareIDs
+        Some(&[I, Iid, OutQ]),                      // CreateViewObject
+        Some(&[I, Pidls, I]),                       // GetAttributesOf
+        Some(&[I, I, Pidls, Iid, I, OutQ]),         // GetUIObjectOf
+        Some(&[I, I, StrRet]),                      // GetDisplayNameOf
+        Some(&[I, I, I, I, OutPtr]),                // SetNameOf
+    ],
+};
+
 static ALL: &[&Iface] = &[
     &IUNKNOWN,
     &ICLASSFACTORY,
@@ -628,6 +666,8 @@ static ALL: &[&Iface] = &[
     &IXMLDOMNODELIST,
     &IXMLDOMNAMEDNODEMAP,
     &IXMLDOMPARSEERROR,
+    &ISHELLFOLDER,
+    &IENUMIDLIST,
 ];
 
 fn by_iid(iid: &Guid) -> Option<&'static Iface> {
@@ -1026,6 +1066,29 @@ unsafe fn statstg64(src: u32, dst: *mut u8) {
     std::ptr::copy_nonoverlapping((src + 8) as usize as *const u8, dst.add(16), 64);
 }
 
+/// STRRET x86 → x64 : uType, puis l'union (décalée de 4).
+unsafe fn strret64(src: u32, dst: *mut u8) {
+    (dst as *mut u32).write_unaligned(rd(src));
+    std::ptr::write_bytes(dst.add(4), 0, 4);
+    std::ptr::copy_nonoverlapping((src + 4) as usize as *const u8, dst.add(8), 260);
+}
+
+/// STRRET x64 → x86. Le pointeur de STRRET_WSTR est sous 4 Go : ses 4
+/// octets bas suffisent, comme pour uOffset et cStr.
+unsafe fn strret32(src: *const u8, dst: u32) {
+    wr(dst, (src as *const u32).read_unaligned());
+    std::ptr::copy_nonoverlapping(src.add(8), (dst + 4) as usize as *mut u8, 260);
+}
+
+/// Taille de l'image 64 bits d'un argument `StrRet` ou `Pidls`, en cases
+/// de 8 octets.
+fn big_len(k: A, count: u32) -> usize {
+    match k {
+        StrRet => 34,
+        _ => (count.min(4096) as usize).max(1),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Appels 32 → 64
 // ---------------------------------------------------------------------
@@ -1036,6 +1099,10 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
     // Cases temporaires : capacité fixée, leurs adresses ne bougent pas.
     let mut temps: Vec<[u64; 10]> = Vec::with_capacity(kinds.len());
     let mut post: Vec<(usize, u32, A, Option<&'static Iface>, Guid)> = Vec::new();
+    // STRRET et tableaux : tampons à part (le tampon d'un Vec ne bouge
+    // pas quand le Vec est déplacé).
+    let mut big: Vec<(Vec<u64>, u32, A, u32)> = Vec::new();
+    let mut count = 0u32;
     let mut slots: Vec<u64> = Vec::with_capacity(kinds.len() + 5);
     slots.extend(this);
     let mut p = args;
@@ -1044,7 +1111,27 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
         let v = rd(p);
         p += 4;
         match k {
-            I => slots.push(widen(v)),
+            I => {
+                count = v;
+                slots.push(widen(v));
+            }
+            StrRet | Pidls => {
+                if v == 0 {
+                    slots.push(0);
+                    continue;
+                }
+                let n = big_len(k, count);
+                let mut t = vec![0u64; n];
+                if matches!(k, StrRet) {
+                    strret64(v, t.as_mut_ptr() as *mut u8);
+                } else {
+                    for (j, e) in t.iter_mut().enumerate().take(count as usize) {
+                        *e = rd(v + 4 * j as u32) as u64;
+                    }
+                }
+                slots.push(t.as_ptr() as u64);
+                big.push((t, v, k, count.min(n as u32)));
+            }
             Q => {
                 slots.push(v as u64 | (rd(p) as u64) << 32);
                 p += 4;
@@ -1118,6 +1205,15 @@ unsafe fn from32(target: usize, this: Option<u64>, args: u32, kinds: &[A]) -> u6
             _ => {}
         }
     }
+    for (t, dst, k, n) in big {
+        if matches!(k, StrRet) {
+            strret32(t.as_ptr() as *const u8, dst);
+        } else {
+            for (j, &e) in t.iter().enumerate().take(n as usize) {
+                wr(dst + 4 * j as u32, e as u32);
+            }
+        }
+    }
     r
 }
 
@@ -1178,11 +1274,43 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
         // Cases basses (le tas est sous 4 Go) pour les valeurs rendues.
         let mut temps: Vec<[u64; 10]> = Vec::with_capacity(kinds.len());
         let mut post: Vec<(usize, u64, A, Option<&'static Iface>)> = Vec::new();
+        // STRRET et tableaux en x86 (le tas est sous 4 Go).
+        let mut big: Vec<(Vec<u32>, u64, A, u32)> = Vec::new();
+        let mut count = 0u32;
         let mut iid: Guid = [0; 16];
         for (i, &k) in kinds.iter().enumerate().take(11) {
             let v = *args.add(i + 1);
             match k {
-                I => a.push(v as u32),
+                I => {
+                    count = v as u32;
+                    a.push(v as u32);
+                }
+                StrRet | Pidls => {
+                    if v == 0 {
+                        a.push(0);
+                        continue;
+                    }
+                    let mut t = if matches!(k, StrRet) {
+                        let mut t = vec![0u32; 66];
+                        strret32(v as usize as *const u8, t.as_mut_ptr() as usize as u32);
+                        t
+                    } else {
+                        let n = big_len(k, count);
+                        let src = v as usize as *const u64;
+                        (0..n)
+                            .map(|j| {
+                                if j < count as usize {
+                                    src.add(j).read_unaligned() as u32
+                                } else {
+                                    0
+                                }
+                            })
+                            .collect()
+                    };
+                    a.push(t.as_mut_ptr() as usize as u32);
+                    let n = count.min(t.len() as u32);
+                    big.push((t, v, k, n));
+                }
                 Q => {
                     a.push(v as u32);
                     a.push((v >> 32) as u32);
@@ -1259,6 +1387,16 @@ extern "win64" fn method64(m: u32, args: *const u64) -> u64 {
                 _ => {}
             }
         }
+        for (t, dst, k, n) in big {
+            let d = dst as usize as *mut u8;
+            if matches!(k, StrRet) {
+                strret64(t.as_ptr() as usize as u32, d);
+            } else {
+                for (j, &e) in t.iter().enumerate().take(n as usize) {
+                    (d as *mut u64).add(j).write_unaligned(e as u64);
+                }
+            }
+        }
         r as u64
     }
 }
@@ -1332,6 +1470,7 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("oleaut32", "GetActiveObject" | "#35") => k!(I, I, Out(&IUNKNOWN)),
         ("ole32", "CreateBindCtx" | "OleRegEnumVerbs") => k!(I, OutPtr),
         ("shell32", "SHGetMalloc") => k!(Out(&IMALLOC)),
+        ("shell32", "SHGetDesktopFolder") => k!(Out(&ISHELLFOLDER)),
         ("comctl32", "ImageList_Read") => k!(In(&ISTREAM)),
         ("comctl32", "ImageList_Write") => k!(I, In(&ISTREAM)),
         ("oleaut32", "GetErrorInfo" | "#200") | ("ole32", "GetErrorInfo") => {

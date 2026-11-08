@@ -398,6 +398,8 @@ local_action() {
     case "$action" in
         browser-launch-*|keyboard-*|lang-*|locale-*|tap-*|mouse-*|align-*|desktop-icon-*|theme-*|welcome-*) return 0 ;;
         privacy-*|lock-*|overlay-*|game-mode-*|cpu-hybrid-*|volume-*|report-open|restart-session|poweroff|reboot) return 0 ;;
+        # Réglages du compte (#1100) : en root, HOME=/root exportait ceux de root.
+        transfer-*) return 0 ;;
     esac
     return 1
 }
@@ -895,7 +897,7 @@ perform() {
         remote-*) shift; winlux-remote-config "${action#remote-}" "$@" ;;
         # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
         share-*) shift; winlux-share "${action#share-}" "$@" ;;
-        transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
+        transfer-*) shift; WINLUX_TRANSFER_RUN="$mine" winlux-transfer "${action#transfer-}" "$@" ;;
         # Téléphone connecté (winlux-phone) : ports du protocole KDE Connect
         # ouverts sur les réseaux privés et de domaine seulement, jamais public.
         phone-firewall-on|phone-firewall-off)
@@ -906,6 +908,15 @@ perform() {
                 printf 'rule=9448\tTelephone connecte Winlux (UDP)\tin\tallow\tudp\t1716\t\tprivate,domain\t1\n' >> "$tmp"
             fi
             mv "$tmp" "$fw"; chmod 644 "$fw" ;;
+        # Type de réseau (#1103) : Public ferme le partage et la découverte,
+        # Privé les rouvre ; profile= de firewall.conf, lu par le pare-feu.
+        firewall-profile-private|firewall-profile-public)
+            fw="$config/firewall.conf" tmp="$config/firewall.conf.$$"
+            if test -r "$fw"; then grep -v '^profile=' "$fw" > "$tmp" || true; else : > "$tmp"; fi
+            printf 'profile=%s\n' "${action#firewall-profile-}" >> "$tmp"
+            mv "$tmp" "$fw"; chmod 644 "$fw"
+            if have winlux; then winlux --firewall apply || true; fi
+            if have winlux-share; then winlux-share status >/dev/null 2>&1 || true; fi ;;
         # Comptes locaux (Paramètres › Comptes) ; mot de passe sur l'entrée standard.
         account-add|account-password|account-role|account-remove) shift; winlux-accounts "${action#account-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;

@@ -247,7 +247,7 @@ SETTINGS_INDEX = [
     (0, "Système Linux", "systeme linux noyau kernel services system sistema núcleo Kernel Dienste"),
     (39, "Applications installées", "applications installees logiciels installes programmes desinstaller supprimer taille liste installed apps programs uninstall remove size aplicaciones instaladas programas desinstalar installierte Apps Programme deinstallieren entfernen"),
     (1, "Gérer les applications", "applications apps gerer demarrage boutiques logiciels par defaut installer manage startup stores software aplicaciones administrar inicio tiendas verwalten Autostart"),
-    (2, "Réseau", "reseau ethernet cable proxy ip dns internet network red Netzwerk Kabel"),
+    (2, "Réseau", "reseau ethernet cable proxy ip dns internet network red Netzwerk Kabel pare feu firewall cortafuegos reseau public prive public private publica privada offentlich privat"),
     (4, "Clavier et souris", "clavier souris azerty qwerty disposition pave tactile touchpad pointeur keyboard mouse layout teclado raton Tastatur Maus Layout"),
     (7, "Mise à jour OS", "mise a jour os mises a jour winlux systeme exploitation os update operating system actualizacion del so sistema operativo Betriebssystem OS-Update update updates actualizaciones actualizar Aktualisierung Updates"),
     (8, "Écran", "ecran affichage resolution luminosite echelle orientation projeter second ecran moniteur display brightness scale monitor project pantalla brillo escala Bildschirm Anzeige Helligkeit Auflosung Skalierung"),

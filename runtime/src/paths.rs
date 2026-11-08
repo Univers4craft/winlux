@@ -839,6 +839,21 @@ pub fn full_windows(name: &str) -> String {
     if wp.verbatim {
         return name.trim_end_matches('\0').to_string();
     }
+    // `\\.\pipe\nom`, `\\.\mailslot\…` : chemin de périphérique, le préfixe
+    // reste et seul le reste est normalisé (#1098). .NET y fait passer tous
+    // ses noms de tubes avant CreateNamedPipeW.
+    let n = name.trim_end_matches('\0');
+    if wp.root == Root::Relative && (n.starts_with("\\\\.\\") || n.starts_with("//./")) {
+        let mut s = String::from("\\\\.");
+        for c in wp.comps.iter().filter(|c| *c != "..") {
+            s.push('\\');
+            s.push_str(c);
+        }
+        if wp.comps.is_empty() || wp.trailing_sep {
+            s.push('\\');
+        }
+        return s;
+    }
     let cwd = || {
         std::env::current_dir()
             .map(|d| parse(&to_windows(&d)))
