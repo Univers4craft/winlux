@@ -51,6 +51,7 @@ pub mod crypt32;
 pub mod cxx_eh;
 pub mod d2d1;
 pub mod d2d_raster;
+pub mod d3d10;
 pub mod d3d11;
 pub mod d3d12;
 pub mod d3d8;
@@ -758,6 +759,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dxgi",
                 exports: dxgi::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "d3d10",
+                exports: d3d10::exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "d3d10_1",
+                exports: d3d10::exports_1(),
                 handle: 0,
             },
             Builtin {

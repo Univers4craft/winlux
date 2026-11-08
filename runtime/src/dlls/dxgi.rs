@@ -996,7 +996,7 @@ unsafe extern "win64" fn sc_present(this: *mut DxgiSwapChain, _sync: u32, _flags
 unsafe extern "win64" fn sc_get_buffer(
     this: *mut DxgiSwapChain,
     buffer: u32,
-    _riid: *const Guid,
+    riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() || buffer > 0 {
@@ -1006,6 +1006,12 @@ unsafe extern "win64" fn sc_get_buffer(
     if let Some(ref ctx) = *guard {
         let tex =
             crate::dlls::d3d11::create_backbuffer_texture(ctx.back_texture, ctx.width, ctx.height);
+        // Direct3D 10 (#1090) : l'enveloppe ID3D10Texture2D du tampon.
+        if riid.as_ref() == Some(&crate::dlls::d3d10::IID_TEXTURE2D) {
+            *out = crate::dlls::d3d10::wrap_backbuffer(tex as usize, (*this).device as usize)
+                as *mut c_void;
+            return S_OK;
+        }
         *out = tex as *mut c_void;
         return S_OK;
     }
