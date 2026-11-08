@@ -624,4 +624,14 @@ ok('"update-auto-on"), (_t("Désactiver"), "update-auto-off")' not in settings_s
    and all(word in update_page for word in ("update-pause-", "update-resume", "update-hours-", "load_history", "notes_markup", "def notify"))
    and (SCRIPTS / "test-update-page.py").exists(),
    "page Mise à jour OS : carte d'état, pause, heures d'activité, historique, notes, notification (#875-#882)")
+
+# Écran et Alimentation en menus (#895) ; Réseau, Comptes et Personnalisation
+# refaits (#898) : plus d'interface réseau brute, carte du compte, aperçu.
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in settings_source
+   and '(_t("Connexion"), "network")' not in settings_source
+   and "def network_summary" in pages_source and "def desktop_preview" in pages_source
+   and 'self.hero("user", name, detail' in pages_source
+   and (SCRIPTS / "test-settings-redesign.py").exists(),
+   "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

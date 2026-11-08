@@ -426,7 +426,7 @@ _VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware",
              "xen": "Xen", "parallels": "Parallels"}
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
-    2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
+    3: [(_t("Volume"), "audio")],
     # Mode, délais, capot et bouton : leurs menus déroulants montrent la valeur (#895).
     23: [(_t("Batterie"), "battery"), (_t("Luminosité (%)"), "power_brightness")],
     8: [(_t("Définition"), "display_current"), (_t("Échelle"), "display_scale")],
@@ -436,7 +436,6 @@ FIELDS = {
 ACTIONS = {
     0: [(_t("Relancer le bureau"), "restart-session"), (_t("Redémarrer"), "reboot"), (_t("Éteindre"), "poweroff"),
         (_t("Signaler un problème"), "report-open")],
-    2: [(_t("Renouveler la connexion"), "network-renew")],
     3: [(_t("Volume −"), "volume-down"), (_t("Muet / rétablir"), "volume-mute"), (_t("Volume +"), "volume-up")],
     # Clavier, souris et personnalisation : réglages complets dans winlux-settings-pages.
     # Mise à jour OS (7) : page refaite dans winlux-update-page (#875-#882).
@@ -750,6 +749,11 @@ SETTINGS_CSS = """
   scale highlight {{ background: {accent}; border: none; }}
   scale slider {{ background: #ffffff; border: 1px solid {border}; }}
   .section {{ font-size: 16px; font-weight: bold; margin-top: 6px; }}
+  .hero {{ padding: 20px 24px; }}
+  .hero-title {{ font-size: 20px; font-weight: 600; }}
+  button.nav-row {{ background: transparent; border: none; border-radius: 6px; padding: 10px 8px; }}
+  button.nav-row:hover {{ background: {card_hover}; }}
+  button.chosen {{ border: 2px solid {accent}; }}
 """
 
 
@@ -1181,6 +1185,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
+        if self.page == 2: self.refresh_network_hero(status)
         if self.process is not None and self.process.poll() is not None:
             result = self.process.returncode
             action = self.active_action
