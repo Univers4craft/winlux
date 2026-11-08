@@ -692,6 +692,28 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
 
+# Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
+# boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
+update_page = (SCRIPTS / "winlux-update-page.py").read_text()
+settings_source = (SCRIPTS / "winlux-settings.py").read_text()
+ok('"update-auto-on"), (_t("Désactiver"), "update-auto-off")' not in settings_source
+   and "Redémarrer après installation" not in settings_source
+   and "UpdatePanel(self" in settings_source
+   and all(word in update_page for word in ("update-pause-", "update-resume", "update-hours-", "load_history", "notes_markup", "def notify"))
+   and (SCRIPTS / "test-update-page.py").exists(),
+   "page Mise à jour OS : carte d'état, pause, heures d'activité, historique, notes, notification (#875-#882)")
+
+# Écran et Alimentation en menus (#895) ; Réseau, Comptes et Personnalisation
+# refaits (#898) : plus d'interface réseau brute, carte du compte, aperçu.
+pages_source = (SCRIPTS / "winlux-settings-pages.py").read_text()
+ok("self.power_controls(choices)" in settings_source and 'f"power-set-' in settings_source
+   and '(_t("Connexion"), "network")' not in settings_source
+   and "def network_summary" in pages_source and "def desktop_preview" in pages_source
+   and 'self.hero("user", name, detail' in pages_source
+   and (SCRIPTS / "test-settings-redesign.py").exists(),
+   "Paramètres : menus Écran/Alimentation, Réseau, Comptes et Personnalisation refaits (#895, #898)")
+
+
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
 # PC (lien et code pour un autre appareil), claude.exe jamais lancé dans un dossier personnel.
