@@ -121,10 +121,12 @@ print(combo.get_active_text() or "", "|", empty.get_active_text() or "", "|", de
 """
 for lang in ("fr", "en", "es", "de"):
     env = dict(os.environ, WINLUX_LANG=lang, LANG=f"{lang}_FR.UTF-8" if lang == "fr" else "C.UTF-8", NO_AT_BRIDGE="1")
-    out = subprocess.run([sys.executable, "-c", probe, str(HERE / "winlux-settings.py")], env=env,
-                         capture_output=True, text=True, timeout=60).stdout.strip().splitlines()
+    # Vrais menus GTK : il faut un écran (CI : xvfb-run, comme les autres tests GTK).
+    result = subprocess.run([sys.executable, "-c", probe, str(HERE / "winlux-settings.py")], env=env,
+                            capture_output=True, text=True, timeout=60)
+    out = result.stdout.strip().splitlines()
     parts = [p.strip() for p in (out[-1] if out else "").split("|")]
-    check(len(parts) == 3 and all(parts), f"menu vide en {lang} : {parts}")
+    check(len(parts) == 3 and all(parts), f"menu vide en {lang} : {parts} {result.stderr.strip()[-300:]}")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)
