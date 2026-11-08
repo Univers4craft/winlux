@@ -881,6 +881,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::oleacc_props::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // WMI en lecture (WbemLocator, ROOT\\CIMV2, #1198).
+        if let Some(hr) = super::wbem::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Documents XML MSXML (DOMDocument 2.6 à 6.0, #1084).
         if let Some(hr) = super::msxml::create_builtin(&guid, &iid, out) {
             return hr;
@@ -1253,6 +1257,88 @@ static MTA_COOKIE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsi
 /// (CsWinRT) l'appelle avant d'activer une classe WinRT et rend le jeton
 /// dans un finaliseur (#1147 : Flow Launcher). Ici le MTA implicite existe
 /// toujours : le compteur suit seulement les appels.
+/// CoInitializeSecurity : sécurité par défaut du processus. Les objets
+/// COM de Winlux vivent dans le processus : rien à régler (WMI, #1198).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn co_initialize_security(
+    _desc: usize,
+    _count: i32,
+    _services: usize,
+    _reserved: usize,
+    _authn_level: u32,
+    _imp_level: u32,
+    _auth_list: usize,
+    _capabilities: u32,
+    _reserved3: usize,
+) -> i32 {
+    0
+}
+
+/// CoSetProxyBlanket : réglage d'authentification d'un mandataire ; les
+/// objets en processus l'acceptent tel quel.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn co_set_proxy_blanket(
+    proxy: usize,
+    _authn: u32,
+    _authz: u32,
+    _principal: usize,
+    _authn_level: u32,
+    _imp_level: u32,
+    _auth_info: usize,
+    _capabilities: u32,
+) -> i32 {
+    if proxy == 0 {
+        return E_INVALIDARG;
+    }
+    0
+}
+
+/// CoQueryProxyBlanket : valeurs par défaut (NTLM, appel, emprunt d'identité).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn co_query_proxy_blanket(
+    proxy: usize,
+    authn: *mut u32,
+    authz: *mut u32,
+    principal: *mut usize,
+    authn_level: *mut u32,
+    imp_level: *mut u32,
+    auth_info: *mut usize,
+    capabilities: *mut u32,
+) -> i32 {
+    if proxy == 0 {
+        return E_INVALIDARG;
+    }
+    for (p, v) in [
+        (authn, 10u32),
+        (authz, 0),
+        (authn_level, 3),
+        (imp_level, 3),
+        (capabilities, 0),
+    ] {
+        if !p.is_null() {
+            p.write_unaligned(v);
+        }
+    }
+    for p in [principal, auth_info] {
+        if !p.is_null() {
+            p.write_unaligned(0);
+        }
+    }
+    0
+}
+
+/// CoCopyProxy : un objet en processus est son propre mandataire.
+pub unsafe extern "win64" fn co_copy_proxy(proxy: usize, out: *mut usize) -> i32 {
+    if proxy == 0 || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let add_ref: unsafe extern "win64" fn(usize) -> u32 =
+        std::mem::transmute(*(*(proxy as *const *const usize)).add(1));
+    add_ref(proxy);
+    *out = proxy;
+    0
+}
+
 pub unsafe extern "win64" fn co_increment_mta_usage(cookie: *mut usize) -> i32 {
     if cookie.is_null() {
         return E_INVALIDARG;
@@ -1662,6 +1748,8 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
+        "CoInitializeSecurity"=>fn co_initialize_security,"CoSetProxyBlanket"=>fn co_set_proxy_blanket,
+        "CoQueryProxyBlanket"=>fn co_query_proxy_blanket,"CoCopyProxy"=>fn co_copy_proxy,
         "CoIncrementMTAUsage"=>fn co_increment_mta_usage,"CoDecrementMTAUsage"=>fn co_decrement_mta_usage,
         "CoGetObjectContext"=>fn co_get_object_context,
         "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
