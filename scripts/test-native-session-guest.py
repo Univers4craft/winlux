@@ -43,6 +43,10 @@ def windows():
 SETTINGS_TITLES = ("Paramètres", "Settings", "Configuración", "Einstellungen", "Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
                    "Configuración de Winlux", "Winlux-Einstellungen")
 
+# Titre de l'Explorateur dans la langue de la session depuis #888 (PR #921),
+# « Explorer Winlux » avant.
+EXPLORER_TITLES = ("Explorateur de fichiers", "File Explorer", "Explorador de archivos", "Datei-Explorer", "Explorer Winlux")
+
 def wait_title(title, timeout=90):
     titles = (title,) if isinstance(title, str) else tuple(title)
     deadline = time.monotonic() + timeout
@@ -151,7 +155,7 @@ print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")
 subprocess.Popen(["winlux-shell-app", "explorer"], stdout=log, stderr=log)
-explorer = wait_title("Explorer Winlux")
+explorer = wait_title(EXPLORER_TITLES)
 subprocess.Popen(["winlux-shell-app", "settings", "11"], stdout=log, stderr=log)
 settings = wait_title(SETTINGS_TITLES)
 def settings_page(window):
@@ -548,7 +552,7 @@ def campaign_shortcuts_and_clipboard():
         for window, (_, title) in windows().items():
             if window not in before:
                 assert "Thunar" not in title, "Windows+E opened Thunar: " + title
-                if "Explorer Winlux" in title: explorer = window
+                if any(name in title for name in EXPLORER_TITLES): explorer = window
         time.sleep(0.2)
     assert explorer, "Windows+E did not open the Winlux Explorer"
     run("wmctrl", "-ic", explorer)
