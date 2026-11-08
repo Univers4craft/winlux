@@ -11,6 +11,8 @@ tourne en root et n'exécute que des actions connues :
   winlux-root exec apt-get|snap ARGS…     installation de logiciels (Boutique)
   winlux-root exec winlux-reset ARGS…     réinitialisation, clé de secours (Récupération)
   winlux-root exec winlux-wifi ARGS…      Wi-Fi : réseaux, clé (entrée standard), WPS, mode avion
+  winlux-root exec winlux-vpn ARGS…       VPN WireGuard/OpenVPN (configuration sur l'entrée standard)
+  winlux-root exec winlux-hotspot ARGS…   point d'accès sans fil mobile (partage de connexion)
   winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
   winlux-root exec winlux-certificates …   autorités ajoutées, heure automatique
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
@@ -194,6 +196,29 @@ def wifi_level(rest):
     return "user"
 
 
+# VPN (Paramètres > VPN, #660) : comme sous Windows, un compte standard ajoute
+# une connexion VPN et s'y connecte. Configuration et mots de passe arrivent
+# sur l'entrée standard, jamais dans la ligne de commande ; le service ne lit
+# aucun fichier du compte (la page les lui envoie).
+VPN_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def vpn_level(rest):
+    """Niveau d'une commande winlux-vpn, None si elle est refusée."""
+    if rest in (["status"], ["import", "--stdin"]):
+        return "user"
+    if len(rest) == 2 and rest[0] in ("connect", "disconnect", "remove") and VPN_UUID.match(rest[1]):
+        return "user"
+    if len(rest) == 3 and rest[0] == "credentials" and VPN_UUID.match(rest[1]) and rest[2] == "--stdin":
+        return "user"
+    return None
+
+
+def hotspot_level(rest):
+    """Point d'accès sans fil mobile : permis à un compte standard, comme sous Windows."""
+    return "user" if rest in (["status"], ["start"], ["stop"], ["configure", "--stdin"]) else None
+
+
 def control_level(args):
     """Niveau requis pour une action de winlux-control, None si elle est refusée."""
     if not args or not all(SAFE_ARG.match(a) for a in args):
@@ -242,6 +267,10 @@ def exec_level(args):
         return None
     if tool == "winlux-wifi":
         return wifi_level(rest)
+    if tool == "winlux-vpn":
+        return vpn_level(rest)
+    if tool == "winlux-hotspot":
+        return hotspot_level(rest)
     if tool == "winlux-certificates":
         # Ajouter une autorité de confiance touche à la sécurité de tout le
         # système : mot de passe d'un administrateur, comme sous Windows.

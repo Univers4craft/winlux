@@ -1393,3 +1393,20 @@ fn syslink_taille_et_clic() {
     );
     gui::destroy_window(p);
 }
+
+#[test]
+fn roundrect_prend_la_largeur_de_l_ellipse() {
+    // RoundRect(…, 6, 6) sur un carré de 12 : coins de rayon 3 (#866). Avec
+    // un rayon de 6, le pixel (1, 1) restait blanc et la case devenait ronde.
+    use crate::dlls::gdi32;
+    let (dc, bmp) = memory_dc(12, 12);
+    let brush = gdi32::create_solid_brush(0);
+    gdi32::select_object(dc, brush);
+    let px = |x, y| unsafe { gdi32::get_pixel(dc, x, y) };
+    unsafe { gdi32::round_rect(dc, 0, 0, 12, 12, 6, 6) };
+    assert_eq!(px(1, 1), 0, "coin trop arrondi");
+    assert_eq!(px(0, 0), 0x00FF_FFFF, "coin pas arrondi");
+    assert_eq!(px(6, 0), 0);
+    gdi32::delete_object(brush);
+    gdi32::delete_object(bmp);
+}

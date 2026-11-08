@@ -53,7 +53,7 @@ install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$s
 # Dans /usr pour arriver aussi par la mise à jour.
 mkdir -p "$stage/usr/share/polkit-1/rules.d"
 install -m 644 "$project/integration/native/fprint/49-winlux-fprint.rules" "$stage/usr/share/polkit-1/rules.d/49-winlux-fprint.rules"
-for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-signin winlux-root winlux-wifi winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
+for name in winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-signin winlux-root winlux-wifi winlux-vpn winlux-hotspot winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done

@@ -72,6 +72,10 @@ _TR = {
     'Luminosité de l’écran, en pourcentage': ('Screen brightness, as a percentage', 'Brillo de la pantalla, en porcentaje', 'Bildschirmhelligkeit in Prozent'),
     'Réseaux Wi-Fi disponibles': ('Available Wi-Fi networks', 'Redes Wi-Fi disponibles', 'Verfügbare WLAN-Netzwerke'),
     'Périphériques Bluetooth': ('Bluetooth devices', 'Dispositivos Bluetooth', 'Bluetooth-Geräte'),
+    'VPN': ('VPN', 'VPN', 'VPN'),
+    'Point d’accès mobile': ('Mobile hotspot', 'Zona con cobertura móvil', 'Mobiler Hotspot'),
+    'Connexions VPN': ('VPN connections', 'Conexiones VPN', 'VPN-Verbindungen'),
+    'Réglages du point d’accès mobile': ('Mobile hotspot settings', 'Configuración de la zona con cobertura móvil', 'Einstellungen für mobilen Hotspot'),
     'Tous les paramètres': ('All settings', 'Toda la configuración', 'Alle Einstellungen'),
     'Options d’alimentation et de batterie': ('Power and battery options', 'Opciones de energía y batería', 'Energie- und Akkuoptionen'),
     '{level} %': ('{level}%', '{level} %', '{level} %'),
@@ -280,6 +284,39 @@ def power_modes():
     return None
 
 
+def side_module(name):
+    """winlux-vpn / winlux-hotspot installé à côté (ou dans le dépôt), None sinon."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name(name + ".py"), here.with_name(name)):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader(name.replace("-", "_") + "_quick", str(candidate))
+                spec = importlib.util.spec_from_loader(loader.name, loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
+
+
+def side_tool(name):
+    """Commande de winlux-vpn / winlux-hotspot (qui se relaie lui-même vers root)."""
+    if shutil.which(name): return [shutil.which(name)]
+    return [sys.executable, "-B", str(Path(__file__).resolve().with_name(name + ".py"))]
+
+
+def side_available(name):
+    module = side_module(name)
+    try: return bool(module and module.available())
+    except Exception: return False
+
+
+# Profil du point d'accès sans fil mobile (winlux-hotspot, même UUID).
+HOTSPOT_UUID = "6a3df0b6-9cff-4e1a-9a5e-77696e6c7578"
+
 
 # ── Réglages rapides : matériel présent et état réel ────────────────────────
 
@@ -302,7 +339,10 @@ def quick_hardware():
             # Luminosité : rétroéclairage, écran DDC/CI ou rampes gamma ;
             # winlux-brightness dit lequel (method=none : curseur caché).
             "backlight": brightness_tool() is not None,
-            "battery": _present("sys/class/power_supply", "BAT*/capacity")}
+            "battery": _present("sys/class/power_supply", "BAT*/capacity"),
+            # VPN et point d'accès mobile (#660) : seulement s'ils marchent ici.
+            "vpn": side_available("winlux-vpn"),
+            "hotspot": side_available("winlux-hotspot")}
 
 
 def virtual_machine():
@@ -365,6 +405,19 @@ def quick_state(hardware, modes_module=None):
                 break
     route = _run(["ip", "-4", "route", "show", "default"]) or ""
     state["online"] = bool(route.strip())
+    if hardware.get("vpn") or hardware.get("hotspot"):
+        # Connexions VPN (la plus récemment utilisée d'abord) et point d'accès.
+        vpns = []
+        for line in (_run(["nmcli", "-t", "-f", "TYPE,UUID,ACTIVE,TIMESTAMP,NAME", "connection", "show"]) or "").splitlines():
+            parts = line.split(":", 4)
+            if len(parts) < 5: continue
+            kind, ident, active, stamp, name = parts
+            if kind in ("vpn", "wireguard"):
+                vpns.append({"uuid": ident, "active": active == "yes", "stamp": int(stamp) if stamp.isdigit() else 0,
+                             "name": name.replace("\\:", ":")})
+            elif ident == HOTSPOT_UUID:
+                state["hotspot_on"] = active == "yes"
+        state["vpns"] = sorted(vpns, key=lambda item: -item["stamp"])
     if hardware["bluetooth"]:
         state["bluetooth_on"] = "Powered: yes" in (_run(["bluetoothctl", "show"], timeout=3) or "")
     if hardware["backlight"]:
@@ -399,6 +452,12 @@ def quick_tiles(hardware, state, in_vm):
                       bool(state.get("bluetooth_on")) and not state.get("airplane"), True))
     if hardware["wifi"] or hardware["bluetooth"]:
         tiles.append(("airplane", _t("Mode avion"), "airplane-mode-symbolic", bool(state.get("airplane")), False))
+    if hardware.get("vpn"):
+        active = [item["name"] for item in state.get("vpns", []) if item["active"]]
+        tiles.append(("vpn", active[0] if active else _t("VPN"), "network-vpn-symbolic", bool(active), True))
+    if hardware.get("hotspot"):
+        tiles.append(("hotspot", _t("Point d’accès mobile"), "network-wireless-hotspot-symbolic",
+                      bool(state.get("hotspot_on")), True))
     if "saver" in state:
         tiles.append(("saver", _t("Économiseur de batterie"), "power-profile-power-saver-symbolic", state["saver"][1], False))
     if "night" in state:
@@ -942,7 +1001,8 @@ class Popup(Gtk.Application):
             button.get_style_context().add_class("split")
             arrow=Gtk.Button.new_from_icon_name("pan-end-symbolic",Gtk.IconSize.BUTTON)
             arrow.get_style_context().add_class("tile-arrow")
-            hint={"wifi":_t("Réseaux Wi-Fi disponibles"),"bluetooth":_t("Périphériques Bluetooth")}.get(key,title)
+            hint={"wifi":_t("Réseaux Wi-Fi disponibles"),"bluetooth":_t("Périphériques Bluetooth"),
+                  "vpn":_t("Connexions VPN"),"hotspot":_t("Réglages du point d’accès mobile")}.get(key,title)
             arrow.set_tooltip_text(hint);arrow.get_accessible().set_name(hint)
             arrow.connect("clicked",lambda *_,value=key:self.tile_detail(value))
             row.pack_start(arrow,False,False,0)
@@ -999,6 +1059,23 @@ class Popup(Gtk.Application):
             if shutil.which("winlux-wifi") and self.hardware["wifi"]:commands.append(["winlux-wifi","airplane","on" if on else "off"])
             elif self.hardware["wifi"] and shutil.which("nmcli"):commands.append(["nmcli","radio","all","off" if on else "on"])
             if self.hardware["bluetooth"]:commands.append(["bluetoothctl","power","off" if on else "on"])
+        elif key=="vpn":
+            # Se connecter au dernier VPN utilisé ; sans connexion, la page VPN.
+            vpns=self.quick.get("vpns",[])
+            if on and not vpns:
+                self.updating=True;button.set_active(False);self.updating=False
+                self.settings("40");return
+            tool=side_tool("winlux-vpn")
+            commands=[tool+["connect",vpns[0]["uuid"]]] if on else [tool+["disconnect",item["uuid"]] for item in vpns if item["active"]]
+        elif key=="hotspot":
+            tool=side_tool("winlux-hotspot")
+            def worker():
+                answer=_run(tool+["start" if on else "stop"],timeout=90)
+                # Refus (même carte que la connexion, pas d'Internet) : la page dit pourquoi.
+                if on and (not answer or '"ok": false' in answer):GLib.idle_add(self.settings,"41")
+                GLib.idle_add(self.poll_quick,True)
+            threading.Thread(target=worker,daemon=True).start()
+            return
         elif key=="night":
             commands=[["winlux-ambiance","toggle"]]
         elif key=="saver":
@@ -1026,6 +1103,8 @@ class Popup(Gtk.Application):
             subprocess.Popen(["winlux-shell-app","settings","35"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         elif key=="bluetooth":
             subprocess.Popen(["winlux-shell-app","settings","22"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        elif key in ("vpn","hotspot"):
+            subprocess.Popen(["winlux-shell-app","settings","40" if key=="vpn" else "41"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def change_brightness(self,scale):
         self.light_value.set_text(f"{round(scale.get_value())}")
