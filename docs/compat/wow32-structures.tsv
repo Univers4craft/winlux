@@ -169,6 +169,7 @@ taskschd.rs	Obj	a-verifier
 threadpool.rs	Instance	a-verifier	
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
+url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte

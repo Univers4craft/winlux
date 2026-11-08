@@ -1778,6 +1778,20 @@ pub extern "win64" fn create_elliptic_rgn(left: i32, top: i32, right: i32, botto
     create_rect_rgn(left, top, right, bottom)
 }
 
+/// CreateRoundRectRgn (#1077) : comme les ellipses, les régions de Winlux sont
+/// des rectangles, donc la région couvre le rectangle englobant. WPF
+/// (WindowChrome) s'en sert pour les coins de ses fenêtres sans cadre.
+pub extern "win64" fn create_round_rect_rgn(
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    _width_ellipse: i32,
+    _height_ellipse: i32,
+) -> usize {
+    create_rect_rgn(left, top, right, bottom)
+}
+
 /// Codes de retour des fonctions de région.
 const NULLREGION: i32 = 1;
 const SIMPLEREGION: i32 = 2;
@@ -2701,6 +2715,7 @@ pub fn exports() -> crate::dlls::Exports {
         // --- Regions ---
         "CreateRectRgn"=>fn create_rect_rgn, "CreateRectRgnIndirect"=>fn create_rect_rgn_indirect,
         "CreateEllipticRgn"=>fn create_elliptic_rgn,
+        "CreateRoundRectRgn"=>fn create_round_rect_rgn,
         "CombineRgn"=>fn combine_rgn, "SetRectRgn"=>fn set_rect_rgn,
         "OffsetRgn"=>fn offset_rgn, "GetRgnBox"=>fn get_rgn_box,
         "PtInRegion"=>fn pt_in_region, "RectInRegion"=>fn rect_in_region,
@@ -2747,5 +2762,22 @@ mod object_type_tests {
         crate::dlls::gui::free_dc(win);
         crate::dlls::gui::free_dc(mem);
         assert_eq!(super::get_object_type(win), 0);
+    }
+}
+
+#[cfg(test)]
+mod round_rect_region_tests {
+    use super::*;
+
+    /// #1077 : la région à coins arrondis couvre son rectangle englobant.
+    #[test]
+    fn region_a_coins_arrondis() {
+        let rgn = create_round_rect_rgn(0, 0, 300, 200, 16, 16);
+        assert_ne!(rgn, 0);
+        let mut r = Rect::default();
+        unsafe {
+            assert_ne!(get_rgn_box(rgn, &mut r), REGION_ERROR);
+        }
+        assert_eq!((r.left, r.top, r.right, r.bottom), (0, 0, 300, 200));
     }
 }
