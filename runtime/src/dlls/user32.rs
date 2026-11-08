@@ -2681,17 +2681,83 @@ pub unsafe extern "win64" fn draw_text_w(
     draw_text_impl(hdc, &s, &mut *rect, format)
 }
 
+/// DrawTextEx : même rendu que DrawText ; les marges de DRAWTEXTPARAMS
+/// ne sont pas appliquées (le bouchon précédent ignorait tout le format).
+pub unsafe extern "win64" fn draw_text_ex_a(
+    hdc: usize,
+    text: *const u8,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_a(hdc, text, count, rect, format)
+}
+
+pub unsafe extern "win64" fn draw_text_ex_w(
+    hdc: usize,
+    text: *const u16,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_w(hdc, text, count, rect, format)
+}
+
+/// Retire les préfixes de mnémonique de DrawText : « &F » affiche « F »
+/// souligné, « && » affiche « & ». Rend le texte affiché et la position (en
+/// caractères) de la lettre à souligner.
+pub(crate) fn split_prefix(text: &str) -> (String, Option<usize>) {
+    let mut out = String::with_capacity(text.len());
+    let mut underline = None;
+    let mut count = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            match chars.next() {
+                Some('&') => {
+                    out.push('&');
+                    count += 1;
+                }
+                Some(c) => {
+                    if underline.is_none() {
+                        underline = Some(count);
+                    }
+                    out.push(c);
+                    count += 1;
+                }
+                None => {}
+            }
+            continue;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    (out, underline)
+}
+
 fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     const DT_CALCRECT: u32 = 0x0400;
     const DT_CENTER: u32 = 0x0001;
+    const DT_RIGHT: u32 = 0x0002;
     const DT_VCENTER: u32 = 0x0004;
+    const DT_BOTTOM: u32 = 0x0008;
     const DT_SINGLELINE: u32 = 0x0020;
-    const DT_NOCLIP: u32 = 0x0100;
     const DT_NOPREFIX: u32 = 0x0800;
+    const DT_HIDEPREFIX: u32 = 0x0010_0000;
+    const DT_PREFIXONLY: u32 = 0x0020_0000;
 
     let font_handle = gui::dc_font(hdc);
     let font = gui::font_spec(font_handle).unwrap_or_default();
-    let (tw, th) = gui::measure_text(&font, text);
+    // Sans DT_NOPREFIX, « & » marque la lettre de raccourci (libellés de la
+    // VCL : « &Hostname: » s'affichait tel quel, #1248).
+    let (shown, underline) = if format & DT_NOPREFIX != 0 {
+        (text.to_string(), None)
+    } else {
+        split_prefix(text)
+    };
+    let (tw, th) = gui::measure_text(&font, &shown);
 
     if format & DT_CALCRECT != 0 {
         rect.right = rect.left + tw;
@@ -2704,9 +2770,15 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
 
     if format & DT_CENTER != 0 {
         x = rect.left + (rect.width() - tw) / 2;
+    } else if format & DT_RIGHT != 0 {
+        x = rect.right - tw;
     }
-    if format & DT_SINGLELINE != 0 && format & DT_VCENTER != 0 {
-        y = rect.top + (rect.height() - th) / 2;
+    if format & DT_SINGLELINE != 0 {
+        if format & DT_VCENTER != 0 {
+            y = rect.top + (rect.height() - th) / 2;
+        } else if format & DT_BOTTOM != 0 {
+            y = rect.bottom - th;
+        }
     }
 
     let color = gui::dc_text_color(hdc);
@@ -2717,18 +2789,37 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         None
     };
 
-    let _ = (DT_NOCLIP, DT_NOPREFIX);
-    gui::record(
-        hdc,
-        gui::DrawCmd::Text {
-            x,
-            y,
-            text: text.to_string(),
-            color,
-            bk,
-            font,
-        },
-    );
+    if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
+        let before: String = shown.chars().take(k).collect();
+        let upto: String = shown.chars().take(k + 1).collect();
+        let x1 = x + gui::measure_text(&font, &before).0;
+        let x2 = x + gui::measure_text(&font, &upto).0;
+        let base = y + th - 2;
+        gui::record(
+            hdc,
+            gui::DrawCmd::Line {
+                x1,
+                y1: base,
+                x2: x2 - 1,
+                y2: base,
+                color,
+                width: 1,
+            },
+        );
+    }
+    if format & DT_PREFIXONLY == 0 {
+        gui::record(
+            hdc,
+            gui::DrawCmd::Text {
+                x,
+                y,
+                text: shown,
+                color,
+                bk,
+                font,
+            },
+        );
+    }
 
     th
 }
@@ -4098,6 +4189,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ReleaseDC"=>fn release_dc,
         "FillRect"=>fn fill_rect, "FrameRect"=>fn frame_rect,
         "DrawTextA"=>fn draw_text_a, "DrawTextW"=>fn draw_text_w,
+        "DrawTextExA"=>fn draw_text_ex_a, "DrawTextExW"=>fn draw_text_ex_w,
         "GetUpdateRect"=>fn get_update_rect, "GetUpdateRgn"=>fn get_update_rgn,
         "RedrawWindow"=>fn redraw_window,
         // --- Keyboard input ---
@@ -4861,6 +4953,29 @@ mod tests {
         // Pointeurs nuls : rien d'écrit.
         let args: [u64; 2] = [0, fmt.as_ptr() as u64];
         assert_eq!(unsafe { imp_wsprintfa(args.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn draw_text_retire_les_prefixes_de_mnemonique() {
+        assert_eq!(split_prefix("&Hostname:"), ("Hostname:".into(), Some(0)));
+        assert_eq!(split_prefix("Po&rt number:"), ("Port number:".into(), Some(2)));
+        assert_eq!(split_prefix("A && B"), ("A & B".into(), None));
+        assert_eq!(split_prefix("fin&"), ("fin".into(), None));
+        // DT_CALCRECT mesure le texte affiché, sans l'esperluette.
+        const DT_CALCRECT: u32 = 0x0400;
+        const DT_NOPREFIX: u32 = 0x0800;
+        let avec = b"&Port\0";
+        let sans = b"Port\0";
+        let mut r1 = Rect::default();
+        let mut r2 = Rect::default();
+        let mut r3 = Rect::default();
+        unsafe {
+            draw_text_a(0, avec.as_ptr(), -1, &mut r1, DT_CALCRECT);
+            draw_text_a(0, sans.as_ptr(), -1, &mut r2, DT_CALCRECT);
+            draw_text_a(0, avec.as_ptr(), -1, &mut r3, DT_CALCRECT | DT_NOPREFIX);
+        }
+        assert_eq!(r1.right, r2.right);
+        assert!(r3.right > r2.right, "DT_NOPREFIX garde « & »");
     }
 
     #[test]

@@ -58,6 +58,23 @@ extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> is
                 .unwrap()
                 .push(String::from_utf16_lossy(&url));
         }
+        if code == -452 {
+            // TVN_GETDISPINFOW : NMHDR (24 octets) puis TVITEMW ; mask à 0,
+            // hItem à 8, pszText à 24, cchTextMax à 32, lParam à 48.
+            unsafe {
+                let it = (lp as *mut u8).add(24);
+                let param = (it.add(48) as *const isize).read_unaligned();
+                let s = w(&format!("rappel{param}"));
+                let buf = (it.add(24) as *const usize).read_unaligned() as *mut u16;
+                let cap = (it.add(32) as *const i32).read_unaligned() as usize;
+                std::ptr::copy_nonoverlapping(s.as_ptr(), buf, s.len().min(cap));
+                if param == 2 {
+                    // TVIF_DI_SETITEM : le contrôle retient le texte.
+                    let mask = it as *mut u32;
+                    mask.write_unaligned(mask.read_unaligned() | 0x1000);
+                }
+            }
+        }
         if code == -177 {
             // LVN_GETDISPINFOW : NMHDR (24 octets) puis LVITEMW
             unsafe {
@@ -557,6 +574,72 @@ fn arborescence_insertion_depliage_et_selection() {
     // Suppression d'un parent : ses enfants partent avec lui
     assert_eq!(sendw(tv, 0x1101, 0, terminal as isize), 1);
     assert_eq!(sendw(tv, 0x1105, 0, 0), 1);
+    gui::destroy_window(p);
+}
+
+/// TTreeView de la VCL : éléments insérés en LPSTR_TEXTCALLBACK, texte rendu
+/// par TVN_GETDISPINFOW au dessin (« New Site » vide dans WinSCP).
+#[test]
+fn arborescence_texte_demande_au_parent() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let tv = child(p, "SysTreeView32", "", 0x7, 50, (0, 0, 200, 200));
+    let insert = |param: isize| {
+        let mut ins = TvInsert {
+            parent: 0xFFFF_FFFF_FFFF_0000,
+            after: 0xFFFF_FFFF_FFFF_0002,
+            mask: 0x1 | 0x4,
+            item: 0,
+            state: 0,
+            state_mask: 0,
+            text: usize::MAX as *const u16, // LPSTR_TEXTCALLBACKW
+            text_max: 0,
+            image: 0,
+            selected_image: 0,
+            children: 0,
+            param,
+        };
+        sendw(tv, 0x1132, 0, &mut ins as *mut TvInsert as isize) as usize
+    };
+    let a = insert(1);
+    let b = insert(2);
+    assert!(a != 0 && b != 0);
+    let text_of = |h: usize| {
+        let mut buf = [0u16; 32];
+        let mut it = TvInsert {
+            parent: 0,
+            after: 0,
+            mask: 0x1 | 0x10,
+            item: h,
+            state: 0,
+            state_mask: 0,
+            text: buf.as_mut_ptr(),
+            text_max: 32,
+            image: 0,
+            selected_image: 0,
+            children: 0,
+            param: 0,
+        };
+        let ptr = unsafe { (&mut it as *mut TvInsert as *mut u8).add(16) };
+        sendw(tv, 0x113E, 0, ptr as isize);
+        let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
+        String::from_utf16_lossy(&buf[..n])
+    };
+    notify_codes();
+    let (dc, bmp) = memory_dc(200, 200);
+    sendw(tv, 0x0318, dc, 0); // WM_PRINTCLIENT
+    let codes = notify_codes();
+    assert_eq!(
+        codes.iter().filter(|&&c| c == -452).count(),
+        2,
+        "TVN_GETDISPINFOW pour chaque élément : {codes:?}"
+    );
+    assert!(dark_pixels(bmp) > 0 || crate::dlls::usp10::spec_font(&gui::FontSpec::default()).is_none());
+    // TVIF_DI_SETITEM : le second texte est retenu, plus redemandé.
+    assert_eq!(text_of(b), "rappel2");
+    sendw(tv, 0x0318, dc, 0);
+    let codes = notify_codes();
+    assert_eq!(codes.iter().filter(|&&c| c == -452).count(), 1, "{codes:?}");
     gui::destroy_window(p);
 }
 

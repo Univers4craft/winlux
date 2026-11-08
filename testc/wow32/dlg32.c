@@ -328,6 +328,14 @@ static void gdi_origin(void)
     RECT cb;
     IntersectClipRect(dc, 0, 0, 5, 5);
     CHECK(GetClipBox(dc, &cb) != 0 && cb.left == 0 && cb.right == 5, "GetClipBox en coordonnées logiques");
+    /* Préfixe de mnémonique (#1248) : « &Port » se mesure comme « Port ». */
+    RECT a = { 0, 0, 0, 0 }, b = { 0, 0, 0, 0 }, c = { 0, 0, 0, 0 }, e = { 0, 0, 0, 0 };
+    DrawTextW(dc, L"&Port", -1, &a, DT_CALCRECT);
+    DrawTextW(dc, L"Port", -1, &b, DT_CALCRECT);
+    DrawTextW(dc, L"&Port", -1, &c, DT_CALCRECT | DT_NOPREFIX);
+    CHECK(a.right == b.right && c.right > b.right, "DrawTextW retire « & » sauf DT_NOPREFIX");
+    DrawTextExW(dc, L"&Port", -1, &e, DT_CALCRECT, NULL);
+    CHECK(e.right == b.right && e.bottom > 0, "DrawTextExW suit le format de DrawText");
     SelectObject(dc, old);
     DeleteObject(dib);
     DeleteDC(dc);

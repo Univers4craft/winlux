@@ -344,27 +344,6 @@ pub unsafe extern "win64" fn draw_text_w(
     draw_text_a(hdc, bytes.as_ptr(), bytes.len() as i32, rect, format)
 }
 
-pub unsafe extern "win64" fn draw_text_ex_a(
-    hdc: usize,
-    text: *mut u8,
-    count: i32,
-    rect: *mut [i32; 4],
-    format: u32,
-    _params: usize,
-) -> i32 {
-    draw_text_a(hdc, text, count, rect, format)
-}
-pub unsafe extern "win64" fn draw_text_ex_w(
-    hdc: usize,
-    text: *mut u16,
-    count: i32,
-    rect: *mut [i32; 4],
-    format: u32,
-    _params: usize,
-) -> i32 {
-    draw_text_w(hdc, text, count, rect, format)
-}
-
 // ── AdjustWindowRect ────────────────────────────────────────────────
 
 pub unsafe extern "win64" fn adjust_window_rect(
@@ -826,7 +805,6 @@ pub fn exports() -> crate::dlls::Exports {
         "TrackPopupMenu"=>fn track_popup_menu, "TrackPopupMenuEx"=>fn track_popup_menu_ex,
         "GetSystemMenu"=>fn get_system_menu,
         "DrawTextA"=>fn draw_text_a, "DrawTextW"=>fn draw_text_w,
-        "DrawTextExA"=>fn draw_text_ex_a, "DrawTextExW"=>fn draw_text_ex_w,
         "AdjustWindowRect"=>fn adjust_window_rect, "AdjustWindowRectEx"=>fn adjust_window_rect_ex,
         "ScreenToClient"=>fn screen_to_client, "ClientToScreen"=>fn client_to_screen,
         "MapWindowPoints"=>fn map_window_points,
