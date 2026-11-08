@@ -342,22 +342,49 @@ extern "win64" fn extract_icon_w(_inst: usize, _file: *const u16, _index: u32) -
     0
 }
 
-/// `SHDefExtractIconW` : S_FALSE (pas d'icône), les sorties à NULL.
-unsafe extern "win64" fn sh_def_extract_icon_w(
-    _file: *const u16,
-    _index: i32,
+/// `SHDefExtractIconW` : icônes standard de shell32.dll ou imageres.dll
+/// (l'emplacement que rend SHGetStockIconInfo, #1169), prises dans la
+/// liste système à la taille demandée (LOWORD grande, HIWORD petite) ;
+/// S_FALSE et des sorties à NULL pour tout autre fichier.
+pub(crate) unsafe extern "win64" fn sh_def_extract_icon_w(
+    file: *const u16,
+    index: i32,
     _flags: u32,
     large: *mut usize,
     small: *mut usize,
-    _size: u32,
+    size: u32,
 ) -> i32 {
+    // HICON* de la taille d'un pointeur du programme (4 octets en x86).
+    let put = |out: *mut usize, v: usize| {
+        if !out.is_null() {
+            crate::wow32::write_ptr(out as usize, v);
+        }
+    };
+    put(large, 0);
+    put(small, 0);
+    if file.is_null() || !(0..7).contains(&index) {
+        return 1; // S_FALSE
+    }
+    let name = crate::dlls::wstr(file).to_ascii_lowercase();
+    let base = name.rsplit(['\\', '/']).next().unwrap_or("");
+    if base != "shell32.dll" && base != "imageres.dll" {
+        return 1;
+    }
+    let icon = |px: u32| {
+        let px = match px {
+            0 => 32,
+            p => p.clamp(16, 256) as usize,
+        };
+        crate::dlls::icons::list_image(crate::dlls::icons::system_list_px(px), index)
+            .map_or(0, crate::dlls::icons::new_icon)
+    };
     if !large.is_null() {
-        *large = 0;
+        put(large, icon(size & 0xFFFF));
     }
     if !small.is_null() {
-        *small = 0;
+        put(small, icon((size >> 16).max(16)));
     }
-    1 // S_FALSE
+    0 // S_OK
 }
 
 /// `SHGetIconOverlayIndexW` : aucune surimpression (-1).

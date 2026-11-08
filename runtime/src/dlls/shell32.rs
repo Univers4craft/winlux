@@ -657,7 +657,8 @@ pub fn exports() -> crate::dlls::Exports {
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
         "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,
         "Shell_NotifyIconA"=>fn crate::dlls::notifyicon::shell_notify_icon_a,
-        "Shell_NotifyIconW"=>fn crate::dlls::notifyicon::shell_notify_icon_w
+        "Shell_NotifyIconW"=>fn crate::dlls::notifyicon::shell_notify_icon_w,
+        "Shell_NotifyIconGetRect"=>fn crate::dlls::notifyicon::shell_notify_icon_get_rect
     }
 }
 

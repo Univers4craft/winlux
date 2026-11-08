@@ -116,6 +116,10 @@ step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q 
 # OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
 step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur
 
+# Listes : clic droit, Maj+F10, renommage en place (#1139) ; 7-Zip montré
+# par SetWindowPlacement (#1159) ; extensions de Notepad++ (#1152) ;
+# cases à cocher des lignes (#1153) ; longue boîte de message (#1161).
+step "Menu contextuel et renommage des listes, SetWindowPlacement, ImageNtHeader, boîte de message (#1139, #1159, #1152, #1153, #1161)" cargo test -q -p winlux -- longue_boite_de_message_tient_dans_l_ecran clic_droit_menu_contextuel_et_renommage_dans_une_liste cases_a_cocher_des_lignes_d_une_liste placement_de_fenetre_deplace_et_affiche en_tetes_nt_d_une_image_projetee
 # Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
 # TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
 step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- reconnaissance_de_gestes_disponible_sans_geste_reconnu moteur_de_gestes_declare_pour_wpf
@@ -123,6 +127,10 @@ step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- r
 # Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
 # DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
 step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux -- glisser_depuis_une_liste_ou_une_arborescence perte_du_focus_garde_les_boutons_de_souris
+step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- icone_standard_par_son_emplacement
+step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
+step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
+step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l_icone_pour_get_rect
 
 # Direct3D 10 et 10.1 sur Direct3D 11 (#1090, étape 2) : conversions des
 # structures propres à Direct3D 10 ; les programmes x86 et x64 d3d1032/d3d1064
