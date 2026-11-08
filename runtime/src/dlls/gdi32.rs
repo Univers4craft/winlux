@@ -510,6 +510,10 @@ fn blit_common(
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
     };
+    // Source en coordonnées logiques de son DC (la destination est
+    // déplacée par gui::record, #1232).
+    let (sdx, sdy) = gui::dc_offset(src_hdc);
+    let (src_x, src_y) = (src_x + sdx, src_y + sdy);
     if width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0 {
         crate::process::set_last_error(87);
         return 0;
@@ -1770,6 +1774,8 @@ pub unsafe extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -
 /// DIB section) ; CLR_INVALID hors de la bitmap ou sans bitmap.
 pub unsafe extern "win64" fn get_pixel(hdc: usize, x: i32, y: i32) -> u32 {
     const CLR_INVALID: u32 = 0xFFFF_FFFF;
+    let (dx, dy) = gui::dc_offset(hdc);
+    let (x, y) = (x + dx, y + dy);
     if x < 0 || y < 0 {
         return CLR_INVALID;
     }
@@ -1982,12 +1988,15 @@ pub extern "win64" fn intersect_clip_rect(
     }
     gui::intersect_dc_clip(
         hdc,
-        Rect {
-            left,
-            top,
-            right,
-            bottom,
-        },
+        gui::rect_to_device(
+            hdc,
+            Rect {
+                left,
+                top,
+                right,
+                bottom,
+            },
+        ),
     )
 }
 
@@ -2003,12 +2012,15 @@ pub extern "win64" fn exclude_clip_rect(
     }
     gui::exclude_dc_clip(
         hdc,
-        Rect {
-            left,
-            top,
-            right,
-            bottom,
-        },
+        gui::rect_to_device(
+            hdc,
+            Rect {
+                left,
+                top,
+                right,
+                bottom,
+            },
+        ),
     )
 }
 
@@ -2028,6 +2040,7 @@ pub unsafe extern "win64" fn get_clip_box(hdc: usize, rect: *mut Rect) -> i32 {
             bottom: h,
         }
     });
+    let (dx, dy) = gui::dc_offset(hdc);
     let (boxed, code) = match gui::dc_clip_box(hdc) {
         Some(c) => match gui::intersect_rects(&c, &base) {
             Some(r) => (r, 2),
@@ -2037,7 +2050,13 @@ pub unsafe extern "win64" fn get_clip_box(hdc: usize, rect: *mut Rect) -> i32 {
         None => (base, 2),
     };
     if !rect.is_null() {
-        *rect = boxed;
+        // Rendu en coordonnées logiques.
+        *rect = Rect {
+            left: boxed.left - dx,
+            top: boxed.top - dy,
+            right: boxed.right - dx,
+            bottom: boxed.bottom - dy,
+        };
     }
     code
 }
@@ -2070,46 +2089,67 @@ pub extern "win64" fn set_map_mode(hdc: usize, mode: i32) -> i32 {
     gui::set_dc_map_mode(hdc, mode)
 }
 
-pub unsafe extern "win64" fn set_viewport_org_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    prev: *mut gui::Point,
-) -> i32 {
+/// Origine de viewport ou de fenêtre (MM_TEXT) : retenue dans le DC et
+/// appliquée au dessin (#1232).
+unsafe fn set_origin(hdc: usize, viewport: bool, x: i32, y: i32, prev: *mut gui::Point) -> i32 {
+    let Some((px, py)) = gui::set_dc_origin(hdc, viewport, x, y) else {
+        return 0;
+    };
     if !prev.is_null() {
-        (*prev).x = 0;
-        (*prev).y = 0;
+        (*prev).x = px;
+        (*prev).y = py;
     }
     1
 }
 
-pub unsafe extern "win64" fn get_viewport_org_ex(_hdc: usize, pt: *mut gui::Point) -> i32 {
-    if !pt.is_null() {
-        (*pt).x = 0;
-        (*pt).y = 0;
+unsafe fn get_origin(hdc: usize, viewport: bool, pt: *mut gui::Point) -> i32 {
+    if pt.is_null() || gui::dc_object_type(hdc).is_none() {
+        return 0;
     }
+    let (w, v) = gui::dc_origins(hdc);
+    let (x, y) = if viewport { v } else { w };
+    (*pt).x = x;
+    (*pt).y = y;
     1
+}
+
+/// OffsetViewportOrgEx / OffsetWindowOrgEx.
+pub unsafe fn offset_origin(
+    hdc: usize,
+    viewport: bool,
+    dx: i32,
+    dy: i32,
+    prev: *mut gui::Point,
+) -> i32 {
+    let (w, v) = gui::dc_origins(hdc);
+    let (x, y) = if viewport { v } else { w };
+    set_origin(hdc, viewport, x + dx, y + dy, prev)
+}
+
+pub unsafe extern "win64" fn set_viewport_org_ex(
+    hdc: usize,
+    x: i32,
+    y: i32,
+    prev: *mut gui::Point,
+) -> i32 {
+    set_origin(hdc, true, x, y, prev)
+}
+
+pub unsafe extern "win64" fn get_viewport_org_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
+    get_origin(hdc, true, pt)
 }
 
 pub unsafe extern "win64" fn set_window_org_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
+    hdc: usize,
+    x: i32,
+    y: i32,
     prev: *mut gui::Point,
 ) -> i32 {
-    if !prev.is_null() {
-        (*prev).x = 0;
-        (*prev).y = 0;
-    }
-    1
+    set_origin(hdc, false, x, y, prev)
 }
 
-pub unsafe extern "win64" fn get_window_org_ex(_hdc: usize, pt: *mut gui::Point) -> i32 {
-    if !pt.is_null() {
-        (*pt).x = 0;
-        (*pt).y = 0;
-    }
-    1
+pub unsafe extern "win64" fn get_window_org_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
+    get_origin(hdc, false, pt)
 }
 
 pub unsafe extern "win64" fn set_viewport_ext_ex(
@@ -2154,12 +2194,26 @@ pub unsafe extern "win64" fn get_window_ext_ex(_hdc: usize, sz: *mut Size) -> i3
     1
 }
 
-pub unsafe extern "win64" fn dp_to_lp(_hdc: usize, _points: *mut gui::Point, _count: i32) -> i32 {
-    1 // En mode MM_TEXT, pas de transformation
+/// MM_TEXT : seules les origines déplacent les points.
+unsafe fn shift_points(hdc: usize, points: *mut gui::Point, count: i32, sign: i32) -> i32 {
+    if points.is_null() || count < 0 {
+        return 0;
+    }
+    let (dx, dy) = gui::dc_offset(hdc);
+    for i in 0..count as usize {
+        let p = &mut *points.add(i);
+        p.x += sign * dx;
+        p.y += sign * dy;
+    }
+    1
 }
 
-pub unsafe extern "win64" fn lp_to_dp(_hdc: usize, _points: *mut gui::Point, _count: i32) -> i32 {
-    1
+pub unsafe extern "win64" fn dp_to_lp(hdc: usize, points: *mut gui::Point, count: i32) -> i32 {
+    shift_points(hdc, points, count, -1)
+}
+
+pub unsafe extern "win64" fn lp_to_dp(hdc: usize, points: *mut gui::Point, count: i32) -> i32 {
+    shift_points(hdc, points, count, 1)
 }
 
 // =====================================================================
