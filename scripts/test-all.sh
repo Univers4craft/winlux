@@ -82,6 +82,12 @@ done <"$logs/steps.txt"
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
     step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
 fi
+# DuplicateHandle et mémoire entre processus (Chromium, Electron, #236) :
+# lancé en CI par test-mingw.sh ; ici aussi dès que clang est là.
+if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
+    step "scripts/test-duplication.sh" sh scripts/test-duplication.sh
+    step "scripts/test-webview2.sh" sh scripts/test-webview2.sh
+fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py

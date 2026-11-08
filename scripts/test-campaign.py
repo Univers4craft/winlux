@@ -622,6 +622,20 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
+broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
+ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
+   and "stop_if_suspended" in (ROOT / "runtime/src/main.rs").read_text()
+   and (SCRIPTS / "test-duplication.sh").exists(),
+   "Electron : handles copiés entre processus, enfant suspendu une fois chargé")
+permission_tool = (SCRIPTS / "winlux-permission.py").read_text(encoding="utf-8")
+ok('"sandbox"' in permission_tool and "Lancer « {app} » sans son isolation ?" in permission_tool
+   and '"sandbox": "Lancer sans isolation (Chromium, Electron)"' in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+   "Electron : bac à sable impossible → proposition claire, choix visible dans Paramètres")
+ok((SCRIPTS / "winlux-webview.py").exists() and (SCRIPTS / "test-webview2.sh").exists()
+   and "winlux-webview" in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")
+   and '"webview2loader"' in (ROOT / "runtime/src/dlls/mod.rs").read_text(encoding="utf-8"),
+   "WebView2 : WebView2Loader.dll maison, moteur WebKitGTK livré à la demande")
 # #662 : dictée vocale (Windows + H) et sous-titres en direct (Windows + Ctrl + L),
 # modèle local vérifié par empreinte ; un compte existant reçoit les deux raccourcis.
 with tempfile.TemporaryDirectory() as directory:
@@ -754,6 +768,17 @@ ok("def move_pin" in (SCRIPTS / "winlux-start-menu.py").read_text()
    and "test-start-pin-move.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : épingle déplacée par clic droit (Déplacer) et glisser-déposer, ordre gardé (#925)")
 
+# #712 : boîtes non modales Rechercher et Remplacer (FindText, ReplaceText).
+_find = (ROOT / "runtime/src/dlls/comdlg32_find.rs").read_text()
+ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
+   and "fn find32" in (ROOT / "runtime/src/wow32/comdlg.rs").read_text()
+   and "registered_id" in (ROOT / "runtime/src/dlls/user32.rs").read_text()
+   and "find_replace()" in (ROOT / "testexe/src/bin/commdlg_suite.rs").read_text()
+   and "find_replace32()" in (ROOT / "testc/wow32/dlg32.c").read_text(),
+   "Rechercher/Remplacer : boîte non modale, FINDMSGSTRING au propriétaire, x86 et crochet (#712)")
+ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
+   "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
+
 # ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
 ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
    and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
@@ -766,6 +791,11 @@ ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
    and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
    and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
    "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+# #923 : Paramètres > Navigateurs, éditeur, version et source avant l'installation.
+ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
+   and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
+   and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
