@@ -274,6 +274,15 @@ for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un 
                       ("RENAME_ALL", "Ctrl+A en renommage"),
                       ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
     ok(marker in explorer, f"Explorateur : {label}")
+# #886/#890/#891 : icônes Prisme par type, Terminal au trait, thème suivi en direct.
+for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)"),
+                      ("fn windows_program", "pastille Windows réservée aux .exe/.msi (#890)"),
+                      ("Kind::Script", "scripts shell à part des programmes (#890)")):
+    ok(marker in explorer, f"Explorateur : {label}")
+ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
+   "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
+   "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
 # ── Widgets Windows+W (#293, passage en VM) ────────────────────────────────
 widgets = (SCRIPTS / "winlux-widgets.py").read_text()
@@ -464,7 +473,7 @@ with tempfile.TemporaryDirectory() as directory:
 
 # ── Sauvegarde des documents (damien, 2026-11-05) ─────────────────────────
 backup_tool = (SCRIPTS / "winlux-backup.sh").read_text()
-ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38])' in settings,
+ok("PAGE_BACKUP = 38" in about_pages and '(_t("Comptes"), [33, 38' in settings,
    "Paramètres › Comptes › Sauvegarde (page 38, native seulement)")
 ok("staging()" in backup_tool and 'chgrp "$gid" "$d"' in backup_tool,
    "sauvegarde : état lisible par le compte sur le système installé (relais root, plus de fichiers 0600 root)")
@@ -626,13 +635,23 @@ root_relay = (SCRIPTS / "winlux-root.py").read_text()
 ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exists()
    and (SCRIPTS / "test-vpn-hotspot.py").exists()
    and 'if tool == "winlux-vpn":' in root_relay and 'if tool == "winlux-hotspot":' in root_relay
-   and '_t("VPN"), _t("Point d’accès sans fil mobile")]' in (SCRIPTS / "winlux-settings.py").read_text()
+   and '_t("VPN"), _t("Point d’accès sans fil mobile")' in (SCRIPTS / "winlux-settings.py").read_text()
    and "def tunnels():" in (SCRIPTS / "winlux-tray.py").read_text()
    and '"vpn": side_available("winlux-vpn")' in (SCRIPTS / "winlux-popup.py").read_text(),
    "Paramètres > VPN et Point d'accès sans fil mobile, relais root, zone de notification, Réglages rapides")
 # #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
 ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
    "Paramètres : interrupteurs activés à la couleur d'accent")
+# #661 : contrôle parental. Le compte surveillé ne lit ni ne modifie ses
+# réglages par le relais root, et ne déverrouille pas hors du temps permis.
+parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py")], capture_output=True, text=True,
+                          timeout=600)
+ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
+   and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
+   "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
+ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
+   "relais root : vrai code de retour malgré SIGCHLD ignoré")
 # #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
 # en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
 runtime_dlls = ROOT / "runtime/src/dlls"
@@ -647,6 +666,17 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
+# #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
+# à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
+# PC (lien et code pour un autre appareil), claude.exe jamais lancé dans un dossier personnel.
+assistant_source = (SCRIPTS / "winlux-assistant.py").read_text()
+ok("assistant_setups" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "org.winlux.AssistantSetup." in assistant_source
+   and 'LLAMA_SHA256 = "' in assistant_source and 'LOCAL_MODEL_REVISION = "' in assistant_source
+   and 'CODEX_VERSION = "' in assistant_source and "releases/latest" not in assistant_source
+   and "def has_browser" in assistant_source and '"--device-auth"' in assistant_source
+   and "cwd=work_dir()" in assistant_source and "cwd=str(HOME)" not in assistant_source,
+   "Assistant IA : trois activations possibles, IA locale téléchargeable, connexion sans navigateur, sans question de fichiers")
 # ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
 ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
    and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
@@ -654,5 +684,28 @@ ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
 ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
    and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
+# #914 : infobulle réseau au nom du Wi-Fi, pas de la carte (« wlo1 »).
+ok("def wifi_name" in (SCRIPTS / "winlux-tray.py").read_text()
+   and (SCRIPTS / "test-tray-wifi-name.py").exists()
+   and "test-tray-wifi-name.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre : infobulle Wi-Fi au nom du réseau (#914)")
+# #915 : icône d'une fenêtre .exe lancée avec un chemin relatif ou Windows.
+ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+
+# ── Barre flottante en deux capsules, maquette 5-B (#889) ──────────────────
+ok('status_ids="40 42 ${tray:+10 }' in (SCRIPTS / "winlux-control.sh").read_text()
+   and "/panels/panel-2/plugin-ids" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "FLOAT_MARGIN" in (SCRIPTS / "winlux-personalize.py").read_text()
+   and "deux capsules" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre flottante : capsule centrale et capsule d'état en bas à droite, marge transparente, retour au classique sans perte (#889)")
+
+# ── Bascule gauche ↔ centre sans relancer la barre (#920) ──────────────────
+ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
+   "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

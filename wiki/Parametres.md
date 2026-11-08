@@ -7,7 +7,7 @@
 1. **Masqué plutôt que grisé.** Une page ou une section qui ne correspond à rien sur la machine n'apparaît pas : pas de page Bluetooth sans adaptateur ni périphérique, pas de page Son sans carte son, pas de Lecteurs réseau sans outil de montage, pas de réglage CPU que le matériel ne permet pas. La détection est faite au démarrage par `winlux-hardware`.
 2. **Les réglages matériels avancés vivent ici, et seulement ici** (processeur, GPU, alimentation), après détection réelle du matériel.
 
-## Les 42 pages
+## Les 43 pages
 
 | # | Page | Ce qu'on y règle |
 |---|---|---|
@@ -52,6 +52,7 @@
 | 39 | **Applications installées** | Tous les logiciels de l'ordinateur, Linux et Windows, sur une seule liste : lanceurs rattachés à leur paquet APT, Flatpak, Snap, programmes Windows inscrits dans le registre (msi, NSIS, Inno…) et programmes portables déjà lancés. Recherche, tri par nom, taille ou date d'installation, filtre (Linux, Windows, désinstallables, composants du système), icône, version, éditeur, taille sur disque. **Désinstaller** passe par le relais root et le Contrôle de compte pour APT et Snap, par `winlux --setup --remove` pour un programme Windows ; les composants dont Winlux a besoin restent grisés. `ms-settings:appsfeatures`, `appwiz.cpl`, Windows + X. Page native seulement. |
 | 40 | **VPN** | Connexions WireGuard (fichier `.conf`) et OpenVPN (fichier `.ovpn`, certificats cités inclus, nom d’utilisateur et mot de passe) : ajouter, se connecter, se déconnecter, identifiants, supprimer. Aucun fournisseur proposé ni compte en ligne. Un VPN « tout le trafic » rend ses DNS exclusifs. Passe par `winlux-vpn` en root via le relais `winlux-root` ; masquée sans WireGuard ni OpenVPN. `ms-settings:network-vpn`. Page native seulement. |
 | 41 | **Point d’accès sans fil mobile** | Partage la connexion Internet (Ethernet, téléphone en USB…) en Wi-Fi : interrupteur, connexion partagée, nom, mot de passe, bande, sécurité WPA2/WPA3 (bouton Modifier), appareils connectés (nom, adresse IP et physique). Refuse clairement quand la seule carte Wi-Fi porte déjà Internet. Passe par `winlux-hotspot` en root via le relais ; masquée sans carte capable de point d’accès ou sans dnsmasq. `ms-settings:network-mobilehotspot`. Page native seulement. |
+| 42 | **Contrôle parental** | Comptes › Contrôle parental, entièrement local : un administrateur surveille un compte standard. Temps d'écran par jour et plage horaire, avertissement 5 puis 1 minute avant la fin, écran de blocage où un adulte accorde du temps avec son mot de passe ; applications bloquées (.exe et Linux) ; sites bloqués ou seulement autorisés, recherches protégées (DNS filtrant propre au compte) ; activité des 7 derniers jours. Le compte surveillé ne voit que son temps restant. `ms-settings:family-group`. Page native seulement ([docs/CONTROLE-PARENTAL.md](https://github.com/Univers4craft/winlux/blob/master/docs/CONTROLE-PARENTAL.md)). |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

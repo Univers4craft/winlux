@@ -283,6 +283,23 @@ def taskbar_preferences():
     return values
 
 
+def taskbar_alignment():
+    """Alignement choisi (TASKBAR_ALIGN), à défaut l'étirement du séparateur 3."""
+    path = Path(os.environ.get("WINLUX_CONTROL_ROOT", "") + "/etc/winlux/preferences.conf")
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("TASKBAR_ALIGN=") and line[14:].strip() in ("left", "center"):
+                return line[14:].strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        expand = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", "/plugins/plugin-3/expand"],
+                                capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        expand = ""
+    return "left" if expand == "false" else "center"
+
+
 def panel_dark():
     """La barre suit le thème GTK du compte (thème clair = barre claire)."""
     forced = os.environ.get("WINLUX_PANEL_THEME")
@@ -410,6 +427,29 @@ def tunnels():
     return vpns, hotspot
 
 
+def wifi_name(interface):
+    """Nom du réseau Wi-Fi de l'interface : « Wi-Fi : wlo1 » ne disait rien (#914).
+
+    nmcli donne le nom de la connexion active ; sans NetworkManager, iw donne
+    le SSID. À défaut, le nom de l'interface reste affiché."""
+    def nmcli(out):
+        return out.strip()
+
+    def iw(out):
+        return next((line.split(":", 1)[1].strip() for line in out.splitlines()
+                     if line.strip().startswith("SSID:")), "")
+
+    for command, pick in ((["nmcli", "-t", "-g", "GENERAL.CONNECTION", "device", "show", interface], nmcli),
+                          (["iw", "dev", interface, "link"], iw)):
+        try:
+            name = pick(subprocess.run(command, capture_output=True, text=True, timeout=2).stdout)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if name and name != "--":
+            return name
+    return interface
+
+
 def network_part():
     try:
         routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
@@ -423,7 +463,8 @@ def network_part():
     else:
         body = f'<rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="{color}" stroke-width="1.6"/><path d="M12 16v5m-5 0h10" stroke="{color}" stroke-width="1.6"/>'
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
-    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(path.name for path in active) if active else _t("Réseau déconnecté")
+    names = [wifi_name(path.name) if wireless else path.name for path in active]
+    tooltip = (_t("Wi-Fi : ") if wireless else _t("Ethernet : ")) + ", ".join(names) if active else _t("Réseau déconnecté")
     # VPN actif : petit bouclier sur l'icône réseau, comme Windows 11 ; point
     # d'accès sans fil mobile : ondes en coin et une ligne de l'infobulle.
     vpns, hotspot = tunnels()
@@ -524,6 +565,11 @@ def render(kind, parent=None):
             ids = []
         # Barre flottante : la barre se centre d'elle-même, pas de contrepoids.
         floating = taskbar_preferences()["STYLE"] == "floating"
+        # Barre à gauche : contrepoids d'un pixel, à la même place qu'au centre
+        # (#920). winlux-control enregistre l'alignement avant de rafraîchir ce
+        # greffon, puis seulement étire ou non le séparateur 3.
+        if taskbar_alignment() == "left":
+            floating = True
         if not floating and 3 in ids and 8 in ids and ids[ids.index(3) + 1:ids.index(3) + 2] == [13]:
             right = set(ids[ids.index(8) + 1:])
             width = _settled_balance(ids, right, set(ids[:ids.index(3)]), parent)

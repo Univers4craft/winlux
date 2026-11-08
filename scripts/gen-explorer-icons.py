@@ -50,7 +50,14 @@ COLOR = [
     ("Video", "type-video"),
     ("Image", "type-image"),
     ("Exe", "type-exe"),
-    ("Code", "type-script"),
+    ("Code", "type-code"),
+    ("Script", "type-script"),
+    ("Web", "type-web"),
+    ("Document", "type-document"),
+    ("Spreadsheet", "type-tableur"),
+    ("Presentation", "type-presentation"),
+    ("Font", "type-police"),
+    ("Globe", "reseau"),
     ("DiskImage", "type-iso"),
     ("File", "fichier-inconnu"),
 ]
@@ -64,6 +71,12 @@ GLYPHS = [
     ("Sort", "trier"),
     ("View", "afficher"),
     ("New", "nouveau"),
+    ("Terminal", "terminal"),
+    ("Search", "rechercher"),
+    ("Details", "details"),
+    ("More", "options"),
+    ("ChevronDown", "chevron-bas"),
+    ("Split", "double-volet"),
 ]
 
 

@@ -215,4 +215,23 @@ ok("home::regression();" in explorer and "pub(super) unsafe fn regression()" in 
 ok(all(w in home for w in ('b"Lecteurs"', 'b"Drives"', 'b"Unidades"', 'b"Laufwerke"')),
    "Accueil : titres de section dans les quatre langues")
 
+# ── #886, #890, #891 : icônes Prisme et thème en direct ─────────────────────
+gen = (ROOT / "scripts/gen-explorer-icons.py").read_text(encoding="utf-8")
+prisme = (ROOT / "scripts/generer-icones.py").read_text(encoding="utf-8")
+icons_dir = ROOT / "assets/icons/explorateur"
+for variant, name in (("Spreadsheet", "type-tableur"), ("Presentation", "type-presentation"),
+                      ("Font", "type-police"), ("Web", "type-web"), ("Code", "type-code"),
+                      ("Script", "type-script"), ("Terminal", "terminal"), ("Search", "rechercher")):
+    ok(f'("{variant}", "{name}")' in gen and all((icons_dir / f"{name}-{t}.png").exists() for t in (16, 20, 24, 32, 48)),
+       f"icône Prisme {name} générée et intégrée")
+    ok(f'"{name}"' in prisme, f"{name} produite par scripts/generer-icones.py (pas à la main)")
+data = (SHELL / "explorer_icons_data.rs").read_text(encoding="utf-8")
+ok("Spreadsheet," in data and "Terminal," in data, "explorer_icons_data.rs régénéré")
+ok('if any(&[b"exe", b"com", b"msi", b"appimage"])' in explorer and 'b"sh", b"bash"' in explorer,
+   "#890 : .sh classé script, plus programme Windows")
+ok("types_regression();" in home_rs, "#890 : types, pastille et libellés vérifiés par explorer_regression")
+demo = (ROOT / "testexe/src/bin/gui_demo.rs").read_text(encoding="utf-8")
+ok("if gfx::theme_animating() {\n                        InvalidateRect(hwnd" in demo,
+   "#891 : la transition clair/sombre est repeinte jusqu'au bout dans une fenêtre ouverte")
+
 print(f"test-explorer-fixes : {checks} vérifications OK")
