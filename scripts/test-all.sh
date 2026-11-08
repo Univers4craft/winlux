@@ -187,6 +187,23 @@ step "Contexte d'effet Direct2D en version 2 (#1206)" cargo test -q -p winlux --
 # un magasin en mémoire par CertAddCertificateLinkToStore.
 step "CertAddCertificateLinkToStore pour X509Chain (#1207)" cargo test -q -p winlux -- chemin_schannel_de_curl
 
+# Étapes déposées dans scripts/test-all.d/ : un fichier par issue
+# (« 1234-sujet.sh »), lu par « . » dans l'ordre des noms, qui appelle step ou
+# skip et peut tester $quick. Deux PR n'ajoutent plus leur étape au même
+# endroit de ce fichier, donc ne sont plus en conflit entre elles.
+deposees=0
+for depot in scripts/test-all.d/*.sh; do
+    test -f "$depot" || continue
+    deposees=$((deposees + 1))
+    . "./$depot"
+done
+step "scripts/test-all.d chargé ($deposees fichier(s))" test -f scripts/test-all.d/0000-dossier-charge.sh -a "$deposees" -ge 1
+
+# Bibliothèques de types (#1108) : CreateTypeLib2/ICreateTypeInfo2, LayOut,
+# ITypeLib/ITypeInfo, RegisterTypeLib puis LoadRegTypeLib, LoadTypeLib
+# (stdole2.tlb intégrée) et Invoke d'une interface double.
+step "Bibliothèques de types créées, inscrites et appelées (#1108)" cargo test -q -p winlux -- bibliotheque_de_types_creee_inscrite_et_appelee
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
