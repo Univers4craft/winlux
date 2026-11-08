@@ -126,9 +126,9 @@ step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux
 
 # Direct3D 12 : shaders DXBC traduits sur OpenGL, signature racine et
 # tampons de constantes (#1177). Le rendu demande un affichage : xvfb-run.
-step "Direct3D 12 : signature racine et tampons de constantes (#1177)" cargo test -q -p winlux -- root_signature_round_trip root_arguments_become_constant_buffers
+step "Direct3D 12 : signature racine et tampons de constantes (#1177)" cargo test -q -p winlux -- root_signature_round_trip root_arguments_become_constant_buffers echantillonneurs_des_tables_et_statiques
 if command -v xvfb-run >/dev/null 2>&1; then
-    step "Direct3D 12 : shaders traduits sur OpenGL (#1177)" xvfb-run -a cargo test -q -p winlux shaders_traduits_et_constantes_racine_opengl
+    step "Direct3D 12 : shaders traduits sur OpenGL (#1177)" xvfb-run -a cargo test -q -p winlux -- shaders_traduits_et_constantes_racine_opengl texture_et_echantillonneur_statique_opengl
 fi
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.

@@ -10,7 +10,9 @@
 //!   (au moment de l'exécution, comme sur le GPU) puis lié en bloc uniforme
 //!   sur `étage * 16 + N`, la convention de `dxbc.rs`.
 //!
-//! Textures et échantillonneurs : étape suivante de #1177.
+//! - Textures (SRV d'une table) et échantillonneurs (table ou statiques) :
+//!   unité `étage * 16 + tN`, état de l'échantillonneur `sM` utilisé avec
+//!   la texture posé sur la même unité (`Shader::sampler_pairs`).
 
 use super::{bounded, descriptor_from_gpu, DESC_CBV, DESC_SIZE};
 use crate::dlls::dxbc::{self, SigElement, Stage};
@@ -45,10 +47,52 @@ pub(super) enum Param {
     Uav { reg: u32, space: u32 },
 }
 
+/// État d'échantillonnage retenu : filtre D3D12_FILTER et adressage U, V, W.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct SamplerState {
+    pub filter: u32,
+    pub address: [u32; 3],
+}
+
+impl SamplerState {
+    /// D3D12_SAMPLER_DESC ou D3D12_STATIC_SAMPLER_DESC (mêmes 4 premiers mots).
+    ///
+    /// # Safety
+    /// `p` pointe au moins 16 octets lisibles.
+    pub(super) unsafe fn read(p: *const u8) -> SamplerState {
+        let r = |o: usize| std::ptr::read_unaligned(p.add(o) as *const u32);
+        SamplerState {
+            filter: r(0),
+            address: [r(4), r(8), r(12)],
+        }
+    }
+}
+
+/// États des descripteurs d'échantillonneur : le descripteur garde un
+/// indice dans cette table (champ `va`), ce qui survit à CopyDescriptors.
+static SAMPLERS: std::sync::Mutex<Vec<SamplerState>> = std::sync::Mutex::new(Vec::new());
+
+/// Indice (à partir de 1) d'un état d'échantillonneur.
+pub(super) fn intern_sampler(s: SamplerState) -> u64 {
+    let mut t = SAMPLERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = t.iter().position(|x| *x == s) {
+        return i as u64 + 1;
+    }
+    t.push(s);
+    t.len() as u64
+}
+
+fn sampler_at(i: u64) -> Option<SamplerState> {
+    let t = SAMPLERS.lock().unwrap_or_else(|e| e.into_inner());
+    t.get((i as usize).checked_sub(1)?).copied()
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct RootLayout {
     /// (paramètre, visibilité).
     pub params: Vec<(Param, u32)>,
+    /// Échantillonneurs statiques : (état, registre, visibilité).
+    pub static_samplers: Vec<(SamplerState, u32, u32)>,
 }
 
 fn rd(b: &[u8], o: usize) -> Option<u32> {
@@ -116,7 +160,21 @@ fn parse_rts0(d: &[u8]) -> Option<RootLayout> {
         };
         params.push((param, vis));
     }
-    Some(RootLayout { params })
+    let mut static_samplers = Vec::new();
+    let (ns, sat) = (rd(d, 12)?.min(64) as usize, rd(d, 16)? as usize);
+    for i in 0..ns {
+        let q = sat + i * 52;
+        let Some(b) = d.get(q..q + 52) else { break };
+        // Space 0 seulement (registre à 40, espace à 44, visibilité à 48).
+        if rd(b, 44)? == 0 {
+            let st = unsafe { SamplerState::read(b.as_ptr()) };
+            static_samplers.push((st, rd(b, 40)?, rd(b, 48)?));
+        }
+    }
+    Some(RootLayout {
+        params,
+        static_samplers,
+    })
 }
 
 /// Sérialise D3D12_ROOT_SIGNATURE_DESC (version 1, 1.0) ou sa version 1.1
@@ -296,6 +354,60 @@ pub(super) fn constant_buffers(root: &RootLayout, args: &[RootArg]) -> Vec<CbBin
     out
 }
 
+/// Texture (SRV) ou échantillonneur à lier : visibilité, registre, poignée
+/// GPU du descripteur.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct DescBinding {
+    pub vis: u32,
+    pub reg: u32,
+    pub handle: u64,
+}
+
+/// Descripteurs des tables pour un type de plage (0 SRV, 3 échantillonneur),
+/// espace 0, 16 au plus par plage non bornée.
+pub(super) fn table_bindings(root: &RootLayout, args: &[RootArg], kind: u32) -> Vec<DescBinding> {
+    let mut out = Vec::new();
+    for (i, (param, vis)) in root.params.iter().enumerate() {
+        let (Param::Table(ranges), Some(RootArg::Table(base))) = (param, args.get(i)) else {
+            continue;
+        };
+        let mut next = 0u32;
+        for r in ranges {
+            let start = if r.offset == u32::MAX { next } else { r.offset };
+            let count = r.count.min(16);
+            if r.kind == kind && r.space == 0 {
+                for k in 0..count {
+                    out.push(DescBinding {
+                        vis: *vis,
+                        reg: r.base + k,
+                        handle: base + (start + k) as u64 * DESC_SIZE as u64,
+                    });
+                }
+            }
+            next = start.saturating_add(count);
+        }
+    }
+    out
+}
+
+/// États d'échantillonnage vus par les shaders : statiques, puis tables.
+pub(super) fn samplers(root: &RootLayout, args: &[RootArg]) -> Vec<(u32, u32, SamplerState)> {
+    let mut out: Vec<(u32, u32, SamplerState)> = root
+        .static_samplers
+        .iter()
+        .map(|(s, reg, vis)| (*vis, *reg, *s))
+        .collect();
+    for b in table_bindings(root, args, 3) {
+        if let Some(st) = descriptor_from_gpu(b.handle)
+            .filter(|d| d.kind == super::DESC_SAMPLER)
+            .and_then(|d| sampler_at(d.va))
+        {
+            out.push((b.vis, b.reg, st));
+        }
+    }
+    out
+}
+
 /// Octets d'un tampon de constantes au moment du dessin.
 unsafe fn cb_bytes(src: &CbSource) -> Option<Vec<u8>> {
     match src {
@@ -316,6 +428,9 @@ pub(super) struct Translated {
     pub vs: String,
     pub ps: Option<String>,
     pub vs_inputs: Vec<SigElement>,
+    /// (texture, échantillonneur) utilisés ensemble, par étage.
+    pub vs_pairs: Vec<(u32, u32)>,
+    pub ps_pairs: Vec<(u32, u32)>,
     /// Clé du programme GL dans le cache du moteur.
     pub key: u64,
 }
@@ -338,7 +453,7 @@ pub(super) fn translate(vs: &[u8], ps: &[u8]) -> Option<Translated> {
         None
     } else {
         match dxbc::translate(ps) {
-            Ok(s) if s.stage == Stage::Pixel => Some(s.glsl),
+            Ok(s) if s.stage == Stage::Pixel => Some(s),
             Ok(_) => return None,
             Err(e) => {
                 log_warn!("d3d12", "pixel shader non traduit : {e}");
@@ -348,10 +463,16 @@ pub(super) fn translate(vs: &[u8], ps: &[u8]) -> Option<Translated> {
     };
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&(vs, ps), &mut h);
+    let ps_pairs = p
+        .as_ref()
+        .map(|s| s.sampler_pairs.clone())
+        .unwrap_or_default();
     Some(Translated {
         vs: v.glsl,
-        ps: p,
+        ps: p.map(|s| s.glsl),
         vs_inputs: v.inputs,
+        vs_pairs: v.sampler_pairs,
+        ps_pairs,
         key: std::hash::Hasher::finish(&h),
     })
 }
@@ -393,6 +514,54 @@ fn attr_format(f: u32) -> Option<(i32, u32, u8, bool)> {
 pub(super) struct GlShaders {
     programs: HashMap<u64, u32>,
     ubos: Vec<u32>,
+    sampler_objects: HashMap<(u32, [u32; 3]), u32>,
+}
+
+/// Objet échantillonneur GL d'un état D3D12 (filtre ponctuel ou linéaire,
+/// adressage répété, miroir, bord ou borné).
+unsafe fn gl_sampler(
+    g: &gl::GlFunctions,
+    cache: &mut HashMap<(u32, [u32; 3]), u32>,
+    s: SamplerState,
+) -> u32 {
+    if let Some(&o) = cache.get(&(s.filter, s.address)) {
+        return o;
+    }
+    const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
+    const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
+    const GL_TEXTURE_WRAP_S: u32 = 0x2802;
+    const GL_TEXTURE_WRAP_T: u32 = 0x2803;
+    const GL_TEXTURE_WRAP_R: u32 = 0x8072;
+    const GL_NEAREST: i32 = 0x2600;
+    const GL_LINEAR: i32 = 0x2601;
+    let mut o = 0;
+    (g.GenSamplers)(1, &mut o);
+    // D3D12_FILTER : bit 2 = grossissement linéaire, bit 4 = réduction
+    // linéaire ; l'anisotrope (0x55) est rendu en linéaire.
+    let lin = |bit: u32| {
+        if s.filter & bit != 0 {
+            GL_LINEAR
+        } else {
+            GL_NEAREST
+        }
+    };
+    (g.SamplerParameteri)(o, GL_TEXTURE_MAG_FILTER, lin(0x4));
+    (g.SamplerParameteri)(o, GL_TEXTURE_MIN_FILTER, lin(0x10));
+    for (pname, a) in [GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R]
+        .into_iter()
+        .zip(s.address)
+    {
+        let mode: i32 = match a {
+            2 => 0x8370, // MIRROR -> GL_MIRRORED_REPEAT
+            3 => 0x812F, // CLAMP -> GL_CLAMP_TO_EDGE
+            4 => 0x812D, // BORDER -> GL_CLAMP_TO_BORDER
+            5 => 0x8742, // MIRROR_ONCE -> GL_MIRROR_CLAMP_TO_EDGE
+            _ => 0x2901, // WRAP -> GL_REPEAT
+        };
+        (g.SamplerParameteri)(o, pname, mode);
+    }
+    cache.insert((s.filter, s.address), o);
+    o
 }
 
 impl GlShaders {
@@ -462,6 +631,7 @@ impl GlShaders {
     ///
     /// # Safety
     /// Contexte GL courant ; le tampon de sommets est lié à GL_ARRAY_BUFFER.
+    #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn bind(
         &mut self,
         g: &gl::GlFunctions,
@@ -470,6 +640,8 @@ impl GlShaders {
         stride: u32,
         base: usize,
         cbs: &[CbBinding],
+        textures: &[(u32, u32, u32)],
+        samplers: &[(u32, u32, SamplerState)],
     ) -> Option<Vec<u32>> {
         let prog = self.program(g, t);
         if prog == 0 {
@@ -525,6 +697,31 @@ impl GlShaders {
             }
         }
         (g.BindBuffer)(gl::GL_UNIFORM_BUFFER, 0);
+        // Textures (visibilité, registre, texture GL) et leur échantillonneur.
+        let stages = [
+            (Stage::Vertex, VIS_VERTEX, &t.vs_pairs),
+            (Stage::Pixel, VIS_PIXEL, &t.ps_pairs),
+        ];
+        for (stage, wanted, pairs) in stages {
+            let visible = |vis: u32| vis == VIS_ALL || vis == wanted;
+            for &(vis, reg, tex) in textures {
+                if !visible(vis) || reg >= 16 {
+                    continue;
+                }
+                let unit = stage.binding_base() + reg;
+                (g.ActiveTexture)(gl::GL_TEXTURE0 + unit);
+                (g.BindTexture)(gl::GL_TEXTURE_2D, tex);
+                let state = pairs
+                    .iter()
+                    .find(|p| p.0 == reg)
+                    .and_then(|p| samplers.iter().find(|s| visible(s.0) && s.1 == p.1))
+                    .map(|s| s.2)
+                    .unwrap_or_default();
+                let o = gl_sampler(g, &mut self.sampler_objects, state);
+                (g.BindSampler)(unit, o);
+            }
+        }
+        (g.ActiveTexture)(gl::GL_TEXTURE0);
         Some(enabled)
     }
 }
@@ -608,6 +805,7 @@ mod tests {
                 ),
                 (Param::Cbv { reg: 0, space: 0 }, 1),
             ],
+            ..Default::default()
         };
         let args = vec![
             RootArg::Table(0x1000),

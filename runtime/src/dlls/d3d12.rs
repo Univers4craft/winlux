@@ -537,6 +537,9 @@ struct DrawCall {
     shaders: Option<std::sync::Arc<shader::Translated>>,
     elements: Vec<shader::Element>,
     cbs: Vec<shader::CbBinding>,
+    /// Textures (SRV des tables) et états d'échantillonnage.
+    textures: Vec<shader::DescBinding>,
+    samplers: Vec<(u32, u32, shader::SamplerState)>,
 }
 
 enum Cmd {
@@ -1536,8 +1539,13 @@ unsafe extern "win64" fn dev_create_dsv(
 ) {
     write_descriptor(handle, descriptor(DESC_DSV, res, view_format(desc, res)));
 }
-unsafe extern "win64" fn dev_create_sampler(_: *mut Obj, _desc: *const u8, handle: usize) {
-    write_descriptor(handle, descriptor(DESC_SAMPLER, std::ptr::null_mut(), 0));
+unsafe extern "win64" fn dev_create_sampler(_: *mut Obj, desc: *const u8, handle: usize) {
+    let mut d = descriptor(DESC_SAMPLER, std::ptr::null_mut(), 0);
+    if !desc.is_null() {
+        // État retenu dans une table : le descripteur n'en garde que l'indice.
+        d.va = shader::intern_sampler(shader::SamplerState::read(desc));
+    }
+    write_descriptor(handle, d);
 }
 
 unsafe fn copy_range(dst: usize, src: usize, n: u32) {
@@ -2305,9 +2313,13 @@ unsafe fn push_draw(
         }
         _ => return,
     };
-    let cbs = match (&shaders, &l.root) {
-        (Some(_), Some(root)) => shader::constant_buffers(root, &l.root_args),
-        _ => Vec::new(),
+    let (cbs, textures, samplers) = match (&shaders, &l.root) {
+        (Some(_), Some(root)) => (
+            shader::constant_buffers(root, &l.root_args),
+            shader::table_bindings(root, &l.root_args, 0),
+            shader::samplers(root, &l.root_args),
+        ),
+        _ => Default::default(),
     };
     let target = st.rt as *mut Obj;
     let Some(r) = res_of(target) else { return };
@@ -2334,6 +2346,8 @@ unsafe fn push_draw(
         shaders,
         elements,
         cbs,
+        textures,
+        samplers,
     })));
 }
 
@@ -2874,6 +2888,26 @@ unsafe fn ensure_gpu(dev: &Device, r: &Res) {
     }
 }
 
+/// Texture GL d'une ressource 2D lue par un shader : créée au premier
+/// usage, téléversée quand la copie processeur est plus récente.
+unsafe fn gl_texture_of(dev: &Device, r: &Res) -> Option<u32> {
+    if r.desc.dimension != DIM_TEX2D {
+        return None;
+    }
+    {
+        let mut d = lock(&r.data);
+        if d.gpu.is_none() {
+            d.gpu = Some(create_image(dev, &r.desc)?);
+            d.cpu_newer = true;
+        }
+    }
+    ensure_gpu(dev, r);
+    match lock(&r.data).gpu.as_ref() {
+        Some(GpuImage::Gl { tex, .. }) => Some(*tex),
+        _ => None,
+    }
+}
+
 unsafe fn bounded(addr: u64, size: u32) -> Option<&'static [u8]> {
     let (o, off) = va_lookup(addr)?;
     let r = res_of(o)?;
@@ -2899,12 +2933,29 @@ unsafe fn draw(dev: &Device, dc: &DrawCall) {
         return;
     }
     ensure_gpu(dev, t);
+    // Textures lues par les shaders traduits : image GL créée et remplie à
+    // la demande (#1177).
+    let textures: Vec<(u32, u32, u32)> = if matches!(dev.gpu, Gpu::Gl(_)) {
+        dc.textures
+            .iter()
+            .filter_map(|b| {
+                let d = descriptor_from_gpu(b.handle).filter(|d| d.kind == DESC_SRV)?;
+                let r = res_of(d.resource)?;
+                if std::ptr::eq(r, t) {
+                    return None;
+                }
+                gl_texture_of(dev, r).map(|tex| (b.vis, b.reg, tex))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut d = lock(&t.data);
     let done = match (&dev.gpu, d.gpu.as_ref()) {
         (Gpu::Vk(ctx), Some(GpuImage::Vk(img))) => vk_draw(ctx, img, dc, vb, ib),
         (Gpu::Gl(m), Some(GpuImage::Gl { fbo, .. })) => {
             let mut b = lock(m);
-            b.current() && b.draw(*fbo, dc, vb, ib)
+            b.current() && b.draw(*fbo, dc, vb, ib, &textures)
         }
         _ => {
             warn_once(
@@ -3207,6 +3258,7 @@ impl GlBackend {
         dc: &DrawCall,
         vb: &[u8],
         ib: Option<(&[u8], u32)>,
+        textures: &[(u32, u32, u32)],
     ) -> bool {
         let mode = match dc.topology {
             1 => gl::GL_POINTS,
@@ -3256,10 +3308,16 @@ impl GlBackend {
         };
         let mut enabled = Vec::new();
         if let Some(t) = &dc.shaders {
-            match self
-                .shaders
-                .bind(g, t, &dc.elements, dc.vb.2, base, &dc.cbs)
-            {
+            match self.shaders.bind(
+                g,
+                t,
+                &dc.elements,
+                dc.vb.2,
+                base,
+                &dc.cbs,
+                textures,
+                &dc.samplers,
+            ) {
                 Some(e) => enabled = e,
                 None => {
                     (g.BindBuffer)(gl::GL_ARRAY_BUFFER, 0);
@@ -4454,6 +4512,249 @@ mod tests {
         }
         assert_eq!(obj_release(dev), 0, "toutes les références rendues");
         pixels
+    }
+
+    /// Quad texturé : texture 2×2 (haut rouge, bas vert) remplie par
+    /// CopyTextureRegion, SRV dans une table, échantillonneur statique
+    /// ponctuel borné. Rend les pixels de la cible 8×8.
+    unsafe fn scenario_texture(gpu: Gpu) -> Vec<u8> {
+        const SRC: &str = "Texture2D tex : register(t0);\n\
+            SamplerState smp : register(s0);\n\
+            struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n\
+            V vs_main(float2 p : POSITION, float2 uv : TEXCOORD0) {\n\
+                V o; o.pos = float4(p, 0.0, 1.0); o.uv = uv; return o;\n\
+            }\n\
+            float4 ps_main(V i) : SV_Target { return tex.Sample(smp, i.uv); }\n";
+        let compile = |entry: &str, target: &str| {
+            let mut inc = |_: &str, _: bool| None;
+            let c = crate::dlls::hlsl::compile(SRC, &[], &mut inc, entry, target, 0)
+                .expect("HLSL compilé");
+            crate::dlls::hlsl::container(&c)
+        };
+        let (vs, ps) = (compile("vs_main", "vs_5_0"), compile("ps_main", "ps_5_0"));
+        let dev = new_device(gpu);
+        let q: *mut Obj = create(
+            |i, o| dev_create_queue(dev, &QueueDesc::default(), i, o),
+            0x0ec8_70a6,
+        );
+        let alloc: *mut Obj = create(|i, o| dev_create_allocator(dev, 0, i, o), 0x6102_dee4);
+        let list: *mut Obj = create(
+            |i, o| dev_create_list(dev, 0, 0, alloc, std::ptr::null_mut(), i, o),
+            0x5b16_0d0f,
+        );
+        let heap = |ty: u32, flags: u32| -> *mut Obj {
+            let d = HeapDesc {
+                ty,
+                count: 2,
+                flags,
+                node_mask: 0,
+            };
+            create(|i, o| dev_create_desc_heap(dev, &d, i, o), 0x8efb_471d)
+        };
+        let (rtv_heap, srv_heap) = (heap(2, 0), heap(0, 1));
+        let committed = |props: u32, desc: &ResourceDesc| -> *mut Obj {
+            let h = HeapProperties {
+                ty: props,
+                ..Default::default()
+            };
+            create(
+                |i, o| dev_create_committed(dev, &h, 0, desc, 0, std::ptr::null(), i, o),
+                0x6964_42be,
+            )
+        };
+        let mut rt_desc = tex(8, 8, 1, 28);
+        rt_desc.flags = FLAG_RENDER_TARGET;
+        let rt = committed(HEAP_DEFAULT, &rt_desc);
+        let texture = committed(HEAP_DEFAULT, &tex(2, 2, 1, 28));
+        let ub = committed(HEAP_UPLOAD, &buffer(1024));
+        let rb = committed(HEAP_READBACK, &buffer(256 * 8));
+        let mut rtv = 0usize;
+        heap_cpu_start(rtv_heap, &mut rtv);
+        dev_create_rtv(dev, rt, std::ptr::null(), rtv);
+        let mut srv = 0usize;
+        heap_cpu_start(srv_heap, &mut srv);
+        dev_create_srv(dev, texture, std::ptr::null(), srv);
+        let mut srv_gpu = 0u64;
+        heap_gpu_start(srv_heap, &mut srv_gpu);
+
+        // Sommets (x, y, u, v) à 0, pixels de la texture à 512 (pas de 256).
+        let quad: [f32; 24] = [
+            -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 1.0, //
+            1.0, 1.0, 1.0, 0.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 0.0, 1.0,
+        ];
+        let mut p: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(ub, 0, std::ptr::null(), &mut p), S_OK);
+        std::ptr::copy_nonoverlapping(quad.as_ptr() as *const u8, p, 96);
+        let red = 0xff00_00ffu32.to_le_bytes();
+        let green = 0xff00_ff00u32.to_le_bytes();
+        for (row, c) in [(0usize, red), (1, green)] {
+            for x in 0..2 {
+                std::ptr::copy_nonoverlapping(c.as_ptr(), p.add(512 + row * 256 + x * 4), 4);
+            }
+        }
+        res_unmap(ub, 0, std::ptr::null());
+        let va = res_va(ub);
+
+        // Signature : table SRV t0 (pixels) et échantillonneur statique s0.
+        let range: [u32; 5] = [0, 1, 0, 0, u32::MAX];
+        let mut params = [0u8; 32];
+        let put = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(&mut params, 0, 0);
+        put(&mut params, 8, 1);
+        params[16..24].copy_from_slice(&(range.as_ptr() as u64).to_le_bytes());
+        put(&mut params, 24, 5);
+        let mut sampler = [0u8; 52];
+        for o in [4, 8, 12] {
+            put(&mut sampler, o, 3); // CLAMP
+        }
+        put(&mut sampler, 48, 5);
+        let mut rs_desc = [0u8; 40];
+        put(&mut rs_desc, 0, 1);
+        rs_desc[8..16].copy_from_slice(&(params.as_ptr() as u64).to_le_bytes());
+        put(&mut rs_desc, 16, 1);
+        rs_desc[24..32].copy_from_slice(&(sampler.as_ptr() as u64).to_le_bytes());
+        let mut blob: *mut Obj = std::ptr::null_mut();
+        assert_eq!(
+            D3D12SerializeRootSignature(
+                rs_desc.as_ptr().cast(),
+                1,
+                &mut blob,
+                std::ptr::null_mut()
+            ),
+            S_OK
+        );
+        let sig: *mut Obj = create(
+            |i, o| dev_create_root_sig(dev, 0, blob_ptr(blob), blob_size(blob), i, o),
+            0xc54a_6b66,
+        );
+        let elems = [
+            InputElement {
+                semantic: c"POSITION".as_ptr(),
+                semantic_index: 0,
+                format: 16,
+                slot: 0,
+                offset: 0,
+                class: 0,
+                step: 0,
+            },
+            InputElement {
+                semantic: c"TEXCOORD".as_ptr(),
+                semantic_index: 0,
+                format: 16,
+                slot: 0,
+                offset: 8,
+                class: 0,
+                step: 0,
+            },
+        ];
+        let mut pso_desc = [0u8; 656];
+        let w = |d: &mut [u8; 656], o: usize, v: u64| {
+            d[o..o + 8].copy_from_slice(&v.to_le_bytes());
+        };
+        w(&mut pso_desc, 0, sig as u64);
+        w(&mut pso_desc, 8, vs.as_ptr() as u64);
+        w(&mut pso_desc, 16, vs.len() as u64);
+        w(&mut pso_desc, 24, ps.as_ptr() as u64);
+        w(&mut pso_desc, 32, ps.len() as u64);
+        w(&mut pso_desc, PSO_INPUT_LAYOUT, elems.as_ptr() as u64);
+        put(&mut pso_desc, PSO_INPUT_LAYOUT + 8, 2);
+        put(&mut pso_desc, PSO_TOPOLOGY_TYPE, 3);
+        put(&mut pso_desc, PSO_NUM_RT, 1);
+        put(&mut pso_desc, PSO_RT_FORMATS, 28);
+        let pso: *mut Obj = create(
+            |i, o| dev_create_gfx_pso(dev, pso_desc.as_ptr(), i, o),
+            0x765a_30f3,
+        );
+
+        let up_loc = CopyLocation {
+            resource: ub,
+            ty: 1,
+            placed: PlacedFootprint {
+                offset: 512,
+                footprint: Footprint {
+                    format: 28,
+                    width: 2,
+                    height: 2,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            },
+        };
+        let tex_loc = CopyLocation {
+            resource: texture,
+            ty: 0,
+            placed: PlacedFootprint::default(),
+        };
+        list_copy_texture(list, &tex_loc, 0, 0, 0, &up_loc, std::ptr::null());
+        list_om_rts(list, 1, &rtv, 0, std::ptr::null());
+        list_clear_rtv(list, rtv, &[0.0, 0.0, 1.0, 1.0], 0, std::ptr::null());
+        list_set_pso(list, pso);
+        list_root_sig(list, sig);
+        list_root_table(list, 0, srv_gpu);
+        list_topology(list, 4);
+        list_viewports(list, 1, &[0.0, 0.0, 8.0, 8.0, 0.0, 1.0]);
+        let view = VertexBufferView {
+            location: va,
+            size: 96,
+            stride: 16,
+        };
+        list_vbs(list, 0, 1, &view);
+        list_draw(list, 6, 1, 0, 0);
+        let dst = CopyLocation {
+            resource: rb,
+            ty: 1,
+            placed: PlacedFootprint {
+                offset: 0,
+                footprint: Footprint {
+                    format: 28,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    row_pitch: 256,
+                },
+            },
+        };
+        let src = CopyLocation {
+            resource: rt,
+            ty: 0,
+            placed: PlacedFootprint::default(),
+        };
+        list_copy_texture(list, &dst, 0, 0, 0, &src, std::ptr::null());
+        assert_eq!(list_close(list), S_OK);
+        queue_execute(q, 1, &list);
+        let mut out: *mut u8 = std::ptr::null_mut();
+        assert_eq!(res_map(rb, 0, std::ptr::null(), &mut out), S_OK);
+        let pixels = std::slice::from_raw_parts(out, 256 * 8).to_vec();
+        for o in [
+            pso, sig, blob, rb, ub, texture, rt, srv_heap, rtv_heap, list, alloc, q,
+        ] {
+            obj_release(o);
+        }
+        assert_eq!(obj_release(dev), 0, "toutes les références rendues");
+        pixels
+    }
+
+    /// #1177 : texture d'une table de SRV et échantillonneur statique.
+    #[test]
+    fn texture_et_echantillonneur_statique_opengl() {
+        if !gpu_caps::caps().opengl {
+            return;
+        }
+        let Some(b) = GlBackend::create() else { return };
+        let p = unsafe { scenario_texture(Gpu::Gl(Mutex::new(b))) };
+        assert_eq!(px(&p, 3, 1), [255, 0, 0, 255], "haut : rangée rouge");
+        assert_eq!(px(&p, 3, 6), [0, 255, 0, 255], "bas : rangée verte");
+    }
+
+    #[test]
+    fn echantillonneurs_des_tables_et_statiques() {
+        let st = shader::SamplerState {
+            filter: 0x15,
+            address: [1, 3, 3],
+        };
+        let i = shader::intern_sampler(st);
+        assert!(i >= 1);
+        assert_eq!(shader::intern_sampler(st), i, "même état, même indice");
     }
 
     /// #1177 : le dessin suit les shaders du programme et ses tampons de
