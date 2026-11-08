@@ -118,6 +118,7 @@ pub mod inifile;
 pub mod iphlpapi;
 pub mod ipp;
 pub(crate) mod jobs;
+pub mod jumplist_com;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
