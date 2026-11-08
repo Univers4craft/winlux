@@ -143,7 +143,7 @@ fn parse_hex_u8(value: &str) -> Option<u8> {
     u8::from_str_radix(value, 16).ok()
 }
 
-fn parse_guid(value: &str) -> Option<Guid> {
+pub(super) fn parse_guid(value: &str) -> Option<Guid> {
     let value = value
         .strip_prefix('{')
         .and_then(|v| v.strip_suffix('}'))
@@ -1654,37 +1654,12 @@ pub unsafe extern "win64" fn create_bind_ctx(_reserved: u32, out: *mut usize) ->
     super::comobj::E_NOTIMPL
 }
 
-/// IsAccelerator : la table d'accélérateurs OLE n'est jamais consultée
-/// (pas d'objets OLE incorporés en place) : FALSE.
-pub unsafe extern "win64" fn is_accelerator(
-    _accel: usize,
-    _count: i32,
-    _msg: usize,
-    cmd: *mut u16,
-) -> i32 {
-    if !cmd.is_null() {
-        *cmd = 0;
-    }
-    0
-}
-
 /// OleRegEnumVerbs : aucun verbe OLE enregistré (OLEOBJ_E_NOVERBS).
 pub unsafe extern "win64" fn ole_reg_enum_verbs(_clsid: *const Guid, out: *mut usize) -> i32 {
     if !out.is_null() {
         *out = 0;
     }
     0x8004_0180u32 as i32
-}
-
-/// OleSetMenuDescriptor : la fusion de menus OLE en place n'a pas lieu.
-pub extern "win64" fn ole_set_menu_descriptor(
-    _holemenu: usize,
-    _frame: usize,
-    _active: usize,
-    _frame_cb: usize,
-    _active_obj: usize,
-) -> i32 {
-    S_OK
 }
 
 thread_local! {
@@ -1754,8 +1729,8 @@ pub fn exports() -> crate::dlls::Exports {
         "CoFreeUnusedLibraries"=>fn co_free_unused_libraries,"CoFreeUnusedLibrariesEx"=>fn co_free_unused_libraries_ex,
         "CoAddRefServerProcess"=>fn co_add_ref_server_process,"CoReleaseServerProcess"=>fn co_release_server_process,
         "CoResumeClassObjects"=>fn co_resume_class_objects,"CoSuspendClassObjects"=>fn co_resume_class_objects,"CreateBindCtx"=>fn create_bind_ctx,
-        "IsAccelerator"=>fn is_accelerator,"OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
-        "OleSetMenuDescriptor"=>fn ole_set_menu_descriptor,
+        "OleRegEnumVerbs"=>fn ole_reg_enum_verbs,
+        // IsAccelerator, OleSetMenuDescriptor : ole32_inplace.rs.
         "CreateErrorInfo"=>fn super::errorinfo::create_error_info,
         "GetErrorInfo"=>fn super::errorinfo::get_error_info,
         "SetErrorInfo"=>fn super::errorinfo::set_error_info,
