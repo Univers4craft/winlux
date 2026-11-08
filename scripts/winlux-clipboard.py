@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Historique du presse-papiers (Windows + V), comme Windows 11.
+"""Historique du presse-papiers (Windows + V).
 
 Un seul processus par session garde l'historique : les 25 derniers éléments
 copiés (texte et images), que ce soit dans une application Linux ou dans un

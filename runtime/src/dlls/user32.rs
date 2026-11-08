@@ -790,6 +790,19 @@ pub unsafe extern "win64" fn def_window_proc_w(
 pub unsafe extern "win64" fn show_window(hwnd: usize, cmd: i32) -> i32 {
     let was = gui::set_visible(hwnd, cmd != gui::SW_HIDE);
     with_backend(|b| b.show_window(hwnd, cmd != gui::SW_HIDE));
+    // Réduire, agrandir, restaurer : demandé au gestionnaire de fenêtres
+    // (fenêtres de premier niveau seulement).
+    if gui::window_parent(hwnd).unwrap_or(0) == 0 {
+        let state = match cmd {
+            2 | 6 | 7 | 11 => Some(gui::WINDOW_MINIMIZED),
+            3 => Some(gui::WINDOW_MAXIMIZED),
+            9 => Some(gui::WINDOW_NORMAL),
+            _ => None,
+        };
+        if let Some(state) = state {
+            with_backend(|b| b.set_window_state(hwnd, state));
+        }
+    }
     if cmd != gui::SW_HIDE {
         gui::request_paint(hwnd);
     }
@@ -1614,13 +1627,24 @@ pub unsafe extern "win64" fn adjust_window_rect(rect: *mut Rect, style: u32, men
 pub unsafe extern "win64" fn adjust_window_rect_ex(
     rect: *mut Rect,
     style: u32,
-    _menu: i32,
+    menu: i32,
     _ex_style: u32,
 ) -> i32 {
     if rect.is_null() {
         return 0;
     }
-    // Marge simple pour les bordures de fenêtre
+    // Une fenêtre de premier niveau n'a pas de cadre à elle : la barre de
+    // titre et les bords sont ceux du gestionnaire de fenêtres, hors du
+    // rectangle (GetWindowRect = zone client + barre de menus). Annoncer des
+    // marges faisait calculer à Qt (VLC) une zone client plus petite que la
+    // fenêtre, avec une bande noire à droite et en bas.
+    const WS_CHILD: u32 = 0x4000_0000;
+    if style & WS_CHILD == 0 {
+        if menu != 0 {
+            (*rect).top -= crate::dlls::menus::BAR_HEIGHT;
+        }
+        return 1;
+    }
     let border = if style & 0x0080_0000 != 0 { 8 } else { 0 }; // WS_BORDER
     let caption = if style & 0x00C0_0000 != 0 { 31 } else { 0 }; // WS_CAPTION
     (*rect).left -= border;
@@ -1666,12 +1690,16 @@ pub unsafe extern "win64" fn enable_window(hwnd: usize, enable: i32) -> i32 {
     was_disabled as i32
 }
 
-pub unsafe extern "win64" fn is_iconic(_hwnd: usize) -> i32 {
-    0 // Pas de minimisation dans Winlux pour l'instant
+pub unsafe extern "win64" fn is_iconic(hwnd: usize) -> i32 {
+    let mut state = gui::WINDOW_NORMAL;
+    with_backend(|b| state = b.window_state(hwnd));
+    (state == gui::WINDOW_MINIMIZED) as i32
 }
 
-pub unsafe extern "win64" fn is_zoomed(_hwnd: usize) -> i32 {
-    0
+pub unsafe extern "win64" fn is_zoomed(hwnd: usize) -> i32 {
+    let mut state = gui::WINDOW_NORMAL;
+    with_backend(|b| state = b.window_state(hwnd));
+    (state == gui::WINDOW_MAXIMIZED) as i32
 }
 
 // =====================================================================
@@ -3646,6 +3674,21 @@ mod tests {
 
     /// Qt lit la police de l'interface dans NONCLIENTMETRICS ; une hauteur
     /// nulle donnait des fenêtres de 5 millions de pixels à VLC (#850).
+    /// Le cadre des fenêtres de premier niveau appartient au gestionnaire de
+    /// fenêtres : AdjustWindowRectEx n'ajoute que la barre de menus, sinon
+    /// Qt (VLC) dessine une zone client plus petite que la fenêtre.
+    #[test]
+    fn adjust_window_rect_sans_cadre_pour_le_premier_niveau() {
+        let mut r = Rect::from_size(0, 0, 884, 513);
+        unsafe { adjust_window_rect_ex(&mut r, 0x00CF_0000, 0, 0) };
+        assert_eq!(r, Rect::from_size(0, 0, 884, 513));
+        unsafe { adjust_window_rect_ex(&mut r, 0x00CF_0000, 1, 0) };
+        assert_eq!(r.top, -crate::dlls::menus::BAR_HEIGHT);
+        let mut c = Rect::from_size(0, 0, 10, 10);
+        unsafe { adjust_window_rect_ex(&mut c, 0x4080_0000, 0, 0) }; // enfant WS_BORDER
+        assert!(c.left < 0);
+    }
+
     #[test]
     fn nonclientmetrics_et_police_des_icones_remplies() {
         unsafe {

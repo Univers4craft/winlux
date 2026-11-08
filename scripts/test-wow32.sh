@@ -28,7 +28,7 @@
 # puis sous un vrai serveur X (Xvfb) quand il est là.
 # jeux32.exe et jeux64.exe (#237, #777) : Direct3D 8, DirectDraw (surfaces 8/16/32 bits,
 # Lock, Blt, BltFast, clés de couleur, GetDC, palette, découpeur, plein écran
-# exclusif et Flip), MIDI (midiOut*, midiStream* et leurs rappels),
+# exclusif et Flip), DirectPlay 4 et 8 (deux joueurs sur 127.0.0.1), MIDI (midiOut*, midiStream* et leurs rappels),
 # timeSetEvent et waveOut avec rappel, en x86 puis en x64.
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
@@ -226,4 +226,4 @@ for name in jeux32 jeux64; do
         jeux "$name" xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI
     fi
 done
-echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"
+echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux), timeSetEvent et waveOut avec rappels, x86 et x64"

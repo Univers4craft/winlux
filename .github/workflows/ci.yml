@@ -615,6 +615,12 @@ jobs:
       - name: Version précédente conservée (même avis partout) et session hors des applications
         run: xvfb-run -a /usr/bin/python3 -B scripts/test-update-previous-version.py
 
+      - name: Page Mise à jour OS (carte d'état, pause, heures d'activité, historique, notes, notification, 4 langues)
+        run: /usr/bin/python3 -B scripts/test-update-page.py
+
+      - name: Paramètres Réseau, Comptes et Personnalisation refaits (carte de connexion, compte ouvert, aperçu du bureau)
+        run: /usr/bin/python3 -B scripts/test-settings-redesign.py
+
       - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py
 

@@ -218,6 +218,7 @@ pub extern "win64" fn msi_get_product_info(_p: usize, _a: usize, _b: usize, _s: 
 pub fn msi_exports() -> super::Exports {
     // Fonctions de session des actions personnalisées DLL (#833).
     let mut all = crate::msi::session::exports();
+    all.extend(crate::msi::session_db::exports());
     all.extend(crate::exports! {
         "MsiGetComponentPathW" => fn msi_get_component_path,
         "MsiGetComponentPathA" => fn msi_get_component_path,

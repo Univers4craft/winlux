@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Ancrage des fenêtres comme Windows 11 (session native, openbox).
+"""Ancrage des fenêtres (session native, openbox).
 
 Windows + flèches suit la logique de Windows :
 - ← / → : moitié gauche / droite ; depuis la moitié opposée, la fenêtre

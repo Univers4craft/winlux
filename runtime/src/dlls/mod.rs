@@ -62,6 +62,7 @@ pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
+pub mod dpnet;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -566,6 +567,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dplay",
                 exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpnet",
+                exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpnaddr",
+                exports: dpnet::exports(),
                 handle: fake_module(),
             },
             Builtin {
