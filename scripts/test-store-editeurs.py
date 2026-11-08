@@ -153,6 +153,11 @@ with tempfile.TemporaryDirectory() as tmp:
           "hôte étranger refusé")
     check(m["editeur_url"]({**entry, "base": "https://downloads.claude.ai/a/"}, "pool/x.deb")
           == "https://downloads.claude.ai/a/pool/x.deb", "hôte de l'éditeur accepté")
+    flat = {**entry, "base": "https://download.sublimetext.com/", "index": "apt/stable/Packages",
+            "hosts": ["download.sublimetext.com"]}
+    check(m["editeur_url"](flat, "files/sublime-text_build-4215_amd64.deb")
+          == "https://download.sublimetext.com/files/sublime-text_build-4215_amd64.deb",
+          "dépôt plat : adresse relative à la racine (vérifiée par la sonde de la CI)")
 
     # Mise à jour visible, puis désinstallation : purge + dépôt retiré.
     ed.installed = lambda package: "1.0"

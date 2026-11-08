@@ -23,9 +23,8 @@
     },
     {
       "id": "chatgpt", "name": "ChatGPT", "publisher": "OpenAI", "category": "bureautique",
-      "licence": "proprietaire", "package": "chatgpt", "kind": "deb",
-      "url": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb",
-      "version": "", "sha256": "",
+      "licence": "proprietaire", "package": "chatgpt", "kind": "index",
+      "base": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/", "index": "dists/stable/main/binary-amd64/Packages",
       "hosts": ["persistent.oaistatic.com"], "site": "https://learn.chatgpt.com/docs/linux/linux-app",
       "desc": {"fr": "Assistant IA d'OpenAI, avec Codex (préversion pour Linux).",
                "en": "OpenAI's AI assistant, with Codex (Linux preview).",
@@ -96,7 +95,7 @@
     {
       "id": "sublime-text", "name": "Sublime Text", "publisher": "Sublime HQ", "category": "developpement",
       "licence": "proprietaire", "package": "sublime-text", "kind": "index",
-      "base": "https://download.sublimetext.com/", "index": "apt/stable/Packages", "flat": true,
+      "base": "https://download.sublimetext.com/", "index": "apt/stable/Packages",
       "hosts": ["download.sublimetext.com"], "site": "https://www.sublimetext.com/docs/linux_repositories.html",
       "desc": {"fr": "Éditeur de texte et de code rapide (évaluation gratuite, licence payante).",
                "en": "Fast text and code editor (free evaluation, paid licence).",

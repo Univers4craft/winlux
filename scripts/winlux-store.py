@@ -1374,11 +1374,9 @@ def index_select(data, package):
 
 
 def editeur_url(entry, filename):
-    """Adresse du paquet : sous la racine du dépôt (ou du dépôt « plat »)."""
-    root = entry["base"]
-    if entry.get("flat"):
-        root = urllib.parse.urljoin(entry["base"], entry["index"].rsplit("/", 1)[0] + "/")
-    url = urllib.parse.urljoin(root, filename.removeprefix("./"))
+    """Adresse du paquet : relative à la racine du dépôt, y compris pour un
+    dépôt « plat » (Sublime Text : files/… sous download.sublimetext.com)."""
+    url = urllib.parse.urljoin(entry["base"], filename.removeprefix("./"))
     host = urllib.parse.urlparse(url).hostname or ""
     if url.startswith("file:") and entry["base"].startswith("file:"):
         return url

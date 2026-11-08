@@ -83,7 +83,8 @@ Sublime Text, VSCodium. Rien n'est fourni dans l'ISO.
 - `kind: index` : le Store lit l'index `Packages` du dépôt de l'éditeur
   (`base` + `index`) et prend la version la plus récente du paquet, avec son
   empreinte SHA-256. L'adresse du fichier doit rester sur un des `hosts` de
-  l'éditeur.
+  l'éditeur. Pour un dépôt « plat » (Sublime Text), l'adresse reste relative
+  à la racine `base`.
 - `kind: deb` : fichier unique épinglé dans le catalogue (`url`, `version`,
   `sha256`). Sans version ni empreinte, l'entrée reste masquée.
 
