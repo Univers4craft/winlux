@@ -2558,6 +2558,10 @@ pub fn exports() -> crate::dlls::Exports {
         "SetPrinterW" => fn set_printer,
         "GetDefaultPrinterA" => fn get_default_printer_a,
         "GetDefaultPrinterW" => fn get_default_printer_w,
+        // La VCL Delphi (WinSCP) importe GetDefaultPrinterW par son numéro
+        // d'ordre 203 : même signature (tampon, taille), appel relevé dans
+        // WinSCP 6.7 x86 juste après EnumPrinters(PRINTER_ENUM_DEFAULT) (#687).
+        "#203" => fn get_default_printer_w,
         "SetDefaultPrinterA" => fn set_default_printer_a,
         "SetDefaultPrinterW" => fn set_default_printer_w,
         "AddPrinterA" => fn add_printer_a,
