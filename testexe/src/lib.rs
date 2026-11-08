@@ -1079,6 +1079,7 @@ extern "C" {
     pub fn SendMessageW(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn PostQuitMessage(code: i32);
     pub fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
+    pub fn IsZoomed(hwnd: Handle) -> i32;
     pub fn UpdateWindow(hwnd: Handle) -> i32;
     pub fn DestroyWindow(hwnd: Handle) -> i32;
     pub fn IsWindow(hwnd: Handle) -> i32;

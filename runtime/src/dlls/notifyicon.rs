@@ -264,6 +264,83 @@ pub fn callback_messages(
         .collect()
 }
 
+/// Identifiant de l'entrée « Ranger dans les icônes cachées » ajoutée au
+/// menu du programme après un clic droit sur son icône (#927). Sous la plage
+/// des commandes système (0xF000), loin des identifiants usuels.
+pub const TRAY_HIDE_ID: u32 = 0xE927;
+
+/// Clic droit sur une icône : le prochain menu surgissant du programme
+/// (dans les 3 s) reçoit l'entrée « Ranger dans les icônes cachées ».
+static TRAY_MENU: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+/// Nom de l'icône pour la zone de notification d'XFCE : celui que
+/// `winlux-notify-icon` donne à son processus (nom du .exe, en minuscules).
+pub fn overflow_name(source: &str) -> String {
+    let file = source.rsplit(['/', '\\']).next().unwrap_or("");
+    let stem = match file.rfind('.') {
+        Some(i) if i > 0 => &file[..i],
+        _ => file,
+    };
+    let cleaned: String = stem
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches(|c| c == '-' || c == '.');
+    if cleaned.is_empty() {
+        "winlux-programme".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+/// Entrée du menu, dans la langue de l'interface.
+pub fn hide_label() -> &'static str {
+    let lang = crate::intl::locale::ui_language_tag().unwrap_or_default();
+    match lang.get(..2).unwrap_or("") {
+        "en" => "Move to hidden icons",
+        "es" => "Mover a iconos ocultos",
+        "de" => "In ausgeblendete Symbole verschieben",
+        _ => "Ranger dans les icônes cachées",
+    }
+}
+
+/// Clic droit reçu sur l'icône `name` (aussi pour les tests du menu).
+pub fn note_tray_menu(name: &str) {
+    *TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((name.to_string(), std::time::Instant::now()));
+}
+
+/// Nom de l'icône dont le clic droit vient d'ouvrir un menu, s'il est récent.
+pub fn take_tray_menu() -> Option<String> {
+    let mut pending = TRAY_MENU.lock().unwrap_or_else(|e| e.into_inner());
+    match pending.take() {
+        Some((name, at)) if at.elapsed() < std::time::Duration::from_secs(3) => Some(name),
+        _ => None,
+    }
+}
+
+/// Range l'icône derrière la flèche (winlux-tray overflow hide), en direct.
+pub fn hide_in_overflow(name: &str) {
+    for tray in ["/usr/bin/winlux-tray", "/usr/local/bin/winlux-tray"] {
+        if std::path::Path::new(tray).is_file() {
+            let _ = Command::new(tray)
+                .args(["overflow", "hide", name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            return;
+        }
+    }
+}
+
 /// Ligne de l'assistant : `<clé>\t<événement>\t<x>\t<y>`.
 fn deliver(line: &str) {
     let mut fields = line.split('\t');
@@ -281,6 +358,15 @@ fn deliver(line: &str) {
     let Some(icon) = state().icons.get(&(hwnd, id)).cloned() else {
         return;
     };
+    if event == "rup" {
+        if icon.callback == 0 {
+            // Programme sans menu : l'assistant ouvre le sien (#927).
+            let line = format!("menu\t{}\n", key(hwnd, id));
+            send(&mut state(), &line);
+            return;
+        }
+        note_tray_menu(&overflow_name(&icon_source()));
+    }
     if icon.callback == 0 {
         return;
     }
@@ -406,6 +492,14 @@ mod tests {
         assert_eq!(d.state, NIS_HIDDEN);
         assert_eq!(d.version, 4);
         assert_eq!(d.info, Some(("Export".into(), "Terminé".into(), 0)));
+    }
+
+    #[test]
+    fn overflow_name_matches_the_helper() {
+        assert_eq!(overflow_name("/opt/apps/putty.exe"), "putty");
+        assert_eq!(overflow_name("C:\\Programmes\\FileZilla.exe"), "filezilla");
+        assert_eq!(overflow_name("Mon Appli (x86).exe"), "mon-appli--x86");
+        assert_eq!(overflow_name(""), "winlux-programme");
     }
 
     #[test]

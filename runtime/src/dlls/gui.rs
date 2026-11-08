@@ -609,6 +609,24 @@ fn transition_key_state(byte: &mut u8, vk: usize, down: bool) {
 /// Ainsi `GetKeyState` reflète l'événement actuellement traité, même si X11 a
 /// déjà livré la pression et le relâchement dans un seul tour de boucle.
 pub fn observe_key_message(msg: &Msg) {
+    // Messages souris : MK_* de wParam donne l'état des boutons (VK_LBUTTON…)
+    // que WPF relit par GetKeyState pendant WM_LBUTTONDOWN (#268).
+    if (0x0200..=0x020D).contains(&msg.message) && msg.message != 0x020A {
+        const BUTTONS: [(usize, usize); 5] = [
+            (0x01, 0x01), // MK_LBUTTON → VK_LBUTTON
+            (0x02, 0x02), // MK_RBUTTON → VK_RBUTTON
+            (0x10, 0x04), // MK_MBUTTON → VK_MBUTTON
+            (0x20, 0x05), // MK_XBUTTON1 → VK_XBUTTON1
+            (0x40, 0x06), // MK_XBUTTON2 → VK_XBUTTON2
+        ];
+        for (mk, vk) in BUTTONS {
+            let down = msg.wparam & mk != 0;
+            if (get_key_state(vk) < 0) != down {
+                update_thread_key_state(vk, down);
+            }
+        }
+        return;
+    }
     if msg.wparam >= KEY_STATE_COUNT {
         return;
     }
@@ -1249,6 +1267,15 @@ pub fn clip_cmd(cmd: DrawCmd, clip: &[Rect]) -> Vec<DrawCmd> {
             _ => vec![other],
         },
     }
+}
+
+/// Type GDI d'un HDC pour GetObjectType : OBJ_MEMDC (10) pour un DC
+/// mémoire (sans fenêtre), OBJ_DC (3) sinon ; `None` si ce n'est pas un DC.
+/// System.Drawing refuse un DC dont le type est 0 (#666).
+pub fn dc_object_type(hdc: usize) -> Option<u32> {
+    lock(dcs())
+        .get(&hdc)
+        .map(|d| if d.hwnd == 0 { 10 } else { 3 })
 }
 
 /// Fenêtre cible d'un HDC, `None` si l'invalide.
@@ -2397,6 +2424,10 @@ pub struct MenuBarItem {
 
 /// Rendu et événements hôte. `headless` n'affiche rien ; X11 traduit les
 /// événements du serveur en messages Win32.
+pub const WINDOW_NORMAL: u8 = 0;
+pub const WINDOW_MINIMIZED: u8 = 1;
+pub const WINDOW_MAXIMIZED: u8 = 2;
+
 pub trait GuiBackend: Send {
     /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
     fn pump(&mut self) -> Vec<PendingEvent> {
@@ -2437,6 +2468,18 @@ pub trait GuiBackend: Send {
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.
     fn set_decorations(&mut self, _hwnd: usize, _level: u8) {}
+    /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
+    /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
+    /// gestionnaire de fenêtres.
+    fn set_window_state(&mut self, _hwnd: usize, _state: u8) {}
+    /// État actuel vu du gestionnaire (IsIconic, IsZoomed).
+    fn window_state(&mut self, _hwnd: usize) -> u8 {
+        WINDOW_NORMAL
+    }
+    /// Déplacement (`edge` = HTCAPTION) ou redimensionnement (HTLEFT…
+    /// HTBOTTOMRIGHT) mené par le gestionnaire de fenêtres à la souris, comme
+    /// la boucle modale de DefWindowProc sur WM_NCLBUTTONDOWN.
+    fn begin_move_resize(&mut self, _hwnd: usize, _edge: u32) {}
     /// Capture du pointeur pour un menu : les clics hors du programme
     /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
     fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
@@ -2852,6 +2895,14 @@ pub fn set_class_style(name: &str, style: u32) {
         .or_insert(style);
 }
 
+/// Style de classe mémorisé (0 si inconnu), pour GetClassInfoEx.
+pub fn class_style(name: &str) -> u32 {
+    lock(class_styles())
+        .get(&name.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(0)
+}
+
 /// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
 /// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
 /// texte sous Windows.
@@ -2901,9 +2952,25 @@ pub fn lookup_class(name: &str) -> Option<ClassInfo> {
 
 // ---------- Accès utilisés par user32 ----------
 
+/// Identifiant Win32 (GetCurrentThreadId) de chaque thread qui a créé une
+/// fenêtre : GetWindowThreadProcessId le rend, et WPF le compare au sien.
+fn thread_tids() -> &'static Mutex<HashMap<ThreadId, u32>> {
+    static T: OnceLock<Mutex<HashMap<ThreadId, u32>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Thread Win32 propriétaire d'une fenêtre (celui qui l'a créée).
+pub fn window_thread_id(hwnd: usize) -> Option<u32> {
+    let owner = lock(windows()).get(&hwnd).map(|w| w.owner)?;
+    lock(thread_tids()).get(&owner).copied()
+}
+
 /// Insère une fenêtre déjà construite dans la table ; une fenêtre de premier
 /// niveau arrive au sommet de l'ordre Z.
 pub fn insert_window(hwnd: usize, w: Window) {
+    if w.owner == std::thread::current().id() {
+        lock(thread_tids()).insert(w.owner, crate::dlls::kernel32::get_current_thread_id());
+    }
     let top_level = w.parent == 0;
     lock(windows()).insert(hwnd, w);
     if top_level {
@@ -3389,6 +3456,35 @@ pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) 
             }
             0
         }
+        // WM_NCLBUTTONDOWN sur la légende ou un bord (fenêtre sans cadre qui
+        // dessine sa propre barre de titre) : le gestionnaire de fenêtres
+        // déplace ou redimensionne, comme la boucle modale de Windows.
+        0x00A1 if wparam == 2 || (10..=17).contains(&wparam) => {
+            with_backend(|b| b.begin_move_resize(hwnd, wparam as u32));
+            0
+        }
+        // WM_SYSCOMMAND : réduire, agrandir, restaurer, déplacer, fermer.
+        0x0112 => {
+            match wparam & 0xFFF0 {
+                0xF020 => with_backend(|b| b.set_window_state(hwnd, WINDOW_MINIMIZED)),
+                0xF030 => with_backend(|b| b.set_window_state(hwnd, WINDOW_MAXIMIZED)),
+                0xF120 => with_backend(|b| b.set_window_state(hwnd, WINDOW_NORMAL)),
+                0xF010 => with_backend(|b| b.begin_move_resize(hwnd, 2)),
+                0xF000 => {
+                    let edge = (wparam & 0xF) as u32;
+                    // SC_SIZE + WMSZ_* (1 gauche … 8 bas-droite) → HT*.
+                    let ht = [0, 10, 11, 12, 13, 14, 15, 16, 17];
+                    if let Some(&h) = ht.get(edge as usize).filter(|&&h| h != 0) {
+                        with_backend(|b| b.begin_move_resize(hwnd, h));
+                    }
+                }
+                0xF060 => unsafe {
+                    crate::dlls::user32::post_message_w(hwnd, 0x0010, 0, 0);
+                },
+                _ => {}
+            }
+            0
+        }
         // WM_NCLBUTTONDOWN sur HTMENU : clic dans la barre de menus.
         0x00A1 if wparam == 5 => {
             let x = lparam as u32 as u16 as i16 as i32;
@@ -3805,6 +3901,34 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn boutons_souris_dans_get_key_state() {
+        // Thread neuf : son état clavier lui est propre.
+        std::thread::spawn(|| {
+            let msg = |message: u32, wparam: usize| Msg {
+                hwnd: 0,
+                message,
+                wparam,
+                lparam: 0,
+                time: 0,
+                pt: Point::default(),
+                l_private: 0,
+            };
+            observe_key_message(&msg(0x0201, 0x0001));
+            assert!(get_key_state(0x01) < 0);
+            assert!(get_key_state(0x02) >= 0);
+            // Glissé avec le bouton droit en plus, puis relâchements.
+            observe_key_message(&msg(0x0200, 0x0003));
+            assert!(get_key_state(0x02) < 0);
+            observe_key_message(&msg(0x0202, 0x0002));
+            assert!(get_key_state(0x01) >= 0);
+            observe_key_message(&msg(0x0205, 0));
+            assert!(get_key_state(0x02) >= 0);
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn les_enfants_sont_places_dans_la_zone_client_du_parent() {
@@ -4631,6 +4755,23 @@ pub fn raw_keys() -> [bool; 256] {
 }
 
 /// Position écran du pointeur : accumule le déplacement relatif.
+/// Dernière position connue du pointeur, en coordonnées écran logiques
+/// (mouvements et clics reçus par une fenêtre Winlux).
+static CURSOR_POS: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+pub fn set_cursor_screen_pos(x: i32, y: i32) {
+    *lock(&CURSOR_POS) = Some((x, y));
+}
+
+/// Position du pointeur pour GetCursorPos ; centre de l'écran tant que la
+/// souris n'a encore rien fait sur une fenêtre Winlux.
+pub fn cursor_screen_pos() -> (i32, i32) {
+    lock(&CURSOR_POS).unwrap_or_else(|| {
+        let (w, h) = screen_size();
+        (w / 2, h / 2)
+    })
+}
+
 pub fn raw_mouse_motion(x: i32, y: i32) {
     let mut r = lock(raw_input());
     if let Some((lx, ly)) = r.mouse_last {
@@ -4642,6 +4783,17 @@ pub fn raw_mouse_motion(x: i32, y: i32) {
 
 /// Bouton X11 (1 gauche, 2 milieu, 3 droit, 4/5 molette, 8/9 latéraux).
 pub fn raw_mouse_button(detail: u8, down: bool) {
+    let vk = match detail {
+        1 => 0x01,
+        3 => 0x02,
+        2 => 0x04,
+        8 => 0x05,
+        9 => 0x06,
+        _ => 0,
+    };
+    if vk != 0 {
+        update_async_key_state(vk, down);
+    }
     let mut r = lock(raw_input());
     match detail {
         4 if down => r.wheel += 120,

@@ -4,6 +4,7 @@
 # Régénérer : cd runtime && WINLUX_EXPORTS_MASQUES=ecrire cargo test exports_masques
 AdjustWindowRect  user32_ext  ←  user32
 AdjustWindowRectEx  user32_ext  ←  user32
+AllocateLocallyUniqueId  ftp_apps  ←  wpf_native
 AngleArc  gdi32_more  ←  gdi32_path
 AppendMenuA  user32  ←  menus
 AppendMenuA  user32_ext  ←  menus

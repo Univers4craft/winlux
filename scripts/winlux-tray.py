@@ -245,6 +245,59 @@ def _settled_balance(ids, right_ids, left_ids, parent=None):
     return width
 
 
+# Icônes cachées derrière la flèche de la zone de notification : le greffon
+# systray d'XFCE retient chaque icône vue (known-legacy-items pour XEmbed,
+# known-items pour StatusNotifier) et masque celles de hidden-*. Écrit en
+# direct dans xfconf, appliqué sans relancer la barre.
+#   winlux-tray overflow list            → JSON [{name, hidden, kind}]
+#   winlux-tray overflow hide|show NOM
+OVERFLOW_KINDS = (("legacy", "known-legacy-items", "hidden-legacy-items"), ("sni", "known-items", "hidden-items"))
+# Toujours cachées, jamais proposées : nm-applet double l'icône réseau de
+# Winlux ; winlux-notify-icon.py était le nom commun des icônes .exe d'avant.
+OVERFLOW_SKIP = {"nm-applet", "winlux-notify-icon.py", "winlux-notify-icon"}
+
+
+def _overflow_values(prop):
+    try:
+        result = subprocess.run(["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{prop}"],
+                                capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode:
+        return []
+    lines = result.stdout.splitlines()
+    # « Value is an array with N items: » puis une ligne vide, traduits.
+    return [line.strip() for line in lines[2:] if line.strip()] if lines and ":" in lines[0] else [line.strip() for line in lines if line.strip()]
+
+
+def overflow_list():
+    items = []
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        hidden_names = set(_overflow_values(hidden))
+        for name in _overflow_values(known):
+            if name not in OVERFLOW_SKIP and all(item["name"] != name for item in items):
+                items.append({"name": name, "hidden": name in hidden_names, "kind": kind_name})
+    return items
+
+
+def overflow_set(name, hide):
+    changed = False
+    for kind_name, known, hidden in OVERFLOW_KINDS:
+        if name not in _overflow_values(known):
+            continue
+        values = [value for value in _overflow_values(hidden) if value != name] + ([name] if hide else [])
+        args = ["xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-10/{hidden}"]
+        if values:
+            command = args + ["-n", "-a"] + [part for value in values for part in ("-t", "string", "-s", value)]
+            if subprocess.run(command, capture_output=True, timeout=3).returncode:
+                subprocess.run(args + ["-a"] + [part for value in values for part in ("-t", "string", "-s", value)],
+                               capture_output=True, timeout=3)
+        else:
+            subprocess.run(args + ["-r"], capture_output=True, timeout=3)
+        changed = True
+    return changed
+
+
 def tray_directory():
     """Icônes de la barre : un dossier par compte. /run/winlux est collant et
     /run/winlux/tray appartenait au premier compte (0755) : un second compte
@@ -710,7 +763,20 @@ def serve(clock=time.monotonic, sleep=time.sleep, rounds=None):
     return 0
 
 
+def overflow(argv):
+    """winlux-tray overflow list|hide NOM|show NOM (zone de notification, #927)."""
+    action = argv[2] if len(argv) > 2 else "list"
+    if action == "list":
+        print(json.dumps(overflow_list(), ensure_ascii=False))
+        return 0
+    if action in ("hide", "show") and len(argv) == 4 and argv[3] not in OVERFLOW_SKIP:
+        return 0 if overflow_set(argv[3], action == "hide") else 1
+    return 2
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "overflow":
+        return overflow(argv)
     if len(argv) != 2:
         print("usage : winlux-tray status|search|balance|notifications|battery|audio|network|serve", file=sys.stderr)
         return 2

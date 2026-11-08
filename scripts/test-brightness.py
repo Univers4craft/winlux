@@ -76,7 +76,16 @@ def run(root, *args, who="user", display=False, **extra):
 
 
 def raw(root, device):
-    return int((root / "sys/class/backlight" / device / "brightness").read_text())
+    """Valeur écrite, ou None si le fichier est relu entre sa troncature et
+    l'écriture de la nouvelle valeur (Paramètres l'écrit en parallèle, #872)."""
+    try: return int((root / "sys/class/backlight" / device / "brightness").read_text())
+    except ValueError: return None
+
+
+# Relecture pendant une écriture : fichier tronqué, pas encore réécrit (#872).
+torn = machine("ecriture-en-cours", [("panel", "raw", 100, 50)])
+(torn / "sys/class/backlight/panel/brightness").write_text("")
+ok(raw(torn, "panel") is None, "relecture d'un fichier vide en cours d'écriture : on attend le tour suivant")
 
 
 # ── Portable : acpi_video0 (firmware) et intel_backlight (raw) ──
