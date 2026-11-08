@@ -109,6 +109,43 @@ T = {
   "gh_failed": "Connexion refusée : {error}",
   "gh_expired": "Le code a expiré : recommencez.",
   "gh_denied": "Connexion annulée sur GitHub.",
+  "cf_title": "Envoyer ce rapport ?",
+  "cf_where_account": "Où : le dépôt public Univers4craft/winlux sur GitHub, sous votre nom @{login}. Tout le monde pourra le lire.",
+  "cf_where_token": "Où : le dépôt public Univers4craft/winlux sur GitHub, avec le jeton configuré sur cette machine. Tout le monde pourra le lire.",
+  "cf_where_relay": "Où : le service de signalement Winlux, qui le publie dans le dépôt public Univers4craft/winlux sur GitHub.",
+  "cf_where_browser": "Où : le site GitHub, dans votre navigateur. Le formulaire s'ouvre prérempli ; rien n'est publié tant que vous n'avez pas cliqué « Submit new issue » sur GitHub, où un compte GitHub gratuit est nécessaire.",
+  "cf_what": "Quoi : le titre « {title} » et le rapport affiché dans la fenêtre ({size}), avec la version de Winlux et la description de la machine.",
+  "cf_logs": "Journaux joints : {logs}.",
+  "cf_no_logs": "Aucun journal de diagnostic joint.",
+  "cf_redact_on": "Données personnelles masquées.",
+  "cf_redact_off": "Attention : les données personnelles ne sont pas masquées.",
+  "cf_search": "Avant l'envoi, Winlux cherche sur GitHub un signalement identique : seuls la signature du problème ou quelques mots du résumé partent pour cette recherche.",
+  "cf_cancel": "Annuler",
+  "cf_send": "Envoyer",
+  "cf_open": "Ouvrir sur GitHub",
+  "q_title": "Envoyer les plantages en attente ?",
+  "q_text": "Winlux va publier ces {count} rapports de plantage, déjà anonymisés, dans le dépôt public Univers4craft/winlux sur GitHub, sous votre nom @{login} :\n\n{titles}\n\nUn plantage déjà signalé reçoit un commentaire au lieu d'une nouvelle issue.",
+  "q_done": "Rapports envoyés : {count}.",
+  "q_none": "Aucun rapport en attente.",
+  "q_failed": "Envoi interrompu ({error}) : les rapports restants attendent.",
+  "q_need": "Reliez d'abord votre compte GitHub dans Paramètres > Signaler un problème.",
+  "dc_title": "Se déconnecter de @{login} ?",
+  "dc_text": "Winlux envoie votre jeton à GitHub (api.github.com, service de révocation) pour qu'il soit révoqué définitivement, puis l'efface de ce PC. GitHub vous prévient par courriel de cette révocation.",
+  "dc_ok": "Se déconnecter et révoquer",
+  "dc_done": "Déconnecté : le jeton est révoqué chez GitHub et effacé de ce PC.",
+  "dc_failed": "Le jeton est effacé de ce PC, mais GitHub n'a pas confirmé sa révocation ({error}). Révoquez-le vous-même sur la page GitHub qui s'ouvre.",
+  "dc_none": "Aucun compte GitHub relié.",
+  "mine_window": "Mes signalements",
+  "mine_intro": "Signalements envoyés depuis ce PC, et ceux ouverts par votre compte GitHub relié. « Actualiser » demande leur état à GitHub (dépôt public Univers4craft/winlux) : seuls les numéros des signalements et le nom du compte relié partent.",
+  "mine_empty": "Aucun signalement envoyé depuis ce PC pour l'instant.",
+  "mine_refresh": "Actualiser depuis GitHub",
+  "mine_view": "Voir",
+  "mine_updated": "État mis à jour.",
+  "mine_failed": "GitHub ne répond pas : {error}",
+  "st_open": "ouvert",
+  "st_fixed": "corrigé",
+  "st_closed": "fermé sans suite",
+  "st_unknown": "état pas encore demandé",
   "searching": "Recherche d'un signalement identique…", "sending": "Envoi en cours…",
   "sent": "Merci ! Signalement envoyé : {url}", "commented": "Merci ! Votre rapport a été ajouté au signalement existant : {url}",
   "opened": "Le formulaire GitHub est ouvert dans le navigateur. Rapport enregistré dans {path}.",
@@ -213,6 +250,43 @@ T = {
   "gh_failed": "Connection refused: {error}",
   "gh_expired": "The code expired: try again.",
   "gh_denied": "Sign-in cancelled on GitHub.",
+  "cf_title": "Send this report?",
+  "cf_where_account": "Where: the public Univers4craft/winlux repository on GitHub, under your name @{login}. Anyone will be able to read it.",
+  "cf_where_token": "Where: the public Univers4craft/winlux repository on GitHub, with the token set up on this machine. Anyone will be able to read it.",
+  "cf_where_relay": "Where: the Winlux reporting service, which publishes it in the public Univers4craft/winlux repository on GitHub.",
+  "cf_where_browser": "Where: the GitHub website, in your browser. The form opens prefilled; nothing is published until you click \"Submit new issue\" on GitHub, where a free GitHub account is needed.",
+  "cf_what": "What: the title \"{title}\" and the report shown in the window ({size}), with the Winlux version and a description of the machine.",
+  "cf_logs": "Attached logs: {logs}.",
+  "cf_no_logs": "No diagnostic log attached.",
+  "cf_redact_on": "Personal data hidden.",
+  "cf_redact_off": "Warning: personal data is not hidden.",
+  "cf_search": "Before sending, Winlux looks on GitHub for an identical report: only the problem's signature or a few words of the summary are sent for this search.",
+  "cf_cancel": "Cancel",
+  "cf_send": "Send",
+  "cf_open": "Open on GitHub",
+  "q_title": "Send the waiting crash reports?",
+  "q_text": "Winlux will publish these {count} crash reports, already anonymised, in the public Univers4craft/winlux repository on GitHub, under your name @{login}:\n\n{titles}\n\nA crash that was already reported gets a comment instead of a new issue.",
+  "q_done": "Reports sent: {count}.",
+  "q_none": "No report waiting.",
+  "q_failed": "Sending stopped ({error}): the remaining reports keep waiting.",
+  "q_need": "First connect your GitHub account in Settings > Report a problem.",
+  "dc_title": "Sign out of @{login}?",
+  "dc_text": "Winlux sends your token to GitHub (api.github.com, revocation service) so that it is revoked for good, then erases it from this PC. GitHub tells you about this revocation by email.",
+  "dc_ok": "Sign out and revoke",
+  "dc_done": "Signed out: the token is revoked at GitHub and erased from this PC.",
+  "dc_failed": "The token is erased from this PC, but GitHub did not confirm its revocation ({error}). Revoke it yourself on the GitHub page that opens.",
+  "dc_none": "No GitHub account connected.",
+  "mine_window": "My reports",
+  "mine_intro": "Reports sent from this PC, and those opened by your connected GitHub account. \"Refresh\" asks GitHub (public Univers4craft/winlux repository) for their state: only the report numbers and the connected account's name are sent.",
+  "mine_empty": "No report sent from this PC yet.",
+  "mine_refresh": "Refresh from GitHub",
+  "mine_view": "View",
+  "mine_updated": "State updated.",
+  "mine_failed": "GitHub does not answer: {error}",
+  "st_open": "open",
+  "st_fixed": "fixed",
+  "st_closed": "closed without change",
+  "st_unknown": "state not asked yet",
   "searching": "Looking for an identical report…", "sending": "Sending…",
   "sent": "Thank you! Report sent: {url}", "commented": "Thank you! Your report was added to the existing issue: {url}",
   "opened": "The GitHub form is open in your browser. Report saved to {path}.",
@@ -317,6 +391,43 @@ T = {
   "gh_failed": "Conexión rechazada: {error}",
   "gh_expired": "El código ha caducado: vuelva a empezar.",
   "gh_denied": "Inicio de sesión cancelado en GitHub.",
+  "cf_title": "¿Enviar este informe?",
+  "cf_where_account": "Dónde: el repositorio público Univers4craft/winlux en GitHub, con su nombre @{login}. Cualquiera podrá leerlo.",
+  "cf_where_token": "Dónde: el repositorio público Univers4craft/winlux en GitHub, con el token configurado en este equipo. Cualquiera podrá leerlo.",
+  "cf_where_relay": "Dónde: el servicio de informes de Winlux, que lo publica en el repositorio público Univers4craft/winlux en GitHub.",
+  "cf_where_browser": "Dónde: el sitio de GitHub, en su navegador. El formulario se abre ya rellenado; no se publica nada hasta que pulse «Submit new issue» en GitHub, donde se necesita una cuenta gratuita de GitHub.",
+  "cf_what": "Qué: el título «{title}» y el informe mostrado en la ventana ({size}), con la versión de Winlux y la descripción del equipo.",
+  "cf_logs": "Registros adjuntos: {logs}.",
+  "cf_no_logs": "Ningún registro de diagnóstico adjunto.",
+  "cf_redact_on": "Datos personales ocultos.",
+  "cf_redact_off": "Atención: los datos personales no están ocultos.",
+  "cf_search": "Antes del envío, Winlux busca en GitHub un informe idéntico: para esta búsqueda solo se envían la firma del problema o algunas palabras del resumen.",
+  "cf_cancel": "Cancelar",
+  "cf_send": "Enviar",
+  "cf_open": "Abrir en GitHub",
+  "q_title": "¿Enviar los fallos en espera?",
+  "q_text": "Winlux publicará estos {count} informes de fallo, ya anonimizados, en el repositorio público Univers4craft/winlux en GitHub, con su nombre @{login}:\n\n{titles}\n\nUn fallo ya informado recibe un comentario en lugar de una nueva incidencia.",
+  "q_done": "Informes enviados: {count}.",
+  "q_none": "Ningún informe en espera.",
+  "q_failed": "Envío interrumpido ({error}): los informes restantes siguen en espera.",
+  "q_need": "Conecte primero su cuenta de GitHub en Configuración > Informar de un problema.",
+  "dc_title": "¿Cerrar la sesión de @{login}?",
+  "dc_text": "Winlux envía su token a GitHub (api.github.com, servicio de revocación) para revocarlo definitivamente y luego lo borra de este PC. GitHub le avisa de esta revocación por correo.",
+  "dc_ok": "Cerrar sesión y revocar",
+  "dc_done": "Sesión cerrada: el token está revocado en GitHub y borrado de este PC.",
+  "dc_failed": "El token se ha borrado de este PC, pero GitHub no ha confirmado su revocación ({error}). Revóquelo usted en la página de GitHub que se abre.",
+  "dc_none": "Ninguna cuenta de GitHub conectada.",
+  "mine_window": "Mis informes",
+  "mine_intro": "Informes enviados desde este PC y los abiertos por su cuenta de GitHub conectada. «Actualizar» pide su estado a GitHub (repositorio público Univers4craft/winlux): solo se envían los números de los informes y el nombre de la cuenta conectada.",
+  "mine_empty": "Todavía no se ha enviado ningún informe desde este PC.",
+  "mine_refresh": "Actualizar desde GitHub",
+  "mine_view": "Ver",
+  "mine_updated": "Estado actualizado.",
+  "mine_failed": "GitHub no responde: {error}",
+  "st_open": "abierto",
+  "st_fixed": "corregido",
+  "st_closed": "cerrado sin cambios",
+  "st_unknown": "estado aún no consultado",
   "searching": "Buscando un informe idéntico…", "sending": "Enviando…",
   "sent": "¡Gracias! Informe enviado: {url}", "commented": "¡Gracias! Su informe se añadió al existente: {url}",
   "opened": "El formulario de GitHub está abierto en el navegador. Informe guardado en {path}.",
@@ -421,6 +532,43 @@ T = {
   "gh_failed": "Verbindung abgelehnt: {error}",
   "gh_expired": "Der Code ist abgelaufen: bitte erneut versuchen.",
   "gh_denied": "Anmeldung bei GitHub abgebrochen.",
+  "cf_title": "Diesen Bericht senden?",
+  "cf_where_account": "Wohin: das öffentliche Repository Univers4craft/winlux auf GitHub, unter Ihrem Namen @{login}. Jeder kann ihn lesen.",
+  "cf_where_token": "Wohin: das öffentliche Repository Univers4craft/winlux auf GitHub, mit dem auf diesem Rechner eingerichteten Token. Jeder kann ihn lesen.",
+  "cf_where_relay": "Wohin: der Meldedienst von Winlux, der ihn im öffentlichen Repository Univers4craft/winlux auf GitHub veröffentlicht.",
+  "cf_where_browser": "Wohin: die GitHub-Website, in Ihrem Browser. Das Formular öffnet sich vorausgefüllt; veröffentlicht wird erst, wenn Sie auf GitHub „Submit new issue“ klicken, wofür ein kostenloses GitHub-Konto nötig ist.",
+  "cf_what": "Was: der Titel „{title}“ und der im Fenster angezeigte Bericht ({size}), mit der Winlux-Version und einer Beschreibung des Rechners.",
+  "cf_logs": "Angehängte Protokolle: {logs}.",
+  "cf_no_logs": "Kein Diagnoseprotokoll angehängt.",
+  "cf_redact_on": "Persönliche Daten ausgeblendet.",
+  "cf_redact_off": "Achtung: Persönliche Daten sind nicht ausgeblendet.",
+  "cf_search": "Vor dem Senden sucht Winlux auf GitHub nach einer gleichen Meldung: Für diese Suche werden nur die Signatur des Problems oder einige Wörter der Zusammenfassung gesendet.",
+  "cf_cancel": "Abbrechen",
+  "cf_send": "Senden",
+  "cf_open": "Auf GitHub öffnen",
+  "q_title": "Wartende Absturzberichte senden?",
+  "q_text": "Winlux veröffentlicht diese {count} bereits anonymisierten Absturzberichte im öffentlichen Repository Univers4craft/winlux auf GitHub, unter Ihrem Namen @{login}:\n\n{titles}\n\nEin bereits gemeldeter Absturz erhält einen Kommentar statt eines neuen Issues.",
+  "q_done": "Gesendete Berichte: {count}.",
+  "q_none": "Kein Bericht wartet.",
+  "q_failed": "Senden unterbrochen ({error}): Die übrigen Berichte warten weiter.",
+  "q_need": "Verbinden Sie zuerst Ihr GitHub-Konto unter Einstellungen > Problem melden.",
+  "dc_title": "Von @{login} abmelden?",
+  "dc_text": "Winlux sendet Ihr Token an GitHub (api.github.com, Widerrufsdienst), damit es endgültig widerrufen wird, und löscht es dann von diesem PC. GitHub informiert Sie per E-Mail über den Widerruf.",
+  "dc_ok": "Abmelden und widerrufen",
+  "dc_done": "Abgemeldet: Das Token ist bei GitHub widerrufen und von diesem PC gelöscht.",
+  "dc_failed": "Das Token ist von diesem PC gelöscht, aber GitHub hat den Widerruf nicht bestätigt ({error}). Widerrufen Sie es selbst auf der GitHub-Seite, die sich öffnet.",
+  "dc_none": "Kein GitHub-Konto verbunden.",
+  "mine_window": "Meine Meldungen",
+  "mine_intro": "Von diesem PC gesendete Meldungen und die von Ihrem verbundenen GitHub-Konto eröffneten. „Aktualisieren“ fragt GitHub (öffentliches Repository Univers4craft/winlux) nach ihrem Stand: Gesendet werden nur die Nummern der Meldungen und der Name des verbundenen Kontos.",
+  "mine_empty": "Von diesem PC wurde noch keine Meldung gesendet.",
+  "mine_refresh": "Von GitHub aktualisieren",
+  "mine_view": "Ansehen",
+  "mine_updated": "Stand aktualisiert.",
+  "mine_failed": "GitHub antwortet nicht: {error}",
+  "st_open": "offen",
+  "st_fixed": "behoben",
+  "st_closed": "ohne Änderung geschlossen",
+  "st_unknown": "Stand noch nicht abgefragt",
   "searching": "Suche nach einer identischen Meldung…", "sending": "Wird gesendet…",
   "sent": "Danke! Meldung gesendet: {url}", "commented": "Danke! Ihr Bericht wurde der bestehenden Meldung hinzugefügt: {url}",
   "opened": "Das GitHub-Formular ist im Browser geöffnet. Bericht gespeichert unter {path}.",
@@ -646,6 +794,114 @@ def save_account(login, token, method):
 
 def forget_account():
     ACCOUNT.unlink(missing_ok=True)
+
+
+# Pages où révoquer soi-même un accès, si GitHub ne confirme pas (#1051).
+REVOKE_PAGES = {"device": f"{GITHUB_WEB}/settings/apps/authorizations",
+                "token": f"{GITHUB_WEB}/settings/tokens"}
+
+
+def revoke_token(token):
+    """Révocation par le service public de GitHub (POST /credentials/revoke,
+    documentation publique) : sans authentification, GitHub refuse une
+    requête authentifiée. Vrai si GitHub l'accepte (202)."""
+    req = urllib.request.Request(f"{API}/credentials/revoke", method="POST",
+                                 data=json.dumps({"credentials": [token]}).encode())
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", "winlux-report")
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as response:
+        return response.status in (200, 202)
+
+
+def disconnect_account():
+    """« Se déconnecter » (#1051) : révoque le jeton chez GitHub, puis
+    l'efface de ce PC dans tous les cas. Rend (login, méthode, erreur)."""
+    data = account()
+    if not data:
+        return "", "", ""
+    error = ""
+    try:
+        if not revoke_token(data["token"]):
+            error = "réponse inattendue"
+    except (OSError, ValueError, urllib.error.URLError) as failure:
+        error = str(failure) or failure.__class__.__name__
+    forget_account()
+    return data["login"], data.get("method", "token"), error
+
+
+# Mes signalements (#1052) : ce qui est parti de ce PC, avec son état.
+SENT_LOG = STATE / "sent-reports.json"
+SENT_KEEP = 200
+
+
+def record_sent(url, title, via):
+    match = re.search(rf"github\.com/{re.escape(REPO)}/issues/(\d+)", url or "")
+    if not match:
+        return None
+    number = int(match.group(1))
+    entries = [e for e in load_json(SENT_LOG, []) if isinstance(e, dict) and isinstance(e.get("number"), int)]
+    now = int(time.time())
+    for entry in entries:
+        if entry["number"] == number:
+            entry["last"] = now
+            entry["count"] = entry.get("count", 1) + 1
+            break
+    else:
+        entries.append({"number": number, "title": title[:200], "via": via, "date": now, "last": now,
+                        "count": 1, "state": ""})
+    STATE.mkdir(parents=True, exist_ok=True)
+    save_json(SENT_LOG, entries[-SENT_KEEP:])
+    return number
+
+
+def report_state(issue):
+    """open, fixed (fermée comme réalisée) ou closed (fermée sans suite)."""
+    if issue.get("state") == "open":
+        return "open"
+    return "fixed" if issue.get("state_reason") in (None, "completed") else "closed"
+
+
+def my_reports():
+    entries = [e for e in load_json(SENT_LOG, []) if isinstance(e, dict) and isinstance(e.get("number"), int)]
+    return sorted(entries, key=lambda e: e.get("last", e.get("date", 0)), reverse=True)
+
+
+def refresh_reports(token=None, login="", limit=30):
+    """Demande l'état à GitHub, sur clic seulement : les numéros des
+    signalements et, s'il y en a un, le nom du compte relié."""
+    entries = {e["number"]: e for e in my_reports()}
+    seen = set()
+    if login:
+        query = urllib.parse.urlencode({"creator": login, "state": "all", "per_page": 50})
+        for issue in http("GET", f"{API}/repos/{REPO}/issues?{query}", token=token):
+            if "pull_request" in issue or not isinstance(issue.get("number"), int):
+                continue
+            entry = entries.setdefault(issue["number"], {"number": issue["number"], "via": "account",
+                                                         "date": utc_seconds(issue.get("created_at", "")) or 0,
+                                                         "count": 1})
+            entry.update(title=issue.get("title", "")[:200], state=report_state(issue))
+            entry.setdefault("last", entry["date"])
+            seen.add(issue["number"])
+    for number in [n for n in entries if n not in seen][:limit]:
+        issue = http("GET", f"{API}/repos/{REPO}/issues/{number}", token=token)
+        entries[number].update(title=issue.get("title", entries[number].get("title", ""))[:200],
+                               state=report_state(issue))
+    STATE.mkdir(parents=True, exist_ok=True)
+    save_json(SENT_LOG, sorted(entries.values(), key=lambda e: e.get("last", e.get("date", 0)))[-SENT_KEEP:])
+    return my_reports()
+
+
+def confirm_lines(kind, title, body, attach, redacted, login="", language=None):
+    """Confirmation avant envoi (#1049) : ce qui part, et où."""
+    L = language
+    where = tr("cf_where_" + kind, L, login=login or "?")
+    logs = [tr("d_" + d, L) for d in attach]
+    return [where,
+            tr("cf_what", L, title=title, size=human_size(len(body.encode()), L)),
+            tr("cf_logs", L, logs=", ".join(logs)) if logs else tr("cf_no_logs", L),
+            tr("cf_redact_on" if redacted else "cf_redact_off", L),
+            tr("cf_search", L)]
 
 
 def connect_token(text):
@@ -1490,6 +1746,8 @@ class Report:
             self.checks.insert(0, (False, tr("k_prev", self.language, reason=reason)))
         self.signature = signature(crash) or system_signature(system)
         self.attach = []
+        # Fenêtre ouverte : aucun journal sans case cochée par l'utilisateur (#1050).
+        self.interactive = False
         path = (crash or {}).get("path", "")
         self.exe_name = (crash or {}).get("exe", "") or component or ""
         self.exe = pe_version(path) if path.lower().endswith((".exe", ".dll", ".com", ".scr")) else {}
@@ -1614,7 +1872,7 @@ class Report:
         if self.journal:
             out += [f"<details><summary>{tr('h_journal', L)}</summary>", "", "```"]
             out += [l[:300].replace("```", "'''") for l in self.journal] + ["```", "", "</details>", ""]
-        if self.kind() in ("manual", "system"):
+        if self.kind() in ("manual", "system") and (not self.interactive or "network" in self.attach):
             for title, lines in network_tail():
                 out += [f"<details><summary>{tr('h_network', L)} ({title})</summary>", "", "```"]
                 out += [l[:300].replace("```", "'''") for l in lines] + ["```", "", "</details>", ""]
@@ -1836,7 +2094,11 @@ TIME_CONF = Path(os.environ.get("WINLUX_TIME_CONF", "/etc/winlux/time.conf"))
 _sent_this_run = [0]
 
 
+_last_log = [""]
+
+
 def auto_log(message):
+    _last_log[0] = message
     try:
         AUTO_DIR.mkdir(parents=True, exist_ok=True)
         log = AUTO_DIR / "journal.log"
@@ -2010,11 +2272,12 @@ def deliver(conf, item, sent, token=None, api=None):
     return True
 
 
-def flush(conf=None):
+def flush(conf=None, token=None):
     """Vide la file vers GitHub. Rend le nombre d'envois, ou None si le
-    réseau, l'horloge ou la cible manquent (la file attend)."""
+    réseau, l'horloge ou la cible manquent (la file attend). token : jeton du
+    compte relié, sur demande confirmée de l'utilisateur (#1052)."""
     conf = conf or config()
-    kind = transport(conf)
+    kind = "token" if token else transport(conf)
     if kind not in ("relay", "token", "system"):
         return None
     if not clock_ready():
@@ -2046,7 +2309,11 @@ def flush(conf=None):
                             auto_log(f"service système : envoi reporté ({code})")
                             return done or None
                     else:
-                        deliver(conf, item, sent)
+                        deliver(conf, item, sent, token=token)
+                        if token:
+                            number = sent.get(item.get("signature") or item["key"], {}).get("issue")
+                            if number:
+                                record_sent(f"https://github.com/{REPO}/issues/{number}", item["title"], "account")
                 except urllib.error.HTTPError as error:
                     auto_log(f"refus de GitHub ({error.code}) : envoi reporté")
                     if error.code == 422:  # rapport invalide : inutile de réessayer
@@ -2368,6 +2635,143 @@ def account_gui():
     return 0
 
 
+def _gtk():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, GLib
+    return Gtk, GLib
+
+
+def _message(Gtk, text, secondary="", kind=None):
+    dialog = Gtk.MessageDialog(modal=True, message_type=kind or Gtk.MessageType.INFO,
+                               buttons=Gtk.ButtonsType.CLOSE, text=text, title=f"{tr('gh_window')} — Winlux")
+    if secondary:
+        dialog.format_secondary_text(secondary)
+    dialog.run()
+    dialog.destroy()
+
+
+def _ask(Gtk, text, secondary, ok_label):
+    """Question avec Annuler par défaut."""
+    dialog = Gtk.MessageDialog(modal=True, message_type=Gtk.MessageType.QUESTION,
+                               text=text, title=f"{tr('gh_window')} — Winlux")
+    dialog.format_secondary_text(secondary)
+    dialog.add_button(tr("cf_cancel"), Gtk.ResponseType.CANCEL)
+    dialog.add_button(ok_label, Gtk.ResponseType.OK)
+    dialog.set_default_response(Gtk.ResponseType.CANCEL)
+    answer = dialog.run()
+    dialog.destroy()
+    return answer == Gtk.ResponseType.OK
+
+
+def disconnect_gui():
+    """Paramètres > « Se déconnecter » (#1051)."""
+    Gtk, _ = _gtk()
+    login = account().get("login", "")
+    if not login:
+        _message(Gtk, tr("dc_none"))
+        return 0
+    if not _ask(Gtk, tr("dc_title", login=login), tr("dc_text"), tr("dc_ok")):
+        return 1
+    login, method, error = disconnect_account()
+    if error:
+        open_url(REVOKE_PAGES.get(method, REVOKE_PAGES["token"]))
+        _message(Gtk, tr("dc_failed", error=error), kind=Gtk.MessageType.WARNING)
+    else:
+        _message(Gtk, tr("dc_done"))
+    return 0
+
+
+def send_queue_gui():
+    """Plantages en attente envoyés avec le compte relié, après accord (#1052)."""
+    Gtk, _ = _gtk()
+    data = account()
+    if not data:
+        _message(Gtk, tr("q_need"))
+        return 1
+    titles = [load_json(path, {}).get("title", "") for path in sorted(QUEUE.glob("*.json"))] if QUEUE.exists() else []
+    titles = [t for t in titles if t]
+    if not titles:
+        _message(Gtk, tr("q_none"))
+        return 0
+    listed = "\n".join("• " + t for t in titles[:AUTO_MAX_SENDS])
+    if len(titles) > AUTO_MAX_SENDS:
+        listed += "\n…"
+    count = min(len(titles), AUTO_MAX_SENDS)
+    if not _ask(Gtk, tr("q_title"), tr("q_text", count=count, login=data["login"], titles=listed), tr("cf_send")):
+        return 1
+    done = flush(config(), token=data["token"])
+    if done is None:
+        _message(Gtk, tr("q_failed", error=_last_log[0] or "?"), kind=Gtk.MessageType.WARNING)
+        return 1
+    _message(Gtk, tr("q_done", count=done))
+    return 0
+
+
+def mine_gui():
+    """Fenêtre « Mes signalements » (#1052)."""
+    Gtk, GLib = _gtk()
+    win = Gtk.Window(title=f"{tr('mine_window')} — Winlux")
+    win.set_default_size(640, 460)
+    win.connect("destroy", Gtk.main_quit)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=18)
+    win.add(box)
+    box.pack_start(Gtk.Label(label=tr("mine_intro"), xalign=0, wrap=True, max_width_chars=80), False, False, 0)
+    listing = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+    scroll = Gtk.ScrolledWindow(vexpand=True)
+    scroll.add(listing)
+    box.pack_start(scroll, True, True, 0)
+    notice = Gtk.Label(label="", xalign=0, wrap=True)
+    box.pack_start(notice, False, False, 0)
+    buttons = Gtk.Box(spacing=8)
+    refresh = Gtk.Button(label=tr("mine_refresh"))
+    close = Gtk.Button(label=tr("gh_close"))
+    close.connect("clicked", lambda *_: win.destroy())
+    buttons.pack_start(refresh, False, False, 0)
+    buttons.pack_end(close, False, False, 0)
+    box.pack_end(buttons, False, False, 0)
+
+    def fill(entries):
+        for child in listing.get_children():
+            listing.remove(child)
+        if not entries:
+            listing.add(Gtk.Label(label=tr("mine_empty"), xalign=0, margin=8))
+        for entry in entries:
+            row = Gtk.Box(spacing=10, margin=6)
+            when = time.strftime("%d/%m/%Y", time.localtime(entry.get("date", 0))) if entry.get("date") else ""
+            state = tr("st_" + entry["state"]) if entry.get("state") in ("open", "fixed", "closed") else tr("st_unknown")
+            text = f"#{entry['number']}  {entry.get('title', '')}\n{state} · {when}"
+            row.pack_start(Gtk.Label(label=text, xalign=0, wrap=True, max_width_chars=60), True, True, 0)
+            row.pack_end(Gtk.LinkButton(uri=f"https://github.com/{REPO}/issues/{entry['number']}",
+                                        label=tr("mine_view")), False, False, 0)
+            listing.add(row)
+        listing.show_all()
+
+    def done(entries, error):
+        refresh.set_sensitive(True)
+        notice.set_text(tr("mine_failed", error=error) if error else tr("mine_updated"))
+        if entries is not None:
+            fill(entries)
+
+    def work():
+        data = account()
+        try:
+            GLib.idle_add(done, refresh_reports(data.get("token"), data.get("login", "")), "")
+        except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError) as error:
+            GLib.idle_add(done, None, str(error))
+
+    def on_refresh(*_):
+        refresh.set_sensitive(False)
+        notice.set_text(tr("gh_checking"))
+        threading.Thread(target=work, daemon=True).start()
+    refresh.connect("clicked", on_refresh)
+    fill(my_reports())
+    win.show_all()
+    Gtk.main()
+    return 0
+
+
 def gui(report, conf):
     import gi
     gi.require_version("Gtk", "3.0")
@@ -2445,12 +2849,13 @@ def gui(report, conf):
     attach_checks = {}
     for domain in DIAG_DOMAINS:
         check = Gtk.CheckButton(label=tr("d_" + domain, L))
-        # Problème du système ou libre : journaux joints d'office (décochables).
-        check.set_active(report.crash is None)
+        # Aucun journal ne part sans que l'utilisateur coche la case (#1050).
+        check.set_active(False)
         attach_checks[domain] = check
         attach_row.add(check)
     box.pack_start(attach_row, False, False, 0)
     report.attach = [d for d, c in attach_checks.items() if c.get_active()]
+    report.interactive = True
 
     expander = Gtk.Expander(label=tr("preview", L))
     preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -2574,39 +2979,35 @@ def gui(report, conf):
             def work():
                 try:
                     url = send_api(conf, title, body, labels, issue, kind)
+                    record_sent(url, title, kind)
                     GLib.idle_add(finish, tr("commented" if issue else "sent", L, url=url), url)
                 except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
                     GLib.idle_add(fallback, title, body, labels, issue, path, str(error))
             threading.Thread(target=work, daemon=True).start()
-        elif kind == "browser" and not explain_account(short(path)):
-            finish(tr("saved", L, path=path))
         else:
             fallback(title, body, labels, issue, path, None)
 
-    def short(path):
-        home = str(Path.home())
-        text = str(path)
-        return "~" + text[len(home):] if home != "/" and text.startswith(home) else text
-
-    def explain_account(path):
-        """Tant que le relais n'est pas en ligne, l'envoi passe par le site
-        GitHub : on le dit clairement avant d'ouvrir le navigateur."""
-        dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.INFO,
-                                   text=tr("acct_title", L), title=tr("window", L))
-        notice.set_text("")
-        dialog.format_secondary_text(tr("acct_text", L, path=path))
-        dialog.add_button(tr("acct_later", L), 0)
-        dialog.add_button(tr("acct_signup", L), 2)
-        dialog.add_button(tr("acct_open", L), 1).get_style_context().add_class("suggested-action")
-        dialog.set_default_response(1)
+    def confirm_send():
+        """Ce qui part et où, Annuler par défaut (#1049). Sans compte, la
+        fenêtre propose aussi d'en créer un."""
+        lines = confirm_lines(kind, title_entry.get_text(), body_text(), report.attach, mask.get_active(),
+                              account().get("login", ""), L)
+        dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   text=tr("cf_title", L), title=tr("window", L))
+        dialog.format_secondary_text("\n\n".join(lines))
+        dialog.add_button(tr("cf_cancel", L), Gtk.ResponseType.CANCEL)
+        if kind == "browser":
+            dialog.add_button(tr("acct_signup", L), 2)
+        dialog.add_button(tr("cf_open" if kind == "browser" else "cf_send", L), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
         while True:
             answer = dialog.run()
             if answer == 2:
-                open_url("https://github.com/signup")
+                open_url(SIGNUP_URL)
                 continue
             break
         dialog.destroy()
-        return answer == 1
+        return answer == Gtk.ResponseType.OK
 
     def fallback(title, body, labels, issue, path, error):
         url, truncated = browser_url(title, body, labels, issue)
@@ -2660,6 +3061,8 @@ def gui(report, conf):
         if kind == "file":
             on_save()
             finish(notice.get_text())
+            return
+        if not confirm_send():
             return
         busy(tr("searching", L))
 
@@ -2719,6 +3122,12 @@ def main(argv):
     if "--account-forget" in args:
         forget_account()
         return 0
+    if "--account-disconnect" in args:
+        return disconnect_gui()
+    if "--mine" in args:
+        return mine_gui()
+    if "--send-queue" in args:
+        return send_queue_gui()
     if "--account-token" in args:
         # Jeton lu sur l'entrée standard, jamais sur la ligne de commande.
         try:

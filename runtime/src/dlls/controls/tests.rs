@@ -1163,6 +1163,11 @@ fn wm_print_peint_barre_d_etat_et_onglets_dessines_par_le_parent() {
     sendw(status, 0x040B, 1 | 0x1000, 0x55); // SBT_OWNERDRAW
     let parts = [100i32, -1];
     sendw(status, 0x0404, 2, parts.as_ptr() as isize); // SB_SETPARTS
+                                                       // SB_GETBORDERS remplit ses trois entiers : wxWidgets en tire la
+                                                       // hauteur de la barre (#1053).
+    let mut borders = [i32::MIN; 3];
+    assert_eq!(sendw(status, 0x0407, 0, borders.as_mut_ptr() as isize), 1);
+    assert_eq!(borders, [0, 2, 2]);
     DRAWN.lock().unwrap().clear();
     let (dc, bmp) = memory_dc(400, 26);
     // WM_PRINT (PRF_CLIENT | PRF_ERASEBKGND) : rendu dans le DC fourni.

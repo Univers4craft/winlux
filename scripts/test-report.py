@@ -339,5 +339,118 @@ g["device_start"]("Iv23liGAitONmE9ke1ZT")
 g["form_post"] = lambda url, fields: sent.append(fields) or {"error": "authorization_pending"}
 g["device_poll"]("Iv23liGAitONmE9ke1ZT", "d")
 assert all("client_secret" not in f for f in sent) and sent[0] == {"client_id": "Iv23liGAitONmE9ke1ZT"}, sent
+
+# #1049 : confirmation « quoi / où » avant tout envoi.
+lines = g["confirm_lines"]("account", "[Bug] Wi-Fi", "x" * 2048, [], True, "alice-dev", "fr")
+assert "Univers4craft/winlux" in lines[0] and "@alice-dev" in lines[0], lines
+assert "« [Bug] Wi-Fi »" in lines[1] and "2 Ko" in lines[1] and lines[2] == "Aucun journal de diagnostic joint.", lines
+lines = g["confirm_lines"]("browser", "t", "b", ["network", "sound"], False, "", "en")
+assert "Submit new issue" in lines[0] and lines[2] == "Attached logs: Network and Wi-Fi, Sound." and "not hidden" in lines[3], lines
+for language in ("fr", "en", "es", "de"):
+    for kind in ("account", "token", "relay", "browser"):
+        assert all(g["confirm_lines"](kind, "t", "b", ["boot"], True, "x", language)), (language, kind)
+    for key in ("dc_title", "dc_text", "dc_ok", "q_text", "mine_intro", "st_fixed", "cf_cancel"):
+        assert key in g["T"][language], (language, key)
+source = Path(__file__).with_name("winlux-report.py").read_text()
+assert "check.set_active(False)" in source and "set_default_response(Gtk.ResponseType.CANCEL)" in source
+assert "if not confirm_send():" in source and "explain_account" not in source
+# #1050 : fenêtre ouverte, le journal du réseau ne part qu'avec la case.
+asked = r["Report"](None, language="fr")
+asked.interactive = True
+assert "Journal du réseau" not in asked.body("Wi-Fi", redacted=True)
+asked.attach = ["network"]
+assert "Journal du réseau (NetworkManager)" in asked.body("Wi-Fi", redacted=True)
+
+# #1051 : « Se déconnecter » révoque le jeton chez GitHub, sans s'authentifier.
+sent_requests = []
+
+
+class FakeOpener:
+    def __init__(self, status=202, error=None):
+        self.status, self.error = status, error
+
+    def open(self, req, timeout=20):
+        sent_requests.append(req)
+        if self.error:
+            raise self.error
+        status = self.status
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        answer = Answer()
+        answer.status = status
+        return answer
+
+
+urllib_request = g["urllib"].request
+real_opener = urllib_request.build_opener
+token = "ghp_" + "a" * 36
+try:
+    urllib_request.build_opener = lambda *handlers: FakeOpener()
+    g["save_account"]("alice-dev", token, "token")
+    assert g["disconnect_account"]() == ("alice-dev", "token", "")
+    req = sent_requests[-1]
+    assert req.full_url.endswith("/credentials/revoke") and req.get_method() == "POST"
+    assert req.get_header("Authorization") is None, "révocation : GitHub refuse une requête authentifiée"
+    assert g["json"].loads(req.data) == {"credentials": [token]}
+    assert g["account"]() == {}
+    urllib_request.build_opener = lambda *handlers: FakeOpener(error=g["urllib"].error.URLError("hors ligne"))
+    g["save_account"]("alice-dev", "gho_x", "device")
+    login, method, error = g["disconnect_account"]()
+    assert (login, method) == ("alice-dev", "device") and "hors ligne" in error
+    assert g["account"]() == {}, "jeton effacé même si GitHub ne répond pas"
+    assert g["REVOKE_PAGES"]["device"].endswith("/settings/apps/authorizations")
+    assert g["disconnect_account"]() == ("", "", "")
+finally:
+    urllib_request.build_opener = real_opener
+
+# #1052 : mes signalements, état demandé à GitHub, file envoyée avec le compte.
+assert g["record_sent"]("https://github.com/Univers4craft/winlux/issues/77", "[Bug] a", "account") == 77
+assert g["record_sent"]("https://github.com/Univers4craft/winlux/issues/77#issuecomment-1", "[Bug] a", "account") == 77
+assert g["record_sent"]("https://example.org/issues/5", "x", "relay") is None
+assert [e["number"] for e in g["my_reports"]()] == [77] and g["my_reports"]()[0]["count"] == 2
+asked_urls = []
+
+
+def state_http(method, url, payload=None, token=None, timeout=20):
+    asked_urls.append((method, url, token))
+    if "creator=alice-dev" in url:
+        return [{"number": 90, "title": "[Bug] b", "state": "closed", "state_reason": "not_planned",
+                 "created_at": "2026-11-08T10:00:00Z"},
+                {"number": 91, "title": "PR", "state": "open", "pull_request": {}}]
+    if url.endswith("/issues/77"):
+        return {"number": 77, "title": "[Bug] a (corrigé)", "state": "closed", "state_reason": "completed"}
+    if "/issues/" in url and method == "POST":
+        return {"html_url": "https://github.com/x/y/issues/1"}
+    if url.endswith("/repos/Univers4craft/winlux/issues") and method == "POST":
+        return {"number": 120, "html_url": "https://github.com/Univers4craft/winlux/issues/120"}
+    return {"items": []}
+
+
+g["http"] = state_http
+listed = {e["number"]: e for e in g["refresh_reports"]("tok", "alice-dev")}
+assert set(listed) == {77, 90}, listed
+assert listed[77]["state"] == "fixed" and listed[77]["title"] == "[Bug] a (corrigé)" and listed[90]["state"] == "closed"
+assert all(m == "GET" for m, _, _ in asked_urls)
+assert g["report_state"]({"state": "open"}) == "open"
+queue = g["QUEUE"]
+queue.mkdir(parents=True, exist_ok=True)
+for old in queue.glob("*.json"):
+    old.unlink()
+g["save_json"](queue / "20261108-a.json", {"key": "k1", "signature": "", "kind": "crash", "title": "[Plantage] z.exe",
+                                         "labels": ["bug"], "body": "corps", "comment": "re"})
+g["clock_ready"] = lambda now=None: True
+asked_urls.clear()
+assert g["flush"](g["config"](), token="ghu_compte") == 1
+assert not list(queue.glob("*.json")) and asked_urls[-1] == ("POST", f"{g['API']}/repos/Univers4craft/winlux/issues", "ghu_compte")
+assert 120 in {e["number"] for e in g["my_reports"]()}
+assert '"--account-disconnect"' in source and '"--mine"' in source and '"--send-queue"' in source
+pages = Path(__file__).with_name("winlux-settings-pages.py").read_text()
+assert '"--account-disconnect"' in pages and '"--mine"' in pages and '"--send-queue"' in pages
+assert '"--account-forget"]' not in pages, "Se déconnecter doit révoquer le jeton"
 g["http"] = real_http
 print("winlux-report : tests OK")
