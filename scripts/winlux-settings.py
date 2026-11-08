@@ -617,6 +617,8 @@ def _update_page():
 
 
 UPDATE_PAGE = 7
+# Mode d'alimentation lu (power-profiles) → nom affiché, comme ses boutons.
+POWER_PROFILE_NAMES = {"performance": "Performances maximales", "balanced": "Équilibré", "power-saver": "Économie d'énergie"}
 
 
 def _power_modes():
@@ -705,7 +707,7 @@ SETTINGS_CSS = """
   entry {{ background: {entry}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 8px; }}
   entry:disabled {{ color: {disabled_fg}; }}
   selection, entry selection {{ background: {selected}; color: {selected_fg}; }}
-  button {{ background: {button}; color: {fg}; border: 1px solid {accent}; border-radius: 6px; padding: 10px 14px;
+  button {{ background: {button}; color: {fg}; border: 1px solid {border}; border-radius: 6px; padding: 8px 16px;
            box-shadow: none; background-image: none; text-shadow: none; }}
   button label {{ color: {fg}; }}
   button:hover {{ background: {button_hover}; }}
@@ -717,7 +719,14 @@ SETTINGS_CSS = """
   switch:checked {{ background: {accent}; border-color: {accent}; }}
   .heading {{ font-size: 24px; font-weight: bold; }}
   .subtitle, label.subtitle {{ color: {dim}; }}
-  .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; }}
+  .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; border: 1px solid {card_border}; }}
+  .state-value {{ color: {dim}; }}
+  switch {{ border: 1px solid {border}; }}
+  switch:checked {{ background: {accent}; border-color: {accent}; }}
+  switch slider {{ background: #ffffff; border: 1px solid {border}; }}
+  scale trough {{ background: {border}; border: none; min-height: 4px; }}
+  scale highlight {{ background: {accent}; border: none; }}
+  scale slider {{ background: #ffffff; border: 1px solid {border}; }}
   .section {{ font-size: 16px; font-weight: bold; margin-top: 6px; }}
 """
 
@@ -879,7 +888,25 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         extra = self.page in EXTRA.ExtraPages.EXTRA_PAGES
         self.update_panel = None
         # Les pages branchées affichent leurs propres réglages : pas de cadre d'état vide.
-        self.state = Gtk.Label() if extra or self.page == UPDATE_PAGE else self.label(_t("Chargement…"), "card")
+        self.state_grid = None
+        self.state_names = None
+        if extra or self.page == UPDATE_PAGE:
+            self.state = Gtk.Label()
+        else:
+            # Carte d'état en lignes « nom … valeur », comme les autres pages,
+            # au lieu d'un bloc « Nom : valeur » brut.
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            card.get_style_context().add_class("card")
+            self.state_grid = Gtk.Grid(column_spacing=24, row_spacing=10)
+            self.state_grid.set_no_show_all(True)
+            card.pack_start(self.state_grid, False, False, 0)
+            self.state = Gtk.Label(label=_t("Chargement…"), xalign=0, wrap=True, selectable=True)
+            card.pack_start(self.state, False, False, 0)
+            self.state_extra = Gtk.Label(xalign=0, wrap=True, selectable=True)
+            self.state_extra.get_style_context().add_class("subtitle")
+            self.state_extra.set_no_show_all(True)
+            card.pack_start(self.state_extra, False, False, 0)
+            self.body.pack_start(card, False, False, 0)
         actions = list(ACTIONS.get(self.page, []))
         if self.page == 23:
             # Modes Économie / Normal / Turbo : seulement ceux que la machine sait appliquer.
@@ -893,8 +920,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
             actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
                        for verb, action in (("Installer {name}", "install"), ("Définir {name} par défaut", "default"), ("Ouvrir {name}", "launch"))]
-        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
-                           row_spacing=8, column_spacing=8)
+        # Boutons à leur largeur naturelle, à la ligne quand la place manque
+        # (allemand, petit écran) ; plus de grandes cases étirées.
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4,
+                           row_spacing=8, column_spacing=8, homogeneous=False)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
         self.rollback_button = None
@@ -948,7 +977,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
     def privacy_controls(self):
         """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
-        self.label(_t("Verrouillage de l’écran"), "subtitle")
+        self.label(_t("Verrouillage de l’écran"), "section")
         row = Gtk.Box(spacing=12)
         row.pack_start(Gtk.Label(label=_t("Verrouiller automatiquement après"), xalign=0), True, True, 0)
         delays = Gtk.ComboBoxText()
@@ -972,7 +1001,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
     def permission_controls(self):
         """Autorisations des .exe : interrupteurs globaux, puis une carte par application."""
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
-        self.label(_t("Autorisations des applications Windows"), "subtitle")
+        self.label(_t("Autorisations des applications Windows"), "section")
         self.label(_t("Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment."))
         for key, action, title in (("privacy_camera", "privacy-camera", _t("Caméra pour toutes les applications")),
                                    ("privacy_microphone", "privacy-microphone", _t("Micro pour toutes les applications"))):
@@ -1104,9 +1133,16 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                     return value
             if key == "browser_default":
                 return browser_default_text(status)
+            if key == "power_profile" and value in POWER_PROFILE_NAMES:
+                return _t(POWER_PROFILE_NAMES[value])
             return value or _t("Indisponible")
-        text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
-        if self.page == UPDATE_PAGE: text = ""
+        rows = [(label, shown(key)) for label, key in fields]
+        # Une valeur que la machine ne donne pas n'occupe pas de ligne.
+        known = [(label, value) for label, value in rows if value != _t("Indisponible")]
+        rows = known or rows
+        prefix = suffix = ""
+        text = "\n".join(_t("{label} : {value}").format(label=label, value=value) for label, value in rows)
+        if self.page == UPDATE_PAGE: text = ""; rows = []
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.rollback_button is not None:
@@ -1115,19 +1151,23 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.update_panel is not None:
             # Une seule source pour la carte, la version précédente et l'avis (#636).
             self.update_panel.refresh(status)
-        if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
+        if self.page == 9:
+            suffix = about_build(read("/usr/share/winlux/BUILD-INFO")).strip()
+            text += "\n" + suffix
         if self.page == 11:
             self.show_browser_buttons(status)
             waiting = browsers_waiting()
             if waiting:
                 text += "\n" + _t("En attente d’Internet, installé au prochain démarrage connecté : {names}").format(names=", ".join(waiting))
-        if self.page == GRAPHICS_PAGE: text = gpu_summary()
-        if self.page == CPU_PAGE: text = cpu_summary()
-        if self.page == PRIVACY_PAGE: text = privacy_summary(status)
+        if self.page == GRAPHICS_PAGE: text = gpu_summary(); rows = []
+        if self.page == CPU_PAGE: text = cpu_summary(); rows = []
+        if self.page == PRIVACY_PAGE: text = privacy_summary(status); rows = []
         if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
             name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
-            text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
+            prefix = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name)
+            text = prefix + "\n" + text
         if self.state.get_text() != text: self.state.set_text(text)
+        self.render_state(rows, "\n".join(part for part in (prefix, suffix) if part))
         if self.process is None:
             try:
                 fresh = os.stat(control_file("action.txt")).st_mtime >= getattr(self, "page_opened", 0) - 1
@@ -1135,6 +1175,32 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 fresh = False
             self.notice.set_text(localize_update_text(read(control_file("action.txt")).strip()) if fresh and self.page != UPDATE_PAGE else "")
         return True
+
+    def render_state(self, rows, extra):
+        """Lignes nom/valeur de la carte d'état ; le texte brut reste pour les résumés."""
+        grid = getattr(self, "state_grid", None)
+        if grid is None: return
+        self.state.set_visible(not rows)
+        grid.set_visible(bool(rows))
+        self.state_extra.set_visible(bool(rows and extra))
+        if rows and self.state_extra.get_text() != extra: self.state_extra.set_text(extra)
+        if not rows: return
+        names = [label for label, _ in rows]
+        if getattr(self, "state_names", None) != names:
+            for child in grid.get_children(): child.destroy()
+            self.state_values = []
+            for index, (label, _) in enumerate(rows):
+                name = Gtk.Label(label=label, xalign=0)
+                value = Gtk.Label(xalign=1, hexpand=True, selectable=True, ellipsize=3)
+                value.get_style_context().add_class("state-value")
+                grid.attach(name, 0, index, 1, 1)
+                grid.attach(value, 1, index, 1, 1)
+                self.state_values.append(value)
+            self.state_names = names
+            # show_all() ne fait rien sur une grille « no_show_all » : chaque ligne est montrée.
+            for child in grid.get_children(): child.show()
+        for widget, (_, value) in zip(self.state_values, rows):
+            if widget.get_text() != value: widget.set_text(value)
 
     def show_update_error(self, action, result):
         stages = {"checking": _t("Recherche et préparation"), "downloading": _t("Téléchargement"), "verifying": _t("Vérification"),

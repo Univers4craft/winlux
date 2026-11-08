@@ -881,6 +881,8 @@ def settings_palette(dark, accent="#6a3df0"):
              "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
              "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
     p["accent"] = accent
+    # Bord discret des cartes, à mi-chemin entre la carte et le contour des champs.
+    p["card_border"] = mix(p["card"], p["border"], 0.5)
     # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
     p["selected"] = mix(p["side"], accent, 0.45)
     p["selected_fg"] = text_on(p["selected"])
