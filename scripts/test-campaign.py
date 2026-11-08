@@ -1139,6 +1139,12 @@ ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testex
    "Shell PE : WINLUX_LANG choisit la langue (#1026)")
 ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
    "Shell PE : winlux-shell-app notepad (#1027)")
+ok('"AllowSetForegroundWindow"=>fn allow_set_foreground_window' in (runtime_dlls / "user32.rs").read_text(),
+   "user32 : AllowSetForegroundWindow et LockSetForegroundWindow exportées (#1074, Flow Launcher)")
+gui_source = (runtime_dlls / "gui.rs").read_text()
+ok("fn la_fenetre_existe_encore_pendant_wm_destroy" in gui_source
+   and "la_fenetre_existe_encore_pendant_wm_destroy" in (SCRIPTS / "test-all.sh").read_text(),
+   "DestroyWindow : la fenêtre et son fil restent connus pendant WM_DESTROY et WM_NCDESTROY (#1079, Paint.NET)")
 # #16 : activation COM depuis le registre (InprocServer32 → DllGetClassObject),
 # CoCreateInstanceEx, CoFreeUnusedLibraries ; vérifiée par com_suite.exe.
 com_registry = (ROOT / "runtime/src/dlls/com_registry.rs").read_text(encoding="utf-8")
