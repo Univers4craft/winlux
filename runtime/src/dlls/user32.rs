@@ -2726,6 +2726,25 @@ pub extern "win64" fn set_foreground_window(hwnd: usize) -> i32 {
     1
 }
 
+/// `AllowSetForegroundWindow(dwProcessId)` : sous Windows, autorise un
+/// autre processus (ou tous, `ASFW_ANY`) à passer au premier plan. Winlux
+/// ne restreint pas ce passage d'un processus à l'autre : rien à accorder,
+/// l'appel réussit toujours (#1074, Flow Launcher).
+pub extern "win64" fn allow_set_foreground_window(_process_id: u32) -> i32 {
+    1
+}
+
+/// `LockSetForegroundWindow(uLockCode)` (`LSFW_LOCK` 1, `LSFW_UNLOCK` 2) :
+/// sans verrou de premier plan dans Winlux, l'appel réussit sans effet.
+pub extern "win64" fn lock_set_foreground_window(lock_code: u32) -> i32 {
+    if matches!(lock_code, 1 | 2) {
+        1
+    } else {
+        crate::process::set_last_error(87);
+        0
+    }
+}
+
 // =====================================================================
 // Hooks stubs
 // =====================================================================
@@ -3624,6 +3643,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetActiveWindow"=>fn get_active_window, "SetActiveWindow"=>fn set_active_window,
         "GetForegroundWindow"=>fn get_foreground_window,
         "SetForegroundWindow"=>fn set_foreground_window,
+        "AllowSetForegroundWindow"=>fn allow_set_foreground_window,
+        "LockSetForegroundWindow"=>fn lock_set_foreground_window,
         "BringWindowToTop"=>fn bring_window_to_top,
         "GetDesktopWindow"=>fn get_desktop_window,
         "GetLastActivePopup"=>fn get_last_active_popup,
@@ -4336,5 +4357,15 @@ mod tests_winforms {
         let unknown: Vec<u16> = "PasUneClasse_269".encode_utf16().chain([0]).collect();
         let r = unsafe { get_class_info_ex_w(0, unknown.as_ptr(), wc.as_mut_ptr().cast()) };
         assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn premier_plan_autorise_et_verrou_sans_effet() {
+        // ASFW_ANY (-1) et un identifiant quelconque (#1074).
+        assert_eq!(allow_set_foreground_window(u32::MAX), 1);
+        assert_eq!(allow_set_foreground_window(4242), 1);
+        assert_eq!(lock_set_foreground_window(1), 1);
+        assert_eq!(lock_set_foreground_window(2), 1);
+        assert_eq!(lock_set_foreground_window(7), 0);
     }
 }
