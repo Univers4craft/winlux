@@ -1270,4 +1270,7 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
+   and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
+   "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

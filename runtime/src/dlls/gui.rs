@@ -3638,9 +3638,30 @@ pub fn post_quit(q: &Queue, code: i32) {
 
 // ---------- Défaut ----------
 
+std::thread_local! {
+    /// WM_NCCALCSIZE est passé à DefWindowProc (cadre standard demandé).
+    static DEFAULT_NCCALCSIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Indicateur « WM_NCCALCSIZE laissé à DefWindowProc » du thread : remis à
+/// zéro avant l'envoi du message, lu après (#1131).
+pub fn reset_default_nccalcsize() {
+    DEFAULT_NCCALCSIZE.with(|c| c.set(false));
+}
+pub fn default_nccalcsize_seen() -> bool {
+    DEFAULT_NCCALCSIZE.with(|c| c.get())
+}
+
 /// `DefWindowProc` minimal : gère WM_CLOSE et laisse le reste au programme.
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     match message {
+        // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
+        // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le
+        // rectangle proposé reste donc la zone cliente.
+        0x0083 => {
+            DEFAULT_NCCALCSIZE.with(|c| c.set(true));
+            0
+        }
         // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH : le titre de la fenêtre,
         // en A ou en W selon la fonction qui a envoyé le message.
         0x000C => {
