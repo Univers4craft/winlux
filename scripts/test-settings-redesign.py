@@ -76,6 +76,9 @@ check("page_available(row[0], self.status)" in source, "Réseau : pages voisines
 check('self.hero("user", name, detail' in source, "Comptes : carte du compte ouvert")
 check('add_class("chosen")' in source and "button.chosen" in settings and '"✓ " if str(path) == current' not in source,
       "fond et couleur choisis : liseré, plus de coche dans le titre")
+check('self.label(crumb + "  ›" if fold(crumb) != fold(PAGES[self.current]) else " ", "subtitle")' in settings
+      and "len(self.shown_pages(category)) > 1:\n            self.label(CATEGORIES" not in settings,
+      "fil d'Ariane sur toutes les pages, titre toujours au même endroit (#904)")
 
 if failures:
     print("ÉCHEC :\n  " + "\n  ".join(failures), file=sys.stderr)

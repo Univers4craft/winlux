@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Réglages avancés de la souris Winlux, comme Paramètres > Bluetooth et
-appareils > Souris de Windows 11.
+appareils > Souris.
 
     winlux-mouse status            état lisible par Paramètres (clé=valeur)
     winlux-mouse set CLÉ VALEUR    enregistre et applique un réglage

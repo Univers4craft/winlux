@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Volet de widgets façon Windows 11 (Win+W), session native.
+"""Volet de widgets (Win+W), session native.
 
     winlux-widgets                 ouvre ou referme le volet
     winlux-widgets --tray          bouton météo de la barre (greffon genmon)

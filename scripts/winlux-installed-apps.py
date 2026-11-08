@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Applications installées (#722) : tous les logiciels de l'ordinateur.
 
-Comme Paramètres > Applications > Applications installées de Windows 11,
+Paramètres > Applications > Applications installées,
 mais pour les deux mondes de Winlux :
 
   * applications Linux : lanceurs .desktop visibles, rattachés à leur paquet

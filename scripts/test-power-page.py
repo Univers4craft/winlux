@@ -66,6 +66,11 @@ check("power_page_items(fields, [], power_hardware())" in source and "power_page
 
 # Menus déroulants plutôt que des boutons qui font défiler la valeur (#895).
 delay_text = settings["delay_text"]
+battery = settings["battery_text"]
+check(battery("99% Not charging") == "99 % · chargée" and battery("54% Discharging") == "54 % · sur batterie"
+      and battery("80% Charging") == "80 % · en charge" and battery("40% Not charging") == "40 % · branchée, pas en charge"
+      and battery("100% Full") == "100 % · chargée" and battery("70% Unknown") == "70 %", "état de la batterie lisible (#902)")
+check(all(len(settings["_TR"].get(word, ())) == 3 for word in settings["BATTERY_STATES"].values()), "états de batterie en 4 langues")
 check(delay_text(300) == "5 min" and delay_text(3600) == "1 h" and delay_text(0) == "Jamais", "délais lisibles")
 check(all(a.startswith(settings["POWER_CHOICES"]) for _, a in actions if a.startswith(("power-screen", "power-sleep", "power-lid", "power-button"))),
       "délais, capot et bouton en menus")
@@ -86,6 +91,13 @@ welcome = (ROOT / "testexe/src/shell/welcome.rs").read_text(encoding="latin-1")
 check("Windows 11" not in welcome, "« Windows 11 » dans la visite guidée")
 accounts = runpy.run_path(str(HERE / "winlux-accounts.py"), run_name="accounts_doc")
 check("Windows 11" not in (accounts.get("__doc__") or ""), "« Windows 11 » dans l'aide de winlux-accounts")
+# Aides affichées (docstring imprimée par les outils winlux-*, #903).
+import ast
+for tool in sorted(HERE.glob("winlux-*.py")):
+    text = tool.read_text()
+    if "__doc__" not in text: continue
+    doc = ast.get_docstring(ast.parse(text)) or ""
+    check("Windows 11" not in doc, f"« Windows 11 » dans l'aide de {tool.stem}")
 
 # Explorateur : Utilisateurs > damien > Téléchargements.
 explorer = (ROOT / "testexe/src/shell/explorer.rs").read_text(encoding="latin-1")

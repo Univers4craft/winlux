@@ -1,10 +1,10 @@
 #!/usr/bin/python3
-"""Écran de verrouillage Winlux, au style de Windows 11.
+"""Écran de verrouillage Winlux.
 
 Usage :
   winlux-lock now       verrouille tout de suite (Windows+L, menu Démarrer)
   winlux-lock switch    « Changer d'utilisateur » : verrouille et propose les
-                        autres comptes (en bas à gauche, comme Windows 11)
+                        autres comptes (en bas à gauche)
   winlux-lock daemon    verrouille après l'inactivité réglée et au retour de veille
   winlux-lock status    état lisible par winlux-control (clé=valeur)
 

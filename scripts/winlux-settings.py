@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Native settings: nonblocking control actions and live Linux status."""
 import os
+import re
 import shutil
 import sys
 import time
@@ -155,6 +156,10 @@ _TR = {
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
     'Appareils mobiles': ('Mobile devices', 'Dispositivos móviles', 'Mobile Geräte'),
     'Bluetooth et appareils': ('Bluetooth & devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
+    'en charge': ('charging', 'cargando', 'wird geladen'),
+    'sur batterie': ('on battery', 'con batería', 'Akkubetrieb'),
+    'chargée': ('fully charged', 'cargada', 'vollständig geladen'),
+    'branchée, pas en charge': ('plugged in, not charging', 'conectada, sin cargar', 'angeschlossen, wird nicht geladen'),
     'Alimentation et batterie': ('Power & battery', 'Energía y batería', 'Energie und Akku'),
     'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
     'Version': ('Version', 'Versión', 'Version'),
@@ -628,6 +633,22 @@ UPDATE_PAGE = 7
 # Mode d'alimentation lu (power-profiles) → nom affiché, comme ses boutons.
 POWER_PROFILE_NAMES = {"performance": "Performances maximales", "balanced": "Équilibré", "saver": "Économie d'énergie",
                        "power-saver": "Économie d'énergie"}
+# Statut sysfs de la batterie → mots affichés, comme l'infobulle de la barre (#902).
+BATTERY_STATES = {"Charging": "en charge", "Discharging": "sur batterie", "Full": "chargée",
+                  "Not charging": "branchée, pas en charge"}
+
+
+def battery_text(value):
+    """« 99% Not charging » (winlux-control) → « 99 % · chargée », traduit."""
+    match = re.fullmatch(r"\s*(\d+)\s*%\s*(.*?)\s*", value or "")
+    if not match: return value
+    level, status = int(match.group(1)), match.group(2)
+    # Seuil de charge ou batterie pleine : « Not charging » sur secteur vaut « chargée ».
+    if status == "Not charging" and level >= 99: status = "Full"
+    state = BATTERY_STATES.get(status)
+    return f"{level} %" + (" · " + _t(state) if state else "")
+
+
 # Mêmes listes que winlux --power (runtime/src/power/mod.rs : DELAYS, Action::ALL).
 POWER_DELAYS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 0)
 POWER_BUTTON_ACTIONS = (("nothing", "Ne rien faire"), ("sleep", "Mettre en veille"), ("hibernate", "Mettre en veille prolongée"),
@@ -908,8 +929,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         for child in self.body.get_children(): child.destroy()
         self.recovery_label = None
         category = category_of(self.current)
-        if len(self.shown_pages(category)) > 1:
-            self.label(CATEGORIES[category][0] + "  ›", "subtitle")
+        # Fil d'Ariane sur toutes les pages (#904) : le titre reste au même
+        # endroit ; une page du même nom que sa catégorie garde la ligne, vide.
+        crumb = CATEGORIES[category][0]
+        self.label(crumb + "  ›" if fold(crumb) != fold(PAGES[self.current]) else " ", "subtitle").set_selectable(False)
         self.label(PAGES[self.current], "heading")
         extra = self.page in EXTRA.ExtraPages.EXTRA_PAGES
         self.update_panel = None
@@ -1228,6 +1251,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 return browser_default_text(status)
             if key == "power_profile" and value in POWER_PROFILE_NAMES:
                 return _t(POWER_PROFILE_NAMES[value])
+            if key == "battery" and value:
+                return battery_text(value)
             return value or _t("Indisponible")
         rows = [(label, shown(key)) for label, key in fields]
         # Une valeur que la machine ne donne pas n'occupe pas de ligne.

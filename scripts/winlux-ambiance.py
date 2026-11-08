@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Ambiance de l'écran : éclairage nocturne, thème et fond d'écran selon l'heure.
 
-Comme Windows 11 (Paramètres > Système > Écran > Éclairage nocturne) :
+Comme dans Paramètres > Système > Écran > Éclairage nocturne :
 - interrupteur « Activer maintenant », intensité de 0 à 100 ;
 - planning : désactivé, du coucher au lever du soleil, ou heures choisies ;
 - le coucher et le lever du soleil sont calculés sans service en ligne, à
