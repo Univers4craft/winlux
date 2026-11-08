@@ -595,6 +595,9 @@ jobs:
       - name: Alignement de la barre appliqué en direct, sans relance manuelle
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-live-align.py
 
+      - name: Icônes cachées une par une derrière la flèche de la zone de notification
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-tray-overflow.py
+
       - name: « Ne répond pas » après la croix, fermeture forcée limitée au compte
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-force-close.py
 

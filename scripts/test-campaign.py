@@ -289,6 +289,10 @@ for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)
     ok(marker in explorer, f"Explorateur : {label}")
 ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
    "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("fn native_frameless" in (ROOT / "testexe/src/shell/wm.rs").read_text()
+   and "fn begin_move_resize" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
+   "Explorateur : onglets dans la barre de titre, fenêtre sans cadre déplaçable (#888)")
+ok('b" GB", b" TB"' in explorer, "Explorateur : unités et dates dans la langue de la session (#916)")
 ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
    "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
@@ -657,6 +661,12 @@ parental = subprocess.run([sys.executable, "-B", str(SCRIPTS / "test-parental.py
 ok(parental.returncode == 0 and "bob ne modifie rien : disable bob" in parental.stdout
    and "temps écoulé : bob ne déverrouille pas sa session" in parental.stdout,
    "contrôle parental : le compte surveillé ne lève pas sa propre restriction")
+# #815 / #816 : copie renommée d'une application bloquée, VPN ou proxy hors du DNS filtrant.
+ok(parental.returncode == 0 and "copie renommée sans VERSIONINFO fermée par son empreinte (#815)" in parental.stdout
+   and "copie renommée d'un .exe bloqué fermée (nom d'origine, #815)" in parental.stdout
+   and "adresse du site ouverte au compte avant la réponse (#816)" in parental.stdout
+   and "seules les adresses données par le filtre, #816" in parental.stdout,
+   "contrôle parental : copie renommée reconnue, VPN et proxy hors du filtre refusés")
 # #811 : « Changer d'utilisateur » ne répond plus « réussi » quand la session ne s'ouvre pas.
 ok("def run_waited" in (SCRIPTS / "winlux-root.py").read_text() and "bascule ratée" in (SCRIPTS / "test-root.py").read_text(),
    "relais root : vrai code de retour malgré SIGCHLD ignoré")
@@ -670,12 +680,13 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and (runtime_dlls / "d3dx9_asm.rs").exists() and (runtime_dlls / "d3dx9_shader.rs").exists()
    and (runtime_dlls / "d3dx9_mesh.rs").exists()
    and (runtime_dlls / "d3dx9_hlsl.rs").exists() and (runtime_dlls / "d3dx9_effect.rs").exists()
-   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (runtime_dlls / "dpnet.rs").exists()
+   and "DirectPlay 4 et 8" in (SCRIPTS / "test-wow32.sh").read_text()
    and (ROOT / "runtime/src/audio/synth.rs").exists()
    and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
-   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
 
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
@@ -729,5 +740,12 @@ ok("genmon-13:refresh:bool:true" in (SCRIPTS / "winlux-control.sh").read_text()
    and "def taskbar_alignment" in (SCRIPTS / "winlux-tray.py").read_text()
    and "barre relancée (#920)" in (SCRIPTS / "test-taskbar-live-align.py").read_text(),
    "barre : même ordre à gauche et au centre, contrepoids rafraîchi en direct, pas de relance (#920)")
+
+# ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
+ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
+   and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
+   and "def tray_icon_settings" in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

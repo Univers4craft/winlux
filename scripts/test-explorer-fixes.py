@@ -234,4 +234,25 @@ demo = (ROOT / "testexe/src/bin/gui_demo.rs").read_text(encoding="utf-8")
 ok("if gfx::theme_animating() {\n                        InvalidateRect(hwnd" in demo,
    "#891 : la transition clair/sombre est repeinte jusqu'au bout dans une fenêtre ouverte")
 
+# ── #888 : maquette Prisme ; #916 : unités et dates en allemand ────────────
+wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
+ok("fn native_frameless" in wm_rs and "DefWindowProcA(hwnd, 0x00A1, ht, 0)" in wm_rs
+   and "0x8000_0000 | 0x0004_0000" in demo,
+   "#888 : Explorateur natif sans barre de titre, onglets en légende (déplacer, bords, boutons)")
+gui = (ROOT / "runtime/src/dlls/gui.rs").read_text(encoding="utf-8")
+x11 = (ROOT / "runtime/src/dlls/gui_x11.rs").read_text(encoding="utf-8")
+ok("fn begin_move_resize" in gui and "_NET_WM_MOVERESIZE" in x11 and "WM_CHANGE_STATE" in x11
+   and "_NET_WM_STATE_MAXIMIZED_VERT" in x11,
+   "#888 : runtime — WM_NCLBUTTONDOWN/WM_SYSCOMMAND et ShowWindow réduire/agrandir via le gestionnaire")
+ok('c"Explorateur de fichiers"' in demo and 'c"Datei-Explorer"' in demo,
+   "#888 : titre de fenêtre traduit, plus « Explorer Winlux »")
+ok("Cmd::More" in explorer and "Cmd::Share" in explorer and "fn view_label" in explorer,
+   "#888 : barre de commandes compacte (Partager, affichage courant ▾, « … »)")
+ok('const NET: &[u8] = b"::net";' in explorer and "push(net_label(), Glyph::NetDrive, NET, 0);" in explorer,
+   "#888 : Réseau dans le volet de navigation")
+ok("fn center_wrap" in explorer and "layout_regression();" in explorer,
+   "#888 : noms sur deux lignes, vérifiés par explorer_regression")
+ok('b" GB", b" TB"' in explorer and "formats_regression();" in explorer,
+   "#916 : unités GB et date 08.11.2026 en allemand")
+
 print(f"test-explorer-fixes : {checks} vérifications OK")
