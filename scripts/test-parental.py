@@ -383,12 +383,21 @@ check(lib.app_file(os.getpid(), "/usr/bin/winlux", ["winlux", str(apps_dir / "de
       and lib.app_file(123, "/usr/bin/firefox", ["firefox"]) == "/proc/123/exe", "fichier de l'application d'un processus")
 check(lib.file_sample("/dev/null") is None and lib.file_sample(str(apps_dir)) is None,
       "empreinte : jamais un périphérique ni un dossier ouvert en root")
-lib.app_of = lambda exe, cmdline: "exe:" + os.path.basename(cmdline[-1]).lower() if cmdline[-1].endswith(".exe") else None
+lib.app_of = lambda exe, cmdline: "exe:" + os.path.basename(cmdline[-1]).lower() if cmdline and cmdline[-1].endswith(".exe") else None
 lib.app_file = lambda pid, exe, cmdline: cmdline[-1]
 
 
 def run_as_bob(name):
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(apps_dir / name)])
+    # Attendre la fin de l'exec : avant, /proc/PID/cmdline est encore celui du parent ou vide.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            if name.encode() in Path(f"/proc/{process.pid}/cmdline").read_bytes():
+                break
+        except OSError:
+            pass
+        time.sleep(0.01)
     lib.pids_of = lambda uids: {process.pid: os.getuid()} if os.getuid() in uids else {}
     daemon.enforce_apps()
     try:
