@@ -1,7 +1,10 @@
 //! Pages de code Windows écrites de zéro : ANSI (1252), OEM (437, 850, 858),
 //! ISO 8859-1/15, ASCII et UTF-8. Elles servent aux API `A` des .exe, aux
 //! noms de fichiers des archives ZIP créées sous Windows et à la conversion
-//! des fichiers texte entre Windows et Linux.
+//! des fichiers texte entre Windows et Linux. Les pages asiatiques à deux
+//! octets (932, 936, 949, 950) sont dans `dbcs`.
+
+use super::dbcs;
 
 pub const CP_ACP: u32 = 0;
 pub const CP_OEMCP: u32 = 1;
@@ -186,7 +189,18 @@ pub fn is_single_byte(cp: u32) -> bool {
 
 /// Pages acceptées par IsValidCodePage.
 pub fn is_valid(cp: u32) -> bool {
-    is_single_byte(cp) || cp == CP_UTF8
+    is_single_byte(cp) || cp == CP_UTF8 || dbcs::available(cp)
+}
+
+/// Le caractère existe-t-il dans la page (sans substitution) ?
+pub fn can_encode(cp: u32, c: char) -> bool {
+    if cp == CP_UTF8 {
+        return true;
+    }
+    if dbcs::is_dbcs(cp) {
+        return dbcs::encode_char(cp, c).is_some();
+    }
+    encode_char(cp, c).is_some()
 }
 
 /// Remplace les pseudo-pages (CP_ACP, CP_OEMCP…) par la page réelle de la
@@ -298,6 +312,9 @@ pub fn decode(cp: u32, bytes: &[u8], strict: bool) -> Result<String, ()> {
             Ok(String::from_utf8_lossy(bytes).into_owned())
         };
     }
+    if dbcs::is_dbcs(cp) {
+        return dbcs::decode(cp, bytes, strict);
+    }
     if !is_single_byte(cp) {
         return Err(());
     }
@@ -325,6 +342,29 @@ pub fn encode(cp: u32, text: &str, default: u8, allow_best_fit: bool) -> Result<
         return Ok(Encoded {
             bytes: text.as_bytes().to_vec(),
             used_default: false,
+        });
+    }
+    if dbcs::is_dbcs(cp) {
+        let mut used_default = false;
+        let mut bytes = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            let enc = dbcs::encode_char(cp, c).or_else(|| {
+                allow_best_fit
+                    .then(|| best_fit(c))
+                    .flatten()
+                    .and_then(|b| dbcs::encode_char(cp, b))
+            });
+            match enc {
+                Some(b) => bytes.extend_from_slice(&b),
+                None => {
+                    used_default = true;
+                    bytes.push(default);
+                }
+            }
+        }
+        return Ok(Encoded {
+            bytes,
+            used_default,
         });
     }
     if !is_single_byte(cp) {
