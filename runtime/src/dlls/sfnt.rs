@@ -39,6 +39,8 @@ pub struct Metrics {
 
 pub struct Font {
     data: Vec<u8>,
+    /// Début de la face dans le fichier (collection .ttc).
+    base: usize,
     glyf: (usize, usize),
     loca: usize,
     long_loca: bool,
@@ -154,6 +156,7 @@ impl Font {
         };
         Some(Font {
             data,
+            base,
             glyf,
             loca,
             long_loca,
@@ -165,6 +168,12 @@ impl Font {
             metrics: m,
             reverse: OnceLock::new(),
         })
+    }
+
+    /// Octets bruts de la table OpenType `tag` de cette face.
+    pub fn raw_table(&self, tag: &[u8; 4]) -> Option<&[u8]> {
+        let (off, len) = table(&self.data, self.base, tag)?;
+        self.data.get(off..off + len)
     }
 
     pub fn glyph_count(&self) -> u16 {

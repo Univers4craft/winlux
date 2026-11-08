@@ -501,16 +501,13 @@ fn free_current_teb() {
         let array = *((t + TEB_TLS_POINTER) as *const usize);
         if array != 0 {
             let mods = loader::MODULES.lock().unwrap().clone();
-            let tls_count = mods.iter().filter(|m| m.tls.is_some()).count().min(512);
-            for i in 0..tls_count {
-                let block = *((array + i * 8) as *const usize);
+            for t in mods.iter().filter_map(|m| m.tls.as_ref()) {
+                if t.slot >= loader::TLS_MODULE_SLOTS {
+                    continue;
+                }
+                let block = *((array + t.slot * 8) as *const usize);
                 if block != 0 {
-                    let tls = mods.iter().filter(|m| m.tls.is_some()).nth(i);
-                    let size = tls
-                        .and_then(|m| m.tls.as_ref())
-                        .map(|t| (t.raw_end.saturating_sub(t.raw_start) + t.zero_fill + 16).max(16))
-                        .unwrap_or(16);
-                    libc::munmap(block as *mut libc::c_void, size);
+                    libc::munmap(block as *mut libc::c_void, tls_block_size(t));
                 }
             }
             libc::munmap(array as *mut libc::c_void, 4096);
@@ -602,11 +599,14 @@ pub fn clear_tls_value_all_threads(index: u32) -> bool {
 fn setup_static_tls(teb: usize) {
     let mods = loader::MODULES.lock().unwrap().clone();
     let array = alloc_zeroed(4096);
-    let mut idx = 0usize;
     for m in mods.iter() {
         if let Some(t) = &m.tls {
+            let idx = t.slot;
+            if idx >= loader::TLS_MODULE_SLOTS {
+                continue;
+            }
             let raw = t.raw_end.saturating_sub(t.raw_start);
-            let block = alloc_zeroed((raw + t.zero_fill + 16).max(16));
+            let block = alloc_zeroed(tls_block_size(t));
             unsafe {
                 std::ptr::copy_nonoverlapping(t.raw_start as *const u8, block as *mut u8, raw);
                 *((array + idx * 8) as *mut usize) = block;
@@ -614,7 +614,6 @@ fn setup_static_tls(teb: usize) {
                     *(t.index_addr as *mut u32) = idx as u32;
                 }
             }
-            idx += 1;
         }
     }
     unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
@@ -646,6 +645,46 @@ fn run_tls_callbacks(m: &Module, reason: u32) {
     }
 }
 
+/// Taille d'un bloc TLS statique (données, zéros, marge).
+fn tls_block_size(t: &loader::TlsInfo) -> usize {
+    (t.raw_end.saturating_sub(t.raw_start) + t.zero_fill + 16).max(16)
+}
+
+/// Déchargement d'une DLL (#24) : ses rappels TLS reçoivent
+/// DLL_PROCESS_DETACH, son bloc TLS est libéré dans chaque thread et son
+/// index TLS redevient libre pour une prochaine DLL.
+pub fn release_module_tls(m: &Module) {
+    NO_THREAD_CALLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|&b| b != m.base);
+    let Some(tls) = &m.tls else { return };
+    run_tls_callbacks(m, 0);
+    if tls.slot >= loader::TLS_MODULE_SLOTS {
+        return;
+    }
+    let tebs = THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    for t in &tebs {
+        unsafe {
+            let array = *((*t + TEB_TLS_POINTER) as *const usize);
+            if array == 0 {
+                continue;
+            }
+            let slot = (array + tls.slot * 8) as *mut usize;
+            if *slot != 0 {
+                libc::munmap(*slot as *mut libc::c_void, tls_block_size(tls));
+                *slot = 0;
+            }
+            crate::wow32::mirror_tls_slot(*t, tls.slot, 0);
+        }
+    }
+    loader::free_tls_slot(tls.slot);
+}
+
 /// Alloue et copie un bloc de données TLS statique pour un module.
 unsafe fn alloc_tls_block(tls: &loader::TlsInfo) -> usize {
     let raw = tls.raw_end.saturating_sub(tls.raw_start);
@@ -661,15 +700,10 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
         if thread_teb == 0 {
             return false;
         }
-        let modules = loader::MODULES.lock().unwrap().clone();
-        let index = modules
-            .iter()
-            .take_while(|x| x.base != m.base)
-            .filter(|x| x.tls.is_some())
-            .count();
+        let index = tls.slot;
         // Le tableau du TEB fait 512 entrées (4 KiB); refuser explicitement
         // plutôt que d'écrire hors limites si l'image dépasse cette capacité.
-        if index >= 512 {
+        if index >= loader::TLS_MODULE_SLOTS {
             return false;
         }
         let array = unsafe { *((thread_teb + TEB_TLS_POINTER) as *const usize) };

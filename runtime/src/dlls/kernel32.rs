@@ -3351,7 +3351,7 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
     // Le compteur est décrémenté sous MODULES, mais DllMain(DLL_PROCESS_DETACH)
     // est appelé verrou relâché : il peut lui-même charger ou libérer des
     // modules, ou créer des threads qui lisent la liste.
-    let detach = {
+    let (last, detach) = {
         let mut mods = crate::loader::MODULES.lock().unwrap();
         let Some(m) = mods.iter_mut().find(|m| m.base == module) else {
             crate::process::set_last_error(6);
@@ -3361,19 +3361,43 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
             crate::process::set_last_error(5);
             return 0;
         }
+        // Module épinglé (GET_MODULE_HANDLE_EX_FLAG_PIN) : jamais déchargé.
+        if m.refcount == u32::MAX {
+            return 1;
+        }
         m.refcount -= 1;
-        if m.refcount == 0 && m.initialized {
+        let detach = if m.refcount == 0 && m.initialized {
             m.initialized = false;
             m.entry().map(|entry| (entry, m.base))
         } else {
             None
-        }
+        };
+        (m.refcount == 0, detach)
     };
     if let Some((entry, base)) = detach {
         // DllMain x86 ou x64 (#232).
         let _ = crate::process::call_dllmain(entry, base, 0, 0);
-        // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
-        // on laisse la DLL chargée mais le compteur est à zéro.
+    }
+    if last {
+        // Vrai déchargement (#24) : rappels TLS et blocs TLS de chaque
+        // thread, retrait de la liste, démappage, puis une référence de
+        // moins sur chaque DLL que celle-ci importait. Un LoadLibrary pendant
+        // DllMain a pu reprendre le module : il reste alors chargé.
+        let still_unused = crate::loader::MODULES
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.base == module && m.refcount == 0);
+        if still_unused {
+            if let Some(m) = crate::loader::find_module_by_addr(module) {
+                crate::process::release_module_tls(&m);
+            }
+            if crate::loader::unload(module).is_some() {
+                for dep in crate::loader::take_dependencies(module) {
+                    free_library(dep);
+                }
+            }
+        }
     }
     1
 }
@@ -9400,9 +9424,7 @@ pub unsafe extern "win64" fn get_module_handle_ex_w(
         // jamais un nom. Sans module à cette adresse : ERROR_MOD_NOT_FOUND.
         let address = module as usize;
         if let Some(m) = crate::loader::find_module_by_addr(address) {
-            if flags & 3 == 0 {
-                crate::loader::increment_ref(m.base);
-            }
+            module_handle_ex_ref(flags, m.base);
             *handle = m.base;
             return 1;
         }
@@ -9422,12 +9444,24 @@ pub unsafe extern "win64" fn get_module_handle_ex_w(
         }
     }
     if let Some(h) = crate::dlls::module_handle(&name) {
+        module_handle_ex_ref(flags, h);
         *handle = h;
         return 1;
     }
     *handle = 0;
     crate::process::set_last_error(126);
     0
+}
+
+/// Référence prise par GetModuleHandleEx sur une DLL réelle : une de plus
+/// (à rendre par FreeLibrary), aucune avec UNCHANGED_REFCOUNT (2), ou
+/// l'épinglage définitif avec PIN (1).
+fn module_handle_ex_ref(flags: u32, base: usize) {
+    if flags & 1 != 0 {
+        crate::loader::pin(base);
+    } else if flags & 2 == 0 {
+        crate::loader::increment_ref(base);
+    }
 }
 
 /// Variantes « Ex » (Vista) : drapeaux au lieu de booléens, droits d'accès ignorés.

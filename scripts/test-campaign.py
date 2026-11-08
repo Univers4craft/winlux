@@ -753,6 +753,12 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay 4 et 8, synthétiseur MIDI, rappels x86")
+# #237 : entrée MIDI sur les claviers branchés, testée sans matériel par jeux32/jeux64.
+ok((runtime_dlls / "winmm_midi_in.rs").exists()
+   and "/dev/snd" in (runtime_dlls / "winmm_midi_in.rs").read_text()
+   and "WINLUX_MIDI_IN_DIR" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "midi_in_tests" in (ROOT / "testc/wow32/jeux32.c").read_text(),
+   "entrée MIDI : midiIn* lit /dev/snd/midiC*D* (statut courant, temps réel, système exclusif)")
 
 # Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
 # boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
@@ -927,6 +933,14 @@ ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_a
    and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
 
+# #24 : FreeLibrary décharge vraiment (démappage, index TLS rendu, dépendances relâchées).
+_deps = (ROOT / "testexe/src/bin/dll_deps.rs").read_text()
+ok("image neuve après rechargement" in _deps and "la DLL et sa dépendance sont toutes deux déchargées" in _deps
+   and "fn unload(" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "fn release_module_tls(" in (ROOT / "runtime/src/process.rs").read_text()
+   and "dll_deps" in (ROOT / "scripts/test-runtime.sh").read_text(),
+   "FreeLibrary : DLL démappée, TLS libéré, dépendances relâchées, rechargement à neuf (#24)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
@@ -951,6 +965,13 @@ ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
    and '"--info"' in (SCRIPTS / "prepare-browser-packages.py").read_text()
    and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
+
+# #1056 : logiciels publiés pour Linux par leur éditeur (Claude, ChatGPT…) dans le Store.
+ok("class Editeur(Source)" in (SCRIPTS / "winlux-store.py").read_text()
+   and "set_default_response(Gtk.ResponseType.CANCEL)" in (SCRIPTS / "winlux-store-confirm.py").read_text()
+   and '"winlux-store-repos"' in (SCRIPTS / "winlux-root.py").read_text()
+   and "test-store-editeurs.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "Store : logiciels des éditeurs, confirmation (Annuler par défaut), SHA-256, purge et dépôt retiré (#1056)")
 
 # ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
 clr = ROOT / "runtime/src/clr"
@@ -1016,6 +1037,15 @@ ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
    "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+# #984 : DirectWrite 3 à 7 (IDWriteFactory7 de Paint.NET 5.1), jeux de polices.
+ok((ROOT / "runtime/src/dlls/dwrite_sets.rs").exists()
+   and "VTable<57>" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "IDWriteFactory7 : 57 méthodes" in (SCRIPTS / "test-paintnet-d2d.py").read_text(),
+   "DirectWrite : IDWriteFactory7, jeux de polices et faces 1 à 6 (#984)")
+# #1075 : polices livrées par l'appli (FontFamily par URI dans WPF).
+ok("custom::custom_collection as *const ()" in (ROOT / "runtime/src/dlls/dwrite.rs").read_text()
+   and "fn read_stream(" in (ROOT / "runtime/src/dlls/dwrite_custom.rs").read_text(),
+   "DirectWrite : CreateCustomFontCollection et CreateCustomFontFileReference lisent les polices de l'appli (#1075)")
 # #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
 # suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
 # tourner à 100 % ; une exception non gérée affiche le message .NET, pas
