@@ -3048,6 +3048,7 @@ pub fn exports() -> crate::dlls::Exports {
     };
     e.extend(super::d3dx9_draw::exports());
     e.extend(super::d3dx9_shader::exports());
+    e.extend(super::d3dx9_mesh::exports());
     e
 }
 

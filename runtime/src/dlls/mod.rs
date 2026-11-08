@@ -46,6 +46,7 @@ pub mod d3dcompiler;
 pub mod d3dx9;
 pub mod d3dx9_asm;
 pub mod d3dx9_draw;
+pub mod d3dx9_mesh;
 pub mod d3dx9_shader;
 pub mod dataobject;
 pub mod dbghelp;

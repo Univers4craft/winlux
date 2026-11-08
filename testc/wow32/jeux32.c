@@ -206,6 +206,11 @@ IMP HRESULT WINAPI D3DXCreateBuffer(DWORD, void **);
 IMP HRESULT WINAPI D3DXAssembleShader(const char *, UINT, void *, void *, DWORD, void **, void **);
 IMP HRESULT WINAPI D3DXGetShaderConstantTable(const DWORD *, void **);
 IMP HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *, DWORD *, UINT *);
+IMP HRESULT WINAPI D3DXCreateBox(void *, float, float, float, void **, void **);
+IMP HRESULT WINAPI D3DXCreateSphere(void *, float, UINT, UINT, void **, void **);
+IMP HRESULT WINAPI D3DXComputeNormals(void *, const DWORD *);
+IMP HRESULT WINAPI D3DXLoadMeshFromXInMemory(const void *, DWORD, DWORD, void *, void **, void **,
+    void **, DWORD *, void **);
 typedef void *(WINAPI *GETBYNAME)(void *, void *, const char *);
 typedef void *(WINAPI *GETPTR)(void *);
 #define BUFPTR(b) (((GETPTR)VT(b)[3])(b))
@@ -768,32 +773,76 @@ static int d3dx_tests(HWND hwnd) {
         D3DXCONSTANT_DESC desc;
         float v[4] = {0.25f, 0.5f, 0.75f, 1.0f}, got[4] = {0, 0, 0, 0};
 
-        CHECK(127, D3DXAssembleShader(vs, sizeof vs - 1, 0, 0, 0, &code, &err) == 0 && code &&
+        CHECK(193, D3DXAssembleShader(vs, sizeof vs - 1, 0, 0, 0, &code, &err) == 0 && code &&
                        !err && *(DWORD *)BUFPTR(code) == 0xFFFE0200);
-        CHECK(128, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
-        CHECK(129, D3DXGetShaderInputSemantics((DWORD *)BUFPTR(code), sem, &n) == 0 &&
+        CHECK(194, CALL2(dev, 91, BUFPTR(code), &vsh) == 0 && vsh);
+        CHECK(195, D3DXGetShaderInputSemantics((DWORD *)BUFPTR(code), sem, &n) == 0 &&
                        n == 2 && sem[0] == 0 && sem[2] == 5 && sem[3] == 1);
         CALL0(code, 2);
-        CHECK(130, D3DXAssembleShader(ps, sizeof ps - 1, 0, 0, 0, &code, 0) == 0 &&
+        CHECK(196, D3DXAssembleShader(ps, sizeof ps - 1, 0, 0, 0, &code, 0) == 0 &&
                        CALL2(dev, 106, BUFPTR(code), &psh) == 0 && psh);
         CALL0(code, 2);
         code = 0;
-        CHECK(131, D3DXAssembleShader("ps_2_0\nfoo r0", 13, 0, 0, 0, &code, &err) != 0 &&
+        CHECK(197, D3DXAssembleShader("ps_2_0\nfoo r0", 13, 0, 0, 0, &code, &err) != 0 &&
                        !code && err && ((char *)BUFPTR(err))[0] != 0);
         CALL0(err, 2);
-        CHECK(132, D3DXGetShaderConstantTable(ctab, &ct) == 0 && ct);
+        CHECK(198, D3DXGetShaderConstantTable(ctab, &ct) == 0 && ct);
         h = ((GETBYNAME)VT(ct)[9])(ct, 0, "gColor");
         zero(&desc, sizeof desc);
         n = 1;
-        CHECK(133, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 3 &&
+        CHECK(199, h && CALL3(ct, 6, h, &desc, &n) == 0 && desc.RegisterIndex == 3 &&
                        desc.Bytes == 16 && desc.Name[0] == 'g');
-        CHECK(134, CALL3(ct, 19, dev, h, v) == 0 && CALL3(dev, 110, 3, got, 1) == 0 &&
+        CHECK(200, CALL3(ct, 19, dev, h, v) == 0 && CALL3(dev, 110, 3, got, 1) == 0 &&
                        got[0] == 0.25f && got[3] == 1.0f);
-        CHECK(135, ((SETFLOATCT)VT(ct)[17])(ct, dev, "gColor", 2.5f) == 0 &&
+        CHECK(201, ((SETFLOATCT)VT(ct)[17])(ct, dev, "gColor", 2.5f) == 0 &&
                        CALL3(dev, 110, 3, got, 1) == 0 && got[0] == 2.5f);
         CALL0(ct, 2);
         CALL0(psh, 2);
         CALL0(vsh, 2);
+    }
+
+    /* Maillages (#834) : D3DXCreateBox, fichier .x texte en mémoire, matériaux,
+     * table d'attributs, DrawSubset, sphère et D3DXComputeNormals. */
+    {
+        static const char xfile[] =
+            "xof 0303txt 0032\n"
+            "Material Rouge { 1.0;0.0;0.0;1.0;; 10.0; 1.0;1.0;1.0;; 0.0;0.0;0.0;;"
+            " TextureFilename { \"rouge.bmp\"; } }\n"
+            "Mesh Quad { 4; -1;-1;0;, 1;-1;0;, 1;1;0;, -1;1;0;;\n"
+            " 1; 4;0,1,2,3;;\n"
+            " MeshNormals { 1; 0;0;1;; 1; 4;0,0,0,0;; }\n"
+            " MeshTextureCoords { 4; 0;1;, 1;1;, 1;0;, 0;0;; }\n"
+            " MeshMaterialList { 1; 1; 0;; { Rouge } } }\n";
+        void *box = 0, *quad = 0, *sphere = 0, *adjb = 0, *mats = 0;
+        float *vtx = 0;
+        DWORD nmat = 0, nattr = 0;
+        unsigned char *mat;
+
+        CHECK(202, D3DXCreateBox(dev, 1.0f, 2.0f, 3.0f, &box, 0) == 0 && box &&
+                       CALL0(box, 4) == 12 && CALL0(box, 5) == 24 && CALL0(box, 6) == 0x12);
+        CHECK(203, CALL2(box, 15, 0, &vtx) == 0 && vtx && vtx[0] == -0.5f && vtx[1] == -1.0f &&
+                       vtx[2] == -1.5f && vtx[3] == -1.0f && CALL0(box, 16) == 0);
+        CHECK(204, CALL0(dev, 41) == 0 && CALL1(box, 3, 0) == 0 && CALL0(dev, 42) == 0);
+        CHECK(205, D3DXLoadMeshFromXInMemory(xfile, sizeof xfile - 1, 0x220, dev, &adjb, &mats, 0,
+                                             &nmat, &quad) == 0 &&
+                       quad && nmat == 1 && CALL0(quad, 4) == 2 && CALL0(quad, 5) == 4);
+        mat = (unsigned char *)BUFPTR(mats);
+        /* D3DXMATERIAL : D3DMATERIAL9 (68 octets) puis le nom de texture, aligné sur 8 en x64. */
+        CHECK(206, ((float *)mat)[0] == 1.0f && ((float *)mat)[1] == 0.0f &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[0] == 'r' &&
+                       (*(char **)(mat + (sizeof(void *) == 8 ? 72 : 68)))[5] == '.' &&
+                       adjb && CALL0(adjb, 4) == 24);
+        CHECK(207, CALL2(quad, 19, 0, &nattr) == 0 && nattr == 1);
+        CHECK(208, D3DXCreateSphere(dev, 1.0f, 8, 4, &sphere, 0) == 0 && sphere &&
+                       CALL0(sphere, 4) > 0 && D3DXComputeNormals(sphere, 0) == 0);
+        /* DrawSubset laisse ses tampons liés à l'appareil : on les délie. */
+        CALL4(dev, 100, 0, 0, 0, 0);
+        CALL1(dev, 104, 0);
+        CALL0(sphere, 2);
+        CALL0(adjb, 2);
+        CALL0(mats, 2);
+        CALL0(quad, 2);
+        CALL0(box, 2);
     }
 
     CALL0(buf, 2);
@@ -1068,7 +1117,7 @@ void entry(void) {
     d3d8_tests(hwnd);
     out("Direct3D 8 : 26 verifications passees\n");
     d3dx_tests(hwnd);
-    out("Direct3D 9 et D3DX9 : 26 verifications passees\n");
+    out("Direct3D 9 et D3DX9 : 33 verifications passees\n");
     dsound_tests(hwnd);
     out("DirectSound : 15 verifications passees\n");
     dshow_tests();

@@ -78,7 +78,8 @@ d3dcompiler.rs	BlobVTable	a-verifier
 d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
 d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
 d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
-d3dx9_shader.rs	Ct	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 132-135 (ID3DXConstantTable)
+d3dx9_mesh.rs	Mesh	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 202-208 (ID3DXMesh)
+d3dx9_shader.rs	Ct	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 198-201 (ID3DXConstantTable)
 dataobject.rs	DataObject	a-verifier	
 dataobject.rs	EnumFormat	a-verifier	
 dataobject.rs	FormatEtc	a-verifier	
