@@ -3,7 +3,7 @@
 
 À l'écran de connexion et de verrouillage (winlux-lock), un compte local peut
 taper un code PIN court ou poser le doigt sur le lecteur au lieu de son mot
-de passe, comme sous Windows 11. Le mot de passe reste toujours possible, et
+de passe. Le mot de passe reste toujours possible, et
 le Contrôle de compte d'utilisateur le demande toujours.
 
 Côté root (lancé par le relais winlux-root, jamais par le bureau) :
