@@ -30,6 +30,19 @@ cat "$work/fibres.txt"
 test "$fiber_status" -eq 0 || { echo "fiber_suite.exe : échec $fiber_status" >&2; exit 1; }
 grep -q '^Fibres 64 bits : tout est correct$' "$work/fibres.txt" || { echo "fiber_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# Vrai service Windows Unicode (#17) : CreateServiceW, StartServiceW,
+# StartServiceCtrlDispatcherW, RegisterServiceCtrlHandlerExW, arrêt, suppression.
+test -f "$dir/service_suite.exe" || { echo "service_suite.exe absent" >&2; exit 1; }
+mkdir -p "$work/service"
+set +e
+(cd "$work/service" && WINLUX_REGISTRY_PATH="$work/service/registre.tsv" WINLUX_GUI=headless \
+    timeout 120 "$runtime" "$dir/service_suite.exe") >"$work/service.txt" 2>&1
+service_status=$?
+set -e
+cat "$work/service.txt"
+test "$service_status" -eq 0 || { echo "service_suite.exe : code $service_status" >&2; exit 1; }
+grep -q '^Service Windows : tout est correct$' "$work/service.txt" || { echo "service_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }
@@ -88,6 +101,11 @@ if test -f "$dir/hwexc_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hw-exceptions.sh"
 fi
 
+# Suspension de threads et contexte pour coreclr (#269), bloquant.
+if test -f "$dir/threadctl_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-thread-control.sh"
+fi
+
 # Manettes et périphériques HID (#271), bloquant.
 if test -f "$dir/hid_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
@@ -96,6 +114,11 @@ fi
 # DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
 if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"
+fi
+
+# Annulation des E/S, handles et tampons invalides (#18), bloquant.
+if test -f "$dir/io_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-io-cancel.sh"
 fi
 
 # Entrée brute : souris relative et clavier en WM_INPUT (#271), bloquant.

@@ -1,0 +1,10 @@
+// Winlux n'a ni systemd ni logind : polkit ne voit jamais la session du bureau
+// comme « active », et fprintd refusait de vérifier ou d'enregistrer un doigt.
+// Seul root (le relais winlux-root, par winlux-signin) parle à fprintd : il
+// vérifie d'abord le compte et son mot de passe (#659). Les comptes du bureau
+// n'ont aucun accès direct au lecteur ni à fprintd.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("net.reactivated.fprint.") === 0) {
+        return subject.user === "root" ? polkit.Result.YES : polkit.Result.NO;
+    }
+});

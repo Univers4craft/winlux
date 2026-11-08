@@ -16,6 +16,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use super::bcl;
 use super::delegates::FnTable;
@@ -27,6 +28,7 @@ use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
 use super::tables::Token;
+use super::threads;
 use super::types::{self, Kind, TypeId};
 
 /// Profondeur d'appel maximale avant StackOverflowException.
@@ -235,15 +237,27 @@ pub struct Interpreter {
     parked: Vec<Option<Assembly>>,
     pub(super) current: usize,
     pub(super) domain: Vec<AsmInfo>,
-    /// Types dont le constructeur statique a été lancé.
-    initialized: HashSet<TypeId>,
-    /// Champs statiques des types de la bibliothèque intégrée.
-    external_statics: HashMap<(usize, u32), Box<[u64; 4]>>,
+    /// État commun à tous les fils managés.
+    pub(super) shared: Arc<Shared>,
     /// Valeurs en transit vers du code natif, gardées en vie par le
     /// ramasse-miettes.
     pub(super) pins: Vec<Value>,
+    /// Instructions exécutées depuis le dernier passage de main.
+    ticks: u32,
+    /// Constructeurs statiques en cours sur ce fil : pas de passage de main
+    /// au milieu (un autre fil verrait le type à moitié initialisé).
+    cctor_depth: u32,
+}
+
+/// État partagé par les interpréteurs des différents fils.
+#[derive(Default)]
+pub struct Shared {
+    /// Types dont le constructeur statique a été lancé.
+    initialized: Mutex<HashSet<TypeId>>,
+    /// Champs statiques des types de la bibliothèque intégrée.
+    external_statics: Mutex<HashMap<(usize, u32), Box<[u64; 4]>>>,
     /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
-    pub(super) fns: FnTable,
+    pub(super) fns: Mutex<FnTable>,
 }
 
 pub enum ExecResult {
@@ -294,10 +308,30 @@ impl Interpreter {
             parked,
             current: 0,
             domain,
-            initialized: HashSet::new(),
-            external_statics: HashMap::new(),
+            shared: Arc::new(Shared::default()),
             pins: Vec::new(),
-            fns: FnTable::default(),
+            ticks: 0,
+            cctor_depth: 0,
+        }
+    }
+
+    /// Interpréteur d'un nouveau fil : mêmes assemblies et même état
+    /// partagé, pile d'appels vide.
+    pub(super) fn fork(&self) -> Interpreter {
+        let mut parked: Vec<Option<Assembly>> = (0..self.parked.len())
+            .map(|i| Some(self.assembly_at(i).clone()))
+            .collect();
+        let assembly = parked[0].take().expect("assembly du programme");
+        Interpreter {
+            frames: Vec::new(),
+            assembly,
+            parked,
+            current: 0,
+            domain: self.domain.clone(),
+            shared: self.shared.clone(),
+            pins: Vec::new(),
+            ticks: 0,
+            cctor_depth: 0,
         }
     }
 
@@ -368,7 +402,7 @@ impl Interpreter {
     /// Lance une seule fois le constructeur statique d'un type, avant son
     /// premier usage (ECMA-335 §II.10.5.3.1).
     fn ensure_initialized(&mut self, id: TypeId) -> Result<(), ClrException> {
-        if !self.initialized.insert(id) {
+        if !self.shared.initialized.lock().unwrap().insert(id) {
             return Ok(());
         }
         let Some(((asm, row), args)) = types::with_types(|reg| {
@@ -383,18 +417,23 @@ impl Interpreter {
             md.is_cctor() && md.rva != 0 && a.get_string(md.name) == ".cctor"
         });
         match cctor {
-            Some(m) => match self.execute_in(
-                asm,
-                m,
-                Vec::new(),
-                Gen {
-                    t: args,
-                    m: Vec::new(),
-                },
-            ) {
-                ExecResult::Exception(e) => Err(e),
-                ExecResult::Return(_) => Ok(()),
-            },
+            Some(m) => {
+                self.cctor_depth += 1;
+                let r = self.execute_in(
+                    asm,
+                    m,
+                    Vec::new(),
+                    Gen {
+                        t: args,
+                        m: Vec::new(),
+                    },
+                );
+                self.cctor_depth -= 1;
+                match r {
+                    ExecResult::Exception(e) => Err(e),
+                    ExecResult::Return(_) => Ok(()),
+                }
+            }
             None => Ok(()),
         }
     }
@@ -555,6 +594,9 @@ impl Interpreter {
         if let Some(r) = self.delegate_call(namespace, class, name, &args, params) {
             return r;
         }
+        if let Some(r) = self.thread_call(namespace, class, name, &args, params) {
+            return r;
+        }
         match (namespace, class, name) {
             (_, _, ".ctor") => {
                 // Constructeurs de la BCL (Object, Exception…) : seul le message
@@ -672,6 +714,12 @@ impl Interpreter {
         loop {
             if gc::with_gc(|gc| gc.should_collect()) {
                 self.collect_garbage();
+            }
+            // Point sûr : entre deux instructions, la main passe aux autres
+            // fils managés de temps en temps.
+            self.ticks = self.ticks.wrapping_add(1);
+            if self.ticks.is_multiple_of(512) && self.cctor_depth == 0 {
+                threads::gil_yield();
             }
             let frame = self.frames.last().unwrap();
             if frame.ip >= frame.code.len() {
@@ -843,8 +891,32 @@ impl Interpreter {
 
     /// Collecte en prenant pour racines tout ce que voient les méthodes en
     /// cours et les champs statiques.
-    fn collect_garbage(&mut self) {
+    pub(super) fn collect_garbage(&mut self) {
         let mut roots: Vec<usize> = Vec::new();
+        self.own_roots(&mut roots);
+        // Les autres fils sont arrêtés à un point sûr (ils n'ont pas la
+        // main) : leurs piles sont stables.
+        let me = self as *const Interpreter as usize;
+        threads::for_each_interpreter(|other| {
+            if other as *const Interpreter as usize != me {
+                other.own_roots(&mut roots);
+            }
+        });
+        roots.extend(threads::roots());
+        roots.extend(super::callbacks::roots());
+        for data in self.shared.external_statics.lock().unwrap().values() {
+            roots.extend(data.iter().map(|&w| w as usize));
+        }
+        types::with_types(|reg| {
+            for data in reg.static_data.values() {
+                roots.extend(data.iter().map(|&w| w as usize));
+            }
+        });
+        gc::with_gc(|gc| gc.collect(&roots));
+    }
+
+    /// Racines propres à ce fil : piles d'appels et valeurs épinglées.
+    fn own_roots(&self, roots: &mut Vec<usize>) {
         for f in &self.frames {
             roots.extend(f.locals.words.iter().map(|&w| w as usize));
             roots.extend(f.args.words.iter().map(|&w| w as usize));
@@ -856,16 +928,6 @@ impl Interpreter {
             }));
         }
         roots.extend(self.pins.iter().map(|v| v.as_i64() as usize));
-        roots.extend(super::callbacks::roots());
-        for data in self.external_statics.values() {
-            roots.extend(data.iter().map(|&w| w as usize));
-        }
-        types::with_types(|reg| {
-            for data in reg.static_data.values() {
-                roots.extend(data.iter().map(|&w| w as usize));
-            }
-        });
-        gc::with_gc(|gc| gc.collect(&roots));
     }
 
     /// Adresse d'un champ statique, après le constructeur statique de son type.
@@ -873,8 +935,8 @@ impl Interpreter {
         let Some(field) = self.resolve_field(token) else {
             // Champ statique de la bibliothèque intégrée : emplacement propre
             // au jeton.
-            let slot = self
-                .external_statics
+            let mut statics = self.shared.external_statics.lock().unwrap();
+            let slot = statics
                 .entry((self.current, token))
                 .or_insert_with(|| Box::new([0u64; 4]));
             return Ok((slot.as_mut_ptr() as *mut u8, Kind::Ref));

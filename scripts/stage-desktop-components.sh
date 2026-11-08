@@ -48,13 +48,18 @@ mkdir -p "$stage/usr/lib/udev/rules.d"
 install -m 644 "$project/integration/native/udev/60-winlux-rfkill.rules" "$stage/usr/lib/udev/rules.d/60-winlux-rfkill.rules"
 mkdir -p "$stage/etc/polkit-1/rules.d"
 install -m 644 "$project/integration/native/network/50-winlux-network.rules" "$stage/etc/polkit-1/rules.d/50-winlux-network.rules"
+# Empreinte digitale (#659) : fprintd n'obéit qu'à root, donc au relais
+# winlux-root qui a vérifié le compte ; aucun droit sur le lecteur lui-même.
+# Dans /usr pour arriver aussi par la mise à jour.
+mkdir -p "$stage/usr/share/polkit-1/rules.d"
+install -m 644 "$project/integration/native/fprint/49-winlux-fprint.rules" "$stage/usr/share/polkit-1/rules.d/49-winlux-fprint.rules"
 # Clé publique des mises à jour signées (#31) : présente, elle rend la
 # signature Ed25519 du manifeste obligatoire.
 if test -f "$project/integration/native/keys/update-signing.pub"; then
     mkdir -p "$stage/usr/share/winlux"
     install -m 644 "$project/integration/native/keys/update-signing.pub" "$stage/usr/share/winlux/update-signing.pub"
 fi
-for name in winlux-ab winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-signature winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-root winlux-wifi winlux-vpn winlux-hotspot winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-parental winlux-webview winlux-screensaver-inhibit; do
+for name in winlux-ab winlux-system-tools winlux-assistant winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-widgets winlux-update-apt winlux-update-progress winlux-signature winlux-power winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock winlux-permission winlux-uac winlux-signin winlux-root winlux-wifi winlux-vpn winlux-hotspot winlux-brightness winlux-volume winlux-certificates winlux-force-close winlux-close-watch winlux-maximized-watch winlux-phone winlux-parental winlux-webview winlux-screensaver-inhibit; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -133,11 +138,22 @@ cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/us
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
 cp --remove-destination "$project/scripts/winlux-boot-menu.sh" "$stage/usr/share/winlux/boot-menu"
 chmod 755 "$stage/usr/share/winlux/boot-menu"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-network-perms.sh:winlux-network-perms' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-update-page.py:winlux-update-page' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-input-watch.sh:winlux-input-watch' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-installed-apps.py:winlux-installed-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-browser-choice.py:winlux-browser-choice' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-super-key.py:winlux-super-key' 'winlux-run.py:winlux-run' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-speech.py:winlux-speech' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts' 'winlux-setup-wizard.py:winlux-setup-wizard'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-system-services.sh:winlux-system-services' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-network-perms.sh:winlux-network-perms' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-update-page.py:winlux-update-page' 'winlux-reset-page.py:winlux-reset-page' 'winlux-hardware-page.py:winlux-hardware-page' 'winlux-osk.py:winlux-osk' 'winlux-mouse.py:winlux-mouse' 'winlux-input-watch.sh:winlux-input-watch' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray-read.sh:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.sh:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-installed-apps.py:winlux-installed-apps' 'winlux-notify-icon.py:winlux-notify-icon' 'winlux-open-with.py:winlux-open-with' 'winlux-browser-choice.py:winlux-browser-choice' 'winlux-clock.sh:winlux-clock' 'winlux-power-modes.py:winlux-power-modes' 'winlux-ambiance.py:winlux-ambiance' 'winlux-emoji.py:winlux-emoji' 'winlux-clipboard.py:winlux-clipboard' 'winlux-snap.py:winlux-snap' 'winlux-super-key.py:winlux-super-key' 'winlux-run.py:winlux-run' 'winlux-taskview.py:winlux-taskview' 'winlux-alarms.py:winlux-alarms' 'winlux-colorpicker.py:winlux-colorpicker' 'winlux-rename.py:winlux-rename' 'winlux-ocr.py:winlux-ocr' 'winlux-speech.py:winlux-speech' 'winlux-first-boot-notice.sh:winlux-first-boot-notice' 'winlux-accounts.py:winlux-accounts' 'winlux-setup-wizard.py:winlux-setup-wizard'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"
 done
+# Barre des tâches : /usr/bin/winlux-tray lit les sorties du service résident
+# (winlux-tray-read.sh), le calcul en Python est installé ici.
+mkdir -p "$stage/usr/lib/winlux"
+cp --remove-destination "$project/scripts/winlux-tray.py" "$stage/usr/lib/winlux/winlux-tray"
+chmod 755 "$stage/usr/lib/winlux/winlux-tray"
+cp --remove-destination "$project/scripts/mesure-barre-taches.sh" "$stage/usr/lib/winlux/mesure-barre-taches.sh"
+chmod 755 "$stage/usr/lib/winlux/mesure-barre-taches.sh"
+# Menu Démarrer : /usr/bin/winlux-start-menu le réveille par D-Bus
+# (winlux-start-menu.sh), le menu en Python est installé ici.
+cp --remove-destination "$project/scripts/winlux-start-menu.py" "$stage/usr/lib/winlux/winlux-start-menu"
+chmod 755 "$stage/usr/lib/winlux/winlux-start-menu"
 "$components/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" --library-path "$components/usr/lib/x86_64-linux-gnu" \
     "$components/usr/bin/glib-compile-schemas" "$stage/usr/share/glib-2.0/schemas"
 for database in mime desktop; do

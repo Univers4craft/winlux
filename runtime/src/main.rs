@@ -115,6 +115,10 @@ fn main() {
     if exe == "--intl" {
         std::process::exit(intl::report());
     }
+    if exe == "--services" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(dlls::advapi32_services::cli(&rest));
+    }
     if exe == "--text" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(intl::text::cli(&rest));

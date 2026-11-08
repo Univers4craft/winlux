@@ -1002,6 +1002,15 @@ unsafe extern "win64" fn get_image_width(img: usize, w: *mut u32) -> i32 {
     }
 }
 
+/// GdipImageForceValidation (Image.FromStream(…, validateImageData)) :
+/// Winlux décode l'image dès son chargement, elle est donc déjà validée.
+unsafe extern "win64" fn image_force_validation(img: usize) -> i32 {
+    match bitmap(img) {
+        Some(_) => OK,
+        None => INVALID_PARAMETER,
+    }
+}
+
 unsafe extern "win64" fn get_image_height(img: usize, h: *mut u32) -> i32 {
     match bitmap(img) {
         Some(b) => out(h, b.h),
@@ -4671,6 +4680,51 @@ unsafe extern "win64" fn get_path_points(p: usize, pts: *mut f32, n: i32) -> i32
     }
     OK
 }
+/// Points du chemin arrondis à l'entier (GpPoint).
+unsafe extern "win64" fn get_path_points_i(p: usize, pts: *mut i32, n: i32) -> i32 {
+    let Some(Obj::Path(gp)) = get(p) else {
+        return INVALID_PARAMETER;
+    };
+    let all: Vec<Pt> = gp
+        .path
+        .figures
+        .iter()
+        .flat_map(|f| f.0.iter().copied())
+        .collect();
+    if pts.is_null() || (n as usize) < all.len() {
+        return INSUFFICIENT_BUFFER;
+    }
+    for (i, q) in all.iter().enumerate() {
+        *pts.add(2 * i) = q.0.round() as i32;
+        *pts.add(2 * i + 1) = q.1.round() as i32;
+    }
+    OK
+}
+
+/// Dernier point du chemin. wxWidgets y lit son « point courant » : sans
+/// lui, chaque arc d'un rectangle arrondi ouvrait une nouvelle figure et
+/// seuls les quatre coins étaient remplis (boutons d'Audacity, #1054).
+unsafe extern "win64" fn get_path_last_point(p: usize, last: *mut f32) -> i32 {
+    let Some(Obj::Path(gp)) = get(p) else {
+        return INVALID_PARAMETER;
+    };
+    let Some(q) = gp
+        .path
+        .figures
+        .iter()
+        .rev()
+        .find_map(|f| f.0.last().copied())
+    else {
+        return INVALID_PARAMETER;
+    };
+    if last.is_null() {
+        return INVALID_PARAMETER;
+    }
+    *last = q.0;
+    *last.add(1) = q.1;
+    OK
+}
+
 unsafe extern "win64" fn get_path_types(p: usize, types: *mut u8, n: i32) -> i32 {
     let Some(Obj::Path(gp)) = get(p) else {
         return INVALID_PARAMETER;
@@ -5272,8 +5326,6 @@ const NOT_YET: &[&str] = &[
     "GdipGetPathGradientSurroundColorsWithCount",
     "GdipGetPathGradientTransform",
     "GdipGetPathGradientWrapMode",
-    "GdipGetPathLastPoint",
-    "GdipGetPathPointsI",
     "GdipGetPenBrushFill",
     "GdipGetPenCompoundArray",
     "GdipGetPenCompoundCount",
@@ -5302,7 +5354,6 @@ const NOT_YET: &[&str] = &[
     "GdipGetTextureImage",
     "GdipGetTextureTransform",
     "GdipGetTextureWrapMode",
-    "GdipImageForceValidation",
     "GdipIsEqualRegion",
     "GdipIsOutlineVisiblePathPoint",
     "GdipIsOutlineVisiblePathPointI",
@@ -5404,6 +5455,7 @@ pub fn exports() -> Exports {
         "GdipCloneBitmapArea" => fn clone_bitmap_area,
         "GdipCloneBitmapAreaI" => fn clone_bitmap_area_i,
         "GdipGetImageWidth" => fn get_image_width,
+        "GdipImageForceValidation" => fn image_force_validation,
         "GdipGetImageHeight" => fn get_image_height,
         "GdipGetImageDimension" => fn get_image_dimension,
         "GdipGetImageBounds" => fn get_image_bounds,
@@ -5713,6 +5765,8 @@ pub fn exports() -> Exports {
         "GdipAddPathPath" => fn add_path_path,
         "GdipGetPointCount" => fn get_point_count,
         "GdipGetPathPoints" => fn get_path_points,
+        "GdipGetPathPointsI" => fn get_path_points_i,
+        "GdipGetPathLastPoint" => fn get_path_last_point,
         "GdipGetPathTypes" => fn get_path_types,
         "GdipGetPathWorldBounds" => fn get_path_bounds,
         "GdipGetPathWorldBoundsI" => fn get_path_bounds_i,

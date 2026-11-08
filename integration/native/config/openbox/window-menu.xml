@@ -6,4 +6,6 @@
  <menu id="winlux-window-menu" label="Fenêtre" execute="/usr/bin/winlux-force-close menu"/>
  <!-- Windows + X : menu d'accès rapide (winlux-run menu), traduit lui aussi. -->
  <menu id="winlux-quick-link" label="Accès rapide" execute="/usr/bin/winlux-run menu"/>
+ <!-- Windows + F10 et clic droit sur la racine : menu du bureau traduit (#787). -->
+ <menu id="winlux-desktop-menu" label="Bureau Winlux" execute="/usr/bin/winlux-run desktop-menu"/>
 </openbox_menu>

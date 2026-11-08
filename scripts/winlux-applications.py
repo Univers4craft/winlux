@@ -166,7 +166,7 @@ SHELL_APP_ICONS = {
     "store": "system-software-install", "programs": "system-software-install",
     "fonts": "font-x-generic", "taskschd": "x-office-calendar", "firewall": "security-high",
     "welcome": "winlux-welcome", "regedit": "preferences-system", "taskmgr": "utilities-system-monitor",
-    "eventviewer": "utilities-system-monitor", "msinfo32": "computer",
+    "eventviewer": "utilities-system-monitor", "msinfo32": "computer", "notepad": "accessories-text-editor",
 }
 ICON_ROOT = Path(os.environ.get("WINLUX_ICON_ROOT", "/usr/share/icons"))
 
@@ -821,6 +821,55 @@ def desktop_shortcuts(home=None):
     STATE.mkdir(parents=True, exist_ok=True)
     save(ours_file, json.dumps(sorted(wanted)))
 
+# Raccourcis du menu Démarrer vers autre chose qu'un .exe (#992) : l'aide
+# (.chm, .pdf, .txt) ou le site web (.url) d'un programme. Windows les montre
+# comme ses autres entrées ; ils s'ouvrent avec l'application par défaut.
+OPENER = "/usr/bin/xdg-open"
+LINK_ICONS = {".chm": "help-browser", ".hlp": "help-browser", ".pdf": "x-office-document",
+              ".txt": "text-x-generic", ".rtf": "x-office-document", ".htm": "text-html", ".html": "text-html"}
+
+def url_of(path):
+    """URL= d'un fichier .url (InternetShortcut), seulement http(s)."""
+    if path.stat().st_size > 64 * 1024: raise ValueError("Internet shortcut too large")
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, _, value = line.strip().partition("=")
+        if key.strip().lower() == "url" and value.strip().lower().startswith(("http://", "https://")):
+            return value.strip()
+    return None
+
+def link_shortcuts(home):
+    """(nom, cible à ouvrir, icône) des raccourcis aide et web du menu Démarrer."""
+    count = 0
+    for name in START_MENUS:
+        root = home / name
+        if not root.is_dir(): continue
+        for path in sorted(root.rglob("*")):
+            suffix = path.suffix.lower()
+            if suffix not in (".lnk", ".url") or not path.is_file(): continue
+            count += 1
+            if count > 4096: return
+            try:
+                if suffix == ".url":
+                    url = url_of(path)
+                    if url: yield path.stem, url, "web-browser"
+                    continue
+                target, _, _, _, _ = lnk_resolve(path, home)
+                if valid_exe(target) or not target.is_file(): continue
+                if target.suffix.lower() == ".url":
+                    url = url_of(target)
+                    if url: yield path.stem, url, "web-browser"
+                    continue
+                if target.suffix.lower() in (".exe", ".com", ".bat", ".cmd", ".msi", ".dll", ".lnk"): continue
+                yield path.stem, str(target), LINK_ICONS.get(target.suffix.lower(), "text-x-generic")
+            except (OSError, ValueError, UnicodeError, struct.error): continue
+
+def link_launcher(name, target, icon, profile="desktop"):
+    identity = hashlib.sha256((target + "\0" + profile + "\0" + name).encode()).hexdigest()[:24]
+    filename = f"winlux-link-{identity}.desktop"
+    name = name.replace("\n", " ").replace("\r", " ").replace("\0", " ")[:200]
+    managed_desktop(APPS / filename, f"[Desktop Entry]\nType=Application\nName={escaped(name)}\nExec={OPENER} {argument(target)}\nIcon={escaped(icon)}\nTerminal=false\nCategories=Utility;WinluxWindows;\nX-Winlux-Link={escaped(target)}\n")
+    return filename
+
 def refresh():
     APPS.mkdir(parents=True, exist_ok=True)
     desktop_shortcuts()
@@ -840,8 +889,11 @@ def refresh():
             filename = launcher(target, name, profile, extra)
             if filename: keep.add(filename)
             if home == HOME: names.setdefault(str(target.resolve()), name)
+        if profile == "desktop":
+            for name, target, icon in link_shortcuts(home):
+                keep.add(link_launcher(name, target, icon, profile))
     keep |= refresh_associations(names)
-    for pattern in ["winlux-pe-*.desktop", "winlux-browser-*.desktop", "winlux-assoc-*.desktop"]:
+    for pattern in ["winlux-pe-*.desktop", "winlux-link-*.desktop", "winlux-browser-*.desktop", "winlux-assoc-*.desktop"]:
         for path in APPS.glob(pattern):
             if path.name not in keep:
                 path.unlink()

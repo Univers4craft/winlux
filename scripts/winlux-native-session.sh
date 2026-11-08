@@ -275,6 +275,11 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
+# Menu Démarrer construit caché quelques secondes après la barre : le premier
+# appui sur Windows ne démarre plus Python et GTK à froid.
+if test -x /usr/lib/winlux/winlux-start-menu; then
+    (sleep 3; exec /usr/lib/winlux/winlux-start-menu --preload) </dev/null >/run/winlux/start-menu.log 2>&1 &
+fi
 # Clavier ou souris USB branché pendant la session : disposition et réglages
 # réappliqués (un clavier branché à chaud tapait en QWERTY).
 if test -x /usr/bin/winlux-input-watch; then /usr/bin/winlux-input-watch >/run/winlux/input-watch.log 2>&1 & fi

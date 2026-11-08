@@ -95,6 +95,7 @@ Section
   ExecWait '"$INSTDIR\linux.exe"' $3
   ExecWait 'cmd.exe /c echo bonjour' $4
   ExecShell open "https://example.org/merci"
+  WriteRegStr HKCU "Software\DemoApp\Réglages" "Langue" "fr"
   WriteRegStr HKCU "Software\DemoApp\Temporaire" "x" "1"
   DeleteRegKey HKCU "Software\DemoApp\Temporaire"
   File nouveau.txt
@@ -126,9 +127,14 @@ test ! -e "$work/linux-lance" || fail "un programme Linux déguisé en .exe a é
 grep -q 'programme ignoré : cmd.exe' "$work/out.txt" || fail "cmd.exe n'est pas signalé comme ignoré"
 grep -q 'adresse non ouverte' "$work/out.txt" || fail "ExecShell d'une adresse non signalé"
 if run reg.exe query 'HKCU\Software\DemoApp\Temporaire' >/dev/null 2>&1; then fail "DeleteRegKey : clé restée"; fi
+# Les noms de clés gardent la casse écrite par le script (#830).
+run reg.exe query 'HKCU\Software\DemoApp' >"$work/reg.txt" 2>&1 || fail "HKCU\Software\DemoApp introuvable"
+grep -q 'Software\\DemoApp\\Réglages$' "$work/reg.txt" || fail "casse des clés perdue : $(cat "$work/reg.txt")"
+run reg.exe query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall' >"$work/reg.txt" 2>&1
+grep -q 'Uninstall\\DemoApp$' "$work/reg.txt" || fail "inscription Uninstall en minuscules : $(cat "$work/reg.txt")"
 
 run --setup --list >"$work/list.txt"
-grep -q "^demoapp	Demo App	2.0	nsis" "$work/list.txt" || fail "Demo App 2.0 absent de la liste"
+grep -qi "^demoapp	Demo App	2.0	nsis" "$work/list.txt" || fail "Demo App 2.0 absent de la liste"
 grep -qi "^prereqdemo	" "$work/list.txt" || fail "prérequis absent de la liste"
 run --setup --remove "HKLM\\$uk\\DemoApp" >"$work/out.txt" 2>&1 || fail "--remove en échec"
 test ! -e "$app/nouveau.txt" || fail "désinstallation incomplète"

@@ -224,7 +224,9 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
         // Journal centralisé + écran bleu + signalement d'abord : ce chemin
         // ne relit la mémoire que par sondage sûr, contrairement au dump
         // détaillé ci-dessous.
-        crate::crash::report(sig, info, ctx);
+        // Code Windows retenu par le rapport : un débordement de pile y est
+        // reconnu (0xC00000FD) et sort avec ce code, pas en 0xC0000005 (#15).
+        let reported = crate::crash::report(sig, info, ctx);
         let uc = ctx as *mut libc::ucontext_t;
         let rip = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
         let rsp = (*uc).uc_mcontext.gregs[libc::REG_RSP as usize] as u64;
@@ -238,6 +240,7 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
         let addr = (*info).si_addr() as u64;
 
         let exception_code: u32 = match sig {
+            libc::SIGSEGV | libc::SIGBUS if reported == 0xC000_00FD => reported,
             libc::SIGSEGV | libc::SIGBUS => 0xC000_0005,
             libc::SIGILL => 0xC000_001D,
             libc::SIGTRAP => 0x8000_0003,

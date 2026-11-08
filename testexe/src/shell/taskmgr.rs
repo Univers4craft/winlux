@@ -3113,6 +3113,17 @@ unsafe fn reveal_details(pid: u32) {
 
 // ---------- Clavier ----------
 
+/// Numéro de la fenêtre pour le focus clavier : wm::APP_TASKMGR du bureau
+/// (le Gestionnaire autonome n'a pas ce module, d'où la copie vérifiée par
+/// wm::focus_regression_checks).
+pub const FOCUS_APP: usize = 3;
+
+/// Tests (#1024) : ouvre ou ferme le menu contextuel sans clic droit.
+#[doc(hidden)]
+pub unsafe fn set_menu_for_test(pid: u32) {
+    MENU_PID = pid;
+}
+
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
     let run = &mut *core::ptr::addr_of_mut!(RUN);
     let search = &mut *core::ptr::addr_of_mut!(SEARCH);
@@ -3163,6 +3174,11 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         0x2E if DIALOG == Dialog::None && list_tab && SELECTED_PID != 0 => {
             ask_end(SELECTED_PID);
             true
+        }
+        // Menu contextuel ouvert : Haut/Bas passent d'une entrée à l'autre
+        // (Fin de tâche, priorités, détails), Entrée active l'entrée (#1024).
+        0x26 | 0x28 if MENU_PID != 0 && DIALOG == Dialog::None => {
+            crate::gfx::focus_step(FOCUS_APP, vk == 0x26)
         }
         0x26 | 0x28 if DIALOG == Dialog::None && list_tab => {
             // Haut/Bas : processus précédent ou suivant parmi les lignes affichées.

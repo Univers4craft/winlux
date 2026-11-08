@@ -81,6 +81,9 @@ pub unsafe fn native_init() {
         APP_EVENTVIEWER
     } else if n == 8 && mode[..8] == b"msinfo32".map(|c| c as i8) {
         APP_SYSINFO
+    } else if n == 7 && mode[..7] == b"notepad".map(|c| c as i8) {
+        // Bloc-notes du shell PE seul (winlux-shell-app notepad, #1027).
+        APP_NOTEPAD
     } else {
         usize::MAX
     };
@@ -97,6 +100,17 @@ pub unsafe fn native_init() {
         } else {
             crate::explorer::preload();
             open(APP_EXPLORER);
+        }
+    } else if NATIVE_APP == APP_NOTEPAD {
+        notepad::open_new();
+        let mut path = [0u8; 1024];
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_SHELL_PATH".as_ptr(),
+            path.as_mut_ptr().cast(),
+            path.len() as u32,
+        );
+        if n > 0 && (n as usize) < path.len() {
+            notepad::load_file_into_active(&path[..n as usize]);
         }
     } else if NATIVE_APP == APP_STORE {
         crate::store::open();
@@ -1006,6 +1020,9 @@ unsafe fn app_mouse_inner(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> b
 /// par le focus entre contrôles (#28), sauf dans l'Éditeur et le Terminal
 /// où Tab s'écrit.
 unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
+    // Échap efface le cadre de focus puis va quand même à l'application ;
+    // le cadre disparu doit être redessiné même si elle ignore la touche (#1023).
+    let frame_shown = crate::gfx::focus_state(app).1;
     if app_key_uses_focus(app) {
         match crate::gfx::focus_key(app, vk, ch) {
             crate::gfx::FocusKey::Pass => {}
@@ -1020,7 +1037,8 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
             }
         }
     }
-    app_key_inner(app, vk, ch)
+    let handled = app_key_inner(app, vk, ch);
+    handled || (frame_shown && !crate::gfx::focus_state(app).1)
 }
 
 unsafe fn app_key_inner(app: usize, vk: u32, ch: u16) -> bool {
@@ -2875,6 +2893,33 @@ pub unsafe fn tick() -> bool {
 /// Navigation Tab entre les contrôles (#28), sans affichage : exécuté par
 /// `explorer_regression.exe`.
 #[doc(hidden)]
+/// #1025, #1026 : WINLUX_LANG choisit la langue du shell, et le titre de
+/// fenêtre d'une application ouverte seule suit cette langue.
+pub unsafe fn language_regression_checks() {
+    let saved = CURRENT_LANG;
+    let mut old = [0u8; 16];
+    let old_n = GetEnvironmentVariableA(c"WINLUX_LANG".as_ptr(), old.as_mut_ptr().cast(), 16);
+    for (code, lang, title) in [
+        (c"en", Lang::En, &b"Settings"[..]),
+        (c"es", Lang::Es, &b"Configuraci\xF3n"[..]),
+        (c"de", Lang::De, &b"Einstellungen"[..]),
+        (c"fr", Lang::Fr, &b"Param\xE8tres"[..]),
+    ] {
+        SetEnvironmentVariableA(c"WINLUX_LANG".as_ptr(), code.as_ptr());
+        CURRENT_LANG = Lang::Fr;
+        load_lang();
+        check!(CURRENT_LANG == lang, "Langue : WINLUX_LANG choisit la langue du shell PE (#1026)");
+        check!(title_of(APP_SETTINGS) == title, "Langue : titre de la fenetre Parametres traduit (#1025)");
+    }
+    if (1..16).contains(&old_n) {
+        old[old_n as usize] = 0;
+        SetEnvironmentVariableA(c"WINLUX_LANG".as_ptr(), old.as_ptr().cast());
+    } else {
+        SetEnvironmentVariableA(c"WINLUX_LANG".as_ptr(), core::ptr::null());
+    }
+    CURRENT_LANG = saved;
+}
+
 pub unsafe fn focus_regression_checks() {
     use crate::gfx::{focus_begin, focus_count, focus_end, focus_field, focus_key, focus_modal, focus_mouse_down, focus_state, focus_zone, FocusKey};
     let (w, h) = (1000, 700);
@@ -2937,6 +2982,26 @@ pub unsafe fn focus_regression_checks() {
     check!(focus_state(T) == (1, false), "Focus clavier : un clic efface le cadre et deplace le focus");
     check!(matches!(focus_key(T, 0x09, 0), FocusKey::Moved) && focus_state(T) == (0, true), "Focus clavier : apres un clic, Tab repart du controle clique");
     check!(matches!(focus_key(T, 0x1B, 0), FocusKey::Pass) && !focus_state(T).1, "Focus clavier : Echap efface le cadre");
+    // #1024 : dans un menu, Bas et Haut passent d'une entrée à l'autre.
+    check!(crate::gfx::focus_step(T, false) && focus_state(T) == (0, true), "Focus clavier : Bas sans cadre montre la premiere entree (#1024)");
+    check!(crate::gfx::focus_step(T, false) && focus_state(T).0 == 1, "Focus clavier : Bas passe a l'entree suivante (#1024)");
+    check!(crate::gfx::focus_step(T, true) && focus_state(T).0 == 0, "Focus clavier : Haut revient a l'entree precedente (#1024)");
+    check!(crate::taskmgr::FOCUS_APP == APP_TASKMGR, "Gestionnaire des taches : numero de fenetre du focus");
+    focus_begin(APP_TASKMGR);
+    focus_modal();
+    for i in 0..7 {
+        focus_zone(&rect(10, 100 + i * 32, 260, 130 + i * 32));
+    }
+    focus_end(dc, &mut b);
+    crate::taskmgr::set_menu_for_test(1);
+    crate::taskmgr::key(0x28, 0);
+    crate::taskmgr::key(0x28, 0);
+    let menu_moved = focus_state(APP_TASKMGR);
+    crate::taskmgr::key(0x26, 0);
+    let menu_back = focus_state(APP_TASKMGR);
+    crate::taskmgr::set_menu_for_test(0);
+    check!(menu_moved == (1, true) && menu_back == (0, true), "Gestionnaire des taches : fleches Haut/Bas dans le menu contextuel (#1024)");
+    crate::gfx::focus_mouse_down(APP_TASKMGR, 0, 0);
 
     // Chaque fenêtre du shell déclare ses contrôles en se dessinant.
     let apps: [(usize, usize, &str); 15] = [
@@ -2968,6 +3033,9 @@ pub unsafe fn focus_regression_checks() {
     app_key(APP_SETTINGS, 0, 9);
     app_key(APP_SETTINGS, 0x09, 0);
     check!(focus_state(APP_SETTINGS) == (1, true), "Focus clavier : Parametres, deux Tab menent au deuxieme controle");
+    // #1023 : Échap efface le cadre et demande un nouveau dessin, même si
+    // la page ne fait rien de la touche.
+    check!(app_key(APP_SETTINGS, 0x1B, 0) && !focus_state(APP_SETTINGS).1, "Focus clavier : Echap dans Parametres efface le cadre et redessine (#1023)");
     // L'Éditeur garde Tab pour le texte.
     check!(focus_count(APP_NOTEPAD) == 0 || !app_key_uses_focus(APP_NOTEPAD), "Focus clavier : l'Editeur ecrit la tabulation");
     SelectObject(dc, old);

@@ -393,6 +393,7 @@ GetVolumeInformationW
 GetVolumePathNameW
 GetWindowsDirectoryA
 GetWindowsDirectoryW
+GetWriteWatch
 GetXStateFeaturesMask
 GlobalAddAtomA
 GlobalAddAtomW
@@ -533,6 +534,8 @@ OpenJobObjectW
 OpenMutexA
 OpenMutexW
 OpenProcess
+OpenSemaphoreA
+OpenSemaphoreW
 OpenThread
 OutputDebugStringA
 OutputDebugStringW
@@ -629,6 +632,7 @@ RemoveVectoredContinueHandler
 RemoveVectoredExceptionHandler
 ReplaceFileW
 ResetEvent
+ResetWriteWatch
 ResizePseudoConsole
 ResolveLocaleName
 ResumeThread
@@ -815,6 +819,7 @@ WinluxJobPoll
 WinluxJobStats
 WinluxMediaCanonical
 WinluxMediaClose
+WinluxMediaControl
 WinluxMediaError
 WinluxMediaFormats
 WinluxMediaFrame

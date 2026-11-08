@@ -293,6 +293,62 @@ pub(crate) unsafe fn resume(ctx: &Context) -> ! {
 
 pub const CTX_EFLAGS: usize = 0x44;
 
+/// Reprise d'une instruction qui a épuisé la pile (#15) : `load_context`
+/// poserait RIP et EFLAGS sous la pile cible, dans la page qui vient de
+/// fauter, et la faute retomberait dans Winlux. Ici rien n'est écrit sous la
+/// pile : RIP passe par une case globale et EFLAGS n'est pas rechargé. Ce
+/// chemin ne sert qu'à rejouer la faute pour le rapport de plantage.
+pub(crate) unsafe fn resume_on_exhausted_stack(ctx: &Context) -> ! {
+    REPLAY_RIP.store(
+        ctx.get(CTX_RIP) as usize,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    load_context_jmp(ctx.0.as_ptr())
+}
+
+static REPLAY_RIP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[unsafe(naked)]
+unsafe extern "win64" fn load_context_jmp(_ctx: *const u8) -> ! {
+    core::arch::naked_asm!(
+        "movdqu xmm0, [rcx + 0x1A0]",
+        "movdqu xmm1, [rcx + 0x1B0]",
+        "movdqu xmm2, [rcx + 0x1C0]",
+        "movdqu xmm3, [rcx + 0x1D0]",
+        "movdqu xmm4, [rcx + 0x1E0]",
+        "movdqu xmm5, [rcx + 0x1F0]",
+        "movdqu xmm6, [rcx + 0x200]",
+        "movdqu xmm7, [rcx + 0x210]",
+        "movdqu xmm8, [rcx + 0x220]",
+        "movdqu xmm9, [rcx + 0x230]",
+        "movdqu xmm10, [rcx + 0x240]",
+        "movdqu xmm11, [rcx + 0x250]",
+        "movdqu xmm12, [rcx + 0x260]",
+        "movdqu xmm13, [rcx + 0x270]",
+        "movdqu xmm14, [rcx + 0x280]",
+        "movdqu xmm15, [rcx + 0x290]",
+        "ldmxcsr [rcx + 0x34]",
+        "mov rdx, [rcx + 0x88]",
+        "mov rbx, [rcx + 0x90]",
+        "mov rsp, [rcx + 0x98]",
+        "mov rbp, [rcx + 0xA0]",
+        "mov rsi, [rcx + 0xA8]",
+        "mov rdi, [rcx + 0xB0]",
+        "mov r8, [rcx + 0xB8]",
+        "mov r9, [rcx + 0xC0]",
+        "mov r10, [rcx + 0xC8]",
+        "mov r11, [rcx + 0xD0]",
+        "mov r12, [rcx + 0xD8]",
+        "mov r13, [rcx + 0xE0]",
+        "mov r14, [rcx + 0xE8]",
+        "mov r15, [rcx + 0xF0]",
+        "mov rax, [rcx + 0x78]",
+        "mov rcx, [rcx + 0x80]",
+        "jmp qword ptr [rip + {slot}]",
+        slot = sym REPLAY_RIP,
+    )
+}
+
 /// Comme `load_context`, mais reprend par `iretq` (RIP, CS, RFLAGS, RSP,
 /// SS posés sous la pile cible) : un drapeau TF prend effet après la
 /// première instruction reprise.
@@ -792,7 +848,13 @@ fn opcode_slots(op: u8, info: u8) -> usize {
 
 /// Repère un épilogue standard à `pc` (add/lea rsp, pop…, ret ou jmp) ; le
 /// cas échéant, l'exécute virtuellement sur `ctx`.
-unsafe fn unwind_epilog(pc: u64, base: u64, entry: *const u32, ctx: &mut Context) -> bool {
+unsafe fn unwind_epilog(
+    pc: u64,
+    base: u64,
+    entry: *const u32,
+    ctx: &mut Context,
+    ptrs: *mut u64,
+) -> bool {
     let begin = base + entry.read_unaligned() as u64;
     let end = base + entry.add(1).read_unaligned() as u64;
     let mut p = pc as *const u8;
@@ -866,6 +928,7 @@ unsafe fn unwind_epilog(pc: u64, base: u64, entry: *const u32, ctx: &mut Context
         };
         let rsp = ctx.get(CTX_RSP);
         ctx.set(gpr(reg), (rsp as *const u64).read_unaligned());
+        note_int(ptrs, reg, rsp);
         ctx.set(CTX_RSP, rsp + 8);
     }
     let rsp = ctx.get(CTX_RSP);
@@ -886,12 +949,18 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
     ctx_raw: *mut c_void,
     handler_data: *mut *mut c_void,
     establisher_frame: *mut u64,
-    _ctx_pointers: *mut c_void,
+    ctx_pointers: *mut c_void,
 ) -> *mut c_void {
     let mut ctx = Context::zeroed();
     std::ptr::copy_nonoverlapping(ctx_raw as *const u8, ctx.ptr(), CONTEXT_SIZE);
-    let (handler, data, frame) =
-        virtual_unwind(handler_type, base, pc, entry as *const u32, &mut ctx);
+    let (handler, data, frame) = virtual_unwind_ptrs(
+        handler_type,
+        base,
+        pc,
+        entry as *const u32,
+        &mut ctx,
+        ctx_pointers.cast(),
+    );
     std::ptr::copy_nonoverlapping(ctx.0.as_ptr(), ctx_raw as *mut u8, CONTEXT_SIZE);
     if !handler_data.is_null() {
         *handler_data = data;
@@ -902,12 +971,38 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
     handler as *mut c_void
 }
 
+/// KNONVOLATILE_CONTEXT_POINTERS : adresse où chaque registre non volatil
+/// du cadre appelant a été sauvé (16 pointeurs XMM, puis 16 entiers dans
+/// l'ordre de CONTEXT). Le ramasse-miettes de coreclr s'en sert pour mettre
+/// à jour les références d'objets gardées dans ces registres (#269).
+unsafe fn note_int(ptrs: *mut u64, reg: usize, addr: u64) {
+    if !ptrs.is_null() {
+        ptrs.add(16 + reg).write_unaligned(addr);
+    }
+}
+unsafe fn note_xmm(ptrs: *mut u64, reg: usize, addr: u64) {
+    if !ptrs.is_null() {
+        ptrs.add(reg).write_unaligned(addr);
+    }
+}
+
 unsafe fn virtual_unwind(
+    handler_type: u32,
+    base: u64,
+    pc: u64,
+    entry: *const u32,
+    ctx: &mut Context,
+) -> (usize, *mut c_void, u64) {
+    virtual_unwind_ptrs(handler_type, base, pc, entry, ctx, std::ptr::null_mut())
+}
+
+unsafe fn virtual_unwind_ptrs(
     handler_type: u32,
     base: u64,
     pc: u64,
     mut entry: *const u32,
     ctx: &mut Context,
+    ptrs: *mut u64,
 ) -> (usize, *mut c_void, u64) {
     let first = entry;
     let mut info = (base + entry.add(2).read_unaligned() as u64) as *const u8;
@@ -936,7 +1031,7 @@ unsafe fn virtual_unwind(
         }
     }
 
-    if prolog_offset >= prolog_size && unwind_epilog(pc, base, first, ctx) {
+    if prolog_offset >= prolog_size && unwind_epilog(pc, base, first, ctx, ptrs) {
         return (0, std::ptr::null_mut(), frame);
     }
 
@@ -961,6 +1056,7 @@ unsafe fn virtual_unwind(
                     // UWOP_PUSH_NONVOL
                     let rsp = ctx.get(CTX_RSP);
                     ctx.set(gpr(reg), (rsp as *const u64).read_unaligned());
+                    note_int(ptrs, reg, rsp);
                     ctx.set(CTX_RSP, rsp + 8);
                 }
                 1 => {
@@ -975,13 +1071,14 @@ unsafe fn virtual_unwind(
                 2 => ctx.set(CTX_RSP, ctx.get(CTX_RSP) + (reg as u64 + 1) * 8),
                 3 => ctx.set(CTX_RSP, frame),
                 4 => {
-                    let v = ((frame + u16_at(1) * 8) as *const u64).read_unaligned();
-                    ctx.set(gpr(reg), v);
+                    let addr = frame + u16_at(1) * 8;
+                    ctx.set(gpr(reg), (addr as *const u64).read_unaligned());
+                    note_int(ptrs, reg, addr);
                 }
                 5 => {
-                    let v =
-                        ((frame + (u16_at(1) | (u16_at(2) << 16))) as *const u64).read_unaligned();
-                    ctx.set(gpr(reg), v);
+                    let addr = frame + (u16_at(1) | (u16_at(2) << 16));
+                    ctx.set(gpr(reg), (addr as *const u64).read_unaligned());
+                    note_int(ptrs, reg, addr);
                 }
                 8 | 9 => {
                     // UWOP_SAVE_XMM128 / UWOP_SAVE_XMM128_FAR
@@ -993,6 +1090,7 @@ unsafe fn virtual_unwind(
                     let src = std::slice::from_raw_parts(addr as *const u8, 16);
                     let at = CTX_XMM0 + reg * 16;
                     ctx.0[at..at + 16].copy_from_slice(src);
+                    note_xmm(ptrs, reg, addr);
                 }
                 10 => {
                     // UWOP_PUSH_MACHFRAME
@@ -1156,8 +1254,31 @@ unsafe fn call_vectored(rec: *mut ExceptionRecord, ctx: *mut u8, continue_handle
         context: ctx,
     };
     for h in handlers {
-        let f: unsafe extern "win64" fn(*mut ExceptionPointers) -> i32 = std::mem::transmute(h);
-        if f(&mut ptrs) == EXCEPTION_CONTINUE_EXECUTION {
+        seh_trace!(
+            "{:#x} : gestionnaire vectorisé {}",
+            (*rec).code,
+            crate::thunks::describe_site(h)
+        );
+        // Appel par le trampoline des gestionnaires de cadre : une
+        // exception levée dans le gestionnaire (coreclr relance ainsi une
+        // faute de code managé depuis son VEH) se déroule au-delà de ce
+        // trampoline jusqu'au point de la faute, comme à travers
+        // KiUserExceptionDispatcher sous Windows (#269).
+        let mut resume = Context::zeroed();
+        std::ptr::copy_nonoverlapping(ctx, resume.ptr(), CONTEXT_SIZE);
+        let index = push_frame(FrameKind::Handler, resume);
+        let mut slot = 0u64;
+        let r = call_handler_tramp(
+            (&mut ptrs as *mut ExceptionPointers).cast(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            h,
+            frame_slot_ptr(index, &mut slot),
+        ) as i32;
+        pop_frames_from(index);
+        seh_trace!("{:#x} : gestionnaire vectorisé rendu {r}", (*rec).code);
+        if r == EXCEPTION_CONTINUE_EXECUTION {
             return true;
         }
     }
@@ -1207,6 +1328,13 @@ pub unsafe fn dispatch(rec: *mut ExceptionRecord, orig: &mut Context) -> Unhandl
             let mut slot = 0u64;
             let (handler, frame) = (dc.language_handler, dc.establisher_frame);
             let pc = dc.control_pc;
+            seh_trace!(
+                "recherche {:#x} : appel du gestionnaire {} du cadre {} (établi {:#x})",
+                (*rec).code,
+                crate::thunks::describe_site(handler),
+                crate::thunks::describe_site(pc as usize),
+                frame
+            );
             let r = call_handler_tramp(
                 rec,
                 frame,
@@ -1476,6 +1604,68 @@ pub unsafe extern "win64" fn raise_exception(
         capture = sym rtl_capture_context,
         raise = sym raise_exception_impl,
     )
+}
+
+/// Petit code exécutable hors des modules, avec sa table de déroulement
+/// Windows (une entrée) : `code` à l'offset 0, `unwind` (UNWIND_INFO) à 0x40.
+/// Renvoie son adresse, 0 en cas d'échec.
+pub(crate) fn code_stub(code: &[u8], unwind: &[u8]) -> usize {
+    assert!(code.len() <= 0x40 && unwind.len() <= 0x20);
+    unsafe {
+        let page = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if page == libc::MAP_FAILED {
+            return 0;
+        }
+        let p = page as *mut u8;
+        std::ptr::copy_nonoverlapping(code.as_ptr(), p, code.len());
+        std::ptr::copy_nonoverlapping(unwind.as_ptr(), p.add(0x40), unwind.len());
+        // RUNTIME_FUNCTION { début, fin, UNWIND_INFO } relatif à la page.
+        let rf = p.add(0x60) as *mut u32;
+        rf.write(0);
+        rf.add(1).write(code.len() as u32);
+        rf.add(2).write(0x40);
+        if libc::mprotect(page, 4096, libc::PROT_READ | libc::PROT_EXEC) != 0 {
+            return 0;
+        }
+        rtl_add_function_table(page as usize + 0x60, 1, page as u64);
+        page as usize
+    }
+}
+
+/// Adresse exportée pour `RaiseException` : un relais avec son cadre
+/// déroulable, comme KernelBase!RaiseException sous Windows. Le CONTEXT et
+/// ExceptionAddress de l'exception désignent ce relais, pas l'appelant :
+/// coreclr relance depuis son VEH une faute de code managé
+/// (NullReferenceException) et ne la reconnaît que si elle ne vient pas de
+/// coreclr.dll ; sinon « Internal CLR error » (#269).
+pub(crate) fn raise_exception_export() -> usize {
+    static STUB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *STUB.get_or_init(|| {
+        let target = (raise_exception as *const () as u64).to_le_bytes();
+        let mut code = vec![
+            0x48, 0x83, 0xEC, 0x28, // sub rsp, 0x28
+            0x48, 0xB8, // mov rax, imm64
+        ];
+        code.extend_from_slice(&target);
+        code.extend_from_slice(&[
+            0xFF, 0xD0, // call rax
+            0x48, 0x83, 0xC4, 0x28, // add rsp, 0x28
+            0xC3, // ret
+        ]);
+        // Prologue de 4 octets : UWOP_ALLOC_SMALL de 0x28.
+        let unwind = [0x01, 0x04, 0x01, 0x00, 0x04, 0x42, 0x00, 0x00];
+        match code_stub(&code, &unwind) {
+            0 => raise_exception as *const () as usize,
+            a => a,
+        }
+    })
 }
 
 /// `RtlRaiseException(record)` : comme RaiseException avec un record fourni.
@@ -1795,14 +1985,16 @@ pub fn exports() -> crate::dlls::Exports {
 
 /// Noms kernel32 des mêmes services.
 pub fn kernel32_exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut m = crate::exports! {
         "RaiseException" => fn raise_exception,
         "RaiseFailFastException" => fn raise_fail_fast_exception,
         "AddVectoredExceptionHandler" => fn rtl_add_vectored_exception_handler,
         "RemoveVectoredExceptionHandler" => fn rtl_remove_vectored_exception_handler,
         "AddVectoredContinueHandler" => fn rtl_add_vectored_continue_handler,
         "RemoveVectoredContinueHandler" => fn rtl_remove_vectored_continue_handler,
-    }
+    };
+    m.insert("RaiseException", raise_exception_export());
+    m
 }
 
 #[cfg(test)]

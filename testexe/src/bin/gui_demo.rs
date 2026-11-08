@@ -968,6 +968,9 @@ unsafe fn on_drop_files(hdrop: usize) {
     explorer::drop_paths_here(&list[..len]);
 }
 
+/// Titre de la fenêtre d'une application du shell ouverte seule (#1025).
+static mut APP_TITLE: [u8; 96] = [0; 96];
+
 #[no_mangle]
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
@@ -1044,22 +1047,15 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 }
             }
         } else if let Some(app) = wm::native_app() {
-            // Titre de l'application ouverte (barre des tâches, Alt+Tab), pas
-            // « Parametres Winlux » pour la Boutique ou le Gestionnaire des tâches.
-            // Windows-1252, comme toutes les chaînes ANSI du shell.
-            match app {
-                wm::APP_STORE => c"Store",
-                wm::APP_TASKMGR => c"Gestionnaire des t\xE2ches",
-                wm::APP_FONTS => c"Polices",
-                wm::APP_PROGRAMS => c"Programmes et fonctionnalit\xE9s",
-                wm::APP_TASKSCHD => c"Planificateur de t\xE2ches",
-                wm::APP_FIREWALL => c"Pare-feu Winlux",
-                wm::APP_WELCOME => c"Bienvenue dans Winlux",
-                wm::APP_REGEDIT => c"\xC9diteur du Registre",
-                wm::APP_EVENTVIEWER => c"Observateur d'\xE9v\xE9nements",
-                wm::APP_SYSINFO => c"Informations syst\xE8me",
-                _ => c"Param\xE8tres",
-            }
+            // Titre de l'application ouverte (barre des tâches, Alt+Tab), dans
+            // la langue de l'interface comme son contenu (#1025). Windows-1252,
+            // comme toutes les chaînes ANSI du shell.
+            let buf = &mut *core::ptr::addr_of_mut!(APP_TITLE);
+            let name = wm::title_of(app);
+            let n = name.iter().position(|&c| c == 0).unwrap_or(name.len()).min(buf.len() - 1);
+            buf[..n].copy_from_slice(&name[..n]);
+            buf[n] = 0;
+            core::ffi::CStr::from_bytes_until_nul(&buf[..]).unwrap_or(c"Winlux")
         } else {
             c"Winlux Control Center"
         };

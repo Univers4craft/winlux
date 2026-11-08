@@ -855,6 +855,8 @@ extern "system" {
     pub fn WinluxMediaFrame(handle: usize, out: *mut u8, cap: u32) -> u32;
     pub fn WinluxMediaError(handle: usize, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaClose(handle: usize) -> i32;
+    /// Pause (1, valeur 1/0) ou volume (2, 0 à 200) sans fermer le flux audio.
+    pub fn WinluxMediaControl(handle: usize, cmd: u32, value: u32) -> i32;
     pub fn WinluxMediaThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaPreview(path: *const u16, at_ms: u32, w: u32, h: u32, out: *mut u8) -> i32;
     pub fn WinluxMediaGetResume(path: *const u16) -> u32;
@@ -1649,9 +1651,22 @@ fn lang_index(code: &[u8]) -> Option<u8> {
     }
 }
 
+/// Variable `WINLUX_LANG` (fr, en, es, de) : la langue de Winlux, lue avant
+/// tout le reste comme par le runtime et la session native (#1026).
+pub fn winlux_lang_env() -> Option<u8> {
+    let mut v = [0u8; 16];
+    let n = unsafe { GetEnvironmentVariableA(c"WINLUX_LANG".as_ptr(), v.as_mut_ptr().cast(), 16) };
+    if (2..16).contains(&n) {
+        lang_index(&v[..n as usize])
+    } else {
+        None
+    }
+}
+
 /// Langue de l'interface (0 fr, 1 en, 2 es, 3 de), pour les applications
-/// autonomes comme pour celles du bureau : `LANG=` de /etc/winlux/locale.conf
-/// (Paramètres > Langue), sinon la variable `LANG`, sinon le français.
+/// autonomes comme pour celles du bureau : la variable `WINLUX_LANG`, sinon
+/// `LANG=` de /etc/winlux/locale.conf (Paramètres > Langue), sinon la
+/// variable `LANG`, sinon le français.
 /// Relue au plus toutes les deux secondes pour suivre un changement.
 /// Langue choisie dans cette session (page Langue des Paramètres) : prioritaire
 /// sur locale.conf, que le service système n'a peut-être pas encore réécrit.
@@ -1675,9 +1690,12 @@ pub fn ui_lang() -> usize {
     if cached != u8::MAX && now.wrapping_sub(UI_LANG_TICK.load(Relaxed)) < 2000 {
         return cached as usize;
     }
-    let mut found = None;
+    let mut found = winlux_lang_env();
     unsafe {
-        let h = CreateFileA(
+        let h = if found.is_some() {
+            core::ptr::null_mut()
+        } else {
+            CreateFileA(
             c"Z:\\etc\\winlux\\locale.conf".as_ptr(),
             0x8000_0000,
             1,
@@ -1685,7 +1703,8 @@ pub fn ui_lang() -> usize {
             3,
             0,
             core::ptr::null_mut(),
-        );
+            )
+        };
         if !h.is_null() && h as isize != -1 {
             let mut buf = [0u8; 256];
             let mut read = 0u32;

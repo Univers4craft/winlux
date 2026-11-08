@@ -403,10 +403,6 @@ unsafe extern "win64" fn ReplaceFileW(
     }
 }
 
-unsafe extern "win64" fn TerminateJobObject(job: usize, _code: u32) -> i32 {
-    i32::from(job != 0)
-}
-
 unsafe extern "win64" fn VirtualFreeEx(
     process: usize,
     addr: *mut c_void,
@@ -487,7 +483,7 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "QueryProcessCycleTime" => fn QueryProcessCycleTime,
         "QueryThreadCycleTime" => fn QueryThreadCycleTime,
         "ReplaceFileW" => fn ReplaceFileW,
-        "TerminateJobObject" => fn TerminateJobObject,
+        "TerminateJobObject" => fn super::jobs::terminate_job_object,
         "VirtualFreeEx" => fn VirtualFreeEx,
         "TransactNamedPipe" => fn TransactNamedPipe,
         "WTSGetActiveConsoleSessionId" => fn WTSGetActiveConsoleSessionId,
