@@ -862,6 +862,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = super::dpnet::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Listes de raccourcis de la barre des tâches (WinSCP, #905).
+        if let Some(hr) = super::jumplist_com::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Gestionnaire d'animations (UIAnimationManager, Paint.NET #561).
         if let Some(hr) = super::uianimation::create_builtin(&guid, &iid, out) {
             return hr;
