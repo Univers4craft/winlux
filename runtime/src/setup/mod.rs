@@ -21,6 +21,7 @@ pub mod nsis;
 pub mod programs;
 pub mod sevenz;
 pub mod squirrel;
+pub mod web;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
@@ -854,6 +855,7 @@ pub fn cli(args: &[String]) -> i32 {
     let mut log = Logger { quiet: false };
     let mut opts = Options::default();
     let mut file = None;
+    let mut allow_download = false;
     let out = args
         .iter()
         .position(|a| a == "--out")
@@ -937,6 +939,7 @@ pub fn cli(args: &[String]) -> i32 {
             | "--quiet" => log.quiet = lower == "--quiet",
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
             "--allow-unverified" => opts.allow_unverified = true,
+            "--allow-download" => allow_download = true,
             _ => {
                 if let Some(d) = a.strip_prefix("/D=").or_else(|| a.strip_prefix("/DIR=")) {
                     opts.dir = Some(d.trim_matches('"').to_string());
@@ -955,7 +958,20 @@ pub fn cli(args: &[String]) -> i32 {
         eprintln!("{USAGE}");
         return 2;
     };
-    match install(&host_path(&file), &opts, log) {
+    // Auto-extractible qui lance son propre installateur (paquet MSI porté,
+    // ou téléchargeur, #733, #896) : suivi ici, comme au double-clic.
+    let path = host_path(&file);
+    if detect_file(&path) == Some(Kind::SevenZip) {
+        let rest: Vec<String> = args
+            .iter()
+            .filter(|a| a.starts_with('/') && !Path::new(a.as_str()).exists())
+            .cloned()
+            .collect();
+        if let Some(rc) = sevenz::chain(&path, &rest, allow_download) {
+            return rc;
+        }
+    }
+    match install(&path, &opts, log) {
         Ok(_) => 0,
         // Paquet MSIX d'un éditeur non vérifié : le lanceur du double-clic
         // demande une confirmation puis relance avec --allow-unverified.
@@ -1034,7 +1050,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     // Auto-extractible qui lance son propre installateur autour d'un paquet
     // MSI (Paint.NET) : le MSI est installé directement.
     let msi = (kind == Kind::SevenZip)
-        .then(|| sevenz::launch_msi(exe, args))
+        .then(|| sevenz::chain(exe, args, false))
         .flatten();
     if let Some(code) = msi {
         return Some(code);

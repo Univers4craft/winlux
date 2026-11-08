@@ -64,6 +64,18 @@ enum Kind {
     Video,
     Archive,
     Code,
+    /// Script shell ou de commandes (.sh, .bat, .ps1…) : `>_`, sans pastille Windows.
+    Script,
+    /// Page web (.html) : globe.
+    Web,
+    /// Document de traitement de texte (.docx, .odt…).
+    Document,
+    /// Feuille de calcul (.ods, .xlsx, .csv…) : tableur vert.
+    Spreadsheet,
+    /// Présentation (.odp, .pptx…) : diapositive orange.
+    Presentation,
+    /// Police de caractères (.ttf, .otf…) : « A ».
+    Font,
     Pdf,
     Text,
     File,
@@ -556,8 +568,20 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     }
     let e = extension(name);
     let any = |list: &[&[u8]]| list.iter().any(|x| cmp_ci(e, x).is_eq());
-    if any(&[b"exe", b"com", b"msi", b"bat", b"cmd", b"appimage", b"sh"]) {
+    if any(&[b"exe", b"com", b"msi", b"appimage"]) {
         Kind::Exe
+    } else if any(&[b"sh", b"bash", b"zsh", b"fish", b"bat", b"cmd", b"ps1", b"psm1", b"command", b"vbs"]) {
+        Kind::Script
+    } else if any(&[b"html", b"htm", b"xhtml", b"mht", b"mhtml"]) {
+        Kind::Web
+    } else if any(&[b"ods", b"fods", b"xlsx", b"xlsm", b"xls", b"xlsb", b"csv", b"tsv", b"numbers"]) {
+        Kind::Spreadsheet
+    } else if any(&[b"odp", b"fodp", b"pptx", b"pptm", b"ppt", b"pps", b"ppsx", b"key"]) {
+        Kind::Presentation
+    } else if any(&[b"ttf", b"otf", b"ttc", b"otc", b"woff", b"woff2", b"fon", b"pfb"]) {
+        Kind::Font
+    } else if any(&[b"doc", b"docx", b"docm", b"odt", b"fodt", b"rtf", b"wpd", b"pages"]) {
+        Kind::Document
     } else if any(&[
         b"png", b"jpg", b"jpeg", b"gif", b"bmp", b"webp", b"svg", b"ico", b"tif", b"tiff", b"heic",
         b"heif", b"avif", b"jxl", b"apng", b"jpe", b"jfif", b"dib", b"cur", b"qoi", b"svgz", b"psd",
@@ -590,14 +614,15 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     ]) {
         Kind::DiskImage
     } else if any(&[
-        b"rs", b"c", b"h", b"cpp", b"py", b"js", b"ts", b"html", b"css", b"json", b"toml", b"yml",
-        b"yaml", b"xml", b"java", b"go", b"cs", b"ps1",
+        b"rs", b"c", b"h", b"cpp", b"hpp", b"cc", b"py", b"js", b"mjs", b"jsx", b"tsx", b"css",
+        b"scss", b"json", b"toml", b"yml", b"yaml", b"xml", b"java", b"kt", b"go", b"cs", b"php",
+        b"rb", b"lua", b"pl", b"swift", b"sql", b"vue",
     ]) {
         Kind::Code
     } else if any(&[b"pdf"]) {
         Kind::Pdf
     } else if any(&[
-        b"txt", b"md", b"log", b"ini", b"cfg", b"conf", b"csv", b"doc", b"docx", b"odt", b"rtf",
+        b"txt", b"md", b"log", b"ini", b"cfg", b"conf",
     ]) {
         Kind::Text
     } else {
@@ -621,6 +646,41 @@ unsafe fn place_icon(path: &[u8]) -> Option<icons::Icon> {
     (0..PLACES.len()).find(|&k| place_path(k).get() == path).map(icons::of_place)
 }
 
+/// Icône Prisme d'un type d'élément (#890) : chaque famille a la sienne
+/// (tableur vert, présentation orange, « A » des polices, globe du web,
+/// `</>` du code, `>_` des seuls scripts).
+fn icon_of(k: Kind) -> Option<icons::Icon> {
+    use icons::Icon;
+    Some(match k {
+        Kind::Code => Icon::Code,
+        Kind::Script => Icon::Script,
+        Kind::Web => Icon::Web,
+        Kind::Document => Icon::Document,
+        Kind::Spreadsheet => Icon::Spreadsheet,
+        Kind::Presentation => Icon::Presentation,
+        Kind::Font => Icon::Font,
+        _ => return icons::of_glyph(glyph_of(k)),
+    })
+}
+
+/// Icône d'un élément à `s` px : l'icône Prisme du type, sinon le glyphe.
+unsafe fn kind_glyph(g: &mut Gfx, k: Kind, x: i32, y: i32, s: i32) {
+    if let Some(ic) = icon_of(k) {
+        if icons::draw(g.hdc, ic, x, y, s, glyph_fg()) {
+            return;
+        }
+    }
+    crate::gfx::glyph(g.hdc, g.b, g.f, glyph_of(k), x, y, s)
+}
+
+/// Programme Windows (.exe, .msi, .com) : lui seul porte la pastille
+/// « Windows » ; un script shell ou une AppImage n'en est pas un (#890).
+fn windows_program(e: &Entry) -> bool {
+    !e.dir
+        && e.kind == Kind::Exe
+        && [b".exe".as_slice(), b".msi", b".com"].iter().any(|x| ends_ci(e.name(), x))
+}
+
 fn glyph_of(k: Kind) -> Glyph {
     match k {
         Kind::Folder => Glyph::Folder,
@@ -629,7 +689,8 @@ fn glyph_of(k: Kind) -> Glyph {
         Kind::Audio => Glyph::Audio,
         Kind::Video => Glyph::Video,
         Kind::Archive => Glyph::Archive,
-        Kind::Code => Glyph::Code,
+        Kind::Code | Kind::Script => Glyph::Code,
+        Kind::Web | Kind::Document | Kind::Spreadsheet | Kind::Presentation | Kind::Font => Glyph::Text,
         Kind::Pdf => Glyph::Pdf,
         Kind::Text => Glyph::Text,
         Kind::File => Glyph::File,
@@ -647,7 +708,7 @@ fn glyph_of(k: Kind) -> Glyph {
 /// les icônes de fichiers de Windows 11. Dossiers et lecteurs gardent leur
 /// glyphe.
 unsafe fn row_icon(g: &mut Gfx, k: Kind, x: i32, y: i32) {
-    if let Some(ic) = icons::of_glyph(glyph_of(k)) {
+    if let Some(ic) = icon_of(k) {
         if icons::draw(g.hdc, ic, x, y, 16, glyph_fg()) {
             return;
         }
@@ -798,6 +859,13 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
             b"Unidad de red",
             b"Netzlaufwerk",
         ]),
+        Kind::Spreadsheet => t4([b"Feuille de calcul", b"Spreadsheet", b"Hoja de c\xE1lculo", b"Tabelle"]),
+        Kind::Presentation => t4([b"Pr\xE9sentation", b"Presentation", b"Presentaci\xF3n", b"Pr\xE4sentation"]),
+        Kind::Document => t4([b"Document texte", b"Text document", b"Documento de texto", b"Textdokument"]),
+        Kind::Font => t4([b"Police de caract\xE8res", b"Font", b"Fuente", b"Schriftart"]),
+        Kind::Web => t4([b"Page web", b"Web page", b"P\xE1gina web", b"Webseite"]),
+        Kind::Script => t4([b"Script", b"Script", b"Script", b"Skript"]),
+        Kind::Code => t4([b"Code source", b"Source code", b"C\xF3digo fuente", b"Quellcode"]),
         Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[b"Application", b"Application", b"Aplicaci\xF3n", b"Anwendung"]),
         Kind::Exe => tr4(&[b"Programme", b"Program", b"Programa", b"Programm"]),
         _ => b"",
@@ -2891,7 +2959,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         let entry_icon = |g: &mut Gfx, x: i32, y: i32, s: i32| match home_ic {
             Some(ic) if icons::draw(g.hdc, ic, x, y, s, 0) => {}
             _ if s == 16 => row_icon(g, e.kind, x, y),
-            _ => glyph(g.hdc, g.b, g.f, glyph_of(e.kind), x, y, s),
+            _ => kind_glyph(g, e.kind, x, y, s),
         };
         match VIEW {
             View::XLarge | View::Large | View::Medium => {
@@ -2901,7 +2969,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     entry_icon(g, gx, ir.top + 8, s);
                     format_badge(g, &e, gx, ir.top + 8, s);
                 }
-                if !e.dir && e.kind == Kind::Exe && carded {
+                if windows_program(&e) && carded {
                     home::badge(g, ir.right - home::badge_width() - 6, ir.top + 6, bg);
                 }
                 let ty = ir.top + 14 + s;

@@ -40,6 +40,29 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Voix : dictée et sous-titres en direct (#662)
+    'Voix': ('Speech', 'Voz', 'Sprache'),
+    'La reconnaissance vocale tourne entièrement sur ce PC : aucun son n’est envoyé en ligne.': ('Speech recognition runs entirely on this PC: no audio is sent online.', 'El reconocimiento de voz funciona por completo en este PC: no se envía ningún audio en línea.', 'Die Spracherkennung läuft vollständig auf diesem PC: Es wird kein Ton online gesendet.'),
+    'Standard (environ {size} Mo)': ('Standard (about {size} MB)', 'Estándar (unos {size} MB)', 'Standard (etwa {size} MB)'),
+    'Précise, plus lente (environ {size} Mo)': ('Accurate, slower (about {size} MB)', 'Precisa, más lenta (unos {size} MB)', 'Genau, langsamer (etwa {size} MB)'),
+    'Reconnaissance vocale installée': ('Speech recognition installed', 'Reconocimiento de voz instalado', 'Spracherkennung installiert'),
+    'Passer au modèle précis': ('Switch to the accurate model', 'Cambiar al modelo preciso', 'Zum genauen Modell wechseln'),
+    'Passer au modèle standard': ('Switch to the standard model', 'Cambiar al modelo estándar', 'Zum Standardmodell wechseln'),
+    'Modèle de reconnaissance vocale': ('Speech recognition model', 'Modelo de reconocimiento de voz', 'Spracherkennungsmodell'),
+    'Modèle Whisper libre, téléchargé une fois, empreinte vérifiée. Français, anglais, allemand, espagnol et d’autres langues.': ('Free Whisper model, downloaded once, fingerprint checked. French, English, German, Spanish and other languages.', 'Modelo Whisper libre, descargado una vez, huella verificada. Francés, inglés, alemán, español y otros idiomas.', 'Freies Whisper-Modell, einmal heruntergeladen, Prüfsumme kontrolliert. Französisch, Englisch, Deutsch, Spanisch und weitere Sprachen.'),
+    'Détection automatique': ('Automatic detection', 'Detección automática', 'Automatische Erkennung'),
+    'Dictée vocale': ('Voice typing', 'Dictado por voz', 'Spracheingabe'),
+    'Windows + H dans une zone de texte : ce que vous dites y est tapé, ponctuation comprise. « À la ligne » passe à la ligne.': ('Windows + H in a text box: what you say is typed there, punctuation included. Say “new line” to start a new line.', 'Windows + H en un cuadro de texto: lo que dice se escribe allí, con la puntuación. Diga «nueva línea» para cambiar de línea.', 'Windows + H in einem Textfeld: Was Sie sagen, wird dort mit Satzzeichen geschrieben. „Neue Zeile“ beginnt eine neue Zeile.'),
+    'Langue de la dictée': ('Voice typing language', 'Idioma del dictado', 'Sprache der Spracheingabe'),
+    'Essayer la dictée': ('Try voice typing', 'Probar el dictado', 'Spracheingabe testen'),
+    'Sous-titres en direct': ('Live captions', 'Subtítulos en directo', 'Liveuntertitel'),
+    'Windows + Ctrl + L : une bande affiche le texte de ce qui sort des haut-parleurs.': ('Windows + Ctrl + L: a band shows the text of what comes out of the speakers.', 'Windows + Ctrl + L: una banda muestra el texto de lo que sale por los altavoces.', 'Windows + Strg + L: Ein Band zeigt den Text dessen, was aus den Lautsprechern kommt.'),
+    'Langue des sous-titres': ('Caption language', 'Idioma de los subtítulos', 'Untertitelsprache'),
+    'En bas de l’écran': ('Bottom of the screen', 'Parte inferior de la pantalla', 'Unten am Bildschirm'),
+    'En haut de l’écran': ('Top of the screen', 'Parte superior de la pantalla', 'Oben am Bildschirm'),
+    'Son sous-titré': ('Captioned audio', 'Audio subtitulado', 'Untertitelter Ton'),
+    'Son du PC': ('PC audio', 'Audio del PC', 'PC-Ton'),
+    'Son du PC et micro': ('PC audio and microphone', 'Audio del PC y micrófono', 'PC-Ton und Mikrofon'),
     # Appareils mobiles (Téléphone connecté)
     'Téléphone connecté': ('Connected phone', 'Teléfono conectado', 'Verbundenes Telefon'),
     'Notifications, SMS et fichiers de votre téléphone Android sur ce PC, avec l’application KDE Connect.': ('Your Android phone’s notifications, texts and files on this PC, with the KDE Connect app.', 'Notificaciones, SMS y archivos de su teléfono Android en este PC, con la aplicación KDE Connect.', 'Benachrichtigungen, SMS und Dateien Ihres Android-Telefons auf diesem PC, mit der App KDE Connect.'),
@@ -646,6 +669,8 @@ _TR = {
     'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
     'Connecté : {account}': ('Signed in: {account}', 'Sesión iniciada: {account}', 'Angemeldet: {account}'),
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
+    'Activation en cours dans sa fenêtre.': ('Turning on in its own window.', 'Activación en curso en su ventana.', 'Wird in seinem eigenen Fenster aktiviert.'),
+    'Afficher la fenêtre d’activation': ('Show the setup window', 'Mostrar la ventana de activación', 'Aktivierungsfenster anzeigen'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
     'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
@@ -806,6 +831,7 @@ PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
 PAGE_VPN = 40
 PAGE_HOTSPOT = 41
+PAGE_PARENTAL = 42
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1044,6 +1070,12 @@ def osk_tool():
 def mouse_tool():
     if have("winlux-mouse"): return ["winlux-mouse"]
     script = Path(__file__).resolve().with_name("winlux-mouse.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def speech_tool():
+    if have("winlux-speech"): return ["winlux-speech"]
+    script = Path(__file__).resolve().with_name("winlux-speech.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
@@ -1432,6 +1464,9 @@ def page_available(page, status=None):
         # NetworkManager et WireGuard (module du noyau) ou le greffon OpenVPN.
         module = vpn_page()
         return module is not None and module.available()
+    if page == PAGE_PARENTAL:
+        module = parental_module()
+        return module is not None and module.available()
     if page == PAGE_HOTSPOT:
         # Carte Wi-Fi capable de point d’accès (mode AP), dnsmasq : sinon pas de page.
         module = hotspot_page()
@@ -1731,6 +1766,30 @@ def installed_apps_module():
     return None
 
 
+_PARENTAL = []
+
+
+def parental_module():
+    """winlux-parental (#661), installé à côté ou dans scripts/ du dépôt."""
+    if _PARENTAL: return _PARENTAL[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-parental.py"), here.with_name("winlux-parental")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_parental_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_parental_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _PARENTAL.append(module)
+    return module
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1764,7 +1823,8 @@ class ExtraPages:
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
                    PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed",
-                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot"}
+                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot",
+                   PAGE_PARENTAL: "page_parental"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -2442,6 +2502,57 @@ class ExtraPages:
             self.switch(box, _t("Narrateur (Orca)"), running,
                         lambda on: self.spawn(["orca", "--replace"]) if on else run(["pkill", "-x", "orca"]),
                         _t("Lit à voix haute ce qui est à l’écran."))
+        self.sections_speech()
+
+    def sections_speech(self):
+        """Dictée vocale (Windows + H) et sous-titres en direct (#662), sur ce PC seulement."""
+        tool = speech_tool()
+        if tool is None: return
+        result = run(tool + ["status"], timeout=10)
+        state = keyvals(result.stdout) if result else {}
+        mic, output = state.get("mic") == "1", state.get("output") == "1"
+        # Ni micro ni sortie audio lisible : rien à proposer (détection réelle).
+        if not mic and not output: return
+        self.section(_t("Voix"), _t("La reconnaissance vocale tourne entièrement sur ce PC : aucun son n’est envoyé en ligne."))
+        box = self.card()
+        sizes = {key: state.get("size_" + key, "?") for key in ("base", "small")}
+        models = [("base", _t("Standard (environ {size} Mo)").format(size=sizes["base"])),
+                  ("small", _t("Précise, plus lente (environ {size} Mo)").format(size=sizes["small"]))]
+        installed = state.get("engine") == "1" and state.get("model", "none") != "none"
+        if installed:
+            current = state.get("model")
+            self.row(box, _t("Reconnaissance vocale installée"), None, dict(models).get(current))
+            other = "small" if current == "base" else "base"
+            self.actions(box, [(_t("Retirer"), lambda: self.tool(tool + ["remove"])),
+                               (_t("Passer au modèle précis") if other == "small" else _t("Passer au modèle standard"),
+                                lambda: self.tool(tool + ["install", other]))])
+        else:
+            choice = {"model": "base"}
+            self.combo(box, _t("Modèle de reconnaissance vocale"), models, "base", lambda value: choice.update(model=value),
+                       _t("Modèle Whisper libre, téléchargé une fois, empreinte vérifiée. Français, anglais, allemand, espagnol et d’autres langues."))
+            self.actions(box, [(_t("Télécharger"), lambda: self.tool(tool + ["install", choice["model"]]))])
+        languages = [("auto", _t("Détection automatique")), ("fr", "Français"), ("en", "English"), ("de", "Deutsch"), ("es", "Español")]
+        if mic:
+            box = self.card()
+            self.row(box, _t("Dictée vocale"), None,
+                     _t("Windows + H dans une zone de texte : ce que vous dites y est tapé, ponctuation comprise. « À la ligne » passe à la ligne."))
+            self.combo(box, _t("Langue de la dictée"), languages, state.get("dictation_language", "fr"),
+                       lambda value: self.tool(tool + ["set", "dictation_language", value], refresh=False))
+            self.actions(box, [(_t("Essayer la dictée"), lambda: self.spawn(tool + ["dictate"]), installed)])
+        if output:
+            box = self.card()
+            self.switch(box, _t("Sous-titres en direct"), state.get("captions") == "on",
+                        lambda on: self.spawn(tool + ["captions", "start" if on else "stop"]),
+                        _t("Windows + Ctrl + L : une bande affiche le texte de ce qui sort des haut-parleurs."))
+            self.combo(box, _t("Langue des sous-titres"), languages, state.get("captions_language", "auto"),
+                       lambda value: self.tool(tool + ["set", "captions_language", value], refresh=False))
+            self.combo(box, _t("Position"), [("bottom", _t("En bas de l’écran")), ("top", _t("En haut de l’écran"))],
+                       state.get("captions_position", "bottom"),
+                       lambda value: self.tool(tool + ["set", "captions_position", value], refresh=False))
+            if mic:
+                self.combo(box, _t("Son sous-titré"), [("output", _t("Son du PC")), ("both", _t("Son du PC et micro"))],
+                           state.get("captions_source", "output"),
+                           lambda value: self.tool(tool + ["set", "captions_source", value], refresh=False))
 
     def set_contrast(self, index):
         a11y_write(contrast=index)
@@ -3366,8 +3477,14 @@ class ExtraPages:
             backend = module.provider(key)
             if not backend.supported(): continue  # matériel trop juste : option cachée, pas grisée
             enabled = module.is_enabled(key)
+            running = self.assistant_setup_running(key)
             box = self.card()
-            self.switch(box, _t(name), enabled, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            self.switch(box, _t(name), enabled or running, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            if running and not enabled:
+                # Page reconstruite pendant qu'une autre activation se termine.
+                self.hint(_t("Activation en cours dans sa fenêtre."), box)
+                self.actions(box, [(_t("Afficher la fenêtre d’activation"), lambda k=key: self.assistant_toggle(k, True))])
+                continue
             if not enabled:
                 self.hint(_t(before), box)
                 continue
@@ -3414,23 +3531,36 @@ class ExtraPages:
         module.write_config(current=key)
         self.spawn([sys.executable, module.__file__])
 
+    def assistant_setup_running(self, key):
+        process = getattr(self, "assistant_setups", {}).get(key)
+        return process is not None and process.poll() is None
+
     def assistant_toggle(self, key, on):
         """Activer ouvre la fenêtre de configuration (téléchargement, connexion) ;
-        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat."""
+        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat.
+        Chaque assistant a sa propre fenêtre (#910) : activer ChatGPT pendant que
+        celle de Claude est ouverte ne doit pas être ignoré en silence."""
         import sys
         module = assistant_module()
+        setups = self.__dict__.setdefault("assistant_setups", {})
         if not on:
+            process = setups.pop(key, None)
+            if process is not None and process.poll() is None: process.terminate()
             self.tool([sys.executable, module.__file__, "--desactiver", key])
             return
-        if getattr(self, "assistant_setup", None) is not None and self.assistant_setup.poll() is None: return
+        command = [sys.executable, module.__file__, "--configurer", key]
+        if self.assistant_setup_running(key):
+            self.spawn(command)  # la fenêtre déjà ouverte revient devant
+            return
         try:
-            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer", key], start_new_session=True)
+            process = setups[key] = subprocess.Popen(command, start_new_session=True)
         except OSError as error:
             self.show_error(_t("L’opération a échoué"), str(error))
             return
 
         def wait():
-            if self.assistant_setup.poll() is None: return True
+            if process.poll() is None: return True
+            if setups.get(key) is process: setups.pop(key)
             self.extra_refresh()
             return False
         GLib.timeout_add(500, wait)
@@ -3706,6 +3836,12 @@ class ExtraPages:
         kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
         self.installed_filter = None
         self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def page_parental(self):
+        """Contrôle parental (#661) : temps d’écran, applications et sites, activité."""
+        module = parental_module()
+        if module is not None:
+            self.parental_panel = module.page(self)
 
     def open_installed_windows(self):
         self.installed_filter = "windows"

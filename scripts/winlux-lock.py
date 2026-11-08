@@ -61,6 +61,10 @@ _TR = {
         "Too many attempts. Try again in {s} seconds.",
         "Demasiados intentos. Vuelva a intentarlo en {s} segundos.",
         "Zu viele Versuche. Versuchen Sie es in {s} Sekunden erneut."),
+    "Contrôle parental : ce compte ne peut pas être utilisé maintenant. Un adulte peut accorder du temps.": (
+        "Parental controls: this account cannot be used right now. An adult can grant more time.",
+        "Control parental: esta cuenta no se puede usar ahora. Un adulto puede conceder más tiempo.",
+        "Jugendschutz: Dieses Konto kann gerade nicht verwendet werden. Ein Erwachsener kann mehr Zeit geben."),
     "Verr. Maj activé": ("Caps Lock is on", "Bloq Mayús activado", "Feststelltaste ist aktiviert"),
     "Clavier tactile": ("Touch keyboard", "Teclado táctil", "Bildschirmtastatur"),
     "Afficher le mot de passe": ("Show password", "Mostrar contraseña", "Kennwort anzeigen"),
@@ -298,6 +302,9 @@ def _crypt(password, setting):
 
 
 RELAY = os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")
+# Dernier refus du contrôle parental (#661) : bon mot de passe, mais hors du
+# temps permis pour ce compte.
+PARENTAL_REFUSED = []
 
 
 def relay_check(user, password, op="check"):
@@ -309,8 +316,9 @@ def relay_check(user, password, op="check"):
             client.settimeout(30)
             client.connect(str(path(RELAY)))
             client.sendall((json.dumps({"op": op, "user": user, "password": password}) + "\n").encode())
-            answer = client.makefile("r", encoding="utf-8").readline()
-        return bool(json.loads(answer or "{}").get("ok"))
+            answer = json.loads(client.makefile("r", encoding="utf-8").readline() or "{}")
+        PARENTAL_REFUSED[:] = [answer["parental"]] if answer.get("parental") else []
+        return bool(answer.get("ok"))
     except (OSError, ValueError):
         return None
 
@@ -325,8 +333,9 @@ def relay_switch(user, password):
             client.settimeout(60)
             client.connect(str(path(RELAY)))
             client.sendall((json.dumps({"op": "switch", "user": user, "password": password}) + "\n").encode())
-            answer = client.makefile("r", encoding="utf-8").readline()
-        return bool(json.loads(answer or "{}").get("ok"))
+            answer = json.loads(client.makefile("r", encoding="utf-8").readline() or "{}")
+        PARENTAL_REFUSED[:] = [answer["parental"]] if answer.get("parental") else []
+        return bool(answer.get("ok"))
     except (OSError, ValueError):
         return False
 
@@ -964,6 +973,7 @@ def run_lock(start="clock"):
         def submit(self):
             if self.entry is None or time.monotonic() < self.blocked_until:
                 return
+            PARENTAL_REFUSED.clear()
             if self.user != self.owner:
                 # Autre compte : le relais root vérifie et bascule de session ;
                 # celle-ci reste verrouillée derrière.
@@ -974,8 +984,11 @@ def run_lock(start="clock"):
             elif check_password(self.user, self.entry.get_text()):
                 self.unlock()
                 return
-            self.failures += 1
             self.entry.set_text("")
+            if PARENTAL_REFUSED:
+                self.error.set_text(_t("Contrôle parental : ce compte ne peut pas être utilisé maintenant. Un adulte peut accorder du temps."))
+                return
+            self.failures += 1
             if self.failures >= MAX_TRIES:
                 self.blocked_until = time.monotonic() + WAIT_AFTER_TRIES
                 self.entry.set_sensitive(False)
@@ -989,6 +1002,8 @@ def run_lock(start="clock"):
                 self.unlock()
             elif relay_switch(self.user, ""):
                 self.show_clock()
+            elif PARENTAL_REFUSED:
+                self.error.set_text(_t("Contrôle parental : ce compte ne peut pas être utilisé maintenant. Un adulte peut accorder du temps."))
             else:
                 self.error.set_text(_t("Impossible d’ouvrir la session de {name}.").format(name=self.user))
 
