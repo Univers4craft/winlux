@@ -169,6 +169,30 @@ pub(super) static IPERSISTSTREAM: Iface = Iface {
     ],
 };
 
+/// IMoniker : liaison à un IStream, nom affiché et type (moniker d'URL).
+pub(super) static IMONIKER: Iface = Iface {
+    name: "IMoniker",
+    iid: ole(0xF),
+    parent: Some(&IPERSISTSTREAM),
+    methods: &[
+        Some(&[I, I, Iid, OutQ]), // BindToObject
+        Some(&[I, I, Iid, OutQ]), // BindToStorage
+        None,                     // Reduce
+        None,                     // ComposeWith
+        None,                     // Enum
+        Some(&[In(&IMONIKER)]),   // IsEqual
+        Some(&[I]),               // Hash
+        None,                     // IsRunning
+        None,                     // GetTimeOfLastChange
+        None,                     // Inverse
+        None,                     // CommonPrefixWith
+        None,                     // RelativePathTo
+        Some(&[I, I, OutPtr]),    // GetDisplayName
+        None,                     // ParseDisplayName
+        Some(&[I]),               // IsSystemMoniker
+    ],
+};
+
 /// IDataObject : méthodes à FORMATETC/STGMEDIUM, pas encore converties.
 pub(super) static IDATAOBJECT: Iface = Iface {
     name: "IDataObject",
@@ -934,6 +958,9 @@ fn api_kinds(dll: &str, func: &str) -> Option<(&'static [A], Option<&'static Ifa
         ("oleaut32", "LoadTypeLibEx" | "#183") => k!(I, I, Out(&ITYPELIB)),
         ("oleaut32", "LoadRegTypeLib" | "#162") => k!(I, I, I, I, Out(&ITYPELIB)),
         ("shlwapi", "SHCreateStreamOnFileA" | "SHCreateStreamOnFileW") => k!(I, I, Out(&ISTREAM)),
+        ("shlwapi", "SHCreateStreamOnFileEx") => k!(I, I, I, I, I, Out(&ISTREAM)),
+        ("urlmon", "CreateURLMoniker") => k!(I, I, Out(&IMONIKER)),
+        ("urlmon", "CreateURLMonikerEx") => k!(I, I, Out(&IMONIKER), I),
         ("shlwapi", "SHOpenRegStreamA" | "SHOpenRegStreamW") => {
             return Some((k!(I, I, I, I), Some(&ISTREAM)))
         }

@@ -1,5 +1,6 @@
 #define _WIN32_WINNT 0x0601
-/* Fibres x86 (#232, étape 7 ; WinSCP s'en sert) : ConvertThreadToFiber,
+/* Fibres x86 (#232, étape 7 ; WinSCP s'en sert), et x64 par
+ * testc/fiber_suite.c (#654) : ConvertThreadToFiber,
  * CreateFiber(Ex), SwitchToFiber aller-retour, GetFiberData,
  * GetCurrentFiber, IsThreadAFiber, pile propre à chaque fibre, fin de la
  * routine qui termine le thread, ConvertFiberToThread, DeleteFiber. */
@@ -8,7 +9,7 @@
 
 static LPVOID main_fiber, worker, second;
 static volatile int steps;
-static volatile unsigned worker_stack, main_stack;
+static volatile ULONG_PTR worker_stack, main_stack;
 
 static int fail(int n, const char *what)
 {
@@ -21,7 +22,7 @@ static int fail(int n, const char *what)
 static void WINAPI worker_proc(LPVOID param)
 {
     volatile int local = 0;
-    worker_stack = (unsigned)(ULONG_PTR)&local;
+    worker_stack = (ULONG_PTR)&local;
     if (param != (LPVOID)0x1234)
         fail(10, "paramètre de la routine");
     if (GetFiberData() != (LPVOID)0x1234)
@@ -85,7 +86,7 @@ int main(void)
     if (!worker)
         fail(5, "CreateFiberEx");
     volatile int here = 0;
-    main_stack = (unsigned)(ULONG_PTR)&here;
+    main_stack = (ULONG_PTR)&here;
     for (int i = 1; i <= 3; i++) {
         SwitchToFiber(worker);
         if (steps != 10 * i)
@@ -93,7 +94,7 @@ int main(void)
         if (GetCurrentFiber() != main_fiber)
             fail(7, "fibre courante après retour");
     }
-    unsigned d = worker_stack > main_stack ? worker_stack - main_stack : main_stack - worker_stack;
+    ULONG_PTR d = worker_stack > main_stack ? worker_stack - main_stack : main_stack - worker_stack;
     if (d < 4096)
         fail(8, "la fibre n'a pas sa propre pile");
     SwitchToFiber(worker);
@@ -120,6 +121,6 @@ int main(void)
 
     if (!ConvertFiberToThread() || IsThreadAFiber())
         fail(40, "ConvertFiberToThread");
-    printf("Fibres 32 bits : tout est correct\n");
+    printf("Fibres %d bits : tout est correct\n", (int)sizeof(void *) * 8);
     return 0;
 }

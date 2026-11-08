@@ -36,6 +36,9 @@ CompareStringEx
 CompareStringOrdinal
 CompareStringW
 ConnectNamedPipe
+ConvertFiberToThread
+ConvertThreadToFiber
+ConvertThreadToFiberEx
 CopyContext
 CopyFileA
 CopyFileExW
@@ -48,6 +51,8 @@ CreateDirectoryW
 CreateEventA
 CreateEventExW
 CreateEventW
+CreateFiber
+CreateFiberEx
 CreateFileA
 CreateFileMappingA
 CreateFileMappingW
@@ -87,6 +92,7 @@ DebugBreak
 DecodePointer
 DeleteAtom
 DeleteCriticalSection
+DeleteFiber
 DeleteFileA
 DeleteFileW
 DeleteProcThreadAttributeList
@@ -696,6 +702,7 @@ SleepConditionVariableSRW
 SleepEx
 SubmitThreadpoolWork
 SuspendThread
+SwitchToFiber
 SwitchToThread
 SystemTimeToFileTime
 SystemTimeToTzSpecificLocalTime
