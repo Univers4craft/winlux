@@ -4857,6 +4857,19 @@ fn running_tid(t: &ThreadObject) -> Option<i32> {
     s.running.then_some(s.win_tid as i32)
 }
 
+/// `GetThreadIOPendingFlag` : les E/S de Winlux sont synchrones vues du
+/// thread (les E/S « overlapped » se terminent dans l'appel ou sur un autre
+/// thread), donc aucun thread n'a d'E/S en attente. Le pool de threads de
+/// .NET 9 la consulte depuis chaque thread de travail (#1072).
+pub unsafe extern "win64" fn get_thread_io_pending_flag(_thread: usize, pending: *mut i32) -> i32 {
+    if pending.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *pending = 0;
+    1
+}
+
 /// `SuspendThread`.
 pub extern "win64" fn suspend_thread(h: usize) -> u32 {
     let Some(t) = thread_object_of(h) else {
@@ -9311,7 +9324,7 @@ pub fn exports() -> crate::dlls::Exports {
      "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
      "GetActiveProcessorCount"=>fn get_active_processor_count,
      "CreateWaitableTimerA"=>fn create_waitable_timer_a,"CreateWaitableTimerW"=>fn create_waitable_timer_w,"CreateWaitableTimerExW"=>fn create_waitable_timer_ex_w,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
-     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,"ReadDirectoryChangesExW"=>fn read_directory_changes_ex_w,"FindFirstChangeNotificationW"=>fn find_first_change_notification_w,"FindFirstChangeNotificationA"=>fn find_first_change_notification_a,"FindNextChangeNotification"=>fn find_next_change_notification,"FindCloseChangeNotification"=>fn find_close_change_notification,"QueueUserAPC"=>fn queue_user_apc,
+     "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,"ReadDirectoryChangesExW"=>fn read_directory_changes_ex_w,"FindFirstChangeNotificationW"=>fn find_first_change_notification_w,"FindFirstChangeNotificationA"=>fn find_first_change_notification_a,"FindNextChangeNotification"=>fn find_next_change_notification,"FindCloseChangeNotification"=>fn find_close_change_notification,"QueueUserAPC"=>fn queue_user_apc,"GetThreadIOPendingFlag"=>fn get_thread_io_pending_flag,
      "CreateNamedPipeA"=>fn create_named_pipe_a,"ConnectNamedPipe"=>fn connect_named_pipe,"DisconnectNamedPipe"=>fn disconnect_named_pipe,
      "CreateFileMappingA"=>fn create_file_mapping_a,"CreateFileMappingW"=>fn create_file_mapping_w,"MapViewOfFile"=>fn map_view_of_file,"UnmapViewOfFile"=>fn unmap_view_of_file,
      "GetUserNameA"=>fn get_user_name_a,
