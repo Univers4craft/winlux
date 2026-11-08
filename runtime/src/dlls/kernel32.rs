@@ -1001,6 +1001,11 @@ pub(crate) fn ntstatus_of_win32(error: u32) -> u32 {
         995 => 0xC000_0120,   // OPERATION_ABORTED → CANCELLED
         1236 => 0xC000_0241,  // CONNECTION_ABORTED
         10054 => 0xC000_020D, // WSAECONNRESET → CONNECTION_RESET
+        10060 => 0xC000_00B5, // WSAETIMEDOUT → IO_TIMEOUT
+        10061 => 0xC000_0236, // WSAECONNREFUSED → CONNECTION_REFUSED
+        10051 => 0xC000_023C, // WSAENETUNREACH → NETWORK_UNREACHABLE
+        10065 => 0xC000_023D, // WSAEHOSTUNREACH → HOST_UNREACHABLE
+        10053 => 0xC000_0241, // WSAECONNABORTED → CONNECTION_ABORTED
         _ => 0xC000_0001,
     }
 }
@@ -1458,7 +1463,24 @@ pub unsafe extern "win64" fn get_overlapped_result(
         1
     }
 }
+/// Fin de vie d'un handle hors kernel32 (socket fermée) : son numéro peut
+/// resservir, il ne doit pas hériter du port de complétion.
+pub(crate) fn forget_completion_port(h: usize) {
+    lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&h);
+}
+/// CancelIo(Ex) sur une socket : ses opérations en cours sont annulées.
+fn cancel_socket_io(h: usize, overlapped: usize) -> i32 {
+    if crate::dlls::ws2_32::cancel_overlapped(h, overlapped) {
+        1
+    } else {
+        crate::process::set_last_error(1168); // ERROR_NOT_FOUND
+        0
+    }
+}
 pub extern "win64" fn cancel_io(h: usize) -> i32 {
+    if crate::dlls::ws2_32::is_socket(h) {
+        return cancel_socket_io(h, 0);
+    }
     if !lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&h) {
         crate::process::set_last_error(6);
         return 0;
@@ -1480,6 +1502,9 @@ pub extern "win64" fn cancel_io(h: usize) -> i32 {
     }
 }
 pub unsafe extern "win64" fn cancel_io_ex(h: usize, overlapped: *mut Overlapped) -> i32 {
+    if crate::dlls::ws2_32::is_socket(h) {
+        return cancel_socket_io(h, overlapped as usize);
+    }
     if !lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&h) {
         crate::process::set_last_error(6);
         return 0;
@@ -1573,7 +1598,11 @@ pub extern "win64" fn create_io_completion_port(
     if file == usize::MAX {
         return port_handle;
     }
-    if !lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&file) {
+    // Les sockets (ws2_32) se lient aussi à un port : .NET y attend la fin
+    // de ConnectEx, WSASend et WSARecv (#1146).
+    if !lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&file)
+        && !crate::dlls::ws2_32::is_socket(file)
+    {
         if existing == 0 {
             remove_sync(port_handle);
         }

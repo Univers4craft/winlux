@@ -1257,6 +1257,15 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+ok("fn altgr_messages" in (runtime_dlls / "gui_x11.rs").read_text()
+   and "altgr_est_ctrl_gauche_plus_alt_droit" in (SCRIPTS / "test-all.sh").read_text(),
+   "AltGr : Ctrl gauche + Alt droit, « # @ € { } » tapés sans déclencher de raccourci Alt (#1151)")
+# #1146 : le HttpClient de .NET (ScreenToGif, Flow Launcher) se connecte par
+# ConnectEx et un port de complétion ; une erreur rend un code Winsock.
+ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
+   and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
+   "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
 ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
    and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
    and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
@@ -1269,6 +1278,8 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+ok("fn layout_format_view(" in (runtime_dlls / "dwrite.rs").read_text(encoding="utf-8"),
+   "DirectWrite : IDWriteTextFormat3 demandé à une mise en page (Paint.NET 5.1, #1158)")
 ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
    and "perte_du_focus_garde_les_boutons_de_souris" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Bouton de souris tenu malgré SetFocus pendant le clic : DragDetect démarre le glisser (#1138)")
@@ -1296,4 +1307,10 @@ ok("fn grab_hotkey" in (runtime_dlls / "gui_x11.rs").read_text(encoding="utf-8")
 ok('"Shell_NotifyIconGetRect"=>fn' in (runtime_dlls / "shell32.rs").read_text(encoding="utf-8")
    and "rectangle_de_l_icone_pour_get_rect" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Zone de notification : Shell_NotifyIconGetRect exportée (clic droit de Claude pour Windows, #1191)")
+# #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
+# instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
+ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
+   and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
+   and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
+   "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -108,6 +108,14 @@ step "Langue des applications wxWidgets : *.* et locale de la session (#1125)" c
 # ERROR_FILE_NOT_FOUND, sans runtime enfant qui écrit sur stderr.
 step "CreateProcess d'un .exe absent (#1133)" cargo test -q -p winlux -- programme_windows_absent_echoue_sans_lancer_de_runtime
 
+# AltGr (#1151) : Ctrl gauche + Alt droit comme sous Windows, sans quoi
+# AltGr+3 (« # ») déclenche le raccourci Alt+3 de Notepad++.
+step "AltGr vu comme Ctrl+Alt, caractères AZERTY tapés (#1151)" cargo test -q -p winlux -- altgr_est_ctrl_gauche_plus_alt_droit
+
+# Sockets .NET (#1146) : port de complétion, ConnectEx, WSASend/WSARecv avec
+# OVERLAPPED, vrais codes Winsock (jamais -1) par WSAGetOverlappedResult.
+step "Sockets avec OVERLAPPED et ConnectEx (#1146)" cargo test -q -p winlux -- connectex_wsasend_wsarecv_terminent_par_le_port_de_completion connexion_refusee_rend_wsaeconnrefused_et_jamais_moins_un fermeture_et_cancelioex_annulent_les_receptions_en_attente wsagetlasterror_et_getlasterror_partagent_la_meme_valeur
+
 # Reconnaissance de gestes de l'encre (#1132) : mshwgst.dll intégrée et clé
 # TPG\System Recognizers lue par WPF (Éditeur de ScreenToGif, InkCanvas).
 step "Gestes de l'encre pour WPF InkCanvas (#1132)" cargo test -q -p winlux -- reconnaissance_de_gestes_disponible_sans_geste_reconnu moteur_de_gestes_declare_pour_wpf
@@ -123,6 +131,10 @@ step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
 step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux -- utilisation_du_mta_par_jetons api_sets_reutilisent_leurs_veritables_exports
+
+# Liste des processus pour .NET (#1162) : NtQuerySystemInformation 5 et 88,
+# d'où Process.GetProcesses et le contrôle d'instance unique.
+step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_des_processus_comme_la_lit_dotnet
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
