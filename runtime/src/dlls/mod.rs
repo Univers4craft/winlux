@@ -138,6 +138,7 @@ pub mod ole32;
 pub mod oleaut32;
 pub mod opengl32;
 pub mod pdh;
+pub mod pe_image;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -922,6 +923,12 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports,
                 handle: fake_module(),
             });
+        }
+        // ntdll a de vrais en-têtes PE et une table d'exports : le bac à
+        // sable de Chromium la lit lui-même au lieu d'appeler GetProcAddress
+        // (#851).
+        for b in all.iter_mut().filter(|b| b.name == "ntdll") {
+            b.handle = pe_image::build(b.name, &b.exports);
         }
         all
     })
