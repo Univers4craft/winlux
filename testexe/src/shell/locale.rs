@@ -1341,7 +1341,12 @@ pub const TZ_STRINGS: [usize; TZ_COUNT] = [
 ];
 
 pub unsafe fn load_lang() {
-    let mut buf = [0u8; 8];
+    // WINLUX_LANG d'abord, comme le runtime et la session native (#1026).
+    if let Some(index) = winlux_testexe::winlux_lang_env() {
+        CURRENT_LANG = lang_of_index(index);
+        return;
+    }
+    let mut buf = [0u8; 256];
     let path = c"Z:\\etc\\winlux\\locale.conf";
     let h = crate::CreateFileA(
         path.as_ptr(),
@@ -1354,17 +1359,23 @@ pub unsafe fn load_lang() {
     );
     if !h.is_null() && h as isize != -1 {
         let mut read = 0u32;
-        crate::ReadFile(h, buf.as_mut_ptr(), 8, &mut read, core::ptr::null_mut());
+        crate::ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut read, core::ptr::null_mut());
         crate::CloseHandle(h);
-        let data = &buf[..(read as usize).min(8)];
-        if let Some(pos) = data.iter().position(|&v| v == b'=') {
-            let code = &data[pos + 1..];
-            let code = if let Some(nl) = code.iter().position(|&v| v == b'\n' || v == b'\r') {
-                &code[..nl]
-            } else {
-                code
-            };
-            CURRENT_LANG = lang_from_code(code);
+        // Ligne LANG= (fr, en_US.UTF-8…) : les deux premières lettres comptent.
+        for line in buf[..(read as usize).min(buf.len())].split(|&v| v == b'\n') {
+            if let Some(code) = line.strip_prefix(b"LANG=") {
+                CURRENT_LANG = lang_from_code(code.get(..2).unwrap_or(code));
+            }
         }
+    }
+}
+
+/// Indice de langue de la bibliothèque (0 fr, 1 en, 2 es, 3 de).
+pub fn lang_of_index(index: u8) -> Lang {
+    match index {
+        1 => Lang::En,
+        2 => Lang::Es,
+        3 => Lang::De,
+        _ => Lang::Fr,
     }
 }
