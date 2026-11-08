@@ -613,5 +613,14 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+# #847 : WPF dessine son texte par IDWriteGlyphRunAnalysis et choisit le thème
+# Aero2 (styles visuels actifs), sans thémer les fenêtres Win32 classiques.
+uxtheme = (runtime_dlls / "uxtheme.rs").read_text()
+ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
+   and (runtime_dlls / "dwrite_glyphs.rs").exists()
+   and "fn IsThemeActive() -> i32 {\n    1\n}" in uxtheme
+   and "fn IsAppThemed() -> i32 {\n    0\n}" in uxtheme
+   and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

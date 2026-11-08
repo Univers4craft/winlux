@@ -1,7 +1,9 @@
 #!/bin/sh
 # Appli WPF .NET « Bonjour » autonome (#268) : la fenêtre s'ouvre en 320×200,
 # l'événement Loaded arrive, le bouton « Fermer » reçoit le clic et l'appli
-# se termine avec le code 0.
+# se termine avec le code 0. Si xwd et ImageMagick sont là, le rendu est
+# aussi vérifié avant le clic (#847) : bouton du thème Aero2 (fond #DDDDDD,
+# bordure #707070) et texte « Fermer » foncé dessiné dans le bouton.
 #
 # Même montage que test-winforms-bonjour.sh : le runtime .NET 9 pour Windows
 # (Microsoft.NETCore.App et Microsoft.WindowsDesktop.App, win-x64) est celui
@@ -100,6 +102,7 @@ done
 sleep 3
 # Fenêtre posée en (100, 100) sans gestionnaire de fenêtres ; bouton de
 # 80×26 centré dans la zone client de 320×200.
+if command -v xwd >/dev/null 2>&1; then xwd -root -silent >"$3.xwd" 2>/dev/null || true; fi
 xdotool mousemove 260 200 click 1
 i=0
 while test $i -lt 20 && kill -0 $pid 2>/dev/null; do sleep 1; i=$((i + 1)); done
@@ -109,14 +112,33 @@ EOF
 ln -s "$note" "$work/state.notes"
 xvfb-run -a -s "-screen 0 800x600x24" sh "$work/run.sh" "$WINLUX" "$work/app" "$work/state" || true
 
+# Rendu (#847) : zone du bouton, 80×26 centré dans la zone client.
+rendu=ok
+if test -s "$work/state.xwd" && command -v convert >/dev/null 2>&1; then
+    couleurs=$(convert "$work/state.xwd" -crop 80x26+220+187 +repage txt:- 2>/dev/null |
+        awk 'NR > 1 { print $3 }' | sort | uniq -c)
+    fond=$(printf '%s\n' "$couleurs" | awk '$2 == "#DDDDDD" { print $1 }')
+    bord=$(printf '%s\n' "$couleurs" | awk '$2 == "#707070" { print $1 }')
+    # Texte : pixels nettement plus foncés que la bordure.
+    texte=$(printf '%s\n' "$couleurs" | awk 'function h(c) { return index("0123456789ABCDEF", c) - 1 }
+        { v = h(substr($2, 2, 1)) * 16 + h(substr($2, 3, 1)); if (v < 96) n += $1 }
+        END { print n + 0 }')
+    if test "${fond:-0}" -lt 800 || test "${bord:-0}" -lt 150 || test "$texte" -lt 15; then
+        rendu="fond=${fond:-0} bordure=${bord:-0} texte=$texte"
+    fi
+else
+    echo "rendu non vérifié (xwd ou ImageMagick absent)" >&2
+fi
+
 expected=$(printf 'charge\n320\n200\nclic\nfin')
 got=$(cat "$note" 2>/dev/null || true)
-if test "$got" = "$expected" && grep -qx "code 0" "$work/state"; then
-    echo "OK : WPF « Bonjour » ouvert en 320×200, clic reçu, fin en code 0"
+if test "$got" = "$expected" && grep -qx "code 0" "$work/state" && test "$rendu" = ok; then
+    echo "OK : WPF « Bonjour » ouvert en 320×200, bouton Aero2 et texte dessinés, clic reçu, fin en code 0"
     exit 0
 fi
 echo "ÉCHEC : WPF « Bonjour »" >&2
 echo "--- notes de l'appli" >&2; printf '%s\n' "$got" >&2
 echo "--- état" >&2; cat "$work/state" >&2 2>/dev/null || true
+echo "--- rendu du bouton : $rendu" >&2
 echo "--- fin du journal winlux" >&2; tail -20 "$work/state.log" >&2 2>/dev/null || true
 exit 1
