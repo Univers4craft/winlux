@@ -1352,6 +1352,9 @@ ok("fn parse_root(" in d3d12_shader_rs and "fn constant_buffers(" in d3d12_shade
 ok("unsafe fn frame_changed" in (runtime_dlls / "user32.rs").read_text()
    and "wm_nccalcsize_traite_par_l_appli_retire_le_cadre" in (SCRIPTS / "test-all.sh").read_text(),
    "WindowChrome de WPF : WM_NCCALCSIZE envoyé, cadre du gestionnaire retiré, une seule barre de titre (#1131)")
+ok("unsafe fn has_own_caption" in (runtime_dlls / "user32.rs").read_text()
+   and "cadre_garde_tant_que_la_fenetre_n_a_pas_de_barre" in (SCRIPTS / "test-all.sh").read_text(),
+   "Fenêtre sans barre de titre à elle (Electron sans page) : cadre du gestionnaire gardé, toujours fermable (#1211)")
 # #1162 : Process.GetProcesses / GetProcessesByName de .NET (Paint.NET,
 # instance unique) lisent NtQuerySystemInformation(SystemProcessInformation).
 ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
