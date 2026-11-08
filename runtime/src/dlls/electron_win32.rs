@@ -24,10 +24,8 @@ const ERROR_IO_PENDING: u32 = 997;
 const ERROR_NOT_FOUND: u32 = 1168;
 const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
 const STATUS_NOT_IMPLEMENTED: u32 = 0xC000_0002;
-const STATUS_PENDING: usize = 0x103;
 const E_NOTIMPL: u32 = 0x8000_4001;
 const CRYPT_E_NOT_FOUND: u32 = 0x8009_2004;
-const WSA_IO_INCOMPLETE: u32 = 996;
 const WSASERVICE_NOT_FOUND: u32 = 10108;
 const WSA_E_NO_MORE: u32 = 10110;
 const SOCKET_ERROR: i32 = -1;
@@ -1732,34 +1730,6 @@ unsafe extern "win64" fn WSAEnumProtocolsW(
     0
 }
 
-/// OVERLAPPED { Internal (statut), InternalHigh (octets), … }.
-unsafe extern "win64" fn WSAGetOverlappedResult(
-    _socket: usize,
-    ov: *const usize,
-    bytes: *mut u32,
-    _wait: i32,
-    flags: *mut u32,
-) -> i32 {
-    if ov.is_null() || bytes.is_null() {
-        api!("ws2_32", "WSASetLastError", fn(i32) -> (), 10014); // WSAEFAULT
-        return 0;
-    }
-    if *ov == STATUS_PENDING {
-        api!(
-            "ws2_32",
-            "WSASetLastError",
-            fn(i32) -> (),
-            WSA_IO_INCOMPLETE as i32
-        );
-        return 0;
-    }
-    *bytes = *ov.add(1) as u32;
-    if !flags.is_null() {
-        *flags = 0;
-    }
-    i32::from(*ov == 0)
-}
-
 /// NS_NLA : l'emplacement réseau (Network Location Awareness), que
 /// Chromium interroge pour savoir si la machine est connectée.
 const NS_NLA: u32 = 15;
@@ -1878,7 +1848,6 @@ unsafe extern "win64" fn WSASetServiceW(_info: *mut c_void, _op: u32, _flags: u3
 pub fn ws2_32_exports() -> crate::dlls::Exports {
     crate::exports! {
         "WSAEnumProtocolsW" => fn WSAEnumProtocolsW,
-        "WSAGetOverlappedResult" => fn WSAGetOverlappedResult,
         "WSALookupServiceBeginW" => fn WSALookupServiceBeginW,
         "WSALookupServiceNextW" => fn WSALookupServiceNextW,
         "WSALookupServiceEnd" => fn WSALookupServiceEnd,

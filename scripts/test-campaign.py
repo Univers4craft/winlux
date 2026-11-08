@@ -1138,6 +1138,9 @@ ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
 ok("PTRACE_SEIZE" in (ROOT / "runtime/src/dlls/remote_vm.rs").read_text()
    and "VirtualAllocEx dans l'enfant suspendu" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
    "VirtualAllocEx/VirtualProtectEx/VirtualFreeEx dans un enfant suspendu (#767)")
+ok("cabinet_lz" in runtime_tests and '"FDICopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text()
+   and '"LZCopy"' in (ROOT / "runtime/src/dlls/cabinet_lz.rs").read_text(),
+   "cabinet.dll (FDI) et lz32.dll (SZDD) réelles, testées par cabinet_lz.exe (#26)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
@@ -1257,6 +1260,12 @@ ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
 ok("fn altgr_messages" in (runtime_dlls / "gui_x11.rs").read_text()
    and "altgr_est_ctrl_gauche_plus_alt_droit" in (SCRIPTS / "test-all.sh").read_text(),
    "AltGr : Ctrl gauche + Alt droit, « # @ € { } » tapés sans déclencher de raccourci Alt (#1151)")
+# #1146 : le HttpClient de .NET (ScreenToGif, Flow Launcher) se connecte par
+# ConnectEx et un port de complétion ; une erreur rend un code Winsock.
+ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
+   and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
+   "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
 ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
    and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
    and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
@@ -1269,6 +1278,9 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
+   and "perte_du_focus_garde_les_boutons_de_souris" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Bouton de souris tenu malgré SetFocus pendant le clic : DragDetect démarre le glisser (#1138)")
 # #1147 : CoIncrementMTAUsage / CoDecrementMTAUsage (WinRT côté .NET, Flow Launcher).
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),

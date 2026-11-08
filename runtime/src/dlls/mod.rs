@@ -24,6 +24,7 @@ pub mod advapi32_services;
 pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
+pub mod cabinet_lz;
 pub mod chromium_win32;
 pub mod clipboard;
 pub mod com_local;
@@ -916,6 +917,17 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "fontsub",
                 exports: absent_devices::fontsub_exports(),
+                handle: 0,
+            },
+            // Décompression de cabinets (FDI) et de fichiers SZDD (#26).
+            Builtin {
+                name: "cabinet",
+                exports: cabinet_lz::cabinet_exports(),
+                handle: 0,
+            },
+            Builtin {
+                name: "lz32",
+                exports: cabinet_lz::lz32_exports(),
                 handle: 0,
             },
             // AlphaBlend, GradientFill, TransparentBlt (complétés par common_apps).
