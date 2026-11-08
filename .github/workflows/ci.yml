@@ -133,8 +133,6 @@ jobs:
         run: |
           sh scripts/test-browsers.sh
           python3 -B scripts/test-browser-fetch.py
-      - name: Navigateurs, éditeur, version et source montrés avant l'installation (#923)
-        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-browser-confirm.py
 
       - name: Vérifier que les liens web s'ouvrent dans le navigateur installé
         run: sh scripts/test-browser-links.sh
@@ -650,6 +648,9 @@ jobs:
 
       - name: Menu Démarrer, déplacer une application épinglée (clic droit et glisser-déposer) (#925)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-start-pin-move.py
+
+      - name: Navigateurs, éditeur, version et source montrés avant l'installation (#923)
+        run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-browser-confirm.py
 
       - name: Menu Démarrer à deux volets (« Pour vous » local, Masquer recentre, catégories, liste A–Z) (#685)
         run: |
