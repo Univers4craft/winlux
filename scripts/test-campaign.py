@@ -600,5 +600,18 @@ ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exis
 # #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
 ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
    "Paramètres : interrupteurs activés à la couleur d'accent")
+# #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
+# en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
+runtime_dlls = ROOT / "runtime/src/dlls"
+ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exists()
+   and (runtime_dlls / "d3d8.rs").exists()
+   and (runtime_dlls / "d3dx9.rs").exists() and (runtime_dlls / "dsound_x86.rs").exists()
+   and (runtime_dlls / "quartz.rs").exists() and (runtime_dlls / "dplayx.rs").exists()
+   and "DirectPlay" in (SCRIPTS / "test-wow32.sh").read_text()
+   and (ROOT / "runtime/src/audio/synth.rs").exists()
+   and "jeux32" in (SCRIPTS / "test-wow32.sh").read_text()
+   and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
+   and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
+   "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

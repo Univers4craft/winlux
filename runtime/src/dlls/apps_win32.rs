@@ -1535,6 +1535,15 @@ unsafe extern "win64" fn time_set_event(
     if callback == 0 || delay == 0 || delay > 1_000_000 {
         return 0;
     }
+    // Programme 32 bits : la fonction est du code x86 (#777). Avec
+    // TIME_CALLBACK_EVENT_*, `callback` est un handle d'événement.
+    let callback = if flags & (TIME_CALLBACK_EVENT_SET | TIME_CALLBACK_EVENT_PULSE) == 0
+        && crate::wow32::active()
+    {
+        crate::wow32::callback64(callback as u32)
+    } else {
+        callback
+    };
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let worker = std::sync::Arc::new(std::sync::OnceLock::new());
