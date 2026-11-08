@@ -105,6 +105,85 @@ PY
     return 1
 }
 
+# Installeur web (#896) : il ne contient qu'un téléchargeur. Winlux propose
+# de récupérer le paquet officiel complet, décrit par les lignes
+# « download.* » du journal ; rien n'est téléchargé sans un « oui ».
+# Question dans la langue de la session (fr, en, de, es).
+confirm_download() {
+    journal=$1
+    field() { sed -n "s/^download\.$1=//p" "$journal" 2>/dev/null | head -n 1; }
+    name=$(field name); version=$(field version); publisher=$(field publisher)
+    source=$(field source); size=$(field size_mb)
+    [ -n "$name" ] && [ -n "$source" ] || return 1
+    lang=${LC_ALL:-${LC_MESSAGES:-${LANG:-fr}}}
+    case "$lang" in
+        en*) title="Download required"
+             text="This installer only contains a downloader, which Winlux cannot run yet.
+
+Winlux can download the official full package instead:
+$name $version, published by $publisher
+Source: $source ($size MB)
+
+The file is checked (version and SHA-256 fingerprint) before installation."
+             yes="Download and install"; no="Cancel" ;;
+        de*) title="Download erforderlich"
+             text="Dieses Installationsprogramm enthält nur einen Downloader, den Winlux noch nicht ausführen kann.
+
+Winlux kann stattdessen das offizielle vollständige Paket herunterladen:
+$name $version, veröffentlicht von $publisher
+Quelle: $source ($size MB)
+
+Die Datei wird vor der Installation geprüft (Version und SHA-256-Fingerabdruck)."
+             yes="Herunterladen und installieren"; no="Abbrechen" ;;
+        es*) title="Descarga necesaria"
+             text="Este instalador solo contiene un programa de descarga que Winlux aún no puede ejecutar.
+
+Winlux puede descargar en su lugar el paquete oficial completo:
+$name $version, publicado por $publisher
+Origen: $source ($size MB)
+
+El archivo se comprueba (versión y huella SHA-256) antes de instalarlo."
+             yes="Descargar e instalar"; no="Cancelar" ;;
+        *)   title="Téléchargement nécessaire"
+             text="Cet installeur ne contient qu’un téléchargeur, que Winlux ne sait pas encore exécuter.
+
+Winlux peut récupérer à la place le paquet officiel complet :
+$name $version, publié par $publisher
+Source : $source ($size Mo)
+
+Le fichier est vérifié (version et empreinte SHA-256) avant l’installation."
+             yes="Télécharger et installer"; no="Annuler" ;;
+    esac
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "$title" --warningcontinuecancel "$text" --continue-label "$yes" --cancel-label "$no"
+        return
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --question --default-cancel --title="$title" \
+            --ok-label="$yes" --cancel-label="$no" --no-wrap --text="$text"
+        return
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$title" "$text" "$yes" "$no" <<'PY' 2>/dev/null
+import sys
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+title, text, yes, no = sys.argv[1:5]
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE,
+                      text=title)
+d.set_title(title)
+d.format_secondary_text(text)
+d.add_button(no, Gtk.ResponseType.CANCEL)
+d.add_button(yes, Gtk.ResponseType.ACCEPT)
+d.set_default_response(Gtk.ResponseType.CANCEL)
+d.set_keep_above(True)
+sys.exit(0 if d.run() == Gtk.ResponseType.ACCEPT else 1)
+PY
+        return
+    fi
+    return 1
+}
+
 # Message clair pour un programme qui n'a pas pu démarrer, d'après le journal.
 explain_failure() {
     name=$1; status=$2; journal=$3
@@ -321,6 +400,15 @@ case "$kind" in
         mkdir -p "$state" 2>/dev/null || log=/dev/null
         "$winlux" "$exe" "$@" >"$log" 2>&1
         status=$?
+        # Code 4 : installeur web, téléchargement à accepter (#896).
+        if [ "$status" -eq 4 ] && [ "$kind" = setup ]; then
+            if confirm_download "$log"; then
+                "$winlux" --setup --allow-download "$exe" "$@" >"$log" 2>&1
+                status=$?
+            else
+                exit 4
+            fi
+        fi
         if [ "$status" -eq 0 ] || [ "$status" -eq 3010 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             if [ "$kind" = uninstall ]; then

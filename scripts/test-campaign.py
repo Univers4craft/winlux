@@ -664,5 +664,15 @@ ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
 ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
    and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
    "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
+# #914 : infobulle réseau au nom du Wi-Fi, pas de la carte (« wlo1 »).
+ok("def wifi_name" in (SCRIPTS / "winlux-tray.py").read_text()
+   and (SCRIPTS / "test-tray-wifi-name.py").exists()
+   and "test-tray-wifi-name.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "barre : infobulle Wi-Fi au nom du réseau (#914)")
+# #915 : icône d'une fenêtre .exe lancée avec un chemin relatif ou Windows.
+ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -51,6 +51,8 @@ __declspec(dllimport) void *WINAPI InterlockedPopEntrySList(void *);
 __declspec(dllimport) WORD WINAPI QueryDepthSList(void *);
 __declspec(dllimport) BOOL WINAPI CreatePipe(HANDLE *, HANDLE *, void *, DWORD);
 __declspec(dllimport) BOOL WINAPI CloseHandle(HANDLE);
+__declspec(dllimport) void WINAPI SetLastError(DWORD);
+__declspec(dllimport) DWORD WINAPI GetLastError(void);
 __declspec(dllimport) DWORD WINAPI GetEnvironmentVariableA(const char *, char *, DWORD);
 __declspec(dllimport) DWORD WINAPI GetSystemWow64DirectoryA(char *, DWORD);
 __declspec(dllimport) BOOL WINAPI Wow64DisableWow64FsRedirection(void **);
@@ -108,6 +110,12 @@ __declspec(dllimport) BOOL WINAPI GetMenuItemInfoW(HANDLE, DWORD, BOOL, void *);
 __declspec(dllimport) HANDLE WINAPI CreateCompatibleDC(HANDLE);
 __declspec(dllimport) HANDLE WINAPI CreateCompatibleBitmap(HANDLE, int, int);
 __declspec(dllimport) HANDLE WINAPI SelectObject(HANDLE, HANDLE);
+__declspec(dllimport) HANDLE WINAPI FindResourceW(HANDLE, const unsigned short *, const unsigned short *);
+__declspec(dllimport) HANDLE WINAPI LoadResource(HANDLE, HANDLE);
+__declspec(dllimport) DWORD WINAPI SizeofResource(HANDLE, HANDLE);
+__declspec(dllimport) void *WINAPI LockResource(HANDLE);
+__declspec(dllimport) HANDLE WINAPI CreateFileW(const unsigned short *, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+__declspec(dllimport) BOOL WINAPI DeleteFileW(const unsigned short *);
 long long __cdecl _ftol(void);
 /* Sans CRT : symbole attendu par l'éditeur de liens dès qu'un double apparaît. */
 int _fltused = 0;
@@ -562,6 +570,33 @@ __attribute__((used)) void __stdcall entry(void) {
         if (!WinHttpGetIEProxyConfigForCurrentUser(ie) || ie[4] != GUARD || ie[0] > 1) fail(77, ie[4]);
         DWORD pi[4] = {GUARD, GUARD, GUARD, GUARD};
         if (!WinHttpGetDefaultProxyConfiguration(pi) || pi[3] != GUARD || (pi[0] != 1 && pi[0] != 3)) fail(77, pi[0]);
+    }
+
+    /* 78 : ressource nommée (RT_RCDATA « WINLUX », comme une fiche Delphi
+     * « TFORM… ») : le HRSRC tient sur 32 bits et LoadResource rend les
+     * données, pas l'en-tête MZ (#905 : RVA perdu, WinSCP 32 bits). */
+    {
+        static const unsigned short name[] = {'W', 'I', 'N', 'L', 'U', 'X', 0};
+        HANDLE r = FindResourceW(0, name, (const unsigned short *)10);
+        if (!r) fail(78, GetLastError());
+        const char *d = (const char *)LockResource(LoadResource(0, r));
+        if (!d || d[0] != 'T' || d[1] != 'P' || d[2] != 'F' || d[3] != '0') fail(78, d ? (DWORD)d[0] : 0);
+        if (SizeofResource(0, r) != 10) fail(78, SizeofResource(0, r));
+    }
+
+    /* 79 : CREATE_ALWAYS sur un fichier absent : dernière erreur 0 ; sur un
+     * fichier présent : ERROR_ALREADY_EXISTS (183). */
+    {
+        static const unsigned short f[] = {'C', ':', '\\', 'w', 'i', 'n', 'l', 'u', 'x', '-', 'c', 'r', 'e', 'e', '.', 'i', 'n', 'i', 0};
+        DeleteFileW(f);
+        SetLastError(2);
+        HANDLE h = CreateFileW(f, 0xC0000000, 0, 0, 2, 0x80, 0);
+        if (h == (HANDLE)-1 || GetLastError() != 0) fail(79, GetLastError());
+        CloseHandle(h);
+        h = CreateFileW(f, 0xC0000000, 0, 0, 2, 0x20, 0);
+        if (h == (HANDLE)-1 || GetLastError() != 183) fail(79, GetLastError());
+        CloseHandle(h);
+        DeleteFileW(f);
     }
 
     say("Tout est correct : personnalite WOW64\r\n");
