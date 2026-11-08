@@ -737,10 +737,21 @@ pub fn get_async_key_state(vk: usize) -> i16 {
     (((if down { 1u16 } else { 0 }) << 15) | if pressed { 1 } else { 0 }) as i16
 }
 
+/// Boutons de la souris (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1/2) :
+/// leur état suit les messages de souris, pas le focus clavier.
+fn is_mouse_button(vk: usize) -> bool {
+    matches!(vk, 1 | 2 | 4 | 5 | 6)
+}
+
+/// Touches relâchées à la perte du focus clavier. Les boutons de la souris
+/// restent : le clic qui donne le focus (SetFocus de la liste pendant son
+/// WM_LBUTTONDOWN) est toujours tenu, et DragDetect le lit (#1138).
 fn clear_thread_keyboard_state(owner: &ThreadId) {
     if let Some(keys) = lock(thread_keyboard_states()).get_mut(owner) {
-        for byte in keys {
-            *byte &= 0x01; // conserve les états de bascule
+        for (vk, byte) in keys.iter_mut().enumerate() {
+            if !is_mouse_button(vk) {
+                *byte &= 0x01; // conserve les états de bascule
+            }
         }
     }
 }
@@ -757,8 +768,10 @@ pub fn clear_current_thread_keyboard_state() {
 
 pub fn clear_async_key_down_states() {
     let mut state = lock(async_keyboard_state());
-    for byte in &mut state.keys {
-        *byte &= 0x01;
+    for (vk, byte) in state.keys.iter_mut().enumerate() {
+        if !is_mouse_button(vk) {
+            *byte &= 0x01;
+        }
     }
 }
 
@@ -4392,6 +4405,21 @@ mod tests {
         assert_eq!(mouse_button_transition(0x020B, 2 << 16), Some((6, true)));
         assert_eq!(mouse_button_transition(0x0204, 2), Some((2, true)));
         assert_eq!(mouse_button_transition(0x0200, 0), None);
+    }
+
+    /// Le clic qui donne le focus reste tenu : SetFocus pendant
+    /// WM_LBUTTONDOWN ne relâche pas VK_LBUTTON (DragDetect, #1138).
+    #[test]
+    fn perte_du_focus_garde_les_boutons_de_souris() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        observe_key_message(&Msg::new(0, 0x0201, 1, 0));
+        update_thread_key_state(0x41, true);
+        clear_current_thread_keyboard_state();
+        clear_async_key_down_states();
+        assert!(get_key_state(1) < 0, "VK_LBUTTON encore pressé");
+        assert!(get_key_state(0x41) >= 0, "la touche A est relâchée");
+        observe_key_message(&Msg::new(0, 0x0202, 0, 0));
+        assert!(get_key_state(1) >= 0);
     }
 
     /// Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis : Ctrl+O sans
