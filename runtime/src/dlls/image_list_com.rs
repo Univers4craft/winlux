@@ -302,8 +302,12 @@ const SHGSI_SYSICONINDEX: u32 = 0x4000;
 const SHGSI_SMALLICON: u32 = 0x1;
 const SHGSI_SHELLICONSIZE: u32 = 0x4;
 
+/// Fichier rendu dans szPath par SHGetStockIconInfo : SHDefExtractIconW
+/// y retrouve l'icône de la liste système d'après iIcon (#1169).
+pub const STOCK_ICON_FILE: &str = "C:\\Windows\\System32\\shell32.dll";
+
 /// Icône de la liste système pour une icône standard (SHSTOCKICONID).
-fn stock_index(id: i32) -> i32 {
+pub fn stock_index(id: i32) -> i32 {
     match id {
         3 | 4 => 0,  // SIID_FOLDER, SIID_FOLDEROPEN
         2 => 4,      // SIID_APPLICATION
@@ -332,6 +336,13 @@ unsafe extern "win64" fn SHGetStockIconInfo(id: i32, flags: u32, info: *mut u8) 
     (info.add(index_at) as *mut i32).write_unaligned(-1);
     (info.add(index_at + 4) as *mut i32).write_unaligned(0);
     std::ptr::write_bytes(info.add(path_at), 0, 520);
+    // Emplacement de l'icône (SHGSI_ICONLOCATION, toujours rendu) :
+    // WinForms (SystemIcons.GetStockIcon) l'extrait par SHDefExtractIconW
+    // pour la boîte d'erreur ; un HICON nul y levait ArgumentException.
+    for (k, c) in STOCK_ICON_FILE.encode_utf16().enumerate() {
+        (info.add(path_at + 2 * k) as *mut u16).write_unaligned(c);
+    }
+    (info.add(index_at + 4) as *mut i32).write_unaligned(index);
     if flags & SHGSI_SYSICONINDEX != 0 {
         (info.add(index_at) as *mut i32).write_unaligned(index);
     }
@@ -413,6 +424,47 @@ mod tests {
             assert_ne!(usize::from_le_bytes(info[8..16].try_into().unwrap()), 0);
             info[..4].copy_from_slice(&10u32.to_le_bytes());
             assert_eq!(SHGetStockIconInfo(3, 0, info.as_mut_ptr()), E_INVALIDARG);
+        }
+    }
+
+    /// SystemIcons.GetStockIcon (WinForms, boîte d'erreur de Flow Launcher,
+    /// #1169) : SHGSI_ICONLOCATION puis SHDefExtractIconW à la taille voulue.
+    #[test]
+    fn icone_standard_par_son_emplacement() {
+        unsafe {
+            #[repr(C, align(8))]
+            struct Info([u8; 544]);
+            let mut buf = Info([0u8; 544]);
+            let info = &mut buf.0;
+            info[..4].copy_from_slice(&544u32.to_le_bytes());
+            // SIID_ERROR (80), SHGSI_ICONLOCATION (0).
+            assert_eq!(SHGetStockIconInfo(80, 0, info.as_mut_ptr()), S_OK);
+            let path = crate::dlls::wstr(info.as_ptr().add(24) as *const u16);
+            assert_eq!(path, STOCK_ICON_FILE);
+            let index = i32::from_le_bytes(info[20..24].try_into().unwrap());
+            let mut large = 0usize;
+            let mut small = 0usize;
+            let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+            let hr = crate::dlls::ftp_apps::sh_def_extract_icon_w(
+                wide.as_ptr(),
+                index,
+                0,
+                &mut large,
+                &mut small,
+                (16 << 16) | 48,
+            );
+            assert_eq!(hr, S_OK);
+            assert!(large != 0 && small != 0);
+            let other: Vec<u16> = "C:\\x\\autre.exe\0".encode_utf16().collect();
+            let hr = crate::dlls::ftp_apps::sh_def_extract_icon_w(
+                other.as_ptr(),
+                0,
+                0,
+                &mut large,
+                std::ptr::null_mut(),
+                32,
+            );
+            assert_eq!((hr, large), (1, 0));
         }
     }
 }
