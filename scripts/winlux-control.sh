@@ -398,6 +398,8 @@ local_action() {
     case "$action" in
         browser-launch-*|keyboard-*|lang-*|locale-*|tap-*|mouse-*|align-*|desktop-icon-*|theme-*|welcome-*) return 0 ;;
         privacy-*|lock-*|overlay-*|game-mode-*|cpu-hybrid-*|volume-*|report-open|restart-session|poweroff|reboot) return 0 ;;
+        # Réglages du compte (#1100) : en root, HOME=/root exportait ceux de root.
+        transfer-*) return 0 ;;
     esac
     return 1
 }
@@ -895,7 +897,7 @@ perform() {
         remote-*) shift; winlux-remote-config "${action#remote-}" "$@" ;;
         # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
         share-*) shift; winlux-share "${action#share-}" "$@" ;;
-        transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
+        transfer-*) shift; WINLUX_TRANSFER_RUN="$mine" winlux-transfer "${action#transfer-}" "$@" ;;
         # Téléphone connecté (winlux-phone) : ports du protocole KDE Connect
         # ouverts sur les réseaux privés et de domaine seulement, jamais public.
         phone-firewall-on|phone-firewall-off)

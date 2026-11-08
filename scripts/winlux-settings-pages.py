@@ -4214,9 +4214,9 @@ class ExtraPages:
                 folders.destroy()
             self.actions(box, [(_t("Partager un dossier…"), pick)])
             self.hint(_t("Droits par compte : clic droit sur le dossier › « Partager ce dossier… »."), box)
-        if not have("winlux-transfer") and not (RUN / "transfer.txt").is_file(): return
+        if not have("winlux-transfer") and not run_file("transfer.txt").is_file(): return
         if have("winlux-control"): run(["winlux-control", "transfer-status"], timeout=5)
-        transfer = read(RUN / "transfer.txt")
+        transfer = read(run_file("transfer.txt"))
         self.section(_t("Transférer mes réglages"), _t("Un fichier .wlxprofile emporte vos réglages vers un autre PC Winlux."))
         box = self.card()
         targets = [line[7:] for line in transfer.splitlines() if line.startswith("target=")]

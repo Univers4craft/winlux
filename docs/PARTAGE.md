@@ -53,12 +53,21 @@ sur une clé USB. Sur l'autre PC, la page liste les fichiers `.wlxprofile`
 trouvés dans Documents, Bureau, Téléchargements et sur les clés USB :
 **Importer**, puis fermer et rouvrir la session.
 
-Contenu (`scripts/winlux-transfer.sh`) : personnalisation (thème, accent, fond,
-barre des tâches), épingles et icônes du bureau, accessibilité, lecteurs
+Contenu (`scripts/winlux-transfer.sh`) : apparence de la session native
+(thème clair ou sombre, couleur d'accent, taille de la barre et fond d'écran,
+lus dans `~/.config/winlux/appearance.json` et xfdesktop ; une image
+personnelle de 8 Mio au plus voyage avec le fichier, un fond livré avec Winlux
+par son seul chemin), réglages de l'ancien bureau PE (personnalisation,
+épingles, icônes du bureau, accessibilité), lecteurs
 réseau **sans mot de passe** (ils restent scellés sur la machine d'origine et
 sont redemandés), applications par défaut (`mimeapps.list`), et les clés
 système THEME, TASKBAR_ALIGN, XKB_LAYOUT, TAP_TO_CLICK, MOUSE_SPEED, LANG et
 les choix de confidentialité.
+
+L'export et l'import tournent **sous le compte** (#1100) : ce sont ses
+réglages et son dossier personnel, son état va dans
+`/run/winlux/control-<uid>/transfer.txt`, et les clés système passent par le
+relais `winlux-root conf`, qui garde sa propre liste blanche.
 
 L'import ne fait confiance à rien : seuls les membres attendus de l'archive
 sont extraits, les liens symboliques et les fichiers trop gros sont ignorés,

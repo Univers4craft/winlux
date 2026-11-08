@@ -1146,4 +1146,11 @@ ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
    and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
    and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
+# Transfert de réglages (fiche #171 point 7) : sous le compte (#1100),
+# apparence de la session native (#1101), état dans son dossier (#1102).
+transfer_script = (SCRIPTS / "winlux-transfer.sh").read_text(encoding="utf-8")
+ok("        transfer-*) return 0 ;;" in (SCRIPTS / "winlux-control.sh").read_text(encoding="utf-8")
+   and "appearance_export" in transfer_script and "WINLUX_TRANSFER_RUN" in transfer_script
+   and "#1101" in (SCRIPTS / "test-transfer.sh").read_text(encoding="utf-8"),
+   "Transfert de réglages : sous le compte, avec thème, accent et fond de la session native (#1100, #1101, #1102)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
