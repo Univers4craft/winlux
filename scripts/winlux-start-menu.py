@@ -343,7 +343,7 @@ MENU_CSS = Template("""
   #winlux-start .app-name { font-size: 9pt; }
   #winlux-start label.dim { color: $dim; font-size: 8.5pt; }
   #winlux-start label.accent { color: $accent; font-weight: bold; }
-  #winlux-start button.pin-target { box-shadow: inset 0 0 0 2px $accent; border-radius: 8px; }
+  #winlux-start button.pin-target { background: $chip; box-shadow: inset 0 0 0 2px $accent; border-radius: 8px; }
   #winlux-start button.pin-dragged { opacity: 0.4; }
   #winlux-start label.letter { color: $accent; font-weight: bold; font-size: 11pt; }
   #winlux-start button.link { background: $chip; padding: 6px 12px; }
@@ -368,6 +368,9 @@ MENU_CSS = Template("""
   menu.winlux-menu menuitem { color: $fg; padding: 8px 18px 8px 12px; border-radius: 4px; min-width: 150px; }
   menu.winlux-menu menuitem label, menu.winlux-menu menuitem image { color: $fg; -gtk-icon-shadow: none; }
   menu.winlux-menu menuitem:hover { background: $hover; }
+  /* Choix sans effet (Déplacer, #925) : grisés pour de vrai, flèche du sous-menu lisible. */
+  menu.winlux-menu menuitem:disabled label { color: $dim; opacity: 0.6; }
+  menu.winlux-menu menuitem arrow { color: $fg; min-width: 16px; min-height: 16px; }
 """)
 
 
@@ -803,7 +806,7 @@ class Start(Gtk.Application):
             dialog.run()
             dialog.destroy()
 
-    def app_button(self, app, grid=False, badge=False):
+    def app_button(self, app, grid=False, badge=False, pinned=False):
         button = Gtk.Button()
         if grid: button.set_size_request(80, 82)  # six colonnes tiennent dans 560 px (1366x768)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if grid else Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -831,7 +834,7 @@ class Start(Gtk.Application):
         button.add(box)
         button.set_tooltip_text(app.get_display_name())
         on_click(button, lambda: self.launch(app))
-        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app))
+        button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app, pinned))
         return button
 
     def result_button(self, title, icon, tooltip, subtitle=None):
@@ -938,7 +941,7 @@ class Start(Gtk.Application):
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
             for index, app in enumerate(pinned):
-                button = self.app_button(app, True)
+                button = self.app_button(app, True, pinned=True)
                 self.pin_drag(button, app)
                 grid.attach(button, index % 6, index // 6, 1, 1)
             # Clavier tactile ouvert : la place manque, les épinglés seuls (le
@@ -1355,20 +1358,21 @@ class Start(Gtk.Application):
         # Pendant le glisser : épingle d'origine estompée, place visée entourée
         # d'accent ; aucun lancement au lâcher (#925).
         def begin(*_):
-            self.pin_dragging = True
+            self.pin_dragging = app.get_id()
             button.get_style_context().add_class("pin-dragged")
         def end(*_):
             button.get_style_context().remove_class("pin-dragged")
             GLib.timeout_add(300, lambda: setattr(self, "pin_dragging", False) or False)
         def motion(widget, *_):
-            widget.get_style_context().add_class("pin-target")
+            if getattr(self, "pin_dragging", False) != app.get_id():  # pas la tuile de départ
+                widget.get_style_context().add_class("pin-target")
             return False  # Gtk.DestDefaults.MOTION répond au glisser
         button.connect("drag-begin", begin)
         button.connect("drag-end", end)
         button.connect("drag-motion", motion)
         button.connect("drag-leave", lambda widget, *_: widget.get_style_context().remove_class("pin-target"))
 
-    def app_context(self, widget, event, app):
+    def app_context(self, widget, event, app, pinned=False):
         if event.button != 3: return False
         identifier = app.get_id()
         def pin():
@@ -1400,9 +1404,9 @@ class Start(Gtk.Application):
                    for name in (app.list_actions() if hasattr(app, "list_actions") else [])]
         entries = [(_t("Ouvrir"), lambda: self.launch(app)), *actions,
                    (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin)]
-        # Épinglée : Déplacer au début, à gauche, à droite, à la fin (#925) ;
-        # les choix sans effet sont grisés (None).
-        if identifier in self.state.get("pins", DEFAULTS):
+        # Dans la grille Épinglé seulement : Déplacer au début, à gauche, à
+        # droite, à la fin (#925) ; les choix sans effet sont grisés (None).
+        if pinned and identifier in self.state.get("pins", DEFAULTS):
             pins = self.state.get("pins", DEFAULTS)
             labels = {"first": _t("Au début"), "left": _t("Vers la gauche"), "right": _t("Vers la droite"), "last": _t("À la fin")}
             entries.append((_t("Déplacer"), [(labels[where], (lambda where=where: self.move_pin(identifier, where))

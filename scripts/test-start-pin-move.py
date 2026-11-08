@@ -7,10 +7,11 @@
 2. Vrai menu sous Xvfb : clic droit (xdotool) sur la 4e tuile → sous-menu
    « Déplacer » avec ses quatre choix ; « Au début » et « Vers la gauche »
    grisés sur la 1re tuile, « Vers la droite » et « À la fin » sur la
-   dernière ; « Au début » sur la 4e la met en tête, à l'écran et dans
+   dernière, et affichés grisés ; « Au début » sur la 4e la met en tête, à l'écran et dans
    start.json.
 3. Glisser-déposer réel (xdotool) de la 5e tuile sur la 2e : tuile glissée
-   estompée, place visée entourée d'accent, rien n'est lancé au lâcher.
+   estompée, place visée (pas celle de départ) entourée d'accent, rien
+   n'est lancé au lâcher ; « Déplacer » absent de Toutes les applications.
 4. Un nouveau menu (nouvelle session) relit le même ordre.
 5. Les cinq textes existent en anglais, espagnol et allemand.
 
@@ -47,7 +48,7 @@ for name in names:
 pins.insert(2, "absente.desktop")  # application désinstallée : garde sa place
 state_file = home / ".config/winlux/start.json"
 state_file.parent.mkdir(parents=True)
-state_file.write_text(json.dumps({"pins": pins, "recent": []}))
+state_file.write_text(json.dumps({"pins": pins, "recent": [], "apps_view": "list"}))
 
 here = Path(__file__).resolve().parent
 module = runpy.run_path(str(here / "winlux-start-menu.py"), run_name="start_pin_move_test")
@@ -140,6 +141,13 @@ def run():
         check(not choices["Au début"].get_sensitive() and not choices["Vers la gauche"].get_sensitive()
               and choices["Vers la droite"].get_sensitive() and choices["À la fin"].get_sensitive(),
               "1re tuile : « Au début » et « Vers la gauche » doivent être grisés, seulement eux")
+        # Grisés pour de vrai : couleur du libellé différente des choix actifs.
+        def colour(item):
+            label = item.get_child()
+            context = label.get_style_context()
+            return context.get_color(context.get_state()).to_string()
+        check(colour(choices["Au début"]) != colour(choices["À la fin"]),
+              f"« Au début » grisé mais affiché comme les autres ({colour(choices['Au début'])})")
     choices = right_click(len(names) - 1)
     if choices:
         check(choices["Au début"].get_sensitive() and not choices["Vers la droite"].get_sensitive()
@@ -174,6 +182,7 @@ def run():
     pump(0.3)
     check(source.get_style_context().has_class("pin-dragged"), "épingle glissée non estompée pendant le glisser")
     check(target.get_style_context().has_class("pin-target"), "place visée non entourée pendant le glisser")
+    check(not source.get_style_context().has_class("pin-target"), "la tuile de départ se surligne elle-même")
     xdo("mouseup", 1)
     pump(0.8)
     check(not launched, f"application lancée au lâcher : {launched}")
@@ -182,6 +191,23 @@ def run():
     expected = ["Delta", "Echo", "Alpha", "Bravo", "Charlie", "Foxtrot"]
     check(order() == expected, f"après glisser Echo sur Alpha : {order()}")
     check(app.window.get_visible(), "le menu s'est fermé pendant le glisser-déposer")
+    # « Déplacer » n'existe que dans la grille Épinglé, pas dans Toutes les applications.
+    app.toggle_list()
+    pump(0.8)
+    def buttons(widget):
+        if isinstance(widget, Gtk.Button) and widget.get_tooltip_text() == "Alpha": yield widget
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children(): yield from buttons(child)
+    listed = next(buttons(app.content), None)
+    check(listed is not None, "Alpha introuvable dans Toutes les applications")
+    if listed is not None:
+        xdo("mousemove", *centre(listed))
+        pump(0.2)
+        xdo("click", 3)
+        pump(0.6)
+        check(app.context is not None and submenu_of_context() is None, "« Déplacer » proposé hors de la grille Épinglé")
+        if app.context is not None: app.context.popdown()
+        pump(0.3)
 
 
 run()
