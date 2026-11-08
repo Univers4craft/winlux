@@ -625,6 +625,7 @@ unsafe extern "win64" fn create_text_layout(
         underline: false,
         strike: false,
         lines: None,
+        format_view: None,
     };
     put(
         out,
@@ -1822,6 +1823,20 @@ struct LayoutState {
     underline: bool,
     strike: bool,
     lines: Option<Arc<Lines>>,
+    /// Vue IDWriteTextFormat1-3 de la mise en page (créée à la demande).
+    format_view: Option<Box<FormatView>>,
+}
+
+/// IDWriteTextFormat1, 2 ou 3 demandé à une mise en page : ses
+/// emplacements 28 et suivants diffèrent de ceux de IDWriteTextLayout, il
+/// faut un autre pointeur d'interface. Chaque méthode relaie vers
+/// FORMAT_ON_LAYOUT_VT avec la mise en page pour `this` (relais communs
+/// de Direct2D) ; AddRef, Release et QueryInterface vont à la mise en page.
+#[repr(C)]
+struct FormatView {
+    vtbl: *const (),
+    target: *mut TextObj,
+    table: *const (),
 }
 
 pub struct Text {
@@ -2169,6 +2184,7 @@ pub unsafe fn text_outline(
         underline: false,
         strike: false,
         lines: None,
+        format_view: None,
     };
     let obj = Com::create(
         LAYOUT_VT.ptr(),
@@ -2225,6 +2241,16 @@ unsafe extern "win64" fn layout_qi(
     riid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
+    if !riid.is_null()
+        && [
+            text_ext::IID_TEXT_FORMAT1,
+            text_ext::IID_TEXT_FORMAT2,
+            text_ext::IID_TEXT_FORMAT3,
+        ]
+        .contains(&*riid)
+    {
+        return layout_format_view(this, out);
+    }
     qi_list(
         this,
         riid,
@@ -2238,6 +2264,30 @@ unsafe extern "win64" fn layout_qi(
             text_ext::IID_TEXT_LAYOUT4,
         ],
     )
+}
+
+/// QueryInterface d'une mise en page vers IDWriteTextFormat1-3 : sa vue.
+unsafe fn layout_format_view(this: *mut TextObj, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let p = {
+        let mut t = text(this);
+        let Some(l) = t.layout.as_mut() else {
+            *out = std::ptr::null_mut();
+            return super::audio_com::E_NOINTERFACE;
+        };
+        let v = l.format_view.get_or_insert_with(|| {
+            Box::new(FormatView {
+                vtbl: super::d2d1::tear_off_vt(),
+                target: this,
+                table: FORMAT_ON_LAYOUT_VT.ptr(),
+            })
+        });
+        &mut **v as *mut FormatView
+    };
+    Com::add_ref(this);
+    put(out, p)
 }
 
 macro_rules! setter {
@@ -2366,6 +2416,54 @@ unsafe extern "win64" fn get_locale(this: *mut TextObj, buf: *mut u16, size: u32
 // IDWriteTextFormat (0-27), puis 1 (28-35), 2 (36-37) et 3 (38-42).
 static FORMAT_VT: VTable<43> = VTable([
     format_qi as *const (),
+    add_ref::<Mutex<Text>> as *const (),
+    release::<Mutex<Text>> as *const (),
+    set_text_align as *const (),
+    set_para_align as *const (),
+    set_wrapping as *const (),
+    set_reading as *const (),
+    set_flow as *const (),
+    set_tab as *const (),
+    set_trimming as *const (),
+    set_line_spacing as *const (),
+    get_text_align as *const (),
+    get_para_align as *const (),
+    get_wrapping as *const (),
+    get_reading as *const (),
+    get_flow as *const (),
+    get_tab as *const (),
+    get_trimming as *const (),
+    get_line_spacing as *const (),
+    get_collection as *const (),
+    get_family_len as *const (),
+    get_family as *const (),
+    get_weight as *const (),
+    get_style as *const (),
+    get_stretch as *const (),
+    get_size as *const (),
+    get_locale_len as *const (),
+    get_locale as *const (),
+    text_ext::set_vertical as *const (),
+    text_ext::get_vertical as *const (),
+    text_ext::set_last_line as *const (),
+    text_ext::get_last_line as *const (),
+    text_ext::set_optical as *const (),
+    text_ext::get_optical as *const (),
+    text_ext::set_fallback as *const (),
+    text_ext::get_fallback as *const (),
+    text_ext::set_spacing2 as *const (),
+    text_ext::get_spacing2 as *const (),
+    text_ext::format_set_axes as *const (),
+    text_ext::format_axis_count as *const (),
+    text_ext::format_get_axes as *const (),
+    text_ext::get_automatic_axes as *const (),
+    text_ext::set_automatic_axes as *const (),
+]);
+
+/// Méthodes de IDWriteTextFormat3 appliquées à une mise en page (vue
+/// `FormatView`) : QueryInterface est celle de la mise en page.
+static FORMAT_ON_LAYOUT_VT: VTable<43> = VTable([
+    layout_qi as *const (),
     add_ref::<Mutex<Text>> as *const (),
     release::<Mutex<Text>> as *const (),
     set_text_align as *const (),
