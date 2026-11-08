@@ -166,6 +166,9 @@ assert "11" not in panel["/panels/panel-1/plugin-ids"] and "/plugins/plugin-11" 
 ids = cli["ids_with_button"]([3, 1, 2, 8, 10, 4, 5, 6, 9, 7], False)
 assert ids == [3, 1, 2, 8, 11, 10, 4, 5, 6, 9, 7], ids  # barre à gauche : près des icônes
 assert cli["ids_with_button"]([11, 3, 1], True) == [11, 3, 1]
+# Barre flottante (#889) : au début de la capsule, après la réserve du coin gauche 44.
+assert cli["ids_with_button"]([3, 44, 1, 2, 45, 8], False) == [3, 44, 11, 1, 2, 45, 8]
+assert cli["ids_with_button"]([3, 44, 1, 2, 45, 8], True) == [3, 44, 11, 1, 2, 45, 8]
 # winlux-control align-left/center garde le bouton (plugin-11 genmon).
 control = (directory / "winlux-control.sh").read_text(encoding="utf-8")
 assert "plugin-11" in control and '${widgets:+11 }' in control, "winlux-control retirerait le bouton à chaque session"

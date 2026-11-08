@@ -696,6 +696,8 @@ _TR = {
     'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
     'Connecté : {account}': ('Signed in: {account}', 'Sesión iniciada: {account}', 'Angemeldet: {account}'),
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
+    'Activation en cours dans sa fenêtre.': ('Turning on in its own window.', 'Activación en curso en su ventana.', 'Wird in seinem eigenen Fenster aktiviert.'),
+    'Afficher la fenêtre d’activation': ('Show the setup window', 'Mostrar la ventana de activación', 'Aktivierungsfenster anzeigen'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
     'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
@@ -856,6 +858,7 @@ PAGE_BACKUP = 38
 PAGE_INSTALLED = 39
 PAGE_VPN = 40
 PAGE_HOTSPOT = 41
+PAGE_PARENTAL = 42
 PHONE_CONFIG = Path(os.environ.get("WINLUX_PHONE_CONFIG", Path.home() / ".config/winlux/phone"))
 PHONE_RUNTIME = Path(os.environ.get("WINLUX_PHONE_RUNTIME") or (Path(os.environ["XDG_RUNTIME_DIR"]) / "winlux-phone" if os.environ.get("XDG_RUNTIME_DIR") else Path.home() / ".cache/winlux/phone"))
 
@@ -1488,6 +1491,9 @@ def page_available(page, status=None):
         # NetworkManager et WireGuard (module du noyau) ou le greffon OpenVPN.
         module = vpn_page()
         return module is not None and module.available()
+    if page == PAGE_PARENTAL:
+        module = parental_module()
+        return module is not None and module.available()
     if page == PAGE_HOTSPOT:
         # Carte Wi-Fi capable de point d’accès (mode AP), dnsmasq : sinon pas de page.
         module = hotspot_page()
@@ -1811,6 +1817,30 @@ def installed_apps_module():
     return None
 
 
+_PARENTAL = []
+
+
+def parental_module():
+    """winlux-parental (#661), installé à côté ou dans scripts/ du dépôt."""
+    if _PARENTAL: return _PARENTAL[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-parental.py"), here.with_name("winlux-parental")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_parental_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_parental_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _PARENTAL.append(module)
+    return module
+
+
 def default_apps_panel(window):
     """Applications par défaut (winlux-default-apps, installé à côté) dans la page."""
     from importlib.machinery import SourceFileLoader
@@ -1844,7 +1874,8 @@ class ExtraPages:
                    PAGE_HARDWARE: "page_hardware", PAGE_WIFI: "page_wifi",
                    PAGE_CERTS: "page_certificates", PAGE_PHONE: "page_phone",
                    PAGE_BACKUP: "page_backup", PAGE_INSTALLED: "page_installed",
-                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot"}
+                   PAGE_VPN: "page_vpn", PAGE_HOTSPOT: "page_hotspot",
+                   PAGE_PARENTAL: "page_parental"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {9: "sections_about", 8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -3644,8 +3675,14 @@ class ExtraPages:
             backend = module.provider(key)
             if not backend.supported(): continue  # matériel trop juste : option cachée, pas grisée
             enabled = module.is_enabled(key)
+            running = self.assistant_setup_running(key)
             box = self.card()
-            self.switch(box, _t(name), enabled, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            self.switch(box, _t(name), enabled or running, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            if running and not enabled:
+                # Page reconstruite pendant qu'une autre activation se termine.
+                self.hint(_t("Activation en cours dans sa fenêtre."), box)
+                self.actions(box, [(_t("Afficher la fenêtre d’activation"), lambda k=key: self.assistant_toggle(k, True))])
+                continue
             if not enabled:
                 self.hint(_t(before), box)
                 continue
@@ -3692,23 +3729,36 @@ class ExtraPages:
         module.write_config(current=key)
         self.spawn([sys.executable, module.__file__])
 
+    def assistant_setup_running(self, key):
+        process = getattr(self, "assistant_setups", {}).get(key)
+        return process is not None and process.poll() is None
+
     def assistant_toggle(self, key, on):
         """Activer ouvre la fenêtre de configuration (téléchargement, connexion) ;
-        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat."""
+        l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat.
+        Chaque assistant a sa propre fenêtre (#910) : activer ChatGPT pendant que
+        celle de Claude est ouverte ne doit pas être ignoré en silence."""
         import sys
         module = assistant_module()
+        setups = self.__dict__.setdefault("assistant_setups", {})
         if not on:
+            process = setups.pop(key, None)
+            if process is not None and process.poll() is None: process.terminate()
             self.tool([sys.executable, module.__file__, "--desactiver", key])
             return
-        if getattr(self, "assistant_setup", None) is not None and self.assistant_setup.poll() is None: return
+        command = [sys.executable, module.__file__, "--configurer", key]
+        if self.assistant_setup_running(key):
+            self.spawn(command)  # la fenêtre déjà ouverte revient devant
+            return
         try:
-            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer", key], start_new_session=True)
+            process = setups[key] = subprocess.Popen(command, start_new_session=True)
         except OSError as error:
             self.show_error(_t("L’opération a échoué"), str(error))
             return
 
         def wait():
-            if self.assistant_setup.poll() is None: return True
+            if process.poll() is None: return True
+            if setups.get(key) is process: setups.pop(key)
             self.extra_refresh()
             return False
         GLib.timeout_add(500, wait)
@@ -3984,6 +4034,12 @@ class ExtraPages:
         kind = getattr(self, "installed_filter", None) or os.environ.pop("WINLUX_INSTALLED_FILTER", None)
         self.installed_filter = None
         self.body.pack_start(module.InstalledAppsPanel(self, kind), False, False, 0)
+
+    def page_parental(self):
+        """Contrôle parental (#661) : temps d’écran, applications et sites, activité."""
+        module = parental_module()
+        if module is not None:
+            self.parental_panel = module.page(self)
 
     def open_installed_windows(self):
         self.installed_filter = "windows"

@@ -15,6 +15,8 @@ tourne en root et n'exécute que des actions connues :
   winlux-root exec winlux-hotspot ARGS…   point d'accès sans fil mobile (partage de connexion)
   winlux-root exec winlux-brightness set N   luminosité (rétroéclairage, DDC/CI)
   winlux-root exec winlux-certificates …   autorités ajoutées, heure automatique
+  winlux-root exec winlux-parental …      contrôle parental (lecture : administrateur ;
+                                          modification : Contrôle de compte d'utilisateur)
   winlux-root conf FICHIER CLÉ VALEUR     préférence de /etc/winlux (sans confirmation)
   winlux-root check COMPTE                mot de passe lu sur l'entrée standard
   winlux-root elevate COMPTE              idem, et ouvre 5 minutes d'élévation
@@ -63,6 +65,8 @@ CONFIG = ROOT + "/etc/winlux"
 CONTROL = os.environ.get("WINLUX_ROOT_CONTROL", "/usr/bin/winlux-control")
 SHARE = "/usr/bin/winlux-share"
 SIGNIN = os.environ.get("WINLUX_ROOT_SIGNIN", "/usr/bin/winlux-signin")
+PARENTAL = os.environ.get("WINLUX_ROOT_PARENTAL", "/usr/bin/winlux-parental")
+PARENTAL_CONF = ROOT + "/etc/winlux/parental"
 ELEVATION_SECONDS = 300
 ADMIN_GROUPS = ("sudo", "wheel", "admin")
 NAME = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
@@ -288,10 +292,95 @@ def exec_level(args):
         if rest == ["detect-ddc"] or (len(rest) == 2 and rest[0] == "set" and re.fullmatch(r"\d{1,3}", rest[1])):
             return "user"
         return None
+    if tool == "winlux-parental":
+        return parental_level(rest)
     if tool == "snap" and rest and rest[0] in SNAP_SUBCOMMANDS:
         if all(PACKAGE.match(a) or a in ("--classic",) for a in rest[1:]):
             return SNAP_SUBCOMMANDS[rest[0]]
     return None
+
+
+def parental_level(rest):
+    """Contrôle parental (#661) : le compte voit son temps restant ; lire les
+    réglages demande un administrateur, les changer le Contrôle de compte."""
+    if rest in (["status"],):
+        return "user"
+    if rest == ["list"]:
+        return "admin-read"
+    if len(rest) < 2 or not NAME.match(rest[1]):
+        return None
+    if rest[0] == "get" and len(rest) == 2:
+        return "admin-read"
+    if rest[0] == "report" and (len(rest) == 2 or (len(rest) == 3 and re.fullmatch(r"[0-9]{1,2}", rest[2]))):
+        return "admin-read"
+    if rest[0] in ("set", "enable", "disable", "forget") and len(rest) == 2:
+        return "admin"
+    if rest[0] == "grant" and len(rest) == 3 and re.fullmatch(r"[0-9]{1,3}", rest[2]):
+        return "admin"
+    return None
+
+
+# ── Contrôle parental ───────────────────────────────────────────────────────
+
+def supervised(name):
+    """Compte surveillé par le contrôle parental (configuration root, activée)."""
+    if not isinstance(name, str) or not NAME.match(name) or name == "root":
+        return False
+    path = os.path.join(PARENTAL_CONF, name + ".json")
+    try:
+        if os.path.islink(path):
+            return False
+        with open(path, encoding="utf-8") as conf:
+            return bool(json.load(conf).get("enabled", True))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def parental_env():
+    env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": os.environ.get("LANG", "C.UTF-8")}
+    if ROOT:
+        env["WINLUX_PARENTAL_ROOT"] = ROOT
+        for key in ("WINLUX_PARENTAL_NOW",):
+            if os.environ.get(key):
+                env[key] = os.environ[key]
+    return env
+
+
+def run_waited(command, **options):
+    """subprocess.run avec un vrai code de retour (#811) : le service ignore
+    SIGCHLD, le noyau récupérait l'enfant seul et wait() rendait toujours 0."""
+    previous = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    try:
+        return subprocess.run(command, **options)
+    finally:
+        signal.signal(signal.SIGCHLD, previous)
+        # Enfants d'autres demandes terminés pendant l'attente : récupérés.
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0]:
+                pass
+        except ChildProcessError:
+            pass
+
+
+def parental_command(*args):
+    return ([sys.executable, "-B", PARENTAL] if PARENTAL.endswith(".py") else [PARENTAL]) + list(args)
+
+
+def parental_block(user):
+    """None si le compte peut utiliser sa session maintenant, sinon la raison
+    du contrôle parental (temps écoulé, hors des heures permises)."""
+    if not supervised(user):
+        return None
+    try:
+        result = run_waited(parental_command("check-login", user), env=parental_env(), capture_output=True,
+                            text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return {"reason": "limit"}  # en cas de doute, le compte reste bloqué
+    try:
+        answer = json.loads(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"reason": "limit"}
+    return None if answer.get("allowed") is True else answer
 
 
 # ── Comptes et mots de passe ────────────────────────────────────────────────
@@ -416,6 +505,13 @@ def check_request(uid, name, request):
         return {"ok": False}
     throttle(uid)
     ok = password_ok(user, password)
+    if ok and request.get("op") == "check":
+        # Hors du temps permis par le contrôle parental, le compte surveillé
+        # ne déverrouille pas sa session (le mot de passe reste bon).
+        block = parental_block(user)
+        if block is not None:
+            FAILURES.pop(uid, None)
+            return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
     if ok:
         FAILURES.pop(uid, None)
         pin_unblock(user)
@@ -546,8 +642,11 @@ def switch_request(uid, name, request, connection=None):
             return {"ok": False}
         FAILURES.pop(uid, None)
         pin_unblock(user)
+    block = parental_block(user)
+    if block is not None:
+        return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
     try:
-        result = subprocess.run([CONTROL, "session-switch", user], env=root_env(request, name),
+        result = run_waited([CONTROL, "session-switch", user], env=root_env(request, name),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 timeout=90)
     except (OSError, subprocess.SubprocessError):
@@ -589,7 +688,7 @@ def _last_answer(text):
 def signin_run(action, user, secret=None):
     """winlux-signin ACTION COMPTE, secret sur l'entrée standard ; réponse finale."""
     try:
-        result = subprocess.run([SIGNIN, action, user], input=(secret or "") + "\n", text=True,
+        result = run_waited([SIGNIN, action, user], input=(secret or "") + "\n", text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=signin_env(), timeout=60)
     except (OSError, subprocess.SubprocessError):
         return {"ok": False, "error": "failed"}
@@ -645,6 +744,16 @@ def signin_stream(connection, action, user):
     return final
 
 
+def parental_gate(user, answer):
+    """Code ou doigt justes : le contrôle parental s'applique comme au mot
+    de passe (#661), sinon le code PIN contournerait les horaires permis."""
+    if answer.get("ok"):
+        block = parental_block(user)
+        if block is not None:
+            return {"ok": False, "parental": block.get("reason") or "limit", "until": block.get("until")}
+    return answer
+
+
 def signin_target(uid, name, request):
     action = request.get("action")
     user = request.get("user") or name
@@ -680,7 +789,9 @@ def signin_prepare(uid, name, request):
     if action == "pin-check" and password_ok(user, ""):
         return {"ok": False, "error": "no-password"}
     pin = request.get("pin") if isinstance(request.get("pin"), str) else ""
-    if action in ("pin-check", "pin-set"):
+    if action == "pin-check":
+        return parental_gate(user, signin_run(action, user, pin))
+    if action == "pin-set":
         return signin_run(action, user, pin)
     if action == "pin-remove":
         return signin_run(action, user)
@@ -696,7 +807,9 @@ def signin_child(connection, uid, name, request):
         return answer
     if action == "fp-verify" and password_ok(user, ""):
         return {"ok": False, "error": "no-password"}
-    if action in ("fp-verify", "fp-enroll"):
+    if action == "fp-verify":
+        return parental_gate(user, signin_stream(connection, action, user))
+    if action == "fp-enroll":
         return signin_stream(connection, action, user)
     if action == "fp-delete":
         return signin_run(action, user)
@@ -707,6 +820,30 @@ def needs_child(request):
     if request.get("op") == "signin":
         return request.get("action") in SIGNIN_FORK
     return request.get("op") == "switch" and bool(request.get("finger"))
+
+
+def effective_level(op, args, uid, name):
+    """Niveau d'une demande « control » ou « exec » pour cet appelant, None si refusée."""
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return None
+    level = control_level(args) if op == "control" else exec_level(args)
+    if level is None:
+        return None
+    if level == "admin-read":
+        # Un administrateur consulte sans confirmation ; un autre compte
+        # (le compte surveillé en premier) doit fournir le mot de passe d'un administrateur.
+        level = "user" if uid == 0 or is_admin(name) else "admin"
+    # Une sauvegarde ne concerne que le compte qui la demande.
+    if op == "control" and args[0].startswith("backup-") and len(args) > 1 and args[1] != name:
+        level = "admin"
+    # Ouvrir ou fermer la session d'un autre compte : son mot de passe
+    # passe par l'écran de verrouillage (op « switch »), sinon un administrateur.
+    if op == "control" and args[0] in ("session-switch", "session-logoff") and len(args) > 1 and args[1] != name:
+        level = "admin"
+    # Compte surveillé : changer de fuseau horaire décalerait ses horaires.
+    if op == "control" and re.match(r"(tz|timezone)-", args[0]) and supervised(name):
+        level = "admin"
+    return level
 
 
 def handle(connection, uid, name, request, fds):
@@ -729,16 +866,9 @@ def handle(connection, uid, name, request, fds):
         args = request.get("args")
         if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
             return {"error": "Demande invalide"}
-        level = control_level(args) if op == "control" else exec_level(args)
+        level = effective_level(op, args, uid, name)
         if level is None:
             return {"error": "Action non autorisée : " + (args[0] if args else "?")}
-        # Une sauvegarde ne concerne que le compte qui la demande.
-        if op == "control" and args[0].startswith("backup-") and len(args) > 1 and args[1] != name:
-            level = "admin"
-        # Ouvrir ou fermer la session d'un autre compte : son mot de passe
-        # passe par l'écran de verrouillage (op « switch »), sinon un administrateur.
-        if op == "control" and args[0] in ("session-switch", "session-logoff") and len(args) > 1 and args[1] != name:
-            level = "admin"
         if level == "admin" and not elevated(uid, name):
             return {"auth": "required"}
         if len(fds) < 3:
@@ -751,10 +881,13 @@ def handle(connection, uid, name, request, fds):
         if op == "control":
             command = [CONTROL, *args]
         else:
-            tool = shutil.which(args[0], path=env["PATH"])
+            tool = PARENTAL if args[0] == "winlux-parental" else shutil.which(args[0], path=env["PATH"])
             if not tool:
                 return {"status": 127}
             command = [tool, *args[1:]]
+            if args[0] == "winlux-parental":
+                command = parental_command(*args[1:])
+                env.update({key: value for key, value in parental_env().items() if key != "PATH"})
             env["DEBIAN_FRONTEND"] = "noninteractive"
         # Dossier courant du client (« share-add » sans chemin, Explorateur).
         cwd = request.get("cwd")
@@ -847,14 +980,8 @@ def serve():
                     # Les commandes longues (APT) tournent à part ; l'élévation
                     # est décidée ici, dans le processus qui la mémorise.
                     args = request.get("args") if isinstance(request.get("args"), list) else []
-                    level = (control_level(args) if request.get("op") == "control" else exec_level(args)) \
-                        if all(isinstance(a, str) for a in args) else None
+                    level = effective_level(request.get("op"), args, uid, name) if args else None
                     if level == "admin" and not elevated(uid, name):
-                        reply(connection, {"auth": "required"})
-                        close_all(fds)
-                        continue
-                    if request.get("op") == "control" and args and args[0].startswith("backup-") and \
-                            len(args) > 1 and args[1] != name and not elevated(uid, name):
                         reply(connection, {"auth": "required"})
                         close_all(fds)
                         continue
@@ -1016,6 +1143,8 @@ def main(argv):
         return 0 if verify(command, rest[0], password) else 1
     if command == "policy" and rest:
         level = control_level(rest) or exec_level(rest)
+        if level == "admin-read":
+            level = "admin"
         print(level or "refusé")
         return 0 if level else 1
     print(__doc__.strip(), file=sys.stderr)

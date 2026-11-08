@@ -66,7 +66,10 @@ mock.chmod(0o755)
 sock = work / "root.sock"
 env = {**os.environ, "WINLUX_ROOT_PREFIX": str(work), "WINLUX_ROOT_SOCKET": str(sock),
        "WINLUX_ROOT_CONTROL": str(mock), "WINLUX_ROOT_SIGNIN": str(SIGNIN_TOOL),
-       "WINLUX_FPRINT_FAKE": str(fake)}
+       "WINLUX_FPRINT_FAKE": str(fake), "WINLUX_ROOT_PARENTAL": str(work / "parental-mock")}
+# Contrôle parental factice (#661) : tout compte surveillé est hors de ses horaires.
+(work / "parental-mock").write_text('#!/bin/sh\necho \'{"supervised": true, "allowed": false, "reason": "hours"}\'\n')
+(work / "parental-mock").chmod(0o755)
 server = None
 
 
@@ -209,6 +212,21 @@ try:
           "bascule vers bob avec son doigt")
     (fake / "auto").write_text("nomatch")
     check(raw({"op": "switch", "user": "bob", "finger": True}).get("ok") is False, "bascule : mauvais doigt refusé")
+
+    # Compte surveillé hors de ses horaires : ni code ni doigt ne le déverrouillent.
+    (work / "etc/winlux/parental").mkdir(parents=True, exist_ok=True)
+    (work / "etc/winlux/parental/alice.json").write_text('{"enabled": true}')
+    (fake / "auto").write_text("match")
+    check(ask("pin-check", user="alice", pin="2580").get("parental") == "hours",
+          "contrôle parental : le bon code PIN ne contourne pas les horaires")
+    check(ask("fp-verify", user="alice").get("parental") == "hours",
+          "contrôle parental : le bon doigt ne contourne pas les horaires")
+    start("1001:bob")
+    log.write_text("")
+    check(raw({"op": "switch", "user": "alice", "pin": "2580"}).get("parental") == "hours"
+          and "session-switch" not in log.read_text(), "contrôle parental : pas de bascule par code PIN")
+    start("1000:alice")
+    (work / "etc/winlux/parental/alice.json").unlink()
 
     # Effacer : mot de passe d'abord.
     check(ask("pin-remove", user="alice", password="faux").get("error") == "password", "supprimer le code : mot de passe exigé")

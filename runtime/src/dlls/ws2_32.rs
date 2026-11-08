@@ -4034,7 +4034,7 @@ mod tests {
             let acc = accept(srv, std::ptr::null_mut(), std::ptr::null_mut());
 
             let msg = b"hello";
-            let mut buf = WsaBuf {
+            let buf = WsaBuf {
                 len: 5,
                 buf: msg.as_ptr() as *mut u8,
             };
