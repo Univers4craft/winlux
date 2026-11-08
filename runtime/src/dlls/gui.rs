@@ -989,6 +989,9 @@ pub struct DcState {
     pub stretch_mode: i32,
     /// Mode de `SetTextAlign` (TA_LEFT|TA_TOP = 0 par défaut).
     pub text_align: u32,
+    /// DC de l'écran entier (`GetDC(NULL)`), par opposition à un DC
+    /// mémoire, lui aussi sans fenêtre.
+    pub screen: bool,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -1083,9 +1086,30 @@ pub fn create_dc(hwnd: usize) -> usize {
             bitmap: 0,
             stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
             text_align: 0,
+            screen: false,
         },
     );
     hdc
+}
+
+/// DC de l'écran (`GetDC(NULL)`, `GetWindowDC(NULL)`) : dessine comme un DC
+/// sans fenêtre, mais `WindowFromDC` le rattache au bureau.
+pub fn create_screen_dc() -> usize {
+    let hdc = create_dc(0);
+    if let Some(d) = lock(dcs()).get_mut(&hdc) {
+        d.screen = true;
+    }
+    hdc
+}
+
+/// Fenêtre d'un DC au sens de `WindowFromDC` : celle du DC, le bureau pour
+/// un DC d'écran, rien pour un DC mémoire ou inconnu.
+pub fn window_from_dc(hdc: usize) -> usize {
+    match lock(dcs()).get(&hdc) {
+        Some(d) if d.hwnd != 0 => d.hwnd,
+        Some(d) if d.screen => crate::dlls::user32::get_desktop_window(),
+        _ => 0,
+    }
 }
 
 /// Retire un DC (`ReleaseDC`, fin de `BeginPaint`).
@@ -2664,6 +2688,9 @@ pub trait GuiBackend: Send {
     /// Fenêtre possédée (hwndParent d'une fenêtre de premier niveau) : le
     /// gestionnaire la garde au-dessus de sa propriétaire (WM_TRANSIENT_FOR).
     fn set_owner(&mut self, _hwnd: usize, _owner: usize) {}
+    /// Affichage sans activation (SW_SHOWNOACTIVATE, SW_SHOWNA) : le
+    /// gestionnaire ne doit pas lui donner le focus en l'affichant.
+    fn set_no_initial_focus(&mut self, _hwnd: usize) {}
     /// État d'une fenêtre de premier niveau (ShowWindow, WM_SYSCOMMAND) :
     /// WINDOW_NORMAL, WINDOW_MINIMIZED ou WINDOW_MAXIMIZED, demandé au
     /// gestionnaire de fenêtres.
