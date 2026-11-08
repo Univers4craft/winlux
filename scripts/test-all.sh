@@ -132,6 +132,10 @@ step "CoIncrementMTAUsage / CoDecrementMTAUsage (#1147)" cargo test -q -p winlux
 # d'où Process.GetProcesses et le contrôle d'instance unique.
 step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_des_processus_comme_la_lit_dotnet
 
+# SMBIOS brut (#1197) : GetSystemFirmwareTable('RSMB') et
+# EnumSystemFirmwareTables, lus dans les tables du noyau ou leur copie.
+step "GetSystemFirmwareTable 'RSMB' (#1197)" cargo test -q -p winlux -- smbios_brut_depuis_les_tables_du_noyau
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

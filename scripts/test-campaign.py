@@ -1291,4 +1291,9 @@ ok("fn process_information" in (runtime_dlls / "ntdll.rs").read_text()
    and "fn system_processes" in (runtime_dlls / "kernel32_node.rs").read_text()
    and "liste_des_processus_comme_la_lit_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "NtQuerySystemInformation : liste des processus pour .NET, plus de 0xC0000002 (#1162)")
+# #1197 : SMBIOS brut pour GetSystemFirmwareTable (Creative Cloud, Photoshop).
+ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls / "apps_win32.rs").read_text(encoding="utf-8")
+   and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
+   and "smbios_brut_depuis_les_tables_du_noyau" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "GetSystemFirmwareTable / EnumSystemFirmwareTables 'RSMB' : plus de 0xC0000139 (#1197)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
