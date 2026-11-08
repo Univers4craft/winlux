@@ -257,6 +257,15 @@ fn main() {
     }
     let cpu_settings = profiles::apply(&exe);
     if let Some(assembly) = managed::managed_image(&exe, &source) {
+        if managed::is_squirrel_update(&assembly) {
+            log_info!(
+                "managed",
+                "Update.exe de Squirrel : servi par winlux-squirrel-update (#1190)"
+            );
+            let err = managed::exec_squirrel_update(&exe);
+            log_error!("managed", "winlux-squirrel-update introuvable : {err}");
+            std::process::exit(1);
+        }
         log_info!(
             "managed",
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
