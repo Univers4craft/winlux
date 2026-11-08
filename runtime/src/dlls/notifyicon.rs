@@ -365,8 +365,15 @@ fn deliver(line: &str) {
         return;
     };
     if !event.starts_with("balloon") && (x, y) != (0, 0) {
+        // L'assistant donne la position du clic en pixels de l'écran X.
+        // C'est aussi la position du pointeur pour GetCursorPos : Electron
+        // ouvre le menu de l'icône à GetCursorPos, qui rendait le centre de
+        // l'écran tant que la souris n'avait pas survolé une fenêtre Winlux
+        // (#1222).
+        let (lx, ly) = crate::dlls::gui::logical_point(x, y);
+        crate::dlls::gui::set_cursor_screen_pos(lx, ly);
         if let Some(entry) = state().icons.get_mut(&(hwnd, id)) {
-            entry.pos = Some((x, y));
+            entry.pos = Some((lx, ly));
         }
     }
     if event == "rup" {
@@ -508,8 +515,15 @@ pub unsafe extern "win64" fn shell_notify_icon_get_rect(ident: *const u8, out: *
         ((ident.add(8) as *const usize).read_unaligned(), u32_at(16))
     };
     let Some(r) = icon_rect(hwnd, id) else {
+        crate::thunks::api_note(&format!(
+            "Shell_NotifyIconGetRect({hwnd:#x}, {id}) → E_FAIL : icône inconnue (#1222)"
+        ));
         return E_FAIL;
     };
+    crate::thunks::api_note(&format!(
+        "Shell_NotifyIconGetRect({hwnd:#x}, {id}) → S_OK ({}, {}, {}, {}) (#1222)",
+        r.left, r.top, r.right, r.bottom
+    ));
     for (i, v) in [r.left, r.top, r.right, r.bottom].into_iter().enumerate() {
         out.add(i).write_unaligned(v);
     }
@@ -639,6 +653,9 @@ mod tests {
 
     #[test]
     fn rectangle_de_l_icone_pour_get_rect() {
+        let _guard = crate::dlls::gui::CURSOR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut d = IconData {
             hwnd: 0x1191,
             id: 3,
@@ -664,6 +681,15 @@ mod tests {
                 0
             );
             assert_eq!(r, [488, 688, 512, 712]);
+            // #1222 : le clic sur l'icône est aussi la position du pointeur
+            // (Electron place le menu à GetCursorPos).
+            deliver("1191-3\trup\t1690\t1059");
+            assert_eq!(crate::dlls::gui::cursor_screen_pos(), (1690, 1059));
+            assert_eq!(
+                shell_notify_icon_get_rect(ident.as_ptr(), r.as_mut_ptr()),
+                0
+            );
+            assert_eq!(r, [1678, 1047, 1702, 1071]);
             ident[16..20].copy_from_slice(&4u32.to_le_bytes());
             assert_eq!(
                 shell_notify_icon_get_rect(ident.as_ptr(), r.as_mut_ptr()),
