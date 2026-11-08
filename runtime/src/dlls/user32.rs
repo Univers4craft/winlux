@@ -374,6 +374,9 @@ unsafe fn create_window_inner(
             let owner = owner_top_level(parent);
             if owner != 0 {
                 b.set_owner(hwnd, owner);
+                if style & 0x00C0_0000 == 0x00C0_0000 {
+                    b.set_dialog_type(hwnd);
+                }
             }
         }
     });
@@ -1588,7 +1591,14 @@ unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
             lock(user_data_map()).insert((hwnd, index), value);
             let owner = owner_top_level(value as usize);
             if owner != 0 && owner != hwnd {
-                with_backend(|b| b.set_owner(hwnd, owner));
+                let captioned =
+                    gui::window_style(hwnd).is_some_and(|s| s & 0x00C0_0000 == 0x00C0_0000);
+                with_backend(|b| {
+                    b.set_owner(hwnd, owner);
+                    if captioned {
+                        b.set_dialog_type(hwnd);
+                    }
+                });
             }
         }
         _ => {

@@ -1260,6 +1260,10 @@ ok("fn connect_ex" in (runtime_dlls / "ws2_32/overlapped.rs").read_text()
    and "crate::dlls::ws2_32::is_socket(file)" in (runtime_dlls / "kernel32.rs").read_text()
    and "connectex_wsasend_wsarecv_terminent_par_le_port_de_completion" in (SCRIPTS / "test-all.sh").read_text(),
    "Sockets .NET : ConnectEx, E/S OVERLAPPED au port de complétion, plus d'« Erreur Windows 4294967295 » (#1146)")
+ok('name: "mshwgst"' in (runtime_dlls / "mod.rs").read_text()
+   and "gesture_recognizer(data)" in (ROOT / "runtime/src/registry/live.rs").read_text()
+   and "moteur_de_gestes_declare_pour_wpf" in (SCRIPTS / "test-all.sh").read_text(),
+   "WPF InkCanvas : moteur de gestes mshwgst.dll intégré, l'Éditeur de ScreenToGif s'ouvre (#1132)")
 # #1138 : glisser-déposer OLE depuis une liste (FileZilla) : DragDetect,
 # LVN_BEGINDRAG / TVN_BEGINDRAGW, puis dépôt sur la cible OLE sous le pointeur.
 controls_rs = (runtime_dlls / "controls/comctl.rs").read_text(encoding="utf-8")
@@ -1268,4 +1272,8 @@ ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
    and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
    and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
+# #1147 : CoIncrementMTAUsage / CoDecrementMTAUsage (WinRT côté .NET, Flow Launcher).
+ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
+   and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
