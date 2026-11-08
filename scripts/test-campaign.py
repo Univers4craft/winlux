@@ -749,6 +749,19 @@ ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
    and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
+# #931 : rendu matériel de WPF par Direct3D 9 : appareil du modèle récent
+# (CANSHARERESOURCE), shaders vs/ps 2.0 générés compilés par D3DCompile,
+# glyphes posés par UpdateSurface, couleur du texte par BLENDFACTOR ;
+# test-wpf-bonjour.sh vérifie le niveau de rendu 2 et les deux rendus.
+d3d9_src = (runtime_dlls / "d3d9.rs").read_text()
+ok("0xE002_0000" in d3d9_src
+   and "fn copy_rect(" in d3d9_src
+   and "(g.BlendColor)(" in d3d9_src
+   and "fn is_d3d9_profile(" in (runtime_dlls / "d3dcompiler.rs").read_text()
+   and "fn struct_uniform(" in (runtime_dlls / "d3dx9_hlsl.rs").read_text()
+   and "for passe in materiel logiciel" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : rendu matériel Direct3D 9 (niveau 2) et rendu logiciel vérifiés par test-wpf-bonjour.sh")
+
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
 # PC (lien et code pour un autre appareil), claude.exe jamais lancé dans un dossier personnel.

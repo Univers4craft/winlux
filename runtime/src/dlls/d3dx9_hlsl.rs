@@ -4398,7 +4398,25 @@ impl<'p> Gen<'p> {
                     });
                 }
                 Base::Struct(_) => {
-                    return Err(format!("{name} : structure uniforme non prise en charge"));
+                    // Structure uniforme (WPF en génère) : chaque champ
+                    // commence sur un registre, dans l'ordre de déclaration.
+                    if ty.array.is_some() {
+                        return Err(format!("{name} : tableau de structures uniforme"));
+                    }
+                    let count = self.struct_regs(&ty)?;
+                    let first = match reg {
+                        Some(('c', n)) => n,
+                        _ => {
+                            let mut k = 0u32;
+                            while taken_c.iter().any(|&(a, c)| k < a + c && a < k + count) {
+                                k += 1;
+                            }
+                            taken_c.push((k, count));
+                            k
+                        }
+                    };
+                    let v = self.struct_uniform(&name, first, &ty)?;
+                    self.globals.insert(name, (v, ty.clone()));
                 }
                 _ => {
                     let v = match &init {
@@ -4410,6 +4428,63 @@ impl<'p> Gen<'p> {
             }
         }
         Ok(())
+    }
+
+    /// Registres c occupés par une structure uniforme.
+    fn struct_regs(&self, ty: &Ty) -> Result<u32, String> {
+        let elems = ty.array.unwrap_or(1).max(1);
+        let one = match &ty.base {
+            Base::Struct(_) => {
+                let mut n = 0;
+                for f in self.fields_of(ty)? {
+                    n += self.struct_regs(&f.ty)?;
+                }
+                n
+            }
+            Base::Float | Base::Int | Base::Bool => self.regs_per_elem(ty),
+            _ => return Err("champ de structure uniforme non numérique".into()),
+        };
+        Ok(one * elems)
+    }
+
+    /// Valeur d'une structure uniforme placée à partir de c`first` ; chaque
+    /// champ numérique reçoit son entrée dans la table des constantes.
+    fn struct_uniform(&mut self, path: &str, first: u32, ty: &Ty) -> Result<V, String> {
+        let mut at = first;
+        let mut out = Vec::new();
+        for f in self.fields_of(ty)? {
+            let full = format!("{path}.{}", f.name);
+            let n = self.struct_regs(&f.ty)?;
+            let v = if let Base::Struct(_) = f.ty.base {
+                if f.ty.array.is_some() {
+                    return Err(format!("{full} : tableau de structures uniforme"));
+                }
+                self.struct_uniform(&full, at, &f.ty)?
+            } else {
+                let rows_major = f.ty.row_major.unwrap_or(self.row_major);
+                self.ctab.push(CtabEntry {
+                    name: full,
+                    set: 2,
+                    index: at as u16,
+                    count: n as u16,
+                    class: match f.ty.class {
+                        0 => 0,
+                        1 => 1,
+                        _ if rows_major => 2,
+                        _ => 3,
+                    },
+                    ty: type_code(&f.ty),
+                    rows: f.ty.rows as u16,
+                    cols: f.ty.cols as u16,
+                    elements: f.ty.array.unwrap_or(1).max(1) as u16,
+                    default: None,
+                });
+                self.uniform_value(at, &f.ty)
+            };
+            out.push((f.name.clone(), v));
+            at += n;
+        }
+        Ok(V::Struct(out))
     }
 
     /// Valeur par défaut rangée comme dans les registres (4 flottants chacun).
@@ -4468,6 +4543,11 @@ impl<'p> Gen<'p> {
             return Err(format!("{sem} : entrée matricielle non prise en charge"));
         }
         let (usage, idx) = usage_of(sem);
+        if self.pixel && usage == "POSITION" {
+            // Sortie de vertex shader reprise telle quelle en entrée de
+            // pixel shader (WPF le fait) : tolérée tant qu'elle n'est pas lue.
+            return Ok(V::Void);
+        }
         let n = ty.cols;
         let low = usage.to_ascii_lowercase();
         let num = if idx == 0 {
@@ -4984,6 +5064,29 @@ mod tests {
             Ok(c) => c,
             Err(e) => panic!("{e}"),
         }
+    }
+
+    /// Structure uniforme et sortie de vertex shader reprise en entrée de
+    /// pixel shader avec POSITION, comme les shaders générés par WPF (#931).
+    #[test]
+    fn structure_uniforme_et_position_ignoree_en_pixel_shader() {
+        let src = "struct T { float4x4 m; float4 c; };\n\
+                   struct D { T t; float4 k; };\n\
+                   D Data;\n\
+                   struct O { float4 Pos : POSITION; float4 Col : COLOR0; };\n\
+                   O vs(float4 p : POSITION) { O o; o.Pos = mul(p, Data.t.m); o.Col = Data.t.c * Data.k; return o; }\n\
+                   float4 ps(O i) : COLOR { return i.Col; }";
+        let v = ok(src, "vs", "vs_2_0");
+        let names: Vec<(&str, u16, u16)> = v
+            .ctab
+            .iter()
+            .map(|e| (e.name.as_str(), e.index, e.count))
+            .collect();
+        assert!(names.contains(&("Data.t.m", 0, 4)), "{names:?}");
+        assert!(names.contains(&("Data.t.c", 4, 1)), "{names:?}");
+        assert!(names.contains(&("Data.k", 5, 1)), "{names:?}");
+        let p = ok(src, "ps", "ps_2_0");
+        assert_eq!(p.tokens[0], 0xFFFF_0200);
     }
 
     #[test]
