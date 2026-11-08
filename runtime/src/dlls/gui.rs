@@ -637,9 +637,29 @@ pub fn observe_key_message(msg: &Msg) {
         return;
     }
     match msg.message {
-        WM_KEYDOWN => update_thread_key_state(msg.wparam, true),
-        WM_KEYUP => update_thread_key_state(msg.wparam, false),
-        _ => {}
+        WM_KEYDOWN | 0x0104 => update_thread_key_state(msg.wparam, true),
+        WM_KEYUP | 0x0105 => update_thread_key_state(msg.wparam, false),
+        _ => return,
+    }
+    // Windows tient aussi l'état du côté gauche ou droit de Maj, Ctrl et
+    // Alt : Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis (Ctrl+O).
+    if let Some(side) = sided_modifier(msg.wparam, msg.lparam) {
+        update_thread_key_state(side, matches!(msg.message, WM_KEYDOWN | 0x0104));
+    }
+}
+
+/// VK_LSHIFT/VK_RSHIFT, VK_LCONTROL/VK_RCONTROL ou VK_LMENU/VK_RMENU d'un
+/// message clavier portant VK_SHIFT, VK_CONTROL ou VK_MENU. Le côté se lit
+/// dans lParam : code de balayage 0x36 pour Maj droite, bit étendu (24) pour
+/// Ctrl et Alt droits.
+pub fn sided_modifier(vk: usize, lparam: isize) -> Option<usize> {
+    let scan = (lparam >> 16) & 0xFF;
+    let extended = lparam & (1 << 24) != 0;
+    match vk {
+        0x10 => Some(if scan == 0x36 { 0xA1 } else { 0xA0 }),
+        0x11 => Some(if extended { 0xA3 } else { 0xA2 }),
+        0x12 => Some(if extended { 0xA5 } else { 0xA4 }),
+        _ => None,
     }
 }
 
@@ -1588,8 +1608,87 @@ pub fn create_dib_section(
     bit_count: u16,
     top_down: bool,
 ) -> Option<(usize, *mut u8)> {
-    if width <= 0 || height <= 0 || !matches!(bit_count, 24 | 32) {
+    create_dib_section_with_palette(width, height, bit_count, top_down, Vec::new())
+}
+
+/// Tables de couleurs des DIB sections à palette (1, 4 et 8 bits par
+/// pixel), en COLORREF, indexées par l'adresse du tampon de pixels : le
+/// tampon ne bouge jamais tant que la bitmap existe.
+fn dib_palettes() -> &'static Mutex<HashMap<usize, Vec<u32>>> {
+    static P: OnceLock<Mutex<HashMap<usize, Vec<u32>>>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+fn palette_of(bytes: &[u8]) -> Vec<u32> {
+    lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Table de couleurs (COLORREF) de la DIB sélectionnée dans `hdc`, comme
+/// GetDIBColorTable ; vide pour une DIB sans palette.
+pub fn dc_dib_color_table(hdc: usize) -> Vec<u32> {
+    let bitmap = dc_bitmap(hdc);
+    let objects = lock(objects());
+    match objects.get(&bitmap) {
+        Some(GdiObject::Bitmap {
+            dib_bits: Some(bytes),
+            dib_bit_count,
+            ..
+        }) if *dib_bit_count <= 8 => palette_of(bytes),
+        _ => Vec::new(),
+    }
+}
+
+/// Remplace des entrées de la table de couleurs de la DIB sélectionnée
+/// dans `hdc` (SetDIBColorTable) ; rend le nombre d'entrées changées.
+pub fn set_dc_dib_color_table(hdc: usize, start: usize, colors: &[u32]) -> usize {
+    let bitmap = dc_bitmap(hdc);
+    let objects = lock(objects());
+    let Some(GdiObject::Bitmap {
+        dib_bits: Some(bytes),
+        dib_bit_count,
+        ..
+    }) = objects.get(&bitmap)
+    else {
+        return 0;
+    };
+    if *dib_bit_count > 8 {
+        return 0;
+    }
+    let mut palettes = lock(dib_palettes());
+    let Some(table) = palettes.get_mut(&(bytes.as_ptr() as usize)) else {
+        return 0;
+    };
+    let mut n = 0;
+    for (i, &c) in colors.iter().enumerate() {
+        if let Some(slot) = table.get_mut(start + i) {
+            *slot = c & 0x00FF_FFFF;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// DIB section de 1, 4, 8, 16, 24 ou 32 bits par pixel. `palette`
+/// (COLORREF) sert aux formats à palette ; 16 bits est en 5-5-5.
+pub fn create_dib_section_with_palette(
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    top_down: bool,
+    mut palette: Vec<u32>,
+) -> Option<(usize, *mut u8)> {
+    if width <= 0 || height <= 0 || !matches!(bit_count, 1 | 4 | 8 | 16 | 24 | 32) {
         return None;
+    }
+    if bit_count <= 8 {
+        let entries = 1usize << bit_count;
+        if palette.is_empty() && bit_count == 1 {
+            palette = vec![0, 0x00FF_FFFF];
+        }
+        palette.resize(entries, 0);
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
     if pixels > MAX_BITMAP_PIXELS {
@@ -1599,13 +1698,23 @@ pub fn create_dib_section(
     let bytes = stride.checked_mul(height as usize)?;
     let mut dib_bits = vec![0u8; bytes];
     let bits_ptr = dib_bits.as_mut_ptr();
+    {
+        let mut palettes = lock(dib_palettes());
+        if bit_count <= 8 {
+            palettes.insert(bits_ptr as usize, palette.clone());
+        } else {
+            palettes.remove(&(bits_ptr as usize));
+        }
+    }
+    // Pixels de départ : index 0 de la palette, comme le tampon à zéro.
+    let first = palette.first().copied().unwrap_or(0);
     let handle = next_handle(0x0021_0000);
     lock(objects()).insert(
         handle,
         GdiObject::Bitmap {
             width: width as usize,
             height: height as usize,
-            pixels: vec![0; pixels],
+            pixels: vec![first; pixels],
             dib_bits: Some(dib_bits),
             dib_bit_count: bit_count,
             dib_stride: stride,
@@ -1628,8 +1737,11 @@ fn bitmap_color_at(
 ) -> u32 {
     let index = if top_down { y } else { height - 1 - y } * width + x;
     if let Some(bytes) = dib_bits {
-        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let row = if top_down { y } else { height - 1 - y };
+        if dib_bit_count <= 16 {
+            return low_depth_color(bytes, dib_bit_count, row * dib_stride, x);
+        }
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let offset = row * dib_stride + x * bytes_per_pixel;
         let b = bytes[offset] as u32;
         let g = bytes[offset + 1] as u32;
@@ -1638,6 +1750,57 @@ fn bitmap_color_at(
     } else {
         pixels[index]
     }
+}
+
+/// Couleur (COLORREF) d'un pixel d'une DIB de 1, 4, 8 ou 16 bits.
+fn low_depth_color(bytes: &[u8], bit_count: u16, row_start: usize, x: usize) -> u32 {
+    if bit_count == 16 {
+        let o = row_start + x * 2;
+        let v = u16::from_le_bytes([bytes[o], bytes[o + 1]]) as u32;
+        let scale = |c: u32| (c << 3) | (c >> 2);
+        let (r, g, b) = (scale((v >> 10) & 31), scale((v >> 5) & 31), scale(v & 31));
+        return (b << 16) | (g << 8) | r;
+    }
+    let bits = bit_count as usize;
+    let bit = x * bits;
+    let byte = bytes[row_start + bit / 8];
+    let index = (byte >> (8 - bits - bit % 8)) & ((1u16 << bits) - 1) as u8;
+    lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .and_then(|p| p.get(index as usize).copied())
+        .unwrap_or(0)
+}
+
+/// Écrit `color` dans une DIB de 1, 4, 8 ou 16 bits : l'entrée de palette
+/// la plus proche pour les formats à palette.
+fn set_low_depth_color(bytes: &mut [u8], bit_count: u16, row_start: usize, x: usize, color: u32) {
+    if bit_count == 16 {
+        let c = |shift: u32| ((color >> shift) & 0xFF) >> 3;
+        let v = ((c(0) << 10) | (c(8) << 5) | c(16)) as u16;
+        let o = row_start + x * 2;
+        bytes[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        return;
+    }
+    let distance = |p: u32| {
+        let d = |shift: u32| ((p >> shift) & 0xFF) as i32 - ((color >> shift) & 0xFF) as i32;
+        d(0) * d(0) + d(8) * d(8) + d(16) * d(16)
+    };
+    let index = lock(dib_palettes())
+        .get(&(bytes.as_ptr() as usize))
+        .and_then(|table| {
+            table
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &p)| distance(p))
+                .map(|(i, _)| i)
+        })
+        .unwrap_or(0) as u8;
+    let bits = bit_count as usize;
+    let bit = x * bits;
+    let shift = 8 - bits - bit % 8;
+    let mask = (((1u16 << bits) - 1) as u8) << shift;
+    let b = &mut bytes[row_start + bit / 8];
+    *b = (*b & !mask) | ((index << shift) & mask);
 }
 
 fn set_bitmap_color(
@@ -1655,8 +1818,12 @@ fn set_bitmap_color(
     let index = if top_down { y } else { height - 1 - y } * width + x;
     pixels[index] = color;
     if let Some(bytes) = dib_bits {
-        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let row = if top_down { y } else { height - 1 - y };
+        if dib_bit_count <= 16 {
+            set_low_depth_color(bytes, dib_bit_count, row * dib_stride, x, color);
+            return;
+        }
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
         let offset = row * dib_stride + x * bytes_per_pixel;
         bytes[offset] = ((color >> 16) & 0xFF) as u8; // B
         bytes[offset + 1] = ((color >> 8) & 0xFF) as u8; // G
@@ -1684,7 +1851,7 @@ pub fn write_bitmap_row(handle: usize, y: usize, row: &[u32]) -> bool {
         return false;
     };
     let (w, h, bits, stride, td) = (*width, *height, *dib_bit_count, *dib_stride, *top_down);
-    if y >= h || (dib_bits.is_some() && bits < 24) {
+    if y >= h {
         return false;
     }
     for (x, &c) in row.iter().take(w).enumerate() {
@@ -3856,6 +4023,31 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
     })
 }
 
+/// WM_TIMER échu sans réarmer le minuteur (`PeekMessage(PM_NOREMOVE)`) :
+/// Windows le montre aussi, et WinForms n'appelle GetMessage qu'après l'avoir
+/// vu par ce moyen.
+pub fn peek_due_timer(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
+    const WM_TIMER: u32 = 0x0113;
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_TIMER) {
+        return None;
+    }
+    let now = crate::dlls::kernel32::get_tick_count64();
+    let tid = std::thread::current().id();
+    let t = lock(timers());
+    let e = t
+        .iter()
+        .find(|e| e.owner == tid && (hwnd == 0 || e.hwnd == hwnd) && now >= e.next_fire)?;
+    Some(Msg {
+        hwnd: e.hwnd,
+        message: WM_TIMER,
+        wparam: e.id,
+        lparam: e.callback as isize,
+        time: now as u32,
+        pt: Point::default(),
+        l_private: 0,
+    })
+}
+
 /// Millisecondes avant le prochain minuteur du thread appelant (pour borner
 /// l'attente).
 pub fn next_timer_ms(hwnd: usize) -> Option<u32> {
@@ -4154,6 +4346,27 @@ mod tests {
         assert_eq!(mouse_button_transition(0x020B, 2 << 16), Some((6, true)));
         assert_eq!(mouse_button_transition(0x0204, 2), Some((2, true)));
         assert_eq!(mouse_button_transition(0x0200, 0), None);
+    }
+
+    /// Qt lit GetKeyState(VK_LCONTROL…) pour ses raccourcis : Ctrl+O sans
+    /// côté gauche/droit restait une simple frappe de « o ».
+    #[test]
+    fn modificateurs_gauche_et_droit_suivis() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let gauche = 0x1D << 16;
+        let droite = (0x1D << 16) | (1 << 24);
+        observe_key_message(&Msg::new(0, WM_KEYDOWN, 0x11, gauche));
+        assert!(get_key_state(0x11) < 0 && get_key_state(0xA2) < 0);
+        assert!(get_key_state(0xA3) >= 0);
+        observe_key_message(&Msg::new(0, WM_KEYUP, 0x11, gauche));
+        assert!(get_key_state(0x11) >= 0 && get_key_state(0xA2) >= 0);
+        observe_key_message(&Msg::new(0, 0x0104, 0x12, droite));
+        assert!(get_key_state(0xA5) < 0);
+        observe_key_message(&Msg::new(0, 0x0105, 0x12, droite));
+        assert!(get_key_state(0xA5) >= 0 && get_key_state(0x12) >= 0);
+        assert_eq!(sided_modifier(0x10, 0x36 << 16), Some(0xA1));
+        assert_eq!(sided_modifier(0x10, 0x2A << 16), Some(0xA0));
+        assert_eq!(sided_modifier(0x41, 0), None);
     }
 
     #[test]

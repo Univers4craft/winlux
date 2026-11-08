@@ -362,6 +362,10 @@ unsafe fn create_window_common(
         forget_window_longs(hwnd);
         return 0;
     }
+    // Procédure actuelle de la fenêtre, pas celle de la classe : WinForms
+    // sous-classe la fenêtre (SetWindowLongPtr(GWLP_WNDPROC)) dès le
+    // premier message et refuse d'en recevoir un second par la procédure de
+    // classe (« Le handle de fenêtre existe déjà », #666).
     let created = crate::dlls::gui::call_wndproc(
         current_proc(),
         hwnd,
@@ -640,11 +644,14 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
     // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
     // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
     // vide sa file par PeekMessage tournerait sans fin (PuTTY).
-    if remove & 0x1 != 0 {
-        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
-            write_msg(out, &m);
-            return 1;
-        }
+    let timer = if remove & 0x1 != 0 {
+        gui::due_timer(hwnd, min, max, false)
+    } else {
+        gui::peek_due_timer(hwnd, min, max)
+    };
+    if let Some(m) = timer {
+        write_msg(out, &m);
+        return 1;
     }
     0
 }
@@ -1583,6 +1590,17 @@ pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_co
         crate::process::set_last_error(1400);
         0
     }
+}
+
+/// RealGetWindowClass : le type de fenêtre. Winlux ne superclasse pas les
+/// contrôles prédéfinis, donc c'est le nom de classe, comme GetClassName.
+/// Le sélecteur de fichiers de Qt (VLC) l'appelle à la fermeture.
+pub unsafe extern "win64" fn real_get_window_class_w(hwnd: usize, buf: *mut u16, max: u32) -> u32 {
+    get_class_name_w(hwnd, buf, max.min(i32::MAX as u32) as i32) as u32
+}
+
+pub unsafe extern "win64" fn real_get_window_class_a(hwnd: usize, buf: *mut u8, max: u32) -> u32 {
+    get_class_name_a(hwnd, buf, max.min(i32::MAX as u32) as i32) as u32
 }
 
 /// Remplit un WNDCLASSEX (A ou W, même disposition en x64) pour la classe
@@ -3091,8 +3109,31 @@ pub extern "win64" fn in_send_message() -> i32 {
     0
 }
 
+/// `WaitMessage` : dort jusqu'à ce qu'un message, un WM_PAINT ou un
+/// minuteur soit disponible. Répondre tout de suite faisait tourner à 100 %
+/// la boucle `PeekMessage(PM_NOREMOVE)` / `WaitMessage` de WinForms.
 pub extern "win64" fn wait_message() -> i32 {
-    1
+    loop {
+        gui::pump_backend();
+        super::ws2_32::pump_async();
+        let q = gui::current_queue();
+        if gui::peek_message(&q, 0, 0, 0).is_some()
+            || gui::pending_paint(0, 0, 0).is_some()
+            || gui::peek_due_timer(0, 0, 0).is_some()
+        {
+            return 1;
+        }
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(0).map_or(cap, |ms| ms.min(cap));
+        if !gui::wait_backend(wait) {
+            // Sans affichage, rien ne viendra : rendre la main.
+            return 1;
+        }
+    }
 }
 
 pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
@@ -3595,6 +3636,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
+        "RealGetWindowClassA"=>fn real_get_window_class_a, "RealGetWindowClassW"=>fn real_get_window_class_w,
         "GetClassInfoExA"=>fn get_class_info_ex_a, "GetClassInfoExW"=>fn get_class_info_ex_w,
         // --- Window text ---
         "SetWindowTextA"=>fn set_window_text_a, "SetWindowTextW"=>fn set_window_text_w,
@@ -4199,6 +4241,41 @@ mod tests_messages {
     }
 
     #[test]
+    fn real_get_window_class_rend_le_nom_de_classe() {
+        unsafe {
+            let class: Vec<u16> = "BUTTON\0".encode_utf16().collect();
+            let hwnd = create_window_ex_w(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(hwnd, 0);
+            let mut buf = [0u16; 32];
+            let n = real_get_window_class_w(hwnd, buf.as_mut_ptr(), 32);
+            assert_eq!(
+                String::from_utf16_lossy(&buf[..n as usize]).to_ascii_uppercase(),
+                "BUTTON"
+            );
+            let mut a = [0u8; 32];
+            assert_eq!(real_get_window_class_a(hwnd, a.as_mut_ptr(), 32), n);
+            assert_eq!(
+                real_get_window_class_w(0x7777_0000, buf.as_mut_ptr(), 32),
+                0
+            );
+            destroy_window(hwnd);
+        }
+    }
+
+    #[test]
     fn crochet_getmessage_voit_chaque_message_retire() {
         // Qt 5 relance ses événements différés depuis ce crochet (#938).
         unsafe {
@@ -4223,5 +4300,41 @@ mod tests_messages {
             assert_eq!(VUS.with(|v| v.borrow().len()), 4);
             drop(q);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_winforms {
+    use super::*;
+
+    #[test]
+    fn messages_enregistres_distincts_et_stables() {
+        let w = |s: &str| {
+            let v: Vec<u16> = s.encode_utf16().chain([0]).collect();
+            unsafe { register_window_message_w(v.as_ptr()) }
+        };
+        let a = w("WinFormsUnSubclass");
+        let b = w("WindowsForms12_ThreadCallbackMessage");
+        assert!((0xC000..=0xFFFF).contains(&a) && (0xC000..=0xFFFF).contains(&b));
+        assert_ne!(a, b, "deux noms, deux messages");
+        assert_eq!(a, w("winformsunsubclass"), "sans casse");
+        assert_eq!(a, unsafe {
+            register_window_message_a(c"WinFormsUnSubclass".as_ptr().cast())
+        });
+        assert_eq!(w(""), 0);
+    }
+
+    #[test]
+    fn get_class_info_ex_classe_predefinie_et_inconnue() {
+        let mut wc = [0u8; 80];
+        wc[..4].copy_from_slice(&80u32.to_le_bytes());
+        let name: Vec<u16> = "BUTTON".encode_utf16().chain([0]).collect();
+        let atom = unsafe { get_class_info_ex_w(0, name.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_ne!(atom, 0);
+        let proc_ = usize::from_le_bytes(wc[8..16].try_into().unwrap());
+        assert_ne!(proc_, 0, "lpfnWndProc rempli");
+        let unknown: Vec<u16> = "PasUneClasse_269".encode_utf16().chain([0]).collect();
+        let r = unsafe { get_class_info_ex_w(0, unknown.as_ptr(), wc.as_mut_ptr().cast()) };
+        assert_eq!(r, 0);
     }
 }

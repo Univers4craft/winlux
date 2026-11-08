@@ -653,35 +653,8 @@ pub unsafe extern "win64" fn QueueUserWorkItem(func: usize, context: usize, _fla
     1
 }
 
-// ---- Objets job -------------------------------------------------------------
-
-/// Les objets job (libuv en crée un pour tuer ses enfants à sa sortie)
-/// sont acceptés sans effet : sous Linux, chaque enfant reste attaché à
-/// son groupe de processus et Winlux le termine avec la session.
-static NEXT_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x4A4F_0000);
-static JOBS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
-pub unsafe extern "win64" fn CreateJobObjectW(_sa: usize, _name: *const u16) -> usize {
-    let job = NEXT_JOB.fetch_add(4, Ordering::Relaxed);
-    crate::dlls::lock(&JOBS).push(job);
-    job
-}
-/// CloseHandle d'un objet Job : doit réussir, Chromium vérifie la fermeture
-/// de chaque poignée (CHECK de ScopedHandle, #767).
-pub(crate) fn close_job(h: usize) -> bool {
-    let mut jobs = crate::dlls::lock(&JOBS);
-    let before = jobs.len();
-    jobs.retain(|&j| j != h);
-    jobs.len() != before
-}
-pub unsafe extern "win64" fn job_ok2(_a: usize, _b: usize) -> i32 {
-    1
-}
-pub unsafe extern "win64" fn SetInformationJobObject(
-    _job: usize,
-    _class: u32,
-    _info: usize,
-    _len: u32,
-) -> i32 {
+/// FindVolumeClose : la recherche de volumes n'a rien à libérer.
+pub unsafe extern "win64" fn find_volume_close(_find: usize) -> i32 {
     1
 }
 
@@ -915,10 +888,6 @@ pub unsafe extern "win64" fn GetNamedPipeProcessId(_pipe: usize, pid: *mut u32) 
 pub unsafe extern "win64" fn fail_not_supported() -> i32 {
     crate::process::set_last_error(50);
     0
-}
-pub unsafe extern "win64" fn fail_suspend() -> u32 {
-    crate::process::set_last_error(50);
-    u32::MAX
 }
 pub unsafe extern "win64" fn fail_no_more_files() -> usize {
     crate::process::set_last_error(18);
@@ -1251,10 +1220,10 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "UnregisterWait" => fn UnregisterWait,
         "UnregisterWaitEx" => fn UnregisterWaitEx,
         "QueueUserWorkItem" => fn QueueUserWorkItem,
-        "CreateJobObjectW" => fn CreateJobObjectW,
-        "CreateJobObjectA" => fn CreateJobObjectW,
-        "AssignProcessToJobObject" => fn job_ok2,
-        "SetInformationJobObject" => fn SetInformationJobObject,
+        "CreateJobObjectW" => fn super::jobs::create_job_object_w,
+        "CreateJobObjectA" => fn super::jobs::create_job_object_a,
+        "AssignProcessToJobObject" => fn super::jobs::assign_process_to_job_object,
+        "SetInformationJobObject" => fn super::jobs::set_information_job_object,
         "ProcessIdToSessionId" => fn ProcessIdToSessionId,
         "K32GetProcessMemoryInfo" => fn K32GetProcessMemoryInfo,
         "GetProcessMemoryInfo" => fn K32GetProcessMemoryInfo,
@@ -1279,14 +1248,14 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "OpenFileById" => fn fail_no_more_files,
         "FindFirstVolumeW" => fn fail_no_more_files,
         "FindNextVolumeW" => fn fail_not_supported,
-        "FindVolumeClose" => fn job_ok2,
+        "FindVolumeClose" => fn find_volume_close,
         "QueryDosDeviceW" => fn fail_not_supported,
         "WaitNamedPipeW" => fn crate::dlls::named_pipes::wait_named_pipe_w,
         "Thread32First" => fn fail_not_supported,
         "Thread32Next" => fn fail_not_supported,
-        "OpenThread" => fn fail_not_supported,
-        "SuspendThread" => fn fail_suspend,
-        "GetThreadContext" => fn fail_not_supported,
+        "OpenThread" => fn crate::dlls::kernel32::open_thread,
+        "SuspendThread" => fn crate::dlls::kernel32::suspend_thread,
+        "GetThreadContext" => fn crate::dlls::kernel32::get_thread_context,
         "BeginUpdateResourceW" => fn fail_not_supported,
         "UpdateResourceW" => fn fail_not_supported,
         "EndUpdateResourceW" => fn fail_not_supported,

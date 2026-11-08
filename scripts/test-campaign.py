@@ -407,6 +407,8 @@ ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"a
 ok('"-stream_name"' in (ROOT / "runtime/src/dlls/winlux_media.rs").read_text()
    and '"Lecteur multimédia"' in (ROOT / "runtime/src/audio/backend.rs").read_text(),
    "mélangeur : le son du lecteur s'appelle « Lecteur multimédia », plus « Lavf… » de ffmpeg (#1010)")
+ok("WinluxMediaControl(SESSION, 2, volume)" in (ROOT / "testexe/src/shell/mediaplayer.rs").read_text(),
+   "lecteur : pause et volume sans fermer le flux audio, plus de trou ni de clic (#1013)")
 
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
@@ -753,6 +755,19 @@ ok("create_glyph_run_analysis" in (runtime_dlls / "dwrite.rs").read_text()
    and "#DDDDDD" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "WPF : texte DirectWrite et thème Aero2, rendu du bouton vérifié par test-wpf-bonjour.sh")
 
+# #931 : rendu matériel de WPF par Direct3D 9 : appareil du modèle récent
+# (CANSHARERESOURCE), shaders vs/ps 2.0 générés compilés par D3DCompile,
+# glyphes posés par UpdateSurface, couleur du texte par BLENDFACTOR ;
+# test-wpf-bonjour.sh vérifie le niveau de rendu 2 et les deux rendus.
+d3d9_src = (runtime_dlls / "d3d9.rs").read_text()
+ok("0xE002_0000" in d3d9_src
+   and "fn copy_rect(" in d3d9_src
+   and "(g.BlendColor)(" in d3d9_src
+   and "fn is_d3d9_profile(" in (runtime_dlls / "d3dcompiler.rs").read_text()
+   and "fn struct_uniform(" in (runtime_dlls / "d3dx9_hlsl.rs").read_text()
+   and "for passe in materiel logiciel" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
+   "WPF : rendu matériel Direct3D 9 (niveau 2) et rendu logiciel vérifiés par test-wpf-bonjour.sh")
+
 # #910-#913 : Assistant IA. Une fenêtre d'activation par assistant, llama.cpp, Qwen et Codex
 # à des révisions figées avec leur empreinte, connexion sans navigateur sur ce
 # PC (lien et code pour un autre appareil), claude.exe jamais lancé dans un dossier personnel.
@@ -784,6 +799,13 @@ ok("struct ImageFile" in loader_source and "fn map_pages" in loader_source
    and "scripts/test-image-memory.py" in (ROOT / ".github/workflows/ci.yml").read_text()
    and (ROOT / "docs/compat/memoire-au-lancement.md").exists(),
    "claude.exe : image projetée sans copie du fichier, connexion tuée faute de mémoire dite clairement (#997)")
+# #1019 : un simple nom de DLL (LoadLibraryExW + SEARCH_SYSTEM32, CRT MSVC) n'est
+# plus un chemin relatif au dossier courant : claude.exe lancé du Bureau attendait
+# la demande « fichiers personnels » avant son main.
+ok("let is_path = value.contains(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and (ROOT / "testexe/src/bin/loadlib_search.rs").exists()
+   and "test-loadlibrary-personal-cwd.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "LoadLibraryExW d'une DLL système depuis le Bureau sans demande d'autorisation (#1019)")
 # #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
 ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
    "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")
@@ -807,6 +829,11 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
+ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
+   and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
 # #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
 ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
    and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
@@ -828,6 +855,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
    "Rechercher/Remplacer : boîte non modale, FINDMSGSTRING au propriétaire, x86 et crochet (#712)")
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
+
+# #19 : objets job (KILL_ON_JOB_CLOSE, TerminateJobObject, enfants rattachés).
+_jobs = (ROOT / "runtime/src/dlls/jobs.rs").read_text()
+ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object_et_liste_des_pid" in _jobs
+   and "jobs::on_child_created(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
 
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
@@ -904,6 +938,29 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
+ok((SCRIPTS / "test-paintnet-d2d.py").exists()
+   and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and "uianimation::create_builtin" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(),
+   "Paint.NET : Direct2D 1.1, effets personnalisés et gestionnaire d'animations (#561)")
+# #269 : applis .NET autonomes et WinForms. Le ramasse-miettes de coreclr
+# suspend ses threads et lit leur contexte ; WaitMessage dort au lieu de
+# tourner à 100 % ; une exception non gérée affiche le message .NET, pas
+# « Stack overflow. » (page de garde de la pile).
+ok((runtime_dlls / "thread_ctl.rs").exists()
+   and '"SuspendThread" => fn crate::dlls::kernel32::suspend_thread' in (runtime_dlls / "kernel32_node.rs").read_text()
+   and '"SetThreadContext" => fn crate::dlls::kernel32::set_thread_context' in (runtime_dlls / "games_win32.rs").read_text()
+   and "fn stack_region(" in (runtime_dlls / "kernel32.rs").read_text()
+   and (runtime_dlls / "write_watch.rs").exists()
+   and '"GetWriteWatch"=>fn crate::dlls::write_watch::get_write_watch' in (runtime_dlls / "kernel32.rs").read_text()
+   and "fn wait_message() -> i32 {\n    loop {" in (runtime_dlls / "user32.rs").read_text()
+   and "fn peek_due_timer(" in (runtime_dlls / "gui.rs").read_text()
+   and "raise_exception_export()" in (runtime_dlls / "seh.rs").read_text()
+   and '"CoRegisterMessageFilter"' in (runtime_dlls / "ole32.rs").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-mingw.sh").read_text()
+   and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
+   ".NET autonome et WinForms : suspension de threads, contexte, WaitMessage, page de garde de pile")
+
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
 ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
@@ -916,6 +973,14 @@ ok("def display_policy" in settings_source and "display_policy(screens)" in sett
    and "Jamais de menu vide (#998)" in settings_source
    and "menu vide en" in (SCRIPTS / "test-settings-redesign.py").read_text(),
    "Paramètres : menus Écran et Alimentation jamais vides (#998)")
+# ── Débordement de pile (#15) : rattrapé sur le thread principal, et sinon
+# rapport EXCEPTION_STACK_OVERFLOW (0xC00000FD) au lieu d'une faute dans Winlux.
+ok("fn resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh.rs").read_text()
+   and "resume_on_exhausted_stack" in (ROOT / "runtime/src/dlls/seh_hw.rs").read_text()
+   and "reported == 0xC000_00FD" in (ROOT / "runtime/src/quality.rs").read_text()
+   and "t_main_overflow" in (ROOT / "testc/msvc/hwexc_msvc.c").read_text()
+   and "overflow-thread" in (SCRIPTS / "test-hw-exceptions.sh").read_text(),
+   "débordement de pile : rattrapé sur tout thread, sinon rapport EXCEPTION_STACK_OVERFLOW (#15)")
 
 # Mise à jour : GitHub en 5xx annoncé comme tel et en 30 s au plus (#1007), liste de
 # pause remise à zéro après la reprise (#1008), vrai pluriel des semaines (#1009).
@@ -928,4 +993,10 @@ ok('self.pause_combo.set_active_id("")' in update_page and "(#1008)" in update_t
    "Mise à jour : liste de pause revenue à « Choisir une durée » après la reprise (#1008)")
 ok("semaine(s)" not in update_page and "def weeks_text" in update_page and "(#1009)" in update_test,
    "Mise à jour : « 1 semaine », « 2 semaines » dans les quatre langues (#1009)")
+# Paramètres : un nom de page a la même traduction en barre latérale, en titre,
+# dans la recherche du menu Démarrer et chez l'assistant (#1039).
+translation_test = (SCRIPTS / "test-translation-keys.py").read_text(encoding="utf-8")
+ok("def inconsistent_page_names" in translation_test and "#1039" in translation_test
+   and "'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir'" in (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8"),
+   "Paramètres : noms de page traduits pareil partout, quatre langues (#1039)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

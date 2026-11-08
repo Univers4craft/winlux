@@ -13,6 +13,10 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
+#[path = "d2d1_shader.rs"]
+pub(crate) mod d2d_shader;
+#[path = "d3d11_ext.rs"]
+mod ext;
 #[path = "d3d11_pipeline.rs"]
 mod pipeline;
 
@@ -44,6 +48,12 @@ const IID_ID3D11_DEVICE_CONTEXT: Guid = Guid {
     data2: 0xe089,
     data3: 0x44fb,
     data4: [0x8e, 0xaf, 0x26, 0xf8, 0x79, 0x61, 0x90, 0xda],
+};
+const IID_ID3D11_DEVICE_CHILD: Guid = Guid {
+    data1: 0x1841e5c8,
+    data2: 0x16b0,
+    data3: 0x489b,
+    data4: [0xbc, 0xc8, 0x44, 0xcf, 0xb0, 0xd5, 0xde, 0xae],
 };
 const IID_ID3D11_TEXTURE2D: Guid = Guid {
     data1: 0x6f15aaf2,
@@ -261,12 +271,17 @@ impl Texture2D {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_TEXTURE2D {
+        // ID3D11Resource (dc8e63f3) et ID3D11DeviceChild en sont la base.
+        if *riid == IID_IUNKNOWN
+            || *riid == IID_ID3D11_TEXTURE2D
+            || *riid == IID_ID3D11_DEVICE_CHILD
+            || riid.data1 == 0xdc8e_63f3
+        {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("d3d11", riid);
+        crate::dlls::comobj::log_no_interface("d3d11 (texture 2D)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -276,6 +291,7 @@ impl Texture2D {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let t = Box::from_raw(this);
             if t.owns_texture && t.gl_texture != 0 {
                 if let Some(g) = gl_here() {
@@ -288,23 +304,27 @@ impl Texture2D {
     }
     unsafe extern "win64" fn get_device(_this: *mut Self, _out: *mut *mut c_void) {}
     unsafe extern "win64" fn get_priv(
-        _: *mut Self,
-        _: *const Guid,
-        _: *mut u32,
-        _: *mut c_void,
+        this: *mut Self,
+        g: *const Guid,
+        size: *mut u32,
+        data: *mut c_void,
     ) -> i32 {
-        E_NOTIMPL
+        unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
     }
     unsafe extern "win64" fn set_priv(
-        _: *mut Self,
-        _: *const Guid,
-        _: u32,
-        _: *const c_void,
+        this: *mut Self,
+        g: *const Guid,
+        size: u32,
+        data: *const c_void,
     ) -> i32 {
-        S_OK
+        unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
     }
-    unsafe extern "win64" fn set_priv_iface(_: *mut Self, _: *const Guid, _: *const c_void) -> i32 {
-        S_OK
+    unsafe extern "win64" fn set_priv_iface(
+        this: *mut Self,
+        g: *const Guid,
+        iface: *const c_void,
+    ) -> i32 {
+        unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
     }
     unsafe extern "win64" fn get_type(_: *mut Self, out: *mut u32) {
         if !out.is_null() {
@@ -640,7 +660,7 @@ impl Buffer {
             *out = this as *mut c_void;
             return S_OK;
         }
-        crate::dlls::comobj::log_no_interface("d3d11", riid);
+        crate::dlls::comobj::log_no_interface("d3d11 (tampon)", riid);
         *out = std::ptr::null_mut();
         E_NOINTERFACE
     }
@@ -650,6 +670,7 @@ impl Buffer {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             let b = Box::from_raw(this);
             if b.gl_buffer != 0 {
                 if let Some(g) = gl_here() {
@@ -662,23 +683,27 @@ impl Buffer {
     }
     unsafe extern "win64" fn get_device(_: *mut Self, _: *mut *mut c_void) {}
     unsafe extern "win64" fn get_priv(
-        _: *mut Self,
-        _: *const Guid,
-        _: *mut u32,
-        _: *mut c_void,
+        this: *mut Self,
+        g: *const Guid,
+        size: *mut u32,
+        data: *mut c_void,
     ) -> i32 {
-        E_NOTIMPL
+        unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
     }
     unsafe extern "win64" fn set_priv(
-        _: *mut Self,
-        _: *const Guid,
-        _: u32,
-        _: *const c_void,
+        this: *mut Self,
+        g: *const Guid,
+        size: u32,
+        data: *const c_void,
     ) -> i32 {
-        S_OK
+        unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
     }
-    unsafe extern "win64" fn set_priv_iface(_: *mut Self, _: *const Guid, _: *const c_void) -> i32 {
-        S_OK
+    unsafe extern "win64" fn set_priv_iface(
+        this: *mut Self,
+        g: *const Guid,
+        iface: *const c_void,
+    ) -> i32 {
+        unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
     }
     unsafe extern "win64" fn get_type(_: *mut Self, out: *mut u32) {
         if !out.is_null() {
@@ -808,30 +833,27 @@ unsafe extern "win64" fn child_get_device(_: *mut SimpleComObj, out: *mut *mut c
     }
 }
 unsafe extern "win64" fn child_get_private_data(
-    _: *mut SimpleComObj,
-    _: *const Guid,
+    this: *mut SimpleComObj,
+    g: *const Guid,
     size: *mut u32,
-    _: *mut c_void,
+    data: *mut c_void,
 ) -> i32 {
-    if !size.is_null() {
-        unsafe { *size = 0 };
-    }
-    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn child_set_private_data(
-    _: *mut SimpleComObj,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut SimpleComObj,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn child_set_private_data_interface(
-    _: *mut SimpleComObj,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut SimpleComObj,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 /// États et shaders : GetDesc (7) n'est pas rempli (taille inconnue ici).
 unsafe extern "win64" fn child_get_resource_or_desc(_: *mut SimpleComObj, _: *mut *mut c_void) {}
@@ -989,6 +1011,7 @@ impl SimpleComObj {
     unsafe extern "win64" fn release(this: *mut Self) -> u32 {
         let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
         if prev == 1 {
+            crate::dlls::dxgi_private::forget(this as *const c_void);
             pipeline::forget(this.cast(), (*this).gl_id);
             let obj = Box::from_raw(this);
             // Vue de ressource : sa glTextureView lui appartient.
@@ -1736,6 +1759,8 @@ struct DeviceContextVTable {
     get_type_ctx: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 112
     get_context_flags: unsafe extern "win64" fn(*mut DeviceContext) -> u32, // 113
     finish_command_list: unsafe extern "win64" fn(*mut DeviceContext, i32, *mut *mut c_void) -> i32, // 114
+    /// ID3D11DeviceContext1 à 4 (115-148).
+    ext: ext::ContextExt,
 }
 
 #[repr(C)]
@@ -1743,6 +1768,8 @@ pub(crate) struct DeviceContext {
     vtable: *const DeviceContextVTable,
     ref_count: AtomicU32,
     state: Mutex<DeviceContextState>,
+    /// Appareil qui a créé ce contexte (sans référence : il vit plus longtemps).
+    device: std::sync::atomic::AtomicPtr<Device>,
 }
 
 unsafe impl Send for DeviceContext {}
@@ -1758,12 +1785,24 @@ unsafe extern "win64" fn ctx_qi(
         return E_INVALIDARG;
     }
     let riid = &*riid;
-    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE_CONTEXT {
+    if *riid == IID_IUNKNOWN
+        || *riid == IID_ID3D11_DEVICE_CONTEXT
+        || *riid == IID_ID3D11_DEVICE_CHILD
+        || ext::is_context_n_iid(riid)
+    {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
         return S_OK;
     }
-    crate::dlls::comobj::log_no_interface("d3d11", riid);
+    // ID3D10Multithread se demande aussi au contexte immédiat.
+    let dev = (*this).device.load(Ordering::Acquire);
+    if *riid == ext::IID_MULTITHREAD && !dev.is_null() {
+        return dev_qi(dev, riid, out);
+    }
+    if *riid == ext::IID_ANNOTATION {
+        return ext::annotation_for(this, out);
+    }
+    crate::dlls::comobj::log_no_interface("d3d11 (contexte)", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
@@ -1773,34 +1812,44 @@ unsafe extern "win64" fn ctx_addref(this: *mut DeviceContext) -> u32 {
 unsafe extern "win64" fn ctx_release(this: *mut DeviceContext) -> u32 {
     let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
     if prev == 1 {
+        crate::dlls::dxgi_private::forget(this as *const c_void);
         let _ = Box::from_raw(this);
         return 0;
     }
     prev - 1
 }
-unsafe extern "win64" fn ctx_get_device(_: *mut DeviceContext, _: *mut *mut c_void) {}
+unsafe extern "win64" fn ctx_get_device(this: *mut DeviceContext, out: *mut *mut c_void) {
+    if out.is_null() {
+        return;
+    }
+    let dev = (*this).device.load(Ordering::Acquire);
+    if !dev.is_null() {
+        dev_addref(dev);
+    }
+    *out = dev.cast();
+}
 unsafe extern "win64" fn ctx_get_priv(
-    _: *mut DeviceContext,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut DeviceContext,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn ctx_set_priv(
-    _: *mut DeviceContext,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DeviceContext,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn ctx_set_priv_iface(
-    _: *mut DeviceContext,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut DeviceContext,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 
 // Stubs for unimplemented methods
@@ -2023,7 +2072,7 @@ unsafe extern "win64" fn ctx_get_flags(_: *mut DeviceContext) -> u32 {
     0
 }
 unsafe extern "win64" fn ctx_finish_cl(_: *mut DeviceContext, _: i32, _: *mut *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11DeviceContext::FinishCommandList")
 }
 unsafe extern "win64" fn ctx_noop_copy_struct(
     _: *mut DeviceContext,
@@ -3076,6 +3125,7 @@ static DEVICE_CONTEXT_VTABLE: DeviceContextVTable = DeviceContextVTable {
     get_type_ctx: ctx_get_type,
     get_context_flags: ctx_get_flags,
     finish_command_list: ctx_finish_cl,
+    ext: ext::CONTEXT_EXT,
 };
 
 fn create_device_context() -> *mut DeviceContext {
@@ -3083,6 +3133,7 @@ fn create_device_context() -> *mut DeviceContext {
         vtable: &DEVICE_CONTEXT_VTABLE,
         ref_count: AtomicU32::new(1),
         state: Mutex::new(DeviceContextState::default()),
+        device: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
     }))
 }
 
@@ -3232,6 +3283,8 @@ struct DeviceVTable {
     get_immediate_context: unsafe extern "win64" fn(*mut Device, *mut *mut c_void),
     set_exception_mode: unsafe extern "win64" fn(*mut Device, u32) -> i32,
     get_exception_mode: unsafe extern "win64" fn(*mut Device) -> u32,
+    /// ID3D11Device1 à 5 (43-68).
+    ext: ext::DeviceExt,
 }
 
 #[repr(C)]
@@ -3240,7 +3293,10 @@ struct Device {
     ref_count: AtomicU32,
     context: *mut DeviceContext,
     feature_level: u32,
+    /// D3D11_CREATE_DEVICE_FLAG passés à la création (GetCreationFlags).
+    flags: u32,
     dxgi: DxgiDevice,
+    multithread: ext::Multithread,
 }
 
 unsafe impl Send for Device {}
@@ -3284,6 +3340,11 @@ struct DxgiDeviceVTable {
         unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, *mut i32) -> i32,
     enqueue_set_event: unsafe extern "win64" fn(*mut DxgiDevice, usize) -> i32,
     trim: unsafe extern "win64" fn(*mut DxgiDevice),
+    // IDXGIDevice4
+    offer_resources1:
+        unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, u32, u32) -> i32,
+    reclaim_resources1:
+        unsafe extern "win64" fn(*mut DxgiDevice, u32, *const *mut c_void, *mut u32) -> i32,
 }
 
 #[repr(C)]
@@ -3293,9 +3354,10 @@ struct DxgiDevice {
     frame_latency: AtomicU32,
 }
 
-/// IDXGIDevice, 1, 2, 3 et IDXGIObject, reconnus par leur premier mot.
+/// IDXGIDevice, 1, 2, 3, 4 et IDXGIObject, reconnus par leur premier mot.
 fn is_dxgi_device_iid(riid: &Guid) -> bool {
     [
+        0x95b4_f95f,
         0x54ec_77fa,
         0x77db_970f,
         0x0500_8617,
@@ -3318,31 +3380,29 @@ unsafe extern "win64" fn dxdev_addref(this: *mut DxgiDevice) -> u32 {
 unsafe extern "win64" fn dxdev_release(this: *mut DxgiDevice) -> u32 {
     unsafe { dev_release((*this).owner) }
 }
+// Données privées partagées avec l'appareil D3D11 : c'est le même objet.
 unsafe extern "win64" fn dxdev_set_priv(
-    _: *mut DxgiDevice,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut DxgiDevice,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set((*this).owner as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn dxdev_set_priv_if(
-    _: *mut DxgiDevice,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut DxgiDevice,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface((*this).owner as *const c_void, g, iface) }
 }
 unsafe extern "win64" fn dxdev_get_priv(
-    _: *mut DxgiDevice,
-    _: *const Guid,
+    this: *mut DxgiDevice,
+    g: *const Guid,
     size: *mut u32,
-    _: *mut c_void,
+    data: *mut c_void,
 ) -> i32 {
-    if !size.is_null() {
-        unsafe { *size = 0 };
-    }
-    0x887a_0002u32 as i32 // DXGI_ERROR_NOT_FOUND
+    unsafe { crate::dlls::dxgi_private::get((*this).owner as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn dxdev_get_adapter(_: *mut DxgiDevice, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
@@ -3378,7 +3438,7 @@ unsafe extern "win64" fn dxdev_create_surface(
     if !out.is_null() {
         unsafe { *out = std::ptr::null_mut() };
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("IDXGIDevice::CreateSurface")
 }
 unsafe extern "win64" fn dxdev_residency(
     _: *mut DxgiDevice,
@@ -3457,6 +3517,29 @@ unsafe extern "win64" fn dxdev_enqueue_set_event(_: *mut DxgiDevice, event: usiz
     S_OK
 }
 unsafe extern "win64" fn dxdev_trim(_: *mut DxgiDevice) {}
+unsafe extern "win64" fn dxdev_offer1(
+    _: *mut DxgiDevice,
+    _: u32,
+    _: *const *mut c_void,
+    _: u32,
+    _: u32,
+) -> i32 {
+    S_OK
+}
+unsafe extern "win64" fn dxdev_reclaim1(
+    _: *mut DxgiDevice,
+    n: u32,
+    _: *const *mut c_void,
+    results: *mut u32,
+) -> i32 {
+    // DXGI_RECLAIM_RESOURCE_RESULT_OK (0) : rien n'a été rendu au système.
+    if !results.is_null() {
+        for i in 0..n as usize {
+            unsafe { *results.add(i) = 0 };
+        }
+    }
+    S_OK
+}
 
 static DXGI_DEVICE_VTABLE: DxgiDeviceVTable = DxgiDeviceVTable {
     query_interface: dxdev_qi,
@@ -3477,6 +3560,8 @@ static DXGI_DEVICE_VTABLE: DxgiDeviceVTable = DxgiDeviceVTable {
     reclaim_resources: dxdev_reclaim,
     enqueue_set_event: dxdev_enqueue_set_event,
     trim: dxdev_trim,
+    offer_resources1: dxdev_offer1,
+    reclaim_resources1: dxdev_reclaim1,
 };
 unsafe impl Sync for Device {}
 
@@ -3490,9 +3575,14 @@ unsafe extern "win64" fn dev_qi(
         return E_INVALIDARG;
     }
     let riid = &*riid;
-    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE {
+    if *riid == IID_IUNKNOWN || *riid == IID_ID3D11_DEVICE || ext::is_device_n_iid(riid) {
         (*this).ref_count.fetch_add(1, Ordering::Relaxed);
         *out = this as *mut c_void;
+        return S_OK;
+    }
+    if *riid == ext::IID_MULTITHREAD {
+        (*this).ref_count.fetch_add(1, Ordering::Relaxed);
+        *out = std::ptr::addr_of_mut!((*this).multithread).cast();
         return S_OK;
     }
     if is_dxgi_device_iid(riid) {
@@ -3500,7 +3590,7 @@ unsafe extern "win64" fn dev_qi(
         *out = std::ptr::addr_of_mut!((*this).dxgi).cast();
         return S_OK;
     }
-    crate::dlls::comobj::log_no_interface("d3d11", riid);
+    crate::dlls::comobj::log_no_interface("d3d11 (appareil)", riid);
     *out = std::ptr::null_mut();
     E_NOINTERFACE
 }
@@ -3510,6 +3600,7 @@ unsafe extern "win64" fn dev_addref(this: *mut Device) -> u32 {
 unsafe extern "win64" fn dev_release(this: *mut Device) -> u32 {
     let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
     if prev == 1 {
+        crate::dlls::dxgi_private::forget(this as *const c_void);
         let _ = LAST_DEVICE.compare_exchange(
             this,
             std::ptr::null_mut(),
@@ -3570,7 +3661,7 @@ unsafe extern "win64" fn dev_create_stub(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device (création non prise en charge)")
 }
 
 unsafe extern "win64" fn dev_create_srv(
@@ -3742,7 +3833,7 @@ unsafe extern "win64" fn dev_create_gs_so(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateGeometryShaderWithStreamOutput")
 }
 
 unsafe extern "win64" fn dev_create_ps(
@@ -3773,7 +3864,7 @@ unsafe extern "win64" fn dev_create_hs(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateHullShader")
 }
 unsafe extern "win64" fn dev_create_ds(
     _: *mut Device,
@@ -3785,7 +3876,7 @@ unsafe extern "win64" fn dev_create_ds(
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDomainShader")
 }
 unsafe extern "win64" fn dev_create_cs(
     _: *mut Device,
@@ -3808,7 +3899,7 @@ unsafe extern "win64" fn dev_create_cl(_: *mut Device, out: *mut *mut c_void) ->
     if !out.is_null() {
         *out = std::ptr::null_mut();
     }
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateClassLinkage")
 }
 
 fn create_dummy_com_obj() -> *mut c_void {
@@ -3836,7 +3927,7 @@ unsafe extern "win64" fn dev_create_state(
 }
 
 unsafe extern "win64" fn dev_create_deferred(_: *mut Device, _: u32, _: *mut *mut c_void) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CreateDeferredContext")
 }
 unsafe extern "win64" fn dev_open_shared(
     _: *mut Device,
@@ -3844,7 +3935,7 @@ unsafe extern "win64" fn dev_open_shared(
     _: *const Guid,
     _: *mut *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::OpenSharedResource")
 }
 
 unsafe extern "win64" fn dev_check_format(_: *mut Device, _format: u32, out: *mut u32) -> i32 {
@@ -3876,47 +3967,91 @@ unsafe extern "win64" fn dev_check_counter(
     _: *mut u8,
     _: *mut u32,
 ) -> i32 {
-    E_NOTIMPL
+    crate::dlls::d2d1::unsupported_call("ID3D11Device::CheckCounter")
 }
 
+/// CheckFeatureSupport : la structure demandée est toujours remplie ; ce que
+/// la couche OpenGL ne sait pas faire y reste à zéro.
 unsafe extern "win64" fn dev_check_feature(
-    _: *mut Device,
-    _feature: u32,
-    _data: *mut c_void,
-    _size: u32,
+    this: *mut Device,
+    feature: u32,
+    data: *mut c_void,
+    size: u32,
 ) -> i32 {
+    if data.is_null() || size == 0 {
+        return E_INVALIDARG;
+    }
+    // D3D11_FEATURE_FORMAT_SUPPORT : { InFormat, OutFormatSupport }.
+    if feature == 2 {
+        if size != 8 {
+            return E_INVALIDARG;
+        }
+        let d = data as *mut u32;
+        return dev_check_format(this, *d, d.add(1));
+    }
+    let keep_format = feature == 3 && size >= 4;
+    let format = if keep_format {
+        *(data as *const u32)
+    } else {
+        0
+    };
+    std::ptr::write_bytes(data as *mut u8, 0, size as usize);
+    let b = data as *mut i32;
+    let n = size as usize / 4;
+    let set = |i: usize| {
+        if i < n {
+            *b.add(i) = 1;
+        }
+    };
+    match feature {
+        // D3D11_FEATURE_THREADING : créations concurrentes, pas de listes.
+        0 => set(0),
+        // D3D10_X_HARDWARE_OPTIONS : tampons bruts et structurés en calcul.
+        4 => set(0),
+        // D3D11_OPTIONS : ignorés/indications (Discard, Update/Copy), ClearView,
+        // mise à jour partielle et décalage des tampons de constantes,
+        // NO_OVERWRITE sur tampons de constantes dynamiques.
+        5 => {
+            for i in [2, 3, 4, 6, 7, 8] {
+                set(i);
+            }
+        }
+        // FORMAT_SUPPORT2 : rien d'atomique.
+        3 => *(data as *mut u32) = format,
+        _ => {}
+    }
     S_OK
 }
 
 unsafe extern "win64" fn dev_get_priv(
-    _: *mut Device,
-    _: *const Guid,
-    _: *mut u32,
-    _: *mut c_void,
+    this: *mut Device,
+    g: *const Guid,
+    size: *mut u32,
+    data: *mut c_void,
 ) -> i32 {
-    E_NOTIMPL
+    unsafe { crate::dlls::dxgi_private::get(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn dev_set_priv(
-    _: *mut Device,
-    _: *const Guid,
-    _: u32,
-    _: *const c_void,
+    this: *mut Device,
+    g: *const Guid,
+    size: u32,
+    data: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set(this as *const c_void, g, size, data) }
 }
 unsafe extern "win64" fn dev_set_priv_iface(
-    _: *mut Device,
-    _: *const Guid,
-    _: *const c_void,
+    this: *mut Device,
+    g: *const Guid,
+    iface: *const c_void,
 ) -> i32 {
-    S_OK
+    unsafe { crate::dlls::dxgi_private::set_iface(this as *const c_void, g, iface) }
 }
 
 unsafe extern "win64" fn dev_get_feature_level(this: *mut Device) -> u32 {
     (*this).feature_level
 }
-unsafe extern "win64" fn dev_get_creation_flags(_: *mut Device) -> u32 {
-    0
+unsafe extern "win64" fn dev_get_creation_flags(this: *mut Device) -> u32 {
+    (*this).flags
 }
 unsafe extern "win64" fn dev_get_removed_reason(_: *mut Device) -> i32 {
     S_OK
@@ -3980,7 +4115,19 @@ static DEVICE_VTABLE: DeviceVTable = DeviceVTable {
     get_immediate_context: dev_get_immediate_context,
     set_exception_mode: dev_set_exception_mode,
     get_exception_mode: dev_get_exception_mode,
+    ext: ext::DEVICE_EXT,
 };
+
+/// Premier niveau demandé que la couche OpenGL sait tenir (11_1 au plus) ;
+/// une liste qui n'en offre aucun garde son plus bas niveau.
+pub(super) fn pick_feature_level(levels: &[u32]) -> u32 {
+    levels
+        .iter()
+        .copied()
+        .find(|&l| l <= D3D_FEATURE_LEVEL_11_1)
+        .or_else(|| levels.iter().copied().min())
+        .unwrap_or(D3D_FEATURE_LEVEL_11_0)
+}
 
 // ────────────────────── Entry points ──────────────────────
 
@@ -3988,7 +4135,7 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
     _adapter: usize,
     _driver_type: u32,
     _software: usize,
-    _flags: u32,
+    flags: u32,
     feature_levels: *const u32,
     num_levels: u32,
     _sdk_version: u32,
@@ -3997,7 +4144,10 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
     context: *mut usize,
 ) -> i32 {
     let fl = if !feature_levels.is_null() && num_levels > 0 {
-        *feature_levels
+        pick_feature_level(std::slice::from_raw_parts(
+            feature_levels,
+            num_levels as usize,
+        ))
     } else {
         D3D_FEATURE_LEVEL_11_0
     };
@@ -4009,13 +4159,17 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         ref_count: AtomicU32::new(1),
         context: ctx,
         feature_level: fl,
+        flags,
         dxgi: DxgiDevice {
             vtable: &DXGI_DEVICE_VTABLE,
             owner: std::ptr::null_mut(),
             frame_latency: AtomicU32::new(3),
         },
+        multithread: ext::Multithread::new(),
     }));
     (*dev).dxgi.owner = dev;
+    (*dev).multithread.set_owner(dev);
+    (*ctx).device.store(dev, Ordering::Release);
     LAST_DEVICE.store(dev, Ordering::Release);
 
     if !device.is_null() {
@@ -4083,6 +4237,60 @@ pub unsafe extern "win64" fn D3D11CreateDeviceAndSwapChain(
     S_OK
 }
 
+// ────────────────────── Surfaces DXGI pour Direct2D 1.1 ──────────────────────
+
+/// Taille d'une texture 2D Winlux de format 8 bits BGRA ou RGBA, que
+/// Direct2D peut prendre pour cible (CreateBitmapFromDxgiSurface).
+pub(crate) unsafe fn d2d_surface_size(p: *mut c_void) -> Option<(u32, u32)> {
+    let tex = as_texture2d(p)?;
+    let d = &(*tex).desc;
+    matches!(
+        d.format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | 91 | DXGI_FORMAT_R8G8B8A8_UNORM | 29
+    )
+    .then_some((d.width, d.height))
+}
+
+/// Pixels BGRA prémultipliés de Direct2D → niveau 0 de la texture.
+pub(crate) unsafe fn d2d_surface_write(p: *mut c_void, px: &[u8]) {
+    let (Some(tex), Some(g)) = (as_texture2d(p), gl_here()) else {
+        return;
+    };
+    let d = (*tex).desc;
+    if px.len() != d.width as usize * d.height as usize * 4 {
+        return;
+    }
+    let rgba = matches!(d.format, DXGI_FORMAT_R8G8B8A8_UNORM | 29);
+    let fmt = if rgba { gl::GL_RGBA } else { gl::GL_BGRA };
+    (g.BindTexture)(gl::GL_TEXTURE_2D, (*tex).gl_texture);
+    (g.PixelStorei)(0x0CF5, 1); // GL_UNPACK_ALIGNMENT
+    (g.TexSubImage2D)(
+        gl::GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        d.width as i32,
+        d.height as i32,
+        fmt,
+        gl::GL_UNSIGNED_BYTE,
+        px.as_ptr().cast(),
+    );
+    (g.PixelStorei)(0x0CF5, 4);
+}
+
+/// Niveau 0 de la texture → pixels BGRA (relu à BeginDraw).
+pub(crate) unsafe fn d2d_surface_read(p: *mut c_void, px: &mut [u8]) {
+    let (Some(tex), Some(g)) = (as_texture2d(p), gl_here()) else {
+        return;
+    };
+    read_level(g, &*tex, 0, 0, px);
+    if matches!((*tex).desc.format, DXGI_FORMAT_R8G8B8A8_UNORM | 29) {
+        for c in px.as_chunks_mut::<4>().0 {
+            c.swap(0, 2);
+        }
+    }
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "D3D11CreateDevice" => fn D3D11CreateDevice,
@@ -4105,7 +4313,8 @@ mod vtable_tests {
             core::mem::offset_of!(DeviceContextVTable, finish_command_list),
             114 * 8
         );
-        assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 115 * 8);
+        // ID3D11DeviceContext1 à 4 : 34 méthodes de plus (115 à 148).
+        assert_eq!(core::mem::size_of::<DeviceContextVTable>(), 149 * 8);
     }
 
     #[test]
@@ -4119,6 +4328,11 @@ mod vtable_tests {
         assert_eq!(
             core::mem::offset_of!(DxgiDeviceVTable, enqueue_set_event),
             16 * 8
+        );
+        // IDXGIDevice4 : OfferResources1 et ReclaimResources1 après Trim (18).
+        assert_eq!(
+            core::mem::offset_of!(DxgiDeviceVTable, reclaim_resources1),
+            19 * 8
         );
         let mut g = super::IID_ID3D11_DEVICE;
         assert!(!is_dxgi_device_iid(&g));
