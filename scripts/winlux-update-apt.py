@@ -613,7 +613,7 @@ def confirm_boot():
 def session_failed():
     """Le bureau n'a pas pu s'ouvrir : retour immédiat si la version est à l'essai."""
     if ab_state().get("state") == "trial":
-        if ab("rollback").returncode != 0: return False
+        if ab("rollback", "session").returncode != 0: return False
         restart()
         return True
     if not fields(read(TRIAL)).get("version") or fields(read(TRIAL))["version"] != installed_version(): return False

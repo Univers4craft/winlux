@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory() as temp:
 client = (project / "scripts/winlux-update-apt.py").read_text()
 ok("prepared = ab_prepare(package" in client and "if not prepared:\n                        write_fields(TRIAL" in client,
    "client : A/B d'abord, APT sur place en repli, pas de second compteur d'essai")
-ok('ab("rollback")' in client and "ab_rolled_back()" in client and 'ab("confirm")' in client,
+ok('ab("rollback"' in client and "ab_rolled_back()" in client and 'ab("confirm")' in client,
    "client : retour, échec du bureau et validation passent par winlux-ab")
 for name, needle in ((project / "scripts/build-live-iso.sh", "--ab-boot"),
                      (project / "scripts/stage-desktop-components.sh", "winlux-ab")):

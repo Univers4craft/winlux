@@ -4,7 +4,7 @@
     winlux-ab prepare PAQUET.deb VERSION   installe la mise à jour dans l'emplacement B
     winlux-ab status                       état (clé=valeur)
     winlux-ab confirm                      le bureau a tenu : la version à l'essai est validée
-    winlux-ab rollback                     revenir à la version de réserve au prochain démarrage
+    winlux-ab rollback [RAISON]            revenir à la réserve au prochain démarrage (manual, session)
     winlux-ab discard                      oublier une mise à jour préparée non appliquée
 
 Le système actif n'est jamais modifié pendant une mise à jour. `prepare`
@@ -237,12 +237,12 @@ def confirm():
     return 0
 
 
-def rollback():
+def rollback(reason="manual"):
     state = read_state()
     if state.get("state") not in ("trial", "confirmed"):
         raise RuntimeError("Aucune version de réserve disponible.")
     state["state"] = "rollback"
-    state.setdefault("reason", "manual")
+    state["reason"] = reason
     write_state(state)
     print("Retour à " + state.get("previous_version", "la version précédente") + " au prochain démarrage.")
     return 0
@@ -273,6 +273,8 @@ def main(argv):
         return 1
     if len(argv) == 4 and argv[1] == "prepare":
         return prepare(Path(argv[2]), argv[3])
+    if len(argv) == 3 and argv[1] == "rollback" and argv[2] in ("manual", "session"):
+        return rollback(argv[2])
     commands = {"confirm": confirm, "rollback": rollback, "discard": discard}
     if len(argv) == 2 and argv[1] in commands:
         return commands[argv[1]]()
