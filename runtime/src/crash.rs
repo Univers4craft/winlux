@@ -343,7 +343,7 @@ unsafe fn write_crash_log(
     };
     let fd = libc::open(
         paths.crash_log.as_ptr(),
-        libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NOFOLLOW,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0o600,
     );
     if fd < 0 {
@@ -421,7 +421,7 @@ unsafe fn write_crash_log(
     // Écrire aussi un fichier BSOD que le shell peut lire pour afficher l'écran bleu
     let bfd = libc::open(
         paths.crash_bsod.as_ptr(),
-        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         0o600,
     );
     if bfd >= 0 {

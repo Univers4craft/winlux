@@ -170,6 +170,8 @@ pub(super) fn override_for(n: &str, func: &str) -> Option<Override> {
         | "CreateDialogIndirectParamA"
         | "CreateDialogIndirectParamW" => spec(with_proc, t?, 5, 3),
         "TrackMouseEvent" | "_TrackMouseEvent" => raw(track_mouse_event, t?, 1),
+        // POINT par valeur : deux cases x86, un registre de 8 octets en x64.
+        "DragDetect" => raw(drag_detect, t?, 3),
         // Une procédure de crochet x86 ne peut pas être appelée en win64 :
         // handle factice, sans enregistrement, comme avant #938.
         "SetWindowsHookExA" | "SetWindowsHookExW" => raw(inert_hook, 0, 4),
@@ -946,6 +948,12 @@ extern "win64" fn with_proc(args: u32, s: usize) -> u64 {
 extern "win64" fn inert_hook(_args: u32, _aux: usize) -> u64 {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x00F8_0000);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64
+}
+
+/// DragDetect(HWND, POINT) : x et y réunis dans le registre du POINT.
+extern "win64" fn drag_detect(args: u32, target: usize) -> u64 {
+    let pt = arg(args, 1) as u64 | (arg(args, 2) as u64) << 32;
+    call64(target, &[ext(arg(args, 0)) as u64, pt])
 }
 
 extern "win64" fn track_mouse_event(args: u32, target: usize) -> u64 {

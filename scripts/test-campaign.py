@@ -1251,4 +1251,12 @@ ok("fn plain_wildcard_matches" in (runtime_dlls / "winfile.rs").read_text()
 ok("fn missing_program_error" in (runtime_dlls / "kernel32.rs").read_text()
    and "programme_windows_absent_echoue_sans_lancer_de_runtime" in (SCRIPTS / "test-all.sh").read_text(),
    "CreateProcess d'un .exe absent : FALSE et ERROR_FILE_NOT_FOUND, plus de « lecture impossible » (#1133)")
+# #1138 : glisser-déposer OLE depuis une liste (FileZilla) : DragDetect,
+# LVN_BEGINDRAG / TVN_BEGINDRAGW, puis dépôt sur la cible OLE sous le pointeur.
+controls_rs = (runtime_dlls / "controls/comctl.rs").read_text(encoding="utf-8")
+ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
+   and '"DragDetect"=>fn drag_detect' in (runtime_dlls / "user32.rs").read_text(encoding="utf-8")
+   and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
+   and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
