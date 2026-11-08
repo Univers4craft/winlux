@@ -58,6 +58,22 @@ fn errors() -> &'static Mutex<HashMap<usize, i32>> {
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// SetFileCompletionNotificationModes d'une socket : bits
+/// FILE_SKIP_COMPLETION_PORT_ON_SUCCESS (1) et FILE_SKIP_SET_EVENT_ON_HANDLE
+/// (2). libuv (Node, Electron) les pose sur chaque socket TCP et traite
+/// lui-même une opération finie tout de suite : un paquet au port en plus
+/// la ferait traiter deux fois (#1155).
+fn modes() -> &'static Mutex<HashMap<usize, u8>> {
+    static M: OnceLock<Mutex<HashMap<usize, u8>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: u8 = 1;
+
+pub(super) fn set_modes(s: usize, flags: u8) {
+    lock(modes()).insert(s, flags);
+}
+
 /// L'appel demande-t-il une E/S avec OVERLAPPED que l'on sait terminer ?
 /// Une routine de complétion (APC) garde l'ancien chemin synchrone.
 pub(super) fn wanted(overlapped: usize, completion: usize) -> bool {
@@ -197,6 +213,7 @@ pub(crate) fn cancel(s: usize, overlapped: usize) -> bool {
 /// closesocket : annule ce qui attend, puis laisse aux paquets
 /// d'annulation le temps de partir (au plus une seconde).
 pub(super) fn close(s: usize) {
+    lock(modes()).remove(&s);
     if !cancel(s, 0) {
         return;
     }
@@ -296,7 +313,14 @@ fn conclude(s: usize, overlapped: usize, now: Option<(u32, i32)>, out: *mut u32)
                 // SAFETY : pointeur de sortie fourni par l'appelant.
                 unsafe { *out = n };
             }
-            finish(s, overlapped, n, 0);
+            let skip = lock(modes()).get(&s).copied().unwrap_or(0);
+            if skip & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS != 0 {
+                // Fin immédiate : OVERLAPPED rempli, aucun paquet au port.
+                lock(errors()).remove(&overlapped);
+                crate::dlls::kernel32::complete_overlapped_inline(overlapped, n, skip & 2 == 0);
+            } else {
+                finish(s, overlapped, n, 0);
+            }
             set_error(0);
             Some(0)
         }

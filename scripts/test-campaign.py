@@ -1315,6 +1315,11 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1155 : libuv (Node d'Electron) pose SetFileCompletionNotificationModes
+# sur chaque socket ; un refus devenait « connect EISDIR ».
+ok("set_completion_modes(h, flags)" in (runtime_dlls / "kernel32_node.rs").read_text(encoding="utf-8")
+   and "mode_sans_paquet_si_fin_immediate_pour_libuv" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Sockets Node/Electron : SetFileCompletionNotificationModes, plus de « connect EISDIR » (#1155)")
 # #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
 # (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
 ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
@@ -1372,6 +1377,12 @@ ok('name: "normaliz"' in (runtime_dlls / "mod.rs").read_text()
    and "fn punycode_decode" in (runtime_dlls / "normaliz.rs").read_text()
    and "noms_de_domaine_pour_le_tls_de_dotnet" in (SCRIPTS / "test-all.sh").read_text(),
    "HTTPS .NET : normaliz.dll (IdnToAscii, IdnToUnicode) pour SslStream (#1183)")
+ok("GetPhysicallyInstalledSystemMemory" in (ROOT / "docs/compat/kernel32-surface.txt").read_text()
+   and "memoire_installee_en_kio" in (runtime_dlls / "kernel32_ext.rs").read_text(),
+   "Installeur Creative Cloud 32 bits : GetPhysicallyInstalledSystemMemory (#1205)")
+ok("fn hint_class" in (ROOT / "runtime/src/wow32/comctl.rs").read_text()
+   and "tab_vcl" in (ROOT / "testc/wow32/dlg32.c").read_text(),
+   "WinSCP x86 : TCITEM converti par CallWindowProc vers SysTabControl32 (VCL, #1129)")
 # #1197 : SMBIOS brut pour GetSystemFirmwareTable (Creative Cloud, Photoshop).
 ok('"GetSystemFirmwareTable" => fn get_system_firmware_table' in (runtime_dlls / "apps_win32.rs").read_text(encoding="utf-8")
    and "/run/winlux/firmware" in (SCRIPTS / "winlux-system-services.sh").read_text(encoding="utf-8")
