@@ -40,6 +40,33 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Options de connexion': ('Sign-in options', 'Opciones de inicio de sesión', 'Anmeldeoptionen'),
+    'Code PIN': ('PIN', 'PIN', 'PIN'),
+    'Ajoutez d’abord un mot de passe à votre compte : le code PIN et l’empreinte s’utilisent à sa place à la connexion.': ('Add a password to your account first: the PIN and fingerprint are used instead of it at sign-in.', 'Primero añada una contraseña a su cuenta: el PIN y la huella se usan en su lugar al iniciar sesión.', 'Fügen Sie Ihrem Konto zuerst ein Kennwort hinzu: PIN und Fingerabdruck ersetzen es bei der Anmeldung.'),
+    'Bloqué après trop d’essais : il revient après votre prochaine connexion par mot de passe.': ('Blocked after too many attempts: it comes back after your next sign-in with your password.', 'Bloqueado tras demasiados intentos: vuelve tras su próximo inicio de sesión con contraseña.', 'Nach zu vielen Versuchen gesperrt: Sie ist nach Ihrer nächsten Anmeldung mit Kennwort wieder verfügbar.'),
+    'Configuré : tapez-le à la place du mot de passe pour vous connecter ou déverrouiller.': ('Set up: type it instead of your password to sign in or unlock.', 'Configurado: escríbalo en lugar de la contraseña para iniciar sesión o desbloquear.', 'Eingerichtet: Geben Sie sie statt des Kennworts ein, um sich anzumelden oder zu entsperren.'),
+    'Modifier le code PIN': ('Change PIN', 'Cambiar el PIN', 'PIN ändern'),
+    'Un code chiffré, propre à ce PC, pour vous connecter plus vite. Votre mot de passe reste valable.': ('A number code that belongs to this PC, to sign in faster. Your password still works.', 'Un código numérico propio de este equipo para iniciar sesión más rápido. Su contraseña sigue siendo válida.', 'Ein Zahlencode nur für diesen PC, um sich schneller anzumelden. Ihr Kennwort bleibt gültig.'),
+    'Configurer': ('Set up', 'Configurar', 'Einrichten'),
+    'Un doigt enregistré.': ('One finger registered.', 'Un dedo registrado.', 'Ein Finger registriert.'),
+    '{n} doigts enregistrés.': ('{n} fingers registered.', '{n} dedos registrados.', '{n} Finger registriert.'),
+    'Posez-le sur le lecteur pour vous connecter ou déverrouiller.': ('Place it on the reader to sign in or unlock.', 'Póngalo en el lector para iniciar sesión o desbloquear.', 'Legen Sie ihn auf den Leser, um sich anzumelden oder zu entsperren.'),
+    'Posez le doigt sur le lecteur pour vous connecter, sans rien taper.': ('Place your finger on the reader to sign in without typing anything.', 'Ponga el dedo en el lector para iniciar sesión sin escribir nada.', 'Legen Sie den Finger auf den Leser, um sich ohne Eingabe anzumelden.'),
+    'Reconnaissance d’empreinte digitale': ('Fingerprint recognition', 'Reconocimiento de huella digital', 'Fingerabdruckerkennung'),
+    'Ajouter un doigt': ('Add a finger', 'Añadir un dedo', 'Finger hinzufügen'),
+    'Configurer un code PIN': ('Set up a PIN', 'Configurar un PIN', 'PIN einrichten'),
+    'Mot de passe actuel': ('Current password', 'Contraseña actual', 'Aktuelles Kennwort'),
+    'Nouveau code PIN': ('New PIN', 'Nuevo PIN', 'Neue PIN'),
+    'Confirmer le code PIN': ('Confirm PIN', 'Confirmar el PIN', 'PIN bestätigen'),
+    'De 4 à 32 chiffres. Évitez les chiffres répétés ou qui se suivent (1111, 1234).': ('4 to 32 digits. Avoid repeated or consecutive digits (1111, 1234).', 'De 4 a 32 dígitos. Evite dígitos repetidos o consecutivos (1111, 1234).', '4 bis 32 Ziffern. Vermeiden Sie wiederholte oder aufeinanderfolgende Ziffern (1111, 1234).'),
+    'Supprimer le code PIN': ('Remove PIN', 'Quitar el PIN', 'PIN entfernen'),
+    'Supprimer les empreintes': ('Remove fingerprints', 'Quitar las huellas', 'Fingerabdrücke entfernen'),
+    'Confirmez votre mot de passe. Vous vous connecterez ensuite avec lui.': ('Confirm your password. You’ll sign in with it afterwards.', 'Confirme su contraseña. Después iniciará sesión con ella.', 'Bestätigen Sie Ihr Kennwort. Sie melden sich danach damit an.'),
+    'Confirmez d’abord votre mot de passe.': ('Confirm your password first.', 'Confirme primero su contraseña.', 'Bestätigen Sie zuerst Ihr Kennwort.'),
+    'Posez votre doigt sur le lecteur, puis levez-le. Recommencez jusqu’à ce que la barre soit pleine.': ('Place your finger on the reader, then lift it. Repeat until the bar is full.', 'Ponga el dedo en el lector y levántelo. Repita hasta que la barra esté llena.', 'Legen Sie den Finger auf den Leser und heben Sie ihn wieder an. Wiederholen Sie das, bis der Balken voll ist.'),
+    'Encore une fois : posez puis levez le même doigt.': ('Once more: place and lift the same finger.', 'Otra vez: ponga y levante el mismo dedo.', 'Noch einmal: Denselben Finger auflegen und anheben.'),
+    'Empreinte enregistrée. Posez ce doigt sur le lecteur pour vous connecter.': ('Fingerprint saved. Place this finger on the reader to sign in.', 'Huella guardada. Ponga este dedo en el lector para iniciar sesión.', 'Fingerabdruck gespeichert. Legen Sie diesen Finger auf den Leser, um sich anzumelden.'),
+    'Fermer': ('Close', 'Cerrar', 'Schließen'),
     # Personnalisation : aperçu (#898)
     'Couleur unie': ('Solid color', 'Color sólido', 'Volltonfarbe'),
     # Comptes : carte d'en-tête (#898)
@@ -1693,6 +1720,30 @@ def accounts_module():
     return module
 
 
+_SIGNIN = []
+
+
+def signin_module():
+    """winlux-signin (code PIN, empreinte), installé à côté ou dans scripts/."""
+    if _SIGNIN: return _SIGNIN[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-signin.py"), here.with_name("winlux-signin")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_signin", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_signin", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _SIGNIN.append(module)
+    return module
+
+
 ACCOUNT_NAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
@@ -3191,6 +3242,7 @@ class ExtraPages:
             detail = " · ".join(part for part in (me if name != me else "", kind(mine), _t("Compte local")) if part)
             self.hero("user", name, detail, [(_t("Changer le mot de passe"), lambda: self.change_password(me))])
         self.hint(_t("Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer."))
+        if mine: self.sections_signin(me)
         self.section(_t("Autres utilisateurs"))
         box = self.card()
         add = Gtk.Button(label=_t("Ajouter un compte"))
@@ -3216,6 +3268,152 @@ class ExtraPages:
             box = self.card()
             box.set_spacing(0)
             self.nav_row(box, "backup", _t("Sauvegarde"), _t("Copier vos documents sur un disque ou un dossier partagé."), PAGE_BACKUP)
+
+    # ── Comptes : options de connexion (code PIN, empreinte digitale, #659) ──
+
+    def sections_signin(self, me):
+        """Code PIN et empreinte du compte. Sans relais root, rien ; sans
+        lecteur d’empreintes (ou sans fprintd), la carte empreinte est masquée."""
+        module = signin_module()
+        if module is None or not Path(module.relay_socket()).exists(): return
+        status = module.client_status(me)
+        if not status: return
+        self.section(_t("Options de connexion"))
+        box = self.card()
+        if not status.get("password"):
+            self.row(box, _t("Code PIN"), None,
+                     _t("Ajoutez d’abord un mot de passe à votre compte : le code PIN et l’empreinte s’utilisent à sa place à la connexion."))
+            return
+        if status.get("pin"):
+            subtitle = (_t("Bloqué après trop d’essais : il revient après votre prochaine connexion par mot de passe.")
+                        if status.get("pin_locked") else _t("Configuré : tapez-le à la place du mot de passe pour vous connecter ou déverrouiller."))
+            self.row(box, _t("Code PIN"), None, subtitle)
+            self.actions(box, [(_t("Modifier le code PIN"), lambda: self.pin_dialog(me, True)),
+                               (_t("Supprimer"), lambda: self.signin_remove(me, "pin-remove"))])
+        else:
+            self.row(box, _t("Code PIN"), None, _t("Un code chiffré, propre à ce PC, pour vous connecter plus vite. Votre mot de passe reste valable."))
+            self.actions(box, [(_t("Configurer"), lambda: self.pin_dialog(me, False))])
+        if not status.get("reader"): return
+        box = self.card()
+        count = int(status.get("fingers") or 0)
+        if count:
+            subtitle = (_t("Un doigt enregistré.") if count == 1 else _t("{n} doigts enregistrés.").format(n=count)) + " " + \
+                _t("Posez-le sur le lecteur pour vous connecter ou déverrouiller.")
+        else:
+            subtitle = _t("Posez le doigt sur le lecteur pour vous connecter, sans rien taper.")
+        self.row(box, _t("Reconnaissance d’empreinte digitale"), None, subtitle)
+        self.actions(box, [(_t("Ajouter un doigt") if count else _t("Configurer"), lambda: self.finger_enroll(me), count < 10),
+                           (_t("Supprimer"), lambda: self.signin_remove(me, "fp-delete"), count > 0)])
+
+    def signin_dialog(self, title, fields, intro=None):
+        """Boîte à champs masqués ; renvoie (dialogue, champs, étiquette d’erreur)."""
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        if intro: self.hint(intro, area)
+        widgets = {}
+        for key, label, pin in fields:
+            area.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            widget = Gtk.Entry(visibility=False, activates_default=True)
+            widget.set_input_purpose(Gtk.InputPurpose.PIN if pin else Gtk.InputPurpose.PASSWORD)
+            widget.get_accessible().set_name(label)
+            area.pack_start(widget, False, False, 0)
+            widgets[key] = widget
+        error = Gtk.Label(xalign=0, wrap=True)
+        area.pack_start(error, False, False, 0)
+        dialog.show_all()
+        return dialog, widgets, error
+
+    def pin_dialog(self, me, change):
+        module = signin_module()
+        dialog, fields, error = self.signin_dialog(
+            _t("Modifier le code PIN") if change else _t("Configurer un code PIN"),
+            [("password", _t("Mot de passe actuel"), False), ("pin", _t("Nouveau code PIN"), True),
+             ("confirm", _t("Confirmer le code PIN"), True)],
+            _t("De 4 à 32 chiffres. Évitez les chiffres répétés ou qui se suivent (1111, 1234)."))
+        while dialog.run() == Gtk.ResponseType.OK:
+            values = {key: widget.get_text() for key, widget in fields.items()}
+            problem = module.pin_problem(values["pin"]) or ("pin-mismatch" if values["pin"] != values["confirm"] else None)
+            if problem is None:
+                answer = module.ask("pin-set", user=me, password=values["password"], pin=values["pin"], timeout=30)
+                if answer.get("ok"): break
+                problem = answer.get("error")
+            error.set_text(module.message(problem))
+            for key in ("pin", "confirm") if problem != "password" else ("password",):
+                fields[key].set_text("")
+        dialog.destroy()
+        self.extra_refresh()
+
+    def signin_remove(self, me, action):
+        module = signin_module()
+        dialog, fields, error = self.signin_dialog(
+            _t("Supprimer le code PIN") if action == "pin-remove" else _t("Supprimer les empreintes"),
+            [("password", _t("Mot de passe actuel"), False)],
+            _t("Confirmez votre mot de passe. Vous vous connecterez ensuite avec lui."))
+        while dialog.run() == Gtk.ResponseType.OK:
+            answer = module.ask(action, user=me, password=fields["password"].get_text(), timeout=60)
+            if answer.get("ok"): break
+            error.set_text(module.message(answer.get("error")))
+            fields["password"].set_text("")
+        dialog.destroy()
+        self.extra_refresh()
+
+    def finger_enroll(self, me):
+        """Mot de passe, puis le doigt posé et levé plusieurs fois : la barre
+        avance à chaque passage réussi (étapes annoncées par fprintd)."""
+        module = signin_module()
+        dialog, fields, error = self.signin_dialog(_t("Reconnaissance d’empreinte digitale"),
+                                                   [("password", _t("Mot de passe actuel"), False)],
+                                                   _t("Confirmez d’abord votre mot de passe."))
+        password = None
+        while dialog.run() == Gtk.ResponseType.OK:
+            password = fields["password"].get_text()
+            break
+        dialog.destroy()
+        if password is None: return
+        import threading
+        dialog = Gtk.Dialog(title=_t("Reconnaissance d’empreinte digitale"), transient_for=self, modal=True)
+        cancel = dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        area = dialog.get_content_area()
+        area.set_spacing(12)
+        area.set_border_width(20)
+        label = Gtk.Label(label=_t("Posez votre doigt sur le lecteur, puis levez-le. Recommencez jusqu’à ce que la barre soit pleine."),
+                          xalign=0, wrap=True, max_width_chars=48)
+        area.pack_start(label, False, False, 0)
+        bar = Gtk.ProgressBar()
+        area.pack_start(bar, False, False, 0)
+        dialog.show_all()
+        request = module.Request({"action": "fp-enroll", "user": me, "password": password})
+
+        def event(item):
+            def show():
+                if item.get("event") == "stage" and item.get("total"):
+                    bar.set_fraction(min(1.0, item["done"] / item["total"]))
+                    label.set_text(_t("Encore une fois : posez puis levez le même doigt."))
+                elif item.get("event") == "retry":
+                    label.set_text(module.message("retry"))
+                return False
+            GLib.idle_add(show)
+
+        def done(answer):
+            if request.cancelled: return False
+            if answer.get("ok"):
+                bar.set_fraction(1.0)
+                label.set_text(_t("Empreinte enregistrée. Posez ce doigt sur le lecteur pour vous connecter."))
+            else:
+                label.set_text(module.message(answer.get("error")))
+            cancel.set_label(_t("Fermer"))
+            return False
+        threading.Thread(target=lambda: (lambda answer: GLib.idle_add(done, answer))(
+            request.run(event, timeout=module.ENROLL_SECONDS + 60)), daemon=True).start()
+        dialog.run()
+        request.cancel()
+        dialog.destroy()
+        self.extra_refresh()
 
     # ── Écran : éclairage nocturne ──
 

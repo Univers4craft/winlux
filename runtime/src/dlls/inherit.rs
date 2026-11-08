@@ -103,7 +103,7 @@ impl SharedWord {
         Some(w)
     }
 
-    fn map(fd: OwnedFd) -> Option<SharedWord> {
+    pub(crate) fn map(fd: OwnedFd) -> Option<SharedWord> {
         let p = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -122,6 +122,30 @@ impl SharedWord {
 
     fn word(&self) -> &AtomicU32 {
         unsafe { &*self.ptr }
+    }
+    /// Mot `i` de la page (0 : l'état ; les suivants servent aux objets
+    /// nommés, voir `kernel32::shared_sync`).
+    pub(crate) fn slot(&self, i: usize) -> &AtomicU32 {
+        assert!(i < 1024);
+        unsafe { &*self.ptr.add(i) }
+    }
+    /// Attend au plus `ms` millisecondes que le mot 0 quitte `value`.
+    pub(crate) fn wait_while(&self, value: u32, ms: u32) {
+        let ts = libc::timespec {
+            tv_sec: (ms / 1000) as libc::time_t,
+            tv_nsec: ((ms % 1000) * 1_000_000) as libc::c_long,
+        };
+        unsafe {
+            libc::syscall(
+                libc::SYS_futex,
+                self.ptr,
+                libc::FUTEX_WAIT,
+                value,
+                &ts as *const libc::timespec,
+                0,
+                0,
+            );
+        }
     }
     pub(crate) fn fd(&self) -> i32 {
         self.fd.as_raw_fd()
@@ -153,21 +177,7 @@ impl SharedWord {
     }
     /// Attend au plus `ms` millisecondes que le mot quitte 0.
     pub(crate) fn wait(&self, ms: u32) {
-        let ts = libc::timespec {
-            tv_sec: (ms / 1000) as libc::time_t,
-            tv_nsec: ((ms % 1000) * 1_000_000) as libc::c_long,
-        };
-        unsafe {
-            libc::syscall(
-                libc::SYS_futex,
-                self.ptr,
-                libc::FUTEX_WAIT,
-                0,
-                &ts as *const libc::timespec,
-                0,
-                0,
-            );
-        }
+        self.wait_while(0, ms);
     }
 }
 

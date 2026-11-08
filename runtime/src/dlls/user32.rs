@@ -2907,8 +2907,53 @@ pub unsafe extern "win64" fn call_next_hook_ex(
 // Misc window management
 // =====================================================================
 
-pub extern "win64" fn get_window_placement(_hwnd: usize, _wp: *mut c_void) -> i32 {
-    0
+/// WINDOWPLACEMENT (44 octets) : longueur, drapeaux, showCmd, points
+/// réduit/agrandi, rectangle de la fenêtre restaurée.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WindowPlacement {
+    pub length: u32,
+    pub flags: u32,
+    pub show_cmd: u32,
+    pub min_pos: Point,
+    pub max_pos: Point,
+    pub normal: Rect,
+}
+
+/// Contenu rendu par GetWindowPlacement pour un état et un rectangle donnés.
+/// Winlux ne garde pas de rectangle « restauré » à part : c'est le rectangle
+/// courant de la fenêtre.
+fn placement_of(state: u8, rect: Rect) -> WindowPlacement {
+    let show_cmd = match state {
+        gui::WINDOW_MINIMIZED => 2, // SW_SHOWMINIMIZED
+        gui::WINDOW_MAXIMIZED => 3, // SW_SHOWMAXIMIZED
+        _ => 1,                     // SW_SHOWNORMAL
+    };
+    WindowPlacement {
+        length: std::mem::size_of::<WindowPlacement>() as u32,
+        flags: 0,
+        show_cmd,
+        min_pos: Point { x: -1, y: -1 },
+        max_pos: Point { x: -1, y: -1 },
+        normal: rect,
+    }
+}
+
+/// GetWindowPlacement (#1073) : WPF (WindowChrome) la lit à chaque WM_SIZE
+/// et lève une exception si elle échoue.
+pub unsafe extern "win64" fn get_window_placement(hwnd: usize, wp: *mut WindowPlacement) -> i32 {
+    if wp.is_null() {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let Some(rect) = gui::screen_rect(hwnd) else {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    };
+    let mut state = gui::WINDOW_NORMAL;
+    with_backend(|b| state = b.window_state(hwnd));
+    std::ptr::write_unaligned(wp, placement_of(state, rect));
+    1
 }
 
 pub extern "win64" fn set_window_placement(_hwnd: usize, _wp: *const c_void) -> i32 {
@@ -3829,6 +3874,27 @@ fn popup_decorations(style: u32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GetWindowPlacement : 44 octets, showCmd selon l'état, rectangle courant.
+    #[test]
+    fn placement_de_fenetre() {
+        assert_eq!(std::mem::size_of::<WindowPlacement>(), 44);
+        let r = Rect {
+            left: 10,
+            top: 20,
+            right: 330,
+            bottom: 220,
+        };
+        let p = placement_of(gui::WINDOW_MAXIMIZED, r);
+        assert_eq!((p.length, p.show_cmd, p.normal), (44, 3, r));
+        assert_eq!(placement_of(gui::WINDOW_MINIMIZED, r).show_cmd, 2);
+        assert_eq!(placement_of(gui::WINDOW_NORMAL, r).show_cmd, 1);
+        unsafe {
+            assert_eq!(get_window_placement(0x7fff_0001, std::ptr::null_mut()), 0);
+            let mut wp = WindowPlacement::default();
+            assert_eq!(get_window_placement(0x7fff_0001, &mut wp), 0);
+        }
+    }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
     /// de cases à cocher ; à 0, ils étaient tronqués.

@@ -3,6 +3,7 @@
 
     winlux-run              boîte Exécuter
     winlux-run menu         menu d'accès rapide (menu « pipe » d'openbox)
+    winlux-run desktop-menu menu du bureau, Windows + F10 (menu « pipe »)
     winlux-run place-menu [left|center] [TAILLE]
                             place ce menu au-dessus du bouton Démarrer
     winlux-run resolve TEXTE   commande lancée pour TEXTE (tests)
@@ -67,6 +68,19 @@ _TR = {
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
     'Bureau': ('Desktop', 'Escritorio', 'Desktop'),
+    # Menu du bureau (Windows + F10, clic droit sur la racine, #787).
+    'Ouvrir Explorer': ('Open Explorer', 'Abrir Explorer', 'Explorer öffnen'),
+    'Fichiers et périphériques': ('Files and devices', 'Archivos y dispositivos', 'Dateien und Geräte'),
+    'Ouvrir le terminal': ('Open Terminal', 'Abrir el terminal', 'Terminal öffnen'),
+    'Coller': ('Paste', 'Pegar', 'Einfügen'),
+    'Nouveau': ('New', 'Nuevo', 'Neu'),
+    'Dossier': ('Folder', 'Carpeta', 'Ordner'),
+    'Document texte': ('Text document', 'Documento de texto', 'Textdokument'),
+    'Actualiser': ('Refresh', 'Actualizar', 'Aktualisieren'),
+    'Personnaliser le bureau': ('Personalize the desktop', 'Personalizar el escritorio', 'Desktop anpassen'),
+    'Écran de veille : tuyaux 3D': ('Screen saver: 3D Pipes', 'Protector de pantalla: tuberías 3D', 'Bildschirmschoner: 3D-Rohre'),
+    'Réglages de l’écran de veille': ('Screen saver settings', 'Configuración del protector de pantalla', 'Bildschirmschoner-Einstellungen'),
+    'Paramètres Linux et Windows': ('Linux and Windows settings', 'Configuración de Linux y Windows', 'Linux- und Windows-Einstellungen'),
 }
 
 
@@ -263,6 +277,34 @@ def quick_menu():
     return 0
 
 
+def desktop_menu():
+    """Menu du bureau (Windows + F10, clic droit sur la racine), dans la
+    langue du système. L'ancien root-menu de ~/.config/openbox/menu.xml,
+    copié une fois à la création du compte, restait en français (#787)."""
+    def item(label, command):
+        return (f'<item label="{html.escape(_t(label))}"><action name="Execute"><command>'
+                f'{html.escape(command)}</command></action></item>')
+    lines = ['<openbox_pipe_menu>',
+             item("Ouvrir Explorer", "winlux-shell-app explorer"),
+             item("Fichiers et périphériques", "winlux-system-tools files"),
+             item("Ouvrir le terminal", "winlux-terminal"),
+             '<separator/>',
+             item("Coller", "winlux-desktop-action paste"),
+             f'<menu id="winlux-desktop-menu-new" label="{html.escape(_t("Nouveau"))}">',
+             item("Dossier", "winlux-desktop-action folder"),
+             item("Document texte", "winlux-desktop-action text"),
+             '</menu>',
+             item("Actualiser", "winlux-desktop-action refresh"),
+             item("Personnaliser le bureau", "winlux-shell-app settings 21"),
+             '<separator/>',
+             item("Écran de veille : tuyaux 3D", "winlux-desktop-action screensaver"),
+             item("Réglages de l’écran de veille", "winlux-desktop-action screensaver-settings"),
+             item("Paramètres Linux et Windows", "winlux-shell-app settings"),
+             '</openbox_pipe_menu>']
+    print("\n".join(lines))
+    return 0
+
+
 def menu_position(alignment, size):
     """Position openbox du menu Windows + X, au-dessus du bouton Démarrer.
 
@@ -321,6 +363,7 @@ def place_menu(alignment=None, size=None, config=None):
 def main(argv):
     if len(argv) == 1: return run_dialog()
     if len(argv) == 2 and argv[1] == "menu": return quick_menu()
+    if len(argv) == 2 and argv[1] == "desktop-menu": return desktop_menu()
     if 2 <= len(argv) <= 4 and argv[1] == "place-menu": return place_menu(*argv[2:])
     if len(argv) == 3 and argv[1] == "resolve":
         command = resolve(argv[2])

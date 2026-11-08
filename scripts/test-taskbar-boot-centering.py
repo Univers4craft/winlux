@@ -6,6 +6,9 @@ xfce4-panel avec la configuration livrée, dans l'ordre de la barre centrée
 (`winlux-control align-center`) et le vrai `winlux-tray`, puis relève la
 position du bouton Démarrer toutes les 20 ms pendant le lancement, deux fois
 de suite avec le même compte (premier démarrage, puis démarrage suivant).
+Les greffons passent par le lecteur livré (/usr/bin/winlux-tray =
+winlux-tray-read.sh) et son service résident `winlux-tray serve`, comme dans
+la session réelle.
 
 Avant le correctif (#602), le contrepoids (greffon 13) était mesuré pendant que
 les icônes de droite s'inséraient encore, dans des carrés de 16 px empilés :
@@ -74,10 +77,17 @@ def prepare(home):
         text = path.read_text(encoding="utf-8")
         text = text.replace("/usr/bin/winlux-clock", f"/bin/sh {directory}/winlux-clock.sh")
         text = text.replace("/usr/share/applications/winlux-start.desktop", str(start))
-        text = text.replace("/usr/bin/winlux-tray", f"{sys.executable} -B {directory}/winlux-tray.py")
+        text = text.replace("/usr/bin/winlux-tray", f"{directory}/winlux-tray-read.sh")
         text = re.sub(r'(<property name="plugin-ids" type="array">).*?(</property>)', lambda m: m[1] + ids + m[2], text)
         path.write_text(text, encoding="utf-8")
     genmon_in_xfconf(config)
+    # Le calcul en Python, nommé comme dans /usr/lib/winlux : le lecteur ne
+    # fait confiance qu'à un service dont le processus s'appelle winlux-tray.
+    program = home / "bin/winlux-tray"
+    program.parent.mkdir(parents=True, exist_ok=True)
+    source = (directory / "winlux-tray.py").read_text(encoding="utf-8").split("\n", 1)[1]
+    program.write_text(f"#!{sys.executable}\n" + source, encoding="utf-8")
+    program.chmod(0o755)
 
 
 def start_x(Gdk, root, width, height):
@@ -98,7 +108,7 @@ def boot(home, label, problems):
     from gi.repository import Gdk
     env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_CACHE_HOME=str(home / ".cache"),
                XDG_DATA_HOME=str(home / ".local/share"), WINLUX_TRAY_DIR=str(home / "tray"), WINLUX_LANG="fr",
-               WINLUX_BALANCE_LOG=str(home / "balance.log"))
+               WINLUX_BALANCE_LOG=str(home / "balance.log"), WINLUX_TRAY_PROGRAM=str(home / "bin/winlux-tray"))
     process = subprocess.Popen(["dbus-run-session", "--", "sh", "-c",
                                 "openbox & sleep 1; xfce4-panel --disable-wm-check & echo go; wait"],
                                env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, text=True)
@@ -111,12 +121,28 @@ def boot(home, label, problems):
         while time.monotonic() - began < 8:
             samples.append((time.monotonic() - began, start_x(Gdk, root, width, height)))
             time.sleep(0.02)
+        # Le service ne sert qu'une fois la barre lancée (SETTLE de winlux-tray) :
+        # sa sortie doit arriver, et la position rester la même ensuite.
+        served_at = time.monotonic() + 8
+        while time.monotonic() < served_at and not (home / ".cache/winlux/tray-out/out-balance").exists():
+            time.sleep(0.2)
+        time.sleep(2.5)
+        samples.append((time.monotonic() - began, start_x(Gdk, root, width, height)))
     finally:
         try:
             os.killpg(process.pid, 15)
         except ProcessLookupError:
             pass
         process.wait(timeout=10)
+        # Le service résident a servi la barre : il a déposé le contrepoids.
+        served = (home / ".cache/winlux/tray-out/out-balance").exists()
+        pid_file = home / ".cache/winlux/tray-out/serve.pid"
+        try:
+            os.kill(int(pid_file.read_text()), 15)
+        except (OSError, ValueError):
+            pass
+    if not served:
+        problems.append(f"{label} : le service résident winlux-tray serve n'a rien servi")
     shown = [(moment, x) for moment, x in samples if x is not None]
     if not shown:
         problems.append(f"{label} : bouton Démarrer introuvable")
