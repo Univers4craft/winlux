@@ -501,6 +501,21 @@ pub(crate) struct WsaBuf {
     buf: *mut u8,
 }
 
+/// WSABUF n° `i` : `{ ULONG len; CHAR *buf; }`, 8 octets en x86 (16 en
+/// x64, pointeur aligné sur 8).
+unsafe fn read_wsabuf(bufs: usize, i: usize) -> (usize, usize) {
+    if crate::wow32::pointer_size() == 4 {
+        let at = bufs + i * 8;
+        (
+            std::ptr::read_unaligned(at as *const u32) as usize,
+            std::ptr::read_unaligned((at + 4) as *const u32) as usize,
+        )
+    } else {
+        let b = std::ptr::read_unaligned((bufs as *const WsaBuf).add(i));
+        (b.len as usize, b.buf as usize)
+    }
+}
+
 #[repr(C)]
 struct WinLinger {
     onoff: u16,
@@ -659,6 +674,11 @@ struct ServentBuf {
     name: Vec<u8>,
     proto: Vec<u8>,
     aliases_ptr: Vec<*mut c_char>,
+    /// Forme x86 : { s_name; s_aliases; SHORT s_port; s_proto }, 16 octets,
+    /// s_port avant s_proto (l'inverse de _WIN64), suivie du tableau
+    /// s_aliases vide. Alloué sur le tas à chaque appel : le tas est sous
+    /// 4 Go en mode x86, alors que ce static vit au-dessus.
+    servent32: Vec<u32>,
 }
 unsafe impl Send for ServentBuf {}
 fn sockets() -> &'static Mutex<HashSet<usize>> {
@@ -744,12 +764,14 @@ unsafe fn make_libc_hints(hints: *const WinAddrInfoA) -> Option<libc::addrinfo> 
     if hints.is_null() {
         return None;
     }
-    let h = std::ptr::read_unaligned(hints);
+    // Seuls les quatre premiers champs (16 octets, communs à x86 et x64)
+    // sont lus : la forme x86 ne fait que 32 octets.
+    let h = std::ptr::read_unaligned(hints as *const [i32; 4]);
     let mut out: libc::addrinfo = std::mem::zeroed();
-    out.ai_flags = h.flags;
-    out.ai_family = af_in(h.family);
-    out.ai_socktype = h.socktype;
-    out.ai_protocol = h.protocol;
+    out.ai_flags = h[0];
+    out.ai_family = af_in(h[1]);
+    out.ai_socktype = h[2];
+    out.ai_protocol = h[3];
     Some(out)
 }
 
@@ -763,6 +785,10 @@ struct WsaData {
     description: [c_char; 257],
     system_status: [c_char; 129],
 }
+
+/// Taille de WSADATA pour un programme x86 : 2 + 2 + 257 + 129 + 2 + 2,
+/// aligné sur 4, puis lpVendorInfo (4 octets).
+const WSADATA32_SIZE: usize = 400;
 
 pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
     if data.is_null() {
@@ -794,7 +820,21 @@ pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
         out.system_status.as_mut_ptr() as *mut u8,
         status.len(),
     );
-    std::ptr::write_unaligned(data as *mut WsaData, out);
+    if crate::wow32::pointer_size() == 4 {
+        // Programme x86 : WSADATA y fait 400 octets et range les chaînes
+        // avant iMaxSockets/iMaxUdpDg/lpVendorInfo. La forme 64 bits
+        // (408 octets) débordait de 8 octets sur la pile de l'appelant :
+        // WinSCP x86 y perdait son adresse de retour (#779).
+        let b = std::slice::from_raw_parts_mut(data, WSADATA32_SIZE);
+        b.fill(0);
+        b[0..2].copy_from_slice(&out.version.to_le_bytes());
+        b[2..4].copy_from_slice(&out.high_version.to_le_bytes());
+        b[4..4 + desc.len()].copy_from_slice(desc);
+        b[261..261 + status.len()].copy_from_slice(status);
+        // iMaxSockets (390), iMaxUdpDg (392), lpVendorInfo (396) : 0.
+    } else {
+        std::ptr::write_unaligned(data as *mut WsaData, out);
+    }
     STARTUPS.fetch_add(1, Ordering::AcqRel);
     0
 }
@@ -1544,12 +1584,9 @@ unsafe extern "win64" fn get_addr_info_w(
     };
     let mut h: libc::addrinfo = std::mem::zeroed();
     if !hints.is_null() {
-        let p = hints as *const WinAddrInfoA;
-        let hin = std::ptr::read_unaligned(p);
-        h.ai_flags = hin.flags;
-        h.ai_family = af_in(hin.family);
-        h.ai_socktype = hin.socktype;
-        h.ai_protocol = hin.protocol;
+        if let Some(hin) = make_libc_hints(hints as *const WinAddrInfoA) {
+            h = hin;
+        }
     }
     let mut raw = std::ptr::null_mut();
     let rc = libc::getaddrinfo(
@@ -1972,12 +2009,10 @@ unsafe fn read_fd_set(win: *const WinFdSet) -> Vec<usize> {
         return Vec::new();
     }
     // `struct fd_set { u_int fd_count; SOCKET fd_array[64]; }` : sur x64 le
-    // tableau commence à l'offset 8 (alignement de SOCKET), pas 4.
+    // tableau commence à l'offset 8 (alignement de SOCKET), pas 4 ; en x86,
+    // SOCKET fait 4 octets et le tableau commence à 4 (#779).
     let count = (std::ptr::read_unaligned(win as *const u32) as usize).min(FD_SETSIZE_WIN);
-    let base = (win as *const u8).add(FD_ARRAY_OFFSET) as *const usize;
-    (0..count)
-        .map(|i| std::ptr::read_unaligned(base.add(i)))
-        .collect()
+    (0..count).map(|i| fd_slot_read(win as usize, i)).collect()
 }
 
 unsafe fn write_fd_set(win: *mut WinFdSet, socks: &[usize]) {
@@ -1986,9 +2021,29 @@ unsafe fn write_fd_set(win: *mut WinFdSet, socks: &[usize]) {
     }
     let socks = &socks[..socks.len().min(FD_SETSIZE_WIN)];
     std::ptr::write_unaligned(win as *mut u32, socks.len() as u32);
-    let base = (win as *mut u8).add(FD_ARRAY_OFFSET) as *mut usize;
     for (i, &s) in socks.iter().enumerate() {
-        std::ptr::write_unaligned(base.add(i), s);
+        fd_slot_write(win as usize, i, s);
+    }
+}
+
+/// Case `i` de fd_array : SOCKET de la taille d'un pointeur du programme.
+unsafe fn fd_slot_read(set: usize, i: usize) -> usize {
+    let ps = crate::wow32::pointer_size();
+    let at = set + if ps == 4 { 4 } else { FD_ARRAY_OFFSET } + i * ps;
+    if ps == 4 {
+        std::ptr::read_unaligned(at as *const u32) as usize
+    } else {
+        std::ptr::read_unaligned(at as *const usize)
+    }
+}
+
+unsafe fn fd_slot_write(set: usize, i: usize, v: usize) {
+    let ps = crate::wow32::pointer_size();
+    let at = set + if ps == 4 { 4 } else { FD_ARRAY_OFFSET } + i * ps;
+    if ps == 4 {
+        std::ptr::write_unaligned(at as *mut u32, v as u32)
+    } else {
+        std::ptr::write_unaligned(at as *mut usize, v)
     }
 }
 
@@ -2120,12 +2175,23 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
         return SOCKET_ERROR;
     }
     let n = nfds as usize;
+    // WSAPOLLFD : { SOCKET fd; SHORT events; SHORT revents; }, 8 octets en
+    // x86 (SOCKET sur 4), 16 en x64.
+    let stride = if crate::wow32::pointer_size() == 4 {
+        8
+    } else {
+        16
+    };
+    let ps = crate::wow32::pointer_size();
+    let base = fds as usize;
     let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(n);
     for i in 0..n {
-        let w = std::ptr::read_unaligned(fds.add(i));
+        let at = base + i * stride;
+        let fd = crate::wow32::read_ptr(at);
+        let events = std::ptr::read_unaligned((at + ps) as *const i16);
         pfds.push(libc::pollfd {
-            fd: w.fd as i32,
-            events: poll_events_to_linux(w.events),
+            fd: fd as i32,
+            events: poll_events_to_linux(events),
             revents: 0,
         });
     }
@@ -2135,7 +2201,8 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
         return SOCKET_ERROR;
     }
     for (i, pfd) in pfds.iter().enumerate().take(n) {
-        (*fds.add(i)).revents = poll_events_to_win(pfd.revents);
+        let at = base + i * stride + ps + 2;
+        std::ptr::write_unaligned(at as *mut i16, poll_events_to_win(pfd.revents));
     }
     rc
 }
@@ -2448,6 +2515,7 @@ unsafe fn fill_servent(se: &libc::servent) -> *const WinServent {
             name: Vec::new(),
             proto: Vec::new(),
             aliases_ptr: Vec::new(),
+            servent32: Vec::new(),
         })
     });
     let mut g = lock(buf);
@@ -2460,6 +2528,14 @@ unsafe fn fill_servent(se: &libc::servent) -> *const WinServent {
     g.servent.s_aliases = g.aliases_ptr.as_mut_ptr();
     g.servent.s_port = se.s_port as i16;
     g.servent.s_proto = g.proto.as_mut_ptr() as *mut c_char;
+    if crate::wow32::pointer_size() == 4 {
+        let name = g.name.as_ptr() as usize as u32;
+        let proto = g.proto.as_ptr() as usize as u32;
+        g.servent32 = vec![name, 0, (se.s_port as u16) as u32, proto, 0];
+        let base = g.servent32.as_mut_ptr();
+        *base.add(1) = base.add(4) as usize as u32;
+        return base as *const WinServent;
+    }
     &g.servent as *const WinServent
 }
 
@@ -2625,10 +2701,10 @@ pub unsafe extern "win64" fn wsa_send(
     let n = buf_count as usize;
     let mut iovs: Vec<libc::iovec> = Vec::with_capacity(n);
     for i in 0..n {
-        let b = std::ptr::read_unaligned(bufs.add(i));
+        let (len, buf) = read_wsabuf(bufs as usize, i);
         iovs.push(libc::iovec {
-            iov_base: b.buf as *mut c_void,
-            iov_len: b.len as usize,
+            iov_base: buf as *mut c_void,
+            iov_len: len,
         });
     }
     let mut msg: libc::msghdr = std::mem::zeroed();
@@ -2671,10 +2747,10 @@ pub unsafe extern "win64" fn wsa_recv(
     let n = buf_count as usize;
     let mut iovs: Vec<libc::iovec> = Vec::with_capacity(n);
     for i in 0..n {
-        let b = std::ptr::read_unaligned(bufs.add(i));
+        let (len, buf) = read_wsabuf(bufs as usize, i);
         iovs.push(libc::iovec {
-            iov_base: b.buf as *mut c_void,
-            iov_len: b.len as usize,
+            iov_base: buf as *mut c_void,
+            iov_len: len,
         });
     }
     let mut msg: libc::msghdr = std::mem::zeroed();
@@ -3283,9 +3359,14 @@ pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i3
         return 0;
     }
     let count = (std::ptr::read_unaligned(set as *const u32) as usize).min(FD_SETSIZE_WIN);
-    let base = (set as *const u8).add(FD_ARRAY_OFFSET) as *const usize;
+    // En x86, SOCKET arrive sur 32 bits : comparer sur cette largeur.
+    let s = if crate::wow32::pointer_size() == 4 {
+        s as u32 as usize
+    } else {
+        s
+    };
     for i in 0..count {
-        if std::ptr::read_unaligned(base.add(i)) == s {
+        if fd_slot_read(set as usize, i) == s {
             return 1;
         }
     }

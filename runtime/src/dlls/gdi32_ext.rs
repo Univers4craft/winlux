@@ -904,6 +904,49 @@ mod reviewed_dib_tests {
 /// composante après l'en-tête. SDL3 en tire le format de l'écran (Warzone
 /// 2100 écartait tous les modes faute de 8 bits par composante).
 /// La lecture des pixels eux-mêmes n'est pas encore prise en charge.
+/// GetDIBits avec tampon : copie les pixels de la bitmap au format demandé
+/// (32 bits BI_RGB ou BI_BITFIELDS, 24 bits BI_RGB), bas-haut si biHeight
+/// est positif. Sans cela, wxWidgets recopiait des bitmaps vides : barre
+/// d'outils de FileZilla sans icônes (#793).
+unsafe fn copy_dib_bits(bmp: usize, start: u32, lines: u32, bits: *mut u8, head: *mut u8) -> i32 {
+    let size = (head as *const u32).read_unaligned() as usize;
+    if size < 40 {
+        return 0;
+    }
+    let bit_count = (head.add(14) as *const u16).read_unaligned();
+    let compression = (head.add(16) as *const u32).read_unaligned();
+    if !matches!((bit_count, compression), (32, 0) | (32, 3) | (24, 0)) {
+        return 0;
+    }
+    let Some((w, h, px, alpha)) = crate::dlls::gui::bitmap_pixels(bmp) else {
+        return 0;
+    };
+    let dw = ((head.add(4) as *const i32).read_unaligned().max(0) as usize).min(w);
+    let raw_h = (head.add(8) as *const i32).read_unaligned();
+    let top_down = raw_h < 0;
+    let dh = (raw_h.unsigned_abs() as usize).min(h);
+    let bpp = bit_count as usize / 8;
+    let stride = ((head.add(4) as *const i32).read_unaligned().max(0) as usize * bpp + 3) & !3;
+    let first = start as usize;
+    let count = (lines as usize).min(dh.saturating_sub(first));
+    for r in 0..count {
+        let scan = first + r;
+        let y = if top_down { scan } else { dh - 1 - scan };
+        let row = bits.add(r * stride);
+        for x in 0..dw {
+            let c = px[y * w + x];
+            let o = row.add(x * bpp);
+            *o = (c >> 16) as u8;
+            *o.add(1) = (c >> 8) as u8;
+            *o.add(2) = c as u8;
+            if bpp == 4 {
+                *o.add(3) = if alpha { (c >> 24) as u8 } else { 0 };
+            }
+        }
+    }
+    count as i32
+}
+
 pub unsafe extern "win64" fn get_dib_its(
     _hdc: usize,
     bmp: usize,
@@ -914,8 +957,11 @@ pub unsafe extern "win64" fn get_dib_its(
     _usage: u32,
 ) -> i32 {
     const BI_BITFIELDS: u32 = 3;
-    if !bits.is_null() || info.is_null() {
+    if info.is_null() {
         return 0;
+    }
+    if !bits.is_null() {
+        return copy_dib_bits(bmp, _start, lines, bits.cast::<u8>(), info.cast::<u8>());
     }
     let head = info as *mut u8;
     let size = (head as *const u32).read_unaligned() as usize;
