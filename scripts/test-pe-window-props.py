@@ -32,6 +32,12 @@ def windows_of(pid: int) -> list[str]:
     return [w for w in out.split() if w]
 
 
+def exists(win: str) -> bool:
+    """La fenêtre existe encore (une fenêtre de passage du programme peut
+    être détruite entre la liste et la lecture de ses propriétés)."""
+    return subprocess.run(["xwininfo", "-id", win], capture_output=True).returncode == 0
+
+
 def props(win: str) -> dict[str, str]:
     out = subprocess.run(["xprop", "-id", win] + REQUIRED, capture_output=True, text=True).stdout
     found = {}
@@ -60,6 +66,9 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
         for w in wins:
             got = props(w)
             missing = [name for name in REQUIRED if name not in got]
+            if missing and not got and not exists(w):
+                print(f"  --     {label} : fenêtre {w} détruite entre-temps, ignorée")
+                continue
             if missing:
                 errors.append(f"{label} : fenêtre {w} sans {', '.join(missing)}")
             elif got["_NET_WM_PID"] != str(proc.pid):
