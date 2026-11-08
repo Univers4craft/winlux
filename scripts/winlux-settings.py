@@ -287,11 +287,7 @@ _TR = {
     'Recherche': ('Check', 'Búsqueda', 'Suche'),
     'Mise à jour': ('Update', 'Actualización', 'Update'),
     'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
-    'Annuler': ('Cancel', 'Cancelar', 'Abbrechen'),
-    'Installer {name} ?': ('Install {name}?', '¿Instalar {name}?', '{name} installieren?'),
     'Recherche de la version chez l’éditeur…': ('Looking up the version from the publisher…', 'Buscando la versión en el sitio del editor…', 'Version wird beim Hersteller abgefragt…'),
-    'Éditeur : {publisher}': ('Publisher: {publisher}', 'Editor: {publisher}', 'Herausgeber: {publisher}'),
-    'Version : {version}': ('Version: {version}', 'Versión: {version}', 'Version: {version}'),
     'Version : connue au téléchargement (index de l’éditeur injoignable pour l’instant)': ('Version: known when downloading (the publisher’s index can’t be reached right now)', 'Versión: se conocerá al descargar (el índice del editor no responde por ahora)', 'Version: wird beim Herunterladen bekannt (Index des Herausgebers derzeit nicht erreichbar)'),
     'Source : https://{host}': ('Source: https://{host}', 'Origen: https://{host}', 'Quelle: https://{host}'),
     'Taille : {size} Mo': ('Size: {size} MB', 'Tamaño: {size} MB', 'Größe: {size} MB'),
@@ -1018,7 +1014,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if action.startswith("browser-install-"):
                 # Téléchargement : produit, éditeur, version et source montrés,
                 # avec refus possible, avant tout lancement (#923).
-                button.connect("clicked", lambda _, value=action: self.confirm_browser(value))
+                button.connect("clicked", lambda _, value=action: self.execute(value))
             else:
                 button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
@@ -1395,22 +1391,6 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
         self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
-    def confirm_browser(self, action):
-        ident = action[len("browser-install-"):]
-        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                   buttons=Gtk.ButtonsType.NONE,
-                                   text=_t("Installer {name} ?").format(name=BROWSER_NAMES[ident]))
-        dialog.format_secondary_text(browser_download_text(ident))
-        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
-        dialog.add_button(_t("Télécharger et installer"), Gtk.ResponseType.OK)
-        dialog.set_default_response(Gtk.ResponseType.CANCEL)
-
-        def answered(window, response):
-            window.destroy()
-            if response == Gtk.ResponseType.OK: self.execute(action)
-        dialog.connect("response", answered)
-        dialog.show_all()
-
     def show_info(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.INFO,
                                    buttons=Gtk.ButtonsType.CLOSE, text=title)
@@ -1471,27 +1451,6 @@ def browser_confirmation(ident, details):
     else:
         lines.append(_t("Le fichier sera vérifié avant l’installation (empreinte SHA-256 publiée par l’éditeur)."))
     return _t("Installer {name} ?").format(name=name), "\n".join(lines)
-
-
-# Éditeur et dépôt officiel de chaque navigateur, les mêmes que le
-# téléchargeur (prepare-browser-packages.py, SOURCES) : vérifié par test.
-BROWSER_PUBLISHERS = {"chrome": ("Google", "https://dl.google.com/linux/chrome/deb/"),
-                      "edge": ("Microsoft", "https://packages.microsoft.com/repos/edge/"),
-                      "firefox": ("Mozilla", "https://packages.mozilla.org/apt/")}
-BROWSER_VERSION_FILES = ("/var/cache/winlux/browsers/{id}.version", "/usr/share/winlux/browsers/{id}.version")
-
-
-def browser_download_text(ident, root=""):
-    """Texte de la confirmation : éditeur, version, source, empreinte (#923)."""
-    publisher, source = BROWSER_PUBLISHERS[ident]
-    version = next((read(root + path.format(id=ident)).strip() for path in BROWSER_VERSION_FILES
-                    if read(root + path.format(id=ident)).strip()), "")
-    lines = [_t("Éditeur : {publisher}").format(publisher=publisher),
-             _t("Version : {version}").format(version=version or _t("dernière version stable publiée par l’éditeur")),
-             _t("Source : {source}").format(source=source),
-             "",
-             _t("Winlux télécharge le paquet officiel sur ce site, vérifie son empreinte SHA-256 et refuse l’installation si elle ne correspond pas.")]
-    return "\n".join(lines)
 
 
 def browser_buttons_shown(status, action):
