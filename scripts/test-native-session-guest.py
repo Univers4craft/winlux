@@ -45,9 +45,6 @@ EXPLORER_TITLES = ("Explorateur de fichiers", "File Explorer", "Explorador de ar
 SETTINGS_TITLES = ("Paramètres", "Settings", "Configuración", "Einstellungen", "Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
                    "Configuración de Winlux", "Winlux-Einstellungen")
 
-# Titre de l'Explorateur dans la langue de la session (#888).
-EXPLORER_TITLES = ("Explorateur de fichiers", "File Explorer", "Explorador de archivos", "Datei-Explorer")
-
 def wait_title(title, timeout=90):
     titles = (title,) if isinstance(title, str) else tuple(title)
     deadline = time.monotonic() + timeout
