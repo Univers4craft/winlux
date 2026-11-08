@@ -835,3 +835,38 @@ fn moteur_de_gestes_declare_pour_wpf() {
     assert!(live::MANAGED.contains(&crate::dlls::mshwgst::REGISTRY_KEY));
     assert!(crate::dlls::is_builtin("mshwgst"));
 }
+
+#[test]
+fn machine_guid_derive_de_machine_id_et_stable() {
+    // #1196 : MachineGuid au format GUID, sans exposer machine-id, jamais
+    // remplacé une fois posé.
+    let mut data = Data::empty();
+    live::machine_guid(&mut data, "d165c2d88d894a4787be219662b439ad");
+    let first = string_of(
+        &data
+            .get("HKLM\\SOFTWARE\\Microsoft\\Cryptography", "MachineGuid")
+            .expect("MachineGuid")
+            .bytes,
+    );
+    let parts: Vec<usize> = first.split('-').map(str::len).collect();
+    assert_eq!(parts, [8, 4, 4, 4, 12], "{first}");
+    assert!(first.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
+    assert!(!first.replace('-', "").contains("d165c2d88d894a47"));
+    assert_eq!(
+        first,
+        live::machine_guid_of("d165c2d88d894a4787be219662b439ad")
+    );
+    // Un autre machine-id ensuite (mise à jour, clone) ne change rien.
+    live::machine_guid(&mut data, "00000000000000000000000000000001");
+    let again = string_of(
+        &data
+            .get(live::CRYPTOGRAPHY, "MachineGuid")
+            .expect("MachineGuid")
+            .bytes,
+    );
+    assert_eq!(again, first);
+    // Sans machine-id : rien n'est inventé.
+    let mut empty = Data::empty();
+    live::machine_guid(&mut empty, "");
+    assert!(empty.get(live::CRYPTOGRAPHY, "MachineGuid").is_none());
+}
