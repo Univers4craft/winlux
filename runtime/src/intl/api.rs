@@ -407,6 +407,77 @@ pub extern "win64" fn get_user_default_lang_id() -> u16 {
 pub extern "win64" fn get_user_default_ui_language() -> u16 {
     locale::ui_locale().lcid as u16
 }
+std::thread_local! {
+    /// Langue d'interface choisie par SetThreadUILanguage (0 : celle de la session).
+    static THREAD_UI_LANGUAGE: std::cell::Cell<u16> = const { std::cell::Cell::new(0) };
+}
+
+pub extern "win64" fn get_thread_ui_language() -> u16 {
+    match THREAD_UI_LANGUAGE.with(|l| l.get()) {
+        0 => get_user_default_ui_language(),
+        id => id,
+    }
+}
+
+/// SetThreadUILanguage : 0 rend la langue de la session ; une langue connue
+/// est retenue pour le thread et rendue telle quelle. wxWidgets l'appelle
+/// en choisissant sa langue (#1125).
+pub extern "win64" fn set_thread_ui_language(langid: u16) -> u16 {
+    if langid == 0 {
+        THREAD_UI_LANGUAGE.with(|l| l.set(0));
+        return get_user_default_ui_language();
+    }
+    match locale::from_lcid(langid as u32) {
+        Some(_) => {
+            THREAD_UI_LANGUAGE.with(|l| l.set(langid));
+            langid
+        }
+        None => {
+            set_last_error(ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+/// SetThreadPreferredUILanguages : accepte une liste de langues connues
+/// (noms, ou identifiants hexadécimaux avec MUI_LANGUAGE_ID) et en rend le
+/// nombre. Les textes de Winlux restent dans la langue de Paramètres.
+/// wxWidgets n'utilise les API de langue par nom que si cette fonction
+/// existe (#1125).
+pub unsafe extern "win64" fn set_thread_preferred_ui_languages(
+    flags: u32,
+    langs: *const u16,
+    count: *mut u32,
+) -> i32 {
+    let mut n = 0u32;
+    if !langs.is_null() {
+        let mut p = langs;
+        loop {
+            let item = crate::dlls::wstr(p);
+            if item.is_empty() {
+                break;
+            }
+            let known = if flags & 4 != 0 {
+                u32::from_str_radix(&item, 16)
+                    .ok()
+                    .and_then(locale::from_lcid)
+            } else {
+                locale::from_tag(&item)
+            };
+            if known.is_none() {
+                set_last_error(ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+            n += 1;
+            p = p.add(item.encode_utf16().count() + 1);
+        }
+    }
+    if !count.is_null() {
+        *count = n;
+    }
+    1
+}
+
 pub extern "win64" fn set_thread_locale(lcid: u32) -> i32 {
     resolve_lcid(lcid).is_some() as i32
 }
@@ -1517,7 +1588,9 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "GetSystemDefaultLangID" => fn get_user_default_lang_id,
         "GetUserDefaultUILanguage" => fn get_user_default_ui_language,
         "GetSystemDefaultUILanguage" => fn get_user_default_ui_language,
-        "GetThreadUILanguage" => fn get_user_default_ui_language,
+        "GetThreadUILanguage" => fn get_thread_ui_language,
+        "SetThreadUILanguage" => fn set_thread_ui_language,
+        "SetThreadPreferredUILanguages" => fn set_thread_preferred_ui_languages,
         "GetUserGeoID" => fn get_user_geo_id,
         "GetUserDefaultLocaleName" => fn get_user_default_locale_name,
         "GetSystemDefaultLocaleName" => fn get_user_default_locale_name,
@@ -1593,6 +1666,46 @@ pub fn advapi32_exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn langue_d_interface_du_thread_et_langues_preferees() {
+        // #1125 : wxWidgets exige SetThreadPreferredUILanguages pour lire la
+        // langue par son nom, puis appelle SetThreadUILanguage.
+        std::thread::spawn(|| {
+            let session = get_user_default_ui_language();
+            assert_eq!(get_thread_ui_language(), session);
+            assert_eq!(set_thread_ui_language(0x0407), 0x0407);
+            assert_eq!(get_thread_ui_language(), 0x0407);
+            assert_eq!(set_thread_ui_language(0x7C7C), 0);
+            assert_eq!(set_thread_ui_language(0), session);
+            assert_eq!(get_thread_ui_language(), session);
+            let list: Vec<u16> = "fr-FR\0de-DE\0\0".encode_utf16().collect();
+            let mut n = 0u32;
+            assert_eq!(
+                unsafe { set_thread_preferred_ui_languages(8, list.as_ptr(), &mut n) },
+                1
+            );
+            assert_eq!(n, 2);
+            let ids: Vec<u16> = "040C\0\0".encode_utf16().collect();
+            assert_eq!(
+                unsafe { set_thread_preferred_ui_languages(4, ids.as_ptr(), &mut n) },
+                1
+            );
+            assert_eq!(n, 1);
+            let bad: Vec<u16> = "xx-ZZ\0\0".encode_utf16().collect();
+            assert_eq!(
+                unsafe { set_thread_preferred_ui_languages(8, bad.as_ptr(), &mut n) },
+                0
+            );
+            assert_eq!(
+                unsafe { set_thread_preferred_ui_languages(8, std::ptr::null(), &mut n) },
+                1
+            );
+            assert_eq!(n, 0);
+        })
+        .join()
+        .unwrap();
+    }
+
     use super::*;
 
     fn wide(s: &str) -> Vec<u16> {

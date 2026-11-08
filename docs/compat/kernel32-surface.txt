@@ -711,9 +711,11 @@ SetThreadGroupAffinity
 SetThreadIdealProcessor
 SetThreadInformation
 SetThreadLocale
+SetThreadPreferredUILanguages
 SetThreadPriority
 SetThreadPriorityBoost
 SetThreadStackGuarantee
+SetThreadUILanguage
 SetThreadpoolTimer
 SetThreadpoolWait
 SetUnhandledExceptionFilter

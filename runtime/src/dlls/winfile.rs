@@ -144,9 +144,29 @@ fn filetime(t: std::time::SystemTime) -> u64 {
         .saturating_add((d.subsec_nanos() / 100) as u64)
 }
 
+/// Motif de FindFirstFile, sans casse. Comme sous Windows, un « . » suivi
+/// seulement de jokers en fin de motif correspond aussi à un nom sans point :
+/// « *.* » désigne tous les fichiers, « *. » ceux sans extension et « nom.* »
+/// aussi « nom ». wxWidgets énumère « dossier\*.* » : sans cela, il ne voyait
+/// aucun sous-dossier « fr », « de »… et FileZilla restait en anglais (#1125).
 fn wildcard_matches(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
     let s: Vec<char> = text.to_lowercase().chars().collect();
+    if plain_wildcard_matches(&p, &s) {
+        return true;
+    }
+    if s.contains(&'.') {
+        return false;
+    }
+    match p.iter().rposition(|&c| c == '.') {
+        Some(dot) if p[dot + 1..].iter().all(|&c| c == '*' || c == '?') => {
+            plain_wildcard_matches(&p[..dot], &s)
+        }
+        _ => false,
+    }
+}
+
+fn plain_wildcard_matches(p: &[char], s: &[char]) -> bool {
     let (mut i, mut j, mut star, mut retry) = (0usize, 0usize, None, 0usize);
     while j < s.len() {
         if i < p.len() && (p[i] == '?' || p[i] == s[j]) {
@@ -408,6 +428,35 @@ mod tests {
         let (dir, pat) = split_search_path("Z:\\tmp\\*").unwrap();
         assert_eq!(dir, std::path::PathBuf::from("/tmp"));
         assert_eq!(pat, "*");
+    }
+    #[test]
+    fn etoile_point_etoile_liste_aussi_les_noms_sans_point() {
+        // #1125 : wxWidgets énumère « locales\*.* » pour trouver « fr », « de »…
+        assert!(wildcard_matches("*.*", "fr"));
+        assert!(wildcard_matches("*.*", "LISEZMOI"));
+        assert!(wildcard_matches("*.*", "notes.txt"));
+        assert!(wildcard_matches("*.", "fr"));
+        assert!(!wildcard_matches("*.", "notes.txt"));
+        assert!(wildcard_matches("fichier.*", "fichier"));
+        assert!(wildcard_matches("fichier.?", "fichier"));
+        assert!(!wildcard_matches("*.txt", "fr"));
+        assert!(!wildcard_matches("fichier.*", "autre"));
+        let dir = std::env::temp_dir().join(format!(
+            "winlux-find-1125-{}-{}",
+            std::process::id(),
+            NEXT_SEARCH.fetch_add(1, Ordering::Relaxed)
+        ));
+        for lang in ["de", "es", "fr"] {
+            std::fs::create_dir_all(dir.join(lang)).unwrap();
+            std::fs::write(dir.join(lang).join("filezilla.mo"), b"x").unwrap();
+        }
+        let names: Vec<String> = enumerate(&format!("{}\\*.*", crate::paths::to_windows(&dir)))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(names, ["de", "es", "fr"]);
     }
     #[test]
     fn enumeration_wildcard_est_insensible_a_la_casse_et_retourne_tailles() {

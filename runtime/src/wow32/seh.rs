@@ -357,6 +357,7 @@ unsafe extern "C" fn hw_dispatch(frame: *mut HwFrame) -> ! {
     let code = get(&f.rec, 0);
     crate::trace!("wow32 : faute 0x{code:08x} à 0x{:x}", get(&f.rec, 12));
     trace_fault_state(&f.ctx);
+    super::trace_history();
     if dispatch(rec, ctx) {
         // Un gestionnaire a pu changer le contexte, y compris l'état SSE.
         let ext: [u8; 512] = f.ctx[CTX_EXTENDED..CTX_EXTENDED + 512].try_into().unwrap();
