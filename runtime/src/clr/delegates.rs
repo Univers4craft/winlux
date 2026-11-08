@@ -63,16 +63,18 @@ impl Interpreter {
             }
             Target::External { .. } => format!("{}:{token}:{:?}", self.current, callee.gen.m),
         };
-        if let Some(&i) = self.fns.index.get(&key) {
+        let current = self.current;
+        let mut fns = self.shared.fns.lock().unwrap();
+        if let Some(&i) = fns.index.get(&key) {
             return i as i64 + 1;
         }
-        let i = self.fns.handles.len();
-        self.fns.handles.push(FnHandle {
-            asm: self.current,
+        let i = fns.handles.len();
+        fns.handles.push(FnHandle {
+            asm: current,
             token,
             callee,
         });
-        self.fns.index.insert(key, i);
+        fns.index.insert(key, i);
         i as i64 + 1
     }
 
@@ -80,8 +82,7 @@ impl Interpreter {
     fn call_handle(&mut self, handle: i64, args: Vec<Value>) -> Result<Value, ClrException> {
         let Some(fh) = usize::try_from(handle - 1)
             .ok()
-            .and_then(|i| self.fns.handles.get(i))
-            .cloned()
+            .and_then(|i| self.shared.fns.lock().unwrap().handles.get(i).cloned())
         else {
             return Err(ClrException::new(
                 "System",

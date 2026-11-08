@@ -2392,7 +2392,21 @@ unsafe fn status_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isi
             }
             1
         }
-        0x0407 | 0x0408 | 0x040E | 0x040F | 0x0410 | 0x2001 => 0, // bordures, hauteur, icônes, couleur
+        0x0407 => {
+            // SB_GETBORDERS : bordure horizontale, verticale, écart entre
+            // parties. wxWidgets en tire la hauteur de la barre d'état : sans
+            // réponse, il lisait des entiers non initialisés et donnait à la
+            // barre 130 000 pixels de haut, ne laissant rien au reste de la
+            // fenêtre (Audacity, #1053).
+            if lp != 0 {
+                let out = lp as *mut i32;
+                *out = 0;
+                *out.add(1) = 2;
+                *out.add(2) = 2;
+            }
+            1
+        }
+        0x0408 | 0x040E | 0x040F | 0x0410 | 0x2001 => 0, // hauteur, icônes, couleur
         WM_SIZE => {
             place_status_bar(hwnd);
             invalidate(hwnd);

@@ -17,6 +17,7 @@ pub mod opcodes;
 pub mod pinvoke;
 pub mod resolve;
 pub mod tables;
+pub mod threads;
 pub mod types;
 pub mod typesys;
 
@@ -59,7 +60,11 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
     for idx in (0..assemblies.len()).rev() {
         load_types(&assemblies[idx], idx, &mut infos[idx]);
     }
-    let mut interp = Interpreter::new(assemblies, infos);
+    threads::init();
+    threads::gil_acquire();
+    let mut interp = Box::new(Interpreter::new(assemblies, infos));
+    let interp_ptr: *const Interpreter = &*interp;
+    threads::register(interp_ptr);
     interp.link_types();
 
     let row = Token(entry).rid();
@@ -80,6 +85,10 @@ pub fn execute_assembly_in(pe_data: &[u8], app_dir: Option<&std::path::Path>) ->
         ExecResult::Return(_) => 0,
         ExecResult::Exception(exc) => unhandled(&exc),
     };
+    // Le processus attend ses fils de premier plan.
+    threads::wait_foreground();
+    threads::unregister(interp_ptr);
+    threads::gil_release();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     code
 }

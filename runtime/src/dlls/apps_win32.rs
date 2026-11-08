@@ -732,6 +732,33 @@ unsafe extern "win64" fn sh_get_path_from_id_list_w(pidl: *const u8, out: *mut u
     }
 }
 
+/// SHGetKnownFolderIDList : PIDL absolu d'un dossier connu (même chemin
+/// que SHGetKnownFolderPath), à libérer par CoTaskMemFree/ILFree.
+unsafe extern "win64" fn sh_get_known_folder_id_list(
+    id: *const u8,
+    flags: u32,
+    _token: usize,
+    out: *mut usize,
+) -> u32 {
+    if out.is_null() {
+        return 0x8007_0057; // E_INVALIDARG
+    }
+    *out = 0;
+    let Some(guid) = crate::dlls::knownfolders::guid_text(id) else {
+        return 0x8007_0057;
+    };
+    let Some(path) = crate::dlls::knownfolders::known_folder_path(&guid, flags) else {
+        return 0x8007_0002; // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+    };
+    match pidl_from_path(&path) {
+        0 => 0x8007_000E, // E_OUTOFMEMORY
+        p => {
+            *out = p;
+            0
+        }
+    }
+}
+
 unsafe extern "win64" fn il_create_from_path_w(path: *const u16) -> usize {
     if path.is_null() {
         return 0;
@@ -1859,6 +1886,7 @@ pub fn shell32_exports() -> Exports {
         "SHFileOperationW" => fn sh_file_operation_w,
         "SHChangeNotify" => fn sh_change_notify,
         "ILCreateFromPathW" => fn il_create_from_path_w,
+        "SHGetKnownFolderIDList" => fn sh_get_known_folder_id_list,
         "ILFree" => fn il_free,
         "SHOpenFolderAndSelectItems" => fn sh_open_folder_and_select_items,
         "FindExecutableW" => fn find_executable_w,

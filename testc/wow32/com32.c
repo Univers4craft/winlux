@@ -11,6 +11,9 @@
 #include <objbase.h>
 #include <oleauto.h>
 #include <shlobj.h>
+#include <commctrl.h>
+#include <knownfolders.h>
+#include <shobjidl.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -285,6 +288,87 @@ int main(void)
     CHECK(sblk != NULL && (UINT_PTR)sblk < 0x100000000ull, "IMalloc_Alloc depuis SHGetMalloc");
     IMalloc_Free(sm, sblk);
     IMalloc_Release(sm);
+
+    /* Unité Variants de Delphi : calcul, comparaison, dates (#232). Les
+     * DATE passent en double sur la pile x86 (8 octets). */
+    VARIANT a, b2, r;
+    VariantInit(&a);
+    VariantInit(&b2);
+    VariantInit(&r);
+    V_VT(&a) = VT_I4;
+    V_I4(&a) = 40;
+    V_VT(&b2) = VT_I2;
+    V_I2(&b2) = 2;
+    CHECK(VarAdd(&a, &b2, &r) == S_OK && V_VT(&r) == VT_I4 && V_I4(&r) == 42, "VarAdd");
+    CHECK(VarCmp(&a, &b2, LOCALE_USER_DEFAULT, 0) == VARCMP_GT, "VarCmp");
+    CHECK(VarNeg(&a, &r) == S_OK && V_I4(&r) == -40, "VarNeg");
+    V_I4(&b2) = 0;
+    V_VT(&b2) = VT_I4;
+    CHECK(VarDiv(&a, &b2, &r) == DISP_E_DIVBYZERO, "VarDiv par zéro");
+    BSTR ds = NULL;
+    CHECK(VarBstrFromDate(46334.0, 0x409, 0, &ds) == S_OK && ds && lstrcmpW(ds, L"11/8/2026") == 0,
+          "VarBstrFromDate");
+    SysFreeString(ds);
+    DATE dt = 0;
+    CHECK(VarDateFromStr(L"2026-11-08 12:00", 0x409, 0, &dt) == S_OK && dt == 46334.5, "VarDateFromStr");
+    SYSTEMTIME vst;
+    CHECK(VariantTimeToSystemTime(dt, &vst) && vst.wYear == 2026 && vst.wDay == 8 && vst.wHour == 12,
+          "VariantTimeToSystemTime");
+    V_VT(&a) = VT_R8;
+    V_R8(&a) = 2.5;
+    CHECK(VariantChangeTypeEx(&r, &a, 0x409, 0, VT_BSTR) == S_OK && lstrcmpW(V_BSTR(&r), L"2.5") == 0,
+          "VariantChangeTypeEx");
+    VariantClear(&r);
+    LONG li = 0;
+    CHECK(VarI4FromStr(L" 123 ", 0x409, 0, &li) == S_OK && li == 123, "VarI4FromStr");
+
+    /* SHGetImageList par GetProcAddress, comme WinSCP : le pointeur rendu
+     * sert de HIMAGELIST (#232, #905). */
+    typedef HRESULT (WINAPI *get_image_list_fn)(int, REFIID, void **);
+    get_image_list_fn gil = (get_image_list_fn)(void *)GetProcAddress(GetModuleHandleA("shell32.dll"),
+                                                                       "SHGetImageList");
+    CHECK(gil != NULL, "GetProcAddress(SHGetImageList)");
+    static const GUID iid_image_list = { 0x46eb5926, 0x582e, 0x4017, { 0x9f, 0xdf, 0xe8, 0x99, 0x8d, 0xaa, 0x09, 0x50 } };
+    void *sys = NULL;
+    CHECK(gil(2, &iid_image_list, &sys) == S_OK && sys != NULL, "SHGetImageList(SHIL_EXTRALARGE)");
+    int icx = 0, icy = 0;
+    CHECK(ImageList_GetIconSize((HIMAGELIST)sys, &icx, &icy) && icx == 48 && icy == 48, "liste système de 48 pixels");
+    CHECK(ImageList_GetImageCount((HIMAGELIST)sys) > 0, "icônes de la liste système");
+    SHSTOCKICONINFO sii;
+    memset(&sii, 0, sizeof sii);
+    sii.cbSize = sizeof sii;
+    CHECK(sizeof sii == 536 && SHGetStockIconInfo(SIID_FOLDER, SHGSI_SYSICONINDEX, &sii) == S_OK
+          && sii.iSysImageIndex == 0, "SHGetStockIconInfo");
+    PIDLIST_ABSOLUTE kpidl = NULL;
+    CHECK(SHGetKnownFolderIDList(&FOLDERID_Documents, 0, NULL, &kpidl) == S_OK && kpidl != NULL,
+          "SHGetKnownFolderIDList");
+    CoTaskMemFree(kpidl);
+
+    /* Listes de raccourcis de la barre des tâches (WinSCP, #905). */
+    ICustomDestinationList *jl = NULL;
+    CHECK(CoCreateInstance(&CLSID_DestinationList, NULL, CLSCTX_INPROC_SERVER, &IID_ICustomDestinationList,
+                           (void **)&jl) == S_OK && jl, "CoCreateInstance(CLSID_DestinationList)");
+    CHECK(ICustomDestinationList_SetAppID(jl, L"Winlux.Test") == S_OK, "SetAppID");
+    UINT slots = 0;
+    IObjectArray *removed = NULL;
+    CHECK(ICustomDestinationList_BeginList(jl, &slots, &IID_IObjectArray, (void **)&removed) == S_OK
+          && slots > 0 && removed, "BeginList");
+    UINT nremoved = 9;
+    CHECK(IObjectArray_GetCount(removed, &nremoved) == S_OK && nremoved == 0, "liste des éléments retirés vide");
+    IObjectArray_Release(removed);
+    CHECK(ICustomDestinationList_AppendKnownCategory(jl, KDC_RECENT) == S_OK, "AppendKnownCategory");
+    CHECK(ICustomDestinationList_CommitList(jl) == S_OK, "CommitList");
+    ICustomDestinationList_Release(jl);
+
+    /* uxtheme demandé par la VCL : aucune fonction ne manque. */
+    HMODULE ux = LoadLibraryA("uxtheme.dll");
+    static const char *const ux_names[] = { "GetThemeMetric", "DrawThemeEdge", "GetWindowTheme",
+        "GetThemeTextExtent", "HitTestThemeBackground", "GetThemeSysSize", "EnableTheming" };
+    for (unsigned k = 0; k < sizeof ux_names / sizeof *ux_names; k++)
+        CHECK(ux && GetProcAddress(ux, ux_names[k]) != NULL, ux_names[k]);
+    typedef int (WINAPI *sys_size_fn)(HANDLE, int);
+    sys_size_fn sys_size = (sys_size_fn)(void *)GetProcAddress(ux, "GetThemeSysSize");
+    CHECK(sys_size(NULL, SM_CXVSCROLL) == GetSystemMetrics(SM_CXVSCROLL), "GetThemeSysSize");
 
     CoUninitialize();
     printf("com32 : COM 32 bits, %d vérifications passées. Tout est correct\n", step);

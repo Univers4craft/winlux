@@ -7,6 +7,7 @@ import io
 import os
 from pathlib import Path
 import runpy
+import sys
 import tempfile
 
 tmp = Path(tempfile.mkdtemp())
@@ -90,3 +91,19 @@ for question, detail, _icon in perm["QUESTIONS"].values():
     assert "{app}" in question and all("{app}" in row for row in perm["_TR"][question])
 assert all(len(row) == 3 and all(row) for row in perm["_TR"].values())
 print("OK: winlux-permission (mémoire des choix, fenêtre fermée si le programme part, réponse enregistrée, langues)")
+
+# #1038 : affichage injoignable -> code 2 (refus pour cette fois), rien de mémorisé.
+# Avant, le plantage sur Gdk.Screen.get_default() rendait 1, lu comme « Refuser ».
+try:
+    import gi  # noqa: F401
+    has_gtk = True
+except ImportError:
+    has_gtk = False
+if has_gtk:
+    lonely = "/home/a/Applications/seul.exe"
+    env = dict(os.environ, DISPLAY=":93", WAYLAND_DISPLAY="")
+    code = subprocess.run([sys.executable, str(Path(__file__).with_name("winlux-permission.py")), "ask", "files",
+                           "seul.exe", lonely], env=env, capture_output=True, timeout=60).returncode
+    assert code == 2, code
+    assert perm["stored"]("files", lonely) is None
+    print("OK: affichage injoignable, refus pour cette fois sans mémoriser (#1038)")

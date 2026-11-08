@@ -229,6 +229,13 @@ def remove(name, files):
     if session_open(name):
         raise AccountError(f"{name} a une session ouverte : fermez-la d’abord (Changer d’utilisateur).")
     run(["userdel"] + (["-r"] if files == "delete" else []) + [name])
+    # Code PIN et empreintes du compte (#659) : effacés avec lui, sans
+    # bloquer la suppression si le lecteur ne répond pas.
+    if LOG or os.path.exists("/usr/bin/winlux-signin"):
+        try:
+            run(["/usr/bin/winlux-signin", "forget", name])
+        except AccountError:
+            pass
     entries = users_conf()
     entries.pop(name, None)
     write_users_conf(entries)

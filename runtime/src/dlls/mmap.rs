@@ -4,6 +4,8 @@
 //! mmap(2) de Linux pour le mappage réel.
 
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Mutex;
 
 /// Un mapping créé par CreateFileMappingA/W.
@@ -111,13 +113,7 @@ fn win_handle_to_fd(handle: usize) -> i32 {
 
 /// Clé d'un nom de mapping : sans préfixe d'espace de noms, sans casse.
 fn name_key(name: &str) -> String {
-    let lower = name.to_lowercase();
-    for prefix in ["local\\", "global\\", "session\\"] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            return rest.to_string();
-        }
-    }
-    lower
+    crate::dlls::named_objects::name_key(name)
 }
 
 fn insert_mapping(
@@ -128,6 +124,9 @@ fn insert_mapping(
     access: u32,
 ) -> usize {
     let handle = next_handle();
+    if let Some(k) = name.as_deref() {
+        crate::dlls::named_objects::retain(crate::dlls::named_objects::SECTION, k);
+    }
     mappings().as_mut().unwrap().insert(
         handle,
         FileMapping {
@@ -139,6 +138,104 @@ fn insert_mapping(
         },
     );
     handle
+}
+
+/// Mapping nommé créé par un autre processus du même compte (#20) : la
+/// mémoire elle-même (section anonyme) ou le fichier qu'il mappe.
+fn open_shared(key: &str, access: u32) -> Option<usize> {
+    use crate::dlls::named_objects as named;
+    use std::os::fd::IntoRawFd;
+    let o = named::open(named::SECTION, key, None)?;
+    let target = match std::fs::read_to_string(named::sidecar(&o.path)) {
+        Ok(text) => text.split_once('\n').and_then(|(size, path)| {
+            let size = size.parse::<u64>().ok()?;
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .or_else(|_| std::fs::File::open(path))
+                .ok()?;
+            Some((f.into_raw_fd(), size))
+        }),
+        Err(_) => {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            (unsafe { libc::fstat(o.fd.as_raw_fd(), &mut st) } == 0 && st.st_size > 0)
+                .then(|| (o.fd.into_raw_fd(), st.st_size as u64))
+        }
+    };
+    let Some((fd, size)) = target else {
+        named::release(named::SECTION, key);
+        return None;
+    };
+    Some(insert_mapping(
+        fd,
+        size,
+        true,
+        Some(key.to_string()),
+        access,
+    ))
+}
+
+/// Crée la section nommée `key` visible des autres processus du compte.
+/// `Ok((handle, existait))`, `Err(code)` ; None : dossier des objets
+/// indisponible, la section reste propre au processus.
+fn create_shared(
+    key: &str,
+    file: usize,
+    protect: u32,
+    max_size: u64,
+) -> Option<Result<(usize, bool), u32>> {
+    use crate::dlls::named_objects as named;
+    use std::io::Write;
+    use std::os::fd::IntoRawFd;
+    if let Some(h) = open_shared(key, SECTION_ALL_ACCESS) {
+        return Some(Ok((h, true)));
+    }
+    named::dir()?;
+    if file == usize::MAX || file == 0 {
+        if max_size == 0 {
+            return Some(Err(ERROR_INVALID_PARAMETER));
+        }
+        let mut init = |f: &std::fs::File, _: &std::path::Path| f.set_len(max_size).is_ok();
+        let o = named::open(named::SECTION, key, Some(&mut init))?;
+        let size = if o.created {
+            max_size
+        } else {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            unsafe { libc::fstat(o.fd.as_raw_fd(), &mut st) };
+            st.st_size as u64
+        };
+        let fd = o.fd.into_raw_fd();
+        let h = insert_mapping(fd, size, true, Some(key.to_string()), SECTION_ALL_ACCESS);
+        return Some(Ok((h, !o.created)));
+    }
+    let (fd, size) = match unsafe { file_source(file, protect, max_size) } {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    // Section adossée à un fichier : les autres processus rouvrent le même
+    // fichier (chemin et taille dans `<objet>.chemin`). Un fichier sans
+    // chemin (supprimé, anonyme) reste une section de ce seul processus.
+    let path = std::fs::read_link(format!("/proc/self/fd/{fd}"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| p.starts_with('/') && !p.ends_with(" (deleted)"));
+    if let Some(path) = path {
+        let mut write = |_: &std::fs::File, object: &std::path::Path| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(named::sidecar(object))
+                .and_then(|mut s| write!(s, "{size}\n{path}"))
+                .is_ok()
+        };
+        let _ = named::open(named::SECTION, key, Some(&mut write));
+    }
+    let h = insert_mapping(fd, size, true, Some(key.to_string()), SECTION_ALL_ACCESS);
+    Some(Ok((h, false)))
 }
 
 /// Nouveau handle vers un mapping nommé existant de ce processus.
@@ -169,6 +266,36 @@ fn anonymous_fd(size: u64) -> Option<i32> {
     Some(fd)
 }
 
+/// Fichier source d'une section adossée à un fichier : (copie de son
+/// descripteur, taille de la section).
+unsafe fn file_source(file: usize, protect: u32, max_size: u64) -> Result<(i32, u64), u32> {
+    let src = win_handle_to_fd(file);
+    if src < 0 {
+        return Err(ERROR_INVALID_HANDLE);
+    }
+    let mut st: libc::stat = std::mem::zeroed();
+    let current = if libc::fstat(src, &mut st) == 0 {
+        st.st_size as u64
+    } else {
+        0
+    };
+    let size = if max_size == 0 { current } else { max_size };
+    if size == 0 {
+        // Fichier vide sans taille : ERROR_FILE_INVALID sous Windows.
+        return Err(1006);
+    }
+    // Mapping inscriptible plus grand que le fichier : Windows l'agrandit.
+    let writable = matches!(protect & 0xFF, PAGE_READWRITE | PAGE_EXECUTE_READWRITE);
+    if writable && size > current {
+        libc::ftruncate(src, size as libc::off_t);
+    }
+    let dup_fd = libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 3);
+    if dup_fd < 0 {
+        return Err(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    Ok((dup_fd, size))
+}
+
 unsafe fn create_mapping(
     file: usize,
     security: usize,
@@ -183,6 +310,19 @@ unsafe fn create_mapping(
             crate::process::set_last_error(ERROR_ALREADY_EXISTS);
             return h;
         }
+        // Même nom dans un autre processus du compte (#20).
+        match create_shared(k, file, protect, max_size) {
+            Some(Ok((h, existed))) => {
+                crate::dlls::inherit::from_security_attributes(h, security);
+                crate::process::set_last_error(if existed { ERROR_ALREADY_EXISTS } else { 0 });
+                return h;
+            }
+            Some(Err(e)) => {
+                crate::process::set_last_error(e);
+                return 0;
+            }
+            None => {}
+        }
     }
     let anonymous = file == usize::MAX || file == 0;
     let (fd, size) = if anonymous {
@@ -196,34 +336,13 @@ unsafe fn create_mapping(
         };
         (fd, max_size)
     } else {
-        let src = win_handle_to_fd(file);
-        if src < 0 {
-            crate::process::set_last_error(ERROR_INVALID_HANDLE);
-            return 0;
+        match file_source(file, protect, max_size) {
+            Ok(v) => v,
+            Err(e) => {
+                crate::process::set_last_error(e);
+                return 0;
+            }
         }
-        let mut st: libc::stat = std::mem::zeroed();
-        let current = if libc::fstat(src, &mut st) == 0 {
-            st.st_size as u64
-        } else {
-            0
-        };
-        let size = if max_size == 0 { current } else { max_size };
-        if size == 0 {
-            // Fichier vide sans taille : ERROR_FILE_INVALID sous Windows.
-            crate::process::set_last_error(1006);
-            return 0;
-        }
-        // Mapping inscriptible plus grand que le fichier : Windows l'agrandit.
-        let writable = matches!(protect & 0xFF, PAGE_READWRITE | PAGE_EXECUTE_READWRITE);
-        if writable && size > current {
-            libc::ftruncate(src, size as libc::off_t);
-        }
-        let dup_fd = libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 3);
-        if dup_fd < 0 {
-            crate::process::set_last_error(ERROR_NOT_ENOUGH_MEMORY);
-            return 0;
-        }
-        (dup_fd, size)
     };
     let handle = insert_mapping(fd, size, true, key, SECTION_ALL_ACCESS);
     crate::dlls::inherit::from_security_attributes(handle, security);
@@ -263,7 +382,9 @@ fn open_mapping(name: Option<String>, access: u32, inherit: i32) -> usize {
         crate::process::set_last_error(ERROR_INVALID_PARAMETER);
         return 0;
     };
-    match open_named(&key, section_rights(access)) {
+    let found = open_named(&key, section_rights(access))
+        .or_else(|| open_shared(&key, section_rights(access)));
+    match found {
         Some(h) => {
             crate::dlls::inherit::set(h, inherit != 0);
             crate::process::set_last_error(0);
@@ -588,6 +709,80 @@ pub unsafe extern "win64" fn flush_view_of_file(addr: usize, size: usize) -> i32
     1
 }
 
+// ============================================================
+//  Sections de ntdll (NtCreateSection, NtOpenSection, NtMapViewOfSection)
+// ============================================================
+
+/// NtCreateSection : même moteur que CreateFileMapping. Ok((handle,
+/// existait)) ou le code d'erreur Win32.
+pub(crate) unsafe fn nt_create(
+    file: usize,
+    protect: u32,
+    max_size: u64,
+    name: Option<String>,
+) -> Result<(usize, bool), u32> {
+    let h = create_mapping(file, 0, protect, max_size, name);
+    let err = crate::dlls::kernel32::get_last_error();
+    if h == 0 {
+        Err(if err == 0 {
+            ERROR_INVALID_PARAMETER
+        } else {
+            err
+        })
+    } else {
+        Ok((h, err == ERROR_ALREADY_EXISTS))
+    }
+}
+
+/// NtOpenSection : handle vers une section nommée, ou 0.
+pub(crate) fn nt_open(name: String, access: u32) -> usize {
+    open_mapping(Some(name), access, 0)
+}
+
+/// Droits de vue (FILE_MAP_*) pour une protection de page de ntdll.
+pub(crate) fn view_access(protect: u32) -> u32 {
+    match protect & 0xFF {
+        0x02 => _FILE_MAP_READ,
+        0x08 => FILE_MAP_COPY,
+        0x10 | 0x20 => _FILE_MAP_READ | FILE_MAP_EXECUTE,
+        0x40 => FILE_MAP_WRITE | FILE_MAP_EXECUTE,
+        0x80 => FILE_MAP_COPY | FILE_MAP_EXECUTE,
+        _ => FILE_MAP_WRITE,
+    }
+}
+
+/// NtMapViewOfSection dans le processus courant : (adresse, taille de la
+/// vue) ou le code d'erreur Win32.
+pub(crate) unsafe fn nt_map(
+    section: usize,
+    protect: u32,
+    offset: u64,
+    size: usize,
+    base: usize,
+) -> Result<(usize, usize), u32> {
+    let addr = map_view_at(
+        section,
+        view_access(protect),
+        (offset >> 32) as u32,
+        offset as u32,
+        size,
+        base,
+    );
+    if addr == 0 {
+        let err = crate::dlls::kernel32::get_last_error();
+        return Err(if err == 0 {
+            ERROR_INVALID_PARAMETER
+        } else {
+            err
+        });
+    }
+    let len = views()
+        .as_ref()
+        .and_then(|m| m.get(&addr).map(|v| v.len))
+        .unwrap_or(size);
+    Ok((addr, len))
+}
+
 /// CloseHandle pour les mappings de fichiers.
 pub fn close_mapping(handle: usize) -> bool {
     let fm = mappings().as_mut().and_then(|m| m.remove(&handle));
@@ -596,6 +791,9 @@ pub fn close_mapping(handle: usize) -> bool {
             unsafe {
                 libc::close(fm.fd);
             }
+        }
+        if let Some(k) = fm.name.as_deref() {
+            crate::dlls::named_objects::release(crate::dlls::named_objects::SECTION, k);
         }
         true
     } else {

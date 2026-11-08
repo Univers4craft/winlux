@@ -534,6 +534,8 @@ OpenJobObjectW
 OpenMutexA
 OpenMutexW
 OpenProcess
+OpenSemaphoreA
+OpenSemaphoreW
 OpenThread
 OutputDebugStringA
 OutputDebugStringW

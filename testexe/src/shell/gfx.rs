@@ -3340,6 +3340,29 @@ pub unsafe fn focus_key(app: usize, vk: u32, ch: u16) -> FocusKey {
     }
 }
 
+/// Flèches Haut/Bas dans un menu ouvert (#1024) : la sélection passe à
+/// l'entrée précédente ou suivante, comme Maj+Tab et Tab. Sans cadre
+/// affiché, Bas part de la première entrée et Haut de la dernière.
+pub unsafe fn focus_step(app: usize, back: bool) -> bool {
+    if app >= FOCUS_APPS {
+        return false;
+    }
+    let n = FOCUS_LISTS[app].n as i32;
+    if n == 0 {
+        return false;
+    }
+    let cur = FOCUS_CURRENT[app];
+    FOCUS_CURRENT[app] = if !FOCUS_SHOWN[app] || cur < 0 || cur >= n {
+        if back { n - 1 } else { 0 }
+    } else if back {
+        (cur + n - 1) % n
+    } else {
+        (cur + 1) % n
+    };
+    FOCUS_SHOWN[app] = true;
+    true
+}
+
 /// Clic de souris dans `app` : le cadre s'efface et le focus suit le
 /// contrôle cliqué (Tab repartira de là).
 pub unsafe fn focus_mouse_down(app: usize, x: i32, y: i32) {
