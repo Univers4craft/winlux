@@ -8,8 +8,8 @@ sur la page 30 des Paramètres (Applications > Assistant IA) :
 | Assistant | Ce qui tourne | Compte | Téléchargé à l'activation |
 |---|---|---|---|
 | **Claude** | Claude Code (`claude.exe` à travers la couche PE, même installation que l'application du menu Démarrer) | compte Claude (`claude auth login`, Google ou e-mail) | Claude Code, ≈ 300 Mo, SHA-256 du manifeste |
-| **ChatGPT** | Codex, l'outil officiel d'OpenAI (programme Linux natif, `x86_64` ou `aarch64`) | compte ChatGPT (`codex login`, Google ou e-mail), jamais une clé d'API | paquet npm `@openai/codex` de la plateforme, ≈ 170 Mo, SHA-512 du registre npm |
-| **IA locale** | `llama-server` de llama.cpp + **Qwen2.5 1,5B Instruct Q4_K_M** | aucun | moteur ≈ 30 Mo (version publiée sur GitHub, SHA-256 de l'API) et modèle ≈ 1,1 Go (Hugging Face, SHA-256 du fichier LFS) |
+| **ChatGPT** | Codex, l'outil officiel d'OpenAI (programme Linux natif, `x86_64` ou `aarch64`) | compte ChatGPT (`codex login`, Google ou e-mail), jamais une clé d'API | paquet npm `@openai/codex` 0.167.0 de la plateforme, SHA-512 figé |
+| **IA locale** | `llama-server` de llama.cpp + **Qwen2.5 1,5B Instruct Q4_K_M** | aucun | moteur ≈ 23 Mo (llama.cpp b12202, SHA-256 figé) et modèle ≈ 1,1 Go (Hugging Face, révision et SHA-256 figés) |
 
 Le modèle local est choisi parce qu'il parle correctement français (et les
 trois autres langues), produit du JSON fiable, tient en 1,1 Go et répond en
@@ -28,6 +28,38 @@ ou qui a moins de 3 Gio de mémoire.
   Plusieurs assistants activés : on choisit dans l'en-tête du panneau, le
   choix est retenu. Le bouton part quand le dernier est désactivé.
   `winlux-control align-left/center` garde le bouton.
+- Chaque assistant a **sa propre** fenêtre d'activation, unique : en activer
+  un deuxième pendant que la première est ouverte marche, et un nouveau clic
+  sur un interrupteur ramène sa fenêtre devant (#910).
+- **Sans navigateur sur ce PC** (l'ISO n'en livre pas, #912) : rien n'est
+  ouvert ici. La fenêtre montre le lien de connexion à ouvrir sur un
+  téléphone ou un autre ordinateur, avec « Copier le lien » et « Installer un
+  navigateur » (page Navigateurs, choix explicite). Claude : on colle ensuite
+  le code affiché par la page. ChatGPT : `codex login --device-auth`, le code
+  à saisir est affiché en grand. Annuler ferme aussi ce que la connexion a
+  lancé (groupe de processus).
+- `claude.exe` et `codex` tournent toujours dans `~/.local/share/winlux/assistant`,
+  jamais dans le dossier courant : lancés depuis le Bureau, la couche PE
+  demandait l'accès aux fichiers personnels et l'activation restait figée (#913).
+- **IA locale adaptée au PC** (#928), choisie sans rien demander et affichée
+  avant le téléchargement : carte graphique dédiée utilisable par Vulkan
+  (pilote nvidia ou amdgpu et son fichier ICD) avec 7 Gio ou plus → Qwen2.5 7B
+  sur la carte (`-ngl 99`, moteur `ubuntu-vulkan-x64`) ; de 3,5 à 7 Gio → 3B
+  sur la carte ; sinon processeur seul : 3B avec 12 Gio de mémoire ou plus,
+  1,5B en dessous. Si le moteur Vulkan ne démarre pas, retour au processeur.
+  Un PC qui change (carte ajoutée) reprend le bon modèle à la réactivation et
+  l'ancien est effacé.
+- **Aucune ressource quand on ne lui écrit plus** (#928) : le moteur s'arrête
+  deux minutes après la dernière question, même panneau ouvert, et redémarre
+  à la question suivante. Panneau fermé ou IA désactivée : rien ne tourne.
+  Pendant qu'il tourne, le bas du panneau dit la mémoire prise (lue dans
+  /proc) et si la carte graphique travaille.
+- **Révisions figées** (#911) : llama.cpp `b12202` (`llama-b12202-bin-ubuntu-x64.tar.gz`),
+  Qwen2.5 1,5B à la révision `91cad511…`, Codex `0.167.0`, chacun avec son
+  empreinte écrite dans `winlux-assistant` : jamais « la dernière publiée »
+  (« latest » de llama.cpp, v0.9.0, n'avait même aucun binaire). Le moteur
+  demande libstdc++, libgomp1 et libssl3 ; une bibliothèque manquante est dite
+  dès l'installation. Monter de version = relever l'empreinte et la changer ici.
 - **Claude et ChatGPT n'ont aucun outil.** Claude tourne en `claude -p
   --tools "" --setting-sources "" --strict-mcp-config
   --no-session-persistence` ; Codex en `codex exec --ephemeral

@@ -44,7 +44,12 @@ pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod d3dcompiler;
 pub mod d3dx9;
+pub mod d3dx9_asm;
 pub mod d3dx9_draw;
+pub mod d3dx9_effect;
+pub mod d3dx9_hlsl;
+pub mod d3dx9_mesh;
+pub mod d3dx9_shader;
 pub mod dataobject;
 pub mod dbghelp;
 pub mod ddeml;
@@ -57,9 +62,11 @@ pub mod dirwatch;
 pub mod displaymode;
 pub mod dpapi;
 pub mod dplayx;
+pub mod dpnet;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
+pub mod dwrite_analyzer;
 pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
@@ -182,6 +189,7 @@ pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
 pub mod winusb;
+pub mod wpf_native;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;
@@ -303,6 +311,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_fs::ntdll_exports());
                     e.extend(kernel32_node::ntdll_exports());
                     e.extend(ntdll_file::exports());
+                    for (name, addr) in wpf_native::ntdll_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: fake_module(),
@@ -345,6 +356,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     for (name, addr) in chromium_win32::user32_exports() {
                         e.entry(name).or_insert(addr);
                     }
+                    for (name, addr) in wpf_native::user32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: fake_module(),
@@ -367,6 +381,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e.extend(chromium_win32::advapi32_exports());
+                    for (name, addr) in wpf_native::advapi32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: fake_module(),
@@ -391,6 +408,9 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = ole32::exports();
                     e.extend(dataobject::ole32_exports());
+                    for (name, addr) in wpf_native::ole32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: fake_module(),
@@ -462,6 +482,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
                     e.extend(displaymode::gdi32_exports());
+                    for (name, addr) in wpf_native::gdi32_exports() {
+                        e.entry(name).or_insert(addr);
+                    }
                     e
                 },
                 handle: fake_module(),
@@ -544,6 +567,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dplay",
                 exports: dplayx::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpnet",
+                exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dpnaddr",
+                exports: dpnet::exports(),
                 handle: fake_module(),
             },
             Builtin {

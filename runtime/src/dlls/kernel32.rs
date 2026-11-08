@@ -103,28 +103,6 @@ impl PageMap {
     }
 }
 
-/// Vue de fichier mappé (MapViewOfFile) : visible des fonctions Virtual*
-/// comme une région MEM_MAPPED engagée avec la protection de la vue.
-pub(crate) fn register_view(base: usize, len: usize, protection: u32) {
-    let pages = len.div_ceil(4096);
-    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
-        base,
-        VmRegion {
-            size: pages * 4096,
-            pages: PageMap::new(pages, protection),
-            allocation_protection: protection,
-            kind: MEM_MAPPED_KIND,
-        },
-    );
-}
-pub(crate) fn unregister_view(base: usize) {
-    let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
-    if maps.get(&base).is_some_and(|r| r.kind == MEM_MAPPED_KIND) {
-        maps.remove(&base);
-    }
-}
-const MEM_MAPPED_KIND: u32 = 0x40000;
-
 /// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
 pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
     let pages = protection.len();
@@ -2002,8 +1980,11 @@ unsafe fn create_file_opened(
             return usize::MAX;
         }
     };
-    if (creation == 2 || creation == 4) && existed {
-        crate::process::set_last_error(183);
+    // CREATE_ALWAYS / OPEN_ALWAYS : ERROR_ALREADY_EXISTS si le fichier
+    // existait, 0 s'il vient d'être créé (documentation de CreateFile) ;
+    // l'erreur d'une tentative précédente ne doit pas rester (#905).
+    if creation == 2 || creation == 4 {
+        crate::process::set_last_error(if existed { 183 } else { 0 });
     }
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
@@ -3627,23 +3608,31 @@ pub unsafe extern "win64" fn virtual_alloc(
         let page_base = addr as usize & !(PAGE - 1);
         let page_end = page_end0 & !(PAGE - 1);
         let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
-        let Some((&region_base, r)) = maps.iter_mut().find(|(b, r)| {
-            // Une vue d'une section SEC_RESERVE s'engage aussi par
-            // VirtualAlloc (coreclr, mémoire exécutable W^X, #665).
-            matches!(r.kind, 0x20000 | MEM_MAPPED_KIND)
-                && page_base >= **b
-                && page_end <= **b + r.size
-        }) else {
-            crate::process::set_last_error(487);
-            return std::ptr::null_mut();
+        let Some((&region_base, r)) = maps
+            .iter_mut()
+            .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
+        else {
+            drop(maps);
+            // Pages d'une vue MapViewOfFile(Ex) d'une section SEC_RESERVE :
+            // Windows les valide par VirtualAlloc(MEM_COMMIT). Le memfd
+            // fournit déjà les pages ; on pose la protection (#665).
+            return match crate::dlls::mmap::protect_view_pages(
+                page_base,
+                page_end,
+                prot,
+                win_prot(prot),
+            ) {
+                Some(Ok(_)) => page_base as *mut c_void,
+                Some(Err(code)) => {
+                    crate::process::set_last_error(code);
+                    std::ptr::null_mut()
+                }
+                None => {
+                    crate::process::set_last_error(487);
+                    std::ptr::null_mut()
+                }
+            };
         };
-        if r.kind == MEM_MAPPED_KIND {
-            // Les pages d'une vue sont déjà accessibles avec les droits de
-            // la vue (FILE_MAP_*) : l'engagement n'y change rien. coreclr
-            // engage en PAGE_READWRITE des pages de sa vue exécutable où il
-            // exécute ensuite du code écrit par l'autre vue.
-            return page_base as *mut c_void;
-        }
         let start = (page_base - region_base) / PAGE;
         let count = (page_end - page_base) / PAGE;
         if libc::mprotect(page_base as *mut _, page_end - page_base, win_prot(prot)) != 0 {
@@ -3855,8 +3844,23 @@ pub unsafe extern "win64" fn virtual_protect(
         .iter_mut()
         .find(|(b, r)| start >= **b && end <= **b + r.size)
     else {
-        crate::process::set_last_error(487);
-        return 0;
+        drop(maps);
+        // Vue d'un mappage de fichier ou de section (code double-mappé de
+        // coreclr, #665).
+        return match crate::dlls::mmap::protect_view_pages(start, end, prot, win_prot(prot)) {
+            Some(Ok(previous)) => {
+                *old = previous;
+                1
+            }
+            Some(Err(code)) => {
+                crate::process::set_last_error(code);
+                0
+            }
+            None => {
+                crate::process::set_last_error(487);
+                0
+            }
+        };
     };
     let first = (start - base) / PAGE;
     let count = (end - start) / PAGE;

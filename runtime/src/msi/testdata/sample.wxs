@@ -14,6 +14,7 @@
             <File Id="donnees" Name="données.bin" Source="donnees.bin"/>
             <RegistryValue Root="HKLM" Key="Software\Winlux Exemple" Name="Chemin" Type="string" Value="[INSTALLDIR]"/>
             <RegistryValue Root="HKLM" Key="Software\Winlux Exemple" Name="Niveau" Type="integer" Value="7"/>
+            <RegistryValue Root="HKLM" Key="Software\Winlux Editeur\Reglages Exemple" Name="Version" Type="string" Value="1.2.3"/>
           </Component>
           <Component Id="Optionnel" Guid="{22222222-2222-4333-8444-555555555555}" Win64="yes">
             <File Id="option" Name="option.txt" Source="lisezmoi.txt"/>

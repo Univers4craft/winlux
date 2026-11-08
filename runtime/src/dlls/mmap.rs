@@ -27,6 +27,9 @@ struct FileMapping {
 struct MappedView {
     addr: usize,
     len: usize,
+    /// Protection Windows (PAGE_*) de chaque page de 4 Kio, pour
+    /// VirtualProtect et VirtualAlloc(MEM_COMMIT) sur la vue (#665).
+    protection: Vec<u32>,
 }
 
 static MAPPINGS: Mutex<Option<HashMap<usize, FileMapping>>> = Mutex::new(None);
@@ -93,7 +96,8 @@ const FILE_MAP_WRITE: u32 = 0x0002;
 const _FILE_MAP_READ: u32 = 0x0004;
 const FILE_MAP_COPY: u32 = 0x0001;
 const FILE_MAP_EXECUTE: u32 = 0x0020;
-const SECTION_MAP_EXECUTE: u32 = 0x0008;
+const PAGE: usize = 4096;
+const ERROR_INVALID_ADDRESS: u32 = 487;
 
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_INVALID_HANDLE: u32 = 6;
@@ -356,10 +360,10 @@ pub unsafe extern "win64" fn map_view_of_file(
     offset_low: u32,
     bytes_to_map: usize,
 ) -> usize {
-    map_view(mapping, access, offset_high, offset_low, bytes_to_map, 0)
+    map_view_at(mapping, access, offset_high, offset_low, bytes_to_map, 0)
 }
 
-unsafe fn map_view(
+unsafe fn map_view_at(
     mapping: usize,
     access: u32,
     offset_high: u32,
@@ -367,10 +371,11 @@ unsafe fn map_view(
     bytes_to_map: usize,
     base: usize,
 ) -> usize {
-    if !base.is_multiple_of(65536) {
-        // ERROR_MAPPED_ALIGNMENT : l'adresse demandée doit suivre la
-        // granularité d'allocation.
-        crate::process::set_last_error(1132);
+    // Adresse imposée : alignée sur 64 Kio et libre, sinon
+    // ERROR_INVALID_ADDRESS, comme Windows. coreclr essaie ainsi plusieurs
+    // adresses proches de son code pour ses vues exécutables (#665).
+    if base != 0 && !base.is_multiple_of(65536) {
+        crate::process::set_last_error(ERROR_INVALID_ADDRESS);
         return 0;
     }
     let guard = mappings();
@@ -392,12 +397,6 @@ unsafe fn map_view(
     } else {
         0
     };
-    let need = need
-        | if access & FILE_MAP_EXECUTE != 0 {
-            SECTION_MAP_EXECUTE
-        } else {
-            0
-        };
     if need & !fm.access != 0 {
         crate::process::set_last_error(ERROR_ACCESS_DENIED);
         return 0;
@@ -420,26 +419,20 @@ unsafe fn map_view(
         return 0;
     }
 
-    let prot = if access & (FILE_MAP_WRITE | FILE_MAP_COPY) != 0 {
+    let mut prot = if access & (FILE_MAP_WRITE | FILE_MAP_COPY) != 0 {
         libc::PROT_READ | libc::PROT_WRITE
     } else {
         libc::PROT_READ
     };
-    // Vue exécutable (FILE_MAP_EXECUTE) : coreclr y place le code compilé
-    // par son JIT, écrit par une seconde vue inscriptible (W^X, #665).
-    let exec = access & FILE_MAP_EXECUTE != 0;
-    let prot = if exec { prot | libc::PROT_EXEC } else { prot };
-    let win_prot = match (
-        exec,
-        access & FILE_MAP_COPY != 0,
-        access & FILE_MAP_WRITE != 0,
-    ) {
-        (false, true, _) => 0x08,
-        (true, true, _) => 0x80,
-        (false, false, true) => 0x04,
-        (true, false, true) => 0x40,
-        (false, false, false) => 0x02,
-        (true, false, false) => 0x20,
+    // FILE_MAP_EXECUTE : vue exécutable (code du JIT de coreclr, #665).
+    if access & FILE_MAP_EXECUTE != 0 {
+        prot |= libc::PROT_EXEC;
+    }
+    let win_prot = match (prot & libc::PROT_WRITE != 0, prot & libc::PROT_EXEC != 0) {
+        (true, true) => 0x40,
+        (true, false) => 0x04,
+        (false, true) => 0x20,
+        (false, false) => 0x02,
     };
 
     // Vue partagée (les écritures des autres vues y apparaissent), sauf
@@ -450,15 +443,42 @@ unsafe fn map_view(
         libc::MAP_SHARED
     };
 
-    // Adresse imposée (MapViewOfFileEx) : la vue s'y place ou échoue
-    // (ERROR_INVALID_ADDRESS), jamais ailleurs.
+    // Sans adresse imposée, la vue est posée sur 64 Kio comme sous Windows :
+    // on réserve un peu plus large, puis on remplace la partie alignée.
+    let target = if base != 0 {
+        base
+    } else {
+        let span = len.saturating_add(65536);
+        let raw = libc::mmap(
+            std::ptr::null_mut(),
+            span,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+            -1,
+            0,
+        );
+        if raw == libc::MAP_FAILED {
+            crate::process::set_last_error(8);
+            return 0;
+        }
+        let aligned = (raw as usize).next_multiple_of(65536);
+        let prefix = aligned - raw as usize;
+        if prefix > 0 {
+            libc::munmap(raw, prefix);
+        }
+        let tail = span - prefix - len;
+        if tail > 0 {
+            libc::munmap((aligned + len) as *mut libc::c_void, tail);
+        }
+        aligned
+    };
     let flags = if base != 0 {
         flags | libc::MAP_FIXED_NOREPLACE
     } else {
-        flags
+        flags | libc::MAP_FIXED
     };
     let p = libc::mmap(
-        base as *mut _,
+        target as *mut libc::c_void,
         len,
         prot,
         flags,
@@ -467,30 +487,60 @@ unsafe fn map_view(
     );
 
     if p == libc::MAP_FAILED {
-        crate::process::set_last_error(if base != 0 { 487 } else { 8 });
+        let busy = std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST);
+        if base == 0 {
+            libc::munmap(target as *mut libc::c_void, len);
+        }
+        crate::process::set_last_error(if busy { ERROR_INVALID_ADDRESS } else { 8 });
         return 0;
     }
-    if base != 0 && p as usize != base {
-        // Noyau trop ancien pour MAP_FIXED_NOREPLACE : simple indice.
+    // Ancien noyau sans MAP_FIXED_NOREPLACE : l'adresse n'est qu'un indice.
+    if p as usize != target {
         libc::munmap(p, len);
-        crate::process::set_last_error(487);
+        crate::process::set_last_error(ERROR_INVALID_ADDRESS);
         return 0;
     }
 
     let addr = p as usize;
     drop(guard);
-    views()
-        .as_mut()
-        .unwrap()
-        .insert(addr, MappedView { addr, len });
-    // Visible des fonctions Virtual* (VirtualAlloc MEM_COMMIT sur une vue
-    // d'une section SEC_RESERVE, VirtualProtect, VirtualQuery) et du tri des
-    // fautes matérielles (code invité).
-    crate::dlls::kernel32::register_view(addr, len, win_prot);
+    views().as_mut().unwrap().insert(
+        addr,
+        MappedView {
+            addr,
+            len,
+            protection: vec![win_prot; len.div_ceil(PAGE)],
+        },
+    );
     addr
 }
 
-/// MapViewOfFileEx (avec adresse suggérée, qu'on ignore).
+/// Change la protection des pages [start, end) si elles sont toutes dans
+/// une même vue. `None` : hors de toute vue. `Some(Err(code))` : échec.
+/// `Some(Ok(ancienne))` : protection Windows de la première page avant.
+/// Sert à VirtualAlloc(MEM_COMMIT) et VirtualProtect sur une vue, que
+/// coreclr utilise pour son code double-mappé (W^X, #665).
+pub fn protect_view_pages(
+    start: usize,
+    end: usize,
+    prot: u32,
+    unix_prot: i32,
+) -> Option<Result<u32, u32>> {
+    let mut guard = views();
+    let v = guard
+        .as_mut()?
+        .values_mut()
+        .find(|v| start >= v.addr && end <= v.addr + v.len.div_ceil(PAGE) * PAGE && start < end)?;
+    if unsafe { libc::mprotect(start as *mut libc::c_void, end - start, unix_prot) } != 0 {
+        return Some(Err(8));
+    }
+    let first = (start - v.addr) / PAGE;
+    let count = (end - start) / PAGE;
+    let old = v.protection[first];
+    v.protection[first..first + count].fill(prot);
+    Some(Ok(old))
+}
+
+/// MapViewOfFileEx : à l'adresse demandée si elle est libre, sinon échec.
 pub unsafe extern "win64" fn map_view_of_file_ex(
     mapping: usize,
     access: u32,
@@ -499,7 +549,7 @@ pub unsafe extern "win64" fn map_view_of_file_ex(
     bytes_to_map: usize,
     base: usize,
 ) -> usize {
-    map_view(mapping, access, offset_high, offset_low, bytes_to_map, base)
+    map_view_at(mapping, access, offset_high, offset_low, bytes_to_map, base)
 }
 
 /// UnmapViewOfFile
@@ -507,7 +557,6 @@ pub unsafe extern "win64" fn unmap_view_of_file(addr: usize) -> i32 {
     let view = views().as_mut().and_then(|m| m.remove(&addr));
     match view {
         Some(v) => {
-            crate::dlls::kernel32::unregister_view(v.addr);
             libc::munmap(v.addr as *mut _, v.len);
             1
         }
@@ -610,6 +659,63 @@ mod tests {
             assert!(!rights_allowed(0x5, 0x4000_0000));
             close_handle(same);
             close_handle(ro);
+        }
+    }
+
+    #[test]
+    fn double_mappage_w_xor_x_comme_coreclr() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            use crate::dlls::kernel32::{close_handle, virtual_alloc, virtual_protect};
+            const SEC_RESERVE: u32 = 0x0400_0000;
+            // CreateFileMapping(INVALID_HANDLE_VALUE, PAGE_EXECUTE_READWRITE |
+            // SEC_RESERVE, 64 Gio) : le mappeur de coreclr.
+            let h = create_file_mapping_w(
+                usize::MAX,
+                0,
+                PAGE_EXECUTE_READWRITE | SEC_RESERVE,
+                0x10,
+                0,
+                std::ptr::null(),
+            );
+            assert_ne!(h, 0);
+            // Vue exécutable, puis VirtualAlloc(MEM_COMMIT, PAGE_EXECUTE_READ).
+            let rx = map_view_of_file_ex(h, FILE_MAP_EXECUTE | _FILE_MAP_READ, 0, 0, 0x10000, 0);
+            assert_ne!(rx, 0);
+            let c = virtual_alloc(rx as *mut _, 0x2000, 0x1000, 0x20);
+            assert_eq!(c as usize, rx);
+            // Vue inscriptible des mêmes pages : ce qu'on y écrit se lit dans
+            // la vue exécutable.
+            let rw = map_view_of_file(h, FILE_MAP_WRITE | _FILE_MAP_READ, 0, 0, 0x10000);
+            assert_ne!(rw, 0);
+            assert_eq!(
+                virtual_alloc(rw as *mut _, 0x2000, 0x1000, 0x04) as usize,
+                rw
+            );
+            *(rw as *mut u8) = 0xC3;
+            assert_eq!(*(rx as *const u8), 0xC3);
+            // VirtualProtect sur la vue rend l'ancienne protection.
+            let mut old = 0u32;
+            assert_eq!(virtual_protect(rx as *mut _, 0x1000, 0x02, &mut old), 1);
+            assert_eq!(old, 0x20);
+            // Adresse imposée : non alignée ou occupée, ERROR_INVALID_ADDRESS.
+            assert_eq!(
+                map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, rx + 0x1000),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 487);
+            assert_eq!(map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, rx), 0);
+            assert_eq!(crate::process::last_error(), 487);
+            // Adresse libre : la vue y est posée.
+            unmap_view_of_file(rx);
+            assert_eq!(
+                map_view_of_file_ex(h, _FILE_MAP_READ, 0, 0, 0x10000, rx),
+                rx
+            );
+            assert_eq!(*(rx as *const u8), 0xC3);
+            unmap_view_of_file(rx);
+            unmap_view_of_file(rw);
+            close_handle(h);
         }
     }
 

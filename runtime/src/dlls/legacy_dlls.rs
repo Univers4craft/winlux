@@ -216,7 +216,9 @@ pub extern "win64" fn msi_get_product_info(_p: usize, _a: usize, _b: usize, _s: 
 }
 
 pub fn msi_exports() -> super::Exports {
-    crate::exports! {
+    // Fonctions de session des actions personnalisées DLL (#833).
+    let mut all = crate::msi::session::exports();
+    all.extend(crate::exports! {
         "MsiGetComponentPathW" => fn msi_get_component_path,
         "MsiGetComponentPathA" => fn msi_get_component_path,
         "MsiGetShortcutTargetW" => fn msi_get_shortcut_target,
@@ -232,7 +234,8 @@ pub fn msi_exports() -> super::Exports {
         // 1627 n'est ni ERROR_SUCCESS ni un INSTALLSTATE « présent ».
         "#70" => fn msi_get_shortcut_target,
         "#205" => fn msi_get_shortcut_target,
-    }
+    });
+    all
 }
 
 // ---------- shfolder.dll ----------

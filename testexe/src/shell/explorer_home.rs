@@ -73,7 +73,10 @@ pub(super) unsafe fn passes(e: &Entry) -> bool {
         return true;
     }
     match FILTER {
-        1 => matches!(e.kind, Kind::Text | Kind::Pdf | Kind::Code),
+        1 => matches!(
+            e.kind,
+            Kind::Text | Kind::Pdf | Kind::Code | Kind::Document | Kind::Spreadsheet | Kind::Presentation | Kind::Web
+        ),
         2 => e.kind == Kind::Image,
         3 => e.kind == Kind::Exe,
         4 => matches!(e.kind, Kind::Archive | Kind::DiskImage),
@@ -388,7 +391,7 @@ pub(super) unsafe fn badge(g: &mut Gfx, x: i32, y: i32, bg: u32) {
 
 /// Nom suivi de la pastille « Windows » pour un .exe, sinon nom seul.
 pub(super) unsafe fn name_badge(g: &mut Gfx, e: &Entry, x: i32, y: i32, name: &[u8], max_w: i32, color: u32, bg: u32) {
-    if e.dir || e.kind != Kind::Exe || max_w < badge_width() + 60 {
+    if !windows_program(e) || max_w < badge_width() + 60 {
         text_fit(g.hdc, g.f.caption, 12, color, x, y, name, max_w);
         return;
     }
@@ -508,10 +511,7 @@ pub(super) unsafe fn draw(g: &mut Gfx, pn: &Pane, r: &Rect, which: usize, focuse
             text_fit(g.hdc, g.f.small, 11, p.text3, tx, ir.top + 36, &sub[..sub_n], ir.right - tx - 10);
         } else if v < q + d {
             card(g, &ir, bg, if selected { p.accent } else { p.border });
-            let ic = icons::of_glyph(glyph_of(e.kind));
-            if !ic.is_some_and(|ic| icons::draw(g.hdc, ic, ir.left + 16, ir.top + 18, 40, 0)) {
-                glyph(g.hdc, g.b, g.f, glyph_of(e.kind), ir.left + 16, ir.top + 18, 40);
-            }
+            kind_glyph(g, e.kind, ir.left + 16, ir.top + 18, 40);
             let tx = ir.left + 70;
             let tw = ir.right - tx - 16;
             text_fit(g.hdc, g.f.semibold, 13, p.text, tx, ir.top + 14, e.name(), tw);
@@ -661,9 +661,9 @@ pub(super) unsafe fn draw_details(g: &mut Gfx, d: &Rect) {
                 } else {
                     None
                 };
-                let ic = place.map(icons::of_place).or_else(|| icons::of_glyph(glyph_of(e.kind)));
-                if !ic.is_some_and(|ic| icons::draw(g.hdc, ic, gx, gy, s, 0)) {
-                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), gx, gy, s);
+                match place.map(icons::of_place) {
+                    Some(ic) if icons::draw(g.hdc, ic, gx, gy, s, 0) => {}
+                    _ => kind_glyph(g, e.kind, gx, gy, s),
                 }
             }
             set_glyph_bg(None);
@@ -735,12 +735,12 @@ pub(super) unsafe fn draw_details(g: &mut Gfx, d: &Rect) {
         }
         None => {
             // Rien ou plusieurs éléments : le dossier courant.
-            let ic = place_icon(pn.loc.get()).or(if pn.loc.is(HOME) { icons::of_glyph(Glyph::Home) } else if pn.loc.is(PC) { icons::of_glyph(Glyph::Computer) } else { icons::of_glyph(Glyph::Folder) });
+            let ic = place_icon(pn.loc.get()).or(if pn.loc.is(HOME) { icons::of_glyph(Glyph::Home) } else if pn.loc.is(PC) { icons::of_glyph(Glyph::Computer) } else if pn.loc.is(NET) { Some(icons::Icon::Globe) } else { icons::of_glyph(Glyph::Folder) });
             if !ic.is_some_and(|ic| icons::draw(g.hdc, ic, gx, gy, s, 0)) {
                 glyph(g.hdc, g.b, g.f, Glyph::Folder, gx, gy, s);
             }
             set_glyph_bg(None);
-            let name = if pn.loc.is(HOME) { tr(S_HOME) } else if pn.loc.is(PC) { tr(S_THIS_PC) } else { last_component(pn.loc.get()) };
+            let name = if pn.loc.is(HOME) { tr(S_HOME) } else { last_component(pn.loc.get()) };
             text_fit(g.hdc, g.f.title, 15, p.text, x, pv.bottom + 14, name, w);
             let k = sel_count(pn);
             let (count, word): (usize, &[u8]) = if k > 1 {
@@ -848,4 +848,55 @@ pub(super) unsafe fn regression() {
     check!(exe.kind == Kind::Exe && pdf.kind != Kind::Exe, "Pastille Windows : seulement les programmes .exe");
     p.count = 0;
     p.nview = 0;
+    types_regression();
+}
+
+/// #890 et #886 : chaque famille de fichiers a son icône Prisme et un
+/// libellé lisible ; la pastille « Windows » reste aux seuls .exe/.msi ;
+/// les pictogrammes Terminal et loupe sont des glyphes Prisme au trait.
+#[inline(never)]
+unsafe fn types_regression() {
+    let entry = |name: &[u8]| {
+        let mut e = EMPTY_ENTRY;
+        e.name[..name.len()].copy_from_slice(name);
+        e.len = name.len() as u16;
+        e.kind = kind_of(name, false);
+        e
+    };
+    let cases: [(&[u8], Kind, icons::Icon); 11] = [
+        (b"budget.ods", Kind::Spreadsheet, icons::Icon::Spreadsheet),
+        (b"budget.XLSX", Kind::Spreadsheet, icons::Icon::Spreadsheet),
+        (b"diapo.pptx", Kind::Presentation, icons::Icon::Presentation),
+        (b"club.odp", Kind::Presentation, icons::Icon::Presentation),
+        (b"police.ttf", Kind::Font, icons::Icon::Font),
+        (b"code.py", Kind::Code, icons::Icon::Code),
+        (b"page.html", Kind::Web, icons::Icon::Web),
+        (b"script.sh", Kind::Script, icons::Icon::Script),
+        (b"lettre.docx", Kind::Document, icons::Icon::Document),
+        (b"setup.msi", Kind::Exe, icons::Icon::Exe),
+        (b"notes.txt", Kind::Text, icons::Icon::Text),
+    ];
+    let mut ok = true;
+    for (name, kind, icon) in cases {
+        let e = entry(name);
+        ok &= e.kind == kind && icon_of(e.kind) == Some(icon);
+    }
+    check!(ok, "Types de fichiers : tableur, presentation, police, code, web, script, document (#890)");
+    let badge = |n: &[u8]| windows_program(&entry(n));
+    check!(
+        badge(b"setup.exe") && badge(b"setup.msi") && !badge(b"script.sh") && !badge(b"jeu.AppImage") && !badge(b"code.py"),
+        "Pastille Windows : .exe et .msi seulement, pas les scripts ni les AppImage (#890)"
+    );
+    let mut ok = true;
+    for n in [b"budget.ods".as_slice(), b"diapo.pptx", b"police.ttf", b"page.html", b"lettre.docx"] {
+        let mut buf = [0u8; 48];
+        let t = type_name(&entry(n), &mut buf);
+        ok &= !t.is_empty() && !t.starts_with(b"Fichier ") && !t.starts_with(b"File ");
+    }
+    check!(ok, "Types de fichiers : libelle lisible, plus \"Fichier ODS\" (#890)");
+    check!(
+        icons::of_glyph(Glyph::Terminal) == Some(icons::Icon::Terminal)
+            && icons::of_glyph(Glyph::Search) == Some(icons::Icon::Search),
+        "Barre d'outils : Terminal et loupe en glyphes Prisme au trait (#886)"
+    );
 }

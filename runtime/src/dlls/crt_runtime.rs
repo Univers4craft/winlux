@@ -141,15 +141,15 @@ pub unsafe extern "win64" fn p_wenviron() -> *mut *mut *mut u16 {
     std::ptr::addr_of_mut!(WENVIRON)
 }
 /// `_get_initial_narrow_environment` : l'environnement tel qu'au démarrage
-/// (le lanceur des applis .NET 6+ le lit avant `main`, #664).
+/// (`__initenv`), utilisé par l'apphost .NET 6+ et createdump.exe (#664).
 pub unsafe extern "win64" fn get_initial_narrow_environment() -> *mut *mut u8 {
     init_args();
-    ENVIRON
+    INITENV
 }
-/// `_get_initial_wide_environment` : même chose en UTF-16.
+/// `_get_initial_wide_environment` : variante large (`__winitenv`) (#664).
 pub unsafe extern "win64" fn get_initial_wide_environment() -> *mut *mut u16 {
     init_args();
-    WENVIRON
+    WINITENV
 }
 pub unsafe extern "win64" fn p_fmode() -> *mut i32 {
     std::ptr::addr_of_mut!(FMODE)
@@ -1788,6 +1788,27 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environnement_initial_de_l_apphost_dotnet() {
+        unsafe {
+            let w = get_initial_wide_environment();
+            let n = get_initial_narrow_environment();
+            assert!(!w.is_null() && !n.is_null());
+            assert_eq!(w, WINITENV);
+            assert_eq!(n, INITENV);
+            // Même nombre d'entrées, liste terminée par NULL.
+            let count = |mut p: *mut *mut u8| {
+                let mut c = 0;
+                while !(*p).is_null() {
+                    c += 1;
+                    p = p.add(1);
+                }
+                c
+            };
+            assert_eq!(count(n), count(w.cast()));
+        }
+    }
 
     static CALLS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
     extern "win64" fn premier() {

@@ -19,8 +19,10 @@ pub mod lzma;
 pub mod msix;
 pub mod nsis;
 pub mod programs;
+pub mod run;
 pub mod sevenz;
 pub mod squirrel;
+pub mod web;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
@@ -217,6 +219,18 @@ pub fn user_language() -> u16 {
     }
 }
 
+/// Programme à lancer au début de la désinstallation (Inno `[UninstallRun]`).
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct RunEntry {
+    /// Programme (chemin Windows ou nom).
+    pub file: String,
+    pub params: String,
+    pub workdir: String,
+    pub wait: bool,
+    /// Ouvert comme par ShellExecute (`shellexec`).
+    pub shell: bool,
+}
+
 /// Ce que l'installation a créé, pour la désinstallation.
 #[derive(Default, Debug)]
 pub struct Manifest {
@@ -241,6 +255,8 @@ pub struct Manifest {
     pub trees: Vec<String>,
     /// Motifs à effacer à la désinstallation (chemin Windows, type).
     pub deletes: Vec<(String, u8)>,
+    /// Programmes lancés au début de la désinstallation.
+    pub runs: Vec<RunEntry>,
 }
 
 pub fn manifest_dir() -> PathBuf {
@@ -298,6 +314,16 @@ impl Manifest {
         for (p, t) in &self.deletes {
             text.push_str(&format!("delete\t{t}\t{}\n", clean(p)));
         }
+        for r in &self.runs {
+            text.push_str(&format!(
+                "run\t{}\t{}\t{}\t{}\t{}\n",
+                u8::from(r.wait),
+                u8::from(r.shell),
+                clean(&r.workdir),
+                clean(&r.file),
+                clean(&r.params)
+            ));
+        }
         let path = manifest_path(&self.id);
         std::fs::create_dir_all(manifest_dir())?;
         let tmp = path.with_extension("tmp");
@@ -328,6 +354,13 @@ impl Manifest {
                 ["key", k] => m.keys.push(k.to_string()),
                 ["tree", k] => m.trees.push(k.to_string()),
                 ["delete", t, p] => m.deletes.push((p.to_string(), t.parse().unwrap_or(0))),
+                ["run", wait, shell, workdir, file, params] => m.runs.push(RunEntry {
+                    wait: *wait == "1",
+                    shell: *shell == "1",
+                    workdir: workdir.to_string(),
+                    file: file.to_string(),
+                    params: params.to_string(),
+                }),
                 _ => {}
             }
         }
@@ -680,6 +713,13 @@ pub fn wildcard(pattern: &str, name: &str) -> bool {
 
 /// Retire tout ce qu'une installation a créé.
 pub fn remove(m: &Manifest, log: &mut Logger) {
+    // [UninstallRun] : avant de retirer les fichiers, comme Windows (l'outil
+    // lancé est souvent celui de l'application : désinscription, arrêt…).
+    for r in &m.runs {
+        let outcome = run::program(&r.file, &r.params, &r.workdir, r.wait, r.shell);
+        let what = format!("{} {}", r.file, r.params);
+        log.log(&run::describe(what.trim(), &outcome));
+    }
     for (pattern, kind) in &m.deletes {
         delete_pattern(pattern, *kind);
     }
@@ -854,6 +894,7 @@ pub fn cli(args: &[String]) -> i32 {
     let mut log = Logger { quiet: false };
     let mut opts = Options::default();
     let mut file = None;
+    let mut allow_download = false;
     let out = args
         .iter()
         .position(|a| a == "--out")
@@ -875,7 +916,25 @@ pub fn cli(args: &[String]) -> i32 {
                     eprintln!("{USAGE}");
                     return 2;
                 };
-                return match info(&host_path(p)) {
+                let host = host_path(p);
+                if host
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("msi"))
+                {
+                    // Paquet Windows Installer : le dossier se choisit par
+                    // ses propriétés, pas par /D= (colonne vide).
+                    return match crate::msi::install::package_summary(&host) {
+                        Ok((name, version, publisher)) => {
+                            println!("msi\t{name}\t{version}\t{publisher}\t");
+                            0
+                        }
+                        Err(code) => {
+                            eprintln!("setup : paquet MSI illisible ({code})");
+                            1
+                        }
+                    };
+                }
+                return match info(&host) {
                     Ok(inf) => {
                         println!(
                             "{}\t{}\t{}\t{}\t{}",
@@ -937,6 +996,7 @@ pub fn cli(args: &[String]) -> i32 {
             | "--quiet" => log.quiet = lower == "--quiet",
             "/nodesktop" | "--no-desktop" => opts.no_desktop = true,
             "--allow-unverified" => opts.allow_unverified = true,
+            "--allow-download" => allow_download = true,
             _ => {
                 if let Some(d) = a.strip_prefix("/D=").or_else(|| a.strip_prefix("/DIR=")) {
                     opts.dir = Some(d.trim_matches('"').to_string());
@@ -955,7 +1015,20 @@ pub fn cli(args: &[String]) -> i32 {
         eprintln!("{USAGE}");
         return 2;
     };
-    match install(&host_path(&file), &opts, log) {
+    // Auto-extractible qui lance son propre installateur (paquet MSI porté,
+    // ou téléchargeur, #733, #896) : suivi ici, comme au double-clic.
+    let path = host_path(&file);
+    if detect_file(&path) == Some(Kind::SevenZip) {
+        let rest: Vec<String> = args
+            .iter()
+            .filter(|a| a.starts_with('/') && !Path::new(a.as_str()).exists())
+            .cloned()
+            .collect();
+        if let Some(rc) = sevenz::chain(&path, &rest, allow_download) {
+            return rc;
+        }
+    }
+    match install(&path, &opts, log) {
         Ok(_) => 0,
         // Paquet MSIX d'un éditeur non vérifié : le lanceur du double-clic
         // demande une confirmation puis relance avec --allow-unverified.
@@ -1034,7 +1107,7 @@ pub fn launch(exe: &Path, args: &[String]) -> Option<i32> {
     // Auto-extractible qui lance son propre installateur autour d'un paquet
     // MSI (Paint.NET) : le MSI est installé directement.
     let msi = (kind == Kind::SevenZip)
-        .then(|| sevenz::launch_msi(exe, args))
+        .then(|| sevenz::chain(exe, args, false))
         .flatten();
     if let Some(code) = msi {
         return Some(code);

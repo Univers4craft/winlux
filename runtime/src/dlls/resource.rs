@@ -123,7 +123,30 @@ fn find_resource_data(
     type_is_str: bool,
     name_is_str: bool,
 ) -> Option<(u32, u32)> {
-    let (_rsrc_rva, rsrc) = resource_root(base)?;
+    let entry = find_resource_entry(base, type_id, name_id, type_is_str, name_is_str)?;
+    // SAFETY: find_resource_entry a vérifié que l'entrée est dans la section.
+    unsafe { Some(read_data_entry(entry)) }
+}
+
+/// RVA et taille lues dans une IMAGE_RESOURCE_DATA_ENTRY en mémoire.
+unsafe fn read_data_entry(entry: usize) -> (u32, u32) {
+    let p = entry as *const u32;
+    (p.read_unaligned(), p.add(1).read_unaligned())
+}
+
+/// Adresse de l'IMAGE_RESOURCE_DATA_ENTRY de la ressource dans l'image :
+/// c'est le HRSRC, comme sous Windows. Il tient sur 32 bits pour un
+/// programme x86 (image sous 4 Go) ; l'ancien encodage « RVA << 32 |
+/// taille » y perdait le RVA, et LoadResource rendait l'en-tête MZ au lieu
+/// des données (fiches Delphi illisibles, WinSCP 32 bits, #905).
+fn find_resource_entry(
+    base: usize,
+    type_id: usize,
+    name_id: usize,
+    type_is_str: bool,
+    name_is_str: bool,
+) -> Option<usize> {
+    let (rsrc_rva, rsrc) = resource_root(base)?;
 
     // Niveau 1 : type
     let type_val = find_entry(rsrc, 0, type_id, type_is_str)?;
@@ -151,10 +174,9 @@ fn find_resource_data(
         return None;
     }
 
-    // IMAGE_RESOURCE_DATA_ENTRY
-    let data_rva = rd32(rsrc, data_entry_off)?;
-    let data_size = rd32(rsrc, data_entry_off + 4)?;
-    Some((data_rva, data_size))
+    // IMAGE_RESOURCE_DATA_ENTRY : OffsetToData, Size, CodePage, Reserved.
+    rd32(rsrc, data_entry_off + 4)?;
+    Some((base & !loader::DATA_HANDLE_BITS) + rsrc_rva + data_entry_off)
 }
 
 /// Manifeste d'application (RT_MANIFEST, identifiant 1) d'un module chargé.
@@ -225,8 +247,8 @@ pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *
     let type_is_str = !is_int_resource(ty as usize);
     let name_is_str = !is_int_resource(name as usize);
 
-    match find_resource_data(base, type_id, name_id, type_is_str, name_is_str) {
-        Some((rva, size)) => encode_hrsrc(rva, size),
+    match find_resource_entry(base, type_id, name_id, type_is_str, name_is_str) {
+        Some(entry) => entry,
         None => {
             crate::process::set_last_error(1813);
             0
@@ -254,8 +276,8 @@ pub unsafe extern "win64" fn find_resource_w(
     let type_is_str = !is_int_resource(ty as usize);
     let name_is_str = !is_int_resource(name as usize);
 
-    match find_resource_data(base, type_id, name_id, type_is_str, name_is_str) {
-        Some((rva, size)) => encode_hrsrc(rva, size),
+    match find_resource_entry(base, type_id, name_id, type_is_str, name_is_str) {
+        Some(entry) => entry,
         None => {
             crate::process::set_last_error(1813);
             0
@@ -263,34 +285,33 @@ pub unsafe extern "win64" fn find_resource_w(
     }
 }
 
-fn encode_hrsrc(rva: u32, size: u32) -> usize {
-    ((rva as usize) << 32) | size as usize
-}
-fn decode_hrsrc(h: usize) -> (u32, u32) {
-    ((h >> 32) as u32, h as u32)
+/// HRSRC plausible : l'adresse d'une entrée de données (jamais une petite
+/// valeur, 0 compris).
+fn data_entry(hrsrc: usize) -> Option<(u32, u32)> {
+    if hrsrc < 0x10000 {
+        return None;
+    }
+    // SAFETY: un HRSRC vient de FindResource, qui rend l'adresse d'une
+    // IMAGE_RESOURCE_DATA_ENTRY dans une image chargée.
+    Some(unsafe { read_data_entry(hrsrc) })
 }
 
 /// LoadResource : renvoie un HGLOBAL (pointeur vers les données en mémoire).
 pub unsafe extern "win64" fn load_resource(hmod: usize, hrsrc: usize) -> usize {
-    if hrsrc == 0 {
+    let Some((rva, _size)) = data_entry(hrsrc) else {
         return 0;
-    }
+    };
     let base = if hmod == 0 {
         loader::main_module().map(|m| m.base).unwrap_or(0)
     } else {
         hmod & !loader::DATA_HANDLE_BITS
     };
-    let (rva, _size) = decode_hrsrc(hrsrc);
     base + rva as usize
 }
 
 /// SizeofResource
 pub unsafe extern "win64" fn sizeof_resource(_hmod: usize, hrsrc: usize) -> u32 {
-    if hrsrc == 0 {
-        return 0;
-    }
-    let (_rva, size) = decode_hrsrc(hrsrc);
-    size
+    data_entry(hrsrc).map_or(0, |(_rva, size)| size)
 }
 
 /// LockResource : sous Windows, c'est un no-op qui renvoie le même pointeur.
@@ -422,7 +443,12 @@ pub unsafe extern "win64" fn load_string_w(
     };
     if buf_size == 0 {
         let (ptr, len) = entry.unwrap_or((0, 0));
-        (buf as *mut usize).write_unaligned(ptr);
+        // Pointeur de 4 octets pour un programme x86.
+        if crate::wow32::pointer_size() == 4 {
+            (buf as *mut u32).write_unaligned(ptr as u32);
+        } else {
+            (buf as *mut usize).write_unaligned(ptr);
+        }
         return len as i32;
     }
     let Some((ptr, len)) = entry else {
@@ -453,11 +479,16 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
 
+    /// #905 : le HRSRC est l'adresse de l'IMAGE_RESOURCE_DATA_ENTRY ;
+    /// SizeofResource et LoadResource y lisent taille et RVA.
     #[test]
-    fn encode_decode_hrsrc() {
-        let h = encode_hrsrc(0x1234, 0x5678);
-        let (rva, size) = decode_hrsrc(h);
-        assert_eq!(rva, 0x1234);
-        assert_eq!(size, 0x5678);
+    fn hrsrc_est_l_adresse_de_l_entree() {
+        let entry: Box<[u32; 4]> = Box::new([0x1234, 0x5678, 0, 0]);
+        let h = entry.as_ptr() as usize;
+        assert_eq!(data_entry(h), Some((0x1234, 0x5678)));
+        assert_eq!(unsafe { sizeof_resource(0, h) }, 0x5678);
+        assert_eq!(unsafe { load_resource(0x40_0000, h) }, 0x40_0000 + 0x1234);
+        assert_eq!(data_entry(0), None);
+        assert_eq!(unsafe { load_resource(0x40_0000, 0) }, 0);
     }
 }

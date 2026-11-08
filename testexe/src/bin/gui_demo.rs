@@ -1032,9 +1032,16 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 let n = t.len().min(buf.len() - 1);
                 buf[..n].copy_from_slice(&t[..n]);
                 buf[n] = 0;
-                core::ffi::CStr::from_bytes_until_nul(&buf[..]).unwrap_or(c"Explorer Winlux")
+                core::ffi::CStr::from_bytes_until_nul(&buf[..]).unwrap_or(c"Explorateur de fichiers")
             } else {
-                c"Explorer Winlux"
+                // Nom de la fenêtre (barre des tâches, Alt+Tab) dans la langue
+                // de la session, plus « Explorer Winlux » en anglais (#888).
+                match locale::CURRENT_LANG {
+                    locale::Lang::En => c"File Explorer",
+                    locale::Lang::Es => c"Explorador de archivos",
+                    locale::Lang::De => c"Datei-Explorer",
+                    _ => c"Explorateur de fichiers",
+                }
             }
         } else if let Some(app) = wm::native_app() {
             // Titre de l'application ouverte (barre des tâches, Alt+Tab), pas
@@ -1068,11 +1075,18 @@ pub extern "C" fn mainCRTStartup() -> ! {
         } else {
             (120, 80, 720, 480)
         };
+        // Explorateur natif : sans barre de titre du gestionnaire (WS_POPUP
+        // redimensionnable), ses onglets forment la barre de titre (#888).
+        let style = if wm::native_app().is_some() && wm::native_frameless() {
+            0x8000_0000 | 0x0004_0000 | 0x0008_0000 | 0x0002_0000 | 0x0001_0000 | WS_VISIBLE
+        } else {
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE
+        };
         let hwnd = CreateWindowExA(
             0,
             class.as_ptr(),
             title.as_ptr(),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            style,
             window_x,
             window_y,
             window_width,
@@ -1118,11 +1132,18 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         last_tick = GetTickCount();
                         desktop::tick(hwnd);
                     }
-                } else if wm::native_app().is_some()
-                    && GetTickCount().wrapping_sub(last_tick) >= 500
-                {
-                    last_tick = GetTickCount();
-                    wm::native_tick(hwnd);
+                } else if wm::native_app().is_some() {
+                    if GetTickCount().wrapping_sub(last_tick) >= 500 {
+                        last_tick = GetTickCount();
+                        wm::native_tick(hwnd);
+                    }
+                    // Passage clair/sombre (#891) : la transition se repeint à
+                    // chaque tour jusqu'au bout, sinon la fenêtre restait figée
+                    // sur la première image (fond gris, texte du thème quitté)
+                    // jusqu'au prochain survol.
+                    if gfx::theme_animating() {
+                        InvalidateRect(hwnd, core::ptr::null(), 0);
+                    }
                 }
                 Sleep(if desktop { 4 } else { 10 });
             }

@@ -119,6 +119,14 @@ GetLogicalProcessorInformation@8
 EnumCalendarInfoW@16
 K32EnumProcessModules@16
 GetModuleHandleA@4
+FindResourceW@12
+LoadResource@8
+SizeofResource@8
+LockResource@4
+CreateFileW@28
+DeleteFileW@4
+SetLastError@4
+GetLastError@0
 DEF
 printf 'LIBRARY msvcrt.dll\nEXPORTS\n_adjust_fdiv DATA\n_controlfp\n_ftol\n' >"$tmp/msvcrt_wow64.def"
 llvm-dlltool -m i386 -d "$tmp/msvcrt_wow64.def" -l "$tmp/msvcrt_wow64.lib"
@@ -145,10 +153,23 @@ printf 'LIBRARY gdi32.dll\nEXPORTS\nCreateCompatibleDC@4\nCreateCompatibleBitmap
 llvm-dlltool -m i386 -k -d "$tmp/gdi32_wow64.def" -l "$tmp/gdi32_wow64.lib"
 llvm-dlltool -m i386 -k -d "$tmp/user32_wow64.def" -l "$tmp/user32_wow64.lib"
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/wow64.c" -o "$tmp/wow64.obj"
+# Ressource RT_RCDATA nommée « WINLUX » (« TPF0winlux ») écrite à la main
+# au format .res, sans llvm-rc : vérification 78.
+python3 -B - "$tmp/wow64.res" <<'PY'
+import struct, sys
+def entry(typ, name, data):
+    hdr = struct.pack("<HH", 0xFFFF, typ) + "".join(name).encode("utf-16-le") + b"\0\0"
+    hdr += b"\0" * (-len(hdr) % 4)
+    hdr += struct.pack("<IHHII", 0, 0x30, 0x0409, 0, 0)
+    out = struct.pack("<II", len(data), 8 + len(hdr)) + hdr + data
+    return out + b"\0" * (-len(out) % 4)
+empty = struct.pack("<IIHHHHIHHII", 0, 32, 0xFFFF, 0, 0xFFFF, 0, 0, 0, 0, 0, 0)
+open(sys.argv[1], "wb").write(empty + entry(10, "WINLUX", b"TPF0winlux"))
+PY
 lld-link /nologo /machine:x86 /entry:entry /subsystem:console /nodefaultlib /safeseh:no \
     "$tmp/wow64.obj" "$tmp/kernel32_wow64.lib" "$tmp/advapi32_wow64.lib" "$tmp/msvcrt_wow64.lib" \
     "$tmp/oleaut32_wow64.lib" "$tmp/ws2_32_wow64.lib" "$tmp/user32_wow64.lib" \
-    "$tmp/gdi32_wow64.lib" "$tmp/winhttp_wow64.lib" /out:"$out/wow64.exe"
+    "$tmp/gdi32_wow64.lib" "$tmp/winhttp_wow64.lib" "$tmp/wow64.res" /out:"$out/wow64.exe"
 # Exceptions C++ MSVC x86 (#232, étape 7) : tables de clang en cible
 # i686-pc-windows-msvc, msvcrt!__CxxFrameHandler3 et _CxxThrowException.
 cat >"$tmp/kernel32_cxx.def" <<'DEF'
@@ -292,6 +313,12 @@ EXPORTS
 DirectPlayCreate@12
 DirectPlayLobbyCreateA@20
 DEF
+cat >"$tmp/jeux_dpnet.def" <<'DEF'
+LIBRARY dpnet.dll
+EXPORTS
+DirectPlay8Create@12
+DirectPlay8AddressCreate@12
+DEF
 cat >"$tmp/jeux_ole32.def" <<'DEF'
 LIBRARY ole32.dll
 EXPORTS
@@ -318,6 +345,15 @@ D3DXCreateTextureFromFileInMemoryEx@60
 D3DXCreateSprite@8
 D3DXCreateFontA@48
 D3DXCreateBuffer@8
+D3DXAssembleShader@28
+D3DXGetShaderConstantTable@8
+D3DXGetShaderInputSemantics@12
+D3DXCreateBox@24
+D3DXCreateSphere@24
+D3DXComputeNormals@8
+D3DXLoadMeshFromXInMemory@36
+D3DXCompileShader@40
+D3DXCreateEffect@36
 DEF
 cat >"$tmp/jeux_winmm.def" <<'DEF'
 LIBRARY winmm.dll
@@ -345,7 +381,7 @@ waveOutWrite@12
 waveOutClose@4
 DEF
 mkdir -p "$tmp/jeux64"
-for lib in jeux jeux_user32 jeux_gdi32 jeux_ddraw jeux_d3d8 jeux_d3d9 jeux_d3dx9 jeux_dsound jeux_ole32 jeux_dplayx jeux_winmm; do
+for lib in jeux jeux_user32 jeux_gdi32 jeux_ddraw jeux_d3d8 jeux_d3d9 jeux_d3dx9 jeux_dsound jeux_ole32 jeux_dplayx jeux_dpnet jeux_winmm; do
     llvm-dlltool -m i386 -k -d "$tmp/$lib.def" -l "$tmp/$lib.lib"
     sed 's/@[0-9]*$//' "$tmp/$lib.def" >"$tmp/jeux64/$lib.def"
     llvm-dlltool -m i386:x86-64 -d "$tmp/jeux64/$lib.def" -l "$tmp/jeux64/$lib.lib"
@@ -353,11 +389,11 @@ done
 clang --target=i686-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux32.obj"
 lld-link /nologo /machine:x86 /entry:entry /subsystem:windows /nodefaultlib /safeseh:no \
     "$tmp/jeux32.obj" "$tmp/jeux.lib" "$tmp/jeux_user32.lib" "$tmp/jeux_gdi32.lib" \
-    "$tmp/jeux_ddraw.lib" "$tmp/jeux_d3d8.lib" "$tmp/jeux_d3d9.lib" "$tmp/jeux_d3dx9.lib" "$tmp/jeux_dsound.lib" "$tmp/jeux_ole32.lib" "$tmp/jeux_dplayx.lib" "$tmp/jeux_winmm.lib" /out:"$out/jeux32.exe"
+    "$tmp/jeux_ddraw.lib" "$tmp/jeux_d3d8.lib" "$tmp/jeux_d3d9.lib" "$tmp/jeux_d3dx9.lib" "$tmp/jeux_dsound.lib" "$tmp/jeux_ole32.lib" "$tmp/jeux_dplayx.lib" "$tmp/jeux_dpnet.lib" "$tmp/jeux_winmm.lib" /out:"$out/jeux32.exe"
 clang --target=x86_64-pc-windows-msvc -O1 -fno-builtin -fno-stack-protector -c "$src/jeux32.c" -o "$tmp/jeux64/jeux64.obj"
 lld-link /nologo /machine:x64 /entry:entry /subsystem:windows /nodefaultlib \
     "$tmp/jeux64/jeux64.obj" "$tmp/jeux64/jeux.lib" "$tmp/jeux64/jeux_user32.lib" \
-    "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_winmm.lib" \
+    "$tmp/jeux64/jeux_gdi32.lib" "$tmp/jeux64/jeux_ddraw.lib" "$tmp/jeux64/jeux_d3d8.lib" "$tmp/jeux64/jeux_d3d9.lib" "$tmp/jeux64/jeux_d3dx9.lib" "$tmp/jeux64/jeux_dsound.lib" "$tmp/jeux64/jeux_ole32.lib" "$tmp/jeux64/jeux_dplayx.lib" "$tmp/jeux64/jeux_dpnet.lib" "$tmp/jeux64/jeux_winmm.lib" \
     /out:"$out/jeux64.exe"
 # CRT 32 bits (#232, étape 3) : vrai programme MinGW i686 lié à msvcrt.dll,
 # avec le printf de MinGW puis avec celui de msvcrt. Facultatif : sans

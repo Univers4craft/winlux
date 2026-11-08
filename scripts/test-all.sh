@@ -89,6 +89,13 @@ fi
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
 
+# Applis WinForms et WPF .NET autonomes (#664–#666, #268) : télécharge une fois le runtime
+# .NET 9 de Paint.NET portable (132 Mo), donc pas en mode rapide.
+if test "$quick" = 0; then
+    step "scripts/test-winforms-bonjour.sh" sh scripts/test-winforms-bonjour.sh
+    step "scripts/test-wpf-bonjour.sh" sh scripts/test-wpf-bonjour.sh
+fi
+
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
 # Playwright, sauf WINLUX_SITE_RENDER=required.
 step "scripts/test-site.py (site web)" python3 -B scripts/test-site.py --render

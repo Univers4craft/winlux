@@ -272,7 +272,7 @@ pub(super) unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     text_fit(g.hdc, g.f.semibold, 14, p.text, r.left + 20, r.top + 16, &title[..n], r.right - r.left - 40);
     // Icône et nom.
-    glyph(g.hdc, g.b, g.f, glyph_of(P.kind), r.left + 20, r.top + 50, 32);
+    kind_glyph(g, P.kind, r.left + 20, r.top + 50, 32);
     text_fit(g.hdc, g.f.caption, 12, p.text, r.left + 70, r.top + 59, &P.name[..P.name_len], r.right - r.left - 90);
     fill(g.hdc, g.b, r.left + 20, r.top + 94, r.right - 20, r.top + 95, p.border);
     let label_x = r.left + 20;

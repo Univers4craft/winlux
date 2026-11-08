@@ -214,10 +214,12 @@ pub unsafe extern "win64" fn ext_text_out_w(
     dx: *const i32,
 ) -> i32 {
     const ETO_GLYPH_INDEX: u32 = 0x10;
-    let s = if !text.is_null() && count > 0 && options & ETO_GLYPH_INDEX == 0 {
-        String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize))
-    } else {
+    let s = if text.is_null() || count == 0 {
         String::new()
+    } else if options & ETO_GLYPH_INDEX != 0 {
+        glyphs_to_text(hdc, std::slice::from_raw_parts(text, count as usize))
+    } else {
+        String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize))
     };
     // lpDx compte des unités UTF-16 : une paire de substitution (hors BMP)
     // fausserait l'appariement, on retombe alors sur l'avance naturelle.
@@ -227,6 +229,25 @@ pub unsafe extern "win64" fn ext_text_out_w(
         std::ptr::null()
     };
     ext_text_out(hdc, x, y, options, rect, &s, dx)
+}
+
+/// Texte équivalent à des numéros de glyphes (ETO_GLYPH_INDEX, que Qt
+/// emploie pour dessiner chaque glyphe dans une DIB) : chaque glyphe
+/// redevient son caractère dans la police du DC ; un glyphe sans caractère
+/// devient une espace pour garder l'appariement avec lpDx.
+fn glyphs_to_text(hdc: usize, glyphs: &[u16]) -> String {
+    let Some(f) = super::usp10::dc_font(hdc) else {
+        return String::new();
+    };
+    glyphs
+        .iter()
+        .map(|&g| {
+            f.font
+                .char_of_glyph(g)
+                .and_then(char::from_u32)
+                .unwrap_or(' ')
+        })
+        .collect()
 }
 
 /// Cœur d'`ExtTextOut` : ETO_OPAQUE remplit le rectangle avec la couleur de
@@ -1567,5 +1588,56 @@ mod text_align_tests {
         );
         gui::free_dc(hdc);
         assert_eq!(set_text_align(hdc, 0), u32::MAX);
+    }
+    /// Qt (VLC) dessine chaque glyphe dans une DIB avec
+    /// ExtTextOutW(ETO_GLYPH_INDEX) puis en lit les pixels : sans dessin,
+    /// tout le texte de l'interface restait invisible.
+    #[test]
+    fn eto_glyph_index_dessine_les_glyphes() {
+        let hdc = gui::create_dc(0);
+        let Some(f) = crate::dlls::usp10::dc_font(hdc) else {
+            eprintln!("aucune police TrueType : test sauté");
+            gui::free_dc(hdc);
+            return;
+        };
+        let glyphs: Vec<u16> = "Hi".chars().map(|c| f.font.glyph_index(c as u32)).collect();
+        assert!(glyphs.iter().all(|&g| g != 0));
+        assert_eq!(glyphs_to_text(hdc, &glyphs), "Hi");
+        assert_eq!(glyphs_to_text(hdc, &[0xFFFF]), " ");
+
+        let bmp = gui::create_compatible_bitmap(40, 30).unwrap();
+        gui::select_object(hdc, bmp);
+        gui::record(
+            hdc,
+            DrawCmd::FillRect {
+                rect: Rect::from_size(0, 0, 40, 30),
+                color: 0x00FF_FFFF,
+            },
+        );
+        gui::set_dc_text_color(hdc, 0);
+        gui::set_dc_bk_mode(hdc, 1);
+        let ok = unsafe {
+            ext_text_out_w(
+                hdc,
+                2,
+                2,
+                0x10,
+                std::ptr::null(),
+                glyphs.as_ptr(),
+                glyphs.len() as u32,
+                std::ptr::null(),
+            )
+        };
+        assert_ne!(ok, 0);
+        let snap = gui::bitmap_snapshot(hdc, Rect::from_size(0, 0, 40, 30)).unwrap();
+        let dark = snap
+            .pixels
+            .iter()
+            .filter(|&&p| p & 0x00FF_FFFF != 0x00FF_FFFF)
+            .count();
+        assert!(dark > 5, "aucun pixel de texte ({dark})");
+        gui::select_object(hdc, gui::DEFAULT_BITMAP);
+        gui::delete_object(bmp);
+        gui::free_dc(hdc);
     }
 }

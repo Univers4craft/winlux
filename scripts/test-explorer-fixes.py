@@ -215,4 +215,44 @@ ok("home::regression();" in explorer and "pub(super) unsafe fn regression()" in 
 ok(all(w in home for w in ('b"Lecteurs"', 'b"Drives"', 'b"Unidades"', 'b"Laufwerke"')),
    "Accueil : titres de section dans les quatre langues")
 
+# ── #886, #890, #891 : icônes Prisme et thème en direct ─────────────────────
+gen = (ROOT / "scripts/gen-explorer-icons.py").read_text(encoding="utf-8")
+prisme = (ROOT / "scripts/generer-icones.py").read_text(encoding="utf-8")
+icons_dir = ROOT / "assets/icons/explorateur"
+for variant, name in (("Spreadsheet", "type-tableur"), ("Presentation", "type-presentation"),
+                      ("Font", "type-police"), ("Web", "type-web"), ("Code", "type-code"),
+                      ("Script", "type-script"), ("Terminal", "terminal"), ("Search", "rechercher")):
+    ok(f'("{variant}", "{name}")' in gen and all((icons_dir / f"{name}-{t}.png").exists() for t in (16, 20, 24, 32, 48)),
+       f"icône Prisme {name} générée et intégrée")
+    ok(f'"{name}"' in prisme, f"{name} produite par scripts/generer-icones.py (pas à la main)")
+data = (SHELL / "explorer_icons_data.rs").read_text(encoding="utf-8")
+ok("Spreadsheet," in data and "Terminal," in data, "explorer_icons_data.rs régénéré")
+ok('if any(&[b"exe", b"com", b"msi", b"appimage"])' in explorer and 'b"sh", b"bash"' in explorer,
+   "#890 : .sh classé script, plus programme Windows")
+ok("types_regression();" in home_rs, "#890 : types, pastille et libellés vérifiés par explorer_regression")
+demo = (ROOT / "testexe/src/bin/gui_demo.rs").read_text(encoding="utf-8")
+ok("if gfx::theme_animating() {\n                        InvalidateRect(hwnd" in demo,
+   "#891 : la transition clair/sombre est repeinte jusqu'au bout dans une fenêtre ouverte")
+
+# ── #888 : maquette Prisme ; #916 : unités et dates en allemand ────────────
+wm_rs = (SHELL / "wm.rs").read_text(encoding="utf-8")
+ok("fn native_frameless" in wm_rs and "DefWindowProcA(hwnd, 0x00A1, ht, 0)" in wm_rs
+   and "0x8000_0000 | 0x0004_0000" in demo,
+   "#888 : Explorateur natif sans barre de titre, onglets en légende (déplacer, bords, boutons)")
+gui = (ROOT / "runtime/src/dlls/gui.rs").read_text(encoding="utf-8")
+x11 = (ROOT / "runtime/src/dlls/gui_x11.rs").read_text(encoding="utf-8")
+ok("fn begin_move_resize" in gui and "_NET_WM_MOVERESIZE" in x11 and "WM_CHANGE_STATE" in x11
+   and "_NET_WM_STATE_MAXIMIZED_VERT" in x11,
+   "#888 : runtime — WM_NCLBUTTONDOWN/WM_SYSCOMMAND et ShowWindow réduire/agrandir via le gestionnaire")
+ok('c"Explorateur de fichiers"' in demo and 'c"Datei-Explorer"' in demo,
+   "#888 : titre de fenêtre traduit, plus « Explorer Winlux »")
+ok("Cmd::More" in explorer and "Cmd::Share" in explorer and "fn view_label" in explorer,
+   "#888 : barre de commandes compacte (Partager, affichage courant ▾, « … »)")
+ok('const NET: &[u8] = b"::net";' in explorer and "push(net_label(), Glyph::NetDrive, NET, 0);" in explorer,
+   "#888 : Réseau dans le volet de navigation")
+ok("fn center_wrap" in explorer and "layout_regression();" in explorer,
+   "#888 : noms sur deux lignes, vérifiés par explorer_regression")
+ok('b" GB", b" TB"' in explorer and "formats_regression();" in explorer,
+   "#916 : unités GB et date 08.11.2026 en allemand")
+
 print(f"test-explorer-fixes : {checks} vérifications OK")
