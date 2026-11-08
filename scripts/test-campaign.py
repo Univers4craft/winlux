@@ -1276,4 +1276,13 @@ ok("fn is_mouse_button" in (runtime_dlls / "gui.rs").read_text(encoding="utf-8")
 ok('"CoDecrementMTAUsage"=>fn co_decrement_mta_usage' in (runtime_dlls / "ole32.rs").read_text(encoding="utf-8")
    and "utilisation_du_mta_par_jetons" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
    "COM : CoIncrementMTAUsage / CoDecrementMTAUsage, aussi par combase et api-ms-win-core-com (#1147)")
+# #1169 : SHGetStockIconInfo donne un emplacement que SHDefExtractIcon sait lire
+# (WinForms SystemIcons.GetStockIcon, boîte d'exception de Flow Launcher).
+ok("fn sh_def_extract_icon_w" in (runtime_dlls / "ftp_apps.rs").read_text(encoding="utf-8")
+   and "icone_standard_par_son_emplacement" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Icônes standard : SHGetStockIconInfo + SHDefExtractIcon rendent une vraie icône (#1169)")
+# #1170 : Themes\Personalize présent (Flow Launcher, Theme.ColorizeWindow).
+ok("fn personalize" in (ROOT / "runtime/src/registry/live.rs").read_text(encoding="utf-8")
+   and "vue_dynamique_personnalisation_presente" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Registre : Themes\\Personalize (AppsUseLightTheme…) toujours présent (#1170)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
