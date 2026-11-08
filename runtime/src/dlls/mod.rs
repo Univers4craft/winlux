@@ -111,6 +111,7 @@ pub mod hlsl;
 pub mod hostcall;
 pub mod hostssl;
 pub mod icons;
+pub mod image_list_com;
 pub mod imm32;
 pub mod inherit;
 pub mod inifile;
@@ -149,6 +150,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod oleaut32_var;
 pub mod opengl32;
 pub mod pdh;
 pub mod powrprof;
@@ -583,7 +585,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "oleaut32",
-                exports: oleaut32::exports(),
+                exports: {
+                    let mut e = oleaut32::exports();
+                    e.extend(oleaut32_var::exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -1031,7 +1037,7 @@ fn add_basics(all: &mut [Builtin]) {
         ("rpcrt4", games_win32::rpcrt4_exports()),
     ];
     // Fonctions relevées sur de vrais logiciels (apps_win32), en complément.
-    let apps: [(&str, Exports); 10] = [
+    let apps: [(&str, Exports); 11] = [
         ("winmm", apps_win32::winmm_exports()),
         ("gdi32", usp10::gdi32_exports()),
         ("kernel32", apps_win32::kernel32_exports()),
@@ -1039,6 +1045,7 @@ fn add_basics(all: &mut [Builtin]) {
         ("user32", apps_win32::user32_exports()),
         ("comctl32", apps_win32::comctl32_exports()),
         ("shell32", apps_win32::shell32_exports()),
+        ("shell32", image_list_com::shell32_exports()),
         ("advapi32", apps_win32::advapi32_exports()),
         ("msvcrt", apps_win32::crt_exports()),
         ("ucrtbase", apps_win32::crt_exports()),

@@ -240,6 +240,22 @@ impl Builder {
     }
 }
 
+/// Nom d'adaptateur stable, au format GUID comme sous Windows.
+fn adapter_guid(a: &Adapter) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in a.name.bytes() {
+        hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3);
+    }
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:04X}-{:012X}}}",
+        hash as u32,
+        (hash >> 32) as u16,
+        (hash >> 48) as u16 & 0x0FFF | 0x4000,
+        a.index as u16 | 0x8000,
+        hash & 0xFFFF_FFFF_FFFF
+    )
+}
+
 fn family_ok(family: u32, ip: &std::net::IpAddr) -> bool {
     match family {
         2 => ip.is_ipv4(),
@@ -263,20 +279,7 @@ fn build(list: &[Adapter], family: u32, flags: u32, dns: &[std::net::IpAddr]) ->
         if let Some(&next) = heads.get(k + 1) {
             b.ptr_at(h + 8, next);
         }
-        // Nom d'adaptateur stable, au format GUID comme sous Windows.
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in a.name.bytes() {
-            hash = (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3);
-        }
-        let guid = format!(
-            "{{{:08X}-{:04X}-{:04X}-{:04X}-{:012X}}}",
-            hash as u32,
-            (hash >> 32) as u16,
-            (hash >> 48) as u16 & 0x0FFF | 0x4000,
-            a.index as u16 | 0x8000,
-            hash & 0xFFFF_FFFF_FFFF
-        );
-        let name = b.ansi(&guid);
+        let name = b.ansi(&adapter_guid(a));
         b.ptr_at(h + 16, name);
         if flags & GAA_FLAG_SKIP_UNICAST == 0 {
             let mut prev = h + 24;
@@ -382,26 +385,278 @@ pub unsafe extern "win64" fn GetAdaptersAddresses(
     *size = b.buf.len() as u32;
     0
 }
-pub unsafe extern "win64" fn GetAdaptersInfo(_info: usize, size: *mut u32) -> u32 {
-    if !size.is_null() {
-        *size = 0;
-    }
-    ERROR_BUFFER_OVERFLOW
+// Structures d'iptypes.h et d'ifmib.h (x64), d'après leur documentation
+// publique. Les listes chaînées (IP_ADDR_STRING) suivent la structure
+// principale dans le tampon de l'appelant, qui annonce sa taille : trop
+// petit, la fonction rend la taille exacte, jamais 0 (sinon .NET réalloue
+// à 0 et recommence sans fin, #1048).
+
+/// IP_ADDR_STRING : Next, IpAddress[16], IpMask[16], Context.
+const ADDR_STRING_SIZE: usize = 48;
+/// FIXED_INFO_W2KSP1.
+const FIXED_INFO_SIZE: usize = 600;
+const FI_DOMAIN: usize = 132;
+const FI_CURRENT_DNS: usize = 264;
+const FI_DNS_LIST: usize = 272;
+const FI_NODE_TYPE: usize = 320;
+const FI_ENABLE_DNS: usize = 592;
+/// IP_ADAPTER_INFO.
+const ADAPTER_INFO_SIZE: usize = 704;
+/// MIB_IFROW.
+const IFROW_SIZE: usize = 860;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const BROADCAST_NODETYPE: u32 = 1;
+
+/// Chaîne ANSI terminée par un zéro, tronquée à `cap` octets zéro compris.
+unsafe fn put_str(at: *mut u8, cap: usize, s: &str) {
+    let n = s.len().min(cap - 1);
+    std::ptr::copy_nonoverlapping(s.as_ptr(), at, n);
+    *at.add(n) = 0;
 }
-pub unsafe extern "win64" fn GetNetworkParams(_info: usize, size: *mut u32) -> u32 {
-    if !size.is_null() {
-        *size = 0;
+
+unsafe fn put_u32(at: *mut u8, v: u32) {
+    (at as *mut u32).write_unaligned(v);
+}
+
+unsafe fn put_ptr(at: *mut u8, v: usize) {
+    (at as *mut usize).write_unaligned(v);
+}
+
+/// Écrit une IP_ADDR_STRING en `at`.
+unsafe fn put_addr_string(at: *mut u8, next: usize, ip: &str, mask: &str) {
+    put_ptr(at, next);
+    put_str(at.add(8), 16, ip);
+    put_str(at.add(24), 16, mask);
+    put_u32(at.add(40), 0);
+}
+
+fn ipv4_mask(prefix: u8) -> std::net::Ipv4Addr {
+    let bits = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix.min(32) as u32)
+    };
+    std::net::Ipv4Addr::from(bits)
+}
+
+/// Domaine DNS : `domain`, sinon le premier `search` de resolv.conf.
+pub fn dns_domain(text: &str) -> String {
+    let mut search = None;
+    for l in text.lines() {
+        let mut w = l.split_whitespace();
+        match (w.next(), w.next()) {
+            (Some("domain"), Some(d)) => return d.to_string(),
+            (Some("search"), Some(d)) if search.is_none() => search = Some(d.to_string()),
+            _ => {}
+        }
     }
-    ERROR_BUFFER_OVERFLOW
+    search.unwrap_or_default()
+}
+
+/// `GetAdaptersInfo` : adaptateurs IPv4, boucle locale exclue comme sous
+/// Windows.
+pub unsafe extern "win64" fn GetAdaptersInfo(info: *mut u8, size: *mut u32) -> u32 {
+    if size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let list: Vec<Adapter> = adapters().into_iter().filter(|a| !a.loopback).collect();
+    if list.is_empty() {
+        return ERROR_NO_DATA;
+    }
+    let v4 = |a: &Adapter| -> Vec<(std::net::Ipv4Addr, u8)> {
+        a.addrs
+            .iter()
+            .filter_map(|(ip, p)| match ip {
+                std::net::IpAddr::V4(v) => Some((*v, *p)),
+                _ => None,
+            })
+            .collect()
+    };
+    // Adresses et passerelles au-delà de la première : IP_ADDR_STRING en plus.
+    let extra = |a: &Adapter| {
+        let gws = a.gateways.iter().filter(|g| g.is_ipv4()).count();
+        v4(a).len().saturating_sub(1) + gws.saturating_sub(1)
+    };
+    let need: usize = list
+        .iter()
+        .map(|a| ADAPTER_INFO_SIZE + extra(a) * ADDR_STRING_SIZE)
+        .sum();
+    if info.is_null() || (*size as usize) < need {
+        *size = need as u32;
+        return ERROR_BUFFER_OVERFLOW;
+    }
+    std::ptr::write_bytes(info, 0, need);
+    // Les structures principales d'abord, les IP_ADDR_STRING en plus ensuite.
+    let mut tail = list.len() * ADAPTER_INFO_SIZE;
+    for (i, a) in list.iter().enumerate() {
+        let p = info.add(i * ADAPTER_INFO_SIZE);
+        let next = if i + 1 < list.len() {
+            p as usize + ADAPTER_INFO_SIZE
+        } else {
+            0
+        };
+        put_ptr(p, next);
+        put_u32(p.add(8), a.index);
+        put_str(p.add(12), 260, &adapter_guid(a));
+        put_str(p.add(272), 132, &a.name);
+        let mac = &a.mac[..a.mac.len().min(8)];
+        put_u32(p.add(404), mac.len() as u32);
+        std::ptr::copy_nonoverlapping(mac.as_ptr(), p.add(408), mac.len());
+        put_u32(p.add(416), a.index);
+        put_u32(p.add(420), if a.wireless { 71 } else { 6 });
+        let mut write_list = |at: usize, items: Vec<(String, String)>| {
+            let items = if items.is_empty() {
+                vec![(String::new(), String::new())]
+            } else {
+                items
+            };
+            let mut cur = at;
+            for (k, (ip, mask)) in items.iter().enumerate() {
+                let next = if k + 1 < items.len() {
+                    info as usize + tail
+                } else {
+                    0
+                };
+                put_addr_string(info.add(cur), next, ip, mask);
+                if next != 0 {
+                    cur = tail;
+                    tail += ADDR_STRING_SIZE;
+                }
+            }
+        };
+        let base = i * ADAPTER_INFO_SIZE;
+        write_list(
+            base + 440,
+            v4(a)
+                .into_iter()
+                .map(|(ip, p)| (ip.to_string(), ipv4_mask(p).to_string()))
+                .collect(),
+        );
+        write_list(
+            base + 488,
+            a.gateways
+                .iter()
+                .filter(|g| g.is_ipv4())
+                .map(|g| (g.to_string(), "255.255.255.255".to_string()))
+                .collect(),
+        );
+        write_list(base + 536, Vec::new());
+        write_list(base + 592, Vec::new());
+        write_list(base + 640, Vec::new());
+    }
+    *size = need as u32;
+    0
+}
+
+/// `GetNetworkParams` : FIXED_INFO, nom d'hôte, domaine et serveurs DNS.
+pub unsafe extern "win64" fn GetNetworkParams(info: *mut u8, size: *mut u32) -> u32 {
+    if size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let conf = std::fs::read_to_string("/etc/resolv.conf").unwrap_or_default();
+    let dns: Vec<String> = dns_servers(&conf)
+        .into_iter()
+        .filter(|ip| ip.is_ipv4())
+        .map(|ip| ip.to_string())
+        .collect();
+    let need = FIXED_INFO_SIZE + dns.len().saturating_sub(1) * ADDR_STRING_SIZE;
+    if info.is_null() || (*size as usize) < need {
+        *size = need as u32;
+        return ERROR_BUFFER_OVERFLOW;
+    }
+    std::ptr::write_bytes(info, 0, need);
+    let host = crate::dlls::kernel32::get_hostname_string();
+    let host = host.split('.').next().unwrap_or_default();
+    put_str(info, 132, host);
+    put_str(info.add(FI_DOMAIN), 132, &dns_domain(&conf));
+    if !dns.is_empty() {
+        put_ptr(info.add(FI_CURRENT_DNS), info as usize + FI_DNS_LIST);
+    }
+    for (k, ip) in dns.iter().enumerate() {
+        let at = if k == 0 {
+            FI_DNS_LIST
+        } else {
+            FIXED_INFO_SIZE + (k - 1) * ADDR_STRING_SIZE
+        };
+        let next = if k + 1 < dns.len() {
+            info as usize + FIXED_INFO_SIZE + k * ADDR_STRING_SIZE
+        } else {
+            0
+        };
+        put_addr_string(info.add(at), next, ip, "");
+    }
+    put_u32(info.add(FI_NODE_TYPE), BROADCAST_NODETYPE);
+    put_u32(info.add(FI_ENABLE_DNS), 1);
+    *size = need as u32;
+    0
 }
 pub unsafe extern "win64" fn GetBestRoute(_dest: u32, _src: u32, _route: usize) -> u32 {
     0
 }
-pub unsafe extern "win64" fn GetIfTable(_table: usize, size: *mut u32, _order: i32) -> u32 {
-    if !size.is_null() {
-        *size = 0;
+fn stat(name: &str, file: &str) -> u32 {
+    sys_net(name, &format!("statistics/{file}"))
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0) as u32
+}
+
+/// `GetIfTable` : MIB_IFTABLE, une MIB_IFROW par interface.
+pub unsafe extern "win64" fn GetIfTable(table: *mut u8, size: *mut u32, order: i32) -> u32 {
+    if size.is_null() {
+        return ERROR_INVALID_PARAMETER;
     }
-    122 // ERROR_INSUFFICIENT_BUFFER
+    let mut list = adapters();
+    if order != 0 {
+        list.sort_by_key(|a| a.index);
+    }
+    let need = 4 + list.len() * IFROW_SIZE;
+    if table.is_null() || (*size as usize) < need {
+        *size = need as u32;
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+    std::ptr::write_bytes(table, 0, need);
+    put_u32(table, list.len() as u32);
+    for (i, a) in list.iter().enumerate() {
+        let r = table.add(4 + i * IFROW_SIZE);
+        let wname: Vec<u16> = format!("\\DEVICE\\TCPIP_{}", adapter_guid(a))
+            .encode_utf16()
+            .take(255)
+            .collect();
+        std::ptr::copy_nonoverlapping(wname.as_ptr() as *const u8, r, wname.len() * 2);
+        put_u32(r.add(512), a.index);
+        let if_type = if a.loopback {
+            24
+        } else if a.wireless {
+            71
+        } else {
+            6
+        };
+        put_u32(r.add(516), if_type);
+        put_u32(r.add(520), a.mtu);
+        put_u32(r.add(524), a.speed.min(u32::MAX as u64) as u32);
+        let mac = &a.mac[..a.mac.len().min(8)];
+        put_u32(r.add(528), mac.len() as u32);
+        std::ptr::copy_nonoverlapping(mac.as_ptr(), r.add(532), mac.len());
+        put_u32(r.add(540), if a.up { 1 } else { 2 });
+        put_u32(r.add(544), if a.up { 5 } else { 2 });
+        for (off, file) in [
+            (552, "rx_bytes"),
+            (556, "rx_packets"),
+            (560, "multicast"),
+            (564, "rx_dropped"),
+            (568, "rx_errors"),
+            (576, "tx_bytes"),
+            (580, "tx_packets"),
+            (588, "tx_dropped"),
+            (592, "tx_errors"),
+        ] {
+            put_u32(r.add(off), stat(&a.name, file));
+        }
+        let descr = &a.name.as_bytes()[..a.name.len().min(255)];
+        put_u32(r.add(600), descr.len() as u32 + 1);
+        std::ptr::copy_nonoverlapping(descr.as_ptr(), r.add(604), descr.len());
+    }
+    *size = need as u32;
+    0
 }
 pub unsafe extern "win64" fn GetBestInterfaceEx(_addr: usize, _idx: *mut u32) -> u32 {
     0
@@ -433,6 +688,84 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parametres_reseau_taille_puis_contenu() {
+        unsafe {
+            // Tampon trop petit : la taille exacte, jamais 0 (#1048).
+            let mut size = 0u32;
+            assert_eq!(
+                GetNetworkParams(std::ptr::null_mut(), &mut size),
+                ERROR_BUFFER_OVERFLOW
+            );
+            assert!(size as usize >= FIXED_INFO_SIZE);
+            let mut buf = vec![0u64; size as usize / 8 + 1];
+            let p = buf.as_mut_ptr() as *mut u8;
+            assert_eq!(GetNetworkParams(p, &mut size), 0);
+            let host = std::ffi::CStr::from_ptr(p as *const libc::c_char);
+            assert!(!host.to_bytes().is_empty(), "nom d'hôte rempli");
+            assert_eq!((p.add(FI_ENABLE_DNS) as *const u32).read_unaligned(), 1);
+            // La liste DNS est chaînée dans le tampon.
+            let mut next = (p.add(FI_DNS_LIST) as *const usize).read_unaligned();
+            while next != 0 {
+                assert!(next >= p as usize && next < p as usize + size as usize);
+                next = (next as *const usize).read_unaligned();
+            }
+        }
+    }
+
+    #[test]
+    fn table_des_interfaces() {
+        unsafe {
+            let mut size = 0u32;
+            assert_eq!(
+                GetIfTable(std::ptr::null_mut(), &mut size, 1),
+                ERROR_INSUFFICIENT_BUFFER
+            );
+            assert!(size as usize >= 4 + IFROW_SIZE, "au moins la boucle locale");
+            let mut buf = vec![0u32; size as usize / 4 + 1];
+            let t = buf.as_mut_ptr() as *mut u8;
+            assert_eq!(GetIfTable(t, &mut size, 1), 0);
+            let n = (t as *const u32).read_unaligned() as usize;
+            assert_eq!(size as usize, 4 + n * IFROW_SIZE);
+            let rows: Vec<*const u8> = (0..n)
+                .map(|i| t.add(4 + i * IFROW_SIZE) as *const u8)
+                .collect();
+            assert!(rows
+                .iter()
+                .any(|r| (r.add(516) as *const u32).read_unaligned() == 24));
+            let idx: Vec<u32> = rows
+                .iter()
+                .map(|r| (r.add(512) as *const u32).read_unaligned())
+                .collect();
+            assert!(idx.windows(2).all(|w| w[0] <= w[1]), "triée par index");
+        }
+    }
+
+    #[test]
+    fn adaptateurs_ipv4_et_domaine() {
+        assert_eq!(
+            dns_domain("search lan maison\ndomain exemple.fr\n"),
+            "exemple.fr"
+        );
+        assert_eq!(dns_domain("nameserver 1.1.1.1\nsearch lan\n"), "lan");
+        assert_eq!(ipv4_mask(24).to_string(), "255.255.255.0");
+        assert_eq!(ipv4_mask(0).to_string(), "0.0.0.0");
+        unsafe {
+            let mut size = 0u32;
+            let r = GetAdaptersInfo(std::ptr::null_mut(), &mut size);
+            if r == ERROR_NO_DATA {
+                return; // seulement la boucle locale ici
+            }
+            assert_eq!(r, ERROR_BUFFER_OVERFLOW);
+            assert!(size as usize >= ADAPTER_INFO_SIZE);
+            let mut buf = vec![0u64; size as usize / 8 + 1];
+            let p = buf.as_mut_ptr() as *mut u8;
+            assert_eq!(GetAdaptersInfo(p, &mut size), 0);
+            let name = std::ffi::CStr::from_ptr(p.add(12) as *const libc::c_char);
+            assert!(name.to_bytes().starts_with(b"{"));
+        }
+    }
 
     #[test]
     fn adaptateurs_reseau() {

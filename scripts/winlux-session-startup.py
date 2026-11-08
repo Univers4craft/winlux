@@ -18,6 +18,12 @@ for path in sorted((Path.home()/".config/autostart").glob("*.desktop")):
         if app:app.launch([],None)
     except (GLib.Error,OSError) as error:print(f"{path.name}: {error}")
 
+# Services Windows en démarrage automatique (#17) : Winlux n'a pas systemd,
+# la session démarre ceux qu'un installateur a inscrits avec Start = 2.
+if shutil.which("winlux"):
+    try:Gio.Subprocess.new(["winlux","--services","autostart"],Gio.SubprocessFlags.STDOUT_SILENCE)
+    except GLib.Error as error:print(f"winlux --services: {error}")
+
 # Arrêt anormal de la session précédente : « Signaler un problème » propose
 # un rapport (une seule fois par arrêt, réglage Paramètres > Signalement).
 if shutil.which("winlux-report"):

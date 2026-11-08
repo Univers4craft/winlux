@@ -87,6 +87,15 @@ case "${1:-explorer}" in
             done
         fi
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
+    notepad)
+        # Bloc-notes du shell PE, seul et dans sa fenêtre (#1027), avec un
+        # fichier facultatif. « editor » reste l'éditeur de la session native.
+        export WINLUX_SHELL_APP=notepad
+        if test -n "${2:-}"; then
+            WINLUX_SHELL_PATH=$(shell_path "$2") || exit 2
+            export WINLUX_SHELL_PATH
+        fi
+        exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
     *) echo 'Application Winlux inconnue' >&2; exit 2 ;;
 esac

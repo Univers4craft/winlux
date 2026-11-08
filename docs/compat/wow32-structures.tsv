@@ -127,6 +127,7 @@ gui.rs	WndClassA	a-verifier
 gui.rs	WndClassExA	a-verifier	
 gui_x11.rs	XftFont	a-verifier	
 icons.rs	IconInfo	a-verifier	
+image_list_com.rs	Obj	interne	objet IImageList d'une liste système ; en x86 seul le handle sert (ImageList_*), pas la table de méthodes
 kernel32.rs	CriticalSection	x86	wow64.c n° 14-17 (CRITICAL_SECTION de 24 octets)
 kernel32.rs	Entry	interne	test unitaire
 kernel32.rs	MemoryBasicInformation	x86	wow64.c n° 8-9 (28 octets)
