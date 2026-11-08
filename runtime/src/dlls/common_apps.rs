@@ -500,7 +500,20 @@ unsafe extern "win64" fn get_combo_box_info(hwnd: usize, info: *mut u8) -> i32 {
     (info.add(20) as *mut Rect).write_unaligned(btn);
     (info.add(36) as *mut u32).write_unaligned(0);
     (info.add(40) as *mut usize).write_unaligned(hwnd);
-    (info.add(48) as *mut usize).write_unaligned(if edit != 0 { edit } else { hwnd });
+    // hwndItem : le champ de saisie. Seule une liste déroulante sans saisie
+    // (CBS_DROPDOWNLIST) se désigne elle-même. Nos listes modifiables se
+    // dessinent sans fenêtre Edit fille : rendre la liste elle-même faisait
+    // que Notepad++ sous-classait la liste au lieu de son champ, et son
+    // CB_GETDROPPEDSTATE se rappelait sans fin (débordement de pile, #1126).
+    let drop_list = gui::window_style(hwnd).is_some_and(|s| s & 3 == 3);
+    let item_hwnd = if edit != 0 {
+        edit
+    } else if drop_list {
+        hwnd
+    } else {
+        0
+    };
+    (info.add(48) as *mut usize).write_unaligned(item_hwnd);
     (info.add(56) as *mut usize).write_unaligned(0);
     1
 }
@@ -1714,6 +1727,41 @@ mod tests {
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn champ_d_une_liste_modifiable_jamais_la_liste_elle_meme() {
+        // #1126 : Notepad++ sous-classe hwndItem et y envoie CB_GETDROPPEDSTATE
+        // à la liste ; si hwndItem est la liste, l'appel se rappelle sans fin.
+        unsafe {
+            let class = w("COMBOBOX\0");
+            let make = |style: u32| {
+                crate::dlls::user32::create_window_ex_w(
+                    0,
+                    class.as_ptr(),
+                    std::ptr::null(),
+                    style,
+                    0,
+                    0,
+                    200,
+                    24,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            for (style, list) in [(0x2u32, false), (0x3, true)] {
+                let h = make(style);
+                assert_ne!(h, 0);
+                let mut info = [0u8; 64];
+                info[..4].copy_from_slice(&64u32.to_le_bytes());
+                assert_eq!(get_combo_box_info(h, info.as_mut_ptr()), 1);
+                let item = usize::from_le_bytes(info[48..56].try_into().unwrap());
+                assert_eq!(item == h, list, "style {style:#x}");
+                crate::dlls::user32::destroy_window(h);
+            }
+        }
     }
 
     #[test]
