@@ -92,6 +92,10 @@ if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev
     step "scripts/test-webview2.sh" sh scripts/test-webview2.sh
 fi
 
+# Fenêtre encore connue pendant WM_DESTROY et WM_NCDESTROY (#1079, Paint.NET) :
+# test unitaire ciblé, lancé aussi en mode rapide.
+step "Fenêtre vivante pendant WM_DESTROY (#1079)" cargo test -q -p winlux la_fenetre_existe_encore_pendant_wm_destroy
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py

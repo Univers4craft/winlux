@@ -1800,6 +1800,9 @@ mod tests {
         assert!(lookup("psapi", "GetModuleBaseNameW").is_some());
         assert!(lookup("advapi32", "GetUserNameW").is_some());
         assert!(lookup("user32", "LoadStringW").is_some());
+        // Premier plan : Flow Launcher (#1074).
+        assert!(lookup("user32", "AllowSetForegroundWindow").is_some());
+        assert!(lookup("user32", "LockSetForegroundWindow").is_some());
         // Pas de repli large vers ntdll, msvcrt ou advapi32.
         for name in ["NtQueryInformationProcess", "memcpy", "RegOpenKeyA"] {
             assert!(kernel32_proc(name, false).is_none(), "{name}");
