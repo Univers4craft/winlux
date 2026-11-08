@@ -400,6 +400,9 @@ ok('GROUP="netdev"' in (ROOT / "integration/native/udev/60-winlux-rfkill.rules")
 desktop_packages = (SCRIPTS / "prepare-desktop-packages.py").read_text()
 ok('"rfkill"' in desktop_packages and '"mesa-utils"' in desktop_packages and '"at-spi2-core"' in desktop_packages,
    "image : rfkill (#604), glxinfo pour la ligne OpenGL du rapport (#610), bus org.a11y.Bus (#615)")
+ok('"-stream_name"' in (ROOT / "runtime/src/dlls/winlux_media.rs").read_text()
+   and '"Lecteur multimédia"' in (ROOT / "runtime/src/audio/backend.rs").read_text(),
+   "mélangeur : le son du lecteur s'appelle « Lecteur multimédia », plus « Lavf… » de ffmpeg (#1010)")
 
 # ── À propos > Votre PC (damien, 2026-11-03) ───────────────────────────────
 about_pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
