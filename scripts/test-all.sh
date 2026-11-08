@@ -135,9 +135,16 @@ if command -v xvfb-run >/dev/null 2>&1; then
     step "Direct3D 12 : shaders traduits sur OpenGL (#1177)" xvfb-run -a cargo test -q -p winlux -- shaders_traduits_et_constantes_racine_opengl texture_et_echantillonneur_statique_opengl
 fi
 
+# Barre de titre dessinée par l'appli (#1131) : WM_NCCALCSIZE traité sans
+# DefWindowProc retire le cadre du gestionnaire (WindowChrome de WPF).
+step "Cadre retiré pour une barre de titre maison (#1131)" cargo test -q -p winlux -- wm_nccalcsize_traite_par_l_appli_retire_le_cadre
 # Liste des processus pour .NET (#1162) : NtQuerySystemInformation 5 et 88,
 # d'où Process.GetProcesses et le contrôle d'instance unique.
 step "Liste des processus pour .NET (#1162)" cargo test -q -p winlux -- liste_des_processus_comme_la_lit_dotnet
+
+# HTTPS des applications .NET (#1183) : normaliz.dll, IdnToAscii et
+# IdnToUnicode (RFC 3490 / 3492) pour le nom d'hôte de SslStream.
+step "normaliz.dll pour le HTTPS .NET (#1183)" cargo test -q -p winlux -- noms_de_domaine_pour_le_tls_de_dotnet decodage_punycode_exemples_de_la_rfc_3492
 
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py

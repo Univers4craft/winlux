@@ -185,6 +185,8 @@ threadpool.rs	Instance	a-verifier
 uiautomationcore.rs	Vtbl	a-verifier	
 url_moniker.rs	UrlMoniker	interne	objet COM du runtime ; en x86, la passerelle COM (wow32/com.rs, IMONIKER) l'enveloppe
 url_security.rs	Manager	a-verifier	objet COM 64 bits seulement (WPF x86 non pris en charge)
+user32.rs	NcCalcSizeParams	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)
+user32.rs	WindowPos	interne	WM_NCCALCSIZE de frame_changed (#1131), x64 seulement (non envoyé si wow32 actif)
 vk_bindings.rs	VkApplicationInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkBufferCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkCommandBufferAllocateInfo	interne	liaison Vulkan côté hôte

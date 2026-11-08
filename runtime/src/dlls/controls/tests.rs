@@ -1587,3 +1587,16 @@ fn glisser_depuis_une_liste_ou_une_arborescence() {
     assert!(codes.contains(&-456), "TVN_BEGINDRAGW : {codes:?}");
     gui::destroy_window(p);
 }
+
+#[test]
+fn superclasse_retrouve_le_controle_d_origine() {
+    // #1129 : TThemePageControl de WinSCP reprend la procédure de
+    // SysTabControl32 ; la conversion x86 doit la reconnaître.
+    let tab = super::builtin_class("SysTabControl32").unwrap();
+    assert_eq!(super::builtin_class_of_proc(tab), Some("systabcontrol32"));
+    let lv = super::builtin_class("SysListView32").unwrap();
+    assert_eq!(super::builtin_class_of_proc(lv), Some("syslistview32"));
+    assert_eq!(super::builtin_class_of_proc(0), None);
+    let button = super::builtin_class("Button").unwrap();
+    assert_eq!(super::builtin_class_of_proc(button), None);
+}
