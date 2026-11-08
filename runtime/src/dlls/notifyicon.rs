@@ -60,6 +60,9 @@ struct Icon {
     tip: String,
     hidden: bool,
     version: u32,
+    /// Dernière position du pointeur sur l'icône (coordonnées écran),
+    /// pour Shell_NotifyIconGetRect.
+    pos: Option<(i32, i32)>,
 }
 
 #[derive(Default)]
@@ -358,6 +361,11 @@ fn deliver(line: &str) {
     let Some(icon) = state().icons.get(&(hwnd, id)).cloned() else {
         return;
     };
+    if !event.starts_with("balloon") && (x, y) != (0, 0) {
+        if let Some(entry) = state().icons.get_mut(&(hwnd, id)) {
+            entry.pos = Some((x, y));
+        }
+    }
     if event == "rup" {
         if icon.callback == 0 {
             // Programme sans menu : l'assistant ouvre le sien (#927).
@@ -437,6 +445,60 @@ pub fn apply(message: u32, data: &IconData) -> bool {
         NIM_SETFOCUS => st.icons.contains_key(&k),
         _ => false,
     }
+}
+
+/// Taille d'une icône de la zone de notification (unités logiques).
+const TRAY_ICON_SIZE: i32 = 24;
+const E_FAIL: i32 = 0x8000_4005u32 as i32;
+const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+
+/// Rectangle écran d'une icône : centré sur le dernier passage du pointeur,
+/// sinon dans le coin de la zone de travail, là où se trouve la zone de
+/// notification du panneau.
+fn icon_rect(hwnd: usize, id: u32) -> Option<crate::dlls::gui::Rect> {
+    let pos = state().icons.get(&(hwnd, id))?.pos;
+    let half = TRAY_ICON_SIZE / 2;
+    let (cx, cy) = pos.unwrap_or_else(|| {
+        let area = crate::dlls::gui::work_area();
+        let (_, screen_bottom) = crate::dlls::gui::screen_size();
+        // Barre en bas : l'icône est sous la zone de travail.
+        let y = if area.bottom < screen_bottom {
+            (area.bottom + screen_bottom) / 2
+        } else {
+            area.bottom - half
+        };
+        (area.right - TRAY_ICON_SIZE * 3, y)
+    });
+    Some(crate::dlls::gui::Rect {
+        left: cx - half,
+        top: cy - half,
+        right: cx - half + TRAY_ICON_SIZE,
+        bottom: cy - half + TRAY_ICON_SIZE,
+    })
+}
+
+/// `Shell_NotifyIconGetRect(NOTIFYICONIDENTIFIER*, RECT*)` : Chromium la
+/// cherche par GetProcAddress au clic droit sur l'icône et s'arrête net
+/// (CHECK) si shell32 ne l'exporte pas (#1191).
+pub unsafe extern "win64" fn shell_notify_icon_get_rect(ident: *const u8, out: *mut i32) -> i32 {
+    if ident.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let u32_at = |offset: usize| (ident.add(offset) as *const u32).read_unaligned();
+    // NOTIFYICONIDENTIFIER : cbSize, hWnd, uID, guidItem (x64 : 40 octets,
+    // x86 : 28 octets).
+    let (hwnd, id) = if crate::wow32::active() {
+        (u32_at(4) as usize, u32_at(8))
+    } else {
+        ((ident.add(8) as *const usize).read_unaligned(), u32_at(16))
+    };
+    let Some(r) = icon_rect(hwnd, id) else {
+        return E_FAIL;
+    };
+    for (i, v) in [r.left, r.top, r.right, r.bottom].into_iter().enumerate() {
+        out.add(i).write_unaligned(v);
+    }
+    0
 }
 
 pub unsafe extern "win64" fn shell_notify_icon_a(message: u32, data: *const u8) -> i32 {
@@ -558,6 +620,43 @@ mod tests {
         assert!(state().icons[&(0x77, 1)].hidden);
         assert!(apply(NIM_DELETE, &d));
         assert!(!apply(NIM_DELETE, &d));
+    }
+
+    #[test]
+    fn rectangle_de_l_icone_pour_get_rect() {
+        let mut d = IconData {
+            hwnd: 0x1191,
+            id: 3,
+            flags: NIF_MESSAGE,
+            callback: 0x8001,
+            ..IconData::default()
+        };
+        assert!(apply(NIM_ADD, &d));
+        let mut ident = [0u8; 40];
+        ident[..4].copy_from_slice(&40u32.to_le_bytes());
+        ident[8..16].copy_from_slice(&0x1191usize.to_le_bytes());
+        ident[16..20].copy_from_slice(&3u32.to_le_bytes());
+        let mut r = [0i32; 4];
+        unsafe {
+            assert_eq!(
+                shell_notify_icon_get_rect(ident.as_ptr(), r.as_mut_ptr()),
+                0
+            );
+            assert_eq!(r[2] - r[0], TRAY_ICON_SIZE);
+            deliver("1191-3\tmove\t500\t700");
+            assert_eq!(
+                shell_notify_icon_get_rect(ident.as_ptr(), r.as_mut_ptr()),
+                0
+            );
+            assert_eq!(r, [488, 688, 512, 712]);
+            ident[16..20].copy_from_slice(&4u32.to_le_bytes());
+            assert_eq!(
+                shell_notify_icon_get_rect(ident.as_ptr(), r.as_mut_ptr()),
+                E_FAIL
+            );
+        }
+        d.flags = 0;
+        assert!(apply(NIM_DELETE, &d));
     }
 
     #[test]

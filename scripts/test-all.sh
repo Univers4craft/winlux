@@ -118,6 +118,7 @@ step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p win
 step "Icône standard par son emplacement (#1169)" cargo test -q -p winlux -- icone_standard_par_son_emplacement
 step "Registre : clé Personalize présente (#1170)" cargo test -q -p winlux -- vue_dynamique_personnalisation_presente
 step "Raccourci global RegisterHotKey et WM_HOTKEY (#1168)" cargo test -q -p winlux -- raccourci_global_unique_et_wm_hotkey
+step "Shell_NotifyIconGetRect (#1191)" cargo test -q -p winlux -- rectangle_de_l_icone_pour_get_rect
 
 # Utilisation du MTA par jetons (#1147, Flow Launcher, CsWinRT .NET) :
 # CoIncrementMTAUsage / CoDecrementMTAUsage, aussi via combase et l'API set.
