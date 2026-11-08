@@ -573,7 +573,7 @@ ok("chmod 1777 /run/winlux/journal" not in iso_init and "echo 2 >/proc/sys/fs/pr
 # #721 / #722 : plus de « Gestionnaire de fichiers » en double, page Applications installées.
 ok('"xfce4-file-manager.desktop"' in (SCRIPTS / "winlux-start-menu.py").read_text()
    and (SCRIPTS / "winlux-installed-apps.py").exists() and (SCRIPTS / "test-installed-apps.py").exists()
-   and '_t("Applications installées")]' in (SCRIPTS / "winlux-settings.py").read_text(),
+   and '_t("Sauvegarde"), _t("Applications installées")' in (SCRIPTS / "winlux-settings.py").read_text(),
    "menu Démarrer sans « Gestionnaire de fichiers » ; Paramètres > Applications installées (page 39)")
 
 # #735 : XScreenSaver (dpmsEnabled: False par défaut) coupait le DPMS au premier
@@ -610,6 +610,19 @@ ok('"sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
 pages = (SCRIPTS / "winlux-settings-pages.py").read_text()
 ok("if not mic and not output: return" in pages and '"LC_ALL": "C"' not in speech and 'LC_ALL="C"' in speech,
    "voix : section masquée sans micro ni sortie audio ; pactl et parec en locale C")
+# #660 : pages VPN (40) et Point d'accès sans fil mobile (41), travail root
+# par le relais, état dans la zone de notification et les Réglages rapides.
+root_relay = (SCRIPTS / "winlux-root.py").read_text()
+ok((SCRIPTS / "winlux-vpn.py").exists() and (SCRIPTS / "winlux-hotspot.py").exists()
+   and (SCRIPTS / "test-vpn-hotspot.py").exists()
+   and 'if tool == "winlux-vpn":' in root_relay and 'if tool == "winlux-hotspot":' in root_relay
+   and '_t("VPN"), _t("Point d’accès sans fil mobile")]' in (SCRIPTS / "winlux-settings.py").read_text()
+   and "def tunnels():" in (SCRIPTS / "winlux-tray.py").read_text()
+   and '"vpn": side_available("winlux-vpn")' in (SCRIPTS / "winlux-popup.py").read_text(),
+   "Paramètres > VPN et Point d'accès sans fil mobile, relais root, zone de notification, Réglages rapides")
+# #792 : interrupteurs de Paramètres à la couleur d'accent, pas au bleu d'Adwaita.
+ok("switch:checked {{ background: {accent}" in (SCRIPTS / "winlux-settings.py").read_text(),
+   "Paramètres : interrupteurs activés à la couleur d'accent")
 # #237 : anciens jeux. DirectDraw, Direct3D 8 et MIDI existent, jeux32/jeux64 les testent
 # en x86 et en x64 ; #777 : rappels x86 de timeSetEvent et waveOut convertis.
 runtime_dlls = ROOT / "runtime/src/dlls"

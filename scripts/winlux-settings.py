@@ -255,6 +255,8 @@ _TR = {
     'Installation': ('Installing', 'Instalación', 'Installation'),
     'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
     'Applications installées': ('Installed apps', 'Aplicaciones instaladas', 'Installierte Apps'),
+    'VPN': ('VPN', 'VPN', 'VPN'),
+    'Point d’accès sans fil mobile': ('Mobile hotspot', 'Zona con cobertura inalámbrica móvil', 'Mobiler Hotspot'),
     'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
     'Téléchargement': ('Downloading', 'Descarga', 'Download'),
     'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
@@ -334,15 +336,15 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant IA"), _t("Récupération"), _t("Presse-papiers"),
          _t("Comptes"), _t("Matériel et pilotes"), _t("Wi-Fi"), _t("Certificats"), _t("Appareils mobiles"),
-         _t("Sauvegarde"), _t("Applications installées")]
+         _t("Sauvegarde"), _t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 39 n’existent que dans les Paramètres natifs.
+# Pages 29 à 41 n’existent que dans les Paramètres natifs.
 CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26, 37]),
-              (_t("Réseau et Internet"), [35, 2, 20, 28]),
+              (_t("Réseau et Internet"), [35, 2, 40, 41, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [39, 1, 10, 11, 15, 30]),
               (_t("Comptes"), [33, 38]),
@@ -698,6 +700,7 @@ SETTINGS_CSS = """
   combobox button, combobox button label, menu, menuitem, menuitem label {{ background: {button}; color: {fg}; }}
   menuitem:hover, menuitem:hover label {{ background: {selected}; color: {selected_fg}; }}
   progressbar text {{ color: {fg}; }}
+  switch:checked {{ background: {accent}; border-color: {accent}; }}
   .heading {{ font-size: 24px; font-weight: bold; }}
   .subtitle, label.subtitle {{ color: {dim}; }}
   .card, label.card {{ background: {card}; color: {fg}; border-radius: 8px; padding: 16px; }}
@@ -1279,6 +1282,9 @@ PAGE_NAMES = {
     "backup": 38, "sauvegarde": 38, "filehistory": 38,
     # ms-settings:appsfeatures ouvre « Applications installées » (#722).
     "appsfeatures": 39, "installed-apps": 39, "installedapps": 39, "applications-installees": 39,
+    # VPN et point d’accès sans fil mobile (#660), noms de Windows compris.
+    "network-vpn": 40, "vpn": 40, "network-mobilehotspot": 41, "mobilehotspot": 41, "hotspot": 41,
+    "point-d-acces": 41, "partage-de-connexion": 41,
 }
 
 
