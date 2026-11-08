@@ -163,6 +163,9 @@ msi_views = (ROOT / "runtime/src/msi/session_db.rs").read_text()
 ok("MsiDatabaseOpenViewW" in msi_views and "MsiViewFetch" in msi_views
    and "MsiDoActionW" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
    "msiexec : une action DLL lit la base du paquet (vues SQL) et planifie une action différée (#833)")
+ok("fn msi_view_modify" in msi_views and "MsiRecordReadStream" in (ROOT / "runtime/src/msi/session.rs").read_text()
+   and "MSIMODIFY_INSERT_TEMPORARY" in (ROOT / "scripts/test-msi-actions.sh").read_text(),
+   "msiexec : une action DLL écrit dans la base (MsiViewModify) et lit les flux de la table Binary (#833)")
 menu_source = (SCRIPTS / "winlux-start-menu.py").read_text()
 ok("metadata::xfce-exe-checksum" in menu_source, "raccourci créé depuis le menu Démarrer : somme de confiance posée")
 ok("list_actions" in menu_source and "launch_action" in menu_source,
