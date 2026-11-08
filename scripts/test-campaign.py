@@ -622,6 +622,20 @@ with tempfile.TemporaryDirectory() as directory:
        and (SCRIPTS / "test-ecran-veille-retour.py").exists(),
        "veille de l'écran : XScreenSaver garde le DPMS actif (compte neuf et compte existant)")
 
+# #236 : DuplicateHandle et ReadProcessMemory entre processus (Chromium, Electron).
+broker_source = (ROOT / "runtime/src/dlls/handle_broker.rs").read_text(encoding="utf-8")
+ok("SCM_RIGHTS" in broker_source and "WINLUX_GUICHET_HANDLES" in broker_source
+   and "stop_if_suspended" in (ROOT / "runtime/src/main.rs").read_text()
+   and (SCRIPTS / "test-duplication.sh").exists(),
+   "Electron : handles copiés entre processus, enfant suspendu une fois chargé")
+permission_tool = (SCRIPTS / "winlux-permission.py").read_text(encoding="utf-8")
+ok('"sandbox"' in permission_tool and "Lancer « {app} » sans son isolation ?" in permission_tool
+   and '"sandbox": "Lancer sans isolation (Chromium, Electron)"' in (SCRIPTS / "winlux-settings.py").read_text(encoding="utf-8"),
+   "Electron : bac à sable impossible → proposition claire, choix visible dans Paramètres")
+ok((SCRIPTS / "winlux-webview.py").exists() and (SCRIPTS / "test-webview2.sh").exists()
+   and "winlux-webview" in (SCRIPTS / "stage-desktop-components.sh").read_text(encoding="utf-8")
+   and '"webview2loader"' in (ROOT / "runtime/src/dlls/mod.rs").read_text(encoding="utf-8"),
+   "WebView2 : WebView2Loader.dll maison, moteur WebKitGTK livré à la demande")
 # #662 : dictée vocale (Windows + H) et sous-titres en direct (Windows + Ctrl + L),
 # modèle local vérifié par empreinte ; un compte existant reçoit les deux raccourcis.
 with tempfile.TemporaryDirectory() as directory:
