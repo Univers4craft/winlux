@@ -184,7 +184,11 @@ impl Interpreter {
 
     /// `Invoke` : appelle chaque délégué de la liste dans l'ordre et rend
     /// le résultat du dernier.
-    fn invoke_delegate(&mut self, d: *mut u8, rest: Vec<Value>) -> Result<Value, ClrException> {
+    pub(super) fn invoke_delegate(
+        &mut self,
+        d: *mut u8,
+        rest: Vec<Value>,
+    ) -> Result<Value, ClrException> {
         let pinned = self.pins.len();
         self.pins.push(Value::Ref(d));
         self.pins.extend(rest.iter().copied());

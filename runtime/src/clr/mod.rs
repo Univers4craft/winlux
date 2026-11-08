@@ -3,6 +3,7 @@
 //! intégrées. Aucun runtime .NET extérieur n'est utilisé.
 
 pub mod bcl;
+pub mod callbacks;
 pub mod delegates;
 pub mod domain;
 #[cfg(test)]
@@ -10,6 +11,7 @@ pub mod emit;
 pub mod exceptions;
 pub mod gc;
 pub mod il;
+pub mod interop;
 pub mod metadata;
 pub mod opcodes;
 pub mod pinvoke;

@@ -26,7 +26,7 @@ use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
 use super::pinvoke;
 use super::resolve::{Callee, Target};
-use super::tables::{TableId, Token};
+use super::tables::Token;
 use super::types::{self, Kind, TypeId};
 
 /// Profondeur d'appel maximale avant StackOverflowException.
@@ -410,24 +410,9 @@ impl Interpreter {
         let sig = metadata::decode_method_sig(self.assembly.get_blob(md.signature));
 
         if md.is_pinvoke() {
-            let token = Token::new(TableId::MethodDef, method_row);
-            let Some(imp) = self.assembly.find_impl_map(token) else {
-                return ExecResult::Exception(exception(
-                    "EntryPointNotFoundException",
-                    "P/Invoke sans ImplMap",
-                ));
-            };
-            let module = self
-                .assembly
-                .get_string(self.assembly.get_module_ref(imp.import_scope).name);
-            let import = pinvoke::Import {
-                module,
-                name: self.assembly.get_string(imp.import_name),
-                unicode: imp.mapping_flags & 0x0004 != 0,
-            };
-            return match pinvoke::call(&import, &args, &sig.param_types, &sig.ret_type) {
+            return match self.call_pinvoke(method_row, args, &sig, &gen) {
                 Ok(v) => ExecResult::Return(v),
-                Err((kind, msg)) => ExecResult::Exception(exception(kind, &msg)),
+                Err(e) => ExecResult::Exception(e),
             };
         }
 
@@ -612,6 +597,13 @@ impl Interpreter {
                 } else {
                     Value::Null
                 });
+            }
+            (
+                "System.Runtime.InteropServices",
+                "Marshal",
+                "GetLastWin32Error" | "GetLastPInvokeError",
+            ) => {
+                return Ok(Value::I32(pinvoke::LAST_ERROR.with(|e| e.get()) as i32));
             }
             ("System", "GC", "Collect") => {
                 self.collect_garbage();
@@ -864,6 +856,7 @@ impl Interpreter {
             }));
         }
         roots.extend(self.pins.iter().map(|v| v.as_i64() as usize));
+        roots.extend(super::callbacks::roots());
         for data in self.external_statics.values() {
             roots.extend(data.iter().map(|&w| w as usize));
         }
@@ -910,7 +903,7 @@ impl Interpreter {
     }
 
     /// Objet temporaire qui porte une copie d'une valeur de type valeur.
-    fn new_struct(&self, id: TypeId) -> *mut u8 {
+    pub(super) fn new_struct(&self, id: TypeId) -> *mut u8 {
         self.ensure_layout(id);
         let size = types::with_types(|reg| reg.get(id).map_or(8, |t| t.instance_size));
         gc::with_gc(|gc| gc.alloc(id, size))

@@ -62,7 +62,7 @@ utile, `MissingMethodException System.OperatingSystem::get_Version`.
 | 3 | Délégués, événements, lambdas (`ldftn`, `ldvirtftn`, `Invoke`, multicast, `Delegate.Combine`/`Remove`, `Interlocked`) | `clr::tests` (délégué statique et d'instance, `Func<int>` par `ldvirtftn`, accesseur d'événement) | fait (#971) ; `BeginInvoke`/`EndInvoke` à l'étape 5 |
 | 4 | Exceptions complètes : filtres `when`, finally imbriqués (pile de reprises par gestionnaire), `rethrow` du catch englobant, `InnerException` | `clr::tests` (filtres, rethrow à travers deux finally, `leave` à travers deux finally, finally d'un appelé) | fait (#972) ; filtres évalués en une seule passe |
 | 5 | Threads, `async/await`, `Task` (recoupe #269) | | à faire |
-| 6 | P/Invoke complet (chaînes, structures, rappels) | | à faire |
+| 6 | P/Invoke complet : appel Win64 générique (flottants dans XMM, arguments sur la pile sans limite), structures disposées comme en C (`StructLayout`, `Pack`, `Size`, `FieldOffset`) par adresse ou par valeur, rappels natifs vers des délégués (64 portes), `SetLastError` et `Marshal.GetLastWin32Error`, TEB créé au lancement | `clr::tests` (`pow`, `sprintf` à six arguments, `PtInRect`, `SetLastError`, `qsort` rappelant un délégué) | fait (#994) ; DLL natives livrées avec l'appli et `StringBuilder` en sortie à faire |
 | 7 | mscorlib, System, System.Core | | à faire |
 | 8 | System.Drawing et WinForms sur user32/gdi32/comctl32 | fenêtre de SetupDownloader | à faire |
 | 9 | KeePass complet, System.Xml | KeePass 2.57.1 | à faire |

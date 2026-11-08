@@ -249,6 +249,11 @@ fn main() {
         let app_dir = std::fs::canonicalize(&exe)
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
+        // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
+        if process::teb() == 0 {
+            process::init_thread();
+        }
         let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }

@@ -812,6 +812,15 @@ ok("fn run_filter" in (clr / "il.rs").read_text()
    and "le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse" in (clr / "tests.rs").read_text(),
    "CLR : filtres when, finally imbriqués traversés par leave et par une exception, rethrow, InnerException (#972)")
 
+# ── Moteur .NET Framework, étape 6 (#994) : P/Invoke complet ──
+ok("fn call_win64" in (clr / "pinvoke.rs").read_text()
+   and "fn callback_for" in (clr / "callbacks.rs").read_text()
+   and "fn call_pinvoke" in (clr / "interop.rs").read_text()
+   and "fn field_offset_of" in (clr / "metadata.rs").read_text()
+   and "p_invoke_rappel_vers_un_delegue" in (clr / "tests.rs").read_text()
+   and "p_invoke_structures_et_derniere_erreur" in (clr / "tests.rs").read_text(),
+   "CLR : P/Invoke Win64 (flottants, pile, structures C par valeur, rappels natifs, SetLastError) (#994)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()

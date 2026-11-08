@@ -22,6 +22,8 @@ const STANDALONE_SIG: usize = 0x11;
 const ASSEMBLY: usize = 0x20;
 const ASSEMBLY_REF: usize = 0x23;
 const TYPE_SPEC: usize = 0x1B;
+const MODULE_REF: usize = 0x1A;
+const IMPL_MAP: usize = 0x1C;
 const GENERIC_PARAM: usize = 0x2A;
 const METHOD_SPEC: usize = 0x2B;
 
@@ -35,6 +37,7 @@ pub const M_VIRTUAL: u16 = 0x0040;
 pub const M_HIDEBYSIG: u16 = 0x0080;
 pub const M_NEWSLOT: u16 = 0x0100;
 pub const M_SPECIALNAME: u16 = 0x0800;
+pub const M_PINVOKE: u16 = 0x2000;
 pub const M_RTSPECIALNAME: u16 = 0x1000;
 pub const M_CTOR: u16 = M_PUBLIC | M_HIDEBYSIG | M_SPECIALNAME | M_RTSPECIALNAME;
 pub const M_CCTOR: u16 = 0x0011 | M_HIDEBYSIG | M_SPECIALNAME | M_RTSPECIALNAME;
@@ -96,6 +99,9 @@ pub struct Builder {
     type_specs: Vec<u32>,
     generic_params: Vec<(u16, u32, u32)>,
     method_specs: Vec<(u32, u32)>,
+    module_refs: Vec<u32>,
+    /// (drapeaux, ligne MethodDef, nom importé, ligne ModuleRef)
+    impl_maps: Vec<(u16, u32, u32, u32)>,
 }
 
 /// Portée d'une référence de type.
@@ -122,6 +128,8 @@ impl Builder {
             type_specs: Vec::new(),
             generic_params: Vec::new(),
             method_specs: Vec::new(),
+            module_refs: Vec::new(),
+            impl_maps: Vec::new(),
         };
         b.type_def(0, "", "<Module>", 0);
         b
@@ -211,6 +219,24 @@ impl Builder {
             body,
         });
         0x0600_0000 | self.methods.len() as u32
+    }
+
+    /// Méthode `[DllImport(dll, EntryPoint = name)]` ; `flags` : drapeaux
+    /// PInvokeAttributes (CharSet, SetLastError…).
+    pub fn dll_import(&mut self, dll: &str, name: &str, flags: u16, sig: &[u8]) -> u32 {
+        let n = self.string(dll);
+        let module = match self.module_refs.iter().position(|&m| m == n) {
+            Some(i) => i as u32 + 1,
+            None => {
+                self.module_refs.push(n);
+                self.module_refs.len() as u32
+            }
+        };
+        let token = self.method(M_PUBLIC | M_STATIC | M_PINVOKE, name, sig, None);
+        let import = self.string(name);
+        self.impl_maps
+            .push((flags, token & 0x00FF_FFFF, import, module));
+        token
     }
 
     /// Référence de membre (jeton 0x0A…) sur un type TypeRef ou TypeDef.
@@ -447,7 +473,26 @@ impl Builder {
             w16(&mut r, b);
             r
         });
+        let mo = self.module_refs.iter().map(|&n| {
+            let mut r = Vec::new();
+            w16(&mut r, n);
+            r
+        });
+        rows.push((MODULE_REF, mo.collect()));
+
         rows.push((TYPE_SPEC, ts.collect()));
+
+        let mut im = self.impl_maps.clone();
+        im.sort_by_key(|&(_, m, _, _)| m);
+        let im = im.iter().map(|&(flags, m, n, scope)| {
+            let mut r = Vec::new();
+            w16(&mut r, flags as u32);
+            w16(&mut r, (m << 1) | 1);
+            w16(&mut r, n);
+            w16(&mut r, scope);
+            r
+        });
+        rows.push((IMPL_MAP, im.collect()));
 
         let mut a = Vec::new();
         w32(&mut a, 0x8004);

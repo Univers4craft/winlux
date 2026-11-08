@@ -1107,3 +1107,241 @@ fn le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse() {
     let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(body));
     assert_eq!(lancer(&b.build(main), None), 12);
 }
+
+// ── Étape 6 : P/Invoke complet (#994) ──
+
+const CONV_I: u8 = 0xD3;
+const NEWARR: u8 = 0x8D;
+const STELEM_I4: u8 = 0x9E;
+const LDELEM_I4: u8 = 0x94;
+const LDELEM_U1: u8 = 0x91;
+const LDIND_I4: u8 = 0x4A;
+const SUB: u8 = 0x59;
+const CONV_I4: u8 = 0x69;
+
+fn r8(v: f64) -> Il {
+    let mut il = Il::default().op(0x23);
+    il.0.extend_from_slice(&v.to_le_bytes());
+    il
+}
+
+/// Flottants dans XMM (`pow`), et arguments au-delà du quatrième sur la
+/// pile (`sprintf` à six arguments, chaîne ANSI, tableau d'octets).
+#[test]
+fn p_invoke_flottants_et_arguments_sur_la_pile() {
+    let mut b = Builder::new("Natif");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let byte = b.type_ref(Scope::Assembly(mscorlib), "System", "Byte");
+    let format = b.user_string("%d-%d-%d-%d");
+    b.type_def(PUBLIC, "Natif", "P", object);
+    let pow = b.dll_import(
+        "msvcrt",
+        "pow",
+        0,
+        &method_sig(false, &[0x0D], &[&[0x0D], &[0x0D]]),
+    );
+    let sprintf = b.dll_import(
+        "msvcrt",
+        "sprintf",
+        0x0002, // CharSet.Ansi
+        &method_sig(
+            false,
+            &[T_I4],
+            &[
+                &[0x1D, 0x05],
+                &[T_STRING],
+                &[T_I4],
+                &[T_I4],
+                &[T_I4],
+                &[T_I4],
+            ],
+        ),
+    );
+    let mut il = r8(2.0);
+    il.0.extend_from_slice(&r8(10.0).0);
+    let il = il
+        .call(pow)
+        .op(CONV_I4)
+        // tampon = new byte[16]
+        .i4(16)
+        .tok(NEWARR, byte)
+        .op(STLOC0)
+        .op(LDLOC0)
+        .ldstr(format)
+        .i4(1)
+        .i4(2)
+        .i4(3)
+        .i4(4)
+        .call(sprintf)
+        .i4(10_000)
+        .op(MUL)
+        .op(ADD)
+        // + tampon[6] ('4' = 52) * 100000
+        .op(LDLOC0)
+        .i4(6)
+        .op(LDELEM_U1)
+        .i4(100_000)
+        .op(MUL)
+        .op(ADD)
+        .ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(il, vec![vec![0x1D, 0x05]])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 5_271_024);
+}
+
+/// Structures C : `RECT` par adresse et `POINT` par valeur (`PtInRect`),
+/// puis `SetLastError = true` et `Marshal.GetLastWin32Error`.
+#[test]
+fn p_invoke_structures_et_derniere_erreur() {
+    let mut b = Builder::new("Structures");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let value_type_ref = b.type_ref(Scope::Assembly(mscorlib), "System", "ValueType");
+    let marshal = b.type_ref(
+        Scope::Assembly(mscorlib),
+        "System.Runtime.InteropServices",
+        "Marshal",
+    );
+    let last_error = b.member_ref(
+        marshal,
+        "GetLastWin32Error",
+        &method_sig(false, &[T_I4], &[]),
+    );
+
+    let rect = b.type_def(PUBLIC | 0x08, "Structures", "RECT", value_type_ref);
+    let left = b.field(F_PUBLIC, "left", &[T_I4]);
+    let top = b.field(F_PUBLIC, "top", &[T_I4]);
+    let right = b.field(F_PUBLIC, "right", &[T_I4]);
+    let bottom = b.field(F_PUBLIC, "bottom", &[T_I4]);
+    let point = b.type_def(PUBLIC | 0x08, "Structures", "POINT", value_type_ref);
+    let x = b.field(F_PUBLIC, "x", &[T_I4]);
+    let y = b.field(F_PUBLIC, "y", &[T_I4]);
+
+    b.type_def(PUBLIC, "Structures", "P", object);
+    let mut ref_rect = vec![0x10];
+    ref_rect.extend_from_slice(&value_type(rect));
+    let pt_in_rect = b.dll_import(
+        "user32",
+        "PtInRect",
+        0,
+        &method_sig(false, &[T_BOOL], &[&ref_rect, &value_type(point)]),
+    );
+    let set_last_error = b.dll_import(
+        "kernel32",
+        "SetLastError",
+        0x0040, // SetLastError = true
+        &method_sig(false, &[T_VOID], &[&[0x09]]),
+    );
+    let champ = |il: Il, local: u8, f: u32, v: i32| il.ldloca(local).i4(v).stfld(f);
+    let mut il = Il::default();
+    for (f, v) in [(left, 0), (top, 0), (right, 10), (bottom, 10)] {
+        il = champ(il, 0, f, v);
+    }
+    let il = champ(champ(il, 1, x, 5), 1, y, 5)
+        // PtInRect(ref r, (5,5)) * 10
+        .ldloca(0)
+        .op(LDLOC1)
+        .call(pt_in_rect)
+        .i4(10)
+        .op(MUL);
+    let il = champ(il, 1, x, 15)
+        // + PtInRect(ref r, (15,5))
+        .ldloca(0)
+        .op(LDLOC1)
+        .call(pt_in_rect)
+        .op(ADD)
+        // + dernière erreur (77) * 100
+        .i4(77)
+        .call(set_last_error)
+        .call(last_error)
+        .i4(100)
+        .op(MUL)
+        .op(ADD)
+        .ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(il, vec![value_type(rect), value_type(point)])),
+    );
+    // GetLastError vit dans le TEB, que crée le lancement d'un programme.
+    let _teb = crate::process::test_teb();
+    assert_eq!(lancer(&b.build(main), None), 7_710);
+}
+
+/// Rappel natif : `qsort` trie un tableau en appelant un délégué managé.
+#[test]
+fn p_invoke_rappel_vers_un_delegue() {
+    let mut b = Builder::new("Rappel");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let multicast = b.type_ref(Scope::Assembly(mscorlib), "System", "MulticastDelegate");
+    let int32 = b.type_ref(Scope::Assembly(mscorlib), "System", "Int32");
+
+    let cmp = b.type_def(PUBLIC, "Rappel", "Comparer", multicast);
+    let cmp_ctor = b.method(M_CTOR, ".ctor", &delegue_ctor_sig(), None);
+    b.method(
+        M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG | M_NEWSLOT,
+        "Invoke",
+        &method_sig(true, &[T_I4], &[&[T_NATIVE_INT], &[T_NATIVE_INT]]),
+        None,
+    );
+
+    b.type_def(PUBLIC, "Rappel", "P", object);
+    let qsort = b.dll_import(
+        "msvcrt",
+        "qsort",
+        0,
+        &method_sig(
+            false,
+            &[T_VOID],
+            &[&[0x1D, T_I4], &[T_NATIVE_INT], &[T_NATIVE_INT], &class(cmp)],
+        ),
+    );
+    // Ordre décroissant : *b - *a
+    let comparer = b.method(
+        M_PUBLIC | M_STATIC,
+        "Decroissant",
+        &method_sig(false, &[T_I4], &[&[T_NATIVE_INT], &[T_NATIVE_INT]]),
+        Some(
+            Il::default()
+                .op(LDARG1)
+                .op(LDIND_I4)
+                .ldarg0()
+                .op(LDIND_I4)
+                .op(SUB)
+                .ret()
+                .body(),
+        ),
+    );
+    let mut il = Il::default().i4(3).tok(NEWARR, int32).op(STLOC0);
+    for (i, v) in [(0, 1), (1, 3), (2, 2)] {
+        il = il.op(LDLOC0).i4(i).i4(v).op(STELEM_I4);
+    }
+    let mut il = il
+        .op(LDLOC0)
+        .i4(3)
+        .op(CONV_I)
+        .i4(4)
+        .op(CONV_I)
+        .op(LDNULL)
+        .ldftn(comparer)
+        .newobj(cmp_ctor)
+        .call(qsort)
+        .i4(0);
+    for (i, poids) in [(0, 100), (1, 10), (2, 1)] {
+        il = il.op(LDLOC0).i4(i).op(LDELEM_I4).i4(poids).op(MUL).op(ADD);
+    }
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(il.ret(), vec![vec![0x1D, T_I4]])),
+    );
+    assert_eq!(lancer(&b.build(main), None), 321);
+}

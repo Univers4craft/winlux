@@ -702,6 +702,25 @@ impl Assembly {
         }
     }
 
+    /// Compactage et taille déclarés d'un type (`StructLayout(Pack, Size)`).
+    pub fn class_layout_of(&self, type_row: u32) -> Option<(u16, u32)> {
+        (1..=self.row_count(TableId::ClassLayout)).find_map(|r| {
+            let l = self.get_class_layout(r);
+            (l.parent == type_row).then_some((l.packing_size, l.class_size))
+        })
+    }
+
+    /// Position déclarée d'un champ (`FieldOffset`, disposition explicite).
+    pub fn field_offset_of(&self, field_row: u32) -> Option<u32> {
+        (1..=self.row_count(TableId::FieldLayout)).find_map(|r| {
+            let d = self.row_data(TableId::FieldLayout, r);
+            let mut o = 0;
+            let offset = self.read_u32_val(d, &mut o);
+            let field = self.table_idx(TableId::Field, d, &mut o);
+            (field == field_row).then_some(offset)
+        })
+    }
+
     pub fn get_field_rva(&self, row: u32) -> FieldRvaRow {
         let d = self.row_data(TableId::FieldRva, row);
         let mut o = 0;

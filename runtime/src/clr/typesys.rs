@@ -254,17 +254,33 @@ impl Interpreter {
             m: Vec::new(),
         };
         let a = self.assembly_at(asm);
+        // Types valeur : disposition des structures C (séquentielle par
+        // défaut, ou explicite), avec `Pack` et `Size` éventuels, pour que
+        // P/Invoke les passe telles quelles (ECMA-335 §II.10.7).
+        let explicit = is_value && a.get_type_def(row).flags & 0x18 == 0x10;
+        let (pack, class_size) = if is_value {
+            a.class_layout_of(row).unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
         let mut fields = Vec::new();
         let mut statics = Vec::new();
         let mut offset = base;
+        let mut end = base;
+        let mut max_align = 1;
         let mut static_offset = 0;
-        for f in a.type_fields(row) {
+        let field_rows: Vec<u32> = a.type_fields(row).collect();
+        for f in field_rows {
+            let a = self.assembly_at(asm);
             let fd = a.get_field(f);
             let blob = a.get_blob(fd.signature);
             let mut off = 1;
             let et = metadata::decode_type(blob, &mut off);
-            if fd.is_static() {
-                if fd.flags & FIELD_LITERAL != 0 {
+            let is_static = fd.is_static();
+            let literal = fd.flags & FIELD_LITERAL != 0;
+            let field_offset = if explicit { a.field_offset_of(f) } else { None };
+            if is_static {
+                if literal {
                     continue;
                 }
                 let kind = self.kind_of_sig(asm, &et, &gen);
@@ -274,6 +290,23 @@ impl Interpreter {
                     kind,
                 });
                 static_offset += kind.slot_size();
+            } else if is_value {
+                let kind = self.kind_of_sig(asm, &et, &gen);
+                let mut align = kind.align().max(1);
+                if pack > 0 {
+                    align = align.min(pack as usize);
+                }
+                max_align = max_align.max(align);
+                let at = match field_offset {
+                    Some(o) => o as usize,
+                    None => end.div_ceil(align) * align,
+                };
+                fields.push(FieldInfo {
+                    offset: at,
+                    metadata_row: f,
+                    kind,
+                });
+                end = end.max(at + kind.elem_size());
             } else {
                 let kind = self.kind_of_sig(asm, &et, &gen);
                 fields.push(FieldInfo {
@@ -285,7 +318,7 @@ impl Interpreter {
             }
         }
         let size = if is_value {
-            offset.max(8)
+            end.max(class_size as usize).div_ceil(max_align).max(1) * max_align
         } else {
             offset.max(base)
         };
@@ -294,6 +327,9 @@ impl Interpreter {
                 t.fields = fields;
                 t.static_fields = statics;
                 t.instance_size = size;
+                if is_value {
+                    t.align = max_align;
+                }
             }
             if static_offset > 0 {
                 reg.static_data

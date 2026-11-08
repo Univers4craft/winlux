@@ -69,6 +69,17 @@ impl Kind {
         }
     }
 
+    /// Alignement naturel, comme en C (ECMA-335 §II.10.7).
+    pub fn align(self) -> usize {
+        match self {
+            Kind::Struct(id) => with_types(|reg| {
+                reg.get(id)
+                    .map_or(8, |t| if t.align == 0 { 8 } else { t.align })
+            }),
+            k => k.elem_size(),
+        }
+    }
+
     /// Taille d'un emplacement (champ, variable) : 8 octets au moins, pour
     /// que toute référence reste alignée sur 8 octets (le ramasse-miettes
     /// parcourt la mémoire par mots de 8 octets).
@@ -117,6 +128,8 @@ pub struct TypeInfo {
     pub is_interface: bool,
     /// Disposition des champs calculée.
     pub laid_out: bool,
+    /// Alignement d'un type valeur (0 : 8 octets).
+    pub align: usize,
 }
 
 impl TypeInfo {
