@@ -1412,4 +1412,16 @@ ok("CLSID_WBEM_LOCATOR" in wbem_rs and '"Win32_VideoController"' in wbem_rs
 ok("unsafe fn gl_surface(" in (runtime_dlls / "d3d9.rs").read_text()
    and "rouge(#1167)" in (SCRIPTS / "test-wpf-bonjour.sh").read_text(),
    "Direct3D 9 : StretchRect et ColorFill sur texture de rendu restent sur le GPU, ruban WPF sous effet d'ombre dessiné (#1167)")
+# ── Contrôles déposés dans scripts/campagne.d/ ──────────────────────────────
+# Un fichier par contrôle, nommé d'après l'issue (« 1234-sujet.py ») : deux PR
+# n'ajoutent plus leur contrôle à la même fin de fichier, donc ne sont plus en
+# conflit entre elles. Chaque fichier voit les noms de ce script (ok, ROOT,
+# SCRIPTS, NATIVE, runtime_dlls, Path…) ; ils passent dans l'ordre des noms.
+CAMPAGNE_D = SCRIPTS / "campagne.d"
+loaded = sorted(CAMPAGNE_D.glob("*.py"))
+before = checks
+for extra in loaded:
+    runpy.run_path(str(extra), init_globals=dict(globals()), run_name="__campagne__")
+ok(any(p.name == "0000-dossier-charge.py" for p in loaded) and checks - before >= len(loaded),
+   f"scripts/campagne.d chargé : {len(loaded)} fichier(s), {checks - before} contrôle(s)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
