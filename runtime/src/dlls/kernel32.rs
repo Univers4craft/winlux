@@ -4681,6 +4681,29 @@ pub(crate) fn split_windows_command_line(line: &str) -> Vec<String> {
 fn process_error(e: &std::io::Error) -> u32 {
     io_error_code(e)
 }
+/// Variables de l'hôte Linux qu'un programme Windows ne transmet pas de
+/// lui-même dans un bloc d'environnement : affichage, session, bus, et la
+/// configuration de Winlux. Elles passent sous les valeurs du bloc.
+fn linux_plumbing_env() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    const KEEP: &[&str] = &[
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PULSE_SERVER",
+    ];
+    std::env::vars_os()
+        .filter(|(k, _)| {
+            let k = k.to_string_lossy();
+            KEEP.contains(&k.as_ref())
+                || (k.starts_with("WINLUX_")
+                    && !matches!(k.as_ref(), "WINLUX_COMMAND_LINE" | "WINLUX_SERVICE_NAME"))
+        })
+        .collect()
+}
+
 unsafe fn parse_environment_block(
     block: *const c_void,
     unicode: bool,
@@ -5046,6 +5069,15 @@ unsafe fn create_process_common(
     }
     if let Some(env) = environment {
         cmd.env_clear();
+        if is_pe {
+            // Un bloc d'environnement Windows ne connaît pas l'affichage ni
+            // la configuration de Winlux : Chromium en construit un sans
+            // DISPLAY pour son processus GPU, qui basculait alors sans
+            // fenêtre et échouait en boucle (#996).
+            for (key, value) in linux_plumbing_env() {
+                cmd.env(key, value);
+            }
+        }
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -5518,6 +5550,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         remove_waitable_timer(handle);
         1
     } else {
+        crate::trace!("CloseHandle({handle:#x}) : handle inconnu");
         crate::process::set_last_error(6);
         0
     }

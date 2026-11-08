@@ -591,9 +591,11 @@ unsafe extern "win64" fn wvsprintfW(dst: *mut u16, fmt: *const u16, va: *const u
 extern "win64" fn GetShellWindow() -> usize {
     crate::dlls::user32::get_desktop_window()
 }
-/// ANGLE (libEGL) retrouve la fenêtre d'un HDC de GetDC.
+/// ANGLE (libEGL) retrouve la fenêtre d'un HDC de GetDC, et refuse un
+/// affichage dont le DC d'écran ne rend aucune fenêtre (#996 : Chromium lui
+/// passe GetDC(NULL), qui désigne le bureau).
 extern "win64" fn WindowFromDC(hdc: usize) -> usize {
-    crate::dlls::gui::dc_window(hdc).unwrap_or(0)
+    crate::dlls::gui::window_from_dc(hdc)
 }
 
 pub fn user32_exports() -> Exports {

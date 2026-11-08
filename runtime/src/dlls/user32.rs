@@ -1166,6 +1166,9 @@ pub extern "win64" fn get_dc(hwnd: usize) -> usize {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
+    if hwnd == 0 {
+        return gui::create_screen_dc();
+    }
     gui::create_dc(hwnd)
 }
 
@@ -2387,6 +2390,9 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
 }
 
 pub extern "win64" fn get_window_dc(hwnd: usize) -> usize {
+    if hwnd == 0 {
+        return gui::create_screen_dc();
+    }
     gui::create_dc(hwnd)
 }
 
@@ -3413,8 +3419,11 @@ pub extern "win64" fn unregister_class_w(_name: *const u16, _instance: usize) ->
     1
 }
 
-pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize {
-    gui::create_dc(_hwnd)
+pub extern "win64" fn get_dc_ex(hwnd: usize, _rgn: usize, _flags: u32) -> usize {
+    if hwnd == 0 {
+        return gui::create_screen_dc();
+    }
+    gui::create_dc(hwnd)
 }
 
 /// Positions en attente de chaque BeginDeferWindowPos, appliquées ensemble
