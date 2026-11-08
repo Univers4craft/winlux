@@ -1598,6 +1598,19 @@ pub unsafe extern "win64" fn read_file(
         crate::process::set_last_error(87);
         return 0;
     };
+    // Lecture de zéro octet sur un tube : Windows attend que des données
+    // arrivent (ou la fin du tube). libuv (Node, Bun) s'en sert pour guetter
+    // un tube sans tampon ; rendue tout de suite, elle relançait sa lecture
+    // en boucle et `claude.exe auth login` prenait 300 Mo par seconde (#1042).
+    if b.is_empty() {
+        if let Some(fd) = fd_of_handle(h).filter(|&fd| fd_is_pipe(fd)) {
+            if !wait_pipe_readable(fd) {
+                crate::process::set_last_error(109);
+                return 0;
+            }
+            return 1;
+        }
+    }
     if h == (-10isize) as usize {
         // Les invites écrites sans retour à la ligne doivent apparaître
         // avant que le programme n'attende la saisie.
@@ -4780,6 +4793,30 @@ pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
 /// Le descripteur est-il un tube (CreatePipe, `|` du shell) ?
 /// Tube anonyme (FIFO) ou tube nommé (socket Unix) : une lecture de 0 octet
 /// y signifie que l'autre bout est fermé.
+/// Attend qu'un tube ait des données à lire. Faux : tube fermé à l'autre
+/// bout sans rien à lire (ERROR_BROKEN_PIPE).
+fn wait_pipe_readable(fd: i32) -> bool {
+    loop {
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let r = unsafe { libc::poll(&mut p, 1, -1) };
+        if r < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if p.revents & libc::POLLIN != 0 {
+            return true;
+        }
+        if p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return false;
+        }
+    }
+}
 fn fd_is_pipe(fd: i32) -> bool {
     file_type_of_fd(fd) == 3
 }
@@ -9837,6 +9874,46 @@ mod tests {
         assert_eq!(code, 42);
         close_handle(info.thread);
         close_handle(info.process);
+    }
+
+    /// #1042 : une lecture de zéro octet sur un tube attend des données
+    /// (libuv guette ainsi stdin) ; tube fermé et vide : ERROR_BROKEN_PIPE.
+    #[test]
+    fn zero_byte_read_on_a_pipe_waits_for_data() {
+        let _teb = crate::process::test_teb();
+        let (mut r, mut w) = (0usize, 0usize);
+        unsafe {
+            assert_eq!(create_pipe(&mut r, &mut w, std::ptr::null(), 0), 1);
+        }
+        let writer = w;
+        let start = std::time::Instant::now();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let mut n = 0u32;
+            unsafe { write_file(writer, b"x".as_ptr(), 1, &mut n, 0) };
+        });
+        let mut buf = [0u8; 4];
+        let mut n = 7u32;
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 0, &mut n, 0), 1);
+        }
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(250),
+            "rendue sans attendre"
+        );
+        assert_eq!(n, 0);
+        t.join().unwrap();
+        // Les données sont toujours là pour la vraie lecture.
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 4, &mut n, 0), 1);
+        }
+        assert_eq!((n, buf[0]), (1, b'x'));
+        close_handle(w);
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 0, &mut n, 0), 0);
+        }
+        assert_eq!(crate::process::last_error(), 109);
+        close_handle(r);
     }
 
     #[test]
