@@ -653,7 +653,7 @@ static FACTORY_VT: VTable<24> = VTable([
     not_implemented as *const (), // CreateEllipsisTrimmingSign
     super::dwrite_analyzer::create_text_analyzer as *const (), // CreateTextAnalyzer
     super::dwrite_analyzer::create_number_substitution as *const (), // CreateNumberSubstitution
-    not_implemented as *const (), // CreateGlyphRunAnalysis
+    super::dwrite_glyphs::create_glyph_run_analysis as *const (), // CreateGlyphRunAnalysis
 ]);
 
 // Paramètres de rendu : valeurs par défaut de Windows.
@@ -3027,6 +3027,42 @@ pub mod tests {
             p
         })
         .clone()
+    }
+
+    /// Suite de deux glyphes de la police de test (carré puis losange),
+    /// 10 DIP, avances de la police. Garde ses tableaux en vie.
+    pub struct SampleRun {
+        pub run: GlyphRun,
+        _indices: Box<[u16; 2]>,
+    }
+
+    pub unsafe fn sample_run() -> SampleRun {
+        let font = Arc::new(sfnt::Font::parse(sfnt::tests::tiny_font(), 0).unwrap());
+        let face = new_face(
+            FaceInfo {
+                family: "Winlux Test".into(),
+                style: "Regular".into(),
+                weight: 400,
+                italic: false,
+                path: PathBuf::new(),
+                index: 0,
+            },
+            font,
+        );
+        let indices = Box::new([1u16, 2]);
+        SampleRun {
+            run: GlyphRun {
+                face: face.cast(),
+                em_size: 10.0,
+                count: 2,
+                indices: indices.as_ptr(),
+                advances: std::ptr::null(),
+                offsets: std::ptr::null(),
+                sideways: 0,
+                bidi_level: 0,
+            },
+            _indices: indices,
+        }
     }
 
     pub fn wide(s: &str) -> Vec<u16> {
