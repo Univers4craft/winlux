@@ -634,6 +634,9 @@ _TR = {
     # Widgets (Windows + W)
     'Widgets': ('Widgets', 'Widgets', 'Widgets'),
     'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
+    'Autres icônes de la barre d’état système': ('Other system tray icons', 'Otros iconos de la bandeja del sistema', 'Weitere Symbole im Infobereich'),
+    'Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici.': ('None yet: every program that shows an icon next to the clock appears here.', 'Ninguno por ahora: cada programa que muestra un icono junto a la hora aparece aquí.', 'Noch keine: Jedes Programm, das ein Symbol neben der Uhr anzeigt, erscheint hier.'),
+    'Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre.': ('When off, the icon goes behind the arrow next to the network icon. Click the arrow to show it.', 'Desactivado, el icono se guarda tras la flecha, junto a la red. Un clic en la flecha lo muestra.', 'Ausgeschaltet wandert das Symbol hinter den Pfeil neben dem Netzwerksymbol. Ein Klick auf den Pfeil zeigt es.'),
     'Bouton Widgets dans la barre des tâches': ('Widgets button on the taskbar', 'Botón Widgets en la barra de tareas', 'Widgets-Schaltfläche in der Taskleiste'),
     'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
     'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
@@ -2094,6 +2097,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.tray_icon_settings()
         self.start_menu_settings()
         self.theme_files()
         if have("winlux-widgets"):
@@ -2117,6 +2121,29 @@ class ExtraPages:
             # « Aligner les icônes sur la grille » de Windows : seul le
             # rangement automatique est proposé.
             self.actions(box, [(_t("Réorganiser les icônes"), lambda: self.spawn(["xfdesktop", "--arrange"]))])
+
+    def tray_icon_settings(self):
+        """Icônes cachées derrière la flèche, à côté du réseau : une par
+        programme, comme « Autres icônes de la barre d’état système » de
+        Windows 11. winlux-tray overflow lit et écrit la liste du greffon
+        systray d'XFCE, appliquée en direct."""
+        if not have("winlux-tray"):
+            return
+        try:
+            listing = subprocess.run(["winlux-tray", "overflow", "list"], capture_output=True, text=True, timeout=5).stdout
+            items = json.loads(listing or "[]")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            items = []
+        self.section(_t("Autres icônes de la barre d’état système"))
+        box = self.card()
+        if not items:
+            self.hint(_t("Aucune pour l’instant : chaque programme qui affiche une icône près de l’heure apparaît ici."), box)
+            return
+        for item in items:
+            name = str(item.get("name", ""))
+            self.switch(box, name[:1].upper() + name[1:], not item.get("hidden"),
+                        lambda on, n=name: self.tool(["winlux-tray", "overflow", "show" if on else "hide", n], refresh=False))
+        self.hint(_t("Désactivée, l’icône se range derrière la flèche, à côté du réseau. Un clic sur la flèche la montre."), box)
 
     def start_menu_settings(self):
         """Menu Démarrer (#685) : volet « Pour vous » et historique local.
