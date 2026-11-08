@@ -662,6 +662,26 @@ fn cles_reseau_toujours_presentes() {
 }
 
 #[test]
+fn vue_dynamique_personnalisation_presente() {
+    // Flow Launcher convertit (int)Registry.GetValue(...) sans garde (#1170).
+    let mut data = Data::empty();
+    let dword = |d: &Data, n: &str| {
+        let v = d.get(live::PERSONALIZE, n).unwrap();
+        u32::from_le_bytes(v.bytes[..4].try_into().unwrap())
+    };
+    data.raw_set(
+        live::PERSONALIZE,
+        "AppsUseLightTheme",
+        REG_DWORD,
+        0u32.to_le_bytes().to_vec(),
+    );
+    live::personalize(&mut data);
+    assert_eq!(dword(&data, "AppsUseLightTheme"), 0);
+    assert_eq!(dword(&data, "SystemUsesLightTheme"), 1);
+    assert_eq!(dword(&data, "EnableTransparency"), 1);
+}
+
+#[test]
 fn vue_dynamique_fuseau_pages_clavier_polices() {
     let mut data = Data::empty();
     let paris = crate::intl::tz::parse_posix("CET-1CEST,M3.5.0,M10.5.0/3").unwrap();

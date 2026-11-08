@@ -29,10 +29,13 @@ struct NmHdr {
 fn notify_struct<T>(hwnd: usize, code: i32, data: &mut T) -> isize {
     let hdr = data as *mut T as *mut NmHdr;
     let id = user32::control_id(hwnd) as usize;
+    // NMLVKEYDOWN est compacté (pshpack1) : son NMHDR n'est pas forcément
+    // aligné sur 8, d'où des écritures non alignées et champ par champ (une
+    // écriture du NMHDR entier déborderait sur wVKey par son remplissage).
     unsafe {
-        (*hdr).hwnd_from = hwnd;
-        (*hdr).id_from = id;
-        (*hdr).code = code;
+        std::ptr::addr_of_mut!((*hdr).hwnd_from).write_unaligned(hwnd);
+        std::ptr::addr_of_mut!((*hdr).id_from).write_unaligned(id);
+        std::ptr::addr_of_mut!((*hdr).code).write_unaligned(code);
     }
     send(parent(hwnd), WM_NOTIFY, id, data as *mut T as isize)
 }
@@ -80,6 +83,11 @@ pub(super) struct CommonState {
     rows: Vec<LvRow>,
     lv_focus: i32,
     lv_top: i32,
+    /// Champ d'édition du renommage en place (LVM_EDITLABEL) et sa ligne.
+    lv_edit: usize,
+    lv_edit_item: i32,
+    /// Style étendu (LVM_SETEXTENDEDLISTVIEWSTYLE), dont LVS_EX_CHECKBOXES.
+    lv_ex_style: u32,
     /// Listes d'images : normale (LVSIL_NORMAL) et petite (LVSIL_SMALL).
     lv_images: [usize; 2],
     // Onglets / barre d'état
@@ -1262,6 +1270,26 @@ fn paint_listview(hwnd: usize, c: &Ctl, p: &Painter, r: Rect) {
                 right: x + w - 6,
                 ..line
             };
+            if i == 0 && s.lv_ex_style & LVS_EX_CHECKBOXES != 0 {
+                // Case à cocher de la ligne (#1153), dessinée comme un bouton.
+                let size = 13;
+                let bx = cell.left - 4;
+                let by = line.top + (rh - size) / 2;
+                let bxr = Rect::from_size(bx, by, size, size);
+                let checked = row.state & LVIS_STATEIMAGEMASK == 0x2000;
+                let (fill, border) = if checked {
+                    (ACCENT, ACCENT)
+                } else {
+                    (FIELD, STRONG_BORDER)
+                };
+                p.shape(bxr, fill, border, 3, false);
+                if checked {
+                    let y = by + size / 2;
+                    p.line(bx + 3, y, bx + 6, y + 3, FIELD, 2);
+                    p.line(bx + 6, y + 3, bx + size - 4, by + 4, FIELD, 2);
+                }
+                cell.left += LV_CHECK_W;
+            }
             if i == 0 && images != 0 {
                 let image = lv_row_image(hwnd, k, row);
                 if let Some((iw, ih)) = crate::dlls::icons::list_size(images) {
@@ -1406,6 +1434,10 @@ unsafe fn lv_set_item(hwnd: usize, lp: isize, wide: bool, insert: bool) -> isize
             }
             if it.mask & LVIF_STATE != 0 {
                 row.state = it.state & it.state_mask;
+            }
+            // Cases à cocher : une ligne sans image d'état est décochée (1).
+            if s.lv_ex_style & LVS_EX_CHECKBOXES != 0 && row.state & LVIS_STATEIMAGEMASK == 0 {
+                row.state |= 0x1000;
             }
             s.rows.insert(at, row);
             if s.lv_focus >= at as i32 {
@@ -1613,6 +1645,277 @@ fn lv_begin_drag(hwnd: usize, item: i32, pt: (i32, i32)) {
     notify_struct(hwnd, -109, &mut nm); // LVN_BEGINDRAG
 }
 
+const NM_RCLICK: i32 = -5;
+const LVS_EX_CHECKBOXES: u32 = 0x4;
+const LVIS_STATEIMAGEMASK: u32 = 0xF000;
+/// Largeur de la case à cocher d'une ligne (LVS_EX_CHECKBOXES), marges comprises.
+const LV_CHECK_W: i32 = 18;
+
+/// Coche ou décoche la ligne (image d'état 2 ou 1) ; LVN_ITEMCHANGED suit.
+fn lv_toggle_check(hwnd: usize, item: i32) {
+    let Some(state) = common_snapshot(hwnd)
+        .rows
+        .get(item as usize)
+        .map(|r| r.state)
+    else {
+        return;
+    };
+    let next = if state & LVIS_STATEIMAGEMASK == 0x2000 {
+        0x1000
+    } else {
+        0x2000
+    };
+    lv_set_state(hwnd, item, next, LVIS_STATEIMAGEMASK);
+}
+const WM_RBUTTONDOWN: u32 = 0x0204;
+const WM_RBUTTONUP: u32 = 0x0205;
+const WM_RBUTTONDBLCLK: u32 = 0x0206;
+const WM_CONTEXTMENU: u32 = 0x007B;
+const VK_F2: usize = 0x71;
+const VK_F10: usize = 0x79;
+const LVS_EDITLABELS: u32 = 0x0200;
+const LVN_BEGINLABELEDITA: i32 = -105;
+const LVN_ENDLABELEDITA: i32 = -106;
+const LVN_BEGINLABELEDITW: i32 = -175;
+const LVN_ENDLABELEDITW: i32 = -176;
+/// Message interne : fin du renommage en place (wp = 1 pour valider).
+const LV_END_EDIT: u32 = 0x10F0;
+
+/// NMLVDISPINFO : NMHDR suivi d'un LVITEM complet.
+#[repr(C)]
+struct LvDispInfo {
+    hdr: NmHdr,
+    item: LvItem,
+    // iIndent, iGroupId, cColumns, puColumns, piColFmt, iGroup
+    tail: [u8; 48],
+}
+
+/// WM_CONTEXTMENU d'une liste, en coordonnées écran ; (-1, -1) au clavier.
+fn lv_context_menu(hwnd: usize, pt: Option<(i32, i32)>) {
+    let lp = match pt {
+        Some((x, y)) => {
+            let (ox, oy) = gui::screen_rect(hwnd).map_or((0, 0), |r| (r.left, r.top));
+            ((((y + oy) as u16 as u32) << 16) | (x + ox) as u16 as u32) as i32 as isize
+        }
+        None => -1,
+    };
+    send(hwnd, WM_CONTEXTMENU, hwnd, lp);
+}
+
+/// LVN_BEGINLABELEDIT / LVN_ENDLABELEDIT. `text` est le nouveau libellé
+/// (None : renommage annulé, pszText = NULL).
+fn lv_label_notify(hwnd: usize, begin: bool, item: i32, text: Option<&str>) -> isize {
+    let wide = snapshot(hwnd).is_none_or(|c| c.wide);
+    let param = common_snapshot(hwnd)
+        .rows
+        .get(item.max(0) as usize)
+        .map_or(0, |r| r.param);
+    let mut wbuf: Vec<u16> = Vec::new();
+    let mut abuf: Vec<u8> = Vec::new();
+    let ptr = match text {
+        Some(t) if wide => {
+            wbuf = t.encode_utf16().chain([0]).collect();
+            wbuf.as_mut_ptr() as usize
+        }
+        Some(t) => {
+            abuf = crate::dlls::encode_ansi(t);
+            abuf.push(0);
+            abuf.as_mut_ptr() as usize
+        }
+        None => 0,
+    };
+    let mut nm = LvDispInfo {
+        hdr: NmHdr {
+            hwnd_from: 0,
+            id_from: 0,
+            code: 0,
+        },
+        item: LvItem {
+            mask: LVIF_TEXT | 0x4, // LVIF_PARAM
+            item,
+            text: ptr,
+            text_max: if wide { wbuf.len() } else { abuf.len() } as i32,
+            param,
+            ..Default::default()
+        },
+        tail: [0; 48],
+    };
+    let code = match (begin, wide) {
+        (true, true) => LVN_BEGINLABELEDITW,
+        (true, false) => LVN_BEGINLABELEDITA,
+        (false, true) => LVN_ENDLABELEDITW,
+        (false, false) => LVN_ENDLABELEDITA,
+    };
+    notify_struct(hwnd, code, &mut nm)
+}
+
+/// Champs de renommage en place : champ → (liste, procédure d'origine).
+fn lv_edits() -> &'static Mutex<HashMap<usize, (usize, usize)>> {
+    static M: OnceLock<Mutex<HashMap<usize, (usize, usize)>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Procédure du champ de renommage : Entrée valide, Échap annule, la perte
+/// du focus valide, comme dans l'Explorateur.
+unsafe extern "win64" fn lv_edit_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
+    let Some((lv, prev)) = lv_edits().lock().unwrap().get(&hwnd).copied() else {
+        return gui::def_window_proc(hwnd, msg, wp, lp);
+    };
+    match msg {
+        WM_KEYDOWN if wp == VK_RETURN || wp == VK_ESCAPE => {
+            user32::post_message_w(lv, LV_END_EDIT, (wp == VK_RETURN) as usize, 0);
+            return 0;
+        }
+        WM_CHAR if wp == 0x0D || wp == 0x1B => return 0,
+        WM_KILLFOCUS => {
+            user32::post_message_w(lv, LV_END_EDIT, 1, 0);
+        }
+        WM_GETDLGCODE => {
+            return gui::call_wndproc(prev, hwnd, msg, wp, lp) | DLGC_WANTALLKEYS;
+        }
+        _ => {}
+    }
+    gui::call_wndproc(prev, hwnd, msg, wp, lp)
+}
+
+/// LVM_GETITEMRECT : rectangle de la ligne `item` en coordonnées client.
+/// `rect.left` donne la partie : LVIR_BOUNDS (0), LVIR_ICON (1),
+/// LVIR_LABEL (2), LVIR_SELECTBOUNDS (3). 7-Zip y place le menu ouvert au
+/// clavier (Maj+F10, touche Applications), #1139.
+unsafe fn lv_item_rect(hwnd: usize, item: i32, rect: *mut [i32; 4]) -> bool {
+    if rect.is_null() {
+        return false;
+    }
+    let s = common_snapshot(hwnd);
+    let Some(c) = snapshot(hwnd) else {
+        return false;
+    };
+    if item < 0 || item as usize >= s.rows.len() {
+        return false;
+    }
+    let part = (*rect)[0];
+    let rh = lv_row_h(&c);
+    let top = header_h(hwnd, &c) + 2 + (item - s.lv_top) * rh;
+    let icon = if s.lv_images[1] != 0 { 20 } else { 0 };
+    let total: i32 = if s.columns.is_empty() {
+        client(hwnd).width()
+    } else {
+        s.columns.iter().map(|c| c.1).sum()
+    };
+    let first = s.columns.first().map_or(total, |c| c.1);
+    let (left, right) = match part {
+        1 => (2, 2 + icon),
+        2 => (2 + icon, first),
+        3 => (2, first),
+        _ => (0, total),
+    };
+    *rect = [left, top, right, top + rh];
+    true
+}
+
+/// LVM_EDITLABEL : ouvre le champ de renommage sur la ligne `item`.
+unsafe fn lv_edit_label(hwnd: usize, item: i32) -> isize {
+    lv_end_edit(hwnd, false);
+    let s = common_snapshot(hwnd);
+    let Some(row) = (item >= 0).then(|| s.rows.get(item as usize)).flatten() else {
+        return 0;
+    };
+    let Some(c) = snapshot(hwnd) else {
+        return 0;
+    };
+    let text = lv_cell_text(hwnd, item as usize, 0, row);
+    user32::set_focus(hwnd);
+    if lv_label_notify(hwnd, true, item, None) != 0 {
+        return 0;
+    }
+    lv_ensure_visible(hwnd, item);
+    let s = common_snapshot(hwnd);
+    let rh = lv_row_h(&c);
+    let y = header_h(hwnd, &c) + 2 + (item - s.lv_top) * rh;
+    let icon = if s.lv_images[1] != 0 { 20 } else { 0 };
+    let w = s
+        .columns
+        .first()
+        .map_or(client(hwnd).width(), |c| c.1)
+        .max(60);
+    let class: Vec<u16> = "Edit".encode_utf16().chain([0]).collect();
+    let title: Vec<u16> = text.encode_utf16().chain([0]).collect();
+    // WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL
+    let edit = with_charset(c.wide, || {
+        user32::create_window_ex_w(
+            0,
+            class.as_ptr(),
+            title.as_ptr(),
+            0x4000_0000 | 0x1000_0000 | WS_BORDER | 0x80,
+            2 + icon,
+            y,
+            (w - icon - 2).max(40),
+            rh,
+            hwnd,
+            0,
+            0,
+            std::ptr::null_mut(),
+        )
+    });
+    if edit == 0 {
+        return 0;
+    }
+    let font = send(hwnd, WM_GETFONT, 0, 0);
+    if font != 0 {
+        send(edit, WM_SETFONT, font as usize, 0);
+    }
+    let prev = user32::set_window_long_ptr_w(edit, -4, lv_edit_proc as *const () as usize as isize);
+    lv_edits()
+        .lock()
+        .unwrap()
+        .insert(edit, (hwnd, prev as usize));
+    with_common(hwnd, |s| {
+        s.lv_edit = edit;
+        s.lv_edit_item = item;
+    });
+    user32::set_focus(edit);
+    send(edit, 0x00B1, 0, -1); // EM_SETSEL : tout le nom
+    edit as isize
+}
+
+/// Ferme le champ de renommage ; `commit` envoie le nouveau nom au parent,
+/// qui l'accepte en répondant TRUE à LVN_ENDLABELEDIT.
+unsafe fn lv_end_edit(hwnd: usize, commit: bool) {
+    let (edit, item) = with_common(hwnd, |s| {
+        let out = (s.lv_edit, s.lv_edit_item);
+        s.lv_edit = 0;
+        out
+    });
+    if edit == 0 {
+        return;
+    }
+    let text = commit.then(|| {
+        let mut buf = vec![0u16; 1024];
+        let n = user32::send_message_w(edit, WM_GETTEXT, buf.len(), buf.as_mut_ptr() as isize);
+        String::from_utf16_lossy(&buf[..(n.max(0) as usize).min(buf.len())])
+    });
+    lv_edits().lock().unwrap().remove(&edit);
+    // Comme sous Windows, la liste reprend le focus du champ fermé.
+    if gui::focused_window() == edit {
+        user32::set_focus(hwnd);
+    }
+    user32::destroy_window(edit);
+    let accepted = lv_label_notify(hwnd, false, item, text.as_deref()) != 0;
+    if let (true, Some(t)) = (accepted, text) {
+        with_common(hwnd, |s| {
+            if let Some(row) = s.rows.get_mut(item as usize) {
+                if row.callback & 1 == 0 {
+                    match row.texts.first_mut() {
+                        Some(first) => *first = t,
+                        None => row.texts.push(t),
+                    }
+                }
+            }
+        });
+    }
+    invalidate(hwnd);
+}
+
 unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
     let r = match msg {
         0x1004 => common_snapshot(hwnd).rows.len() as isize, // LVM_GETITEMCOUNT
@@ -1702,6 +2005,7 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             invalidate(hwnd);
             1
         }
+        0x100E => lv_item_rect(hwnd, wp as i32, lp as *mut [i32; 4]) as isize, // GETITEMRECT
         0x100C => {
             // GETNEXTITEM : wp = départ (-1), lp = LVNI_*
             let s = common_snapshot(hwnd);
@@ -1854,11 +2158,70 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             }
             common_snapshot(hwnd).lv_images[(wp == 1) as usize] as isize
         }
-        0x1036 | 0x1037 | 0x1001 | 0x1024 | 0x1026 | 0x1015 => 0,
+        0x1036 => {
+            // SETEXTENDEDLISTVIEWSTYLE : wp = masque (0 : tous), lp = style.
+            let mask = if wp == 0 { u32::MAX } else { wp as u32 };
+            let old = with_common(hwnd, |s| {
+                let old = s.lv_ex_style;
+                s.lv_ex_style = (old & !mask) | (lp as u32 & mask);
+                // Cases activées : chaque ligne devient décochée (#1153).
+                if s.lv_ex_style & LVS_EX_CHECKBOXES != 0 && old & LVS_EX_CHECKBOXES == 0 {
+                    for row in s.rows.iter_mut() {
+                        if row.state & LVIS_STATEIMAGEMASK == 0 {
+                            row.state |= 0x1000;
+                        }
+                    }
+                }
+                old
+            });
+            invalidate(hwnd);
+            old as isize
+        }
+        0x1037 => common_snapshot(hwnd).lv_ex_style as isize, // GETEXTENDEDLISTVIEWSTYLE
+        0x1001 | 0x1024 | 0x1026 | 0x1015 => 0,
         0x101F => 0, // GETHEADER : pas de contrôle séparé
         0x1027 => common_snapshot(hwnd).lv_top as isize, // GETTOPINDEX
         0x1028 => lv_rows_visible(hwnd) as isize, // GETCOUNTPERPAGE
         WM_GETDLGCODE => DLGC_WANTARROWS | DLGC_WANTCHARS,
+        0x1076 | 0x1017 => lv_edit_label(hwnd, wp as i32), // EDITLABEL W/A
+        0x1018 => common_snapshot(hwnd).lv_edit as isize,  // GETEDITCONTROL
+        0x10B3 => {
+            // CANCELEDITLABEL
+            lv_end_edit(hwnd, false);
+            1
+        }
+        LV_END_EDIT => {
+            lv_end_edit(hwnd, wp != 0);
+            0
+        }
+        // Clic droit : la ligne visée est sélectionnée (la sélection est
+        // gardée si elle en fait partie), NM_RCLICK part au parent puis,
+        // s'il ne l'a pas traité, WM_CONTEXTMENU ouvre le menu (#1139).
+        WM_RBUTTONDOWN | WM_RBUTTONDBLCLK => {
+            user32::set_focus(hwnd);
+            let pt = point(lp);
+            let c = snapshot(hwnd)?;
+            if pt.1 >= header_h(hwnd, &c) {
+                let i = lv_hit(hwnd, pt.1);
+                if i >= 0 {
+                    let state = common_snapshot(hwnd).rows[i as usize].state;
+                    if state & LVIS_SELECTED == 0 {
+                        lv_select_only(hwnd, i);
+                    } else {
+                        lv_set_state(hwnd, i, LVIS_FOCUSED, LVIS_FOCUSED);
+                    }
+                } else if !ctrl_down() {
+                    lv_set_state(hwnd, -1, 0, LVIS_SELECTED);
+                }
+                if lv_notify_item(hwnd, NM_RCLICK, i, pt) != 0 {
+                    return Some(0);
+                }
+            }
+            lv_context_menu(hwnd, Some(pt));
+            0
+        }
+        // Le menu est déjà demandé à l'appui : pas de second WM_CONTEXTMENU.
+        WM_RBUTTONUP => 0,
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             user32::set_focus(hwnd);
             let (_, y) = point(lp);
@@ -1895,6 +2258,15 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
                 return Some(0);
             }
             let pt = point(lp);
+            // Clic sur la case à cocher de la ligne : elle bascule, puis la
+            // ligne est sélectionnée comme par un clic ordinaire (#1153).
+            if msg == WM_LBUTTONDOWN
+                && i >= 0
+                && common_snapshot(hwnd).lv_ex_style & LVS_EX_CHECKBOXES != 0
+                && (2..8 + LV_CHECK_W).contains(&pt.0)
+            {
+                lv_toggle_check(hwnd, i);
+            }
             // Glisser depuis un élément déjà sélectionné : la sélection
             // multiple est gardée, comme sous Windows (#1138).
             let selected =
@@ -1951,6 +2323,20 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             };
             notify_struct(hwnd, -155, &mut kd);
             let s = common_snapshot(hwnd);
+            // Maj+F10 : menu contextuel ; F2 : renommage en place (#1139).
+            if wp == VK_F10 && shift_down() {
+                lv_context_menu(hwnd, None);
+                return Some(0);
+            }
+            // Espace : coche ou décoche la ligne courante (#1153).
+            if wp == VK_SPACE && s.lv_ex_style & LVS_EX_CHECKBOXES != 0 && s.lv_focus >= 0 {
+                lv_toggle_check(hwnd, s.lv_focus);
+                return Some(0);
+            }
+            if wp == VK_F2 && style(hwnd) & LVS_EDITLABELS != 0 && s.lv_focus >= 0 {
+                lv_edit_label(hwnd, s.lv_focus);
+                return Some(0);
+            }
             let n = s.rows.len() as i32;
             if n == 0 {
                 return Some(0);
