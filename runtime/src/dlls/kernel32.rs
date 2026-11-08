@@ -7304,13 +7304,17 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
             *out.add(21) = u8::from(is_dir);
         }
         2 => {
-            let Some(p) = path else {
-                crate::process::set_last_error(6);
-                return 0;
+            let wide: Vec<u16> = if let Some(name) = crate::dlls::named_pipes::file_name(handle) {
+                name
+            } else {
+                let Some(p) = path else {
+                    crate::process::set_last_error(6);
+                    return 0;
+                };
+                let win = crate::paths::to_windows(&p);
+                let rest = win.get(2..).unwrap_or(&win);
+                rest.encode_utf16().collect()
             };
-            let win = crate::paths::to_windows(&p);
-            let rest = win.get(2..).unwrap_or(&win);
-            let wide: Vec<u16> = rest.encode_utf16().collect();
             if out.is_null() || size < 4 {
                 crate::process::set_last_error(24);
                 return 0;
