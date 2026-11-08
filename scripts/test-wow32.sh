@@ -73,11 +73,13 @@ run() {
 }
 
 run hello32
-echo "hello32 : programme x86 lancé, 15 vérifications passées"
+echo "hello32 : programme x86 lancé, 16 vérifications passées"
 run hello32_reloc
 echo "hello32_reloc : image déplacée sous 2 Go, relocations HIGHLOW"
 run hello32 WINLUX_WOW32_NO_FSGSBASE=1
 echo "hello32 : FS rétabli par arch_prctl (sans FSGSBASE)"
+run hello32 WINLUX_WOW32_STEP=GetEnvironmentVariableA
+echo "hello32 : pas à pas (WINLUX_WOW32_STEP) sans perdre FS"
 
 set +e
 WINLUX_GUI=headless WINLUX_CRASH_DIR="$work/crash" timeout 60 "$runtime" "$out/hello32.exe" plantage >"$work/crash.txt" 2>&1

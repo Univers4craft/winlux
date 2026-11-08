@@ -2097,6 +2097,21 @@ winlux_wow_signal:
     movzx eax, word ptr [rdx + {csgsfs}]
     cmp eax, {cs32}
     jne 1f
+    // Pas à pas (WINLUX_WOW32_STEP) : traité sans toucher à FS, que le
+    // retour du signal ne rétablirait pas pour le code x86.
+    cmp edi, 5
+    jne 2f
+    push rdi
+    push rsi
+    push rdx
+    call {step_signal}
+    pop rdx
+    pop rsi
+    pop rdi
+    test al, al
+    jz 2f
+    ret
+2:
     push rdi
     push rsi
     push rdx
@@ -2117,7 +2132,13 @@ winlux_wow_signal:
     fs_glibc = const TEB64_FS_GLIBC,
     fault32 = sym fault32,
     chain = sym chain,
+    step_signal = sym step_signal,
 );
+
+/// SIGTRAP reçu en x86, FS encore celui du programme : sans TLS.
+extern "C" fn step_signal(_sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) -> bool {
+    unsafe { step_trap(info, ctx as *mut libc::ucontext_t) }
+}
 
 extern "C" {
     fn winlux_wow_signal();
@@ -2127,9 +2148,6 @@ extern "C" {
 /// fs:[0]) viendra avec la deuxième étape de #232.
 extern "C" fn fault32(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
-        if sig == libc::SIGTRAP && step_trap(info, ctx as *mut libc::ucontext_t) {
-            return;
-        }
         if !info.is_null()
             && !ctx.is_null()
             && redirect_fault(sig, info, ctx as *mut libc::ucontext_t)
