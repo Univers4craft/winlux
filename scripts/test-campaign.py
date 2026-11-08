@@ -940,6 +940,14 @@ ok((runtime_dlls / "thread_ctl.rs").exists()
    and "test-thread-control.sh" in (SCRIPTS / "test-all.sh").read_text(),
    ".NET autonome et WinForms : suspension de threads, contexte, WaitMessage, page de garde de pile")
 
+# #1048 : GetNetworkParams, GetIfTable et GetAdaptersInfo rendent une vraie
+# taille quand le tampon est trop petit (.NET bouclait sur une taille 0).
+iphlp = (runtime_dlls / "iphlpapi.rs").read_text()
+ok("const FIXED_INFO_SIZE: usize = 600;" in iphlp and "const IFROW_SIZE: usize = 860;" in iphlp
+   and "fn parametres_reseau_taille_puis_contenu" in iphlp
+   and "net_params()" in (ROOT / "testc/msvc/threadctl_msvc.c").read_text(),
+   "iphlpapi : paramètres réseau et table des interfaces sans boucle sans fin (#1048)")
+
 # #1003 : la dictée et les sous-titres ne passent plus par GLib.unix_signal_add (déprécié).
 speech = (SCRIPTS / "winlux-speech.py").read_text()
 ok("GLibUnix.signal_add" in speech and speech.count("GLib.unix_signal_add") == 1
