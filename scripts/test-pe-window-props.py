@@ -57,9 +57,17 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
             return [f"{label} : aucune fenêtre de haut niveau"]
         time.sleep(1)
         wins = [w for w in windows_of(proc.pid) if w in wins] or wins
+        checked = 0
         for w in wins:
             got = props(w)
             missing = [name for name in REQUIRED if name not in got]
+            if missing and w not in windows_of(proc.pid):
+                # Fenêtre fermée pendant la lecture (la boîte de message de
+                # controls_suite se ferme seule) : xprop n'a lu qu'une partie
+                # de ses propriétés. Ce n'est pas un défaut de la fenêtre.
+                print(f"  --     {label} : fenêtre {w} fermée pendant la vérification, ignorée")
+                continue
+            checked += 1
             if missing:
                 errors.append(f"{label} : fenêtre {w} sans {', '.join(missing)}")
             elif got["_NET_WM_PID"] != str(proc.pid):
@@ -70,6 +78,8 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
                 errors.append(f"{label} : _NET_WM_DESKTOP = {got['_NET_WM_DESKTOP']} au lieu de 0")
             else:
                 print(f"  OK     {label} : {', '.join(f'{k}={v}' for k, v in got.items())}")
+        if not checked and not errors:
+            errors.append(f"{label} : toutes les fenêtres se sont fermées avant la vérification")
         if cycle and not errors:
             # Réduire puis réafficher : la fenêtre doit rester gérée, avec son
             # bureau (cas relevé sur la VM après windowminimize puis snap).

@@ -3028,15 +3028,16 @@ pub fn destroy_window(hwnd: usize) -> bool {
     let (wnd_proc, owner) = {
         let map = lock(windows());
         match map.get(&hwnd) {
-            Some(w) => (w.wnd_proc, w.owner),
-            None => return false,
+            Some(w) => (Some(w.wnd_proc), Some(w.owner)),
+            // Inconnue de la table : on nettoie quand même ce que le
+            // serveur X et les files en gardent, comme avant.
+            None => (None, None),
         }
     };
     if !lock(destroying()).insert(hwnd) {
         // DestroyWindow rappelé pendant la destruction de la même fenêtre.
         return true;
     }
-    let (wnd_proc, owner) = (Some(wnd_proc), Some(owner));
     // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
     lock(dcs()).retain(|_, d| d.hwnd != hwnd);
     discard_key_chars(hwnd);
@@ -4504,7 +4505,6 @@ mod tests {
         );
         for h in [parent, enfant] {
             assert_eq!(unsafe { crate::dlls::user32::is_window(h) }, 0);
-            assert!(!destroy_window(h));
         }
     }
 
