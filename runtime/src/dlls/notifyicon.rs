@@ -359,6 +359,9 @@ fn deliver(line: &str) {
         return;
     };
     let Some(icon) = state().icons.get(&(hwnd, id)).cloned() else {
+        crate::thunks::api_note(&format!(
+            "zone de notification : {event} sur {target}, icône inconnue (#1222)"
+        ));
         return;
     };
     if !event.starts_with("balloon") && (x, y) != (0, 0) {
@@ -376,18 +379,30 @@ fn deliver(line: &str) {
         note_tray_menu(&overflow_name(&icon_source()));
     }
     if icon.callback == 0 {
+        crate::thunks::api_note(&format!(
+            "zone de notification : {event} sur {target}, pas de message de rappel (#1222)"
+        ));
         return;
     }
     for (wparam, lparam) in callback_messages(icon.version, id, event, x, y) {
-        crate::dlls::gui::post_to_window(
+        let posted = crate::dlls::gui::post_to_window(
             hwnd,
             crate::dlls::gui::Msg::new(hwnd, icon.callback, wparam, lparam),
         );
+        crate::thunks::api_note(&format!(
+            "zone de notification : {event} sur {target} → message {:#x} ({wparam:#x}, {lparam:#x}) {} (#1222)",
+            icon.callback,
+            if posted { "posté" } else { "refusé : fenêtre inconnue" }
+        ));
     }
 }
 
 /// Applique une commande `NIM_*` ; renvoie le BOOL de `Shell_NotifyIcon`.
 pub fn apply(message: u32, data: &IconData) -> bool {
+    crate::thunks::api_note(&format!(
+        "Shell_NotifyIcon({message}) : fenêtre {:#x}, id {}, drapeaux {:#x}, message {:#x}, version {} (#1222)",
+        data.hwnd, data.id, data.flags, data.callback, data.version
+    ));
     let mut st = state();
     let k = (data.hwnd, data.id);
     match message {
