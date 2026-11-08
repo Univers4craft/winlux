@@ -900,5 +900,8 @@ ok(all(t in runtime_tests for t in ("ntdll_exports", "register_wait", "chromium_
    "Claude pour Windows : table d'exports, attentes annulées et processus GPU testés (#851, #852, #996)")
 ok("Some(d) if d.screen" in (ROOT / "runtime/src/dlls/gui.rs").read_text(),
    "WindowFromDC(GetDC(NULL)) rend le bureau, ANGLE accepte l'affichage (#996)")
+ok("SAME_BASE_ENV" in (ROOT / "runtime/src/loader.rs").read_text()
+   and "#767" in (ROOT / "testexe/src/bin/chromium_compat.rs").read_text(),
+   "même .exe dans un enfant : même adresse d'image, exigée par le bac à sable de Chromium (#767)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

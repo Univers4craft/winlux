@@ -4987,6 +4987,14 @@ unsafe fn create_process_common(
                 .map(std::ffi::OsString::from),
         );
     }
+    // Même .exe que nous (enfants de Chromium) : même adresse d'image (#767).
+    let same_base = if is_pe {
+        target
+            .get(1)
+            .and_then(|p| crate::loader::base_for_child(std::path::Path::new(p)))
+    } else {
+        None
+    };
     // Programme Windows suspendu : il se fige lui-même une fois chargé
     // (image, DLL et PEB en place, aucun code du programme exécuté),
     // comme sous Windows. Le bac à sable de Chromium lit puis écrit alors
@@ -5090,6 +5098,10 @@ unsafe fn create_process_common(
     }
     cmd.env_remove(crate::dlls::inherit::ENV);
     cmd.env_remove(crate::process::SUSPENDED_ENV);
+    cmd.env_remove(crate::loader::SAME_BASE_ENV);
+    if let Some(b) = same_base.as_ref() {
+        cmd.env(crate::loader::SAME_BASE_ENV, b);
+    }
     if suspended && is_pe {
         cmd.env(crate::process::SUSPENDED_ENV, "1");
     }

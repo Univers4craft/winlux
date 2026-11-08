@@ -146,6 +146,10 @@ unsafe fn foreign_memory(
     if !done.is_null() {
         *done = total;
     }
+    crate::trace!(
+        "{} du processus {pid} à {addr:#x} : {total}/{n} octets",
+        if write { "écriture" } else { "lecture" }
+    );
     if total == n {
         1
     } else {

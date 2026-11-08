@@ -269,6 +269,7 @@ fn main() {
     // La copie lue du fichier ne sert plus : sans ce drop, elle restait en
     // mémoire toute la vie du programme (300 Mo pour claude.exe, #997).
     drop(source);
+    loader::take_inherited_base();
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {

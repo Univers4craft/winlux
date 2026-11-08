@@ -4,6 +4,8 @@
 //! - Un enfant Windows lancé avec un bloc d'environnement explicite garde
 //!   les variables de l'hôte (affichage, configuration de Winlux) : Chromium
 //!   en donne un sans DISPLAY à son processus GPU.
+//! - #767 : un enfant qui exécute le même .exe le charge à la même adresse,
+//!   comme sous Windows ; le bac à sable de Chromium tue sinon l'enfant.
 
 #![no_std]
 #![no_main]
@@ -27,6 +29,22 @@ unsafe fn env_is(name: &core::ffi::CStr, expected: &[u8]) -> bool {
     n == expected.len() && cstr_eq(buf.as_ptr(), expected)
 }
 
+/// Adresse en hexadécimal, terminée par un zéro.
+fn hex(v: usize, out: &mut [u8; 20]) {
+    let digits = b"0123456789abcdef";
+    let mut n = 0;
+    let mut started = false;
+    for i in (0..16).rev() {
+        let d = (v >> (i * 4)) & 0xf;
+        if d != 0 || started || i == 0 {
+            started = true;
+            out[n] = digits[d];
+            n += 1;
+        }
+    }
+    out[n] = 0;
+}
+
 unsafe fn is_child() -> bool {
     let line = GetCommandLineA() as *const u8;
     let mut i = 0;
@@ -45,7 +63,17 @@ pub extern "C" fn mainCRTStartup() -> ! {
         if is_child() {
             // Enfant : la valeur du bloc et celle de l'hôte sont là.
             let ok = env_is(c"A", b"1") && env_is(c"WINLUX_TEST_PLOMBERIE", b"oui");
-            ExitProcess(if ok { 0 } else { 7 });
+            let mut base = [0u8; 20];
+            hex(GetModuleHandleA(core::ptr::null()) as usize, &mut base);
+            let n = base.iter().position(|&b| b == 0).unwrap_or(0);
+            let same = env_is(c"WINLUX_TEST_BASE", &base[..n]);
+            ExitProcess(if !ok {
+                7
+            } else if !same {
+                8
+            } else {
+                0
+            });
         }
         let null = core::ptr::null_mut();
         let screen = GetDC(null);
@@ -63,6 +91,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         DeleteDC(mem);
 
         SetEnvironmentVariableA(c"WINLUX_TEST_PLOMBERIE".as_ptr(), c"oui".as_ptr());
+        let mut base = [0u8; 20];
+        hex(GetModuleHandleA(core::ptr::null()) as usize, &mut base);
+        SetEnvironmentVariableA(c"WINLUX_TEST_BASE".as_ptr(), base.as_ptr() as *const c_char);
         let mut path = [0 as c_char; 512];
         GetModuleFileNameA(null, path.as_mut_ptr(), 512);
         let mut startup: StartupInfoA = core::mem::zeroed();
@@ -87,8 +118,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
             let done = WaitForSingleObject(child.process, 20_000) == 0
                 && GetExitCodeProcess(child.process, &mut code) != 0;
             check!(
-                done && code == 0,
+                done && code != 7 && code != 99,
                 "l'enfant garde les variables de l'hôte et reçoit celles du bloc"
+            );
+            check!(
+                done && code == 0,
+                "même .exe dans l'enfant : chargé à la même adresse (#767)"
             );
             CloseHandle(child.thread);
             CloseHandle(child.process);
