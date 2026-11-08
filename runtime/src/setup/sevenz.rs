@@ -924,12 +924,14 @@ pub fn embedded_msi(entries: &[Entry]) -> Option<&Entry> {
     }
 }
 
-/// Lancement d'un auto-extractible 7z qui porte un paquet MSI (voir
-/// [`embedded_msi`]). `None` : ce n'est pas ce cas, la suite habituelle
-/// s'applique. Le contenu est extrait dans un dossier temporaire (un MSI
-/// peut lire ses .cab à côté de lui), le paquet est installé par le
-/// msiexec de Winlux, puis le dossier est effacé.
-pub fn launch_msi(exe: &Path, args: &[String]) -> Option<i32> {
+/// Lancement d'un auto-extractible 7z qui lance son propre installateur.
+/// `None` : ce n'est pas ce cas, la suite habituelle s'applique.
+/// - Il porte un paquet MSI (voir [`embedded_msi`]) : le contenu est extrait
+///   dans un dossier temporaire (un MSI peut lire ses .cab à côté de lui),
+///   le paquet est installé par le msiexec de Winlux, puis le dossier est
+///   effacé.
+/// - Il ne porte qu'un téléchargeur : voir [`super::web`].
+pub fn chain(exe: &Path, args: &[String], allow_download: bool) -> Option<i32> {
     let data = std::fs::read(exe).ok()?;
     let at = find_archive(&data)?;
     if !runs_own_setup(&data, at) {
@@ -942,7 +944,10 @@ pub fn launch_msi(exe: &Path, args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
-    let msi = embedded_msi(&entries)?;
+    let Some(msi) = embedded_msi(&entries) else {
+        return super::web::is_downloader(&entries)
+            .then(|| super::web::run(&data, exe, args, allow_download));
+    };
     let quiet = args.iter().any(|a| {
         let w = a.trim_start_matches(['/', '-']).to_ascii_lowercase();
         matches!(
@@ -1231,6 +1236,32 @@ pub mod tests {
         // Sans bloc : une archive simple (7-Zip lui-même).
         let plain = [b"MZ....".as_slice(), SIGNATURE].concat();
         assert!(!runs_own_setup(&plain, 6));
+    }
+
+    #[test]
+    fn installeur_web_inconnu_refuse_sans_rien_telecharger() {
+        // Auto-extractible qui lance SetupShim.exe et ne porte qu'un
+        // téléchargeur, sans ressources de version : aucun paquet connu.
+        let mut d = vec![0u8; 0x200];
+        d[0..2].copy_from_slice(b"MZ");
+        d[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        d[0x80..0x84].copy_from_slice(b"PE\0\0");
+        d[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        d.extend(b";!@Install@!UTF-8!\r\nExecuteFile=\"SetupShim.exe\"\r\n;!@InstallEnd@!");
+        d.extend(build_copy_archive(
+            &[
+                ("SetupShim.exe", b"MZ"),
+                ("x64\\SetupDownloader\\SetupDownloader.exe", b"MZ"),
+            ],
+            "x64",
+        ));
+        let dir = std::env::temp_dir().join(format!("winlux-web-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("app.web.exe");
+        std::fs::write(&exe, &d).unwrap();
+        assert_eq!(chain(&exe, &[], false), Some(1));
+        assert_eq!(chain(&exe, &[], true), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
