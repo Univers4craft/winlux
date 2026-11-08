@@ -1469,6 +1469,18 @@ unsafe fn lv_get_item(hwnd: usize, lp: isize, wide: bool, text_only: Option<usiz
     1
 }
 
+/// Largeur d'une colonne ajustée à son en-tête et à ses textes : environ
+/// 7 pixels par caractère plus les marges, 60 pixels au moins.
+fn autosize_width(header: &str, texts: &[&str]) -> i32 {
+    let chars = texts
+        .iter()
+        .map(|t| t.chars().count())
+        .chain(std::iter::once(header.chars().count()))
+        .max()
+        .unwrap_or(0);
+    (chars as i32 * 7 + 20).max(60)
+}
+
 unsafe fn lv_column(hwnd: usize, wp: usize, lp: isize, wide: bool, insert: bool) -> isize {
     if lp == 0 {
         return -1;
@@ -1480,6 +1492,14 @@ unsafe fn lv_column(hwnd: usize, wp: usize, lp: isize, wide: bool, insert: bool)
         String::new()
     };
     let width = if col.mask & 0x2 != 0 { col.cx } else { 100 };
+    // cx négatif (LVSCW_AUTOSIZE -1, LVSCW_AUTOSIZE_USEHEADER -2) : largeur
+    // ajustée, jamais négative. wxWidgets insère ainsi ses colonnes ; gardée
+    // telle quelle, la largeur faisait chevaucher les en-têtes (#1055).
+    let width = if width < 0 {
+        autosize_width(&title, &[])
+    } else {
+        width
+    };
     let r = with_common(hwnd, |s| {
         if insert {
             let at = wp.min(s.columns.len());
@@ -1615,9 +1635,23 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             .get(wp)
             .map_or(0, |c| c.1 as isize), // GETCOLUMNWIDTH
         0x101E => {
-            // SETCOLUMNWIDTH (-1 / -2 : ajusté au contenu)
-            let w = if (lp as i32) < 0 { 120 } else { lp as i32 };
+            // SETCOLUMNWIDTH (-1 : contenu, -2 : contenu et en-tête)
             with_common(hwnd, |s| {
+                let w = if (lp as i32) < 0 {
+                    let texts: Vec<&str> = s
+                        .rows
+                        .iter()
+                        .filter_map(|r| r.texts.get(wp).map(String::as_str))
+                        .collect();
+                    let header = if lp as i32 == -2 {
+                        s.columns.get(wp).map_or("", |c| c.0.as_str())
+                    } else {
+                        ""
+                    };
+                    autosize_width(header, &texts)
+                } else {
+                    lp as i32
+                };
                 if let Some(c) = s.columns.get_mut(wp) {
                     c.1 = w;
                 }
