@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::bcl;
+use super::delegates::FnTable;
 use super::domain::AsmInfo;
 use super::exceptions::{self, ClrException, Handler};
 use super::gc;
@@ -240,7 +241,9 @@ pub struct Interpreter {
     external_statics: HashMap<(usize, u32), Box<[u64; 4]>>,
     /// Valeurs en transit vers du code natif, gardées en vie par le
     /// ramasse-miettes.
-    pins: Vec<Value>,
+    pub(super) pins: Vec<Value>,
+    /// Pointeurs de méthode rendus par `ldftn` / `ldvirtftn`.
+    pub(super) fns: FnTable,
 }
 
 pub enum ExecResult {
@@ -283,11 +286,12 @@ impl Interpreter {
             initialized: HashSet::new(),
             external_statics: HashMap::new(),
             pins: Vec::new(),
+            fns: FnTable::default(),
         }
     }
 
     /// Rend `index` assembly courante ; renvoie la précédente.
-    fn enter(&mut self, index: usize) -> usize {
+    pub(super) fn enter(&mut self, index: usize) -> usize {
         let previous = self.current;
         if index != previous {
             let next = self.parked[index].take().expect("assembly déjà active");
@@ -486,7 +490,7 @@ impl Interpreter {
 
     /// Appelle `callee`. Avec `virtual_call`, la redéfinition du type réel de
     /// `this` est choisie.
-    fn invoke(
+    pub(super) fn invoke(
         &mut self,
         token: u32,
         callee: Callee,
@@ -499,26 +503,7 @@ impl Interpreter {
         } = callee;
         if virtual_call {
             match args.first() {
-                Some(Value::Ref(this)) => {
-                    if let Some(type_id) = gc::type_of(*this) {
-                        let name = self.method_name(token);
-                        let argc = self.get_method_sig(token).param_types.len();
-                        let found = types::with_types(|reg| {
-                            let (asm, tok, decl) = reg.find_override(type_id, &name, argc)?;
-                            Some((
-                                asm,
-                                tok,
-                                reg.get(decl)
-                                    .map(|t| t.type_args.clone())
-                                    .unwrap_or_default(),
-                            ))
-                        });
-                        if let Some((asm, tok, type_args)) = found {
-                            target = Target::Managed(asm, Token(tok).rid());
-                            gen.t = type_args;
-                        }
-                    }
-                }
+                Some(Value::Ref(this)) => self.devirtualize(token, *this, &mut target, &mut gen),
                 Some(Value::Null) => return Err(ClrException::null_reference()),
                 _ => {}
             }
@@ -539,6 +524,30 @@ impl Interpreter {
         }
     }
 
+    /// Remplace la méthode appelée par la redéfinition du type réel de
+    /// `this`.
+    fn devirtualize(&self, token: u32, this: *mut u8, target: &mut Target, gen: &mut Gen) {
+        let Some(type_id) = gc::type_of(this) else {
+            return;
+        };
+        let name = self.method_name(token);
+        let argc = self.get_method_sig(token).param_types.len();
+        let found = types::with_types(|reg| {
+            let (asm, tok, decl) = reg.find_override(type_id, &name, argc)?;
+            Some((
+                asm,
+                tok,
+                reg.get(decl)
+                    .map(|t| t.type_args.clone())
+                    .unwrap_or_default(),
+            ))
+        });
+        if let Some((asm, tok, type_args)) = found {
+            *target = Target::Managed(asm, Token(tok).rid());
+            gen.t = type_args;
+        }
+    }
+
     /// Méthode implémentée par le runtime (bibliothèque intégrée).
     fn call_native(
         &mut self,
@@ -548,6 +557,9 @@ impl Interpreter {
         args: Vec<Value>,
         params: &[ElementType],
     ) -> Result<Value, ClrException> {
+        if let Some(r) = self.delegate_call(namespace, class, name, &args, params) {
+            return r;
+        }
         match (namespace, class, name) {
             (_, _, ".ctor") => {
                 // Constructeurs de la BCL (Object, Exception…) : seul le message
@@ -1636,6 +1648,28 @@ impl Interpreter {
                     None => token as i64,
                 };
                 push!(Value::I64(handle));
+                StepResult::Continue
+            }
+
+            // --- Pointeurs de méthode ---
+            O::Ldftn => {
+                let token = tok2();
+                let callee = self.resolve_callee(token);
+                push!(Value::I64(self.fn_handle(token, callee)));
+                StepResult::Continue
+            }
+            O::Ldvirtftn => {
+                let token = tok2();
+                let Callee {
+                    mut target,
+                    mut gen,
+                } = self.resolve_callee(token);
+                match pop!() {
+                    Value::Ref(this) => self.devirtualize(token, this, &mut target, &mut gen),
+                    Value::Null => return Err(ClrException::null_reference()),
+                    _ => {}
+                }
+                push!(Value::I64(self.fn_handle(token, Callee { target, gen })));
                 StepResult::Continue
             }
 

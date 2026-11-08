@@ -755,6 +755,14 @@ ok("fn ensure_layout" in (clr / "typesys.rs").read_text()
    and "les_structures_se_copient" in (clr / "tests.rs").read_text(),
    "CLR : ref/out, structures copiées, génériques instanciés (box/unbox de T, statiques, constrained., ldelem T) (#945, #946)")
 
+# ── Moteur .NET Framework, étape 3 (#971) : délégués, événements, lambdas ──
+ok((clr / "delegates.rs").exists()
+   and "fn invoke_delegate" in (clr / "delegates.rs").read_text()
+   and "O::Ldvirtftn" in (clr / "il.rs").read_text()
+   and "les_delegues_appellent_leur_methode" in (clr / "tests.rs").read_text()
+   and "ldvirtftn_func_et_evenements" in (clr / "tests.rs").read_text(),
+   "CLR : ldftn/ldvirtftn, Invoke, délégués multicast, Combine/Remove, Interlocked des événements (#971)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()

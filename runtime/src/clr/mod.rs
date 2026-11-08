@@ -3,6 +3,7 @@
 //! intégrées. Aucun runtime .NET extérieur n'est utilisé.
 
 pub mod bcl;
+pub mod delegates;
 pub mod domain;
 #[cfg(test)]
 pub mod emit;

@@ -59,7 +59,7 @@ utile, `MissingMethodException System.OperatingSystem::get_Version`.
 |---|---|---|---|
 | 1 | Chargeur multi-assemblies, appels, héritage, champs et constructeurs statiques entre assemblies | `clr::tests` (Outils.dll + Programme) ; SetupDownloader charge Newtonsoft.Json | fait (#926) |
 | 2 | Nouveau cœur d'exécution : disposition mémoire réelle, `ref`/`out`, structures copiées, génériques (TypeSpec, MethodSpec, `constrained.`), arithmétique ECMA | `clr::tests` (ref/out, structures, `Boite<T>`, arithmétique) | fait (#945, #946) |
-| 3 | Délégués, événements, lambdas (`ldftn`, `ldvirtftn`) | LINQ, `EventHandler` | à faire |
+| 3 | Délégués, événements, lambdas (`ldftn`, `ldvirtftn`, `Invoke`, multicast, `Delegate.Combine`/`Remove`, `Interlocked`) | `clr::tests` (délégué statique et d'instance, `Func<int>` par `ldvirtftn`, accesseur d'événement) | fait (#971) ; `BeginInvoke`/`EndInvoke` à l'étape 5 |
 | 4 | Exceptions complètes (filtres, finally, rethrow) | | à faire |
 | 5 | Threads, `async/await`, `Task` (recoupe #269) | | à faire |
 | 6 | P/Invoke complet (chaînes, structures, rappels) | | à faire |

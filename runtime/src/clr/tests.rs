@@ -534,3 +534,285 @@ fn ldloca_puis_ldind_relit_la_variable() {
     let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(body));
     assert_eq!(lancer(&b.build(main), None), 5);
 }
+
+// ── Étape 3 : délégués, événements, lambdas (#971) ──
+
+const LDNULL: u8 = 0x14;
+const POP: u8 = 0x26;
+const CASTCLASS: u8 = 0x74;
+const LDSFLDA: u8 = 0x7F;
+const T_NATIVE_INT: u8 = 0x18;
+
+impl Il {
+    fn ldftn(self, t: u32) -> Il {
+        self.prefix(0x06, t)
+    }
+    fn ldvirtftn(self, t: u32) -> Il {
+        self.prefix(0x07, t)
+    }
+}
+
+fn delegue_ctor_sig() -> Vec<u8> {
+    method_sig(true, &[T_VOID], &[&[T_OBJECT], &[T_NATIVE_INT]])
+}
+
+/// Délégué simple sur une méthode statique, délégué fermé sur une
+/// instance, `Delegate.Combine` puis `Delegate.Remove`.
+#[test]
+fn les_delegues_appellent_leur_methode() {
+    let mut b = Builder::new("Delegues");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let multicast = b.type_ref(Scope::Assembly(mscorlib), "System", "MulticastDelegate");
+    let delegate = b.type_ref(Scope::Assembly(mscorlib), "System", "Delegate");
+    let object_ctor = b.member_ref(object, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let deux_delegues = method_sig(
+        false,
+        &class(delegate),
+        &[&class(delegate), &class(delegate)],
+    );
+    let combine = b.member_ref(delegate, "Combine", &deux_delegues);
+    let remove = b.member_ref(delegate, "Remove", &deux_delegues);
+
+    let op = b.type_def(PUBLIC, "Delegues", "Op", multicast);
+    let op_ctor = b.method(M_CTOR, ".ctor", &delegue_ctor_sig(), None);
+    let op_invoke = b.method(
+        M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG | M_NEWSLOT,
+        "Invoke",
+        &method_sig(true, &[T_I4], &[&[T_I4]]),
+        None,
+    );
+
+    let compteur = b.type_def(PUBLIC, "Delegues", "Compteur", object);
+    let total = b.field(F_PUBLIC, "Total", &[T_I4]);
+    let compteur_ctor = b.method(
+        M_CTOR,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[]),
+        Some(Il::default().ldarg0().call(object_ctor).ret().body()),
+    );
+    // Total += x ; return Total
+    let ajouter = b.method(
+        M_PUBLIC | M_HIDEBYSIG,
+        "Ajouter",
+        &method_sig(true, &[T_I4], &[&[T_I4]]),
+        Some(
+            Il::default()
+                .ldarg0()
+                .ldarg0()
+                .ldfld(total)
+                .op(LDARG1)
+                .op(ADD)
+                .stfld(total)
+                .ldarg0()
+                .ldfld(total)
+                .ret()
+                .body(),
+        ),
+    );
+
+    b.type_def(PUBLIC, "Delegues", "P", object);
+    let carre = b.method(
+        M_PUBLIC | M_STATIC,
+        "Carre",
+        &method_sig(false, &[T_I4], &[&[T_I4]]),
+        Some(Il::default().ldarg0().ldarg0().op(MUL).ret().body()),
+    );
+    // locaux : 0 = Compteur, 1 = Op d1 (Carre), 2 = Op d2 (Ajouter), 3 = Op d
+    let code = Il::default()
+        .newobj(compteur_ctor)
+        .op(STLOC0)
+        .op(LDNULL)
+        .ldftn(carre)
+        .newobj(op_ctor)
+        .op(STLOC1)
+        .op(LDLOC0)
+        .ldftn(ajouter)
+        .newobj(op_ctor)
+        .op(0x0C) // stloc.2
+        // d = Combine(d1, d2) ; d(5) ; résultat = d(10) → Total = 15
+        .op(LDLOC1)
+        .op(0x08) // ldloc.2
+        .call(combine)
+        .tok(CASTCLASS, op)
+        .op(0x0D) // stloc.3
+        .op(0x09) // ldloc.3
+        .i4(5)
+        .callvirt(op_invoke)
+        .op(POP)
+        .op(0x09)
+        .i4(10)
+        .callvirt(op_invoke)
+        .i4(100)
+        .op(MUL)
+        // + d1(7) = 49
+        .op(LDLOC1)
+        .i4(7)
+        .callvirt(op_invoke)
+        .op(ADD)
+        // + Remove(d, d2)(3) * 10000 = 90000
+        .op(0x09)
+        .op(0x08)
+        .call(remove)
+        .tok(CASTCLASS, op)
+        .i4(3)
+        .callvirt(op_invoke)
+        .i4(10000)
+        .op(MUL)
+        .op(ADD)
+        // + Total * 1000000 : Remove n'a plus appelé Ajouter
+        .op(LDLOC0)
+        .ldfld(total)
+        .i4(1_000_000)
+        .op(MUL)
+        .op(ADD)
+        .ret();
+    let main = b.method(
+        M_PUBLIC | M_STATIC,
+        "Main",
+        &main_sig(),
+        Some(avec_locaux(
+            code,
+            vec![class(compteur), class(op), class(op), class(op)],
+        )),
+    );
+    assert_eq!(lancer(&b.build(main), None), 15_091_549);
+}
+
+/// `ldvirtftn` choisit la redéfinition, délégué générique de la
+/// bibliothèque (`Func<int>`), et accesseur d'événement tel que l'écrit un
+/// compilateur : `Delegate.Combine` puis `Interlocked.CompareExchange<T>`.
+#[test]
+fn ldvirtftn_func_et_evenements() {
+    let mut b = Builder::new("Evenements");
+    let mscorlib = b.assembly_ref("mscorlib");
+    let object = b.type_ref(Scope::Assembly(mscorlib), "System", "Object");
+    let multicast = b.type_ref(Scope::Assembly(mscorlib), "System", "MulticastDelegate");
+    let delegate = b.type_ref(Scope::Assembly(mscorlib), "System", "Delegate");
+    let func = b.type_ref(Scope::Assembly(mscorlib), "System", "Func`1");
+    let interlocked = b.type_ref(Scope::Assembly(mscorlib), "System.Threading", "Interlocked");
+    let object_ctor = b.member_ref(object, ".ctor", &method_sig(true, &[T_VOID], &[]));
+    let combine = b.member_ref(
+        delegate,
+        "Combine",
+        &method_sig(
+            false,
+            &class(delegate),
+            &[&class(delegate), &class(delegate)],
+        ),
+    );
+    let func_int = b.type_spec(&generic_inst(false, func, &[&[T_I4]]));
+    let func_ctor = b.member_ref(func_int, ".ctor", &delegue_ctor_sig());
+    let func_invoke = b.member_ref(func_int, "Invoke", &method_sig(true, &var(0), &[]));
+    let mut ref_t = vec![0x10];
+    ref_t.extend_from_slice(&mvar(0));
+    let cmpxchg = b.member_ref(
+        interlocked,
+        "CompareExchange",
+        &generic_method_sig(1, false, &mvar(0), &[&ref_t, &mvar(0), &mvar(0)]),
+    );
+
+    let rappel = b.type_def(PUBLIC, "Evenements", "Rappel", multicast);
+    let rappel_ctor = b.method(M_CTOR, ".ctor", &delegue_ctor_sig(), None);
+    let rappel_invoke = b.method(
+        M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG | M_NEWSLOT,
+        "Invoke",
+        &method_sig(true, &[T_I4], &[]),
+        None,
+    );
+    let cmpxchg_rappel = b.method_spec(cmpxchg, &[&class(rappel)]);
+
+    let base = b.type_def(PUBLIC, "Evenements", "Base", object);
+    let base_ctor = b.method(
+        M_CTOR,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[]),
+        Some(Il::default().ldarg0().call(object_ctor).ret().body()),
+    );
+    let base_valeur = b.method(
+        M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG | M_NEWSLOT,
+        "Valeur",
+        &method_sig(true, &[T_I4], &[]),
+        Some(Il::default().i4(1).ret().body()),
+    );
+    b.type_def(PUBLIC, "Evenements", "Derive", base);
+    let derive_ctor = b.method(
+        M_CTOR,
+        ".ctor",
+        &method_sig(true, &[T_VOID], &[]),
+        Some(Il::default().ldarg0().call(base_ctor).ret().body()),
+    );
+    b.method(
+        M_PUBLIC | M_VIRTUAL | M_HIDEBYSIG,
+        "Valeur",
+        &method_sig(true, &[T_I4], &[]),
+        Some(Il::default().i4(2).ret().body()),
+    );
+
+    b.type_def(PUBLIC, "Evenements", "P", object);
+    let evt = b.field(F_PUBLIC | F_STATIC, "Clic", &class(rappel));
+    let appels = b.field(F_PUBLIC | F_STATIC, "Appels", &[T_I4]);
+    let un = b.method(
+        M_PUBLIC | M_STATIC,
+        "Un",
+        &method_sig(false, &[T_I4], &[]),
+        Some(
+            Il::default()
+                .ldsfld(appels)
+                .i4(1)
+                .op(ADD)
+                .stsfld(appels)
+                .i4(1)
+                .ret()
+                .body(),
+        ),
+    );
+    // add_Clic(Rappel r) : CompareExchange(ref Clic, Combine(Clic, r), Clic)
+    let ajouter = b.method(
+        M_PUBLIC | M_STATIC,
+        "add_Clic",
+        &method_sig(false, &[T_VOID], &[&class(rappel)]),
+        Some(
+            Il::default()
+                .tok(LDSFLDA, evt)
+                .ldsfld(evt)
+                .ldarg0()
+                .call(combine)
+                .tok(CASTCLASS, rappel)
+                .ldsfld(evt)
+                .call(cmpxchg_rappel)
+                .op(POP)
+                .ret()
+                .body(),
+        ),
+    );
+    let code = Il::default()
+        // new Func<int>(derive, ldvirtftn Base::Valeur)() = 2
+        .newobj(derive_ctor)
+        .op(DUP)
+        .ldvirtftn(base_valeur)
+        .newobj(func_ctor)
+        .callvirt(func_invoke)
+        // Clic += Un ; Clic += Un ; Clic() * 10 = 10
+        .op(LDNULL)
+        .ldftn(un)
+        .newobj(rappel_ctor)
+        .call(ajouter)
+        .op(LDNULL)
+        .ldftn(un)
+        .newobj(rappel_ctor)
+        .call(ajouter)
+        .ldsfld(evt)
+        .callvirt(rappel_invoke)
+        .i4(10)
+        .op(MUL)
+        .op(ADD)
+        // + Appels * 100 = 200
+        .ldsfld(appels)
+        .i4(100)
+        .op(MUL)
+        .op(ADD)
+        .ret();
+    let main = b.method(M_PUBLIC | M_STATIC, "Main", &main_sig(), Some(code.body()));
+    assert_eq!(lancer(&b.build(main), None), 212);
+}
