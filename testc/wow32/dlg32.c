@@ -177,6 +177,18 @@ static void tab_control(void)
     g.cchTextMax = 32;
     CHECK(SendMessageW(tab, TCM_GETITEMW, 1, (LPARAM)&g) != 0, "TCM_GETITEMW");
     CHECK(wcscmp(text, L"Avancé") == 0 && g.lParam == 12, "TCITEM relu");
+    /* Comme la VCL de Delphi (#1129) : seuls mask et lParam sont remplis,
+       pszText et cchTextMax restent non initialisés. */
+    TCITEMW o;
+    memset(&o, 0x77, sizeof o);
+    o.mask = TCIF_PARAM;
+    o.lParam = (LPARAM)0xff946730u;
+    CHECK(SendMessageW(tab, TCM_SETITEMW, 0, (LPARAM)&o) != 0, "TCM_SETITEMW sans TCIF_TEXT");
+    TCITEMW q;
+    memset(&q, 0x77, sizeof q);
+    q.mask = TCIF_PARAM;
+    CHECK(SendMessageW(tab, TCM_GETITEMW, 0, (LPARAM)&q) != 0 && q.lParam == (LPARAM)0xff946730u,
+          "objet de l'onglet relu (pszText non initialisé)");
     DestroyWindow(tab);
 }
 

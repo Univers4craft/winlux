@@ -40,7 +40,7 @@ pub use wow64::{
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Sélecteurs de segments de Linux x86-64 : code 32 bits, code 64 bits, données.
@@ -144,6 +144,15 @@ winlux_wow_entry64:
     pop rsi
     pop rbx
     pop rbp
+    // WINLUX_WOW32_STEP : pas à pas du code x86 à partir du retour (TF
+    // posé par popfq agit après l'instruction suivante, le retf).
+    cmp byte ptr [rip + winlux_wow_step_arm], 0
+    je 8f
+    mov byte ptr [rip + winlux_wow_step_arm], 0
+    pushfq
+    or dword ptr [rsp], 0x100
+    popfq
+8:
     retf
 
 // Remet la base de FS à celle de glibc (TLS du runtime).
@@ -294,6 +303,9 @@ winlux_wow_enter32_far:
     .globl winlux_wow_has_fsgsbase
 winlux_wow_has_fsgsbase:
     .byte 0
+    .globl winlux_wow_step_arm
+winlux_wow_step_arm:
+    .byte 0
     .balign 16
     .globl winlux_wow_blob_end
 winlux_wow_blob_end:
@@ -374,6 +386,7 @@ extern "C" {
     static winlux_wow_repair_ptr: u8;
     static winlux_wow_enter32_far: u8;
     static winlux_wow_has_fsgsbase: u8;
+    static winlux_wow_step_arm: u8;
     static winlux_wow_call_ebp: u8;
 }
 
@@ -384,6 +397,8 @@ extern "win64" {
 /// Adresses (sous 4 Go) du code de transition recopié.
 struct Blob {
     entry64: u32,
+    /// Octet lu par la sortie des passerelles : pose TF au retour en x86.
+    step_arm: usize,
     call32: usize,
     call_ebp: usize,
 }
@@ -414,6 +429,7 @@ fn blob() -> &'static Blob {
         *(at(std::ptr::addr_of!(winlux_wow_has_fsgsbase)) as *mut u8) = has_fsgsbase() as u8;
         Blob {
             entry64: at(std::ptr::addr_of!(winlux_wow_entry64)) as u32,
+            step_arm: at(std::ptr::addr_of!(winlux_wow_step_arm)),
             call32: at(std::ptr::addr_of!(winlux_wow_call32)),
             call_ebp: at(std::ptr::addr_of!(winlux_wow_call_ebp)),
         }
@@ -1654,6 +1670,22 @@ fn history_lines() -> Vec<String> {
 
 #[cfg(test)]
 #[test]
+fn pas_a_pas_cible() {
+    assert_eq!(
+        parse_step("SendMessageW:133c"),
+        Some(("SendMessageW".to_string(), Some(0x133c)))
+    );
+    assert_eq!(
+        parse_step("SendMessageW:0x30"),
+        Some(("SendMessageW".into(), Some(0x30)))
+    );
+    assert_eq!(parse_step("GetObjectW"), Some(("GetObjectW".into(), None)));
+    assert_eq!(parse_step(":12"), None);
+    assert_eq!(parse_step("F:zz"), None);
+}
+
+#[cfg(test)]
+#[test]
 fn historique_borne() {
     for i in 0..(HISTORY_LEN as u32 + 5) {
         note(Passage {
@@ -1670,8 +1702,121 @@ fn historique_borne() {
     assert!(lines[HISTORY_LEN - 1].contains("0x400044"));
 }
 
+// ---------------------------------------------------------------------
+// Pas à pas (WINLUX_WOW32_STEP)
+// ---------------------------------------------------------------------
+
+/// Instructions x86 encore à suivre pas à pas.
+static STEP_LEFT: AtomicUsize = AtomicUsize::new(0);
+const STEP_RING: usize = 1024;
+const STEP_MAX: usize = 200_000;
+/// Derniers pas : (eip << 32) | esp.
+static STEPS: [AtomicU64; STEP_RING] = [const { AtomicU64::new(0) }; STEP_RING];
+static STEP_AT: AtomicUsize = AtomicUsize::new(0);
+
+/// `WINLUX_WOW32_STEP=Fonction[:message]` (avec `WINLUX_TRACE=1`) : au
+/// retour de chaque appel x86 de la passerelle dont le libellé contient
+/// `Fonction` (et dont le deuxième argument vaut `message`, en hexadécimal),
+/// le code x86 est suivi pas à pas sur 200 000 instructions (indicateur TF
+/// du processeur) ; une faute x86 écrit les 1 024 derniers EIP et ESP.
+/// Sert quand la pile est abîmée sans appel au runtime entre le dernier
+/// passage et la faute (#1129).
+fn step_target() -> Option<&'static (String, Option<u32>)> {
+    static T: OnceLock<Option<(String, Option<u32>)>> = OnceLock::new();
+    T.get_or_init(|| {
+        let v = std::env::var("WINLUX_WOW32_STEP").ok()?;
+        parse_step(&v)
+    })
+    .as_ref()
+}
+
+fn parse_step(v: &str) -> Option<(String, Option<u32>)> {
+    let (f, m) = match v.split_once(':') {
+        Some((f, m)) => {
+            let m = m.trim().trim_start_matches("0x");
+            (f, Some(u32::from_str_radix(m, 16).ok()?))
+        }
+        None => (v, None),
+    };
+    let f = f.trim();
+    (!f.is_empty()).then(|| (f.to_string(), m))
+}
+
+/// L'appel qui commence doit-il armer le pas à pas à son retour ?
+fn step_wanted(d: &Desc, args: u32) -> bool {
+    let Some((f, m)) = step_target() else {
+        return false;
+    };
+    d.label.contains(f.as_str()) && m.is_none_or(|m| rd(args + 4) == m)
+}
+
+fn step_arm() {
+    STEP_LEFT.store(STEP_MAX, Ordering::Relaxed);
+    unsafe { *(blob().step_arm as *mut u8) = 1 };
+}
+
+/// SIGTRAP du pas à pas. En x86 : le pas est noté et TF reste posé. En
+/// 64 bits (passerelle appelée pendant le pas à pas) : TF est retiré et
+/// sera reposé au retour de la passerelle. Rend faux si le signal n'est
+/// pas un pas.
+unsafe fn step_trap(info: *mut libc::siginfo_t, uc: *mut libc::ucontext_t) -> bool {
+    const TRAP_TRACE: i32 = 2;
+    if STEP_LEFT.load(Ordering::Relaxed) == 0 || info.is_null() || uc.is_null() {
+        return false;
+    }
+    if (*info).si_code != TRAP_TRACE {
+        return false;
+    }
+    let g = &mut (*uc).uc_mcontext.gregs;
+    let cs = g[libc::REG_CSGSFS as usize] as u64 & 0xffff;
+    if cs == CS64 as u64 {
+        g[libc::REG_EFL as usize] &= !0x100;
+        *(blob().step_arm as *mut u8) = 1;
+        return true;
+    }
+    let eip = g[libc::REG_RIP as usize] as u64 & 0xffff_ffff;
+    let esp = g[libc::REG_RSP as usize] as u64 & 0xffff_ffff;
+    let i = STEP_AT.fetch_add(1, Ordering::Relaxed) % STEP_RING;
+    STEPS[i].store(eip << 32 | esp, Ordering::Relaxed);
+    if STEP_LEFT.fetch_sub(1, Ordering::Relaxed) > 1 {
+        g[libc::REG_EFL as usize] |= 0x100;
+    } else {
+        g[libc::REG_EFL as usize] &= !0x100;
+    }
+    true
+}
+
+/// Derniers pas notés, du plus ancien au plus récent.
+fn step_lines() -> Vec<String> {
+    let n = STEP_AT.load(Ordering::Relaxed);
+    let first = n.saturating_sub(STEP_RING);
+    let all: Vec<u64> = (first..n)
+        .map(|i| STEPS[i % STEP_RING].load(Ordering::Relaxed))
+        .collect();
+    all.chunks(8)
+        .map(|c| {
+            c.iter()
+                .map(|v| format!("{:x}/{:x}", v >> 32, v & 0xffff_ffff))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect()
+}
+
 /// Écrit l'historique du fil dans la trace (faute x86).
 pub(super) fn trace_history() {
+    if step_target().is_some() {
+        // Plus de pas à pas pendant la répartition de la faute.
+        STEP_LEFT.store(0, Ordering::Relaxed);
+        let lines = step_lines();
+        crate::trace!(
+            "wow32 : {} derniers pas x86 (eip/esp) :",
+            STEP_AT.load(Ordering::Relaxed).min(STEP_RING)
+        );
+        for l in lines {
+            crate::trace!("wow32 :   {l}");
+        }
+    }
     if !history_on() {
         return;
     }
@@ -1685,6 +1830,15 @@ pub(super) fn trace_history() {
 /// Relit les arguments x86 et appelle la fonction win64.
 extern "win64" fn dispatch(desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     let d = unsafe { &*(desc as usize as *const Desc) };
+    let step = step_target().is_some() && step_wanted(d, args);
+    let r = dispatch_inner(d, desc, args, xmm0);
+    if step {
+        step_arm();
+    }
+    r
+}
+
+fn dispatch_inner(d: &Desc, desc: u32, args: u32, xmm0: *mut u64) -> u64 {
     if history_on() {
         let rd = |a: u32| unsafe { (a as usize as *const u32).read_unaligned() };
         note(Passage {
@@ -1973,6 +2127,9 @@ extern "C" {
 /// fs:[0]) viendra avec la deuxième étape de #232.
 extern "C" fn fault32(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        if sig == libc::SIGTRAP && step_trap(info, ctx as *mut libc::ucontext_t) {
+            return;
+        }
         if !info.is_null()
             && !ctx.is_null()
             && redirect_fault(sig, info, ctx as *mut libc::ucontext_t)
@@ -2044,6 +2201,11 @@ unsafe fn redirect_fault(sig: i32, info: *mut libc::siginfo_t, uc: *mut libc::uc
 
 /// Faute du code 64 bits : gestionnaire installé avant nous.
 extern "C" fn chain(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+    // Pas à pas entré dans une passerelle : sans TLS (FS peut encore être
+    // celui du programme x86).
+    if sig == libc::SIGTRAP && unsafe { step_trap(info, ctx as *mut libc::ucontext_t) } {
+        return;
+    }
     let prev = PREVIOUS
         .get(sig as usize)
         .map_or(0, |p| p.load(Ordering::Relaxed));
