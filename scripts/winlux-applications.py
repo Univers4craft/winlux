@@ -63,7 +63,8 @@ KNOWN_FOLDERS = {"desktop": ("XDG_DESKTOP_DIR", "Desktop"), "documents": ("XDG_D
                  "my documents": ("XDG_DOCUMENTS_DIR", "Documents"), "downloads": ("XDG_DOWNLOAD_DIR", "Downloads"),
                  "music": ("XDG_MUSIC_DIR", "Music"), "my music": ("XDG_MUSIC_DIR", "Music"),
                  "pictures": ("XDG_PICTURES_DIR", "Pictures"), "my pictures": ("XDG_PICTURES_DIR", "Pictures"),
-                 "videos": ("XDG_VIDEOS_DIR", "Videos"), "my videos": ("XDG_VIDEOS_DIR", "Videos")}
+                 "videos": ("XDG_VIDEOS_DIR", "Videos"), "my videos": ("XDG_VIDEOS_DIR", "Videos"),
+                 "public": ("XDG_PUBLICSHARE_DIR", "Public")}
 
 def known_folder(home, name):
     entry = KNOWN_FOLDERS.get(name.lower())
@@ -95,6 +96,9 @@ def windows_path(value, home):
         if len(parts) >= 2 and parts[0].lower() == "users" and parts[1].lower() in account_names(home):
             folder = known_folder(home, parts[2]) if len(parts) >= 3 else None
             return folder.joinpath(*parts[3:]) if folder else home.joinpath(*parts[2:])
+        # C:\\Users\\Public : dossier public XDG (~/Public), comme public_folder() du runtime.
+        if len(parts) >= 2 and parts[0].lower() == "users" and parts[1].lower() == "public":
+            return known_folder(home, "public").joinpath(*parts[2:])
         return home / value[2:].lstrip("/")
     if value[:2].lower() == "z:":
         return Path("/") / value[2:].lstrip("/")

@@ -87,6 +87,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert (claude, "Claude", []) in list(catalogue.shortcuts(home)), list(catalogue.shortcuts(home))
     assert catalogue.windows_path(f"C:\\Users\\{home.name}\\Desktop\\a.txt", home) == catalogue.desktop_dir(home) / "a.txt"
     assert catalogue.windows_path("C:\\Users\\autre\\a.exe", home) == home / "Users/autre/a.exe"
+    assert catalogue.windows_path("C:\\Users\\Public\\Desktop\\a.lnk", home) == home / "Public/Desktop/a.lnk"
     assert catalogue.windows_path("C:\\Program Files\\X\\a.exe", home) == home / "Program Files/X/a.exe"
     (links / "Anthropic PBC/Claude.lnk").unlink()
     (links / "Anthropic PBC").rmdir()
