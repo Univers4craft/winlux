@@ -1053,6 +1053,41 @@ struct Desc {
 
 include!(concat!(env!("OUT_DIR"), "/win64_sigs.rs"));
 
+/// Signatures des méthodes d'une table écrite comme une structure
+/// (`module` sans le nom du crate, par exemple `dlls::d3d11`), relevées par
+/// `build.rs`, une par méthode et `this` compris. Une sous-structure
+/// (`ext: ext::DeviceExt`) est remplacée par ses propres champs (#1090).
+pub fn vtable_sigs(module: &str, name: &str) -> Option<Vec<&'static str>> {
+    fn expand(module: &str, name: &str, depth: u32, out: &mut Vec<&'static str>) -> bool {
+        let Some((_, _, sigs)) = VTABLE_SIGS
+            .iter()
+            .find(|(m, n, _)| *m == module && *n == name)
+            .or_else(|| {
+                VTABLE_SIGS
+                    .iter()
+                    .find(|(m, n, _)| m.starts_with(module) && *n == name)
+            })
+            .or_else(|| VTABLE_SIGS.iter().find(|(_, n, _)| *n == name))
+        else {
+            return false;
+        };
+        for s in sigs.iter() {
+            match s.strip_prefix('@') {
+                Some(inner) if depth < 4 => {
+                    if !expand(module, inner, depth + 1, out) {
+                        return false;
+                    }
+                }
+                Some(_) => return false,
+                None => out.push(s),
+            }
+        }
+        true
+    }
+    let mut out = Vec::new();
+    expand(module, name, 0, &mut out).then_some(out)
+}
+
 /// Fonctions exportées par les DLL intégrées : adresse, module Rust de la
 /// table d'exports et chemin écrit dans `exports!`.
 static NOTES: Mutex<Vec<(usize, &'static str, &'static str)>> = Mutex::new(Vec::new());

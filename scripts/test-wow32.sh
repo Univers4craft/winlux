@@ -30,6 +30,8 @@
 # Lock, Blt, BltFast, clés de couleur, GetDC, palette, découpeur, plein écran
 # exclusif et Flip), DirectPlay 4 et 8 (deux joueurs sur 127.0.0.1), MIDI (midiOut*, midiStream* et leurs rappels),
 # timeSetEvent et waveOut avec rappel, en x86 puis en x64.
+# d3d1132.exe et d3d1164.exe (#1090) : Direct3D 11 et DXGI en x86 et en x64,
+# sous Xvfb (contexte OpenGL).
 # Sauté (code 0) quand le runtime ou clang manque.
 set -eu
 
@@ -39,7 +41,7 @@ out=${WINLUX_MINGW_DIR:-$root/target/mingw}
 
 test -x "$runtime" || { echo "runtime absent ($runtime) : test sauté"; exit 0; }
 stale=0
-names="hello32 seh32 wow64 cxx32 gui32 jeux32"
+names="hello32 seh32 wow64 cxx32 gui32 jeux32 d3d1132"
 command -v i686-w64-mingw32-gcc >/dev/null 2>&1 && names="$names crt32 thread32 load32 fiber32 com32 dlg32"
 for name in $names; do
     if ! test -f "$out/$name.exe" || test "$root/testc/wow32/$name.c" -nt "$out/$name.exe" \
@@ -234,3 +236,21 @@ for name in jeux32 jeux64; do
     fi
 done
 echo "jeux32/jeux64 : DirectDraw, Direct3D 8, Direct3D 9 et D3DX9, DirectSound, DirectShow, DirectPlay 4 et 8, MIDI (synthétiseur, flux, entrée), msacm32 (conversions PCM, décodeurs ADPCM), timeSetEvent et waveOut avec rappels, x86 et x64"
+
+# Direct3D 11 et DXGI (#1090) : il faut un contexte OpenGL, donc Xvfb.
+if command -v xvfb-run >/dev/null 2>&1; then
+    for name in d3d1132 d3d1164; do
+        set +e
+        xvfb-run -a -s '-screen 0 1024x768x24' env -u WINLUX_GUI timeout 60 "$runtime" "$out/$name.exe" >"$work/d3d11.txt" 2>&1
+        status=$?
+        set -e
+        if test "$status" -ne 0 || ! grep -q 'Direct3D 11 : tout est correct' "$work/d3d11.txt"; then
+            tail -20 "$work/d3d11.txt"
+            echo "$name.exe : code $status, vérification n° $status en échec" >&2
+            exit 1
+        fi
+    done
+    echo "d3d1132/d3d1164 : Direct3D 11 et DXGI en x86 et en x64 (données initiales, Map, tableaux de vues, DXGI_SWAP_CHAIN_DESC, DXGI_ADAPTER_DESC)"
+else
+    echo "d3d1132 : xvfb-run absent, test Direct3D 11 sauté"
+fi

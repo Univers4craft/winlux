@@ -82,6 +82,7 @@ pub mod dwmapi;
 pub mod dwrite;
 pub mod dwrite_analyzer;
 pub mod dwrite_glyphs;
+pub(crate) mod dx11_x86;
 pub mod dxbc;
 pub mod dxgi;
 pub(crate) mod dxgi_private;
