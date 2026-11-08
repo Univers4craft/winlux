@@ -601,4 +601,14 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
 
+# Page Mise à jour OS refaite (#875 à #882) : plus de rapport brut ni de
+# boutons activer/désactiver, une carte d'état, pause, heures, historique, notes.
+update_page = (SCRIPTS / "winlux-update-page.py").read_text()
+settings_source = (SCRIPTS / "winlux-settings.py").read_text()
+ok('"update-auto-on"), (_t("Désactiver"), "update-auto-off")' not in settings_source
+   and "Redémarrer après installation" not in settings_source
+   and "UpdatePanel(self" in settings_source
+   and all(word in update_page for word in ("update-pause-", "update-resume", "update-hours-", "load_history", "notes_markup", "def notify"))
+   and (SCRIPTS / "test-update-page.py").exists(),
+   "page Mise à jour OS : carte d'état, pause, heures d'activité, historique, notes, notification (#875-#882)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

@@ -194,7 +194,6 @@ _TR = {
     'Rechercher': ('Check', 'Buscar', 'Suchen'),
     'Installer': ('Install', 'Instalar', 'Installieren'),
     'Restaurer': ('Restore', 'Restaurar', 'Wiederherstellen'),
-    'Mises à jour auto : activer': ('Automatic updates: turn on', 'Actualizaciones automáticas: activar', 'Automatische Updates: aktivieren'),
     'Désactiver': ('Turn off', 'Desactivar', 'Deaktivieren'),
     'Performances maximales': ('Best performance', 'Máximo rendimiento', 'Höchstleistung'),
     'Équilibré': ('Balanced', 'Equilibrado', 'Ausbalanciert'),
@@ -240,11 +239,9 @@ _TR = {
     'Presse-papiers': ('Clipboard', 'Portapapeles', 'Zwischenablage'),
     'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
     'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
-    'La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation.': ('Preparing updates uses the disk. Keep the computer on during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga el ordenador encendido durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie den Computer während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
     'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
-    'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
     'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
     'Enregistrez vos documents avant de continuer.': ('Save your documents before continuing.', 'Guarde sus documentos antes de continuar.', 'Speichern Sie Ihre Dokumente, bevor Sie fortfahren.'),
     'Impossible de lancer l’opération': ('Unable to start the operation', 'No se puede iniciar la operación', 'Der Vorgang kann nicht gestartet werden'),
@@ -431,8 +428,7 @@ ACTIONS = {
     2: [(_t("Renouveler la connexion"), "network-renew")],
     3: [(_t("Volume −"), "volume-down"), (_t("Muet / rétablir"), "volume-mute"), (_t("Volume +"), "volume-up")],
     # Clavier, souris et personnalisation : réglages complets dans winlux-settings-pages.
-    7: [(_t("Rechercher"), "update-check"), (_t("Installer"), "update-apply"), (_t("Restaurer"), "update-rollback"),
-        (_t("Mises à jour auto : activer"), "update-auto-on"), (_t("Désactiver"), "update-auto-off")],
+    # Mise à jour OS (7) : page refaite dans winlux-update-page (#875-#882).
     23: [(_t("Performances maximales"), "power-profile-performance"), (_t("Équilibré"), "power-profile-balanced"),
          (_t("Économie d'énergie"), "power-profile-saver"), (_t("Écran (secteur)"), "power-screen-ac"),
          (_t("Écran (batterie)"), "power-screen-dc"), (_t("Veille (secteur)"), "power-sleep-ac"),
@@ -601,6 +597,24 @@ def power_page_items(fields, actions, hardware):
             return False
         return True
     return [f for f in fields if keep(f[1])], [a for a in actions if keep(a[1])]
+
+
+def _update_page():
+    """Module de la page Mise à jour OS (winlux-update-page, installé à côté)."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-update-page.py"), here.with_name("winlux-update-page")):
+        if candidate.is_file():
+            loader = SourceFileLoader("winlux_update_page", str(candidate))
+            spec = importlib.util.spec_from_loader("winlux_update_page", loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            return module
+    raise ImportError("winlux-update-page introuvable")
+
+
+UPDATE_PAGE = 7
 
 
 def _power_modes():
@@ -791,7 +805,6 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.open_page(self.current)
         GLib.timeout_add(1000, self.poll)
         self.show_all()
-        self.progress.set_visible(self.page == 7)
 
     def apply_theme(self):
         p = EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0"))
@@ -861,8 +874,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.label(CATEGORIES[category][0] + "  ›", "subtitle")
         self.label(PAGES[self.current], "heading")
         extra = self.page in EXTRA.ExtraPages.EXTRA_PAGES
+        self.update_panel = None
         # Les pages branchées affichent leurs propres réglages : pas de cadre d'état vide.
-        self.state = Gtk.Label() if extra else self.label(_t("Chargement…"), "card")
+        self.state = Gtk.Label() if extra or self.page == UPDATE_PAGE else self.label(_t("Chargement…"), "card")
         actions = list(ACTIONS.get(self.page, []))
         if self.page == 23:
             # Modes Économie / Normal / Turbo : seulement ceux que la machine sait appliquer.
@@ -890,6 +904,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if action == "update-rollback": self.rollback_button = button
             if action.startswith("browser-"): self.browser_buttons[action] = button
         self.buttons = flow
+        # Page sans boutons d'action : pas de rangée vide (espace sous le titre).
+        flow.set_no_show_all(not actions)
         display_status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line) if self.page == 8 else {}
         # Écrans détaillés (définition, fréquence, échelle par écran) : sections_screens.
         if self.page == 8 and not display_status.get("display_1_name"):
@@ -903,6 +919,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
         if extra: self.extra_page(self.page)
+        if self.page == UPDATE_PAGE:
+            # Carte d'état, étapes, nouveautés et « Plus d'options » (#875-#882).
+            colors = {"palette": EXTRA.settings_palette(dark_theme(), EXTRA.appearance().get("accent", "#6a3df0")),
+                      "readable": EXTRA.readable, "text_on": EXTRA.text_on, "mix": EXTRA.mix}
+            self.update_panel = _update_page().UpdatePanel(self, journal=control_file("update.log"), colors=colors)
         sections = EXTRA.ExtraPages.EXTRA_SECTIONS.get(self.page)
         if sections:
             self.status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
@@ -911,17 +932,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             self.privacy_controls()
             self.permission_controls()
         self.notice = self.label("")
-        self.progress = Gtk.ProgressBar(show_text=True)
-        self.body.pack_start(self.progress, False, False, 0)
-        self.details = self.label("")
-        if self.page == 7:
-            self.label(_t("La préparation des mises à jour utilise le disque. Gardez l’ordinateur allumé pendant l’installation."), "subtitle")
-            restart = Gtk.Button(label=_t("Redémarrer après installation"))
-            restart.connect("clicked", lambda *_: self.execute("reboot"))
-            self.body.pack_start(restart, False, False, 0)
         self.poll()
         self.body.show_all()
-        self.progress.set_visible(self.page == 7)
         if self.page == 11:
             # show_all() vient de tout réafficher : on remasque selon l'état réel.
             self.show_browser_buttons(dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line))
@@ -1058,7 +1070,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 # Reporté faute de réseau : une information, pas une erreur technique.
                 self.show_info(_t("Pas de connexion Internet"), _t("Rien n’est perdu : Winlux le téléchargera chez l’éditeur et l’installera automatiquement au prochain démarrage connecté. Vous pouvez aussi réessayer ici une fois connecté."))
             elif result and action in ("update-check", "update-apply", "update-rollback"):
-                self.show_update_error(action, result)
+                # Sur la page : la carte d'état dit l'échec et garde « Afficher les détails ».
+                if self.update_panel is not None:
+                    self.update_panel.failed(action, read("/run/winlux/update-error-phase").strip())
+                else:
+                    self.show_update_error(action, result)
             elif result:
                 detail = read(control_file("action.log")).strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
                 self.show_error(_t("L’opération a échoué"), _t("Code : {code}\n\n{detail}").format(code=result, detail=detail))
@@ -1087,16 +1103,15 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 return browser_default_text(status)
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
-        if self.page == 7: text = read("/run/winlux/updates.txt")
+        if self.page == UPDATE_PAGE: text = ""
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.rollback_button is not None:
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
             self.rollback_button.get_parent().set_visible(bool(EXTRA.previous_version_kept()))
-        if self.page == 7:
-            text = localize_update_text(text)
-            # « Secours et restauration » relu avec l'encadré : un seul avis (#636).
-            self.refresh_recovery()
+        if self.update_panel is not None:
+            # Une seule source pour la carte, la version précédente et l'avis (#636).
+            self.update_panel.refresh(status)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
             self.show_browser_buttons(status)
@@ -1115,32 +1130,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 fresh = os.stat(control_file("action.txt")).st_mtime >= getattr(self, "page_opened", 0) - 1
             except OSError:
                 fresh = False
-            self.notice.set_text(localize_update_text(read(control_file("action.txt")).strip()) if fresh else "")
-        progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
-        try: percent = int(progress.get("percent", "-1"))
-        except ValueError: percent = -1
-        try: fraction = min(1, max(0, percent / 100))
-        except ValueError: fraction = 0
-        if percent < 0: self.progress.pulse()
-        else: self.progress.set_fraction(fraction)
-        item = progress.get("item", "")
-        if progress.get("unit") == "bytes":
-            try:
-                done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
-                mib = _t("Mio")
-                amount = f"{done / 1048576:.1f} {mib}" + (f" / {total / 1048576:.1f} {mib}" if total else "")
-                item = f"{item} · {amount}" + (f" · {percent} %" if percent >= 0 else "")
-            except ValueError: pass
-        elif progress.get("phase") in ("backing-up", "installing"):
-            try:
-                done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
-                if total: item = f"{progress.get('phase') == 'installing' and _t('Installation') or _t('Sauvegarde')} · {_t('{done}/{total} fichiers').format(done=done, total=total)} · {done * 100 // total} %\n{item}"
-            except ValueError: pass
-        self.progress.set_text(item)
-        self.progress.set_visible(self.page == 7)
-        if self.page == 7:
-            journal = read(control_file("update.log"))[-12000:]
-            if self.details.get_text() != journal: self.details.set_text(journal)
+            self.notice.set_text(localize_update_text(read(control_file("action.txt")).strip()) if fresh and self.page != UPDATE_PAGE else "")
         return True
 
     def show_update_error(self, action, result):
