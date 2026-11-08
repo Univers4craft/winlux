@@ -205,6 +205,7 @@ Winlux utilise un système de logs structurés configurable.
 | `WINLUX_LOG=info` | Messages informatifs |
 | `WINLUX_LOG=debug` | Détails de débogage ; préférer cette variable à un argument CLI non filtré |
 | `WINLUX_LOG=trace` ou `WINLUX_TRACE=1` | Traces complètes du chargeur |
+| `WINLUX_WOW32_HISTORY=1` (avec `WINLUX_TRACE=1`) | Programmes 32 bits : à chaque faute, les 64 derniers passages du fil entre le code x86 et le runtime (fonction, esp, adresse de retour, quatre premiers arguments ; rappels x86 compris) |
 | `WINLUX_LOG=debug,json` | Format JSON structuré |
 | `WINLUX_LOG=json` | JSON en mode debug |
 
