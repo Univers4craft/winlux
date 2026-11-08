@@ -762,7 +762,11 @@ ok("struct ImageFile" in loader_source and "fn map_pages" in loader_source
    and "let file = ImageFile::open(path)" in loader_source and "drop(source);" in main_source
    and "loader::ImageFile::open(&exe)" in main_source
    and "image_file_is_mapped_and_sections_are_private_copies" in loader_source
-   and "def login_failure" in assistant_source,
+   and "def login_failure" in assistant_source
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/mod.rs").read_text()
+   and "crate::loader::ImageFile::open(path)" in (ROOT / "runtime/src/setup/burn.rs").read_text()
+   and "scripts/test-image-memory.py" in (ROOT / ".github/workflows/ci.yml").read_text()
+   and (ROOT / "docs/compat/memoire-au-lancement.md").exists(),
    "claude.exe : image projetée sans copie du fichier, connexion tuée faute de mémoire dite clairement (#997)")
 # #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
 ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
