@@ -141,7 +141,12 @@ if os.geteuid() == 0:
     if policy_user:
         os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
-    for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
+    # Comptes que créent les scripts des paquets (absents : paquets extraits
+    # sans postinst) : dnsmasq du point d'accès sans fil mobile et OpenVPN de
+    # NetworkManager quittent root pour eux (#660).
+    ensure_account_or_log("dnsmasq", 970, "dnsmasq", "/var/lib/misc")
+    ensure_account_or_log("nm-openvpn", 975, "NetworkManager OpenVPN", "/var/lib/openvpn/chroot")
+    for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2","/etc/NetworkManager/dnsmasq-shared.d"):
         Path(directory).mkdir(parents=True,exist_ok=True)
     saver = ensure_account_or_log("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
     if saver:
