@@ -2220,12 +2220,25 @@ mod tests {
 
     #[test]
     fn device_table_has_101_methods() {
-        // La table win64 est un tableau de 101 fonctions.
+        // La table win64 est un tableau de 101 fonctions. On vérifie la
+        // dernière par son effet, pas par son adresse : en --release, deux
+        // références à une même fonction peuvent avoir des adresses
+        // différentes (#1218).
         let t = device_table() as *const usize;
-        assert_eq!(unsafe { *t }, dev_qi as *const () as usize);
-        assert_eq!(
-            unsafe { *t.add(100) },
-            get_feature_level as *const () as usize
-        );
+        let entries = unsafe { std::slice::from_raw_parts(t, 101) };
+        assert!(entries.iter().all(|&f| f != 0));
+        let mut d = Dev {
+            vtbl: t as usize,
+            refs: AtomicU32::new(1),
+            dev11: 0,
+            ctx11: 0,
+            level: 0xa100,
+            flags: 0,
+            filter: Mutex::new((0, 0)),
+            raster: Mutex::new((Vec::new(), Vec::new())),
+        };
+        let level: unsafe extern "win64" fn(*mut Dev) -> u32 =
+            unsafe { std::mem::transmute(entries[100]) };
+        assert_eq!(unsafe { level(&mut d) }, 0xa100);
     }
 }

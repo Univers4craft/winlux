@@ -805,7 +805,7 @@ static ADAPTER_VTABLE: DxgiAdapterVTable = DxgiAdapterVTable {
 };
 
 /// Description de l'adaptateur : le vrai GPU quand Vulkan le connaît.
-fn adapter_desc() -> DxgiAdapterDesc {
+pub(crate) fn adapter_desc() -> DxgiAdapterDesc {
     let mut desc = DxgiAdapterDesc::default();
     let caps = crate::dlls::gpu_caps::caps();
     let prefs = crate::dlls::gpu_caps::prefs();

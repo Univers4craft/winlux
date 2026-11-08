@@ -231,6 +231,7 @@ vk_bindings.rs	VkSwapchainCreateInfoKHR	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkXlibSurfaceCreateInfoKHR	interne	liaison Vulkan côté hôte
 vulkan1.rs	Callback	a-verifier	
 vulkan1.rs	Xlib	a-verifier	
+wbem.rs	Com	interne	objet WMI du runtime (locator, services, énumérateur, objet) ; en x86, la passerelle COM (wow32/com.rs, IWBEM*) l'enveloppe (wmi32.exe, #1198)
 webview2.rs	Com	a-verifier	objet COM WebView2 lu par l’application (vtbl) ; WebView2 pour appelants x86 pas encore pris en charge
 win32_basics.rs	MemoryStatus	a-verifier	
 winhttp.rs	IeProxyConfig	x86	wow64.c n° 77 (WINHTTP_CURRENT_USER_IE_PROXY_CONFIG de 16 octets)
