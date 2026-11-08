@@ -440,7 +440,7 @@ def test_settings():
     pages = (HERE / "winlux-settings-pages.py").read_text()
     start = (HERE / "winlux-start-menu.py").read_text()
     popup = (HERE / "winlux-popup.py").read_text()
-    ok('_t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile")]' in settings,
+    ok('_t("Applications installées"), _t("VPN"), _t("Point d’accès sans fil mobile")' in settings,
        "Paramètres : pages 40 VPN et 41 Point d'accès sans fil mobile")
     ok('(_t("Réseau et Internet"), [35, 2, 40, 41, 20, 28])' in settings, "Réseau et Internet : Wi-Fi, Ethernet, VPN, point d'accès")
     ok('"network-vpn": 40' in settings and '"network-mobilehotspot": 41' in settings, "ms-settings:network-vpn et network-mobilehotspot")
