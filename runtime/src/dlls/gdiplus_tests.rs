@@ -373,3 +373,26 @@ fn dessin_et_mesure_d_une_chaine() {
         dispose_image(b);
     }
 }
+
+/// wxWidgets lit le point courant d'un chemin par GdipGetPathLastPoint
+/// (rectangles arrondis des boutons d'Audacity, #1054).
+#[test]
+fn dernier_point_et_points_entiers_du_chemin() {
+    unsafe {
+        let mut p = 0usize;
+        assert_eq!(create_path(0, &mut p), OK);
+        let mut last = [0f32; 2];
+        assert_eq!(get_path_last_point(p, last.as_mut_ptr()), INVALID_PARAMETER);
+        assert_eq!(add_path_line(p, 1.4, 2.6, 10.0, 2.0), OK);
+        assert_eq!(get_path_last_point(p, last.as_mut_ptr()), OK);
+        assert_eq!(last, [10.0, 2.0]);
+        let mut pts = [0i32; 4];
+        assert_eq!(get_path_points_i(p, pts.as_mut_ptr(), 4), OK);
+        assert_eq!(pts, [1, 3, 10, 2]);
+        assert_eq!(
+            get_path_points_i(p, pts.as_mut_ptr(), 1),
+            INSUFFICIENT_BUFFER
+        );
+        delete_path(p);
+    }
+}

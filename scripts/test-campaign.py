@@ -147,6 +147,10 @@ ok("SYSTEM_TOOLS" in setup_run and "is_linux_program" in setup_run and "WINLUX_S
 ok((ROOT / "scripts/test-setup-run.sh").is_file()
    and "scripts/test-setup-run.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "test des programmes lancés par un installateur NSIS en CI (#179)")
+setup_mod = (ROOT / "runtime/src/setup/mod.rs").read_text()
+ok('format!("{root}\\\\{sub}")\n' in setup_mod
+   and "Software\\\\DemoApp\\\\Réglages" in (ROOT / "scripts/test-setup-run.sh").read_text(),
+   "installateurs NSIS/Inno : les noms de clés de registre gardent leur casse (#830)")
 msi_actions = (ROOT / "runtime/src/msi/actions.rs").read_text()
 ok("Phase::Uninstall" in msi_actions and "ServiceInstall" in msi_actions and "setup::run" in msi_actions,
    "msiexec : actions personnalisées EXE (installation et désinstallation) et services (#833)")
@@ -559,6 +563,17 @@ ok(all(f'"{d}": {{"files"' in report_tool for d in ("network", "sound", "boot", 
    "rapport : journaux réseau, son, démarrage et mise à jour joignables, pactl en LC_ALL=C")
 ok("d_empty" in report_tool and "queued_reports()" in report_tool,
    "rapport : journal vide signalé comme tel, plantages en attente listés")
+# Relier Winlux à GitHub (#1049 à #1052) : rien ne part sans confirmation
+# « quoi / où » (Annuler par défaut), aucun journal sans case cochée,
+# déconnexion qui révoque vraiment le jeton, suivi de ses signalements.
+ok("def confirm_send" in report_tool and "set_default_response(Gtk.ResponseType.CANCEL)" in report_tool
+   and "check.set_active(False)" in report_tool and '"network" in self.attach' in report_tool,
+   "rapport : confirmation de ce qui part et où, journaux joints seulement sur accord")
+ok("/credentials/revoke" in report_tool and '"--account-disconnect"' in (SCRIPTS / "winlux-settings-pages.py").read_text(),
+   "compte GitHub : « Se déconnecter » révoque le jeton chez GitHub")
+ok("def refresh_reports" in report_tool and '"--mine"' in (SCRIPTS / "winlux-settings-pages.py").read_text()
+   and "def send_queue_gui" in report_tool,
+   "compte GitHub : « Mes signalements » et envoi des plantages en attente avec son compte")
 
 # ── Barre centrée : Démarrer immobile au démarrage (#602) ─────────────────
 tray_source = (SCRIPTS / "winlux-tray.py").read_text()
@@ -802,6 +817,22 @@ ok("let is_path = value.contains(" in (ROOT / "runtime/src/dlls/kernel32.rs").re
    and (ROOT / "testexe/src/bin/loadlib_search.rs").exists()
    and "test-loadlibrary-personal-cwd.sh" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "LoadLibraryExW d'une DLL système depuis le Bureau sans demande d'autorisation (#1019)")
+# #1033-#1036 : IA locale 1,5B en VM. Pas de réglage pour « Bonjour », pas de dossier
+# que la question ne nomme pas, Programmes Windows toujours proposé pour un .exe,
+# bouton par défaut mis en évidence dans « Arrêter l'activation ? ».
+ok("def setting_relevant" in assistant_source and "def mentions_setting" in assistant_source
+   and "FOLDER_WORDS = {" in assistant_source and 'page = "10" if program else' in assistant_source
+   and 'keep.get_style_context().add_class("suggested-action")' in assistant_source,
+   "IA locale : aucune action hors sujet, page Programmes Windows pour un .exe, choix par défaut visible (#1033-#1036)")
+# #1042 : ReadFile de zéro octet sur un tube attend des données (libuv) : sinon
+# `claude.exe auth login` relançait sa lecture en boucle, 300 Mo par seconde.
+ok("fn wait_pipe_readable" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "fn zero_byte_read_on_a_pipe_waits_for_data" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "tube : lecture de zéro octet bloquante comme sous Windows, plus de boucle de Claude Code (#1042)")
+# #1038 : demande d'autorisation sans affichage joignable -> refus pour cette fois, rien de mémorisé.
+ok("Gtk.init_check(sys.argv)[0]" in (SCRIPTS / "winlux-permission.py").read_text()
+   and "#1038" in (SCRIPTS / "test-permission.py").read_text(),
+   "autorisations : affichage injoignable jamais enregistré comme un refus (#1038)")
 # #1001 : fermer la fenêtre d'activation avant la fin est annoncé et confirmé.
 ok("def stop_confirmed" in assistant_source and '"delete-event"' in assistant_source,
    "Assistant IA : fermer l'activation en cours demande confirmation (#1001)")
@@ -825,11 +856,21 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #17 : services Windows en Unicode et démarrage automatique.
+ok('"StartServiceCtrlDispatcherW"' in (ROOT / "runtime/src/dlls/advapi32_services.rs").read_text()
+   and "pub fn autostart" in (ROOT / "runtime/src/dlls/advapi32_services.rs").read_text()
+   and '"--services","autostart"' in (SCRIPTS / "winlux-session-startup.py").read_text()
+   and "service_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(),
+   "services W (CreateServiceW, StartServiceCtrlDispatcherW…) et démarrage automatique en session (#17)")
 # #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
 ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
    and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
    and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
+# #1045/#1046 : clé Fonts toujours présente, vue dynamique jamais écrite ni doublée.
+ok("fn vue_dynamique_jamais_ecrite_ni_doublee" in (ROOT / "runtime/src/registry/tests.rs").read_text()
+   and "live::strip" in (ROOT / "runtime/src/registry/mod.rs").read_text(),
+   "registre : clé Fonts toujours là, ni doublon ni police fantôme, vue dynamique hors de registry.tsv (#1045, #1046)")
 # #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
 ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
    and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
@@ -858,6 +899,14 @@ ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object
    and "jobs::on_child_created(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
    and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
    "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
+
+# #20 : objets nommés partagés entre processus du même compte (sections, événements, mutex, sémaphores).
+_named = (ROOT / "runtime/src/dlls/named_objects.rs").read_text()
+ok("fn objets_nommes_partages_entre_processus" in _named and "fn dossier_prive_au_compte" in _named
+   and "meta.uid() == uid()" in _named and "winlux-objets-{}" in _named
+   and "fn sections_nommees_de_ntdll_et_de_kernel32" in (ROOT / "runtime/src/dlls/ntdll.rs").read_text()
+   and "\"OpenSemaphoreW\"" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets nommés visibles entre processus, cloisonnés par compte (dossier 0700), sections ntdll (#20)")
 
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
@@ -926,6 +975,15 @@ ok("fn call_win64" in (clr / "pinvoke.rs").read_text()
    and "p_invoke_rappel_vers_un_delegue" in (clr / "tests.rs").read_text()
    and "p_invoke_structures_et_derniere_erreur" in (clr / "tests.rs").read_text(),
    "CLR : P/Invoke Win64 (flottants, pile, structures C par valeur, rappels natifs, SetLastError) (#994)")
+
+# ── Moteur .NET Framework, étape 5 (#1066) : fils managés ──
+ok("fn gil_acquire" in (clr / "threads.rs").read_text()
+   and "fn monitor_wait" in (clr / "threads.rs").read_text()
+   and "threads::gil_yield()" in (clr / "il.rs").read_text()
+   and "threads::wait_foreground()" in (clr / "mod.rs").read_text()
+   and "quatre_fils_sous_verrou" in (clr / "tests.rs").read_text()
+   and "threadpool_wait_pulse_et_begin_invoke" in (clr / "tests.rs").read_text(),
+   "CLR : Thread, lock/Monitor (Wait, Pulse), ThreadPool, Sleep, BeginInvoke/EndInvoke, verrou global aux points sûrs (#1066)")
 
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
@@ -1015,4 +1073,21 @@ translation_test = (SCRIPTS / "test-translation-keys.py").read_text(encoding="ut
 ok("def inconsistent_page_names" in translation_test and "#1039" in translation_test
    and "'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir'" in (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8"),
    "Paramètres : noms de page traduits pareil partout, quatre langues (#1039)")
+# Shell PE, fiche 28 : Échap redessine (#1023), flèches dans le menu du
+# Gestionnaire des tâches (#1024), titre traduit (#1025), WINLUX_LANG lu
+# (#1026), Bloc-notes ouvrable seul (#1027). Vérifiés dans le vrai runtime
+# par explorer_regression (test-runtime.sh).
+pe_wm = (ROOT / "testexe/src/shell/wm.rs").read_text(encoding="utf-8")
+pe_lib = (ROOT / "testexe/src/lib.rs").read_text(encoding="utf-8")
+ok("frame_shown && !crate::gfx::focus_state(app).1" in pe_wm and "(#1023)" in pe_wm,
+   "Shell PE : Échap efface le cadre de focus et redessine (#1023)")
+ok("focus_step(FOCUS_APP" in (ROOT / "testexe/src/shell/taskmgr.rs").read_text(encoding="utf-8") and "(#1024)" in pe_wm,
+   "Shell PE : Haut/Bas dans le menu contextuel du Gestionnaire des tâches (#1024)")
+ok("wm::title_of(app)" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(encoding="utf-8") and "(#1025)" in pe_wm,
+   "Shell PE : titre de fenêtre dans la langue de l'interface (#1025)")
+ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testexe/src/shell/locale.rs").read_text(encoding="utf-8")
+   and "language_regression_checks" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text(encoding="utf-8"),
+   "Shell PE : WINLUX_LANG choisit la langue (#1026)")
+ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
+   "Shell PE : winlux-shell-app notepad (#1027)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

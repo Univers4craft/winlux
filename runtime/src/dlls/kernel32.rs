@@ -178,6 +178,9 @@ static TEMP_FILE_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 pub(crate) struct SemaphoreObject {
     count: Mutex<(i32, i32)>,
     changed: Condvar,
+    /// Sémaphore nommé partagé avec d'autres processus (#20) : compteur et
+    /// maximum dans la page partagée, qui fait foi à la place de `count`.
+    shared: std::sync::OnceLock<crate::dlls::inherit::SharedWord>,
 }
 pub(crate) struct EventObject {
     manual_reset: bool,
@@ -248,6 +251,80 @@ struct MutexState {
 pub(crate) struct MutexObject {
     state: Mutex<MutexState>,
     changed: Condvar,
+    /// Mutex nommé partagé avec d'autres processus (#20) : propriétaire (tid
+    /// Linux) et récursion dans la page partagée, à la place de `state`.
+    shared: std::sync::OnceLock<crate::dlls::inherit::SharedWord>,
+}
+
+// Page d'état d'un objet nommé partagé entre processus (#20), en mots de
+// 32 bits : 0 = état (événement signalé, tid du propriétaire d'un mutex,
+// compteur d'un sémaphore), 1 = récursion du mutex ou maximum du sémaphore,
+// 2 = type d'objet, 3 = réinitialisation manuelle d'un événement.
+const SHARED_KIND_EVENT: u32 = 1;
+const SHARED_KIND_MUTEX: u32 = 2;
+const SHARED_KIND_SEMAPHORE: u32 = 3;
+
+fn os_thread_id() -> u32 {
+    unsafe { libc::syscall(libc::SYS_gettid) as u32 }
+}
+
+impl MutexObject {
+    fn new(owned: bool) -> MutexObject {
+        MutexObject {
+            state: Mutex::new(MutexState {
+                owner: owned.then(|| std::thread::current().id()),
+                recursion: usize::from(owned),
+            }),
+            changed: Condvar::new(),
+            shared: std::sync::OnceLock::new(),
+        }
+    }
+    /// Mutex partagé : essaie de le prendre. Some(abandonné) si pris.
+    fn shared_try(w: &crate::dlls::inherit::SharedWord) -> Option<bool> {
+        let me = os_thread_id();
+        let owner = w.slot(0).load(Ordering::Acquire);
+        if owner == me {
+            w.slot(1).fetch_add(1, Ordering::AcqRel);
+            return Some(false);
+        }
+        // Propriétaire disparu (thread ou processus terminé) : le mutex est
+        // abandonné, le suivant le prend avec WAIT_ABANDONED.
+        let abandoned = owner != 0 && !os_process_alive(owner as i32);
+        if (owner == 0 || abandoned)
+            && w.slot(0)
+                .compare_exchange(owner, me, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            w.slot(1).store(1, Ordering::Release);
+            return Some(abandoned);
+        }
+        None
+    }
+    fn shared_ready(w: &crate::dlls::inherit::SharedWord) -> bool {
+        let owner = w.slot(0).load(Ordering::Acquire);
+        owner == 0 || owner == os_thread_id() || !os_process_alive(owner as i32)
+    }
+}
+
+impl SemaphoreObject {
+    fn new(initial: i32, maximum: i32) -> SemaphoreObject {
+        SemaphoreObject {
+            count: Mutex::new((initial, maximum)),
+            changed: Condvar::new(),
+            shared: std::sync::OnceLock::new(),
+        }
+    }
+    fn shared_try(w: &crate::dlls::inherit::SharedWord) -> bool {
+        let c = w.slot(0);
+        let mut v = c.load(Ordering::Acquire);
+        while v > 0 {
+            match c.compare_exchange(v, v - 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return true,
+                Err(now) => v = now,
+            }
+        }
+        false
+    }
 }
 struct ThreadState {
     finished: bool,
@@ -1718,6 +1795,19 @@ pub unsafe extern "win64" fn read_file(
         crate::process::set_last_error(998); // ERROR_NOACCESS (#18)
         return 0;
     };
+    // Lecture de zéro octet sur un tube : Windows attend que des données
+    // arrivent (ou la fin du tube). libuv (Node, Bun) s'en sert pour guetter
+    // un tube sans tampon ; rendue tout de suite, elle relançait sa lecture
+    // en boucle et `claude.exe auth login` prenait 300 Mo par seconde (#1042).
+    if b.is_empty() {
+        if let Some(fd) = fd_of_handle(h).filter(|&fd| fd_is_pipe(fd)) {
+            if !wait_pipe_readable(fd) {
+                crate::process::set_last_error(109);
+                return 0;
+            }
+            return 1;
+        }
+    }
     if h == (-10isize) as usize {
         // Les invites écrites sans retour à la ligne doivent apparaître
         // avant que le programme n'attende la saisie.
@@ -4242,9 +4332,110 @@ fn same_sync(a: &SyncHandle, b: &SyncHandle) -> bool {
         _ => false,
     }
 }
+fn sync_kind(obj: &SyncHandle) -> u32 {
+    match obj {
+        SyncHandle::Event(_) => SHARED_KIND_EVENT,
+        SyncHandle::Mutex(_) => SHARED_KIND_MUTEX,
+        SyncHandle::Semaphore(_) => SHARED_KIND_SEMAPHORE,
+        _ => 0,
+    }
+}
+
+/// Objet nommé `key` partagé avec les autres processus du compte (#20).
+/// `obj` : l'objet à publier si le nom est libre (Create*), None pour
+/// seulement ouvrir (Open*). Rend l'objet à utiliser et vrai s'il existait ;
+/// Err(6) si le nom désigne un objet d'un autre type ; None : pas d'objet
+/// de ce nom ailleurs (ou partage indisponible).
+fn share_named(
+    key: &str,
+    want: u32,
+    obj: Option<&SyncHandle>,
+) -> Option<Result<(SyncHandle, bool), u32>> {
+    use crate::dlls::inherit::SharedWord;
+    use crate::dlls::named_objects as named;
+    let mut made: Option<SharedWord> = None;
+    let opened = {
+        let mut init = |f: &std::fs::File, _: &std::path::Path| -> bool {
+            let Some(obj) = obj else {
+                return false;
+            };
+            if f.set_len(4096).is_err() {
+                return false;
+            }
+            let Some(w) = named::dup(f).and_then(SharedWord::map) else {
+                return false;
+            };
+            let (state, aux, manual) = match obj {
+                SyncHandle::Event(e) => (
+                    u32::from(e.is_set(&lock(&e.signaled))),
+                    0,
+                    u32::from(e.manual_reset),
+                ),
+                SyncHandle::Mutex(m) => {
+                    let st = lock(&m.state);
+                    match st.owner {
+                        Some(_) => (os_thread_id(), st.recursion as u32, 0),
+                        None => (0, 0, 0),
+                    }
+                }
+                SyncHandle::Semaphore(sem) => {
+                    let c = lock(&sem.count);
+                    (c.0 as u32, c.1 as u32, 0)
+                }
+                _ => return false,
+            };
+            w.slot(0).store(state, Ordering::Release);
+            w.slot(1).store(aux, Ordering::Release);
+            w.slot(3).store(manual, Ordering::Release);
+            w.slot(2).store(want, Ordering::Release);
+            made = Some(w);
+            true
+        };
+        let create: Option<&mut dyn FnMut(&std::fs::File, &std::path::Path) -> bool> =
+            if obj.is_some() { Some(&mut init) } else { None };
+        named::open(named::SYNC, key, create)?
+    };
+    if opened.created {
+        let (obj, w) = (obj?.clone(), made?);
+        let attached = match &obj {
+            SyncHandle::Event(e) => e.shared.set(w).is_ok(),
+            SyncHandle::Mutex(m) => m.shared.set(w).is_ok(),
+            SyncHandle::Semaphore(sem) => sem.shared.set(w).is_ok(),
+            _ => false,
+        };
+        return attached.then_some(Ok((obj, false)));
+    }
+    let Some(w) = SharedWord::map(opened.fd) else {
+        named::release(named::SYNC, key);
+        return None;
+    };
+    if w.slot(2).load(Ordering::Acquire) != want {
+        named::release(named::SYNC, key);
+        return Some(Err(6));
+    }
+    let found = match want {
+        SHARED_KIND_EVENT => {
+            let manual = w.slot(3).load(Ordering::Acquire) != 0;
+            EventObject::adopt(manual, w)
+        }
+        SHARED_KIND_MUTEX => {
+            let m = MutexObject::new(false);
+            let _ = m.shared.set(w);
+            SyncHandle::Mutex(Arc::new(m))
+        }
+        _ => {
+            let max = w.slot(1).load(Ordering::Acquire) as i32;
+            let sem = SemaphoreObject::new(0, max);
+            let _ = sem.shared.set(w);
+            SyncHandle::Semaphore(Arc::new(sem))
+        }
+    };
+    Some(Ok((found, true)))
+}
+
 pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
-        let key = name.to_lowercase();
+        let key = crate::dlls::named_objects::name_key(&name);
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
         if let Some((old, count)) = names.get_mut(&key) {
             let compatible = matches!(
@@ -4261,6 +4452,21 @@ pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
             crate::process::set_last_error(183);
             old.clone()
         } else {
+            // Même nom dans un autre processus du compte (#20) ?
+            let obj = match share_named(&key, sync_kind(&obj), Some(&obj)) {
+                Some(Ok((shared, existed))) => {
+                    if existed {
+                        crate::process::set_last_error(183);
+                    }
+                    shared
+                }
+                Some(Err(e)) => {
+                    crate::process::set_last_error(e);
+                    return 0;
+                }
+                None => obj,
+            };
+            crate::dlls::named_objects::retain(crate::dlls::named_objects::SYNC, &key);
             names.insert(key, (obj.clone(), 1));
             obj
         }
@@ -4320,6 +4526,7 @@ fn remove_sync(h: usize) -> bool {
     }
     if let Some(name) = dead {
         names.remove(&name);
+        crate::dlls::named_objects::release(crate::dlls::named_objects::SYNC, &name);
     }
     true
 }
@@ -4386,6 +4593,17 @@ fn wait_event(e: &EventObject, timeout: u32) -> u32 {
 }
 fn wait_semaphore(sem: &SemaphoreObject, timeout: u32) -> u32 {
     let start = std::time::Instant::now();
+    if let Some(w) = sem.shared.get() {
+        loop {
+            if SemaphoreObject::shared_try(w) {
+                return 0;
+            }
+            let Some(left) = time_left(start, timeout) else {
+                return 258;
+            };
+            w.wait_while(0, left.min(50));
+        }
+    }
     loop {
         let gate = sync_gate();
         let mut state = lock(&sem.count);
@@ -4410,9 +4628,31 @@ fn wait_semaphore(sem: &SemaphoreObject, timeout: u32) -> u32 {
         drop(next);
     }
 }
+/// Temps restant d'une attente commencée à `start` (None : écoulé).
+fn time_left(start: std::time::Instant, timeout: u32) -> Option<u32> {
+    if timeout == u32::MAX {
+        return Some(u32::MAX);
+    }
+    let elapsed = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+    (elapsed < timeout).then(|| timeout - elapsed)
+}
 fn wait_mutex(m: &MutexObject, timeout: u32) -> u32 {
     let me = std::thread::current().id();
     let start = std::time::Instant::now();
+    if let Some(w) = m.shared.get() {
+        loop {
+            if let Some(abandoned) = MutexObject::shared_try(w) {
+                return if abandoned { 0x80 } else { 0 };
+            }
+            let Some(left) = time_left(start, timeout) else {
+                return 258;
+            };
+            let owner = w.slot(0).load(Ordering::Acquire);
+            if owner != 0 {
+                w.wait_while(owner, left.min(50));
+            }
+        }
+    }
     loop {
         let gate = sync_gate();
         let mut s = lock(&m.state);
@@ -4527,6 +4767,21 @@ fn try_mutex(m: &MutexObject) -> bool {
     }
 }
 fn leave_mutex(m: &MutexObject) -> bool {
+    if let Some(w) = m.shared.get() {
+        if w.slot(0).load(Ordering::Acquire) != os_thread_id() {
+            crate::process::set_last_error(288);
+            return false;
+        }
+        let depth = w.slot(1).load(Ordering::Acquire);
+        if depth > 1 {
+            w.slot(1).store(depth - 1, Ordering::Release);
+        } else {
+            w.slot(1).store(0, Ordering::Release);
+            w.slot(0).store(0, Ordering::Release);
+            w.wake();
+        }
+        return true;
+    }
     let _gate = sync_gate();
     let me = std::thread::current().id();
     let mut s = lock(&m.state);
@@ -4600,16 +4855,8 @@ pub unsafe extern "win64" fn initialize_critical_section(cs: *mut c_void) {
         return;
     }
     reset_critical_fields(cs, -1, 0);
-    lock(CRITICALS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
-        cs as usize,
-        Arc::new(MutexObject {
-            state: Mutex::new(MutexState {
-                owner: None,
-                recursion: 0,
-            }),
-            changed: Condvar::new(),
-        }),
-    );
+    lock(CRITICALS.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(cs as usize, Arc::new(MutexObject::new(false)));
 }
 pub unsafe extern "win64" fn initialize_critical_section_and_spin_count(
     cs: *mut c_void,
@@ -5148,6 +5395,30 @@ pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
 /// Le descripteur est-il un tube (CreatePipe, `|` du shell) ?
 /// Tube anonyme (FIFO) ou tube nommé (socket Unix) : une lecture de 0 octet
 /// y signifie que l'autre bout est fermé.
+/// Attend qu'un tube ait des données à lire. Faux : tube fermé à l'autre
+/// bout sans rien à lire (ERROR_BROKEN_PIPE).
+fn wait_pipe_readable(fd: i32) -> bool {
+    loop {
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let r = unsafe { libc::poll(&mut p, 1, -1) };
+        if r < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if p.revents & libc::POLLIN != 0 {
+            return true;
+        }
+        if p.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return false;
+        }
+    }
+}
 fn fd_is_pipe(fd: i32) -> bool {
     file_type_of_fd(fd) == 3
 }
@@ -5948,17 +6219,7 @@ pub extern "win64" fn reset_event(h: usize) -> i32 {
     1
 }
 pub unsafe extern "win64" fn create_mutex_a(_sec: usize, initial: i32, name: *const u8) -> usize {
-    let obj = SyncHandle::Mutex(Arc::new(MutexObject {
-        state: Mutex::new(MutexState {
-            owner: if initial != 0 {
-                Some(std::thread::current().id())
-            } else {
-                None
-            },
-            recursion: usize::from(initial != 0),
-        }),
-        changed: Condvar::new(),
-    }));
+    let obj = SyncHandle::Mutex(Arc::new(MutexObject::new(initial != 0)));
     add_sync(obj, named_event(name))
 }
 pub extern "win64" fn release_mutex(h: usize) -> i32 {
@@ -5978,16 +6239,39 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
-    let key = crate::dlls::cstr(name).to_lowercase();
+    let kind = if event {
+        SHARED_KIND_EVENT
+    } else {
+        SHARED_KIND_MUTEX
+    };
+    open_sync_by_name(&crate::dlls::cstr(name), kind)
+}
+/// Open{Event,Mutex,Semaphore} : objet nommé de ce processus, ou d'un autre
+/// processus du même compte (#20).
+fn open_sync_by_name(name: &str, kind: u32) -> usize {
+    let key = crate::dlls::named_objects::name_key(name);
     let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
+    if !names.contains_key(&key) {
+        match share_named(&key, kind, None) {
+            Some(Ok((obj, _))) => {
+                crate::dlls::named_objects::retain(crate::dlls::named_objects::SYNC, &key);
+                names.insert(key.clone(), (obj, 0));
+            }
+            Some(Err(e)) => {
+                crate::process::set_last_error(e);
+                return 0;
+            }
+            None => {
+                crate::process::set_last_error(2);
+                return 0;
+            }
+        }
+    }
     let Some((object, count)) = names.get_mut(&key) else {
         crate::process::set_last_error(2);
         return 0;
     };
-    if !matches!(
-        (&*object, event),
-        (SyncHandle::Event(_), true) | (SyncHandle::Mutex(_), false)
-    ) {
+    if sync_kind(object) != kind {
         crate::process::set_last_error(6);
         return 0;
     }
@@ -5995,6 +6279,38 @@ unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, object.clone());
     *count += 1;
     h
+}
+/// OpenSemaphoreW
+pub unsafe extern "win64" fn open_semaphore_w(
+    _access: u32,
+    inherit: i32,
+    name: *const u16,
+) -> usize {
+    if inherit != 0 {
+        crate::process::set_last_error(50);
+        return 0;
+    }
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    open_sync_by_name(&crate::dlls::wstr(name), SHARED_KIND_SEMAPHORE)
+}
+/// OpenSemaphoreA
+pub unsafe extern "win64" fn open_semaphore_a(
+    _access: u32,
+    inherit: i32,
+    name: *const u8,
+) -> usize {
+    if inherit != 0 {
+        crate::process::set_last_error(50);
+        return 0;
+    }
+    if name.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    open_sync_by_name(&crate::dlls::cstr(name), SHARED_KIND_SEMAPHORE)
 }
 #[cfg(test)]
 mod reviewed_named_sync_tests {
@@ -6090,14 +6406,20 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
             let me = std::thread::current().id();
             let ready = objects.iter().all(|o| match o {
                 SyncHandle::Event(e) => e.is_set(&lock(&e.signaled)),
-                SyncHandle::Mutex(m) => {
-                    let s = lock(&m.state);
-                    s.owner.is_none() || s.owner.as_ref() == Some(&me)
-                }
+                SyncHandle::Mutex(m) => match m.shared.get() {
+                    Some(w) => MutexObject::shared_ready(w),
+                    None => {
+                        let s = lock(&m.state);
+                        s.owner.is_none() || s.owner.as_ref() == Some(&me)
+                    }
+                },
                 SyncHandle::Thread(t) => lock(&t.state).finished,
                 SyncHandle::Process(p) => poll_process(p),
                 SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
-                SyncHandle::Semaphore(sem) => lock(&sem.count).0 > 0,
+                SyncHandle::Semaphore(sem) => match sem.shared.get() {
+                    Some(w) => w.slot(0).load(Ordering::Acquire) > 0,
+                    None => lock(&sem.count).0 > 0,
+                },
             });
             if ready {
                 for o in &objects {
@@ -6106,6 +6428,10 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                             e.take(&mut lock(&e.signaled));
                         }
                         SyncHandle::Mutex(m) => {
+                            if let Some(w) = m.shared.get() {
+                                MutexObject::shared_try(w);
+                                continue;
+                            }
                             let mut s = lock(&m.state);
                             if s.owner.as_ref() == Some(&me) {
                                 s.recursion = s.recursion.saturating_add(1);
@@ -6114,7 +6440,12 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                                 s.recursion = 1;
                             }
                         }
-                        SyncHandle::Semaphore(sem) => lock(&sem.count).0 -= 1,
+                        SyncHandle::Semaphore(sem) => match sem.shared.get() {
+                            Some(w) => {
+                                SemaphoreObject::shared_try(w);
+                            }
+                            None => lock(&sem.count).0 -= 1,
+                        },
                         SyncHandle::Thread(_)
                         | SyncHandle::Process(_)
                         | SyncHandle::CompletionPort(_) => {}
@@ -6136,7 +6467,11 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
         for (i, obj) in objects.iter().enumerate() {
             let ready = match obj {
                 SyncHandle::Event(e) => wait_event(e, 0) == 0,
-                SyncHandle::Mutex(m) => wait_mutex(m, 0) == 0,
+                SyncHandle::Mutex(m) => match wait_mutex(m, 0) {
+                    0 => true,
+                    0x80 => return 0x80 + i as u32,
+                    _ => false,
+                },
                 SyncHandle::Thread(t) => wait_thread(t, 0) == 0,
                 SyncHandle::Process(p) => poll_process(p),
                 SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
@@ -6915,6 +7250,7 @@ pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
     crate::dlls::jobs::on_exit();
+    crate::dlls::named_objects::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let _ = std::io::Write::flush(&mut std::io::stderr());
     crate::dlls::console_input::restore();
@@ -6925,6 +7261,7 @@ pub fn terminate_self(code: u32) -> ! {
 pub fn flush_and_exit(code: i32) -> ! {
     // Les jobs KILL_ON_JOB_CLOSE du processus se ferment avec lui (#19).
     crate::dlls::jobs::on_exit();
+    crate::dlls::named_objects::on_exit();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     crate::dlls::console_input::restore();
     crate::dlls::handle_broker::forget();
@@ -9112,10 +9449,7 @@ pub unsafe extern "win64" fn create_semaphore_w(
         crate::process::set_last_error(87);
         return 0;
     }
-    let obj = SyncHandle::Semaphore(Arc::new(SemaphoreObject {
-        count: Mutex::new((initial, maximum)),
-        changed: Condvar::new(),
-    }));
+    let obj = SyncHandle::Semaphore(Arc::new(SemaphoreObject::new(initial, maximum)));
     let name = (!_name.is_null())
         .then(|| crate::dlls::wstr(_name))
         .filter(|n| !n.is_empty());
@@ -9146,6 +9480,26 @@ pub unsafe extern "win64" fn release_semaphore(h: usize, count: i32, prev: *mut 
     if count <= 0 {
         crate::process::set_last_error(87);
         return 0;
+    }
+    if let Some(w) = sem.shared.get() {
+        let c = w.slot(0);
+        let max = w.slot(1).load(Ordering::Acquire);
+        let mut v = c.load(Ordering::Acquire);
+        loop {
+            if v.checked_add(count as u32).is_none_or(|n| n > max) {
+                crate::process::set_last_error(298);
+                return 0;
+            }
+            match c.compare_exchange(v, v + count as u32, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => break,
+                Err(now) => v = now,
+            }
+        }
+        if !prev.is_null() {
+            *prev = v as i32;
+        }
+        w.wake();
+        return 1;
     }
     let _gate = sync_gate();
     let mut state = lock(&sem.count);
@@ -9333,7 +9687,7 @@ pub fn exports() -> crate::dlls::Exports {
      "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
      "GetStringTypeW"=>fn get_string_type_w,
      "LCMapStringW"=>fn lc_map_string_w,
-     "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,
+     "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,"OpenSemaphoreW"=>fn open_semaphore_w,"OpenSemaphoreA"=>fn open_semaphore_a,
      "LoadLibraryExA"=>fn load_library_ex_a,"LoadLibraryExW"=>fn load_library_ex_w,
      // --- API Electron / Chromium ---
      "GetProductInfo"=>fn get_product_info,
@@ -10226,6 +10580,46 @@ mod tests {
         assert_eq!(code, 42);
         close_handle(info.thread);
         close_handle(info.process);
+    }
+
+    /// #1042 : une lecture de zéro octet sur un tube attend des données
+    /// (libuv guette ainsi stdin) ; tube fermé et vide : ERROR_BROKEN_PIPE.
+    #[test]
+    fn zero_byte_read_on_a_pipe_waits_for_data() {
+        let _teb = crate::process::test_teb();
+        let (mut r, mut w) = (0usize, 0usize);
+        unsafe {
+            assert_eq!(create_pipe(&mut r, &mut w, std::ptr::null(), 0), 1);
+        }
+        let writer = w;
+        let start = std::time::Instant::now();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let mut n = 0u32;
+            unsafe { write_file(writer, b"x".as_ptr(), 1, &mut n, 0) };
+        });
+        let mut buf = [0u8; 4];
+        let mut n = 7u32;
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 0, &mut n, 0), 1);
+        }
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(250),
+            "rendue sans attendre"
+        );
+        assert_eq!(n, 0);
+        t.join().unwrap();
+        // Les données sont toujours là pour la vraie lecture.
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 4, &mut n, 0), 1);
+        }
+        assert_eq!((n, buf[0]), (1, b'x'));
+        close_handle(w);
+        unsafe {
+            assert_eq!(read_file(r, buf.as_mut_ptr(), 0, &mut n, 0), 0);
+        }
+        assert_eq!(crate::process::last_error(), 109);
+        close_handle(r);
     }
 
     #[test]

@@ -490,7 +490,9 @@ unsafe fn load_preferences() {
         }
     }
     let mut conf = [0u8; 8];
-    if read_small_file(c"Z:\\etc\\winlux\\locale.conf", &mut conf) > 0 {
+    if winlux_testexe::winlux_lang_env().is_some()
+        || read_small_file(c"Z:\\etc\\winlux\\locale.conf", &mut conf) > 0
+    {
         crate::locale::load_lang();
         return;
     }
