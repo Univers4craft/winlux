@@ -813,6 +813,49 @@ ok("def browser_confirmation" in (SCRIPTS / "winlux-settings.py").read_text()
    and "test-browser-confirm.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "navigateurs : éditeur, version, source et empreinte montrés avant l'installation, confirmer ou refuser (#923)")
 
+# ── Moteur .NET Framework maison, étape 1 (#926) : plusieurs assemblies ──
+clr = ROOT / "runtime/src/clr"
+ok((clr / "domain.rs").exists() and "fn probe" in (clr / "domain.rs").read_text()
+   and "fn resolve_type_ref_in" in (clr / "typesys.rs").read_text()
+   and "fn ensure_initialized" in (clr / "il.rs").read_text()
+   and "une_bibliotheque_livree_avec_le_programme_est_chargee" in (clr / "tests.rs").read_text()
+   and "execute_assembly_in" in (ROOT / "runtime/src/main.rs").read_text(),
+   "CLR : DLL .NET privées du dossier de l'appli chargées, appels, héritage, champs et .cctor entre assemblies (#926)")
+
+# ── Moteur .NET Framework, étape 2 (#945, #946) : cœur d'exécution, génériques ──
+ok("fn ensure_layout" in (clr / "typesys.rs").read_text()
+   and "fn instantiate" in (clr / "typesys.rs").read_text()
+   and "O::Constrained" in (clr / "il.rs").read_text()
+   and "les_generiques_sont_instancies" in (clr / "tests.rs").read_text()
+   and "ref_out_et_acces_indirects" in (clr / "tests.rs").read_text()
+   and "les_structures_se_copient" in (clr / "tests.rs").read_text(),
+   "CLR : ref/out, structures copiées, génériques instanciés (box/unbox de T, statiques, constrained., ldelem T) (#945, #946)")
+
+# ── Moteur .NET Framework, étape 3 (#971) : délégués, événements, lambdas ──
+ok((clr / "delegates.rs").exists()
+   and "fn invoke_delegate" in (clr / "delegates.rs").read_text()
+   and "O::Ldvirtftn" in (clr / "il.rs").read_text()
+   and "les_delegues_appellent_leur_methode" in (clr / "tests.rs").read_text()
+   and "ldvirtftn_func_et_evenements" in (clr / "tests.rs").read_text(),
+   "CLR : ldftn/ldvirtftn, Invoke, délégués multicast, Combine/Remove, Interlocked des événements (#971)")
+
+# ── Moteur .NET Framework, étape 4 (#972) : filtres, finally imbriqués, rethrow ──
+ok("fn run_filter" in (clr / "il.rs").read_text()
+   and "O::Endfilter" in (clr / "il.rs").read_text()
+   and "INNER_SLOT" in (clr / "exceptions.rs").read_text()
+   and "filtres_finally_et_rethrow" in (clr / "tests.rs").read_text()
+   and "le_finally_tourne_avant_l_appelant_et_un_filtre_qui_leve_refuse" in (clr / "tests.rs").read_text(),
+   "CLR : filtres when, finally imbriqués traversés par leave et par une exception, rethrow, InnerException (#972)")
+
+# ── Moteur .NET Framework, étape 6 (#994) : P/Invoke complet ──
+ok("fn call_win64" in (clr / "pinvoke.rs").read_text()
+   and "fn callback_for" in (clr / "callbacks.rs").read_text()
+   and "fn call_pinvoke" in (clr / "interop.rs").read_text()
+   and "fn field_offset_of" in (clr / "metadata.rs").read_text()
+   and "p_invoke_rappel_vers_un_delegue" in (clr / "tests.rs").read_text()
+   and "p_invoke_structures_et_derniere_erreur" in (clr / "tests.rs").read_text(),
+   "CLR : P/Invoke Win64 (flottants, pile, structures C par valeur, rappels natifs, SetLastError) (#994)")
+
 # ── Icônes cachées une par une derrière la flèche (#927) ───────────────────
 ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-icon.py").read_text()
    and 'if kind == "overflow":' in (SCRIPTS / "winlux-tray.py").read_text()
