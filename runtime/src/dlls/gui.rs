@@ -3698,6 +3698,37 @@ pub fn class_style(name: &str) -> u32 {
         .unwrap_or(0)
 }
 
+fn class_cursors() -> &'static Mutex<HashMap<String, usize>> {
+    static S: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Mémorise le curseur de classe (hCursor de WNDCLASS) ; le premier
+/// enregistrement l'emporte, comme pour le style.
+pub fn set_class_cursor(name: &str, cursor: usize) {
+    lock(class_cursors())
+        .entry(name.to_ascii_lowercase())
+        .or_insert(cursor);
+}
+
+/// Curseur de classe d'une fenêtre : celui de RegisterClass, sinon celui du
+/// contrôle prédéfini (barre en I pour une zone de texte, flèche ailleurs).
+/// 0 quand la classe a été enregistrée sans curseur : l'application le
+/// choisit elle-même par SetCursor.
+pub fn class_cursor_of(hwnd: usize) -> usize {
+    let Some(class) = window_class(hwnd).map(|c| c.to_ascii_lowercase()) else {
+        return 0;
+    };
+    if let Some(&cursor) = lock(class_cursors()).get(&class) {
+        return cursor;
+    }
+    if class == "edit" || class.starts_with("richedit") {
+        load_cursor(0, 32513)
+    } else {
+        load_cursor(0, 32512)
+    }
+}
+
 /// La fenêtre reçoit-elle des WM_xBUTTONDBLCLK ? Oui si sa classe porte
 /// CS_DBLCLKS, comme les contrôles prédéfinis listes, boutons et zones de
 /// texte sous Windows.
@@ -4212,6 +4243,36 @@ pub fn default_nccalcsize_seen() -> bool {
 pub fn def_window_proc(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     crate::dlls::pointer::on_default(message);
     match message {
+        // WM_SETCURSOR : le parent d'une fenêtre enfant décide d'abord ; puis
+        // le curseur de classe dans la zone cliente, la flèche ailleurs.
+        0x0020 => {
+            const WS_CHILD: u32 = 0x4000_0000;
+            const HTCLIENT: isize = 1;
+            let child = window_style(hwnd).is_some_and(|s| s & WS_CHILD != 0);
+            if let Some(parent) = window_parent(hwnd).filter(|&p| child && p != 0) {
+                let handled =
+                    unsafe { crate::dlls::user32::send_message_w(parent, 0x0020, wparam, lparam) };
+                if handled != 0 {
+                    return handled;
+                }
+            }
+            // Message remonté d'un enfant (wParam = la fenêtre sous le
+            // pointeur) : le parent ne choisit rien, l'enfant applique son
+            // propre curseur de classe (la barre en I d'une zone de texte).
+            if wparam != hwnd {
+                return 0;
+            }
+            if lparam & 0xFFFF == HTCLIENT {
+                let cursor = class_cursor_of(hwnd);
+                if cursor == 0 {
+                    return 0;
+                }
+                set_cursor(cursor);
+                return 1;
+            }
+            set_cursor(load_cursor(0, 32512));
+            0
+        }
         // WM_NCCALCSIZE : une fenêtre de premier niveau n'a pas de zone non
         // cliente à elle (le cadre est celui du gestionnaire de fenêtres), le
         // rectangle proposé reste donc la zone cliente.

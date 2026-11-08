@@ -76,6 +76,7 @@ pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO: u3
 pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO: u32 = 22;
 pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO: u32 = 23;
 pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO: u32 = 24;
+pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO: u32 = 25;
 pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO: u32 = 26;
 pub(crate) const VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO: u32 = 27;
 pub(crate) const VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO: u32 = 28;
@@ -118,6 +119,7 @@ pub(crate) const VK_FORMAT_R32_SFLOAT: u32 = 100;
 pub(crate) const VK_FORMAT_R32G32_SFLOAT: u32 = 103;
 pub(crate) const VK_FORMAT_R32G32B32_SFLOAT: u32 = 106;
 pub(crate) const VK_FORMAT_R32G32B32A32_SFLOAT: u32 = 109;
+pub(crate) const VK_FORMAT_D16_UNORM: u32 = 124;
 pub(crate) const VK_FORMAT_D32_SFLOAT: u32 = 126;
 pub(crate) const VK_FORMAT_D24_UNORM_S8_UINT: u32 = 129;
 pub(crate) const VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: u32 = 0;
@@ -778,6 +780,34 @@ pub(crate) struct VkPipelineColorBlendAttachmentState {
     pub dstAlphaBlendFactor: u32,
     pub alphaBlendOp: u32,
     pub colorWriteMask: VkFlags,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub(crate) struct VkStencilOpState {
+    pub failOp: u32,
+    pub passOp: u32,
+    pub depthFailOp: u32,
+    pub compareOp: u32,
+    pub compareMask: u32,
+    pub writeMask: u32,
+    pub reference: u32,
+}
+
+#[repr(C)]
+pub(crate) struct VkPipelineDepthStencilStateCreateInfo {
+    pub sType: u32,
+    pub pNext: *const c_void,
+    pub flags: VkFlags,
+    pub depthTestEnable: VkBool32,
+    pub depthWriteEnable: VkBool32,
+    pub depthCompareOp: u32,
+    pub depthBoundsTestEnable: VkBool32,
+    pub stencilTestEnable: VkBool32,
+    pub front: VkStencilOpState,
+    pub back: VkStencilOpState,
+    pub minDepthBounds: f32,
+    pub maxDepthBounds: f32,
 }
 
 #[repr(C)]

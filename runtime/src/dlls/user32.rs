@@ -138,6 +138,7 @@ unsafe fn register_class_common(
     wnd_proc: usize,
     background: usize,
     instance: usize,
+    cursor: usize,
 ) -> usize {
     if name.is_empty() || wnd_proc == 0 {
         crate::process::set_last_error(87);
@@ -146,6 +147,7 @@ unsafe fn register_class_common(
     // Classe déjà enregistrée : Win32 renvoie une erreur mais garde la
     // classe ; on rend son atome.
     gui::set_class_style(&name, style);
+    gui::set_class_cursor(&name, cursor);
     gui::register_class(
         &name,
         ClassInfo {
@@ -165,7 +167,14 @@ pub unsafe extern "win64" fn register_class_a(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
@@ -177,7 +186,14 @@ pub unsafe extern "win64" fn register_class_w(wc: *const WndClassA) -> u16 {
     let c = &*wc;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16 {
@@ -188,7 +204,14 @@ pub unsafe extern "win64" fn register_class_ex_a(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_a(c.class_name);
     remember_class_menu(&name, c.instance, c.menu_name, false);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16 {
@@ -199,14 +222,21 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
     let c = &*wcx;
     let name = read_class_name_w(c.class_name as *const u16);
     remember_class_menu(&name, c.instance, c.menu_name, true);
-    register_class_common(name, c.style, c.wnd_proc, c.background, c.instance) as u16
+    register_class_common(
+        name,
+        c.style,
+        c.wnd_proc,
+        c.background,
+        c.instance,
+        c.cursor,
+    ) as u16
 }
 
 // ---------- Création de fenêtres ----------
 
 /// `WINLUX_WINDOW_DIAG=1` : création, placement et affichage des fenêtres
 /// sur la sortie d'erreur (diagnostic des fenêtres filles absentes).
-fn window_diag() -> bool {
+pub(crate) fn window_diag() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         std::env::var_os("WINLUX_WINDOW_DIAG").is_some_and(|v| !v.is_empty() && v != "0")
@@ -594,6 +624,26 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
     r
 }
 
+/// WM_SETCURSOR, que Windows envoie quand il retire de la file un message
+/// souris de la zone cliente, la souris n'étant pas capturée : l'application
+/// y choisit son curseur (barre en I sur le texte de Sumatra PDF, #1253).
+/// Sans lui, le pointeur restait une flèche partout.
+unsafe fn send_set_cursor(m: &Msg) {
+    const HTCLIENT: isize = 1;
+    if m.hwnd == 0 || gui::get_capture() != 0 {
+        return;
+    }
+    if !matches!(m.message, 0x0200 | 0x0201 | 0x0204 | 0x0207 | 0x020B) {
+        return;
+    }
+    send_message_w(
+        m.hwnd,
+        0x0020,
+        m.hwnd,
+        ((m.message as isize) << 16) | HTCLIENT,
+    );
+}
+
 unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
@@ -613,6 +663,7 @@ unsafe fn get_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i
                 return 0;
             }
             gui::observe_key_message(&m);
+            send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
         }
@@ -700,6 +751,7 @@ unsafe fn peek_message_inner(out: *mut Msg, hwnd: usize, min: u32, max: u32, rem
                 return 1;
             }
             gui::observe_key_message(&m);
+            send_set_cursor(&m);
             write_msg(out, &m);
             return 1;
         }
@@ -2023,6 +2075,9 @@ pub extern "win64" fn get_parent(hwnd: usize) -> usize {
 
 pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
     let old = gui::set_window_parent(hwnd, new_parent).unwrap_or(0);
+    if window_diag() {
+        eprintln!("winlux[fenetre] parent {hwnd:#x} : {old:#x} -> {new_parent:#x}");
+    }
     if new_parent != 0 && new_parent != old {
         // Sans cela la fenêtre X restait dans l'ancien parent (bandes d'une
         // ReBar, panneaux déplacés d'une fenêtre à l'autre).
@@ -2748,17 +2803,83 @@ pub unsafe extern "win64" fn draw_text_w(
     draw_text_impl(hdc, &s, &mut *rect, format)
 }
 
+/// DrawTextEx : même rendu que DrawText ; les marges de DRAWTEXTPARAMS
+/// ne sont pas appliquées (le bouchon précédent ignorait tout le format).
+pub unsafe extern "win64" fn draw_text_ex_a(
+    hdc: usize,
+    text: *const u8,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_a(hdc, text, count, rect, format)
+}
+
+pub unsafe extern "win64" fn draw_text_ex_w(
+    hdc: usize,
+    text: *const u16,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
+    _params: usize,
+) -> i32 {
+    draw_text_w(hdc, text, count, rect, format)
+}
+
+/// Retire les préfixes de mnémonique de DrawText : « &F » affiche « F »
+/// souligné, « && » affiche « & ». Rend le texte affiché et la position (en
+/// caractères) de la lettre à souligner.
+pub(crate) fn split_prefix(text: &str) -> (String, Option<usize>) {
+    let mut out = String::with_capacity(text.len());
+    let mut underline = None;
+    let mut count = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            match chars.next() {
+                Some('&') => {
+                    out.push('&');
+                    count += 1;
+                }
+                Some(c) => {
+                    if underline.is_none() {
+                        underline = Some(count);
+                    }
+                    out.push(c);
+                    count += 1;
+                }
+                None => {}
+            }
+            continue;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    (out, underline)
+}
+
 fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     const DT_CALCRECT: u32 = 0x0400;
     const DT_CENTER: u32 = 0x0001;
+    const DT_RIGHT: u32 = 0x0002;
     const DT_VCENTER: u32 = 0x0004;
+    const DT_BOTTOM: u32 = 0x0008;
     const DT_SINGLELINE: u32 = 0x0020;
-    const DT_NOCLIP: u32 = 0x0100;
     const DT_NOPREFIX: u32 = 0x0800;
+    const DT_HIDEPREFIX: u32 = 0x0010_0000;
+    const DT_PREFIXONLY: u32 = 0x0020_0000;
 
     let font_handle = gui::dc_font(hdc);
     let font = gui::font_spec(font_handle).unwrap_or_default();
-    let (tw, th) = gui::measure_text(&font, text);
+    // Sans DT_NOPREFIX, « & » marque la lettre de raccourci (libellés de la
+    // VCL : « &Hostname: » s'affichait tel quel, #1248).
+    let (shown, underline) = if format & DT_NOPREFIX != 0 {
+        (text.to_string(), None)
+    } else {
+        split_prefix(text)
+    };
+    let (tw, th) = gui::measure_text(&font, &shown);
 
     if format & DT_CALCRECT != 0 {
         rect.right = rect.left + tw;
@@ -2771,9 +2892,15 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
 
     if format & DT_CENTER != 0 {
         x = rect.left + (rect.width() - tw) / 2;
+    } else if format & DT_RIGHT != 0 {
+        x = rect.right - tw;
     }
-    if format & DT_SINGLELINE != 0 && format & DT_VCENTER != 0 {
-        y = rect.top + (rect.height() - th) / 2;
+    if format & DT_SINGLELINE != 0 {
+        if format & DT_VCENTER != 0 {
+            y = rect.top + (rect.height() - th) / 2;
+        } else if format & DT_BOTTOM != 0 {
+            y = rect.bottom - th;
+        }
     }
 
     let color = gui::dc_text_color(hdc);
@@ -2784,18 +2911,37 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
         None
     };
 
-    let _ = (DT_NOCLIP, DT_NOPREFIX);
-    gui::record(
-        hdc,
-        gui::DrawCmd::Text {
-            x,
-            y,
-            text: text.to_string(),
-            color,
-            bk,
-            font,
-        },
-    );
+    if let Some(k) = underline.filter(|_| format & DT_HIDEPREFIX == 0) {
+        let before: String = shown.chars().take(k).collect();
+        let upto: String = shown.chars().take(k + 1).collect();
+        let x1 = x + gui::measure_text(&font, &before).0;
+        let x2 = x + gui::measure_text(&font, &upto).0;
+        let base = y + th - 2;
+        gui::record(
+            hdc,
+            gui::DrawCmd::Line {
+                x1,
+                y1: base,
+                x2: x2 - 1,
+                y2: base,
+                color,
+                width: 1,
+            },
+        );
+    }
+    if format & DT_PREFIXONLY == 0 {
+        gui::record(
+            hdc,
+            gui::DrawCmd::Text {
+                x,
+                y,
+                text: shown,
+                color,
+                bk,
+                font,
+            },
+        );
+    }
 
     th
 }
@@ -4166,6 +4312,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ReleaseDC"=>fn release_dc,
         "FillRect"=>fn fill_rect, "FrameRect"=>fn frame_rect,
         "DrawTextA"=>fn draw_text_a, "DrawTextW"=>fn draw_text_w,
+        "DrawTextExA"=>fn draw_text_ex_a, "DrawTextExW"=>fn draw_text_ex_w,
         "GetUpdateRect"=>fn get_update_rect, "GetUpdateRgn"=>fn get_update_rgn,
         "RedrawWindow"=>fn redraw_window,
         // --- Keyboard input ---
@@ -5020,6 +5167,32 @@ mod tests {
         // Pointeurs nuls : rien d'écrit.
         let args: [u64; 2] = [0, fmt.as_ptr() as u64];
         assert_eq!(unsafe { imp_wsprintfa(args.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn draw_text_retire_les_prefixes_de_mnemonique() {
+        assert_eq!(split_prefix("&Hostname:"), ("Hostname:".into(), Some(0)));
+        assert_eq!(
+            split_prefix("Po&rt number:"),
+            ("Port number:".into(), Some(2))
+        );
+        assert_eq!(split_prefix("A && B"), ("A & B".into(), None));
+        assert_eq!(split_prefix("fin&"), ("fin".into(), None));
+        // DT_CALCRECT mesure le texte affiché, sans l'esperluette.
+        const DT_CALCRECT: u32 = 0x0400;
+        const DT_NOPREFIX: u32 = 0x0800;
+        let avec = b"&Port\0";
+        let sans = b"Port\0";
+        let mut r1 = Rect::default();
+        let mut r2 = Rect::default();
+        let mut r3 = Rect::default();
+        unsafe {
+            draw_text_a(0, avec.as_ptr(), -1, &mut r1, DT_CALCRECT);
+            draw_text_a(0, sans.as_ptr(), -1, &mut r2, DT_CALCRECT);
+            draw_text_a(0, avec.as_ptr(), -1, &mut r3, DT_CALCRECT | DT_NOPREFIX);
+        }
+        assert_eq!(r1.right, r2.right);
+        assert!(r3.right > r2.right, "DT_NOPREFIX garde « & »");
     }
 
     #[test]

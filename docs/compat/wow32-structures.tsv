@@ -93,6 +93,9 @@ d3d9.rs	Obj	a-verifier
 d3d9.rs	PresentParams	a-verifier	
 d3dcompiler.rs	Blob	a-verifier	
 d3dcompiler.rs	BlobVTable	a-verifier	
+d3dcompiler_reflect.rs	CbObj	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
+d3dcompiler_reflect.rs	Reflection	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
+d3dcompiler_reflect.rs	VarObj	a-verifier	objet COM 64 bits de D3DReflect ; les descriptions rendues sont écrites en disposition x64 (#1247)
 d3dx9.rs	Buffer	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 126 (ID3DXBuffer)
 d3dx9_draw.rs	Font	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXFont)
 d3dx9_draw.rs	Sprite	x86	objet COM : le programme ne lit que sa table ; jeux32.c n° 110-126 (ID3DXSprite)
@@ -220,6 +223,7 @@ vk_bindings.rs	VkMemoryBarrier	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceDynamicRenderingFeatures	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPhysicalDeviceExtendedDynamicStateFeaturesEXT	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineColorBlendStateCreateInfo	interne	liaison Vulkan côté hôte
+vk_bindings.rs	VkPipelineDepthStencilStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineDynamicStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineInputAssemblyStateCreateInfo	interne	liaison Vulkan côté hôte
 vk_bindings.rs	VkPipelineLayoutCreateInfo	interne	liaison Vulkan côté hôte

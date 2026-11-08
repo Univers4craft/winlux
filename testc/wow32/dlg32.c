@@ -328,6 +328,14 @@ static void gdi_origin(void)
     RECT cb;
     IntersectClipRect(dc, 0, 0, 5, 5);
     CHECK(GetClipBox(dc, &cb) != 0 && cb.left == 0 && cb.right == 5, "GetClipBox en coordonnées logiques");
+    /* Préfixe de mnémonique (#1248) : « &Port » se mesure comme « Port ». */
+    RECT a = { 0, 0, 0, 0 }, b = { 0, 0, 0, 0 }, c = { 0, 0, 0, 0 }, e = { 0, 0, 0, 0 };
+    DrawTextW(dc, L"&Port", -1, &a, DT_CALCRECT);
+    DrawTextW(dc, L"Port", -1, &b, DT_CALCRECT);
+    DrawTextW(dc, L"&Port", -1, &c, DT_CALCRECT | DT_NOPREFIX);
+    CHECK(a.right == b.right && c.right > b.right, "DrawTextW retire « & » sauf DT_NOPREFIX");
+    DrawTextExW(dc, L"&Port", -1, &e, DT_CALCRECT, NULL);
+    CHECK(e.right == b.right && e.bottom > 0, "DrawTextExW suit le format de DrawText");
     SelectObject(dc, old);
     DeleteObject(dib);
     DeleteDC(dc);
@@ -564,6 +572,81 @@ static void dialogs(void)
 }
 
 /* Fonctions de comctl32, comdlg32 et shell32 demandées par WinSCP 6.7 x86. */
+/* Liste déroulante dessinée par le programme, superclasse de COMBOBOX comme
+   le TComboBox csOwnerDrawFixed de la VCL (« File protocol » de WinSCP,
+   #1250) : le parent reçoit WM_DRAWITEM et relit le texte par
+   CB_GETLBTEXT. */
+static WNDPROC od_combo_orig;
+static int od_draws, od_edit_draws;
+static WCHAR od_text[32];
+static LRESULT CALLBACK od_combo_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    return CallWindowProcW(od_combo_orig, h, m, w, l);
+}
+static LRESULT CALLBACK od_parent_proc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_MEASUREITEM) {
+        ((MEASUREITEMSTRUCT *)l)->itemHeight = 17;
+        return TRUE;
+    }
+    if (m == WM_DRAWITEM) {
+        DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)l;
+        if (d->CtlType == ODT_COMBOBOX && (int)d->itemID >= 0) {
+            od_draws++;
+            if (d->itemState & ODS_COMBOBOXEDIT) od_edit_draws++;
+            WCHAR t[32] = { 0 };
+            SendMessageW(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)t);
+            if (d->itemID == 0) wcscpy(od_text, t);
+            FillRect(d->hDC, &d->rcItem, GetStockObject(WHITE_BRUSH));
+            TextOutW(d->hDC, d->rcItem.left + 2, d->rcItem.top, t, (int)wcslen(t));
+        }
+        return TRUE;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void owner_combo(void)
+{
+    WNDCLASSW base;
+    CHECK(GetClassInfoW(NULL, L"COMBOBOX", &base), "GetClassInfoW(COMBOBOX)");
+    od_combo_orig = base.lpfnWndProc;
+    base.lpfnWndProc = od_combo_proc;
+    base.lpszClassName = L"TComboBoxOd";
+    base.hInstance = GetModuleHandleW(NULL);
+    CHECK(RegisterClassW(&base) != 0, "superclasse TComboBoxOd");
+    WNDCLASSW pc = { 0 };
+    pc.lpfnWndProc = od_parent_proc;
+    pc.hInstance = GetModuleHandleW(NULL);
+    pc.lpszClassName = L"OdParent";
+    RegisterClassW(&pc);
+    HWND parent = CreateWindowExW(0, L"OdParent", L"", WS_POPUP, 0, 0, 300, 200, NULL, NULL, NULL, NULL);
+    HWND cb = CreateWindowExW(0, L"TComboBoxOd", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST
+                              | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL,
+                              8, 40, 164, 200, parent, (HMENU)7, NULL, NULL);
+    CHECK(cb != NULL, "liste déroulante dessinée par le programme");
+    static const WCHAR *names[] = { L"SFTP", L"SCP", L"FTP", L"WebDAV", L"Amazon S3" };
+    for (int i = 0; i < 5; i++)
+        SendMessageW(cb, CB_ADDSTRING, 0, (LPARAM)names[i]);
+    CHECK(SendMessageW(cb, CB_GETCOUNT, 0, 0) == 5, "CB_GETCOUNT sur la superclasse");
+    SendMessageW(cb, CB_SETCURSEL, 0, 0);
+    CHECK(SendMessageW(cb, CB_GETCURSEL, 0, 0) == 0, "CB_SETCURSEL");
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP canvas = CreateCompatibleBitmap(screen, 200, 240);
+    SelectObject(mem, canvas);
+    SendMessageW(cb, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
+    CHECK(od_edit_draws == 1 && wcscmp(od_text, L"SFTP") == 0, "WM_DRAWITEM du champ (ODS_COMBOBOXEDIT)");
+    SendMessageW(cb, CB_SHOWDROPDOWN, TRUE, 0);
+    od_draws = 0;
+    SendMessageW(cb, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
+    CHECK(od_draws >= 5, "WM_DRAWITEM pour chaque élément de la liste ouverte");
+    SendMessageW(cb, CB_SHOWDROPDOWN, FALSE, 0);
+    DeleteDC(mem);
+    DeleteObject(canvas);
+    ReleaseDC(NULL, screen);
+    DestroyWindow(parent);
+}
+
 static void winscp(void)
 {
     /* Barres de défilement « plates » : celles de la fenêtre. */
@@ -775,6 +858,7 @@ int main(void)
     notifications();
     dialogs();
     winscp();
+    owner_combo();
     printf("dlg32 : contrôles et boîtes communes 32 bits, %d vérifications passées. Tout est correct\n", step);
     return 0;
 }
