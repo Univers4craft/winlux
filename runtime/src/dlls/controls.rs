@@ -318,6 +318,7 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "scrollbar" => scrollbar_proc,
             "#32768" => popup::popup_proc,
             n if richedit::is_rich_class(n) => richedit::rich_edit_proc,
+            n if syslink::is_link_class(n) => syslink::syslink_proc,
             _ => match comctl::class_kind(&lower).or_else(|| bars::class_kind(&lower))? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
@@ -3550,6 +3551,7 @@ mod bars;
 mod comctl;
 pub(crate) mod popup;
 mod richedit;
+mod syslink;
 
 #[cfg(test)]
 mod tests;
