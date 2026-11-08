@@ -14,6 +14,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::dlls::ole32::Guid;
 
+#[path = "d3dcompiler_reflect.rs"]
+mod reflect;
+
 const S_OK: i32 = 0;
 const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
@@ -542,7 +545,7 @@ pub fn exports() -> crate::dlls::Exports {
         "D3DPreprocess"=>fn d3d_preprocess,
         "D3DCreateBlob"=>fn d3d_create_blob,
         "D3DDisassemble"=>fn d3d_not_impl,
-        "D3DReflect"=>fn d3d_not_impl,
+        "D3DReflect"=>fn reflect::d3d_reflect,
     }
 }
 
