@@ -1675,22 +1675,25 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             .get(wp)
             .map_or(0, |c| c.1 as isize), // GETCOLUMNWIDTH
         0x101E => {
-            // SETCOLUMNWIDTH (-1 : contenu, -2 : contenu et en-tête)
+            // SETCOLUMNWIDTH (-1 : contenu, -2 : contenu et en-tête). La
+            // macro ListView_SetColumnWidth passe MAKELPARAM(cx, 0) : -2 arrive
+            // donc en 0xFFFE et se lit sur le mot bas signé (#1055).
+            let cx = lp as u16 as i16 as i32;
             with_common(hwnd, |s| {
-                let w = if (lp as i32) < 0 {
+                let w = if cx < 0 {
                     let texts: Vec<&str> = s
                         .rows
                         .iter()
                         .filter_map(|r| r.texts.get(wp).map(String::as_str))
                         .collect();
-                    let header = if lp as i32 == -2 {
+                    let header = if cx == -2 {
                         s.columns.get(wp).map_or("", |c| c.0.as_str())
                     } else {
                         ""
                     };
                     autosize_width(header, &texts)
                 } else {
-                    lp as i32
+                    cx
                 };
                 if let Some(c) = s.columns.get_mut(wp) {
                     c.1 = w;
