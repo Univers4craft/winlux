@@ -32,21 +32,6 @@ def windows_of(pid: int) -> list[str]:
     return [w for w in out.split() if w]
 
 
-def exists(win: str) -> bool:
-    """La fenêtre existe encore (une fenêtre de passage du programme peut
-    être détruite entre la liste et la lecture de ses propriétés)."""
-    return subprocess.run(["xwininfo", "-id", win], capture_output=True).returncode == 0
-
-
-def parent_of(win: str) -> str:
-    """Fenêtre X parente (cadre d'openbox pour une fenêtre gérée)."""
-    out = subprocess.run(["xwininfo", "-tree", "-id", win], capture_output=True, text=True).stdout
-    for line in out.splitlines():
-        if "Parent window id:" in line:
-            return line.split(":", 1)[1].split()[0]
-    return ""
-
-
 def props(win: str) -> dict[str, str]:
     out = subprocess.run(["xprop", "-id", win] + REQUIRED, capture_output=True, text=True).stdout
     found = {}
@@ -97,20 +82,8 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
                 print(f"  --     {label} : fenêtre {w} fermée pendant la mesure, ignorée")
                 continue
             missing = [name for name in REQUIRED if name not in got]
-            if missing and not exists(w):
-                print(f"  --     {label} : fenêtre {w} détruite entre-temps, ignorée")
-                continue
             if missing:
-                # Une fenêtre placée depuis dans une autre fenêtre du programme
-                # (SetParent) n'est plus de haut niveau : rien à exiger d'elle.
-                parent = parent_of(w)
-                if parent and props(parent).get("_NET_WM_PID") == str(proc.pid):
-                    print(f"  --     {label} : fenêtre {w} devenue enfant de {parent}, ignorée")
-                    continue
-                name = subprocess.run(["xprop", "-id", w, "WM_NAME"], capture_output=True,
-                                      text=True).stdout.strip()
-                errors.append(f"{label} : fenêtre {w} sans {', '.join(missing)} "
-                              f"(parent {parent or '?'}, {name or 'sans WM_NAME'})")
+                errors.append(f"{label} : fenêtre {w} sans {', '.join(missing)}")
             elif got["_NET_WM_PID"] != str(proc.pid):
                 errors.append(f"{label} : _NET_WM_PID {got['_NET_WM_PID']} au lieu de {proc.pid}")
             elif not got["WM_CLIENT_MACHINE"].strip('"'):
