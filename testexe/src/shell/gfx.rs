@@ -3124,3 +3124,231 @@ unsafe fn audit_text(hdc: Handle, color: u32, x: i32, y: i32, s: &[u8]) {
     );
     CloseHandle(h);
 }
+
+// ---------- Focus clavier entre les contrôles (#28) ----------
+//
+// Chaque application déclare ses contrôles pendant qu'elle se dessine
+// (`focus_zone`, `focus_field`), dans l'ordre du dessin. La fenêtre garde
+// la liste du dernier dessin : Tab et Maj+Tab passent d'un contrôle à
+// l'autre, Entrée ou Espace l'activent (clic simulé en son centre), et un
+// cadre à la couleur d'accent montre le contrôle actif. Comme sous Windows,
+// le cadre n'apparaît qu'après une touche et disparaît au premier clic.
+
+const FOCUS_APPS: usize = 32;
+const FOCUS_MAX: usize = 96;
+
+#[derive(Clone, Copy)]
+struct FocusList {
+    rects: [Rect; FOCUS_MAX],
+    field: [bool; FOCUS_MAX],
+    n: usize,
+}
+
+const EMPTY_FOCUS: FocusList = FocusList {
+    rects: [Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }; FOCUS_MAX],
+    field: [false; FOCUS_MAX],
+    n: 0,
+};
+
+/// Liste en cours de dessin, et celle de chaque fenêtre au dernier dessin.
+static mut FOCUS_DRAWING: FocusList = EMPTY_FOCUS;
+static mut FOCUS_DRAW_APP: usize = usize::MAX;
+static mut FOCUS_LISTS: [FocusList; FOCUS_APPS] = [EMPTY_FOCUS; FOCUS_APPS];
+static mut FOCUS_CURRENT: [i32; FOCUS_APPS] = [-1; FOCUS_APPS];
+static mut FOCUS_SHOWN: [bool; FOCUS_APPS] = [false; FOCUS_APPS];
+
+/// Ce que la fenêtre doit faire d'une touche.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FocusKey {
+    /// Touche laissée à l'application.
+    Pass,
+    /// Le focus a changé : redessiner.
+    Moved,
+    /// Clic simulé au point donné (activer un bouton, entrer dans un champ),
+    /// puis redessiner.
+    Click(i32, i32),
+}
+
+/// Début du dessin de la fenêtre `app`.
+pub unsafe fn focus_begin(app: usize) {
+    FOCUS_DRAW_APP = app;
+    FOCUS_DRAWING.n = 0;
+}
+
+unsafe fn focus_push(r: &Rect, field: bool) {
+    if FOCUS_DRAW_APP >= FOCUS_APPS || r.right - r.left < 4 || r.bottom - r.top < 4 {
+        return;
+    }
+    let l = &mut *core::ptr::addr_of_mut!(FOCUS_DRAWING);
+    // Un même contrôle déclaré deux fois (survol redessiné) ne compte qu'une fois.
+    let same = |a: &Rect| a.left == r.left && a.top == r.top && a.right == r.right && a.bottom == r.bottom;
+    if l.n > 0 && same(&l.rects[l.n - 1]) {
+        // Déclaré d'abord comme zone, puis comme champ : il devient champ.
+        l.field[l.n - 1] |= field;
+        return;
+    }
+    // Les grands panneaux cliquables (liste entière, fond) ne sont pas des
+    // arrêts de tabulation : leurs lignes le sont.
+    if r.right - r.left > 320 && r.bottom - r.top > 160 {
+        return;
+    }
+    if l.n < FOCUS_MAX {
+        l.rects[l.n] = *r;
+        l.field[l.n] = field;
+        l.n += 1;
+    }
+}
+
+/// Retire le dernier contrôle déclaré s'il occupe `r` (bouton grisé).
+pub unsafe fn focus_unzone(r: &Rect) {
+    let l = &mut *core::ptr::addr_of_mut!(FOCUS_DRAWING);
+    if l.n > 0 {
+        let a = &l.rects[l.n - 1];
+        if a.left == r.left && a.top == r.top && a.right == r.right && a.bottom == r.bottom {
+            l.n -= 1;
+        }
+    }
+}
+
+/// Contrôle atteignable au clavier (bouton, lien, onglet, case…).
+pub unsafe fn focus_zone(r: &Rect) {
+    focus_push(r, false);
+}
+
+/// Champ de saisie : y arriver par Tab y place le curseur (clic simulé),
+/// et Espace ou Entrée restent à l'application.
+pub unsafe fn focus_field(r: &Rect) {
+    focus_push(r, true);
+}
+
+/// Boîte modale dessinée par-dessus : seuls ses contrôles, déclarés ensuite,
+/// restent atteignables.
+pub unsafe fn focus_modal() {
+    FOCUS_DRAWING.n = 0;
+}
+
+/// Fin du dessin : garde la liste et dessine le cadre de focus.
+pub unsafe fn focus_end(hdc: Handle, b: &mut Brushes) {
+    let app = FOCUS_DRAW_APP;
+    FOCUS_DRAW_APP = usize::MAX;
+    if app >= FOCUS_APPS {
+        return;
+    }
+    FOCUS_LISTS[app] = FOCUS_DRAWING;
+    let n = FOCUS_LISTS[app].n as i32;
+    if FOCUS_CURRENT[app] >= n {
+        FOCUS_CURRENT[app] = n - 1;
+    }
+    let cur = FOCUS_CURRENT[app];
+    if !FOCUS_SHOWN[app] || cur < 0 {
+        return;
+    }
+    let r = FOCUS_LISTS[app].rects[cur as usize];
+    let c = pal().accent;
+    // Cadre de 2 px juste autour du contrôle.
+    fill(hdc, b, r.left - 2, r.top - 2, r.right + 2, r.top, c);
+    fill(hdc, b, r.left - 2, r.bottom, r.right + 2, r.bottom + 2, c);
+    fill(hdc, b, r.left - 2, r.top, r.left, r.bottom, c);
+    fill(hdc, b, r.right, r.top, r.right + 2, r.bottom, c);
+}
+
+/// Nombre de contrôles déclarés par `app` à son dernier dessin.
+pub unsafe fn focus_count(app: usize) -> usize {
+    if app < FOCUS_APPS {
+        FOCUS_LISTS[app].n
+    } else {
+        0
+    }
+}
+
+/// Contrôle actif (index) et cadre visible, pour les tests.
+pub unsafe fn focus_state(app: usize) -> (i32, bool) {
+    if app < FOCUS_APPS {
+        (FOCUS_CURRENT[app], FOCUS_SHOWN[app])
+    } else {
+        (-1, false)
+    }
+}
+
+/// Rectangle du contrôle `i` de `app` au dernier dessin.
+pub unsafe fn focus_rect(app: usize, i: usize) -> Option<Rect> {
+    (app < FOCUS_APPS && i < FOCUS_LISTS[app].n).then(|| FOCUS_LISTS[app].rects[i])
+}
+
+/// Touche reçue par la fenêtre `app` : Tab, Maj+Tab, Entrée, Espace.
+/// Ctrl+Tab reste à l'application (changer d'onglet).
+pub unsafe fn focus_key(app: usize, vk: u32, ch: u16) -> FocusKey {
+    if app >= FOCUS_APPS {
+        return FocusKey::Pass;
+    }
+    let l = &FOCUS_LISTS[app];
+    let n = l.n as i32;
+    if n == 0 {
+        return FocusKey::Pass;
+    }
+    let down = |k: i32| (key_state(k) as u16 & 0x8000) != 0;
+    if vk == 0x09 && ch == 0 {
+        if down(0x11) || down(0x12) {
+            return FocusKey::Pass;
+        }
+        let back = down(0x10);
+        let cur = FOCUS_CURRENT[app];
+        // Après un clic, Tab repart du contrôle cliqué, comme sous Windows.
+        let next = if cur < 0 || cur >= n {
+            if back { n - 1 } else { 0 }
+        } else if back {
+            (cur + n - 1) % n
+        } else {
+            (cur + 1) % n
+        };
+        FOCUS_CURRENT[app] = next;
+        FOCUS_SHOWN[app] = true;
+        let i = next as usize;
+        if l.field[i] {
+            let r = l.rects[i];
+            return FocusKey::Click((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+        }
+        return FocusKey::Moved;
+    }
+    if vk == 0x09 || ch == 9 {
+        // Le caractère Tab qui suit la touche est déjà traité.
+        return if FOCUS_SHOWN[app] && !down(0x11) {
+            FocusKey::Moved
+        } else {
+            FocusKey::Pass
+        };
+    }
+    let cur = FOCUS_CURRENT[app];
+    if !FOCUS_SHOWN[app] || cur < 0 || cur >= n || l.field[cur as usize] {
+        return FocusKey::Pass;
+    }
+    let r = l.rects[cur as usize];
+    match (vk, ch) {
+        (0x0D, 0) | (0x20, 0) => FocusKey::Click((r.left + r.right) / 2, (r.top + r.bottom) / 2),
+        // Le caractère produit par Entrée ou Espace ne doit pas aller plus loin.
+        (0, 13) | (0, 32) => FocusKey::Moved,
+        (0x1B, 0) => {
+            FOCUS_SHOWN[app] = false;
+            FocusKey::Pass
+        }
+        _ => FocusKey::Pass,
+    }
+}
+
+/// Clic de souris dans `app` : le cadre s'efface et le focus suit le
+/// contrôle cliqué (Tab repartira de là).
+pub unsafe fn focus_mouse_down(app: usize, x: i32, y: i32) {
+    if app >= FOCUS_APPS {
+        return;
+    }
+    FOCUS_SHOWN[app] = false;
+    let l = &FOCUS_LISTS[app];
+    if let Some(i) = (0..l.n).rev().find(|&i| inside(&l.rects[i], x, y)) {
+        FOCUS_CURRENT[app] = i as i32;
+    }
+}

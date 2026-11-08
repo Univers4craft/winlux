@@ -203,6 +203,8 @@ jobs:
       # avec « gh run download <run> -n winlux-iso-validation-<commit> ».
       - name: Préparer l'ISO de validation pour le fil de test
         if: success() && !startsWith(github.ref, 'refs/tags/') && env.SKIP_ISO == 'false'
+        env:
+          WINLUX_UPDATE_SIGNING_KEY: ${{ secrets.WINLUX_UPDATE_SIGNING_KEY }}
         run: |
           mkdir -p build/iso-validation
           mv "build/winlux-live-$RELEASE_NAME.iso" build/iso-validation/
@@ -222,7 +224,10 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           if bash scripts/build-update-bundle.sh --system; then
             asset=$(sed -n 's/^asset=//p' build/winlux-update-manifest.txt)
+            sh scripts/sign-update-manifest.sh build/winlux-update-manifest.txt ||
+              echo "::warning::Manifeste de validation non signé : les PC avec la clé publique le refuseront."
             cp build/winlux-update-manifest.txt "build/$asset" build/iso-validation/
+            if test -f build/winlux-update-manifest.txt.sig; then cp build/winlux-update-manifest.txt.sig build/iso-validation/; fi
           else
             echo "::warning::Paquet de mise à jour non construit : l'artefact ne contient que l'ISO."
           fi
@@ -255,10 +260,15 @@ jobs:
 
       - name: Construire la mise à jour
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          WINLUX_UPDATE_SIGNING_KEY: ${{ secrets.WINLUX_UPDATE_SIGNING_KEY }}
         run: |
           bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
           grep -qx 'scope=system' build/winlux-update-manifest.txt
           grep -q '^components=.*desktop.*applications' build/winlux-update-manifest.txt
+          # Signature Ed25519 du manifeste (#31), obligatoire dès que la clé
+          # publique est dans le dépôt.
+          sh scripts/sign-update-manifest.sh build/winlux-update-manifest.txt
 
       - name: Calculer les sommes SHA-256
         if: startsWith(github.ref, 'refs/tags/')
@@ -277,6 +287,9 @@ jobs:
         run: |
           asset=$(sed -n 's/^asset=//p' build/winlux-update-manifest.txt)
           set -- "build/$asset" "build/$asset.sha256" build/winlux-update-manifest.txt
+          if test -f build/winlux-update-manifest.txt.sig; then
+            set -- "$@" build/winlux-update-manifest.txt.sig
+          fi
           if grep -q '^notes_asset=' build/winlux-update-manifest.txt; then
             set -- "$@" build/winlux-release-notes.txt
           fi

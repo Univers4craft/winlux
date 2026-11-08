@@ -1,15 +1,21 @@
 //! Base du paquet vue par une action personnalisée DLL (#833) :
 //! `MsiGetActiveDatabase`, `MsiDatabaseOpenView`, `MsiViewExecute`,
-//! `MsiViewFetch`… en lecture seule, d'après la documentation publique du
+//! `MsiViewFetch`, `MsiViewModify`… d'après la documentation publique du
 //! SQL de Windows Installer.
 //!
 //! Requêtes reconnues : `SELECT [DISTINCT] colonnes|* FROM t1[, t2…]
 //! [WHERE condition] [ORDER BY colonnes]`, noms entre accents graves ou
 //! non, colonnes `table.colonne`, chaînes `'…'`, entiers, paramètres `?`
 //! (champs de l'enregistrement passé à MsiViewExecute), `=`, `<>`, `<`,
-//! `>`, `<=`, `>=`, `IS [NOT] NULL`, `AND`, `OR`, `NOT`, parenthèses. Les
-//! écritures (`MsiViewModify`, `INSERT`, `UPDATE`…) sont refusées : la base
-//! d'un paquet en cours d'installation est en lecture seule pour Winlux.
+//! `>`, `<=`, `>=`, `IS [NOT] NULL`, `AND`, `OR`, `NOT`, parenthèses.
+//!
+//! Écritures : `MsiViewModify` (insertion, insertion temporaire, mise à
+//! jour, affectation, remplacement, fusion, suppression) sur une vue d'une
+//! seule table. Comme dans une session d'installation de Windows, où la
+//! base du paquet n'accepte que des changements temporaires, elles vivent
+//! en mémoire le temps de l'action et ne sont jamais écrites dans le .msi.
+//! Les colonnes de flux binaire (table `Binary`, `Icon`…) se lisent par
+//! `MsiRecordReadStream`.
 //!
 //! Le paquet est relu depuis la propriété `OriginalDatabase`. Une action
 //! différée n'a pas de base (comme sous Windows).
@@ -17,7 +23,7 @@
 use super::db::{Database, Value};
 use super::session::{self, Field};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 pub const DB_HANDLE: u32 = 0x4D54;
 const ERROR_SUCCESS: u32 = 0;
@@ -28,15 +34,19 @@ const ERROR_BAD_QUERY_SYNTAX: u32 = 1615;
 const ERROR_FUNCTION_FAILED: u32 = 1627;
 const ERROR_INVALID_TABLE: u32 = 1628;
 const ERROR_INVALID_HANDLE_STATE: u32 = 1609;
+const ERROR_INVALID_DATA: u32 = 13;
 
-fn database() -> Option<&'static Database> {
-    static DB: OnceLock<Option<Database>> = OnceLock::new();
-    DB.get_or_init(|| {
+/// Base du paquet, chargée à la première demande (`None` : illisible).
+static DB: Mutex<Option<Option<Database>>> = Mutex::new(None);
+
+fn with_db<T>(f: impl FnOnce(&mut Database) -> T) -> Option<T> {
+    let mut g = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let db = g.get_or_insert_with(|| {
         let path = session::property("OriginalDatabase")?;
         let data = std::fs::read(crate::paths::to_linux(&path)).ok()?;
         Database::parse(&data).ok()
-    })
-    .as_ref()
+    });
+    db.as_mut().map(f)
 }
 
 // ---------- analyse ----------
@@ -346,10 +356,6 @@ fn locate(layout: &[(String, String)], c: &ColRef) -> Result<usize, u32> {
         .ok_or(ERROR_BAD_QUERY_SYNTAX)
 }
 
-fn is_null(v: &Value) -> bool {
-    v.is_null()
-}
-
 fn value(op: &Operand, layout: &[(String, String)], row: &[Value], params: &[Value]) -> Value {
     match op {
         Operand::Col(c) => locate(layout, c)
@@ -364,7 +370,7 @@ fn value(op: &Operand, layout: &[(String, String)], row: &[Value], params: &[Val
 }
 
 fn compare(a: &Value, op: &str, b: &Value) -> bool {
-    if is_null(a) || is_null(b) {
+    if a.is_null() || b.is_null() {
         // Windows Installer : NULL = NULL est faux, comme en SQL.
         return false;
     }
@@ -389,61 +395,96 @@ fn eval(e: &Expr, layout: &[(String, String)], row: &[Value], params: &[Value]) 
             op,
             &value(b, layout, row, params),
         ),
-        Expr::IsNull(a, want) => is_null(&value(a, layout, row, params)) == *want,
+        Expr::IsNull(a, want) => value(a, layout, row, params).is_null() == *want,
         Expr::And(a, b) => eval(a, layout, row, params) && eval(b, layout, row, params),
         Expr::Or(a, b) => eval(a, layout, row, params) || eval(b, layout, row, params),
         Expr::Not(a) => !eval(a, layout, row, params),
     }
 }
 
-/// Lignes du résultat (au plus 100 000 combinaisons de jointure).
-fn run(db: &Database, q: &Query, params: &[Value]) -> Result<Vec<Vec<Value>>, u32> {
+/// Ligne du résultat : valeurs choisies et, pour chaque table de la
+/// jointure, l'indice de la ligne d'origine.
+#[derive(Clone, Debug, PartialEq)]
+struct Hit {
+    values: Vec<Value>,
+    origin: Vec<usize>,
+}
+
+/// Colonnes choisies : (indice de table dans la jointure, indice de colonne).
+fn picked(db: &Database, q: &Query) -> Result<Vec<(usize, usize)>, u32> {
     let lay = layout(db, q)?;
-    let mut joined: Vec<Vec<Value>> = vec![Vec::new()];
+    let mut owner = Vec::new();
+    for (k, t) in q.tables.iter().enumerate() {
+        owner.extend((0..db.tables[t].columns.len()).map(|c| (k, c)));
+    }
+    Ok(match &q.columns {
+        None => owner,
+        Some(cols) => cols
+            .iter()
+            .map(|c| locate(&lay, c).map(|i| owner[i]))
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+/// Lignes du résultat (au plus 100 000 combinaisons de jointure).
+fn run_hits(db: &Database, q: &Query, params: &[Value]) -> Result<Vec<Hit>, u32> {
+    let lay = layout(db, q)?;
+    let mut joined: Vec<(Vec<Value>, Vec<usize>)> = vec![(Vec::new(), Vec::new())];
     for t in &q.tables {
         let table = &db.tables[t];
         let mut next = Vec::new();
-        for prefix in &joined {
-            for r in &table.rows {
+        for (prefix, origin) in &joined {
+            for (i, r) in table.rows.iter().enumerate() {
                 if next.len() >= 100_000 {
                     return Err(ERROR_FUNCTION_FAILED);
                 }
                 let mut row = prefix.clone();
                 row.extend(r.iter().cloned());
-                next.push(row);
+                let mut o = origin.clone();
+                o.push(i);
+                next.push((row, o));
             }
         }
         joined = next;
     }
-    let mut rows: Vec<Vec<Value>> = joined
+    let mut rows: Vec<(Vec<Value>, Vec<usize>)> = joined
         .into_iter()
-        .filter(|r| q.filter.as_ref().is_none_or(|f| eval(f, &lay, r, params)))
+        .filter(|(r, _)| q.filter.as_ref().is_none_or(|f| eval(f, &lay, r, params)))
         .collect();
     for c in q.order.iter().rev() {
         let i = locate(&lay, c)?;
-        rows.sort_by(|a, b| match (a[i].int(), b[i].int()) {
+        rows.sort_by(|(a, _), (b, _)| match (a[i].int(), b[i].int()) {
             (Some(x), Some(y)) => x.cmp(&y),
             _ => a[i].text().cmp(&b[i].text()),
         });
     }
-    let picked: Vec<usize> = match &q.columns {
-        None => (0..lay.len()).collect(),
-        Some(cols) => cols
-            .iter()
-            .map(|c| locate(&lay, c))
-            .collect::<Result<_, _>>()?,
-    };
-    let mut out: Vec<Vec<Value>> = rows
+    let cols = picked(db, q)?;
+    let starts: Vec<usize> = q
+        .tables
+        .iter()
+        .scan(0, |acc, t| {
+            let s = *acc;
+            *acc += db.tables[t].columns.len();
+            Some(s)
+        })
+        .collect();
+    let mut out: Vec<Hit> = rows
         .into_iter()
-        .map(|r| picked.iter().map(|&i| r[i].clone()).collect())
+        .map(|(r, origin)| Hit {
+            values: cols
+                .iter()
+                .map(|&(k, c)| r[starts[k] + c].clone())
+                .collect(),
+            origin,
+        })
         .collect();
     if q.distinct {
-        let mut seen = Vec::new();
-        out.retain(|r| {
-            if seen.contains(r) {
+        let mut seen: Vec<Vec<Value>> = Vec::new();
+        out.retain(|h| {
+            if seen.contains(&h.values) {
                 false
             } else {
-                seen.push(r.clone());
+                seen.push(h.values.clone());
                 true
             }
         });
@@ -451,24 +492,42 @@ fn run(db: &Database, q: &Query, params: &[Value]) -> Result<Vec<Vec<Value>>, u3
     Ok(out)
 }
 
+#[cfg(test)]
+fn run(db: &Database, q: &Query, params: &[Value]) -> Result<Vec<Vec<Value>>, u32> {
+    Ok(run_hits(db, q, params)?
+        .into_iter()
+        .map(|h| h.values)
+        .collect())
+}
+
 // ---------- poignées de vue ----------
 
 struct View {
     query: Query,
-    rows: Option<Vec<Vec<Value>>>,
+    rows: Option<Vec<Hit>>,
     pos: usize,
 }
 
-static VIEWS: Mutex<Option<HashMap<u32, View>>> = Mutex::new(None);
-
-fn views<T>(f: impl FnOnce(&mut HashMap<u32, View>) -> T) -> T {
-    let mut g = VIEWS.lock().unwrap_or_else(|e| e.into_inner());
-    f(g.get_or_insert_with(HashMap::new))
+#[derive(Default)]
+struct Views {
+    views: HashMap<u32, View>,
+    /// Enregistrement rendu par MsiViewFetch → (vue, ligne d'origine).
+    fetched: HashMap<u32, (u32, Vec<usize>)>,
 }
 
-/// MsiCloseHandle d'une vue.
+static VIEWS: Mutex<Option<Views>> = Mutex::new(None);
+
+fn views<T>(f: impl FnOnce(&mut Views) -> T) -> T {
+    let mut g = VIEWS.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(Views::default))
+}
+
+/// MsiCloseHandle d'une vue ou d'un enregistrement lu.
 pub fn close(h: u32) -> bool {
-    views(|v| v.remove(&h).is_some())
+    views(|v| {
+        v.fetched.remove(&h);
+        v.views.remove(&h).is_some()
+    })
 }
 
 fn to_field(v: &Value) -> Field {
@@ -482,17 +541,23 @@ fn to_field(v: &Value) -> Field {
 
 fn from_field(f: &Field) -> Value {
     match f {
-        Field::Null => Value::Null,
+        Field::Null | Field::Stream(..) => Value::Null,
         Field::Int(n) => Value::Int(*n),
         Field::Str(s) => Value::Str(s.clone()),
     }
+}
+
+/// Flux d'une ligne : `Table.clé`, la clé étant la première colonne.
+fn stream_of(db: &Database, table: &str, row: usize) -> Option<Vec<u8>> {
+    let key = db.tables.get(table)?.rows.get(row)?.first()?.text();
+    db.streams.get(&format!("{table}.{key}")).cloned()
 }
 
 pub extern "win64" fn msi_get_active_database(h: usize) -> u32 {
     if h as u32 != session::SESSION_HANDLE || session::scheduled() {
         return 0;
     }
-    if database().is_some() {
+    if with_db(|_| ()).is_some() {
         DB_HANDLE
     } else {
         0
@@ -500,7 +565,7 @@ pub extern "win64" fn msi_get_active_database(h: usize) -> u32 {
 }
 
 fn open_view(db: usize, query: usize, out: usize, wide: bool) -> u32 {
-    if db as u32 != DB_HANDLE || database().is_none() {
+    if db as u32 != DB_HANDLE {
         return ERROR_INVALID_HANDLE;
     }
     if query == 0 || out == 0 {
@@ -517,12 +582,14 @@ fn open_view(db: usize, query: usize, out: usize, wide: bool) -> u32 {
         eprintln!("msi.dll : requête non prise en charge : {sql}");
         return ERROR_BAD_QUERY_SYNTAX;
     };
-    if let Err(e) = layout(database().unwrap(), &q) {
-        return e;
+    match with_db(|d| layout(d, &q).map(|_| ())) {
+        None => return ERROR_INVALID_HANDLE,
+        Some(Err(e)) => return e,
+        Some(Ok(())) => {}
     }
     let h = session::new_handle();
     views(|v| {
-        v.insert(
+        v.views.insert(
             h,
             View {
                 query: q,
@@ -546,25 +613,26 @@ pub extern "win64" fn msi_view_execute(view: usize, rec: usize) -> u32 {
     let params: Vec<Value> = session::record_fields(rec as u32)
         .map(|f| f.iter().skip(1).map(from_field).collect())
         .unwrap_or_default();
-    let Some(db) = database() else {
+    let Some(query) = views(|v| v.views.get(&(view as u32)).map(|w| w.query.clone())) else {
         return ERROR_INVALID_HANDLE;
     };
-    views(|v| {
-        let Some(view) = v.get_mut(&(view as u32)) else {
-            return ERROR_INVALID_HANDLE;
-        };
-        if params.len() < view.query.params {
-            return ERROR_INVALID_PARAMETER;
-        }
-        match run(db, &view.query, &params) {
-            Ok(rows) => {
-                view.rows = Some(rows);
-                view.pos = 0;
+    if params.len() < query.params {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let Some(result) = with_db(|d| run_hits(d, &query, &params)) else {
+        return ERROR_INVALID_HANDLE;
+    };
+    match result {
+        Ok(rows) => views(|v| match v.views.get_mut(&(view as u32)) {
+            Some(w) => {
+                w.rows = Some(rows);
+                w.pos = 0;
                 ERROR_SUCCESS
             }
-            Err(e) => e,
-        }
-    })
+            None => ERROR_INVALID_HANDLE,
+        }),
+        Err(e) => e,
+    }
 }
 
 pub extern "win64" fn msi_view_fetch(view: usize, out: usize) -> u32 {
@@ -572,40 +640,176 @@ pub extern "win64" fn msi_view_fetch(view: usize, out: usize) -> u32 {
         return ERROR_INVALID_PARAMETER;
     }
     let row = views(|v| {
-        let view = v.get_mut(&(view as u32)).ok_or(ERROR_INVALID_HANDLE)?;
-        let rows = view.rows.as_ref().ok_or(ERROR_INVALID_HANDLE_STATE)?;
-        let row = rows.get(view.pos).cloned().ok_or(ERROR_NO_MORE_ITEMS)?;
-        view.pos += 1;
-        Ok::<_, u32>(row)
+        let w = v
+            .views
+            .get_mut(&(view as u32))
+            .ok_or(ERROR_INVALID_HANDLE)?;
+        let rows = w.rows.as_ref().ok_or(ERROR_INVALID_HANDLE_STATE)?;
+        let hit = rows.get(w.pos).cloned().ok_or(ERROR_NO_MORE_ITEMS)?;
+        w.pos += 1;
+        Ok::<_, u32>((hit, w.query.clone()))
     });
-    match row {
-        Ok(row) => {
-            let mut fields = vec![Field::Null];
-            fields.extend(row.iter().map(to_field));
-            unsafe { *(out as *mut u32) = session::new_record(fields) };
-            ERROR_SUCCESS
-        }
+    let (hit, query) = match row {
+        Ok(r) => r,
         Err(e) => {
             unsafe { *(out as *mut u32) = 0 };
-            e
+            return e;
         }
-    }
+    };
+    let fields = with_db(|d| {
+        let cols = picked(d, &query).unwrap_or_default();
+        let mut fields = vec![Field::Null];
+        for (i, v) in hit.values.iter().enumerate() {
+            let stream = cols.get(i).and_then(|&(k, c)| {
+                let t = &query.tables[k];
+                let binary = d.tables[t].binary.get(c).copied().unwrap_or(false);
+                (binary && !v.is_null())
+                    .then(|| stream_of(d, t, hit.origin[k]))
+                    .flatten()
+            });
+            fields.push(match stream {
+                Some(data) => Field::Stream(data, 0),
+                None => to_field(v),
+            });
+        }
+        fields
+    })
+    .unwrap_or_default();
+    let h = session::new_record(fields);
+    views(|v| v.fetched.insert(h, (view as u32, hit.origin)));
+    unsafe { *(out as *mut u32) = h };
+    ERROR_SUCCESS
 }
 
 pub extern "win64" fn msi_view_close(view: usize) -> u32 {
-    views(|v| match v.get_mut(&(view as u32)) {
-        Some(view) => {
-            view.rows = None;
-            view.pos = 0;
+    views(|v| match v.views.get_mut(&(view as u32)) {
+        Some(w) => {
+            w.rows = None;
+            w.pos = 0;
             ERROR_SUCCESS
         }
         None => ERROR_INVALID_HANDLE,
     })
 }
 
-/// Écritures refusées : la base du paquet reste en lecture seule.
-pub extern "win64" fn msi_view_modify(_view: usize, _mode: i32, _rec: usize) -> u32 {
-    ERROR_FUNCTION_FAILED
+/// Applique un MsiViewModify à la base en mémoire. `origin` : ligne d'où
+/// vient l'enregistrement (lu par MsiViewFetch), sinon recherche par la
+/// première colonne (la clé).
+fn modify(
+    db: &mut Database,
+    q: &Query,
+    mode: i32,
+    values: &[Value],
+    origin: Option<usize>,
+) -> Result<(), u32> {
+    if q.tables.len() != 1 {
+        return Err(ERROR_FUNCTION_FAILED);
+    }
+    let cols = picked(db, q)?;
+    let table = db.tables.get_mut(&q.tables[0]).ok_or(ERROR_INVALID_TABLE)?;
+    let width = table.columns.len();
+    let key = cols
+        .iter()
+        .position(|&(_, c)| c == 0)
+        .and_then(|i| values.get(i).cloned());
+    let found = origin.or_else(|| {
+        let k = key.as_ref().filter(|k| !k.is_null())?;
+        table.rows.iter().position(|r| r[0].text() == k.text())
+    });
+    let apply = |row: &mut Vec<Value>| {
+        for (i, &(_, c)) in cols.iter().enumerate() {
+            if let Some(v) = values.get(i) {
+                row[c] = v.clone();
+            }
+        }
+    };
+    match mode {
+        // MSIMODIFY_SEEK, REFRESH, VALIDATE*
+        -1 | 0 | 8..=10 => Ok(()),
+        // INSERT, INSERT_TEMPORARY : refusé si la clé existe déjà.
+        1 | 7 => {
+            if key.as_ref().is_none_or(|k| k.is_null()) {
+                return Err(ERROR_INVALID_DATA);
+            }
+            if found.is_some() && origin.is_none() {
+                return Err(ERROR_FUNCTION_FAILED);
+            }
+            let mut row = vec![Value::Null; width];
+            apply(&mut row);
+            table.rows.push(row);
+            Ok(())
+        }
+        // UPDATE : la ligne doit avoir été lue.
+        2 => {
+            let i = origin.ok_or(ERROR_FUNCTION_FAILED)?;
+            apply(table.rows.get_mut(i).ok_or(ERROR_FUNCTION_FAILED)?);
+            Ok(())
+        }
+        // ASSIGN, REPLACE, MERGE : mise à jour ou insertion.
+        3..=5 => {
+            match found {
+                Some(i) => {
+                    let row = table.rows.get_mut(i).ok_or(ERROR_FUNCTION_FAILED)?;
+                    if mode == 5 {
+                        let same = cols.iter().enumerate().all(|(n, &(_, c))| {
+                            values.get(n).is_none_or(|v| v.text() == row[c].text())
+                        });
+                        if !same {
+                            return Err(ERROR_FUNCTION_FAILED);
+                        }
+                    }
+                    apply(row);
+                }
+                None => {
+                    let mut row = vec![Value::Null; width];
+                    apply(&mut row);
+                    table.rows.push(row);
+                }
+            }
+            Ok(())
+        }
+        // DELETE
+        6 => {
+            let i = found.ok_or(ERROR_FUNCTION_FAILED)?;
+            if i < table.rows.len() {
+                table.rows.remove(i);
+            }
+            Ok(())
+        }
+        _ => Err(ERROR_INVALID_PARAMETER),
+    }
+}
+
+/// MsiViewModify : changements en mémoire seulement (voir l'en-tête).
+pub extern "win64" fn msi_view_modify(view: usize, mode: i32, rec: usize) -> u32 {
+    let Some(fields) = session::record_fields(rec as u32) else {
+        return ERROR_INVALID_HANDLE;
+    };
+    let values: Vec<Value> = fields.iter().skip(1).map(from_field).collect();
+    let info = views(|v| {
+        let q = v.views.get(&(view as u32))?.query.clone();
+        let origin = v
+            .fetched
+            .get(&(rec as u32))
+            .filter(|(from, _)| *from == view as u32)
+            .and_then(|(_, o)| o.first().copied());
+        Some((q, origin))
+    });
+    let Some((query, origin)) = info else {
+        return ERROR_INVALID_HANDLE;
+    };
+    let result = with_db(|d| modify(d, &query, mode, &values, origin));
+    match result {
+        Some(Ok(())) => {
+            if mode == 6 {
+                // Les lignes suivantes ont changé d'indice.
+                views(|v| v.fetched.retain(|_, (from, _)| *from != view as u32));
+            }
+            ERROR_SUCCESS
+        }
+        Some(Err(e)) => e,
+        None => ERROR_INVALID_HANDLE,
+    }
 }
 
 /// MsiViewGetColumnInfo : noms (0) ou types (1) des colonnes du résultat.
@@ -613,38 +817,33 @@ pub extern "win64" fn msi_view_get_column_info(view: usize, kind: i32, out: usiz
     if out == 0 {
         return ERROR_INVALID_PARAMETER;
     }
-    let Some(db) = database() else {
+    let Some(query) = views(|v| v.views.get(&(view as u32)).map(|w| w.query.clone())) else {
         return ERROR_INVALID_HANDLE;
     };
-    let info = views(|v| {
-        let view = v.get(&(view as u32))?;
-        let lay = layout(db, &view.query).ok()?;
-        let cols: Vec<(String, String)> = match &view.query.columns {
-            None => lay.clone(),
-            Some(c) => c
-                .iter()
-                .filter_map(|c| locate(&lay, c).ok().map(|i| lay[i].clone()))
-                .collect(),
-        };
+    let info = with_db(|d| {
+        let cols = picked(d, &query).ok()?;
         Some(
             cols.iter()
-                .map(|(t, c)| {
+                .map(|&(k, c)| {
+                    let table = &d.tables[&query.tables[k]];
                     if kind == 0 {
-                        return c.clone();
+                        return table.columns[c].clone();
+                    }
+                    if table.binary.get(c).copied().unwrap_or(false) {
+                        return "v0".to_string();
                     }
                     // Type déduit des valeurs : entier ou chaîne.
-                    let table = &db.tables[t];
-                    let i = table.col(c).unwrap_or(0);
                     let int = table
                         .rows
                         .iter()
-                        .find(|r| !r[i].is_null())
-                        .is_some_and(|r| matches!(r[i], Value::Int(_)));
+                        .find(|r| !r[c].is_null())
+                        .is_some_and(|r| matches!(r[c], Value::Int(_)));
                     if int { "i4" } else { "s255" }.to_string()
                 })
                 .collect::<Vec<_>>(),
         )
-    });
+    })
+    .flatten();
     let Some(info) = info else {
         return ERROR_INVALID_HANDLE;
     };
@@ -665,9 +864,9 @@ fn table_persistent(db: usize, table: usize, wide: bool) -> i32 {
             crate::dlls::cstr(table as *const u8)
         }
     };
-    match database() {
-        Some(d) if d.tables.contains_key(&name) => 1, // MSICONDITION_TRUE
-        Some(_) => 2,                                 // MSICONDITION_NONE
+    match with_db(|d| d.tables.contains_key(&name)) {
+        Some(true) => 1,  // MSICONDITION_TRUE
+        Some(false) => 2, // MSICONDITION_NONE
         None => 3,
     }
 }
@@ -699,6 +898,10 @@ mod tests {
     use super::*;
     use crate::msi::db::Table;
 
+    fn s(v: &str) -> Value {
+        Value::Str(v.into())
+    }
+
     fn sample() -> Database {
         let mut db = Database::default();
         db.tables.insert(
@@ -711,37 +914,31 @@ mod tests {
                     "Sequence".into(),
                 ],
                 rows: vec![
-                    vec![
-                        Value::Str("a".into()),
-                        Value::Str("C1".into()),
-                        Value::Str("a.exe".into()),
-                        Value::Int(2),
-                    ],
-                    vec![
-                        Value::Str("b".into()),
-                        Value::Str("C2".into()),
-                        Value::Str("b.dll".into()),
-                        Value::Int(1),
-                    ],
-                    vec![
-                        Value::Str("c".into()),
-                        Value::Str("C1".into()),
-                        Value::Null,
-                        Value::Int(3),
-                    ],
+                    vec![s("a"), s("C1"), s("a.exe"), Value::Int(2)],
+                    vec![s("b"), s("C2"), s("b.dll"), Value::Int(1)],
+                    vec![s("c"), s("C1"), Value::Null, Value::Int(3)],
                 ],
+                ..Default::default()
             },
         );
         db.tables.insert(
             "Component".into(),
             Table {
                 columns: vec!["Component".into(), "Directory_".into()],
-                rows: vec![
-                    vec![Value::Str("C1".into()), Value::Str("INSTALLDIR".into())],
-                    vec![Value::Str("C2".into()), Value::Str("BIN".into())],
-                ],
+                rows: vec![vec![s("C1"), s("INSTALLDIR")], vec![s("C2"), s("BIN")]],
+                ..Default::default()
             },
         );
+        db.tables.insert(
+            "Binary".into(),
+            Table {
+                columns: vec!["Name".into(), "Data".into()],
+                rows: vec![vec![s("Outil"), Value::Int(1)]],
+                binary: vec![false, true],
+            },
+        );
+        db.streams
+            .insert("Binary.Outil".into(), b"MZ\x90\0".to_vec());
         db
     }
 
@@ -752,17 +949,14 @@ mod tests {
             "SELECT `File`, `FileName` FROM `File` WHERE `Component_` = ? ORDER BY `Sequence`",
         )
         .unwrap();
-        let rows = run(&db, &q, &[Value::Str("C1".into())]).unwrap();
+        let rows = run(&db, &q, &[s("C1")]).unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], Value::Str("a".into()));
+        assert_eq!(rows[0][0], s("a"));
         let q = parse("SELECT * FROM File WHERE FileName IS NULL").unwrap();
         assert_eq!(run(&db, &q, &[]).unwrap().len(), 1);
         let q = parse("SELECT `File` FROM `File` WHERE `Sequence` >= 2 AND NOT (`File` = 'c')")
             .unwrap();
-        assert_eq!(
-            run(&db, &q, &[]).unwrap(),
-            vec![vec![Value::Str("a".into())]]
-        );
+        assert_eq!(run(&db, &q, &[]).unwrap(), vec![vec![s("a")]]);
     }
 
     #[test]
@@ -774,20 +968,58 @@ mod tests {
         )
         .unwrap();
         let rows = run(&db, &q, &[]).unwrap();
-        assert_eq!(
-            rows,
-            vec![
-                vec![Value::Str("BIN".into())],
-                vec![Value::Str("INSTALLDIR".into())]
-            ]
-        );
+        assert_eq!(rows, vec![vec![s("BIN")], vec![s("INSTALLDIR")]]);
     }
 
     #[test]
-    fn refuse_writes_and_unknown_tables() {
+    fn refuse_bad_sql_and_unknown_tables() {
         assert!(parse("INSERT INTO `File` (`File`) VALUES ('x')").is_err());
         let db = sample();
         let q = parse("SELECT * FROM `Absente`").unwrap();
         assert_eq!(run(&db, &q, &[]), Err(ERROR_INVALID_TABLE));
+    }
+
+    #[test]
+    fn modify_in_memory() {
+        let mut db = sample();
+        let q = parse("SELECT `File`, `FileName` FROM `File`").unwrap();
+        // Insertion temporaire, puis doublon refusé.
+        assert_eq!(modify(&mut db, &q, 7, &[s("d"), s("d.txt")], None), Ok(()));
+        assert_eq!(
+            modify(&mut db, &q, 1, &[s("d"), s("autre")], None),
+            Err(ERROR_FUNCTION_FAILED)
+        );
+        let all = parse("SELECT `Component_` FROM `File` WHERE `File` = 'd'").unwrap();
+        assert_eq!(run(&db, &all, &[]).unwrap(), vec![vec![Value::Null]]);
+        // Mise à jour d'une ligne lue, affectation par la clé, suppression.
+        assert_eq!(
+            modify(&mut db, &q, 2, &[s("a"), s("A.EXE")], Some(0)),
+            Ok(())
+        );
+        assert_eq!(modify(&mut db, &q, 3, &[s("b"), s("B.DLL")], None), Ok(()));
+        assert_eq!(modify(&mut db, &q, 6, &[s("c"), Value::Null], None), Ok(()));
+        let names = parse("SELECT `FileName` FROM `File` ORDER BY `File`").unwrap();
+        assert_eq!(
+            run(&db, &names, &[]).unwrap(),
+            vec![vec![s("A.EXE")], vec![s("B.DLL")], vec![s("d.txt")]]
+        );
+        // Jointure : pas d'écriture.
+        let j = parse("SELECT `File`.`File` FROM `File`, `Component`").unwrap();
+        assert_eq!(
+            modify(&mut db, &j, 7, &[s("x")], None),
+            Err(ERROR_FUNCTION_FAILED)
+        );
+    }
+
+    #[test]
+    fn binary_column_reads_its_stream() {
+        let db = sample();
+        let q = parse("SELECT `Data` FROM `Binary` WHERE `Name` = 'Outil'").unwrap();
+        let hits = run_hits(&db, &q, &[]).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            stream_of(&db, "Binary", hits[0].origin[0]).unwrap(),
+            b"MZ\x90\0"
+        );
     }
 }

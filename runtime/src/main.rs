@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod abslots;
 mod admin;
 mod archive;
 mod audio;
@@ -121,6 +122,10 @@ fn main() {
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
+    }
+    if exe == "--ab-boot" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(abslots::cli(&rest));
     }
     if exe == "--boot-splash" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
@@ -248,7 +253,15 @@ fn main() {
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
         cpu::apply_launch(&cpu_settings, &[]);
-        let code = clr::execute_assembly(&assembly);
+        let app_dir = std::fs::canonicalize(&exe)
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        // Les DLL intégrées appelées par P/Invoke lisent leur état de fil
+        // (dernière erreur Win32…) dans le TEB, comme pour un .exe natif.
+        if process::teb() == 0 {
+            process::init_thread();
+        }
+        let code = clr::execute_assembly_in(&assembly, app_dir.as_deref());
         dlls::kernel32::flush_and_exit(code);
     }
     // Programme x86 32 bits : mémoire sous 4 Go et passerelles (#232),

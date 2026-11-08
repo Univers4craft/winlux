@@ -2911,10 +2911,20 @@ unsafe fn load_library_str(name: &str) -> usize {
         && crate::loader::main_module()
             .is_some_and(|m| crate::loader::find_dll_file(n, &m.path).is_some());
     if let Some(h) = crate::dlls::module_handle(n).filter(|_| !real_first) {
-        {
+        // Une DLL réelle libérée par FreeLibrary (DLL_PROCESS_DETACH déjà
+        // reçu) puis rechargée : Windows la reprojette et rappelle son
+        // DllMain ; ses objets globaux C++ détruits sont reconstruits.
+        let reattach = {
             let mut mods = crate::loader::MODULES.lock().unwrap();
-            if let Some(m) = mods.iter_mut().find(|m| m.base == h) {
+            mods.iter_mut().find(|m| m.base == h).and_then(|m| {
                 m.refcount = m.refcount.saturating_add(1);
+                (!m.initialized).then(|| m.clone())
+            })
+        };
+        if let Some(m) = reattach {
+            if !initialize_with_dependencies(&m, &[]) {
+                crate::process::set_last_error(1114);
+                return 0;
             }
         }
         return h;
@@ -2927,9 +2937,15 @@ unsafe fn load_library_str(name: &str) -> usize {
         crate::process::set_last_error(126);
         return 0;
     };
+    let before: Vec<usize> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.base)
+        .collect();
     match crate::loader::load(&path, false) {
         Ok(m) => {
-            if crate::process::initialize_dynamic_module(&m) {
+            if initialize_with_dependencies(&m, &before) {
                 m.base
             } else {
                 crate::process::set_last_error(1114);
@@ -2941,6 +2957,36 @@ unsafe fn load_library_str(name: &str) -> usize {
             0
         }
     }
+}
+/// DllMain (et rappels TLS) de `m` et des DLL réelles que son chargement a
+/// amenées, dépendances d'abord, comme le chargeur de Windows. Sans cela, une
+/// DLL chargée seulement comme dépendance d'un LoadLibrary n'était jamais
+/// initialisée : ses objets globaux C++ restaient à zéro. C'était le
+/// plantage d'Audacity au premier lancement (#691) : la clé de
+/// ProjectCloudExtension, globale de lib-cloud-audiocom.dll amenée par
+/// mod-cloud-audiocom.dll, valait 0 et désignait un autre objet du projet.
+fn initialize_with_dependencies(m: &crate::loader::Module, before: &[usize]) -> bool {
+    // Les dépendances sont projetées après le module qui les importe : à
+    // rebours, chacune passe avant ceux qui l'utilisent.
+    let pending: Vec<crate::loader::Module> = crate::loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|x| x.base != m.base && !x.initialized && x.refcount > 0)
+        .filter(|x| !before.is_empty() && !before.contains(&x.base))
+        .cloned()
+        .collect();
+    for dep in pending.iter().rev() {
+        if !crate::process::initialize_dynamic_module(dep) {
+            crate::trace!(
+                "DllMain de {} (dépendance de {}) a échoué",
+                dep.name,
+                m.name
+            );
+            return false;
+        }
+    }
+    crate::process::initialize_dynamic_module(m)
 }
 pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     let s = match cstring_from_wide(name) {
@@ -6459,6 +6505,24 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
     }
     1
 }
+/// QueryUnbiasedInterruptTime : temps depuis le démarrage en unités de
+/// 100 ns, hors veille (horloge CLOCK_MONOTONIC de Linux, qui s'arrête
+/// pendant la suspension). Utilisé par .NET (Flow Launcher, #953).
+pub extern "win64" fn query_unbiased_interrupt_time(out: *mut u64) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+        *out = ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100;
+    }
+    1
+}
 /// Arrêt immédiat du processus courant : vide la sortie puis `_exit`, sans
 /// atexit ni destructeurs, comme TerminateProcess sous Windows.
 pub fn terminate_self(code: u32) -> ! {
@@ -7387,13 +7451,17 @@ pub unsafe extern "win64" fn get_file_information_by_handle_ex(
             *out.add(21) = u8::from(is_dir);
         }
         2 => {
-            let Some(p) = path else {
-                crate::process::set_last_error(6);
-                return 0;
+            let wide: Vec<u16> = if let Some(name) = crate::dlls::named_pipes::file_name(handle) {
+                name
+            } else {
+                let Some(p) = path else {
+                    crate::process::set_last_error(6);
+                    return 0;
+                };
+                let win = crate::paths::to_windows(&p);
+                let rest = win.get(2..).unwrap_or(&win);
+                rest.encode_utf16().collect()
             };
-            let win = crate::paths::to_windows(&p);
-            let rest = win.get(2..).unwrap_or(&win);
-            let wide: Vec<u16> = rest.encode_utf16().collect();
             if out.is_null() || size < 4 {
                 crate::process::set_last_error(24);
                 return 0;
@@ -8835,6 +8903,7 @@ pub fn exports() -> crate::dlls::Exports {
      "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
      "WriteConsoleW"=>fn write_console_w,
     "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
+     "QueryUnbiasedInterruptTime"=>fn query_unbiased_interrupt_time,
      "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
      "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
      "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w,
@@ -10602,5 +10671,21 @@ fn wait_until_stopped(pid: u32) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod interrupt_time_tests {
+    #[test]
+    fn query_unbiased_interrupt_time_avance_en_100_ns() {
+        let (mut a, mut b) = (0u64, 0u64);
+        assert_eq!(super::query_unbiased_interrupt_time(&mut a), 1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(super::query_unbiased_interrupt_time(&mut b), 1);
+        assert!(b - a >= 150_000 && b - a < 50_000_000, "{a} {b}");
+        assert_eq!(
+            super::query_unbiased_interrupt_time(std::ptr::null_mut()),
+            0
+        );
     }
 }

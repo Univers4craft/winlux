@@ -265,4 +265,21 @@ ok("fn center_wrap" in explorer and "layout_regression();" in explorer,
 ok('b" GB", b" TB"' in explorer and "formats_regression();" in explorer,
    "#916 : unités GB et date 08.11.2026 en allemand")
 
+# ── #28 : Tab entre les contrôles dans toutes les fenêtres du shell PE ─────
+wm = (SHELL / "wm.rs").read_text(encoding="utf-8")
+gfx = (SHELL / "gfx.rs").read_text(encoding="utf-8")
+admin = (SHELL / "admin_ui.rs").read_text(encoding="utf-8")
+ok("crate::gfx::focus_begin(app);" in wm and "crate::gfx::focus_end(g.hdc, g.b);" in wm,
+   "#28 : chaque fenêtre déclare ses contrôles en se dessinant, le cadre de focus est dessiné ensuite")
+ok("crate::gfx::focus_key(app, vk, ch)" in wm and "FocusKey::Click(x, y)" in wm and "app_key_uses_focus" in wm,
+   "#28 : Tab, Maj+Tab, Entrée et Espace passent par le focus, sauf Éditeur et Terminal")
+ok("pub unsafe fn focus_modal()" in gfx and "focus_modal();" in admin and "pub fn row(&mut self" in admin,
+   "#28 : une boîte modale garde Tab, les lignes de liste ne sont pas des arrêts de tabulation")
+for name in ("explorer", "settings", "diskcleaner", "diskmgr", "restore", "welcome", "store", "fonts", "programs", "filehistory"):
+    src = (SHELL / f"{name}.rs").read_text(encoding="utf-8")
+    ok("focus_zone(" in src or "focus_field(" in src, f"#28 : {name}.rs déclare ses contrôles")
+ok("0x09 | 0x75 => {" in explorer, "#28 : F6 (ou Ctrl+Tab) change de volet dans l'Explorateur double volet")
+ok("wm::focus_regression_checks();" in (ROOT / "testexe/src/bin/explorer_regression.rs").read_text(encoding="utf-8"),
+   "#28 : comportement vérifié par explorer_regression (Focus clavier)")
+
 print(f"test-explorer-fixes : {checks} vérifications OK")

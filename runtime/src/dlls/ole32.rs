@@ -905,6 +905,11 @@ pub unsafe extern "win64" fn co_get_class_object(
         if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
             return hr;
         }
+        crate::log_info!(
+            "ole32",
+            "CoGetClassObject : classe non enregistrée {:?}",
+            guid
+        );
         return REGDB_E_CLASSNOTREG;
     };
     let entry = Arc::clone(entry);

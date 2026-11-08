@@ -176,6 +176,12 @@ jobs:
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 
+      - name: Vérifier les mises à jour signées Ed25519 (#31)
+        run: python3 -B scripts/test-update-signature.py
+
+      - name: Vérifier les mises à jour A/B (emplacement B, bascule et réserve)
+        run: python3 -B scripts/test-ab-update.py
+
       - name: Vérifier les noms des pages Mise à jour OS et Mise à jour application (4 langues)
         run: python3 -B scripts/test-update-page-names.py
 
@@ -625,7 +631,7 @@ jobs:
         run: /usr/bin/python3 -B scripts/test-update-page.py
 
       - name: Paramètres Réseau, Comptes et Personnalisation refaits (carte de connexion, compte ouvert, aperçu du bureau)
-        run: /usr/bin/python3 -B scripts/test-settings-redesign.py
+        run: xvfb-run -a /usr/bin/python3 -B scripts/test-settings-redesign.py
 
       - name: Bulle de notification en bas à droite au-dessus de la barre (icône, nom, clic, croix)
         run: xvfb-run -a -s '-screen 0 1366x768x24' dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-notification-toast.py
