@@ -2205,12 +2205,14 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         crate::process::set_last_error(87);
         return 0;
     }
-    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    let win = crate::dlls::cstr(path);
+    let p = crate::paths::to_linux(&win);
     match crate::dlls::winfile::attributes(&p) {
         Ok((a, m)) => {
             std::ptr::write_unaligned(data, metadata_to_find_data(a, &m));
             1
         }
+        Err(e) if builtin_attribute_data(&e, &win, data) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
             0
@@ -2246,6 +2248,7 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
             std::ptr::write_unaligned(data, metadata_to_find_data(a, &m));
             1
         }
+        Err(e) if builtin_attribute_data(&e, &s, data) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
             0
@@ -6638,7 +6641,10 @@ fn module_path(module: usize) -> Option<String> {
     if module == 0 {
         crate::loader::main_module().map(|m| crate::paths::to_windows(&m.path))
     } else {
-        crate::loader::find_module_by_addr(module).map(|m| crate::paths::to_windows(&m.path))
+        crate::loader::find_module_by_addr(module)
+            .map(|m| crate::paths::to_windows(&m.path))
+            // DLL système intégrée : son chemin sous Windows (#1113).
+            .or_else(|| crate::dlls::builtin_file_path(module))
     }
 }
 pub unsafe extern "win64" fn get_environment_variable_a(
@@ -6765,10 +6771,39 @@ pub unsafe extern "win64" fn get_file_attributes_a(path: *const u8) -> u32 {
 }
 /// Corps commun de `get_file_attributes_a` et `get_file_attributes_w` : le chemin est déjà décodé
 /// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+/// Attributs d'une DLL système intégrée, présente pour le programme mais
+/// sans fichier sur le disque (#1113).
+const BUILTIN_FILE_ATTRIBUTES: u32 = 0x20; // FILE_ATTRIBUTE_ARCHIVE
+
+/// Fichier introuvable mais DLL système intégrée : remplit `data` comme
+/// pour un fichier présent (taille et dates nulles).
+unsafe fn builtin_attribute_data(
+    e: &std::io::Error,
+    win_path: &str,
+    data: *mut Win32FileAttributeData,
+) -> bool {
+    if e.kind() != std::io::ErrorKind::NotFound || !crate::dlls::is_builtin_system_file(win_path) {
+        return false;
+    }
+    std::ptr::write_bytes(
+        data as *mut u8,
+        0,
+        std::mem::size_of::<Win32FileAttributeData>(),
+    );
+    (*data).attributes = BUILTIN_FILE_ATTRIBUTES;
+    true
+}
+
 unsafe fn get_file_attributes_str(path: &str) -> u32 {
     let p = crate::paths::to_linux(path);
     match crate::dlls::winfile::attributes(&p) {
         Ok((a, _)) => a,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && crate::dlls::is_builtin_system_file(path) =>
+        {
+            BUILTIN_FILE_ATTRIBUTES
+        }
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
             u32::MAX

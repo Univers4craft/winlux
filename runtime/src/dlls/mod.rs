@@ -142,6 +142,7 @@ pub mod mmdevapi;
 pub mod monitors;
 pub mod mouse;
 pub mod mpr;
+pub mod msacm32;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;
@@ -181,6 +182,7 @@ pub mod serial;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
+pub mod shell_folder_com;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
@@ -692,6 +694,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dpnaddr",
                 exports: dpnet::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "msacm32",
+                exports: msacm32::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -1653,6 +1660,48 @@ pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
     builtins().iter().find(|b| b.handle == h).map(|b| b.name)
 }
 
+/// Dossier système vu par le programme : System32, ou SysWOW64 pour un
+/// programme x86 (comme le WOW64 de Windows).
+fn system_dir() -> &'static str {
+    if crate::wow32::pointer_size() == 4 {
+        "C:\\Windows\\SysWOW64"
+    } else {
+        "C:\\Windows\\System32"
+    }
+}
+
+/// Chemin Windows d'une DLL intégrée d'après son HMODULE. Elle n'a pas de
+/// fichier sur le disque ; ce chemin est celui qu'elle aurait sous
+/// Windows, et `GetFileAttributes(Ex)` comme `GetFileVersionInfo` y
+/// répondent (#1113 : WinForms lit la version de msftedit.dll).
+pub fn builtin_file_path(h: usize) -> Option<String> {
+    let name = if h == kernelbase_handle() {
+        "KernelBase"
+    } else {
+        builtins().iter().find(|b| b.handle == h)?.name
+    };
+    Some(format!("{}\\{name}.dll", system_dir()))
+}
+
+/// Le chemin Windows désigne-t-il une DLL intégrée dans System32,
+/// SysWOW64 ou Windows (sans fichier réel sur le disque) ?
+pub fn is_builtin_system_file(path: &str) -> bool {
+    let Some(file) = path.rsplit(['\\', '/']).next() else {
+        return false;
+    };
+    let lower = file.to_ascii_lowercase();
+    if !(lower.ends_with(".dll") || lower.ends_with(".drv")) {
+        return false;
+    }
+    let dir = path[..path.len() - file.len()]
+        .to_ascii_lowercase()
+        .replace('/', "\\");
+    let system = dir.ends_with("\\windows\\system32\\")
+        || dir.ends_with("\\windows\\syswow64\\")
+        || dir.ends_with("\\windows\\");
+    system && (is_builtin(&normalize(file)) || lower == "kernelbase.dll")
+}
+
 // ---------- Utilitaires partagés par les DLL ----------
 
 pub(crate) fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1832,6 +1881,46 @@ mod tests {
         }
         // Les imports statiques gardent la table complète.
         assert!(lookup("kernel32", "GetUserNameW").is_some());
+    }
+
+    #[test]
+    fn dll_integree_a_un_chemin_et_un_fichier_visible() {
+        use super::{builtin_file_path, is_builtin_system_file, module_handle};
+        // #1113 : WinForms lit le chemin de msftedit.dll puis sa version.
+        let h = module_handle("msftedit.dll").unwrap();
+        let path = builtin_file_path(h).unwrap();
+        assert_eq!(path, "C:\\Windows\\System32\\msftedit.dll");
+        let w: Vec<u16> = path.encode_utf16().chain([0]).collect();
+        let mut buf = [0u16; 260];
+        let n = unsafe { crate::dlls::kernel32::get_module_file_name_w(h, buf.as_mut_ptr(), 260) };
+        assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), path);
+        assert_eq!(
+            unsafe { crate::dlls::kernel32::get_file_attributes_w(w.as_ptr()) },
+            0x20
+        );
+        let mut data: crate::dlls::kernel32::Win32FileAttributeData = unsafe { std::mem::zeroed() };
+        let ok =
+            unsafe { crate::dlls::kernel32::get_file_attributes_ex_w(w.as_ptr(), 0, &mut data) };
+        assert_eq!((ok, data.attributes), (1, 0x20));
+        assert!(is_builtin_system_file(
+            "C:\\WINDOWS\\SysWOW64\\KERNEL32.DLL"
+        ));
+        assert!(is_builtin_system_file("c:/windows/system32/kernelbase.dll"));
+        // Ni ailleurs, ni une DLL inconnue de Winlux.
+        assert!(!is_builtin_system_file(
+            "C:\\Program Files\\App\\msftedit.dll"
+        ));
+        assert!(!is_builtin_system_file(
+            "C:\\Windows\\System32\\pas_une_dll_winlux.dll"
+        ));
+        let absent: Vec<u16> = "C:\\Windows\\System32\\pas_une_dll_winlux.dll"
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        assert_eq!(
+            unsafe { crate::dlls::kernel32::get_file_attributes_w(absent.as_ptr()) },
+            u32::MAX
+        );
     }
 
     #[test]

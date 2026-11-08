@@ -354,6 +354,13 @@ fn chemin_complet_calcule_sur_le_texte() {
     );
     assert_eq!(full_windows("D:x\\y"), "D:\\x\\y");
     assert_eq!(full_windows("C:\\Temp\\nul"), "\\\\.\\nul");
+    // #1098 : les tubes nommés gardent leur préfixe de périphérique.
+    assert_eq!(full_windows("\\\\.\\pipe\\Nom_1"), "\\\\.\\pipe\\Nom_1");
+    assert_eq!(full_windows("//./pipe/a/./b"), "\\\\.\\pipe\\a\\b");
+    assert_eq!(
+        crate::dlls::named_pipes::pipe_name(&full_windows("\\\\.\\pipe\\x")).as_deref(),
+        Some("x")
+    );
     let rel = full_windows("sous\\..\\f.txt");
     assert!(
         rel.ends_with("\\f.txt") && rel.as_bytes()[1] == b':',
