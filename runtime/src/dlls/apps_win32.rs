@@ -60,6 +60,106 @@ extern "win64" fn get_large_page_minimum() -> usize {
 /// Winlux, quel que soit ce choix.
 extern "win64" fn set_file_apis_to_oem() {}
 
+// ── Tables du micrologiciel (SMBIOS) ────────────────────────────────────
+
+/// Fournisseur 'RSMB' (SMBIOS brut), tel que l'écrit une constante C à
+/// quatre caractères.
+const FIRMWARE_RSMB: u32 = u32::from_be_bytes(*b"RSMB");
+
+/// Dossiers où lire `smbios_entry_point` et `DMI`. Le noyau ne les rend
+/// lisibles qu'à root ; `winlux-system-services` en dépose une copie
+/// lisible par tous dans /run/winlux/firmware au démarrage. La variable
+/// WINLUX_FIRMWARE_ROOT remplace les deux (tests).
+fn firmware_dirs() -> Vec<std::path::PathBuf> {
+    if let Some(root) = std::env::var_os("WINLUX_FIRMWARE_ROOT") {
+        return vec![root.into()];
+    }
+    vec![
+        "/sys/firmware/dmi/tables".into(),
+        "/run/winlux/firmware".into(),
+    ]
+}
+
+/// Construit la structure RawSMBIOSData de GetSystemFirmwareTable('RSMB') :
+/// Used20CallingMethod, MajorVersion, MinorVersion, DmiRevision, Length
+/// (u32), puis les tables SMBIOS brutes.
+fn raw_smbios(entry: &[u8], dmi: &[u8]) -> Vec<u8> {
+    let (major, minor, rev) = if entry.starts_with(b"_SM3_") && entry.len() >= 10 {
+        (entry[7], entry[8], entry[9])
+    } else if entry.starts_with(b"_SM_") && entry.len() >= 0x1f {
+        (entry[6], entry[7], entry[0x1e])
+    } else {
+        (0, 0, 0)
+    };
+    let mut out = Vec::with_capacity(8 + dmi.len());
+    out.extend([0, major, minor, rev]);
+    out.extend((dmi.len() as u32).to_le_bytes());
+    out.extend_from_slice(dmi);
+    out
+}
+
+fn read_raw_smbios() -> Option<Vec<u8>> {
+    for dir in firmware_dirs() {
+        let Ok(dmi) = std::fs::read(dir.join("DMI")) else {
+            continue;
+        };
+        if dmi.is_empty() {
+            continue;
+        }
+        let entry = std::fs::read(dir.join("smbios_entry_point")).unwrap_or_default();
+        return Some(raw_smbios(&entry, &dmi));
+    }
+    None
+}
+
+/// Copie `data` si le tampon suffit ; renvoie toujours la taille requise,
+/// comme le font EnumSystemFirmwareTables et GetSystemFirmwareTable.
+unsafe fn firmware_copy(data: &[u8], buf: *mut u8, size: u32) -> u32 {
+    if !buf.is_null() && size as usize >= data.len() {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
+    }
+    data.len() as u32
+}
+
+/// EnumSystemFirmwareTables : 'RSMB' a une seule table, d'identifiant 0,
+/// quand le SMBIOS de la machine est lisible.
+unsafe extern "win64" fn enum_system_firmware_tables(
+    provider: u32,
+    buf: *mut u8,
+    size: u32,
+) -> u32 {
+    if provider != FIRMWARE_RSMB {
+        set_last_error(1); // ERROR_INVALID_FUNCTION
+        return 0;
+    }
+    if read_raw_smbios().is_none() {
+        set_last_error(1168); // ERROR_NOT_FOUND
+        return 0;
+    }
+    firmware_copy(&0u32.to_le_bytes(), buf, size)
+}
+
+/// GetSystemFirmwareTable('RSMB', 0) : en-tête RawSMBIOSData suivi des
+/// tables lues dans /sys/firmware/dmi/tables (ou leur copie de démarrage).
+unsafe extern "win64" fn get_system_firmware_table(
+    provider: u32,
+    _table: u32,
+    buf: *mut u8,
+    size: u32,
+) -> u32 {
+    if provider != FIRMWARE_RSMB {
+        set_last_error(1); // ERROR_INVALID_FUNCTION
+        return 0;
+    }
+    match read_raw_smbios() {
+        Some(data) => firmware_copy(&data, buf, size),
+        None => {
+            set_last_error(1168); // ERROR_NOT_FOUND
+            0
+        }
+    }
+}
+
 /// MoveFileWithProgressW : déplacement par MoveFileExW. Le rappel de
 /// progression n'est appelé par Windows que pour une copie entre volumes,
 /// que MoveFileExW fait ici d'un bloc.
@@ -1708,6 +1808,8 @@ pub const WS2_32_ORDINALS: &[(u16, &str)] = &[
 pub fn kernel32_exports() -> Exports {
     crate::exports! {
         "GetLargePageMinimum" => fn get_large_page_minimum,
+        "EnumSystemFirmwareTables" => fn enum_system_firmware_tables,
+        "GetSystemFirmwareTable" => fn get_system_firmware_table,
         "SetFileApisToOEM" => fn set_file_apis_to_oem,
         "MoveFileWithProgressW" => fn move_file_with_progress_w,
         "FindFirstStreamW" => fn find_first_stream_w,
@@ -1960,6 +2062,45 @@ mod tests {
             .chain([0])
             .flat_map(|c| c.to_le_bytes())
             .collect()
+    }
+
+    #[test]
+    fn smbios_brut_depuis_les_tables_du_noyau() {
+        let mut e3 = b"_SM3_".to_vec();
+        e3.extend([0, 0x18, 3, 4, 1]);
+        let dmi = [0u8, 4, 0, 0, 0x7f, 4, 0xff, 0xfe];
+        let raw = raw_smbios(&e3, &dmi);
+        assert_eq!(&raw[..8], &[0, 3, 4, 1, 8, 0, 0, 0]);
+        assert_eq!(&raw[8..], &dmi);
+        let mut e2 = b"_SM_".to_vec();
+        e2.resize(0x1f, 0);
+        e2[6] = 2;
+        e2[7] = 8;
+        e2[0x1e] = 0x28;
+        assert_eq!(&raw_smbios(&e2, &dmi)[..4], &[0, 2, 8, 0x28]);
+
+        let dir = std::env::temp_dir().join(format!("winlux-fw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("smbios_entry_point"), &e3).unwrap();
+        std::fs::write(dir.join("DMI"), dmi).unwrap();
+        std::env::set_var("WINLUX_FIRMWARE_ROOT", &dir);
+        unsafe {
+            let rsmb = u32::from_be_bytes(*b"RSMB");
+            let mut ids = [0xffu8; 4];
+            assert_eq!(enum_system_firmware_tables(rsmb, ids.as_mut_ptr(), 4), 4);
+            assert_eq!(ids, [0; 4]);
+            assert_eq!(
+                get_system_firmware_table(rsmb, 0, std::ptr::null_mut(), 0),
+                16
+            );
+            let mut out = [0u8; 16];
+            assert_eq!(get_system_firmware_table(rsmb, 0, out.as_mut_ptr(), 16), 16);
+            assert_eq!(out.to_vec(), raw);
+            let acpi = u32::from_be_bytes(*b"ACPI");
+            assert_eq!(get_system_firmware_table(acpi, 0, out.as_mut_ptr(), 16), 0);
+        }
+        std::env::remove_var("WINLUX_FIRMWARE_ROOT");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

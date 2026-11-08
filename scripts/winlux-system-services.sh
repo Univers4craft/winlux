@@ -22,6 +22,17 @@ if ! test -s "$pixbuf_dir/loaders.cache" || test -n "$(find "$pixbuf_dir/loaders
 fi
 chmod 644 "$pixbuf_dir/loaders.cache" 2>/dev/null || true
 mkdir -p /run/winlux /var/lib/dbus
+# SMBIOS (#1197) : le noyau ne laisse lire /sys/firmware/dmi/tables qu'à
+# root ; GetSystemFirmwareTable('RSMB') le donne à tout programme sous
+# Windows, donc une copie lisible par tous les comptes est posée ici.
+if test -r /sys/firmware/dmi/tables/DMI; then
+    mkdir -p /run/winlux/firmware
+    chmod 755 /run/winlux/firmware
+    for table in smbios_entry_point DMI; do
+        cat "/sys/firmware/dmi/tables/$table" >"/run/winlux/firmware/$table" 2>/dev/null || true
+        chmod 644 "/run/winlux/firmware/$table" 2>/dev/null || true
+    done
+fi
 if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
 /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
 chmod 644 /etc/machine-id
