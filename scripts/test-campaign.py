@@ -1162,6 +1162,24 @@ ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
    and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
    and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
+# Transfert de réglages (fiche #171 point 7) : sous le compte (#1100),
+# apparence de la session native (#1101), état dans son dossier (#1102).
+transfer_script = (SCRIPTS / "winlux-transfer.sh").read_text(encoding="utf-8")
+ok("        transfer-*) return 0 ;;" in (SCRIPTS / "winlux-control.sh").read_text(encoding="utf-8")
+   and "appearance_export" in transfer_script and "WINLUX_TRANSFER_RUN" in transfer_script
+   and "#1101" in (SCRIPTS / "test-transfer.sh").read_text(encoding="utf-8"),
+   "Transfert de réglages : sous le compte, avec thème, accent et fond de la session native (#1100, #1101, #1102)")
+# Fiche #171 point 6 : choix Réseau public/privé (#1103), avertissement du
+# partage en Public (#1104), sortie du pare-feu coupée sans panique (#1105).
+pages_src = (SCRIPTS / "winlux-settings-pages.py").read_text(encoding="utf-8")
+ok("def network_profile_card" in pages_src and 'self.execute(f"firewall-profile-{value}")' in pages_src
+   and "firewall-profile-private|firewall-profile-public)" in (SCRIPTS / "winlux-control.sh").read_text(encoding="utf-8")
+   and 'r"firewall-profile-private", "admin"' in (SCRIPTS / "winlux-root.py").read_text(encoding="utf-8"),
+   "Réseau : choix public ou privé dans Paramètres, Privé confirmé par un administrateur (#1103)")
+ok('info.get("firewall_profile") == "public"' in pages_src,
+   "Partage et transfert : avertissement en profil Public (#1104)")
+ok("fn closed_pipe_ends_output_quietly" in (ROOT / "runtime/src/firewall.rs").read_text(encoding="utf-8"),
+   "winlux --firewall status | head : plus de panique sur Broken pipe (#1105)")
 # #16 : OLE Automation (IDispatch standard, DispCallFunc, objets actifs) ;
 # vérifiée par automation_suite.exe.
 oleaut_disp = (ROOT / "runtime/src/dlls/oleaut32_disp.rs").read_text(encoding="utf-8")
@@ -1178,4 +1196,11 @@ ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
 ok("fn create_bitmap_brush(" in (runtime_dlls / "d2d1_brush.rs").read_text(encoding="utf-8")
    and "bitmap_and_gradient_brushes_paint" in (runtime_dlls / "d2d1.rs").read_text(encoding="utf-8"),
    "Direct2D : CreateBitmapBrush, CreateImageBrush et dégradés (Notepad++ / Scintilla, #1124)")
+ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_point_w'
+   in (runtime_dlls / "win32_basics.rs").read_text()
+   and "GetVolumeNameForVolumeMountPointW" in (ROOT / "docs/compat/kernel32-surface.txt").read_text(),
+   "kernel32 : GetVolumeNameForVolumeMountPointW (#1112, diagnostic de Paint.NET)")
+ok("builtin_file_path(module)" in (runtime_dlls / "kernel32.rs").read_text()
+   and "dll_integree_a_un_chemin_et_un_fichier_visible" in (SCRIPTS / "test-all.sh").read_text(),
+   "DLL système intégrées : chemin System32 par GetModuleFileNameW, visibles par GetFileAttributesExW (#1113)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
