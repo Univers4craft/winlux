@@ -104,6 +104,7 @@ pub mod inherit;
 pub mod inifile;
 pub mod iphlpapi;
 pub mod ipp;
+pub(crate) mod jobs;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;

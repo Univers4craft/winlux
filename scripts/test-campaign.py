@@ -788,6 +788,13 @@ ok("fn find_proc" in _find and "FR_DIALOGTERM" in _find
 ok(all(t in _find for t in ("Remplacer &tout", "Replace &All", "&Alle ersetzen", "Reemplazar &todo")),
    "Rechercher/Remplacer : libellés en français, anglais, allemand et espagnol (#712)")
 
+# #19 : objets job (KILL_ON_JOB_CLOSE, TerminateJobObject, enfants rattachés).
+_jobs = (ROOT / "runtime/src/dlls/jobs.rs").read_text()
+ok("fn job_tue_ses_membres_a_la_fermeture" in _jobs and "fn terminate_job_object_et_liste_des_pid" in _jobs
+   and "jobs::on_child_created(" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text()
+   and "jobs::on_exit();" in (ROOT / "runtime/src/dlls/kernel32.rs").read_text(),
+   "objets job : membres tués à la fermeture ou à la fin du processus, enfants rattachés, comptage (#19)")
+
 # #28 : navigation Tab entre les contrôles de toutes les fenêtres du shell PE.
 _wm = (ROOT / "testexe/src/shell/wm.rs").read_text()
 ok("pub unsafe fn focus_regression_checks()" in _wm and "crate::gfx::focus_key(app, vk, ch)" in _wm
