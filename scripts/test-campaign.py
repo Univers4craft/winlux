@@ -825,6 +825,11 @@ ok("def window_target" in (SCRIPTS / "winlux-applications.py").read_text()
    and "/proc/{pid}/cwd" in (SCRIPTS / "winlux-applications.py").read_text()
    and "test-window-icon-target.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "fenêtres .exe : chemin relatif résolu par le dossier du processus, icône du lanceur en repli (#915)")
+# #992 : aide (.chm) et site web (.url) d'un programme dans les applications du menu.
+ok("def link_shortcuts" in (SCRIPTS / "winlux-applications.py").read_text()
+   and "#992" in (SCRIPTS / "test-native-catalogue.py").read_text()
+   and "test-native-catalogue.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
+   "menu Démarrer : raccourcis aide et web d'un programme sous Applications (#992)")
 # #183 : pages de code asiatiques (gconv) et registre en vue dynamique.
 ok("fn is_lead_byte" in (ROOT / "runtime/src/intl/dbcs.rs").read_text()
    and "live::overlay" in (ROOT / "runtime/src/registry/mod.rs").read_text()
