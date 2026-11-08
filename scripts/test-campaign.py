@@ -1032,6 +1032,10 @@ ok("GLib.set_prgname(program_name(executable))" in (SCRIPTS / "winlux-notify-ico
    and "test-tray-overflow.py" in (ROOT / ".github/workflows/ci.yml").read_text(),
    "zone de notification : chaque programme .exe sous son nom, caché ou montré par icône dans Paramètres (#927)")
 
+# #1085 : une cible Direct2D 1.0 répond aussi à ID2D1DeviceContext à 6.
+ok("fn context_view(" in (ROOT / "runtime/src/dlls/d2d1_1.rs").read_text()
+   and "v11::context_view(this, out)" in (ROOT / "runtime/src/dlls/d2d1.rs").read_text(),
+   "Direct2D : HwndRenderTarget, DCRenderTarget et BitmapRenderTarget servent ID2D1DeviceContext6 (#1085)")
 # #561 : Paint.NET 5.1 (Direct3D 11.1, Direct2D 1.1 et ses effets personnalisés).
 ok((SCRIPTS / "test-paintnet-d2d.py").exists()
    and "test-paintnet-d2d.py" in (ROOT / ".github/workflows/ci.yml").read_text()
@@ -1153,6 +1157,12 @@ ok("pub fn winlux_lang_env" in pe_lib and "winlux_lang_env()" in (ROOT / "testex
    "Shell PE : WINLUX_LANG choisit la langue (#1026)")
 ok("export WINLUX_SHELL_APP=notepad" in (SCRIPTS / "winlux-shell-app.sh").read_text(encoding="utf-8"),
    "Shell PE : winlux-shell-app notepad (#1027)")
+ok('"AllowSetForegroundWindow"=>fn allow_set_foreground_window' in (runtime_dlls / "user32.rs").read_text(),
+   "user32 : AllowSetForegroundWindow et LockSetForegroundWindow exportées (#1074, Flow Launcher)")
+gui_source = (runtime_dlls / "gui.rs").read_text()
+ok("fn la_fenetre_existe_encore_pendant_wm_destroy" in gui_source
+   and "la_fenetre_existe_encore_pendant_wm_destroy" in (SCRIPTS / "test-all.sh").read_text(),
+   "DestroyWindow : la fenêtre et son fil restent connus pendant WM_DESTROY et WM_NCDESTROY (#1079, Paint.NET)")
 # #16 : activation COM depuis le registre (InprocServer32 → DllGetClassObject),
 # CoCreateInstanceEx, CoFreeUnusedLibraries ; vérifiée par com_suite.exe.
 com_registry = (ROOT / "runtime/src/dlls/com_registry.rs").read_text(encoding="utf-8")
@@ -1160,4 +1170,17 @@ ok("DllGetClassObject" in com_registry and "fn free_unused" in com_registry
    and "co_create_instance_ex" in (ROOT / "runtime/src/dlls/ole32.rs").read_text(encoding="utf-8")
    and "com_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
    "COM : activation par InprocServer32, CoCreateInstanceEx, CoFreeUnusedLibraries (#16)")
+# #16 : OLE Automation (IDispatch standard, DispCallFunc, objets actifs) ;
+# vérifiée par automation_suite.exe.
+oleaut_disp = (ROOT / "runtime/src/dlls/oleaut32_disp.rs").read_text(encoding="utf-8")
+ok("fn create_std_dispatch" in oleaut_disp and "fn disp_call_func" in oleaut_disp
+   and "fn register_active_object" in oleaut_disp
+   and "automation_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : automatisation (CreateStdDispatch, DispInvoke, DispCallFunc, objets actifs) (#16)")
+# #16 : serveurs COM hors processus (LocalServer32, mandataire IDispatch) ;
+# vérifiés par com_local_suite.exe.
+com_local = (ROOT / "runtime/src/dlls/com_local.rs").read_text(encoding="utf-8")
+ok('arg("-Embedding")' in com_local and "fn same_user" in com_local
+   and "com_local_suite.exe" in (SCRIPTS / "test-mingw.sh").read_text(encoding="utf-8"),
+   "COM : serveurs hors processus LocalServer32, IDispatch entre processus (#16)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

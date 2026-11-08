@@ -57,6 +57,22 @@ def props(win: str) -> dict[str, str]:
     return found
 
 
+def settled_props(win: str, pid: int, delay: float = 5.0) -> dict[str, str] | None:
+    """Propriétés d'une fenêtre encore affichée, relues jusqu'à `delay` secondes
+    tant qu'il en manque (openbox pose WM_STATE et _NET_WM_DESKTOP un peu après
+    l'affichage). None si la fenêtre n'est plus affichée : elle a été fermée."""
+    deadline = time.time() + delay
+    while True:
+        if win not in windows_of(pid):
+            return None
+        got = props(win)
+        if all(name in got for name in REQUIRED) or time.time() >= deadline:
+            # Relue une dernière fois : une fenêtre détruite pendant la
+            # lecture perd ses propriétés avant de quitter la liste.
+            return got if win in windows_of(pid) else None
+        time.sleep(0.25)
+
+
 def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) -> list[str]:
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     errors = []
@@ -73,7 +89,13 @@ def check(label: str, cmd: list[str], env: dict[str, str], cycle: bool = False) 
         time.sleep(1)
         wins = [w for w in windows_of(proc.pid) if w in wins] or wins
         for w in wins:
-            got = props(w)
+            got = settled_props(w, proc.pid)
+            if got is None:
+                # Fenêtre fermée entre la détection et la mesure : la boîte
+                # MessageBox de controls_suite, que son minuteur ferme à
+                # 1,5 s. Elle n'a plus à être gérée.
+                print(f"  --     {label} : fenêtre {w} fermée pendant la mesure, ignorée")
+                continue
             missing = [name for name in REQUIRED if name not in got]
             if missing and not exists(w):
                 print(f"  --     {label} : fenêtre {w} détruite entre-temps, ignorée")

@@ -55,6 +55,14 @@ pub fn inproc_server(guid: &Guid) -> Option<String> {
     (!path.is_empty()).then_some(path)
 }
 
+/// Ligne de commande du serveur hors processus inscrit pour cette classe.
+pub fn local_server(guid: &Guid) -> Option<String> {
+    let raw = crate::registry::get_string(&format!("{}\\LocalServer32", key_of(guid)), "")?;
+    let line = super::kernel32_fs::expand_environment(raw.trim());
+    let line = line.trim().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
 /// Charge (une seule fois) la DLL et rend son module.
 unsafe fn load(path: &str) -> Option<usize> {
     let mut loaded = LOADED.lock().unwrap();
@@ -164,6 +172,7 @@ mod tests {
         let mut out = std::ptr::null_mut();
         assert!(unsafe { class_object(&g, &g, &mut out) }.is_none());
         assert!(inproc_server(&g).is_none());
+        assert!(local_server(&g).is_none());
         match old {
             Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
             None => std::env::remove_var("WINLUX_REGISTRY_PATH"),

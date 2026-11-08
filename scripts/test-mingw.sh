@@ -57,6 +57,30 @@ cat "$work/com.txt"
 test "$com_status" -eq 0 || { echo "com_suite.exe : code $com_status" >&2; exit 1; }
 grep -q '^COM par le registre : tout est correct$' "$work/com.txt" || { echo "com_suite : marqueur de réussite absent" >&2; exit 1; }
 
+# OLE Automation (#16) : CreateDispTypeInfo, CreateStdDispatch, Invoke
+# (conversions, arguments nommés, propriétés), DispCallFunc, objets actifs.
+test -f "$dir/automation_suite.exe" || { echo "automation_suite.exe absent" >&2; exit 1; }
+set +e
+WINLUX_GUI=headless timeout 120 "$runtime" "$dir/automation_suite.exe" >"$work/automation.txt" 2>&1
+automation_status=$?
+set -e
+cat "$work/automation.txt"
+test "$automation_status" -eq 0 || { echo "automation_suite.exe : code $automation_status" >&2; exit 1; }
+grep -q '^Automation OLE : tout est correct$' "$work/automation.txt" || { echo "automation_suite : marqueur de réussite absent" >&2; exit 1; }
+
+# Serveur COM hors processus (#16) : LocalServer32 lancé avec -Embedding,
+# CoRegisterClassObject(CLSCTX_LOCAL_SERVER), IDispatch entre processus.
+test -f "$dir/com_local_suite.exe" || { echo "com_local_suite.exe absent" >&2; exit 1; }
+mkdir -p "$work/com-local"
+set +e
+(cd "$work/com-local" && WINLUX_REGISTRY_PATH="$work/com-local/registre.tsv" WINLUX_GUI=headless \
+    timeout 120 "$runtime" "$dir/com_local_suite.exe") >"$work/com-local.txt" 2>&1
+com_local_status=$?
+set -e
+cat "$work/com-local.txt"
+test "$com_local_status" -eq 0 || { echo "com_local_suite.exe : code $com_local_status" >&2; exit 1; }
+grep -q '^COM hors processus : tout est correct$' "$work/com-local.txt" || { echo "com_local_suite : marqueur de réussite absent" >&2; exit 1; }
+
 # Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }

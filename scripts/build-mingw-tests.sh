@@ -19,6 +19,10 @@ for src in "$root"/testc/*.c; do
     test "$name" = service_suite && libs="-municode -ladvapi32"
     # com_suite : activation COM depuis le registre (#16).
     test "$name" = com_suite && libs="-lole32 -luuid -ladvapi32"
+    # automation_suite : IDispatch standard et objets actifs (#16).
+    test "$name" = automation_suite && libs="-loleaut32 -lole32 -luuid"
+    # com_local_suite : serveur COM hors processus, LocalServer32 (#16).
+    test "$name" = com_local_suite && libs="-loleaut32 -lole32 -luuid -ladvapi32"
     # shellcheck disable=SC2086
     "$cc" -O2 -Wall -Werror -o "$out/$name.exe" "$src" $libs
 done
