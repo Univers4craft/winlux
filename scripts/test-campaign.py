@@ -1221,4 +1221,12 @@ ok('"GetVolumeNameForVolumeMountPointW" => fn get_volume_name_for_volume_mount_p
 ok("builtin_file_path(module)" in (runtime_dlls / "kernel32.rs").read_text()
    and "dll_integree_a_un_chemin_et_un_fichier_visible" in (SCRIPTS / "test-all.sh").read_text(),
    "DLL système intégrées : chemin System32 par GetModuleFileNameW, visibles par GetFileAttributesExW (#1113)")
+# #1138 : glisser-déposer OLE depuis une liste (FileZilla) : DragDetect,
+# LVN_BEGINDRAG / TVN_BEGINDRAGW, puis dépôt sur la cible OLE sous le pointeur.
+controls_rs = (runtime_dlls / "controls/comctl.rs").read_text(encoding="utf-8")
+ok("lv_begin_drag" in controls_rs and "-456, -407" in controls_rs
+   and '"DragDetect"=>fn drag_detect' in (runtime_dlls / "user32.rs").read_text(encoding="utf-8")
+   and "fn pick_at" in (runtime_dlls / "dataobject.rs").read_text(encoding="utf-8")
+   and "glisser_depuis_une_liste_ou_une_arborescence" in (SCRIPTS / "test-all.sh").read_text(encoding="utf-8"),
+   "Glisser-déposer : LVN_BEGINDRAG, TVN_BEGINDRAG, DragDetect, cible sous le pointeur (#1138)")
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

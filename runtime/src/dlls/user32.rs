@@ -1322,6 +1322,7 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         19 => 1,                              // SM_MOUSEPRESENT
         23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
         36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        68 | 69 => 4,                         // SM_CXDRAG / SM_CYDRAG (#1138)
         43 => 3,                              // SM_CMOUSEBUTTONS
         75 => 1,                              // SM_MOUSEWHEELPRESENT
         // Icônes : 32 px, petite icône 16 px.
@@ -1910,6 +1911,64 @@ pub extern "win64" fn set_capture(hwnd: usize) -> usize {
 pub extern "win64" fn release_capture() -> i32 {
     gui::release_capture();
     1
+}
+
+/// Détection d'un glisser (DragDetect, et la liste ou l'arborescence avant
+/// LVN_BEGINDRAG / TVN_BEGINDRAG, #1138) : vrai dès que le pointeur sort,
+/// bouton gauche tenu, du rectangle SM_CXDRAG × SM_CYDRAG centré sur `x`,
+/// `y` (coordonnées écran) ; faux au relâchement, à un autre clic ou à
+/// Échap. Les déplacements sont consommés, les clics restent dans la file.
+pub unsafe fn drag_detect_at(hwnd: usize, x: i32, y: i32) -> bool {
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_MOUSELAST: u32 = 0x020E;
+    let cx = get_system_metrics(68).max(1); // SM_CXDRAG
+    let cy = get_system_metrics(69).max(1); // SM_CYDRAG
+    let previous = gui::set_capture(hwnd);
+    let started = std::time::Instant::now();
+    let mut dragged = false;
+    loop {
+        let mut m: Msg = std::mem::zeroed();
+        if peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSELAST, 0) != 0 {
+            if m.message != WM_MOUSEMOVE {
+                break;
+            }
+            peek_message_w(&mut m, 0, WM_MOUSEMOVE, WM_MOUSEMOVE, 1);
+            let mut p = Point {
+                x: m.lparam as u16 as i16 as i32,
+                y: (m.lparam >> 16) as u16 as i16 as i32,
+            };
+            client_to_screen(m.hwnd, &mut p);
+            if (p.x - x).abs() > cx / 2 || (p.y - y).abs() > cy / 2 {
+                dragged = true;
+                break;
+            }
+            continue;
+        }
+        if gui::get_async_key_state(0x1B) < 0 {
+            break;
+        }
+        // Bouton déjà relâché sans message en attente (clic envoyé par
+        // SendMessage, automate) : pas de glisser.
+        let held = gui::get_key_state(1) < 0 || gui::get_async_key_state(1) < 0;
+        if !held || !gui::backend_is_interactive() {
+            break;
+        }
+        // Garde-fou : un bouton « tenu » que le serveur X ne relâche jamais.
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    gui::release_capture();
+    if previous != 0 && previous != hwnd {
+        gui::set_capture(previous);
+    }
+    dragged
+}
+
+/// DragDetect(HWND, POINT) : le POINT (8 octets) arrive dans un registre.
+pub unsafe extern "win64" fn drag_detect(hwnd: usize, pt: u64) -> i32 {
+    drag_detect_at(hwnd, pt as u32 as i32, (pt >> 32) as u32 as i32) as i32
 }
 
 pub extern "win64" fn get_capture() -> usize {
@@ -3808,7 +3867,7 @@ pub fn exports() -> crate::dlls::Exports {
         "ToAscii"=>fn to_ascii, "ToAsciiEx"=>fn to_ascii_ex,
         "VkKeyScanExA"=>fn vk_key_scan_ex_a, "VkKeyScanExW"=>fn vk_key_scan_ex_w,
         // --- Mouse / Cursor ---
-        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture,
+        "SetCapture"=>fn set_capture, "ReleaseCapture"=>fn release_capture, "DragDetect"=>fn drag_detect,
         "GetCapture"=>fn get_capture,
         "GetCursorPos"=>fn get_cursor_pos, "SetCursorPos"=>fn set_cursor_pos,
         "LoadCursorA"=>fn load_cursor_a, "LoadCursorW"=>fn load_cursor_w,

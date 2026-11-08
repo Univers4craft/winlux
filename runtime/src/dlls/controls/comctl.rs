@@ -254,6 +254,7 @@ const TVIS_BOLD: u32 = 0x10;
 const TVS_HASBUTTONS: u32 = 0x1;
 const TVS_HASLINES: u32 = 0x2;
 const TVS_LINESATROOT: u32 = 0x4;
+const TVS_DISABLEDRAGDROP: u32 = 0x10;
 
 /// TVITEMW / TVITEMA (64 bits) : mêmes positions, texte A ou W.
 #[repr(C)]
@@ -403,6 +404,7 @@ fn tree_notify_sel(
     old: usize,
     new: usize,
     action: u32,
+    pt: [i32; 2],
 ) -> isize {
     let s = common_snapshot(hwnd);
     let item = |h: usize| {
@@ -424,7 +426,7 @@ fn tree_notify_sel(
         action,
         old: item(old),
         new: item(new),
-        pt: [0, 0],
+        pt,
     };
     let code = if wide_for(hwnd) { code_w } else { code_a };
     notify_struct(hwnd, code, &mut nm)
@@ -436,7 +438,7 @@ fn tree_select(hwnd: usize, h: usize, action: u32) -> bool {
     if old == h {
         return true;
     }
-    if tree_notify_sel(hwnd, -450, -401, old, h, action) != 0 {
+    if tree_notify_sel(hwnd, -450, -401, old, h, action, [0, 0]) != 0 {
         return false; // TVN_SELCHANGING refusé
     }
     with_common(hwnd, |s| {
@@ -464,7 +466,7 @@ fn tree_select(hwnd: usize, h: usize, action: u32) -> bool {
         }
     });
     tree_ensure_visible(hwnd, h);
-    tree_notify_sel(hwnd, -451, -402, old, h, action);
+    tree_notify_sel(hwnd, -451, -402, old, h, action, [0, 0]);
     invalidate(hwnd);
     true
 }
@@ -506,7 +508,7 @@ fn tree_expand(hwnd: usize, h: usize, how: u32) -> bool {
         return true;
     }
     let action = if want { 2 } else { 1 };
-    if tree_notify_sel(hwnd, -454, -405, 0, h, action) != 0 {
+    if tree_notify_sel(hwnd, -454, -405, 0, h, action, [0, 0]) != 0 {
         return false;
     }
     with_common(hwnd, |s| {
@@ -536,7 +538,7 @@ fn tree_expand(hwnd: usize, h: usize, how: u32) -> bool {
             }
         }
     });
-    tree_notify_sel(hwnd, -455, -406, 0, h, action);
+    tree_notify_sel(hwnd, -455, -406, 0, h, action, [0, 0]);
     invalidate(hwnd);
     true
 }
@@ -869,6 +871,14 @@ unsafe fn tree_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize
                     tree_select(hwnd, h, 1); // TVC_BYMOUSE
                     if msg == WM_LBUTTONDBLCLK && notify_simple(hwnd, NM_DBLCLK) == 0 {
                         tree_expand(hwnd, h, 3);
+                    }
+                    // TVN_BEGINDRAG (#1138), sauf TVS_DISABLEDRAGDROP.
+                    if msg == WM_LBUTTONDOWN
+                        && style(hwnd) & TVS_DISABLEDRAGDROP == 0
+                        && begins_drag(hwnd, (x, y))
+                    {
+                        tree_notify_sel(hwnd, -456, -407, 0, h, 0, [x, y]);
+                        return Some(0);
                     }
                 }
             }
@@ -1573,6 +1583,36 @@ fn lv_hit(hwnd: usize, y: i32) -> i32 {
     }
 }
 
+/// Le bouton gauche, pressé en `pt` (coordonnées client), commence-t-il un
+/// glisser ? (DragDetect, #1138)
+fn begins_drag(hwnd: usize, pt: (i32, i32)) -> bool {
+    let mut p = crate::dlls::gui::Point { x: pt.0, y: pt.1 };
+    unsafe {
+        user32::client_to_screen(hwnd, &mut p);
+        user32::drag_detect_at(hwnd, p.x, p.y)
+    }
+}
+
+/// LVN_BEGINDRAG : le parent lance le glisser-déposer (DoDragDrop de
+/// wxWidgets, de l'Explorateur…), #1138.
+fn lv_begin_drag(hwnd: usize, item: i32, pt: (i32, i32)) {
+    let mut nm = NmListView {
+        hdr: NmHdr {
+            hwnd_from: 0,
+            id_from: 0,
+            code: 0,
+        },
+        item,
+        sub_item: 0,
+        new_state: 0,
+        old_state: 0,
+        changed: 0,
+        pt: [pt.0, pt.1],
+        param: 0,
+    };
+    notify_struct(hwnd, -109, &mut nm); // LVN_BEGINDRAG
+}
+
 unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<isize> {
     let r = match msg {
         0x1004 => common_snapshot(hwnd).rows.len() as isize, // LVM_GETITEMCOUNT
@@ -1851,6 +1891,15 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
                 notify_struct(hwnd, -108, &mut nm);
                 return Some(0);
             }
+            let pt = point(lp);
+            // Glisser depuis un élément déjà sélectionné : la sélection
+            // multiple est gardée, comme sous Windows (#1138).
+            let selected =
+                i >= 0 && common_snapshot(hwnd).rows[i as usize].state & LVIS_SELECTED != 0;
+            if msg == WM_LBUTTONDOWN && selected && !ctrl_down() && begins_drag(hwnd, pt) {
+                lv_begin_drag(hwnd, i, pt);
+                return Some(0);
+            }
             if i >= 0 {
                 let multi = style(hwnd) & LVS_SINGLESEL == 0 && ctrl_down();
                 if multi {
@@ -1867,7 +1916,10 @@ unsafe fn listview_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> Option<i
             } else {
                 lv_set_state(hwnd, -1, 0, LVIS_SELECTED);
             }
-            let pt = point(lp);
+            if msg == WM_LBUTTONDOWN && i >= 0 && !selected && begins_drag(hwnd, pt) {
+                lv_begin_drag(hwnd, i, pt);
+                return Some(0);
+            }
             lv_notify_item(
                 hwnd,
                 if msg == WM_LBUTTONDBLCLK {

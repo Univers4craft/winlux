@@ -100,6 +100,10 @@ step "Fenêtre vivante pendant WM_DESTROY (#1079)" cargo test -q -p winlux la_fe
 # d'un lecteur, chemin et attributs des DLL système intégrées.
 step "Volume et DLL intégrées vues par Paint.NET (#1112, #1113)" cargo test -q -p winlux -- nom_de_volume_d_une_racine_de_lecteur dll_integree_a_un_chemin_et_un_fichier_visible
 
+# Glisser-déposer depuis une liste ou une arborescence (#1138, FileZilla) :
+# DragDetect, LVN_BEGINDRAG, TVN_BEGINDRAGW.
+step "Glisser depuis une liste ou une arborescence (#1138)" cargo test -q -p winlux glisser_depuis_une_liste_ou_une_arborescence
+
 # Accent violet Prisme par défaut (#343), pas encore dans ci.yml.
 step "scripts/test-avahi-printers.py" python3 -B scripts/test-avahi-printers.py
 step "scripts/test-control-status-cost.py" python3 -B scripts/test-control-status-cost.py
