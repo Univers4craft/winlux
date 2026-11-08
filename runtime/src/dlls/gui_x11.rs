@@ -4682,6 +4682,46 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn set_shape(&mut self, hwnd: usize, rects: Option<&[Rect]>) {
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
+        if w.frame != 0 {
+            return; // cadre Winlux (barre de menus) : jamais en couches
+        }
+        let rects: Vec<x11rb::protocol::xproto::Rectangle> = match rects {
+            Some(list) => list
+                .iter()
+                .map(|r| {
+                    let (x, y) = (self.scaled(r.left), self.scaled(r.top));
+                    x11rb::protocol::xproto::Rectangle {
+                        x: x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        y: y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                        width: (self.scaled(r.right) - x).clamp(0, u16::MAX as i32) as u16,
+                        height: (self.scaled(r.bottom) - y).clamp(0, u16::MAX as i32) as u16,
+                    }
+                })
+                .collect(),
+            None => vec![x11rb::protocol::xproto::Rectangle {
+                x: 0,
+                y: 0,
+                width: w.width,
+                height: w.height,
+            }],
+        };
+        let _ = self.conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            x11rb::protocol::xproto::ClipOrdering::UNSORTED,
+            w.window,
+            0,
+            0,
+            &rects,
+        );
+        let _ = self.conn.flush();
+    }
+
     fn set_decorations(&mut self, hwnd: usize, level: u8) {
         let Some(w) = self.windows.get(&hwnd) else {
             return;

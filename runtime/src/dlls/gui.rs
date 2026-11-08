@@ -2783,6 +2783,10 @@ pub trait GuiBackend: Send {
     /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
     /// fenêtres. À appeler avant de l'afficher.
     fn set_popup(&mut self, _hwnd: usize) {}
+    /// Forme d'une fenêtre en couches (UpdateLayeredWindow avec alpha) :
+    /// seuls ces rectangles (coordonnées client) restent visibles et
+    /// cliquables ; `None` rend la fenêtre rectangulaire.
+    fn set_shape(&mut self, _hwnd: usize, _rects: Option<&[Rect]>) {}
     /// Cadre du gestionnaire de fenêtres d'une fenêtre de premier niveau :
     /// 0 aucun, 1 bordure seule, 2 complet (barre de titre). Une WS_POPUP
     /// sans WS_CAPTION n'a pas de barre de titre sous Windows.

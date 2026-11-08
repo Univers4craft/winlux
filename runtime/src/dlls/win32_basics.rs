@@ -1420,9 +1420,73 @@ pub unsafe extern "win64" fn get_layered_window_attributes(
     1
 }
 
+const ULW_COLORKEY: u32 = 1;
+const ULW_ALPHA: u32 = 2;
+const AC_SRC_ALPHA: u8 = 1;
+/// Au-delà, la forme coûterait plus cher que le rendu : fenêtre rectangulaire.
+const MAX_SHAPE_RECTS: usize = 16_384;
+
+/// Forme d'une image de fenêtre en couches : bandes horizontales des pixels
+/// visibles (alpha d'au moins 50 %, ou couleur différente de la clé), lignes
+/// identiques fusionnées. `None` : tout est visible, ou trop de morceaux.
+/// `pixels` : COLORREF avec l'alpha dans l'octet haut, ligne du haut d'abord.
+fn layered_shape(
+    width: usize,
+    height: usize,
+    pixels: &[u32],
+    alpha: bool,
+    key: Option<u32>,
+) -> Option<Vec<super::gui::Rect>> {
+    use super::gui::Rect;
+    let visible = |c: u32| {
+        (!alpha || c >> 24 >= 0x80) && key.is_none_or(|k| c & 0x00FF_FFFF != k & 0x00FF_FFFF)
+    };
+    let mut rects: Vec<Rect> = Vec::new();
+    let mut previous: Vec<(i32, i32)> = Vec::new();
+    let mut band_start = 0usize; // index dans `rects` des bandes de la ligne précédente
+    let mut all_visible = true;
+    for y in 0..height {
+        let row = pixels.get(y * width..(y + 1) * width)?;
+        let mut runs = Vec::new();
+        let mut x = 0;
+        while x < width {
+            if !visible(row[x]) {
+                all_visible = false;
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < width && visible(row[x]) {
+                x += 1;
+            }
+            runs.push((start as i32, x as i32));
+        }
+        if y > 0 && runs == previous {
+            for r in &mut rects[band_start..] {
+                r.bottom += 1;
+            }
+            continue;
+        }
+        band_start = rects.len();
+        rects.extend(runs.iter().map(|&(l, r)| Rect {
+            left: l,
+            top: y as i32,
+            right: r,
+            bottom: y as i32 + 1,
+        }));
+        if rects.len() > MAX_SHAPE_RECTS {
+            return None;
+        }
+        previous = runs;
+    }
+    (!all_visible).then_some(rects)
+}
+
 /// UpdateLayeredWindow : place la fenêtre (pptDst, psize) et y copie le
-/// contenu de hdcSrc à partir de pptSrc. La transparence par pixel n'est pas
-/// composée par le serveur X : l'image est posée opaque.
+/// contenu de hdcSrc à partir de pptSrc. Le serveur X ne compose pas l'alpha
+/// d'une fenêtre ordinaire : avec ULW_ALPHA (et l'alpha par pixel) ou
+/// ULW_COLORKEY, les pixels transparents sont découpés par une forme X
+/// (SHAPE) au lieu d'apparaître en noir (fond de Flow Launcher, #1220).
 pub unsafe extern "win64" fn update_layered_window(
     hwnd: usize,
     _hdc_dst: usize,
@@ -1430,9 +1494,9 @@ pub unsafe extern "win64" fn update_layered_window(
     size: *const [i32; 2],
     hdc_src: usize,
     pt_src: *const [i32; 2],
-    _key: u32,
-    _blend: *const u32,
-    _flags: u32,
+    key: u32,
+    blend: *const u32,
+    flags: u32,
 ) -> i32 {
     let Some(rect) = super::gui::window_rect(hwnd) else {
         set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
@@ -1454,6 +1518,28 @@ pub unsafe extern "win64" fn update_layered_window(
         let dc = super::user32::get_dc(hwnd);
         super::gdi32::bit_blt(dc, 0, 0, w, h, hdc_src, sx, sy, 0x00CC_0020);
         super::user32::release_dc(hwnd, dc);
+        // BLENDFUNCTION : BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat.
+        let per_pixel = flags & ULW_ALPHA != 0
+            && !blend.is_null()
+            && (std::ptr::read_unaligned(blend) >> 24) as u8 & AC_SRC_ALPHA != 0;
+        let key = (flags & ULW_COLORKEY != 0).then_some(key);
+        if per_pixel || key.is_some() {
+            let bitmap = super::gui::dc_bitmap(hdc_src);
+            if let Some((bw, bh, pixels, has_alpha)) = super::gui::bitmap_pixels(bitmap) {
+                let (cw, ch) = (w.max(0) as usize, h.max(0) as usize);
+                let mut area = vec![0u32; cw * ch];
+                for y in 0..ch {
+                    for x in 0..cw {
+                        let (px, py) = (sx as i64 + x as i64, sy as i64 + y as i64);
+                        if px >= 0 && py >= 0 && (px as usize) < bw && (py as usize) < bh {
+                            area[y * cw + x] = pixels[py as usize * bw + px as usize];
+                        }
+                    }
+                }
+                let shape = layered_shape(cw, ch, &area, per_pixel && has_alpha, key);
+                super::gui::with_backend_public(|b| b.set_shape(hwnd, shape.as_deref()));
+            }
+        }
     }
     1
 }
@@ -2025,6 +2111,44 @@ pub fn crt_exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1220 : fond transparent d'une fenêtre WPF en couches (Flow Launcher)
+    /// découpé, coins arrondis compris ; image opaque : pas de forme.
+    #[test]
+    fn forme_d_une_fenetre_en_couches() {
+        let (o, t) = (0xFF20_2020u32, 0x0000_0000u32);
+        // 4x3 : coins transparents sur la première ligne.
+        #[rustfmt::skip]
+        let px = [
+            t, o, o, t,
+            o, o, o, o,
+            o, o, o, o,
+        ];
+        let r = layered_shape(4, 3, &px, true, None).expect("forme");
+        let rr: Vec<_> = r
+            .iter()
+            .map(|r| (r.left, r.top, r.right, r.bottom))
+            .collect();
+        assert_eq!(rr, vec![(1, 0, 3, 1), (0, 1, 4, 3)]);
+        assert!(layered_shape(4, 3, &[o; 12], true, None).is_none());
+        // Ombre à 25 % d'opacité : découpée ; sans alpha par pixel : gardée.
+        let ombre = 0x4000_0000u32;
+        assert_eq!(
+            layered_shape(2, 1, &[ombre, o], true, None).unwrap().len(),
+            1
+        );
+        assert!(layered_shape(2, 1, &[ombre, o], false, None).is_none());
+        // ULW_COLORKEY : la couleur clé (magenta) est découpée.
+        let r = layered_shape(
+            3,
+            1,
+            &[0xFF_00FF, 0x12_3456, 0xFF_00FF],
+            false,
+            Some(0xFF_00FF),
+        );
+        let rr: Vec<_> = r.unwrap().iter().map(|r| (r.left, r.right)).collect();
+        assert_eq!(rr, vec![(1, 2)]);
+    }
 
     #[test]
     fn attributs_de_fenetre_superposee_relus() {

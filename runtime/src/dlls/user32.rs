@@ -363,7 +363,9 @@ unsafe fn create_window_inner(
             }
         } else {
             b.create_window(hwnd, &title, rect);
-            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS)
+                || floating_popup(style, ex_style)
+            {
                 // Menu surgissant : ni cadre ni placement du gestionnaire.
                 b.set_popup(hwnd);
             } else if let Some(level) = popup_decorations(style) {
@@ -4187,6 +4189,22 @@ fn owner_top_level(mut hwnd: usize) -> usize {
     0
 }
 
+/// Fenêtre surgissante qui n'est ni une boîte ni une fenêtre d'application :
+/// WS_POPUP sans barre de titre, WS_EX_TOOLWINDOW (absente de la barre des
+/// tâches) et jamais activée (WS_EX_NOACTIVATE). C'est la forme d'un menu
+/// dessiné par le programme lui-même, comme le menu de l'icône de Claude
+/// (Chromium, #1222) : le gestionnaire de fenêtres ne doit ni la recentrer
+/// ni lui donner un bouton dans la barre des tâches.
+fn floating_popup(style: u32, ex_style: u32) -> bool {
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+    style & WS_POPUP != 0
+        && style & WS_CAPTION != WS_CAPTION
+        && ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) == WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+}
+
 /// Cadre d'une fenêtre WS_POPUP sans barre de titre (WS_CAPTION) : la boîte
 /// « À propos » de Notepad++ n'a qu'une bordure fine (#705). `None` : cadre
 /// complet, comme toute fenêtre WS_OVERLAPPED ou avec WS_CAPTION.
@@ -4227,6 +4245,18 @@ mod tests {
             let mut wp = WindowPlacement::default();
             assert_eq!(get_window_placement(0x7fff_0001, &mut wp), 0);
         }
+    }
+
+    /// #1222 : le menu de l'icône de Claude (WS_POPUP, outil, jamais
+    /// activé) échappe au gestionnaire ; une fenêtre outil ordinaire
+    /// (Flow Launcher, activable) ou une boîte avec titre reste gérée.
+    #[test]
+    fn menu_dessine_par_le_programme_hors_gestionnaire() {
+        assert!(floating_popup(0x8000_0000, 0x0800_0080));
+        assert!(floating_popup(0x8000_0000, 0x0808_0088));
+        assert!(!floating_popup(0x8000_0000, 0x0000_0080));
+        assert!(!floating_popup(0x80C0_0000, 0x0800_0080));
+        assert!(!floating_popup(0x0000_0000, 0x0800_0080));
     }
 
     /// #842 : wxWidgets ajoute SM_CXMENUCHECK à la largeur des libellés
