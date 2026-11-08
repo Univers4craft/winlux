@@ -47,6 +47,13 @@ Suivi d'ensemble : #138.
   `DESKTOPSHORTCUT`, cochée par défaut) et l'inscrit dans « Applications
   installées ». L'icône affichée est celle de `paintdotnet.exe`. La désinstallation retire
   tout.
+- L'installeur web (`paint.net.X.install.anycpu.web.exe`) ne contient
+  qu'un téléchargeur .NET Framework WinForms (`SetupDownloader.exe`), que le
+  CLR intégré ne sait pas exécuter. Depuis #896, Winlux demande la
+  permission (fenêtre en fr/en/de/es, produit, version et source affichés),
+  télécharge le paquet complet officiel de la même version listé dans
+  `runtime/src/setup/web.rs`, vérifie son SHA-256 et l'installe comme
+  ci-dessus. Une version absente du catalogue donne un message clair.
 - Mesure du 07/11/2026 : le programme installé s'arrête au même endroit que
   la version portable (#561), sans ouvrir de fenêtre.
 

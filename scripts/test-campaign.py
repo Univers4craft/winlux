@@ -264,6 +264,15 @@ for marker, label in (("fn drop_target", "glisser-déposer sur un dossier ou un 
                       ("RENAME_ALL", "Ctrl+A en renommage"),
                       ("(0, true, 0x56) => 22", "Ctrl+V dans les champs de l'Explorateur")):
     ok(marker in explorer, f"Explorateur : {label}")
+# #886/#890/#891 : icônes Prisme par type, Terminal au trait, thème suivi en direct.
+for marker, label in (("Kind::Spreadsheet", "tableur vert pour .ods/.xlsx (#890)"),
+                      ("fn windows_program", "pastille Windows réservée aux .exe/.msi (#890)"),
+                      ("Kind::Script", "scripts shell à part des programmes (#890)")):
+    ok(marker in explorer, f"Explorateur : {label}")
+ok("Glyph::Terminal => Icon::Terminal" in (ROOT / "testexe/src/shell/explorer_icons.rs").read_text(),
+   "Explorateur : icône Terminal Prisme au trait (#886)")
+ok("gfx::theme_animating()" in (ROOT / "testexe/src/bin/gui_demo.rs").read_text(),
+   "Explorateur : passage clair/sombre appliqué à la fenêtre ouverte (#891)")
 
 # ── Widgets Windows+W (#293, passage en VM) ────────────────────────────────
 widgets = (SCRIPTS / "winlux-widgets.py").read_text()
@@ -639,5 +648,13 @@ ok((runtime_dlls / "ddraw.rs").exists() and (runtime_dlls / "winmm_midi.rs").exi
    and "wow32::callback64" in (runtime_dlls / "apps_win32.rs").read_text()
    and "wow32::callback64" in (runtime_dlls / "winmm_waveout.rs").read_text(),
    "anciens jeux : DirectDraw, Direct3D 8, D3DX9, D3D9/DirectSound 32 bits, DirectShow, DirectPlay, synthétiseur MIDI, rappels x86")
+
+# ── Barre : Vue des tâches recopiée, contrepoids sans attente (#885, #887) ──
+ok("launcher-$number" in (SCRIPTS / "winlux-control.sh").read_text()
+   and "X-XFCE-Source" in (SCRIPTS / "winlux-control.sh").read_text(),
+   "barre centrée : Vue des tâches et Rechercher reconnus à leur lanceur recopié (#885)")
+ok("def _genmon_blank" in (SCRIPTS / "winlux-tray.py").read_text()
+   and "Vue des tâches (15) reconnus" in (SCRIPTS / "test-second-session-taskbar.py").read_text(),
+   "barre : genmon vide hors du bloc attendu, contrepoids du cache sans attente (#887)")
 
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
