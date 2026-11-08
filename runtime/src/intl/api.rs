@@ -1137,7 +1137,7 @@ fn current_bias_ticks(now: i64) -> i64 {
     tz::current().bias_at_utc(unix_seconds(now)) as i64 * tz::TICKS_PER_MINUTE
 }
 
-fn rule_to_systemtime(r: Option<Rule>) -> SystemTime {
+pub(crate) fn rule_to_systemtime(r: Option<Rule>) -> SystemTime {
     match r {
         None => SystemTime::default(),
         Some(r) => {
@@ -1207,7 +1207,7 @@ unsafe fn read_tzi(p: *const u8) -> Zone {
     z
 }
 
-fn zone_state(z: &Zone) -> u32 {
+pub(crate) fn zone_state(z: &Zone) -> u32 {
     if !z.has_dst() {
         0 // TIME_ZONE_ID_UNKNOWN
     } else if z.is_dst_utc(unix_seconds(now_filetime())) {

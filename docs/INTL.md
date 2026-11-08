@@ -76,7 +76,12 @@ clavier, fuseau).
   UI, Tahoma, MS Shell Dlg, Calibri, Cambria, Consolas… vers les polices
   libres installées (paquet `fonts-liberation`).
 
-## Reste à faire
+## Registre en vue dynamique (`registry/live.rs`)
 
-- Clés de registre `TimeZoneInformation`, `Nls\CodePage`, `Keyboard Layout` et
-  `Fonts` en vue dynamique.
+Recalculées à chaque chargement du registre d'après les réglages Linux :
+`HKLM\System\CurrentControlSet\Control\TimeZoneInformation` (biais, noms,
+dates de changement d'heure au format SYSTEMTIME), `…\Control\Nls\CodePage`
+(ACP, OEMCP), `HKCU\Keyboard Layout\Preload` (disposition XKB) et
+`HKLM`/`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts` (polices
+de `C:\Windows\Fonts` et du dossier de l'utilisateur ; les valeurs écrites
+par les installateurs sont gardées).
